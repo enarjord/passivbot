@@ -624,7 +624,7 @@ pub fn calc_twel_enforcer_actions(
     pside: usize,
     threshold: f64,
     total_wallet_exposure_limit: f64,
-    configured_n_positions: usize,
+    effective_n_positions: usize,
     balance: f64,
     positions: &[TwelEnforcerInputPosition],
     policy: TwelEnforcerPolicy,
@@ -633,7 +633,7 @@ pub fn calc_twel_enforcer_actions(
     if threshold <= 0.0
         || total_wallet_exposure_limit <= 0.0
         || balance <= 0.0
-        || configured_n_positions == 0
+        || effective_n_positions == 0
         || !threshold.is_finite()
         || !total_wallet_exposure_limit.is_finite()
         || !balance.is_finite()
@@ -772,7 +772,7 @@ pub fn calc_twel_enforcer_actions(
         return Vec::new();
     }
 
-    let overweight_target = limit / configured_n_positions as f64;
+    let overweight_target = limit / effective_n_positions as f64;
     let mut candidates: Vec<Candidate> = valid_positions
         .into_iter()
         .filter(|candidate| match policy {
