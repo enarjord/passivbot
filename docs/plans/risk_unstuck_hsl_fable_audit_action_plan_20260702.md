@@ -663,6 +663,8 @@ provide required managers. Test-only no-manager paths should be isolated.
 
 ### C1 - `live.hsl_signal_mode` Defaults Differ
 
+Status: implementation PR opened in `codex/v8-fable-hsl-signal-mode`.
+
 Plan: code fix.
 
 Prefer fail-loud missing-key behavior in live/backtest after schema
@@ -791,6 +793,9 @@ Remaining implementation details:
       position-adding orders. `entry_cooldown_minutes` now only controls the
       post-fill time window, with values below one minute treated as no time
       cooldown.
+- [ ] `live.hsl_signal_mode` runtime/default alignment.
+      Runtime paths should require normalized `live.hsl_signal_mode`, while
+      raw-config diagnostics should report the schema default `coin`.
 - [ ] Canonical HSL equity-history signal design.
       Align coin, pside, and unified around one raw per-minute `pnl + upnl`
       data-store model, keep scoped modes on base slot-budget-style

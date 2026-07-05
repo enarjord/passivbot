@@ -28,6 +28,9 @@ All notable user-facing changes will be documented in this file.
   `entry_cooldown_minutes` now only controls the post-fill time window; values
   above or below one minute no longer imply single-order ladder staging outside
   the active cooldown window by themselves.
+- Live and backtest HSL runtime paths now require normalized
+  `live.hsl_signal_mode` instead of silently treating a missing raw key as
+  `unified`; raw-config diagnostics now report the schema default `coin`.
 - The Rust orchestrator JSON boundary now rejects invalid account/risk globals
   such as non-positive raw balance, negative realized-loss limits, and negative
   unstuck allowances before risk gates or order planning can silently skip.

@@ -315,6 +315,27 @@ def test_live_config_preflight_allows_coin_hsl_with_balance_override(tmp_path):
     ]
 
 
+def test_live_config_preflight_uses_schema_default_for_missing_hsl_signal_mode(tmp_path):
+    config = _sample_config()
+    del config["live"]["hsl_signal_mode"]
+    config_path = tmp_path / "live.json"
+    _write_config(config_path, config)
+
+    report = live_config_preflight.build_live_config_preflight_report(
+        config_path,
+        balance_override=1000,
+    )
+
+    assert report["ok"] is True
+    assert report["hsl"]["signal_mode"] is None
+    assert report["hsl"]["effective_signal_mode"] == "coin"
+    assert not [
+        issue
+        for issue in report["issues"]
+        if issue["code"] == "hsl_balance_override_account_level_replay_unsafe"
+    ]
+
+
 def test_live_config_preflight_reports_flat_shared_bot_keys(tmp_path):
     config = _sample_config()
     config["bot"]["long"] = {
