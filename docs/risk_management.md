@@ -127,6 +127,11 @@ With the default `we_excess_allowance_mode = "bounded"`, the raw excess is cappe
 
 `effective_limit = wallet_exposure_limit * (1 + effective_we_excess_allowance_pct)`
 
+If `wallet_exposure_limit` is non-positive or non-finite, bounded mode treats
+the effective excess allowance and effective limit as zero. If
+`total_wallet_exposure_limit` is non-positive or non-finite, bounded mode
+grants no excess headroom.
+
 Set `we_excess_allowance_mode = "legacy_raw"` only when intentionally preserving v7-style behavior where the configured excess percentage is used raw and may expand one symbol above side TWEL.
 
 * **Example:** If WEL is `0.20` and allowance is `0.10` (10%), the position can grow to `0.22` before the bot considers it "full."

@@ -4,6 +4,9 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Bounded `we_excess_allowance_mode` now treats non-positive or non-finite base
+  WEL as zero allowed exposure and non-positive/non-finite TWEL as zero excess
+  headroom instead of falling back to the raw excess percentage.
 - Rust protective reducers now suppress lower-priority same-position ordinary
   close orders in the same ideal-order batch, so panic, TWEL/WEL auto-reduce,
   and auto-unstuck no longer stack with grid/trailing closes for one coin+pside.

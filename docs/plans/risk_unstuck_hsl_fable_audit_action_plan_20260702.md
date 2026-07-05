@@ -250,6 +250,11 @@ Bounded mode should not degrade to raw semantics when base/TWEL is invalid.
 Return zero for explicitly disabled/no-budget contexts and fail validation for
 active configs with invalid limits.
 
+Implemented: Rust bounded `we_excess` now returns zero allowed exposure for
+non-positive/non-finite base WEL and zero excess headroom for
+non-positive/non-finite TWEL instead of falling back to the raw excess
+percentage. `legacy_raw` remains intentionally raw.
+
 ### A3.1 - Reducer Stacking
 
 Plan: Rust-side code fix.
