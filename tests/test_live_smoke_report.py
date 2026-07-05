@@ -6000,6 +6000,58 @@ def test_live_smoke_report_allows_coin_hsl_with_balance_override(
     }
 
 
+def test_live_smoke_report_uses_coin_default_for_missing_hsl_signal_mode_with_balance_override(
+    tmp_path,
+    monkeypatch,
+):
+    _write_minimal_monitor_event(tmp_path / "monitor")
+    config_path = tmp_path / "configs" / "missing_mode_coin_hsl.json"
+    config_path.parent.mkdir()
+    config_path.write_text(
+        json.dumps(
+            {
+                "live": {"balance_override": 1000},
+                "bot": {
+                    "long": {"hsl": {"enabled": True}},
+                    "short": {"hsl": {"enabled": False}},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        smoke_report_module,
+        "_ps_process_rows",
+        lambda: (
+            [
+                (
+                    "123 1 42 S 2.5 6.0 120000 "
+                    "/root/passivbot/venv/bin/passivbot live "
+                    "configs/missing_mode_coin_hsl.json -u bybit_01"
+                )
+            ],
+            None,
+        ),
+    )
+
+    report = build_live_smoke_report(
+        tmp_path / "monitor",
+        logs_root=None,
+        include_processes=True,
+    )
+
+    assert report["ok"] is True
+    assert report["processes"]["config_checks"] == {
+        "enabled": True,
+        "ok": True,
+        "checked": 1,
+        "skipped": 0,
+        "hard_failures": 0,
+        "issues": [],
+    }
+
+
 def test_live_smoke_report_includes_repository_metadata(tmp_path, monkeypatch):
     _write_minimal_monitor_event(tmp_path / "monitor")
     calls = []
