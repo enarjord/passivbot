@@ -1474,6 +1474,96 @@ async def test_coin_hsl_history_replay_allows_flat_realized_only_rows():
 
 
 @pytest.mark.asyncio
+async def test_coin_hsl_history_replay_resets_current_episode_after_nonpanic_flatten():
+    bot = make_coin_bot()
+    symbol = "A"
+    bot.hsl["long"]["red_threshold"] = 0.2
+    bot.positions = {
+        symbol: {"long": {"size": 1.0, "price": 100.0}, "short": {"size": 0.0}}
+    }
+    bot.get_exchange_time = lambda: 300_000
+    fill_events = [
+        {
+            "timestamp": 60_500,
+            "symbol": symbol,
+            "pside": "long",
+            "action": "increase",
+            "qty": 1.0,
+            "price": 100.0,
+            "pnl": 0.0,
+        },
+        {
+            "timestamp": 180_500,
+            "symbol": symbol,
+            "pside": "long",
+            "action": "decrease",
+            "qty": 1.0,
+            "price": 80.0,
+            "pnl": -20.0,
+            "pb_order_type": "close_grid_long",
+        },
+        {
+            "timestamp": 240_500,
+            "symbol": symbol,
+            "pside": "long",
+            "action": "increase",
+            "qty": 1.0,
+            "price": 100.0,
+            "pnl": 0.0,
+        },
+    ]
+
+    async def fake_history(current_balance=None, **kwargs):
+        return {
+            "timeline": [
+                {
+                    "timestamp": 60_000,
+                    "balance": 100.0,
+                    "realized_pnl": 0.0,
+                    "realized_pnl_by_coin_pside": {symbol: {"long": 0.0, "short": 0.0}},
+                    "unrealized_pnl_by_coin_pside": {symbol: {"long": 0.0, "short": 0.0}},
+                },
+                {
+                    "timestamp": 120_000,
+                    "balance": 100.0,
+                    "realized_pnl": 0.0,
+                    "realized_pnl_by_coin_pside": {symbol: {"long": 0.0, "short": 0.0}},
+                    "unrealized_pnl_by_coin_pside": {symbol: {"long": -30.0, "short": 0.0}},
+                },
+                {
+                    "timestamp": 180_000,
+                    "balance": 80.0,
+                    "realized_pnl": -20.0,
+                    "realized_pnl_by_coin_pside": {symbol: {"long": -20.0, "short": 0.0}},
+                    "unrealized_pnl_by_coin_pside": {},
+                },
+                {
+                    "timestamp": 240_000,
+                    "balance": 80.0,
+                    "realized_pnl": -20.0,
+                    "realized_pnl_by_coin_pside": {symbol: {"long": -20.0, "short": 0.0}},
+                    "unrealized_pnl_by_coin_pside": {symbol: {"long": 0.0, "short": 0.0}},
+                },
+            ],
+            "panic_flatten_events": [],
+            "fill_events": fill_events,
+        }
+
+    bot.get_balance_equity_history = fake_history
+
+    await bot._equity_hard_stop_initialize_coin_from_history()
+
+    state = bot._hsl_coin_state("long", symbol)
+    assert state["pnl_reset_timestamp_ms"] == 180_501
+    assert state["halted"] is False
+    assert state["last_stop_event"] is None
+    assert state["last_metrics"]["timestamp_ms"] == 300_000
+    assert state["last_metrics"]["tier"] == "green"
+    assert state["last_metrics"]["drawdown_raw"] == pytest.approx(0.0)
+    assert bot._runtime_forced_modes == {"long": {}, "short": {}}
+
+
+@pytest.mark.asyncio
 async def test_coin_hsl_history_replay_requires_upnl_for_carry_in_decrease():
     bot = make_coin_bot()
     symbol = "A"
