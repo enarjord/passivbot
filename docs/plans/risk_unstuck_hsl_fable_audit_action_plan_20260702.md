@@ -792,7 +792,7 @@ Remaining implementation details:
       finalization now use the explicit policy, with `threshold` as the
       behavior-preserving default and config/JSON validation for invalid
       values.
-- [ ] Dynamic WEL and snapped/raw balance docs/tests.
+- [x] Dynamic WEL and snapped/raw balance docs/tests.
       Make `reduce_overweight` use dynamic currently-tradable slot count, keep
       snapped/raw balance separation, and add high-hysteresis warning/preflight
       visibility.
@@ -803,6 +803,8 @@ Remaining implementation details:
       reports `balance_hysteresis_snap_pct` and warns when it is invalid or
       above `0.05`; docs now spell out snapped-balance sizing/gating versus
       raw-balance exposure-repair surfaces.
+      Implemented: JSON API coverage now pins both shrinking and expanding
+      currently-tradable universes for `reduce_overweight`.
 - [x] Entry cooldown design and migration plan.
       `entry_cooldown_minutes` is the sole ladder/cooldown control. Zero
       cooldown with entry retracement disabled may stage multiple

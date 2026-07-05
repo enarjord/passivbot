@@ -1195,6 +1195,54 @@ def test_twel_reduce_overweight_uses_effective_tradable_slots():
     assert {order["symbol_idx"] for order in twel_closes} == {1}
 
 
+def test_twel_reduce_overweight_relaxes_floor_when_tradable_slots_expand():
+    import passivbot_rust as pbr
+
+    global_bp = bot_params_pair(
+        long_overrides={
+            "n_positions": 4,
+            "total_wallet_exposure_limit": 0.5,
+            "risk_twel_enforcer_threshold": 1.0,
+            "risk_twel_enforcer_policy": "reduce_overweight",
+        }
+    )
+    common_bp = {
+        "wallet_exposure_limit": 0.4,
+        "risk_wel_enforcer_threshold": 2.0,
+    }
+    inp = make_input(
+        balance=1_000.0,
+        global_bp=global_bp,
+        symbols=[
+            make_symbol(
+                0,
+                bid=100.0,
+                ask=100.0,
+                long_pos_size=2.5,
+                long_pos_price=100.0,
+                long_bp=common_bp,
+            ),
+            make_symbol(
+                1,
+                bid=95.0,
+                ask=95.0,
+                long_pos_size=2.6,
+                long_pos_price=100.0,
+                long_bp=common_bp,
+            ),
+            make_symbol(2, bid=100.0, ask=100.0, long_bp=common_bp),
+            make_symbol(3, bid=100.0, ask=100.0, long_bp=common_bp),
+        ],
+    )
+
+    out = compute(pbr, inp)
+    twel_closes = [
+        order for order in out["orders"] if order["order_type"] == "close_auto_reduce_twel_long"
+    ]
+    assert twel_closes
+    assert {order["symbol_idx"] for order in twel_closes} == {0}
+
+
 def test_twel_reduce_overweight_repairs_when_no_symbols_eligible():
     import passivbot_rust as pbr
 
