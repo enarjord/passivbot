@@ -1727,6 +1727,29 @@ async def _equity_hard_stop_try_reuse_replay_cache(
     account_manifest, account_arrays = account_loaded
     watermark_ts = int(account_manifest["end_ts_ms"])
 
+    # Flat-pair cooldown safety: the replay treats every supported panic
+    # marker as a required replay pair, but this slice only loads matrices
+    # for currently held pairs. A marker for a supported flat coin would
+    # therefore demand per-coin timeline values the synthesized rows cannot
+    # provide, aborting startup mid-replay instead of falling back. Reject
+    # reuse up front so the authoritative full replay reconstructs that
+    # flat-pair cooldown.
+    held_pair_set = set(held_pairs)
+    for marker in account_manifest.get("panic_flatten_events") or []:
+        marker_pside = str(marker.get("pside", ""))
+        marker_symbol = str(marker.get("symbol", ""))
+        if not self._equity_hard_stop_symbol_supported_for_coin_replay(marker_symbol):
+            continue
+        if (marker_pside, marker_symbol) not in held_pair_set:
+            logging.info(
+                "[risk] HSL replay cache reuse skipped: cached panic marker for "
+                "flat pair %s:%s is not covered by a held-pair matrix; falling "
+                "back to full replay for cooldown reconstruction",
+                marker_pside,
+                marker_symbol,
+            )
+            return None
+
     pair_arrays_by_pair: dict[tuple[str, str], dict[str, Any]] = {}
     for pside, symbol in held_pairs:
         pair_dir = self._hsl_replay_cache_dir(pside, symbol)

@@ -2307,6 +2307,47 @@ async def test_hsl_cache_reuse_falls_back_on_missing_or_incompatible_cache(
         await bot._equity_hard_stop_try_reuse_replay_cache(exchange_now) is None
     )
 
+    # A cached panic marker for a supported flat coin whose pair matrix is
+    # not loaded must reject reuse (full replay owns flat-pair cooldown
+    # reconstruction) instead of aborting startup mid-replay.
+    flat_symbol = "ETH/USDT:USDT"
+    marker_history = dict(prefix_history)
+    marker_history["panic_flatten_events"] = [
+        {
+            "timestamp": _REUSE_BASE_TS + 500,
+            "minute_timestamp": _REUSE_BASE_TS,
+            "pside": "long",
+            "symbol": flat_symbol,
+        }
+    ]
+    writer_bot = make_coin_bot()
+    writer_bot.exchange = "test_exchange"
+    _bind_reuse_support(writer_bot, tmp_path, monkeypatch, fills=_REUSE_PREFIX_FILLS)
+    assert writer_bot._equity_hard_stop_persist_replay_matrices(marker_history) == 2
+    bot = _make_reuse_bot(
+        tmp_path,
+        monkeypatch,
+        fills=all_fills,
+        exchange_now=exchange_now,
+        positions=final_positions,
+    )
+    # The flat marker symbol is supported for coin replay but not held.
+    bot.c_mults[flat_symbol] = 1.0
+    assert (
+        await bot._equity_hard_stop_try_reuse_replay_cache(exchange_now) is None
+    )
+    # With the marker symbol unsupported, the marker is ignored by the full
+    # replay too, so reuse remains allowed.
+    del bot.c_mults[flat_symbol]
+    assert (
+        await bot._equity_hard_stop_try_reuse_replay_cache(exchange_now) is not None
+    )
+    # Restore the marker-free cache for the remaining gate checks.
+    writer_bot = make_coin_bot()
+    writer_bot.exchange = "test_exchange"
+    _bind_reuse_support(writer_bot, tmp_path, monkeypatch, fills=_REUSE_PREFIX_FILLS)
+    assert writer_bot._equity_hard_stop_persist_replay_matrices(prefix_history) == 2
+
     # Unproven load-time coverage: skipped.
     bot = _make_reuse_bot(
         tmp_path,
