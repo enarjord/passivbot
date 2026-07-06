@@ -279,12 +279,64 @@ def test_hsl_replay_matrix_cache_reports_array_hash_mismatch(tmp_path):
     assert "array_hash_mismatch:pnl" in reasons
 
 
+def test_hsl_replay_matrix_cache_write_rejects_semantically_invalid_raw_values(tmp_path):
+    rows = _hsl_cache_rows()
+    rows[0] = dict(rows[0], price=float("nan"))
+
+    with pytest.raises(ValueError, match="price"):
+        hsl._write_hsl_replay_matrix_cache(tmp_path, rows, _hsl_cache_metadata())
+
+    rows = _hsl_cache_rows()
+    rows[0] = dict(rows[0], pprice=0.0)
+
+    with pytest.raises(ValueError, match="pprice"):
+        hsl._write_hsl_replay_matrix_cache(tmp_path, rows, _hsl_cache_metadata())
+
+
+def test_hsl_replay_matrix_cache_validation_reports_semantically_invalid_raw_values(tmp_path):
+    import numpy as np
+
+    metadata = _hsl_cache_metadata()
+    hsl._write_hsl_replay_matrix_cache(tmp_path, _hsl_cache_rows(), metadata)
+    matrix_path = tmp_path / hsl._HSL_REPLAY_CACHE_MATRIX_FILENAME
+    with np.load(matrix_path, allow_pickle=False) as loaded:
+        arrays = {field: loaded[field].copy() for field in hsl._HSL_REPLAY_MATRIX_RAW_FIELDS}
+    arrays["price"][0] = float("nan")
+    arrays["pprice"][1] = 0.0
+    np.savez(matrix_path, **arrays)
+
+    reasons = hsl._hsl_replay_cache_validation_reasons(
+        tmp_path,
+        expected_metadata=metadata,
+    )
+
+    assert "array_hash_mismatch:price" in reasons
+    assert "array_nonfinite:price" in reasons
+    assert "array_hash_mismatch:pprice" in reasons
+    assert "nonflat_pprice_nonpositive" in reasons
+
+
 def test_hsl_replay_matrix_cache_requires_trust_boundary_metadata(tmp_path):
     metadata = _hsl_cache_metadata()
     metadata.pop("config_digest")
 
     with pytest.raises(ValueError, match="metadata missing required fields"):
         hsl._write_hsl_replay_matrix_cache(tmp_path, _hsl_cache_rows(), metadata)
+
+
+def test_hsl_replay_matrix_cache_validation_requires_manifest_trust_boundary_metadata(tmp_path):
+    import json
+
+    metadata = _hsl_cache_metadata()
+    hsl._write_hsl_replay_matrix_cache(tmp_path, _hsl_cache_rows(), metadata)
+    manifest_path = tmp_path / hsl._HSL_REPLAY_CACHE_MANIFEST_FILENAME
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["metadata"].pop("config_digest")
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    reasons = hsl._hsl_replay_cache_validation_reasons(tmp_path)
+
+    assert reasons == ["metadata_missing_required:config_digest"]
 
 
 def bind_hsl_methods(bot):

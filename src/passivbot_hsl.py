@@ -483,6 +483,16 @@ def _hsl_replay_matrix_arrays(rows: list[dict[str, Any]]) -> dict[str, Any]:
 
     # Reuse the derived-series validation path for raw fields and 1m continuity.
     _hsl_replay_matrix_derived_series(rows, base_equity=1.0)
+    for row in rows:
+        price = _finite_hsl_float(row["price"], "price")
+        psize = _finite_hsl_float(row["psize"], "psize")
+        pprice = _finite_hsl_float(row["pprice"], "pprice")
+        if price <= 0.0:
+            raise ValueError(f"HSL replay matrix price must be > 0, got {price}")
+        if abs(psize) > 0.0 and pprice <= 0.0:
+            raise ValueError(
+                f"HSL replay matrix pprice must be > 0 for non-flat rows, got {pprice}"
+            )
     return {
         "ts": np.asarray([int(row["ts"]) for row in rows], dtype=np.int64),
         "price": np.asarray([float(row["price"]) for row in rows], dtype=np.float64),
@@ -515,6 +525,33 @@ def _hsl_replay_cache_array_manifest(arrays: dict[str, Any]) -> dict[str, dict[s
         }
         for field in _HSL_REPLAY_MATRIX_RAW_FIELDS
     }
+
+
+def _hsl_replay_cache_array_value_reasons(arrays: dict[str, Any]) -> list[str]:
+    import numpy as np
+
+    reasons: list[str] = []
+    required = set(_HSL_REPLAY_MATRIX_RAW_FIELDS)
+    if set(arrays) != required:
+        return reasons
+    row_count = int(len(arrays["ts"]))
+    for field in _HSL_REPLAY_MATRIX_RAW_FIELDS:
+        if len(arrays[field]) != row_count:
+            reasons.append(f"array_length_mismatch:{field}")
+    if reasons:
+        return reasons
+    ts = arrays["ts"]
+    if row_count and (not bool(np.all(np.isfinite(ts))) or int(ts[0]) < 0):
+        reasons.append("timestamp_invalid")
+    for field in ("price", "psize", "pprice", "pnl", "upnl"):
+        if not bool(np.all(np.isfinite(arrays[field]))):
+            reasons.append(f"array_nonfinite:{field}")
+    if row_count and bool(np.any(arrays["price"] <= 0.0)):
+        reasons.append("price_nonpositive")
+    nonflat = np.abs(arrays["psize"]) > 0.0
+    if row_count and bool(np.any(nonflat & (arrays["pprice"] <= 0.0))):
+        reasons.append("nonflat_pprice_nonpositive")
+    return reasons
 
 
 def _normalize_hsl_replay_cache_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
@@ -614,11 +651,25 @@ def _hsl_replay_cache_validation_reasons(
         except Exception:
             reasons.append("expected_metadata_invalid")
     metadata = manifest.get("metadata")
+    metadata_norm = None
     if not isinstance(metadata, dict):
         reasons.append("metadata_missing")
-    elif expected_norm is not None:
+    else:
+        try:
+            metadata_norm = _normalize_hsl_replay_cache_metadata(metadata)
+        except ValueError:
+            missing_fields = [
+                key for key in _HSL_REPLAY_CACHE_REQUIRED_METADATA if metadata.get(key) is None
+            ]
+            if missing_fields:
+                reasons.extend(f"metadata_missing_required:{key}" for key in missing_fields)
+            else:
+                reasons.append("metadata_invalid")
+        except Exception:
+            reasons.append("metadata_invalid")
+    if metadata_norm is not None and expected_norm is not None:
         for key, value in expected_norm.items():
-            if metadata.get(key) != value:
+            if metadata_norm.get(key) != value:
                 reasons.append(f"metadata_mismatch:{key}")
     try:
         loaded_npz = np.load(matrix_path, allow_pickle=False)
@@ -651,6 +702,7 @@ def _hsl_replay_cache_validation_reasons(
             row_count = int(len(loaded_arrays["ts"]))
             if row_count != int(manifest.get("row_count", -1)):
                 reasons.append("row_count_mismatch")
+            reasons.extend(_hsl_replay_cache_array_value_reasons(loaded_arrays))
             if row_count:
                 diffs = np.diff(loaded_arrays["ts"])
                 if diffs.size and not bool(np.all(diffs == _HSL_REPLAY_MATRIX_INTERVAL_MS)):
