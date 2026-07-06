@@ -1374,6 +1374,64 @@ def test_candle_fetch_concurrency_is_conservative_for_history_replay():
     assert bot._candle_fetch_concurrency(context="history_replay") == 7
 
 
+def test_hsl_extract_fill_events_normalization():
+    bot = Passivbot.__new__(Passivbot)
+    bot.c_mults = {"BTC/USDT:USDT": 2.0}
+    bot.get_symbol_id_inv = (
+        lambda sym: "BTC/USDT:USDT" if sym == "BTCUSDT" else ""
+    )
+
+    events = bot._hsl_extract_fill_events(
+        [
+            {
+                "timestamp": 1_800_000_061_000,
+                "symbol": "BTCUSDT",
+                "position_side": "long",
+                "side": "buy",
+                "qty": 1.0,
+                "price": 100.0,
+                "pnl": 0.0,
+            },
+            {
+                "timestamp": 1_800_000_060_000,
+                "symbol": "BTC/USDT:USDT",
+                "pside": "short",
+                "side": "buy",
+                "amount": 2.0,
+                "avgPrice": 50.0,
+                "pnl": -1.0,
+            },
+            {
+                "timestamp": 1_800_000_062_000,
+                "symbol": "BTC/USDT:USDT",
+                "qty_signed": -0.5,
+                "price": 10.0,
+            },
+            # Missing timestamp, missing symbol, zero qty, zero price: skipped.
+            {"symbol": "BTC/USDT:USDT", "qty": 1.0, "price": 1.0},
+            {"timestamp": 1_800_000_063_000, "symbol": "", "qty": 1.0, "price": 1.0},
+            {"timestamp": 1_800_000_064_000, "symbol": "BTC/USDT:USDT", "qty": 0.0, "price": 1.0},
+            {"timestamp": 1_800_000_065_000, "symbol": "BTC/USDT:USDT", "qty": 1.0, "price": 0.0},
+        ]
+    )
+
+    assert [event["timestamp"] for event in events] == [1_800_000_060_000, 1_800_000_061_000, 1_800_000_062_000]
+    by_ts = {event["timestamp"]: event for event in events}
+    # Exchange-id symbols normalize through get_symbol_id_inv.
+    assert by_ts[1_800_000_061_000]["symbol"] == "BTC/USDT:USDT"
+    assert by_ts[1_800_000_061_000]["action"] == "increase"
+    assert by_ts[1_800_000_061_000]["c_mult"] == 2.0
+    # qty/price fallbacks (amount/avgPrice); short buy reduces.
+    assert by_ts[1_800_000_060_000]["qty"] == 2.0
+    assert by_ts[1_800_000_060_000]["price"] == 50.0
+    assert by_ts[1_800_000_060_000]["pside"] == "short"
+    assert by_ts[1_800_000_060_000]["action"] == "decrease"
+    # Signed qty decides the action and qty is stored unsigned.
+    assert by_ts[1_800_000_062_000]["qty"] == 0.5
+    assert by_ts[1_800_000_062_000]["action"] == "decrease"
+    assert all("fee" in event and "pb_order_type" in event for event in events)
+
+
 @pytest.mark.asyncio
 async def test_balance_equity_history_paces_replay_candle_fetches(monkeypatch):
     bot = Passivbot.__new__(Passivbot)
