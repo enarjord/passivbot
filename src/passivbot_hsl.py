@@ -741,7 +741,9 @@ def _hsl_replay_cache_expected_metadata(
         "fill_covered_start_ms": int(fill_covered_start_ms),
         "fill_covered_end_ms": int(fill_covered_end_ms),
         "fill_history_scope": str(fill_history_scope),
-        "fill_coverage_proven": bool(fill_coverage_proven),
+        # Passed through raw so the normalizer rejects non-bool proof values
+        # instead of silently blessing truthy garbage as a proven manifest.
+        "fill_coverage_proven": fill_coverage_proven,
         "candle_covered_start_ms": int(candle_covered_start_ms),
         "candle_covered_end_ms": int(candle_covered_end_ms),
     }
@@ -1100,7 +1102,7 @@ def _equity_hard_stop_persist_replay_matrices(self, history: dict[str, Any]) -> 
                     fill_covered_start_ms=int(coverage["fill_covered_start_ms"]),
                     fill_covered_end_ms=int(coverage["fill_covered_end_ms"]),
                     fill_history_scope=str(coverage["fill_history_scope"]),
-                    fill_coverage_proven=bool(coverage["fill_coverage_proven"]),
+                    fill_coverage_proven=coverage["fill_coverage_proven"],
                     candle_covered_start_ms=int(coverage["candle_covered_start_ms"]),
                     candle_covered_end_ms=int(coverage["candle_covered_end_ms"]),
                 )

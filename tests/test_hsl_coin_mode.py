@@ -699,6 +699,54 @@ def test_hsl_replay_cache_persist_matrices_write_failure_is_nonfatal(
     assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 
+def test_hsl_replay_cache_writer_rejects_non_bool_coverage_proof(tmp_path, monkeypatch):
+    from live.event_bus import EventTypes, ReasonCodes
+
+    bot, sink = _make_persist_bot(tmp_path, monkeypatch)
+    symbol = "BTC/USDT:USDT"
+
+    with pytest.raises(ValueError, match="fill_coverage_proven"):
+        hsl._hsl_replay_cache_expected_metadata(
+            bot,
+            "long",
+            symbol,
+            fill_covered_start_ms=60_000,
+            fill_covered_end_ms=200_000,
+            fill_history_scope="window",
+            fill_coverage_proven=1,
+            candle_covered_start_ms=60_000,
+            candle_covered_end_ms=180_000,
+        )
+
+    history = {
+        "hsl_replay_matrices": {"long": {symbol: _hsl_cache_rows()}},
+        "hsl_replay_matrix_coverage": {
+            "fill_covered_start_ms": 60_000,
+            "fill_covered_end_ms": 200_000,
+            "fill_history_scope": "window",
+            "fill_coverage_proven": 1,
+            "candle_covered_start_ms": 60_000,
+            "candle_covered_end_ms": 180_000,
+        },
+    }
+
+    written = hsl._equity_hard_stop_persist_replay_matrices(bot, history)
+
+    assert written == 0
+    cache_dir = hsl._hsl_replay_cache_dir(bot, "long", symbol)
+    assert hsl._hsl_replay_cache_validation_reasons(cache_dir) == ["manifest_missing"]
+    assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    failed_events = [
+        event
+        for event in sink.events
+        if event.event_type == EventTypes.HSL_REPLAY_CACHE
+        and event.reason_code == ReasonCodes.HSL_REPLAY_CACHE_WRITE_FAILED
+    ]
+    assert len(failed_events) == 1
+    assert failed_events[0].data["reasons"] == ["write_exception:ValueError"]
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
+
+
 def test_hsl_replay_cache_persist_matrices_skips_missing_coverage(tmp_path, monkeypatch, caplog):
     import logging as logging_module
 
