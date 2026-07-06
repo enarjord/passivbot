@@ -1196,6 +1196,8 @@ def bind_hsl_methods(bot):
         "_hsl_replay_cache_account_series_dir",
         "_hsl_replay_cache_account_expected_metadata",
         "_equity_hard_stop_persist_replay_matrices",
+        "_try_load_hsl_replay_matrix_cache",
+        "_equity_hard_stop_try_reuse_replay_cache",
         "_equity_hard_stop_build_latch_payload",
         "_equity_hard_stop_check_coin",
         "_equity_hard_stop_clear_coin_runtime_forced_mode",
@@ -1927,6 +1929,402 @@ def test_hsl_cache_extension_fail_loud_contracts():
     )
     assert [row["price"] for row in rows] == [101.0, 101.0]
     assert [row["psize"] for row in rows] == [1.0, 1.0]
+
+
+def _bind_reuse_support(bot, tmp_path, monkeypatch, *, fills, covered_start_ms=1):
+    """Equip a fake coin bot with everything the cache-reuse path consumes."""
+    from unittest.mock import AsyncMock
+
+    def fake_get_filepath(rel):
+        path = tmp_path / rel
+        path.mkdir(parents=True, exist_ok=True)
+        return f"{path}/"
+
+    monkeypatch.setattr(hsl, "make_get_filepath", fake_get_filepath)
+    bot.market_type = "swap"
+    bot.qty_steps = {}
+    bot.init_pnls = AsyncMock()
+    bot._pnl_history_coverage_status = MethodType(
+        Passivbot._pnl_history_coverage_status, bot
+    )
+    bot._pnl_blocking_known_gaps = MethodType(Passivbot._pnl_blocking_known_gaps, bot)
+    bot._pnl_gap_is_confirmed_legitimate = Passivbot._pnl_gap_is_confirmed_legitimate
+    bot._pnl_gap_overlaps = Passivbot._pnl_gap_overlaps
+    bot._hsl_extract_fill_events = MethodType(Passivbot._hsl_extract_fill_events, bot)
+    bot._hsl_normalize_fill_symbol = MethodType(
+        Passivbot._hsl_normalize_fill_symbol, bot
+    )
+    bot.get_symbol_id_inv = lambda sym: sym
+
+    class _StubEvent:
+        def __init__(self, payload):
+            self._payload = payload
+
+        def to_dict(self):
+            return dict(self._payload)
+
+    class _StubCache:
+        def load_metadata(self):
+            return {"covered_start_ms": covered_start_ms, "oldest_event_ts": 1}
+
+        def get_covered_start_ms(self):
+            return covered_start_ms
+
+        def get_history_scope(self):
+            return "all"
+
+    class _StubPnlsManager:
+        cache = _StubCache()
+
+        def get_events(self):
+            return [_StubEvent(payload) for payload in fills]
+
+        def get_history_scope(self):
+            return "all"
+
+    bot._pnls_manager = _StubPnlsManager()
+    return bot
+
+
+_REUSE_BASE_TS = 1_800_000_000_000
+_REUSE_SYMBOL = "BTC/USDT:USDT"
+
+
+def _reuse_fill(offset_ms, *, side, qty, price, pnl=0.0, pb_order_type=""):
+    return {
+        "timestamp": _REUSE_BASE_TS + offset_ms,
+        "symbol": _REUSE_SYMBOL,
+        "position_side": "long",
+        "side": side,
+        "qty": qty,
+        "price": price,
+        "pnl": pnl,
+        "pb_order_type": pb_order_type,
+    }
+
+
+_REUSE_PREFIX_FILLS = [
+    _reuse_fill(0, side="buy", qty=1.0, price=100.0),
+    _reuse_fill(90_000, side="sell", qty=0.5, price=101.0, pnl=0.5),
+]
+_REUSE_GAP_FILL = _reuse_fill(210_000, side="buy", qty=0.4, price=99.0)
+_REUSE_CANDLES = [
+    (_REUSE_BASE_TS, 99.0, 101.0, 98.0, 100.0, 1.0),
+    (_REUSE_BASE_TS + 60_000, 84.0, 100.0, 60.0, 60.0, 1.0),
+    (_REUSE_BASE_TS + 120_000, 60.0, 102.0, 60.0, 101.0, 1.0),
+    (_REUSE_BASE_TS + 180_000, 99.0, 101.0, 98.0, 99.0, 1.0),
+    (_REUSE_BASE_TS + 240_000, 99.0, 104.0, 99.0, 103.0, 1.0),
+]
+
+
+async def _reuse_collection_history(monkeypatch, *, n_minutes, fills, positions):
+    """Run the real manager-backed collection over the first n scenario minutes."""
+    import numpy as np
+    from unittest.mock import AsyncMock
+
+    import passivbot as passivbot_module
+    from live.event_bus import ListEventSink, LiveEventPipeline
+
+    bot = Passivbot.__new__(Passivbot)
+    bot.config = {"live": {}}
+    bot.exchange = "test_exchange"
+    bot.user = "test_user"
+    bot.init_pnls = AsyncMock()
+    bot.live_value = lambda key: 1.0 if key == "pnls_max_lookback_days" else None
+    ts_now = _REUSE_BASE_TS + (n_minutes - 1) * 60_000
+    bot.get_exchange_time = lambda: ts_now
+    bot.get_raw_balance = lambda: 100.0
+    bot.get_symbol_id_inv = lambda symbol: symbol
+    bot.positions = positions
+    bot.inverse = False
+    bot._candle_fetch_concurrency = lambda *, context="runtime": 2
+    bot._get_fetch_delay_seconds = lambda: 0.0
+    bot._live_event_pipeline = LiveEventPipeline(
+        structured_sinks=[ListEventSink()], monitor_sinks=[]
+    )
+    bot._live_event_current_cycle_id = "cy_reuse_collect"
+    bot._emit_live_event = Passivbot._emit_live_event.__get__(bot, Passivbot)
+    bot.c_mults = {_REUSE_SYMBOL: 1.0}
+    monkeypatch.setattr(
+        passivbot_module, "compute_psize_pprice", lambda *args, **kwargs: None
+    )
+
+    class _CM:
+        async def get_candles(self, sym, **kwargs):
+            return np.array(
+                _REUSE_CANDLES[:n_minutes], dtype=passivbot_module.CANDLE_DTYPE
+            )
+
+    bot.cm = _CM()
+
+    class _StubEvent:
+        def __init__(self, payload):
+            self._payload = payload
+
+        def to_dict(self):
+            return dict(self._payload)
+
+    class _StubCache:
+        def load_metadata(self):
+            return {"covered_start_ms": 1, "oldest_event_ts": 1}
+
+        def get_covered_start_ms(self):
+            return 1
+
+        def get_history_scope(self):
+            return "all"
+
+    class _StubPnlsManager:
+        cache = _StubCache()
+
+        def __init__(self, payloads):
+            self._payloads = payloads
+
+        def get_events(self):
+            return [_StubEvent(p) for p in self._payloads]
+
+        def get_history_scope(self):
+            return "all"
+
+    bot._pnls_manager = _StubPnlsManager(fills)
+    history = await bot.get_balance_equity_history(
+        current_balance=100.0,
+        hsl_replay_signal_mode="coin",
+    )
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
+    return history
+
+
+def _make_reuse_bot(tmp_path, monkeypatch, *, fills, exchange_now, positions):
+    import numpy as np
+
+    import passivbot as passivbot_module
+
+    bot = make_coin_bot()
+    bot.exchange = "test_exchange"
+    bot.positions = positions
+    bot.c_mults = {_REUSE_SYMBOL: 1.0}
+    bot.get_exchange_time = lambda: exchange_now
+    _bind_reuse_support(bot, tmp_path, monkeypatch, fills=fills)
+
+    class _GapCM:
+        async def get_candles(self, sym, *, start_ts, end_ts, **kwargs):
+            rows = [
+                row
+                for row in _REUSE_CANDLES
+                if start_ts <= row[0] <= end_ts
+            ]
+            return np.array(rows, dtype=passivbot_module.CANDLE_DTYPE)
+
+    bot.cm = _GapCM()
+
+    async def calc_upnl(pside=None, symbol=None):
+        # Final close 103 vs pprice (0.5*100 + 0.4*99)/0.9.
+        pprice = (0.5 * 100.0 + 0.4 * 99.0) / 0.9
+        return (103.0 - pprice) * 0.9
+
+    bot._calc_upnl_sum_strict = calc_upnl
+
+    def fail_full_replay(*args, **kwargs):
+        raise AssertionError("cache reuse must not fall back in this scenario")
+
+    bot._fail_full_replay = fail_full_replay
+    return bot
+
+
+@pytest.mark.asyncio
+async def test_hsl_cache_reuse_reaches_state_identical_to_full_replay(
+    tmp_path, monkeypatch
+):
+    prefix_positions = {
+        _REUSE_SYMBOL: {
+            "long": {"size": 0.5, "price": 100.0},
+            "short": {"size": 0.0, "price": 0.0},
+        }
+    }
+    final_positions = {
+        _REUSE_SYMBOL: {
+            "long": {"size": 0.9, "price": (0.5 * 100.0 + 0.4 * 99.0) / 0.9},
+            "short": {"size": 0.0, "price": 0.0},
+        }
+    }
+    all_fills = _REUSE_PREFIX_FILLS + [_REUSE_GAP_FILL]
+    exchange_now = _REUSE_BASE_TS + 240_000
+
+    # Boot 1: full replay over the prefix window writes the cache.
+    prefix_history = await _reuse_collection_history(
+        monkeypatch, n_minutes=3, fills=_REUSE_PREFIX_FILLS, positions=prefix_positions
+    )
+    writer_bot = make_coin_bot()
+    writer_bot.exchange = "test_exchange"
+    _bind_reuse_support(writer_bot, tmp_path, monkeypatch, fills=_REUSE_PREFIX_FILLS)
+    assert writer_bot._equity_hard_stop_persist_replay_matrices(prefix_history) == 2
+
+    # Boot 2: cache-fed replay over the full window; full fetch must not run.
+    reuse_bot = _make_reuse_bot(
+        tmp_path,
+        monkeypatch,
+        fills=all_fills,
+        exchange_now=exchange_now,
+        positions=final_positions,
+    )
+    reuse_bot.get_balance_equity_history = reuse_bot._fail_full_replay
+    await reuse_bot._equity_hard_stop_initialize_coin_from_history()
+    assert getattr(reuse_bot, "_equity_hard_stop_coin_initialized", False) is True
+
+    # Boot 3 (control): authoritative full replay over the full window.
+    full_history = await _reuse_collection_history(
+        monkeypatch, n_minutes=5, fills=all_fills, positions=final_positions
+    )
+    control_bot = _make_reuse_bot(
+        tmp_path,
+        monkeypatch,
+        fills=all_fills,
+        exchange_now=exchange_now,
+        positions=final_positions,
+    )
+
+    async def full_fetch(current_balance=None, **kwargs):
+        return full_history
+
+    control_bot.get_balance_equity_history = full_fetch
+    await control_bot._equity_hard_stop_initialize_coin_from_history()
+
+    state_reuse = reuse_bot._hsl_coin_state("long", _REUSE_SYMBOL)
+    state_control = control_bot._hsl_coin_state("long", _REUSE_SYMBOL)
+    metrics_reuse = state_reuse["last_metrics"]
+    metrics_control = state_control["last_metrics"]
+    assert metrics_reuse is not None and metrics_control is not None
+    assert metrics_reuse["tier"] == metrics_control["tier"]
+    for key in (
+        "balance",
+        "slot_budget",
+        "drawdown_usd",
+        "drawdown_raw",
+        "drawdown_ema",
+        "drawdown_score",
+        "unrealized_pnl",
+    ):
+        assert metrics_reuse[key] == pytest.approx(metrics_control[key], abs=1e-9)
+    assert state_reuse["halted"] == state_control["halted"]
+    assert state_reuse["cooldown_until_ms"] == state_control["cooldown_until_ms"]
+
+
+@pytest.mark.asyncio
+async def test_hsl_cache_reuse_falls_back_on_missing_or_incompatible_cache(
+    tmp_path, monkeypatch
+):
+    final_positions = {
+        _REUSE_SYMBOL: {
+            "long": {"size": 0.9, "price": (0.5 * 100.0 + 0.4 * 99.0) / 0.9},
+            "short": {"size": 0.0, "price": 0.0},
+        }
+    }
+    all_fills = _REUSE_PREFIX_FILLS + [_REUSE_GAP_FILL]
+    exchange_now = _REUSE_BASE_TS + 240_000
+
+    # No cache on disk: reuse returns None (miss) and the caller falls back.
+    bot = _make_reuse_bot(
+        tmp_path,
+        monkeypatch,
+        fills=all_fills,
+        exchange_now=exchange_now,
+        positions=final_positions,
+    )
+    assert (
+        await bot._equity_hard_stop_try_reuse_replay_cache(exchange_now) is None
+    )
+
+    # Write a valid cache, then break each reuse gate in turn.
+    prefix_positions = {
+        _REUSE_SYMBOL: {
+            "long": {"size": 0.5, "price": 100.0},
+            "short": {"size": 0.0, "price": 0.0},
+        }
+    }
+    prefix_history = await _reuse_collection_history(
+        monkeypatch, n_minutes=3, fills=_REUSE_PREFIX_FILLS, positions=prefix_positions
+    )
+    writer_bot = make_coin_bot()
+    writer_bot.exchange = "test_exchange"
+    _bind_reuse_support(writer_bot, tmp_path, monkeypatch, fills=_REUSE_PREFIX_FILLS)
+    assert writer_bot._equity_hard_stop_persist_replay_matrices(prefix_history) == 2
+
+    # Sanity: the intact cache is reusable.
+    bot = _make_reuse_bot(
+        tmp_path,
+        monkeypatch,
+        fills=all_fills,
+        exchange_now=exchange_now,
+        positions=final_positions,
+    )
+    assert (
+        await bot._equity_hard_stop_try_reuse_replay_cache(exchange_now) is not None
+    )
+
+    # HSL config change rotates the digest: rejected.
+    bot = _make_reuse_bot(
+        tmp_path,
+        monkeypatch,
+        fills=all_fills,
+        exchange_now=exchange_now,
+        positions=final_positions,
+    )
+    bot.hsl["long"]["red_threshold"] = 0.31
+    assert (
+        await bot._equity_hard_stop_try_reuse_replay_cache(exchange_now) is None
+    )
+
+    # Positions that do not reconcile with the extended series: rejected.
+    bot = _make_reuse_bot(
+        tmp_path,
+        monkeypatch,
+        fills=all_fills,
+        exchange_now=exchange_now,
+        positions={
+            _REUSE_SYMBOL: {
+                "long": {"size": 5.0, "price": 100.0},
+                "short": {"size": 0.0, "price": 0.0},
+            }
+        },
+    )
+    assert (
+        await bot._equity_hard_stop_try_reuse_replay_cache(exchange_now) is None
+    )
+
+    # A panic fill inside the gap: skipped (full replay owns marker derivation).
+    panic_fills = _REUSE_PREFIX_FILLS + [
+        dict(_REUSE_GAP_FILL, pb_order_type="close_panic_long")
+    ]
+    bot = _make_reuse_bot(
+        tmp_path,
+        monkeypatch,
+        fills=panic_fills,
+        exchange_now=exchange_now,
+        positions=final_positions,
+    )
+    assert (
+        await bot._equity_hard_stop_try_reuse_replay_cache(exchange_now) is None
+    )
+
+    # Unproven load-time coverage: skipped.
+    bot = _make_reuse_bot(
+        tmp_path,
+        monkeypatch,
+        fills=all_fills,
+        exchange_now=exchange_now,
+        positions=final_positions,
+    )
+    bot._pnls_manager.cache.get_history_scope = lambda: "window"
+    bot._pnls_manager.get_history_scope = lambda: "window"
+    bot._pnls_manager.cache.get_covered_start_ms = lambda: 0
+    bot._pnls_manager.cache.load_metadata = lambda: {
+        "covered_start_ms": 0,
+        "oldest_event_ts": 1,
+    }
+    assert (
+        await bot._equity_hard_stop_try_reuse_replay_cache(exchange_now) is None
+    )
 
 
 def test_hsl_cache_synthesized_rows_fail_loud_on_bad_inputs():

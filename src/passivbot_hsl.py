@@ -1609,6 +1609,282 @@ def _try_load_hsl_replay_matrix_cache(
     return manifest, arrays
 
 
+def _hsl_replay_cache_read_manifest_window(
+    cache_dir: str | os.PathLike[str],
+) -> dict[str, Any] | None:
+    """Best-effort read of a manifest's recorded coverage window and scope.
+
+    The reader cannot predict the write-time coverage window, so expected
+    metadata takes those fields from the manifest itself (tautological
+    comparison) while identity fields and the coverage proof stay strict.
+    Returns None when no readable manifest exists (a cache miss).
+    """
+    manifest_path = Path(cache_dir) / _HSL_REPLAY_CACHE_MANIFEST_FILENAME
+    if not manifest_path.exists():
+        return None
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        metadata = manifest.get("metadata") or {}
+        return {
+            "fill_covered_start_ms": int(metadata["fill_covered_start_ms"]),
+            "fill_covered_end_ms": int(metadata["fill_covered_end_ms"]),
+            "fill_history_scope": str(metadata["fill_history_scope"]),
+            "candle_covered_start_ms": int(metadata["candle_covered_start_ms"]),
+            "candle_covered_end_ms": int(metadata["candle_covered_end_ms"]),
+        }
+    except Exception:
+        # Unreadable manifests are handled (and evented) by the validator.
+        return {}
+
+
+async def _equity_hard_stop_try_reuse_replay_cache(
+    self, now_ms: int
+) -> dict[str, Any] | None:
+    """Attempt to reconstruct the coin-replay history from persisted caches.
+
+    Returns a history payload equivalent to `get_balance_equity_history()`
+    output for the coin replay, or None when the cache must not be used, in
+    which case the caller falls back to the full exchange-derived replay.
+    Every rejection is observable through the cache hit/miss/rejected events
+    emitted by the loader or a warning here. The cache never becomes
+    authoritative: reuse requires a proven write-time fill-coverage flag, a
+    fresh load-time coverage proof, digest identity, watermark agreement,
+    gap extension from exchange fills/candles, and current-position
+    compatibility; any failure falls back.
+    """
+    if self._equity_hard_stop_signal_mode() != "coin":
+        return None
+    if bool(getattr(self, "inverse", False)):
+        return None
+    manager = getattr(self, "_pnls_manager", None)
+    if manager is None:
+        return None
+    held_pairs: list[tuple[str, str]] = []
+    for symbol, slots in (self.positions or {}).items():
+        if not isinstance(slots, dict):
+            continue
+        for pside in self._hsl_psides():
+            if not self._equity_hard_stop_coin_active_pside(pside):
+                continue
+            if self._equity_hard_stop_has_open_position_symbol(pside, str(symbol)):
+                if not self._equity_hard_stop_symbol_supported_for_coin_replay(
+                    str(symbol)
+                ):
+                    return None
+                held_pairs.append((pside, str(symbol)))
+    if not held_pairs:
+        return None
+
+    lookback = parse_pnls_max_lookback_days(
+        self.live_value("pnls_max_lookback_days"),
+        field_name="live.pnls_max_lookback_days",
+    )
+    lookback_start = lookback.balance_history_start_ms(int(now_ms))
+    coverage_status = self._pnl_history_coverage_status(
+        start_ms=None if lookback_start is None else int(lookback_start),
+        end_ms=int(now_ms),
+        lookback=lookback,
+    )
+    if not bool(coverage_status.get("ready", False)):
+        logging.info(
+            "[risk] HSL replay cache reuse skipped: fill coverage not proven at load "
+            "| reason=%s",
+            str(coverage_status.get("reason", "unknown")),
+        )
+        return None
+
+    def expected_from_window(window: dict[str, Any], *, account: bool, pside: str = "", symbol: str = ""):
+        if window.get("fill_history_scope") not in ("window", "all"):
+            return None
+        kwargs = {
+            "fill_covered_start_ms": window["fill_covered_start_ms"],
+            "fill_covered_end_ms": window["fill_covered_end_ms"],
+            "fill_history_scope": window["fill_history_scope"],
+            # Strict: only caches written from proven fills are reusable.
+            "fill_coverage_proven": True,
+            "candle_covered_start_ms": window["candle_covered_start_ms"],
+            "candle_covered_end_ms": window["candle_covered_end_ms"],
+        }
+        if account:
+            return self._hsl_replay_cache_account_expected_metadata(**kwargs)
+        return self._hsl_replay_cache_expected_metadata(pside, symbol, **kwargs)
+
+    account_dir = self._hsl_replay_cache_account_series_dir()
+    account_window = _hsl_replay_cache_read_manifest_window(account_dir)
+    if account_window is None or not account_window:
+        return None
+    account_expected = expected_from_window(account_window, account=True)
+    if account_expected is None:
+        return None
+    account_loaded = self._try_load_hsl_replay_matrix_cache(
+        account_dir,
+        expected_metadata=account_expected,
+        pside=_HSL_REPLAY_CACHE_ACCOUNT_PSIDE,
+        symbol=_HSL_REPLAY_CACHE_ACCOUNT_SYMBOL,
+    )
+    if account_loaded is None:
+        return None
+    account_manifest, account_arrays = account_loaded
+    watermark_ts = int(account_manifest["end_ts_ms"])
+
+    pair_arrays_by_pair: dict[tuple[str, str], dict[str, Any]] = {}
+    for pside, symbol in held_pairs:
+        pair_dir = self._hsl_replay_cache_dir(pside, symbol)
+        pair_window = _hsl_replay_cache_read_manifest_window(pair_dir)
+        if pair_window is None or not pair_window:
+            return None
+        pair_expected = expected_from_window(
+            pair_window, account=False, pside=pside, symbol=symbol
+        )
+        if pair_expected is None:
+            return None
+        pair_loaded = self._try_load_hsl_replay_matrix_cache(
+            pair_dir,
+            expected_metadata=pair_expected,
+            pside=pside,
+            symbol=symbol,
+        )
+        if pair_loaded is None:
+            return None
+        pair_manifest, pair_arrays = pair_loaded
+        if int(pair_manifest["end_ts_ms"]) != watermark_ts:
+            logging.warning(
+                "[risk] HSL replay cache reuse rejected: pair %s:%s watermark %s "
+                "disagrees with account watermark %s",
+                pside,
+                symbol,
+                pair_manifest["end_ts_ms"],
+                watermark_ts,
+            )
+            return None
+        pair_arrays_by_pair[(pside, symbol)] = pair_arrays
+
+    raw_fills = [event.to_dict() for event in manager.get_events()]
+    extracted = self._hsl_extract_fill_events(raw_fills)
+    gap_floor = watermark_ts + _HSL_REPLAY_MATRIX_INTERVAL_MS
+    gap_fills = [event for event in extracted if int(event["timestamp"]) >= gap_floor]
+    if any(
+        "panic" in str(event.get("pb_order_type") or "") for event in gap_fills
+    ):
+        # Gap panic markers need flat-detection state this slice does not
+        # reconstruct; the full replay derives them authoritatively.
+        logging.info(
+            "[risk] HSL replay cache reuse skipped: panic fill inside the "
+            "extension gap; falling back to full replay"
+        )
+        return None
+
+    closes_by_symbol: dict[str, dict[int, float]] = {}
+    end_minute = int(math.floor(int(now_ms) / _HSL_REPLAY_MATRIX_INTERVAL_MS)) * (
+        _HSL_REPLAY_MATRIX_INTERVAL_MS
+    )
+    if end_minute > watermark_ts:
+        for _pside, symbol in held_pairs:
+            if symbol in closes_by_symbol:
+                continue
+            candles = await self.cm.get_candles(
+                symbol,
+                start_ts=watermark_ts,
+                end_ts=end_minute,
+                strict=False,
+                timeframe="1m",
+            )
+            closes: dict[int, float] = {}
+            for row in candles:
+                closes[int(row["ts"])] = float(row["c"])
+            closes_by_symbol[symbol] = closes
+
+    extended_pairs: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for (pside, symbol), arrays in pair_arrays_by_pair.items():
+        pair_gap_fills = [
+            event
+            for event in gap_fills
+            if str(event["symbol"]) == symbol and str(event["pside"]) == pside
+        ]
+        new_rows = _hsl_replay_extend_pair_rows(
+            arrays,
+            pside=pside,
+            symbol=symbol,
+            fills=pair_gap_fills,
+            closes_by_minute=closes_by_symbol.get(symbol, {}),
+            end_ts=end_minute,
+            c_mult=float(self.c_mults.get(symbol, 1.0)),
+        )
+        extended_pairs[(pside, symbol)] = (
+            _hsl_replay_rows_from_arrays(arrays, series_kind="pair_matrix") + new_rows
+        )
+    account_new_rows = _hsl_replay_extend_account_rows(
+        account_arrays,
+        fills=gap_fills,
+        end_ts=end_minute,
+    )
+    account_rows = (
+        _hsl_replay_rows_from_arrays(account_arrays, series_kind="account_pnl")
+        + account_new_rows
+    )
+
+    # Current-position compatibility: the extended series' final position must
+    # reconcile with the exchange state or the cache is stale/incomplete.
+    for (pside, symbol), rows in extended_pairs.items():
+        extended_psize = float(rows[-1]["psize"])
+        slot = (self.positions or {}).get(symbol, {}).get(pside, {})
+        current_size = abs(float(slot.get("size", 0.0) or 0.0))
+        current_signed = current_size if pside == "long" else -current_size
+        tolerance = max(float(self.qty_steps.get(symbol, 0.0) or 0.0), 1e-9)
+        if abs(extended_psize - current_signed) > tolerance:
+            logging.warning(
+                "[risk] HSL replay cache reuse rejected: extended %s:%s position "
+                "%.12f does not reconcile with exchange position %.12f "
+                "(tolerance %.12f)",
+                pside,
+                symbol,
+                extended_psize,
+                current_signed,
+                tolerance,
+            )
+            return None
+
+    current_balance = float(self.get_raw_balance())
+    timeline = _hsl_replay_timeline_rows_from_cache(
+        {
+            pair: _hsl_replay_matrix_arrays(rows)
+            for pair, rows in extended_pairs.items()
+        },
+        _hsl_replay_account_series_arrays(account_rows),
+        current_balance=current_balance,
+    )
+    panic_flatten_events = list(account_manifest.get("panic_flatten_events") or [])
+    return {
+        "timeline": timeline,
+        "panic_flatten_events": panic_flatten_events,
+        "fill_events": extracted,
+        "hsl_replay_matrices": _hsl_reuse_group_matrices(extended_pairs),
+        "hsl_replay_account_series": account_rows,
+        "hsl_replay_matrix_coverage": {
+            "fill_covered_start_ms": int(
+                account_expected["fill_covered_start_ms"]
+            ),
+            "fill_covered_end_ms": int(now_ms),
+            "fill_history_scope": str(coverage_status.get("history_scope", "unknown")),
+            "fill_coverage_proven": bool(coverage_status.get("ready", False)),
+            "fill_coverage_reason": str(coverage_status.get("reason", "unknown")),
+            "candle_covered_start_ms": int(
+                account_expected["candle_covered_start_ms"]
+            ),
+            "candle_covered_end_ms": int(end_minute),
+        },
+    }
+
+
+def _hsl_reuse_group_matrices(
+    extended_pairs: dict[tuple[str, str], list[dict[str, Any]]],
+) -> dict[str, dict[str, list[dict[str, Any]]]]:
+    out: dict[str, dict[str, list[dict[str, Any]]]] = {}
+    for (pside, symbol), rows in extended_pairs.items():
+        out.setdefault(pside, {})[symbol] = rows
+    return out
+
+
 def _equity_hard_stop_persist_replay_matrices(self, history: dict[str, Any]) -> int:
     """Persist non-authoritative raw replay matrices after a successful coin replay.
 
@@ -3997,10 +4273,35 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
             reason_code="coin_history_replay",
         )
         history_fetch_started_s = time.monotonic()
-        history = await self.get_balance_equity_history(
-            current_balance=self.get_raw_balance(),
-            hsl_replay_signal_mode="coin",
-        )
+        history = None
+        cache_reused = False
+        try:
+            history = await self._equity_hard_stop_try_reuse_replay_cache(
+                int(self.get_exchange_time())
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            # Reuse is an accelerator; any unexpected failure must fall back
+            # to the authoritative full replay, never abort startup.
+            logging.warning(
+                "[risk] HSL replay cache reuse failed; falling back to full "
+                "replay | error=%s: %s",
+                type(exc).__name__,
+                exc,
+            )
+            history = None
+        if history is not None:
+            cache_reused = True
+            logging.info(
+                "[risk] HSL coin replay reusing persisted cache | timeline_rows=%d",
+                len(history.get("timeline") or []),
+            )
+        else:
+            history = await self.get_balance_equity_history(
+                current_balance=self.get_raw_balance(),
+                hsl_replay_signal_mode="coin",
+            )
         history_loaded_s = time.monotonic()
         history_fetch_elapsed_s = max(0.0, history_loaded_s - history_fetch_started_s)
         check_shutdown("hsl_coin_history_replay_history_loaded")
@@ -4675,6 +4976,7 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
                 "full_elapsed_s": round(total_elapsed_s, 3),
                 "startup_blocking_elapsed_s": round(total_elapsed_s, 3),
                 "elapsed_s": round(total_elapsed_s, 3),
+                "cache_reused": bool(cache_reused),
             },
             status="succeeded",
             reason_code="coin_history_replay_completed",

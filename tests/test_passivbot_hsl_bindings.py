@@ -47,4 +47,6 @@ def test_passivbot_uses_passivbot_hsl_module_for_hsl_methods():
         "_hsl_replay_cache_account_series_dir",
         "_hsl_replay_cache_account_expected_metadata",
         "_equity_hard_stop_persist_replay_matrices",
+        "_try_load_hsl_replay_matrix_cache",
+        "_equity_hard_stop_try_reuse_replay_cache",
     } <= assigned_names
