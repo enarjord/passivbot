@@ -51,6 +51,18 @@ _HSL_REPLAY_CACHE_REQUIRED_METADATA = (
 )
 
 
+def _hsl_replay_cache_safe_fragment(value: Any) -> str:
+    raw = str(value).strip()
+    out = []
+    for char in raw:
+        if char.isalnum() or char in {"-", "_", "."}:
+            out.append(char)
+        else:
+            out.append("_")
+    safe = "".join(out).strip("._")
+    return safe or "unknown"
+
+
 def _hsl_key_sample(value: Any, *, limit: int = 32) -> list[str]:
     if not isinstance(value, dict):
         return []
@@ -647,6 +659,88 @@ def _normalize_hsl_replay_cache_metadata(metadata: dict[str, Any]) -> dict[str, 
     ):
         out[key] = int(out[key])
     return out
+
+
+def _hsl_replay_cache_json_digest(payload: Any) -> str:
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str).encode(
+        "utf-8"
+    )
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _hsl_replay_cache_config_digest(self, pside: str) -> str:
+    if pside not in {"long", "short"}:
+        raise ValueError(f"HSL replay cache pside must be long or short, got {pside!r}")
+    hsl_cfg = getattr(self, "hsl", None)
+    if not isinstance(hsl_cfg, dict) or pside not in hsl_cfg:
+        raise ValueError(f"HSL replay cache requires parsed HSL config for {pside}")
+    payload = {
+        "schema_version": _HSL_REPLAY_CACHE_SCHEMA_VERSION,
+        "signal_mode": self._equity_hard_stop_signal_mode(),
+        "cooldown_position_policy": self._equity_hard_stop_cooldown_position_policy(),
+        "pnls_max_lookback_days": parse_pnls_max_lookback_days(
+            self.live_value("pnls_max_lookback_days"),
+            field_name="live.pnls_max_lookback_days",
+        ).display_value,
+        "pside": pside,
+        "hsl": hsl_cfg[pside],
+        "n_positions": float(self.bot_value(pside, "n_positions")),
+        "total_wallet_exposure_limit": float(
+            self.bot_value(pside, "total_wallet_exposure_limit")
+        ),
+    }
+    return _hsl_replay_cache_json_digest(payload)
+
+
+def _hsl_replay_cache_market_type(self) -> str:
+    for attr in ("market_type", "market"):
+        value = getattr(self, attr, None)
+        if value not in (None, ""):
+            return str(value)
+    config = getattr(self, "config", {})
+    value = get_optional_live_value(config, "market_type", None)
+    if value not in (None, ""):
+        return str(value)
+    return "unknown"
+
+
+def _hsl_replay_cache_expected_metadata(
+    self,
+    pside: str,
+    symbol: str,
+    *,
+    fill_covered_start_ms: int,
+    fill_covered_end_ms: int,
+    candle_covered_start_ms: int,
+    candle_covered_end_ms: int,
+) -> dict[str, Any]:
+    metadata = {
+        "exchange": str(self.exchange),
+        "market_type": _hsl_replay_cache_market_type(self),
+        "user": str(self.user),
+        "config_digest": self._hsl_replay_cache_config_digest(pside),
+        "signal_mode": self._equity_hard_stop_signal_mode(),
+        "pside": str(pside),
+        "symbol": str(symbol),
+        "fill_covered_start_ms": int(fill_covered_start_ms),
+        "fill_covered_end_ms": int(fill_covered_end_ms),
+        "candle_covered_start_ms": int(candle_covered_start_ms),
+        "candle_covered_end_ms": int(candle_covered_end_ms),
+    }
+    return _normalize_hsl_replay_cache_metadata(metadata)
+
+
+def _hsl_replay_cache_dir(self, pside: str, symbol: str, config_digest: str | None = None) -> str:
+    digest = str(config_digest or self._hsl_replay_cache_config_digest(pside))
+    if len(digest) < 16:
+        raise ValueError("HSL replay cache config digest must be at least 16 characters")
+    exchange = _hsl_replay_cache_safe_fragment(getattr(self, "exchange", "unknown"))
+    user = _hsl_replay_cache_safe_fragment(getattr(self, "user", "unknown"))
+    safe_symbol = _hsl_replay_cache_safe_fragment(symbol)
+    return make_get_filepath(
+        "caches/equity_hard_stop/"
+        f"{exchange}/replay_matrix/{user}/{pside}/{safe_symbol}/{digest[:16]}/"
+    )
 
 
 def _write_hsl_replay_matrix_cache(
