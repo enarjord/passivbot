@@ -599,12 +599,19 @@ def _hsl_replay_timeline_rows_from_cache(
     """Synthesize coin-replay timeline rows from persisted cache arrays.
 
     Pure and unwired: this is the trust-boundary conversion a future reuse
-    slice would feed into the existing coin replay loop, so its output must be
-    row-for-row equivalent to the authoritative `get_balance_equity_history`
-    timeline for the covered pairs. Fail-loud on any input that cannot prove
-    that equivalence. Per-pair realized values are cumulative from each pair's
-    matrix start; the replay windowing consumes differences, so a constant
-    anchor offset versus the authoritative timeline is harmless by contract.
+    slice would feed into the existing coin replay loop. The output is an
+    explicit coin-replay row contract, not the full unified timeline shape:
+    each row carries exactly `timestamp`, `balance`, `realized_pnl`
+    (account-level, anchored at the series start like the authoritative
+    record-window anchor), `realized_pnl_by_coin_pside`, and
+    `unrealized_pnl_by_coin_pside` — the fields the coin replay loop and its
+    stop/latch payloads consume. Values must equal the authoritative
+    `get_balance_equity_history` timeline for the covered pairs; consumers
+    that need additional unified-timeline fields must fail loudly rather than
+    assume this shape. Fail-loud on any input that cannot prove equivalence.
+    Per-pair realized values are cumulative from each pair's matrix start; the
+    replay windowing consumes differences, so a constant anchor offset versus
+    the authoritative timeline is harmless by contract.
     """
     import numpy as np
 
@@ -695,6 +702,7 @@ def _hsl_replay_timeline_rows_from_cache(
             {
                 "timestamp": int(account_ts[idx]),
                 "balance": float(balances[idx]),
+                "realized_pnl": float(account_cumsum[idx]),
                 "realized_pnl_by_coin_pside": realized_by_minute[idx],
                 "unrealized_pnl_by_coin_pside": unrealized_by_minute[idx],
             }

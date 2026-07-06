@@ -1462,8 +1462,19 @@ async def test_hsl_cache_synthesized_rows_match_authoritative_timeline(monkeypat
     assert len(synthesized) == len(history["timeline"])
     seen_pair_values = 0
     for row in synthesized:
+        # The synthesized rows expose an explicit coin-replay row contract.
+        assert set(row) == {
+            "timestamp",
+            "balance",
+            "realized_pnl",
+            "realized_pnl_by_coin_pside",
+            "unrealized_pnl_by_coin_pside",
+        }
         auth = timeline_by_ts[row["timestamp"]]
         assert row["balance"] == pytest.approx(auth["balance"], abs=1e-9)
+        # Account-level realized pnl feeds stop/latch payload diagnostics and
+        # must match the authoritative record-window value exactly.
+        assert row["realized_pnl"] == pytest.approx(auth["realized_pnl"], abs=1e-9)
         synth_realized = row["realized_pnl_by_coin_pside"].get(symbol, {}).get("long")
         synth_upnl = row["unrealized_pnl_by_coin_pside"].get(symbol, {}).get("long")
         auth_realized = (
