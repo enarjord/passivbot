@@ -976,6 +976,15 @@ Remaining implementation details:
       metric sequences (across an orange tier transition) when the real coin
       initializer replays synthesized versus authoritative rows. This is the
       trust boundary the read/reuse slice must build on.
+      Partial: pure, unwired watermark-extension helpers
+      (`_hsl_replay_extend_pair_rows`/`_hsl_replay_extend_account_rows`) now
+      extend cached pair/account arrays from the cache watermark to now using
+      post-watermark extracted fills and candle closes, mirroring the
+      authoritative position bookkeeping exactly. Slice-and-extend parity
+      tests prove extension equals a full rebuild to 1e-12; fills inside the
+      cached window, beyond the extension end, or from another pair are
+      rejected fail-loud so double-counting rejects the cache instead of
+      corrupting it.
 - [ ] Python simplification after Rust owns ideal protective orders and unstuck
       orders.
       Python should reconcile ideal vs actual orders, not re-decide trading

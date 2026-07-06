@@ -710,6 +710,205 @@ def _hsl_replay_timeline_rows_from_cache(
     return rows
 
 
+def _hsl_replay_rows_from_arrays(
+    arrays: dict[str, Any], *, series_kind: str
+) -> list[dict[str, Any]]:
+    """Inverse of the arrays builders: expand validated arrays into row dicts."""
+    fields = _hsl_replay_cache_series_fields(series_kind)
+    reasons = _hsl_replay_cache_array_value_reasons(dict(arrays), series_kind=series_kind)
+    if reasons:
+        raise ValueError(
+            f"HSL replay {series_kind} arrays invalid: " + ", ".join(reasons)
+        )
+    row_count = int(len(arrays["ts"]))
+    rows: list[dict[str, Any]] = []
+    for idx in range(row_count):
+        row: dict[str, Any] = {}
+        for field in fields:
+            value = arrays[field][idx]
+            row[field] = int(value) if field == "ts" else float(value)
+        rows.append(row)
+    return rows
+
+
+def _hsl_replay_extension_minutes(
+    watermark_ts: int, end_ts: int
+) -> list[int]:
+    end_minute = int(math.floor(int(end_ts) / _HSL_REPLAY_MATRIX_INTERVAL_MS)) * (
+        _HSL_REPLAY_MATRIX_INTERVAL_MS
+    )
+    if end_minute < int(watermark_ts):
+        raise ValueError(
+            f"HSL cache extension end {end_ts} precedes watermark {watermark_ts}"
+        )
+    return list(
+        range(
+            int(watermark_ts) + _HSL_REPLAY_MATRIX_INTERVAL_MS,
+            end_minute + _HSL_REPLAY_MATRIX_INTERVAL_MS,
+            _HSL_REPLAY_MATRIX_INTERVAL_MS,
+        )
+    )
+
+
+def _hsl_replay_extension_require_fill(fill: Any, watermark_ts: int) -> dict[str, Any]:
+    if not isinstance(fill, dict):
+        raise TypeError(
+            f"HSL cache extension fills must be dicts, got {type(fill).__name__}"
+        )
+    for key in ("timestamp", "qty", "price", "action", "pnl"):
+        if key not in fill:
+            raise ValueError(f"HSL cache extension fill missing required key: {key}")
+    ts = int(fill["timestamp"])
+    if ts < int(watermark_ts) + _HSL_REPLAY_MATRIX_INTERVAL_MS:
+        raise ValueError(
+            "HSL cache extension fill lies inside the cached window "
+            f"(ts={ts}, watermark={watermark_ts}); the cache must be rejected "
+            "instead of double-counting fills"
+        )
+    return fill
+
+
+def _hsl_replay_extend_pair_rows(
+    arrays: dict[str, Any],
+    *,
+    pside: str,
+    symbol: str,
+    fills: list[dict[str, Any]],
+    closes_by_minute: dict[int, float],
+    end_ts: int,
+    c_mult: float,
+) -> list[dict[str, Any]]:
+    """Extend a cached pair matrix from its watermark to `end_ts` (pure).
+
+    Mirrors the authoritative replay's position bookkeeping exactly
+    (`_apply_event` in get_balance_equity_history): increases move the
+    weighted-average entry price, decreases shrink size and zero the price on
+    flat. `fills` must contain only this pair's extracted events strictly
+    after the cached window; anything else is rejected fail-loud because it
+    would double-count or misattribute cached data.
+    """
+    if pside not in ("long", "short"):
+        raise ValueError(f"HSL cache extension pside must be long or short, got {pside!r}")
+    rows = _hsl_replay_rows_from_arrays(arrays, series_kind="pair_matrix")
+    if not rows:
+        raise ValueError(f"HSL cache extension requires non-empty pair arrays for {symbol}")
+    watermark_ts = int(rows[-1]["ts"])
+    minutes = _hsl_replay_extension_minutes(watermark_ts, end_ts)
+    c_mult_f = _finite_hsl_float(c_mult, "c_mult")
+    size = abs(float(rows[-1]["psize"]))
+    pprice = float(rows[-1]["pprice"]) if size > 1e-12 else 0.0
+    last_price = float(rows[-1]["price"])
+    ordered = sorted(
+        (_hsl_replay_extension_require_fill(fill, watermark_ts) for fill in fills),
+        key=lambda fill: int(fill["timestamp"]),
+    )
+    for fill in ordered:
+        if str(fill.get("symbol", symbol)) != symbol or str(
+            fill.get("pside", pside)
+        ) != pside:
+            raise ValueError(
+                "HSL cache extension fill does not belong to pair "
+                f"{pside}:{symbol}: {fill.get('pside')}:{fill.get('symbol')}"
+            )
+    if ordered and int(ordered[-1]["timestamp"]) >= (
+        (minutes[-1] if minutes else watermark_ts) + _HSL_REPLAY_MATRIX_INTERVAL_MS
+    ):
+        raise ValueError(
+            "HSL cache extension fill lies beyond the extension end "
+            f"(ts={ordered[-1]['timestamp']})"
+        )
+    new_rows: list[dict[str, Any]] = []
+    fill_idx = 0
+    for minute in minutes:
+        boundary = minute + _HSL_REPLAY_MATRIX_INTERVAL_MS
+        minute_pnl = 0.0
+        while fill_idx < len(ordered) and int(ordered[fill_idx]["timestamp"]) < boundary:
+            fill = ordered[fill_idx]
+            qty = abs(_finite_hsl_float(fill["qty"], "qty"))
+            fill_price = _finite_hsl_float(fill["price"], "price")
+            minute_pnl += _finite_hsl_float(fill["pnl"], "pnl") + _finite_hsl_float(
+                fill.get("fee", 0.0), "fee"
+            )
+            if str(fill["action"]) == "increase":
+                new_size = size + qty
+                if new_size <= 0.0:
+                    size, pprice = 0.0, 0.0
+                elif size <= 0.0:
+                    size, pprice = new_size, fill_price
+                else:
+                    pprice = max((size * pprice + qty * fill_price) / new_size, 0.0)
+                    size = new_size
+            else:
+                size = max(size - qty, 0.0)
+                if size <= 0.0:
+                    pprice = 0.0
+            fill_idx += 1
+        close = closes_by_minute.get(minute)
+        if close is not None:
+            close_f = _finite_hsl_float(close, "close")
+            if close_f <= 0.0:
+                raise ValueError(
+                    f"HSL cache extension close must be > 0 at {minute}, got {close_f}"
+                )
+            last_price = close_f
+        psize = size if pside == "long" else -size
+        new_rows.append(
+            _hsl_replay_matrix_row(
+                pside=pside,
+                ts=int(minute),
+                price=last_price,
+                psize=psize if size > 1e-12 else 0.0,
+                pprice=pprice if size > 1e-12 else 0.0,
+                pnl=minute_pnl,
+                c_mult=c_mult_f,
+            )
+        )
+    return new_rows
+
+
+def _hsl_replay_extend_account_rows(
+    arrays: dict[str, Any],
+    *,
+    fills: list[dict[str, Any]],
+    end_ts: int,
+) -> list[dict[str, Any]]:
+    """Extend a cached account pnl series from its watermark to `end_ts` (pure).
+
+    `fills` must contain the extracted events for ALL symbols strictly after
+    the cached window; per-minute pnl is the sum of `pnl + fee`, matching the
+    authoritative balance accounting.
+    """
+    rows = _hsl_replay_rows_from_arrays(arrays, series_kind="account_pnl")
+    if not rows:
+        raise ValueError("HSL cache extension requires non-empty account arrays")
+    watermark_ts = int(rows[-1]["ts"])
+    minutes = _hsl_replay_extension_minutes(watermark_ts, end_ts)
+    ordered = sorted(
+        (_hsl_replay_extension_require_fill(fill, watermark_ts) for fill in fills),
+        key=lambda fill: int(fill["timestamp"]),
+    )
+    if ordered and int(ordered[-1]["timestamp"]) >= (
+        (minutes[-1] if minutes else watermark_ts) + _HSL_REPLAY_MATRIX_INTERVAL_MS
+    ):
+        raise ValueError(
+            "HSL cache extension fill lies beyond the extension end "
+            f"(ts={ordered[-1]['timestamp']})"
+        )
+    new_rows: list[dict[str, Any]] = []
+    fill_idx = 0
+    for minute in minutes:
+        boundary = minute + _HSL_REPLAY_MATRIX_INTERVAL_MS
+        minute_pnl = 0.0
+        while fill_idx < len(ordered) and int(ordered[fill_idx]["timestamp"]) < boundary:
+            fill = ordered[fill_idx]
+            minute_pnl += _finite_hsl_float(fill["pnl"], "pnl") + _finite_hsl_float(
+                fill.get("fee", 0.0), "fee"
+            )
+            fill_idx += 1
+        new_rows.append(_hsl_replay_account_series_row(ts=int(minute), pnl=minute_pnl))
+    return new_rows
+
+
 def _hsl_hash_array(array: Any) -> str:
     import numpy as np
 
