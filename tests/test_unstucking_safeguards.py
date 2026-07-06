@@ -524,7 +524,6 @@ def _make_dummy_bot(config, *, last_price=100.0):
                 "ema_span_1": 2.0,
                 "entry_volatility_ema_span_1h": 0.0,
                 "entry_volatility_ema_span_1m": 60.0,
-        "entry_volatility_ema_span_1m": 60.0,
                 "entry_grid_spacing_pct": 0.0,
                 "entry_initial_qty_pct": 0.0,
                 "entry_grid_double_down_factor": 1.0,
@@ -555,7 +554,11 @@ def _make_dummy_bot(config, *, last_price=100.0):
             self._bot_value_defaults = {
                 "n_positions": 0,
                 "total_wallet_exposure_limit": 0.0,
+                "risk_twel_enforcer_policy": "reduce_overweight",
                 "risk_twel_enforcer_threshold": 0.0,
+                "hsl_restart_after_red_policy": "threshold",
+                "hsl_orange_tier_mode": "tp_only_with_active_entry_cancellation",
+                "hsl_panic_close_order_type": "limit",
                 "filter_volume_ema_span_1m": 0.0,
                 "filter_volatility_ema_span_1m": 0.0,
                 "forager_volume_drop_pct": 0.0,
@@ -3076,6 +3079,7 @@ async def test_hard_stop_finalize_red_stop_uses_persistent_no_restart_peak(monke
 @pytest.mark.asyncio
 async def test_hard_stop_initialize_from_history_terminal_stop_sets_latch(monkeypatch):
     cfg = _dummy_config()
+    cfg["live"]["hsl_signal_mode"] = "unified"
     bot = _make_dummy_bot(cfg)
     _hsl_cfg(bot)["enabled"] = True
     _hsl_cfg(bot)["red_threshold"] = 0.05
@@ -3160,6 +3164,7 @@ async def test_hard_stop_initialize_from_history_does_not_latch_recovered_red_wi
     monkeypatch,
 ):
     cfg = _dummy_config()
+    cfg["live"]["hsl_signal_mode"] = "unified"
     bot = _make_dummy_bot(cfg)
     _hsl_cfg(bot)["enabled"] = True
     _hsl_cfg(bot)["red_threshold"] = 0.05
@@ -3230,6 +3235,7 @@ async def test_hard_stop_initialize_from_history_reconstructs_active_cooldown_wi
     monkeypatch,
 ):
     cfg = _dummy_config()
+    cfg["live"]["hsl_signal_mode"] = "unified"
     bot = _make_dummy_bot(cfg)
     _hsl_cfg(bot)["enabled"] = True
     _hsl_cfg(bot)["red_threshold"] = 0.05
@@ -3410,6 +3416,7 @@ async def test_hard_stop_initialize_from_history_replay_cooldown_resets_cycle(
     monkeypatch,
 ):
     cfg = _dummy_config()
+    cfg["live"]["hsl_signal_mode"] = "unified"
     bot = _make_dummy_bot(cfg)
     _hsl_cfg(bot)["enabled"] = True
     _hsl_cfg(bot)["red_threshold"] = 0.05
@@ -3526,11 +3533,12 @@ async def test_hard_stop_initialize_from_history_preserves_no_restart_peak_acros
     monkeypatch,
 ):
     cfg = _dummy_config()
+    cfg["live"]["hsl_signal_mode"] = "unified"
     bot = _make_dummy_bot(cfg)
     _hsl_cfg(bot)["enabled"] = True
     _hsl_cfg(bot)["red_threshold"] = 0.04
     _hsl_cfg(bot)["ema_span_minutes"] = 1.0
-    _hsl_cfg(bot)["cooldown_minutes_after_red"] = 1.0
+    _hsl_cfg(bot)["cooldown_minutes_after_red"] = 0.5
     _hsl_cfg(bot)["no_restart_drawdown_threshold"] = 0.2
     bot.balance = 86.0
     bot._live_values["execution_delay_seconds"] = 60.0
@@ -3638,10 +3646,10 @@ async def test_hard_stop_initialize_from_history_preserves_no_restart_peak_acros
     assert _hsl_state(bot)["no_restart_peak_strategy_equity"] == pytest.approx(110.0)
     assert len(captured) == 2
     assert captured[0][1]["no_restart_latched"] is False
-    assert captured[0][1]["cooldown_until_ms"] == 181_500
+    assert captured[0][1]["cooldown_until_ms"] == 151_500
     assert captured[1][1]["no_restart_latched"] is True
     assert captured[1][1]["cooldown_until_ms"] is None
-    assert captured[1][1]["drawdown_raw"] == pytest.approx(0.0)
+    assert captured[1][1]["drawdown_raw"] == pytest.approx(1.0 - 86.0 / 90.0)
     assert captured[1][1]["no_restart_drawdown_raw"] == pytest.approx(
         1.0 - 86.0 / 110.0
     )
@@ -4178,6 +4186,7 @@ async def test_hard_stop_initialize_from_history_resets_after_panic_marker_same_
     monkeypatch,
 ):
     cfg = _dummy_config()
+    cfg["live"]["hsl_signal_mode"] = "unified"
     bot = _make_dummy_bot(cfg)
     _hsl_cfg(bot)["enabled"] = True
     _hsl_cfg(bot)["red_threshold"] = 0.05
@@ -4286,6 +4295,7 @@ async def test_hard_stop_initialize_from_history_normal_policy_replays_from_entr
     monkeypatch,
 ):
     cfg = _dummy_config()
+    cfg["live"]["hsl_signal_mode"] = "unified"
     bot = _make_dummy_bot(cfg)
     symbol = _set_basic_state(bot)
     _hsl_cfg(bot)["enabled"] = True
@@ -4407,6 +4417,7 @@ async def test_hard_stop_initialize_from_history_unresolved_panic_residue_stays_
     monkeypatch,
 ):
     cfg = _dummy_config()
+    cfg["live"]["hsl_signal_mode"] = "unified"
     bot = _make_dummy_bot(cfg)
     symbol = _set_basic_state(bot)
     _hsl_cfg(bot)["enabled"] = True
@@ -4484,6 +4495,22 @@ async def test_hard_stop_initialize_from_history_unresolved_panic_residue_stays_
     assert _hsl_state(bot)["cooldown_unresolved_residue"] is True
     assert _hsl_state(bot)["cooldown_until_ms"] == 241_500
     assert bot._equity_hard_stop_halted_mode("long", symbol) == "panic"
+
+
+@pytest.mark.asyncio
+async def test_hard_stop_initialize_from_history_rejects_coin_signal_mode(monkeypatch):
+    cfg = _dummy_config()
+    cfg["live"]["hsl_signal_mode"] = "coin"
+    bot = _make_dummy_bot(cfg)
+    _hsl_cfg(bot)["enabled"] = True
+
+    async def fake_history(*, current_balance=None, **kwargs):
+        raise AssertionError("history must not be fetched for coin signal mode")
+
+    monkeypatch.setattr(bot, "get_balance_equity_history", fake_history)
+
+    with pytest.raises(ValueError, match="unified or pside"):
+        await bot._equity_hard_stop_initialize_from_history()
 
 
 @pytest.mark.asyncio

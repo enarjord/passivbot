@@ -1386,7 +1386,15 @@ async def test_balance_equity_history_paces_replay_candle_fetches(monkeypatch):
     bot.get_exchange_time = lambda: base_ts + 120_000
     bot.get_raw_balance = lambda: 100.0
     bot.get_symbol_id_inv = lambda symbol: symbol
-    bot.positions = {}
+    # Coin-mode price replay only fetches candles for held or panic symbols,
+    # so hold a long position in every replayed symbol.
+    bot.positions = {
+        symbol: {
+            "long": {"size": 1.0, "price": 100.0},
+            "short": {"size": 0.0, "price": 0.0},
+        }
+        for symbol in ("BTC/USDT:USDT", "ETH/USDT:USDT", "SOL/USDT:USDT")
+    }
     bot._pnls_manager = None
     bot.inverse = False
     bot._candle_fetch_concurrency = lambda *, context="runtime": 2

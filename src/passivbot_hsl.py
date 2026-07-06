@@ -2845,6 +2845,11 @@ async def _equity_hard_stop_initialize_from_history(self) -> None:
     try:
         self._equity_hard_stop_reset_state()
         signal_mode = self._equity_hard_stop_signal_mode()
+        if signal_mode not in ("unified", "pside"):
+            raise ValueError(
+                "HSL initialize_from_history requires signal_mode unified or pside, "
+                f"got {signal_mode!r}; coin mode must use the coin history initializer"
+            )
         lookback = parse_pnls_max_lookback_days(
             self.live_value("pnls_max_lookback_days"),
             field_name="live.pnls_max_lookback_days",

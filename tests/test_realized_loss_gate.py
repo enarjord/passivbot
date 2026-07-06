@@ -846,6 +846,7 @@ class TestPrepBacktestArgsMaxRealizedLossPct:
             "hsl_tier_ratios": {"yellow": 0.5, "orange": 0.75},
             "hsl_orange_tier_mode": "tp_only_with_active_entry_cancellation",
             "hsl_panic_close_order_type": "market",
+            "hsl_restart_after_red_policy": "threshold",
         }
         hsl_short = deepcopy(hsl_long)
         config = {
@@ -874,6 +875,7 @@ class TestPrepBacktestArgsMaxRealizedLossPct:
             "live": {
                 "approved_coins": {"long": ["BTC"], "short": []},
                 "hedge_mode": True,
+                "hsl_signal_mode": "coin",
                 "max_realized_loss_pct": 1.0,
                 "pnls_max_lookback_days": 30.0,
             },
@@ -926,6 +928,7 @@ class TestPrepBacktestArgsEquityHardStopLoss:
             "hsl_tier_ratios": {"yellow": 0.5, "orange": 0.75},
             "hsl_orange_tier_mode": "tp_only_with_active_entry_cancellation",
             "hsl_panic_close_order_type": "market",
+            "hsl_restart_after_red_policy": "threshold",
         }
         hsl_short = deepcopy(hsl_long)
         config = {
@@ -954,6 +957,7 @@ class TestPrepBacktestArgsEquityHardStopLoss:
             "live": {
                 "approved_coins": {"long": ["BTC"], "short": []},
                 "hedge_mode": True,
+                "hsl_signal_mode": "coin",
                 "max_realized_loss_pct": 1.0,
                 "pnls_max_lookback_days": 30.0,
             },
