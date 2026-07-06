@@ -968,6 +968,14 @@ Remaining implementation details:
       tampering is rejected (`fields_mismatch`/`series_kind_invalid`). The
       account series is only written together with at least one pair matrix
       and remains never read for trading decisions.
+      Partial: a pure, unwired `_hsl_replay_timeline_rows_from_cache` now
+      synthesizes coin-replay timeline rows from persisted pair+account
+      arrays with fail-loud span/continuity/balance checks, and parity tests
+      prove row equality against the authoritative
+      `get_balance_equity_history` timeline plus identical per-sample coin
+      metric sequences (across an orange tier transition) when the real coin
+      initializer replays synthesized versus authoritative rows. This is the
+      trust boundary the read/reuse slice must build on.
 - [ ] Python simplification after Rust owns ideal protective orders and unstuck
       orders.
       Python should reconcile ideal vs actual orders, not re-decide trading
