@@ -1360,6 +1360,276 @@ async def test_coin_hsl_history_replay_emits_lifecycle_events():
     assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 
+async def _run_parity_history(monkeypatch):
+    """Run the real coin-mode collection over a small two-close scenario."""
+    import numpy as np
+    from unittest.mock import AsyncMock
+
+    import passivbot as passivbot_module
+    from live.event_bus import ListEventSink, LiveEventPipeline
+
+    bot = Passivbot.__new__(Passivbot)
+    bot.config = {"live": {}}
+    bot.exchange = "kucoin"
+    bot.user = "test_user"
+    bot.init_pnls = AsyncMock()
+    bot.live_value = lambda key: 1.0 if key == "pnls_max_lookback_days" else None
+    base_ts = 1_800_000_000_000
+    ts_now = base_ts + 120_000
+    bot.get_exchange_time = lambda: ts_now
+    bot.get_raw_balance = lambda: 100.0
+    bot.get_symbol_id_inv = lambda symbol: symbol
+    symbol = "BTC/USDT:USDT"
+    bot.positions = {
+        symbol: {
+            "long": {"size": 0.5, "price": 100.0},
+            "short": {"size": 0.0, "price": 0.0},
+        }
+    }
+    bot._pnls_manager = None
+    bot.inverse = False
+    bot._candle_fetch_concurrency = lambda *, context="runtime": 2
+    bot._get_fetch_delay_seconds = lambda: 0.0
+    bot._live_event_pipeline = LiveEventPipeline(
+        structured_sinks=[ListEventSink()],
+        monitor_sinks=[],
+    )
+    bot._live_event_current_cycle_id = "cy_hsl_parity"
+    bot._emit_live_event = Passivbot._emit_live_event.__get__(bot, Passivbot)
+    bot.c_mults = {symbol: 1.0}
+    monkeypatch.setattr(
+        passivbot_module, "compute_psize_pprice", lambda *args, **kwargs: None
+    )
+
+    class _CM:
+        async def get_candles(self, sym, **kwargs):
+            return np.array(
+                [
+                    (base_ts, 99.0, 101.0, 98.0, 100.0, 1.0),
+                    (base_ts + 60_000, 84.0, 100.0, 60.0, 60.0, 1.0),
+                    (base_ts + 120_000, 60.0, 102.0, 60.0, 101.0, 1.0),
+                ],
+                dtype=passivbot_module.CANDLE_DTYPE,
+            )
+
+    bot.cm = _CM()
+    fill_events = [
+        {
+            "timestamp": base_ts,
+            "symbol": symbol,
+            "position_side": "long",
+            "side": "buy",
+            "qty": 1.0,
+            "price": 100.0,
+            "pnl": 0.0,
+        },
+        {
+            "timestamp": base_ts + 90_000,
+            "symbol": symbol,
+            "position_side": "long",
+            "side": "sell",
+            "qty": 0.5,
+            "price": 101.0,
+            "pnl": 0.5,
+        },
+    ]
+    history = await bot.get_balance_equity_history(
+        fill_events=fill_events,
+        current_balance=100.0,
+        hsl_replay_signal_mode="coin",
+    )
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
+    return history, symbol
+
+
+@pytest.mark.asyncio
+async def test_hsl_cache_synthesized_rows_match_authoritative_timeline(monkeypatch):
+    history, symbol = await _run_parity_history(monkeypatch)
+    pair_arrays = hsl._hsl_replay_matrix_arrays(
+        history["hsl_replay_matrices"]["long"][symbol]
+    )
+    account_arrays = hsl._hsl_replay_account_series_arrays(
+        history["hsl_replay_account_series"]
+    )
+
+    synthesized = hsl._hsl_replay_timeline_rows_from_cache(
+        {("long", symbol): pair_arrays},
+        account_arrays,
+        current_balance=100.0,
+    )
+
+    timeline_by_ts = {int(row["timestamp"]): row for row in history["timeline"]}
+    assert len(synthesized) == len(history["timeline"])
+    seen_pair_values = 0
+    for row in synthesized:
+        auth = timeline_by_ts[row["timestamp"]]
+        assert row["balance"] == pytest.approx(auth["balance"], abs=1e-9)
+        synth_realized = row["realized_pnl_by_coin_pside"].get(symbol, {}).get("long")
+        synth_upnl = row["unrealized_pnl_by_coin_pside"].get(symbol, {}).get("long")
+        auth_realized = (
+            auth.get("realized_pnl_by_coin_pside", {}).get(symbol, {}).get("long")
+        )
+        auth_upnl = (
+            auth.get("unrealized_pnl_by_coin_pside", {}).get(symbol, {}).get("long")
+        )
+        if auth_realized is not None:
+            seen_pair_values += 1
+            assert synth_realized == pytest.approx(auth_realized, abs=1e-9)
+            assert synth_upnl == pytest.approx(auth_upnl, abs=1e-9)
+        elif synth_realized is not None:
+            # Collection may start pair rows at the first candle, before the
+            # pair's first fill; those extra rows must be exactly neutral.
+            assert synth_realized == 0.0
+            assert synth_upnl == 0.0
+    # The scenario's fill minutes must actually have been compared.
+    assert seen_pair_values >= 2
+
+
+@pytest.mark.asyncio
+async def test_hsl_cache_synthesized_replay_reaches_identical_coin_state(monkeypatch):
+    history, symbol = await _run_parity_history(monkeypatch)
+    pair_arrays = hsl._hsl_replay_matrix_arrays(
+        history["hsl_replay_matrices"]["long"][symbol]
+    )
+    account_arrays = hsl._hsl_replay_account_series_arrays(
+        history["hsl_replay_account_series"]
+    )
+    synthesized = hsl._hsl_replay_timeline_rows_from_cache(
+        {("long", symbol): pair_arrays},
+        account_arrays,
+        current_balance=100.0,
+    )
+    end_ts = int(history["timeline"][-1]["timestamp"])
+
+    async def run_replay(timeline):
+        bot = make_coin_bot()
+        bot.positions = {
+            symbol: {
+                "long": {"size": 0.5, "price": 100.0},
+                "short": {"size": 0.0, "price": 0.0},
+            }
+        }
+        bot.c_mults = {symbol: 1.0}
+        bot.get_exchange_time = lambda: end_ts
+
+        async def fake_history(current_balance=None, **kwargs):
+            return {
+                "timeline": timeline,
+                "panic_flatten_events": [],
+                "fill_events": history["fill_events"],
+            }
+
+        bot.get_balance_equity_history = fake_history
+        samples = []
+        original_apply = bot._equity_hard_stop_apply_coin_metrics_sample
+
+        def recording_apply(*args, **kwargs):
+            metrics = original_apply(*args, **kwargs)
+            samples.append(
+                (
+                    metrics["timestamp_ms"],
+                    metrics["tier"],
+                    round(metrics["drawdown_raw"], 12),
+                    round(metrics["drawdown_score"], 12),
+                    round(metrics["balance"], 9),
+                    round(metrics["unrealized_pnl"], 9),
+                )
+            )
+            return metrics
+
+        bot._equity_hard_stop_apply_coin_metrics_sample = recording_apply
+        await bot._equity_hard_stop_initialize_coin_from_history()
+        return bot, samples
+
+    bot_auth, samples_auth = await run_replay(history["timeline"])
+    bot_synth, samples_synth = await run_replay(synthesized)
+
+    # The scenario dips through the orange tier mid-replay, so the sequences
+    # prove parity across tier transitions rather than only green states.
+    auth_tiers = {tier for _, tier, *_ in samples_auth}
+    assert "orange" in auth_tiers
+    # The synthesized replay may include extra leading neutral samples (pair
+    # rows can start at the first candle, before the first fill); after
+    # aligning on the authoritative sample timestamps the sequences must match
+    # exactly.
+    auth_ts = {sample[0] for sample in samples_auth}
+    assert [s for s in samples_synth if s[0] in auth_ts] == samples_auth
+    extra = [s for s in samples_synth if s[0] not in auth_ts]
+    assert all(tier == "green" and dd == 0.0 for _, tier, dd, *_ in extra)
+
+    state_auth = bot_auth._hsl_coin_state("long", symbol)
+    state_synth = bot_synth._hsl_coin_state("long", symbol)
+    metrics_auth = state_auth["last_metrics"]
+    metrics_synth = state_synth["last_metrics"]
+    assert metrics_auth is not None and metrics_synth is not None
+    for key in ("tier", "timestamp_ms"):
+        assert metrics_synth[key] == metrics_auth[key]
+    for key in (
+        "balance",
+        "slot_budget",
+        "drawdown_usd",
+        "drawdown_raw",
+        "drawdown_ema",
+        "drawdown_score",
+        "unrealized_pnl",
+    ):
+        assert metrics_synth[key] == pytest.approx(metrics_auth[key], abs=1e-9)
+    assert state_synth["halted"] == state_auth["halted"]
+    assert state_synth["cooldown_until_ms"] == state_auth["cooldown_until_ms"]
+
+
+def test_hsl_cache_synthesized_rows_fail_loud_on_bad_inputs():
+    account = hsl._hsl_replay_account_series_arrays(
+        [
+            hsl._hsl_replay_account_series_row(ts=60_000, pnl=0.0),
+            hsl._hsl_replay_account_series_row(ts=120_000, pnl=0.5),
+        ]
+    )
+    pair = hsl._hsl_replay_matrix_arrays(
+        [
+            hsl._hsl_replay_matrix_row(
+                pside="long", ts=60_000, price=100.0, psize=1.0,
+                pprice=100.0, pnl=0.0, c_mult=1.0,
+            ),
+            hsl._hsl_replay_matrix_row(
+                pside="long", ts=120_000, price=101.0, psize=1.0,
+                pprice=100.0, pnl=0.5, c_mult=1.0,
+            ),
+        ]
+    )
+
+    with pytest.raises(ValueError, match="current_balance"):
+        hsl._hsl_replay_timeline_rows_from_cache(
+            {("long", "A"): pair}, account, current_balance=0.0
+        )
+
+    out_of_span = hsl._hsl_replay_matrix_arrays(
+        [
+            hsl._hsl_replay_matrix_row(
+                pside="long", ts=180_000, price=100.0, psize=1.0,
+                pprice=100.0, pnl=0.0, c_mult=1.0,
+            ),
+        ]
+    )
+    with pytest.raises(ValueError, match="outside account span"):
+        hsl._hsl_replay_timeline_rows_from_cache(
+            {("long", "A"): out_of_span}, account, current_balance=100.0
+        )
+
+    # A synthesized balance dipping to <= 0 anywhere must be rejected because
+    # the coin metrics layer requires balance > 0.
+    deep_loss_account = hsl._hsl_replay_account_series_arrays(
+        [
+            hsl._hsl_replay_account_series_row(ts=60_000, pnl=0.0),
+            hsl._hsl_replay_account_series_row(ts=120_000, pnl=250.0),
+        ]
+    )
+    with pytest.raises(ValueError, match="finite and > 0"):
+        hsl._hsl_replay_timeline_rows_from_cache(
+            {}, deep_loss_account, current_balance=100.0
+        )
+
+
 @pytest.mark.asyncio
 async def test_coin_hsl_history_replay_persists_replay_matrices(tmp_path, monkeypatch):
     from live.event_bus import EventTypes, ListEventSink, LiveEventPipeline, ReasonCodes
