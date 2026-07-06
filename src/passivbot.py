@@ -1767,6 +1767,9 @@ class Passivbot:
     _equity_hard_stop_apply_sample = pb_hsl._equity_hard_stop_apply_sample
     _equity_hard_stop_apply_coin_sample = pb_hsl._equity_hard_stop_apply_coin_sample
     _equity_hard_stop_log_transition = pb_hsl._equity_hard_stop_log_transition
+    _hsl_replay_cache_config_digest = pb_hsl._hsl_replay_cache_config_digest
+    _hsl_replay_cache_expected_metadata = pb_hsl._hsl_replay_cache_expected_metadata
+    _hsl_replay_cache_dir = pb_hsl._hsl_replay_cache_dir
     _equity_hard_stop_maybe_emit_raw_red_pending = (
         pb_hsl._equity_hard_stop_maybe_emit_raw_red_pending
     )

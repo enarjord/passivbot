@@ -40,4 +40,7 @@ def test_passivbot_uses_passivbot_hsl_module_for_hsl_methods():
         "_equity_hard_stop_run_red_supervisor",
         "_equity_hard_stop_run_coin_red_supervisor",
         "_apply_equity_hard_stop_orange_overlay",
+        "_hsl_replay_cache_config_digest",
+        "_hsl_replay_cache_expected_metadata",
+        "_hsl_replay_cache_dir",
     } <= assigned_names

@@ -448,6 +448,73 @@ def test_hsl_replay_matrix_cache_try_load_emits_rejected_event(tmp_path):
     assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 
+def test_hsl_replay_cache_config_digest_is_stable_and_hsl_scoped():
+    bot = make_coin_bot()
+    digest = hsl._hsl_replay_cache_config_digest(bot, "long")
+
+    bot.config["irrelevant"] = {"changes": "do_not_affect_hsl_replay_cache"}
+    assert hsl._hsl_replay_cache_config_digest(bot, "long") == digest
+
+    bot.hsl["long"]["red_threshold"] = 0.25
+    assert hsl._hsl_replay_cache_config_digest(bot, "long") != digest
+
+    bot = make_coin_bot()
+    original_bot_value = bot.bot_value
+
+    def bot_value(pside, key):
+        if key == "n_positions":
+            return 3
+        return original_bot_value(pside, key)
+
+    bot.bot_value = bot_value
+    assert hsl._hsl_replay_cache_config_digest(bot, "long") != digest
+
+
+def test_hsl_replay_cache_expected_metadata_uses_trust_boundary_fields():
+    bot = make_coin_bot()
+    bot.market_type = "swap"
+
+    metadata = hsl._hsl_replay_cache_expected_metadata(
+        bot,
+        "long",
+        "BTC/USDT:USDT",
+        fill_covered_start_ms=60_000,
+        fill_covered_end_ms=120_000,
+        candle_covered_start_ms=60_000,
+        candle_covered_end_ms=180_000,
+    )
+
+    assert set(metadata) == set(hsl._HSL_REPLAY_CACHE_REQUIRED_METADATA)
+    assert metadata["exchange"] == "test_exchange"
+    assert metadata["market_type"] == "swap"
+    assert metadata["user"] == "test_user"
+    assert metadata["signal_mode"] == "coin"
+    assert metadata["pside"] == "long"
+    assert metadata["symbol"] == "BTC/USDT:USDT"
+    assert metadata["config_digest"] == hsl._hsl_replay_cache_config_digest(bot, "long")
+    assert len(metadata["config_digest"]) == 64
+    assert metadata["fill_covered_start_ms"] == 60_000
+    assert metadata["fill_covered_end_ms"] == 120_000
+    assert metadata["candle_covered_start_ms"] == 60_000
+    assert metadata["candle_covered_end_ms"] == 180_000
+
+
+def test_hsl_replay_cache_dir_is_sanitized_and_digest_scoped():
+    bot = make_coin_bot()
+    bot.exchange = "binance/usdm"
+    bot.user = "user:one"
+    digest = "abcdef0123456789fedcba9876543210abcdef0123456789fedcba9876543210"
+
+    path = hsl._hsl_replay_cache_dir(bot, "long", "BTC/USDT:USDT", config_digest=digest)
+
+    assert "binance_usdm" in path
+    assert "user_one" in path
+    assert "BTC_USDT_USDT" in path
+    assert "abcdef0123456789" in path
+    assert "BTC/USDT:USDT" not in path
+    assert "user:one" not in path
+
+
 def test_hsl_replay_matrix_cache_reports_array_hash_mismatch(tmp_path):
     import numpy as np
 
@@ -645,6 +712,9 @@ def bind_hsl_methods(bot):
         "_equity_hard_stop_infer_coin_replay_contract",
         "_equity_hard_stop_lookback_ms",
         "_equity_hard_stop_log_transition",
+        "_hsl_replay_cache_config_digest",
+        "_hsl_replay_cache_expected_metadata",
+        "_hsl_replay_cache_dir",
         "_equity_hard_stop_build_latch_payload",
         "_equity_hard_stop_check_coin",
         "_equity_hard_stop_clear_coin_runtime_forced_mode",
