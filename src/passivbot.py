@@ -11093,6 +11093,123 @@ class Passivbot:
 
     # Legacy init_fill_events, update_fill_events, etc. removed - using FillEventsManager
 
+    @staticmethod
+    def _hsl_fill_safe_float(val: Any, default: float = 0.0) -> float:
+        try:
+            if val is None:
+                return default
+            return float(val)
+        except Exception:
+            return default
+
+    def _hsl_normalize_fill_symbol(self, symbol: Any) -> str:
+        sym = str(symbol) if symbol else ""
+        if not sym:
+            return ""
+        if sym in self.c_mults:
+            return sym
+        try:
+            converted = self.get_symbol_id_inv(sym)
+            if converted:
+                return converted
+        except Exception:
+            pass
+        return sym
+
+    @staticmethod
+    def _hsl_fill_action(
+        pside: str, side: str, qty_signed: Optional[float], explicit: Optional[str]
+    ):
+        if explicit in ("increase", "decrease"):
+            return explicit
+        if qty_signed is not None and qty_signed != 0.0:
+            return "increase" if qty_signed > 0 else "decrease"
+        side = side.lower()
+        if pside == "long":
+            return "increase" if side == "buy" else "decrease"
+        return "increase" if side == "sell" else "decrease"
+
+    def _hsl_extract_fill_events(self, source: List[dict]) -> List[dict]:
+        """Normalize raw fill payloads into canonical HSL replay events.
+
+        Shared by the balance/equity replay and (future) cache-extension
+        paths so both consume the same trust-critical normalization.
+        """
+        safe_float = Passivbot._hsl_fill_safe_float
+        out = []
+        for fill in source:
+            ts_raw = fill.get("timestamp")
+            if ts_raw is None:
+                continue
+            try:
+                ts = int(ensure_millis(ts_raw))
+            except Exception:
+                continue
+            symbol = self._hsl_normalize_fill_symbol(fill.get("symbol"))
+            if not symbol:
+                continue
+            pside = str(
+                fill.get("position_side", fill.get("pside", "long"))
+            ).lower()
+            if pside not in ("long", "short"):
+                pside = "long"
+            qty_signed = fill.get("qty_signed")
+            qty_fallback_keys = ("qty", "amount", "size", "contracts")
+            qty_val = safe_float(
+                (
+                    qty_signed
+                    if qty_signed is not None
+                    else next(
+                        (
+                            fill.get(k)
+                            for k in qty_fallback_keys
+                            if fill.get(k) is not None
+                        ),
+                        0.0,
+                    )
+                ),
+                0.0,
+            )
+            qty = abs(qty_val)
+            if qty <= 0.0:
+                continue
+            price_keys = ("price", "avgPrice", "average", "avg_price", "execPrice")
+            price = next(
+                (fill.get(k) for k in price_keys if fill.get(k) is not None), None
+            )
+            if price is None:
+                info = fill.get("info", {})
+                price = (
+                    info.get("avgPrice")
+                    or info.get("execPrice")
+                    or info.get("avg_exec_price")
+                )
+            price = safe_float(price, 0.0)
+            if price <= 0.0:
+                continue
+            pnl_val = safe_float(fill.get("pnl", 0.0), 0.0)
+            fee_paid = signed_fee_paid_from_payload(fill)
+            side = str(fill.get("side", "")).lower()
+            action = Passivbot._hsl_fill_action(
+                pside, side, qty_signed, fill.get("action")
+            )
+            out.append(
+                {
+                    "timestamp": ts,
+                    "symbol": symbol,
+                    "pside": pside,
+                    "qty": qty,
+                    "price": price,
+                    "action": action,
+                    "pnl": pnl_val,
+                    "fee": fee_paid,
+                    "fee_paid": fee_paid,
+                    "pb_order_type": str(fill.get("pb_order_type") or "").lower(),
+                    "c_mult": float(self.c_mults.get(symbol, 1.0)),
+                }
+            )
+        return sorted(out, key=lambda x: x["timestamp"])
+
     async def get_balance_equity_history(
         self,
         fill_events: Optional[List[dict]] = None,
@@ -11141,27 +11258,8 @@ class Passivbot:
                     exc,
                 )
 
-        def _safe_float(val: Any, default: float = 0.0) -> float:
-            try:
-                if val is None:
-                    return default
-                return float(val)
-            except Exception:
-                return default
-
-        def _normalize_symbol(symbol: Any) -> str:
-            sym = str(symbol) if symbol else ""
-            if not sym:
-                return ""
-            if sym in self.c_mults:
-                return sym
-            try:
-                converted = self.get_symbol_id_inv(sym)
-                if converted:
-                    return converted
-            except Exception:
-                pass
-            return sym
+        _safe_float = Passivbot._hsl_fill_safe_float
+        _normalize_symbol = self._hsl_normalize_fill_symbol
 
         def _ensure_slot(
             container: Dict[str, Dict[str, Dict[str, float]]], symbol: str
@@ -11173,90 +11271,6 @@ class Passivbot:
                 }
             return container[symbol]
 
-        def _determine_action(
-            pside: str, side: str, qty_signed: Optional[float], explicit: Optional[str]
-        ):
-            if explicit in ("increase", "decrease"):
-                return explicit
-            if qty_signed is not None and qty_signed != 0.0:
-                return "increase" if qty_signed > 0 else "decrease"
-            side = side.lower()
-            if pside == "long":
-                return "increase" if side == "buy" else "decrease"
-            return "increase" if side == "sell" else "decrease"
-
-        def _extract_events(source: List[dict]) -> List[dict]:
-            out = []
-            for fill in source:
-                ts_raw = fill.get("timestamp")
-                if ts_raw is None:
-                    continue
-                try:
-                    ts = int(ensure_millis(ts_raw))
-                except Exception:
-                    continue
-                symbol = _normalize_symbol(fill.get("symbol"))
-                if not symbol:
-                    continue
-                pside = str(
-                    fill.get("position_side", fill.get("pside", "long"))
-                ).lower()
-                if pside not in ("long", "short"):
-                    pside = "long"
-                qty_signed = fill.get("qty_signed")
-                qty_fallback_keys = ("qty", "amount", "size", "contracts")
-                qty_val = _safe_float(
-                    (
-                        qty_signed
-                        if qty_signed is not None
-                        else next(
-                            (
-                                fill.get(k)
-                                for k in qty_fallback_keys
-                                if fill.get(k) is not None
-                            ),
-                            0.0,
-                        )
-                    ),
-                    0.0,
-                )
-                qty = abs(qty_val)
-                if qty <= 0.0:
-                    continue
-                price_keys = ("price", "avgPrice", "average", "avg_price", "execPrice")
-                price = next(
-                    (fill.get(k) for k in price_keys if fill.get(k) is not None), None
-                )
-                if price is None:
-                    info = fill.get("info", {})
-                    price = (
-                        info.get("avgPrice")
-                        or info.get("execPrice")
-                        or info.get("avg_exec_price")
-                    )
-                price = _safe_float(price, 0.0)
-                if price <= 0.0:
-                    continue
-                pnl_val = _safe_float(fill.get("pnl", 0.0), 0.0)
-                fee_paid = signed_fee_paid_from_payload(fill)
-                side = str(fill.get("side", "")).lower()
-                action = _determine_action(pside, side, qty_signed, fill.get("action"))
-                out.append(
-                    {
-                        "timestamp": ts,
-                        "symbol": symbol,
-                        "pside": pside,
-                        "qty": qty,
-                        "price": price,
-                        "action": action,
-                        "pnl": pnl_val,
-                        "fee": fee_paid,
-                        "fee_paid": fee_paid,
-                        "pb_order_type": str(fill.get("pb_order_type") or "").lower(),
-                        "c_mult": float(self.c_mults.get(symbol, 1.0)),
-                    }
-                )
-            return sorted(out, key=lambda x: x["timestamp"])
 
         def _current_position_state() -> Dict[Tuple[str, str], Tuple[float, float]]:
             out: Dict[Tuple[str, str], Tuple[float, float]] = {}
@@ -11279,7 +11293,7 @@ class Passivbot:
             else:
                 fill_events = []
 
-        events = _extract_events(fill_events)
+        events = self._hsl_extract_fill_events(fill_events)
         current_position_state = _current_position_state()
         _emit_hsl_history_progress(
             "history_inputs_loaded",
