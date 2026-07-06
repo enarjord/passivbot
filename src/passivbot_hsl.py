@@ -1047,6 +1047,86 @@ def _try_load_hsl_replay_matrix_cache(
     return manifest, arrays
 
 
+def _equity_hard_stop_persist_replay_matrices(self, history: dict[str, Any]) -> int:
+    """Persist non-authoritative raw replay matrices after a successful coin replay.
+
+    Write-only cache population: nothing here is read back for trading decisions.
+    Per-pair failures are logged and emitted as events but never raised, because
+    the cache is a performance aid, not trading state.
+    """
+    matrices = history.get("hsl_replay_matrices")
+    coverage = history.get("hsl_replay_matrix_coverage")
+    if not isinstance(matrices, dict) or not matrices:
+        return 0
+    if not isinstance(coverage, dict):
+        logging.warning(
+            "[risk] HSL replay cache write skipped: history missing matrix coverage metadata"
+        )
+        return 0
+    written = 0
+    for pside in sorted(matrices):
+        by_symbol = matrices.get(pside)
+        if not isinstance(by_symbol, dict):
+            continue
+        for symbol in sorted(by_symbol):
+            rows = by_symbol[symbol]
+            started_s = time.monotonic()
+            try:
+                config_digest = self._hsl_replay_cache_config_digest(pside)
+                cache_dir = self._hsl_replay_cache_dir(
+                    pside, symbol, config_digest=config_digest
+                )
+                metadata = self._hsl_replay_cache_expected_metadata(
+                    pside,
+                    symbol,
+                    fill_covered_start_ms=int(coverage["fill_covered_start_ms"]),
+                    fill_covered_end_ms=int(coverage["fill_covered_end_ms"]),
+                    candle_covered_start_ms=int(coverage["candle_covered_start_ms"]),
+                    candle_covered_end_ms=int(coverage["candle_covered_end_ms"]),
+                )
+                manifest = _write_hsl_replay_matrix_cache(cache_dir, rows, metadata)
+            except Exception as exc:
+                logging.warning(
+                    "[risk] HSL[%s:%s] replay cache write failed | rows=%d error=%s: %s",
+                    pside,
+                    symbol,
+                    len(rows) if isinstance(rows, list) else -1,
+                    type(exc).__name__,
+                    exc,
+                )
+                _emit_hsl_replay_event(
+                    self,
+                    EventTypes.HSL_REPLAY_CACHE,
+                    _hsl_replay_cache_status_data(
+                        cache_status="write_failed",
+                        elapsed_s=time.monotonic() - started_s,
+                        reasons=[f"write_exception:{type(exc).__name__}"],
+                    ),
+                    pside=pside,
+                    symbol=symbol,
+                    level="warning",
+                    status="failed",
+                    reason_code=ReasonCodes.HSL_REPLAY_CACHE_WRITE_FAILED,
+                )
+                continue
+            written += 1
+            _emit_hsl_replay_event(
+                self,
+                EventTypes.HSL_REPLAY_CACHE,
+                _hsl_replay_cache_status_data(
+                    cache_status="written",
+                    elapsed_s=time.monotonic() - started_s,
+                    manifest=manifest,
+                ),
+                pside=pside,
+                symbol=symbol,
+                level="debug",
+                status="succeeded",
+                reason_code=ReasonCodes.HSL_REPLAY_CACHE_WRITTEN,
+            )
+    return written
+
+
 def _hsl_psides(self) -> tuple[str, str]:
     return ("long", "short")
 
@@ -3972,6 +4052,18 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
             status="succeeded",
             reason_code="coin_history_replay_completed",
         )
+        try:
+            self._equity_hard_stop_persist_replay_matrices(history)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            # Cache persistence is a performance aid; a failure here must
+            # never invalidate the completed replay.
+            logging.warning(
+                "[risk] HSL replay cache persistence failed | error=%s: %s",
+                type(exc).__name__,
+                exc,
+            )
     except asyncio.CancelledError:
         _emit_hsl_replay_event(
             self,

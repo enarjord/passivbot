@@ -244,6 +244,8 @@ class ReasonCodes:
     HSL_REPLAY_CACHE_HIT = "hsl_replay_cache_hit"
     HSL_REPLAY_CACHE_MISS = "hsl_replay_cache_miss"
     HSL_REPLAY_CACHE_REJECTED = "hsl_replay_cache_rejected"
+    HSL_REPLAY_CACHE_WRITTEN = "hsl_replay_cache_written"
+    HSL_REPLAY_CACHE_WRITE_FAILED = "hsl_replay_cache_write_failed"
     HSL_RAW_RED_PENDING_EMA_CONFIRMATION = "hsl_raw_red_pending_ema_confirmation"
     HSL_RED_FINALIZED_WITHOUT_EXCHANGE_ORDER = (
         "hsl_red_finalized_without_exchange_order"

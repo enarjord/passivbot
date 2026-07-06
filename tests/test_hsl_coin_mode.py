@@ -515,6 +515,160 @@ def test_hsl_replay_cache_dir_is_sanitized_and_digest_scoped():
     assert "user:one" not in path
 
 
+def _make_persist_bot(tmp_path, monkeypatch):
+    from live.event_bus import ListEventSink, LiveEventPipeline
+
+    def fake_get_filepath(rel):
+        path = tmp_path / rel
+        path.mkdir(parents=True, exist_ok=True)
+        return f"{path}/"
+
+    monkeypatch.setattr(hsl, "make_get_filepath", fake_get_filepath)
+    bot = make_coin_bot()
+    bot.market_type = "swap"
+    sink = ListEventSink()
+    bot._live_event_pipeline = LiveEventPipeline(
+        structured_sinks=[sink],
+        monitor_sinks=[],
+    )
+    bot._live_event_current_cycle_id = "cy_hsl_cache_write"
+    bot._emit_live_event = MethodType(Passivbot._emit_live_event, bot)
+    return bot, sink
+
+
+def test_hsl_replay_cache_persist_matrices_round_trip(tmp_path, monkeypatch):
+    import numpy as np
+    from live.event_bus import EventTypes, ReasonCodes
+
+    bot, sink = _make_persist_bot(tmp_path, monkeypatch)
+    symbol = "BTC/USDT:USDT"
+    rows = _hsl_cache_rows()
+    coverage = {
+        "fill_covered_start_ms": 60_000,
+        "fill_covered_end_ms": 200_000,
+        "candle_covered_start_ms": 60_000,
+        "candle_covered_end_ms": 180_000,
+    }
+    history = {
+        "hsl_replay_matrices": {"long": {symbol: rows}},
+        "hsl_replay_matrix_coverage": coverage,
+    }
+
+    written = hsl._equity_hard_stop_persist_replay_matrices(bot, history)
+
+    assert written == 1
+    expected_metadata = hsl._hsl_replay_cache_expected_metadata(
+        bot,
+        "long",
+        symbol,
+        fill_covered_start_ms=coverage["fill_covered_start_ms"],
+        fill_covered_end_ms=coverage["fill_covered_end_ms"],
+        candle_covered_start_ms=coverage["candle_covered_start_ms"],
+        candle_covered_end_ms=coverage["candle_covered_end_ms"],
+    )
+    cache_dir = hsl._hsl_replay_cache_dir(bot, "long", symbol)
+    assert (
+        hsl._hsl_replay_cache_validation_reasons(
+            cache_dir, expected_metadata=expected_metadata
+        )
+        == []
+    )
+    loaded = hsl._try_load_hsl_replay_matrix_cache(
+        bot,
+        cache_dir,
+        expected_metadata=expected_metadata,
+        pside="long",
+        symbol=symbol,
+    )
+    assert loaded is not None
+    manifest, arrays = loaded
+    assert manifest["row_count"] == len(rows)
+    np.testing.assert_array_equal(
+        arrays["ts"], np.array([row["ts"] for row in rows], dtype=np.int64)
+    )
+    np.testing.assert_allclose(arrays["pnl"], [row["pnl"] for row in rows])
+    np.testing.assert_allclose(arrays["upnl"], [row["upnl"] for row in rows])
+
+    assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    cache_events = [
+        event for event in sink.events if event.event_type == EventTypes.HSL_REPLAY_CACHE
+    ]
+    written_events = [
+        event
+        for event in cache_events
+        if event.reason_code == ReasonCodes.HSL_REPLAY_CACHE_WRITTEN
+    ]
+    assert len(written_events) == 1
+    event = written_events[0]
+    assert event.status == "succeeded"
+    assert event.pside == "long"
+    assert event.symbol == symbol
+    assert event.data["cache_status"] == "written"
+    assert event.data["row_count"] == len(rows)
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
+
+
+def test_hsl_replay_cache_persist_matrices_write_failure_is_nonfatal(
+    tmp_path, monkeypatch, caplog
+):
+    import logging as logging_module
+
+    from live.event_bus import EventTypes, ReasonCodes
+
+    bot, sink = _make_persist_bot(tmp_path, monkeypatch)
+    symbol = "BTC/USDT:USDT"
+    rows = _hsl_cache_rows()
+    # Break 1m continuity so the fail-loud writer rejects the rows.
+    rows[-1] = dict(rows[-1], ts=rows[-1]["ts"] + 60_000)
+    history = {
+        "hsl_replay_matrices": {"long": {symbol: rows}},
+        "hsl_replay_matrix_coverage": {
+            "fill_covered_start_ms": 60_000,
+            "fill_covered_end_ms": 200_000,
+            "candle_covered_start_ms": 60_000,
+            "candle_covered_end_ms": 180_000,
+        },
+    }
+
+    with caplog.at_level(logging_module.WARNING):
+        written = hsl._equity_hard_stop_persist_replay_matrices(bot, history)
+
+    assert written == 0
+    assert "replay cache write failed" in caplog.text
+    cache_dir = hsl._hsl_replay_cache_dir(bot, "long", symbol)
+    assert hsl._hsl_replay_cache_validation_reasons(cache_dir) == ["manifest_missing"]
+
+    assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    failed_events = [
+        event
+        for event in sink.events
+        if event.event_type == EventTypes.HSL_REPLAY_CACHE
+        and event.reason_code == ReasonCodes.HSL_REPLAY_CACHE_WRITE_FAILED
+    ]
+    assert len(failed_events) == 1
+    event = failed_events[0]
+    assert event.status == "failed"
+    assert event.pside == "long"
+    assert event.symbol == symbol
+    assert event.data["cache_status"] == "write_failed"
+    assert event.data["reasons"] == ["write_exception:ValueError"]
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
+
+
+def test_hsl_replay_cache_persist_matrices_skips_missing_coverage(tmp_path, monkeypatch, caplog):
+    import logging as logging_module
+
+    bot, _sink = _make_persist_bot(tmp_path, monkeypatch)
+    history = {"hsl_replay_matrices": {"long": {"BTC/USDT:USDT": _hsl_cache_rows()}}}
+
+    with caplog.at_level(logging_module.WARNING):
+        written = hsl._equity_hard_stop_persist_replay_matrices(bot, history)
+
+    assert written == 0
+    assert "missing matrix coverage metadata" in caplog.text
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
+
+
 def test_hsl_replay_matrix_cache_reports_array_hash_mismatch(tmp_path):
     import numpy as np
 
@@ -715,6 +869,7 @@ def bind_hsl_methods(bot):
         "_hsl_replay_cache_config_digest",
         "_hsl_replay_cache_expected_metadata",
         "_hsl_replay_cache_dir",
+        "_equity_hard_stop_persist_replay_matrices",
         "_equity_hard_stop_build_latch_payload",
         "_equity_hard_stop_check_coin",
         "_equity_hard_stop_clear_coin_runtime_forced_mode",
@@ -980,6 +1135,140 @@ async def test_coin_hsl_history_replay_emits_lifecycle_events():
         + events[2].data["replay_loop_elapsed_s"]
     )
     assert phase_elapsed_s <= events[2].data["startup_blocking_elapsed_s"] + 0.006
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
+
+
+@pytest.mark.asyncio
+async def test_coin_hsl_history_replay_persists_replay_matrices(tmp_path, monkeypatch):
+    from live.event_bus import EventTypes, ListEventSink, LiveEventPipeline, ReasonCodes
+
+    def fake_get_filepath(rel):
+        path = tmp_path / rel
+        path.mkdir(parents=True, exist_ok=True)
+        return f"{path}/"
+
+    monkeypatch.setattr(hsl, "make_get_filepath", fake_get_filepath)
+    bot = make_coin_bot()
+    bot.market_type = "swap"
+    symbol = "A"
+    bot.positions = {
+        symbol: {
+            "long": {"size": 1.0, "price": 100.0},
+            "short": {"size": 0.0, "price": 0.0},
+        }
+    }
+    sink = ListEventSink()
+    bot._live_event_current_cycle_id = "cy_hsl_replay"
+    bot._live_event_pipeline = LiveEventPipeline(
+        structured_sinks=[sink],
+        monitor_sinks=[],
+    )
+    bot._emit_live_event = MethodType(Passivbot._emit_live_event, bot)
+
+    matrix_rows = [
+        hsl._hsl_replay_matrix_row(
+            pside="long",
+            ts=60_000,
+            price=100.0,
+            psize=1.0,
+            pprice=101.0,
+            pnl=0.0,
+            c_mult=1.0,
+        ),
+        hsl._hsl_replay_matrix_row(
+            pside="long",
+            ts=120_000,
+            price=99.5,
+            psize=1.0,
+            pprice=101.0,
+            pnl=1.0,
+            c_mult=1.0,
+        ),
+    ]
+    coverage = {
+        "fill_covered_start_ms": 0,
+        "fill_covered_end_ms": 180_000,
+        "candle_covered_start_ms": 60_000,
+        "candle_covered_end_ms": 120_000,
+    }
+
+    async def fake_history(current_balance=None, **kwargs):
+        return {
+            "timeline": [
+                {
+                    "timestamp": 60_000,
+                    "balance": 100.0,
+                    "realized_pnl": 0.0,
+                    "realized_pnl_by_coin_pside": {
+                        symbol: {"long": 0.0, "short": 0.0}
+                    },
+                    "unrealized_pnl_by_coin_pside": {
+                        symbol: {"long": -1.0, "short": 0.0}
+                    },
+                },
+                {
+                    "timestamp": 120_000,
+                    "balance": 100.0,
+                    "realized_pnl": 1.0,
+                    "realized_pnl_by_coin_pside": {
+                        symbol: {"long": 1.0, "short": 0.0}
+                    },
+                    "unrealized_pnl_by_coin_pside": {
+                        symbol: {"long": -0.5, "short": 0.0}
+                    },
+                },
+            ],
+            "panic_flatten_events": [],
+            "fill_events": [],
+            "hsl_replay_matrices": {"long": {symbol: matrix_rows}},
+            "hsl_replay_matrix_coverage": coverage,
+        }
+
+    bot.get_balance_equity_history = fake_history
+
+    await bot._equity_hard_stop_initialize_coin_from_history()
+
+    assert getattr(bot, "_equity_hard_stop_coin_initialized", False) is True
+    expected_metadata = hsl._hsl_replay_cache_expected_metadata(
+        bot,
+        "long",
+        symbol,
+        fill_covered_start_ms=coverage["fill_covered_start_ms"],
+        fill_covered_end_ms=coverage["fill_covered_end_ms"],
+        candle_covered_start_ms=coverage["candle_covered_start_ms"],
+        candle_covered_end_ms=coverage["candle_covered_end_ms"],
+    )
+    cache_dir = hsl._hsl_replay_cache_dir(bot, "long", symbol)
+    assert (
+        hsl._hsl_replay_cache_validation_reasons(
+            cache_dir, expected_metadata=expected_metadata
+        )
+        == []
+    )
+
+    assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    replay_events = [
+        event for event in sink.events if event.event_type.startswith("hsl.replay.")
+    ]
+    completed_idx = [
+        idx
+        for idx, event in enumerate(replay_events)
+        if event.event_type == EventTypes.HSL_REPLAY_COMPLETED
+    ]
+    written_idx = [
+        idx
+        for idx, event in enumerate(replay_events)
+        if event.event_type == EventTypes.HSL_REPLAY_CACHE
+        and event.reason_code == ReasonCodes.HSL_REPLAY_CACHE_WRITTEN
+    ]
+    assert len(completed_idx) == 1
+    assert len(written_idx) == 1
+    assert written_idx[0] > completed_idx[0]
+    written_event = replay_events[written_idx[0]]
+    assert written_event.status == "succeeded"
+    assert written_event.pside == "long"
+    assert written_event.symbol == symbol
+    assert written_event.data["row_count"] == 2
     assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 

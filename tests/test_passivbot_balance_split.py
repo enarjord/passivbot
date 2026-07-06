@@ -1517,6 +1517,109 @@ async def test_balance_equity_history_paces_replay_candle_fetches(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_balance_equity_history_builds_replay_matrices_for_held_pairs(monkeypatch):
+    bot = Passivbot.__new__(Passivbot)
+    bot.config = {"live": {}}
+    bot.exchange = "kucoin"
+    bot.user = "test_user"
+    bot.init_pnls = AsyncMock()
+    bot.live_value = lambda key: 1.0 if key == "pnls_max_lookback_days" else None
+    base_ts = 1_800_000_000_000
+    ts_now = base_ts + 120_000
+    bot.get_exchange_time = lambda: ts_now
+    bot.get_raw_balance = lambda: 100.0
+    bot.get_symbol_id_inv = lambda symbol: symbol
+    symbol = "BTC/USDT:USDT"
+    bot.positions = {
+        symbol: {
+            "long": {"size": 0.5, "price": 100.0},
+            "short": {"size": 0.0, "price": 0.0},
+        }
+    }
+    bot._pnls_manager = None
+    bot.inverse = False
+    bot._candle_fetch_concurrency = lambda *, context="runtime": 2
+    bot._get_fetch_delay_seconds = lambda: 0.0
+    bot._live_event_pipeline = LiveEventPipeline(
+        structured_sinks=[ListEventSink()],
+        monitor_sinks=[],
+    )
+    bot._live_event_current_cycle_id = "cy_hsl_history_build"
+    bot._emit_live_event = Passivbot._emit_live_event.__get__(bot, Passivbot)
+    bot.c_mults = {symbol: 1.0}
+    monkeypatch.setattr(
+        passivbot_module, "compute_psize_pprice", lambda *args, **kwargs: None
+    )
+
+    class _CM:
+        async def get_candles(self, sym, **kwargs):
+            return np.array(
+                [
+                    (base_ts, 99.0, 101.0, 98.0, 100.0, 1.0),
+                    (base_ts + 60_000, 100.0, 102.0, 99.0, 101.0, 1.0),
+                    (base_ts + 120_000, 101.0, 103.0, 100.0, 102.0, 1.0),
+                ],
+                dtype=passivbot_module.CANDLE_DTYPE,
+            )
+
+    bot.cm = _CM()
+    fill_events = [
+        {
+            "timestamp": base_ts,
+            "symbol": symbol,
+            "position_side": "long",
+            "side": "buy",
+            "qty": 1.0,
+            "price": 100.0,
+            "pnl": 0.0,
+        },
+        {
+            "timestamp": base_ts + 90_000,
+            "symbol": symbol,
+            "position_side": "long",
+            "side": "sell",
+            "qty": 0.5,
+            "price": 101.0,
+            "pnl": 0.5,
+        },
+    ]
+
+    history = await bot.get_balance_equity_history(
+        fill_events=fill_events,
+        current_balance=100.0,
+        hsl_replay_signal_mode="coin",
+    )
+
+    matrices = history["hsl_replay_matrices"]
+    assert set(matrices) == {"long"}
+    assert set(matrices["long"]) == {symbol}
+    rows = matrices["long"][symbol]
+    assert [row["ts"] for row in rows] == [base_ts, base_ts + 60_000, base_ts + 120_000]
+    assert [row["price"] for row in rows] == [100.0, 101.0, 102.0]
+    assert [row["psize"] for row in rows] == [1.0, 0.5, 0.5]
+    assert [row["pprice"] for row in rows] == [100.0, 100.0, 100.0]
+    # Raw minute pnl: the partial close realized +0.5 inside the second minute.
+    assert [row["pnl"] for row in rows] == [0.0, 0.5, 0.0]
+    assert [row["upnl"] for row in rows] == [0.0, 0.5, 1.0]
+
+    coverage = history["hsl_replay_matrix_coverage"]
+    assert coverage["candle_covered_start_ms"] <= base_ts
+    assert coverage["candle_covered_start_ms"] % 60_000 == 0
+    assert coverage["candle_covered_end_ms"] == base_ts + 120_000
+    assert coverage["fill_covered_start_ms"] <= base_ts
+    assert coverage["fill_covered_end_ms"] == ts_now
+
+    # Non-coin signal modes must not build matrices.
+    history_unified = await bot.get_balance_equity_history(
+        fill_events=fill_events,
+        current_balance=100.0,
+        hsl_replay_signal_mode="unified",
+    )
+    assert history_unified["hsl_replay_matrices"] == {}
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
+
+
+@pytest.mark.asyncio
 async def test_balance_equity_history_clamps_finite_replay_to_lookback_after_state_seed(
     monkeypatch,
 ):

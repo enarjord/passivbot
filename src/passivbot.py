@@ -1770,6 +1770,9 @@ class Passivbot:
     _hsl_replay_cache_config_digest = pb_hsl._hsl_replay_cache_config_digest
     _hsl_replay_cache_expected_metadata = pb_hsl._hsl_replay_cache_expected_metadata
     _hsl_replay_cache_dir = pb_hsl._hsl_replay_cache_dir
+    _equity_hard_stop_persist_replay_matrices = (
+        pb_hsl._equity_hard_stop_persist_replay_matrices
+    )
     _equity_hard_stop_maybe_emit_raw_red_pending = (
         pb_hsl._equity_hard_stop_maybe_emit_raw_red_pending
     )
@@ -11684,6 +11687,79 @@ class Passivbot:
         last_price: Dict[str, float] = {}
         pre_window_events_applied = 0
 
+        # Non-authoritative raw replay matrices (ts, price, psize, pprice, pnl, upnl)
+        # for currently held coin+psides. Written to the replay cache after a
+        # successful coin-mode replay; never read back for trading decisions here.
+        replay_matrix_pairs: set[Tuple[str, str]] = set()
+        if str(hsl_replay_signal_mode or "").lower() == "coin" and not self.inverse:
+            replay_matrix_pairs = {
+                (pside, sym)
+                for (sym, pside), (size, _price) in current_position_state.items()
+                if size > 1e-12 and sym in price_replay_symbols
+            }
+        replay_matrix_rows: Dict[Tuple[str, str], List[dict]] = {
+            pair: [] for pair in replay_matrix_pairs
+        }
+        replay_matrix_prev_realized: Dict[Tuple[str, str], float] = {}
+        replay_matrix_last_price: Dict[str, float] = {}
+
+        def _collect_replay_matrix_rows(minute_ts: int, *, record: bool) -> None:
+            for pair in list(replay_matrix_rows):
+                pside, sym = pair
+                running = float(
+                    realized_pnl_coin_pside_running.get(
+                        sym, {"long": 0.0, "short": 0.0}
+                    ).get(pside, 0.0)
+                )
+                # Track the running realized value every minute so the first
+                # persisted row's pnl covers only its own minute.
+                minute_pnl = running - replay_matrix_prev_realized.get(pair, running)
+                replay_matrix_prev_realized[pair] = running
+                mprice = price_lookup.get(sym, {}).get(minute_ts)
+                if mprice is not None and mprice > 0.0:
+                    replay_matrix_last_price[sym] = float(mprice)
+                else:
+                    mprice = replay_matrix_last_price.get(sym)
+                if not record:
+                    continue
+                if mprice is None or mprice <= 0.0:
+                    if replay_matrix_rows[pair]:
+                        # A gap after rows started would break 1m continuity;
+                        # drop the pair rather than persist an unprovable series.
+                        del replay_matrix_rows[pair]
+                    continue
+                slot = positions.get(sym, {}).get(pside, {})
+                size = float(slot.get("size", 0.0) or 0.0)
+                if size > 1e-12:
+                    psize = size if pside == "long" else -size
+                    pprice = float(slot.get("price", 0.0) or 0.0)
+                else:
+                    psize = 0.0
+                    pprice = 0.0
+                try:
+                    replay_matrix_rows[pair].append(
+                        pb_hsl._hsl_replay_matrix_row(
+                            pside=pside,
+                            ts=int(minute_ts),
+                            price=float(mprice),
+                            psize=psize,
+                            pprice=pprice,
+                            pnl=minute_pnl,
+                            c_mult=float(self.c_mults.get(sym, 1.0)),
+                        )
+                    )
+                except Exception as exc:
+                    del replay_matrix_rows[pair]
+                    logging.warning(
+                        "[risk] HSL[%s:%s] replay matrix row build failed; "
+                        "skipping cache for this pair | ts=%s error=%s: %s",
+                        pside,
+                        Passivbot._log_symbol(sym),
+                        minute_ts,
+                        type(exc).__name__,
+                        exc,
+                    )
+
         history_minutes = int(max(0, (end_minute - start_minute) // ONE_MIN_MS)) + 1
         _emit_hsl_history_progress(
             "timeline_replay_started",
@@ -11764,6 +11840,12 @@ class Passivbot:
             event_idx += 1
             pre_window_events_applied += 1
         record_start_balance = float(balance)
+        for pair in replay_matrix_rows:
+            replay_matrix_prev_realized[pair] = float(
+                realized_pnl_coin_pside_running.get(
+                    pair[1], {"long": 0.0, "short": 0.0}
+                ).get(pair[0], 0.0)
+            )
         record_start_realized_pnl_pside = {
             "long": float(realized_pnl_pside_running["long"]),
             "short": float(realized_pnl_pside_running["short"]),
@@ -11899,6 +11981,9 @@ class Passivbot:
                         "panic_fill_count": int(panic_fill_count),
                     }
                 )
+            _collect_replay_matrix_rows(
+                int(minute), record=minute >= record_start_minute
+            )
             minute += ONE_MIN_MS
 
         if not timeline:
@@ -11957,6 +12042,10 @@ class Passivbot:
             status="succeeded",
             reason_code=ReasonCodes.HSL_TIMELINE_REPLAY_COMPLETED,
         )
+        hsl_replay_matrices: Dict[str, Dict[str, List[dict]]] = {}
+        for (pside, sym), rows in replay_matrix_rows.items():
+            if rows:
+                hsl_replay_matrices.setdefault(pside, {})[sym] = rows
         return {
             "timeline": timeline,
             "panic_flatten_events": panic_flatten_events,
@@ -11964,6 +12053,13 @@ class Passivbot:
             "balances": balances,
             "equities": equities,
             "metadata": metadata,
+            "hsl_replay_matrices": hsl_replay_matrices,
+            "hsl_replay_matrix_coverage": {
+                "fill_covered_start_ms": int(record_start_ts),
+                "fill_covered_end_ms": int(ts_now),
+                "candle_covered_start_ms": int(start_minute),
+                "candle_covered_end_ms": int(end_minute),
+            },
         }
 
     async def update_open_orders(self):

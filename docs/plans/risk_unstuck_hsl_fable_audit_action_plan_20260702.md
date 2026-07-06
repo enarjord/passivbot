@@ -863,6 +863,13 @@ Remaining implementation details:
       Partial: coin-HSL replay lifecycle events now split startup timing into
       history-fetch, pre-replay, replay-loop, and total blocking elapsed fields
       so future cache-reuse work can prove which phase improved.
+      Partial: live coin-HSL replay now persists write-only raw replay matrices
+      for currently held coin+psides (`.npz` plus manifest, linear markets
+      only) after a successful replay, keyed by the tested cache-dir/config
+      digest helpers with fill/candle coverage metadata. Per-pair write
+      failures warn and emit `hsl_replay_cache_write_failed` without touching
+      replay results; successful writes emit `hsl_replay_cache_written`. The
+      cache is still never read for trading decisions.
 - [ ] Python simplification after Rust owns ideal protective orders and unstuck
       orders.
       Python should reconcile ideal vs actual orders, not re-decide trading
