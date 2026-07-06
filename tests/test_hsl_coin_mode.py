@@ -337,6 +337,34 @@ def test_hsl_replay_matrix_cache_validation_reports_non_numeric_array_without_ra
     assert "array_value_invalid:price" in reasons
 
 
+def test_hsl_replay_matrix_cache_validation_rejects_complex_arrays_with_matching_manifest(
+    tmp_path,
+):
+    import json
+    import numpy as np
+
+    metadata = _hsl_cache_metadata()
+    hsl._write_hsl_replay_matrix_cache(tmp_path, _hsl_cache_rows(), metadata)
+    matrix_path = tmp_path / hsl._HSL_REPLAY_CACHE_MATRIX_FILENAME
+    manifest_path = tmp_path / hsl._HSL_REPLAY_CACHE_MANIFEST_FILENAME
+    with np.load(matrix_path, allow_pickle=False) as loaded:
+        arrays = {field: loaded[field].copy() for field in hsl._HSL_REPLAY_MATRIX_RAW_FIELDS}
+    arrays["ts"] = arrays["ts"].astype(np.complex128) + 1j
+    arrays["price"] = arrays["price"].astype(np.complex128) + 1j
+    np.savez(matrix_path, **arrays)
+    manifest = json.loads(manifest_path.read_text())
+    manifest["arrays"] = hsl._hsl_replay_cache_array_manifest(arrays)
+    manifest_path.write_text(json.dumps(manifest, sort_keys=True))
+
+    reasons = hsl._hsl_replay_cache_validation_reasons(
+        tmp_path,
+        expected_metadata=metadata,
+    )
+
+    assert "array_value_invalid:ts" in reasons
+    assert "array_value_invalid:price" in reasons
+
+
 @pytest.mark.parametrize("bad_ts_kind", ["strings", "scalar", "two_dim"])
 def test_hsl_replay_matrix_cache_validation_reports_corrupt_ts_without_raising(
     tmp_path, bad_ts_kind

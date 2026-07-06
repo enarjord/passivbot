@@ -527,6 +527,17 @@ def _hsl_replay_cache_array_manifest(arrays: dict[str, Any]) -> dict[str, dict[s
     }
 
 
+def _hsl_replay_cache_array_dtype_is_valid(field: str, dtype: Any) -> bool:
+    import numpy as np
+
+    np_dtype = np.dtype(dtype)
+    if np.issubdtype(np_dtype, np.complexfloating):
+        return False
+    if field == "ts":
+        return bool(np.issubdtype(np_dtype, np.integer))
+    return bool(np.issubdtype(np_dtype, np.integer) or np.issubdtype(np_dtype, np.floating))
+
+
 def _hsl_replay_cache_array_value_reasons(arrays: dict[str, Any]) -> list[str]:
     import numpy as np
 
@@ -551,7 +562,7 @@ def _hsl_replay_cache_array_value_reasons(arrays: dict[str, Any]) -> list[str]:
     numeric_arrays: dict[str, Any] = {}
     for field in _HSL_REPLAY_MATRIX_RAW_FIELDS:
         arr = np.asarray(arrays[field])
-        if arr.ndim != 1 or not np.issubdtype(arr.dtype, np.number):
+        if arr.ndim != 1 or not _hsl_replay_cache_array_dtype_is_valid(field, arr.dtype):
             reasons.append(f"array_value_invalid:{field}")
             continue
         numeric_arrays[field] = arr
@@ -725,7 +736,7 @@ def _hsl_replay_cache_validation_reasons(
             ts_array = np.asarray(loaded_arrays["ts"])
             ts_valid_for_time_checks = (
                 ts_array.ndim == 1
-                and np.issubdtype(ts_array.dtype, np.number)
+                and _hsl_replay_cache_array_dtype_is_valid("ts", ts_array.dtype)
                 and bool(np.all(np.isfinite(ts_array)))
             )
             row_count = int(len(ts_array)) if ts_valid_for_time_checks else None
