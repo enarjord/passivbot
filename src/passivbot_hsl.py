@@ -814,6 +814,145 @@ def _load_hsl_replay_matrix_cache(
     return manifest, arrays
 
 
+def _hsl_replay_cache_status_data(
+    *,
+    cache_status: str,
+    elapsed_s: float,
+    reasons: list[str] | None = None,
+    manifest: dict[str, Any] | None = None,
+    expected_metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    data: dict[str, Any] = {
+        "cache_status": str(cache_status),
+        "schema_version": _HSL_REPLAY_CACHE_SCHEMA_VERSION,
+        "matrix_file": _HSL_REPLAY_CACHE_MATRIX_FILENAME,
+        "manifest_file": _HSL_REPLAY_CACHE_MANIFEST_FILENAME,
+        "elapsed_s": round(max(0.0, float(elapsed_s)), 3),
+    }
+    metadata = manifest.get("metadata") if isinstance(manifest, dict) else expected_metadata
+    if isinstance(metadata, dict):
+        for key in ("signal_mode", "pside", "symbol"):
+            value = metadata.get(key)
+            if value is not None:
+                data[key] = str(value)
+    if isinstance(manifest, dict):
+        for key in ("row_count", "start_ts_ms", "end_ts_ms", "interval_ms"):
+            value = manifest.get(key)
+            if value is not None:
+                data[key] = int(value)
+    if reasons:
+        bounded_reasons = [str(reason) for reason in reasons[:8]]
+        data["reasons"] = bounded_reasons
+        data["reason_count"] = int(len(reasons))
+        data["reasons_truncated"] = bool(len(reasons) > len(bounded_reasons))
+    else:
+        data["reason_count"] = 0
+        data["reasons_truncated"] = False
+    return data
+
+
+def _try_load_hsl_replay_matrix_cache(
+    self,
+    cache_dir: str | os.PathLike[str],
+    *,
+    expected_metadata: dict[str, Any] | None = None,
+    pside: str | None = None,
+    symbol: str | None = None,
+) -> tuple[dict[str, Any], dict[str, Any]] | None:
+    started_s = time.monotonic()
+    try:
+        reasons = _hsl_replay_cache_validation_reasons(
+            cache_dir,
+            expected_metadata=expected_metadata,
+        )
+    except Exception as exc:
+        elapsed_s = time.monotonic() - started_s
+        _emit_hsl_replay_event(
+            self,
+            EventTypes.HSL_REPLAY_CACHE,
+            _hsl_replay_cache_status_data(
+                cache_status="rejected",
+                elapsed_s=elapsed_s,
+                reasons=[f"validation_exception:{type(exc).__name__}"],
+                expected_metadata=expected_metadata,
+            ),
+            pside=pside,
+            symbol=symbol,
+            level="debug",
+            status="skipped",
+            reason_code=ReasonCodes.HSL_REPLAY_CACHE_REJECTED,
+        )
+        return None
+    if reasons:
+        elapsed_s = time.monotonic() - started_s
+        cache_status = "miss" if reasons == ["manifest_missing"] else "rejected"
+        reason_code = (
+            ReasonCodes.HSL_REPLAY_CACHE_MISS
+            if cache_status == "miss"
+            else ReasonCodes.HSL_REPLAY_CACHE_REJECTED
+        )
+        _emit_hsl_replay_event(
+            self,
+            EventTypes.HSL_REPLAY_CACHE,
+            _hsl_replay_cache_status_data(
+                cache_status=cache_status,
+                elapsed_s=elapsed_s,
+                reasons=reasons,
+                expected_metadata=expected_metadata,
+            ),
+            pside=pside,
+            symbol=symbol,
+            level="debug",
+            status="skipped",
+            reason_code=reason_code,
+        )
+        return None
+    try:
+        import numpy as np
+
+        cache_path = Path(cache_dir)
+        manifest = json.loads(
+            (cache_path / _HSL_REPLAY_CACHE_MANIFEST_FILENAME).read_text(encoding="utf-8")
+        )
+        with np.load(cache_path / _HSL_REPLAY_CACHE_MATRIX_FILENAME, allow_pickle=False) as loaded:
+            arrays = {field: loaded[field].copy() for field in _HSL_REPLAY_MATRIX_RAW_FIELDS}
+    except Exception as exc:
+        elapsed_s = time.monotonic() - started_s
+        _emit_hsl_replay_event(
+            self,
+            EventTypes.HSL_REPLAY_CACHE,
+            _hsl_replay_cache_status_data(
+                cache_status="rejected",
+                elapsed_s=elapsed_s,
+                reasons=[f"load_exception:{type(exc).__name__}"],
+                expected_metadata=expected_metadata,
+            ),
+            pside=pside,
+            symbol=symbol,
+            level="debug",
+            status="skipped",
+            reason_code=ReasonCodes.HSL_REPLAY_CACHE_REJECTED,
+        )
+        return None
+    elapsed_s = time.monotonic() - started_s
+    _emit_hsl_replay_event(
+        self,
+        EventTypes.HSL_REPLAY_CACHE,
+        _hsl_replay_cache_status_data(
+            cache_status="hit",
+            elapsed_s=elapsed_s,
+            manifest=manifest,
+            expected_metadata=expected_metadata,
+        ),
+        pside=pside,
+        symbol=symbol,
+        level="debug",
+        status="succeeded",
+        reason_code=ReasonCodes.HSL_REPLAY_CACHE_HIT,
+    )
+    return manifest, arrays
+
+
 def _hsl_psides(self) -> tuple[str, str]:
     return ("long", "short")
 

@@ -330,6 +330,124 @@ def test_hsl_replay_matrix_cache_load_rejects_metadata_mismatch(tmp_path):
         )
 
 
+def test_hsl_replay_matrix_cache_try_load_emits_hit_event(tmp_path):
+    import numpy as np
+    from live.event_bus import EventTypes, ListEventSink, LiveEventPipeline, ReasonCodes
+
+    metadata = _hsl_cache_metadata()
+    written_manifest = hsl._write_hsl_replay_matrix_cache(tmp_path, _hsl_cache_rows(), metadata)
+    bot = FakeHslBot()
+    sink = ListEventSink()
+    bot._live_event_pipeline = LiveEventPipeline(
+        structured_sinks=[sink],
+        monitor_sinks=[],
+    )
+    bot._live_event_current_cycle_id = "cy_hsl_cache"
+    bot._emit_live_event = MethodType(Passivbot._emit_live_event, bot)
+
+    loaded = hsl._try_load_hsl_replay_matrix_cache(
+        bot,
+        tmp_path,
+        expected_metadata=metadata,
+        pside="long",
+        symbol=metadata["symbol"],
+    )
+
+    assert loaded is not None
+    manifest, arrays = loaded
+    assert manifest == written_manifest
+    np.testing.assert_array_equal(arrays["ts"], np.array([60_000, 120_000, 180_000]))
+    assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    events = [event for event in sink.events if event.event_type == EventTypes.HSL_REPLAY_CACHE]
+    assert len(events) == 1
+    event = events[0]
+    assert event.status == "succeeded"
+    assert event.reason_code == ReasonCodes.HSL_REPLAY_CACHE_HIT
+    assert event.cycle_id == "cy_hsl_cache"
+    assert event.pside == "long"
+    assert event.symbol == metadata["symbol"]
+    assert event.data["cache_status"] == "hit"
+    assert event.data["row_count"] == 3
+    assert event.data["start_ts_ms"] == 60_000
+    assert event.data["end_ts_ms"] == 180_000
+    assert event.data["reason_count"] == 0
+    assert "cache_dir" not in event.data
+    assert "path" not in event.data
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
+
+
+def test_hsl_replay_matrix_cache_try_load_emits_miss_event(tmp_path):
+    from live.event_bus import EventTypes, ListEventSink, LiveEventPipeline, ReasonCodes
+
+    metadata = _hsl_cache_metadata()
+    bot = FakeHslBot()
+    sink = ListEventSink()
+    bot._live_event_pipeline = LiveEventPipeline(
+        structured_sinks=[sink],
+        monitor_sinks=[],
+    )
+    bot._emit_live_event = MethodType(Passivbot._emit_live_event, bot)
+
+    loaded = hsl._try_load_hsl_replay_matrix_cache(
+        bot,
+        tmp_path,
+        expected_metadata=metadata,
+        pside="long",
+        symbol=metadata["symbol"],
+    )
+
+    assert loaded is None
+    assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    events = [event for event in sink.events if event.event_type == EventTypes.HSL_REPLAY_CACHE]
+    assert len(events) == 1
+    event = events[0]
+    assert event.status == "skipped"
+    assert event.reason_code == ReasonCodes.HSL_REPLAY_CACHE_MISS
+    assert event.data["cache_status"] == "miss"
+    assert event.data["reasons"] == ["manifest_missing"]
+    assert event.data["reason_count"] == 1
+    assert "cache_dir" not in event.data
+    assert "path" not in event.data
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
+
+
+def test_hsl_replay_matrix_cache_try_load_emits_rejected_event(tmp_path):
+    from live.event_bus import EventTypes, ListEventSink, LiveEventPipeline, ReasonCodes
+
+    metadata = _hsl_cache_metadata()
+    hsl._write_hsl_replay_matrix_cache(tmp_path, _hsl_cache_rows(), metadata)
+    bot = FakeHslBot()
+    sink = ListEventSink()
+    bot._live_event_pipeline = LiveEventPipeline(
+        structured_sinks=[sink],
+        monitor_sinks=[],
+    )
+    bot._emit_live_event = MethodType(Passivbot._emit_live_event, bot)
+
+    loaded = hsl._try_load_hsl_replay_matrix_cache(
+        bot,
+        tmp_path,
+        expected_metadata=_hsl_cache_metadata(config_digest="other_cfg_hash"),
+        pside="long",
+        symbol=metadata["symbol"],
+    )
+
+    assert loaded is None
+    assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    events = [event for event in sink.events if event.event_type == EventTypes.HSL_REPLAY_CACHE]
+    assert len(events) == 1
+    event = events[0]
+    assert event.status == "skipped"
+    assert event.reason_code == ReasonCodes.HSL_REPLAY_CACHE_REJECTED
+    assert event.data["cache_status"] == "rejected"
+    assert event.data["reasons"] == ["metadata_mismatch:config_digest"]
+    assert event.data["reason_count"] == 1
+    assert "other_cfg_hash" not in str(event.data)
+    assert "cache_dir" not in event.data
+    assert "path" not in event.data
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
+
+
 def test_hsl_replay_matrix_cache_reports_array_hash_mismatch(tmp_path):
     import numpy as np
 
