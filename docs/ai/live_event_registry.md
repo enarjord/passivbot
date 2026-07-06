@@ -61,6 +61,7 @@ across time.
 - `hsl.raw_red_pending`
 - `hsl.red_finalized_without_order`
 - `hsl.red_triggered`
+- `hsl.replay.cache`
 - `hsl.replay.completed`
 - `hsl.replay.failed`
 - `hsl.replay.progress`
@@ -89,6 +90,15 @@ across time.
 - `trailing.status`
 - `unstuck.selection`
 - `unstuck.status`
+
+## HSL Replay Timing Fields
+
+For `hsl.replay.completed`, `full_elapsed_s`, `startup_blocking_elapsed_s`, and
+`elapsed_s` measure total blocking startup time for the replay. Use
+`replay_loop_elapsed_s` for the replay-loop-only duration. Cache status events
+use `hsl.replay.cache` with `cache_status=hit|miss|rejected`; misses and
+rejections are non-authoritative performance-cache outcomes and should fall
+back to exchange-derived replay.
 
 ## Event Tags
 
