@@ -537,6 +537,78 @@ def test_hsl_replay_cache_validation_flags_missing_coverage_proof_fields(tmp_pat
     assert "metadata_missing_required:fill_coverage_proven" in reasons
 
 
+def _hsl_account_series_rows():
+    return [
+        hsl._hsl_replay_account_series_row(ts=60_000, pnl=0.0),
+        hsl._hsl_replay_account_series_row(ts=120_000, pnl=-2.5),
+        hsl._hsl_replay_account_series_row(ts=180_000, pnl=1.0),
+    ]
+
+
+def test_hsl_replay_account_series_round_trip(tmp_path):
+    import numpy as np
+
+    metadata = _hsl_cache_metadata(
+        pside=hsl._HSL_REPLAY_CACHE_ACCOUNT_PSIDE,
+        symbol=hsl._HSL_REPLAY_CACHE_ACCOUNT_SYMBOL,
+    )
+    rows = _hsl_account_series_rows()
+    manifest = hsl._write_hsl_replay_matrix_cache(
+        tmp_path, rows, metadata, series_kind="account_pnl"
+    )
+
+    assert manifest["series_kind"] == "account_pnl"
+    assert manifest["fields"] == ["ts", "pnl"]
+    assert (
+        hsl._hsl_replay_cache_validation_reasons(tmp_path, expected_metadata=metadata)
+        == []
+    )
+    loaded_manifest, arrays = hsl._load_hsl_replay_matrix_cache(
+        tmp_path, expected_metadata=metadata
+    )
+    assert set(arrays) == {"ts", "pnl"}
+    np.testing.assert_array_equal(arrays["ts"], np.array([60_000, 120_000, 180_000]))
+    np.testing.assert_allclose(arrays["pnl"], [0.0, -2.5, 1.0])
+
+    with pytest.raises(ValueError, match="contiguous"):
+        hsl._hsl_replay_account_series_arrays(
+            [
+                hsl._hsl_replay_account_series_row(ts=60_000, pnl=0.0),
+                hsl._hsl_replay_account_series_row(ts=240_000, pnl=1.0),
+            ]
+        )
+
+
+def test_hsl_replay_cache_rejects_series_kind_tampering(tmp_path):
+    import json
+
+    hsl._write_hsl_replay_matrix_cache(tmp_path, _hsl_cache_rows(), _hsl_cache_metadata())
+    manifest_path = tmp_path / hsl._HSL_REPLAY_CACHE_MANIFEST_FILENAME
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+
+    tampered = dict(manifest, series_kind="account_pnl")
+    manifest_path.write_text(json.dumps(tampered), encoding="utf-8")
+    assert "fields_mismatch" in hsl._hsl_replay_cache_validation_reasons(tmp_path)
+
+    stripped = dict(manifest)
+    del stripped["series_kind"]
+    manifest_path.write_text(json.dumps(stripped), encoding="utf-8")
+    assert "series_kind_invalid" in hsl._hsl_replay_cache_validation_reasons(tmp_path)
+
+
+def test_hsl_replay_cache_account_digest_scoped_to_lookback():
+    bot = make_coin_bot()
+    digest = hsl._hsl_replay_cache_account_config_digest(bot)
+    assert len(digest) == 64
+
+    bot.config["irrelevant"] = {"changes": "ignored"}
+    bot.hsl["long"]["red_threshold"] = 0.33
+    assert hsl._hsl_replay_cache_account_config_digest(bot) == digest
+
+    bot.config["live"]["pnls_max_lookback_days"] = 7.0
+    assert hsl._hsl_replay_cache_account_config_digest(bot) != digest
+
+
 def test_hsl_replay_cache_dir_is_sanitized_and_digest_scoped():
     bot = make_coin_bot()
     bot.exchange = "binance/usdm"
@@ -589,14 +661,16 @@ def test_hsl_replay_cache_persist_matrices_round_trip(tmp_path, monkeypatch):
         "candle_covered_start_ms": 60_000,
         "candle_covered_end_ms": 180_000,
     }
+    account_rows = _hsl_account_series_rows()
     history = {
         "hsl_replay_matrices": {"long": {symbol: rows}},
+        "hsl_replay_account_series": account_rows,
         "hsl_replay_matrix_coverage": coverage,
     }
 
     written = hsl._equity_hard_stop_persist_replay_matrices(bot, history)
 
-    assert written == 1
+    assert written == 2
     expected_metadata = hsl._hsl_replay_cache_expected_metadata(
         bot,
         "long",
@@ -631,6 +705,30 @@ def test_hsl_replay_cache_persist_matrices_round_trip(tmp_path, monkeypatch):
     np.testing.assert_allclose(arrays["pnl"], [row["pnl"] for row in rows])
     np.testing.assert_allclose(arrays["upnl"], [row["upnl"] for row in rows])
 
+    account_expected = hsl._hsl_replay_cache_account_expected_metadata(
+        bot,
+        fill_covered_start_ms=coverage["fill_covered_start_ms"],
+        fill_covered_end_ms=coverage["fill_covered_end_ms"],
+        fill_history_scope=coverage["fill_history_scope"],
+        fill_coverage_proven=coverage["fill_coverage_proven"],
+        candle_covered_start_ms=coverage["candle_covered_start_ms"],
+        candle_covered_end_ms=coverage["candle_covered_end_ms"],
+    )
+    account_dir = hsl._hsl_replay_cache_account_series_dir(bot)
+    assert (
+        hsl._hsl_replay_cache_validation_reasons(
+            account_dir, expected_metadata=account_expected
+        )
+        == []
+    )
+    account_manifest, account_arrays = hsl._load_hsl_replay_matrix_cache(
+        account_dir, expected_metadata=account_expected
+    )
+    assert account_manifest["series_kind"] == "account_pnl"
+    np.testing.assert_allclose(
+        account_arrays["pnl"], [row["pnl"] for row in account_rows]
+    )
+
     assert bot._live_event_pipeline.flush(timeout=2.0) is True
     cache_events = [
         event for event in sink.events if event.event_type == EventTypes.HSL_REPLAY_CACHE
@@ -640,7 +738,11 @@ def test_hsl_replay_cache_persist_matrices_round_trip(tmp_path, monkeypatch):
         for event in cache_events
         if event.reason_code == ReasonCodes.HSL_REPLAY_CACHE_WRITTEN
     ]
-    assert len(written_events) == 1
+    assert len(written_events) == 2
+    assert [(event.pside, event.symbol) for event in written_events] == [
+        ("long", symbol),
+        (hsl._HSL_REPLAY_CACHE_ACCOUNT_PSIDE, hsl._HSL_REPLAY_CACHE_ACCOUNT_SYMBOL),
+    ]
     event = written_events[0]
     assert event.status == "succeeded"
     assert event.pside == "long"
@@ -744,6 +846,31 @@ def test_hsl_replay_cache_writer_rejects_non_bool_coverage_proof(tmp_path, monke
     ]
     assert len(failed_events) == 1
     assert failed_events[0].data["reasons"] == ["write_exception:ValueError"]
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
+
+
+def test_hsl_replay_cache_persist_skips_account_series_without_pair_writes(
+    tmp_path, monkeypatch
+):
+    bot, sink = _make_persist_bot(tmp_path, monkeypatch)
+    history = {
+        "hsl_replay_matrices": {},
+        "hsl_replay_account_series": _hsl_account_series_rows(),
+        "hsl_replay_matrix_coverage": {
+            "fill_covered_start_ms": 60_000,
+            "fill_covered_end_ms": 200_000,
+            "fill_history_scope": "window",
+            "fill_coverage_proven": True,
+            "candle_covered_start_ms": 60_000,
+            "candle_covered_end_ms": 180_000,
+        },
+    }
+
+    written = hsl._equity_hard_stop_persist_replay_matrices(bot, history)
+
+    assert written == 0
+    account_dir = hsl._hsl_replay_cache_account_series_dir(bot)
+    assert hsl._hsl_replay_cache_validation_reasons(account_dir) == ["manifest_missing"]
     assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 
@@ -961,6 +1088,9 @@ def bind_hsl_methods(bot):
         "_hsl_replay_cache_config_digest",
         "_hsl_replay_cache_expected_metadata",
         "_hsl_replay_cache_dir",
+        "_hsl_replay_cache_account_config_digest",
+        "_hsl_replay_cache_account_series_dir",
+        "_hsl_replay_cache_account_expected_metadata",
         "_equity_hard_stop_persist_replay_matrices",
         "_equity_hard_stop_build_latch_payload",
         "_equity_hard_stop_check_coin",
@@ -1315,6 +1445,10 @@ async def test_coin_hsl_history_replay_persists_replay_matrices(tmp_path, monkey
             "panic_flatten_events": [],
             "fill_events": [],
             "hsl_replay_matrices": {"long": {symbol: matrix_rows}},
+            "hsl_replay_account_series": [
+                hsl._hsl_replay_account_series_row(ts=60_000, pnl=0.0),
+                hsl._hsl_replay_account_series_row(ts=120_000, pnl=1.0),
+            ],
             "hsl_replay_matrix_coverage": coverage,
         }
 
@@ -1341,6 +1475,22 @@ async def test_coin_hsl_history_replay_persists_replay_matrices(tmp_path, monkey
         )
         == []
     )
+    account_expected = hsl._hsl_replay_cache_account_expected_metadata(
+        bot,
+        fill_covered_start_ms=coverage["fill_covered_start_ms"],
+        fill_covered_end_ms=coverage["fill_covered_end_ms"],
+        fill_history_scope=coverage["fill_history_scope"],
+        fill_coverage_proven=coverage["fill_coverage_proven"],
+        candle_covered_start_ms=coverage["candle_covered_start_ms"],
+        candle_covered_end_ms=coverage["candle_covered_end_ms"],
+    )
+    account_dir = hsl._hsl_replay_cache_account_series_dir(bot)
+    assert (
+        hsl._hsl_replay_cache_validation_reasons(
+            account_dir, expected_metadata=account_expected
+        )
+        == []
+    )
 
     assert bot._live_event_pipeline.flush(timeout=2.0) is True
     replay_events = [
@@ -1358,8 +1508,8 @@ async def test_coin_hsl_history_replay_persists_replay_matrices(tmp_path, monkey
         and event.reason_code == ReasonCodes.HSL_REPLAY_CACHE_WRITTEN
     ]
     assert len(completed_idx) == 1
-    assert len(written_idx) == 1
-    assert written_idx[0] > completed_idx[0]
+    assert len(written_idx) == 2
+    assert all(idx > completed_idx[0] for idx in written_idx)
     written_event = replay_events[written_idx[0]]
     assert written_event.status == "succeeded"
     assert written_event.pside == "long"

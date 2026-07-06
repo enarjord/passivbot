@@ -1602,6 +1602,17 @@ async def test_balance_equity_history_builds_replay_matrices_for_held_pairs(monk
     assert [row["pnl"] for row in rows] == [0.0, 0.5, 0.0]
     assert [row["upnl"] for row in rows] == [0.0, 0.5, 1.0]
 
+    account_rows = history["hsl_replay_account_series"]
+    assert len(account_rows) >= 3
+    account_ts = [row["ts"] for row in account_rows]
+    assert account_ts == sorted(account_ts)
+    assert all(b - a == 60_000 for a, b in zip(account_ts, account_ts[1:]))
+    assert account_ts[-3:] == [base_ts, base_ts + 60_000, base_ts + 120_000]
+    # The partial close realized +0.5 inside the second-to-last minute; every
+    # other recorded minute has zero account-level realized pnl.
+    assert [row["pnl"] for row in account_rows[-3:]] == [0.0, 0.5, 0.0]
+    assert sum(row["pnl"] for row in account_rows) == pytest.approx(0.5)
+
     coverage = history["hsl_replay_matrix_coverage"]
     assert coverage["candle_covered_start_ms"] <= base_ts
     assert coverage["candle_covered_start_ms"] % 60_000 == 0
@@ -1620,6 +1631,7 @@ async def test_balance_equity_history_builds_replay_matrices_for_held_pairs(monk
         hsl_replay_signal_mode="unified",
     )
     assert history_unified["hsl_replay_matrices"] == {}
+    assert history_unified["hsl_replay_account_series"] == []
 
     # A failing matrix row build must drop the pair's cache, not the replay.
     def raising_row_builder(**kwargs):
@@ -1634,6 +1646,7 @@ async def test_balance_equity_history_builds_replay_matrices_for_held_pairs(monk
         hsl_replay_signal_mode="coin",
     )
     assert history_degraded["hsl_replay_matrices"] == {}
+    assert history_degraded["hsl_replay_account_series"] == []
     assert len(history_degraded["timeline"]) == len(history["timeline"])
     assert bot._live_event_pipeline.close(timeout=2.0) is True
 
