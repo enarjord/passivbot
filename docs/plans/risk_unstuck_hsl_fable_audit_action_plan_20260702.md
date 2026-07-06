@@ -848,6 +848,10 @@ Remaining implementation details:
       metadata, per-array dtype/shape/SHA-256, and explicit validation reason
       codes for reuse rejection. The cache remains unwired and
       non-authoritative.
+      Partial: `cache-integrity-doctor` now discovers HSL replay manifests,
+      runs the replay-cache validator, reports valid/invalid cache counts and
+      validation reason counts under risk metadata, and emits warning issues
+      for caches that must be rebuilt rather than reused.
 - [ ] Python simplification after Rust owns ideal protective orders and unstuck
       orders.
       Python should reconcile ideal vs actual orders, not re-decide trading

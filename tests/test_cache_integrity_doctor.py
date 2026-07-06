@@ -66,6 +66,79 @@ def test_cache_integrity_report_summarizes_cache_families(tmp_path):
     assert issue["family"] == "candles"
 
 
+def _hsl_replay_cache_rows():
+    return [
+        {"ts": 60_000, "price": 100.0, "psize": 0.0, "pprice": 0.0, "pnl": 0.0, "upnl": 0.0},
+        {"ts": 120_000, "price": 101.0, "psize": 1.0, "pprice": 100.0, "pnl": 0.5, "upnl": 1.0},
+        {"ts": 180_000, "price": 102.0, "psize": 1.0, "pprice": 100.0, "pnl": 0.0, "upnl": 2.0},
+    ]
+
+
+def _hsl_replay_cache_metadata():
+    return {
+        "exchange": "binance",
+        "market_type": "swap",
+        "user": "user_01",
+        "config_digest": "cfg_digest",
+        "signal_mode": "coin",
+        "pside": "long",
+        "symbol": "BTC/USDT:USDT",
+        "fill_covered_start_ms": 60_000,
+        "fill_covered_end_ms": 180_000,
+        "candle_covered_start_ms": 60_000,
+        "candle_covered_end_ms": 180_000,
+    }
+
+
+def test_cache_integrity_report_validates_hsl_replay_cache(tmp_path):
+    import passivbot_hsl as hsl
+
+    cache_dir = tmp_path / "caches" / "equity_hard_stop" / "binance" / "user_01" / "BTC"
+    hsl._write_hsl_replay_matrix_cache(
+        cache_dir,
+        _hsl_replay_cache_rows(),
+        _hsl_replay_cache_metadata(),
+    )
+
+    report = build_cache_integrity_report([tmp_path / "caches"])
+
+    risk = report["summary"]["by_family"]["risk"]
+    metadata = risk["metadata"]
+    assert metadata["hsl_replay_cache_count"] == 1
+    assert metadata["hsl_replay_cache_valid_count"] == 1
+    assert metadata["hsl_replay_cache_invalid_count"] == 0
+    assert metadata["hsl_replay_cache_reason_counts"] == {}
+    assert metadata["hsl_compatibility"] == "hsl_replay_cache_valid"
+    assert report["issues"] == []
+
+
+def test_cache_integrity_report_flags_invalid_hsl_replay_cache(tmp_path):
+    import passivbot_hsl as hsl
+
+    cache_dir = tmp_path / "caches" / "equity_hard_stop" / "binance" / "user_01" / "BTC"
+    hsl._write_hsl_replay_matrix_cache(
+        cache_dir,
+        _hsl_replay_cache_rows(),
+        _hsl_replay_cache_metadata(),
+    )
+    (cache_dir / hsl._HSL_REPLAY_CACHE_MATRIX_FILENAME).unlink()
+
+    report = build_cache_integrity_report([tmp_path / "caches"])
+
+    risk = report["summary"]["by_family"]["risk"]
+    metadata = risk["metadata"]
+    assert metadata["hsl_replay_cache_count"] == 1
+    assert metadata["hsl_replay_cache_valid_count"] == 0
+    assert metadata["hsl_replay_cache_invalid_count"] == 1
+    assert metadata["hsl_replay_cache_reason_counts"] == {"matrix_missing": 1}
+    assert metadata["hsl_compatibility"] == "hsl_replay_cache_invalid"
+    assert report["ok"] is True
+    issue = next(item for item in report["issues"] if item["code"] == "hsl_replay_cache_invalid")
+    assert issue["severity"] == "warning"
+    assert issue["family"] == "risk"
+    assert "matrix_missing" in issue["message"]
+
+
 def test_cache_integrity_report_summarizes_candle_coverage_windows_and_gaps(tmp_path):
     root = tmp_path / "caches"
     month_dir = root / "ohlcv" / "data" / "binance" / "1m" / "BTC_USDT" / "2026"

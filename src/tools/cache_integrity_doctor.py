@@ -258,6 +258,10 @@ def _metadata_summary_entry() -> dict[str, Any]:
         "no_trade_known_gap_count": 0,
         "unclassified_known_gap_count": 0,
         "hsl_artifact_count": 0,
+        "hsl_replay_cache_count": 0,
+        "hsl_replay_cache_valid_count": 0,
+        "hsl_replay_cache_invalid_count": 0,
+        "hsl_replay_cache_reason_counts": Counter(),
         "first_event_ms": None,
         "last_event_ms": None,
         "covered_start_ms": None,
@@ -862,6 +866,62 @@ def _summarize_risk_ndjson_payload(path: Path) -> dict[str, Any] | None:
     return out
 
 
+def _inspect_hsl_replay_cache_manifest(path: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    out = _metadata_summary_entry()
+    out["artifact_count"] = 1
+    out["metadata_file_count"] = 1
+    out["hsl_artifact_count"] = 1
+    out["hsl_replay_cache_count"] = 1
+    sample = {
+        "path": str(path),
+        "kind": "hsl_replay_cache_manifest",
+        "hsl_related": True,
+    }
+    issues: list[dict[str, Any]] = []
+    try:
+        from passivbot_hsl import _hsl_replay_cache_validation_reasons
+    except Exception as exc:
+        out["hsl_replay_cache_invalid_count"] = 1
+        reason = "validator_unavailable"
+        out["hsl_replay_cache_reason_counts"][reason] += 1
+        sample["valid"] = False
+        sample["reasons"] = [reason]
+        issues.append(
+            _issue(
+                "warning",
+                "hsl_replay_cache_validation_unavailable",
+                path,
+                f"could not import HSL replay cache validator: {type(exc).__name__}",
+                family="risk",
+            )
+        )
+    else:
+        try:
+            reasons = list(_hsl_replay_cache_validation_reasons(path.parent))
+        except Exception as exc:
+            reasons = [f"validator_failed:{type(exc).__name__}"]
+        if reasons:
+            out["hsl_replay_cache_invalid_count"] = 1
+            for reason in reasons:
+                out["hsl_replay_cache_reason_counts"][str(reason)] += 1
+            sample["valid"] = False
+            sample["reasons"] = [str(reason) for reason in reasons[:MAX_METADATA_ARTIFACT_SAMPLES]]
+            issues.append(
+                _issue(
+                    "warning",
+                    "hsl_replay_cache_invalid",
+                    path,
+                    "HSL replay cache is not safely reusable: " + ", ".join(sample["reasons"]),
+                    family="risk",
+                )
+            )
+        else:
+            out["hsl_replay_cache_valid_count"] = 1
+            sample["valid"] = True
+    _add_limited_sample(out["artifact_samples"], sample, MAX_METADATA_ARTIFACT_SAMPLES)
+    return out, issues
+
+
 def _inspect_metadata_artifact(path: Path, family: str) -> dict[str, Any] | None:
     suffix = path.suffix.lower()
     if suffix == ".json":
@@ -899,10 +959,16 @@ def _merge_metadata(summary: dict[str, Any], artifact: dict[str, Any]) -> None:
         "unclassified_known_gap_count",
         "timestamp_field_count",
         "hsl_artifact_count",
+        "hsl_replay_cache_count",
+        "hsl_replay_cache_valid_count",
+        "hsl_replay_cache_invalid_count",
     ):
         metadata[key] += int(artifact[key])
     metadata["history_scope_counts"].update(artifact["history_scope_counts"])
     metadata["known_gap_reason_counts"].update(artifact["known_gap_reason_counts"])
+    metadata["hsl_replay_cache_reason_counts"].update(
+        artifact["hsl_replay_cache_reason_counts"]
+    )
     for key in ("first_event_ms", "covered_start_ms"):
         value = artifact[key]
         if value is not None and (metadata[key] is None or int(value) < int(metadata[key])):
@@ -933,10 +999,16 @@ def _merge_finalized_metadata(summary: dict[str, Any], metadata_report: dict[str
         "unclassified_known_gap_count",
         "timestamp_field_count",
         "hsl_artifact_count",
+        "hsl_replay_cache_count",
+        "hsl_replay_cache_valid_count",
+        "hsl_replay_cache_invalid_count",
     ):
         metadata[key] += int(metadata_report[key])
     metadata["history_scope_counts"].update(metadata_report["history_scope_counts"])
     metadata["known_gap_reason_counts"].update(metadata_report["known_gap_reason_counts"])
+    metadata["hsl_replay_cache_reason_counts"].update(
+        metadata_report["hsl_replay_cache_reason_counts"]
+    )
     for key in ("first_event_ms", "covered_start_ms"):
         value = metadata_report[key]
         if value is not None and (metadata[key] is None or int(value) < int(metadata[key])):
@@ -969,6 +1041,9 @@ def _finalize_metadata(
     known_gap_count = int(metadata["known_gap_count"])
     no_trade_known_gap_count = int(metadata["no_trade_known_gap_count"])
     hsl_artifact_count = int(metadata["hsl_artifact_count"])
+    hsl_replay_cache_count = int(metadata["hsl_replay_cache_count"])
+    hsl_replay_cache_valid_count = int(metadata["hsl_replay_cache_valid_count"])
+    hsl_replay_cache_invalid_count = int(metadata["hsl_replay_cache_invalid_count"])
     if artifact_count == 0:
         compatibility = "no_local_metadata"
     elif issue_count:
@@ -994,7 +1069,11 @@ def _finalize_metadata(
         compatibility = "local_state_observed"
     hsl_compatibility = None
     if family == "risk":
-        if hsl_artifact_count and int(metadata["timestamp_field_count"]):
+        if hsl_replay_cache_invalid_count:
+            hsl_compatibility = "hsl_replay_cache_invalid"
+        elif hsl_replay_cache_valid_count:
+            hsl_compatibility = "hsl_replay_cache_valid"
+        elif hsl_artifact_count and int(metadata["timestamp_field_count"]):
             hsl_compatibility = "hsl_state_with_timestamps"
         elif hsl_artifact_count:
             hsl_compatibility = "hsl_state_without_timestamps"
@@ -1014,6 +1093,12 @@ def _finalize_metadata(
         "no_trade_known_gap_count": no_trade_known_gap_count,
         "unclassified_known_gap_count": int(metadata["unclassified_known_gap_count"]),
         "hsl_artifact_count": hsl_artifact_count,
+        "hsl_replay_cache_count": hsl_replay_cache_count,
+        "hsl_replay_cache_valid_count": hsl_replay_cache_valid_count,
+        "hsl_replay_cache_invalid_count": hsl_replay_cache_invalid_count,
+        "hsl_replay_cache_reason_counts": dict(
+            sorted(metadata["hsl_replay_cache_reason_counts"].items())
+        ),
         "hsl_compatibility": hsl_compatibility,
         "first_event_ms": metadata["first_event_ms"],
         "last_event_ms": metadata["last_event_ms"],
@@ -1410,9 +1495,15 @@ def _scan_root(root: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
                         family=family,
                     )
                 )
-        metadata_artifact = _inspect_metadata_artifact(entry, family)
-        if metadata_artifact is not None:
+        if family == "risk" and entry.name == "hsl_replay_manifest.json":
+            metadata_artifact, hsl_cache_issues = _inspect_hsl_replay_cache_manifest(entry)
             _merge_metadata(family_summary, metadata_artifact)
+            family_summary["issue_count"] += len(hsl_cache_issues)
+            issues.extend(hsl_cache_issues)
+        else:
+            metadata_artifact = _inspect_metadata_artifact(entry, family)
+            if metadata_artifact is not None:
+                _merge_metadata(family_summary, metadata_artifact)
     summary["by_extension"] = dict(sorted(by_extension.items()))
     summary["by_family"] = _finalize_family_summary(by_family)
     summary["warm_cache_readiness"] = _build_warm_cache_readiness(summary["by_family"])
