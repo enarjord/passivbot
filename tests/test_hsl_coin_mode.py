@@ -1589,6 +1589,242 @@ async def test_hsl_cache_synthesized_replay_reaches_identical_coin_state(monkeyp
     assert state_synth["cooldown_until_ms"] == state_auth["cooldown_until_ms"]
 
 
+async def _run_extension_history(monkeypatch):
+    """Five-minute scenario with a fill after the intended cache watermark."""
+    import numpy as np
+    from unittest.mock import AsyncMock
+
+    import passivbot as passivbot_module
+    from live.event_bus import ListEventSink, LiveEventPipeline
+
+    bot = Passivbot.__new__(Passivbot)
+    bot.config = {"live": {}}
+    bot.exchange = "kucoin"
+    bot.user = "test_user"
+    bot.init_pnls = AsyncMock()
+    bot.live_value = lambda key: 1.0 if key == "pnls_max_lookback_days" else None
+    base_ts = 1_800_000_000_000
+    ts_now = base_ts + 240_000
+    bot.get_exchange_time = lambda: ts_now
+    bot.get_raw_balance = lambda: 100.0
+    bot.get_symbol_id_inv = lambda symbol: symbol
+    symbol = "BTC/USDT:USDT"
+    bot.positions = {
+        symbol: {
+            "long": {"size": 0.9, "price": (0.5 * 100.0 + 0.4 * 99.0) / 0.9},
+            "short": {"size": 0.0, "price": 0.0},
+        }
+    }
+    bot._pnls_manager = None
+    bot.inverse = False
+    bot._candle_fetch_concurrency = lambda *, context="runtime": 2
+    bot._get_fetch_delay_seconds = lambda: 0.0
+    bot._live_event_pipeline = LiveEventPipeline(
+        structured_sinks=[ListEventSink()],
+        monitor_sinks=[],
+    )
+    bot._live_event_current_cycle_id = "cy_hsl_extension"
+    bot._emit_live_event = Passivbot._emit_live_event.__get__(bot, Passivbot)
+    bot.c_mults = {symbol: 1.0}
+    monkeypatch.setattr(
+        passivbot_module, "compute_psize_pprice", lambda *args, **kwargs: None
+    )
+
+    class _CM:
+        async def get_candles(self, sym, **kwargs):
+            return np.array(
+                [
+                    (base_ts, 99.0, 101.0, 98.0, 100.0, 1.0),
+                    (base_ts + 60_000, 84.0, 100.0, 60.0, 60.0, 1.0),
+                    (base_ts + 120_000, 60.0, 102.0, 60.0, 101.0, 1.0),
+                    (base_ts + 180_000, 99.0, 101.0, 98.0, 99.0, 1.0),
+                    (base_ts + 240_000, 99.0, 104.0, 99.0, 103.0, 1.0),
+                ],
+                dtype=passivbot_module.CANDLE_DTYPE,
+            )
+
+    bot.cm = _CM()
+    fill_events = [
+        {
+            "timestamp": base_ts,
+            "symbol": symbol,
+            "position_side": "long",
+            "side": "buy",
+            "qty": 1.0,
+            "price": 100.0,
+            "pnl": 0.0,
+        },
+        {
+            "timestamp": base_ts + 90_000,
+            "symbol": symbol,
+            "position_side": "long",
+            "side": "sell",
+            "qty": 0.5,
+            "price": 101.0,
+            "pnl": 0.5,
+        },
+        {
+            "timestamp": base_ts + 210_000,
+            "symbol": symbol,
+            "position_side": "long",
+            "side": "buy",
+            "qty": 0.4,
+            "price": 99.0,
+            "pnl": 0.0,
+        },
+    ]
+    history = await bot.get_balance_equity_history(
+        fill_events=fill_events,
+        current_balance=100.0,
+        hsl_replay_signal_mode="coin",
+    )
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
+    return history, symbol, base_ts
+
+
+@pytest.mark.asyncio
+async def test_hsl_cache_extension_matches_full_rebuild(monkeypatch):
+    import numpy as np
+
+    history, symbol, base_ts = await _run_extension_history(monkeypatch)
+    watermark_ts = base_ts + 120_000
+    end_ts = base_ts + 240_000
+
+    full_pair_rows = history["hsl_replay_matrices"]["long"][symbol]
+    full_pair = hsl._hsl_replay_matrix_arrays(full_pair_rows)
+    full_account = hsl._hsl_replay_account_series_arrays(
+        history["hsl_replay_account_series"]
+    )
+
+    # Slice the full arrays at the watermark, exactly what a cache written at
+    # that time would contain (collection is deterministic; see parity tests).
+    pair_cut = int(np.searchsorted(full_pair["ts"], watermark_ts, side="right"))
+    cached_pair = {field: arr[:pair_cut] for field, arr in full_pair.items()}
+    account_cut = int(
+        np.searchsorted(full_account["ts"], watermark_ts, side="right")
+    )
+    cached_account = {field: arr[:account_cut] for field, arr in full_account.items()}
+
+    extension_fills = [
+        evt
+        for evt in history["fill_events"]
+        if int(evt["timestamp"]) >= watermark_ts + 60_000
+    ]
+    assert len(extension_fills) == 1
+    closes_by_minute = {base_ts + 180_000: 99.0, base_ts + 240_000: 103.0}
+
+    new_pair_rows = hsl._hsl_replay_extend_pair_rows(
+        cached_pair,
+        pside="long",
+        symbol=symbol,
+        fills=extension_fills,
+        closes_by_minute=closes_by_minute,
+        end_ts=end_ts,
+        c_mult=1.0,
+    )
+    rebuilt_pair = hsl._hsl_replay_matrix_arrays(
+        hsl._hsl_replay_rows_from_arrays(cached_pair, series_kind="pair_matrix")
+        + new_pair_rows
+    )
+    for field in full_pair:
+        np.testing.assert_allclose(
+            rebuilt_pair[field], full_pair[field], rtol=0.0, atol=1e-12
+        )
+
+    new_account_rows = hsl._hsl_replay_extend_account_rows(
+        cached_account,
+        fills=extension_fills,
+        end_ts=end_ts,
+    )
+    rebuilt_account = hsl._hsl_replay_account_series_arrays(
+        hsl._hsl_replay_rows_from_arrays(cached_account, series_kind="account_pnl")
+        + new_account_rows
+    )
+    for field in full_account:
+        np.testing.assert_allclose(
+            rebuilt_account[field], full_account[field], rtol=0.0, atol=1e-12
+        )
+
+
+def test_hsl_cache_extension_fail_loud_contracts():
+    pair = hsl._hsl_replay_matrix_arrays(
+        [
+            hsl._hsl_replay_matrix_row(
+                pside="long", ts=60_000, price=100.0, psize=1.0,
+                pprice=100.0, pnl=0.0, c_mult=1.0,
+            ),
+            hsl._hsl_replay_matrix_row(
+                pside="long", ts=120_000, price=101.0, psize=1.0,
+                pprice=100.0, pnl=0.0, c_mult=1.0,
+            ),
+        ]
+    )
+
+    def fill(ts, action="increase", qty=0.1, price=100.0, pnl=0.0):
+        return {
+            "timestamp": ts,
+            "symbol": "A",
+            "pside": "long",
+            "qty": qty,
+            "price": price,
+            "action": action,
+            "pnl": pnl,
+        }
+
+    # Fill inside the cached window must reject the extension.
+    with pytest.raises(ValueError, match="inside the cached window"):
+        hsl._hsl_replay_extend_pair_rows(
+            pair, pside="long", symbol="A",
+            fills=[fill(150_000)], closes_by_minute={}, end_ts=240_000, c_mult=1.0,
+        )
+    # Fill beyond the extension end must reject.
+    with pytest.raises(ValueError, match="beyond the extension end"):
+        hsl._hsl_replay_extend_pair_rows(
+            pair, pside="long", symbol="A",
+            fills=[fill(400_000)], closes_by_minute={}, end_ts=240_000, c_mult=1.0,
+        )
+    # End before the watermark must reject.
+    with pytest.raises(ValueError, match="precedes watermark"):
+        hsl._hsl_replay_extend_pair_rows(
+            pair, pside="long", symbol="A",
+            fills=[], closes_by_minute={}, end_ts=60_000, c_mult=1.0,
+        )
+    # Fill from another pair must reject.
+    wrong = fill(200_000)
+    wrong["symbol"] = "B"
+    with pytest.raises(ValueError, match="does not belong to pair"):
+        hsl._hsl_replay_extend_pair_rows(
+            pair, pside="long", symbol="A",
+            fills=[wrong], closes_by_minute={}, end_ts=240_000, c_mult=1.0,
+        )
+    # Fills with stripped pair identity must reject, never default to the
+    # target pair.
+    for missing_keys in (("symbol",), ("pside",), ("symbol", "pside")):
+        stripped = fill(200_000)
+        for key in missing_keys:
+            del stripped[key]
+        with pytest.raises(ValueError, match="missing pair identity"):
+            hsl._hsl_replay_extend_pair_rows(
+                pair, pside="long", symbol="A",
+                fills=[stripped], closes_by_minute={}, end_ts=240_000, c_mult=1.0,
+            )
+    # Zero-length extension is a no-op.
+    assert (
+        hsl._hsl_replay_extend_pair_rows(
+            pair, pside="long", symbol="A",
+            fills=[], closes_by_minute={}, end_ts=120_000, c_mult=1.0,
+        )
+        == []
+    )
+    # Missing closes carry the last known price forward.
+    rows = hsl._hsl_replay_extend_pair_rows(
+        pair, pside="long", symbol="A",
+        fills=[], closes_by_minute={}, end_ts=240_000, c_mult=1.0,
+    )
+    assert [row["price"] for row in rows] == [101.0, 101.0]
+    assert [row["psize"] for row in rows] == [1.0, 1.0]
+
+
 def test_hsl_cache_synthesized_rows_fail_loud_on_bad_inputs():
     account = hsl._hsl_replay_account_series_arrays(
         [
