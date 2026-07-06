@@ -11704,39 +11704,42 @@ class Passivbot:
         replay_matrix_last_price: Dict[str, float] = {}
 
         def _collect_replay_matrix_rows(minute_ts: int, *, record: bool) -> None:
+            # Matrix collection is a passive observer of the replay; any
+            # per-pair failure drops that pair's cache and must never
+            # propagate into the replay itself.
             for pair in list(replay_matrix_rows):
                 pside, sym = pair
-                running = float(
-                    realized_pnl_coin_pside_running.get(
-                        sym, {"long": 0.0, "short": 0.0}
-                    ).get(pside, 0.0)
-                )
-                # Track the running realized value every minute so the first
-                # persisted row's pnl covers only its own minute.
-                minute_pnl = running - replay_matrix_prev_realized.get(pair, running)
-                replay_matrix_prev_realized[pair] = running
-                mprice = price_lookup.get(sym, {}).get(minute_ts)
-                if mprice is not None and mprice > 0.0:
-                    replay_matrix_last_price[sym] = float(mprice)
-                else:
-                    mprice = replay_matrix_last_price.get(sym)
-                if not record:
-                    continue
-                if mprice is None or mprice <= 0.0:
-                    if replay_matrix_rows[pair]:
-                        # A gap after rows started would break 1m continuity;
-                        # drop the pair rather than persist an unprovable series.
-                        del replay_matrix_rows[pair]
-                    continue
-                slot = positions.get(sym, {}).get(pside, {})
-                size = float(slot.get("size", 0.0) or 0.0)
-                if size > 1e-12:
-                    psize = size if pside == "long" else -size
-                    pprice = float(slot.get("price", 0.0) or 0.0)
-                else:
-                    psize = 0.0
-                    pprice = 0.0
                 try:
+                    running = float(
+                        realized_pnl_coin_pside_running.get(
+                            sym, {"long": 0.0, "short": 0.0}
+                        ).get(pside, 0.0)
+                    )
+                    # Track the running realized value every minute so the first
+                    # persisted row's pnl covers only its own minute.
+                    minute_pnl = running - replay_matrix_prev_realized.get(pair, running)
+                    replay_matrix_prev_realized[pair] = running
+                    mprice = price_lookup.get(sym, {}).get(minute_ts)
+                    if mprice is not None and mprice > 0.0:
+                        replay_matrix_last_price[sym] = float(mprice)
+                    else:
+                        mprice = replay_matrix_last_price.get(sym)
+                    if not record:
+                        continue
+                    if mprice is None or mprice <= 0.0:
+                        if replay_matrix_rows[pair]:
+                            # A gap after rows started would break 1m continuity;
+                            # drop the pair rather than persist an unprovable series.
+                            del replay_matrix_rows[pair]
+                        continue
+                    slot = positions.get(sym, {}).get(pside, {})
+                    size = float(slot.get("size", 0.0) or 0.0)
+                    if size > 1e-12:
+                        psize = size if pside == "long" else -size
+                        pprice = float(slot.get("price", 0.0) or 0.0)
+                    else:
+                        psize = 0.0
+                        pprice = 0.0
                     replay_matrix_rows[pair].append(
                         pb_hsl._hsl_replay_matrix_row(
                             pside=pside,
@@ -11749,7 +11752,7 @@ class Passivbot:
                         )
                     )
                 except Exception as exc:
-                    del replay_matrix_rows[pair]
+                    replay_matrix_rows.pop(pair, None)
                     logging.warning(
                         "[risk] HSL[%s:%s] replay matrix row build failed; "
                         "skipping cache for this pair | ts=%s error=%s: %s",

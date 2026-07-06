@@ -1616,6 +1616,21 @@ async def test_balance_equity_history_builds_replay_matrices_for_held_pairs(monk
         hsl_replay_signal_mode="unified",
     )
     assert history_unified["hsl_replay_matrices"] == {}
+
+    # A failing matrix row build must drop the pair's cache, not the replay.
+    def raising_row_builder(**kwargs):
+        raise ValueError("synthetic matrix row failure")
+
+    monkeypatch.setattr(
+        passivbot_module.pb_hsl, "_hsl_replay_matrix_row", raising_row_builder
+    )
+    history_degraded = await bot.get_balance_equity_history(
+        fill_events=fill_events,
+        current_balance=100.0,
+        hsl_replay_signal_mode="coin",
+    )
+    assert history_degraded["hsl_replay_matrices"] == {}
+    assert len(history_degraded["timeline"]) == len(history["timeline"])
     assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 
