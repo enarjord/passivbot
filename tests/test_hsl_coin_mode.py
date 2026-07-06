@@ -194,6 +194,8 @@ def _hsl_cache_metadata(**overrides):
         "symbol": "BTC/USDT:USDT",
         "fill_covered_start_ms": 60_000,
         "fill_covered_end_ms": 180_000,
+        "fill_history_scope": "window",
+        "fill_coverage_proven": True,
         "candle_covered_start_ms": 60_000,
         "candle_covered_end_ms": 180_000,
     }
@@ -480,6 +482,8 @@ def test_hsl_replay_cache_expected_metadata_uses_trust_boundary_fields():
         "BTC/USDT:USDT",
         fill_covered_start_ms=60_000,
         fill_covered_end_ms=120_000,
+        fill_history_scope="window",
+        fill_coverage_proven=True,
         candle_covered_start_ms=60_000,
         candle_covered_end_ms=180_000,
     )
@@ -495,8 +499,42 @@ def test_hsl_replay_cache_expected_metadata_uses_trust_boundary_fields():
     assert len(metadata["config_digest"]) == 64
     assert metadata["fill_covered_start_ms"] == 60_000
     assert metadata["fill_covered_end_ms"] == 120_000
+    assert metadata["fill_history_scope"] == "window"
+    assert metadata["fill_coverage_proven"] is True
     assert metadata["candle_covered_start_ms"] == 60_000
     assert metadata["candle_covered_end_ms"] == 180_000
+
+
+def test_hsl_replay_cache_metadata_rejects_invalid_coverage_proof_fields():
+    with pytest.raises(ValueError, match="fill_history_scope"):
+        hsl._normalize_hsl_replay_cache_metadata(
+            _hsl_cache_metadata(fill_history_scope="everything")
+        )
+    with pytest.raises(ValueError, match="fill_coverage_proven"):
+        hsl._normalize_hsl_replay_cache_metadata(
+            _hsl_cache_metadata(fill_coverage_proven=1)
+        )
+    # Unproven coverage is valid metadata; the future read slice gates on it.
+    normalized = hsl._normalize_hsl_replay_cache_metadata(
+        _hsl_cache_metadata(fill_coverage_proven=False)
+    )
+    assert normalized["fill_coverage_proven"] is False
+
+
+def test_hsl_replay_cache_validation_flags_missing_coverage_proof_fields(tmp_path):
+    import json
+
+    hsl._write_hsl_replay_matrix_cache(tmp_path, _hsl_cache_rows(), _hsl_cache_metadata())
+    manifest_path = tmp_path / hsl._HSL_REPLAY_CACHE_MANIFEST_FILENAME
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    del manifest["metadata"]["fill_history_scope"]
+    del manifest["metadata"]["fill_coverage_proven"]
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    reasons = hsl._hsl_replay_cache_validation_reasons(tmp_path)
+
+    assert "metadata_missing_required:fill_history_scope" in reasons
+    assert "metadata_missing_required:fill_coverage_proven" in reasons
 
 
 def test_hsl_replay_cache_dir_is_sanitized_and_digest_scoped():
@@ -546,6 +584,8 @@ def test_hsl_replay_cache_persist_matrices_round_trip(tmp_path, monkeypatch):
     coverage = {
         "fill_covered_start_ms": 60_000,
         "fill_covered_end_ms": 200_000,
+        "fill_history_scope": "window",
+        "fill_coverage_proven": True,
         "candle_covered_start_ms": 60_000,
         "candle_covered_end_ms": 180_000,
     }
@@ -563,6 +603,8 @@ def test_hsl_replay_cache_persist_matrices_round_trip(tmp_path, monkeypatch):
         symbol,
         fill_covered_start_ms=coverage["fill_covered_start_ms"],
         fill_covered_end_ms=coverage["fill_covered_end_ms"],
+        fill_history_scope=coverage["fill_history_scope"],
+        fill_coverage_proven=coverage["fill_coverage_proven"],
         candle_covered_start_ms=coverage["candle_covered_start_ms"],
         candle_covered_end_ms=coverage["candle_covered_end_ms"],
     )
@@ -625,6 +667,8 @@ def test_hsl_replay_cache_persist_matrices_write_failure_is_nonfatal(
         "hsl_replay_matrix_coverage": {
             "fill_covered_start_ms": 60_000,
             "fill_covered_end_ms": 200_000,
+            "fill_history_scope": "window",
+            "fill_coverage_proven": True,
             "candle_covered_start_ms": 60_000,
             "candle_covered_end_ms": 180_000,
         },
@@ -652,6 +696,54 @@ def test_hsl_replay_cache_persist_matrices_write_failure_is_nonfatal(
     assert event.symbol == symbol
     assert event.data["cache_status"] == "write_failed"
     assert event.data["reasons"] == ["write_exception:ValueError"]
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
+
+
+def test_hsl_replay_cache_writer_rejects_non_bool_coverage_proof(tmp_path, monkeypatch):
+    from live.event_bus import EventTypes, ReasonCodes
+
+    bot, sink = _make_persist_bot(tmp_path, monkeypatch)
+    symbol = "BTC/USDT:USDT"
+
+    with pytest.raises(ValueError, match="fill_coverage_proven"):
+        hsl._hsl_replay_cache_expected_metadata(
+            bot,
+            "long",
+            symbol,
+            fill_covered_start_ms=60_000,
+            fill_covered_end_ms=200_000,
+            fill_history_scope="window",
+            fill_coverage_proven=1,
+            candle_covered_start_ms=60_000,
+            candle_covered_end_ms=180_000,
+        )
+
+    history = {
+        "hsl_replay_matrices": {"long": {symbol: _hsl_cache_rows()}},
+        "hsl_replay_matrix_coverage": {
+            "fill_covered_start_ms": 60_000,
+            "fill_covered_end_ms": 200_000,
+            "fill_history_scope": "window",
+            "fill_coverage_proven": 1,
+            "candle_covered_start_ms": 60_000,
+            "candle_covered_end_ms": 180_000,
+        },
+    }
+
+    written = hsl._equity_hard_stop_persist_replay_matrices(bot, history)
+
+    assert written == 0
+    cache_dir = hsl._hsl_replay_cache_dir(bot, "long", symbol)
+    assert hsl._hsl_replay_cache_validation_reasons(cache_dir) == ["manifest_missing"]
+    assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    failed_events = [
+        event
+        for event in sink.events
+        if event.event_type == EventTypes.HSL_REPLAY_CACHE
+        and event.reason_code == ReasonCodes.HSL_REPLAY_CACHE_WRITE_FAILED
+    ]
+    assert len(failed_events) == 1
+    assert failed_events[0].data["reasons"] == ["write_exception:ValueError"]
     assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 
@@ -1188,6 +1280,8 @@ async def test_coin_hsl_history_replay_persists_replay_matrices(tmp_path, monkey
     coverage = {
         "fill_covered_start_ms": 0,
         "fill_covered_end_ms": 180_000,
+        "fill_history_scope": "all",
+        "fill_coverage_proven": True,
         "candle_covered_start_ms": 60_000,
         "candle_covered_end_ms": 120_000,
     }
@@ -1235,6 +1329,8 @@ async def test_coin_hsl_history_replay_persists_replay_matrices(tmp_path, monkey
         symbol,
         fill_covered_start_ms=coverage["fill_covered_start_ms"],
         fill_covered_end_ms=coverage["fill_covered_end_ms"],
+        fill_history_scope=coverage["fill_history_scope"],
+        fill_coverage_proven=coverage["fill_coverage_proven"],
         candle_covered_start_ms=coverage["candle_covered_start_ms"],
         candle_covered_end_ms=coverage["candle_covered_end_ms"],
     )

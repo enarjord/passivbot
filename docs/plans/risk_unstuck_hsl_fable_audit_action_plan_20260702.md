@@ -870,6 +870,12 @@ Remaining implementation details:
       failures warn and emit `hsl_replay_cache_write_failed` without touching
       replay results; successful writes emit `hsl_replay_cache_written`. The
       cache is still never read for trading decisions.
+      Partial: replay cache manifests (schema v2) now record the pnls-manager
+      fill-coverage proof at write time (`fill_history_scope`,
+      `fill_coverage_proven`) via the canonical coverage-status check, with
+      caller-provided fill events explicitly marked unproven. The future
+      read/reuse slice must gate on a proven manifest plus a fresh coverage
+      proof at load time.
 - [ ] Python simplification after Rust owns ideal protective orders and unstuck
       orders.
       Python should reconcile ideal vs actual orders, not re-decide trading
