@@ -183,6 +183,110 @@ def test_hsl_replay_matrix_derived_series_requires_contiguous_minutes():
         hsl._hsl_replay_matrix_derived_series(rows, base_equity=1_000.0)
 
 
+def _hsl_cache_metadata(**overrides):
+    metadata = {
+        "exchange": "binance",
+        "market_type": "swap",
+        "user": "test_user",
+        "config_digest": "cfg_hash",
+        "signal_mode": "coin",
+        "pside": "long",
+        "symbol": "BTC/USDT:USDT",
+        "fill_covered_start_ms": 60_000,
+        "fill_covered_end_ms": 180_000,
+        "candle_covered_start_ms": 60_000,
+        "candle_covered_end_ms": 180_000,
+    }
+    metadata.update(overrides)
+    return metadata
+
+
+def _hsl_cache_rows():
+    return [
+        hsl._hsl_replay_matrix_row(
+            pside="long",
+            ts=60_000,
+            price=100.0,
+            psize=1.0,
+            pprice=100.0,
+            pnl=0.0,
+            c_mult=1.0,
+        ),
+        hsl._hsl_replay_matrix_row(
+            pside="long",
+            ts=120_000,
+            price=90.0,
+            psize=1.0,
+            pprice=100.0,
+            pnl=-2.0,
+            c_mult=1.0,
+        ),
+        hsl._hsl_replay_matrix_row(
+            pside="long",
+            ts=180_000,
+            price=95.0,
+            psize=0.0,
+            pprice=0.0,
+            pnl=3.0,
+            c_mult=1.0,
+        ),
+    ]
+
+
+def test_hsl_replay_matrix_cache_round_trips_with_manifest(tmp_path):
+    metadata = _hsl_cache_metadata()
+
+    manifest = hsl._write_hsl_replay_matrix_cache(tmp_path, _hsl_cache_rows(), metadata)
+
+    assert manifest["schema_version"] == hsl._HSL_REPLAY_CACHE_SCHEMA_VERSION
+    assert manifest["matrix_file"] == hsl._HSL_REPLAY_CACHE_MATRIX_FILENAME
+    assert manifest["row_count"] == 3
+    assert manifest["metadata"] == metadata
+    assert hsl._hsl_replay_cache_validation_reasons(
+        tmp_path,
+        expected_metadata=metadata,
+    ) == []
+
+
+def test_hsl_replay_matrix_cache_reports_metadata_mismatch(tmp_path):
+    metadata = _hsl_cache_metadata()
+    hsl._write_hsl_replay_matrix_cache(tmp_path, _hsl_cache_rows(), metadata)
+
+    reasons = hsl._hsl_replay_cache_validation_reasons(
+        tmp_path,
+        expected_metadata=_hsl_cache_metadata(config_digest="other_cfg_hash"),
+    )
+
+    assert reasons == ["metadata_mismatch:config_digest"]
+
+
+def test_hsl_replay_matrix_cache_reports_array_hash_mismatch(tmp_path):
+    import numpy as np
+
+    metadata = _hsl_cache_metadata()
+    hsl._write_hsl_replay_matrix_cache(tmp_path, _hsl_cache_rows(), metadata)
+    matrix_path = tmp_path / hsl._HSL_REPLAY_CACHE_MATRIX_FILENAME
+    with np.load(matrix_path, allow_pickle=False) as loaded:
+        arrays = {field: loaded[field].copy() for field in hsl._HSL_REPLAY_MATRIX_RAW_FIELDS}
+    arrays["pnl"][1] = -99.0
+    np.savez(matrix_path, **arrays)
+
+    reasons = hsl._hsl_replay_cache_validation_reasons(
+        tmp_path,
+        expected_metadata=metadata,
+    )
+
+    assert "array_hash_mismatch:pnl" in reasons
+
+
+def test_hsl_replay_matrix_cache_requires_trust_boundary_metadata(tmp_path):
+    metadata = _hsl_cache_metadata()
+    metadata.pop("config_digest")
+
+    with pytest.raises(ValueError, match="metadata missing required fields"):
+        hsl._write_hsl_replay_matrix_cache(tmp_path, _hsl_cache_rows(), metadata)
+
+
 def bind_hsl_methods(bot):
     for name in (
         "_hsl_psides",

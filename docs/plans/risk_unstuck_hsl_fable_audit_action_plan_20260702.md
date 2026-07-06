@@ -842,6 +842,12 @@ Remaining implementation details:
       computation away from Python primitive loops. First persisted format
       should be `.npz` arrays plus JSON metadata unless implementation evidence
       shows a better dependency-free option.
+      Partial: pure live-HSL cache helpers now write the raw replay matrix as
+      `hsl_replay_matrix.npz` plus `hsl_replay_manifest.json`, including schema
+      version, fixed one-minute interval, row/time bounds, trust-boundary
+      metadata, per-array dtype/shape/SHA-256, and explicit validation reason
+      codes for reuse rejection. The cache remains unwired and
+      non-authoritative.
 - [ ] Python simplification after Rust owns ideal protective orders and unstuck
       orders.
       Python should reconcile ideal vs actual orders, not re-decide trading

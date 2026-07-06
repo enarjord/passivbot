@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import math
@@ -8,6 +9,7 @@ import os
 import time
 import traceback
 from collections import deque
+from pathlib import Path
 from typing import Any, Optional
 
 import passivbot_rust as pbr
@@ -31,6 +33,22 @@ from utils import make_get_filepath
 _HSL_RISKS_DOC = "docs/equity_hard_stop_loss_risks.md"
 _HSL_REPLAY_MATRIX_INTERVAL_MS = 60_000
 _HSL_REPLAY_MATRIX_RAW_FIELDS = ("ts", "price", "psize", "pprice", "pnl", "upnl")
+_HSL_REPLAY_CACHE_SCHEMA_VERSION = 1
+_HSL_REPLAY_CACHE_MATRIX_FILENAME = "hsl_replay_matrix.npz"
+_HSL_REPLAY_CACHE_MANIFEST_FILENAME = "hsl_replay_manifest.json"
+_HSL_REPLAY_CACHE_REQUIRED_METADATA = (
+    "exchange",
+    "market_type",
+    "user",
+    "config_digest",
+    "signal_mode",
+    "pside",
+    "symbol",
+    "fill_covered_start_ms",
+    "fill_covered_end_ms",
+    "candle_covered_start_ms",
+    "candle_covered_end_ms",
+)
 
 
 def _hsl_key_sample(value: Any, *, limit: int = 32) -> list[str]:
@@ -458,6 +476,190 @@ def _hsl_replay_matrix_derived_series(
         )
         prev_ts = ts
     return out
+
+
+def _hsl_replay_matrix_arrays(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    import numpy as np
+
+    # Reuse the derived-series validation path for raw fields and 1m continuity.
+    _hsl_replay_matrix_derived_series(rows, base_equity=1.0)
+    return {
+        "ts": np.asarray([int(row["ts"]) for row in rows], dtype=np.int64),
+        "price": np.asarray([float(row["price"]) for row in rows], dtype=np.float64),
+        "psize": np.asarray([float(row["psize"]) for row in rows], dtype=np.float64),
+        "pprice": np.asarray([float(row["pprice"]) for row in rows], dtype=np.float64),
+        "pnl": np.asarray([float(row["pnl"]) for row in rows], dtype=np.float64),
+        "upnl": np.asarray([float(row["upnl"]) for row in rows], dtype=np.float64),
+    }
+
+
+def _hsl_hash_array(array: Any) -> str:
+    import numpy as np
+
+    arr = np.ascontiguousarray(np.asarray(array))
+    hasher = hashlib.sha256()
+    hasher.update(str(arr.dtype).encode("utf-8"))
+    hasher.update(b"\0")
+    hasher.update(json.dumps(list(arr.shape), separators=(",", ":")).encode("utf-8"))
+    hasher.update(b"\0")
+    hasher.update(arr.tobytes(order="C"))
+    return hasher.hexdigest()
+
+
+def _hsl_replay_cache_array_manifest(arrays: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    return {
+        field: {
+            "sha256": _hsl_hash_array(arrays[field]),
+            "shape": [int(x) for x in arrays[field].shape],
+            "dtype": str(arrays[field].dtype),
+        }
+        for field in _HSL_REPLAY_MATRIX_RAW_FIELDS
+    }
+
+
+def _normalize_hsl_replay_cache_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(metadata, dict):
+        raise TypeError(f"HSL replay cache metadata must be a dict, got {type(metadata).__name__}")
+    missing = [key for key in _HSL_REPLAY_CACHE_REQUIRED_METADATA if metadata.get(key) is None]
+    if missing:
+        raise ValueError(f"HSL replay cache metadata missing required fields: {missing}")
+    out = dict(metadata)
+    for key in (
+        "exchange",
+        "market_type",
+        "user",
+        "config_digest",
+        "signal_mode",
+        "pside",
+        "symbol",
+    ):
+        out[key] = str(out[key])
+    for key in (
+        "fill_covered_start_ms",
+        "fill_covered_end_ms",
+        "candle_covered_start_ms",
+        "candle_covered_end_ms",
+    ):
+        out[key] = int(out[key])
+    return out
+
+
+def _write_hsl_replay_matrix_cache(
+    cache_dir: str | os.PathLike[str],
+    rows: list[dict[str, Any]],
+    metadata: dict[str, Any],
+) -> dict[str, Any]:
+    import numpy as np
+
+    cache_path = Path(cache_dir)
+    cache_path.mkdir(parents=True, exist_ok=True)
+    arrays = _hsl_replay_matrix_arrays(rows)
+    metadata_norm = _normalize_hsl_replay_cache_metadata(metadata)
+    manifest = {
+        "schema_version": _HSL_REPLAY_CACHE_SCHEMA_VERSION,
+        "matrix_file": _HSL_REPLAY_CACHE_MATRIX_FILENAME,
+        "row_count": int(len(rows)),
+        "fields": list(_HSL_REPLAY_MATRIX_RAW_FIELDS),
+        "interval_ms": _HSL_REPLAY_MATRIX_INTERVAL_MS,
+        "start_ts_ms": int(arrays["ts"][0]) if len(rows) else None,
+        "end_ts_ms": int(arrays["ts"][-1]) if len(rows) else None,
+        "metadata": metadata_norm,
+        "arrays": _hsl_replay_cache_array_manifest(arrays),
+    }
+    matrix_path = cache_path / _HSL_REPLAY_CACHE_MATRIX_FILENAME
+    manifest_path = cache_path / _HSL_REPLAY_CACHE_MANIFEST_FILENAME
+    matrix_tmp = matrix_path.with_suffix(matrix_path.suffix + f".{os.getpid()}.tmp")
+    manifest_tmp = manifest_path.with_suffix(manifest_path.suffix + f".{os.getpid()}.tmp")
+    np.savez(matrix_tmp, **arrays)
+    # numpy appends .npz when the provided filename does not already end with it.
+    actual_matrix_tmp = matrix_tmp if matrix_tmp.exists() else Path(str(matrix_tmp) + ".npz")
+    os.replace(actual_matrix_tmp, matrix_path)
+    manifest_tmp.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    os.replace(manifest_tmp, manifest_path)
+    return manifest
+
+
+def _hsl_replay_cache_validation_reasons(
+    cache_dir: str | os.PathLike[str],
+    *,
+    expected_metadata: dict[str, Any] | None = None,
+) -> list[str]:
+    import numpy as np
+
+    cache_path = Path(cache_dir)
+    manifest_path = cache_path / _HSL_REPLAY_CACHE_MANIFEST_FILENAME
+    matrix_path = cache_path / _HSL_REPLAY_CACHE_MATRIX_FILENAME
+    if not manifest_path.exists():
+        return ["manifest_missing"]
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except Exception:
+        return ["manifest_unreadable"]
+    reasons: list[str] = []
+    if not isinstance(manifest, dict):
+        return ["manifest_not_object"]
+    if int(manifest.get("schema_version", 0) or 0) != _HSL_REPLAY_CACHE_SCHEMA_VERSION:
+        reasons.append("schema_version_mismatch")
+    if str(manifest.get("matrix_file", "")) != _HSL_REPLAY_CACHE_MATRIX_FILENAME:
+        reasons.append("matrix_filename_mismatch")
+    if int(manifest.get("interval_ms", 0) or 0) != _HSL_REPLAY_MATRIX_INTERVAL_MS:
+        reasons.append("interval_mismatch")
+    if not matrix_path.exists():
+        reasons.append("matrix_missing")
+        return reasons
+    expected_norm = None
+    if expected_metadata is not None:
+        try:
+            expected_norm = _normalize_hsl_replay_cache_metadata(expected_metadata)
+        except Exception:
+            reasons.append("expected_metadata_invalid")
+    metadata = manifest.get("metadata")
+    if not isinstance(metadata, dict):
+        reasons.append("metadata_missing")
+    elif expected_norm is not None:
+        for key, value in expected_norm.items():
+            if metadata.get(key) != value:
+                reasons.append(f"metadata_mismatch:{key}")
+    try:
+        loaded_npz = np.load(matrix_path, allow_pickle=False)
+    except Exception:
+        reasons.append("matrix_unreadable")
+        return reasons
+    with loaded_npz as loaded:
+        arrays_manifest = manifest.get("arrays")
+        if not isinstance(arrays_manifest, dict):
+            reasons.append("arrays_manifest_missing")
+            arrays_manifest = {}
+        loaded_arrays: dict[str, Any] = {}
+        for field in _HSL_REPLAY_MATRIX_RAW_FIELDS:
+            if field not in loaded:
+                reasons.append(f"array_missing:{field}")
+                continue
+            arr = loaded[field]
+            loaded_arrays[field] = arr
+            entry = arrays_manifest.get(field)
+            if not isinstance(entry, dict):
+                reasons.append(f"array_manifest_missing:{field}")
+                continue
+            if str(arr.dtype) != str(entry.get("dtype")):
+                reasons.append(f"array_dtype_mismatch:{field}")
+            if [int(x) for x in arr.shape] != list(entry.get("shape", [])):
+                reasons.append(f"array_shape_mismatch:{field}")
+            if _hsl_hash_array(arr) != str(entry.get("sha256")):
+                reasons.append(f"array_hash_mismatch:{field}")
+        if set(loaded_arrays) == set(_HSL_REPLAY_MATRIX_RAW_FIELDS):
+            row_count = int(len(loaded_arrays["ts"]))
+            if row_count != int(manifest.get("row_count", -1)):
+                reasons.append("row_count_mismatch")
+            if row_count:
+                diffs = np.diff(loaded_arrays["ts"])
+                if diffs.size and not bool(np.all(diffs == _HSL_REPLAY_MATRIX_INTERVAL_MS)):
+                    reasons.append("timestamp_not_contiguous")
+                if int(loaded_arrays["ts"][0]) != manifest.get("start_ts_ms"):
+                    reasons.append("start_ts_mismatch")
+                if int(loaded_arrays["ts"][-1]) != manifest.get("end_ts_ms"):
+                    reasons.append("end_ts_mismatch")
+    return reasons
 
 
 def _hsl_psides(self) -> tuple[str, str]:
