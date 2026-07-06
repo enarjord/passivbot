@@ -534,23 +534,44 @@ def _hsl_replay_cache_array_value_reasons(arrays: dict[str, Any]) -> list[str]:
     required = set(_HSL_REPLAY_MATRIX_RAW_FIELDS)
     if set(arrays) != required:
         return reasons
-    row_count = int(len(arrays["ts"]))
+    try:
+        row_count = int(len(arrays["ts"]))
+    except TypeError:
+        return ["array_value_invalid:ts"]
     for field in _HSL_REPLAY_MATRIX_RAW_FIELDS:
-        if len(arrays[field]) != row_count:
+        try:
+            field_len = int(len(arrays[field]))
+        except TypeError:
+            reasons.append(f"array_value_invalid:{field}")
+            continue
+        if field_len != row_count:
             reasons.append(f"array_length_mismatch:{field}")
     if reasons:
         return reasons
-    ts = arrays["ts"]
-    if row_count and (not bool(np.all(np.isfinite(ts))) or int(ts[0]) < 0):
-        reasons.append("timestamp_invalid")
-    for field in ("price", "psize", "pprice", "pnl", "upnl"):
-        if not bool(np.all(np.isfinite(arrays[field]))):
-            reasons.append(f"array_nonfinite:{field}")
-    if row_count and bool(np.any(arrays["price"] <= 0.0)):
+    numeric_arrays: dict[str, Any] = {}
+    for field in _HSL_REPLAY_MATRIX_RAW_FIELDS:
+        arr = np.asarray(arrays[field])
+        if arr.ndim != 1 or not np.issubdtype(arr.dtype, np.number):
+            reasons.append(f"array_value_invalid:{field}")
+            continue
+        numeric_arrays[field] = arr
+        try:
+            if not bool(np.all(np.isfinite(arr))):
+                reasons.append(f"array_nonfinite:{field}")
+        except (TypeError, ValueError):
+            reasons.append(f"array_value_invalid:{field}")
+    if "ts" in numeric_arrays and row_count:
+        try:
+            if int(numeric_arrays["ts"][0]) < 0:
+                reasons.append("timestamp_invalid")
+        except (TypeError, ValueError, OverflowError):
+            reasons.append("timestamp_invalid")
+    if "price" in numeric_arrays and row_count and bool(np.any(numeric_arrays["price"] <= 0.0)):
         reasons.append("price_nonpositive")
-    nonflat = np.abs(arrays["psize"]) > 0.0
-    if row_count and bool(np.any(nonflat & (arrays["pprice"] <= 0.0))):
-        reasons.append("nonflat_pprice_nonpositive")
+    if {"psize", "pprice"}.issubset(numeric_arrays) and row_count:
+        nonflat = np.abs(numeric_arrays["psize"]) > 0.0
+        if bool(np.any(nonflat & (numeric_arrays["pprice"] <= 0.0))):
+            reasons.append("nonflat_pprice_nonpositive")
     return reasons
 
 

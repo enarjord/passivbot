@@ -316,6 +316,27 @@ def test_hsl_replay_matrix_cache_validation_reports_semantically_invalid_raw_val
     assert "nonflat_pprice_nonpositive" in reasons
 
 
+def test_hsl_replay_matrix_cache_validation_reports_non_numeric_array_without_raising(tmp_path):
+    import numpy as np
+
+    metadata = _hsl_cache_metadata()
+    hsl._write_hsl_replay_matrix_cache(tmp_path, _hsl_cache_rows(), metadata)
+    matrix_path = tmp_path / hsl._HSL_REPLAY_CACHE_MATRIX_FILENAME
+    with np.load(matrix_path, allow_pickle=False) as loaded:
+        arrays = {field: loaded[field].copy() for field in hsl._HSL_REPLAY_MATRIX_RAW_FIELDS}
+    arrays["price"] = np.array(["bad", "bad", "bad"], dtype="<U3")
+    np.savez(matrix_path, **arrays)
+
+    reasons = hsl._hsl_replay_cache_validation_reasons(
+        tmp_path,
+        expected_metadata=metadata,
+    )
+
+    assert "array_dtype_mismatch:price" in reasons
+    assert "array_hash_mismatch:price" in reasons
+    assert "array_value_invalid:price" in reasons
+
+
 def test_hsl_replay_matrix_cache_requires_trust_boundary_metadata(tmp_path):
     metadata = _hsl_cache_metadata()
     metadata.pop("config_digest")
