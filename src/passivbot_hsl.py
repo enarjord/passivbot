@@ -29,6 +29,8 @@ from utils import make_get_filepath
 
 
 _HSL_RISKS_DOC = "docs/equity_hard_stop_loss_risks.md"
+_HSL_REPLAY_MATRIX_INTERVAL_MS = 60_000
+_HSL_REPLAY_MATRIX_RAW_FIELDS = ("ts", "price", "psize", "pprice", "pnl", "upnl")
 
 
 def _hsl_key_sample(value: Any, *, limit: int = 32) -> list[str]:
@@ -370,6 +372,92 @@ def _calc_hsl_pnl(position_side, entry_price, close_price, qty, c_mult):
             return pbr.calc_pnl_long(entry_price, close_price, qty, c_mult)
         return pbr.calc_pnl_short(entry_price, close_price, qty, c_mult)
     return pbr.calc_pnl_long(entry_price, close_price, qty, c_mult)
+
+
+def _finite_hsl_float(value: Any, field_name: str) -> float:
+    out = float(value)
+    if not math.isfinite(out):
+        raise ValueError(f"HSL replay matrix field {field_name} must be finite, got {out}")
+    return out
+
+
+def _hsl_replay_matrix_row(
+    *,
+    pside: str,
+    ts: int,
+    price: float,
+    psize: float,
+    pprice: float,
+    pnl: float,
+    c_mult: float,
+) -> dict[str, float | int]:
+    """Build one non-authoritative cache row from authoritative candles/fills."""
+    if pside not in {"long", "short"}:
+        raise ValueError(f"HSL replay matrix pside must be long or short, got {pside!r}")
+    ts_int = int(ts)
+    if ts_int < 0:
+        raise ValueError(f"HSL replay matrix ts must be >= 0, got {ts_int}")
+    price_f = _finite_hsl_float(price, "price")
+    psize_f = _finite_hsl_float(psize, "psize")
+    pprice_f = _finite_hsl_float(pprice, "pprice")
+    pnl_f = _finite_hsl_float(pnl, "pnl")
+    c_mult_f = _finite_hsl_float(c_mult, "c_mult")
+    if price_f <= 0.0:
+        raise ValueError(f"HSL replay matrix price must be > 0, got {price_f}")
+    if c_mult_f <= 0.0:
+        raise ValueError(f"HSL replay matrix c_mult must be > 0, got {c_mult_f}")
+    if abs(psize_f) <= 0.0:
+        upnl = 0.0
+    else:
+        if pprice_f <= 0.0:
+            raise ValueError(
+                f"HSL replay matrix pprice must be > 0 for non-flat rows, got {pprice_f}"
+            )
+        qty = abs(psize_f)
+        upnl = float(_calc_hsl_pnl(pside, pprice_f, price_f, qty, c_mult_f))
+    return {
+        "ts": ts_int,
+        "price": price_f,
+        "psize": psize_f,
+        "pprice": pprice_f,
+        "pnl": pnl_f,
+        "upnl": upnl,
+    }
+
+
+def _hsl_replay_matrix_derived_series(
+    rows: list[dict[str, Any]], *, base_equity: float
+) -> list[dict[str, float | int]]:
+    """Derive cumulative PnL/equity without treating persisted raw PnL as cumulative."""
+    base_equity_f = _finite_hsl_float(base_equity, "base_equity")
+    if base_equity_f <= 0.0:
+        raise ValueError(f"HSL replay matrix base_equity must be > 0, got {base_equity_f}")
+    out: list[dict[str, float | int]] = []
+    pnl_cumsum = 0.0
+    prev_ts: int | None = None
+    for row in rows:
+        missing = [field for field in _HSL_REPLAY_MATRIX_RAW_FIELDS if field not in row]
+        if missing:
+            raise ValueError(f"HSL replay matrix row missing fields: {missing}")
+        ts = int(row["ts"])
+        if prev_ts is not None and ts - prev_ts != _HSL_REPLAY_MATRIX_INTERVAL_MS:
+            raise ValueError(
+                "HSL replay matrix rows must be contiguous 1m samples; "
+                f"got previous_ts={prev_ts} ts={ts}"
+            )
+        pnl = _finite_hsl_float(row["pnl"], "pnl")
+        upnl = _finite_hsl_float(row["upnl"], "upnl")
+        pnl_cumsum += pnl
+        out.append(
+            {
+                "ts": ts,
+                "pnl_cumsum": float(pnl_cumsum),
+                "upnl": upnl,
+                "equity": float(base_equity_f + pnl_cumsum + upnl),
+            }
+        )
+        prev_ts = ts
+    return out
 
 
 def _hsl_psides(self) -> tuple[str, str]:
