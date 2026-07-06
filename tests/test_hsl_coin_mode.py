@@ -711,6 +711,7 @@ async def test_coin_hsl_history_replay_emits_lifecycle_events():
     bot._emit_live_event = MethodType(Passivbot._emit_live_event, bot)
 
     async def fake_history(current_balance=None, **kwargs):
+        await asyncio.sleep(0.01)
         return {
             "timeline": [
                 {
@@ -784,6 +785,13 @@ async def test_coin_hsl_history_replay_emits_lifecycle_events():
     assert events[2].data["full_elapsed_s"] is not None
     assert events[2].data["startup_blocking_elapsed_s"] is not None
     assert events[2].data["elapsed_s"] is not None
+    assert events[2].data["history_fetch_elapsed_s"] > 0.0
+    phase_elapsed_s = (
+        events[2].data["history_fetch_elapsed_s"]
+        + events[2].data["pre_replay_elapsed_s"]
+        + events[2].data["replay_loop_elapsed_s"]
+    )
+    assert phase_elapsed_s <= events[2].data["startup_blocking_elapsed_s"] + 0.006
     assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 

@@ -3056,7 +3056,8 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
             current_balance=self.get_raw_balance(),
             hsl_replay_signal_mode="coin",
         )
-        history_fetch_elapsed_s = max(0.0, time.monotonic() - history_fetch_started_s)
+        history_loaded_s = time.monotonic()
+        history_fetch_elapsed_s = max(0.0, history_loaded_s - history_fetch_started_s)
         check_shutdown("hsl_coin_history_replay_history_loaded")
         panic_flatten_events = history["panic_flatten_events"] if "panic_flatten_events" in history else []
         if panic_flatten_events is None:
@@ -3195,7 +3196,7 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
         balance = float(self.get_raw_balance())
         rows = 0
         replay_started_s = time.monotonic()
-        pre_replay_elapsed_s = max(0.0, replay_started_s - initialization_started_s)
+        pre_replay_elapsed_s = max(0.0, replay_started_s - history_loaded_s)
         last_progress_log_s = replay_started_s
         replay_symbols = set(symbols)
         active_pairs = [
