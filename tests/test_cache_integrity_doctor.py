@@ -85,6 +85,8 @@ def _hsl_replay_cache_metadata():
         "symbol": "BTC/USDT:USDT",
         "fill_covered_start_ms": 60_000,
         "fill_covered_end_ms": 180_000,
+        "fill_history_scope": "window",
+        "fill_coverage_proven": True,
         "candle_covered_start_ms": 60_000,
         "candle_covered_end_ms": 180_000,
     }

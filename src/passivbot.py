@@ -11094,6 +11094,7 @@ class Passivbot:
     ) -> Dict[str, Any]:
         """Replay canonical fill events to produce historical balance/equity curves."""
         history_started_s = time.monotonic()
+        external_fill_events = fill_events is not None
         await self.init_pnls()
 
         def _emit_hsl_history_progress(
@@ -12049,6 +12050,19 @@ class Passivbot:
         for (pside, sym), rows in replay_matrix_rows.items():
             if rows:
                 hsl_replay_matrices.setdefault(pside, {})[sym] = rows
+        if external_fill_events:
+            # Caller-provided fills carry no pnls-manager coverage proof.
+            fill_coverage_status: Dict[str, object] = {
+                "ready": False,
+                "reason": "external_fill_events",
+                "history_scope": "unknown",
+            }
+        else:
+            fill_coverage_status = self._pnl_history_coverage_status(
+                start_ms=None if lookback_start is None else int(record_start_ts),
+                end_ms=int(ts_now),
+                lookback=lookback,
+            )
         return {
             "timeline": timeline,
             "panic_flatten_events": panic_flatten_events,
@@ -12060,6 +12074,13 @@ class Passivbot:
             "hsl_replay_matrix_coverage": {
                 "fill_covered_start_ms": int(record_start_ts),
                 "fill_covered_end_ms": int(ts_now),
+                "fill_history_scope": str(
+                    fill_coverage_status.get("history_scope", "unknown") or "unknown"
+                ),
+                "fill_coverage_proven": bool(fill_coverage_status.get("ready", False)),
+                "fill_coverage_reason": str(
+                    fill_coverage_status.get("reason", "unknown") or "unknown"
+                ),
                 "candle_covered_start_ms": int(start_minute),
                 "candle_covered_end_ms": int(end_minute),
             },

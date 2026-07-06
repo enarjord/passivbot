@@ -33,7 +33,7 @@ from utils import make_get_filepath
 _HSL_RISKS_DOC = "docs/equity_hard_stop_loss_risks.md"
 _HSL_REPLAY_MATRIX_INTERVAL_MS = 60_000
 _HSL_REPLAY_MATRIX_RAW_FIELDS = ("ts", "price", "psize", "pprice", "pnl", "upnl")
-_HSL_REPLAY_CACHE_SCHEMA_VERSION = 1
+_HSL_REPLAY_CACHE_SCHEMA_VERSION = 2
 _HSL_REPLAY_CACHE_MATRIX_FILENAME = "hsl_replay_matrix.npz"
 _HSL_REPLAY_CACHE_MANIFEST_FILENAME = "hsl_replay_manifest.json"
 _HSL_REPLAY_CACHE_REQUIRED_METADATA = (
@@ -46,9 +46,12 @@ _HSL_REPLAY_CACHE_REQUIRED_METADATA = (
     "symbol",
     "fill_covered_start_ms",
     "fill_covered_end_ms",
+    "fill_history_scope",
+    "fill_coverage_proven",
     "candle_covered_start_ms",
     "candle_covered_end_ms",
 )
+_HSL_REPLAY_CACHE_FILL_HISTORY_SCOPES = ("unknown", "window", "all")
 
 
 def _hsl_replay_cache_safe_fragment(value: Any) -> str:
@@ -649,6 +652,7 @@ def _normalize_hsl_replay_cache_metadata(metadata: dict[str, Any]) -> dict[str, 
         "signal_mode",
         "pside",
         "symbol",
+        "fill_history_scope",
     ):
         out[key] = str(out[key])
     for key in (
@@ -658,6 +662,16 @@ def _normalize_hsl_replay_cache_metadata(metadata: dict[str, Any]) -> dict[str, 
         "candle_covered_end_ms",
     ):
         out[key] = int(out[key])
+    if out["fill_history_scope"] not in _HSL_REPLAY_CACHE_FILL_HISTORY_SCOPES:
+        raise ValueError(
+            "HSL replay cache metadata fill_history_scope must be one of "
+            f"{_HSL_REPLAY_CACHE_FILL_HISTORY_SCOPES}, got {out['fill_history_scope']!r}"
+        )
+    if not isinstance(out["fill_coverage_proven"], bool):
+        raise ValueError(
+            "HSL replay cache metadata fill_coverage_proven must be a bool, "
+            f"got {type(out['fill_coverage_proven']).__name__}"
+        )
     return out
 
 
@@ -711,6 +725,8 @@ def _hsl_replay_cache_expected_metadata(
     *,
     fill_covered_start_ms: int,
     fill_covered_end_ms: int,
+    fill_history_scope: str,
+    fill_coverage_proven: bool,
     candle_covered_start_ms: int,
     candle_covered_end_ms: int,
 ) -> dict[str, Any]:
@@ -724,6 +740,8 @@ def _hsl_replay_cache_expected_metadata(
         "symbol": str(symbol),
         "fill_covered_start_ms": int(fill_covered_start_ms),
         "fill_covered_end_ms": int(fill_covered_end_ms),
+        "fill_history_scope": str(fill_history_scope),
+        "fill_coverage_proven": bool(fill_coverage_proven),
         "candle_covered_start_ms": int(candle_covered_start_ms),
         "candle_covered_end_ms": int(candle_covered_end_ms),
     }
@@ -1081,6 +1099,8 @@ def _equity_hard_stop_persist_replay_matrices(self, history: dict[str, Any]) -> 
                     symbol,
                     fill_covered_start_ms=int(coverage["fill_covered_start_ms"]),
                     fill_covered_end_ms=int(coverage["fill_covered_end_ms"]),
+                    fill_history_scope=str(coverage["fill_history_scope"]),
+                    fill_coverage_proven=bool(coverage["fill_coverage_proven"]),
                     candle_covered_start_ms=int(coverage["candle_covered_start_ms"]),
                     candle_covered_end_ms=int(coverage["candle_covered_end_ms"]),
                 )

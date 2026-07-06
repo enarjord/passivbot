@@ -1608,6 +1608,10 @@ async def test_balance_equity_history_builds_replay_matrices_for_held_pairs(monk
     assert coverage["candle_covered_end_ms"] == base_ts + 120_000
     assert coverage["fill_covered_start_ms"] <= base_ts
     assert coverage["fill_covered_end_ms"] == ts_now
+    # Caller-provided fill events carry no pnls-manager coverage proof.
+    assert coverage["fill_history_scope"] == "unknown"
+    assert coverage["fill_coverage_proven"] is False
+    assert coverage["fill_coverage_reason"] == "external_fill_events"
 
     # Non-coin signal modes must not build matrices.
     history_unified = await bot.get_balance_equity_history(
@@ -1631,6 +1635,99 @@ async def test_balance_equity_history_builds_replay_matrices_for_held_pairs(monk
     )
     assert history_degraded["hsl_replay_matrices"] == {}
     assert len(history_degraded["timeline"]) == len(history["timeline"])
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
+
+
+@pytest.mark.asyncio
+async def test_balance_equity_history_records_pnls_manager_coverage_proof(monkeypatch):
+    bot = Passivbot.__new__(Passivbot)
+    bot.config = {"live": {}}
+    bot.exchange = "kucoin"
+    bot.user = "test_user"
+    bot.init_pnls = AsyncMock()
+    bot.live_value = lambda key: 1.0 if key == "pnls_max_lookback_days" else None
+    base_ts = 1_800_000_000_000
+    ts_now = base_ts + 120_000
+    bot.get_exchange_time = lambda: ts_now
+    bot.get_raw_balance = lambda: 100.0
+    bot.get_symbol_id_inv = lambda symbol: symbol
+    symbol = "BTC/USDT:USDT"
+    bot.positions = {
+        symbol: {
+            "long": {"size": 1.0, "price": 100.0},
+            "short": {"size": 0.0, "price": 0.0},
+        }
+    }
+    bot.inverse = False
+    bot._candle_fetch_concurrency = lambda *, context="runtime": 2
+    bot._get_fetch_delay_seconds = lambda: 0.0
+    bot._live_event_pipeline = LiveEventPipeline(
+        structured_sinks=[ListEventSink()],
+        monitor_sinks=[],
+    )
+    bot._live_event_current_cycle_id = "cy_hsl_history_build"
+    bot._emit_live_event = Passivbot._emit_live_event.__get__(bot, Passivbot)
+    bot.c_mults = {symbol: 1.0}
+    monkeypatch.setattr(
+        passivbot_module, "compute_psize_pprice", lambda *args, **kwargs: None
+    )
+
+    class _CM:
+        async def get_candles(self, sym, **kwargs):
+            return np.array(
+                [
+                    (base_ts, 99.0, 101.0, 98.0, 100.0, 1.0),
+                    (base_ts + 60_000, 100.0, 102.0, 99.0, 101.0, 1.0),
+                    (base_ts + 120_000, 101.0, 103.0, 100.0, 102.0, 1.0),
+                ],
+                dtype=passivbot_module.CANDLE_DTYPE,
+            )
+
+    bot.cm = _CM()
+
+    class _StubEvent:
+        def to_dict(self):
+            return {
+                "timestamp": base_ts,
+                "symbol": symbol,
+                "position_side": "long",
+                "side": "buy",
+                "qty": 1.0,
+                "price": 100.0,
+                "pnl": 0.0,
+            }
+
+    class _StubCache:
+        def load_metadata(self):
+            return {"covered_start_ms": 1, "oldest_event_ts": base_ts}
+
+        def get_covered_start_ms(self):
+            return 1
+
+        def get_history_scope(self):
+            return "all"
+
+    class _StubPnlsManager:
+        cache = _StubCache()
+
+        def get_events(self):
+            return [_StubEvent()]
+
+        def get_history_scope(self):
+            return "all"
+
+    bot._pnls_manager = _StubPnlsManager()
+
+    history = await bot.get_balance_equity_history(
+        current_balance=100.0,
+        hsl_replay_signal_mode="coin",
+    )
+
+    coverage = history["hsl_replay_matrix_coverage"]
+    assert coverage["fill_history_scope"] == "all"
+    assert coverage["fill_coverage_proven"] is True
+    assert coverage["fill_coverage_reason"] == "full_history"
+    assert set(history["hsl_replay_matrices"]) == {"long"}
     assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 
