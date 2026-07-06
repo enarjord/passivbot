@@ -37,7 +37,7 @@ _HSL_REPLAY_ACCOUNT_SERIES_FIELDS = ("ts", "pnl")
 _HSL_REPLAY_CACHE_SERIES_KINDS = ("pair_matrix", "account_pnl")
 _HSL_REPLAY_CACHE_ACCOUNT_PSIDE = "account"
 _HSL_REPLAY_CACHE_ACCOUNT_SYMBOL = "__account__"
-_HSL_REPLAY_CACHE_SCHEMA_VERSION = 3
+_HSL_REPLAY_CACHE_SCHEMA_VERSION = 4
 _HSL_REPLAY_CACHE_MATRIX_FILENAME = "hsl_replay_matrix.npz"
 _HSL_REPLAY_CACHE_MANIFEST_FILENAME = "hsl_replay_manifest.json"
 _HSL_REPLAY_CACHE_REQUIRED_METADATA = (
@@ -1192,16 +1192,83 @@ def _hsl_replay_cache_account_expected_metadata(
     return _normalize_hsl_replay_cache_metadata(metadata)
 
 
+def _hsl_replay_cache_normalize_panic_events(
+    events: Any, *, start_ts: int, end_ts: int
+) -> list[dict[str, Any]]:
+    """Normalize/validate panic flatten markers persisted with the account series."""
+    if not isinstance(events, list):
+        raise TypeError(
+            f"HSL cache panic_flatten_events must be a list, got {type(events).__name__}"
+        )
+    out: list[dict[str, Any]] = []
+    prev_ts: int | None = None
+    for event in events:
+        if not isinstance(event, dict):
+            raise TypeError(
+                "HSL cache panic_flatten_events entries must be dicts, "
+                f"got {type(event).__name__}"
+            )
+        missing = [
+            key
+            for key in ("timestamp", "minute_timestamp", "pside", "symbol")
+            if event.get(key) is None
+        ]
+        if missing:
+            raise ValueError(
+                f"HSL cache panic_flatten_events entry missing fields: {missing}"
+            )
+        ts = int(event["timestamp"])
+        minute_ts = int(event["minute_timestamp"])
+        pside = str(event["pside"])
+        symbol = str(event["symbol"])
+        if pside not in ("long", "short"):
+            raise ValueError(
+                f"HSL cache panic_flatten_events pside must be long or short, got {pside!r}"
+            )
+        if not symbol:
+            raise ValueError("HSL cache panic_flatten_events symbol must be non-empty")
+        if minute_ts % _HSL_REPLAY_MATRIX_INTERVAL_MS != 0:
+            raise ValueError(
+                f"HSL cache panic_flatten_events minute_timestamp {minute_ts} "
+                "is not minute-aligned"
+            )
+        if minute_ts < int(start_ts) or minute_ts > int(end_ts):
+            raise ValueError(
+                f"HSL cache panic_flatten_events minute_timestamp {minute_ts} lies "
+                f"outside the series span [{start_ts}, {end_ts}]"
+            )
+        if prev_ts is not None and ts < prev_ts:
+            raise ValueError(
+                "HSL cache panic_flatten_events must be ascending by timestamp"
+            )
+        prev_ts = ts
+        out.append(
+            {
+                "timestamp": ts,
+                "minute_timestamp": minute_ts,
+                "pside": pside,
+                "symbol": symbol,
+            }
+        )
+    return out
+
+
 def _write_hsl_replay_matrix_cache(
     cache_dir: str | os.PathLike[str],
     rows: list[dict[str, Any]],
     metadata: dict[str, Any],
     *,
     series_kind: str = "pair_matrix",
+    panic_flatten_events: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     import numpy as np
 
     fields = _hsl_replay_cache_series_fields(series_kind)
+    if series_kind != "account_pnl" and panic_flatten_events is not None:
+        raise ValueError(
+            "HSL cache panic_flatten_events are account-scoped facts; "
+            f"they cannot be persisted with series_kind={series_kind!r}"
+        )
     cache_path = Path(cache_dir)
     cache_path.mkdir(parents=True, exist_ok=True)
     if series_kind == "account_pnl":
@@ -1221,6 +1288,16 @@ def _write_hsl_replay_matrix_cache(
         "metadata": metadata_norm,
         "arrays": _hsl_replay_cache_array_manifest(arrays),
     }
+    if series_kind == "account_pnl":
+        if not len(rows):
+            raise ValueError(
+                "HSL cache account series must be non-empty to scope panic markers"
+            )
+        manifest["panic_flatten_events"] = _hsl_replay_cache_normalize_panic_events(
+            panic_flatten_events if panic_flatten_events is not None else [],
+            start_ts=int(arrays["ts"][0]),
+            end_ts=int(arrays["ts"][-1]),
+        )
     matrix_path = cache_path / _HSL_REPLAY_CACHE_MATRIX_FILENAME
     manifest_path = cache_path / _HSL_REPLAY_CACHE_MANIFEST_FILENAME
     matrix_tmp = matrix_path.with_suffix(matrix_path.suffix + f".{os.getpid()}.tmp")
@@ -1266,6 +1343,20 @@ def _hsl_replay_cache_validation_reasons(
         # A kind/field-list disagreement means the manifest was tampered with
         # or written by an incompatible writer.
         reasons.append("fields_mismatch")
+    if series_kind == "account_pnl":
+        if "panic_flatten_events" not in manifest:
+            reasons.append("panic_events_missing")
+        else:
+            try:
+                _hsl_replay_cache_normalize_panic_events(
+                    manifest.get("panic_flatten_events"),
+                    start_ts=int(manifest.get("start_ts_ms") or 0),
+                    end_ts=int(manifest.get("end_ts_ms") or 0),
+                )
+            except (TypeError, ValueError):
+                reasons.append("panic_events_invalid")
+    elif manifest.get("panic_flatten_events") is not None:
+        reasons.append("panic_events_wrong_kind")
     if str(manifest.get("matrix_file", "")) != _HSL_REPLAY_CACHE_MATRIX_FILENAME:
         reasons.append("matrix_filename_mismatch")
     if int(manifest.get("interval_ms", 0) or 0) != _HSL_REPLAY_MATRIX_INTERVAL_MS:
@@ -1613,8 +1704,15 @@ def _equity_hard_stop_persist_replay_matrices(self, history: dict[str, Any]) -> 
                 candle_covered_start_ms=int(coverage["candle_covered_start_ms"]),
                 candle_covered_end_ms=int(coverage["candle_covered_end_ms"]),
             )
+            panic_events = history.get("panic_flatten_events")
             manifest = _write_hsl_replay_matrix_cache(
-                cache_dir, account_rows, metadata, series_kind="account_pnl"
+                cache_dir,
+                account_rows,
+                metadata,
+                series_kind="account_pnl",
+                panic_flatten_events=(
+                    panic_events if isinstance(panic_events, list) else []
+                ),
             )
         except Exception as exc:
             logging.warning(
