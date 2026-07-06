@@ -579,6 +579,100 @@ def test_hsl_replay_account_series_round_trip(tmp_path):
         )
 
 
+def test_hsl_replay_account_series_persists_panic_markers(tmp_path):
+    import json
+
+    metadata = _hsl_cache_metadata(
+        pside=hsl._HSL_REPLAY_CACHE_ACCOUNT_PSIDE,
+        symbol=hsl._HSL_REPLAY_CACHE_ACCOUNT_SYMBOL,
+    )
+    markers = [
+        {
+            "timestamp": 121_500,
+            "minute_timestamp": 120_000,
+            "pside": "long",
+            "symbol": "BTC/USDT:USDT",
+        }
+    ]
+    manifest = hsl._write_hsl_replay_matrix_cache(
+        tmp_path,
+        _hsl_account_series_rows(),
+        metadata,
+        series_kind="account_pnl",
+        panic_flatten_events=markers,
+    )
+
+    assert manifest["panic_flatten_events"] == markers
+    assert (
+        hsl._hsl_replay_cache_validation_reasons(tmp_path, expected_metadata=metadata)
+        == []
+    )
+    loaded_manifest, _arrays = hsl._load_hsl_replay_matrix_cache(
+        tmp_path, expected_metadata=metadata
+    )
+    assert loaded_manifest["panic_flatten_events"] == markers
+
+    # Tampering detection on the persisted manifest.
+    manifest_path = tmp_path / hsl._HSL_REPLAY_CACHE_MANIFEST_FILENAME
+    stored = json.loads(manifest_path.read_text(encoding="utf-8"))
+    stripped = dict(stored)
+    del stripped["panic_flatten_events"]
+    manifest_path.write_text(json.dumps(stripped), encoding="utf-8")
+    assert "panic_events_missing" in hsl._hsl_replay_cache_validation_reasons(tmp_path)
+
+    corrupted = dict(stored, panic_flatten_events=[{"timestamp": 1}])
+    manifest_path.write_text(json.dumps(corrupted), encoding="utf-8")
+    assert "panic_events_invalid" in hsl._hsl_replay_cache_validation_reasons(tmp_path)
+
+
+def test_hsl_replay_cache_panic_markers_fail_loud_contracts(tmp_path):
+    import json
+
+    marker = {
+        "timestamp": 121_500,
+        "minute_timestamp": 120_000,
+        "pside": "long",
+        "symbol": "BTC/USDT:USDT",
+    }
+    account_metadata = _hsl_cache_metadata(
+        pside=hsl._HSL_REPLAY_CACHE_ACCOUNT_PSIDE,
+        symbol=hsl._HSL_REPLAY_CACHE_ACCOUNT_SYMBOL,
+    )
+    # Markers are account-scoped; pair manifests must reject them.
+    with pytest.raises(ValueError, match="account-scoped"):
+        hsl._write_hsl_replay_matrix_cache(
+            tmp_path,
+            _hsl_cache_rows(),
+            _hsl_cache_metadata(),
+            panic_flatten_events=[marker],
+        )
+    # Off-grid minute rejects.
+    with pytest.raises(ValueError, match="not minute-aligned"):
+        hsl._write_hsl_replay_matrix_cache(
+            tmp_path,
+            _hsl_account_series_rows(),
+            account_metadata,
+            series_kind="account_pnl",
+            panic_flatten_events=[dict(marker, minute_timestamp=90_000)],
+        )
+    # Outside the series span rejects.
+    with pytest.raises(ValueError, match="outside the series span"):
+        hsl._write_hsl_replay_matrix_cache(
+            tmp_path,
+            _hsl_account_series_rows(),
+            account_metadata,
+            series_kind="account_pnl",
+            panic_flatten_events=[dict(marker, minute_timestamp=600_000)],
+        )
+    # A pair manifest carrying markers is rejected by the validator.
+    hsl._write_hsl_replay_matrix_cache(tmp_path, _hsl_cache_rows(), _hsl_cache_metadata())
+    manifest_path = tmp_path / hsl._HSL_REPLAY_CACHE_MANIFEST_FILENAME
+    stored = json.loads(manifest_path.read_text(encoding="utf-8"))
+    stored["panic_flatten_events"] = [marker]
+    manifest_path.write_text(json.dumps(stored), encoding="utf-8")
+    assert "panic_events_wrong_kind" in hsl._hsl_replay_cache_validation_reasons(tmp_path)
+
+
 def test_hsl_replay_cache_rejects_series_kind_tampering(tmp_path):
     import json
 
@@ -662,9 +756,18 @@ def test_hsl_replay_cache_persist_matrices_round_trip(tmp_path, monkeypatch):
         "candle_covered_end_ms": 180_000,
     }
     account_rows = _hsl_account_series_rows()
+    panic_markers = [
+        {
+            "timestamp": 121_500,
+            "minute_timestamp": 120_000,
+            "pside": "long",
+            "symbol": symbol,
+        }
+    ]
     history = {
         "hsl_replay_matrices": {"long": {symbol: rows}},
         "hsl_replay_account_series": account_rows,
+        "panic_flatten_events": panic_markers,
         "hsl_replay_matrix_coverage": coverage,
     }
 
@@ -725,6 +828,7 @@ def test_hsl_replay_cache_persist_matrices_round_trip(tmp_path, monkeypatch):
         account_dir, expected_metadata=account_expected
     )
     assert account_manifest["series_kind"] == "account_pnl"
+    assert account_manifest["panic_flatten_events"] == panic_markers
     np.testing.assert_allclose(
         account_arrays["pnl"], [row["pnl"] for row in account_rows]
     )

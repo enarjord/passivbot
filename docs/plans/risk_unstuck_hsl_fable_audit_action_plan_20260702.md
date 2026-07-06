@@ -114,6 +114,11 @@ order changes as follows:
 - Rust should be the source of truth for entries, closes, risk, HSL, and
   unstuck. Python should gather exchange data, build Rust payloads, unpack Rust
   ideal orders, and reconcile ideal vs actual exchange orders.
+- Any HSL/risk/unstuck contract shared by live and backtest must be
+  implemented in Rust and consumed by both paths, unless the implementing PR
+  explicitly documents why centralization is infeasible or materially worse.
+  Python-owned live HSL code is limited to exchange data gathering,
+  cache/replay matrix construction, diagnostics, and reconciliation.
 - Statelessness is required. Trading behavior must be reconstructable from
   exchange state plus config. Local caches/checkpoints may improve speed or
   diagnostics, but must not be authoritative trading state.
@@ -985,6 +990,12 @@ Remaining implementation details:
       cached window, beyond the extension end, or from another pair are
       rejected fail-loud so double-counting rejects the cache instead of
       corrupting it.
+      Partial: account-series manifests (schema v4) now persist the replay's
+      panic flatten markers (raw exchange-derived facts: timestamp, minute,
+      pside, symbol) so a future cache-fed replay does not lose in-window
+      cooldown/no-restart evidence. Markers are validated fail-loud (grid
+      alignment, series-span bounds, ascending order, account-kind only) and
+      tamper-checked (missing/invalid/wrong-kind reasons).
 - [ ] Python simplification after Rust owns ideal protective orders and unstuck
       orders.
       Python should reconcile ideal vs actual orders, not re-decide trading
