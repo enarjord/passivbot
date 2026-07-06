@@ -50,7 +50,8 @@ recommendations:
   `restart_after_red_policy` enum: `always`, `threshold`, `never`.
   `threshold` preserves the current threshold-based behavior, `always`
   restarts after cooldown regardless of no-restart drawdown, and `never`
-  permanently halts the affected scope after any RED breach.
+  permanently halts the affected scope after any episode in which RED was
+  active (`red_seen_in_episode`).
 - HSL restart/no-restart scope is mode-local. Unified mode applies the restart
   policy to the whole account. Pside mode applies it only to the affected side.
   Coin mode applies it only to the affected coin+pside.
@@ -75,8 +76,10 @@ recommendations:
   Backtests may use dynamic effective n-positions for historical coin
   availability only when explicitly enabled by backtest config.
 - HSL cooldown reconstruction should use the canonical HSL equity/drawdown time
-  series as the primary source of RED timestamps. It should not depend on
-  passivbot order-type markers in fill events where that can be avoided.
+  series as the primary source of RED evidence (`red_seen_in_episode`), with
+  the scoped episode-end fill timestamp as the cooldown anchor. It should not
+  depend on passivbot order-type markers in fill events where that can be
+  avoided.
 
 ## Priority Changes From The Initial Audit
 
@@ -95,7 +98,7 @@ order changes as follows:
 - Replace the implicit restart/no-restart contract with a scoped
   `restart_after_red_policy` enum. This gives users an explicit way to always
   resume after cooldown, threshold-halt as today, or permanently halt after any
-  RED breach.
+  episode in which RED was active.
 - Treat local checkpoints/cache as performance aids only. They may speed HSL
   replay and improve diagnostics, but they must not become authoritative panic,
   cooldown, or config-epoch state.
@@ -169,7 +172,7 @@ New config contract:
 - `restart_after_red_policy=threshold`: current behavior. Restart after
   cooldown unless the no-restart threshold is breached.
 - `restart_after_red_policy=never`: permanently halt the affected HSL scope
-  after any RED breach.
+  after any episode in which RED was active (`red_seen_in_episode`).
 
 Scope follows `live.hsl_signal_mode`:
 
@@ -225,7 +228,12 @@ Contract: replace the implicit no-restart-only behavior with
   if `hsl_no_restart_drawdown_threshold` is breached. This preserves current
   threshold semantics, but makes the scope explicit.
 - `never`: close the affected scope on RED and permanently halt that scope after
-  any RED breach.
+  any episode with `red_seen_in_episode` true.
+
+Under the B2.1 contract, closing on RED is authorized by `red_active_now`
+only; halt/restart decisions are evaluated per episode using
+`red_seen_in_episode` once the scope fully flattens, and the no-restart
+threshold uses `max(drawdown_raw, drawdown_ema)`.
 
 Scopes:
 
@@ -472,15 +480,71 @@ live/backtest divergence that remains.
 
 Plan: redesign HSL around trading episodes.
 
-New contract proposal:
+New contract (clarified 2026-07-06):
 
 - A trading episode starts when the relevant HSL scope goes from flat to
   non-flat.
-- A trading episode resets when the scope fully flattens by any means, not only
-  by a bot-emitted panic order.
+- A trading episode ends at the fill timestamp that makes the full scoped HSL
+  position set flat, by any means, not only by a bot-emitted panic order:
+  - `unified`: all positions, all coins, both psides flat.
+  - `pside`: all positions on that pside flat.
+  - `coin`: that coin+pside flat.
+  Episode end is explicitly not the RED breach timestamp, panic submit
+  timestamp, panic order create timestamp, or panic initiation timestamp.
 - Current panic eligibility is computed from the current episode.
 - A separate broader drawdown tracker remains for
   `hsl_no_restart_drawdown_threshold`.
+
+Split RED concepts:
+
+- `red_active_now`: whether the current metric sample is in RED. Only this may
+  authorize new panic orders.
+- `red_seen_in_episode`: whether `red_active_now` was true at any point in the
+  current episode. This affects post-episode cooldown/restart handling after
+  the scope fully closes.
+- If RED was active earlier in the episode but the current sample is no longer
+  RED, the bot must not submit new panic orders solely because RED was seen
+  earlier.
+
+Drawdown trigger formulas:
+
+- RED / panic-now: `min(drawdown_raw, drawdown_ema) >= red_threshold`.
+  Rationale: EMA smoothing exists to avoid panicking on sharp V-shaped flash
+  crashes. Users who want immediate raw sensitivity can set
+  `hsl_ema_span_minutes = 1`.
+- No-restart: `max(drawdown_raw, drawdown_ema) >=
+  hsl_no_restart_drawdown_threshold`.
+  Rationale: the permanent halt should be conservative and catch either
+  catastrophic instantaneous damage or sustained smoothed damage.
+
+Cooldown:
+
+- Cooldown starts at the scoped episode end (the scope-flattening fill
+  timestamp), not at RED breach and not at panic order submission.
+- Cooldown is activated for an episode if `red_seen_in_episode` was true for
+  that episode.
+
+Incomplete panic / partial flattening:
+
+- While the scoped positions remain non-flat, the episode remains active and
+  keeps its current-episode drawdown tracker.
+- If a panic partially flattens the scope and `red_active_now` later becomes
+  false before the scope is fully flat, the bot must not keep submitting panic
+  orders just because RED happened earlier in the episode.
+- Remaining reduce-only orders should still be canceled when the relevant
+  position/scope is flat, consistent with normal flat-position cleanup.
+
+Incomplete history policy:
+
+- For `restart_after_red_policy=always`, missing history before the current
+  episode may warn/degrade but should not necessarily block startup if
+  current-episode reconstruction is proven.
+- For `threshold` or `never`, full configured lookback coverage is required for
+  the affected scope, because no-restart depends on historical evidence.
+- Missing current-episode fills/candles must block startup unless the user
+  explicitly opts into a dangerous CLI override.
+- Any such override must be per-run, loud, and documented as "HSL evidence
+  incomplete; panic/cooldown/no-restart may be wrong."
 
 Scopes:
 
@@ -608,19 +672,23 @@ doc and print a startup warning when HSL is enabled.
 
 Plan: change with coin-HSL redesign.
 
-Cooldown after RED should be reconstructed primarily from the canonical
-HSL equity/drawdown time series, not from passivbot order-type markers in fill
-events. If smoothed drawdown crossed RED inside the current trading episode,
-the RED timestamp is the cooldown anchor. This avoids dependence on
+Cooldown evidence should be reconstructed primarily from the canonical
+HSL equity/drawdown time series plus fills, not from passivbot order-type
+markers in fill events. If `min(drawdown_raw, drawdown_ema)` crossed
+`red_threshold` inside a trading episode, that sets `red_seen_in_episode`;
+when the scope later fully flattens, the scope-flattening fill timestamp (the
+episode end) is the cooldown anchor, per the B2.1 contract. The RED breach
+timestamp itself is evidence, not the anchor. This avoids dependence on
 client-order-id/order-type history that some exchanges may omit or truncate.
 
 This interacts with `config.live.hsl_position_during_cooldown_policy`:
 
-- If the position is still open and the current HSL state is RED, Rust should
+- If the position is still open and `red_active_now` is true, Rust should
   emit the appropriate panic/protective action.
-- If the position is flat and the latest RED timestamp is inside
-  `cooldown_minutes_after_red`, the affected HSL scope remains in cooldown and
-  entries follow the configured cooldown-position policy.
+- If the scope is flat, `red_seen_in_episode` was true for the last episode,
+  and the episode-end timestamp is inside `cooldown_minutes_after_red`, the
+  affected HSL scope remains in cooldown and entries follow the configured
+  cooldown-position policy.
 - If reconstructed history cannot prove a RED crossing, do not invent cooldown
   from missing order markers. Warn and surface degraded cooldown confidence.
 
@@ -628,8 +696,9 @@ This interacts with `config.live.hsl_position_during_cooldown_policy`:
 
 Plan: reduce dependence on markers; keep diagnostics.
 
-Do not add authoritative local panic markers/checkpoints. Prefer RED timestamps
-derived from the canonical equity/drawdown replay. Keep diagnostics for
+Do not add authoritative local panic markers/checkpoints. Prefer RED evidence
+(`red_seen_in_episode`) and scoped episode-end timestamps derived from the
+canonical equity/drawdown replay plus fills. Keep diagnostics for
 exchanges where client-order-id history is incomplete, but those diagnostics
 should explain marker confidence rather than decide cooldown by themselves.
 
@@ -745,18 +814,26 @@ Resolved enough to plan implementation:
 - Python may build canonical live replay matrices first; Rust should own
   threshold/tier/order decisions with parity tests.
 - Hysteresis warning should stay simple: warn above roughly 5%.
-- Cooldown should be derived from canonical RED timestamps in the reconstructed
-  HSL drawdown series rather than passivbot order-type markers where possible.
+- Cooldown activation is derived from `red_seen_in_episode` in the
+  reconstructed HSL drawdown series rather than passivbot order-type markers
+  where possible, and the cooldown anchor is the scoped episode-end fill
+  timestamp, not the RED breach or panic submission time (B2.1/B2.7).
+- RED / panic-now triggers on `min(drawdown_raw, drawdown_ema)`; no-restart
+  triggers on `max(drawdown_raw, drawdown_ema)` (B2.1).
 
 Remaining implementation details:
 
 1. HSL checkpoint metadata versioning: the trust-boundary fields are listed in
    B2.1b, but the first implementation still needs exact manifest names,
    digests, and invalidation reason codes.
-2. HSL RED timestamp edge cases: define how RED crossings are detected when
-   equity is `<= 0`, when drawdown moves above and below RED multiple times
-   inside one episode, and when historical candle/fill coverage starts after
-   the configured lookback start.
+2. HSL RED edge cases, mostly resolved by the B2.1 contract: equity `<= 0`
+   keeps `red_active_now` true while it persists; multiple RED crossings
+   inside one episode collapse into a single `red_seen_in_episode`; candle or
+   fill coverage starting after the configured lookback start follows the
+   B2.1 incomplete-history policy per `restart_after_red_policy`. Still open:
+   the exact flat-detection tolerance for the episode-end fill (qty-step
+   epsilon versus exchange dust) and the CLI surface for the dangerous
+   incomplete-evidence override.
 
 ## Recommended PR Order / Checklist
 
