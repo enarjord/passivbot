@@ -183,6 +183,8 @@ back to exchange-derived replay.
 - `hsl_replay_cache_hit`
 - `hsl_replay_cache_miss`
 - `hsl_replay_cache_rejected`
+- `hsl_replay_cache_write_failed`
+- `hsl_replay_cache_written`
 - `hsl_timeline_replay_completed`
 - `hsl_timeline_replay_started`
 - `initial_entry_distance_gate`
