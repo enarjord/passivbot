@@ -205,6 +205,13 @@ Plan: tests/investigation first.
 Add metric-level regression tests for pside, unified, and coin HSL before
 changing metric semantics.
 
+Partial: `tests/test_hsl_metric_regression.py` now pins hand-computed
+drawdown/tier ladders for all three signal modes, the pside scoped-signal and
+baseline-minus-total-realized contracts, unified-mode `unrealized_pnl_total`
+fail-loud requirement, the coin slot-budget denominator (exposure-knob
+invariance, `n_positions` sensitivity, non-positive input rejection), red
+latching across recovery, and the runtime's first-sample peak anchoring.
+
 ### A2.1 - Coin-Mode `hsl_no_restart_drawdown_threshold`
 
 Plan: code/design plus docs.
