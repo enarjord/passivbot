@@ -852,6 +852,10 @@ Remaining implementation details:
       runs the replay-cache validator, reports valid/invalid cache counts and
       validation reason counts under risk metadata, and emits warning issues
       for caches that must be rebuilt rather than reused.
+      Partial: pure live-HSL cache helpers now include a fail-closed loader
+      that validates manifest metadata and array hashes before returning copied
+      manifest/array data for future replay reuse. The loader remains unwired
+      and non-authoritative.
 - [ ] Python simplification after Rust owns ideal protective orders and unstuck
       orders.
       Python should reconcile ideal vs actual orders, not re-decide trading

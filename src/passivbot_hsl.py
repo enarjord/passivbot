@@ -756,6 +756,28 @@ def _hsl_replay_cache_validation_reasons(
     return reasons
 
 
+def _load_hsl_replay_matrix_cache(
+    cache_dir: str | os.PathLike[str],
+    *,
+    expected_metadata: dict[str, Any] | None = None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    import numpy as np
+
+    reasons = _hsl_replay_cache_validation_reasons(
+        cache_dir,
+        expected_metadata=expected_metadata,
+    )
+    if reasons:
+        raise ValueError("HSL replay cache validation failed: " + ", ".join(reasons))
+    cache_path = Path(cache_dir)
+    manifest = json.loads(
+        (cache_path / _HSL_REPLAY_CACHE_MANIFEST_FILENAME).read_text(encoding="utf-8")
+    )
+    with np.load(cache_path / _HSL_REPLAY_CACHE_MATRIX_FILENAME, allow_pickle=False) as loaded:
+        arrays = {field: loaded[field].copy() for field in _HSL_REPLAY_MATRIX_RAW_FIELDS}
+    return manifest, arrays
+
+
 def _hsl_psides(self) -> tuple[str, str]:
     return ("long", "short")
 
