@@ -1799,9 +1799,10 @@ def test_hsl_cache_extension_fail_loud_contracts():
         )
     # Fills with stripped pair identity must reject, never default to the
     # target pair.
-    for missing_key in ("symbol", "pside"):
+    for missing_keys in (("symbol",), ("pside",), ("symbol", "pside")):
         stripped = fill(200_000)
-        del stripped[missing_key]
+        for key in missing_keys:
+            del stripped[key]
         with pytest.raises(ValueError, match="missing pair identity"):
             hsl._hsl_replay_extend_pair_rows(
                 pair, pside="long", symbol="A",
