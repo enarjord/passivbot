@@ -2449,7 +2449,7 @@ async def test_coin_hsl_check_preserves_cooldown_policy_forced_mode(policy, expe
 
 
 @pytest.mark.asyncio
-async def test_coin_hsl_check_tp_only_orange_skips_flat_symbols():
+async def test_coin_hsl_check_tp_only_orange_blocks_flat_initial_entries():
     bot = make_coin_bot()
     open_symbol = "A"
     flat_symbol = "B"
@@ -2473,4 +2473,7 @@ async def test_coin_hsl_check_tp_only_orange_skips_flat_symbols():
         bot._runtime_forced_modes["long"][open_symbol]
         == "tp_only_with_active_entry_cancellation"
     )
-    assert flat_symbol not in bot._runtime_forced_modes["long"]
+    assert (
+        bot._runtime_forced_modes["long"][flat_symbol]
+        == "tp_only_with_active_entry_cancellation"
+    )
