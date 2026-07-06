@@ -860,6 +860,9 @@ Remaining implementation details:
       `pnl_cumsum`/`upnl`/equity arrays through a vectorized helper with the
       same continuity/value checks, reducing the need for Python row loops when
       cache reuse is later wired.
+      Partial: coin-HSL replay lifecycle events now split startup timing into
+      history-fetch, pre-replay, replay-loop, and total blocking elapsed fields
+      so future cache-reuse work can prove which phase improved.
 - [ ] Python simplification after Rust owns ideal protective orders and unstuck
       orders.
       Python should reconcile ideal vs actual orders, not re-decide trading
