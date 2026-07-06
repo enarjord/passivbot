@@ -856,6 +856,10 @@ Remaining implementation details:
       that validates manifest metadata and array hashes before returning copied
       manifest/array data for future replay reuse. The loader remains unwired
       and non-authoritative.
+      Partial: raw replay arrays can now be converted to derived
+      `pnl_cumsum`/`upnl`/equity arrays through a vectorized helper with the
+      same continuity/value checks, reducing the need for Python row loops when
+      cache reuse is later wired.
 - [ ] Python simplification after Rust owns ideal protective orders and unstuck
       orders.
       Python should reconcile ideal vs actual orders, not re-decide trading
