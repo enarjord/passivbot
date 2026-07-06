@@ -3014,6 +3014,7 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
     prev_phase = getattr(self, "_log_silence_watchdog_phase", "runtime")
     prev_stage = getattr(self, "_log_silence_watchdog_stage", "idle")
     raise_if_shutdown = getattr(self, "_raise_if_shutdown_requested", None)
+    initialization_started_s = time.monotonic()
 
     def check_shutdown(stage: str) -> None:
         if callable(raise_if_shutdown):
@@ -3050,10 +3051,13 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
             status="started",
             reason_code="coin_history_replay",
         )
+        history_fetch_started_s = time.monotonic()
         history = await self.get_balance_equity_history(
             current_balance=self.get_raw_balance(),
             hsl_replay_signal_mode="coin",
         )
+        history_loaded_s = time.monotonic()
+        history_fetch_elapsed_s = max(0.0, history_loaded_s - history_fetch_started_s)
         check_shutdown("hsl_coin_history_replay_history_loaded")
         panic_flatten_events = history["panic_flatten_events"] if "panic_flatten_events" in history else []
         if panic_flatten_events is None:
@@ -3192,6 +3196,7 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
         balance = float(self.get_raw_balance())
         rows = 0
         replay_started_s = time.monotonic()
+        pre_replay_elapsed_s = max(0.0, replay_started_s - history_loaded_s)
         last_progress_log_s = replay_started_s
         replay_symbols = set(symbols)
         active_pairs = [
@@ -3228,6 +3233,9 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
                 "fill_events": len(fill_events),
                 "panic_events": len(panic_flatten_events),
                 "skipped_unsupported_symbols": len(skipped_unsupported_symbols),
+                "history_fetch_elapsed_s": round(history_fetch_elapsed_s, 3),
+                "pre_replay_elapsed_s": round(pre_replay_elapsed_s, 3),
+                "elapsed_s": round(pre_replay_elapsed_s, 3),
             },
             status="started",
             reason_code="history_loaded",
@@ -3688,6 +3696,7 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
                 log_replay_progress(pair_idx, pside, symbol, applied_rows)
         self._equity_hard_stop_coin_initialized = True
         elapsed_s = max(0.0, time.monotonic() - replay_started_s)
+        total_elapsed_s = max(0.0, time.monotonic() - initialization_started_s)
         rows_per_second = float(rows) / elapsed_s if elapsed_s > 0.0 else None
         skipped_pairs = sum(1 for pair in active_pairs if pair_rows_applied.get(pair, 0) == 0)
         logging.info(
@@ -3715,9 +3724,12 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
                 "rows_per_second": round(rows_per_second, 3)
                 if rows_per_second is not None
                 else None,
-                "full_elapsed_s": round(elapsed_s, 3),
-                "startup_blocking_elapsed_s": round(elapsed_s, 3),
-                "elapsed_s": round(elapsed_s, 3),
+                "history_fetch_elapsed_s": round(history_fetch_elapsed_s, 3),
+                "pre_replay_elapsed_s": round(pre_replay_elapsed_s, 3),
+                "replay_loop_elapsed_s": round(elapsed_s, 3),
+                "full_elapsed_s": round(total_elapsed_s, 3),
+                "startup_blocking_elapsed_s": round(total_elapsed_s, 3),
+                "elapsed_s": round(total_elapsed_s, 3),
             },
             status="succeeded",
             reason_code="coin_history_replay_completed",
@@ -3728,7 +3740,14 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
             EventTypes.HSL_REPLAY_FAILED,
             {
                 "signal_mode": "coin",
-                "elapsed_s": round(time.monotonic() - replay_started_s, 3)
+                "elapsed_s": round(time.monotonic() - initialization_started_s, 3),
+                "history_fetch_elapsed_s": round(history_fetch_elapsed_s, 3)
+                if "history_fetch_elapsed_s" in locals()
+                else None,
+                "pre_replay_elapsed_s": round(pre_replay_elapsed_s, 3)
+                if "pre_replay_elapsed_s" in locals()
+                else None,
+                "replay_loop_elapsed_s": round(time.monotonic() - replay_started_s, 3)
                 if "replay_started_s" in locals()
                 else None,
             },
@@ -3743,7 +3762,14 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
             {
                 "signal_mode": "coin",
                 "error_type": type(exc).__name__,
-                "elapsed_s": round(time.monotonic() - replay_started_s, 3)
+                "elapsed_s": round(time.monotonic() - initialization_started_s, 3),
+                "history_fetch_elapsed_s": round(history_fetch_elapsed_s, 3)
+                if "history_fetch_elapsed_s" in locals()
+                else None,
+                "pre_replay_elapsed_s": round(pre_replay_elapsed_s, 3)
+                if "pre_replay_elapsed_s" in locals()
+                else None,
+                "replay_loop_elapsed_s": round(time.monotonic() - replay_started_s, 3)
                 if "replay_started_s" in locals()
                 else None,
             },

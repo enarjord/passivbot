@@ -683,6 +683,10 @@ async def test_coin_hsl_replay_cancels_when_shutdown_requested_after_history_loa
     assert events[0].reason_code == "coin_history_replay"
     assert events[1].status == "failed"
     assert events[1].reason_code == "shutdown_cancelled"
+    assert events[1].data["elapsed_s"] is not None
+    assert events[1].data["history_fetch_elapsed_s"] is not None
+    assert events[1].data["pre_replay_elapsed_s"] is None
+    assert events[1].data["replay_loop_elapsed_s"] is None
     assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 
@@ -707,6 +711,7 @@ async def test_coin_hsl_history_replay_emits_lifecycle_events():
     bot._emit_live_event = MethodType(Passivbot._emit_live_event, bot)
 
     async def fake_history(current_balance=None, **kwargs):
+        await asyncio.sleep(0.01)
         return {
             "timeline": [
                 {
@@ -758,6 +763,9 @@ async def test_coin_hsl_history_replay_emits_lifecycle_events():
     assert events[1].data["cooldown_pairs"] == 0
     assert events[1].data["required_pairs"] == 1
     assert events[1].data["timeline_rows"] == 2
+    assert events[1].data["history_fetch_elapsed_s"] is not None
+    assert events[1].data["pre_replay_elapsed_s"] is not None
+    assert events[1].data["elapsed_s"] is not None
     assert events[2].status == "succeeded"
     assert events[2].reason_code == "coin_history_replay_completed"
     assert events[2].data["rows"] == 2
@@ -771,8 +779,19 @@ async def test_coin_hsl_history_replay_emits_lifecycle_events():
     assert events[2].data["fill_events"] == 0
     assert events[2].data["panic_events"] == 0
     assert events[2].data["rows_per_second"] is not None
+    assert events[2].data["history_fetch_elapsed_s"] is not None
+    assert events[2].data["pre_replay_elapsed_s"] is not None
+    assert events[2].data["replay_loop_elapsed_s"] is not None
     assert events[2].data["full_elapsed_s"] is not None
     assert events[2].data["startup_blocking_elapsed_s"] is not None
+    assert events[2].data["elapsed_s"] is not None
+    assert events[2].data["history_fetch_elapsed_s"] > 0.0
+    phase_elapsed_s = (
+        events[2].data["history_fetch_elapsed_s"]
+        + events[2].data["pre_replay_elapsed_s"]
+        + events[2].data["replay_loop_elapsed_s"]
+    )
+    assert phase_elapsed_s <= events[2].data["startup_blocking_elapsed_s"] + 0.006
     assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 
