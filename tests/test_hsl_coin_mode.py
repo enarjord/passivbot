@@ -1797,6 +1797,16 @@ def test_hsl_cache_extension_fail_loud_contracts():
             pair, pside="long", symbol="A",
             fills=[wrong], closes_by_minute={}, end_ts=240_000, c_mult=1.0,
         )
+    # Fills with stripped pair identity must reject, never default to the
+    # target pair.
+    for missing_key in ("symbol", "pside"):
+        stripped = fill(200_000)
+        del stripped[missing_key]
+        with pytest.raises(ValueError, match="missing pair identity"):
+            hsl._hsl_replay_extend_pair_rows(
+                pair, pside="long", symbol="A",
+                fills=[stripped], closes_by_minute={}, end_ts=240_000, c_mult=1.0,
+            )
     # Zero-length extension is a no-op.
     assert (
         hsl._hsl_replay_extend_pair_rows(

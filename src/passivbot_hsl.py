@@ -803,9 +803,14 @@ def _hsl_replay_extend_pair_rows(
         key=lambda fill: int(fill["timestamp"]),
     )
     for fill in ordered:
-        if str(fill.get("symbol", symbol)) != symbol or str(
-            fill.get("pside", pside)
-        ) != pside:
+        # Pair identity must be explicit: defaulting a stripped fill to the
+        # target pair would silently apply it to the wrong (or every) pair.
+        if "symbol" not in fill or "pside" not in fill:
+            raise ValueError(
+                "HSL cache extension fill missing pair identity (symbol/pside) "
+                f"for {pside}:{symbol}"
+            )
+        if str(fill["symbol"]) != symbol or str(fill["pside"]) != pside:
             raise ValueError(
                 "HSL cache extension fill does not belong to pair "
                 f"{pside}:{symbol}: {fill.get('pside')}:{fill.get('symbol')}"
