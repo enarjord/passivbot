@@ -92,6 +92,97 @@ def test_parse_hsl_config_warns_about_history_reinterpretation(caplog):
     assert any("HSL mode changes" in message for message in messages)
 
 
+def test_hsl_replay_matrix_row_derives_upnl_from_rust_pnl_helpers():
+    long_row = hsl._hsl_replay_matrix_row(
+        pside="long",
+        ts=60_000,
+        price=90.0,
+        psize=2.0,
+        pprice=100.0,
+        pnl=-3.0,
+        c_mult=1.0,
+    )
+    short_row = hsl._hsl_replay_matrix_row(
+        pside="short",
+        ts=60_000,
+        price=110.0,
+        psize=-2.0,
+        pprice=100.0,
+        pnl=4.0,
+        c_mult=1.0,
+    )
+
+    assert set(long_row) == set(hsl._HSL_REPLAY_MATRIX_RAW_FIELDS)
+    assert long_row["upnl"] == pytest.approx(pbr.calc_pnl_long(100.0, 90.0, 2.0, 1.0))
+    assert short_row["upnl"] == pytest.approx(pbr.calc_pnl_short(100.0, 110.0, 2.0, 1.0))
+    assert long_row["pnl"] == pytest.approx(-3.0)
+    assert short_row["pnl"] == pytest.approx(4.0)
+
+
+def test_hsl_replay_matrix_derived_series_keeps_persisted_pnl_raw():
+    rows = [
+        hsl._hsl_replay_matrix_row(
+            pside="long",
+            ts=60_000,
+            price=100.0,
+            psize=1.0,
+            pprice=100.0,
+            pnl=5.0,
+            c_mult=1.0,
+        ),
+        hsl._hsl_replay_matrix_row(
+            pside="long",
+            ts=120_000,
+            price=90.0,
+            psize=1.0,
+            pprice=100.0,
+            pnl=-2.0,
+            c_mult=1.0,
+        ),
+        hsl._hsl_replay_matrix_row(
+            pside="long",
+            ts=180_000,
+            price=105.0,
+            psize=0.0,
+            pprice=0.0,
+            pnl=7.0,
+            c_mult=1.0,
+        ),
+    ]
+
+    derived = hsl._hsl_replay_matrix_derived_series(rows, base_equity=1_000.0)
+
+    assert [row["pnl"] for row in rows] == [5.0, -2.0, 7.0]
+    assert [row["pnl_cumsum"] for row in derived] == pytest.approx([5.0, 3.0, 10.0])
+    assert [row["equity"] for row in derived] == pytest.approx([1005.0, 993.0, 1010.0])
+
+
+def test_hsl_replay_matrix_derived_series_requires_contiguous_minutes():
+    rows = [
+        hsl._hsl_replay_matrix_row(
+            pside="long",
+            ts=60_000,
+            price=100.0,
+            psize=0.0,
+            pprice=0.0,
+            pnl=0.0,
+            c_mult=1.0,
+        ),
+        hsl._hsl_replay_matrix_row(
+            pside="long",
+            ts=180_000,
+            price=100.0,
+            psize=0.0,
+            pprice=0.0,
+            pnl=0.0,
+            c_mult=1.0,
+        ),
+    ]
+
+    with pytest.raises(ValueError, match="contiguous 1m samples"):
+        hsl._hsl_replay_matrix_derived_series(rows, base_equity=1_000.0)
+
+
 def bind_hsl_methods(bot):
     for name in (
         "_hsl_psides",

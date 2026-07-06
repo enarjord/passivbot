@@ -818,6 +818,12 @@ Remaining implementation details:
       Align coin, pside, and unified around one raw per-minute `pnl + upnl`
       data-store model, keep scoped modes on base slot-budget-style
       normalization, and add sample-parity tests before changing semantics.
+      Partial: live HSL now has pure replay-matrix helpers that build
+      non-authoritative raw rows (`ts`, `price`, `psize`, `pprice`, `pnl`,
+      `upnl`) from authoritative candle/fill inputs, derive UPnL through the
+      Rust PnL helpers, require contiguous one-minute rows, and recompute
+      `pnl_cumsum`/equity from raw minute `pnl` instead of persisting cumulative
+      state.
 - [ ] Coin-HSL episode anchoring redesign, including no-restart persistence and
       cooldown rules.
       Current panic eligibility should be based on the current trading episode;
