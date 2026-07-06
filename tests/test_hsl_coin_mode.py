@@ -260,6 +260,34 @@ def test_hsl_replay_matrix_cache_reports_metadata_mismatch(tmp_path):
     assert reasons == ["metadata_mismatch:config_digest"]
 
 
+def test_hsl_replay_matrix_cache_load_returns_manifest_and_arrays(tmp_path):
+    import numpy as np
+
+    metadata = _hsl_cache_metadata()
+    written_manifest = hsl._write_hsl_replay_matrix_cache(tmp_path, _hsl_cache_rows(), metadata)
+
+    manifest, arrays = hsl._load_hsl_replay_matrix_cache(
+        tmp_path,
+        expected_metadata=metadata,
+    )
+
+    assert manifest == written_manifest
+    assert set(arrays) == set(hsl._HSL_REPLAY_MATRIX_RAW_FIELDS)
+    np.testing.assert_array_equal(arrays["ts"], np.array([60_000, 120_000, 180_000]))
+    np.testing.assert_allclose(arrays["pnl"], np.array([0.0, -2.0, 3.0]))
+
+
+def test_hsl_replay_matrix_cache_load_rejects_metadata_mismatch(tmp_path):
+    metadata = _hsl_cache_metadata()
+    hsl._write_hsl_replay_matrix_cache(tmp_path, _hsl_cache_rows(), metadata)
+
+    with pytest.raises(ValueError, match="metadata_mismatch:config_digest"):
+        hsl._load_hsl_replay_matrix_cache(
+            tmp_path,
+            expected_metadata=_hsl_cache_metadata(config_digest="other_cfg_hash"),
+        )
+
+
 def test_hsl_replay_matrix_cache_reports_array_hash_mismatch(tmp_path):
     import numpy as np
 
@@ -277,6 +305,21 @@ def test_hsl_replay_matrix_cache_reports_array_hash_mismatch(tmp_path):
     )
 
     assert "array_hash_mismatch:pnl" in reasons
+
+
+def test_hsl_replay_matrix_cache_load_rejects_corrupt_matrix(tmp_path):
+    import numpy as np
+
+    metadata = _hsl_cache_metadata()
+    hsl._write_hsl_replay_matrix_cache(tmp_path, _hsl_cache_rows(), metadata)
+    matrix_path = tmp_path / hsl._HSL_REPLAY_CACHE_MATRIX_FILENAME
+    with np.load(matrix_path, allow_pickle=False) as loaded:
+        arrays = {field: loaded[field].copy() for field in hsl._HSL_REPLAY_MATRIX_RAW_FIELDS}
+    arrays["pnl"][1] = -99.0
+    np.savez(matrix_path, **arrays)
+
+    with pytest.raises(ValueError, match="array_hash_mismatch:pnl"):
+        hsl._load_hsl_replay_matrix_cache(tmp_path, expected_metadata=metadata)
 
 
 def test_hsl_replay_matrix_cache_write_rejects_semantically_invalid_raw_values(tmp_path):
