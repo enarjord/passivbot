@@ -503,6 +503,42 @@ def _hsl_replay_matrix_arrays(rows: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def _hsl_replay_matrix_derived_arrays(
+    arrays: dict[str, Any], *, base_equity: float
+) -> dict[str, Any]:
+    import numpy as np
+
+    if not isinstance(arrays, dict):
+        raise TypeError(f"HSL replay matrix arrays must be a dict, got {type(arrays).__name__}")
+    expected = set(_HSL_REPLAY_MATRIX_RAW_FIELDS)
+    actual = set(arrays)
+    if actual != expected:
+        missing = sorted(expected - actual)
+        extra = sorted(actual - expected)
+        raise ValueError(
+            "HSL replay matrix arrays must contain exactly the raw fields; "
+            f"missing={missing} extra={extra}"
+        )
+    base_equity_f = _finite_hsl_float(base_equity, "base_equity")
+    if base_equity_f <= 0.0:
+        raise ValueError(f"HSL replay matrix base_equity must be > 0, got {base_equity_f}")
+    reasons = _hsl_replay_cache_array_value_reasons(arrays)
+    if reasons:
+        raise ValueError("HSL replay matrix arrays invalid: " + ", ".join(reasons))
+    ts = np.asarray(arrays["ts"], dtype=np.int64)
+    if len(ts) > 1 and not bool(np.all(np.diff(ts) == _HSL_REPLAY_MATRIX_INTERVAL_MS)):
+        raise ValueError("HSL replay matrix arrays invalid: timestamp_not_contiguous")
+    pnl = np.asarray(arrays["pnl"], dtype=np.float64)
+    upnl = np.asarray(arrays["upnl"], dtype=np.float64)
+    pnl_cumsum = np.cumsum(pnl, dtype=np.float64)
+    return {
+        "ts": ts.copy(),
+        "pnl_cumsum": pnl_cumsum,
+        "upnl": upnl.copy(),
+        "equity": base_equity_f + pnl_cumsum + upnl,
+    }
+
+
 def _hsl_hash_array(array: Any) -> str:
     import numpy as np
 

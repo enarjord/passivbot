@@ -248,6 +248,48 @@ def test_hsl_replay_matrix_cache_round_trips_with_manifest(tmp_path):
     ) == []
 
 
+def test_hsl_replay_matrix_derived_arrays_matches_row_series():
+    import numpy as np
+
+    rows = _hsl_cache_rows()
+    arrays = hsl._hsl_replay_matrix_arrays(rows)
+    derived_arrays = hsl._hsl_replay_matrix_derived_arrays(arrays, base_equity=1_000.0)
+    derived_rows = hsl._hsl_replay_matrix_derived_series(rows, base_equity=1_000.0)
+
+    np.testing.assert_array_equal(
+        derived_arrays["ts"],
+        np.array([row["ts"] for row in derived_rows], dtype=np.int64),
+    )
+    np.testing.assert_allclose(
+        derived_arrays["pnl_cumsum"],
+        np.array([row["pnl_cumsum"] for row in derived_rows]),
+    )
+    np.testing.assert_allclose(
+        derived_arrays["upnl"],
+        np.array([row["upnl"] for row in derived_rows]),
+    )
+    np.testing.assert_allclose(
+        derived_arrays["equity"],
+        np.array([row["equity"] for row in derived_rows]),
+    )
+
+
+def test_hsl_replay_matrix_derived_arrays_rejects_missing_field():
+    arrays = hsl._hsl_replay_matrix_arrays(_hsl_cache_rows())
+    arrays.pop("upnl")
+
+    with pytest.raises(ValueError, match="missing=\\['upnl'\\]"):
+        hsl._hsl_replay_matrix_derived_arrays(arrays, base_equity=1_000.0)
+
+
+def test_hsl_replay_matrix_derived_arrays_rejects_timestamp_gap():
+    arrays = hsl._hsl_replay_matrix_arrays(_hsl_cache_rows())
+    arrays["ts"][1] += hsl._HSL_REPLAY_MATRIX_INTERVAL_MS
+
+    with pytest.raises(ValueError, match="timestamp_not_contiguous"):
+        hsl._hsl_replay_matrix_derived_arrays(arrays, base_equity=1_000.0)
+
+
 def test_hsl_replay_matrix_cache_reports_metadata_mismatch(tmp_path):
     metadata = _hsl_cache_metadata()
     hsl._write_hsl_replay_matrix_cache(tmp_path, _hsl_cache_rows(), metadata)
