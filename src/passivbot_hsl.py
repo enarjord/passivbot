@@ -33,7 +33,11 @@ from utils import make_get_filepath
 _HSL_RISKS_DOC = "docs/equity_hard_stop_loss_risks.md"
 _HSL_REPLAY_MATRIX_INTERVAL_MS = 60_000
 _HSL_REPLAY_MATRIX_RAW_FIELDS = ("ts", "price", "psize", "pprice", "pnl", "upnl")
-_HSL_REPLAY_CACHE_SCHEMA_VERSION = 2
+_HSL_REPLAY_ACCOUNT_SERIES_FIELDS = ("ts", "pnl")
+_HSL_REPLAY_CACHE_SERIES_KINDS = ("pair_matrix", "account_pnl")
+_HSL_REPLAY_CACHE_ACCOUNT_PSIDE = "account"
+_HSL_REPLAY_CACHE_ACCOUNT_SYMBOL = "__account__"
+_HSL_REPLAY_CACHE_SCHEMA_VERSION = 3
 _HSL_REPLAY_CACHE_MATRIX_FILENAME = "hsl_replay_matrix.npz"
 _HSL_REPLAY_CACHE_MANIFEST_FILENAME = "hsl_replay_manifest.json"
 _HSL_REPLAY_CACHE_REQUIRED_METADATA = (
@@ -458,6 +462,38 @@ def _hsl_replay_matrix_row(
     }
 
 
+def _hsl_replay_account_series_row(*, ts: int, pnl: float) -> dict[str, float | int]:
+    """Build one non-authoritative account-level realized-PnL row."""
+    ts_int = int(ts)
+    if ts_int < 0:
+        raise ValueError(f"HSL account series ts must be >= 0, got {ts_int}")
+    return {"ts": ts_int, "pnl": _finite_hsl_float(pnl, "pnl")}
+
+
+def _hsl_replay_account_series_arrays(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    import numpy as np
+
+    prev_ts: int | None = None
+    for row in rows:
+        missing = [field for field in _HSL_REPLAY_ACCOUNT_SERIES_FIELDS if field not in row]
+        if missing:
+            raise ValueError(f"HSL account series row missing fields: {missing}")
+        ts = int(row["ts"])
+        if ts < 0:
+            raise ValueError(f"HSL account series ts must be >= 0, got {ts}")
+        if prev_ts is not None and ts - prev_ts != _HSL_REPLAY_MATRIX_INTERVAL_MS:
+            raise ValueError(
+                "HSL account series rows must be contiguous 1m samples; "
+                f"got previous_ts={prev_ts} ts={ts}"
+            )
+        _finite_hsl_float(row["pnl"], "pnl")
+        prev_ts = ts
+    return {
+        "ts": np.asarray([int(row["ts"]) for row in rows], dtype=np.int64),
+        "pnl": np.asarray([float(row["pnl"]) for row in rows], dtype=np.float64),
+    }
+
+
 def _hsl_replay_matrix_derived_series(
     rows: list[dict[str, Any]], *, base_equity: float
 ) -> list[dict[str, float | int]]:
@@ -574,7 +610,7 @@ def _hsl_replay_cache_array_manifest(arrays: dict[str, Any]) -> dict[str, dict[s
             "shape": [int(x) for x in arrays[field].shape],
             "dtype": str(arrays[field].dtype),
         }
-        for field in _HSL_REPLAY_MATRIX_RAW_FIELDS
+        for field in sorted(arrays)
     }
 
 
@@ -589,18 +625,32 @@ def _hsl_replay_cache_array_dtype_is_valid(field: str, dtype: Any) -> bool:
     return bool(np.issubdtype(np_dtype, np.integer) or np.issubdtype(np_dtype, np.floating))
 
 
-def _hsl_replay_cache_array_value_reasons(arrays: dict[str, Any]) -> list[str]:
+def _hsl_replay_cache_series_fields(series_kind: str) -> tuple[str, ...]:
+    if series_kind == "pair_matrix":
+        return _HSL_REPLAY_MATRIX_RAW_FIELDS
+    if series_kind == "account_pnl":
+        return _HSL_REPLAY_ACCOUNT_SERIES_FIELDS
+    raise ValueError(
+        "HSL replay cache series_kind must be one of "
+        f"{_HSL_REPLAY_CACHE_SERIES_KINDS}, got {series_kind!r}"
+    )
+
+
+def _hsl_replay_cache_array_value_reasons(
+    arrays: dict[str, Any], *, series_kind: str = "pair_matrix"
+) -> list[str]:
     import numpy as np
 
+    fields = _hsl_replay_cache_series_fields(series_kind)
     reasons: list[str] = []
-    required = set(_HSL_REPLAY_MATRIX_RAW_FIELDS)
+    required = set(fields)
     if set(arrays) != required:
         return reasons
     try:
         row_count = int(len(arrays["ts"]))
     except TypeError:
         return ["array_value_invalid:ts"]
-    for field in _HSL_REPLAY_MATRIX_RAW_FIELDS:
+    for field in fields:
         try:
             field_len = int(len(arrays[field]))
         except TypeError:
@@ -611,7 +661,7 @@ def _hsl_replay_cache_array_value_reasons(arrays: dict[str, Any]) -> list[str]:
     if reasons:
         return reasons
     numeric_arrays: dict[str, Any] = {}
-    for field in _HSL_REPLAY_MATRIX_RAW_FIELDS:
+    for field in fields:
         arr = np.asarray(arrays[field])
         if arr.ndim != 1 or not _hsl_replay_cache_array_dtype_is_valid(field, arr.dtype):
             reasons.append(f"array_value_invalid:{field}")
@@ -763,22 +813,84 @@ def _hsl_replay_cache_dir(self, pside: str, symbol: str, config_digest: str | No
     )
 
 
+def _hsl_replay_cache_account_config_digest(self) -> str:
+    """Digest over the inputs that change how the account pnl series is built."""
+    payload = {
+        "schema_version": _HSL_REPLAY_CACHE_SCHEMA_VERSION,
+        "series_kind": "account_pnl",
+        "pnls_max_lookback_days": parse_pnls_max_lookback_days(
+            self.live_value("pnls_max_lookback_days"),
+            field_name="live.pnls_max_lookback_days",
+        ).display_value,
+    }
+    return _hsl_replay_cache_json_digest(payload)
+
+
+def _hsl_replay_cache_account_series_dir(self, config_digest: str | None = None) -> str:
+    digest = str(config_digest or self._hsl_replay_cache_account_config_digest())
+    if len(digest) < 16:
+        raise ValueError("HSL replay cache account digest must be at least 16 characters")
+    exchange = _hsl_replay_cache_safe_fragment(getattr(self, "exchange", "unknown"))
+    user = _hsl_replay_cache_safe_fragment(getattr(self, "user", "unknown"))
+    return make_get_filepath(
+        "caches/equity_hard_stop/"
+        f"{exchange}/replay_matrix/{user}/{_HSL_REPLAY_CACHE_ACCOUNT_PSIDE}/"
+        f"{_HSL_REPLAY_CACHE_ACCOUNT_SYMBOL}/{digest[:16]}/"
+    )
+
+
+def _hsl_replay_cache_account_expected_metadata(
+    self,
+    *,
+    fill_covered_start_ms: int,
+    fill_covered_end_ms: int,
+    fill_history_scope: str,
+    fill_coverage_proven: bool,
+    candle_covered_start_ms: int,
+    candle_covered_end_ms: int,
+) -> dict[str, Any]:
+    metadata = {
+        "exchange": str(self.exchange),
+        "market_type": _hsl_replay_cache_market_type(self),
+        "user": str(self.user),
+        "config_digest": self._hsl_replay_cache_account_config_digest(),
+        "signal_mode": self._equity_hard_stop_signal_mode(),
+        "pside": _HSL_REPLAY_CACHE_ACCOUNT_PSIDE,
+        "symbol": _HSL_REPLAY_CACHE_ACCOUNT_SYMBOL,
+        "fill_covered_start_ms": int(fill_covered_start_ms),
+        "fill_covered_end_ms": int(fill_covered_end_ms),
+        "fill_history_scope": str(fill_history_scope),
+        # Raw pass-through: the normalizer rejects non-bool proof values.
+        "fill_coverage_proven": fill_coverage_proven,
+        "candle_covered_start_ms": int(candle_covered_start_ms),
+        "candle_covered_end_ms": int(candle_covered_end_ms),
+    }
+    return _normalize_hsl_replay_cache_metadata(metadata)
+
+
 def _write_hsl_replay_matrix_cache(
     cache_dir: str | os.PathLike[str],
     rows: list[dict[str, Any]],
     metadata: dict[str, Any],
+    *,
+    series_kind: str = "pair_matrix",
 ) -> dict[str, Any]:
     import numpy as np
 
+    fields = _hsl_replay_cache_series_fields(series_kind)
     cache_path = Path(cache_dir)
     cache_path.mkdir(parents=True, exist_ok=True)
-    arrays = _hsl_replay_matrix_arrays(rows)
+    if series_kind == "account_pnl":
+        arrays = _hsl_replay_account_series_arrays(rows)
+    else:
+        arrays = _hsl_replay_matrix_arrays(rows)
     metadata_norm = _normalize_hsl_replay_cache_metadata(metadata)
     manifest = {
         "schema_version": _HSL_REPLAY_CACHE_SCHEMA_VERSION,
+        "series_kind": str(series_kind),
         "matrix_file": _HSL_REPLAY_CACHE_MATRIX_FILENAME,
         "row_count": int(len(rows)),
-        "fields": list(_HSL_REPLAY_MATRIX_RAW_FIELDS),
+        "fields": list(fields),
         "interval_ms": _HSL_REPLAY_MATRIX_INTERVAL_MS,
         "start_ts_ms": int(arrays["ts"][0]) if len(rows) else None,
         "end_ts_ms": int(arrays["ts"][-1]) if len(rows) else None,
@@ -819,6 +931,17 @@ def _hsl_replay_cache_validation_reasons(
         return ["manifest_not_object"]
     if int(manifest.get("schema_version", 0) or 0) != _HSL_REPLAY_CACHE_SCHEMA_VERSION:
         reasons.append("schema_version_mismatch")
+    series_kind = str(manifest.get("series_kind", "") or "")
+    if series_kind not in _HSL_REPLAY_CACHE_SERIES_KINDS:
+        reasons.append("series_kind_invalid")
+        # Field-set checks below need a concrete kind; a wrong-kind manifest is
+        # already invalid, so validate the arrays against the pair layout.
+        series_kind = "pair_matrix"
+    series_fields = _hsl_replay_cache_series_fields(series_kind)
+    if list(manifest.get("fields") or []) != list(series_fields):
+        # A kind/field-list disagreement means the manifest was tampered with
+        # or written by an incompatible writer.
+        reasons.append("fields_mismatch")
     if str(manifest.get("matrix_file", "")) != _HSL_REPLAY_CACHE_MATRIX_FILENAME:
         reasons.append("matrix_filename_mismatch")
     if int(manifest.get("interval_ms", 0) or 0) != _HSL_REPLAY_MATRIX_INTERVAL_MS:
@@ -864,7 +987,7 @@ def _hsl_replay_cache_validation_reasons(
             reasons.append("arrays_manifest_missing")
             arrays_manifest = {}
         loaded_arrays: dict[str, Any] = {}
-        for field in _HSL_REPLAY_MATRIX_RAW_FIELDS:
+        for field in series_fields:
             if field not in loaded:
                 reasons.append(f"array_missing:{field}")
                 continue
@@ -880,8 +1003,10 @@ def _hsl_replay_cache_validation_reasons(
                 reasons.append(f"array_shape_mismatch:{field}")
             if _hsl_hash_array(arr) != str(entry.get("sha256")):
                 reasons.append(f"array_hash_mismatch:{field}")
-        if set(loaded_arrays) == set(_HSL_REPLAY_MATRIX_RAW_FIELDS):
-            value_reasons = _hsl_replay_cache_array_value_reasons(loaded_arrays)
+        if set(loaded_arrays) == set(series_fields):
+            value_reasons = _hsl_replay_cache_array_value_reasons(
+                loaded_arrays, series_kind=series_kind
+            )
             reasons.extend(value_reasons)
             ts_array = np.asarray(loaded_arrays["ts"])
             ts_valid_for_time_checks = (
@@ -923,8 +1048,9 @@ def _load_hsl_replay_matrix_cache(
     manifest = json.loads(
         (cache_path / _HSL_REPLAY_CACHE_MANIFEST_FILENAME).read_text(encoding="utf-8")
     )
+    fields = _hsl_replay_cache_series_fields(str(manifest.get("series_kind", "")))
     with np.load(cache_path / _HSL_REPLAY_CACHE_MATRIX_FILENAME, allow_pickle=False) as loaded:
-        arrays = {field: loaded[field].copy() for field in _HSL_REPLAY_MATRIX_RAW_FIELDS}
+        arrays = {field: loaded[field].copy() for field in fields}
     return manifest, arrays
 
 
@@ -1028,8 +1154,9 @@ def _try_load_hsl_replay_matrix_cache(
         manifest = json.loads(
             (cache_path / _HSL_REPLAY_CACHE_MANIFEST_FILENAME).read_text(encoding="utf-8")
         )
+        fields = _hsl_replay_cache_series_fields(str(manifest.get("series_kind", "")))
         with np.load(cache_path / _HSL_REPLAY_CACHE_MATRIX_FILENAME, allow_pickle=False) as loaded:
-            arrays = {field: loaded[field].copy() for field in _HSL_REPLAY_MATRIX_RAW_FIELDS}
+            arrays = {field: loaded[field].copy() for field in fields}
     except Exception as exc:
         elapsed_s = time.monotonic() - started_s
         _emit_hsl_replay_event(
@@ -1142,6 +1269,62 @@ def _equity_hard_stop_persist_replay_matrices(self, history: dict[str, Any]) -> 
                 ),
                 pside=pside,
                 symbol=symbol,
+                level="debug",
+                status="succeeded",
+                reason_code=ReasonCodes.HSL_REPLAY_CACHE_WRITTEN,
+            )
+    account_rows = history.get("hsl_replay_account_series")
+    if written and isinstance(account_rows, list) and account_rows:
+        # Pair matrices are only reusable together with the account-level pnl
+        # series (per-minute slot budgets need the account balance), so persist
+        # it alongside them under the same guarded, write-only contract.
+        started_s = time.monotonic()
+        try:
+            cache_dir = self._hsl_replay_cache_account_series_dir()
+            metadata = self._hsl_replay_cache_account_expected_metadata(
+                fill_covered_start_ms=int(coverage["fill_covered_start_ms"]),
+                fill_covered_end_ms=int(coverage["fill_covered_end_ms"]),
+                fill_history_scope=str(coverage["fill_history_scope"]),
+                fill_coverage_proven=coverage["fill_coverage_proven"],
+                candle_covered_start_ms=int(coverage["candle_covered_start_ms"]),
+                candle_covered_end_ms=int(coverage["candle_covered_end_ms"]),
+            )
+            manifest = _write_hsl_replay_matrix_cache(
+                cache_dir, account_rows, metadata, series_kind="account_pnl"
+            )
+        except Exception as exc:
+            logging.warning(
+                "[risk] HSL account series replay cache write failed | rows=%d error=%s: %s",
+                len(account_rows),
+                type(exc).__name__,
+                exc,
+            )
+            _emit_hsl_replay_event(
+                self,
+                EventTypes.HSL_REPLAY_CACHE,
+                _hsl_replay_cache_status_data(
+                    cache_status="write_failed",
+                    elapsed_s=time.monotonic() - started_s,
+                    reasons=[f"write_exception:{type(exc).__name__}"],
+                ),
+                pside=_HSL_REPLAY_CACHE_ACCOUNT_PSIDE,
+                symbol=_HSL_REPLAY_CACHE_ACCOUNT_SYMBOL,
+                level="warning",
+                status="failed",
+                reason_code=ReasonCodes.HSL_REPLAY_CACHE_WRITE_FAILED,
+            )
+        else:
+            written += 1
+            _emit_hsl_replay_event(
+                self,
+                EventTypes.HSL_REPLAY_CACHE,
+                _hsl_replay_cache_status_data(
+                    cache_status="written",
+                    elapsed_s=time.monotonic() - started_s,
+                    manifest=manifest,
+                ),
+                pside=_HSL_REPLAY_CACHE_ACCOUNT_PSIDE,
+                symbol=_HSL_REPLAY_CACHE_ACCOUNT_SYMBOL,
                 level="debug",
                 status="succeeded",
                 reason_code=ReasonCodes.HSL_REPLAY_CACHE_WRITTEN,

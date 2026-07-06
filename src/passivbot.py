@@ -1770,6 +1770,13 @@ class Passivbot:
     _hsl_replay_cache_config_digest = pb_hsl._hsl_replay_cache_config_digest
     _hsl_replay_cache_expected_metadata = pb_hsl._hsl_replay_cache_expected_metadata
     _hsl_replay_cache_dir = pb_hsl._hsl_replay_cache_dir
+    _hsl_replay_cache_account_config_digest = (
+        pb_hsl._hsl_replay_cache_account_config_digest
+    )
+    _hsl_replay_cache_account_series_dir = pb_hsl._hsl_replay_cache_account_series_dir
+    _hsl_replay_cache_account_expected_metadata = (
+        pb_hsl._hsl_replay_cache_account_expected_metadata
+    )
     _equity_hard_stop_persist_replay_matrices = (
         pb_hsl._equity_hard_stop_persist_replay_matrices
     )
@@ -11703,6 +11710,42 @@ class Passivbot:
         }
         replay_matrix_prev_realized: Dict[Tuple[str, str], float] = {}
         replay_matrix_last_price: Dict[str, float] = {}
+        # Account-level realized-pnl series: pair matrices are only reusable
+        # together with per-minute account balance (slot budgets), which is not
+        # derivable from held-pair rows alone.
+        replay_account_enabled = bool(replay_matrix_pairs)
+        replay_account_rows: List[dict] = []
+        replay_account_prev_balance: Optional[float] = None
+
+        def _collect_account_series_row(minute_ts: int, *, record: bool) -> None:
+            nonlocal replay_account_enabled, replay_account_prev_balance
+            if not replay_account_enabled:
+                return
+            try:
+                balance_now = float(balance)
+                prev = (
+                    balance_now
+                    if replay_account_prev_balance is None
+                    else replay_account_prev_balance
+                )
+                replay_account_prev_balance = balance_now
+                if not record:
+                    return
+                replay_account_rows.append(
+                    pb_hsl._hsl_replay_account_series_row(
+                        ts=int(minute_ts), pnl=balance_now - prev
+                    )
+                )
+            except Exception as exc:
+                replay_account_enabled = False
+                replay_account_rows.clear()
+                logging.warning(
+                    "[risk] HSL account series row build failed; "
+                    "skipping account series cache | ts=%s error=%s: %s",
+                    minute_ts,
+                    type(exc).__name__,
+                    exc,
+                )
 
         def _collect_replay_matrix_rows(minute_ts: int, *, record: bool) -> None:
             # Matrix collection is a passive observer of the replay; any
@@ -11850,6 +11893,8 @@ class Passivbot:
                     pair[1], {"long": 0.0, "short": 0.0}
                 ).get(pair[0], 0.0)
             )
+        if replay_account_enabled:
+            replay_account_prev_balance = float(balance)
         record_start_realized_pnl_pside = {
             "long": float(realized_pnl_pside_running["long"]),
             "short": float(realized_pnl_pside_running["short"]),
@@ -11988,6 +12033,9 @@ class Passivbot:
             _collect_replay_matrix_rows(
                 int(minute), record=minute >= record_start_minute
             )
+            _collect_account_series_row(
+                int(minute), record=minute >= record_start_minute
+            )
             minute += ONE_MIN_MS
 
         if not timeline:
@@ -12071,6 +12119,9 @@ class Passivbot:
             "equities": equities,
             "metadata": metadata,
             "hsl_replay_matrices": hsl_replay_matrices,
+            "hsl_replay_account_series": (
+                replay_account_rows if hsl_replay_matrices else []
+            ),
             "hsl_replay_matrix_coverage": {
                 "fill_covered_start_ms": int(record_start_ts),
                 "fill_covered_end_ms": int(ts_now),

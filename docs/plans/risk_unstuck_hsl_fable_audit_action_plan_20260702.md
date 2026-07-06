@@ -876,6 +876,14 @@ Remaining implementation details:
       caller-provided fill events explicitly marked unproven. The future
       read/reuse slice must gate on a proven manifest plus a fresh coverage
       proof at load time.
+      Partial: cache format (schema v3) now carries a manifest `series_kind`
+      (`pair_matrix` | `account_pnl`), and live coin replay additionally
+      persists the write-only account-level realized-PnL series (`ts`, raw
+      minute `pnl`) alongside held-pair matrices, because per-minute slot
+      budgets need account balance that pair rows cannot provide. Kind/field
+      tampering is rejected (`fields_mismatch`/`series_kind_invalid`). The
+      account series is only written together with at least one pair matrix
+      and remains never read for trading decisions.
 - [ ] Python simplification after Rust owns ideal protective orders and unstuck
       orders.
       Python should reconcile ideal vs actual orders, not re-decide trading
