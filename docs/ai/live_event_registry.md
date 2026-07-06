@@ -180,6 +180,9 @@ back to exchange-derived replay.
 - `hsl_price_history_symbol_fetch_started`
 - `hsl_raw_red_pending_ema_confirmation`
 - `hsl_red_finalized_without_exchange_order`
+- `hsl_replay_cache_hit`
+- `hsl_replay_cache_miss`
+- `hsl_replay_cache_rejected`
 - `hsl_timeline_replay_completed`
 - `hsl_timeline_replay_started`
 - `initial_entry_distance_gate`
