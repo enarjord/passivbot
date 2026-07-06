@@ -337,6 +337,34 @@ def test_hsl_replay_matrix_cache_validation_reports_non_numeric_array_without_ra
     assert "array_value_invalid:price" in reasons
 
 
+@pytest.mark.parametrize("bad_ts_kind", ["strings", "scalar", "two_dim"])
+def test_hsl_replay_matrix_cache_validation_reports_corrupt_ts_without_raising(
+    tmp_path, bad_ts_kind
+):
+    import numpy as np
+
+    metadata = _hsl_cache_metadata()
+    hsl._write_hsl_replay_matrix_cache(tmp_path, _hsl_cache_rows(), metadata)
+    matrix_path = tmp_path / hsl._HSL_REPLAY_CACHE_MATRIX_FILENAME
+    with np.load(matrix_path, allow_pickle=False) as loaded:
+        arrays = {field: loaded[field].copy() for field in hsl._HSL_REPLAY_MATRIX_RAW_FIELDS}
+    if bad_ts_kind == "strings":
+        arrays["ts"] = np.array(["bad", "bad", "bad"], dtype="<U3")
+    elif bad_ts_kind == "scalar":
+        arrays["ts"] = np.array(0)
+    else:
+        arrays["ts"] = np.array([[60_000], [120_000], [180_000]])
+    np.savez(matrix_path, **arrays)
+
+    reasons = hsl._hsl_replay_cache_validation_reasons(
+        tmp_path,
+        expected_metadata=metadata,
+    )
+
+    assert "array_value_invalid:ts" in reasons
+    assert any(reason.startswith("array_hash_mismatch:ts") for reason in reasons)
+
+
 def test_hsl_replay_matrix_cache_requires_trust_boundary_metadata(tmp_path):
     metadata = _hsl_cache_metadata()
     metadata.pop("config_digest")

@@ -720,18 +720,28 @@ def _hsl_replay_cache_validation_reasons(
             if _hsl_hash_array(arr) != str(entry.get("sha256")):
                 reasons.append(f"array_hash_mismatch:{field}")
         if set(loaded_arrays) == set(_HSL_REPLAY_MATRIX_RAW_FIELDS):
-            row_count = int(len(loaded_arrays["ts"]))
-            if row_count != int(manifest.get("row_count", -1)):
+            value_reasons = _hsl_replay_cache_array_value_reasons(loaded_arrays)
+            reasons.extend(value_reasons)
+            ts_array = np.asarray(loaded_arrays["ts"])
+            ts_valid_for_time_checks = (
+                ts_array.ndim == 1
+                and np.issubdtype(ts_array.dtype, np.number)
+                and bool(np.all(np.isfinite(ts_array)))
+            )
+            row_count = int(len(ts_array)) if ts_valid_for_time_checks else None
+            if row_count is not None and row_count != int(manifest.get("row_count", -1)):
                 reasons.append("row_count_mismatch")
-            reasons.extend(_hsl_replay_cache_array_value_reasons(loaded_arrays))
             if row_count:
-                diffs = np.diff(loaded_arrays["ts"])
+                diffs = np.diff(ts_array)
                 if diffs.size and not bool(np.all(diffs == _HSL_REPLAY_MATRIX_INTERVAL_MS)):
                     reasons.append("timestamp_not_contiguous")
-                if int(loaded_arrays["ts"][0]) != manifest.get("start_ts_ms"):
-                    reasons.append("start_ts_mismatch")
-                if int(loaded_arrays["ts"][-1]) != manifest.get("end_ts_ms"):
-                    reasons.append("end_ts_mismatch")
+                try:
+                    if int(ts_array[0]) != manifest.get("start_ts_ms"):
+                        reasons.append("start_ts_mismatch")
+                    if int(ts_array[-1]) != manifest.get("end_ts_ms"):
+                        reasons.append("end_ts_mismatch")
+                except (TypeError, ValueError, OverflowError):
+                    reasons.append("timestamp_invalid")
     return reasons
 
 
