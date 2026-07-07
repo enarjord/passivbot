@@ -352,9 +352,16 @@ def test_red_latching_holds_tier_after_recovery():
     m = sample(120_000, -15.0, latch_red=True)
     # Peak 110, equity 85 -> drawdown 25/110 > red threshold 0.2.
     assert m["tier"] == "red"
+    assert m["red_active_now"] is True
+    assert m["red_seen_in_episode"] is True
     assert bot._equity_hard_stop_runtime_red_latched("long") is True
 
-    # Full recovery does not clear a latched red tier.
+    # Full recovery does not clear a latched red tier, but the split contract
+    # (B2.1, clarified 2026-07-06) records that the CURRENT sample is out of
+    # RED: only red_active_now may authorize new panic orders, while
+    # red_seen_in_episode persists as post-episode cooldown/restart evidence.
     m = sample(180_000, 12.0, latch_red=True)
     assert m["drawdown_raw"] == pytest.approx(0.0)
     assert m["tier"] == "red"
+    assert m["red_active_now"] is False
+    assert m["red_seen_in_episode"] is True

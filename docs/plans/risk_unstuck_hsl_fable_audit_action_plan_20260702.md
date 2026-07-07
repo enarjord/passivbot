@@ -890,6 +890,14 @@ Remaining implementation details:
       contract. The RED/panic-now tier score was verified to already use
       `min(raw, ema)` in the shared runtime and is pinned by regression
       tests rather than changed.
+      Partial (B2.1 red split, groundwork): the shared Rust runtime now
+      tracks `red_seen_in_episode` separately from the tier latch and every
+      step reports `red_active_now` (whether the CURRENT sample crosses RED),
+      exposed through the PyO3 runtime/stateless step and threaded into the
+      live metrics dicts and hermetic test stubs. Behavior is unchanged in
+      this slice: the tier latch still pins display red; the follow-up slice
+      rewires panic authorization to consume `red_active_now` only and moves
+      the cooldown anchor to the scoped episode-end fill timestamp.
 - [x] Dynamic WEL and snapped/raw balance docs/tests.
       Make `reduce_overweight` use dynamic currently-tradable slot count, keep
       snapped/raw balance separation, and add high-hysteresis warning/preflight

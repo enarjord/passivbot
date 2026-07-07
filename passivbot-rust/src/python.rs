@@ -278,6 +278,10 @@ impl EquityHardStopRuntimePy {
         self.state.red_latched
     }
 
+    pub fn red_seen_in_episode(&self) -> bool {
+        self.state.red_seen_in_episode
+    }
+
     pub fn tier(&self) -> &'static str {
         hard_stop_tier_to_str(self.state.tier)
     }
@@ -339,12 +343,14 @@ impl EquityHardStopRuntimePy {
         let out = PyDict::new_bound(py);
         out.set_item("initialized", self.state.initialized)?;
         out.set_item("red_latched", self.state.red_latched)?;
+        out.set_item("red_seen_in_episode", self.state.red_seen_in_episode)?;
         out.set_item("peak_strategy_equity", self.state.peak_strategy_equity)?;
         out.set_item("rolling_peak_strategy_equity", self.last_rolling_peak)?;
         out.set_item("drawdown_ema", self.state.drawdown_ema)?;
         out.set_item("tier", hard_stop_tier_to_str(self.state.tier))?;
         out.set_item("drawdown_raw", step.drawdown_raw)?;
         out.set_item("drawdown_score", step.drawdown_score)?;
+        out.set_item("red_active_now", step.red_active_now)?;
         out.set_item("changed", step.changed)?;
         out.set_item("alpha", step.alpha)?;
         out.set_item("elapsed_minutes", step.elapsed_minutes)?;
@@ -903,6 +909,7 @@ fn hard_stop_tier_to_str(tier: ehsl::HardStopTier) -> &'static str {
     *,
     initialized,
     red_latched,
+    red_seen_in_episode = None,
     drawdown_ema,
     tier,
     red_threshold,
@@ -917,6 +924,7 @@ pub fn equity_hard_stop_step_py(
     py: Python<'_>,
     initialized: bool,
     red_latched: bool,
+    red_seen_in_episode: Option<bool>,
     drawdown_ema: f64,
     tier: &str,
     red_threshold: f64,
@@ -932,6 +940,8 @@ pub fn equity_hard_stop_step_py(
         drawdown_ema,
         tier: hard_stop_tier_from_str(tier).map_err(PyValueError::new_err)?,
         red_latched,
+        // Conservative stateless default: a latched red was necessarily seen.
+        red_seen_in_episode: red_seen_in_episode.unwrap_or(red_latched),
         initialized,
         ..Default::default()
     };
@@ -955,11 +965,13 @@ pub fn equity_hard_stop_step_py(
     let out = PyDict::new_bound(py);
     out.set_item("initialized", state.initialized)?;
     out.set_item("red_latched", state.red_latched)?;
+    out.set_item("red_seen_in_episode", state.red_seen_in_episode)?;
     out.set_item("peak_strategy_equity", state.peak_strategy_equity)?;
     out.set_item("drawdown_ema", state.drawdown_ema)?;
     out.set_item("tier", hard_stop_tier_to_str(state.tier))?;
     out.set_item("drawdown_raw", step.drawdown_raw)?;
     out.set_item("drawdown_score", step.drawdown_score)?;
+    out.set_item("red_active_now", step.red_active_now)?;
     out.set_item("changed", step.changed)?;
     out.set_item("alpha", step.alpha)?;
     out.set_item("elapsed_minutes", step.elapsed_minutes)?;

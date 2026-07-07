@@ -66,6 +66,11 @@ pub struct HardStopState {
     pub drawdown_ema: f64,
     pub tier: HardStopTier,
     pub red_latched: bool,
+    /// True once any sample in the current episode crossed RED
+    /// (`red_active_now`), regardless of latching. Post-episode
+    /// cooldown/restart evidence per the clarified B2.1 contract; cleared
+    /// only on episode reset. Unlike `red_latched`, this never pins the tier.
+    pub red_seen_in_episode: bool,
     pub initialized: bool,
     pub last_minute: Option<u64>,
     pub cached_step: Option<HardStopStep>,
@@ -76,6 +81,10 @@ pub struct HardStopStep {
     pub drawdown_raw: f64,
     pub drawdown_ema: f64,
     pub drawdown_score: f64,
+    /// Whether THIS sample's score crosses the RED threshold, independent of
+    /// latching. The only signal that may authorize new panic orders per the
+    /// clarified B2.1 contract; a latched tier alone must not.
+    pub red_active_now: bool,
     pub tier: HardStopTier,
     pub changed: bool,
     pub alpha: f64,
@@ -241,6 +250,7 @@ pub fn step_with_peak_strategy_equity_latch(
             drawdown_raw: 0.0,
             drawdown_ema: state.drawdown_ema.max(0.0),
             drawdown_score: 0.0,
+            red_active_now: false,
             tier: state.tier,
             changed: state.tier != prev_tier,
             alpha,
@@ -286,9 +296,13 @@ pub fn step_with_peak_strategy_equity_latch(
     let threshold_yellow = config.tier_ratios.yellow * config.red_threshold;
     let threshold_orange = config.tier_ratios.orange * config.red_threshold;
     let cmp_eps = 1e-12;
+    let red_active_now = drawdown_score + cmp_eps >= config.red_threshold;
+    if red_active_now {
+        state.red_seen_in_episode = true;
+    }
     let next_tier = if state.red_latched {
         HardStopTier::Red
-    } else if drawdown_score + cmp_eps >= config.red_threshold {
+    } else if red_active_now {
         HardStopTier::Red
     } else if drawdown_score + cmp_eps >= threshold_orange {
         HardStopTier::Orange
@@ -310,6 +324,7 @@ pub fn step_with_peak_strategy_equity_latch(
         drawdown_raw,
         drawdown_ema: state.drawdown_ema.max(0.0),
         drawdown_score,
+        red_active_now,
         tier: state.tier,
         changed: state.tier != prev_tier,
         alpha,
@@ -322,6 +337,79 @@ pub fn step_with_peak_strategy_equity_latch(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn red_active_now_splits_from_seen_and_latch() {
+        // Clarified B2.1 contract: red_active_now reflects only the current
+        // sample; red_seen_in_episode persists after recovery; the tier latch
+        // may pin display red but must not report red_active_now.
+        let mut state = HardStopState::default();
+        let config = HardStopConfig {
+            red_threshold: 0.2,
+            ema_span_minutes: 1.0,
+            tier_ratios: HardStopTierRatios::default(),
+        };
+        let s = step_with_peak_strategy_equity_latch(
+            &mut state, config, 100.0, 100.0, 60_000, true,
+        )
+        .unwrap();
+        assert!(!s.red_active_now);
+        assert!(!state.red_seen_in_episode);
+
+        // Crash through RED with latching on.
+        let s = step_with_peak_strategy_equity_latch(
+            &mut state, config, 70.0, 100.0, 120_000, true,
+        )
+        .unwrap();
+        assert!(s.red_active_now);
+        assert!(state.red_seen_in_episode);
+        assert!(state.red_latched);
+        assert_eq!(s.tier, HardStopTier::Red);
+
+        // Full recovery: latch pins the tier, but the current sample is no
+        // longer RED, and the episode memory persists.
+        let s = step_with_peak_strategy_equity_latch(
+            &mut state, config, 100.0, 100.0, 180_000, true,
+        )
+        .unwrap();
+        assert!(!s.red_active_now);
+        assert!(state.red_seen_in_episode);
+        assert_eq!(s.tier, HardStopTier::Red);
+
+        // Episode reset clears both.
+        state = HardStopState::default();
+        assert!(!state.red_seen_in_episode);
+        assert!(!state.red_latched);
+    }
+
+    #[test]
+    fn red_seen_in_episode_tracks_without_latching() {
+        // With latching off (replay), the tier recovers but the episode
+        // memory still records that RED was active.
+        let mut state = HardStopState::default();
+        let config = HardStopConfig {
+            red_threshold: 0.2,
+            ema_span_minutes: 1.0,
+            tier_ratios: HardStopTierRatios::default(),
+        };
+        step_with_peak_strategy_equity_latch(
+            &mut state, config, 100.0, 100.0, 60_000, false,
+        )
+        .unwrap();
+        let s = step_with_peak_strategy_equity_latch(
+            &mut state, config, 70.0, 100.0, 120_000, false,
+        )
+        .unwrap();
+        assert!(s.red_active_now);
+        assert!(!state.red_latched);
+        let s = step_with_peak_strategy_equity_latch(
+            &mut state, config, 100.0, 100.0, 180_000, false,
+        )
+        .unwrap();
+        assert!(!s.red_active_now);
+        assert!(state.red_seen_in_episode);
+        assert_ne!(s.tier, HardStopTier::Red);
+    }
 
     fn cfg() -> HardStopConfig {
         HardStopConfig {
