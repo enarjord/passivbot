@@ -975,6 +975,15 @@ Remaining implementation details:
       Partial: historical panic markers now require reconstructed confirmed RED
       tier/score, not raw-only drawdown. Raw RED pending remains diagnostic and
       does not reconstruct a cooldown/no-restart event by itself.
+      Partial: replay cooldown/no-restart evidence is now canonical from
+      reconstructed episodes. An episode with `red_seen_in_episode` that is
+      flattened by an ordinary (non-panic) close fill latches cooldown at the
+      flatten fill timestamp and evaluates `restart_after_red_policy` /
+      no-restart via the shared Rust predicate at that stop, mirroring the
+      confirmed-panic-marker path (source=red_episode_flatten in the
+      reconstruction logs). Broader cross-episode no-restart peak accounting
+      (the backtest's `no_restart_peak_strategy_equity` analogue) remains
+      future work.
 - [ ] HSL replay performance/readiness slice.
       Persist verified non-authoritative HSL time series/checkpoints, add doctor
       tools, prioritize held scopes, keep timing/source evidence, and move dense

@@ -4,6 +4,17 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Live coin-HSL startup replay now derives cooldown and no-restart evidence
+  from canonical reconstructed RED episodes, not only from bot-emitted panic
+  order markers. An episode that crossed RED and was flattened by an ordinary
+  (non-panic) close fill - including a manual close - now latches its
+  cooldown anchored at the scope-flattening fill timestamp and evaluates the
+  no-restart policy at that stop, exactly like a confirmed panic marker.
+  Previously such episodes were silently reset with no stop accounting, so a
+  restart during an active cooldown (or after a terminal-drawdown episode)
+  would resume trading. RED-free ordinary flattenings keep the plain episode
+  reset.
+
 - HSL startup now applies the clarified incomplete-history policy: with
   `restart_after_red_policy=always`, missing pre-episode fill coverage
   degrades to a loud warning when the coin scope's current-episode start is
