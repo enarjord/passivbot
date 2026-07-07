@@ -5505,7 +5505,17 @@ def _equity_hard_stop_coin_needs_panic_supervision(
     if not self._equity_hard_stop_enabled(pside):
         return False
     if state["runtime"].red_latched() and not state["halted"]:
-        return True
+        # B2.1 contract (clarified 2026-07-06): only the CURRENT sample being
+        # in RED may authorize new panic orders. A latched tier with a
+        # recovered sample keeps the episode's entry blocking (forced-mode
+        # downgrade handled by the supervisor) but must not keep submitting
+        # panic orders.
+        last_metrics = state.get("last_metrics")
+        if last_metrics is None:
+            # No sample yet against the latched state: stay protective until
+            # the next sample proves recovery.
+            return True
+        return bool(last_metrics.get("red_active_now", True))
     return bool(state["halted"] and state["cooldown_repanic_reset_pending"])
 
 
@@ -5534,6 +5544,31 @@ def _equity_hard_stop_set_red_runtime_forced_modes(self, pside: str) -> None:
             previous_modes=previous,
             modes=forced,
             reason_code="hsl_red_runtime_forced_modes",
+        )
+
+
+def _equity_hard_stop_set_red_paused_runtime_forced_modes(self, pside: str) -> None:
+    """Episode entry blocking without panic emission (B2.1 red split).
+
+    Used while a red-seen episode is still open but the current sample is no
+    longer in RED: entries stay cancelled/blocked, normal closes may proceed,
+    and no new panic orders are authorized.
+    """
+    previous = dict(getattr(self, "_runtime_forced_modes", {}).get(pside, {}) or {})
+    forced = {}
+    symbols = set(self.positions.keys()) | set(self.open_orders.keys()) | set(self.active_symbols)
+    for symbol in symbols:
+        forced[symbol] = "tp_only_with_active_entry_cancellation"
+    self._runtime_forced_modes[pside] = forced
+    if previous != forced:
+        _emit_runtime_forced_mode_changed_event(
+            self,
+            pside=pside,
+            action="replace",
+            symbols=forced.keys(),
+            previous_modes=previous,
+            modes=forced,
+            reason_code="hsl_red_paused_runtime_forced_modes",
         )
 
 
@@ -6029,7 +6064,50 @@ async def _equity_hard_stop_run_red_supervisor(self) -> None:
             if not active_red_psides:
                 return
             for pside in active_red_psides:
-                self._equity_hard_stop_set_red_runtime_forced_modes(pside)
+                # B2.1 contract: refresh the sample so recovery is observable
+                # mid-supervision; only red_active_now authorizes continued
+                # panic emission for the episode. Any refresh failure keeps
+                # panic modes: recovery must be PROVEN by a fresh sample.
+                metrics = None
+                try:
+                    signal_mode = self._equity_hard_stop_signal_mode()
+                    upnl_total = (
+                        float(await self._calc_upnl_sum_strict())
+                        if signal_mode == "unified"
+                        else None
+                    )
+                    metrics = self._equity_hard_stop_apply_sample(
+                        pside,
+                        int(self.get_exchange_time()),
+                        float(self.get_raw_balance()),
+                        float(self._equity_hard_stop_realized_pnl_now()),
+                        float(self._equity_hard_stop_realized_pnl_now(pside)),
+                        float(await self._calc_upnl_sum_strict(pside)),
+                        unrealized_pnl_total=upnl_total,
+                    )
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    logging.warning(
+                        "[risk] HSL[%s] RED supervisor sample refresh failed; "
+                        "keeping panic modes (recovery must be proven) | "
+                        "error=%s: %s",
+                        pside,
+                        type(exc).__name__,
+                        exc,
+                    )
+                if metrics is not None and not bool(
+                    metrics.get("red_active_now", True)
+                ):
+                    logging.info(
+                        "[risk] HSL[%s] RED no longer active on current sample; "
+                        "pausing panic emission for the remainder of the episode "
+                        "(entries stay blocked)",
+                        pside,
+                    )
+                    self._equity_hard_stop_set_red_paused_runtime_forced_modes(pside)
+                else:
+                    self._equity_hard_stop_set_red_runtime_forced_modes(pside)
             self._equity_hard_stop_refresh_halted_runtime_forced_modes()
             try:
                 to_cancel, to_create = (
@@ -6105,7 +6183,51 @@ async def _equity_hard_stop_run_coin_red_supervisor(self) -> None:
                             nonpanic_close_orders=nonpanic_close_orders,
                         )
                 else:
-                    self._equity_hard_stop_set_coin_runtime_forced_mode(pside, symbol, "panic")
+                    # B2.1 contract: refresh the sample so recovery is
+                    # observable mid-supervision; only red_active_now may
+                    # authorize continued panic emission. A recovered sample
+                    # inside a red-seen episode keeps entry blocking without
+                    # new panic orders; supervision re-engages if RED
+                    # re-activates. Any refresh failure keeps panic modes:
+                    # recovery must be PROVEN by a fresh sample.
+                    metrics = None
+                    try:
+                        metrics = self._equity_hard_stop_apply_coin_sample(
+                            pside,
+                            symbol,
+                            int(self.get_exchange_time()),
+                            float(self.get_raw_balance()),
+                            float(await self._calc_upnl_sum_strict(pside, symbol)),
+                        )
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as exc:
+                        logging.warning(
+                            "[risk] HSL[%s:%s] RED supervisor sample refresh "
+                            "failed; keeping panic mode (recovery must be "
+                            "proven) | error=%s: %s",
+                            pside,
+                            symbol,
+                            type(exc).__name__,
+                            exc,
+                        )
+                    if metrics is not None and not bool(
+                        metrics.get("red_active_now", True)
+                    ):
+                        logging.info(
+                            "[risk] HSL[%s:%s] RED no longer active on current "
+                            "sample; pausing panic emission for the remainder "
+                            "of the episode (entries stay blocked)",
+                            pside,
+                            symbol,
+                        )
+                        self._equity_hard_stop_set_coin_runtime_forced_mode(
+                            pside, symbol, "tp_only_with_active_entry_cancellation"
+                        )
+                    else:
+                        self._equity_hard_stop_set_coin_runtime_forced_mode(
+                            pside, symbol, "panic"
+                        )
             active = [
                 (pside, symbol)
                 for pside in self._hsl_psides()

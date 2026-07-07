@@ -703,6 +703,64 @@ def test_hsl_replay_cache_account_digest_scoped_to_lookback():
     assert hsl._hsl_replay_cache_account_config_digest(bot) != digest
 
 
+def test_coin_panic_supervision_requires_red_active_now():
+    # B2.1 red split: a latched red episode authorizes panic supervision only
+    # while the CURRENT sample is in RED.
+    bot = make_coin_bot()
+    symbol = "A"
+    state = bot._hsl_coin_state("long", symbol)
+    state["runtime"].apply_sample(
+        timestamp_ms=60_000, equity=100.0, peak_strategy_equity=100.0,
+        red_threshold=0.2, ema_span_minutes=1.0,
+        tier_ratio_yellow=0.5, tier_ratio_orange=0.75, latch_red=True,
+    )
+    state["runtime"].apply_sample(
+        timestamp_ms=120_000, equity=70.0, peak_strategy_equity=100.0,
+        red_threshold=0.2, ema_span_minutes=1.0,
+        tier_ratio_yellow=0.5, tier_ratio_orange=0.75, latch_red=True,
+    )
+    assert state["runtime"].red_latched() is True
+
+    # No metrics yet against the latched state: stay protective.
+    state["last_metrics"] = None
+    assert (
+        bot._equity_hard_stop_coin_needs_panic_supervision("long", symbol, state)
+        is True
+    )
+    # Current sample in RED: panic authorized.
+    state["last_metrics"] = {"red_active_now": True}
+    assert (
+        bot._equity_hard_stop_coin_needs_panic_supervision("long", symbol, state)
+        is True
+    )
+    # Current sample recovered: no new panic orders for this episode.
+    state["last_metrics"] = {"red_active_now": False}
+    assert (
+        bot._equity_hard_stop_coin_needs_panic_supervision("long", symbol, state)
+        is False
+    )
+    # Halted repanic-reset supervision is unaffected by the split.
+    state["halted"] = True
+    state["cooldown_repanic_reset_pending"] = True
+    assert (
+        bot._equity_hard_stop_coin_needs_panic_supervision("long", symbol, state)
+        is True
+    )
+
+
+def test_red_paused_forced_modes_block_entries_without_panic():
+    bot = make_coin_bot()
+    bot.positions = {"A": {"long": {"size": 1.0, "price": 100.0}, "short": {"size": 0.0}}}
+    bot.open_orders = {"B": []}
+    bot.active_symbols = ["C"]
+
+    bot._equity_hard_stop_set_red_paused_runtime_forced_modes("long")
+
+    forced = bot._runtime_forced_modes["long"]
+    assert set(forced) == {"A", "B", "C"}
+    assert set(forced.values()) == {"tp_only_with_active_entry_cancellation"}
+
+
 def test_hsl_replay_cache_dir_is_sanitized_and_digest_scoped():
     bot = make_coin_bot()
     bot.exchange = "binance/usdm"
@@ -1198,6 +1256,7 @@ def bind_hsl_methods(bot):
         "_equity_hard_stop_persist_replay_matrices",
         "_try_load_hsl_replay_matrix_cache",
         "_equity_hard_stop_try_reuse_replay_cache",
+        "_equity_hard_stop_set_red_paused_runtime_forced_modes",
         "_equity_hard_stop_build_latch_payload",
         "_equity_hard_stop_check_coin",
         "_equity_hard_stop_clear_coin_runtime_forced_mode",

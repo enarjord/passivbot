@@ -4,6 +4,15 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- HSL panic orders are now authorized only while the CURRENT drawdown sample
+  is in RED (`red_active_now`), in both live and backtest. Previously a
+  latched RED episode kept emitting panic closes until the scope was flat
+  even after the drawdown recovered; now a recovered sample pauses panic
+  emission for the remainder of the episode while entries stay blocked
+  (`tp_only_with_active_entry_cancellation`), and panic resumes if RED
+  re-activates. Flat-scope stop finalization, cooldown, and no-restart
+  accounting are unchanged and still use the episode's RED evidence.
+
 - The HSL no-restart (permanent halt) trigger now evaluates
   `max(drawdown_raw, drawdown_ema)` against
   `hsl_no_restart_drawdown_threshold` in both live and backtest, instead of
