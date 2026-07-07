@@ -274,6 +274,14 @@ FIELD_RUNTIME_RULES = {
             "optimize": "Backtest Runtime",
         },
     },
+    "live.hsl_accept_incomplete_history": {
+        "owner": "live",
+        "consumed_by": {"live"},
+        "cli_exposed_on": {"live"},
+        "help_group": {
+            "live": "Behavior",
+        },
+    },
     "live.hsl_signal_mode": {
         "owner": "live",
         "consumed_by": {"live", "backtest", "optimize"},
@@ -1085,6 +1093,15 @@ RESERVED_CLI_ARGS = {
             "optimize": "Backtest Runtime",
         },
         "help": "How far into the past to fetch realized PnL history: 0=minimal lookback, positive=float days, 'all'=full history.",
+    },
+    "live.hsl_accept_incomplete_history": {
+        "visible": ["--hsl-accept-incomplete-history"],
+        "hidden": [
+            "--live.hsl_accept_incomplete_history",
+            "--live_hsl_accept_incomplete_history",
+        ],
+        "action": "store_true",
+        "default": None,
     },
     "live.hsl_signal_mode": {
         "visible": ["--hsl-signal-mode"],

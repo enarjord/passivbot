@@ -2197,6 +2197,17 @@ def _parse_hsl_config(self) -> dict[str, dict[str, Any]]:
                 pside,
                 _HSL_RISKS_DOC,
             )
+            live_cfg = self.config.get("live") if isinstance(self.config, dict) else None
+            if isinstance(live_cfg, dict) and bool(
+                live_cfg.get("hsl_accept_incomplete_history", False)
+            ):
+                logging.critical(
+                    "[risk] HSL[%s] hsl_accept_incomplete_history OVERRIDE is "
+                    "active: HSL evidence incomplete; panic/cooldown/no-restart "
+                    "may be wrong. This is a dangerous per-run flag - do not "
+                    "persist it in config files.",
+                    pside,
+                )
             logging.info(
                 "[risk] HSL[%s] enabled | red_threshold=%.6f ema_span_minutes=%.3f "
                 "cooldown_minutes_after_red=%.3f "
@@ -2781,6 +2792,69 @@ def _orchestrator_exchange_params(self, symbol: str) -> dict:
     }
 
 
+def _equity_hard_stop_coin_episode_start_covered(self, pside: str, symbol: str) -> bool:
+    """Whether covered fills prove the coin scope's current-episode start.
+
+    Walks the pair's covered fills backward from the current exchange
+    position; if the reversed running size reaches flat inside coverage, the
+    episode boundary is provable from available evidence. Ambiguous fills
+    (unknown action/qty) make the reconstruction unprovable.
+    """
+    if self._pnls_manager is None:
+        return False
+    slot = (self.positions or {}).get(symbol, {}).get(pside, {})
+    size = abs(float(slot.get("size", 0.0) or 0.0))
+    if size <= 1e-12:
+        # Flat scope: the current episode is empty; nothing to reconstruct.
+        return True
+    replay_events, ambiguous = _equity_hard_stop_coin_replay_events(
+        list(self._pnls_manager.get_events()), pside, symbol
+    )
+    if ambiguous:
+        return False
+    running = size
+    for _ts, action, qty in reversed(replay_events):
+        running = running - qty if action == "increase" else running + qty
+        if running <= 1e-12:
+            return True
+    return False
+
+
+def _equity_hard_stop_coverage_allow_incomplete(
+    self, pside: str, symbol: Optional[str] = None
+) -> bool:
+    """B2.1 incomplete-history policy (#1122).
+
+    Coverage-category failures on HSL PnL inputs may be waived only when:
+    - the explicit per-run operator override is active
+      (`live.hsl_accept_incomplete_history`), or
+    - `restart_after_red_policy=always` for the scope AND the coin scope's
+      current-episode start is provable from covered fills (the `always`
+      policy ignores the historical no-restart evidence, so pre-episode
+      history may degrade to a warning). `threshold`/`never` always require
+      full configured lookback coverage; pside/unified scopes stay strict.
+    """
+    config = getattr(self, "config", None)
+    if isinstance(config, dict):
+        live_cfg = config.get("live")
+        if isinstance(live_cfg, dict) and bool(
+            live_cfg.get("hsl_accept_incomplete_history", False)
+        ):
+            return True
+    if symbol is None:
+        return False
+    hsl_cfg = getattr(self, "hsl", None)
+    if not isinstance(hsl_cfg, dict) or pside not in hsl_cfg:
+        return False
+    policy = normalize_hsl_restart_after_red_policy(
+        hsl_cfg[pside].get("restart_after_red_policy", "threshold"),
+        path="hsl.restart_after_red_policy",
+    )
+    if policy != "always":
+        return False
+    return self._equity_hard_stop_coin_episode_start_covered(pside, symbol)
+
+
 def _equity_hard_stop_realized_pnl_now(self, pside: Optional[str] = None) -> float:
     if self._pnls_manager is None:
         return 0.0
@@ -2799,6 +2873,9 @@ def _equity_hard_stop_realized_pnl_now(self, pside: Optional[str] = None) -> flo
         events,
         context="equity hard stop realized PnL",
         start_ms=start_ms,
+        allow_incomplete=self._equity_hard_stop_coverage_allow_incomplete(
+            pside if pside is not None else "long"
+        ),
     )
     for event in events:
         realized += float(getattr(event, "pnl", 0.0) or 0.0)
@@ -2829,6 +2906,9 @@ def _equity_hard_stop_coin_realized_pnl_peak_last(
         events,
         context="coin HSL realized PnL",
         start_ms=start_ms,
+        allow_incomplete=self._equity_hard_stop_coverage_allow_incomplete(
+            pside, symbol
+        ),
     )
     events.sort(key=_equity_hard_stop_fill_timestamp_ms)
     current = 0.0

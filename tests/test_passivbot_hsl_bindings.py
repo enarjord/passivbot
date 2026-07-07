@@ -51,4 +51,6 @@ def test_passivbot_uses_passivbot_hsl_module_for_hsl_methods():
         "_equity_hard_stop_try_reuse_replay_cache",
         "_equity_hard_stop_set_red_paused_runtime_forced_modes",
         "_equity_hard_stop_latest_flatten_fill_timestamp_ms",
+        "_equity_hard_stop_coverage_allow_incomplete",
+        "_equity_hard_stop_coin_episode_start_covered",
     } <= assigned_names

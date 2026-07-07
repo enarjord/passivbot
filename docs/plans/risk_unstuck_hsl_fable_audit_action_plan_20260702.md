@@ -915,6 +915,17 @@ Remaining implementation details:
       back to the previous panic-fill anchor and then the caller fallback
       when no fill evidence exists in the window. Only the incomplete-history
       policy remains from the #1122 contract.
+      Implemented (incomplete-history policy): HSL coverage assertions now
+      accept an explicit allow_incomplete waiver that converts
+      coverage-category failures into critical logs (corrupt pending/degraded
+      PnL still hard-fails). Waivers are granted only by the per-run
+      `live.hsl_accept_incomplete_history` CLI override (critical startup
+      banner + per-use critical logs) or by `restart_after_red_policy=always`
+      when the coin scope's current-episode start is provable from covered
+      fills (reversed running-size reconstruction from the live position;
+      ambiguity is unprovable). pside/unified scopes stay strict, which is
+      conservative-compliant with the contract's "not necessarily block"
+      wording. With this, every #1122 contract item is implemented.
       Implemented (A2.2 backtest parity): the backtest ORANGE `TpOnly`
       override now forces flat symbols too (`apply_orange_override` has-pos
       gate removed), matching the live overlay since #1098; the orchestrator's

@@ -858,6 +858,119 @@ def test_forced_mode_refresher_preserves_paused_red(monkeypatch):
     )
 
 
+def _incomplete_history_bot(*, policy="threshold", override=False, fills=(), position_size=1.0):
+    bot = make_coin_bot()
+    bot.hsl["long"]["restart_after_red_policy"] = policy
+    if override:
+        bot.config["live"]["hsl_accept_incomplete_history"] = True
+    bot.positions = {
+        "A": {"long": {"size": position_size, "price": 100.0}, "short": {"size": 0.0}}
+    }
+
+    class _Cache:
+        def load_metadata(self):
+            return {"covered_start_ms": 0, "oldest_event_ts": 1}
+
+        def get_covered_start_ms(self):
+            return 0
+
+        def get_history_scope(self):
+            return "window"
+
+    class _Manager:
+        cache = _Cache()
+
+        def __init__(self, events):
+            self._events = list(events)
+
+        def get_events(self, start_ms=None):
+            if start_ms is None:
+                return list(self._events)
+            return [
+                e for e in self._events if getattr(e, "timestamp", 0) >= start_ms
+            ]
+
+        def get_history_scope(self):
+            return "window"
+
+    bot._pnls_manager = _Manager(fills)
+    return bot
+
+
+def _episode_fill(ts, action, qty):
+    return SimpleNamespace(
+        position_side="long",
+        symbol="A",
+        timestamp=ts,
+        action=action,
+        qty=qty,
+        pnl=0.0,
+    )
+
+
+def test_incomplete_history_policy_gates_hsl_coverage(caplog):
+    import logging as logging_module
+
+    # Coverage is unproven in every case below (covered_start_ms=0, window).
+    # Fills reconstruct the current episode: flat -> 1.0 long.
+    episode_fills = [_episode_fill(60_000, "increase", 1.0)]
+
+    # threshold: hard-fail preserved.
+    bot = _incomplete_history_bot(policy="threshold", fills=episode_fills)
+    with pytest.raises(Exception):
+        bot._equity_hard_stop_coin_realized_pnl_peak_last("long", "A", 120_000)
+
+    # never: hard-fail preserved.
+    bot = _incomplete_history_bot(policy="never", fills=episode_fills)
+    with pytest.raises(Exception):
+        bot._equity_hard_stop_coin_realized_pnl_peak_last("long", "A", 120_000)
+
+    # always + provable episode start: proceeds with a critical log.
+    bot = _incomplete_history_bot(policy="always", fills=episode_fills)
+    with caplog.at_level(logging_module.CRITICAL):
+        peak, last = bot._equity_hard_stop_coin_realized_pnl_peak_last(
+            "long", "A", 120_000
+        )
+    assert "INCOMPLETE fill history" in caplog.text
+    caplog.clear()
+
+    # always + unprovable episode (fills never reach flat): hard-fail.
+    partial_fills = [_episode_fill(60_000, "increase", 0.4)]
+    bot = _incomplete_history_bot(policy="always", fills=partial_fills)
+    with pytest.raises(Exception):
+        bot._equity_hard_stop_coin_realized_pnl_peak_last("long", "A", 120_000)
+
+    # Explicit per-run override: proceeds loudly regardless of policy.
+    bot = _incomplete_history_bot(
+        policy="never", override=True, fills=partial_fills
+    )
+    with caplog.at_level(logging_module.CRITICAL):
+        bot._equity_hard_stop_coin_realized_pnl_peak_last("long", "A", 120_000)
+    assert "INCOMPLETE fill history" in caplog.text
+
+
+def test_coin_episode_start_covered_reconstruction():
+    # Flat scope: trivially provable.
+    bot = _incomplete_history_bot(fills=(), position_size=0.0)
+    assert bot._equity_hard_stop_coin_episode_start_covered("long", "A") is True
+    # Covered fills reconstruct back to flat: provable.
+    bot = _incomplete_history_bot(
+        fills=[
+            _episode_fill(60_000, "increase", 0.6),
+            _episode_fill(120_000, "increase", 0.4),
+        ]
+    )
+    assert bot._equity_hard_stop_coin_episode_start_covered("long", "A") is True
+    # Fills do not explain the position: unprovable.
+    bot = _incomplete_history_bot(fills=[_episode_fill(60_000, "increase", 0.4)])
+    assert bot._equity_hard_stop_coin_episode_start_covered("long", "A") is False
+    # Ambiguous fill (unknown action) poisons the reconstruction.
+    ambiguous = _episode_fill(60_000, "increase", 1.0)
+    ambiguous.action = "unknown"
+    bot = _incomplete_history_bot(fills=[ambiguous])
+    assert bot._equity_hard_stop_coin_episode_start_covered("long", "A") is False
+
+
 def test_cooldown_anchor_uses_scope_flattening_fill():
     # B2.1: cooldown anchors at the fill that flattened the scope, by any
     # means. A manual close after the last panic fill must win; with no fills
@@ -1407,6 +1520,8 @@ def bind_hsl_methods(bot):
         "_equity_hard_stop_try_reuse_replay_cache",
         "_equity_hard_stop_set_red_paused_runtime_forced_modes",
         "_equity_hard_stop_latest_flatten_fill_timestamp_ms",
+        "_equity_hard_stop_coverage_allow_incomplete",
+        "_equity_hard_stop_coin_episode_start_covered",
         "_equity_hard_stop_refresh_halted_runtime_forced_modes",
         "_equity_hard_stop_set_red_runtime_forced_modes",
         "_equity_hard_stop_runtime_red_latched",
@@ -1437,6 +1552,7 @@ def bind_hsl_methods(bot):
         "_pnl_gap_overlaps",
         "_pnl_event_preview",
         "_assert_pnl_history_safe_for_risk",
+        "_assert_pnl_history_coverage_for_risk",
     ):
         setattr(bot, name, MethodType(getattr(Passivbot, name), bot))
 
