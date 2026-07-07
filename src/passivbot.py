@@ -1631,8 +1631,17 @@ class Passivbot:
         start_ms: Optional[int],
         end_ms: Optional[int] = None,
         require_coverage: bool = True,
+        allow_incomplete: bool = False,
     ) -> None:
-        """Fail before risk gates consume incomplete realized-PnL history."""
+        """Fail before risk gates consume incomplete realized-PnL history.
+
+        `allow_incomplete=True` (B2.1 incomplete-history policy: the `always`
+        restart policy with a proven current episode, or the explicit per-run
+        operator override) converts coverage-category failures into a loud
+        critical log and proceeds. Pending or degraded PnL data still raises:
+        corrupt evidence is never acceptable, only provably-incomplete
+        evidence can be waived.
+        """
         self._assert_no_pending_pnl_events(events, context=context)
         degraded = [
             event
@@ -1649,6 +1658,27 @@ class Passivbot:
             )
         if not require_coverage or self._pnls_manager is None:
             return
+        try:
+            self._assert_pnl_history_coverage_for_risk(
+                context=context, start_ms=start_ms, end_ms=end_ms
+            )
+        except (RuntimeError, FillHistoryCoverageUnavailable) as exc:
+            if not allow_incomplete:
+                raise
+            logging.critical(
+                "[risk] %s: proceeding on INCOMPLETE fill history by explicit "
+                "policy/override; panic/cooldown/no-restart may be wrong | %s",
+                context,
+                exc,
+            )
+
+    def _assert_pnl_history_coverage_for_risk(
+        self,
+        *,
+        context: str,
+        start_ms: Optional[int],
+        end_ms: Optional[int] = None,
+    ) -> None:
         cache = getattr(self._pnls_manager, "cache", None)
         if cache is None:
             raise RuntimeError(
@@ -1766,6 +1796,12 @@ class Passivbot:
     _get_exchange_fee_rates = pb_hsl._get_exchange_fee_rates
     _orchestrator_exchange_params = pb_hsl._orchestrator_exchange_params
     _equity_hard_stop_realized_pnl_now = pb_hsl._equity_hard_stop_realized_pnl_now
+    _equity_hard_stop_coverage_allow_incomplete = (
+        pb_hsl._equity_hard_stop_coverage_allow_incomplete
+    )
+    _equity_hard_stop_coin_episode_start_covered = (
+        pb_hsl._equity_hard_stop_coin_episode_start_covered
+    )
     _equity_hard_stop_coin_realized_pnl_peak_last = (
         pb_hsl._equity_hard_stop_coin_realized_pnl_peak_last
     )

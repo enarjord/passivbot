@@ -40,3 +40,18 @@ HSL replay currently models fills, positions, prices, and current balance. It
 does not build a separate authoritative transfer ledger. Future diagnostics may
 detect suspicious balance jumps, but trading behavior should remain derived
 from exchange state plus config unless an explicit stateless contract is added.
+
+## Incomplete fill history and the override flag
+
+With `restart_after_red_policy=always`, HSL startup tolerates missing
+pre-episode fill coverage when the current episode is provable from covered
+fills, because `always` ignores historical no-restart evidence. `threshold`
+and `never` require full configured lookback coverage.
+
+`--hsl-accept-incomplete-history` is a dangerous per-run CLI flag that starts
+the bot on incomplete HSL evidence for any policy. While it is active,
+panic, cooldown, and no-restart decisions may be wrong. Pass it on the
+command line for the specific run that needs it. Persisting it in config
+files does not work: any `hsl_accept_incomplete_history: true` found in a
+config file is stripped at load time with a critical log, before CLI
+overrides are applied, so the waiver can never survive a restart.

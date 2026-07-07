@@ -4,6 +4,20 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- HSL startup now applies the clarified incomplete-history policy: with
+  `restart_after_red_policy=always`, missing pre-episode fill coverage
+  degrades to a loud warning when the coin scope's current-episode start is
+  provable from covered fills (the `always` policy ignores historical
+  no-restart evidence); `threshold` and `never` still require full
+  configured lookback coverage. A new dangerous per-run CLI flag
+  `--hsl-accept-incomplete-history` lets an operator explicitly start on
+  incomplete evidence for any policy, with a critical startup banner and
+  per-use critical logs warning that panic/cooldown/no-restart may be wrong.
+  The override is enforced as per-run only: values persisted in config
+  files are stripped at load time (with a critical log) before CLI
+  overrides are applied, so it can never survive a restart. Corrupt
+  (pending/degraded) PnL data still always hard-fails.
+
 - HSL RED cooldown now anchors at the fill that actually flattened the
   affected scope, by any means, instead of the latest bot-emitted panic
   fill. If a position is finished off manually (or by any non-panic close)

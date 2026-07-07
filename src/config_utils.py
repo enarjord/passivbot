@@ -274,6 +274,14 @@ FIELD_RUNTIME_RULES = {
             "optimize": "Backtest Runtime",
         },
     },
+    "live.hsl_accept_incomplete_history": {
+        "owner": "live",
+        "consumed_by": {"live"},
+        "cli_exposed_on": {"live"},
+        "help_group": {
+            "live": "Behavior",
+        },
+    },
     "live.hsl_signal_mode": {
         "owner": "live",
         "consumed_by": {"live", "backtest", "optimize"},
@@ -1086,6 +1094,20 @@ RESERVED_CLI_ARGS = {
         },
         "help": "How far into the past to fetch realized PnL history: 0=minimal lookback, positive=float days, 'all'=full history.",
     },
+    "live.hsl_accept_incomplete_history": {
+        "visible": ["--hsl-accept-incomplete-history"],
+        "hidden": [
+            "--live.hsl_accept_incomplete_history",
+            "--live_hsl_accept_incomplete_history",
+        ],
+        "action": "store_true",
+        "default": None,
+        "help": (
+            "DANGEROUS per-run override: start despite incomplete HSL fill-history "
+            "evidence (panic/cooldown/no-restart may be wrong). Per-invocation only; "
+            "values persisted in config files are ignored."
+        ),
+    },
     "live.hsl_signal_mode": {
         "visible": ["--hsl-signal-mode"],
         "hidden": ["--live.hsl_signal_mode", "--live_hsl_signal_mode"],
@@ -1769,20 +1791,30 @@ def add_reserved_arguments(
             else parser
         )
 
-        register_kwargs = dict(
-            type=spec["type"],
-            dest=config_key,
-            required=False,
-            default=None,
-            metavar=spec["metavar"],
-            help=(
-                spec["help"]
-                if help_all or visible_group is not None or command is None
-                else argparse.SUPPRESS
-            ),
+        help_text = (
+            spec["help"]
+            if help_all or visible_group is not None or command is None
+            else argparse.SUPPRESS
         )
-        if "choices" in spec:
-            register_kwargs["choices"] = spec["choices"]
+        if spec.get("action") == "store_true":
+            register_kwargs = dict(
+                action="store_true",
+                dest=config_key,
+                required=False,
+                default=spec.get("default"),
+                help=help_text,
+            )
+        else:
+            register_kwargs = dict(
+                type=spec["type"],
+                dest=config_key,
+                required=False,
+                default=None,
+                metavar=spec["metavar"],
+                help=help_text,
+            )
+            if "choices" in spec:
+                register_kwargs["choices"] = spec["choices"]
 
         _register_argument(
             container,
