@@ -20,6 +20,25 @@ def _make_mock_pbr():
 
     module.get_strategy_kinds = _get_strategy_kinds
 
+    def _hsl_no_restart_triggered(
+        restart_after_red_policy, drawdown_raw, drawdown_ema, no_restart_drawdown_threshold
+    ):
+        # Mirrors ehsl::no_restart_triggered exactly (max(raw, ema) contract).
+        if restart_after_red_policy == "always":
+            return False
+        if restart_after_red_policy == "threshold":
+            return max(float(drawdown_raw), float(drawdown_ema)) >= float(
+                no_restart_drawdown_threshold
+            )
+        if restart_after_red_policy == "never":
+            return True
+        raise ValueError(
+            "hsl_restart_after_red_policy must be one of always, threshold, never; "
+            f"got {restart_after_red_policy!r}"
+        )
+
+    module.hsl_no_restart_triggered = _hsl_no_restart_triggered
+
     class _EquityHardStopRollingPeak:
         def __init__(self):
             self._peaks = []
