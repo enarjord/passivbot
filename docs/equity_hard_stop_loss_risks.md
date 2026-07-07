@@ -51,5 +51,7 @@ and `never` require full configured lookback coverage.
 `--hsl-accept-incomplete-history` is a dangerous per-run CLI flag that starts
 the bot on incomplete HSL evidence for any policy. While it is active,
 panic, cooldown, and no-restart decisions may be wrong. Pass it on the
-command line for the specific run that needs it; do not persist it in config
-files.
+command line for the specific run that needs it. Persisting it in config
+files does not work: any `hsl_accept_incomplete_history: true` found in a
+config file is stripped at load time with a critical log, before CLI
+overrides are applied, so the waiver can never survive a restart.

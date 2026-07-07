@@ -1102,6 +1102,11 @@ RESERVED_CLI_ARGS = {
         ],
         "action": "store_true",
         "default": None,
+        "help": (
+            "DANGEROUS per-run override: start despite incomplete HSL fill-history "
+            "evidence (panic/cooldown/no-restart may be wrong). Per-invocation only; "
+            "values persisted in config files are ignored."
+        ),
     },
     "live.hsl_signal_mode": {
         "visible": ["--hsl-signal-mode"],
@@ -1786,20 +1791,30 @@ def add_reserved_arguments(
             else parser
         )
 
-        register_kwargs = dict(
-            type=spec["type"],
-            dest=config_key,
-            required=False,
-            default=None,
-            metavar=spec["metavar"],
-            help=(
-                spec["help"]
-                if help_all or visible_group is not None or command is None
-                else argparse.SUPPRESS
-            ),
+        help_text = (
+            spec["help"]
+            if help_all or visible_group is not None or command is None
+            else argparse.SUPPRESS
         )
-        if "choices" in spec:
-            register_kwargs["choices"] = spec["choices"]
+        if spec.get("action") == "store_true":
+            register_kwargs = dict(
+                action="store_true",
+                dest=config_key,
+                required=False,
+                default=spec.get("default"),
+                help=help_text,
+            )
+        else:
+            register_kwargs = dict(
+                type=spec["type"],
+                dest=config_key,
+                required=False,
+                default=None,
+                metavar=spec["metavar"],
+                help=help_text,
+            )
+            if "choices" in spec:
+                register_kwargs["choices"] = spec["choices"]
 
         _register_argument(
             container,
