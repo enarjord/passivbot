@@ -3246,7 +3246,7 @@ impl<'a> Backtest<'a> {
             if pos.size != 0.0 {
                 *mode = Some(orchestrator::TradingMode::Panic);
             } else {
-                Self::apply_orange_override(mode, orchestrator::TradingMode::GracefulStop, false);
+                Self::apply_orange_override(mode, orchestrator::TradingMode::GracefulStop);
             }
             return;
         }
@@ -3264,7 +3264,7 @@ impl<'a> Backtest<'a> {
             }
             ehsl::HardStopTier::Orange => {
                 let target = self.hard_stop_orange_target_mode_pside(pside);
-                Self::apply_orange_override(mode, target, pos.size != 0.0);
+                Self::apply_orange_override(mode, target);
             }
             _ => {}
         }
@@ -3286,7 +3286,7 @@ impl<'a> Backtest<'a> {
             if pos.size != 0.0 {
                 *mode = Some(orchestrator::TradingMode::Panic);
             } else {
-                Self::apply_orange_override(mode, orchestrator::TradingMode::GracefulStop, false);
+                Self::apply_orange_override(mode, orchestrator::TradingMode::GracefulStop);
             }
             return;
         }
@@ -3304,7 +3304,7 @@ impl<'a> Backtest<'a> {
             }
             ehsl::HardStopTier::Orange => {
                 let target = self.hard_stop_orange_target_mode_pside(pside);
-                Self::apply_orange_override(mode, target, pos.size != 0.0);
+                Self::apply_orange_override(mode, target);
             }
             _ => {}
         }
@@ -3314,7 +3314,6 @@ impl<'a> Backtest<'a> {
     fn apply_orange_override(
         mode: &mut Option<orchestrator::TradingMode>,
         target: orchestrator::TradingMode,
-        has_pos: bool,
     ) {
         use orchestrator::TradingMode::*;
         match target {
@@ -3323,9 +3322,10 @@ impl<'a> Backtest<'a> {
                 _ => {}
             },
             TpOnly => {
-                if !has_pos {
-                    return;
-                }
+                // A2.2 contract: ORANGE tp-only blocks initial entries in the
+                // affected scope, so flat symbols are forced too (TpOnly
+                // generates no entries and no closes without a position),
+                // matching the live overlay since #1098.
                 match mode {
                     None | Some(Normal) | Some(GracefulStop) => *mode = Some(TpOnly),
                     _ => {}
@@ -8150,6 +8150,14 @@ mod tests {
 
     #[test]
     fn hard_stop_restart_after_red_policy_controls_terminal_latch() {
+        // A2.2 parity: ORANGE tp-only forces flat symbols too.
+        let mut mode: Option<orchestrator::TradingMode> = None;
+        Backtest::apply_orange_override(&mut mode, orchestrator::TradingMode::TpOnly);
+        assert!(matches!(mode, Some(orchestrator::TradingMode::TpOnly)));
+        let mut manual = Some(orchestrator::TradingMode::Manual);
+        Backtest::apply_orange_override(&mut manual, orchestrator::TradingMode::TpOnly);
+        assert!(matches!(manual, Some(orchestrator::TradingMode::Manual)));
+
         assert!(!hsl_no_restart_latched("always", 1.0, 1.0, 0.10).unwrap());
         assert!(!hsl_no_restart_latched("threshold", 0.09, 0.05, 0.10).unwrap());
         assert!(hsl_no_restart_latched("threshold", 0.10, 0.0, 0.10).unwrap());
