@@ -4,6 +4,13 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- The HSL no-restart (permanent halt) trigger now evaluates
+  `max(drawdown_raw, drawdown_ema)` against
+  `hsl_no_restart_drawdown_threshold` in both live and backtest, instead of
+  raw drawdown only. The permanent halt is intentionally conservative: it now
+  also trips on sustained smoothed damage even when the instantaneous
+  drawdown at the stop sample has partially recovered. The RED/panic-now
+  trigger is unchanged (`min(raw, ema)` crossing `hsl_red_threshold`).
 - Live coin-mode HSL startup can now reuse its persisted replay cache: when
   the cached series pass every trust gate (proven fill coverage at write and
   load time, config digest identity, watermark agreement, gap extension from

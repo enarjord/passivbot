@@ -257,6 +257,82 @@ def test_coin_metrics_reject_nonpositive_slot_inputs():
         )
 
 
+def test_no_restart_trigger_uses_max_of_raw_and_ema():
+    # Contract (plan B2.1, clarified 2026-07-06): the permanent no-restart
+    # halt trips on max(drawdown_raw, drawdown_ema) — conservative, catching
+    # catastrophic instantaneous damage OR sustained smoothed damage — while
+    # the RED/panic-now tier score stays min(raw, ema).
+    cfg = {
+        "restart_after_red_policy": "threshold",
+        "no_restart_drawdown_threshold": 0.2,
+    }
+    assert hsl._equity_hard_stop_no_restart_latched(cfg, 0.25, 0.05) is True
+    # Sustained smoothed damage trips the halt even after raw recovered.
+    assert hsl._equity_hard_stop_no_restart_latched(cfg, 0.05, 0.25) is True
+    assert hsl._equity_hard_stop_no_restart_latched(cfg, 0.15, 0.19) is False
+    assert (
+        hsl._equity_hard_stop_no_restart_latched(
+            dict(cfg, restart_after_red_policy="always"), 1.0, 1.0
+        )
+        is False
+    )
+    assert (
+        hsl._equity_hard_stop_no_restart_latched(
+            dict(cfg, restart_after_red_policy="never"), 0.0, 0.0
+        )
+        is True
+    )
+    with pytest.raises(ValueError):
+        hsl._equity_hard_stop_no_restart_latched(
+            dict(cfg, restart_after_red_policy="sometimes"), 1.0, 1.0
+        )
+
+
+def test_red_tier_score_is_min_of_raw_and_ema():
+    # Pin the existing Rust runtime semantics as the #1122 RED contract:
+    # min(raw, ema) must cross red_threshold, so a raw flash-crash spike with
+    # a calm EMA does not trigger RED, and a stale high EMA after recovery
+    # does not either.
+    bot = _make_bot("unified")
+
+    def sample(ts, upnl_total):
+        return bot._equity_hard_stop_apply_sample(
+            "long",
+            ts,
+            100.0,
+            0.0,
+            0.0,
+            0.0,
+            unrealized_pnl_total=upnl_total,
+            latch_red=False,
+        )
+
+    slow_bot = _make_bot("unified")
+    slow_bot.hsl["long"]["ema_span_minutes"] = 60.0
+
+    def slow_sample(ts, upnl_total):
+        return slow_bot._equity_hard_stop_apply_sample(
+            "long",
+            ts,
+            100.0,
+            0.0,
+            0.0,
+            0.0,
+            unrealized_pnl_total=upnl_total,
+            latch_red=False,
+        )
+
+    slow_sample(60_000, 10.0)
+    # Raw crashes 30/110 > red 0.2 but the 60m EMA stays calm: no RED.
+    m = slow_sample(120_000, -20.0)
+    assert m["drawdown_raw"] > m["red_threshold"]
+    assert m["drawdown_ema"] < m["red_threshold"]
+    assert m["drawdown_score"] == pytest.approx(
+        min(m["drawdown_raw"], m["drawdown_ema"])
+    )
+    assert m["tier"] != "red"
+
+
 def test_red_latching_holds_tier_after_recovery():
     bot = _make_bot("unified")
 

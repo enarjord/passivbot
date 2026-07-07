@@ -520,6 +520,22 @@ pub fn trailing_bundle_default_py() -> (f64, f64, f64, f64) {
 }
 
 #[pyfunction]
+pub fn hsl_no_restart_triggered(
+    restart_after_red_policy: &str,
+    drawdown_raw: f64,
+    drawdown_ema: f64,
+    no_restart_drawdown_threshold: f64,
+) -> PyResult<bool> {
+    ehsl::no_restart_triggered(
+        restart_after_red_policy,
+        drawdown_raw,
+        drawdown_ema,
+        no_restart_drawdown_threshold,
+    )
+    .map_err(pyo3::exceptions::PyValueError::new_err)
+}
+
+#[pyfunction]
 #[pyo3(signature = (highs, lows, closes, bundle=None))]
 pub fn update_trailing_bundle_py(
     highs: PyReadonlyArray1<'_, f64>,

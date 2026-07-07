@@ -438,22 +438,22 @@ struct HardStopStopSnapshot {
     equity: f64,
     peak_strategy_equity: f64,
     drawdown_raw: f64,
+    drawdown_ema: f64,
 }
 
 fn hsl_no_restart_latched(
     restart_after_red_policy: &str,
     persistent_drawdown_raw: f64,
+    drawdown_ema: f64,
     no_restart_drawdown_threshold: f64,
 ) -> Result<bool, String> {
-    match restart_after_red_policy {
-        "always" => Ok(false),
-        "threshold" => Ok(persistent_drawdown_raw >= no_restart_drawdown_threshold),
-        "never" => Ok(true),
-        raw => Err(format!(
-            "hsl_restart_after_red_policy must be one of always, threshold, never; got {:?}",
-            raw
-        )),
-    }
+    // Shared live/backtest contract: max(raw, ema) trips the permanent halt.
+    ehsl::no_restart_triggered(
+        restart_after_red_policy,
+        persistent_drawdown_raw,
+        drawdown_ema,
+        no_restart_drawdown_threshold,
+    )
 }
 
 #[derive(Debug, Clone, Default)]
@@ -3125,6 +3125,7 @@ impl<'a> Backtest<'a> {
                     state.last_minute = Some(current_minute.saturating_sub(1));
                     state.cached_step.get_or_insert(ehsl::HardStopStep {
                         drawdown_raw: state.drawdown_ema.max(0.0),
+                        drawdown_ema: state.drawdown_ema.max(0.0),
                         drawdown_score: state.drawdown_ema.max(0.0),
                         tier: state.tier,
                         changed: false,
@@ -3593,6 +3594,7 @@ impl<'a> Backtest<'a> {
                         equity: strategy_equity,
                         peak_strategy_equity,
                         drawdown_raw: step.drawdown_raw,
+                        drawdown_ema: step.drawdown_ema.max(0.0),
                     });
                 }
                 if runtime.flat_confirmations >= 2 {
@@ -3601,6 +3603,7 @@ impl<'a> Backtest<'a> {
                         equity: strategy_equity,
                         peak_strategy_equity,
                         drawdown_raw: step.drawdown_raw,
+                        drawdown_ema: step.drawdown_ema.max(0.0),
                     });
                     runtime.last_stop = Some(stop_snapshot);
                     runtime.pending_stop = None;
@@ -3651,6 +3654,7 @@ impl<'a> Backtest<'a> {
                     if hsl_no_restart_latched(
                         hsl_restart_after_red_policy.as_str(),
                         persistent_drawdown_raw,
+                        stop_snapshot.drawdown_ema,
                         hsl_no_restart_drawdown_threshold,
                     )? {
                         runtime.no_restart_latched = true;
@@ -3787,6 +3791,7 @@ impl<'a> Backtest<'a> {
                         equity: synthetic_equity,
                         peak_strategy_equity: 1.0,
                         drawdown_raw: step.drawdown_raw,
+                        drawdown_ema: step.drawdown_ema.max(0.0),
                     });
                 }
                 if runtime.flat_confirmations >= 2 {
@@ -3795,6 +3800,7 @@ impl<'a> Backtest<'a> {
                         equity: synthetic_equity,
                         peak_strategy_equity: 1.0,
                         drawdown_raw: step.drawdown_raw,
+                        drawdown_ema: step.drawdown_ema.max(0.0),
                     });
                     runtime.last_stop = Some(stop_snapshot);
                     runtime.pending_stop = None;
@@ -3841,6 +3847,7 @@ impl<'a> Backtest<'a> {
                     if hsl_no_restart_latched(
                         hsl_restart_after_red_policy.as_str(),
                         persistent_drawdown_raw,
+                        stop_snapshot.drawdown_ema,
                         hsl_no_restart_drawdown_threshold,
                     )? {
                         runtime.no_restart_latched = true;
@@ -8120,11 +8127,13 @@ mod tests {
 
     #[test]
     fn hard_stop_restart_after_red_policy_controls_terminal_latch() {
-        assert!(!hsl_no_restart_latched("always", 1.0, 0.10).unwrap());
-        assert!(!hsl_no_restart_latched("threshold", 0.09, 0.10).unwrap());
-        assert!(hsl_no_restart_latched("threshold", 0.10, 0.10).unwrap());
-        assert!(hsl_no_restart_latched("never", 0.0, 0.10).unwrap());
-        assert!(hsl_no_restart_latched("sometimes", 1.0, 0.10).is_err());
+        assert!(!hsl_no_restart_latched("always", 1.0, 1.0, 0.10).unwrap());
+        assert!(!hsl_no_restart_latched("threshold", 0.09, 0.05, 0.10).unwrap());
+        assert!(hsl_no_restart_latched("threshold", 0.10, 0.0, 0.10).unwrap());
+        // Sustained smoothed damage trips the halt even when raw recovered.
+        assert!(hsl_no_restart_latched("threshold", 0.02, 0.11, 0.10).unwrap());
+        assert!(hsl_no_restart_latched("never", 0.0, 0.0, 0.10).unwrap());
+        assert!(hsl_no_restart_latched("sometimes", 1.0, 1.0, 0.10).is_err());
     }
 
     #[test]

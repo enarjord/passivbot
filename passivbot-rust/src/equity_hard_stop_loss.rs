@@ -74,6 +74,7 @@ pub struct HardStopState {
 #[derive(Debug, Clone, Copy)]
 pub struct HardStopStep {
     pub drawdown_raw: f64,
+    pub drawdown_ema: f64,
     pub drawdown_score: f64,
     pub tier: HardStopTier,
     pub changed: bool,
@@ -135,6 +136,31 @@ impl RollingPeakTracker {
         }
         self.peaks.push_back((timestamp_ms, equity));
         Ok(self.peaks.front().map(|(_, eq)| *eq).unwrap_or(equity))
+    }
+}
+
+/// Whether the permanent no-restart halt trips for a finalized RED stop.
+///
+/// Contract (fable audit plan, clarified 2026-07-06): the no-restart trigger
+/// is conservative and uses `max(drawdown_raw, drawdown_ema)` so it catches
+/// either catastrophic instantaneous damage or sustained smoothed damage,
+/// while the RED/panic-now tier score stays `min(raw, ema)`.
+pub fn no_restart_triggered(
+    restart_after_red_policy: &str,
+    drawdown_raw: f64,
+    drawdown_ema: f64,
+    no_restart_drawdown_threshold: f64,
+) -> Result<bool, String> {
+    match restart_after_red_policy {
+        "always" => Ok(false),
+        "threshold" => {
+            Ok(drawdown_raw.max(drawdown_ema) >= no_restart_drawdown_threshold)
+        }
+        "never" => Ok(true),
+        raw => Err(format!(
+            "hsl_restart_after_red_policy must be one of always, threshold, never; got {:?}",
+            raw
+        )),
     }
 }
 
@@ -213,6 +239,7 @@ pub fn step_with_peak_strategy_equity_latch(
         };
         let step = HardStopStep {
             drawdown_raw: 0.0,
+            drawdown_ema: state.drawdown_ema.max(0.0),
             drawdown_score: 0.0,
             tier: state.tier,
             changed: state.tier != prev_tier,
@@ -281,6 +308,7 @@ pub fn step_with_peak_strategy_equity_latch(
     state.last_minute = Some(current_minute);
     let step = HardStopStep {
         drawdown_raw,
+        drawdown_ema: state.drawdown_ema.max(0.0),
         drawdown_score,
         tier: state.tier,
         changed: state.tier != prev_tier,

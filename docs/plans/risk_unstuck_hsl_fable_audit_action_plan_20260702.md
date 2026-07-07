@@ -881,6 +881,15 @@ Remaining implementation details:
       finalization now use the explicit policy, with `threshold` as the
       behavior-preserving default and config/JSON validation for invalid
       values.
+      Implemented (B2.1 contract, 2026-07-06 clarification): the no-restart
+      trigger is now the shared Rust predicate
+      `ehsl::no_restart_triggered(policy, drawdown_raw, drawdown_ema,
+      threshold)` using `max(raw, ema)`, consumed by both the Rust backtest
+      finalization (stop snapshots now carry the smoothed drawdown) and
+      Python live finalize paths via PyO3, per the centralization guiding
+      contract. The RED/panic-now tier score was verified to already use
+      `min(raw, ema)` in the shared runtime and is pinned by regression
+      tests rather than changed.
 - [x] Dynamic WEL and snapped/raw balance docs/tests.
       Make `reduce_overweight` use dynamic currently-tradable slot count, keep
       snapped/raw balance separation, and add high-hysteresis warning/preflight
