@@ -19,20 +19,20 @@ Last updated: 2026-07-03.
 
 Current `origin/v8` head:
 
-- `c5ba5f5d` after PR #1041, `Expose restart plan timeout summaries in incident bundles`.
+- `06f04070` after PR #1042, `Add cache live-event debug profile`.
 
 Current logging-overhaul head:
 
-- `c5ba5f5d` after PR #1041, `Expose restart plan timeout summaries in incident bundles`.
+- `06f04070` after PR #1042, `Add cache live-event debug profile`.
 
 Current work:
 
-- Branch `codex/v8-cache-debug-profile` adds an opt-in `cache` live-event debug
-  profile for existing cache load, flush, and warmup-decision events. The slice
-  adds bounded key/count/source metadata only when the profile is enabled. It
-  does not change default event payloads, console output, event routing,
-  exchange calls, cache behavior, startup behavior, order/risk logic, or trading
-  behavior.
+- Branch `codex/v8-smoke-cache-health` adds a read-only `cache_health` smoke
+  report projection over existing cache load, flush, and warmup-decision events.
+  It lets restart/warm-cache smoke loops see cache reuse, cold-path, load, and
+  flush counters without running a separate performance report. It does not add
+  event producers, exchange calls, cache behavior, startup behavior, console
+  routing, order/risk logic, or trading behavior.
 
 Current review gate:
 
@@ -62,6 +62,15 @@ Retuned goal boundary:
 
 VPS5 deployment status:
 
+- Repository pulled through PR #1042 at `06f04070`.
+- PR #1042 added an opt-in `cache` live-event debug profile for existing cache
+  load, flush, and warmup-decision events. It merged after Claude and Hermes
+  approved with no findings and CI was green. VPS5 checkout was updated to
+  `06f04070` without restarting running bots because the slice was
+  observability-only. Bounded smoke reported `ok=true`, `hard_failures=0`,
+  `matched_expected=5`, clean tracked repository state, zero hard log matches,
+  no event-pipeline drops or sink errors, and only known non-hard ZEC HSL
+  cooldown attention.
 - Repository pulled through PR #1041 at `c5ba5f5d`.
 - PR #1041 made `live-incident-bundle --restart-smoke-plan` expose the embedded
   restart-smoke plan's compact timeout-escalation ladder summary in the returned
@@ -6625,6 +6634,31 @@ VPS5 deployment status:
 - Expected validation: focused cache debug-profile monitor test, live-event
   debug-profile normalization and registry-doc tests, `py_compile`,
   `git diff --check`, and the standard added-line silent-handling scan.
+- Result: PR #1042 was reviewed by Claude and Hermes, merged to `v8`, and
+  deployed to VPS5 at `06f04070` without restarting bots. A short post-deploy
+  smoke reported `ok=true`, `hard_failures=0`, clean tracked repository state,
+  five configured bots still running, no event-pipeline drops/sink errors, and
+  only known non-hard ZEC HSL cooldown attention.
+
+### Draft Slice: Cache Health Smoke Summary
+
+- Branch: `codex/v8-smoke-cache-health`.
+- Scope: read-only smoke-report projection over existing `cache.load.completed`,
+  `cache.flush.completed`, and `cache.warmup_decision` events.
+- Triggering evidence: `live-performance-report` already summarizes cache
+  warmup/load/flush behavior, and PR #1042 made cache events debug-profile
+  enriched on demand, but repeated VPS smoke loops still did not expose
+  warm-cache reuse, cold-path counts, cache load rows, or cache flush rows
+  directly.
+- Intended result: add `cache_health` to full/summary smoke output and `cache`
+  to brief/section aliases, exposing bounded cache counters and latest compact
+  event data. Do not expose raw cache paths, raw cache payloads, candle rows, or
+  arbitrary payload keys. Do not add event producers, exchange calls, cache
+  behavior, startup behavior, console routing, monitor writes, order/risk logic,
+  or trading behavior.
+- Expected validation: focused cache smoke-report test, full
+  `tests/test_live_smoke_report.py`, `py_compile`, `git diff --check`, and the
+  standard added-line silent-handling scan.
 
 ### Draft Slice: Event Query Debug Profile Filter
 

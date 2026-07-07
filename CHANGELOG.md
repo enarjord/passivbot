@@ -11,6 +11,9 @@ All notable user-facing changes will be documented in this file.
   also trips on sustained smoothed damage even when the instantaneous
   drawdown at the stop sample has partially recovered. The RED/panic-now
   trigger is unchanged (`min(raw, ema)` crossing `hsl_red_threshold`).
+- `passivbot tool live-smoke-report` now summarizes existing cache load, flush,
+  and warmup-decision events as `cache_health` in full/summary output and
+  `cache` in brief output.
 - Live coin-mode HSL startup can now reuse its persisted replay cache: when
   the cached series pass every trust gate (proven fill coverage at write and
   load time, config digest identity, watermark agreement, gap extension from
