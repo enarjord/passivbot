@@ -1855,6 +1855,9 @@ class Passivbot:
     _equity_hard_stop_set_red_runtime_forced_modes = (
         pb_hsl._equity_hard_stop_set_red_runtime_forced_modes
     )
+    _equity_hard_stop_set_red_paused_runtime_forced_modes = (
+        pb_hsl._equity_hard_stop_set_red_paused_runtime_forced_modes
+    )
     _equity_hard_stop_set_coin_runtime_forced_mode = (
         pb_hsl._equity_hard_stop_set_coin_runtime_forced_mode
     )

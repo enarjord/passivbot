@@ -898,6 +898,20 @@ Remaining implementation details:
       this slice: the tier latch still pins display red; the follow-up slice
       rewires panic authorization to consume `red_active_now` only and moves
       the cooldown anchor to the scoped episode-end fill timestamp.
+      Implemented (panic authorization): live coin and unified/pside RED
+      supervisors now refresh a sample each cycle and emit panic modes only
+      while `red_active_now`; a recovered sample downgrades the scope to
+      `tp_only_with_active_entry_cancellation` for the remainder of the
+      episode and re-engages panic if RED re-activates. Backtest parity: the
+      pside/coin mode overrides gate `TradingMode::Panic` on the runtime's
+      latest `red_active_now` and fall back to tp-only. Live stop anchors
+      already use the latest panic-fill timestamp (the flattening fill for
+      bot-flattened episodes); the manual-flatten anchor refinement and the
+      incomplete-history policy remain open.
+      Observed while implementing (pre-existing, not this slice): the
+      backtest ORANGE `TpOnly` override still skips flat symbols
+      (`apply_orange_override` has-pos gate), which diverges from the
+      live A2.2 contract; needs its own parity fix.
 - [x] Dynamic WEL and snapped/raw balance docs/tests.
       Make `reduce_overweight` use dynamic currently-tradable slot count, keep
       snapped/raw balance separation, and add high-hysteresis warning/preflight

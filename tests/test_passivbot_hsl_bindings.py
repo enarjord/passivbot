@@ -49,4 +49,5 @@ def test_passivbot_uses_passivbot_hsl_module_for_hsl_methods():
         "_equity_hard_stop_persist_replay_matrices",
         "_try_load_hsl_replay_matrix_cache",
         "_equity_hard_stop_try_reuse_replay_cache",
+        "_equity_hard_stop_set_red_paused_runtime_forced_modes",
     } <= assigned_names

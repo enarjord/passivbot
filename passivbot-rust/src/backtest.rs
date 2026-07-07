@@ -460,6 +460,10 @@ fn hsl_no_restart_latched(
 struct HardStopPsideRuntime {
     state: Option<ehsl::HardStopState>,
     tier: ehsl::HardStopTier,
+    // B2.1 red split: whether the LATEST sample crossed RED. Only this may
+    // authorize panic-mode order emission; a latched red tier alone keeps
+    // entry blocking but no new panic orders.
+    red_active_now: bool,
     rolling_peak_strategy_pnl: VecDeque<(u64, f64)>,
     halted: bool,
     no_restart_latched: bool,
@@ -3248,7 +3252,15 @@ impl<'a> Backtest<'a> {
         }
         match runtime.tier {
             ehsl::HardStopTier::Red => {
-                *mode = Some(orchestrator::TradingMode::Panic);
+                if runtime.red_active_now {
+                    *mode = Some(orchestrator::TradingMode::Panic);
+                } else {
+                    // B2.1 red split: RED seen this episode but the current
+                    // sample recovered. Block entries for the remainder of
+                    // the episode without authorizing new panic orders,
+                    // matching the live supervisor's paused-red mode.
+                    *mode = Some(orchestrator::TradingMode::TpOnly);
+                }
             }
             ehsl::HardStopTier::Orange => {
                 let target = self.hard_stop_orange_target_mode_pside(pside);
@@ -3280,7 +3292,15 @@ impl<'a> Backtest<'a> {
         }
         match runtime.tier {
             ehsl::HardStopTier::Red => {
-                *mode = Some(orchestrator::TradingMode::Panic);
+                if runtime.red_active_now {
+                    *mode = Some(orchestrator::TradingMode::Panic);
+                } else {
+                    // B2.1 red split: RED seen this episode but the current
+                    // sample recovered. Block entries for the remainder of
+                    // the episode without authorizing new panic orders,
+                    // matching the live supervisor's paused-red mode.
+                    *mode = Some(orchestrator::TradingMode::TpOnly);
+                }
             }
             ehsl::HardStopTier::Orange => {
                 let target = self.hard_stop_orange_target_mode_pside(pside);
@@ -3568,6 +3588,7 @@ impl<'a> Backtest<'a> {
         let runtime = &mut self.hard_stop_pside[pside];
         let prev_tier = runtime.tier;
         runtime.tier = step.tier;
+        runtime.red_active_now = step.red_active_now;
 
         if step.tier == ehsl::HardStopTier::Red {
             if prev_tier != ehsl::HardStopTier::Red {
@@ -3765,6 +3786,7 @@ impl<'a> Backtest<'a> {
         let runtime = &mut self.hard_stop_coin[pside][idx];
         let prev_tier = runtime.tier;
         runtime.tier = step.tier;
+        runtime.red_active_now = step.red_active_now;
 
         if step.tier == ehsl::HardStopTier::Red {
             if prev_tier != ehsl::HardStopTier::Red {

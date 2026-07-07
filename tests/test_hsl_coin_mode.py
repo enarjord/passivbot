@@ -703,6 +703,174 @@ def test_hsl_replay_cache_account_digest_scoped_to_lookback():
     assert hsl._hsl_replay_cache_account_config_digest(bot) != digest
 
 
+def test_coin_panic_supervision_requires_red_active_now():
+    # B2.1 red split: a latched red episode authorizes panic supervision only
+    # while the CURRENT sample is in RED.
+    bot = make_coin_bot()
+    symbol = "A"
+    state = bot._hsl_coin_state("long", symbol)
+    state["runtime"].apply_sample(
+        timestamp_ms=60_000, equity=100.0, peak_strategy_equity=100.0,
+        red_threshold=0.2, ema_span_minutes=1.0,
+        tier_ratio_yellow=0.5, tier_ratio_orange=0.75, latch_red=True,
+    )
+    state["runtime"].apply_sample(
+        timestamp_ms=120_000, equity=70.0, peak_strategy_equity=100.0,
+        red_threshold=0.2, ema_span_minutes=1.0,
+        tier_ratio_yellow=0.5, tier_ratio_orange=0.75, latch_red=True,
+    )
+    assert state["runtime"].red_latched() is True
+
+    # No metrics yet against the latched state: stay protective.
+    state["last_metrics"] = None
+    assert (
+        bot._equity_hard_stop_coin_needs_panic_supervision("long", symbol, state)
+        is True
+    )
+    # Current sample in RED: panic authorized.
+    state["last_metrics"] = {"red_active_now": True}
+    assert (
+        bot._equity_hard_stop_coin_needs_panic_supervision("long", symbol, state)
+        is True
+    )
+    # Current sample recovered: no new panic orders for this episode.
+    state["last_metrics"] = {"red_active_now": False}
+    assert (
+        bot._equity_hard_stop_coin_needs_panic_supervision("long", symbol, state)
+        is False
+    )
+    # Halted repanic-reset supervision is unaffected by the split.
+    state["halted"] = True
+    state["cooldown_repanic_reset_pending"] = True
+    assert (
+        bot._equity_hard_stop_coin_needs_panic_supervision("long", symbol, state)
+        is True
+    )
+
+
+@pytest.mark.asyncio
+async def test_recovered_red_episode_finalizes_from_check_path():
+    # Codex blocker regression on the red split: RED latches, the sample
+    # recovers while the position is open (panic pauses, tp-only holds), the
+    # position later flattens normally, and the episode MUST still be
+    # finalized (halt + cooldown) by the regular check path without RED ever
+    # re-activating and without the panic supervisor running.
+    bot = make_coin_bot()
+    symbol = "A"
+    bot.positions = {
+        symbol: {"long": {"size": 1.0, "price": 100.0}, "short": {"size": 0.0}}
+    }
+    bot.open_orders = {}
+    bot.active_symbols = [symbol]
+    upnl_box = {"value": 0.0}
+
+    async def calc_upnl(pside=None, sym=None):
+        return upnl_box["value"]
+
+    bot._calc_upnl_sum_strict = calc_upnl
+    now_box = {"ts": 60_000}
+    bot.get_exchange_time = lambda: now_box["ts"]
+
+    # Warmup green sample, then crash through RED (slot budget 50, red 0.5).
+    await bot._equity_hard_stop_check_coin()
+    now_box["ts"] = 120_000
+    upnl_box["value"] = -30.0
+    out = await bot._equity_hard_stop_check_coin()
+    state = bot._hsl_coin_state("long", symbol)
+    assert out[f"long:{symbol}"]["tier"] == "red"
+    assert state["runtime"].red_latched() is True
+    assert bot._runtime_forced_modes["long"][symbol] == "panic"
+
+    # Recovery while the position is still open: panic pauses, tp-only holds,
+    # and the panic supervisor is NOT needed.
+    now_box["ts"] = 180_000
+    upnl_box["value"] = 0.0
+    out = await bot._equity_hard_stop_check_coin()
+    state = bot._hsl_coin_state("long", symbol)
+    assert out[f"long:{symbol}"]["red_active_now"] is False
+    assert (
+        bot._runtime_forced_modes["long"][symbol]
+        == "tp_only_with_active_entry_cancellation"
+    )
+    assert (
+        bot._equity_hard_stop_coin_needs_panic_supervision("long", symbol, state)
+        is False
+    )
+    assert state["halted"] is False
+
+    # The position closes normally under tp-only; two check cycles confirm
+    # flat and finalize the episode: halt + cooldown, no RED re-activation.
+    bot.positions = {
+        symbol: {"long": {"size": 0.0, "price": 0.0}, "short": {"size": 0.0}}
+    }
+    bot.active_symbols = []
+    now_box["ts"] = 240_000
+    await bot._equity_hard_stop_check_coin()
+    state = bot._hsl_coin_state("long", symbol)
+    assert state["red_flat_confirmations"] == 1
+    assert state["halted"] is False
+    now_box["ts"] = 300_000
+    await bot._equity_hard_stop_check_coin()
+    state = bot._hsl_coin_state("long", symbol)
+    assert state["halted"] is True
+    assert state["cooldown_until_ms"] is not None
+
+
+def test_forced_mode_refresher_preserves_paused_red(monkeypatch):
+    # Hermes finding on the red split: the centralized refresher used to
+    # overwrite the paused tp-only modes back to panic for any latched
+    # non-halted pside. It must derive panic vs paused from the latest
+    # sample's red_active_now, staying protective when no sample exists.
+    bot = make_coin_bot()
+    bot.positions = {"A": {"long": {"size": 1.0, "price": 100.0}, "short": {"size": 0.0}}}
+    bot.open_orders = {}
+    bot.active_symbols = ["A"]
+    state = bot._hsl_state("long")
+    state["runtime"].apply_sample(
+        timestamp_ms=60_000, equity=100.0, peak_strategy_equity=100.0,
+        red_threshold=0.2, ema_span_minutes=1.0,
+        tier_ratio_yellow=0.5, tier_ratio_orange=0.75, latch_red=True,
+    )
+    state["runtime"].apply_sample(
+        timestamp_ms=120_000, equity=70.0, peak_strategy_equity=100.0,
+        red_threshold=0.2, ema_span_minutes=1.0,
+        tier_ratio_yellow=0.5, tier_ratio_orange=0.75, latch_red=True,
+    )
+    assert state["runtime"].red_latched() is True
+
+    # No sample recorded: protective panic.
+    state["last_metrics"] = None
+    bot._equity_hard_stop_refresh_halted_runtime_forced_modes()
+    assert bot._runtime_forced_modes["long"]["A"] == "panic"
+
+    # Active sample: panic.
+    state["last_metrics"] = {"red_active_now": True}
+    bot._equity_hard_stop_refresh_halted_runtime_forced_modes()
+    assert bot._runtime_forced_modes["long"]["A"] == "panic"
+
+    # Recovered sample: the paused tp-only modes survive the refresher.
+    state["last_metrics"] = {"red_active_now": False}
+    bot._equity_hard_stop_set_red_paused_runtime_forced_modes("long")
+    bot._equity_hard_stop_refresh_halted_runtime_forced_modes()
+    assert (
+        bot._runtime_forced_modes["long"]["A"]
+        == "tp_only_with_active_entry_cancellation"
+    )
+
+
+def test_red_paused_forced_modes_block_entries_without_panic():
+    bot = make_coin_bot()
+    bot.positions = {"A": {"long": {"size": 1.0, "price": 100.0}, "short": {"size": 0.0}}}
+    bot.open_orders = {"B": []}
+    bot.active_symbols = ["C"]
+
+    bot._equity_hard_stop_set_red_paused_runtime_forced_modes("long")
+
+    forced = bot._runtime_forced_modes["long"]
+    assert set(forced) == {"A", "B", "C"}
+    assert set(forced.values()) == {"tp_only_with_active_entry_cancellation"}
+
+
 def test_hsl_replay_cache_dir_is_sanitized_and_digest_scoped():
     bot = make_coin_bot()
     bot.exchange = "binance/usdm"
@@ -1184,6 +1352,7 @@ def bind_hsl_methods(bot):
         "_equity_hard_stop_coin_symbols",
         "_equity_hard_stop_handle_coin_position_during_cooldown",
         "_equity_hard_stop_has_open_position_symbol",
+        "_equity_hard_stop_count_blocking_open_orders_symbol",
         "_equity_hard_stop_history_coin_value",
         "_equity_hard_stop_initialize_coin_from_history",
         "_equity_hard_stop_infer_coin_replay_contract",
@@ -1198,6 +1367,12 @@ def bind_hsl_methods(bot):
         "_equity_hard_stop_persist_replay_matrices",
         "_try_load_hsl_replay_matrix_cache",
         "_equity_hard_stop_try_reuse_replay_cache",
+        "_equity_hard_stop_set_red_paused_runtime_forced_modes",
+        "_equity_hard_stop_refresh_halted_runtime_forced_modes",
+        "_equity_hard_stop_set_red_runtime_forced_modes",
+        "_equity_hard_stop_runtime_red_latched",
+        "_equity_hard_stop_clear_runtime_forced_modes",
+        "_equity_hard_stop_halted_mode",
         "_equity_hard_stop_build_latch_payload",
         "_equity_hard_stop_check_coin",
         "_equity_hard_stop_clear_coin_runtime_forced_mode",
