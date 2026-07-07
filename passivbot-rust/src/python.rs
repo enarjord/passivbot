@@ -520,6 +520,22 @@ pub fn trailing_bundle_default_py() -> (f64, f64, f64, f64) {
 }
 
 #[pyfunction]
+pub fn hsl_no_restart_triggered(
+    restart_after_red_policy: &str,
+    drawdown_raw: f64,
+    drawdown_ema: f64,
+    no_restart_drawdown_threshold: f64,
+) -> PyResult<bool> {
+    ehsl::no_restart_triggered(
+        restart_after_red_policy,
+        drawdown_raw,
+        drawdown_ema,
+        no_restart_drawdown_threshold,
+    )
+    .map_err(pyo3::exceptions::PyValueError::new_err)
+}
+
+#[pyfunction]
 #[pyo3(signature = (highs, lows, closes, bundle=None))]
 pub fn update_trailing_bundle_py(
     highs: PyReadonlyArray1<'_, f64>,
@@ -1931,6 +1947,17 @@ fn backtest_params_from_dict(dict: &PyDict) -> PyResult<BacktestParams> {
                 signal_mode
             )));
         }
+        let restart_after_red_policy =
+            extract_optional_string(cfg, "restart_after_red_policy", "threshold")?;
+        match restart_after_red_policy.as_str() {
+            "always" | "threshold" | "never" => {}
+            raw => {
+                return Err(PyValueError::new_err(format!(
+                    "{key}.restart_after_red_policy must be one of {{always, threshold, never}}, got {:?}",
+                    raw
+                )));
+            }
+        }
         Ok(EquityHardStopLossConfig {
             enabled: extract_value(cfg, "enabled")?,
             signal_mode,
@@ -1938,6 +1965,7 @@ fn backtest_params_from_dict(dict: &PyDict) -> PyResult<BacktestParams> {
             ema_span_minutes: extract_value(cfg, "ema_span_minutes")?,
             cooldown_minutes_after_red: extract_value(cfg, "cooldown_minutes_after_red")?,
             no_restart_drawdown_threshold: extract_value(cfg, "no_restart_drawdown_threshold")?,
+            restart_after_red_policy,
             tier_ratios: EquityHardStopLossTierRatios {
                 yellow: extract_value(ratios, "yellow")?,
                 orange: extract_value(ratios, "orange")?,
@@ -2301,6 +2329,8 @@ fn bot_params_from_dict(dict: &PyDict) -> PyResult<BotParams> {
         extract_value(dict, "hsl_cooldown_minutes_after_red")?;
     let hsl_no_restart_drawdown_threshold: f64 =
         extract_value(dict, "hsl_no_restart_drawdown_threshold")?;
+    let hsl_restart_after_red_policy: String =
+        extract_optional_string(dict, "hsl_restart_after_red_policy", "threshold")?;
     let hsl_tier_ratios = dict
         .get_item("hsl_tier_ratios")?
         .ok_or_else(|| PyValueError::new_err("position missing 'hsl_tier_ratios'"))?
@@ -2386,6 +2416,7 @@ fn bot_params_from_dict(dict: &PyDict) -> PyResult<BotParams> {
         hsl_ema_span_minutes,
         hsl_cooldown_minutes_after_red,
         hsl_no_restart_drawdown_threshold,
+        hsl_restart_after_red_policy,
         hsl_tier_ratio_yellow,
         hsl_tier_ratio_orange,
         hsl_orange_tier_mode,
@@ -2449,6 +2480,291 @@ fn validate_forager_score_weights_pair(bot_params: &BotParamsPair) -> PyResult<(
             return Err(PyValueError::new_err(format!("bot.{pside}.{err}")));
         }
     }
+    Ok(())
+}
+
+fn validate_hsl_panic_close_order_type_pair(bot_params: &BotParamsPair) -> PyResult<()> {
+    for (pside, params) in [("long", &bot_params.long), ("short", &bot_params.short)] {
+        match params.hsl_panic_close_order_type.as_str() {
+            "market" | "limit" => {}
+            raw => {
+                return Err(PyValueError::new_err(format!(
+                    "bot.{pside}.hsl_panic_close_order_type must be one of: market, limit; got {:?}",
+                    raw
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_hsl_restart_after_red_policy_pair(bot_params: &BotParamsPair) -> PyResult<()> {
+    for (pside, params) in [("long", &bot_params.long), ("short", &bot_params.short)] {
+        match params.hsl_restart_after_red_policy.as_str() {
+            "always" | "threshold" | "never" => {}
+            raw => {
+                return Err(PyValueError::new_err(format!(
+                    "bot.{pside}.hsl_restart_after_red_policy must be one of: always, threshold, never; got {:?}",
+                    raw
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_finite_range(
+    path: &str,
+    value: f64,
+    min_value: f64,
+    max_value: Option<f64>,
+    min_inclusive: bool,
+) -> PyResult<()> {
+    if !value.is_finite() {
+        return Err(PyValueError::new_err(format!("{path} must be finite")));
+    }
+    let min_ok = if min_inclusive {
+        value >= min_value
+    } else {
+        value > min_value
+    };
+    if !min_ok {
+        let op = if min_inclusive { ">=" } else { ">" };
+        return Err(PyValueError::new_err(format!(
+            "{path} must be finite and {op} {min_value}"
+        )));
+    }
+    if let Some(max_value) = max_value {
+        if value > max_value {
+            return Err(PyValueError::new_err(format!(
+                "{path} must be finite and <= {max_value}"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn validate_hsl_risk_unstuck_bot_params(
+    path_prefix: &str,
+    pside: &str,
+    params: &BotParams,
+) -> PyResult<()> {
+    validate_finite_range(
+        &format!("{path_prefix}.hsl_ema_span_minutes"),
+        params.hsl_ema_span_minutes,
+        1.0,
+        None,
+        true,
+    )?;
+    validate_finite_range(
+        &format!("{path_prefix}.hsl_red_threshold"),
+        params.hsl_red_threshold,
+        0.0,
+        Some(1.0),
+        false,
+    )?;
+    validate_finite_range(
+        &format!("{path_prefix}.hsl_no_restart_drawdown_threshold"),
+        params.hsl_no_restart_drawdown_threshold,
+        0.0,
+        Some(1.0),
+        true,
+    )?;
+    if params.hsl_no_restart_drawdown_threshold < params.hsl_red_threshold {
+        return Err(PyValueError::new_err(format!(
+            "{path_prefix}.hsl_no_restart_drawdown_threshold must be >= {path_prefix}.hsl_red_threshold"
+        )));
+    }
+    match params.hsl_restart_after_red_policy.as_str() {
+        "always" | "threshold" | "never" => {}
+        raw => {
+            return Err(PyValueError::new_err(format!(
+                "{path_prefix}.hsl_restart_after_red_policy must be one of: always, threshold, never; got {:?}",
+                raw
+            )));
+        }
+    }
+    validate_finite_range(
+        &format!("{path_prefix}.hsl_cooldown_minutes_after_red"),
+        params.hsl_cooldown_minutes_after_red,
+        0.0,
+        None,
+        true,
+    )?;
+    validate_finite_range(
+        &format!("{path_prefix}.hsl_tier_ratio_yellow"),
+        params.hsl_tier_ratio_yellow,
+        0.0,
+        Some(1.0),
+        true,
+    )?;
+    validate_finite_range(
+        &format!("{path_prefix}.hsl_tier_ratio_orange"),
+        params.hsl_tier_ratio_orange,
+        0.0,
+        Some(1.0),
+        true,
+    )?;
+    if params.hsl_tier_ratio_yellow > params.hsl_tier_ratio_orange {
+        return Err(PyValueError::new_err(format!(
+            "{path_prefix}.hsl_tier_ratio_yellow must be <= {path_prefix}.hsl_tier_ratio_orange"
+        )));
+    }
+    validate_finite_range(
+        &format!("{path_prefix}.risk_entry_cooldown_minutes"),
+        params.risk_entry_cooldown_minutes,
+        0.0,
+        None,
+        true,
+    )?;
+    validate_finite_range(
+        &format!("{path_prefix}.total_wallet_exposure_limit"),
+        params.total_wallet_exposure_limit,
+        0.0,
+        None,
+        true,
+    )?;
+    validate_finite_range(
+        &format!("{path_prefix}.wallet_exposure_limit"),
+        params.wallet_exposure_limit,
+        0.0,
+        None,
+        true,
+    )?;
+    validate_finite_range(
+        &format!("{path_prefix}.risk_wel_enforcer_threshold"),
+        params.risk_wel_enforcer_threshold,
+        0.0,
+        None,
+        true,
+    )?;
+    validate_finite_range(
+        &format!("{path_prefix}.risk_twel_enforcer_threshold"),
+        params.risk_twel_enforcer_threshold,
+        0.0,
+        None,
+        true,
+    )?;
+    validate_finite_range(
+        &format!("{path_prefix}.risk_we_excess_allowance_pct"),
+        params.risk_we_excess_allowance_pct,
+        0.0,
+        None,
+        true,
+    )?;
+    validate_finite_range(
+        &format!("{path_prefix}.unstuck_close_pct"),
+        params.unstuck_close_pct,
+        0.0,
+        Some(1.0),
+        true,
+    )?;
+    validate_finite_range(
+        &format!("{path_prefix}.unstuck_loss_allowance_pct"),
+        params.unstuck_loss_allowance_pct,
+        0.0,
+        None,
+        true,
+    )?;
+    validate_finite_range(
+        &format!("{path_prefix}.unstuck_threshold"),
+        params.unstuck_threshold,
+        0.0,
+        None,
+        true,
+    )?;
+    if !params.unstuck_ema_dist.is_finite() {
+        return Err(PyValueError::new_err(format!(
+            "{path_prefix}.unstuck_ema_dist must be finite"
+        )));
+    }
+    if pside == "long" && params.unstuck_ema_dist <= -1.0 {
+        return Err(PyValueError::new_err(format!(
+            "{path_prefix}.unstuck_ema_dist must be > -1.0"
+        )));
+    }
+    if pside == "short" && params.unstuck_ema_dist >= 1.0 {
+        return Err(PyValueError::new_err(format!(
+            "{path_prefix}.unstuck_ema_dist must be < 1.0"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_hsl_risk_unstuck_orchestrator_input(
+    input: &crate::orchestrator::OrchestratorInput,
+) -> PyResult<()> {
+    validate_hsl_risk_unstuck_bot_params("bot.long", "long", &input.global.global_bot_params.long)?;
+    validate_hsl_risk_unstuck_bot_params(
+        "bot.short",
+        "short",
+        &input.global.global_bot_params.short,
+    )?;
+    for symbol in &input.symbols {
+        validate_hsl_risk_unstuck_bot_params(
+            &format!("symbols[{}].long.bot_params", symbol.symbol_idx),
+            "long",
+            &symbol.long.bot_params,
+        )?;
+        validate_hsl_risk_unstuck_bot_params(
+            &format!("symbols[{}].short.bot_params", symbol.symbol_idx),
+            "short",
+            &symbol.short.bot_params,
+        )?;
+    }
+    Ok(())
+}
+
+fn validate_orchestrator_account_risk_inputs(
+    input: &crate::orchestrator::OrchestratorInput,
+) -> PyResult<()> {
+    validate_finite_range("balance", input.balance, 0.0, None, false)?;
+    let balance_raw = if input.balance_raw.is_finite() {
+        input.balance_raw
+    } else {
+        input.balance
+    };
+    validate_finite_range("balance_raw", balance_raw, 0.0, None, false)?;
+    validate_finite_range(
+        "global.max_realized_loss_pct",
+        input.global.max_realized_loss_pct,
+        0.0,
+        None,
+        true,
+    )?;
+    for (path, value) in [
+        (
+            "global.realized_pnl_cumsum_max",
+            input.global.realized_pnl_cumsum_max,
+        ),
+        (
+            "global.realized_pnl_cumsum_last",
+            input.global.realized_pnl_cumsum_last,
+        ),
+    ] {
+        if !value.is_finite() {
+            return Err(PyValueError::new_err(format!("{path} must be finite")));
+        }
+    }
+    if input.global.realized_pnl_cumsum_max < input.global.realized_pnl_cumsum_last {
+        return Err(PyValueError::new_err(
+            "global.realized_pnl_cumsum_max must be >= global.realized_pnl_cumsum_last",
+        ));
+    }
+    validate_finite_range(
+        "global.unstuck_allowance_long",
+        input.global.unstuck_allowance_long,
+        0.0,
+        None,
+        true,
+    )?;
+    validate_finite_range(
+        "global.unstuck_allowance_short",
+        input.global.unstuck_allowance_short,
+        0.0,
+        None,
+        true,
+    )?;
     Ok(())
 }
 
@@ -3749,7 +4065,11 @@ pub fn compute_ideal_orders_json(input_json: &str) -> PyResult<String> {
                 e
             ))
         })?;
+    validate_orchestrator_account_risk_inputs(&input)?;
     validate_forager_score_weights_pair(&input.global.global_bot_params)?;
+    validate_hsl_panic_close_order_type_pair(&input.global.global_bot_params)?;
+    validate_hsl_restart_after_red_policy_pair(&input.global.global_bot_params)?;
+    validate_hsl_risk_unstuck_orchestrator_input(&input)?;
 
     let out = crate::orchestrator::compute_ideal_orders(&input).map_err(|e| {
         pyo3::exceptions::PyValueError::new_err(format!(

@@ -294,6 +294,16 @@ pub fn strategy_initial_qty_pct(params: &StrategyParams) -> f64 {
     }
 }
 
+pub fn strategy_entry_retracement_enabled(params: &StrategyParams) -> bool {
+    match params {
+        StrategyParams::TrailingMartingale(params) => params.entry.retracement_base_pct > 0.0,
+        StrategyParams::EmaAnchor(_) => false,
+        StrategyParams::TrailingGridV7(params) => {
+            params.entry.trailing_grid_ratio != 0.0 && params.entry.trailing_retracement_pct > 0.0
+        }
+    }
+}
+
 pub fn strategy_needs_log_range_1m(params: &StrategyParams) -> bool {
     match params {
         StrategyParams::TrailingMartingale(params) => {

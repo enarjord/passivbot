@@ -40,6 +40,18 @@ class SingleObjectiveEvaluator:
         )
 
 
+class PayloadEvaluator:
+    limit_checks = []
+
+    def evaluate(self, vector, overrides_list):
+        return {
+            "fitness": (-2.0,),
+            "constraint_violation": 0.0,
+            "metrics": {"objectives": {"w_0": -2.0}},
+            "evaluation_vector": [0.42, float(vector[1])],
+        }
+
+
 class FakeAsyncResult:
     def __init__(self, value):
         self._value = value
@@ -97,6 +109,21 @@ def test_problem_without_constraints_omits_g():
     assert out["F"].tolist() == [-1.5]
 
 
+def test_problem_accepts_shared_evaluation_payload_vector():
+    adapter = PymooEvaluatorAdapter(PayloadEvaluator())
+    problem = PassivbotProblem(
+        bounds=[Bound(0.0, 1.0), Bound(0.0, 2.0)],
+        scoring_keys=["adg"],
+        evaluator_adapter=adapter,
+    )
+
+    out = {}
+    problem._evaluate(np.asarray([0.7, 1.1]), out)
+
+    assert out["F"].tolist() == [-2.0]
+    assert out["evaluation_vector"].tolist() == [0.42, 1.1]
+
+
 def test_async_recording_runner_records_and_strips_metrics():
     evaluator = FakeEvaluator(has_constraints=True)
     recorder = MagicMock()
@@ -122,6 +149,35 @@ def test_async_recording_runner_records_and_strips_metrics():
     assert "metrics" not in results[0]
     assert "evaluation_vector" not in results[0]
     assert recorder.record.call_count == 2
+
+
+def test_async_recording_runner_does_not_reseed_parent_numpy_rng():
+    evaluator = FakeEvaluator(has_constraints=True)
+    recorder = MagicMock()
+    runner = PymooAsyncRecordingRunner(
+        evaluator=evaluator,
+        has_constraints=True,
+        n_obj=2,
+        pool=FakeAsyncPool(),
+        recorder=recorder,
+        template={"optimize": {"backend": "pymoo"}},
+        build_config_fn=lambda vector, overrides_fn, overrides_list, template: {
+            "bot": {"long": {"a": float(vector[0])}},
+            "backtest": {"coins": {"binance": ["BTC/USDT:USDT"]}},
+            **template,
+        },
+        overrides_fn=object(),
+        overrides_list=["x"],
+    )
+    np.random.seed(42)
+    before = np.random.get_state()
+
+    runner(object(), [np.asarray([0.25])])
+
+    after = np.random.get_state()
+    assert before[0] == after[0]
+    assert np.array_equal(before[1], after[1])
+    assert before[2:] == after[2:]
 
 
 def test_async_recording_runner_profiles_record_result_when_enabled(monkeypatch, caplog):

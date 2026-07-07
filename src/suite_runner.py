@@ -42,6 +42,19 @@ from ohlcv_utils import align_and_aggregate_hlcvs
 from shared_arrays import SharedArraySpec
 from metrics_schema import flatten_metric_stats, merge_suite_payload
 
+_SCENARIO_KEYS = frozenset(
+    {
+        "label",
+        "start_date",
+        "end_date",
+        "coins",
+        "ignored_coins",
+        "exchanges",
+        "coin_sources",
+        "overrides",
+    }
+)
+
 # --------------------------------------------------------------------------- #
 # Data containers
 # --------------------------------------------------------------------------- #
@@ -154,8 +167,9 @@ def _suite_override_from_section(section: Dict[str, Any], *, source_label: str) 
         raise ValueError(f"Suite config {source_label} field 'scenarios' must be a list.")
     suite_override: Dict[str, Any] = {
         "scenarios": deepcopy(scenarios),
-        "aggregate": deepcopy(section.get("aggregate", {"default": "mean"})),
     }
+    if "aggregate" in section:
+        suite_override["aggregate"] = deepcopy(section["aggregate"])
     for key in ("exchanges", "volume_normalization"):
         if key in section:
             suite_override[key] = deepcopy(section[key])
@@ -481,6 +495,16 @@ def build_scenarios(
 
     scenarios: List[SuiteScenario] = []
     for idx, raw in enumerate(scenarios_cfg, 1):
+        scenario_path = f"config.backtest.scenarios[{idx - 1}]"
+        if not isinstance(raw, dict):
+            raise ValueError(f"{scenario_path} must be a mapping.")
+        unknown_keys = sorted(set(raw) - _SCENARIO_KEYS)
+        if unknown_keys:
+            allowed = ", ".join(sorted(_SCENARIO_KEYS))
+            raise ValueError(
+                f"{scenario_path} contains unknown key(s): {', '.join(unknown_keys)}. "
+                f"Allowed keys: {allowed}."
+            )
         exchanges_value = raw.get("exchanges")
         coin_sources_value = raw.get("coin_sources")
 
@@ -587,7 +611,6 @@ def filter_coins_by_exchange_assignment(
 
 
 @dataclass
-@dataclass
 class ExchangeDataset:
     exchange: str
     coins: List[str]
@@ -599,8 +622,6 @@ class ExchangeDataset:
     btc_usd_prices: np.ndarray
     timestamps: Optional[np.ndarray]
     cache_dir: str
-    hlcvs_spec: Optional[SharedArraySpec] = None
-    btc_spec: Optional[SharedArraySpec] = None
     hlcvs_spec: Optional[SharedArraySpec] = None
     btc_spec: Optional[SharedArraySpec] = None
 

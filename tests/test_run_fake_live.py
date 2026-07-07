@@ -333,6 +333,7 @@ def test_bot_params_to_rust_dict_includes_hsl_fields():
                 "hsl_ema_span_minutes": 1.0,
                 "hsl_cooldown_minutes_after_red": 1.0,
                 "hsl_no_restart_drawdown_threshold": 0.9,
+                "hsl_restart_after_red_policy": "threshold",
                 "hsl_tier_ratios": {"yellow": 0.5, "orange": 0.75},
                 "hsl_orange_tier_mode": "tp_only_with_active_entry_cancellation",
                 "hsl_panic_close_order_type": "market",
@@ -341,6 +342,7 @@ def test_bot_params_to_rust_dict_includes_hsl_fields():
                 "wallet_exposure_limit": 5.0,
                 "risk_entry_cooldown_minutes": 0.0,
                 "risk_wel_enforcer_threshold": 1.0,
+                "risk_twel_enforcer_policy": "REDUCE_PORTFOLIO",
                 "risk_twel_enforcer_threshold": 1.0,
                 "risk_we_excess_allowance_pct": 0.0,
                 "risk_we_excess_allowance_mode": "LEGACY_RAW",
@@ -365,8 +367,10 @@ def test_bot_params_to_rust_dict_includes_hsl_fields():
     assert out["hsl_red_threshold"] == pytest.approx(0.05)
     assert out["hsl_tier_ratio_yellow"] == pytest.approx(0.5)
     assert out["hsl_tier_ratio_orange"] == pytest.approx(0.75)
+    assert out["hsl_restart_after_red_policy"] == "threshold"
     assert out["hsl_orange_tier_mode"] == "tp_only_with_active_entry_cancellation"
     assert out["hsl_panic_close_order_type"] == "market"
+    assert out["risk_twel_enforcer_policy"] == "reduce_portfolio"
     assert out["risk_we_excess_allowance_mode"] == "legacy_raw"
     assert "entry_grid_inflation_enabled" not in out
     assert out["forager_score_weights"] == {
@@ -374,6 +378,11 @@ def test_bot_params_to_rust_dict_includes_hsl_fields():
         "ema_readiness": pytest.approx(0.0),
         "volatility": pytest.approx(0.0),
     }
+
+    stub = _Stub()
+    stub.values["risk_twel_enforcer_policy"] = "invalid_policy"
+    with pytest.raises(ValueError, match="total_exposure_enforcer_policy"):
+        Passivbot._bot_params_to_rust_dict(stub, "long", None)
 
 
 def test_bot_params_to_rust_dict_ignores_removed_entry_grid_inflation_flag():
@@ -417,6 +426,7 @@ def test_bot_params_to_rust_dict_ignores_removed_entry_grid_inflation_flag():
                         "hsl_ema_span_minutes": 1.0,
                         "hsl_cooldown_minutes_after_red": 1.0,
                         "hsl_no_restart_drawdown_threshold": 0.9,
+                        "hsl_restart_after_red_policy": "threshold",
                         "hsl_tier_ratios": {"yellow": 0.5, "orange": 0.75},
                         "hsl_orange_tier_mode": "tp_only_with_active_entry_cancellation",
                         "hsl_panic_close_order_type": "market",
@@ -427,12 +437,15 @@ def test_bot_params_to_rust_dict_ignores_removed_entry_grid_inflation_flag():
                         "risk_wel_enforcer_enabled": True,
                         "risk_wel_enforcer_threshold": 1.0,
                         "risk_twel_enforcer_enabled": True,
+                        "risk_twel_enforcer_policy": "reduce_overweight",
+                        "risk_twel_entry_gate_enabled": True,
                         "risk_twel_enforcer_threshold": 1.0,
                         "risk_we_excess_allowance_pct": 0.0,
                         "risk_we_excess_allowance_mode": "bounded",
                         "unstuck_close_pct": 0.01,
                         "unstuck_ema_dist": 0.0,
                         "unstuck_enabled": True,
+                        "unstuck_ema_gating_enabled": True,
                         "unstuck_loss_allowance_pct": 0.1,
                         "unstuck_threshold": 1.0,
                     },

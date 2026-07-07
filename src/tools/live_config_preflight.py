@@ -12,6 +12,9 @@ from live.smoke_report import _user_safe_display_path
 
 
 DEFAULT_SAMPLE_SIZE = 8
+HIGH_BALANCE_HYSTERESIS_WARNING_PCT = 0.05
+DEFAULT_HSL_SIGNAL_MODE = "coin"
+HSL_RISKS_DOC = "docs/equity_hard_stop_loss_risks.md"
 SIDES = ("long", "short")
 _MISSING = object()
 CACHE_LIVE_KEYS = (
@@ -272,6 +275,7 @@ def _hsl_side_report(side_config: dict[str, Any]) -> dict[str, Any]:
             ("red_threshold", "hsl_red_threshold"),
             ("cooldown_minutes_after_red", "hsl_cooldown_minutes_after_red"),
             ("no_restart_drawdown_threshold", "hsl_no_restart_drawdown_threshold"),
+            ("restart_after_red_policy", "hsl_restart_after_red_policy"),
             ("ema_span_minutes", "hsl_ema_span_minutes"),
             ("tier_ratios", "hsl_tier_ratios"),
             ("orange_tier_mode", "hsl_orange_tier_mode"),
@@ -453,8 +457,83 @@ def _balance_override_report(
     }
 
 
+def _balance_hysteresis_report(
+    live: dict[str, Any],
+    issues: list[dict[str, Any]],
+) -> dict[str, Any]:
+    raw_value = live.get("balance_hysteresis_snap_pct", _MISSING)
+    report: dict[str, Any] = {
+        "present": raw_value is not _MISSING,
+        "default_value": 0.02,
+        "warning_threshold": HIGH_BALANCE_HYSTERESIS_WARNING_PCT,
+        "basis": (
+            "snapped balance is used for sizing/gating surfaces where hysteresis "
+            "is intentional; raw balance remains the basis for exact exposure repair"
+        ),
+    }
+    if raw_value is _MISSING:
+        report["status"] = "defaulted"
+        report["effective_value"] = report["default_value"]
+        return report
+    report["raw_value"] = raw_value
+    if isinstance(raw_value, bool):
+        report["status"] = "invalid_bool"
+        issues.append(
+            _issue(
+                "warning",
+                "balance_hysteresis_snap_pct_invalid_bool",
+                "live.balance_hysteresis_snap_pct should be a non-negative number, not a boolean",
+                path="live.balance_hysteresis_snap_pct",
+            )
+        )
+        return report
+    try:
+        value = float(raw_value)
+    except (TypeError, ValueError):
+        report["status"] = "invalid"
+        report["value_type"] = type(raw_value).__name__
+        issues.append(
+            _issue(
+                "warning",
+                "balance_hysteresis_snap_pct_invalid",
+                "live.balance_hysteresis_snap_pct should be a non-negative finite number",
+                path="live.balance_hysteresis_snap_pct",
+            )
+        )
+        return report
+    report["value"] = value if math.isfinite(value) else None
+    if not math.isfinite(value) or value < 0.0:
+        report["status"] = "invalid"
+        issues.append(
+            _issue(
+                "warning",
+                "balance_hysteresis_snap_pct_invalid",
+                "live.balance_hysteresis_snap_pct should be a non-negative finite number",
+                path="live.balance_hysteresis_snap_pct",
+            )
+        )
+        return report
+    if value > HIGH_BALANCE_HYSTERESIS_WARNING_PCT:
+        report["status"] = "high"
+        issues.append(
+            _issue(
+                "warning",
+                "balance_hysteresis_snap_pct_high",
+                (
+                    "live.balance_hysteresis_snap_pct is above 5%; snapped-balance "
+                    "entry sizing/gating may diverge noticeably from raw-balance "
+                    "exposure repair near risk boundaries"
+                ),
+                path="live.balance_hysteresis_snap_pct",
+            )
+        )
+    else:
+        report["status"] = "ok"
+    return report
+
+
 def _effective_hsl_signal_mode(live: dict[str, Any]) -> str:
-    raw = live.get("hsl_signal_mode", "unified")
+    raw = live.get("hsl_signal_mode", DEFAULT_HSL_SIGNAL_MODE)
     return str(raw)
 
 
@@ -644,6 +723,17 @@ def _cache_readiness_report(
     if _any_hsl_enabled(hsl_sides):
         hsl["evidence"].append(
             {"code": "hsl_enabled", "message": "one or more HSL sides are enabled"}
+        )
+        hsl["evidence"].append(
+            {
+                "code": "hsl_history_reinterpretation_caveat",
+                "doc": HSL_RISKS_DOC,
+                "message": (
+                    "HSL reconstructs history from exchange state plus config; deposits, "
+                    "withdrawals, balance overrides, HSL mode changes, and HSL budget/"
+                    "threshold changes can reinterpret historical drawdown"
+                ),
+            }
         )
         signal_mode = _effective_hsl_signal_mode(live)
         if (
@@ -982,6 +1072,7 @@ def build_live_config_preflight_report(
         for side, side_config in side_configs.items()
     }
     balance_override_report = _balance_override_report(live, override_value=balance_override)
+    balance_hysteresis_report = _balance_hysteresis_report(live, issues)
     hsl_signal_mode = _effective_hsl_signal_mode(live)
     if balance_override_report.get("status") in {"invalid", "invalid_bool"}:
         issues.append(
@@ -1040,6 +1131,9 @@ def build_live_config_preflight_report(
             "live_settings": _selected_values(live, FORAGER_LIVE_KEYS),
             "sides": forager_by_side,
             "total_configured_n_positions": sum(float(value) for value in n_positions_values),
+        },
+        "risk": {
+            "balance_hysteresis_snap_pct": balance_hysteresis_report,
         },
         "cache": {
             "live_settings": _selected_values(live, CACHE_LIVE_KEYS),

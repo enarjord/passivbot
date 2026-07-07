@@ -10,7 +10,7 @@ import pytest
 
 from cli_utils import build_command_parser, expand_help_all_argv, help_all_requested
 from config import load_input_config, prepare_config
-from config.coerce import normalize_hsl_signal_mode
+from config.coerce import normalize_hsl_restart_after_red_policy, normalize_hsl_signal_mode
 from config.project import project_config
 from config.runtime_compile import compile_runtime_config
 from config.validate import validate_config
@@ -65,6 +65,13 @@ def test_load_input_config_without_path_uses_schema_defaults():
 
 def test_hsl_signal_mode_accepts_coin():
     assert normalize_hsl_signal_mode("coin") == "coin"
+
+
+def test_hsl_restart_after_red_policy_normalizes_default_and_rejects_invalid():
+    assert normalize_hsl_restart_after_red_policy(None) == "threshold"
+    assert normalize_hsl_restart_after_red_policy("always") == "always"
+    with pytest.raises(ValueError, match="restart_after_red_policy"):
+        normalize_hsl_restart_after_red_policy("sometimes")
 
 
 @pytest.mark.parametrize(

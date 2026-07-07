@@ -69,6 +69,27 @@ def _build_random_sampling(bounds, population_size: int) -> np.ndarray:
     return np.asarray(population, dtype=np.float64)
 
 
+def _prepare_resumed_algorithm(
+    algorithm,
+    *,
+    problem,
+    termination,
+    seed: int | None,
+    callback,
+) -> None:
+    saved_random_state = getattr(algorithm, "random_state", None)
+    algorithm.has_terminated = False
+    algorithm.setup(
+        problem,
+        termination=termination,
+        seed=seed,
+        verbose=False,
+        callback=callback,
+    )
+    if saved_random_state is not None:
+        algorithm.random_state = saved_random_state
+
+
 def _population_from_payloads(
     vectors: np.ndarray,
     payloads: list[dict[str, Any]],
@@ -84,7 +105,16 @@ def _population_from_payloads(
             [payload.get("G", np.asarray([-1.0], dtype=np.float64)) for payload in payloads],
             dtype=np.float64,
         )
-    return Population.new(*sum(([key, value] for key, value in kwargs.items()), []))
+    return _mark_population_evaluated(
+        Population.new(*sum(([key, value] for key, value in kwargs.items()), []))
+    )
+
+
+def _mark_population_evaluated(population: Population) -> Population:
+    # pymoo's default evaluator requests F/G/H and re-evaluates unless all are marked.
+    for individual in population:
+        individual.evaluated.update(("F", "G", "H"))
+    return population
 
 
 def _reduce_starting_population(
@@ -95,6 +125,7 @@ def _reduce_starting_population(
     payloads: list[dict[str, Any]],
     population_size: int,
     bounds,
+    rng_seed: int | None,
 ) -> np.ndarray:
     if not starting_individuals:
         return _build_random_sampling(bounds, population_size)
@@ -106,7 +137,12 @@ def _reduce_starting_population(
         array_bytes=int(seed_vectors.nbytes),
     )
     if len(seed_vectors) <= population_size:
-        return _extend_sampling_to_size(seed_vectors, bounds, population_size)
+        pop = _population_from_payloads(
+            seed_vectors,
+            payloads,
+            has_constraints=bool(problem.n_ieq_constr),
+        )
+        return _extend_sampling_to_size(pop, bounds, population_size)
 
     pop = _population_from_payloads(
         seed_vectors,
@@ -118,15 +154,14 @@ def _reduce_starting_population(
         pop,
         n_survive=population_size,
         algorithm=algorithm,
-        seed=1,
+        seed=rng_seed,
     )
     logging.info(
         "Trimmed starting configs to population size via pymoo %s survival (kept %d)",
         algorithm.__class__.__name__.lower(),
         len(reduced),
     )
-    reduced_vectors = np.asarray(reduced.get("X"), dtype=np.float64)
-    return _extend_sampling_to_size(reduced_vectors, bounds, population_size)
+    return _extend_sampling_to_size(_mark_population_evaluated(reduced), bounds, population_size)
 
 
 def _evaluate_starting_individuals(
@@ -197,7 +232,7 @@ def _evaluate_starting_individuals(
     return slim_payloads
 
 
-def _extend_sampling_to_size(sampling: np.ndarray, bounds, target_size: int) -> np.ndarray:
+def _extend_sampling_to_size(sampling, bounds, target_size: int):
     current_size = int(len(sampling))
     if current_size >= target_size:
         return sampling
@@ -207,7 +242,10 @@ def _extend_sampling_to_size(sampling: np.ndarray, bounds, target_size: int) -> 
     ]
     if not extra:
         return sampling
-    return np.vstack([sampling, np.asarray(extra, dtype=np.float64)])
+    extra_array = np.asarray(extra, dtype=np.float64)
+    if isinstance(sampling, Population):
+        return Population.merge(sampling, Population.new("X", extra_array))
+    return np.vstack([sampling, extra_array])
 
 
 def _resolve_requested_population_size(config: dict[str, Any]) -> int | None:
@@ -575,6 +613,7 @@ def run_backend(
     try:
         bounds = base_evaluator.bounds
         sig_digits = config["optimize"]["round_to_n_significant_digits"]
+        rng_seed = config["optimize"].get("seed")
         population_plan = _resolve_pymoo_population_plan(
             config,
             n_obj=len(config["optimize"]["scoring"]),
@@ -607,6 +646,7 @@ def run_backend(
             overrides_list,
             len(config["optimize"]["scoring"]),
             evaluator_adapter.has_constraints,
+            rng_seed,
             ignore_sigint_in_worker,
         )
         pool = multiprocessing.Pool(
@@ -631,6 +671,12 @@ def run_backend(
             elementwise_runner=runner,
         )
 
+        ngen = max(1, int(config["optimize"]["iters"] / population_size))
+        termination = get_termination("n_gen", ngen)
+        checkpoint_callback = (
+            PymooCheckpointCallback(checkpoint_path) if checkpoint_path is not None else None
+        )
+
         algorithm = None
         if resume:
             if checkpoint_path is None:
@@ -640,17 +686,13 @@ def run_backend(
             logging.info(f"Loading PyMoo checkpoint from {checkpoint_path}...")
             with open(checkpoint_path, "rb") as f:
                 algorithm = pickle.load(f)
-            algorithm.has_terminated = False
-
-            # Restore the active runner (pool) and evaluator
-            if hasattr(algorithm, "problem"):
-                algorithm.problem.elementwise_runner = runner
-                if hasattr(algorithm.problem, "evaluator_adapter"):
-                    algorithm.problem.evaluator_adapter.evaluator = evaluator_for_pool
-            if hasattr(algorithm, "evaluator") and hasattr(algorithm.evaluator, "problem"):
-                algorithm.evaluator.problem.elementwise_runner = runner
-                if hasattr(algorithm.evaluator.problem, "evaluator_adapter"):
-                    algorithm.evaluator.problem.evaluator_adapter.evaluator = evaluator_for_pool
+            _prepare_resumed_algorithm(
+                algorithm,
+                problem=problem,
+                termination=termination,
+                seed=rng_seed,
+                callback=checkpoint_callback,
+            )
 
         if algorithm is None:
             algorithm = _build_algorithm(
@@ -683,22 +725,22 @@ def run_backend(
                     payloads=seed_payloads,
                     population_size=population_size,
                     bounds=bounds,
+                    rng_seed=rng_seed,
                 )
-        ngen = max(1, int(config["optimize"]["iters"] / population_size))
         logging.info("Starting optimize...")
 
         minimize_kwargs = {
-            "seed": 1,
+            "seed": rng_seed,
             "verbose": False,
             "copy_algorithm": False,
         }
-        if checkpoint_path is not None:
-            minimize_kwargs["callback"] = PymooCheckpointCallback(checkpoint_path)
+        if checkpoint_callback is not None:
+            minimize_kwargs["callback"] = checkpoint_callback
 
         pymoo_minimize(
             problem,
             algorithm,
-            get_termination("n_gen", ngen),
+            termination,
             **minimize_kwargs
         )
         logging.info("Optimization complete.")

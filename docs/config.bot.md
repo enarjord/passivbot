@@ -19,6 +19,9 @@ Throughout:
 * With the default `we_excess_allowance_mode = "bounded"`,
   `we_excess_effective = min(max(0, risk_we_excess_allowance_pct),
   max(0, total_wallet_exposure_limit / wel_base - 1))`.
+  If `wel_base` is non-positive/non-finite, bounded mode treats the effective
+  allowance and allowed exposure as zero. If `total_wallet_exposure_limit` is
+  non-positive/non-finite, bounded mode grants no excess headroom.
   With `we_excess_allowance_mode = "legacy_raw"`, the raw
   `max(0, risk_we_excess_allowance_pct)` is used instead.
 * `wel_allowed = wel_base * (1 + we_excess_effective)`, so per-position excess allowance never

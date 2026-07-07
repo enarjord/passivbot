@@ -26,6 +26,31 @@ See also:
    - global account-level strategy-equity metrics under `*_strategy_eq`
    - side-specific strategy-equity metrics under `*_strategy_eq_long` / `*_strategy_eq_short`
 
+## Startup And Config-Change Contract
+
+HSL is stateless trading behavior. Live startup may use local caches or
+checkpoints to speed reconstruction, but the authoritative inputs are exchange
+state, fill history, candle history, config, and current time. Cache contents
+must never be required to decide whether HSL is RED, in cooldown, or terminal.
+
+Important consequences:
+
+1. Enabling HSL on an account with existing positions can trigger immediate
+   panic closes if reconstructed current-episode drawdown is RED.
+2. `live.pnls_max_lookback_days` is shared by HSL, realized-loss gating,
+   auto-unstuck allowance, plotting, and backtests. It is a memory horizon, not
+   a process-local lifetime.
+3. Changing HSL thresholds, signal mode, `n_positions`, TWEL, excess allowance,
+   or lookback length can retroactively change reconstructed RED/cooldown/
+   no-restart outcomes. Treat those edits as risk-policy migrations.
+4. Live `coin` mode uses configured `n_positions` for slot-budget sensitivity.
+   It must not silently switch to dynamic live coin eligibility; backtests may
+   use dynamic historical effective n-positions only behind an explicit option.
+5. Missing fill or candle coverage must be visible and fail/defer rather than
+   creating neutral drawdown values.
+6. Performance caches are allowed only when they can be invalidated safely and
+   extended from exchange-derived history without changing trading decisions.
+
 ## Restart / Statelessness Edge Cases
 
 These should stay under explicit review as HSL evolves:

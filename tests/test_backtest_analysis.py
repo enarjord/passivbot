@@ -108,6 +108,13 @@ def _make_analysis_entry(value):
     return analysis
 
 
+def test_backtest_hsl_signal_mode_requires_normalized_live_config():
+    assert bt._resolve_backtest_hsl_signal_mode({"live": {"hsl_signal_mode": "coin"}}) == "coin"
+
+    with pytest.raises(KeyError, match="live.hsl_signal_mode"):
+        bt._resolve_backtest_hsl_signal_mode({"live": {}})
+
+
 def test_expand_analysis_includes_entry_balance_pct():
     analysis_usd = _make_analysis_entry(0.123)
     analysis_btc = _make_analysis_entry(0.456)
@@ -937,7 +944,7 @@ def test_create_forager_hard_stop_drawdown_figure_returns_plot_when_enabled(monk
         index=idx,
     )
     config = {
-        "live": {"pnls_max_lookback_days": 30.0},
+        "live": {"hsl_signal_mode": "pside", "pnls_max_lookback_days": 30.0},
         "bot": {
             "long": {
                 "hsl_enabled": True,
@@ -1016,7 +1023,7 @@ def test_create_forager_hard_stop_drawdown_figure_plots_both_sides(monkeypatch):
     timestamps_ms = (idx.view("int64") // 10**6).tolist()
     bal_eq = pd.DataFrame({"usd_total_equity": [1000.0, 990.0, 995.0]}, index=idx)
     config = {
-        "live": {"pnls_max_lookback_days": 30.0},
+        "live": {"hsl_signal_mode": "pside", "pnls_max_lookback_days": 30.0},
         "bot": {
             "long": {
                 "hsl_enabled": True,

@@ -4,9 +4,139 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- The HSL no-restart (permanent halt) trigger now evaluates
+  `max(drawdown_raw, drawdown_ema)` against
+  `hsl_no_restart_drawdown_threshold` in both live and backtest, instead of
+  raw drawdown only. The permanent halt is intentionally conservative: it now
+  also trips on sustained smoothed damage even when the instantaneous
+  drawdown at the stop sample has partially recovered. The RED/panic-now
+  trigger is unchanged (`min(raw, ema)` crossing `hsl_red_threshold`).
 - `passivbot tool live-smoke-report` now summarizes existing cache load, flush,
   and warmup-decision events as `cache_health` in full/summary output and
   `cache` in brief output.
+- Live coin-mode HSL startup can now reuse its persisted replay cache: when
+  the cached series pass every trust gate (proven fill coverage at write and
+  load time, config digest identity, watermark agreement, gap extension from
+  exchange fills/candles, and current-position reconciliation), the bot
+  replays from the cache plus the gap instead of re-fetching the full
+  lookback. Any gate failure falls back to the full exchange-derived replay;
+  the cache never becomes authoritative trading state, and a fresh VPS
+  reconstructs identical decisions.
+- HSL-enabled startup and live-config preflight now surface a history
+  reinterpretation caveat and point operators to a dedicated HSL risks doc for
+  deposits, withdrawals, balance overrides, and HSL config changes.
+- Rust close-reducer pruning now keeps only the closest-to-fill reducer when
+  multiple same-priority protective reducers target one coin+pside in the same
+  ideal-order batch; ordinary grid/trailing close ladders remain preserved.
+- Bounded `we_excess_allowance_mode` now treats non-positive or non-finite base
+  WEL as zero allowed exposure and non-positive/non-finite TWEL as zero excess
+  headroom instead of falling back to the raw excess percentage.
+- Rust protective reducers now suppress lower-priority same-position ordinary
+  close orders in the same ideal-order batch, so panic, TWEL/WEL auto-reduce,
+  and auto-unstuck no longer stack with grid/trailing closes for one coin+pside.
+- Rust WEL auto-reduce now takes priority over same-position auto-unstuck
+  reducers in the same ideal-order batch, matching the documented reducer
+  priority before auto-unstuck is admitted.
+- Rust TWEL auto-reduce now takes priority over same-position auto-unstuck
+  reducers in the same ideal-order batch, preventing two reducer closes from
+  stacking on one coin+pside when portfolio exposure enforcement is active.
+- Rust TWEL `reduce_overweight` auto-reduce now uses the dynamic currently
+  tradable slot count when deciding which positions are overweight, matching
+  dynamic WEL sizing instead of the configured `n_positions` floor. If no
+  symbols are eligible for new entries but positions remain open, TWEL repair
+  falls back to the held-position count so protective reduce-only closes can
+  still be emitted.
+- `passivbot tool live-config-preflight` now reports
+  `balance_hysteresis_snap_pct` and warns when it is invalid or above `0.05`,
+  where snapped-balance entry sizing/gating can diverge noticeably from
+  raw-balance exposure repair near risk boundaries.
+- Entry ladder throttling now uses `entry_cooldown_minutes` as the single
+  control: full simultaneous ladders are allowed only when
+  `entry_cooldown_minutes = 0.0` and entry retracement is disabled. Any
+  positive cooldown, including fractional sub-minute values, stages at most one
+  position-adding entry order and blocks further adds until the exact cooldown
+  window expires.
+- Live and backtest HSL runtime paths now require normalized
+  `live.hsl_signal_mode` instead of silently treating a missing raw key as
+  `unified`; raw-config diagnostics now report the schema default `coin`.
+- The Rust orchestrator JSON boundary now rejects invalid account/risk globals
+  such as non-positive raw balance, negative realized-loss limits, and negative
+  unstuck allowances before risk gates or order planning can silently skip.
+- HSL/risk/unstuck config validation now clamps HSL EMA spans below `1.0`
+  during config preparation and rejects malformed HSL, risk, and unstuck
+  numeric inputs at the Rust orchestrator JSON boundary before order planning.
+- HSL panic close execution now preserves side-local
+  `bot.long/short.hsl.panic_close_order_type` in live and backtests; configuring
+  one side as `market` no longer market-promotes panic closes for the other side
+  when that side is configured as `limit`.
+- HSL restart behavior after RED is now controlled by explicit
+  `bot.long/short.hsl.restart_after_red_policy` values: `threshold` preserves
+  the previous no-restart-threshold behavior, `never` makes any RED terminal,
+  and `always` restarts after cooldown while disabling the no-restart safety
+  latch for that HSL scope.
+- Live TWEL auto-reduce now honors configured
+  `risk_twel_enforcer_policy` when building Rust orchestrator payloads instead
+  of always falling back to `reduce_overweight`, aligning live behavior with
+  backtests for configs using `reduce_portfolio`.
+- Live coin-mode HSL now computes slot drawdown from configured
+  `n_positions` and current raw balance only, so TWEL or excess allowance no
+  longer makes the configured RED drawdown threshold tolerate a larger
+  percentage loss. Compared with the previous TWEL-scaled denominator, this
+  makes TWEL > 1 coin-HSL stops trigger sooner and TWEL < 1 stops trigger later.
+- DEAP optimizer generation evaluations now honor
+  `optimize.max_pending_starting_evals_per_cpu`, bounding queued offspring
+  evaluations with the same memory-control cap used for starting seeds.
+- Pymoo optimizer starting configs now reuse their precomputed seed evaluations
+  during initial population setup instead of backtesting the same seed vectors a
+  second time.
+- Optimizer Pareto storage now checks candidate/front dominance in a single
+  pass, reducing per-candidate overhead without changing Pareto semantics.
+- Optimizer vector-shape extraction now rejects empty `config.optimize.bounds`
+  instead of generating key paths that fail later without matching bounds.
+- Compressed `all_results.bin` optimizer history now preserves deleted keys
+  during replay, preventing stale fields such as prior candidate errors from
+  leaking into later entries.
+- Pareto limit filters now fail loudly when a configured limit metric is missing
+  instead of silently retaining candidates that cannot be checked.
+- Suite optimizer workers now close lazy-slicing master shared-memory attachments when the
+  evaluator is cleaned up, avoiding attachment churn across evaluations.
+- Pareto pruning now rejects non-finite objective matrices before selecting
+  required extremes, preventing NaN values from being retained as best/worst axes.
+- Pareto bootstrap now uses non-empty scoring metadata from existing entries
+  before rebuilding the front, preventing legacy unscored files from forcing
+  minimize-all dominance for scored results.
+- Suite scenarios now reject unknown scenario fields before running, catching
+  typos such as `coin` instead of silently ignoring them.
+- Resumed pymoo optimizer checkpoints now refresh the active problem,
+  termination target, and checkpoint callback before continuing, so increasing
+  `optimize.iters` on resume takes effect.
+- Optimizer overrides now reject unknown `optimize.enable_overrides` names before
+  the run starts, and `forward_tp_grid` / `backward_tp_grid` now reorder
+  `trailing_grid_v7` close-grid markup bounds as intended.
+- Anchored fine-tune optimizer seed conversion now preserves each anchor's
+  original id when an earlier starting seed is skipped.
+- Optimizer SIGINT handling now safely no-ops before a worker pool exists and
+  terminates an active pool without referencing backend-local shutdown state.
+- `passivbot optimize --suite-config` now enables suite mode when `--suite` is
+  omitted, while explicit `--suite n` still disables suite mode.
+- Partial suite override files that define scenarios without `aggregate` now
+  preserve the base config's `backtest.aggregate` instead of resetting to mean.
+- Optimizer stepped bounds now stay on the configured grid for fractional steps
+  such as `0.25`, `0.125`, and `0.0025`, avoiding off-grid candidate values in
+  DEAP, pymoo repair, seed conversion, and result hashing.
+- Fixed DEAP optimizer candidate recording so duplicate-guard perturbations and
+  evaluated starting seeds keep the fitness attached to the actual evaluated
+  parameter vector.
+- Suite optimizer context preparation now matches suite-runner exchange and
+  coin-universe setup, and fails loudly when a scenario cannot be prepared
+  instead of silently dropping scenarios or falling back to other exchanges.
+- Added optional `optimize.seed`; the default `null` randomizes optimizer
+  population and worker RNGs, including replacing pymoo's previous fixed
+  default seed, while an integer seed opts into deterministic seeding for
+  diagnostics.
+- Optimizer Pareto recording now fails loudly on corrupt existing Pareto files
+  or invalid objective payloads instead of silently skipping store errors or
+  pruning files that were never loaded.
 - The `cache` live-event debug profile now enriches existing cache load,
   flush, and warmup-decision events with bounded key/count/source metadata
   without changing default event payloads or console output.

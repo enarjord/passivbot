@@ -63,7 +63,7 @@ from config.access import (
 )
 from config.pnl_lookback import parse_pnls_max_lookback_days
 from config.metrics import ANALYSIS_SHARED_KEYS
-from config.coerce import normalize_hsl_signal_mode
+from config.coerce import normalize_hsl_restart_after_red_policy, normalize_hsl_signal_mode
 from config.overrides import parse_overrides
 from config.shared_bot import flatten_shared_bot_side
 from config.strategy import (
@@ -260,6 +260,10 @@ def _resolve_backtest_hsl_configs(config: dict) -> tuple[dict, dict]:
             "no_restart_drawdown_threshold": float(
                 pside_cfg["hsl_no_restart_drawdown_threshold"]
             ),
+            "restart_after_red_policy": normalize_hsl_restart_after_red_policy(
+                pside_cfg["hsl_restart_after_red_policy"],
+                path="bot.<pside>.hsl.restart_after_red_policy",
+            ),
             "tier_ratios": {
                 "yellow": float(pside_cfg["hsl_tier_ratios"]["yellow"]),
                 "orange": float(pside_cfg["hsl_tier_ratios"]["orange"]),
@@ -272,9 +276,7 @@ def _resolve_backtest_hsl_configs(config: dict) -> tuple[dict, dict]:
 
 
 def _resolve_backtest_hsl_signal_mode(config: dict) -> str:
-    return normalize_hsl_signal_mode(
-        get_optional_config_value(config, "live.hsl_signal_mode", "unified")
-    )
+    return normalize_hsl_signal_mode(require_config_value(config, "live.hsl_signal_mode"))
 
 
 def _normalize_optional_bool_flag(argv: list[str], flag: str) -> list[str]:
@@ -2259,6 +2261,10 @@ def prep_backtest_args(
             tier_ratio_orange = float(tier_ratios["orange"])
             orange_tier_mode = str(cfg["orange_tier_mode"])
             panic_close_order_type = str(cfg["panic_close_order_type"])
+            restart_after_red_policy = normalize_hsl_restart_after_red_policy(
+                cfg.get("restart_after_red_policy", "threshold"),
+                path=f"{path_prefix}.restart_after_red_policy",
+            )
             if enabled and red_threshold <= 0.0:
                 raise ValueError(
                     f"{path_prefix}.red_threshold must be > 0.0 when enabled"
@@ -2305,6 +2311,7 @@ def prep_backtest_args(
                 "ema_span_minutes": ema_span_minutes,
                 "cooldown_minutes_after_red": cooldown_minutes_after_red,
                 "no_restart_drawdown_threshold": no_restart_drawdown_threshold,
+                "restart_after_red_policy": restart_after_red_policy,
                 "tier_ratios": {
                     "yellow": tier_ratio_yellow,
                     "orange": tier_ratio_orange,

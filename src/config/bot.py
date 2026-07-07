@@ -19,6 +19,7 @@ from .shared_bot import (
 )
 from .schema import get_template_config
 from .access import require_config_dict
+from .coerce import normalize_hsl_restart_after_red_policy
 from .tree_ops import add_missing_keys_recursively
 from risk_limits import normalize_we_excess_allowance_mode
 
@@ -133,13 +134,20 @@ def validate_bot_config(result: dict) -> None:
             path=f"bot.{pside}.risk.total_exposure_enforcer_policy",
         )
         twel = float(get_grouped_bot_value(bot_side, "total_wallet_exposure_limit"))
-        n_positions = int(round(float(get_grouped_bot_value(bot_side, "n_positions"))))
-        twel_enabled = bool(get_grouped_bot_value(bot_side, "risk_twel_enforcer_enabled"))
+        raw_n_positions = get_grouped_bot_value(bot_side, "n_positions")
+        try:
+            n_positions_value = float(raw_n_positions)
+        except (TypeError, ValueError) as exc:
+            raise TypeError(f"bot.{pside}.risk.n_positions must be numeric") from exc
+        if not math.isfinite(n_positions_value) or n_positions_value < 0.0:
+            raise ValueError(f"bot.{pside}.risk.n_positions must be finite and >= 0")
+        n_positions = int(round(n_positions_value))
         if twel < 0.0 or not math.isfinite(twel):
             raise ValueError(f"bot.{pside}.risk.total_wallet_exposure_limit must be finite and >= 0.0")
-        if twel > 0.0 and (entry_gate_enabled or twel_enabled) and n_positions <= 0:
+        if twel > 0.0 and n_positions <= 0:
             raise ValueError(
-                f"bot.{pside}.risk.n_positions must be > 0 when TWEL entry gate or enforcer is enabled"
+                f"bot.{pside}.risk.n_positions must be > 0 when "
+                f"bot.{pside}.risk.total_wallet_exposure_limit is > 0"
             )
         _validate_bool(
             get_grouped_bot_value(bot_side, "unstuck_enabled"),
@@ -363,6 +371,207 @@ def _normalize_cliff_edge_threshold(
     return numeric
 
 
+def _coerce_finite_float(value, *, path: str) -> float:
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError) as exc:
+        raise TypeError(f"{path} must be numeric") from exc
+    if not math.isfinite(numeric):
+        raise ValueError(f"{path} must be finite")
+    return numeric
+
+
+def _set_grouped_bot_value(
+    result: dict,
+    *,
+    pside: str,
+    flat_key: str,
+    value,
+    tracker: Optional[object],
+) -> None:
+    group_path = FLAT_BOT_KEY_TO_GROUP_PATH.get(flat_key)
+    if group_path is None:
+        result["bot"][pside][flat_key] = value
+        return
+    group_name, local_key = group_path
+    group_cfg = get_bot_group(result["bot"][pside], group_name)
+    if group_cfg:
+        group_cfg[local_key] = value
+    else:
+        result["bot"][pside][flat_key] = value
+
+
+def _normalize_minimum_span(
+    result: dict,
+    *,
+    pside: str,
+    flat_key: str,
+    path: str,
+    verbose: bool,
+    tracker: Optional[object],
+) -> None:
+    raw_value = get_grouped_bot_value(result["bot"][pside], flat_key)
+    numeric = _coerce_finite_float(raw_value, path=path)
+    normalized = max(1.0, numeric)
+    if normalized != numeric:
+        log_config_message(
+            verbose,
+            logging.WARNING,
+            "%s=%s is below minimum EMA span; clamping to %.1f",
+            path,
+            numeric,
+            normalized,
+        )
+        if tracker is not None:
+            group_path = FLAT_BOT_KEY_TO_GROUP_PATH.get(flat_key)
+            if group_path is not None:
+                tracker.update(["bot", pside, *group_path], raw_value, normalized)
+            else:
+                tracker.update(["bot", pside, flat_key], raw_value, normalized)
+    _set_grouped_bot_value(
+        result,
+        pside=pside,
+        flat_key=flat_key,
+        value=normalized,
+        tracker=tracker,
+    )
+
+
+def _validate_ratio(
+    value,
+    *,
+    path: str,
+    min_value: float = 0.0,
+    max_value: float | None = None,
+    min_inclusive: bool = True,
+) -> float:
+    numeric = _coerce_finite_float(value, path=path)
+    if min_inclusive:
+        min_ok = numeric >= min_value
+        min_desc = f">= {min_value}"
+    else:
+        min_ok = numeric > min_value
+        min_desc = f"> {min_value}"
+    if not min_ok:
+        raise ValueError(f"{path} must be finite and {min_desc}")
+    if max_value is not None and numeric > max_value:
+        raise ValueError(f"{path} must be finite and <= {max_value}")
+    return numeric
+
+
+def normalize_hsl_risk_unstuck_numerics(
+    result: dict,
+    *,
+    verbose: bool = True,
+    tracker: Optional[object] = None,
+) -> None:
+    for pside in BOT_POSITION_SIDES:
+        bot_side = result["bot"][pside]
+        hsl_path = f"bot.{pside}.hsl"
+        risk_path = f"bot.{pside}.risk"
+        unstuck_path = f"bot.{pside}.unstuck"
+
+        _normalize_minimum_span(
+            result,
+            pside=pside,
+            flat_key="hsl_ema_span_minutes",
+            path=f"{hsl_path}.ema_span_minutes",
+            verbose=verbose,
+            tracker=tracker,
+        )
+        red_threshold = _validate_ratio(
+            get_grouped_bot_value(bot_side, "hsl_red_threshold"),
+            path=f"{hsl_path}.red_threshold",
+            min_value=0.0,
+            max_value=1.0,
+            min_inclusive=False,
+        )
+        no_restart = _validate_ratio(
+            get_grouped_bot_value(bot_side, "hsl_no_restart_drawdown_threshold"),
+            path=f"{hsl_path}.no_restart_drawdown_threshold",
+            min_value=0.0,
+            max_value=1.0,
+        )
+        if no_restart < red_threshold:
+            log_config_message(
+                verbose,
+                logging.WARNING,
+                "%s.no_restart_drawdown_threshold=%s is below red_threshold=%s; clamping to red_threshold",
+                hsl_path,
+                no_restart,
+                red_threshold,
+            )
+            _set_grouped_bot_value(
+                result,
+                pside=pside,
+                flat_key="hsl_no_restart_drawdown_threshold",
+                value=red_threshold,
+                tracker=tracker,
+            )
+            if tracker is not None:
+                tracker.update(
+                    ["bot", pside, "hsl", "no_restart_drawdown_threshold"],
+                    no_restart,
+                    red_threshold,
+                )
+        _validate_ratio(
+            get_grouped_bot_value(bot_side, "hsl_cooldown_minutes_after_red"),
+            path=f"{hsl_path}.cooldown_minutes_after_red",
+        )
+        tier_ratios = get_grouped_bot_value(bot_side, "hsl_tier_ratios")
+        if not isinstance(tier_ratios, dict):
+            raise TypeError(f"{hsl_path}.tier_ratios must be a dict")
+        yellow = _validate_ratio(
+            tier_ratios.get("yellow"),
+            path=f"{hsl_path}.tier_ratios.yellow",
+            max_value=1.0,
+        )
+        orange = _validate_ratio(
+            tier_ratios.get("orange"),
+            path=f"{hsl_path}.tier_ratios.orange",
+            max_value=1.0,
+        )
+        if yellow > orange:
+            raise ValueError(
+                f"{hsl_path}.tier_ratios.yellow must be <= {hsl_path}.tier_ratios.orange"
+            )
+        restart_after_red_policy = normalize_hsl_restart_after_red_policy(
+            get_grouped_bot_value(bot_side, "hsl_restart_after_red_policy"),
+            path=f"{hsl_path}.restart_after_red_policy",
+        )
+        if tracker is not None:
+            current_restart_policy = get_grouped_bot_value(
+                bot_side, "hsl_restart_after_red_policy"
+            )
+            if current_restart_policy != restart_after_red_policy:
+                tracker.update(
+                    ["bot", pside, "hsl", "restart_after_red_policy"],
+                    current_restart_policy,
+                    restart_after_red_policy,
+                )
+        _set_grouped_bot_value(
+            result,
+            pside=pside,
+            flat_key="hsl_restart_after_red_policy",
+            value=restart_after_red_policy,
+            tracker=None,
+        )
+
+        _validate_ratio(
+            get_grouped_bot_value(bot_side, "risk_we_excess_allowance_pct"),
+            path=f"{risk_path}.we_excess_allowance_pct",
+        )
+        _validate_ratio(
+            get_grouped_bot_value(bot_side, "unstuck_close_pct"),
+            path=f"{unstuck_path}.close_pct",
+            max_value=1.0,
+        )
+        _validate_ratio(
+            get_grouped_bot_value(bot_side, "unstuck_loss_allowance_pct"),
+            path=f"{unstuck_path}.loss_allowance_pct",
+        )
+
+
 def normalize_cliff_edge_thresholds(
     result: dict,
     *,
@@ -582,9 +791,12 @@ def normalize_position_counts(result: dict, *, tracker: Optional[object] = None)
         if current is None:
             continue
         try:
-            rounded = int(round(float(current)))
+            current_value = float(current)
         except (TypeError, ValueError) as exc:
             raise TypeError(f"bot.{pside}.n_positions must be numeric") from exc
+        if not math.isfinite(current_value) or current_value < 0.0:
+            raise ValueError(f"bot.{pside}.risk.n_positions must be finite and >= 0")
+        rounded = int(round(current_value))
         if tracker is not None and current != rounded:
             tracker.update(["bot", pside, "risk", "n_positions"], current, rounded)
         risk_cfg["n_positions"] = rounded
@@ -833,6 +1045,7 @@ def format_bot_config(
     apply_backward_compatibility_renames(result, verbose=verbose, tracker=tracker)
     ensure_bot_defaults(result, verbose=verbose, tracker=tracker)
     ensure_required_bot_params_present(result)
+    normalize_hsl_risk_unstuck_numerics(result, verbose=verbose, tracker=tracker)
     normalize_cliff_edge_thresholds(result, verbose=verbose, tracker=tracker)
     normalize_bot_forager_config(result, verbose=verbose, tracker=tracker)
     normalize_position_counts(result, tracker=tracker)

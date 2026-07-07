@@ -43,10 +43,10 @@ mod core {
     };
     use crate::strategies::{
         generate_orders as generate_strategy_orders, parse_strategy_params, strategy_ema_spans,
-        strategy_entry_volatility_span_hours, strategy_initial_entry_offset,
-        strategy_initial_qty_pct, strategy_needs_log_range_1h, strategy_needs_log_range_1m,
-        strategy_offset_volatility_span_minutes, EmaGateMode, NextStepHint, PeekBehavior,
-        StrategyKind, StrategyParams, StrategyRequest, StrategySide,
+        strategy_entry_retracement_enabled, strategy_entry_volatility_span_hours,
+        strategy_initial_entry_offset, strategy_initial_qty_pct, strategy_needs_log_range_1h,
+        strategy_needs_log_range_1m, strategy_offset_volatility_span_minutes, EmaGateMode,
+        NextStepHint, PeekBehavior, StrategyKind, StrategyParams, StrategyRequest, StrategySide,
     };
     use crate::types::{
         BotParams, BotParamsPair, EMABands, ExchangeParams, OrderBook, OrderType, Position,
@@ -415,20 +415,71 @@ mod core {
         }
     }
 
-    fn cooldown_delay_minutes(cooldown_minutes: f64) -> u64 {
-        if !cooldown_minutes.is_finite() || cooldown_minutes <= 0.0 {
-            0
-        } else if cooldown_minutes < 1.0 {
-            0
-        } else {
-            cooldown_minutes.ceil() as u64
+    fn validate_account_risk_inputs(input: &OrchestratorInput) -> Result<(), OrchestratorError> {
+        if !(input.balance.is_finite() && input.balance > 0.0) {
+            return Err(OrchestratorError::NonFiniteInput {
+                field: "balance",
+                symbol_idx: None,
+            });
         }
+        let balance_raw = input_balance_raw(input);
+        if !(balance_raw.is_finite() && balance_raw > 0.0) {
+            return Err(OrchestratorError::NonFiniteInput {
+                field: "balance_raw",
+                symbol_idx: None,
+            });
+        }
+        if !(input.global.max_realized_loss_pct.is_finite()
+            && input.global.max_realized_loss_pct >= 0.0)
+        {
+            return Err(OrchestratorError::NonFiniteInput {
+                field: "global.max_realized_loss_pct",
+                symbol_idx: None,
+            });
+        }
+        if !input.global.realized_pnl_cumsum_max.is_finite() {
+            return Err(OrchestratorError::NonFiniteInput {
+                field: "global.realized_pnl_cumsum_max",
+                symbol_idx: None,
+            });
+        }
+        if !input.global.realized_pnl_cumsum_last.is_finite() {
+            return Err(OrchestratorError::NonFiniteInput {
+                field: "global.realized_pnl_cumsum_last",
+                symbol_idx: None,
+            });
+        }
+        if input.global.realized_pnl_cumsum_max < input.global.realized_pnl_cumsum_last {
+            return Err(OrchestratorError::NonFiniteInput {
+                field: "global.realized_pnl_cumsum_max_lt_last",
+                symbol_idx: None,
+            });
+        }
+        if !(input.global.unstuck_allowance_long.is_finite()
+            && input.global.unstuck_allowance_long >= 0.0)
+        {
+            return Err(OrchestratorError::NonFiniteInput {
+                field: "global.unstuck_allowance_long",
+                symbol_idx: None,
+            });
+        }
+        if !(input.global.unstuck_allowance_short.is_finite()
+            && input.global.unstuck_allowance_short >= 0.0)
+        {
+            return Err(OrchestratorError::NonFiniteInput {
+                field: "global.unstuck_allowance_short",
+                symbol_idx: None,
+            });
+        }
+        Ok(())
     }
 
-    fn effective_fill_timestamp_ms(fill_timestamp_ms: u64) -> u64 {
-        let minute_ms = 60_000_u64;
-        let minute = fill_timestamp_ms / minute_ms;
-        minute.saturating_add(1).saturating_mul(minute_ms)
+    fn cooldown_delay_ms(cooldown_minutes: f64) -> u64 {
+        if !cooldown_minutes.is_finite() || cooldown_minutes <= 0.0 {
+            0
+        } else {
+            (cooldown_minutes * 60_000.0).ceil() as u64
+        }
     }
 
     fn order_increases_position(pside: PositionSide, qty: f64) -> bool {
@@ -449,29 +500,18 @@ mod core {
         let Some(last_fill_ts) = last_increase_fill_timestamp_ms else {
             return false;
         };
-        let until_ms = effective_fill_timestamp_ms(last_fill_ts)
-            .saturating_add(cooldown_delay_minutes(cooldown_minutes).saturating_mul(60_000));
+        let until_ms = last_fill_ts.saturating_add(cooldown_delay_ms(cooldown_minutes));
         now_timestamp_ms < until_ms
     }
 
-    fn apply_add_order_cooldown(
-        orders: &mut Vec<IdealOrder>,
-        pside: PositionSide,
-        now_timestamp_ms: u64,
-        last_increase_fill_timestamp_ms: Option<u64>,
+    fn allow_full_entry_ladder_simultaneously(
         cooldown_minutes: f64,
-    ) {
-        if !cooldown_minutes.is_finite() || cooldown_minutes <= 0.0 {
-            return;
-        }
-        if add_order_cooldown_active(
-            now_timestamp_ms,
-            last_increase_fill_timestamp_ms,
-            cooldown_minutes,
-        ) {
-            orders.retain(|order| !order_increases_position(pside, order.qty));
-            return;
-        }
+        entry_retracement_enabled: bool,
+    ) -> bool {
+        !entry_retracement_enabled && cooldown_minutes.is_finite() && cooldown_minutes == 0.0
+    }
+
+    fn keep_only_first_add_order(orders: &mut Vec<IdealOrder>, pside: PositionSide) {
         let mut seen_add_order = false;
         orders.retain(|order| {
             if !order_increases_position(pside, order.qty) {
@@ -484,6 +524,27 @@ mod core {
                 true
             }
         });
+    }
+
+    fn apply_add_order_gates(
+        orders: &mut Vec<IdealOrder>,
+        pside: PositionSide,
+        now_timestamp_ms: u64,
+        last_increase_fill_timestamp_ms: Option<u64>,
+        cooldown_minutes: f64,
+        entry_retracement_enabled: bool,
+    ) {
+        if add_order_cooldown_active(
+            now_timestamp_ms,
+            last_increase_fill_timestamp_ms,
+            cooldown_minutes,
+        ) {
+            orders.retain(|order| !order_increases_position(pside, order.qty));
+            return;
+        }
+        if !allow_full_entry_ladder_simultaneously(cooldown_minutes, entry_retracement_enabled) {
+            keep_only_first_add_order(orders, pside);
+        }
     }
 
     pub fn is_close_order_type(order_type: OrderType) -> bool {
@@ -514,12 +575,75 @@ mod core {
         )
     }
 
+    fn is_higher_priority_reducer_than_unstuck(order_type: OrderType, pside: PositionSide) -> bool {
+        matches!(
+            (pside, order_type),
+            (PositionSide::Long, OrderType::ClosePanicLong)
+                | (PositionSide::Long, OrderType::CloseAutoReduceTwelLong)
+                | (PositionSide::Long, OrderType::CloseAutoReduceWelLong)
+                | (PositionSide::Short, OrderType::ClosePanicShort)
+                | (PositionSide::Short, OrderType::CloseAutoReduceTwelShort)
+                | (PositionSide::Short, OrderType::CloseAutoReduceWelShort)
+        )
+    }
+
     fn is_twel_close_order_type(order_type: OrderType, pside: PositionSide) -> bool {
         matches!(
             (pside, order_type),
             (PositionSide::Long, OrderType::CloseAutoReduceTwelLong)
                 | (PositionSide::Short, OrderType::CloseAutoReduceTwelShort)
         )
+    }
+
+    fn close_reducer_priority(order_type: OrderType, pside: PositionSide) -> Option<u8> {
+        match (pside, order_type) {
+            (PositionSide::Long, OrderType::ClosePanicLong)
+            | (PositionSide::Short, OrderType::ClosePanicShort) => Some(0),
+            (PositionSide::Long, OrderType::CloseAutoReduceTwelLong)
+            | (PositionSide::Long, OrderType::CloseAutoReduceWelLong)
+            | (PositionSide::Short, OrderType::CloseAutoReduceTwelShort)
+            | (PositionSide::Short, OrderType::CloseAutoReduceWelShort) => Some(1),
+            (PositionSide::Long, OrderType::CloseUnstuckLong)
+            | (PositionSide::Short, OrderType::CloseUnstuckShort) => Some(2),
+            _ if is_close_order_type(order_type) => Some(3),
+            _ => None,
+        }
+    }
+
+    fn prune_lower_priority_closes(
+        orders: &mut Vec<IdealOrder>,
+        pside: PositionSide,
+        ob: &OrderBook,
+    ) {
+        let highest = orders
+            .iter()
+            .filter_map(|order| close_reducer_priority(order.order_type, pside))
+            .min();
+        if let Some(priority) = highest {
+            if priority < 3 {
+                orders.retain(|order| {
+                    close_reducer_priority(order.order_type, pside).unwrap_or(3) == priority
+                });
+                orders.sort_by(|a, b| {
+                    let da = order_price_diff_strict(a, ob);
+                    let db = order_price_diff_strict(b, ob);
+                    da.partial_cmp(&db)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                        .then_with(|| a.order_type.id().cmp(&b.order_type.id()))
+                        .then_with(|| {
+                            a.price
+                                .partial_cmp(&b.price)
+                                .unwrap_or(std::cmp::Ordering::Equal)
+                        })
+                        .then_with(|| {
+                            a.qty
+                                .partial_cmp(&b.qty)
+                                .unwrap_or(std::cmp::Ordering::Equal)
+                        })
+                });
+                orders.truncate(1);
+            }
+        }
     }
 
     fn current_market_price(order_book: &OrderBook) -> f64 {
@@ -1613,6 +1737,17 @@ mod core {
         base.max(forced_normals_len)
     }
 
+    fn twel_repair_effective_n_positions(
+        effective_n_positions: usize,
+        open_position_count: usize,
+    ) -> usize {
+        if effective_n_positions > 0 {
+            effective_n_positions
+        } else {
+            open_position_count
+        }
+    }
+
     fn fill_forced_normal_indices(
         symbols: &[SymbolInput],
         pside: PositionSide,
@@ -2313,18 +2448,7 @@ mod core {
         input: &OrchestratorInput,
         workspace: &mut OrchestratorWorkspace,
     ) -> Result<OrchestratorOutput, OrchestratorError> {
-        if !input.balance.is_finite() {
-            return Err(OrchestratorError::NonFiniteInput {
-                field: "balance",
-                symbol_idx: None,
-            });
-        }
-        if input.balance_raw.is_infinite() {
-            return Err(OrchestratorError::NonFiniteInput {
-                field: "balance_raw",
-                symbol_idx: None,
-            });
-        }
+        validate_account_risk_inputs(input)?;
         let mut diagnostics = OrchestratorDiagnostics::default();
 
         // Validate invariants:
@@ -2858,12 +2982,13 @@ mod core {
                             s.symbol_idx,
                             PositionSide::Long,
                         );
-                        apply_add_order_cooldown(
+                        apply_add_order_gates(
                             &mut entries,
                             PositionSide::Long,
                             input.timestamp_ms,
                             s.long.last_increase_fill_timestamp_ms,
                             s.long.bot_params.risk_entry_cooldown_minutes,
+                            strategy_entry_retracement_enabled(&strategy_params),
                         );
                         append_strategy_orders_as_ideal(
                             &mut closes,
@@ -3023,12 +3148,13 @@ mod core {
                             s.symbol_idx,
                             PositionSide::Short,
                         );
-                        apply_add_order_cooldown(
+                        apply_add_order_gates(
                             &mut entries,
                             PositionSide::Short,
                             input.timestamp_ms,
                             s.short.last_increase_fill_timestamp_ms,
                             s.short.bot_params.risk_entry_cooldown_minutes,
+                            strategy_entry_retracement_enabled(&strategy_params),
                         );
                         append_strategy_orders_as_ideal(
                             &mut closes,
@@ -3189,12 +3315,26 @@ mod core {
                 match ideal.pside {
                     PositionSide::Long => {
                         if let Some(s) = per_long.get_mut(idx).and_then(|v| v.as_mut()) {
-                            s.closes.push(ideal);
+                            if !s.closes.iter().any(|o| {
+                                is_higher_priority_reducer_than_unstuck(
+                                    o.order_type,
+                                    PositionSide::Long,
+                                )
+                            }) {
+                                s.closes.push(ideal);
+                            }
                         }
                     }
                     PositionSide::Short => {
                         if let Some(s) = per_short.get_mut(idx).and_then(|v| v.as_mut()) {
-                            s.closes.push(ideal);
+                            if !s.closes.iter().any(|o| {
+                                is_higher_priority_reducer_than_unstuck(
+                                    o.order_type,
+                                    PositionSide::Short,
+                                )
+                            }) {
+                                s.closes.push(ideal);
+                            }
                         }
                     }
                 }
@@ -3233,6 +3373,8 @@ mod core {
                     min_cost: sym.exchange.min_cost,
                 });
             }
+            let twel_effective_n_positions =
+                twel_repair_effective_n_positions(enp_long, workspace.twel_positions.len());
             let actions = calc_twel_enforcer_actions(
                 LONG,
                 input
@@ -3245,7 +3387,7 @@ mod core {
                     .global_bot_params
                     .long
                     .total_wallet_exposure_limit,
-                input.global.global_bot_params.long.n_positions,
+                twel_effective_n_positions,
                 input_balance_raw(input),
                 &workspace.twel_positions,
                 input
@@ -3257,8 +3399,12 @@ mod core {
             );
             for (idx, order) in actions {
                 if let Some(s) = per_long.get_mut(idx).and_then(|v| v.as_mut()) {
-                    s.closes
-                        .retain(|o| o.order_type != OrderType::CloseAutoReduceWelLong);
+                    s.closes.retain(|o| {
+                        !matches!(
+                            o.order_type,
+                            OrderType::CloseAutoReduceWelLong | OrderType::CloseUnstuckLong
+                        )
+                    });
                     s.closes.push(IdealOrder {
                         symbol_idx: idx,
                         pside: PositionSide::Long,
@@ -3299,6 +3445,8 @@ mod core {
                     min_cost: sym.exchange.min_cost,
                 });
             }
+            let twel_effective_n_positions =
+                twel_repair_effective_n_positions(enp_short, workspace.twel_positions.len());
             let actions = calc_twel_enforcer_actions(
                 SHORT,
                 input
@@ -3311,7 +3459,7 @@ mod core {
                     .global_bot_params
                     .short
                     .total_wallet_exposure_limit,
-                input.global.global_bot_params.short.n_positions,
+                twel_effective_n_positions,
                 input_balance_raw(input),
                 &workspace.twel_positions,
                 input
@@ -3323,8 +3471,12 @@ mod core {
             );
             for (idx, order) in actions {
                 if let Some(s) = per_short.get_mut(idx).and_then(|v| v.as_mut()) {
-                    s.closes
-                        .retain(|o| o.order_type != OrderType::CloseAutoReduceWelShort);
+                    s.closes.retain(|o| {
+                        !matches!(
+                            o.order_type,
+                            OrderType::CloseAutoReduceWelShort | OrderType::CloseUnstuckShort
+                        )
+                    });
                     s.closes.push(IdealOrder {
                         symbol_idx: idx,
                         pside: PositionSide::Short,
@@ -3343,6 +3495,7 @@ mod core {
         // Trim closes per symbol to position size (furthest-first).
         for s in per_long.iter_mut().filter_map(|v| v.as_mut()) {
             let sym = &input.symbols[s.symbol_idx];
+            prune_lower_priority_closes(&mut s.closes, PositionSide::Long, &sym.order_book);
             trim_closes_to_position(
                 PositionSide::Long,
                 &mut s.closes,
@@ -3353,6 +3506,7 @@ mod core {
         }
         for s in per_short.iter_mut().filter_map(|v| v.as_mut()) {
             let sym = &input.symbols[s.symbol_idx];
+            prune_lower_priority_closes(&mut s.closes, PositionSide::Short, &sym.order_book);
             trim_closes_to_position(
                 PositionSide::Short,
                 &mut s.closes,
@@ -4098,26 +4252,166 @@ mod core {
         }
 
         #[test]
-        fn panic_close_respects_panic_close_market_flag() {
+        fn close_pruning_keeps_single_closest_same_priority_reducer() {
+            let order_book = OrderBook {
+                bid: 100.0,
+                ask: 101.0,
+            };
+            let mut closes = vec![
+                IdealOrder {
+                    symbol_idx: 0,
+                    pside: PositionSide::Long,
+                    qty: -0.3,
+                    price: 102.0,
+                    order_type: OrderType::CloseAutoReduceWelLong,
+                },
+                IdealOrder {
+                    symbol_idx: 0,
+                    pside: PositionSide::Long,
+                    qty: -0.3,
+                    price: 101.1,
+                    order_type: OrderType::CloseAutoReduceTwelLong,
+                },
+            ];
+
+            prune_lower_priority_closes(&mut closes, PositionSide::Long, &order_book);
+
+            assert_eq!(closes.len(), 1);
+            assert_eq!(closes[0].order_type, OrderType::CloseAutoReduceTwelLong);
+            assert!((closes[0].price - 101.1).abs() < 1e-12);
+        }
+
+        #[test]
+        fn close_pruning_prefers_reachable_long_reducer_with_same_priority() {
+            let order_book = OrderBook {
+                bid: 100.0,
+                ask: 101.0,
+            };
+            let mut closes = vec![
+                IdealOrder {
+                    symbol_idx: 0,
+                    pside: PositionSide::Long,
+                    qty: -0.3,
+                    price: 101.1,
+                    order_type: OrderType::CloseAutoReduceTwelLong,
+                },
+                IdealOrder {
+                    symbol_idx: 0,
+                    pside: PositionSide::Long,
+                    qty: -0.3,
+                    price: 100.9,
+                    order_type: OrderType::CloseAutoReduceWelLong,
+                },
+            ];
+
+            prune_lower_priority_closes(&mut closes, PositionSide::Long, &order_book);
+
+            assert_eq!(closes.len(), 1);
+            assert_eq!(closes[0].order_type, OrderType::CloseAutoReduceWelLong);
+            assert!((closes[0].price - 100.9).abs() < 1e-12);
+        }
+
+        #[test]
+        fn close_pruning_prefers_reachable_short_reducer_with_same_priority() {
+            let order_book = OrderBook {
+                bid: 100.0,
+                ask: 101.0,
+            };
+            let mut closes = vec![
+                IdealOrder {
+                    symbol_idx: 0,
+                    pside: PositionSide::Short,
+                    qty: 0.3,
+                    price: 99.9,
+                    order_type: OrderType::CloseAutoReduceTwelShort,
+                },
+                IdealOrder {
+                    symbol_idx: 0,
+                    pside: PositionSide::Short,
+                    qty: 0.3,
+                    price: 100.1,
+                    order_type: OrderType::CloseAutoReduceWelShort,
+                },
+            ];
+
+            prune_lower_priority_closes(&mut closes, PositionSide::Short, &order_book);
+
+            assert_eq!(closes.len(), 1);
+            assert_eq!(closes[0].order_type, OrderType::CloseAutoReduceWelShort);
+            assert!((closes[0].price - 100.1).abs() < 1e-12);
+        }
+
+        #[test]
+        fn close_pruning_preserves_ordinary_close_ladder() {
+            let order_book = OrderBook {
+                bid: 100.0,
+                ask: 101.0,
+            };
+            let mut closes = vec![
+                IdealOrder {
+                    symbol_idx: 0,
+                    pside: PositionSide::Long,
+                    qty: -0.3,
+                    price: 102.0,
+                    order_type: OrderType::CloseGridLong,
+                },
+                IdealOrder {
+                    symbol_idx: 0,
+                    pside: PositionSide::Long,
+                    qty: -0.3,
+                    price: 101.1,
+                    order_type: OrderType::CloseGridLong,
+                },
+                IdealOrder {
+                    symbol_idx: 0,
+                    pside: PositionSide::Long,
+                    qty: -0.3,
+                    price: 101.5,
+                    order_type: OrderType::CloseGridLong,
+                },
+            ];
+
+            prune_lower_priority_closes(&mut closes, PositionSide::Long, &order_book);
+
+            assert_eq!(closes.len(), 3);
+        }
+
+        #[test]
+        fn panic_close_respects_side_local_hsl_order_type() {
             let mut global = make_basic_global();
+            global.global_bot_params.long.hsl_enabled = true;
+            global.global_bot_params.long.hsl_panic_close_order_type = "market".to_string();
+            global.global_bot_params.short.hsl_enabled = true;
+            global.global_bot_params.short.hsl_panic_close_order_type = "limit".to_string();
             let order_book = OrderBook {
                 bid: 100.0,
                 ask: 100.0,
             };
-            let order = IdealOrder {
+            let long_order = IdealOrder {
                 symbol_idx: 0,
                 pside: PositionSide::Long,
                 qty: -1.0,
                 price: 50.0,
                 order_type: OrderType::ClosePanicLong,
             };
+            let short_order = IdealOrder {
+                symbol_idx: 0,
+                pside: PositionSide::Short,
+                qty: 1.0,
+                price: 150.0,
+                order_type: OrderType::ClosePanicShort,
+            };
             assert_eq!(
-                to_executable_order(order.clone(), &global, &order_book).execution_type,
+                to_executable_order(long_order.clone(), &global, &order_book).execution_type,
+                ExecutionType::Market
+            );
+            assert_eq!(
+                to_executable_order(short_order.clone(), &global, &order_book).execution_type,
                 ExecutionType::Limit
             );
             global.panic_close_market = true;
             assert_eq!(
-                to_executable_order(order, &global, &order_book).execution_type,
+                to_executable_order(short_order, &global, &order_book).execution_type,
                 ExecutionType::Market
             );
         }
@@ -5640,7 +5934,7 @@ mod core {
         }
 
         #[test]
-        fn realized_loss_gate_non_positive_balance_raw_returns_early() {
+        fn account_risk_validation_rejects_non_positive_balance_raw() {
             for raw_balance in [0.0, -1.0] {
                 let mut sym = make_basic_symbol(0);
                 sym.long.position = Position {
@@ -5685,20 +5979,37 @@ mod core {
                     peek_hints: None,
                     forager_hysteresis: None,
                 };
-                let out = compute_ideal_orders_for_test(&input).unwrap();
-                assert!(
-                    out.orders
-                        .iter()
-                        .any(|o| o.order_type == OrderType::CloseAutoReduceWelLong),
-                    "expected non-positive balance_raw={} to early-return and keep close order",
-                    raw_balance
-                );
-                assert!(
-                    out.diagnostics.loss_gate_blocks.is_empty(),
-                    "expected non-positive balance_raw={} to skip loss-gate diagnostics",
-                    raw_balance
+                assert_eq!(
+                    compute_ideal_orders_for_test(&input).unwrap_err(),
+                    OrchestratorError::NonFiniteInput {
+                        field: "balance_raw",
+                        symbol_idx: None,
+                    }
                 );
             }
+        }
+
+        #[test]
+        fn account_risk_validation_rejects_pnl_peak_below_current() {
+            let mut input = OrchestratorInput {
+                balance: 1000.0,
+                balance_raw: 1000.0,
+                timestamp_ms: 0,
+                global: make_basic_global(),
+                symbols: vec![make_basic_symbol(0)],
+                peek_hints: None,
+                forager_hysteresis: None,
+            };
+            input.global.realized_pnl_cumsum_max = 5.0;
+            input.global.realized_pnl_cumsum_last = 10.0;
+
+            assert_eq!(
+                compute_ideal_orders_for_test(&input).unwrap_err(),
+                OrchestratorError::NonFiniteInput {
+                    field: "global.realized_pnl_cumsum_max_lt_last",
+                    symbol_idx: None,
+                }
+            );
         }
 
         #[test]
@@ -5760,6 +6071,158 @@ mod core {
                 "TWEL enforcer should trigger using raw balance (WE=0.625 > 0.6), \
                  not snapped balance (WE=0.5 < 0.6). Orders: {:?}",
                 out.orders.iter().map(|o| &o.order_type).collect::<Vec<_>>()
+            );
+        }
+
+        #[test]
+        fn twel_reduce_overweight_uses_effective_tradable_slots() {
+            // Configured n_positions=4 but only two symbols are currently eligible.
+            // TWEL target is 0.50, so the dynamic overweight floor is 0.25.
+            // idx0 is exactly at the dynamic floor and less adverse; using the old
+            // configured floor 0.125 would wrongly select idx0 first.
+            let mut sym0 = make_basic_symbol(0);
+            sym0.long.position = Position {
+                size: 2.5,
+                price: 100.0,
+            };
+            sym0.order_book = OrderBook {
+                bid: 100.0,
+                ask: 100.0,
+            };
+            sym0.long.bot_params.wallet_exposure_limit = 0.4;
+            sym0.long.bot_params.risk_wel_enforcer_threshold = 2.0;
+
+            let mut sym1 = make_basic_symbol(1);
+            sym1.long.position = Position {
+                size: 2.6,
+                price: 100.0,
+            };
+            sym1.order_book = OrderBook {
+                bid: 95.0,
+                ask: 95.0,
+            };
+            sym1.long.bot_params.wallet_exposure_limit = 0.4;
+            sym1.long.bot_params.risk_wel_enforcer_threshold = 2.0;
+
+            let mut global_bp = BotParamsPair::default();
+            global_bp.long.total_wallet_exposure_limit = 0.5;
+            global_bp.long.risk_twel_enforcer_threshold = 1.0;
+            global_bp.long.risk_twel_enforcer_policy = TwelEnforcerPolicy::ReduceOverweight;
+            global_bp.long.n_positions = 4;
+
+            let input = OrchestratorInput {
+                balance: 1000.0,
+                balance_raw: 1000.0,
+                timestamp_ms: 0,
+                global: OrchestratorGlobal {
+                    filter_by_min_effective_cost: false,
+                    market_orders_allowed: false,
+                    market_order_near_touch_threshold: 0.001,
+                    market_order_slippage_pct: 0.0,
+                    panic_close_market: false,
+                    auto_unstuck_allowed: Some(true),
+                    unstuck_allowance_long: 0.0,
+                    unstuck_allowance_short: 0.0,
+                    max_realized_loss_pct: 1.0,
+                    realized_pnl_cumsum_max: 0.0,
+                    realized_pnl_cumsum_last: 0.0,
+                    sort_global: true,
+                    global_bot_params: global_bp,
+                    hedge_mode: true,
+                    strategy_kind: StrategyKind::TrailingMartingale,
+                },
+                symbols: vec![sym0, sym1],
+                peek_hints: None,
+                forager_hysteresis: None,
+            };
+            let out = compute_ideal_orders_for_test(&input).unwrap();
+            let twel_closes = out
+                .orders
+                .iter()
+                .filter(|o| o.order_type == OrderType::CloseAutoReduceTwelLong)
+                .collect::<Vec<_>>();
+            assert!(
+                !twel_closes.is_empty(),
+                "TWEL reduce-overweight should still repair total exposure"
+            );
+            assert!(
+                twel_closes.iter().all(|o| o.symbol_idx == 1),
+                "dynamic floor should leave idx0 at WE=0.25 untouched; orders: {:?}",
+                twel_closes
+            );
+        }
+
+        #[test]
+        fn twel_reduce_overweight_repairs_when_no_symbols_eligible() {
+            // No symbols are eligible for new entries, but held positions still need
+            // protective TWEL repair. The enforcer should fall back to the current
+            // open-position count instead of no-oping on effective_n_positions=0.
+            let mut sym0 = make_basic_symbol(0);
+            sym0.tradable = false;
+            sym0.long.position = Position {
+                size: 2.6,
+                price: 100.0,
+            };
+            sym0.order_book = OrderBook {
+                bid: 100.0,
+                ask: 100.0,
+            };
+            sym0.long.bot_params.wallet_exposure_limit = 0.4;
+            sym0.long.bot_params.risk_wel_enforcer_threshold = 2.0;
+
+            let mut sym1 = make_basic_symbol(1);
+            sym1.tradable = false;
+            sym1.long.position = Position {
+                size: 2.6,
+                price: 100.0,
+            };
+            sym1.order_book = OrderBook {
+                bid: 95.0,
+                ask: 95.0,
+            };
+            sym1.long.bot_params.wallet_exposure_limit = 0.4;
+            sym1.long.bot_params.risk_wel_enforcer_threshold = 2.0;
+
+            let mut global_bp = BotParamsPair::default();
+            global_bp.long.total_wallet_exposure_limit = 0.5;
+            global_bp.long.risk_twel_enforcer_threshold = 1.0;
+            global_bp.long.risk_twel_enforcer_policy = TwelEnforcerPolicy::ReduceOverweight;
+            global_bp.long.n_positions = 4;
+
+            let input = OrchestratorInput {
+                balance: 1000.0,
+                balance_raw: 1000.0,
+                timestamp_ms: 0,
+                global: OrchestratorGlobal {
+                    filter_by_min_effective_cost: false,
+                    market_orders_allowed: false,
+                    market_order_near_touch_threshold: 0.001,
+                    market_order_slippage_pct: 0.0,
+                    panic_close_market: false,
+                    auto_unstuck_allowed: Some(true),
+                    unstuck_allowance_long: 0.0,
+                    unstuck_allowance_short: 0.0,
+                    max_realized_loss_pct: 1.0,
+                    realized_pnl_cumsum_max: 0.0,
+                    realized_pnl_cumsum_last: 0.0,
+                    sort_global: true,
+                    global_bot_params: global_bp,
+                    hedge_mode: true,
+                    strategy_kind: StrategyKind::TrailingMartingale,
+                },
+                symbols: vec![sym0, sym1],
+                peek_hints: None,
+                forager_hysteresis: None,
+            };
+            let out = compute_ideal_orders_for_test(&input).unwrap();
+            let twel_closes = out
+                .orders
+                .iter()
+                .filter(|o| o.order_type == OrderType::CloseAutoReduceTwelLong)
+                .collect::<Vec<_>>();
+            assert!(
+                !twel_closes.is_empty(),
+                "TWEL reduce-overweight should still repair held positions when eligibility is zero"
             );
         }
 

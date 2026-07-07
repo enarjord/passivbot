@@ -4622,7 +4622,7 @@ def _smoke_hsl_enabled_psides(config: dict[str, Any]) -> list[str]:
 
 
 def _normalize_smoke_hsl_signal_mode(value: Any) -> str:
-    text = str(value if value not in (None, "") else "unified").strip().lower()
+    text = str(value if value not in (None, "") else "coin").strip().lower()
     aliases = {
         "per_side": "pside",
         "side": "pside",

@@ -43,6 +43,10 @@ class TestDeapAdapters:
         vals_eq = from_index_space([5.0, 99.0], bounds, mask_with_equal)
         assert vals_eq[1] == 1.0  # Reset to low
 
+        quarter_bounds = [Bound(0.0, 1.0, 0.25), Bound(0.0, 0.01, 0.0025)]
+        vals = from_index_space([3.0, 3.0], quarter_bounds, np.array([False, False]))
+        assert vals == pytest.approx([0.75, 0.0075])
+
     @patch("optimization.deap_adapters.deap_tools")
     def test_mutPolynomialBoundedWrapper(self, mock_deap_tools):
         mock_deap_tools.mutPolynomialBounded = MagicMock()

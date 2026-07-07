@@ -29,6 +29,7 @@ def _get_shared_bot_defaults():
                 "orange_tier_mode": "tp_only_with_active_entry_cancellation",
                 "panic_close_order_type": "limit",
                 "red_threshold": 0.025,
+                "restart_after_red_policy": "threshold",
                 "tier_ratios": {
                     "orange": 0.75,
                     "yellow": 0.5
@@ -75,6 +76,7 @@ def _get_shared_bot_defaults():
                 "orange_tier_mode": "tp_only_with_active_entry_cancellation",
                 "panic_close_order_type": "limit",
                 "red_threshold": 0.01,
+                "restart_after_red_policy": "threshold",
                 "tier_ratios": {
                     "orange": 0.75,
                     "yellow": 0.5
@@ -473,7 +475,9 @@ def get_template_config():
                     "fixed_params": [],
                     "fixed_runtime_overrides": {
                         "bot.long.hsl.no_restart_drawdown_threshold": 1,
-                        "bot.short.hsl.no_restart_drawdown_threshold": 1
+                        "bot.long.hsl.restart_after_red_policy": "threshold",
+                        "bot.short.hsl.no_restart_drawdown_threshold": 1,
+                        "bot.short.hsl.restart_after_red_policy": "threshold"
                     },
                     "iters": 200000,
                     "mutation_eta": 20,
@@ -483,6 +487,7 @@ def get_template_config():
                     "offspring_multiplier": 1,
                     "pareto_max_size": 1000,
                     "population_size": None,
+                    "seed": None,
                     "pymoo": {
                         "algorithm": "auto",
                         "algorithms": {

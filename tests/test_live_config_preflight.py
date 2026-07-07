@@ -85,6 +85,19 @@ def test_live_config_preflight_reports_risk_relevant_shape_and_bounds_symbols(tm
     assert report["hsl"]["sides"]["long"]["enabled"] is True
     assert report["hsl"]["sides"]["long"]["red_threshold"] == 0.05
     assert report["hsl"]["sides"]["short"]["enabled"] is False
+    hsl_evidence = report["cache"]["readiness"]["surfaces"]["hsl"]["evidence"]
+    assert {
+        item["code"]
+        for item in hsl_evidence
+    } >= {"hsl_enabled", "hsl_history_reinterpretation_caveat"}
+    caveat = next(
+        item
+        for item in hsl_evidence
+        if item["code"] == "hsl_history_reinterpretation_caveat"
+    )
+    assert caveat["doc"] == "docs/equity_hard_stop_loss_risks.md"
+    assert "deposits" in caveat["message"]
+    assert "HSL mode changes" in caveat["message"]
     assert report["universe"]["approved_coins"]["long"] == {
         "count": 4,
         "mode": "list",
@@ -94,6 +107,17 @@ def test_live_config_preflight_reports_risk_relevant_shape_and_bounds_symbols(tm
     }
     assert report["forager"]["sides"]["long"]["n_positions"] == 3
     assert report["forager"]["total_configured_n_positions"] == 4.0
+    assert report["risk"]["balance_hysteresis_snap_pct"] == {
+        "basis": (
+            "snapped balance is used for sizing/gating surfaces where hysteresis "
+            "is intentional; raw balance remains the basis for exact exposure repair"
+        ),
+        "default_value": 0.02,
+        "effective_value": 0.02,
+        "present": False,
+        "status": "defaulted",
+        "warning_threshold": 0.05,
+    }
     assert report["cache"]["live_settings"]["pnls_max_lookback_days"] == 7
     assert report["cache"]["readiness"]["status"] == "attention"
     assert report["cache"]["readiness"]["summary"] == {
@@ -117,6 +141,60 @@ def test_live_config_preflight_reports_risk_relevant_shape_and_bounds_symbols(tm
     }
     assert "super-secret-api-key" not in rendered
     assert "api_key" not in rendered
+
+
+def test_live_config_preflight_warns_on_high_balance_hysteresis(tmp_path):
+    config = _sample_config()
+    config["live"]["balance_hysteresis_snap_pct"] = 0.06
+    config_path = tmp_path / "live.json"
+    _write_config(config_path, config)
+
+    report = live_config_preflight.build_live_config_preflight_report(config_path)
+
+    assert report["ok"] is True
+    assert report["summary"]["warning_count"] == 1
+    assert report["risk"]["balance_hysteresis_snap_pct"] == {
+        "basis": (
+            "snapped balance is used for sizing/gating surfaces where hysteresis "
+            "is intentional; raw balance remains the basis for exact exposure repair"
+        ),
+        "default_value": 0.02,
+        "present": True,
+        "raw_value": 0.06,
+        "status": "high",
+        "value": 0.06,
+        "warning_threshold": 0.05,
+    }
+    assert report["issues"] == [
+        {
+            "code": "balance_hysteresis_snap_pct_high",
+            "message": (
+                "live.balance_hysteresis_snap_pct is above 5%; snapped-balance "
+                "entry sizing/gating may diverge noticeably from raw-balance "
+                "exposure repair near risk boundaries"
+            ),
+            "path": "live.balance_hysteresis_snap_pct",
+            "severity": "warning",
+        }
+    ]
+
+
+@pytest.mark.parametrize("value", [-0.01, "wide", True])
+def test_live_config_preflight_warns_on_invalid_balance_hysteresis(tmp_path, value):
+    config = _sample_config()
+    config["live"]["balance_hysteresis_snap_pct"] = value
+    config_path = tmp_path / "live.json"
+    _write_config(config_path, config)
+
+    report = live_config_preflight.build_live_config_preflight_report(config_path)
+
+    assert report["ok"] is True
+    assert report["summary"]["warning_count"] == 1
+    assert report["risk"]["balance_hysteresis_snap_pct"]["status"] in {
+        "invalid",
+        "invalid_bool",
+    }
+    assert report["issues"][0]["path"] == "live.balance_hysteresis_snap_pct"
 
 
 def test_live_config_preflight_reports_cache_readiness_without_artifact_claims(tmp_path):
@@ -243,6 +321,27 @@ def test_live_config_preflight_allows_coin_hsl_with_balance_override(tmp_path):
     assert report["ok"] is True
     assert report["hsl"]["effective_signal_mode"] == "coin"
     assert report["hsl"]["balance_override"]["active"] is True
+    assert not [
+        issue
+        for issue in report["issues"]
+        if issue["code"] == "hsl_balance_override_account_level_replay_unsafe"
+    ]
+
+
+def test_live_config_preflight_uses_schema_default_for_missing_hsl_signal_mode(tmp_path):
+    config = _sample_config()
+    del config["live"]["hsl_signal_mode"]
+    config_path = tmp_path / "live.json"
+    _write_config(config_path, config)
+
+    report = live_config_preflight.build_live_config_preflight_report(
+        config_path,
+        balance_override=1000,
+    )
+
+    assert report["ok"] is True
+    assert report["hsl"]["signal_mode"] is None
+    assert report["hsl"]["effective_signal_mode"] == "coin"
     assert not [
         issue
         for issue in report["issues"]

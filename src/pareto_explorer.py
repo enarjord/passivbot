@@ -752,6 +752,17 @@ def _resolve_limit_value(
     return None
 
 
+def _format_available_limit_metrics(candidate: ParetoCandidate) -> str:
+    available = sorted(
+        {
+            *candidate.objectives.keys(),
+            *candidate.stats_flat.keys(),
+            *candidate.aggregated_values.keys(),
+        }
+    )
+    return ", ".join(available) if available else "<none>"
+
+
 def _limit_rejects(entry: Mapping[str, Any], value: float) -> bool:
     mode = str(entry.get("penalize_if", "greater_than")).strip().lower()
     if mode == "greater_than":
@@ -802,7 +813,12 @@ def filter_candidates(
         for entry in enabled_limits:
             value = _resolve_limit_value(candidate, entry, aggregate_cfg)
             if value is None:
-                continue
+                metric = str(entry.get("metric", "")).strip() or "<missing>"
+                available = _format_available_limit_metrics(candidate)
+                raise ValueError(
+                    f"Limit metric {metric!r} could not be resolved for "
+                    f"{candidate.path.name}. Available metrics: {available}"
+                )
             if _limit_rejects(entry, value):
                 rejected = True
                 break

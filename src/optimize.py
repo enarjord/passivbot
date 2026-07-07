@@ -61,8 +61,6 @@ from backtest import (
     get_backtest_execution_settings,
 )
 import asyncio
-import argparse
-import mmap
 import multiprocessing
 import random
 import time
@@ -153,7 +151,7 @@ except ImportError:  # pragma: no cover - allow import in minimal test envs
     tools = algorithms = None
 import math
 import fcntl
-from optimizer_overrides import optimizer_overrides
+from optimizer_overrides import optimizer_overrides, validate_optimizer_overrides
 from opt_utils import make_json_serializable, generate_incremental_diff, round_floats, quantize_floats
 from limit_utils import expand_limit_checks, compute_limit_violation
 from pareto_store import ParetoStore
@@ -181,13 +179,15 @@ from optimization.bounds import (
     round_to_sig_digits,
 )
 from optimization.fine_tune_anchors import ANCHOR_GENE_KEY, ANCHOR_PLAN_KEY, get_anchor_plan
-from optimization.backend_shared import cancel_pending_async_results, drain_async_results
+from optimization.backend_shared import cancel_pending_async_results, stream_async_results
 from optimization.backends import get_backend_runner
+from optimization.random_seed import seed_rngs
 from optimization.config_adapter import (
     extract_bounds_tuple_list_from_config,
     get_optimization_key_paths,
     resolve_optimization_bound_path,
 )
+from optimization.evaluation_payload import apply_evaluation_payload, build_evaluation_payload
 from optimization.warmup import (
     build_optimizer_vector_config,
     compute_optimizer_per_coin_warmup_minutes,
@@ -348,10 +348,10 @@ def _register_exchange_data(
     config["backtest"]["coins"][exchange] = coins
     msss[exchange] = mss
     validate_array(hlcvs, "hlcvs")
-    hlcvs_array = np.array(hlcvs, dtype=np.float64, copy=True, order="C")
+    hlcvs_array = np.asarray(hlcvs, dtype=np.float64, order="C")
     hlcvs_spec, _ = array_manager.create_from(hlcvs_array)
     hlcvs_specs[exchange] = hlcvs_spec
-    btc_usd_array = np.array(btc_usd_prices, dtype=np.float64, copy=True, order="C")
+    btc_usd_array = np.asarray(btc_usd_prices, dtype=np.float64, order="C")
     validate_array(btc_usd_array, f"btc_usd_data for {exchange}", allow_nan=False)
     btc_usd_spec, _ = array_manager.create_from(btc_usd_array)
     btc_usd_specs[exchange] = btc_usd_spec
@@ -374,14 +374,17 @@ class ResultRecorder:
         bounds: Optional[Sequence[Bound]] = None,
         starting_iters: int = 0,
     ):
+        self.scoring_specs = extract_objective_specs(scoring_keys)
+        self.scoring_keys = [spec.metric for spec in self.scoring_specs]
         self.store = ParetoStore(
             directory=results_dir,
             sig_digits=sig_digits,
-            bounds=bounds,
             flush_interval=flush_interval,
             log_name="optimizer.pareto",
             max_size=pareto_max_size,
         )
+        self.store.scoring_specs = self.scoring_specs
+        self.store.scoring_keys = self.scoring_keys
         self.store.n_iters = starting_iters
         self.write_all = write_all_results
         self.compress = compress
@@ -393,8 +396,6 @@ class ResultRecorder:
             self.packer = msgpack.Packer(use_bin_type=True)
         self.prev_data = None
         self.counter = 0
-        self.scoring_specs = extract_objective_specs(scoring_keys)
-        self.scoring_keys = [spec.metric for spec in self.scoring_specs]
 
     def record(self, data: dict) -> None:
         if self.write_all and self.results_file:
@@ -418,7 +419,7 @@ class ResultRecorder:
         try:
             updated = self.store.add_entry(data)
         except Exception as exc:
-            logging.error(f"ParetoStore error: {exc}")
+            raise RuntimeError("Error updating Pareto store") from exc
         else:
             if updated:
                 objectives_block = metrics_block.get("objectives", {})
@@ -569,6 +570,31 @@ def _optimizer_exit_code(*, interrupted: bool, failed: bool) -> int:
     if failed:
         return 1
     return 0
+
+
+def _terminate_optimizer_pool(pool, pool_terminated: bool) -> bool:
+    if pool is None or pool_terminated:
+        return pool_terminated
+    logging.info("Terminating worker pool...")
+    pool.terminate()
+    return True
+
+
+def _close_evaluator_for_pool(evaluator_for_pool) -> bool:
+    close = getattr(evaluator_for_pool, "close", None)
+    if not callable(close):
+        return False
+    logging.info("Closing evaluator resources...")
+    try:
+        close()
+    except Exception:
+        logging.exception("Failed to close evaluator resources")
+        return False
+    return True
+
+
+def _suite_config_implies_suite_mode(args) -> bool:
+    return bool(getattr(args, "suite_config", None)) and getattr(args, "suite", None) is None
 
 
 def _build_invalid_candidate_metrics(
@@ -764,29 +790,30 @@ def _validate_resume_results(results_dir: str, config: dict) -> int:
     previous_evals = 0
     try:
         with open(results_filename, "rb") as f:
-            with mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ) as raw:
-                for entry in _iter_strict_msgpack_objects(raw, results_filename):
-                    previous_evals += 1
-                    if not isinstance(entry, dict):
-                        if previous_evals == 1:
-                            raise ValueError(
-                                f"Cannot resume: first all_results.bin entry is not a config object: "
-                                f"{results_filename}"
-                            )
+            for entry in _iter_strict_msgpack_objects(
+                f, results_filename, os.path.getsize(results_filename)
+            ):
+                previous_evals += 1
+                if not isinstance(entry, dict):
+                    if previous_evals == 1:
                         raise ValueError(
-                            f"Cannot resume: all_results.bin entry {previous_evals} is not a result object: "
+                            f"Cannot resume: first all_results.bin entry is not a config object: "
                             f"{results_filename}"
                         )
-                    if previous_evals == 1:
-                        mismatches = _resume_config_mismatches(entry, config)
-                        if mismatches:
-                            mismatch_str = "\n".join(mismatches)
-                            raise ValueError(
-                                f"\n\nERROR: Cannot resume because critical parameters have changed!\n"
-                                f"Mismatches detected:\n{mismatch_str}\n\n"
-                                f"Resuming with a changed configuration would corrupt optimization scores.\n"
-                                f"Please restore the original config or start a fresh run.\n"
-                            )
+                    raise ValueError(
+                        f"Cannot resume: all_results.bin entry {previous_evals} is not a result object: "
+                        f"{results_filename}"
+                    )
+                if previous_evals == 1:
+                    mismatches = _resume_config_mismatches(entry, config)
+                    if mismatches:
+                        mismatch_str = "\n".join(mismatches)
+                        raise ValueError(
+                            f"\n\nERROR: Cannot resume because critical parameters have changed!\n"
+                            f"Mismatches detected:\n{mismatch_str}\n\n"
+                            f"Resuming with a changed configuration would corrupt optimization scores.\n"
+                            f"Please restore the original config or start a fresh run.\n"
+                        )
     except msgpack.exceptions.UnpackException as exc:
         raise ValueError(f"Cannot resume: failed to read all_results.bin: {results_filename}") from exc
     except ValueError:
@@ -800,114 +827,26 @@ def _validate_resume_results(results_dir: str, config: dict) -> int:
     return previous_evals
 
 
-def _iter_strict_msgpack_objects(raw: bytes, filename: str):
-    offset = 0
-    while offset < len(raw):
-        next_offset = _skip_msgpack_object(raw, offset, filename)
+def _iter_strict_msgpack_objects(file_obj, filename: str, file_size: int):
+    unpacker = msgpack.Unpacker(file_obj, raw=False, strict_map_key=False)
+    last_successful_offset = 0
+    while True:
         try:
-            yield msgpack.unpackb(raw[offset:next_offset], raw=False, strict_map_key=False)
+            entry = unpacker.unpack()
+        except msgpack.exceptions.OutOfData as exc:
+            if last_successful_offset != file_size:
+                raise ValueError(
+                    f"Cannot resume: all_results.bin has truncated msgpack data: {filename}"
+                ) from exc
+            return
+        except msgpack.exceptions.FormatError as exc:
+            raise ValueError(
+                f"Cannot resume: all_results.bin contains invalid msgpack marker: {filename}"
+            ) from exc
         except Exception as exc:
             raise ValueError(f"Cannot resume: failed to decode all_results.bin: {filename}") from exc
-        offset = next_offset
-
-
-def _skip_msgpack_object(raw: bytes, offset: int, filename: str, depth: int = 0) -> int:
-    if depth > 512:
-        raise ValueError(f"Cannot resume: all_results.bin nesting is too deep: {filename}")
-    if offset >= len(raw):
-        raise ValueError(f"Cannot resume: all_results.bin has truncated msgpack data: {filename}")
-    marker = raw[offset]
-    offset += 1
-
-    if marker <= 0x7F or marker >= 0xE0:
-        return offset
-    if 0x80 <= marker <= 0x8F:
-        return _skip_msgpack_map(raw, offset, marker & 0x0F, filename, depth)
-    if 0x90 <= marker <= 0x9F:
-        return _skip_msgpack_array(raw, offset, marker & 0x0F, filename, depth)
-    if 0xA0 <= marker <= 0xBF:
-        return _require_msgpack_bytes(raw, offset, marker & 0x1F, filename)
-
-    fixed_size = {
-        0xC0: 0,
-        0xC2: 0,
-        0xC3: 0,
-        0xCA: 4,
-        0xCB: 8,
-        0xCC: 1,
-        0xCD: 2,
-        0xCE: 4,
-        0xCF: 8,
-        0xD0: 1,
-        0xD1: 2,
-        0xD2: 4,
-        0xD3: 8,
-        0xD4: 2,
-        0xD5: 3,
-        0xD6: 5,
-        0xD7: 9,
-        0xD8: 17,
-    }
-    if marker in fixed_size:
-        return _require_msgpack_bytes(raw, offset, fixed_size[marker], filename)
-    if marker == 0xC1:
-        raise ValueError(f"Cannot resume: all_results.bin contains invalid msgpack marker: {filename}")
-    if marker in (0xC4, 0xD9):
-        size, offset = _read_msgpack_uint(raw, offset, 1, filename)
-        return _require_msgpack_bytes(raw, offset, size, filename)
-    if marker in (0xC5, 0xDA):
-        size, offset = _read_msgpack_uint(raw, offset, 2, filename)
-        return _require_msgpack_bytes(raw, offset, size, filename)
-    if marker in (0xC6, 0xDB):
-        size, offset = _read_msgpack_uint(raw, offset, 4, filename)
-        return _require_msgpack_bytes(raw, offset, size, filename)
-    if marker == 0xC7:
-        size, offset = _read_msgpack_uint(raw, offset, 1, filename)
-        return _require_msgpack_bytes(raw, offset, size + 1, filename)
-    if marker == 0xC8:
-        size, offset = _read_msgpack_uint(raw, offset, 2, filename)
-        return _require_msgpack_bytes(raw, offset, size + 1, filename)
-    if marker == 0xC9:
-        size, offset = _read_msgpack_uint(raw, offset, 4, filename)
-        return _require_msgpack_bytes(raw, offset, size + 1, filename)
-    if marker == 0xDC:
-        size, offset = _read_msgpack_uint(raw, offset, 2, filename)
-        return _skip_msgpack_array(raw, offset, size, filename, depth)
-    if marker == 0xDD:
-        size, offset = _read_msgpack_uint(raw, offset, 4, filename)
-        return _skip_msgpack_array(raw, offset, size, filename, depth)
-    if marker == 0xDE:
-        size, offset = _read_msgpack_uint(raw, offset, 2, filename)
-        return _skip_msgpack_map(raw, offset, size, filename, depth)
-    if marker == 0xDF:
-        size, offset = _read_msgpack_uint(raw, offset, 4, filename)
-        return _skip_msgpack_map(raw, offset, size, filename, depth)
-    raise ValueError(f"Cannot resume: all_results.bin contains unknown msgpack marker: {filename}")
-
-
-def _skip_msgpack_array(raw: bytes, offset: int, size: int, filename: str, depth: int) -> int:
-    for _ in range(size):
-        offset = _skip_msgpack_object(raw, offset, filename, depth + 1)
-    return offset
-
-
-def _skip_msgpack_map(raw: bytes, offset: int, size: int, filename: str, depth: int) -> int:
-    for _ in range(size):
-        offset = _skip_msgpack_object(raw, offset, filename, depth + 1)
-        offset = _skip_msgpack_object(raw, offset, filename, depth + 1)
-    return offset
-
-
-def _read_msgpack_uint(raw: bytes, offset: int, size: int, filename: str) -> tuple[int, int]:
-    end = _require_msgpack_bytes(raw, offset, size, filename)
-    return int.from_bytes(raw[offset:end], "big"), end
-
-
-def _require_msgpack_bytes(raw: bytes, offset: int, size: int, filename: str) -> int:
-    end = offset + size
-    if end > len(raw):
-        raise ValueError(f"Cannot resume: all_results.bin has truncated msgpack data: {filename}")
-    return end
+        last_successful_offset = unpacker.tell()
+        yield entry
 
 
 def ea_mu_plus_lambda_stream(
@@ -930,6 +869,7 @@ def ea_mu_plus_lambda_stream(
     start_gen=1,
     logbook=None,
     checkpoint_path=None,
+    max_pending_evals=None,
 ):
     import pickle
     if logbook is None:
@@ -946,19 +886,13 @@ def ea_mu_plus_lambda_stream(
         if not individuals:
             return 0
         logging.debug("Evaluating %d candidates", len(individuals))
-        pending = {}
-        for idx, ind in enumerate(individuals):
-            pending[pool.apply_async(toolbox.evaluate, (ind,))] = idx
 
         completed = {"count": 0}
 
         def _on_result(idx, payload):
             nonlocal liquidation_total
-            fit_values, penalty, metrics = payload
             ind = individuals[idx]
-            ind.fitness.values = fit_values
-            ind.fitness.constraint_violation = penalty
-            ind.constraint_violation = penalty
+            metrics = apply_evaluation_payload(ind, payload)
             if metrics and isinstance(metrics, dict):
                 suite = metrics.get("suite_metrics", {}) or {}
                 metric_map = suite.get("metrics", {}) or {}
@@ -999,11 +933,13 @@ def ea_mu_plus_lambda_stream(
                 logging.info("Terminating worker pool immediately due to interrupt...")
                 pool.terminate()
                 pool_state["terminated"] = True
-        drain_async_results(
-            pending,
+        stream_async_results(
+            enumerate(individuals),
+            submit=lambda item: (pool.apply_async(toolbox.evaluate, (item[1],)), item[0]),
             poll_interval_seconds=0.1,
             on_result=_on_result,
             on_interrupt=_on_interrupt,
+            max_pending=max_pending_evals,
         )
 
         total_evals += completed["count"]
@@ -1548,7 +1484,12 @@ class Evaluator:
                 else:
                     if existing_score is not None:
                         self.duplicate_counter["reused"] += 1
-                        return tuple(existing_score), existing_penalty, None
+                        return build_evaluation_payload(
+                            existing_score,
+                            existing_penalty,
+                            None,
+                            individual,
+                        )
             else:
                 self.seen_hashes[individual_hash] = None
         analyses = {}
@@ -1590,7 +1531,12 @@ class Evaluator:
                 _set_candidate_metrics(individual, metrics_payload)
                 actual_hash = calc_hash(individual)
                 self.seen_hashes[actual_hash] = (tuple(objectives), total_penalty)
-                return tuple(objectives), total_penalty, metrics_payload
+                return build_evaluation_payload(
+                    objectives,
+                    total_penalty,
+                    metrics_payload,
+                    individual,
+                )
             analyses[exchange] = analysis
             liquidated = liquidated or _analysis_indicates_liquidation(analysis, config)
 
@@ -1621,7 +1567,12 @@ class Evaluator:
             actual_hash = calc_hash(individual)
             if self.use_duplicate_guard:
                 self.seen_hashes[actual_hash] = (tuple(objectives), total_penalty)
-            return tuple(objectives), total_penalty, metrics_payload
+            return build_evaluation_payload(
+                objectives,
+                total_penalty,
+                metrics_payload,
+                individual,
+            )
         metrics_payload = {
             "stats": aggregate_stats,
             "objectives": raw_objectives,
@@ -1632,7 +1583,7 @@ class Evaluator:
         actual_hash = calc_hash(individual)
         if self.use_duplicate_guard:
             self.seen_hashes[actual_hash] = (tuple(objectives), total_penalty)
-        return tuple(objectives), total_penalty, metrics_payload
+        return build_evaluation_payload(objectives, total_penalty, metrics_payload, individual)
 
     def build_limit_checks(self, aggregate_cfg: Dict[str, Any] | None = None):
         limits = self.config["optimize"].get("limits", [])
@@ -1876,7 +1827,12 @@ class SuiteEvaluator:
                 else:
                     if existing_score is not None:
                         duplicate_counter["reused"] += 1
-                        return tuple(existing_score), existing_penalty, None
+                        return build_evaluation_payload(
+                            existing_score,
+                            existing_penalty,
+                            None,
+                            individual,
+                        )
             else:
                 seen_hashes[individual_hash] = None
 
@@ -1974,7 +1930,12 @@ class SuiteEvaluator:
                     _set_candidate_metrics(individual, metrics_payload)
                     actual_hash = calc_hash(individual)
                     self.base.seen_hashes[actual_hash] = (tuple(objectives), total_penalty)
-                    return tuple(objectives), total_penalty, metrics_payload
+                    return build_evaluation_payload(
+                        objectives,
+                        total_penalty,
+                        metrics_payload,
+                        individual,
+                    )
                 analyses[exchange] = analysis
                 liquidated = liquidated or _analysis_indicates_liquidation(
                     analysis, scenario_config
@@ -2005,7 +1966,12 @@ class SuiteEvaluator:
                 _set_candidate_metrics(individual, metrics_payload)
                 actual_hash = calc_hash(individual)
                 self.base.seen_hashes[actual_hash] = (tuple(objectives), total_penalty)
-                return tuple(objectives), total_penalty, metrics_payload
+                return build_evaluation_payload(
+                    objectives,
+                    total_penalty,
+                    metrics_payload,
+                    individual,
+                )
             _profile_add(timings, "combine_metrics_ms", phase_start)
             stats = combined_metrics.get("stats", {})
             logging.debug(
@@ -2094,20 +2060,30 @@ class SuiteEvaluator:
         actual_hash = calc_hash(individual)
         if self.base.use_duplicate_guard:
             self.base.seen_hashes[actual_hash] = (tuple(objectives), total_penalty)
-        return tuple(objectives), total_penalty, metrics_payload
+        return build_evaluation_payload(objectives, total_penalty, metrics_payload, individual)
 
     def __del__(self):
-        for ctx in self.contexts:
-            for attachment in ctx.attachments.get("hlcvs", {}).values():
+        self.close()
+
+    def close(self):
+        for ctx in getattr(self, "contexts", []):
+            attachments = getattr(ctx, "attachments", {}) or {}
+            for attachment_map in attachments.values():
+                for attachment in attachment_map.values():
+                    try:
+                        attachment.close()
+                    except Exception:
+                        pass
+                attachment_map.clear()
+        for attachment_map in getattr(self, "_master_attachments", {}).values():
+            for attachment in attachment_map.values():
                 try:
                     attachment.close()
                 except Exception:
                     pass
-            for attachment in ctx.attachments.get("btc", {}).values():
-                try:
-                    attachment.close()
-                except Exception:
-                    pass
+            attachment_map.clear()
+        for array_map in getattr(self, "_master_arrays", {}).values():
+            array_map.clear()
 
 
 def add_extra_options(parser, *, help_all: bool):
@@ -2558,9 +2534,6 @@ def extract_configs(path):
 def iter_extract_configs(path):
     if not os.path.exists(path):
         return
-    if path.endswith("_all_results.bin"):
-        logging.info(f"Skipping {path}")
-        return
     if path.endswith(".json"):
         try:
             raw = load_hjson_config(path, log_errors=False)
@@ -2689,9 +2662,8 @@ def configs_to_individuals_streaming(
         and optimization_shape.key_paths
         and optimization_shape.key_paths[0][0] == ANCHOR_GENE_KEY
     )
-    anchor_count = 0
     clamp_collector = {}
-    for cfg in cfgs:
+    for anchor_idx, cfg in enumerate(cfgs):
         raw_count += 1
         try:
             fcfg = _build_starting_seed_config(cfg)
@@ -2701,7 +2673,7 @@ def configs_to_individuals_streaming(
                 sig_digits,
                 key_paths=key_paths,
                 optimization_shape=optimization_shape,
-                anchor_id=anchor_count if anchored_shape else None,
+                anchor_id=anchor_idx if anchored_shape else None,
                 clamp_context="starting config",
                 source=cfg.get("_starting_config_source", "<memory>")
                 if isinstance(cfg, dict)
@@ -2709,8 +2681,6 @@ def configs_to_individuals_streaming(
                 clamp_collector=clamp_collector,
             )
             inds.add(tuple(individual))
-            if anchored_shape:
-                anchor_count += 1
         except Exception as e:
             logging.warning(f"failed to use starting config as optimizer seed: {e}")
     _flush_seed_bounds_adjustments(clamp_collector)
@@ -2851,6 +2821,7 @@ async def main():
         verbose=False,
         raw_snapshot=raw_snapshot,
     )
+    validate_optimizer_overrides(config.get("optimize", {}).get("enable_overrides", []))
     config_logging_value = get_optional_config_value(config, "logging.level", None)
     effective_log_level = resolve_log_level(args.log_level, config_logging_value, fallback=1)
     if effective_log_level != initial_log_level:
@@ -2880,6 +2851,8 @@ async def main():
     if args.suite_config:
         logging.info("loading suite config %s", args.suite_config)
         suite_override = load_suite_override_config(args.suite_config)
+        if _suite_config_implies_suite_mode(args):
+            recursive_config_update(config, "backtest.suite_enabled", True, verbose=True)
     suite_cfg = extract_suite_config(config, suite_override)
 
     # Handle --scenarios filter (implies --suite y)
@@ -3057,6 +3030,7 @@ async def main():
         if checkpoint_path is None:
             checkpoint_path = os.path.join(results_dir, "checkpoint.pkl")
         overrides_list = config.get("optimize", {}).get("enable_overrides", [])
+        seed_rngs(config.get("optimize", {}).get("seed"), context="optimizer")
 
         # Shared state used by workers for duplicate detection
         manager = multiprocessing.Manager()
@@ -3132,14 +3106,7 @@ async def main():
     except KeyboardInterrupt:
         interrupted = True
         logging.info("SIGINT received; starting graceful shutdown")
-        if "pool" in locals():
-            already = pool_state["terminated"] if "pool_state" in locals() else pool_terminated
-            if not already:
-                logging.info("Terminating worker pool...")
-                pool.terminate()
-                pool_terminated = True
-                if "pool_state" in locals():
-                    pool_state["terminated"] = True
+        pool_terminated = _terminate_optimizer_pool(pool, pool_terminated)
     except Exception as e:
         failed = True
         logging.error(f"An error occurred: {e}")
@@ -3155,9 +3122,7 @@ async def main():
             recorder.close()
         if "pool" in locals() and pool is not None:
             if interrupted and not pool_terminated:
-                logging.info("Terminating worker pool...")
-                pool.terminate()
-                pool_terminated = True
+                pool_terminated = _terminate_optimizer_pool(pool, pool_terminated)
             if pool_terminated or interrupted:
                 logging.info("Joining terminated worker pool...")
             else:
@@ -3173,6 +3138,8 @@ async def main():
                 manager.shutdown()
             except Exception:
                 logging.exception("Failed to shut down multiprocessing manager")
+        if "evaluator_for_pool" in locals():
+            _close_evaluator_for_pool(evaluator_for_pool)
         if "array_manager" in locals():
             logging.info("Releasing shared memory...")
             try:

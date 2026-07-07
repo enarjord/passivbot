@@ -91,7 +91,7 @@ class TestConfigAdapter:
         assert ("long_hsl_red_threshold", ("bot", "long", "hsl_red_threshold")) in key_paths
         assert ("short_hsl_ema_span_minutes", ("bot", "short", "hsl_ema_span_minutes")) in key_paths
 
-    def test_get_optimization_key_paths_skips_missing_side_configs(self):
+    def test_get_optimization_key_paths_rejects_empty_bounds(self):
         config = {
             "bot": {
                 "long": {
@@ -102,12 +102,14 @@ class TestConfigAdapter:
             "optimize": {"bounds": {}},
         }
 
-        key_paths = get_optimization_key_paths(config)
-
-        assert key_paths == [
-            ("long_a", ("bot", "long", "a")),
-            ("long_b", ("bot", "long", "b")),
-        ]
+        with pytest.raises(
+            ValueError, match="config.optimize.bounds must contain at least one optimizer bound"
+        ):
+            get_optimization_key_paths(config)
+        with pytest.raises(
+            ValueError, match="config.optimize.bounds must contain at least one optimizer bound"
+        ):
+            extract_bounds_tuple_list_from_config(config)
 
     @pytest.mark.parametrize(
         ("bound_key", "bound_value", "expected"),

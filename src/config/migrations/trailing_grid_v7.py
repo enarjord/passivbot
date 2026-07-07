@@ -130,6 +130,7 @@ V7_INSERTED_DEFAULT_TOP_LEVEL_PATHS = (
     ("live", "hsl_signal_mode"),
 )
 V7_INSERTED_DEFAULT_SHARED_FLAT_KEYS = (
+    "risk_allow_simultaneous_grid_entries",
     "risk_entry_cooldown_minutes",
     "risk_twel_enforcer_enabled",
     "risk_twel_enforcer_threshold",
@@ -147,6 +148,7 @@ V7_INSERTED_DEFAULT_SHARED_FLAT_KEYS = (
     "hsl_orange_tier_mode",
     "hsl_panic_close_order_type",
     "hsl_red_threshold",
+    "hsl_restart_after_red_policy",
     "hsl_tier_ratios",
     "unstuck_close_pct",
     "unstuck_ema_dist",

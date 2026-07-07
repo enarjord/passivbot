@@ -104,6 +104,54 @@ def test_build_scenarios_inherits_exchanges_from_defaults():
     assert scenarios[0].exchanges == ["kucoin"]
 
 
+def test_build_scenarios_accepts_documented_scenario_keys():
+    suite_cfg = {
+        "scenarios": [
+            {
+                "label": "full",
+                "start_date": "2021-01-01",
+                "end_date": "2021-01-31",
+                "coins": ["BTC"],
+                "ignored_coins": ["ETH"],
+                "exchanges": "binance",
+                "coin_sources": {"BTC": "binance"},
+                "overrides": {"bot.long.risk.n_positions": 1},
+            }
+        ]
+    }
+
+    scenarios, _ = build_scenarios(suite_cfg)
+
+    assert scenarios[0].label == "full"
+    assert scenarios[0].exchanges == ["binance"]
+    assert scenarios[0].coins == ["BTC"]
+    assert scenarios[0].ignored_coins == ["ETH"]
+    assert scenarios[0].coin_sources == {"BTC": "binance"}
+    assert scenarios[0].overrides == {"bot.long.risk.n_positions": 1}
+
+
+def test_build_scenarios_rejects_unknown_scenario_keys():
+    suite_cfg = {
+        "scenarios": [
+            {
+                "label": "typo",
+                "coin": ["BTC"],
+            }
+        ]
+    }
+
+    with pytest.raises(
+        ValueError,
+        match=r"config\.backtest\.scenarios\[0\] contains unknown key\(s\): coin",
+    ):
+        build_scenarios(suite_cfg)
+
+
+def test_build_scenarios_rejects_non_mapping_scenarios():
+    with pytest.raises(ValueError, match=r"config\.backtest\.scenarios\[0\] must be a mapping"):
+        build_scenarios({"scenarios": ["not-a-mapping"]})
+
+
 def test_apply_scenario_filters_unavailable_coins():
     base_config = {
         "backtest": {

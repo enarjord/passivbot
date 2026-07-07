@@ -3,6 +3,7 @@ from copy import deepcopy
 from typing import Any, Dict, Iterable, Optional
 
 from utils import format_end_date, normalize_coins_source, symbol_to_coin
+from optimization.random_seed import normalize_optional_seed
 
 from .limits import _resolve_optimize_limits_for_load
 from .log_output import log_config_message
@@ -224,6 +225,7 @@ def apply_non_live_adjustments(
     if population_size is not None and population_size <= 0:
         raise ValueError("optimize.population_size must be > 0 when set")
     result["optimize"]["population_size"] = population_size
+    result["optimize"]["seed"] = normalize_optional_seed(result["optimize"].get("seed"))
 
     current_limits = deepcopy(result["optimize"].get("limits", []))
     limits_snapshot = deepcopy(current_limits)

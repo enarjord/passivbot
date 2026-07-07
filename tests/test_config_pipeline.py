@@ -1477,6 +1477,35 @@ def test_prepare_config_rejects_negative_entry_cooldown_minutes():
         prepare_config(source, verbose=False, target="canonical", runtime=None)
 
 
+def test_prepare_config_rejects_positive_twel_with_zero_positions():
+    source = get_template_config()
+    risk = source["bot"]["long"]["risk"]
+    risk["total_wallet_exposure_limit"] = 1.0
+    risk["n_positions"] = 0
+    risk["total_exposure_entry_gate_enabled"] = False
+    risk["total_exposure_enforcer_enabled"] = False
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            r"bot\.long\.risk\.n_positions must be > 0 when "
+            r"bot\.long\.risk\.total_wallet_exposure_limit is > 0"
+        ),
+    ):
+        prepare_config(source, verbose=False, target="canonical", runtime=None)
+
+
+@pytest.mark.parametrize("n_positions", [-1, -0.1])
+def test_prepare_config_rejects_negative_positions_even_when_side_disabled(n_positions):
+    source = get_template_config()
+    risk = source["bot"]["short"]["risk"]
+    risk["total_wallet_exposure_limit"] = 0.0
+    risk["n_positions"] = n_positions
+
+    with pytest.raises(ValueError, match=r"bot\.short\.risk\.n_positions"):
+        prepare_config(source, verbose=False, target="canonical", runtime=None)
+
+
 def test_prepare_config_normalizes_we_excess_allowance_mode_and_runtime_flattening():
     source = get_template_config()
     source["bot"]["long"]["risk"]["we_excess_allowance_mode"] = "LEGACY_RAW"
@@ -1882,6 +1911,71 @@ def test_prepare_config_rejects_cancellations_not_greater_than_creations():
 def test_prepare_config_rejects_invalid_staged_live_controls(field, value, match):
     source = get_template_config()
     source["live"][field] = value
+
+    with pytest.raises((TypeError, ValueError), match=match):
+        prepare_config(source, verbose=False, target="canonical", runtime=None)
+
+
+def test_prepare_config_clamps_hsl_ema_span_to_minimum():
+    source = get_template_config()
+    source["bot"]["long"]["hsl"]["ema_span_minutes"] = 0.25
+
+    prepared = prepare_config(source, verbose=False, target="canonical", runtime=None)
+
+    assert prepared["bot"]["long"]["hsl"]["ema_span_minutes"] == pytest.approx(1.0)
+
+
+def test_prepare_config_clamps_hsl_no_restart_threshold_to_red_threshold():
+    source = get_template_config()
+    source["bot"]["long"]["hsl"]["red_threshold"] = 0.20
+    source["bot"]["long"]["hsl"]["no_restart_drawdown_threshold"] = 0.10
+
+    prepared = prepare_config(source, verbose=False, target="canonical", runtime=None)
+
+    assert prepared["bot"]["long"]["hsl"]["no_restart_drawdown_threshold"] == pytest.approx(0.20)
+
+
+@pytest.mark.parametrize(
+    ("group", "field", "value", "match"),
+    [
+        ("hsl", "red_threshold", 0.0, r"bot\.long\.hsl\.red_threshold must be finite and > 0\.0"),
+        (
+            "hsl",
+            "cooldown_minutes_after_red",
+            -1.0,
+            r"bot\.long\.hsl\.cooldown_minutes_after_red must be finite and >= 0\.0",
+        ),
+        (
+            "hsl",
+            "tier_ratios",
+            {"yellow": 0.9, "orange": 0.8},
+            r"bot\.long\.hsl\.tier_ratios\.yellow must be <= bot\.long\.hsl\.tier_ratios\.orange",
+        ),
+        (
+            "risk",
+            "we_excess_allowance_pct",
+            -0.01,
+            r"bot\.long\.risk\.we_excess_allowance_pct must be finite and >= 0\.0",
+        ),
+        (
+            "unstuck",
+            "close_pct",
+            1.01,
+            r"bot\.long\.unstuck\.close_pct must be finite and <= 1\.0",
+        ),
+        (
+            "unstuck",
+            "loss_allowance_pct",
+            float("nan"),
+            r"bot\.long\.unstuck\.loss_allowance_pct must be finite",
+        ),
+    ],
+)
+def test_prepare_config_rejects_invalid_hsl_risk_unstuck_numerics(
+    group, field, value, match
+):
+    source = get_template_config()
+    source["bot"]["long"][group][field] = value
 
     with pytest.raises((TypeError, ValueError), match=match):
         prepare_config(source, verbose=False, target="canonical", runtime=None)

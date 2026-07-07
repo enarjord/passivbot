@@ -76,6 +76,46 @@ def test_optimizer_suite_config_override_accepts_partial_backtest_scenarios(tmp_
     assert suite_cfg["scenarios"] == override_cfg["backtest"]["scenarios"]
 
 
+def test_partial_backtest_suite_config_preserves_base_aggregate(tmp_path: Path):
+    base_cfg = get_template_config()
+    base_cfg["backtest"]["suite_enabled"] = True
+    base_cfg["backtest"]["scenarios"] = [{"label": "base_scenario"}]
+    base_cfg["backtest"]["aggregate"] = {"default": "max", "adg": "median"}
+
+    override_cfg = {
+        "backtest": {
+            "scenarios": [{"label": "stress_window"}],
+        }
+    }
+
+    config_path = tmp_path / "base.json"
+    suite_path = tmp_path / "partial_suite.hjson"
+    config_path.write_text(json.dumps(base_cfg))
+    suite_path.write_text(json.dumps(override_cfg))
+
+    suite_cfg = ensure_suite_config(config_path, suite_path)
+    assert suite_cfg["aggregate"] == {"default": "max", "adg": "median"}
+    assert suite_cfg["scenarios"] == override_cfg["backtest"]["scenarios"]
+
+
+def test_partial_top_level_suite_config_preserves_base_aggregate(tmp_path: Path):
+    base_cfg = get_template_config()
+    base_cfg["backtest"]["suite_enabled"] = True
+    base_cfg["backtest"]["scenarios"] = [{"label": "base_scenario"}]
+    base_cfg["backtest"]["aggregate"] = {"default": "max", "adg": "median"}
+
+    override_cfg = {"scenarios": [{"label": "top_level_stress"}]}
+
+    config_path = tmp_path / "base.json"
+    suite_path = tmp_path / "partial_suite.hjson"
+    config_path.write_text(json.dumps(base_cfg))
+    suite_path.write_text(json.dumps(override_cfg))
+
+    suite_cfg = ensure_suite_config(config_path, suite_path)
+    assert suite_cfg["aggregate"] == {"default": "max", "adg": "median"}
+    assert suite_cfg["scenarios"] == override_cfg["scenarios"]
+
+
 def test_optimizer_suite_legacy_override_format(tmp_path: Path):
     """Test that legacy backtest.suite format in override config still works."""
     base_cfg = get_template_config()

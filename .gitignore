@@ -393,3 +393,6 @@ Cargo.lock
 
 # Git worktrees
 .worktrees/
+
+# Fake-live/monitor test artifacts
+/monitor/

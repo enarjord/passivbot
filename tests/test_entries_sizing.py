@@ -19,7 +19,7 @@ def _calc_next_entry_short(**kwargs):
 
 
 @pytest.mark.skipif(pbr is None or pbr_is_stub, reason="passivbot_rust extension not available")
-def test_initial_entry_qty_long_respects_min_qty_and_allowance():
+def test_initial_entry_qty_long_uses_base_wel_without_runtime_excess():
     params = dict(
         qty_step=0.01,
         price_step=0.1,
@@ -54,7 +54,10 @@ def test_initial_entry_qty_long_respects_min_qty_and_allowance():
     qty, price, order_type = _calc_next_entry_long(**params)
     assert order_type == "entry_initial_normal_long"
 
-    allowed = params["wallet_exposure_limit"] * (1.0 + params["risk_we_excess_allowance_pct"])
+    # Excess allowance is applied upstream (orchestrator/backtest) through the
+    # runtime effective wallet exposure limit; the standalone entry calculator
+    # sizes off the base limit it receives.
+    allowed = params["wallet_exposure_limit"]
     target_cost = params["balance"] * allowed * params["entry_initial_qty_pct"]
     expected_qty = pbr.round_(
         pbr.cost_to_qty(target_cost, price, params["c_mult"]), params["qty_step"]
@@ -64,7 +67,7 @@ def test_initial_entry_qty_long_respects_min_qty_and_allowance():
 
 
 @pytest.mark.skipif(pbr is None or pbr_is_stub, reason="passivbot_rust extension not available")
-def test_initial_entry_qty_short_respects_allowance():
+def test_initial_entry_qty_short_uses_base_wel_without_runtime_excess():
     params = dict(
         qty_step=0.01,
         price_step=0.1,
@@ -99,7 +102,10 @@ def test_initial_entry_qty_short_respects_allowance():
     qty, price, order_type = _calc_next_entry_short(**params)
     assert order_type == "entry_initial_normal_short"
 
-    allowed = params["wallet_exposure_limit"] * (1.0 + params["risk_we_excess_allowance_pct"])
+    # Excess allowance is applied upstream (orchestrator/backtest) through the
+    # runtime effective wallet exposure limit; the standalone entry calculator
+    # sizes off the base limit it receives.
+    allowed = params["wallet_exposure_limit"]
     target_cost = params["balance"] * allowed * params["entry_initial_qty_pct"]
     expected_qty = pbr.round_(
         pbr.cost_to_qty(target_cost, price, params["c_mult"]), params["qty_step"]

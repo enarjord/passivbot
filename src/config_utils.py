@@ -22,11 +22,13 @@ from config.bot import (
 from config.load import load_prepared_config as staged_load_prepared_config
 from config.coerce import (
     HSL_COOLDOWN_POSITION_POLICIES,
+    HSL_RESTART_AFTER_RED_POLICIES,
     HSL_SIGNAL_MODES,
     MONITOR_BOOL_KEYS,
     PYMOO_ALGORITHMS,
     PYMOO_REF_DIR_METHODS,
     normalize_hsl_cooldown_position_policy,
+    normalize_hsl_restart_after_red_policy,
     normalize_hsl_signal_mode,
 )
 from config.hydrate import (
@@ -144,6 +146,7 @@ HSL_PSIDE_KEYS = (
     "hsl_ema_span_minutes",
     "hsl_cooldown_minutes_after_red",
     "hsl_no_restart_drawdown_threshold",
+    "hsl_restart_after_red_policy",
     "hsl_orange_tier_mode",
     "hsl_panic_close_order_type",
     "hsl_tier_ratios",
@@ -353,6 +356,30 @@ OPTIMIZE_FIXED_BOT_RUNTIME_CLI_ARGS = {
         "commands": {"optimize"},
         "choices": ["limit", "market"],
         "help": "Override bot.short.hsl.panic_close_order_type for this optimize run.",
+    },
+    "bot.long.hsl.restart_after_red_policy": {
+        "visible": ["--bot.long.hsl.restart_after_red_policy"],
+        "hidden": [
+            "--bot.long.hsl_restart_after_red_policy",
+            "--bot_long_hsl_restart_after_red_policy",
+        ],
+        "type": normalize_hsl_restart_after_red_policy,
+        "metavar": "POLICY",
+        "commands": {"optimize"},
+        "choices": tuple(HSL_RESTART_AFTER_RED_POLICIES),
+        "help": "Override bot.long.hsl.restart_after_red_policy for this optimize run.",
+    },
+    "bot.short.hsl.restart_after_red_policy": {
+        "visible": ["--bot.short.hsl.restart_after_red_policy"],
+        "hidden": [
+            "--bot.short.hsl_restart_after_red_policy",
+            "--bot_short_hsl_restart_after_red_policy",
+        ],
+        "type": normalize_hsl_restart_after_red_policy,
+        "metavar": "POLICY",
+        "commands": {"optimize"},
+        "choices": tuple(HSL_RESTART_AFTER_RED_POLICIES),
+        "help": "Override bot.short.hsl.restart_after_red_policy for this optimize run.",
     },
 }
 
@@ -1457,6 +1484,10 @@ for _pside in ("long", "short"):
             f"bot.{_pside}.hsl.no_restart_drawdown_threshold": (
                 f"Terminal {_pside} HSL drawdown threshold. Values below "
                 "red_threshold are clamped up to red_threshold."
+            ),
+            f"bot.{_pside}.hsl.restart_after_red_policy": (
+                f"Restart policy after {_pside} HSL RED. Allowed values: "
+                "always, threshold, or never."
             ),
             f"bot.{_pside}.hsl.tier_ratios.yellow": (
                 f"Multiplier of red_threshold used for the {_pside} YELLOW HSL tier."

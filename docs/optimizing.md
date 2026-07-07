@@ -130,12 +130,12 @@ The main NSGA-III-specific knob is:
   - Controls how fine the reference-direction grid is.
   - Higher values generate more reference directions, which increases diversity resolution but also
     makes each generation heavier.
-  - With the default 8-objective Passivbot scoring set, common reference-direction counts are:
-    - `n_partitions = 3` -> `120`
-    - `n_partitions = 4` -> `330`
-    - `n_partitions = 5` -> `792`
-  - Default is `"auto"`. For the default 8-objective setup, Passivbot currently resolves that to
-    `n_partitions = 4`, which gives `330` reference directions.
+  - With the default 11-objective Passivbot scoring set, common reference-direction counts are:
+    - `n_partitions = 2` -> `66`
+    - `n_partitions = 3` -> `286`
+    - `n_partitions = 4` -> `1001`
+  - Default is `"auto"`. For the default 11-objective setup, Passivbot currently resolves that to
+    `n_partitions = 3`, which gives `286` reference directions.
   - In auto mode, Passivbot chooses the largest Das-Dennis grid whose reference-direction count
     fits within the resolved NSGA-III population budget. This preserves the NSGA-III invariant that
     `population_size >= reference directions`.
@@ -144,7 +144,7 @@ The main NSGA-III-specific knob is:
   - For `pymoo` + `nsga3`, `null` means “auto”.
   - In that case Passivbot uses the default NSGA-III population budget of `500`, then resolves
     auto reference directions to the finest Das-Dennis grid that fits inside that budget.
-  - For the default 8-objective setup, that means `population_size = 500` with `330` reference
+  - For the default 11-objective setup, that means `population_size = 500` with `286` reference
     directions.
   - For a 10-objective setup, auto keeps `population_size = 500` and uses `220` reference
     directions (`n_partitions = 3`) because the next grid would require `715` reference directions.
@@ -241,7 +241,7 @@ Algorithm selection under the default `auto` mode:
 - `1` to `3` objectives -> `nsga2`
 - `4+` objectives -> `nsga3`
 
-That means the default 8-objective Passivbot template uses `nsga3`, while small custom scoring
+That means the default 11-objective Passivbot template uses `nsga3`, while small custom scoring
 lists automatically fall back to `nsga2`.
 
 ### Candle Interval
@@ -368,8 +368,8 @@ be constrained through `drawdown_worst_strategy_eq`, `drawdown_worst_ema_strateg
 `drawdown_worst_mean_1pct_strategy_eq`, `drawdown_worst_mean_1pct_ema_strategy_eq`, and
 `strategy_eq_recovery_days_max` instead of being prematurely truncated.
 
-When you provide many starting configs, optimizer now also bounds how many seed evaluations may be
-in flight at once:
+When you provide many starting configs, optimizer bounds how many seed evaluations may be in flight
+at once. For the DEAP backend, the same cap also applies to generation offspring evaluations:
 
 ```json
 "optimize": {
@@ -383,9 +383,9 @@ Effective cap:
 - All provided starting configs are still evaluated before the optimizer trims them down to the
   backend's initial population.
 
-This is mainly a memory-control knob for large seed pools, especially in suite mode where each
-candidate returns a larger metrics payload. Lower it first if the VPS spikes RAM during initial
-seed evaluation.
+This is mainly a memory-control knob for large seed pools and DEAP generation batches, especially
+in suite mode where each candidate returns a larger metrics payload. Lower it first if the VPS
+spikes RAM during seed or offspring evaluation.
 
 ### Optimizer Suites
 
@@ -460,10 +460,6 @@ Contents:
 - `pareto/`: JSON files for Pareto-optimal configurations
   - Named `{hash}.json`
   - Files are added/removed over time as the Pareto front updates and is pruned to `optimize.pareto_max_size`
-- `index.json`: List of Pareto member hashes
-
-Each recorded result now also includes runtime provenance so later replay mismatches can be
-diagnosed directly from the artifact.
 
 ## Analyzing Results
 
@@ -547,7 +543,8 @@ objects. Each object describes when to penalize a result:
 - `value`: numeric threshold for `<`/`>` limits.
 - `range`: `[low, high]` for the range-based operators.
 - Optional `stat`: override the statistic to compare against (`min`, `max`, `mean`, `std`).
-  The default is `_max` for `>` checks, `_min` for `<` checks, and `_mean` for range checks.
+  Without `stat`, Passivbot resolves the metric through `backtest.aggregate`: first a
+  metric-specific aggregate rule, then `backtest.aggregate.default`, then `mean`.
 
 Example:
 
@@ -596,9 +593,11 @@ Semantics:
   `<=`, `==`). Explicit JSON/HJSON limit objects still use direct `penalize_if` semantics.
 - `--clear-limits` starts from an empty limit list before any `--limits` or `--limit` entries are applied.
 
-Penalties are added to every objective as a positive modifier; they do not disqualify a config but will push it far from the Pareto front when violated. Metric names may include `_usd` / `_btc` suffixes to lock a denomination; when omitted, USD is assumed.
-
-Pareto logging also includes the top violated constraints and their penalties so you can see which limits are driving a bad candidate.
+Limit violations do not disqualify a config. They produce positive penalty scores in optimizer
+engine space: if a limit metric matches a configured scoring metric, the penalty replaces that
+objective's engine score for the candidate; unmatched/global penalties affect every objective.
+Metric names may include `_usd` / `_btc` suffixes to lock a denomination; when omitted, USD is
+assumed.
 
 ## Performance Metrics
 
@@ -616,8 +615,9 @@ over all exchanges before scoring.
   exchanges in the run. The scoring logic uses the mean (`{metric}_mean`).
 - Internally, Passivbot converts all objectives into optimizer engine space where lower is better,
   so both the `deap` and `pymoo` backends receive consistent minimization-style values.
-- Penalties from `optimize.limits` are added to every objective when a bound is violated,
-  turning constraint breaches into very poor scores.
+- Penalties from `optimize.limits` replace affected engine objective scores when a bound is
+  violated, turning constraint breaches into very poor scores while preserving the raw metrics
+  stored for inspection.
 - Metrics are emitted with both USD and BTC suffixes (for example, `adg_usd` and `adg_btc`).
 - `_btc` metrics use BTC-denominated balance/equity as the numeraire even when
   `backtest.btc_collateral_cap = 0`, so they can be used to compare strategy performance against
@@ -704,20 +704,16 @@ for config in load_results("optimize_results/.../all_results.bin"):
 
 ### Monitoring Optimizer Memory Usage
 
-The script `tools/profile_optimizer_memory.py` (requires `psutil`) can be used to launch
-two optimizer runs with different CPU counts and record both process RSS and system-wide
-memory pressure. This is useful when validating that shared-memory datasets are behaving
-as expected on a given machine.
+The script `src/tools/capture_optimize_memory.py` samples an active optimizer process tree and
+host memory state into a JSON report. This is useful when validating that shared-memory datasets
+are behaving as expected on a given machine.
 
 ```bash
-python tools/profile_optimizer_memory.py \
-  --coins BTC ETH XRP SOL \
-  --iters 20 \
-  --population-size 12 \
-  --cpus 2 6
+PYTHONPATH=src python3 src/tools/capture_optimize_memory.py --wait --output tmp/optimize_memory.json
 ```
 
-The script writes raw samples and a summary to `tmp/optimizer_mem_profiles/`.
+Use `--pid <pid>` to monitor a specific optimizer process instead of waiting for the newest
+matching process.
 
 ### Profiling Suite Optimizer Evaluation
 

@@ -704,18 +704,45 @@ def test_adaptive_grid_short_entry_output_regression():
     ]
 
 
-def test_entry_cooldown_keeps_only_one_position_adding_order_when_enabled():
+def test_entry_ladder_can_stage_simultaneously_only_with_zero_cooldown():
     import passivbot_rust as pbr
 
     inp = make_input(
         balance=1_000.0,
-        global_bp=bot_params_pair(long_overrides={"risk_entry_cooldown_minutes": 0.5}),
+        global_bp=bot_params_pair(long_overrides={"risk_entry_cooldown_minutes": 0.0}),
         symbols=[
             make_symbol(
                 0,
                 bid=100.0,
                 ask=100.0,
-                long_bp={"risk_entry_cooldown_minutes": 0.5},
+                long_bp={"risk_entry_cooldown_minutes": 0.0},
+            )
+        ],
+    )
+    inp["timestamp_ms"] = 120_000
+
+    out = compute(pbr, inp)
+    long_add_orders = [
+        o
+        for o in out["orders"]
+        if o["pside"] == "long" and o["qty"] > 0.0 and o["order_type"].startswith("entry_")
+    ]
+
+    assert len(long_add_orders) > 1
+
+
+def test_positive_fractional_entry_cooldown_throttles_ladder_to_one_order():
+    import passivbot_rust as pbr
+
+    inp = make_input(
+        balance=1_000.0,
+        global_bp=bot_params_pair(long_overrides={"risk_entry_cooldown_minutes": 0.05}),
+        symbols=[
+            make_symbol(
+                0,
+                bid=100.0,
+                ask=100.0,
+                long_bp={"risk_entry_cooldown_minutes": 0.05},
             )
         ],
     )
@@ -732,7 +759,34 @@ def test_entry_cooldown_keeps_only_one_position_adding_order_when_enabled():
     assert long_add_orders[0]["order_type"] == "entry_initial_normal_long"
 
 
-def test_entry_cooldown_blocks_position_adding_orders_until_whole_minute_window_expires():
+def test_entry_retracement_throttles_ladder_even_with_zero_cooldown():
+    import passivbot_rust as pbr
+
+    inp = make_input(
+        balance=1_000.0,
+        symbols=[
+            make_symbol(
+                0,
+                bid=100.0,
+                ask=100.0,
+                long_strategy=adaptive_strategy_params(entry={"retracement_base_pct": 0.001}),
+            )
+        ],
+    )
+    inp["timestamp_ms"] = 120_000
+
+    out = compute(pbr, inp)
+    long_add_orders = [
+        o
+        for o in out["orders"]
+        if o["pside"] == "long" and o["qty"] > 0.0 and o["order_type"].startswith("entry_")
+    ]
+
+    assert len(long_add_orders) == 1
+    assert long_add_orders[0]["order_type"] == "entry_initial_normal_long"
+
+
+def test_entry_cooldown_blocks_position_adding_orders_until_exact_window_expires():
     import passivbot_rust as pbr
 
     inp = make_input(
@@ -747,7 +801,7 @@ def test_entry_cooldown_blocks_position_adding_orders_until_whole_minute_window_
             )
         ],
     )
-    inp["timestamp_ms"] = 120_000
+    inp["timestamp_ms"] = 119_999
     inp["symbols"][0]["long"]["last_increase_fill_timestamp_ms"] = 60_000
 
     out = compute(pbr, inp)
@@ -758,6 +812,35 @@ def test_entry_cooldown_blocks_position_adding_orders_until_whole_minute_window_
     ]
 
     assert long_add_orders == []
+
+
+def test_entry_cooldown_keeps_one_add_order_after_window_expires():
+    import passivbot_rust as pbr
+
+    inp = make_input(
+        balance=1_000.0,
+        global_bp=bot_params_pair(long_overrides={"risk_entry_cooldown_minutes": 2.0}),
+        symbols=[
+            make_symbol(
+                0,
+                bid=100.0,
+                ask=100.0,
+                long_bp={"risk_entry_cooldown_minutes": 2.0},
+            )
+        ],
+    )
+    inp["timestamp_ms"] = 240_000
+    inp["symbols"][0]["long"]["last_increase_fill_timestamp_ms"] = 60_000
+
+    out = compute(pbr, inp)
+    long_add_orders = [
+        o
+        for o in out["orders"]
+        if o["pside"] == "long" and o["qty"] > 0.0 and o["order_type"].startswith("entry_")
+    ]
+
+    assert len(long_add_orders) == 1
+    assert long_add_orders[0]["order_type"] == "entry_initial_normal_long"
 
 
 def test_entry_cooldown_keeps_close_orders_while_blocking_adds():
@@ -777,7 +860,7 @@ def test_entry_cooldown_keeps_close_orders_while_blocking_adds():
             )
         ],
     )
-    inp["timestamp_ms"] = 120_000
+    inp["timestamp_ms"] = 119_999
     inp["symbols"][0]["long"]["last_increase_fill_timestamp_ms"] = 60_000
 
     out = compute(pbr, inp)
@@ -796,22 +879,22 @@ def test_entry_cooldown_keeps_close_orders_while_blocking_adds():
     assert long_close_orders
 
 
-def test_fractional_entry_cooldown_allows_next_minute_updates():
+def test_fractional_entry_cooldown_blocks_until_seconds_elapsed_then_keeps_one_add():
     import passivbot_rust as pbr
 
     inp = make_input(
         balance=1_000.0,
-        global_bp=bot_params_pair(long_overrides={"risk_entry_cooldown_minutes": 0.5}),
+        global_bp=bot_params_pair(long_overrides={"risk_entry_cooldown_minutes": 0.05}),
         symbols=[
             make_symbol(
                 0,
                 bid=100.0,
                 ask=100.0,
-                long_bp={"risk_entry_cooldown_minutes": 0.5},
+                long_bp={"risk_entry_cooldown_minutes": 0.05},
             )
         ],
     )
-    inp["timestamp_ms"] = 120_000
+    inp["timestamp_ms"] = 63_999
     inp["symbols"][0]["long"]["last_increase_fill_timestamp_ms"] = 61_000
 
     out = compute(pbr, inp)
@@ -821,7 +904,18 @@ def test_fractional_entry_cooldown_allows_next_minute_updates():
         if o["pside"] == "long" and o["qty"] > 0.0 and o["order_type"].startswith("entry_")
     ]
 
+    assert long_add_orders == []
+
+    inp["timestamp_ms"] = 64_000
+    out = compute(pbr, inp)
+    long_add_orders = [
+        o
+        for o in out["orders"]
+        if o["pside"] == "long" and o["qty"] > 0.0 and o["order_type"].startswith("entry_")
+    ]
+
     assert len(long_add_orders) == 1
+    assert long_add_orders[0]["order_type"] == "entry_initial_normal_long"
 
 
 def test_entry_cooldown_is_separated_by_pside_in_hedge_mode():
@@ -852,7 +946,7 @@ def test_entry_cooldown_is_separated_by_pside_in_hedge_mode():
         ],
     )
     inp["global"]["hedge_mode"] = True
-    inp["timestamp_ms"] = 120_000
+    inp["timestamp_ms"] = 119_999
     inp["symbols"][0]["long"]["last_increase_fill_timestamp_ms"] = 60_000
 
     out = compute(pbr, inp)
@@ -869,6 +963,7 @@ def test_entry_cooldown_is_separated_by_pside_in_hedge_mode():
 
     assert long_add_orders == []
     assert len(short_add_orders) == 1
+    assert short_add_orders[0]["order_type"] == "entry_initial_normal_short"
 
 
 def test_ema_anchor_long_position_emits_single_entry_and_close():
@@ -1050,6 +1145,151 @@ def test_ema_anchor_respects_runtime_budget_for_base_clip_size():
 
     out = compute(pbr, inp)
     assert out["orders"][0]["qty"] == pytest.approx(0.3)
+
+
+def test_twel_reduce_overweight_uses_effective_tradable_slots():
+    import passivbot_rust as pbr
+
+    global_bp = bot_params_pair(
+        long_overrides={
+            "n_positions": 4,
+            "total_wallet_exposure_limit": 0.5,
+            "risk_twel_enforcer_threshold": 1.0,
+            "risk_twel_enforcer_policy": "reduce_overweight",
+        }
+    )
+    inp = make_input(
+        balance=1_000.0,
+        global_bp=global_bp,
+        symbols=[
+            make_symbol(
+                0,
+                bid=100.0,
+                ask=100.0,
+                long_pos_size=2.5,
+                long_pos_price=100.0,
+                long_bp={
+                    "wallet_exposure_limit": 0.4,
+                    "risk_wel_enforcer_threshold": 2.0,
+                },
+            ),
+            make_symbol(
+                1,
+                bid=95.0,
+                ask=95.0,
+                long_pos_size=2.6,
+                long_pos_price=100.0,
+                long_bp={
+                    "wallet_exposure_limit": 0.4,
+                    "risk_wel_enforcer_threshold": 2.0,
+                },
+            ),
+        ],
+    )
+
+    out = compute(pbr, inp)
+    twel_closes = [
+        order for order in out["orders"] if order["order_type"] == "close_auto_reduce_twel_long"
+    ]
+    assert twel_closes
+    assert {order["symbol_idx"] for order in twel_closes} == {1}
+
+
+def test_twel_reduce_overweight_relaxes_floor_when_tradable_slots_expand():
+    import passivbot_rust as pbr
+
+    global_bp = bot_params_pair(
+        long_overrides={
+            "n_positions": 4,
+            "total_wallet_exposure_limit": 0.5,
+            "risk_twel_enforcer_threshold": 1.0,
+            "risk_twel_enforcer_policy": "reduce_overweight",
+        }
+    )
+    common_bp = {
+        "wallet_exposure_limit": 0.4,
+        "risk_wel_enforcer_threshold": 2.0,
+    }
+    inp = make_input(
+        balance=1_000.0,
+        global_bp=global_bp,
+        symbols=[
+            make_symbol(
+                0,
+                bid=100.0,
+                ask=100.0,
+                long_pos_size=2.5,
+                long_pos_price=100.0,
+                long_bp=common_bp,
+            ),
+            make_symbol(
+                1,
+                bid=95.0,
+                ask=95.0,
+                long_pos_size=2.6,
+                long_pos_price=100.0,
+                long_bp=common_bp,
+            ),
+            make_symbol(2, bid=100.0, ask=100.0, long_bp=common_bp),
+            make_symbol(3, bid=100.0, ask=100.0, long_bp=common_bp),
+        ],
+    )
+
+    out = compute(pbr, inp)
+    twel_closes = [
+        order for order in out["orders"] if order["order_type"] == "close_auto_reduce_twel_long"
+    ]
+    assert twel_closes
+    assert {order["symbol_idx"] for order in twel_closes} == {0}
+
+
+def test_twel_reduce_overweight_repairs_when_no_symbols_eligible():
+    import passivbot_rust as pbr
+
+    global_bp = bot_params_pair(
+        long_overrides={
+            "n_positions": 4,
+            "total_wallet_exposure_limit": 0.5,
+            "risk_twel_enforcer_threshold": 1.0,
+            "risk_twel_enforcer_policy": "reduce_overweight",
+        }
+    )
+    inp = make_input(
+        balance=1_000.0,
+        global_bp=global_bp,
+        symbols=[
+            make_symbol(
+                0,
+                bid=100.0,
+                ask=100.0,
+                tradable=False,
+                long_pos_size=2.6,
+                long_pos_price=100.0,
+                long_bp={
+                    "wallet_exposure_limit": 0.4,
+                    "risk_wel_enforcer_threshold": 2.0,
+                },
+            ),
+            make_symbol(
+                1,
+                bid=95.0,
+                ask=95.0,
+                tradable=False,
+                long_pos_size=2.6,
+                long_pos_price=100.0,
+                long_bp={
+                    "wallet_exposure_limit": 0.4,
+                    "risk_wel_enforcer_threshold": 2.0,
+                },
+            ),
+        ],
+    )
+
+    out = compute(pbr, inp)
+    twel_closes = [
+        order for order in out["orders"] if order["order_type"] == "close_auto_reduce_twel_long"
+    ]
+    assert twel_closes
 
 
 def test_ema_anchor_volatility_weights_widen_quotes():
@@ -1295,6 +1535,103 @@ def test_panic_mode_emits_close_panic_long():
     assert o["qty"] < 0.0
 
 
+def test_panic_close_order_type_is_side_local():
+    import passivbot_rust as pbr
+
+    global_bp = bot_params_pair(
+        long_overrides={"hsl_enabled": True, "hsl_panic_close_order_type": "market"},
+        short_overrides={
+            "hsl_enabled": True,
+            "hsl_panic_close_order_type": "limit",
+            "n_positions": 1,
+            "total_wallet_exposure_limit": 1.0,
+        },
+    )
+    inp = make_input(
+        balance=1_000.0,
+        global_bp=global_bp,
+        symbols=[
+            make_symbol(
+                0,
+                bid=95.0,
+                ask=95.0,
+                long_mode="panic",
+                short_mode="panic",
+                long_pos_size=1.5,
+                long_pos_price=100.0,
+                short_pos_size=-1.5,
+                short_pos_price=100.0,
+            )
+        ],
+    )
+
+    out = compute(pbr, inp)
+    by_pside = {o["pside"]: o for o in out["orders"]}
+
+    assert by_pside["long"]["order_type"] == "close_panic_long"
+    assert by_pside["long"]["execution_type"] == "market"
+    assert by_pside["short"]["order_type"] == "close_panic_short"
+    assert by_pside["short"]["execution_type"] == "limit"
+
+
+def test_panic_close_order_type_rejects_invalid_values():
+    import passivbot_rust as pbr
+
+    global_bp = bot_params_pair(
+        long_overrides={"hsl_panic_close_order_type": "iceberg"},
+    )
+    inp = make_input(balance=1_000.0, global_bp=global_bp, symbols=[])
+
+    with pytest.raises(ValueError, match="hsl_panic_close_order_type"):
+        compute(pbr, inp)
+
+
+@pytest.mark.parametrize(
+    ("overrides", "match"),
+    [
+        ({"hsl_ema_span_minutes": 0.5}, r"bot\.long\.hsl_ema_span_minutes"),
+        ({"hsl_red_threshold": 0.0}, r"bot\.long\.hsl_red_threshold"),
+        (
+            {"hsl_red_threshold": 0.2, "hsl_no_restart_drawdown_threshold": 0.1},
+            r"bot\.long\.hsl_no_restart_drawdown_threshold",
+        ),
+        ({"hsl_restart_after_red_policy": "sometimes"}, r"bot\.long\.hsl_restart_after_red_policy"),
+        ({"risk_we_excess_allowance_pct": -0.01}, r"bot\.long\.risk_we_excess_allowance_pct"),
+        ({"unstuck_ema_dist": -1.0}, r"bot\.long\.unstuck_ema_dist"),
+    ],
+)
+def test_json_rejects_invalid_global_hsl_risk_unstuck_values(overrides, match):
+    import passivbot_rust as pbr
+
+    inp = make_input(
+        balance=1_000.0,
+        global_bp=bot_params_pair(long_overrides=overrides),
+        symbols=[],
+    )
+
+    with pytest.raises(ValueError, match=match):
+        compute(pbr, inp)
+
+
+def test_json_rejects_invalid_symbol_hsl_risk_unstuck_values():
+    import passivbot_rust as pbr
+
+    inp = make_input(
+        balance=1_000.0,
+        symbols=[
+            make_symbol(
+                0,
+                bid=100.0,
+                ask=101.0,
+                long_bp={"unstuck_close_pct": 1.01},
+            )
+        ],
+    )
+
+    with pytest.raises(ValueError, match=r"symbols\[0\]\.long\.bot_params\.unstuck_close_pct"):
+        compute(pbr, inp)
+
+
 def test_graceful_stop_blocks_initial_entries_only():
     import passivbot_rust as pbr
 
@@ -1483,7 +1820,7 @@ def test_json_output_is_deterministic():
     assert out1 == out2
 
 
-def test_unstuck_is_added_in_addition_to_close_grid_and_capped():
+def test_unstuck_takes_priority_over_close_grid_and_is_capped():
     import passivbot_rust as pbr
 
     balance = 1_000.0
@@ -1519,7 +1856,7 @@ def test_unstuck_is_added_in_addition_to_close_grid_and_capped():
     out = compute(pbr, inp)
     order_types = [o["order_type"] for o in out["orders"]]
     assert "close_unstuck_long" in order_types
-    assert "close_grid_long" in order_types
+    assert "close_grid_long" not in order_types
 
     closes = [
         o
@@ -2065,6 +2402,144 @@ def test_twel_auto_reduce_takes_priority_over_wel_for_same_position():
     assert "close_auto_reduce_wel_long" not in order_types
 
 
+def test_wel_auto_reduce_takes_priority_over_unstuck_for_same_position():
+    import passivbot_rust as pbr
+
+    long_bp = {
+        "wallet_exposure_limit": 0.4,
+        "risk_wel_enforcer_threshold": 1.0,
+        "risk_twel_enforcer_enabled": False,
+        "total_wallet_exposure_limit": 1.0,
+        "n_positions": 1,
+        "unstuck_close_pct": 0.5,
+        "unstuck_threshold": 0.001,
+        "unstuck_ema_dist": 0.0,
+        "unstuck_loss_allowance_pct": 0.01,
+    }
+    global_bp = bot_params_pair(long_overrides=long_bp)
+    sym = make_symbol(
+        0,
+        bid=100.0,
+        ask=100.0,
+        long_pos_size=6.0,
+        long_pos_price=100.0,
+        long_bp=long_bp,
+    )
+    inp = make_input(balance=1_000.0, global_bp=global_bp, symbols=[sym])
+    inp["global"]["unstuck_allowance_long"] = 1e9
+
+    out = compute(pbr, inp)
+    order_types = [o["order_type"] for o in out["orders"]]
+
+    assert "close_auto_reduce_wel_long" in order_types
+    assert "close_unstuck_long" not in order_types
+    assert "close_grid_long" not in order_types
+
+
+def test_wel_auto_reduce_takes_priority_over_short_unstuck_for_same_position():
+    import passivbot_rust as pbr
+
+    short_bp = {
+        "wallet_exposure_limit": 0.4,
+        "risk_wel_enforcer_threshold": 1.0,
+        "risk_twel_enforcer_enabled": False,
+        "total_wallet_exposure_limit": 1.0,
+        "n_positions": 1,
+        "unstuck_close_pct": 0.5,
+        "unstuck_threshold": 0.001,
+        "unstuck_ema_dist": 0.0,
+        "unstuck_loss_allowance_pct": 0.01,
+    }
+    global_bp = bot_params_pair(short_overrides=short_bp)
+    sym = make_symbol(
+        0,
+        bid=100.0,
+        ask=100.0,
+        short_pos_size=-6.0,
+        short_pos_price=100.0,
+        short_bp=short_bp,
+    )
+    inp = make_input(balance=1_000.0, global_bp=global_bp, symbols=[sym])
+    inp["global"]["unstuck_allowance_short"] = 1e9
+
+    out = compute(pbr, inp)
+    order_types = [o["order_type"] for o in out["orders"]]
+
+    assert "close_auto_reduce_wel_short" in order_types
+    assert "close_unstuck_short" not in order_types
+    assert "close_grid_short" not in order_types
+
+
+def test_twel_auto_reduce_takes_priority_over_unstuck_for_same_position():
+    import passivbot_rust as pbr
+
+    long_bp = {
+        "wallet_exposure_limit": 0.4,
+        "risk_wel_enforcer_enabled": False,
+        "total_wallet_exposure_limit": 0.5,
+        "risk_twel_enforcer_policy": "reduce_portfolio",
+        "risk_twel_enforcer_threshold": 1.0,
+        "n_positions": 1,
+        "unstuck_close_pct": 0.5,
+        "unstuck_threshold": 0.001,
+        "unstuck_ema_dist": 0.0,
+        "unstuck_loss_allowance_pct": 0.01,
+    }
+    global_bp = bot_params_pair(long_overrides=long_bp)
+    sym = make_symbol(
+        0,
+        bid=100.0,
+        ask=100.0,
+        long_pos_size=6.0,
+        long_pos_price=100.0,
+        long_bp=long_bp,
+    )
+    inp = make_input(balance=1_000.0, global_bp=global_bp, symbols=[sym])
+    inp["global"]["unstuck_allowance_long"] = 1e9
+
+    out = compute(pbr, inp)
+    order_types = [o["order_type"] for o in out["orders"]]
+
+    assert "close_auto_reduce_twel_long" in order_types
+    assert "close_unstuck_long" not in order_types
+    assert "close_grid_long" not in order_types
+
+
+def test_twel_auto_reduce_takes_priority_over_short_unstuck_for_same_position():
+    import passivbot_rust as pbr
+
+    short_bp = {
+        "wallet_exposure_limit": 0.4,
+        "risk_wel_enforcer_enabled": False,
+        "total_wallet_exposure_limit": 0.5,
+        "risk_twel_enforcer_policy": "reduce_portfolio",
+        "risk_twel_enforcer_threshold": 1.0,
+        "n_positions": 1,
+        "unstuck_close_pct": 0.5,
+        "unstuck_threshold": 0.001,
+        "unstuck_ema_dist": 0.0,
+        "unstuck_loss_allowance_pct": 0.01,
+    }
+    global_bp = bot_params_pair(short_overrides=short_bp)
+    sym = make_symbol(
+        0,
+        bid=100.0,
+        ask=100.0,
+        short_pos_size=-6.0,
+        short_pos_price=100.0,
+        short_bp=short_bp,
+    )
+    inp = make_input(balance=1_000.0, global_bp=global_bp, symbols=[sym])
+    inp["global"]["unstuck_allowance_short"] = 1e9
+
+    out = compute(pbr, inp)
+    order_types = [o["order_type"] for o in out["orders"]]
+
+    assert "close_auto_reduce_twel_short" in order_types
+    assert "close_unstuck_short" not in order_types
+    assert "close_grid_short" not in order_types
+
+
 def test_twel_auto_reduce_includes_managed_modes_and_excludes_manual_panic():
     import passivbot_rust as pbr
 
@@ -2354,8 +2829,46 @@ def test_balance_raw_absent_falls_back_to_balance():
     assert isinstance(out, dict)
 
 
-def test_balance_raw_zero_gate_returns_early():
-    """When balance_raw is 0.0, the loss gate returns early (non-positive guard)."""
+@pytest.mark.parametrize(
+    ("mutator", "match"),
+    [
+        (lambda inp: inp.__setitem__("balance", 0.0), r"balance must be finite and > 0"),
+        (
+            lambda inp: inp["global"].__setitem__("max_realized_loss_pct", -0.01),
+            r"global\.max_realized_loss_pct must be finite and >= 0",
+        ),
+        (
+            lambda inp: inp["global"].__setitem__("unstuck_allowance_long", -1.0),
+            r"global\.unstuck_allowance_long must be finite and >= 0",
+        ),
+        (
+            lambda inp: inp["global"].__setitem__("unstuck_allowance_short", -1.0),
+            r"global\.unstuck_allowance_short must be finite and >= 0",
+        ),
+        (
+            lambda inp: (
+                inp["global"].__setitem__("realized_pnl_cumsum_max", 5.0),
+                inp["global"].__setitem__("realized_pnl_cumsum_last", 10.0),
+            ),
+            r"global\.realized_pnl_cumsum_max must be >= global\.realized_pnl_cumsum_last",
+        ),
+    ],
+)
+def test_json_rejects_invalid_account_risk_globals(mutator, match):
+    import passivbot_rust as pbr
+
+    inp = make_input(
+        balance=1_000.0,
+        symbols=[make_symbol(0, bid=100.0, ask=100.0)],
+    )
+    mutator(inp)
+
+    with pytest.raises(ValueError, match=match):
+        compute(pbr, inp)
+
+
+def test_balance_raw_zero_rejected():
+    """Non-positive balance_raw is rejected instead of disabling realized-loss gates."""
     import passivbot_rust as pbr
 
     long_bp = {}
@@ -2378,14 +2891,12 @@ def test_balance_raw_zero_gate_returns_early():
     inp["global"]["realized_pnl_cumsum_max"] = 10.0
     inp["global"]["realized_pnl_cumsum_last"] = 5.0
 
-    out = compute(pbr, inp)
-    # Gate skips with non-positive balance_raw, close orders should still appear
-    close_orders = [o for o in out["orders"] if o["order_type"].startswith("close_")]
-    assert len(close_orders) > 0
+    with pytest.raises(ValueError, match=r"balance_raw must be finite and > 0"):
+        compute(pbr, inp)
 
 
-def test_balance_raw_negative_gate_returns_early():
-    """When balance_raw is -1.0, the loss gate returns early (non-positive guard)."""
+def test_balance_raw_negative_rejected():
+    """Negative balance_raw is rejected instead of disabling realized-loss gates."""
     import passivbot_rust as pbr
 
     long_bp = {}
@@ -2408,10 +2919,8 @@ def test_balance_raw_negative_gate_returns_early():
     inp["global"]["realized_pnl_cumsum_max"] = 10.0
     inp["global"]["realized_pnl_cumsum_last"] = 5.0
 
-    out = compute(pbr, inp)
-    # Gate skips with negative balance_raw, close orders should still appear
-    close_orders = [o for o in out["orders"] if o["order_type"].startswith("close_")]
-    assert len(close_orders) > 0
+    with pytest.raises(ValueError, match=r"balance_raw must be finite and > 0"):
+        compute(pbr, inp)
 
 
 def test_balance_raw_inf_rejected():
@@ -2516,8 +3025,8 @@ def test_twel_enforcer_uses_balance_raw_not_snapped():
     )
 
 
-def test_loss_gate_returns_early_when_raw_is_non_positive():
-    """Non-positive balance_raw causes the loss gate to early-return (gate disabled)."""
+def test_loss_gate_rejects_non_positive_raw_balance():
+    """Non-positive balance_raw fails loudly before loss-gate planning."""
     import passivbot_rust as pbr
 
     global_bp = bot_params_pair(
@@ -2545,8 +3054,5 @@ def test_loss_gate_returns_early_when_raw_is_non_positive():
     for raw_balance in [0.0, -1.0]:
         inp_case = copy.deepcopy(inp)
         inp_case["balance_raw"] = raw_balance
-        out = compute(pbr, inp_case)
-        order_types = [o["order_type"] for o in out["orders"]]
-        assert "close_auto_reduce_wel_long" in order_types
-        blocks = out.get("diagnostics", {}).get("loss_gate_blocks", [])
-        assert not blocks
+        with pytest.raises(ValueError, match="balance_raw must be finite and > 0"):
+            compute(pbr, inp_case)
