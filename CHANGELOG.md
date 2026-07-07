@@ -4,6 +4,13 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- HSL RED cooldown now anchors at the fill that actually flattened the
+  affected scope, by any means, instead of the latest bot-emitted panic
+  fill. If a position is finished off manually (or by any non-panic close)
+  after the last panic fill, the cooldown window starts at that flattening
+  fill rather than earlier, so cooldowns can no longer expire prematurely
+  for manually-completed flattens.
+
 - Backtest ORANGE `tp_only_with_active_entry_cancellation` now forces flat
   symbols in the affected HSL scope too, blocking initial entries exactly
   like live has since the A2.2 contract change; previously backtests allowed

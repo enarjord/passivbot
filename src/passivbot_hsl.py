@@ -2617,6 +2617,60 @@ def _equity_hard_stop_latest_panic_fill_timestamp_ms(
     return int(self.get_exchange_time())
 
 
+def _equity_hard_stop_latest_flatten_fill_timestamp_optional_ms(
+    self,
+    pside: str,
+    *,
+    symbol: Optional[str] = None,
+    since_ms: Optional[int] = None,
+) -> Optional[int]:
+    """Latest fill timestamp for the scope, regardless of order type.
+
+    B2.1 contract: the episode ends (and cooldown anchors) at the fill that
+    makes the scoped position set flat, by any means - not only bot-emitted
+    panic fills. Once the scope is flat, its latest fill is that flattening
+    fill.
+    """
+    latest_ts: Optional[int] = None
+    if self._pnls_manager is not None:
+        for event in self._pnls_manager.get_events():
+            if _equity_hard_stop_fill_pside(event) != pside:
+                continue
+            if symbol is not None and _equity_hard_stop_fill_symbol(event) != symbol:
+                continue
+            event_ts = _equity_hard_stop_fill_timestamp_ms(event)
+            if since_ms is not None and event_ts < int(since_ms):
+                continue
+            latest_ts = event_ts if latest_ts is None else max(latest_ts, event_ts)
+    return latest_ts
+
+
+def _equity_hard_stop_latest_flatten_fill_timestamp_ms(
+    self,
+    pside: str,
+    *,
+    symbol: Optional[str] = None,
+    since_ms: Optional[int] = None,
+    fallback_ms: Optional[int] = None,
+) -> int:
+    latest_ts = _equity_hard_stop_latest_flatten_fill_timestamp_optional_ms(
+        self,
+        pside,
+        symbol=symbol,
+        since_ms=since_ms,
+    )
+    if latest_ts is not None:
+        return int(latest_ts)
+    # No fill evidence inside the window: fall back to the latest panic fill
+    # (pre-refinement anchor), then the caller-provided fallback.
+    return self._equity_hard_stop_latest_panic_fill_timestamp_ms(
+        pside,
+        symbol=symbol,
+        since_ms=since_ms,
+        fallback_ms=fallback_ms,
+    )
+
+
 def _equity_hard_stop_latest_panic_fill_timestamp_optional_ms(
     self,
     pside: str,
@@ -3587,7 +3641,7 @@ async def _equity_hard_stop_refresh_cooldown_after_repanic(self, pside: str, now
     previous_stop_ts = None
     if state.get("last_stop_event") is not None:
         previous_stop_ts = int(state["last_stop_event"]["stop_event_timestamp_ms"]) + 1
-    stop_ts_ms = self._equity_hard_stop_latest_panic_fill_timestamp_ms(
+    stop_ts_ms = self._equity_hard_stop_latest_flatten_fill_timestamp_ms(
         pside,
         since_ms=previous_stop_ts,
         fallback_ms=now_ms,
@@ -3652,7 +3706,7 @@ async def _equity_hard_stop_refresh_coin_cooldown_after_repanic(
     previous_stop_ts = None
     if state.get("last_stop_event") is not None:
         previous_stop_ts = int(state["last_stop_event"]["stop_event_timestamp_ms"]) + 1
-    stop_ts_ms = self._equity_hard_stop_latest_panic_fill_timestamp_ms(
+    stop_ts_ms = self._equity_hard_stop_latest_flatten_fill_timestamp_ms(
         pside,
         symbol=symbol,
         since_ms=previous_stop_ts,
@@ -5527,7 +5581,7 @@ async def _equity_hard_stop_check_coin(self) -> Optional[dict]:
                     )
                 )
                 if not has_position and entry_orders == 0 and nonpanic_close_orders == 0:
-                    stop_ts_ms = self._equity_hard_stop_latest_panic_fill_timestamp_ms(
+                    stop_ts_ms = self._equity_hard_stop_latest_flatten_fill_timestamp_ms(
                         pside,
                         symbol=symbol,
                         since_ms=state.get("pending_red_since_ms"),
@@ -6084,7 +6138,7 @@ async def _equity_hard_stop_run_red_supervisor(self) -> None:
                 n_positions = self._equity_hard_stop_count_open_positions(pside)
                 entry_orders, nonpanic_close_orders = self._equity_hard_stop_count_blocking_open_orders(pside)
                 if n_positions == 0 and entry_orders == 0 and nonpanic_close_orders == 0:
-                    stop_ts_ms = self._equity_hard_stop_latest_panic_fill_timestamp_ms(
+                    stop_ts_ms = self._equity_hard_stop_latest_flatten_fill_timestamp_ms(
                         pside,
                         since_ms=state.get("pending_red_since_ms"),
                         fallback_ms=int(self.get_exchange_time()),
@@ -6211,7 +6265,7 @@ async def _equity_hard_stop_run_coin_red_supervisor(self) -> None:
                     self._equity_hard_stop_count_blocking_open_orders_symbol(pside, symbol)
                 )
                 if not has_position and entry_orders == 0 and nonpanic_close_orders == 0:
-                    stop_ts_ms = self._equity_hard_stop_latest_panic_fill_timestamp_ms(
+                    stop_ts_ms = self._equity_hard_stop_latest_flatten_fill_timestamp_ms(
                         pside,
                         symbol=symbol,
                         since_ms=state.get("pending_red_since_ms"),

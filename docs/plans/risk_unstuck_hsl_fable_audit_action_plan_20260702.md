@@ -908,6 +908,13 @@ Remaining implementation details:
       already use the latest panic-fill timestamp (the flattening fill for
       bot-flattened episodes); the manual-flatten anchor refinement and the
       incomplete-history policy remain open.
+      Implemented (episode-end anchor): all five live cooldown anchor sites
+      (both supervisors, the check-path finalization, and both
+      repanic-refresh paths) now anchor at the scope's latest fill of any
+      type via `_equity_hard_stop_latest_flatten_fill_timestamp_ms`, falling
+      back to the previous panic-fill anchor and then the caller fallback
+      when no fill evidence exists in the window. Only the incomplete-history
+      policy remains from the #1122 contract.
       Implemented (A2.2 backtest parity): the backtest ORANGE `TpOnly`
       override now forces flat symbols too (`apply_orange_override` has-pos
       gate removed), matching the live overlay since #1098; the orchestrator's
