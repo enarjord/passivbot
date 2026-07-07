@@ -996,6 +996,16 @@ Remaining implementation details:
       cooldown/no-restart evidence. Markers are validated fail-loud (grid
       alignment, series-span bounds, ascending order, account-kind only) and
       tamper-checked (missing/invalid/wrong-kind reasons).
+      Implemented: live coin-mode startup now attempts cache reuse before the
+      full replay. Gates: write-time proven coverage recorded in the manifest
+      plus a fresh load-time pnls-manager coverage proof, config-digest
+      identity, account/pair watermark agreement, gap extension from
+      exchange fills/candles (panic fills inside the gap force full replay),
+      and current-position reconciliation within qty-step tolerance. Any
+      rejection or unexpected error falls back to the authoritative full
+      replay; the completed event now reports `cache_reused` alongside phase
+      timings. End-to-end test proves the cache-fed boot reaches state
+      identical to the full replay with the full fetch provably skipped.
 - [ ] Python simplification after Rust owns ideal protective orders and unstuck
       orders.
       Python should reconcile ideal vs actual orders, not re-decide trading

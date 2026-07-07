@@ -4,6 +4,14 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Live coin-mode HSL startup can now reuse its persisted replay cache: when
+  the cached series pass every trust gate (proven fill coverage at write and
+  load time, config digest identity, watermark agreement, gap extension from
+  exchange fills/candles, and current-position reconciliation), the bot
+  replays from the cache plus the gap instead of re-fetching the full
+  lookback. Any gate failure falls back to the full exchange-derived replay;
+  the cache never becomes authoritative trading state, and a fresh VPS
+  reconstructs identical decisions.
 - HSL-enabled startup and live-config preflight now surface a history
   reinterpretation caveat and point operators to a dedicated HSL risks doc for
   deposits, withdrawals, balance overrides, and HSL config changes.

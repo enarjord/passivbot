@@ -1780,6 +1780,10 @@ class Passivbot:
     _equity_hard_stop_persist_replay_matrices = (
         pb_hsl._equity_hard_stop_persist_replay_matrices
     )
+    _try_load_hsl_replay_matrix_cache = pb_hsl._try_load_hsl_replay_matrix_cache
+    _equity_hard_stop_try_reuse_replay_cache = (
+        pb_hsl._equity_hard_stop_try_reuse_replay_cache
+    )
     _equity_hard_stop_maybe_emit_raw_red_pending = (
         pb_hsl._equity_hard_stop_maybe_emit_raw_red_pending
     )
