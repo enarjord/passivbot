@@ -3925,7 +3925,17 @@ def _equity_hard_stop_refresh_halted_runtime_forced_modes(self) -> None:
             continue
         state = self._hsl_state(pside)
         if self._equity_hard_stop_runtime_red_latched(pside) and not state["halted"]:
-            self._equity_hard_stop_set_red_runtime_forced_modes(pside)
+            # B2.1 red split: a latched episode whose CURRENT sample has
+            # recovered stays entry-blocked without panic authorization; the
+            # centralized refresher must not overwrite the paused state back
+            # to panic. Unknown/missing sample stays protective (panic).
+            last_metrics = state.get("last_metrics")
+            if last_metrics is not None and not bool(
+                last_metrics.get("red_active_now", True)
+            ):
+                self._equity_hard_stop_set_red_paused_runtime_forced_modes(pside)
+            else:
+                self._equity_hard_stop_set_red_runtime_forced_modes(pside)
             continue
         if not state["halted"]:
             self._equity_hard_stop_clear_runtime_forced_modes(pside)
@@ -5494,6 +5504,55 @@ async def _equity_hard_stop_check_coin(self) -> Optional[dict]:
                     self._equity_hard_stop_set_coin_runtime_forced_mode(
                         pside, symbol, "tp_only_with_active_entry_cancellation"
                     )
+            if (
+                state["runtime"].red_latched()
+                and not state["halted"]
+                and not bool(metrics.get("red_active_now", True))
+            ):
+                # B2.1 red split: the episode saw RED but the current sample
+                # recovered, so panic supervision is disengaged. The regular
+                # check path owns the paused episode: keep entries blocked and
+                # perform the flat-confirmation/finalization the supervisor
+                # would otherwise do, so cooldown/no-restart accounting can
+                # never be skipped just because RED recovered before flat.
+                self._equity_hard_stop_set_coin_runtime_forced_mode(
+                    pside, symbol, "tp_only_with_active_entry_cancellation"
+                )
+                has_position = self._equity_hard_stop_has_open_position_symbol(
+                    pside, symbol
+                )
+                entry_orders, nonpanic_close_orders = (
+                    self._equity_hard_stop_count_blocking_open_orders_symbol(
+                        pside, symbol
+                    )
+                )
+                if not has_position and entry_orders == 0 and nonpanic_close_orders == 0:
+                    stop_ts_ms = self._equity_hard_stop_latest_panic_fill_timestamp_ms(
+                        pside,
+                        symbol=symbol,
+                        since_ms=state.get("pending_red_since_ms"),
+                        fallback_ms=ts_ms,
+                    )
+                    state["pending_stop_event"] = (
+                        await self._equity_hard_stop_compute_coin_stop_event(
+                            pside, symbol, stop_ts_ms
+                        )
+                    )
+                    state["red_flat_confirmations"] += 1
+                else:
+                    state["red_flat_confirmations"] = 0
+                    state["pending_stop_event"] = None
+                if state["red_flat_confirmations"] >= 2:
+                    await self._equity_hard_stop_finalize_coin_red_stop(
+                        pside,
+                        symbol,
+                        state["pending_stop_event"],
+                        finalized_without_order=True,
+                        flat_confirmations=state["red_flat_confirmations"],
+                        entry_orders=entry_orders,
+                        nonpanic_close_orders=nonpanic_close_orders,
+                    )
+                    state = self._hsl_coin_state(pside, symbol)
             self._equity_hard_stop_emit_coin_status(pside, symbol, metrics)
             out[f"{pside}:{symbol}"] = metrics
     return out if out else None
