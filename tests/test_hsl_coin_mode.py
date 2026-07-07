@@ -858,6 +858,44 @@ def test_forced_mode_refresher_preserves_paused_red(monkeypatch):
     )
 
 
+def test_cooldown_anchor_uses_scope_flattening_fill():
+    # B2.1: cooldown anchors at the fill that flattened the scope, by any
+    # means. A manual close after the last panic fill must win; with no fills
+    # in the window the panic-fill fallback and then the caller fallback hold.
+    bot = make_coin_bot()
+    events = [
+        SimpleNamespace(
+            position_side="long", symbol="A", timestamp=120_500,
+            pb_order_type="close_panic_long",
+        ),
+        SimpleNamespace(
+            position_side="long", symbol="A", timestamp=150_000,
+            pb_order_type="close_manual_long",
+        ),
+    ]
+    bot._pnls_manager = SimpleNamespace(get_events=lambda: events)
+    assert (
+        bot._equity_hard_stop_latest_flatten_fill_timestamp_ms(
+            "long", symbol="A", since_ms=60_000, fallback_ms=999_000
+        )
+        == 150_000
+    )
+    # Window that excludes both fills: caller fallback.
+    assert (
+        bot._equity_hard_stop_latest_flatten_fill_timestamp_ms(
+            "long", symbol="A", since_ms=200_000, fallback_ms=999_000
+        )
+        == 999_000
+    )
+    # Other-pair fills never leak into the anchor.
+    assert (
+        bot._equity_hard_stop_latest_flatten_fill_timestamp_ms(
+            "long", symbol="B", since_ms=60_000, fallback_ms=999_000
+        )
+        == 999_000
+    )
+
+
 def test_red_paused_forced_modes_block_entries_without_panic():
     bot = make_coin_bot()
     bot.positions = {"A": {"long": {"size": 1.0, "price": 100.0}, "short": {"size": 0.0}}}
@@ -1368,6 +1406,7 @@ def bind_hsl_methods(bot):
         "_try_load_hsl_replay_matrix_cache",
         "_equity_hard_stop_try_reuse_replay_cache",
         "_equity_hard_stop_set_red_paused_runtime_forced_modes",
+        "_equity_hard_stop_latest_flatten_fill_timestamp_ms",
         "_equity_hard_stop_refresh_halted_runtime_forced_modes",
         "_equity_hard_stop_set_red_runtime_forced_modes",
         "_equity_hard_stop_runtime_red_latched",
