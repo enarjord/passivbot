@@ -71,6 +71,7 @@ def _make_mock_pbr():
         def _state_reset(self):
             self._initialized = False
             self._red_latched = False
+            self._red_seen_in_episode = False
             self._tier = "green"
             self._drawdown_ema = 0.0
             self._peak_strategy_equity = 0.0
@@ -85,6 +86,7 @@ def _make_mock_pbr():
         def reset_state_keep_peak(self):
             self._initialized = False
             self._red_latched = False
+            self._red_seen_in_episode = False
             self._tier = "green"
             self._drawdown_ema = 0.0
             self._peak_strategy_equity = 0.0
@@ -94,6 +96,9 @@ def _make_mock_pbr():
 
         def red_latched(self):
             return bool(self._red_latched)
+
+        def red_seen_in_episode(self):
+            return bool(getattr(self, "_red_seen_in_episode", False))
 
         def tier(self):
             return str(self._tier)
@@ -133,6 +138,10 @@ def _make_mock_pbr():
                 self._cached_step = {
                     "initialized": True,
                     "red_latched": bool(self._red_latched),
+                    "red_seen_in_episode": bool(
+                        getattr(self, "_red_seen_in_episode", False)
+                    ),
+                    "red_active_now": False,
                     "peak_strategy_equity": float(self._peak_strategy_equity),
                     "rolling_peak_strategy_equity": float(self._last_rolling_peak),
                     "drawdown_ema": float(self._drawdown_ema),
@@ -169,7 +178,10 @@ def _make_mock_pbr():
                 drawdown_raw + (self._drawdown_ema - drawdown_raw) * decay
             )
             drawdown_score = min(drawdown_raw, self._drawdown_ema)
-            if self._red_latched or drawdown_score >= red_threshold:
+            red_active_now = drawdown_score >= red_threshold
+            if red_active_now:
+                self._red_seen_in_episode = True
+            if self._red_latched or red_active_now:
                 self._tier = "red"
                 if latch_red:
                     self._red_latched = True
@@ -183,6 +195,10 @@ def _make_mock_pbr():
             self._cached_step = {
                 "initialized": True,
                 "red_latched": bool(self._red_latched),
+                "red_seen_in_episode": bool(
+                    getattr(self, "_red_seen_in_episode", False)
+                ),
+                "red_active_now": bool(red_active_now),
                 "peak_strategy_equity": float(self._peak_strategy_equity),
                 "rolling_peak_strategy_equity": float(self._last_rolling_peak),
                 "drawdown_ema": float(self._drawdown_ema),
@@ -2543,6 +2559,8 @@ def test_hard_stop_apply_sample_delegates_to_rust(monkeypatch):
             "tier": "orange",
             "drawdown_raw": 0.19,
             "drawdown_score": 0.13,
+            "red_active_now": False,
+            "red_seen_in_episode": False,
             "changed": True,
             "alpha": 0.001110493,
             "elapsed_minutes": 1,
@@ -2606,6 +2624,8 @@ def test_hard_stop_apply_sample_unified_uses_total_signal(monkeypatch):
             "tier": "yellow",
             "drawdown_raw": 0.05,
             "drawdown_score": 0.05,
+            "red_active_now": False,
+            "red_seen_in_episode": False,
             "changed": True,
             "alpha": 0.0327868852,
             "elapsed_minutes": 1,
@@ -2654,6 +2674,8 @@ def test_hard_stop_apply_sample_same_minute_recomputes_when_inputs_change(monkey
             "drawdown_score": max(
                 0.0, 1.0 - kwargs["equity"] / max(kwargs["peak_strategy_equity"], 1e-12)
             ),
+            "red_active_now": False,
+            "red_seen_in_episode": False,
             "changed": True,
             "alpha": 0.01,
             "elapsed_minutes": 0,

@@ -3127,6 +3127,7 @@ impl<'a> Backtest<'a> {
                         drawdown_raw: state.drawdown_ema.max(0.0),
                         drawdown_ema: state.drawdown_ema.max(0.0),
                         drawdown_score: state.drawdown_ema.max(0.0),
+                        red_active_now: false,
                         tier: state.tier,
                         changed: false,
                         alpha: 1.0,
