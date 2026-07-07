@@ -13,7 +13,10 @@ All notable user-facing changes will be documented in this file.
   Previously such episodes were silently reset with no stop accounting, so a
   restart during an active cooldown (or after a terminal-drawdown episode)
   would resume trading. RED-free ordinary flattenings keep the plain episode
-  reset.
+  reset. The Rust backtest already finalizes cooldown/no-restart for such
+  episodes (its per-episode tier latch keeps the stop path armed after the
+  sample recovers); new Rust regression tests pin that parity for both the
+  pside and coin scopes.
 
 - HSL startup now applies the clarified incomplete-history policy: with
   `restart_after_red_policy=always`, missing pre-episode fill coverage

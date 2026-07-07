@@ -981,9 +981,14 @@ Remaining implementation details:
       flatten fill timestamp and evaluates `restart_after_red_policy` /
       no-restart via the shared Rust predicate at that stop, mirroring the
       confirmed-panic-marker path (source=red_episode_flatten in the
-      reconstruction logs). Broader cross-episode no-restart peak accounting
-      (the backtest's `no_restart_peak_strategy_equity` analogue) remains
-      future work.
+      reconstruction logs). Backtest parity is pre-existing, provided by the
+      backtest's per-episode RED tier latch (step latch_red=true pins the
+      stop path armed after the sample recovers until the episode resets),
+      and is now pinned by Rust regression tests for both the pside and coin
+      scopes (RED seen while open, sample recovered, ordinary flatten ->
+      cooldown). Broader cross-episode no-restart peak accounting in the
+      live replay (the backtest's `no_restart_peak_strategy_equity`
+      analogue) remains future work.
 - [ ] HSL replay performance/readiness slice.
       Persist verified non-authoritative HSL time series/checkpoints, add doctor
       tools, prioritize held scopes, keep timing/source evidence, and move dense
