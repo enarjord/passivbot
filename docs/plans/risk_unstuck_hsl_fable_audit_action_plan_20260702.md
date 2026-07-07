@@ -908,10 +908,11 @@ Remaining implementation details:
       already use the latest panic-fill timestamp (the flattening fill for
       bot-flattened episodes); the manual-flatten anchor refinement and the
       incomplete-history policy remain open.
-      Observed while implementing (pre-existing, not this slice): the
-      backtest ORANGE `TpOnly` override still skips flat symbols
-      (`apply_orange_override` has-pos gate), which diverges from the
-      live A2.2 contract; needs its own parity fix.
+      Implemented (A2.2 backtest parity): the backtest ORANGE `TpOnly`
+      override now forces flat symbols too (`apply_orange_override` has-pos
+      gate removed), matching the live overlay since #1098; the orchestrator's
+      `TpOnly` generates no entries and no flat-symbol closes, so the forced
+      mode is safe for flat scopes.
 - [x] Dynamic WEL and snapped/raw balance docs/tests.
       Make `reduce_overweight` use dynamic currently-tradable slot count, keep
       snapped/raw balance separation, and add high-hysteresis warning/preflight

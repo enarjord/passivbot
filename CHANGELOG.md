@@ -4,6 +4,12 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Backtest ORANGE `tp_only_with_active_entry_cancellation` now forces flat
+  symbols in the affected HSL scope too, blocking initial entries exactly
+  like live has since the A2.2 contract change; previously backtests allowed
+  new initial entries during ORANGE for symbols without a position, so
+  backtest results could overstate entry activity near the orange tier.
+
 - HSL panic orders are now authorized only while the CURRENT drawdown sample
   is in RED (`red_active_now`), in both live and backtest. Previously a
   latched RED episode kept emitting panic closes until the scope was flat
