@@ -2218,16 +2218,27 @@ def _parse_hsl_config(self) -> dict[str, dict[str, Any]]:
     return out
 
 
-def _equity_hard_stop_no_restart_latched(cfg: dict[str, Any], drawdown_raw: float) -> bool:
+def _equity_hard_stop_no_restart_latched(
+    cfg: dict[str, Any], drawdown_raw: float, drawdown_ema: float
+) -> bool:
+    """Shared live/backtest no-restart trigger, owned by Rust.
+
+    Contract (fable audit plan, clarified 2026-07-06): the permanent halt is
+    conservative and trips on max(drawdown_raw, drawdown_ema), catching either
+    catastrophic instantaneous damage or sustained smoothed damage.
+    """
     policy = normalize_hsl_restart_after_red_policy(
         cfg.get("restart_after_red_policy", "threshold"),
         path="hsl.restart_after_red_policy",
     )
-    if policy == "always":
-        return False
-    if policy == "never":
-        return True
-    return bool(float(drawdown_raw) >= float(cfg["no_restart_drawdown_threshold"]))
+    return bool(
+        pbr.hsl_no_restart_triggered(
+            policy,
+            float(drawdown_raw),
+            float(drawdown_ema),
+            float(cfg["no_restart_drawdown_threshold"]),
+        )
+    )
 
 
 def _equity_hard_stop_enabled(self, pside: Optional[str] = None) -> bool:
@@ -4133,7 +4144,9 @@ async def _equity_hard_stop_initialize_from_history(self) -> None:
                         },
                     )
                     no_restart_latched = _equity_hard_stop_no_restart_latched(
-                        cfg, no_restart_drawdown_raw
+                        cfg,
+                        no_restart_drawdown_raw,
+                        float(current_metrics["drawdown_ema"]),
                     )
                     cooldown_until_ms = None
                     if not no_restart_latched and cooldown_ms > 0:
@@ -4790,7 +4803,7 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
                         continue
                     stop_drawdown_raw = float(metrics["drawdown_raw"])
                     no_restart_latched = _equity_hard_stop_no_restart_latched(
-                        cfg, stop_drawdown_raw
+                        cfg, stop_drawdown_raw, float(metrics["drawdown_ema"])
                     )
                     cooldown_until_ms = None
                     if not no_restart_latched and cooldown_ms > 0:
@@ -5696,7 +5709,9 @@ async def _equity_hard_stop_finalize_red_stop(
         no_restart_peak_strategy_equity,
         no_restart_drawdown_raw,
     ) = self._equity_hard_stop_record_no_restart_stop(pside, stop_event)
-    no_restart_latched = _equity_hard_stop_no_restart_latched(cfg, no_restart_drawdown_raw)
+    no_restart_latched = _equity_hard_stop_no_restart_latched(
+        cfg, no_restart_drawdown_raw, float(stop_event["drawdown_ema"])
+    )
     cooldown_ms = int(round(cooldown_minutes * 60_000.0)) if cooldown_minutes > 0.0 else 0
     cooldown_until_ms = None if no_restart_latched or cooldown_ms <= 0 else int(stop_ts_ms + cooldown_ms)
     payload = self._equity_hard_stop_build_latch_payload(
@@ -5837,7 +5852,9 @@ async def _equity_hard_stop_finalize_coin_red_stop(
     else:
         stop_ts_ms = int(stop_event["stop_event_timestamp_ms"])
     cooldown_minutes = float(cfg["cooldown_minutes_after_red"])
-    no_restart_latched = _equity_hard_stop_no_restart_latched(cfg, stop_event["drawdown_raw"])
+    no_restart_latched = _equity_hard_stop_no_restart_latched(
+        cfg, stop_event["drawdown_raw"], float(stop_event["drawdown_ema"])
+    )
     cooldown_ms = int(round(cooldown_minutes * 60_000.0)) if cooldown_minutes > 0.0 else 0
     cooldown_until_ms = None if no_restart_latched or cooldown_ms <= 0 else int(stop_ts_ms + cooldown_ms)
     payload = self._equity_hard_stop_build_latch_payload(
