@@ -6107,7 +6107,7 @@ async def test_protective_panic_orchestrator_payload_omits_ema_dependencies(monk
         "m1": {"close": [], "log_range": [], "volume": []},
         "h1": {"close": [], "log_range": [], "volume": []},
     }
-    assert captured["input"]["global"]["unstuck_allowance_long"] == 0.0
+    assert "unstuck_allowance_long" not in captured["input"]["global"]
     assert captured["input"]["global"]["realized_pnl_cumsum_last"] == 0.0
     assert pb_mod.Passivbot._protective_panic_target_psides_by_symbol(FakeBot()) == {
         symbol: {"long"}

@@ -4,6 +4,17 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- The live path no longer computes unstuck allowances for the Rust
+  orchestrator input. Rust has always derived the unstuck allowance
+  internally from the realized-pnl cumsum facts (risk.rs); the
+  unstuck_allowance_long/short input fields were consumed only as a legacy
+  fallback for the auto_unstuck_allowed flag, which live callers always set
+  explicitly. The fields are now optional (serde defaults) and documented
+  as legacy/diagnostic; live inputs and recorded planning snapshots omit
+  them, removing the last per-cycle duplicate of the allowance formula from
+  the hot path. The monitor still computes allowances on demand for
+  diagnostics. Behavior unchanged.
+
 - Live unstuck-allowance inputs to the Rust orchestrator are no longer
   zeroed while an unstuck order is resting on the exchange. The allowance
   values are pure budget facts derived from fill history; suppression of

@@ -12944,8 +12944,6 @@ class Passivbot:
                 ),
                 "panic_close_market": False,
                 "auto_unstuck_allowed": False,
-                "unstuck_allowance_long": 0.0,
-                "unstuck_allowance_short": 0.0,
                 "max_realized_loss_pct": float(Passivbot._live_max_realized_loss_pct(self)),
                 "realized_pnl_cumsum_max": 0.0,
                 "realized_pnl_cumsum_last": 0.0,
@@ -13617,8 +13615,6 @@ class Passivbot:
                 ),
                 "panic_close_market": False,
                 "auto_unstuck_allowed": auto_unstuck_allowed,
-                "unstuck_allowance_long": float(unstuck_allowances.get("long", 0.0)),
-                "unstuck_allowance_short": float(unstuck_allowances.get("short", 0.0)),
                 "max_realized_loss_pct": max_realized_loss_pct,
                 "realized_pnl_cumsum_max": float(
                     realized_pnl_cumsum.get("max", 0.0) or 0.0
@@ -15418,10 +15414,12 @@ class Passivbot:
             self, last_prices, ts=utc_ms(), source=monitor_source
         )
 
-        # The allowance values are pure budget facts; the open-order check
-        # only drives the auto_unstuck_allowed emission gate that Rust owns.
+        # The open-order check drives only the auto_unstuck_allowed emission
+        # gate; Rust derives the actual unstuck allowance internally from the
+        # realized-pnl cumsum facts below, so no allowance values are computed
+        # or passed on this path (the monitor computes them on demand for
+        # diagnostics).
         allow_new_unstuck = not self.has_open_unstuck_order()
-        unstuck_allowances = self._calc_unstuck_allowances_live()
         auto_unstuck_allowed = self._auto_unstuck_allowed_live(allow_new_unstuck)
         realized_pnl_cumsum = self._get_realized_pnl_cumsum_stats()
         now_ms = int(self.get_exchange_time())
@@ -15462,8 +15460,6 @@ class Passivbot:
                 ),
                 "panic_close_market": False,
                 "auto_unstuck_allowed": auto_unstuck_allowed,
-                "unstuck_allowance_long": float(unstuck_allowances.get("long", 0.0)),
-                "unstuck_allowance_short": float(unstuck_allowances.get("short", 0.0)),
                 "max_realized_loss_pct": max_realized_loss_pct,
                 "realized_pnl_cumsum_max": float(
                     realized_pnl_cumsum.get("max", 0.0) or 0.0
@@ -15722,7 +15718,6 @@ class Passivbot:
                 "user": str(self.config_get(["live", "user"]) or ""),
                 "active_symbols": list(symbols),
                 "auto_unstuck_allowed": auto_unstuck_allowed,
-                "unstuck_allowances": unstuck_allowances,
                 "realized_pnl_cumsum": realized_pnl_cumsum,
                 "last_increase_fill_timestamps": last_increase_fill_timestamps,
                 "planning_snapshot": (
