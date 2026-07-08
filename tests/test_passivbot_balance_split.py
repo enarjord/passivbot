@@ -1574,6 +1574,201 @@ async def test_balance_equity_history_paces_replay_candle_fetches(monkeypatch):
     assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 
+def test_pside_timeline_synthesis_rejects_inconsistent_pside_pnl():
+    # Codex P1: the trust boundary must reject a v5 account series whose
+    # account-level pnl and per-pside pnl describe different realized streams.
+    account_arrays = passivbot_module.pb_hsl._hsl_replay_account_series_arrays(
+        [
+            passivbot_module.pb_hsl._hsl_replay_account_series_row(
+                ts=60_000, pnl=10.0, pnl_long=3.0, pnl_short=0.0
+            )
+        ]
+    )
+    with pytest.raises(ValueError, match="pnl_pside_sum_mismatch"):
+        passivbot_module.pb_hsl._hsl_replay_pside_timeline_rows_from_cache(
+            {}, account_arrays, current_balance=100.0
+        )
+    # A consistent series passes.
+    consistent = passivbot_module.pb_hsl._hsl_replay_account_series_arrays(
+        [
+            passivbot_module.pb_hsl._hsl_replay_account_series_row(
+                ts=60_000, pnl=3.0, pnl_long=3.0, pnl_short=0.0
+            )
+        ]
+    )
+    rows = passivbot_module.pb_hsl._hsl_replay_pside_timeline_rows_from_cache(
+        {}, consistent, current_balance=100.0
+    )
+    assert rows[0]["realized_pnl"] == rows[0]["realized_pnl_long"] == 3.0
+
+
+@pytest.mark.asyncio
+async def test_pside_timeline_synthesis_matches_authoritative_rows(monkeypatch):
+    # Trust boundary for the future pside/unified reuse gate: rows synthesized
+    # from the persisted cache arrays must equal the authoritative timeline
+    # field-for-field on every aggregate field the pside/unified initializer
+    # consumes, for every covered minute.
+    bot = Passivbot.__new__(Passivbot)
+    bot.config = {"live": {}}
+    bot.exchange = "kucoin"
+    bot.user = "test_user"
+    bot.init_pnls = AsyncMock()
+    bot.live_value = lambda key: "all" if key == "pnls_max_lookback_days" else None
+    base_ts = 1_800_000_000_000
+    ts_now = base_ts + 180_000
+    bot.get_exchange_time = lambda: ts_now
+    bot.get_raw_balance = lambda: 100.5
+    bot.get_symbol_id_inv = lambda symbol: symbol
+    sym_long = "BTC/USDT:USDT"
+    sym_short = "ETH/USDT:USDT"
+    bot.positions = {
+        sym_long: {
+            "long": {"size": 0.5, "price": 100.0},
+            "short": {"size": 0.0, "price": 0.0},
+        },
+        sym_short: {
+            "long": {"size": 0.0, "price": 0.0},
+            "short": {"size": 1.0, "price": 50.0},
+        },
+    }
+    bot._pnls_manager = None
+    bot.inverse = False
+    bot._candle_fetch_concurrency = lambda *, context="runtime": 2
+    bot._get_fetch_delay_seconds = lambda: 0.0
+    bot._live_event_pipeline = LiveEventPipeline(
+        structured_sinks=[ListEventSink()],
+        monitor_sinks=[],
+    )
+    bot._live_event_current_cycle_id = "cy_hsl_pside_parity"
+    bot._emit_live_event = Passivbot._emit_live_event.__get__(bot, Passivbot)
+    bot.c_mults = {sym_long: 1.0, sym_short: 1.0}
+    monkeypatch.setattr(
+        passivbot_module, "compute_psize_pprice", lambda *args, **kwargs: None
+    )
+
+    candles = {
+        sym_long: np.array(
+            [
+                (base_ts, 99.0, 101.0, 98.0, 100.0, 1.0),
+                (base_ts + 60_000, 100.0, 102.0, 99.0, 101.0, 1.0),
+                (base_ts + 120_000, 101.0, 103.0, 100.0, 102.0, 1.0),
+                (base_ts + 180_000, 102.0, 104.0, 101.0, 103.0, 1.0),
+            ],
+            dtype=passivbot_module.CANDLE_DTYPE,
+        ),
+        sym_short: np.array(
+            [
+                (base_ts, 49.0, 51.0, 48.0, 50.0, 1.0),
+                (base_ts + 60_000, 50.0, 52.0, 49.0, 49.0, 1.0),
+                (base_ts + 120_000, 49.0, 51.0, 48.0, 48.0, 1.0),
+                (base_ts + 180_000, 48.0, 50.0, 47.0, 47.0, 1.0),
+            ],
+            dtype=passivbot_module.CANDLE_DTYPE,
+        ),
+    }
+
+    class _CM:
+        async def get_candles(self, sym, **kwargs):
+            return candles[sym]
+
+    bot.cm = _CM()
+    fill_events = [
+        {
+            "timestamp": base_ts,
+            "symbol": sym_long,
+            "position_side": "long",
+            "side": "buy",
+            "qty": 1.0,
+            "price": 100.0,
+            "pnl": 0.0,
+        },
+        {
+            "timestamp": base_ts + 30_000,
+            "symbol": sym_short,
+            "position_side": "short",
+            "side": "sell",
+            "qty": 1.0,
+            "price": 50.0,
+            "pnl": 0.0,
+        },
+        {
+            # Long partial close, realized +1.0 inside the second minute.
+            "timestamp": base_ts + 90_000,
+            "symbol": sym_long,
+            "position_side": "long",
+            "side": "sell",
+            "qty": 0.5,
+            "price": 102.0,
+            "pnl": 1.0,
+        },
+        {
+            # Short add, realized -0.5 fee-like loss inside the third minute.
+            "timestamp": base_ts + 150_000,
+            "symbol": sym_short,
+            "position_side": "short",
+            "side": "buy",
+            "qty": 0.0,
+            "price": 48.0,
+            "pnl": -0.5,
+        },
+    ]
+
+    history = await bot.get_balance_equity_history(
+        fill_events=fill_events,
+        current_balance=100.5,
+        hsl_replay_signal_mode="unified",
+    )
+
+    matrices = history["hsl_replay_matrices"]
+    assert set(matrices.get("long", {})) == {sym_long}
+    assert set(matrices.get("short", {})) == {sym_short}
+    pair_arrays = {
+        (pside, sym): passivbot_module.pb_hsl._hsl_replay_matrix_arrays(rows)
+        for pside, by_sym in matrices.items()
+        for sym, rows in by_sym.items()
+    }
+    account_arrays = passivbot_module.pb_hsl._hsl_replay_account_series_arrays(
+        history["hsl_replay_account_series"]
+    )
+
+    synthesized = passivbot_module.pb_hsl._hsl_replay_pside_timeline_rows_from_cache(
+        pair_arrays,
+        account_arrays,
+        current_balance=100.5,
+    )
+
+    authoritative = {int(row["timestamp"]): row for row in history["timeline"]}
+    contract_fields = (
+        "balance",
+        "realized_pnl",
+        "realized_pnl_long",
+        "realized_pnl_short",
+        "unrealized_pnl_long",
+        "unrealized_pnl_short",
+        "is_flat",
+        "is_flat_long",
+        "is_flat_short",
+    )
+    assert synthesized, "synthesis must produce rows"
+    compared = 0
+    for row in synthesized:
+        auth = authoritative.get(int(row["timestamp"]))
+        if auth is None:
+            continue
+        compared += 1
+        assert set(row) == {"timestamp", *contract_fields}
+        for field in contract_fields:
+            if isinstance(auth[field], bool):
+                assert row[field] == auth[field], (row["timestamp"], field)
+            else:
+                assert row[field] == pytest.approx(auth[field], abs=1e-9), (
+                    row["timestamp"],
+                    field,
+                )
+    assert compared >= 4
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
+
+
 @pytest.mark.asyncio
 async def test_balance_equity_history_first_minute_realized_pnl_attributes_pside(
     monkeypatch,

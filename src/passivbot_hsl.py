@@ -730,6 +730,157 @@ def _hsl_replay_timeline_rows_from_cache(
     return rows
 
 
+def _hsl_replay_pside_timeline_rows_from_cache(
+    pair_arrays: dict[tuple[str, str], dict[str, Any]],
+    account_arrays: dict[str, Any],
+    *,
+    current_balance: float,
+) -> list[dict[str, Any]]:
+    """Synthesize pside/unified-replay timeline rows from persisted cache arrays.
+
+    Pure and unwired: the trust-boundary conversion a future pside/unified
+    reuse slice would feed into `_equity_hard_stop_initialize_from_history`.
+    Each row carries exactly the aggregate fields that initializer consumes:
+    `timestamp`, `balance`, `realized_pnl`, `realized_pnl_long`,
+    `realized_pnl_short`, `unrealized_pnl_long`, `unrealized_pnl_short`,
+    `is_flat`, `is_flat_long`, `is_flat_short`.
+
+    CRITICAL precondition (enforced by the future reuse gate, not here): the
+    cached pairs must be the ONLY pairs that held positions anywhere in the
+    covered window. Unrealized-PnL and flatness aggregates are summed from
+    cached pair matrices alone, so any uncached pair with an in-window
+    position makes them wrong; the reuse gate must prove pair completeness
+    from fills (mirroring the coin-mode flat-pair rejection) or force a full
+    replay. Realized aggregates come from the schema-v5 account series
+    (`pnl_long`/`pnl_short`) and are anchored at the series start like the
+    authoritative record-window anchor. Fail-loud on any input that cannot
+    prove equivalence.
+    """
+    import numpy as np
+
+    balance_f = _finite_hsl_float(current_balance, "current_balance")
+    if balance_f <= 0.0:
+        raise ValueError(f"current_balance must be > 0, got {balance_f}")
+    account_reasons = _hsl_replay_cache_array_value_reasons(
+        dict(account_arrays), series_kind="account_pnl"
+    )
+    if account_reasons:
+        raise ValueError(
+            "HSL cache account arrays invalid: " + ", ".join(account_reasons)
+        )
+    account_ts = np.asarray(account_arrays["ts"], dtype=np.int64)
+    if account_ts.size == 0:
+        raise ValueError("HSL cache account arrays must not be empty")
+    if account_ts.size > 1 and not bool(
+        np.all(np.diff(account_ts) == _HSL_REPLAY_MATRIX_INTERVAL_MS)
+    ):
+        raise ValueError("HSL cache account arrays invalid: timestamp_not_contiguous")
+    account_pnl = np.asarray(account_arrays["pnl"], dtype=np.float64)
+    pnl_long = np.asarray(account_arrays["pnl_long"], dtype=np.float64)
+    pnl_short = np.asarray(account_arrays["pnl_short"], dtype=np.float64)
+    # The authoritative writer accumulates the identical pnl+fee per fill into
+    # both the balance stream and the per-pside totals, so per minute
+    # pnl == pnl_long + pnl_short must hold; anything else is a malformed or
+    # internally inconsistent v5 series and must be rejected, not synthesized.
+    pside_sum = pnl_long + pnl_short
+    tolerance = 1e-9 * np.maximum(
+        1.0, np.maximum(np.abs(account_pnl), np.abs(pside_sum))
+    )
+    mismatch = np.abs(account_pnl - pside_sum) > tolerance
+    if bool(np.any(mismatch)):
+        idx = int(np.argmax(mismatch))
+        raise ValueError(
+            "HSL cache account arrays invalid: pnl_pside_sum_mismatch at "
+            f"ts={int(np.asarray(account_arrays['ts'], dtype=np.int64)[idx])} "
+            f"(pnl={float(account_pnl[idx])!r}, "
+            f"pnl_long+pnl_short={float(pside_sum[idx])!r})"
+        )
+    account_cumsum = np.cumsum(account_pnl, dtype=np.float64)
+    pside_cumsum = {
+        "long": np.cumsum(pnl_long, dtype=np.float64),
+        "short": np.cumsum(pnl_short, dtype=np.float64),
+    }
+    # Anchor the balance series so its final minute equals the current balance,
+    # mirroring how the authoritative replay back-computes its baseline.
+    balances = balance_f - (float(account_cumsum[-1]) - account_cumsum)
+    if not bool(np.all(np.isfinite(balances))) or bool(np.any(balances <= 0.0)):
+        raise ValueError(
+            "HSL cache-derived balance series must be finite and > 0 for every minute"
+        )
+    start_ts = int(account_ts[0])
+    end_ts = int(account_ts[-1])
+    n_rows = int(len(account_ts))
+    upnl_by_minute = {
+        "long": np.zeros(n_rows, dtype=np.float64),
+        "short": np.zeros(n_rows, dtype=np.float64),
+    }
+    nonflat_by_minute = {
+        "long": np.zeros(n_rows, dtype=bool),
+        "short": np.zeros(n_rows, dtype=bool),
+    }
+    for pair, arrays in pair_arrays.items():
+        pside, symbol = pair
+        if pside not in ("long", "short"):
+            raise ValueError(f"HSL cache pair pside must be long or short, got {pside!r}")
+        pair_reasons = _hsl_replay_cache_array_value_reasons(
+            dict(arrays), series_kind="pair_matrix"
+        )
+        if pair_reasons:
+            raise ValueError(
+                f"HSL cache pair arrays invalid for {pside}:{symbol}: "
+                + ", ".join(pair_reasons)
+            )
+        pair_ts = np.asarray(arrays["ts"], dtype=np.int64)
+        if pair_ts.size == 0:
+            raise ValueError(f"HSL cache pair arrays empty for {pside}:{symbol}")
+        if pair_ts.size > 1 and not bool(
+            np.all(np.diff(pair_ts) == _HSL_REPLAY_MATRIX_INTERVAL_MS)
+        ):
+            raise ValueError(
+                f"HSL cache pair arrays invalid for {pside}:{symbol}: "
+                "timestamp_not_contiguous"
+            )
+        pair_start = int(pair_ts[0])
+        pair_end = int(pair_ts[-1])
+        if pair_start < start_ts or pair_end > end_ts:
+            raise ValueError(
+                f"HSL cache pair series for {pside}:{symbol} spans "
+                f"[{pair_start}, {pair_end}] outside account span "
+                f"[{start_ts}, {end_ts}]"
+            )
+        if (pair_start - start_ts) % _HSL_REPLAY_MATRIX_INTERVAL_MS != 0:
+            raise ValueError(
+                f"HSL cache pair series for {pside}:{symbol} is not aligned to "
+                "the account minute grid"
+            )
+        offset = (pair_start - start_ts) // _HSL_REPLAY_MATRIX_INTERVAL_MS
+        pair_upnl = np.asarray(arrays["upnl"], dtype=np.float64)
+        # Pair matrices store signed position size (shorts are negative).
+        pair_psize = np.asarray(arrays["psize"], dtype=np.float64)
+        span = slice(offset, offset + len(pair_ts))
+        upnl_by_minute[pside][span] += pair_upnl
+        nonflat_by_minute[pside][span] |= np.abs(pair_psize) > 1e-12
+    rows: list[dict[str, Any]] = []
+    for idx in range(n_rows):
+        flat_long = not bool(nonflat_by_minute["long"][idx])
+        flat_short = not bool(nonflat_by_minute["short"][idx])
+        rows.append(
+            {
+                "timestamp": int(account_ts[idx]),
+                "balance": float(balances[idx]),
+                "realized_pnl": float(account_cumsum[idx]),
+                "realized_pnl_long": float(pside_cumsum["long"][idx]),
+                "realized_pnl_short": float(pside_cumsum["short"][idx]),
+                "unrealized_pnl_long": float(upnl_by_minute["long"][idx]),
+                "unrealized_pnl_short": float(upnl_by_minute["short"][idx]),
+                "is_flat": flat_long and flat_short,
+                "is_flat_long": flat_long,
+                "is_flat_short": flat_short,
+            }
+        )
+    return rows
+
+
 def _hsl_replay_rows_from_arrays(
     arrays: dict[str, Any], *, series_kind: str
 ) -> list[dict[str, Any]]:
