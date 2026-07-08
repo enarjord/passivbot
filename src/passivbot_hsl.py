@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import bisect
 import math
 import os
 import time
@@ -4418,6 +4419,15 @@ async def _equity_hard_stop_initialize_from_history(self) -> None:
                     state["pending_red_since_ms"] = int(current_metrics["timestamp_ms"])
                 continue
             ignored_panic_marker_timestamps: set[int] = set()
+            scope_flat_key = "is_flat" if signal_mode == "unified" else f"is_flat_{pside}"
+            scope_fill_ts = sorted(
+                _equity_hard_stop_fill_timestamp_ms(fill)
+                for fill in fill_events
+                if signal_mode == "unified"
+                or _equity_hard_stop_fill_pside(fill) == pside
+            )
+            scope_was_nonflat = False
+            prev_recorded_ts: Optional[int] = None
             for row in timeline:
                 if not isinstance(row, dict):
                     continue
@@ -4455,7 +4465,17 @@ async def _equity_hard_stop_initialize_from_history(self) -> None:
                     latch_red=False,
                 )
                 n_rows[pside] += 1
+                row_flat = row.get(scope_flat_key)
+                scope_flattened_this_row = (
+                    isinstance(row_flat, bool) and row_flat and scope_was_nonflat
+                )
+                if isinstance(row_flat, bool):
+                    scope_was_nonflat = not row_flat
+                row_prev_recorded_ts = prev_recorded_ts
+                prev_recorded_ts = ts
                 panic_flatten_marker = panic_flatten_events_by_key.get((pside, ts))
+                stop_ts: Optional[int] = None
+                stop_source = "panic_fill_flatten"
                 if panic_flatten_marker is not None:
                     marker_ts = int(panic_flatten_marker["timestamp"])
                     if not _equity_hard_stop_replay_marker_confirms_red(current_metrics):
@@ -4472,6 +4492,40 @@ async def _equity_hard_stop_initialize_from_history(self) -> None:
                             float(current_metrics["red_threshold"]),
                         )
                         continue
+                    stop_ts = marker_ts
+                elif scope_flattened_this_row:
+                    if bool(current_metrics.get("red_seen_in_episode")):
+                        # B2.1: the episode crossed RED and ended by an ordinary
+                        # (non-panic) scope-flattening fill; cooldown/no-restart
+                        # evidence is canonical from the reconstructed episode.
+                        # Anchor at the latest scope fill inside the flatten
+                        # window, falling back to the row minute.
+                        boundary = ts + 60_000
+                        window_start = (
+                            row_prev_recorded_ts
+                            if row_prev_recorded_ts is not None
+                            else ts - 60_000
+                        )
+                        idx = bisect.bisect_left(scope_fill_ts, boundary)
+                        anchor = None
+                        if idx > 0 and scope_fill_ts[idx - 1] > window_start:
+                            anchor = int(scope_fill_ts[idx - 1])
+                        stop_ts = anchor if anchor is not None else int(ts)
+                        stop_source = "red_episode_flatten"
+                    else:
+                        # Ordinary flatten of a RED-free episode: plain episode
+                        # reset with no stop accounting.
+                        self._equity_hard_stop_reset_after_restart(pside)
+                        state = self._hsl_state(pside)
+                        logging.info(
+                            "[risk] HSL[%s] replay reset current episode after flat row | ts=%s",
+                            pside,
+                            int(ts),
+                        )
+                        continue
+                if stop_ts is None:
+                    continue
+                if True:
                     state["pending_red_since_ms"] = int(ts)
                     stop_drawdown_raw = float(current_metrics["drawdown_raw"])
                     (
@@ -4491,10 +4545,10 @@ async def _equity_hard_stop_initialize_from_history(self) -> None:
                     )
                     cooldown_until_ms = None
                     if not no_restart_latched and cooldown_ms > 0:
-                        cooldown_until_ms = marker_ts + cooldown_ms
+                        cooldown_until_ms = stop_ts + cooldown_ms
                     payload = self._equity_hard_stop_build_latch_payload(
                         pside,
-                        stop_event_timestamp_ms=marker_ts,
+                        stop_event_timestamp_ms=stop_ts,
                         balance=float(row["balance"]),
                         realized_pnl_total=float(row["realized_pnl"]),
                         realized_pnl=float(row[f"realized_pnl_{pside}"]),
@@ -4522,14 +4576,15 @@ async def _equity_hard_stop_initialize_from_history(self) -> None:
                         "[risk] HSL[%s] replay found finalized RED stop in exchange-derived history | "
                         "stop_ts=%s drawdown_raw=%.6f no_restart_drawdown_raw=%.6f "
                         "no_restart_latched=%s cooldown_until_ms=%s diagnostic=%s "
-                        "source=panic_fill_flatten",
+                        "source=%s",
                         pside,
-                        marker_ts,
+                        stop_ts,
                         stop_drawdown_raw,
                         no_restart_drawdown_raw,
                         state["no_restart_latched"],
                         cooldown_until_ms if cooldown_until_ms is not None else "none",
                         latch_path,
+                        stop_source,
                     )
                     if state["no_restart_latched"]:
                         break

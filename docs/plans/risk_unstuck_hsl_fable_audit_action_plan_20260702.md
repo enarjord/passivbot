@@ -996,6 +996,14 @@ Remaining implementation details:
       `persistent_drawdown_raw` equals the at-stop drawdown ratio, which is
       exactly what the live coin replay and coin forward finalize evaluate.
       With that, every sub-item of this tracker entry is implemented.
+      Implemented (pside/unified parity, 2026-07-08): the pside/unified
+      startup replay now applies the same canonical RED-episode accounting
+      as coin replay - ordinary scope-flattening of a red_seen_in_episode
+      episode latches cooldown at the flatten fill (row-minute fallback) and
+      evaluates no-restart via the persistent tracker; RED-free flattenings
+      reset the episode state. Flatness comes from the timeline's
+      is_flat/is_flat_{pside} flags (rows without the flags conservatively
+      skip transition detection).
 - [ ] HSL replay performance/readiness slice.
       Persist verified non-authoritative HSL time series/checkpoints, add doctor
       tools, prioritize held scopes, keep timing/source evidence, and move dense
