@@ -11978,6 +11978,10 @@ class Passivbot:
             )
         if replay_account_enabled:
             replay_account_prev_balance = float(balance)
+            replay_account_prev_realized_pside = {
+                "long": float(realized_pnl_pside_running["long"]),
+                "short": float(realized_pnl_pside_running["short"]),
+            }
         record_start_realized_pnl_pside = {
             "long": float(realized_pnl_pside_running["long"]),
             "short": float(realized_pnl_pside_running["short"]),
