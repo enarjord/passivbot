@@ -1575,6 +1575,35 @@ async def test_balance_equity_history_paces_replay_candle_fetches(monkeypatch):
 
 
 @pytest.mark.asyncio
+def test_pside_timeline_synthesis_rejects_inconsistent_pside_pnl():
+    # Codex P1: the trust boundary must reject a v5 account series whose
+    # account-level pnl and per-pside pnl describe different realized streams.
+    account_arrays = passivbot_module.pb_hsl._hsl_replay_account_series_arrays(
+        [
+            passivbot_module.pb_hsl._hsl_replay_account_series_row(
+                ts=60_000, pnl=10.0, pnl_long=3.0, pnl_short=0.0
+            )
+        ]
+    )
+    with pytest.raises(ValueError, match="pnl_pside_sum_mismatch"):
+        passivbot_module.pb_hsl._hsl_replay_pside_timeline_rows_from_cache(
+            {}, account_arrays, current_balance=100.0
+        )
+    # A consistent series passes.
+    consistent = passivbot_module.pb_hsl._hsl_replay_account_series_arrays(
+        [
+            passivbot_module.pb_hsl._hsl_replay_account_series_row(
+                ts=60_000, pnl=3.0, pnl_long=3.0, pnl_short=0.0
+            )
+        ]
+    )
+    rows = passivbot_module.pb_hsl._hsl_replay_pside_timeline_rows_from_cache(
+        {}, consistent, current_balance=100.0
+    )
+    assert rows[0]["realized_pnl"] == rows[0]["realized_pnl_long"] == 3.0
+
+
+@pytest.mark.asyncio
 async def test_pside_timeline_synthesis_matches_authoritative_rows(monkeypatch):
     # Trust boundary for the future pside/unified reuse gate: rows synthesized
     # from the persisted cache arrays must equal the authoritative timeline

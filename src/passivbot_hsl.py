@@ -776,14 +776,29 @@ def _hsl_replay_pside_timeline_rows_from_cache(
     ):
         raise ValueError("HSL cache account arrays invalid: timestamp_not_contiguous")
     account_pnl = np.asarray(account_arrays["pnl"], dtype=np.float64)
+    pnl_long = np.asarray(account_arrays["pnl_long"], dtype=np.float64)
+    pnl_short = np.asarray(account_arrays["pnl_short"], dtype=np.float64)
+    # The authoritative writer accumulates the identical pnl+fee per fill into
+    # both the balance stream and the per-pside totals, so per minute
+    # pnl == pnl_long + pnl_short must hold; anything else is a malformed or
+    # internally inconsistent v5 series and must be rejected, not synthesized.
+    pside_sum = pnl_long + pnl_short
+    tolerance = 1e-9 * np.maximum(
+        1.0, np.maximum(np.abs(account_pnl), np.abs(pside_sum))
+    )
+    mismatch = np.abs(account_pnl - pside_sum) > tolerance
+    if bool(np.any(mismatch)):
+        idx = int(np.argmax(mismatch))
+        raise ValueError(
+            "HSL cache account arrays invalid: pnl_pside_sum_mismatch at "
+            f"ts={int(np.asarray(account_arrays['ts'], dtype=np.int64)[idx])} "
+            f"(pnl={float(account_pnl[idx])!r}, "
+            f"pnl_long+pnl_short={float(pside_sum[idx])!r})"
+        )
     account_cumsum = np.cumsum(account_pnl, dtype=np.float64)
     pside_cumsum = {
-        "long": np.cumsum(
-            np.asarray(account_arrays["pnl_long"], dtype=np.float64), dtype=np.float64
-        ),
-        "short": np.cumsum(
-            np.asarray(account_arrays["pnl_short"], dtype=np.float64), dtype=np.float64
-        ),
+        "long": np.cumsum(pnl_long, dtype=np.float64),
+        "short": np.cumsum(pnl_short, dtype=np.float64),
     }
     # Anchor the balance series so its final minute equals the current balance,
     # mirroring how the authoritative replay back-computes its baseline.
