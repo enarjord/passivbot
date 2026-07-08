@@ -18,6 +18,13 @@ All notable user-facing changes will be documented in this file.
   sample recovers); new Rust regression tests pin that parity for both the
   pside and coin scopes.
 
+- Repaired three stale Rust hard_stop unit tests that pinned pre-B2.1/A2.2
+  mode-override behavior and were never run by CI: ORANGE tp-only now forces
+  flat sides too (A2.2), and RED only authorizes panic while the current
+  sample is actively RED - a recovered sample downgrades to tp-only (B2.1
+  red split). The repaired red test now pins both branches; no behavior
+  changes.
+
 - HSL startup now applies the clarified incomplete-history policy: with
   `restart_after_red_policy=always`, missing pre-episode fill coverage
   degrades to a loud warning when the coin scope's current-episode start is
