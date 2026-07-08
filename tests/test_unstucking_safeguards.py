@@ -3169,6 +3169,114 @@ def _pside_state_snapshot(bot):
     }
 
 
+def _red_flatten_bot(monkeypatch, *, rows, fills=(), policy="threshold",
+                     no_restart_threshold=0.9, now_ms=361_000):
+    cfg = _dummy_config()
+    cfg["live"]["hsl_signal_mode"] = "unified"
+    bot = _make_dummy_bot(cfg)
+    _hsl_cfg(bot)["enabled"] = True
+    _hsl_cfg(bot)["red_threshold"] = 0.1
+    _hsl_cfg(bot)["ema_span_minutes"] = 1.0
+    _hsl_cfg(bot)["cooldown_minutes_after_red"] = 5.0
+    _hsl_cfg(bot)["no_restart_drawdown_threshold"] = no_restart_threshold
+    _hsl_cfg(bot)["restart_after_red_policy"] = policy
+    bot.balance = rows[-1]["balance"]
+    bot.get_exchange_time = lambda: now_ms
+
+    async def fake_history(*, current_balance=None, **kwargs):
+        return {
+            "timeline": list(rows),
+            "panic_flatten_events": [],
+            "fill_events": list(fills),
+        }
+
+    monkeypatch.setattr(bot, "get_balance_equity_history", fake_history)
+    monkeypatch.setattr(
+        bot, "_equity_hard_stop_write_latch", lambda pside, payload: "/tmp/x.json"
+    )
+    return bot
+
+
+@pytest.mark.asyncio
+async def test_pside_replay_red_episode_ordinary_flatten_latches_cooldown(monkeypatch):
+    # RED seen mid-episode; ordinary flatten with a scope fill inside the
+    # flatten window anchors the cooldown at that fill.
+    rows = _pside_parity_timeline()
+    fills = [
+        {
+            "timestamp": 195_000,
+            "symbol": "XMR/USDT:USDT",
+            "position_side": "long",
+            "side": "sell",
+            "qty": 1.0,
+            "price": 90.0,
+            "pnl": -15.0,
+        }
+    ]
+    # Flatten row is at 181_000; the fill at 195_000 is inside [181_000, 241_000).
+    rows[-1]["timestamp"] = 241_000
+    bot = _red_flatten_bot(monkeypatch, rows=rows, fills=fills, now_ms=400_000)
+
+    await bot._equity_hard_stop_initialize_from_history()
+
+    state = _hsl_state(bot)
+    assert state["halted"] is True
+    assert state["no_restart_latched"] is False
+    assert state["cooldown_until_ms"] == 195_000 + 300_000
+    assert state["last_stop_event"]["stop_event_timestamp_ms"] == 195_000
+
+
+@pytest.mark.asyncio
+async def test_pside_replay_red_episode_flatten_latches_terminal_by_threshold(
+    monkeypatch,
+):
+    bot = _red_flatten_bot(
+        monkeypatch, rows=_pside_parity_timeline(), no_restart_threshold=0.12
+    )
+
+    await bot._equity_hard_stop_initialize_from_history()
+
+    state = _hsl_state(bot)
+    assert state["halted"] is True
+    assert state["no_restart_latched"] is True
+    assert state["cooldown_until_ms"] is None
+
+
+@pytest.mark.asyncio
+async def test_pside_replay_never_policy_latches_terminal_on_red_episode(monkeypatch):
+    bot = _red_flatten_bot(monkeypatch, rows=_pside_parity_timeline(), policy="never")
+
+    await bot._equity_hard_stop_initialize_from_history()
+
+    state = _hsl_state(bot)
+    assert state["halted"] is True
+    assert state["no_restart_latched"] is True
+    assert state["cooldown_until_ms"] is None
+
+
+@pytest.mark.asyncio
+async def test_pside_replay_red_free_flatten_resets_without_stop(monkeypatch):
+    # Control: drawdown stays below RED (0.05 < 0.1); the ordinary flatten is a
+    # plain episode reset with no stop accounting.
+    rows = _pside_parity_timeline()
+    for row in rows:
+        if row["unrealized_pnl_long"] == -12.0:
+            row["unrealized_pnl_long"] = -5.0
+        if row["realized_pnl"] == -15.0:
+            row["balance"] = 95.0
+            row["realized_pnl"] = -5.0
+            row["realized_pnl_long"] = -5.0
+    bot = _red_flatten_bot(monkeypatch, rows=rows)
+
+    await bot._equity_hard_stop_initialize_from_history()
+
+    state = _hsl_state(bot)
+    assert state["halted"] is False
+    assert state["no_restart_latched"] is False
+    assert state["cooldown_until_ms"] is None
+    assert state["last_stop_event"] is None
+
+
 @pytest.mark.asyncio
 async def test_pside_initializer_state_parity_on_contract_shaped_rows(monkeypatch):
     # Trust boundary: rows carrying ONLY the synthesis contract fields must
@@ -3209,14 +3317,13 @@ async def test_pside_initializer_state_parity_on_contract_shaped_rows(monkeypatc
 
     assert snapshots[0] == snapshots[1]
     # Nontriviality: the replay crossed RED mid-window (row 1: -12 upnl on a
-    # 100 balance vs red_threshold 0.1) and the final live sample applied.
-    # Recovered mid-replay RED without a panic marker intentionally does not
-    # latch on this path (pinned by
-    # test_hard_stop_initialize_from_history_does_not_latch_recovered_red_without_panic_marker),
-    # so the final state is green - what matters here is that both row shapes
-    # walked the identical path to it.
-    assert snapshots[0]["metrics"]["timestamp_ms"] == 361_000
-    assert snapshots[0]["metrics"]["strategy_equity"] == pytest.approx(85.0)
+    # 100 balance vs red_threshold 0.1) and the episode flattened ordinarily at
+    # row 3, so the canonical RED-episode accounting latches an active cooldown
+    # anchored at the flatten row (no fill evidence in this fixture).
+    assert snapshots[0]["halted"] is True
+    assert snapshots[0]["no_restart_latched"] is False
+    assert snapshots[0]["cooldown_until_ms"] == 181_000 + 300_000
+    assert snapshots[0]["metrics"]["timestamp_ms"] == 181_000
 
 
 def _minimal_pside_history():

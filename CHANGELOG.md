@@ -4,6 +4,18 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- HSL pside/unified startup replay now derives cooldown and no-restart
+  evidence from canonical reconstructed RED episodes, matching the coin-mode
+  behavior shipped earlier: an episode that crossed RED and was flattened by
+  an ordinary (non-panic) close now latches its cooldown anchored at the
+  scope-flattening fill (falling back to the flatten row minute when no fill
+  evidence exists) and evaluates restart_after_red_policy/no-restart at that
+  stop via the persistent cross-episode tracker. Previously such episodes
+  were silently dropped, so a restart during an active cooldown resumed
+  trading. RED-free ordinary flattenings now perform a plain episode reset
+  (clearing the episode's RED memory) instead of carrying state into the
+  next episode.
+
 - HSL: new pure, unwired synthesis helper
   `_hsl_replay_pside_timeline_rows_from_cache` converts persisted held-pair
   matrices plus the schema-v5 account series into the aggregate timeline
