@@ -1682,14 +1682,25 @@ async def test_balance_equity_history_builds_replay_matrices_for_held_pairs(monk
     assert coverage["fill_coverage_proven"] is False
     assert coverage["fill_coverage_reason"] == "external_fill_events"
 
-    # Non-coin signal modes must not build matrices.
-    history_unified = await bot.get_balance_equity_history(
+    # pside/unified signal modes now build the same held-pair matrices and
+    # account series (write-only cache population; the cache config digest
+    # includes the signal mode, so caches never cross modes).
+    for other_mode in ("unified", "pside"):
+        history_other = await bot.get_balance_equity_history(
+            fill_events=fill_events,
+            current_balance=100.0,
+            hsl_replay_signal_mode=other_mode,
+        )
+        assert history_other["hsl_replay_matrices"] == matrices, other_mode
+        assert history_other["hsl_replay_account_series"] == account_rows, other_mode
+
+    # A replay fetch with no signal mode must not build matrices.
+    history_no_mode = await bot.get_balance_equity_history(
         fill_events=fill_events,
         current_balance=100.0,
-        hsl_replay_signal_mode="unified",
     )
-    assert history_unified["hsl_replay_matrices"] == {}
-    assert history_unified["hsl_replay_account_series"] == []
+    assert history_no_mode["hsl_replay_matrices"] == {}
+    assert history_no_mode["hsl_replay_account_series"] == []
 
     # A failing matrix row build must drop the pair's cache, not the replay.
     def raising_row_builder(**kwargs):

@@ -4,6 +4,14 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- HSL pside/unified startup replay now persists the same write-only replay
+  cache as coin mode after a successful replay (held-pair raw matrices plus
+  the account-level realized-PnL series). The cache config digest includes
+  the HSL signal mode, so caches written by one mode can never be reused by
+  another, and cache-write failures only warn - they never affect the
+  completed replay. The caches are not yet read back on pside/unified boot;
+  the reuse gate for those modes is a follow-up slice.
+
 - Live coin-HSL startup replay now derives cooldown and no-restart evidence
   from canonical reconstructed RED episodes, not only from bot-emitted panic
   order markers. An episode that crossed RED and was flattened by an ordinary
