@@ -1574,7 +1574,6 @@ async def test_balance_equity_history_paces_replay_candle_fetches(monkeypatch):
     assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 
-@pytest.mark.asyncio
 def test_pside_timeline_synthesis_rejects_inconsistent_pside_pnl():
     # Codex P1: the trust boundary must reject a v5 account series whose
     # account-level pnl and per-pside pnl describe different realized streams.
