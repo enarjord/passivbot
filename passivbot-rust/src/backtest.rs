@@ -6458,11 +6458,16 @@ mod tests {
             input.symbols[0].long.mode,
             Some(orchestrator::TradingMode::TpOnly)
         );
-        assert_eq!(input.symbols[0].short.mode, None);
+        // A2.2: ORANGE tp-only blocks initial entries, so the flat side is
+        // forced too.
+        assert_eq!(
+            input.symbols[0].short.mode,
+            Some(orchestrator::TradingMode::TpOnly)
+        );
     }
 
     #[test]
-    fn hard_stop_orange_tp_only_leaves_flat_sides_unchanged() {
+    fn hard_stop_orange_tp_only_forces_flat_sides() {
         let hlcvs = Array3::from_shape_vec((2, 1, 4), vec![1.0; 2 * 1 * 4]).unwrap();
         let btc_usd_prices = Array1::from_vec(vec![20_000.0, 20_000.0]);
 
@@ -6518,9 +6523,17 @@ mod tests {
         );
         bt.hard_stop_tier = ehsl::HardStopTier::Orange;
 
+        // A2.2: ORANGE tp-only blocks initial entries in the affected scope,
+        // so flat sides are forced to TpOnly instead of left unchanged.
         let input = bt.get_orchestrator_input_cached(1, None, None);
-        assert_eq!(input.symbols[0].long.mode, None);
-        assert_eq!(input.symbols[0].short.mode, None);
+        assert_eq!(
+            input.symbols[0].long.mode,
+            Some(orchestrator::TradingMode::TpOnly)
+        );
+        assert_eq!(
+            input.symbols[0].short.mode,
+            Some(orchestrator::TradingMode::TpOnly)
+        );
     }
 
     #[test]
@@ -6577,12 +6590,29 @@ mod tests {
             vec![ExchangeParams::default()],
             &backtest_params,
         );
-        bt.hard_stop_tier = ehsl::HardStopTier::Red;
         bt.positions.long[0] = Position {
             size: 1.0,
             price: 100.0,
         };
 
+        // B2.1 red split: RED tier with the current sample recovered
+        // (red_active_now false) blocks entries without authorizing panic.
+        bt.hard_stop_tier = ehsl::HardStopTier::Red;
+        let input = bt.get_orchestrator_input_cached(1, None, None);
+        assert_eq!(
+            input.symbols[0].long.mode,
+            Some(orchestrator::TradingMode::TpOnly)
+        );
+        assert_eq!(
+            input.symbols[0].short.mode,
+            Some(orchestrator::TradingMode::TpOnly)
+        );
+
+        // Only an actively-RED sample authorizes panic on all sides.
+        for pside in [LONG, SHORT] {
+            bt.hard_stop_pside[pside].tier = ehsl::HardStopTier::Red;
+            bt.hard_stop_pside[pside].red_active_now = true;
+        }
         let input = bt.get_orchestrator_input_cached(1, None, None);
         assert_eq!(
             input.symbols[0].long.mode,
