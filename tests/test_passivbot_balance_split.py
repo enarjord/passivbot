@@ -5620,6 +5620,56 @@ async def test_update_effective_min_cost_uses_executable_min_qty():
     assert bot.effective_min_cost[symbol] == pytest.approx(88.165)
 
 
+def test_unstuck_allowances_stay_real_while_unstuck_order_is_open(monkeypatch):
+    # The allowance values are pure budget facts; an open unstuck order must
+    # not zero them. Suppression of new unstuck emission rides solely on the
+    # auto_unstuck_allowed flag, which the Rust orchestrator consumes as the
+    # sole gate (pinned in test_auto_unstuck_allowed_flag_is_sole_emission_gate).
+    import passivbot as pb_mod
+
+    bot = Passivbot.__new__(Passivbot)
+    bot.balance = 100.0
+    bot.balance_raw = 200.0
+    bot._pnls_manager = types.SimpleNamespace(
+        get_events=lambda: [
+            types.SimpleNamespace(pnl=10.0, fee_paid=-1.0),
+        ],
+        cache=_SafeRiskCache(),
+        get_history_scope=lambda: "all",
+    )
+    bot.bot_value = lambda pside, key: {
+        "unstuck_loss_allowance_pct": 0.2 if pside == "long" else 0.0,
+        "total_wallet_exposure_limit": 0.5,
+    }.get(key, 0.0)
+    monkeypatch.setattr(
+        pb_mod.pbr, "calc_auto_unstuck_allowance", lambda *a: 77.0
+    )
+    # An unstuck order is live on the exchange.
+    bot.open_orders = {
+        "BTC/USDT:USDT": [
+            {"custom_id": _make_unstuck_custom_id()},
+        ]
+    }
+    assert bot.has_open_unstuck_order() is True
+
+    out = bot._calc_unstuck_allowances()
+    assert out["long"] == pytest.approx(77.0)
+
+    # The emission gate is still off while the order is open.
+    assert bot._auto_unstuck_allowed_live(allow_new_unstuck=False) is False
+
+
+def _make_unstuck_custom_id() -> str:
+    import passivbot as pb_mod
+
+    bot = Passivbot.__new__(Passivbot)
+    bot.broker_code = ""
+    bot.custom_id_max_length = 36
+    return bot.format_custom_id_single(
+        pb_mod.pbr.get_order_id_type_from_string("close_unstuck_long")
+    )
+
+
 def test_unstuck_allowance_routes_raw_balance_to_rust(monkeypatch):
     import passivbot as pb_mod
 
@@ -5656,7 +5706,7 @@ def test_unstuck_allowance_routes_raw_balance_to_rust(monkeypatch):
         pb_mod.pbr, "calc_auto_unstuck_allowance", fake_calc_auto_unstuck_allowance
     )
 
-    out = bot._calc_unstuck_allowances(allow_new_unstuck=True)
+    out = bot._calc_unstuck_allowances()
 
     assert out["long"] == pytest.approx(123.45)
     assert out["short"] == pytest.approx(0.0)
@@ -5709,7 +5759,7 @@ def test_unstuck_allowance_uses_only_configured_pnl_lookback(monkeypatch):
         pb_mod.pbr, "calc_auto_unstuck_allowance", fake_calc_auto_unstuck_allowance
     )
 
-    out = bot._calc_unstuck_allowances(allow_new_unstuck=True)
+    out = bot._calc_unstuck_allowances()
 
     assert out["long"] == pytest.approx(10.0)
     assert len(calls) == 1
@@ -5745,7 +5795,7 @@ def test_unstuck_allowance_blocks_degraded_synthetic_pnl():
     bot.bot_value = bot_value
 
     with pytest.raises(RuntimeError, match="degraded realized PnL"):
-        bot._calc_unstuck_allowances(allow_new_unstuck=True)
+        bot._calc_unstuck_allowances()
 
 
 @pytest.mark.asyncio

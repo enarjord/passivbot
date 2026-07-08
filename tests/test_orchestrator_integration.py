@@ -470,6 +470,52 @@ class TestOrchestratorOrderAccuracy:
         # At minimum, we should get valid output without errors
         assert isinstance(out["orders"], list)
 
+    def test_auto_unstuck_allowed_flag_is_sole_emission_gate(self):
+        """auto_unstuck_allowed=false suppresses unstuck emission even with
+        positive allowances - the live open-order suppression rides this flag
+        alone, so allowance values stay pure budget facts."""
+        import passivbot_rust as pbr
+
+        def stuck_input():
+            inp = make_input(
+                balance=1_000.0,
+                symbols=[
+                    make_symbol(
+                        0,
+                        bid=80.0,
+                        ask=80.0,
+                        long_pos_size=5.0,
+                        long_pos_price=100.0,
+                        long_bp={
+                            "unstuck_threshold": 0.1,
+                            "unstuck_loss_allowance_pct": 0.05,
+                            "unstuck_close_pct": 0.5,
+                            "unstuck_ema_dist": -0.05,
+                        },
+                    )
+                ],
+            )
+            inp["global"]["unstuck_allowance_long"] = 50.0
+            inp["global"]["max_realized_loss_pct"] = 1.0
+            return inp
+
+        baseline = compute(pbr, stuck_input())
+        baseline_unstuck = [
+            o
+            for o in baseline["orders"]
+            if "unstuck" in o.get("order_type", "").lower()
+        ]
+        assert len(baseline_unstuck) == 1, baseline_unstuck
+
+        suppressed_input = stuck_input()
+        suppressed_input["global"]["auto_unstuck_allowed"] = False
+        suppressed = compute(pbr, suppressed_input)
+        assert [
+            o
+            for o in suppressed["orders"]
+            if "unstuck" in o.get("order_type", "").lower()
+        ] == []
+
     def test_trailing_entry_logic(self):
         """Test trailing entry logic."""
         import passivbot_rust as pbr

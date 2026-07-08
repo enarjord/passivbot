@@ -4,6 +4,15 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Live unstuck-allowance inputs to the Rust orchestrator are no longer
+  zeroed while an unstuck order is resting on the exchange. The allowance
+  values are pure budget facts derived from fill history; suppression of
+  new unstuck emission rides solely on the existing auto_unstuck_allowed
+  flag, which the Rust orchestrator consumes as the sole gate. Behavior is
+  unchanged (Rust emitted no unstuck either way); this removes a redundant
+  second suppression channel that made the allowance inputs diverge from
+  the backtest for reasons unrelated to budget.
+
 - Live order conversion no longer re-decides execution type in Python. The
   Rust orchestrator is the single source of execution-type truth
   (`should_use_market_execution` owns the panic market-vs-limit choice from
