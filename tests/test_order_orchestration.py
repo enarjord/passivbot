@@ -361,7 +361,6 @@ async def test_calc_orders_allows_panic_close_when_trailing_candles_pending():
     assert [order["pb_order_type"] for order in to_create] == ["close_panic_long"]
 
 
-@pytest.mark.asyncio
 def test_no_silent_execution_type_defaults_in_rust_order_conversion():
     # Codex P1 regression on the exec-type fail-loud contract: the Rust JSON
     # conversion sites must not default a missing execution_type (a silent
