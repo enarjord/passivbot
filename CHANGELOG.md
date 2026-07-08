@@ -4,6 +4,13 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Plan tracker: closed the Python-simplification item, the final open item
+  of the risk/unstuck/HSL action plan. Removed live-path policy
+  re-decisions: execution type, the redundant unstuck-suppression channel,
+  and the per-cycle unstuck-allowance computation. The remaining
+  Python-side order handling is documented as intentionally Python-owned
+  reconciliation or live-only execution/data guards. Docs-only change.
+
 - The live path no longer computes unstuck allowances for the Rust
   orchestrator input. Rust has always derived the unstuck allowance
   internally from the realized-pnl cumsum facts (risk.rs); the
