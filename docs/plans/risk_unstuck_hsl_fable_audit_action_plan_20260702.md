@@ -1067,6 +1067,13 @@ Remaining implementation details:
       cooldown/no-restart evidence. Markers are validated fail-loud (grid
       alignment, series-span bounds, ascending order, account-kind only) and
       tamper-checked (missing/invalid/wrong-kind reasons).
+      Partial: pside/unified startup replay now persists the same write-only
+      cache as coin mode after a successful replay (held-pair matrices plus
+      the account series; matrix collection in get_balance_equity_history is
+      enabled for all three signal modes). The signal mode is part of the
+      cache config digest, so caches never cross modes. The pside/unified
+      reuse gate (synthesis + parity trust boundary for aggregate rows)
+      remains future work.
       Implemented: live coin-mode startup now attempts cache reuse before the
       full replay. Gates: write-time proven coverage recorded in the manifest
       plus a fresh load-time pnls-manager coverage proof, config-digest

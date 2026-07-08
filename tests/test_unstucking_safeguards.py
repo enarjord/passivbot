@@ -3117,6 +3117,85 @@ async def test_hard_stop_finalize_red_stop_uses_persistent_no_restart_peak(monke
     assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 
+def _minimal_pside_history():
+    return {
+        "timeline": [
+            {
+                "timestamp": 1_000,
+                "balance": 100.0,
+                "realized_pnl": 0.0,
+                "realized_pnl_long": 0.0,
+                "realized_pnl_short": 0.0,
+                "unrealized_pnl_long": 0.0,
+                "unrealized_pnl_short": 0.0,
+                "is_flat": True,
+                "is_flat_long": True,
+                "is_flat_short": True,
+            }
+        ],
+        "panic_flatten_events": [],
+        "hsl_replay_matrices": {"long": {"XMR/USDT:USDT": [{"ts": 0}]}},
+        "hsl_replay_account_series": [{"ts": 0, "pnl": 0.0}],
+        "hsl_replay_matrix_coverage": {"fill_coverage_proven": False},
+    }
+
+
+@pytest.mark.asyncio
+async def test_hard_stop_initialize_from_history_persists_replay_cache(monkeypatch):
+    cfg = _dummy_config()
+    cfg["live"]["hsl_signal_mode"] = "unified"
+    bot = _make_dummy_bot(cfg)
+    _hsl_cfg(bot)["enabled"] = True
+    bot.balance = 100.0
+
+    history = _minimal_pside_history()
+
+    async def fake_history(*, current_balance=None, **kwargs):
+        return history
+
+    persisted = []
+    monkeypatch.setattr(bot, "get_balance_equity_history", fake_history)
+    monkeypatch.setattr(
+        bot,
+        "_equity_hard_stop_persist_replay_matrices",
+        lambda h: persisted.append(h) or 1,
+    )
+
+    await bot._equity_hard_stop_initialize_from_history()
+
+    assert persisted == [history]
+
+
+@pytest.mark.asyncio
+async def test_hard_stop_initialize_from_history_survives_cache_persist_failure(
+    monkeypatch, caplog
+):
+    cfg = _dummy_config()
+    cfg["live"]["hsl_signal_mode"] = "unified"
+    bot = _make_dummy_bot(cfg)
+    _hsl_cfg(bot)["enabled"] = True
+    bot.balance = 100.0
+
+    async def fake_history(*, current_balance=None, **kwargs):
+        return _minimal_pside_history()
+
+    def failing_persist(history):
+        raise RuntimeError("synthetic cache write failure")
+
+    monkeypatch.setattr(bot, "get_balance_equity_history", fake_history)
+    monkeypatch.setattr(
+        bot, "_equity_hard_stop_persist_replay_matrices", failing_persist
+    )
+
+    import logging as logging_module
+
+    with caplog.at_level(logging_module.WARNING):
+        await bot._equity_hard_stop_initialize_from_history()
+
+    assert "HSL replay cache persistence failed" in caplog.text
+    assert _hsl_state(bot)["halted"] is False
+
+
 @pytest.mark.asyncio
 async def test_hard_stop_initialize_from_history_terminal_stop_sets_latch(monkeypatch):
     cfg = _dummy_config()

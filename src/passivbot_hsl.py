@@ -1909,7 +1909,10 @@ def _hsl_reuse_group_matrices(
 
 
 def _equity_hard_stop_persist_replay_matrices(self, history: dict[str, Any]) -> int:
-    """Persist non-authoritative raw replay matrices after a successful coin replay.
+    """Persist non-authoritative raw replay matrices after a successful HSL replay.
+
+    Called by the coin and pside/unified startup initializers alike; the cache
+    config digest includes the signal mode, so caches never cross modes.
 
     Write-only cache population: nothing here is read back for trading decisions.
     Per-pair failures are logged and emitted as events but never raised, because
@@ -4408,6 +4411,18 @@ async def _equity_hard_stop_initialize_from_history(self) -> None:
             if current_metrics["tier"] == "red":
                 state["pending_red_since_ms"] = int(current_metrics["timestamp_ms"])
         self._equity_hard_stop_refresh_halted_runtime_forced_modes()
+        try:
+            self._equity_hard_stop_persist_replay_matrices(history)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            # Cache persistence is a performance aid; a failure here must
+            # never invalidate the completed replay.
+            logging.warning(
+                "[risk] HSL replay cache persistence failed | error=%s: %s",
+                type(exc).__name__,
+                exc,
+            )
     finally:
         if hasattr(self, "_set_log_silence_watchdog_context"):
             self._set_log_silence_watchdog_context(phase=prev_phase, stage=prev_stage)

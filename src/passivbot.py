@@ -11760,9 +11760,14 @@ class Passivbot:
 
         # Non-authoritative raw replay matrices (ts, price, psize, pprice, pnl, upnl)
         # for currently held coin+psides. Written to the replay cache after a
-        # successful coin-mode replay; never read back for trading decisions here.
+        # successful HSL replay in any signal mode; never read back for trading
+        # decisions here. The cache config digest includes the signal mode, so
+        # matrices persisted by one mode can never be reused by another.
         replay_matrix_pairs: set[Tuple[str, str]] = set()
-        if str(hsl_replay_signal_mode or "").lower() == "coin" and not self.inverse:
+        if (
+            str(hsl_replay_signal_mode or "").lower() in ("coin", "pside", "unified")
+            and not self.inverse
+        ):
             replay_matrix_pairs = {
                 (pside, sym)
                 for (sym, pside), (size, _price) in current_position_state.items()
