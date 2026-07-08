@@ -1333,8 +1333,10 @@ async def test_existing_unstuck_blocks_new(monkeypatch):
 
     payload = json.loads(captured["input"])
     assert payload["global"]["auto_unstuck_allowed"] is False
-    assert payload["global"]["unstuck_allowance_long"] == 0.0
-    assert payload["global"]["unstuck_allowance_short"] == 0.0
+    # Allowance values are no longer passed: Rust derives the unstuck
+    # allowance internally from the realized-pnl cumsum facts.
+    assert "unstuck_allowance_long" not in payload["global"]
+    assert "unstuck_allowance_short" not in payload["global"]
 
 
 @pytest.mark.asyncio

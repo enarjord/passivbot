@@ -307,7 +307,13 @@ mod core {
         pub panic_close_market: bool,
         #[serde(default)]
         pub auto_unstuck_allowed: Option<bool>,
+        /// Legacy/diagnostic only: the unstuck decision derives its allowance
+        /// internally from realized_pnl_cumsum_max/last (risk.rs). These values
+        /// are consumed solely as the fallback for `auto_unstuck_allowed` when
+        /// that flag is absent; explicit-flag callers may omit them.
+        #[serde(default)]
         pub unstuck_allowance_long: f64,
+        #[serde(default)]
         pub unstuck_allowance_short: f64,
         /// Fraction of peak balance that may be realized as drawdown before lossy closes are blocked.
         /// <=0 blocks all lossy closes; >=1 disables gating.

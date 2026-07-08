@@ -516,6 +516,25 @@ class TestOrchestratorOrderAccuracy:
             if "unstuck" in o.get("order_type", "").lower()
         ] == []
 
+        # The allowance input fields are legacy/diagnostic: omitting them
+        # entirely parses (serde defaults) and emission is governed by the
+        # explicit flag plus the realized-pnl cumsum facts alone.
+        omitted_input = stuck_input()
+        del omitted_input["global"]["unstuck_allowance_long"]
+        del omitted_input["global"]["unstuck_allowance_short"]
+        omitted_input["global"]["auto_unstuck_allowed"] = True
+        omitted = compute(pbr, omitted_input)
+        assert (
+            len(
+                [
+                    o
+                    for o in omitted["orders"]
+                    if "unstuck" in o.get("order_type", "").lower()
+                ]
+            )
+            == 1
+        )
+
     def test_trailing_entry_logic(self):
         """Test trailing entry logic."""
         import passivbot_rust as pbr
