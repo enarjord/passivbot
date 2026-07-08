@@ -11784,24 +11784,39 @@ class Passivbot:
         replay_account_enabled = bool(replay_matrix_pairs)
         replay_account_rows: List[dict] = []
         replay_account_prev_balance: Optional[float] = None
+        replay_account_prev_realized_pside: Optional[Dict[str, float]] = None
 
         def _collect_account_series_row(minute_ts: int, *, record: bool) -> None:
             nonlocal replay_account_enabled, replay_account_prev_balance
+            nonlocal replay_account_prev_realized_pside
             if not replay_account_enabled:
                 return
             try:
                 balance_now = float(balance)
+                realized_pside_now = {
+                    "long": float(realized_pnl_pside_running["long"]),
+                    "short": float(realized_pnl_pside_running["short"]),
+                }
                 prev = (
                     balance_now
                     if replay_account_prev_balance is None
                     else replay_account_prev_balance
                 )
+                prev_pside = (
+                    realized_pside_now
+                    if replay_account_prev_realized_pside is None
+                    else replay_account_prev_realized_pside
+                )
                 replay_account_prev_balance = balance_now
+                replay_account_prev_realized_pside = realized_pside_now
                 if not record:
                     return
                 replay_account_rows.append(
                     pb_hsl._hsl_replay_account_series_row(
-                        ts=int(minute_ts), pnl=balance_now - prev
+                        ts=int(minute_ts),
+                        pnl=balance_now - prev,
+                        pnl_long=realized_pside_now["long"] - prev_pside["long"],
+                        pnl_short=realized_pside_now["short"] - prev_pside["short"],
                     )
                 )
             except Exception as exc:

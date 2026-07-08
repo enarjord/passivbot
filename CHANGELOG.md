@@ -4,6 +4,16 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- HSL replay cache schema v5: the persisted account-level realized-PnL
+  series now carries per-minute per-pside deltas (`pnl_long`, `pnl_short`)
+  alongside the account-level `pnl`, collected from the authoritative
+  per-pside running totals during the history replay and reproduced exactly
+  by the watermark-extension helper (which now requires an explicit position
+  side on every extension fill and rejects the cache otherwise). This is
+  groundwork for the future pside/unified cache-reuse gate, whose timeline
+  synthesis needs per-pside realized PnL. Existing v4 caches fail schema
+  validation and are rebuilt by the next full replay, by design.
+
 - HSL pside/unified startup replay now persists the same write-only replay
   cache as coin mode after a successful replay (held-pair raw matrices plus
   the account-level realized-PnL series). The cache config digest includes

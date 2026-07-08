@@ -539,9 +539,9 @@ def test_hsl_replay_cache_validation_flags_missing_coverage_proof_fields(tmp_pat
 
 def _hsl_account_series_rows():
     return [
-        hsl._hsl_replay_account_series_row(ts=60_000, pnl=0.0),
-        hsl._hsl_replay_account_series_row(ts=120_000, pnl=-2.5),
-        hsl._hsl_replay_account_series_row(ts=180_000, pnl=1.0),
+        hsl._hsl_replay_account_series_row(ts=60_000, pnl=0.0, pnl_long=0.0, pnl_short=0.0),
+        hsl._hsl_replay_account_series_row(ts=120_000, pnl=-2.5, pnl_long=-2.5, pnl_short=0.0),
+        hsl._hsl_replay_account_series_row(ts=180_000, pnl=1.0, pnl_long=1.0, pnl_short=0.0),
     ]
 
 
@@ -558,7 +558,7 @@ def test_hsl_replay_account_series_round_trip(tmp_path):
     )
 
     assert manifest["series_kind"] == "account_pnl"
-    assert manifest["fields"] == ["ts", "pnl"]
+    assert manifest["fields"] == ["ts", "pnl", "pnl_long", "pnl_short"]
     assert (
         hsl._hsl_replay_cache_validation_reasons(tmp_path, expected_metadata=metadata)
         == []
@@ -566,15 +566,15 @@ def test_hsl_replay_account_series_round_trip(tmp_path):
     loaded_manifest, arrays = hsl._load_hsl_replay_matrix_cache(
         tmp_path, expected_metadata=metadata
     )
-    assert set(arrays) == {"ts", "pnl"}
+    assert set(arrays) == {"ts", "pnl", "pnl_long", "pnl_short"}
     np.testing.assert_array_equal(arrays["ts"], np.array([60_000, 120_000, 180_000]))
     np.testing.assert_allclose(arrays["pnl"], [0.0, -2.5, 1.0])
 
     with pytest.raises(ValueError, match="contiguous"):
         hsl._hsl_replay_account_series_arrays(
             [
-                hsl._hsl_replay_account_series_row(ts=60_000, pnl=0.0),
-                hsl._hsl_replay_account_series_row(ts=240_000, pnl=1.0),
+                hsl._hsl_replay_account_series_row(ts=60_000, pnl=0.0, pnl_long=0.0, pnl_short=0.0),
+                hsl._hsl_replay_account_series_row(ts=240_000, pnl=1.0, pnl_long=1.0, pnl_short=0.0),
             ]
         )
 
@@ -2182,6 +2182,41 @@ async def test_hsl_cache_extension_matches_full_rebuild(monkeypatch):
         )
 
 
+def test_hsl_account_extension_requires_fill_pside():
+    account = hsl._hsl_replay_account_series_arrays(
+        [
+            hsl._hsl_replay_account_series_row(
+                ts=60_000, pnl=0.0, pnl_long=0.0, pnl_short=0.0
+            ),
+        ]
+    )
+    fill = {
+        "timestamp": 130_000,
+        "qty": 1.0,
+        "price": 100.0,
+        "action": "decrease",
+        "pnl": -2.0,
+        "position_side": "short",
+    }
+    rows = hsl._hsl_replay_extend_account_rows(
+        dict(account), fills=[fill], end_ts=180_000
+    )
+    # Watermark 60_000, end 180_000 -> extension minutes [120_000, 180_000];
+    # the fill at 130_000 lands in the first extension minute.
+    assert [row["ts"] for row in rows] == [120_000, 180_000]
+    assert [row["pnl_short"] for row in rows] == [-2.0, 0.0]
+    assert all(row["pnl_long"] == 0.0 for row in rows)
+    assert [row["pnl"] for row in rows] == [-2.0, 0.0]
+
+    # A fill without a usable position side must reject the cache, not guess.
+    anonymous = dict(fill)
+    del anonymous["position_side"]
+    with pytest.raises(ValueError, match="no usable position side"):
+        hsl._hsl_replay_extend_account_rows(
+            dict(account), fills=[anonymous], end_ts=180_000
+        )
+
+
 def test_hsl_cache_extension_fail_loud_contracts():
     pair = hsl._hsl_replay_matrix_arrays(
         [
@@ -2701,8 +2736,8 @@ async def test_hsl_cache_reuse_falls_back_on_missing_or_incompatible_cache(
 def test_hsl_cache_synthesized_rows_fail_loud_on_bad_inputs():
     account = hsl._hsl_replay_account_series_arrays(
         [
-            hsl._hsl_replay_account_series_row(ts=60_000, pnl=0.0),
-            hsl._hsl_replay_account_series_row(ts=120_000, pnl=0.5),
+            hsl._hsl_replay_account_series_row(ts=60_000, pnl=0.0, pnl_long=0.0, pnl_short=0.0),
+            hsl._hsl_replay_account_series_row(ts=120_000, pnl=0.5, pnl_long=0.5, pnl_short=0.0),
         ]
     )
     pair = hsl._hsl_replay_matrix_arrays(
@@ -2740,8 +2775,8 @@ def test_hsl_cache_synthesized_rows_fail_loud_on_bad_inputs():
     # the coin metrics layer requires balance > 0.
     deep_loss_account = hsl._hsl_replay_account_series_arrays(
         [
-            hsl._hsl_replay_account_series_row(ts=60_000, pnl=0.0),
-            hsl._hsl_replay_account_series_row(ts=120_000, pnl=250.0),
+            hsl._hsl_replay_account_series_row(ts=60_000, pnl=0.0, pnl_long=0.0, pnl_short=0.0),
+            hsl._hsl_replay_account_series_row(ts=120_000, pnl=250.0, pnl_long=250.0, pnl_short=0.0),
         ]
     )
     with pytest.raises(ValueError, match="finite and > 0"):
@@ -2836,8 +2871,8 @@ async def test_coin_hsl_history_replay_persists_replay_matrices(tmp_path, monkey
             "fill_events": [],
             "hsl_replay_matrices": {"long": {symbol: matrix_rows}},
             "hsl_replay_account_series": [
-                hsl._hsl_replay_account_series_row(ts=60_000, pnl=0.0),
-                hsl._hsl_replay_account_series_row(ts=120_000, pnl=1.0),
+                hsl._hsl_replay_account_series_row(ts=60_000, pnl=0.0, pnl_long=0.0, pnl_short=0.0),
+                hsl._hsl_replay_account_series_row(ts=120_000, pnl=1.0, pnl_long=1.0, pnl_short=0.0),
             ],
             "hsl_replay_matrix_coverage": coverage,
         }

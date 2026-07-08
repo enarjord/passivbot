@@ -1670,6 +1670,11 @@ async def test_balance_equity_history_builds_replay_matrices_for_held_pairs(monk
     # other recorded minute has zero account-level realized pnl.
     assert [row["pnl"] for row in account_rows[-3:]] == [0.0, 0.5, 0.0]
     assert sum(row["pnl"] for row in account_rows) == pytest.approx(0.5)
+    # Schema v5: per-minute per-pside realized deltas. The fixture's only
+    # realized event is the long partial close (+0.5).
+    assert [row["pnl_long"] for row in account_rows[-3:]] == [0.0, 0.5, 0.0]
+    assert all(row["pnl_short"] == 0.0 for row in account_rows)
+    assert sum(row["pnl_long"] for row in account_rows) == pytest.approx(0.5)
 
     coverage = history["hsl_replay_matrix_coverage"]
     assert coverage["candle_covered_start_ms"] <= base_ts
