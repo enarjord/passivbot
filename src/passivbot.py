@@ -13029,7 +13029,11 @@ class Passivbot:
                 continue
             order_type = str(order["order_type"])
             order_type_id = int(pbr.order_type_snake_to_id(order_type))
-            execution_type = str(order.get("execution_type", "limit"))
+            if "execution_type" not in order:
+                raise ValueError(
+                    f"Rust orchestrator order missing execution_type: {order!r}"
+                )
+            execution_type = str(order["execution_type"])
             ideal_orders.setdefault(symbol, []).append(
                 (
                     float(order["qty"]),
@@ -13755,7 +13759,11 @@ class Passivbot:
                 continue
             order_type = str(o["order_type"])
             order_type_id = int(pbr.order_type_snake_to_id(order_type))
-            execution_type = str(o.get("execution_type", "limit"))
+            if "execution_type" not in o:
+                raise ValueError(
+                    f"Rust orchestrator order missing execution_type: {o!r}"
+                )
+            execution_type = str(o["execution_type"])
             tup = (
                 float(o["qty"]),
                 float(o["price"]),
@@ -15659,7 +15667,11 @@ class Passivbot:
                 continue
             order_type = str(o["order_type"])
             order_type_id = int(pbr.order_type_snake_to_id(order_type))
-            execution_type = str(o.get("execution_type", "limit"))
+            if "execution_type" not in o:
+                raise ValueError(
+                    f"Rust orchestrator order missing execution_type: {o!r}"
+                )
+            execution_type = str(o["execution_type"])
             tup = (
                 float(o["qty"]),
                 float(o["price"]),

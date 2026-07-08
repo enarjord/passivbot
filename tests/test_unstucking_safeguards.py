@@ -2518,23 +2518,35 @@ def test_orange_overlay_tp_only_with_active_entry_cancellation_blocks_initial_en
     assert bot.PB_modes["short"][symbol] == "normal"
 
 
-def test_panic_close_order_type_pref_market_overrides_limit_path():
+def test_executable_orders_take_execution_type_from_rust_only():
+    # The Rust orchestrator is the single source of execution-type truth:
+    # 5-tuple execution_type passes through verbatim, and a short tuple is a
+    # broken producer that must fail loudly rather than silently downgrade a
+    # panic market close to a limit order.
     cfg = _dummy_config()
     bot = _make_dummy_bot(cfg)
     symbol = _set_basic_state(bot)
     import passivbot_rust as pbr
 
     panic_id = pbr.get_order_id_type_from_string("close_panic_long")
-    ideal_orders = {symbol: [(0.1, 100.0, "close_panic_long", panic_id)]}
     last_prices = {symbol: 100.0}
 
-    _hsl_cfg(bot)["panic_close_order_type"] = "market"
-    orders, _ = bot._to_executable_orders(ideal_orders, last_prices)
-    assert orders[symbol][0]["type"] == "market"
+    for execution_type in ("market", "limit"):
+        ideal_orders = {
+            symbol: [(0.1, 100.0, "close_panic_long", panic_id, execution_type)]
+        }
+        orders, _ = bot._to_executable_orders(ideal_orders, last_prices)
+        assert orders[symbol][0]["type"] == execution_type
 
-    _hsl_cfg(bot)["panic_close_order_type"] = "limit"
-    orders, _ = bot._to_executable_orders(ideal_orders, last_prices)
-    assert orders[symbol][0]["type"] == "limit"
+    with pytest.raises(ValueError, match="missing execution_type"):
+        bot._to_executable_orders(
+            {symbol: [(0.1, 100.0, "close_panic_long", panic_id)]}, last_prices
+        )
+    with pytest.raises(ValueError, match="invalid execution_type"):
+        bot._to_executable_orders(
+            {symbol: [(0.1, 100.0, "close_panic_long", panic_id, "stop")]},
+            last_prices,
+        )
 
 
 def test_hard_stop_apply_sample_delegates_to_rust(monkeypatch):

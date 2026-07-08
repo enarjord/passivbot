@@ -102,7 +102,7 @@ def test_ema_anchor_limit_orders_route_to_ccxt_post_only_params(
     bot.register_symbol(symbol)
     bot.positions[symbol][position_side]["size"] = position_size
     order_type_id = pbr.order_type_snake_to_id(order_type)
-    ideal_orders = {symbol: [(qty, 100.0, order_type, order_type_id)]}
+    ideal_orders = {symbol: [(qty, 100.0, order_type, order_type_id, "limit")]}
 
     orders_by_symbol, _ = bot._to_executable_orders(ideal_orders, {symbol: 100.0})
     [order] = orders_by_symbol[symbol]
@@ -359,6 +359,33 @@ async def test_calc_orders_allows_panic_close_when_trailing_candles_pending():
         ("sell", "long", 101.0),
     ]
     assert [order["pb_order_type"] for order in to_create] == ["close_panic_long"]
+
+
+def test_no_silent_execution_type_defaults_in_rust_order_conversion():
+    # Codex P1 regression on the exec-type fail-loud contract: the Rust JSON
+    # conversion sites must not default a missing execution_type (a silent
+    # default upstream would defeat the reconciler's fail-loud guard and
+    # could downgrade a panic market close to a limit order). Any .get with a
+    # default on the execution_type key in the live modules is an offender;
+    # defaultless .get (classification of exchange-side orders) is allowed.
+    import ast
+    from pathlib import Path
+
+    offenders = []
+    for rel in ("src/passivbot.py", "src/live/reconciler.py"):
+        tree = ast.parse(Path(rel).read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "get"
+                and node.args
+                and isinstance(node.args[0], ast.Constant)
+                and node.args[0].value == "execution_type"
+                and len(node.args) > 1
+            ):
+                offenders.append(f"{rel}:{node.lineno}")
+    assert offenders == [], offenders
 
 
 @pytest.mark.asyncio

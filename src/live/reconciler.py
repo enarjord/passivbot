@@ -1419,19 +1419,21 @@ def to_executable_orders(
                 logging.debug("duplicate ideal order for %s skipped: %s", symbol, order)
                 continue
             pb_order_type = snake_of(order[3])
-            if len(order) >= 5:
-                execution_type = str(order[4]).lower()
-            else:
-                execution_type = "limit"
-                panic_close_pref = bot._equity_hard_stop_panic_close_order_type(
-                    position_side
+            # The Rust orchestrator is the single source of execution-type
+            # truth (every live path builds 5-tuples from its execution_type
+            # field); a short tuple here means a broken producer, and
+            # silently defaulting could downgrade a panic market close.
+            if len(order) < 5:
+                raise ValueError(
+                    f"ideal order for {symbol} missing execution_type: {order!r}; "
+                    "the Rust orchestrator must supply it"
                 )
-                if "panic" in pb_order_type:
-                    execution_type = (
-                        "market" if panic_close_pref == "market" else "limit"
-                    )
+            execution_type = str(order[4]).lower()
             if execution_type not in {"limit", "market"}:
-                execution_type = "limit"
+                raise ValueError(
+                    f"ideal order for {symbol} has invalid execution_type "
+                    f"{order[4]!r}; expected limit or market"
+                )
             ideal_orders_f[symbol].append(
                 {
                     "symbol": symbol,
