@@ -3117,6 +3117,108 @@ async def test_hard_stop_finalize_red_stop_uses_persistent_no_restart_peak(monke
     assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 
+def _pside_parity_timeline():
+    # Nontrivial path: drawdown into RED territory, partial recovery, flatten.
+    rows = []
+    specs = [
+        # (minute, balance, r_pnl, r_long, r_short, u_long, u_short, flat_l, flat_s)
+        (0, 100.0, 0.0, 0.0, 0.0, 0.0, 0.0, False, True),
+        (1, 100.0, 0.0, 0.0, 0.0, -12.0, 0.0, False, True),
+        (2, 100.0, 0.0, 0.0, 0.0, -6.0, 0.0, False, True),
+        (3, 85.0, -15.0, -15.0, 0.0, 0.0, 0.0, True, True),
+    ]
+    for minute, balance, r, rl, rs, ul, us, fl, fs in specs:
+        rows.append(
+            {
+                "timestamp": 1_000 + minute * 60_000,
+                "balance": balance,
+                "realized_pnl": r,
+                "realized_pnl_long": rl,
+                "realized_pnl_short": rs,
+                "unrealized_pnl_long": ul,
+                "unrealized_pnl_short": us,
+                "is_flat": fl and fs,
+                "is_flat_long": fl,
+                "is_flat_short": fs,
+            }
+        )
+    return rows
+
+
+def _pside_state_snapshot(bot):
+    state = _hsl_state(bot)
+    metrics = state.get("last_metrics") or {}
+    return {
+        "halted": state["halted"],
+        "no_restart_latched": state["no_restart_latched"],
+        "cooldown_until_ms": state["cooldown_until_ms"],
+        "pnl_reset_timestamp_ms": state.get("pnl_reset_timestamp_ms"),
+        "pending_red_since_ms": state.get("pending_red_since_ms"),
+        "metrics": {
+            key: metrics.get(key)
+            for key in (
+                "timestamp_ms",
+                "tier",
+                "drawdown_raw",
+                "drawdown_ema",
+                "drawdown_score",
+                "strategy_equity",
+                "peak_strategy_equity",
+            )
+        },
+    }
+
+
+@pytest.mark.asyncio
+async def test_pside_initializer_state_parity_on_contract_shaped_rows(monkeypatch):
+    # Trust boundary: rows carrying ONLY the synthesis contract fields must
+    # drive _equity_hard_stop_initialize_from_history to a state identical to
+    # authoritative-shaped rows (which carry extra fields like equity,
+    # unrealized_pnl, per-coin dicts, panic_fill_count) with equal values.
+    contract_rows = _pside_parity_timeline()
+    authoritative_rows = []
+    for row in contract_rows:
+        full = dict(row)
+        upnl = row["unrealized_pnl_long"] + row["unrealized_pnl_short"]
+        full["unrealized_pnl"] = upnl
+        full["equity"] = row["balance"] + upnl
+        full["unrealized_pnl_by_coin_pside"] = {}
+        full["realized_pnl_by_coin_pside"] = {}
+        full["panic_fill_count"] = 0
+        authoritative_rows.append(full)
+
+    snapshots = []
+    for timeline in (contract_rows, authoritative_rows):
+        cfg = _dummy_config()
+        cfg["live"]["hsl_signal_mode"] = "unified"
+        bot = _make_dummy_bot(cfg)
+        _hsl_cfg(bot)["enabled"] = True
+        _hsl_cfg(bot)["red_threshold"] = 0.1
+        _hsl_cfg(bot)["ema_span_minutes"] = 1.0
+        _hsl_cfg(bot)["cooldown_minutes_after_red"] = 5.0
+        _hsl_cfg(bot)["no_restart_drawdown_threshold"] = 0.9
+        bot.balance = 85.0
+        bot.get_exchange_time = lambda: 361_000
+
+        async def fake_history(*, current_balance=None, _rows=timeline, **kwargs):
+            return {"timeline": list(_rows), "panic_flatten_events": []}
+
+        monkeypatch.setattr(bot, "get_balance_equity_history", fake_history)
+        await bot._equity_hard_stop_initialize_from_history()
+        snapshots.append(_pside_state_snapshot(bot))
+
+    assert snapshots[0] == snapshots[1]
+    # Nontriviality: the replay crossed RED mid-window (row 1: -12 upnl on a
+    # 100 balance vs red_threshold 0.1) and the final live sample applied.
+    # Recovered mid-replay RED without a panic marker intentionally does not
+    # latch on this path (pinned by
+    # test_hard_stop_initialize_from_history_does_not_latch_recovered_red_without_panic_marker),
+    # so the final state is green - what matters here is that both row shapes
+    # walked the identical path to it.
+    assert snapshots[0]["metrics"]["timestamp_ms"] == 361_000
+    assert snapshots[0]["metrics"]["strategy_equity"] == pytest.approx(85.0)
+
+
 def _minimal_pside_history():
     return {
         "timeline": [

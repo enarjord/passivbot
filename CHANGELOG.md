@@ -4,6 +4,19 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- HSL: new pure, unwired synthesis helper
+  `_hsl_replay_pside_timeline_rows_from_cache` converts persisted held-pair
+  matrices plus the schema-v5 account series into the aggregate timeline
+  rows the pside/unified startup replay consumes, with fail-loud
+  span/continuity/alignment checks. Parity tests prove the synthesized rows
+  equal the authoritative history timeline field-for-field (long and short
+  pairs, realized events on both sides, flatness transitions) and that
+  contract-shaped rows drive the pside/unified initializer to a state
+  identical to authoritative-shaped rows. The helper is not yet consumed:
+  the pside/unified reuse gate is a follow-up slice, and it must prove from
+  fills that cached pairs were the only pairs with in-window positions
+  before trusting these aggregates.
+
 - HSL replay cache schema v5: the persisted account-level realized-PnL
   series now carries per-minute per-pside deltas (`pnl_long`, `pnl_short`)
   alongside the account-level `pnl`, collected from the authoritative

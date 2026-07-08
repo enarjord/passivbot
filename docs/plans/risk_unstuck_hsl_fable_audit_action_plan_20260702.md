@@ -1067,6 +1067,16 @@ Remaining implementation details:
       cooldown/no-restart evidence. Markers are validated fail-loud (grid
       alignment, series-span bounds, ascending order, account-kind only) and
       tamper-checked (missing/invalid/wrong-kind reasons).
+      Partial: a pure, unwired `_hsl_replay_pside_timeline_rows_from_cache`
+      now synthesizes the aggregate pside/unified timeline rows (balance,
+      windowed realized_pnl and per-pside realized, per-pside upnl and
+      flatness from signed pair psize) from held-pair matrices plus the v5
+      account series, with the same fail-loud span/continuity checks as the
+      coin synthesis. Field-for-field parity against the authoritative
+      timeline and initializer state parity on contract-shaped rows are
+      pinned. Documented precondition for the future reuse gate: cached
+      pairs must be proven (from fills) to be the only pairs with in-window
+      positions, else full replay.
       Partial: cache schema v5 extends the account series with per-minute
       per-pside realized deltas (`pnl_long`/`pnl_short`), collected from the
       authoritative per-pside running totals and reproduced by the
