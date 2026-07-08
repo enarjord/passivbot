@@ -4,6 +4,20 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- HSL pside/unified startup replay now attempts cache reuse before the full
+  history fetch, completing the replay-cache arc for all signal modes. The
+  gate shares the coin-mode core (fresh fill-coverage proof, strict
+  write-time-proven expected metadata, account/pair watermark agreement,
+  gap panic-fill rejection, watermark extension from exchange fills/candles,
+  current-position reconciliation) and adds the pair-completeness proof the
+  aggregate synthesis requires: any fill inside the covered window or the
+  extension gap belonging to a pair that is not currently held (and thus
+  not cached) rejects reuse, because per-pside unrealized/flatness
+  aggregates are summed from cached pair matrices alone. Any rejection or
+  unexpected error falls back to the authoritative full replay. End-to-end
+  test proves the cache-fed unified boot reaches state identical to the
+  full replay with the fetch provably skipped.
+
 - HSL pside/unified startup replay now derives cooldown and no-restart
   evidence from canonical reconstructed RED episodes, matching the coin-mode
   behavior shipped earlier: an episode that crossed RED and was flattened by

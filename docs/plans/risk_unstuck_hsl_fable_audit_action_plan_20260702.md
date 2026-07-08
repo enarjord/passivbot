@@ -1075,6 +1075,16 @@ Remaining implementation details:
       cooldown/no-restart evidence. Markers are validated fail-loud (grid
       alignment, series-span bounds, ascending order, account-kind only) and
       tamper-checked (missing/invalid/wrong-kind reasons).
+      Implemented (pside/unified reuse gate): pside/unified startup now
+      attempts cache reuse before the full fetch via a gate that shares the
+      coin-mode core (extracted into
+      `_hsl_replay_load_extend_and_reconcile_cache`: coverage proof, strict
+      expected metadata, watermark agreement, gap panic rejection,
+      extension, position reconciliation) plus the pair-completeness proof:
+      uncached-pair fills inside the covered window or gap reject reuse.
+      Cache-fed unified boot is proven state-identical to the full replay
+      end-to-end. With this, the replay performance/readiness cache arc
+      covers all three signal modes.
       Partial: a pure, unwired `_hsl_replay_pside_timeline_rows_from_cache`
       now synthesizes the aggregate pside/unified timeline rows (balance,
       windowed realized_pnl and per-pside realized, per-pside upnl and

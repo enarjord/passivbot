@@ -1506,6 +1506,18 @@ def bind_hsl_methods(bot):
         "_equity_hard_stop_count_blocking_open_orders_symbol",
         "_equity_hard_stop_history_coin_value",
         "_equity_hard_stop_initialize_coin_from_history",
+        "_equity_hard_stop_initialize_from_history",
+        "_equity_hard_stop_infer_replay_contract",
+        "_equity_hard_stop_apply_sample",
+        "_equity_hard_stop_reset_state",
+        "_equity_hard_stop_reset_after_restart",
+        "_equity_hard_stop_record_no_restart_stop",
+        "_equity_hard_stop_validate_balance_source_for_history_replay",
+        "_equity_hard_stop_balance_override_active",
+        "_equity_hard_stop_position_symbols",
+        "_equity_hard_stop_latest_flatten_fill_timestamp_ms",
+        "_equity_hard_stop_signal_values",
+        "_equity_hard_stop_refresh_halted_runtime_forced_modes",
         "_equity_hard_stop_infer_coin_replay_contract",
         "_equity_hard_stop_lookback_ms",
         "_equity_hard_stop_log_transition",
@@ -1518,6 +1530,9 @@ def bind_hsl_methods(bot):
         "_equity_hard_stop_persist_replay_matrices",
         "_try_load_hsl_replay_matrix_cache",
         "_equity_hard_stop_try_reuse_replay_cache",
+        "_equity_hard_stop_try_reuse_pside_replay_cache",
+        "_hsl_replay_load_extend_and_reconcile_cache",
+        "_hsl_reuse_assemble_history",
         "_equity_hard_stop_set_red_paused_runtime_forced_modes",
         "_equity_hard_stop_latest_flatten_fill_timestamp_ms",
         "_equity_hard_stop_coverage_allow_incomplete",
@@ -2382,7 +2397,7 @@ _REUSE_CANDLES = [
 ]
 
 
-async def _reuse_collection_history(monkeypatch, *, n_minutes, fills, positions):
+async def _reuse_collection_history(monkeypatch, *, n_minutes, fills, positions, signal_mode="coin"):
     """Run the real manager-backed collection over the first n scenario minutes."""
     import numpy as np
     from unittest.mock import AsyncMock
@@ -2454,7 +2469,7 @@ async def _reuse_collection_history(monkeypatch, *, n_minutes, fills, positions)
     bot._pnls_manager = _StubPnlsManager(fills)
     history = await bot.get_balance_equity_history(
         current_balance=100.0,
-        hsl_replay_signal_mode="coin",
+        hsl_replay_signal_mode=signal_mode,
     )
     assert bot._live_event_pipeline.close(timeout=2.0) is True
     return history
@@ -2495,6 +2510,165 @@ def _make_reuse_bot(tmp_path, monkeypatch, *, fills, exchange_now, positions):
 
     bot._fail_full_replay = fail_full_replay
     return bot
+
+
+@pytest.mark.asyncio
+async def test_hsl_pside_cache_reuse_rejects_uncached_pair_activity(
+    tmp_path, monkeypatch
+):
+    # A fill for a pair that is not held now (and therefore not cached) inside
+    # the covered window must reject reuse: per-pside upnl/flatness aggregates
+    # cannot be synthesized from held-pair matrices alone.
+    prefix_positions = {
+        _REUSE_SYMBOL: {
+            "long": {"size": 0.5, "price": 100.0},
+            "short": {"size": 0.0, "price": 0.0},
+        }
+    }
+    final_positions = {
+        _REUSE_SYMBOL: {
+            "long": {"size": 0.9, "price": (0.5 * 100.0 + 0.4 * 99.0) / 0.9},
+            "short": {"size": 0.0, "price": 0.0},
+        }
+    }
+    other_pair_fill = {
+        "timestamp": _REUSE_BASE_TS + 60_000,
+        "symbol": "ETH/USDT:USDT",
+        "position_side": "long",
+        "side": "buy",
+        "qty": 1.0,
+        "price": 50.0,
+        "pnl": 0.0,
+        "pb_order_type": "",
+    }
+    exchange_now = _REUSE_BASE_TS + 240_000
+
+    prefix_history = await _reuse_collection_history(
+        monkeypatch,
+        n_minutes=3,
+        fills=_REUSE_PREFIX_FILLS,
+        positions=prefix_positions,
+        signal_mode="unified",
+    )
+    writer_bot = make_coin_bot()
+    writer_bot.exchange = "test_exchange"
+    writer_bot.config["live"]["hsl_signal_mode"] = "unified"
+    _bind_reuse_support(writer_bot, tmp_path, monkeypatch, fills=_REUSE_PREFIX_FILLS)
+    assert writer_bot._equity_hard_stop_persist_replay_matrices(prefix_history) == 2
+
+    reuse_bot = _make_reuse_bot(
+        tmp_path,
+        monkeypatch,
+        fills=_REUSE_PREFIX_FILLS + [other_pair_fill, _REUSE_GAP_FILL],
+        exchange_now=exchange_now,
+        positions=final_positions,
+    )
+    reuse_bot.config["live"]["hsl_signal_mode"] = "unified"
+
+    assert (
+        await reuse_bot._equity_hard_stop_try_reuse_pside_replay_cache(exchange_now)
+        is None
+    )
+    # The coin gate must also refuse to serve a unified-mode bot.
+    assert (
+        await reuse_bot._equity_hard_stop_try_reuse_replay_cache(exchange_now) is None
+    )
+
+
+def _pside_reuse_state_snapshot(bot):
+    state = bot._hsl_state("long")
+    metrics = state.get("last_metrics") or {}
+    return {
+        "halted": state["halted"],
+        "no_restart_latched": state["no_restart_latched"],
+        "cooldown_until_ms": state["cooldown_until_ms"],
+        "pending_red_since_ms": state.get("pending_red_since_ms"),
+        "metrics": {
+            key: metrics.get(key)
+            for key in (
+                "timestamp_ms",
+                "tier",
+                "drawdown_raw",
+                "drawdown_ema",
+                "drawdown_score",
+                "strategy_equity",
+                "peak_strategy_equity",
+            )
+        },
+    }
+
+
+@pytest.mark.asyncio
+async def test_hsl_pside_cache_reuse_reaches_state_identical_to_full_replay(
+    tmp_path, monkeypatch
+):
+    prefix_positions = {
+        _REUSE_SYMBOL: {
+            "long": {"size": 0.5, "price": 100.0},
+            "short": {"size": 0.0, "price": 0.0},
+        }
+    }
+    final_positions = {
+        _REUSE_SYMBOL: {
+            "long": {"size": 0.9, "price": (0.5 * 100.0 + 0.4 * 99.0) / 0.9},
+            "short": {"size": 0.0, "price": 0.0},
+        }
+    }
+    all_fills = _REUSE_PREFIX_FILLS + [_REUSE_GAP_FILL]
+    exchange_now = _REUSE_BASE_TS + 240_000
+
+    # Boot 1: full unified replay over the prefix window writes the cache.
+    prefix_history = await _reuse_collection_history(
+        monkeypatch,
+        n_minutes=3,
+        fills=_REUSE_PREFIX_FILLS,
+        positions=prefix_positions,
+        signal_mode="unified",
+    )
+    writer_bot = make_coin_bot()
+    writer_bot.exchange = "test_exchange"
+    writer_bot.config["live"]["hsl_signal_mode"] = "unified"
+    _bind_reuse_support(writer_bot, tmp_path, monkeypatch, fills=_REUSE_PREFIX_FILLS)
+    assert writer_bot._equity_hard_stop_persist_replay_matrices(prefix_history) == 2
+
+    # Boot 2: cache-fed unified replay; the full fetch must not run.
+    reuse_bot = _make_reuse_bot(
+        tmp_path,
+        monkeypatch,
+        fills=all_fills,
+        exchange_now=exchange_now,
+        positions=final_positions,
+    )
+    reuse_bot.config["live"]["hsl_signal_mode"] = "unified"
+    reuse_bot.get_balance_equity_history = reuse_bot._fail_full_replay
+    await reuse_bot._equity_hard_stop_initialize_from_history()
+
+    # Boot 3 (control): authoritative full unified replay over the full window.
+    full_history = await _reuse_collection_history(
+        monkeypatch,
+        n_minutes=5,
+        fills=all_fills,
+        positions=final_positions,
+        signal_mode="unified",
+    )
+    control_bot = _make_reuse_bot(
+        tmp_path,
+        monkeypatch,
+        fills=all_fills,
+        exchange_now=exchange_now,
+        positions=final_positions,
+    )
+    control_bot.config["live"]["hsl_signal_mode"] = "unified"
+
+    async def full_fetch(current_balance=None, **kwargs):
+        return full_history
+
+    control_bot.get_balance_equity_history = full_fetch
+    await control_bot._equity_hard_stop_initialize_from_history()
+
+    assert _pside_reuse_state_snapshot(reuse_bot) == _pside_reuse_state_snapshot(
+        control_bot
+    )
 
 
 @pytest.mark.asyncio
