@@ -1151,10 +1151,36 @@ Remaining implementation details:
       replay; the completed event now reports `cache_reused` alongside phase
       timings. End-to-end test proves the cache-fed boot reaches state
       identical to the full replay with the full fetch provably skipped.
-- [ ] Python simplification after Rust owns ideal protective orders and unstuck
+- [x] Python simplification after Rust owns ideal protective orders and unstuck
       orders.
       Python should reconcile ideal vs actual orders, not re-decide trading
       policy where Rust can own it.
+      Closure assessment (2026-07-08): the live path was audited end to end
+      for policy re-decisions layered on the Rust orchestrator's output.
+      Removed re-decisions: execution type (the Rust orchestrator is the
+      single source of truth, fail-loud end to end, silent limit-downgrade
+      hazard eliminated); the redundant unstuck-suppression channel
+      (auto_unstuck_allowed is the sole emission gate; allowances no longer
+      zeroed by an open-order check); and the per-cycle unstuck-allowance
+      computation (Rust always derived the allowance internally from the
+      realized-pnl cumsum facts; the input fields are now optional and
+      documented legacy/diagnostic).
+      Verified as intentionally Python-owned per the guiding contract
+      (reconciliation, live-only execution economics, or live-data guards
+      with no backtest analog): the reconciler's mode cancel-retention
+      filters (the two tp_only variants produce identical Rust ideal orders
+      and differ only in which ACTUAL orders reconciliation retains);
+      reduce-only qty clamps and the over-subscription trim (a response to
+      live exchange-position drift Rust cannot observe, trimming
+      farthest-first consistently with Rust's keep-nearest reducer
+      priority); the initial-entry distance gate; entry-cooldown
+      delta-guard anchors; the trailing-unavailable reconciliation filter;
+      executor-time safety guards; and exchange data gathering.
+      Still-open acknowledged detail (from Remaining implementation
+      details): the exact flat-detection tolerance for episode-end fills
+      (qty-step epsilon versus exchange dust) remains a design refinement -
+      current code uses 1e-12 in replay flatness and qty-step tolerance in
+      cache-reuse position reconciliation.
 - [x] Dead legacy HSL cleanup after parity tests cover active
       `src/passivbot_hsl.py`.
       Implemented: removed shadowed legacy HSL method definitions from
