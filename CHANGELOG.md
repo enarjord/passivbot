@@ -4,6 +4,13 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Plan tracker: closed the canonical HSL equity-history signal design item.
+  The one-raw-per-minute data-store goal is realized by the shared
+  authoritative timeline plus the cache-primitive store (pair matrices +
+  per-pside account series) consumed by all three signal modes, with
+  sample-parity tests at every trust boundary; the originally sketched five
+  named dataframes are superseded by these primitives. Docs-only change.
+
 - Plan tracker: closed the HSL replay performance/readiness item. All
   sub-items are implemented (persisted npz+manifest checkpoints with
   watermark extension for all three signal modes, fail-closed reuse gates,
