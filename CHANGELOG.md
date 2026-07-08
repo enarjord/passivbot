@@ -22,6 +22,13 @@ All notable user-facing changes will be documented in this file.
   the hot path. The monitor still computes allowances on demand for
   diagnostics. Behavior unchanged.
 
+- Optimizer defaults now keep HSL restarts enabled by setting
+  `bot.long/short.hsl.restart_after_red_policy=always` in
+  `optimize.fixed_runtime_overrides` instead of forcing
+  `no_restart_drawdown_threshold=1`. This avoids permanent optimizer halts
+  while preserving the live/default no-restart threshold values for configs
+  that use `restart_after_red_policy=threshold`.
+
 - Live unstuck-allowance inputs to the Rust orchestrator are no longer
   zeroed while an unstuck order is resting on the exchange. The allowance
   values are pure budget facts derived from fill history; suppression of

@@ -160,29 +160,30 @@
     "bot": {
         "long": {
             "forager": {
-                "score_weights": {"ema_readiness": 0.08, "volatility": 0.48, "volume": 0.44},
-                "volatility_ema_span_1m": 661.0,
-                "volume_drop_pct": 0.06,
-                "volume_ema_span_1m": 2369.0
+                "score_weights": {"ema_readiness": 0.2, "volatility": 0.34, "volume": 0.46},
+                "volatility_ema_span_1m": 187.0,
+                "volume_drop_pct": 0.02,
+                "volume_ema_span_1m": 1280.0
             },
             "hsl": {
-                "cooldown_minutes_after_red": 3981.0,
-                "ema_span_minutes": 644.0,
+                "cooldown_minutes_after_red": 4041.0,
+                "ema_span_minutes": 639.0,
                 "enabled": false,
                 "no_restart_drawdown_threshold": 1,
                 "orange_tier_mode": "tp_only_with_active_entry_cancellation",
                 "panic_close_order_type": "limit",
-                "red_threshold": 0.025,
+                "red_threshold": 0.117,
+                "restart_after_red_policy": "threshold",
                 "tier_ratios": {"orange": 0.75, "yellow": 0.5}
             },
             "risk": {
-                "entry_cooldown_minutes": 7.1,
+                "entry_cooldown_minutes": 7.3,
                 "n_positions": 5.0,
                 "position_exposure_enforcer_enabled": false,
                 "position_exposure_enforcer_threshold": 1.0,
                 "total_exposure_enforcer_enabled": true,
                 "total_exposure_enforcer_policy": "reduce_overweight",
-                "total_exposure_enforcer_threshold": 1.004,
+                "total_exposure_enforcer_threshold": 1.002,
                 "total_exposure_entry_gate_enabled": true,
                 "total_wallet_exposure_limit": 1.5,
                 "we_excess_allowance_mode": "bounded",
@@ -191,42 +192,42 @@
             "strategy": {
                 "trailing_martingale": {
                     "close": {
-                        "qty_pct": 0.4,
+                        "qty_pct": 0.22,
                         "retracement_base_pct": 0.0001,
-                        "retracement_volatility_1h_weight": 0.93,
-                        "retracement_volatility_1m_weight": 1.33,
-                        "threshold_base_pct": -0.0138,
-                        "threshold_volatility_1h_weight": 0.02,
-                        "threshold_volatility_1m_weight": 7.58,
-                        "threshold_we_weight": 0.0142
+                        "retracement_volatility_1h_weight": 5.8,
+                        "retracement_volatility_1m_weight": 39.03,
+                        "threshold_base_pct": -0.0179,
+                        "threshold_volatility_1h_weight": 0.13,
+                        "threshold_volatility_1m_weight": 7.94,
+                        "threshold_we_weight": 0.0148
                     },
-                    "ema_span_0": 200.0,
-                    "ema_span_1": 150.0,
+                    "ema_span_0": 130.0,
+                    "ema_span_1": 130.0,
                     "entry": {
-                        "double_down_factor": 0.39,
+                        "double_down_factor": 0.68,
                         "ema_gate_mode": "all",
-                        "initial_ema_dist": 0.0193,
-                        "initial_qty_pct": 0.0703,
-                        "retracement_base_pct": 0.0006,
-                        "retracement_volatility_1h_weight": 6.24,
-                        "retracement_volatility_1m_weight": 24.21,
-                        "retracement_we_weight": 2.984,
-                        "threshold_base_pct": 0.032,
-                        "threshold_volatility_1h_weight": 1.71,
-                        "threshold_volatility_1m_weight": 35.44,
-                        "threshold_we_weight": 4.821
+                        "initial_ema_dist": 0.0184,
+                        "initial_qty_pct": 0.0673,
+                        "retracement_base_pct": 0.0011,
+                        "retracement_volatility_1h_weight": 13.35,
+                        "retracement_volatility_1m_weight": 18.54,
+                        "retracement_we_weight": 4.575,
+                        "threshold_base_pct": 0.0248,
+                        "threshold_volatility_1h_weight": 1.64,
+                        "threshold_volatility_1m_weight": 35.21,
+                        "threshold_we_weight": 4.107
                     },
-                    "volatility_ema_span_1h": 672.0,
-                    "volatility_ema_span_1m": 1049.0
+                    "volatility_ema_span_1h": 1537.0,
+                    "volatility_ema_span_1m": 1425.0
                 }
             },
             "unstuck": {
-                "close_pct": 0.028,
-                "ema_dist": -0.086,
+                "close_pct": 0.024,
+                "ema_dist": -0.1238,
                 "ema_gating_enabled": true,
                 "enabled": true,
-                "loss_allowance_pct": 0.0065,
-                "threshold": 0.46
+                "loss_allowance_pct": 0.0063,
+                "threshold": 0.432
             }
         },
         "short": {
@@ -244,6 +245,7 @@
                 "orange_tier_mode": "tp_only_with_active_entry_cancellation",
                 "panic_close_order_type": "limit",
                 "red_threshold": 0.01,
+                "restart_after_red_policy": "threshold",
                 "tier_ratios": {"orange": 0.75, "yellow": 0.5}
             },
             "risk": {
@@ -411,6 +413,7 @@
         "forced_mode_long": "",
         "forced_mode_short": "",
         "hedge_mode": false,
+        "hsl_accept_incomplete_history": false,
         "hsl_position_during_cooldown_policy": "panic",
         "hsl_signal_mode": "coin",
         "ignored_coins": {"long": [], "short": []},
@@ -603,8 +606,8 @@
         "enable_overrides": [],
         "fixed_params": [],
         "fixed_runtime_overrides": {
-            "bot.long.hsl.no_restart_drawdown_threshold": 1,
-            "bot.short.hsl.no_restart_drawdown_threshold": 1
+            "bot.long.hsl.restart_after_red_policy": "always",
+            "bot.short.hsl.restart_after_red_policy": "always"
         },
         "iters": 200000,
         "limits": [
@@ -633,7 +636,9 @@
             "algorithm": "auto",
             "algorithms": {
                 "nsga2": {},
-                "nsga3": {"ref_dirs": {"method": "das_dennis", "n_partitions": "auto"}}
+                "nsga3": {
+                    "ref_dirs": {"method": "das_dennis", "n_partitions": "auto"}
+                }
             },
             "shared": {
                 "crossover_eta": 20.0,
@@ -657,6 +662,7 @@
             {"goal": "min", "metric": "loss_profit_ratio"},
             {"goal": "min", "metric": "strategy_eq_underwater_pct_mean"}
         ],
+        "seed": null,
         "write_all_results": true
     }
 }
