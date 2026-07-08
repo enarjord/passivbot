@@ -1004,12 +1004,28 @@ Remaining implementation details:
       reset the episode state. Flatness comes from the timeline's
       is_flat/is_flat_{pside} flags (rows without the flags conservatively
       skip transition detection).
-- [ ] HSL replay performance/readiness slice.
+- [x] HSL replay performance/readiness slice.
       Persist verified non-authoritative HSL time series/checkpoints, add doctor
       tools, prioritize held scopes, keep timing/source evidence, and move dense
       computation away from Python primitive loops. First persisted format
       should be `.npz` arrays plus JSON metadata unless implementation evidence
       shows a better dependency-free option.
+      Closure assessment (2026-07-08): every sub-item is implemented or
+      consciously bounded. Persisted `.npz`+manifest checkpoints exist for
+      pair matrices and the v5 account series, written by all three signal
+      modes and extended (not rebuilt) at the watermark on reuse - the
+      checkpoint resumability the spec asked for. The doctor discovers and
+      validates HSL manifests with reason codes. Startup replays reuse
+      proven caches in all three modes with fall-back-on-any-doubt, so the
+      full fetch+replay cost is paid only on first boot or invalidation.
+      Held scopes are the only cached scopes by design (flat-scope evidence
+      forces full replay, which is the fail-closed choice). Timing/source
+      evidence is emitted through the phased replay lifecycle events.
+      Deliberately NOT done: the dense per-minute metric stepping still
+      walks Python->PyO3 per row; with cache reuse amortizing it to
+      first-boot-only, batch vectorization (e.g. a Rust whole-series replay)
+      is optional future work to be revisited only if production startup
+      timings show first-boot replay latency remains a live-safety concern.
       Partial: pure live-HSL cache helpers now write the raw replay matrix as
       `hsl_replay_matrix.npz` plus `hsl_replay_manifest.json`, including schema
       version, fixed one-minute interval, row/time bounds, trust-boundary
