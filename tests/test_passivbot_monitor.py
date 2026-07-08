@@ -4831,8 +4831,9 @@ async def test_build_monitor_snapshot_includes_market_forager_unstuck_and_recent
                 }
             return {"status": "disabled"}
 
-        def _calc_unstuck_allowances_live(self, allow_new_unstuck):
-            return {"long": 0.0 if not allow_new_unstuck else 1.0, "short": 0.0}
+        def _calc_unstuck_allowances_live(self):
+            # Allowances are pure budget facts, real even with an open unstuck order.
+            return {"long": 1.0, "short": 0.0}
 
         async def build_forager_candidate_payload(
             self,

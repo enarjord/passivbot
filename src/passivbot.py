@@ -10423,9 +10423,15 @@ class Passivbot:
                 self._log_fill_event(event),
             )
 
-    def _calc_unstuck_allowances(self, allow_new_unstuck: bool) -> dict[str, float]:
-        """Calculate unstuck allowances using FillEventsManager data."""
-        if not allow_new_unstuck or self._pnls_manager is None:
+    def _calc_unstuck_allowances(self) -> dict[str, float]:
+        """Calculate unstuck allowances using FillEventsManager data.
+
+        Pure budget math from fill history; whether an unstuck order may be
+        emitted this cycle is a separate decision carried by the
+        auto_unstuck_allowed flag, which the Rust orchestrator consumes as
+        the sole emission gate.
+        """
+        if self._pnls_manager is None:
             return {"long": 0.0, "short": 0.0}
 
         start_ms = self._pnls_lookback_start_ms()
@@ -13516,11 +13522,9 @@ class Passivbot:
             return mode
         return "graceful_stop"
 
-    def _calc_unstuck_allowances_live(
-        self, allow_new_unstuck: bool
-    ) -> dict[str, float]:
+    def _calc_unstuck_allowances_live(self) -> dict[str, float]:
         """Calculate unstuck allowances using FillEventsManager."""
-        return self._calc_unstuck_allowances(allow_new_unstuck)
+        return self._calc_unstuck_allowances()
 
     def _auto_unstuck_allowed_live(self, allow_new_unstuck: bool) -> bool:
         if not allow_new_unstuck or self._pnls_manager is None:
@@ -15414,10 +15418,10 @@ class Passivbot:
             self, last_prices, ts=utc_ms(), source=monitor_source
         )
 
+        # The allowance values are pure budget facts; the open-order check
+        # only drives the auto_unstuck_allowed emission gate that Rust owns.
         allow_new_unstuck = not self.has_open_unstuck_order()
-        unstuck_allowances = self._calc_unstuck_allowances_live(
-            allow_new_unstuck=allow_new_unstuck
-        )
+        unstuck_allowances = self._calc_unstuck_allowances_live()
         auto_unstuck_allowed = self._auto_unstuck_allowed_live(allow_new_unstuck)
         realized_pnl_cumsum = self._get_realized_pnl_cumsum_stats()
         now_ms = int(self.get_exchange_time())
