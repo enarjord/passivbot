@@ -102,7 +102,7 @@ def test_ema_anchor_limit_orders_route_to_ccxt_post_only_params(
     bot.register_symbol(symbol)
     bot.positions[symbol][position_side]["size"] = position_size
     order_type_id = pbr.order_type_snake_to_id(order_type)
-    ideal_orders = {symbol: [(qty, 100.0, order_type, order_type_id)]}
+    ideal_orders = {symbol: [(qty, 100.0, order_type, order_type_id, "limit")]}
 
     orders_by_symbol, _ = bot._to_executable_orders(ideal_orders, {symbol: 100.0})
     [order] = orders_by_symbol[symbol]

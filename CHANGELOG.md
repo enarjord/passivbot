@@ -4,6 +4,15 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Live order conversion no longer re-decides execution type in Python. The
+  Rust orchestrator is the single source of execution-type truth
+  (`should_use_market_execution` owns the panic market-vs-limit choice from
+  `hsl_panic_close_order_type`); the Python fallback that re-derived it for
+  short order tuples was dead on every live path and is replaced by
+  fail-loud validation - a tuple without a valid `limit`/`market`
+  execution type now raises instead of silently defaulting to a limit
+  order, which could have downgraded a panic market close.
+
 - Plan tracker: closed the canonical HSL equity-history signal design item.
   The one-raw-per-minute data-store goal is realized by the shared
   authoritative timeline plus the cache-primitive store (pair matrices +
