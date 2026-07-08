@@ -1823,6 +1823,13 @@ class Passivbot:
         pb_hsl._equity_hard_stop_persist_replay_matrices
     )
     _try_load_hsl_replay_matrix_cache = pb_hsl._try_load_hsl_replay_matrix_cache
+    _hsl_replay_load_extend_and_reconcile_cache = (
+        pb_hsl._hsl_replay_load_extend_and_reconcile_cache
+    )
+    _hsl_reuse_assemble_history = pb_hsl._hsl_reuse_assemble_history
+    _equity_hard_stop_try_reuse_pside_replay_cache = (
+        pb_hsl._equity_hard_stop_try_reuse_pside_replay_cache
+    )
     _equity_hard_stop_try_reuse_replay_cache = (
         pb_hsl._equity_hard_stop_try_reuse_replay_cache
     )

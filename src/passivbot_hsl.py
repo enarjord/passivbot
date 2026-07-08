@@ -1845,11 +1845,6 @@ async def _equity_hard_stop_try_reuse_replay_cache(
     """
     if self._equity_hard_stop_signal_mode() != "coin":
         return None
-    if bool(getattr(self, "inverse", False)):
-        return None
-    manager = getattr(self, "_pnls_manager", None)
-    if manager is None:
-        return None
     held_pairs: list[tuple[str, str]] = []
     for symbol, slots in (self.positions or {}).items():
         if not isinstance(slots, dict):
@@ -1863,6 +1858,64 @@ async def _equity_hard_stop_try_reuse_replay_cache(
                 ):
                     return None
                 held_pairs.append((pside, str(symbol)))
+    if not held_pairs:
+        return None
+    core = await self._hsl_replay_load_extend_and_reconcile_cache(now_ms, held_pairs)
+    if core is None:
+        return None
+    account_manifest = core["account_manifest"]
+
+    # Flat-pair cooldown safety: the replay treats every supported panic
+    # marker as a required replay pair, but this slice only loads matrices
+    # for currently held pairs. A marker for a supported flat coin would
+    # therefore demand per-coin timeline values the synthesized rows cannot
+    # provide, aborting startup mid-replay instead of falling back. Reject
+    # reuse up front so the authoritative full replay reconstructs that
+    # flat-pair cooldown.
+    held_pair_set = set(held_pairs)
+    for marker in account_manifest.get("panic_flatten_events") or []:
+        marker_pside = str(marker.get("pside", ""))
+        marker_symbol = str(marker.get("symbol", ""))
+        if not self._equity_hard_stop_symbol_supported_for_coin_replay(marker_symbol):
+            continue
+        if (marker_pside, marker_symbol) not in held_pair_set:
+            logging.info(
+                "[risk] HSL replay cache reuse skipped: cached panic marker for "
+                "flat pair %s:%s is not covered by a held-pair matrix; falling "
+                "back to full replay for cooldown reconstruction",
+                marker_pside,
+                marker_symbol,
+            )
+            return None
+
+    timeline = _hsl_replay_timeline_rows_from_cache(
+        {
+            pair: _hsl_replay_matrix_arrays(rows)
+            for pair, rows in core["extended_pairs"].items()
+        },
+        _hsl_replay_account_series_arrays(core["account_rows"]),
+        current_balance=float(self.get_raw_balance()),
+    )
+    return self._hsl_reuse_assemble_history(core, timeline, now_ms)
+
+
+async def _hsl_replay_load_extend_and_reconcile_cache(
+    self, now_ms: int, held_pairs: list[tuple[str, str]]
+) -> dict[str, Any] | None:
+    """Shared scope-agnostic core of the replay-cache reuse gates.
+
+    Runs every gate that does not depend on the signal mode's timeline shape:
+    fresh load-time coverage proof, account+pair cache loads against strict
+    expected metadata (write-time proven coverage), account/pair watermark
+    agreement, gap panic-fill rejection, watermark extension from exchange
+    fills/candles, and current-position reconciliation. Returns the loaded
+    building blocks or None (fall back to full replay).
+    """
+    if bool(getattr(self, "inverse", False)):
+        return None
+    manager = getattr(self, "_pnls_manager", None)
+    if manager is None:
+        return None
     if not held_pairs:
         return None
 
@@ -1917,29 +1970,6 @@ async def _equity_hard_stop_try_reuse_replay_cache(
         return None
     account_manifest, account_arrays = account_loaded
     watermark_ts = int(account_manifest["end_ts_ms"])
-
-    # Flat-pair cooldown safety: the replay treats every supported panic
-    # marker as a required replay pair, but this slice only loads matrices
-    # for currently held pairs. A marker for a supported flat coin would
-    # therefore demand per-coin timeline values the synthesized rows cannot
-    # provide, aborting startup mid-replay instead of falling back. Reject
-    # reuse up front so the authoritative full replay reconstructs that
-    # flat-pair cooldown.
-    held_pair_set = set(held_pairs)
-    for marker in account_manifest.get("panic_flatten_events") or []:
-        marker_pside = str(marker.get("pside", ""))
-        marker_symbol = str(marker.get("symbol", ""))
-        if not self._equity_hard_stop_symbol_supported_for_coin_replay(marker_symbol):
-            continue
-        if (marker_pside, marker_symbol) not in held_pair_set:
-            logging.info(
-                "[risk] HSL replay cache reuse skipped: cached panic marker for "
-                "flat pair %s:%s is not covered by a held-pair matrix; falling "
-                "back to full replay for cooldown reconstruction",
-                marker_pside,
-                marker_symbol,
-            )
-            return None
 
     pair_arrays_by_pair: dict[tuple[str, str], dict[str, Any]] = {}
     for pside, symbol in held_pairs:
@@ -2058,22 +2088,33 @@ async def _equity_hard_stop_try_reuse_replay_cache(
             )
             return None
 
-    current_balance = float(self.get_raw_balance())
-    timeline = _hsl_replay_timeline_rows_from_cache(
-        {
-            pair: _hsl_replay_matrix_arrays(rows)
-            for pair, rows in extended_pairs.items()
-        },
-        _hsl_replay_account_series_arrays(account_rows),
-        current_balance=current_balance,
+    return {
+        "account_manifest": account_manifest,
+        "account_expected": account_expected,
+        "account_rows": account_rows,
+        "extended_pairs": extended_pairs,
+        "extracted": extracted,
+        "gap_fills": gap_fills,
+        "end_minute": end_minute,
+        "coverage_status": coverage_status,
+        "watermark_ts": watermark_ts,
+    }
+
+
+def _hsl_reuse_assemble_history(
+    self, core: dict[str, Any], timeline: list[dict[str, Any]], now_ms: int
+) -> dict[str, Any]:
+    account_expected = core["account_expected"]
+    coverage_status = core["coverage_status"]
+    panic_flatten_events = list(
+        core["account_manifest"].get("panic_flatten_events") or []
     )
-    panic_flatten_events = list(account_manifest.get("panic_flatten_events") or [])
     return {
         "timeline": timeline,
         "panic_flatten_events": panic_flatten_events,
-        "fill_events": extracted,
-        "hsl_replay_matrices": _hsl_reuse_group_matrices(extended_pairs),
-        "hsl_replay_account_series": account_rows,
+        "fill_events": core["extracted"],
+        "hsl_replay_matrices": _hsl_reuse_group_matrices(core["extended_pairs"]),
+        "hsl_replay_account_series": core["account_rows"],
         "hsl_replay_matrix_coverage": {
             "fill_covered_start_ms": int(
                 account_expected["fill_covered_start_ms"]
@@ -2085,9 +2126,70 @@ async def _equity_hard_stop_try_reuse_replay_cache(
             "candle_covered_start_ms": int(
                 account_expected["candle_covered_start_ms"]
             ),
-            "candle_covered_end_ms": int(end_minute),
+            "candle_covered_end_ms": int(core["end_minute"]),
         },
     }
+
+
+async def _equity_hard_stop_try_reuse_pside_replay_cache(
+    self, now_ms: int
+) -> dict[str, Any] | None:
+    """Attempt to reconstruct the pside/unified replay history from caches.
+
+    Mirrors the coin-mode reuse gate through the shared core (coverage proof,
+    strict expected metadata, watermark agreement, gap panic rejection,
+    extension, position reconciliation) and adds the pair-completeness gate
+    the synthesis contract requires: every fill inside the covered window and
+    the extension gap must belong to a cached (currently held) pair, because
+    per-pside upnl/flatness aggregates are summed from cached pair matrices
+    alone. Any uncached-pair activity falls back to the full replay.
+    """
+    if self._equity_hard_stop_signal_mode() not in ("unified", "pside"):
+        return None
+    held_pairs: list[tuple[str, str]] = []
+    for symbol, slots in (self.positions or {}).items():
+        if not isinstance(slots, dict):
+            continue
+        for pside in self._hsl_psides():
+            if self._equity_hard_stop_has_open_position_symbol(pside, str(symbol)):
+                if not self._equity_hard_stop_symbol_supported_for_coin_replay(
+                    str(symbol)
+                ):
+                    return None
+                held_pairs.append((pside, str(symbol)))
+    if not held_pairs:
+        return None
+    core = await self._hsl_replay_load_extend_and_reconcile_cache(now_ms, held_pairs)
+    if core is None:
+        return None
+    account_rows = core["account_rows"]
+    if not account_rows:
+        return None
+    window_start = int(account_rows[0]["ts"])
+    held_set = set(held_pairs)
+    for event in core["extracted"]:
+        ts = int(event["timestamp"])
+        if ts < window_start:
+            continue
+        pair = (str(event["pside"]), str(event["symbol"]))
+        if pair not in held_set:
+            logging.info(
+                "[risk] HSL pside replay cache reuse skipped: fill for uncached "
+                "pair %s:%s inside the covered window; per-pside aggregates "
+                "cannot be synthesized from held-pair matrices alone",
+                pair[0],
+                pair[1],
+            )
+            return None
+    timeline = _hsl_replay_pside_timeline_rows_from_cache(
+        {
+            pair: _hsl_replay_matrix_arrays(rows)
+            for pair, rows in core["extended_pairs"].items()
+        },
+        _hsl_replay_account_series_arrays(account_rows),
+        current_balance=float(self.get_raw_balance()),
+    )
+    return self._hsl_reuse_assemble_history(core, timeline, now_ms)
 
 
 def _hsl_reuse_group_matrices(
@@ -4312,10 +4414,36 @@ async def _equity_hard_stop_initialize_from_history(self) -> None:
             lookback.display_value,
             signal_mode,
         )
-        history = await self.get_balance_equity_history(
-            current_balance=self.get_raw_balance(),
-            hsl_replay_signal_mode=signal_mode,
-        )
+        history = None
+        cache_reused = False
+        try:
+            history = await self._equity_hard_stop_try_reuse_pside_replay_cache(
+                int(self.get_exchange_time())
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            # Reuse is an accelerator; any unexpected failure must fall back
+            # to the authoritative full replay, never abort startup.
+            logging.warning(
+                "[risk] HSL pside replay cache reuse failed; falling back to "
+                "full replay | error=%s: %s",
+                type(exc).__name__,
+                exc,
+            )
+            history = None
+        if history is not None:
+            cache_reused = True
+            logging.info(
+                "[risk] HSL %s replay reusing persisted cache | timeline_rows=%d",
+                signal_mode,
+                len(history.get("timeline") or []),
+            )
+        else:
+            history = await self.get_balance_equity_history(
+                current_balance=self.get_raw_balance(),
+                hsl_replay_signal_mode=signal_mode,
+            )
         if "timeline" not in history:
             raise ValueError("get_balance_equity_history() missing required key: timeline")
         timeline = history["timeline"]
