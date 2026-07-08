@@ -7325,6 +7325,109 @@ mod tests {
     }
 
     #[test]
+    fn hard_stop_red_seen_episode_recovered_before_flatten_sets_cooldown() {
+        // B2.1: RED is seen mid-episode while the position is open, the sample
+        // recovers before the position flattens, and the stop must still
+        // finalize into cooldown accounting once the scope is flat.
+        let hlcvs = Array3::from_shape_vec((5, 1, 4), vec![1.0; 5 * 1 * 4]).unwrap();
+        let btc_usd_prices =
+            Array1::from_vec(vec![20_000.0, 20_000.0, 20_000.0, 20_000.0, 20_000.0]);
+
+        let mut bp_pair = BotParamsPair::default();
+        bp_pair.long.n_positions = 1;
+        bp_pair.long.ema_span_0 = 10.0;
+        bp_pair.long.ema_span_1 = 20.0;
+
+        let mut hs = EquityHardStopLossConfig::default();
+        hs.enabled = true;
+        hs.red_threshold = 0.1;
+        hs.ema_span_minutes = 1.0;
+        hs.cooldown_minutes_after_red = 5.0;
+        hs.signal_mode = "unified".to_string();
+
+        let backtest_params = BacktestParams {
+            starting_balance: 1000.0,
+            maker_fee: 0.0,
+            taker_fee: 0.00055,
+            coins: vec!["TEST".to_string()],
+            active_coin_indices: None,
+            first_timestamp_ms: 0,
+            requested_start_timestamp_ms: 0,
+            first_valid_indices: vec![0],
+            last_valid_indices: vec![4],
+            warmup_minutes: vec![0],
+            trade_start_indices: vec![0],
+            global_warmup_bars: 0,
+            btc_collateral_cap: 0.0,
+            btc_collateral_ltv_cap: None,
+            metrics_only: true,
+            skip_btc_analysis: false,
+            filter_by_min_effective_cost: false,
+            dynamic_wel_by_tradability: true,
+            hedge_mode: true,
+            max_realized_loss_pct: 1.0,
+            pnls_max_lookback_days: 30.0,
+            liquidation_threshold: 0.05,
+            equity_hard_stop_loss: hs,
+            market_orders_allowed: false,
+            market_order_near_touch_threshold: 0.001,
+            market_order_slippage_pct: 0.0005,
+            forager_score_hysteresis_pct: 0.0,
+            candle_interval_minutes: 1,
+        };
+
+        let mut bt = Backtest::new(
+            hlcvs.view(),
+            btc_usd_prices.view(),
+            vec![bp_pair],
+            vec![ExchangeParams::default()],
+            &backtest_params,
+        );
+
+        bt.positions.long[0] = Position {
+            size: 1.0,
+            price: 100.0,
+        };
+
+        bt.balance.usd_total_balance = 100.0;
+        bt.equities.timestamps_ms.push(0);
+        bt.equities.usd_total_equity.push(100.0);
+        bt.update_hard_stop_state(0).unwrap();
+
+        // RED while the position is open: no flat confirmations accumulate.
+        bt.equities.timestamps_ms.push(60_000);
+        bt.equities.usd_total_equity.push(80.0);
+        bt.update_hard_stop_state(1).unwrap();
+        assert!(!bt.hard_stop_pside[LONG].halted);
+
+        // Sample recovers below RED while still open; red_seen persists.
+        bt.equities.timestamps_ms.push(120_000);
+        bt.equities.usd_total_equity.push(96.0);
+        bt.update_hard_stop_state(2).unwrap();
+        assert!(!bt.hard_stop_pside[LONG].halted);
+        // The tier stays latched Red for the episode, but the SAMPLE recovered.
+        assert!(!bt.hard_stop_pside[LONG].red_active_now);
+
+        // Position flattens by an ordinary close (no panic): the recovered
+        // episode must still finalize into a cooldown stop.
+        bt.positions.long[0] = Position::default();
+        bt.equities.timestamps_ms.push(180_000);
+        bt.equities.usd_total_equity.push(96.0);
+        bt.update_hard_stop_state(3).unwrap();
+
+        bt.equities.timestamps_ms.push(240_000);
+        bt.equities.usd_total_equity.push(96.0);
+        bt.update_hard_stop_state(4).unwrap();
+
+        assert!(bt.hard_stop_pside[LONG].halted);
+        assert!(!bt.hard_stop_pside[LONG].no_restart_latched);
+        assert_eq!(
+            bt.hard_stop_pside[LONG].cooldown_until_ms,
+            Some(180_000 + 300_000)
+        );
+    }
+
+    #[test]
     fn hard_stop_unified_signal_feeds_same_equity_to_both_psides() {
         let hlcvs = Array3::from_shape_vec((1, 1, 4), vec![90.0; 1 * 1 * 4]).unwrap();
         let btc_usd_prices = Array1::from_vec(vec![20_000.0]);
@@ -7407,6 +7510,122 @@ mod tests {
         bt_unified.update_hard_stop_state_pside(0, SHORT).unwrap();
         assert_eq!(bt_unified.strategy_equity_series_pside[LONG][0], 90.0);
         assert_eq!(bt_unified.strategy_equity_series_pside[SHORT][0], 90.0);
+    }
+
+    #[test]
+    fn hard_stop_coin_red_seen_episode_recovered_before_flatten_sets_cooldown() {
+        // B2.1 parity pin (coin scope): RED is seen mid-episode while the coin
+        // position is open, the sample recovers before the position flattens,
+        // and the stop must still finalize into cooldown accounting once flat.
+        let hlcvs = Array3::from_shape_vec((5, 1, 4), vec![100.0; 5 * 1 * 4]).unwrap();
+        let btc_usd_prices =
+            Array1::from_vec(vec![20_000.0, 20_000.0, 20_000.0, 20_000.0, 20_000.0]);
+
+        let mut bp_pair = BotParamsPair::default();
+        bp_pair.long.n_positions = 4;
+        bp_pair.long.total_wallet_exposure_limit = 4.0;
+        bp_pair.long.wallet_exposure_limit = 1.0;
+        bp_pair.long.ema_span_0 = 10.0;
+        bp_pair.long.ema_span_1 = 20.0;
+        bp_pair.long.hsl_enabled = true;
+        bp_pair.long.hsl_red_threshold = 0.5;
+        bp_pair.long.hsl_ema_span_minutes = 1.0;
+        bp_pair.long.hsl_tier_ratio_yellow = 0.5;
+        bp_pair.long.hsl_tier_ratio_orange = 0.75;
+        bp_pair.long.hsl_cooldown_minutes_after_red = 5.0;
+
+        let mut hs = EquityHardStopLossConfig::default();
+        hs.enabled = true;
+        hs.signal_mode = "coin".to_string();
+        hs.red_threshold = 0.5;
+        hs.ema_span_minutes = 1.0;
+        hs.cooldown_minutes_after_red = 5.0;
+
+        let backtest_params = BacktestParams {
+            starting_balance: 100.0,
+            maker_fee: 0.0,
+            taker_fee: 0.00055,
+            coins: vec!["A".to_string()],
+            active_coin_indices: None,
+            first_timestamp_ms: 0,
+            requested_start_timestamp_ms: 0,
+            first_valid_indices: vec![0],
+            last_valid_indices: vec![4],
+            warmup_minutes: vec![0],
+            trade_start_indices: vec![0],
+            global_warmup_bars: 0,
+            btc_collateral_cap: 0.0,
+            btc_collateral_ltv_cap: None,
+            metrics_only: true,
+            skip_btc_analysis: false,
+            filter_by_min_effective_cost: false,
+            dynamic_wel_by_tradability: false,
+            hedge_mode: true,
+            max_realized_loss_pct: 1.0,
+            pnls_max_lookback_days: 30.0,
+            liquidation_threshold: 0.05,
+            equity_hard_stop_loss: hs,
+            market_orders_allowed: false,
+            market_order_near_touch_threshold: 0.001,
+            market_order_slippage_pct: 0.0005,
+            forager_score_hysteresis_pct: 0.0,
+            candle_interval_minutes: 1,
+        };
+
+        let mut bt = Backtest::new(
+            hlcvs.view(),
+            btc_usd_prices.view(),
+            vec![bp_pair],
+            vec![ExchangeParams::default()],
+            &backtest_params,
+        );
+
+        bt.positions.long[0] = Position {
+            size: 1.0,
+            price: 100.0,
+        };
+        bt.balance.usd_total_balance = 100.0;
+
+        // slot budget = balance * TWEL / n_positions = 100 * 4 / 4 = 100;
+        // RED at drawdown >= 50.
+        bt.record_coin_rolling_pnl(0, 0, LONG, 0.0);
+        bt.equities.timestamps_ms.push(0);
+        bt.equities.usd_total_equity.push(100.0);
+        bt.update_hard_stop_state_coin(0, 0, LONG).unwrap();
+
+        // RED while the coin position is open: no flat confirmations.
+        bt.record_coin_rolling_pnl(1, 0, LONG, -60.0);
+        bt.equities.timestamps_ms.push(60_000);
+        bt.equities.usd_total_equity.push(100.0);
+        bt.update_hard_stop_state_coin(1, 0, LONG).unwrap();
+        assert!(!bt.hard_stop_coin[LONG][0].halted);
+        assert_eq!(bt.hard_stop_coin[LONG][0].tier, ehsl::HardStopTier::Red);
+        assert!(bt.hard_stop_coin[LONG][0].red_active_now);
+
+        // Sample recovers (pnl claws back) while still open; red_seen persists.
+        bt.record_coin_rolling_pnl(2, 0, LONG, 55.0);
+        bt.equities.timestamps_ms.push(120_000);
+        bt.equities.usd_total_equity.push(100.0);
+        bt.update_hard_stop_state_coin(2, 0, LONG).unwrap();
+        assert!(!bt.hard_stop_coin[LONG][0].halted);
+        assert!(!bt.hard_stop_coin[LONG][0].red_active_now);
+
+        // Ordinary flatten (no panic): recovered episode must still cool down.
+        bt.positions.long[0] = Position::default();
+        bt.equities.timestamps_ms.push(180_000);
+        bt.equities.usd_total_equity.push(100.0);
+        bt.update_hard_stop_state_coin(3, 0, LONG).unwrap();
+
+        bt.equities.timestamps_ms.push(240_000);
+        bt.equities.usd_total_equity.push(100.0);
+        bt.update_hard_stop_state_coin(4, 0, LONG).unwrap();
+
+        assert!(bt.hard_stop_coin[LONG][0].halted);
+        assert!(!bt.hard_stop_coin[LONG][0].no_restart_latched);
+        assert_eq!(
+            bt.hard_stop_coin[LONG][0].cooldown_until_ms,
+            Some(180_000 + 300_000)
+        );
     }
 
     #[test]

@@ -963,7 +963,7 @@ Remaining implementation details:
       Rust PnL helpers, require contiguous one-minute rows, and recompute
       `pnl_cumsum`/equity from raw minute `pnl` instead of persisting cumulative
       state.
-- [ ] Coin-HSL episode anchoring redesign, including no-restart persistence and
+- [x] Coin-HSL episode anchoring redesign, including no-restart persistence and
       cooldown rules.
       Current panic eligibility should be based on the current trading episode;
       terminal no-restart accounting remains broader.
@@ -975,6 +975,27 @@ Remaining implementation details:
       Partial: historical panic markers now require reconstructed confirmed RED
       tier/score, not raw-only drawdown. Raw RED pending remains diagnostic and
       does not reconstruct a cooldown/no-restart event by itself.
+      Partial: replay cooldown/no-restart evidence is now canonical from
+      reconstructed episodes. An episode with `red_seen_in_episode` that is
+      flattened by an ordinary (non-panic) close fill latches cooldown at the
+      flatten fill timestamp and evaluates `restart_after_red_policy` /
+      no-restart via the shared Rust predicate at that stop, mirroring the
+      confirmed-panic-marker path (source=red_episode_flatten in the
+      reconstruction logs). Backtest parity is pre-existing, provided by the
+      backtest's per-episode RED tier latch (step latch_red=true pins the
+      stop path armed after the sample recovers until the episode resets),
+      and is now pinned by Rust regression tests for both the pside and coin
+      scopes (RED seen while open, sample recovered, ordinary flatten ->
+      cooldown). Broader cross-episode no-restart peak accounting needs no
+      further live work, verified 2026-07-08: the pside/unified live replay
+      and forward finalize already maintain the persistent tracker via
+      `_equity_hard_stop_record_no_restart_stop` (max of stop peaks across
+      episodes), and for the coin scope the backtest's tracker is
+      mathematically degenerate - the synthetic per-episode equity is
+      normalized to peak 1.0 and never exceeds it, so
+      `persistent_drawdown_raw` equals the at-stop drawdown ratio, which is
+      exactly what the live coin replay and coin forward finalize evaluate.
+      With that, every sub-item of this tracker entry is implemented.
 - [ ] HSL replay performance/readiness slice.
       Persist verified non-authoritative HSL time series/checkpoints, add doctor
       tools, prioritize held scopes, keep timing/source evidence, and move dense

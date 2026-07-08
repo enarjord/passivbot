@@ -3264,6 +3264,172 @@ def test_coin_hsl_live_slot_budget_ignores_twel(total_wallet_exposure_limit):
     assert metrics["drawdown_raw"] == pytest.approx(0.5)
 
 
+def _red_episode_history(symbol, *, flatten_pnl, rows_upnl, flatten_ts=150_000):
+    """History where a coin episode enters at 60_000, draws down, and is
+    flattened by an ORDINARY close fill (no panic_flatten_events)."""
+    timeline = []
+    realized = 0.0
+    for idx, upnl in enumerate(rows_upnl):
+        ts = 60_000 * (idx + 1)
+        if flatten_ts < ts + 60_000:
+            realized = flatten_pnl
+        timeline.append(
+            {
+                "timestamp": ts,
+                "balance": 100.0,
+                "realized_pnl": realized,
+                "realized_pnl_by_coin_pside": {symbol: {"long": realized, "short": 0.0}},
+                "unrealized_pnl_by_coin_pside": {symbol: {"long": upnl, "short": 0.0}},
+            }
+        )
+    fills = [
+        {
+            "timestamp": 60_000,
+            "symbol": symbol,
+            "pside": "long",
+            "action": "increase",
+            "qty": 1.0,
+            "pnl": 0.0,
+        },
+        {
+            "timestamp": flatten_ts,
+            "symbol": symbol,
+            "pside": "long",
+            "action": "decrease",
+            "qty": 1.0,
+            "pnl": flatten_pnl,
+        },
+    ]
+    return {"timeline": timeline, "panic_flatten_events": [], "fill_events": fills}
+
+
+def _flat_position_bot(symbol):
+    bot = make_coin_bot()
+    bot.positions = {
+        symbol: {"long": {"size": 0.0, "price": 0.0}, "short": {"size": 0.0, "price": 0.0}}
+    }
+    return bot
+
+
+@pytest.mark.asyncio
+async def test_coin_hsl_replay_latches_cooldown_from_red_episode_ordinary_flatten():
+    # Episode crosses RED (drawdown 0.6 >= 0.5) and is flattened at 150_000 by an
+    # ordinary close with no panic marker: cooldown must anchor at the flatten fill.
+    symbol = "A"
+    bot = _flat_position_bot(symbol)
+    bot.get_exchange_time = lambda: 180_000
+
+    async def fake_history(current_balance=None, **kwargs):
+        return _red_episode_history(symbol, flatten_pnl=-30.0, rows_upnl=[0.0, 0.0])
+
+    bot.get_balance_equity_history = fake_history
+
+    await bot._equity_hard_stop_initialize_coin_from_history()
+
+    state = bot._hsl_coin_state("long", symbol)
+    assert state["halted"] is True
+    assert state["no_restart_latched"] is False
+    assert state["cooldown_until_ms"] == 150_000 + 300_000
+    assert state["last_stop_event"]["stop_event_timestamp_ms"] == 150_000
+    assert state["pnl_reset_timestamp_ms"] == 150_001
+    assert bot._runtime_forced_modes["long"][symbol] == "graceful_stop"
+
+
+@pytest.mark.asyncio
+async def test_coin_hsl_replay_latches_no_restart_from_red_episode_ordinary_flatten():
+    # Same shape but the episode drawdown (1.6) breaches the no-restart threshold
+    # (0.9) under policy=threshold: terminal halt, no cooldown.
+    symbol = "A"
+    bot = _flat_position_bot(symbol)
+    bot.get_exchange_time = lambda: 180_000
+
+    async def fake_history(current_balance=None, **kwargs):
+        return _red_episode_history(symbol, flatten_pnl=-80.0, rows_upnl=[0.0, 0.0])
+
+    bot.get_balance_equity_history = fake_history
+
+    await bot._equity_hard_stop_initialize_coin_from_history()
+
+    state = bot._hsl_coin_state("long", symbol)
+    assert state["halted"] is True
+    assert state["no_restart_latched"] is True
+    assert state["cooldown_until_ms"] is None
+    assert bot._runtime_forced_modes["long"][symbol] == "graceful_stop"
+
+
+@pytest.mark.asyncio
+async def test_coin_hsl_replay_never_policy_latches_no_restart_on_red_episode():
+    symbol = "A"
+    bot = _flat_position_bot(symbol)
+    bot.hsl["long"]["restart_after_red_policy"] = "never"
+    bot.get_exchange_time = lambda: 180_000
+
+    async def fake_history(current_balance=None, **kwargs):
+        return _red_episode_history(symbol, flatten_pnl=-30.0, rows_upnl=[0.0, 0.0])
+
+    bot.get_balance_equity_history = fake_history
+
+    await bot._equity_hard_stop_initialize_coin_from_history()
+
+    state = bot._hsl_coin_state("long", symbol)
+    assert state["halted"] is True
+    assert state["no_restart_latched"] is True
+    assert state["cooldown_until_ms"] is None
+
+
+@pytest.mark.asyncio
+async def test_coin_hsl_replay_red_recovered_before_ordinary_flatten_still_cools_down():
+    # RED is seen mid-episode (row 120_000, drawdown 0.6) but the current sample
+    # has recovered by the flatten row: red_seen_in_episode still activates
+    # cooldown, and no-restart is evaluated on at-flatten drawdown (small), so
+    # the halt is a cooldown, not terminal.
+    symbol = "A"
+    bot = _flat_position_bot(symbol)
+    bot.get_exchange_time = lambda: 300_000
+
+    async def fake_history(current_balance=None, **kwargs):
+        return _red_episode_history(
+            symbol,
+            flatten_pnl=-1.0,
+            rows_upnl=[0.0, -30.0, -1.0, 0.0],
+            flatten_ts=210_000,
+        )
+
+    bot.get_balance_equity_history = fake_history
+
+    await bot._equity_hard_stop_initialize_coin_from_history()
+
+    state = bot._hsl_coin_state("long", symbol)
+    assert state["halted"] is True
+    assert state["no_restart_latched"] is False
+    assert state["cooldown_until_ms"] == 210_000 + 300_000
+    assert state["last_stop_event"]["stop_event_timestamp_ms"] == 210_000
+    assert bot._runtime_forced_modes["long"][symbol] == "graceful_stop"
+
+
+@pytest.mark.asyncio
+async def test_coin_hsl_replay_red_free_ordinary_flatten_resets_without_stop():
+    # Control: an episode that never saw RED and flattens ordinarily keeps the
+    # existing plain episode reset with no cooldown/no-restart accounting.
+    symbol = "A"
+    bot = _flat_position_bot(symbol)
+    bot.get_exchange_time = lambda: 180_000
+
+    async def fake_history(current_balance=None, **kwargs):
+        return _red_episode_history(symbol, flatten_pnl=-1.0, rows_upnl=[0.0, 0.0])
+
+    bot.get_balance_equity_history = fake_history
+
+    await bot._equity_hard_stop_initialize_coin_from_history()
+
+    state = bot._hsl_coin_state("long", symbol)
+    assert state["halted"] is False
+    assert state["no_restart_latched"] is False
+    assert state["cooldown_until_ms"] is None
+    assert state["last_stop_event"] is None
+    assert symbol not in bot._runtime_forced_modes["long"]
+
+
 @pytest.mark.asyncio
 async def test_coin_hsl_history_replay_does_not_latch_recovered_red_without_panic_marker():
     bot = make_coin_bot()
@@ -4086,9 +4252,12 @@ async def test_coin_hsl_history_replay_allows_flat_realized_only_rows():
 
 @pytest.mark.asyncio
 async def test_coin_hsl_history_replay_resets_current_episode_after_nonpanic_flatten():
+    # The episode stays below RED (drawdown 0.6 < 0.7): an ordinary flatten is a
+    # plain episode reset. RED-crossing episodes now latch cooldown/no-restart
+    # instead (see test_coin_hsl_replay_latches_cooldown_from_red_episode_*).
     bot = make_coin_bot()
     symbol = "A"
-    bot.hsl["long"]["red_threshold"] = 0.2
+    bot.hsl["long"]["red_threshold"] = 0.7
     bot.positions = {
         symbol: {"long": {"size": 1.0, "price": 100.0}, "short": {"size": 0.0}}
     }

@@ -4,6 +4,20 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Live coin-HSL startup replay now derives cooldown and no-restart evidence
+  from canonical reconstructed RED episodes, not only from bot-emitted panic
+  order markers. An episode that crossed RED and was flattened by an ordinary
+  (non-panic) close fill - including a manual close - now latches its
+  cooldown anchored at the scope-flattening fill timestamp and evaluates the
+  no-restart policy at that stop, exactly like a confirmed panic marker.
+  Previously such episodes were silently reset with no stop accounting, so a
+  restart during an active cooldown (or after a terminal-drawdown episode)
+  would resume trading. RED-free ordinary flattenings keep the plain episode
+  reset. The Rust backtest already finalizes cooldown/no-restart for such
+  episodes (its per-episode tier latch keeps the stop path armed after the
+  sample recovers); new Rust regression tests pin that parity for both the
+  pside and coin scopes.
+
 - Repaired three stale Rust hard_stop unit tests that pinned pre-B2.1/A2.2
   mode-override behavior and were never run by CI: ORANGE tp-only now forces
   flat sides too (A2.2), and RED only authorizes panic while the current
