@@ -1575,6 +1575,100 @@ async def test_balance_equity_history_paces_replay_candle_fetches(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_balance_equity_history_first_minute_realized_pnl_attributes_pside(
+    monkeypatch,
+):
+    # Codex P1 regression on schema v5: with lookback "all" the record window
+    # starts at the first minute; a realized fill inside that minute must land
+    # in pnl_long/pnl_short exactly like in pnl (the per-pside baseline must be
+    # seeded alongside the balance baseline, pre-fill).
+    bot = Passivbot.__new__(Passivbot)
+    bot.config = {"live": {}}
+    bot.exchange = "kucoin"
+    bot.user = "test_user"
+    bot.init_pnls = AsyncMock()
+    bot.live_value = lambda key: "all" if key == "pnls_max_lookback_days" else None
+    base_ts = 1_800_000_000_000
+    ts_now = base_ts + 120_000
+    bot.get_exchange_time = lambda: ts_now
+    bot.get_raw_balance = lambda: 101.0
+    bot.get_symbol_id_inv = lambda symbol: symbol
+    symbol = "BTC/USDT:USDT"
+    bot.positions = {
+        symbol: {
+            "long": {"size": 0.5, "price": 100.0},
+            "short": {"size": 0.0, "price": 0.0},
+        }
+    }
+    bot._pnls_manager = None
+    bot.inverse = False
+    bot._candle_fetch_concurrency = lambda *, context="runtime": 2
+    bot._get_fetch_delay_seconds = lambda: 0.0
+    bot._live_event_pipeline = LiveEventPipeline(
+        structured_sinks=[ListEventSink()],
+        monitor_sinks=[],
+    )
+    bot._live_event_current_cycle_id = "cy_hsl_first_minute_pnl"
+    bot._emit_live_event = Passivbot._emit_live_event.__get__(bot, Passivbot)
+    bot.c_mults = {symbol: 1.0}
+    monkeypatch.setattr(
+        passivbot_module, "compute_psize_pprice", lambda *args, **kwargs: None
+    )
+
+    class _CM:
+        async def get_candles(self, sym, **kwargs):
+            return np.array(
+                [
+                    (base_ts, 99.0, 101.0, 98.0, 100.0, 1.0),
+                    (base_ts + 60_000, 100.0, 102.0, 99.0, 101.0, 1.0),
+                    (base_ts + 120_000, 101.0, 103.0, 100.0, 102.0, 1.0),
+                ],
+                dtype=passivbot_module.CANDLE_DTYPE,
+            )
+
+    bot.cm = _CM()
+    fill_events = [
+        {
+            "timestamp": base_ts,
+            "symbol": symbol,
+            "position_side": "long",
+            "side": "buy",
+            "qty": 1.0,
+            "price": 100.0,
+            "pnl": 0.0,
+        },
+        {
+            # Realized close inside the FIRST minute of the record window.
+            "timestamp": base_ts + 1_000,
+            "symbol": symbol,
+            "position_side": "long",
+            "side": "sell",
+            "qty": 0.5,
+            "price": 102.0,
+            "pnl": 1.0,
+        },
+    ]
+
+    history = await bot.get_balance_equity_history(
+        fill_events=fill_events,
+        current_balance=101.0,
+        hsl_replay_signal_mode="unified",
+    )
+
+    account_rows = history["hsl_replay_account_series"]
+    assert account_rows, "account series must be collected"
+    first = account_rows[0]
+    assert first["pnl"] == pytest.approx(1.0)
+    assert first["pnl_long"] == pytest.approx(1.0)
+    assert first["pnl_short"] == 0.0
+    for row in account_rows[1:]:
+        assert row["pnl"] == 0.0
+        assert row["pnl_long"] == 0.0
+        assert row["pnl_short"] == 0.0
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
+
+
+@pytest.mark.asyncio
 async def test_balance_equity_history_builds_replay_matrices_for_held_pairs(monkeypatch):
     bot = Passivbot.__new__(Passivbot)
     bot.config = {"live": {}}
@@ -1670,6 +1764,11 @@ async def test_balance_equity_history_builds_replay_matrices_for_held_pairs(monk
     # other recorded minute has zero account-level realized pnl.
     assert [row["pnl"] for row in account_rows[-3:]] == [0.0, 0.5, 0.0]
     assert sum(row["pnl"] for row in account_rows) == pytest.approx(0.5)
+    # Schema v5: per-minute per-pside realized deltas. The fixture's only
+    # realized event is the long partial close (+0.5).
+    assert [row["pnl_long"] for row in account_rows[-3:]] == [0.0, 0.5, 0.0]
+    assert all(row["pnl_short"] == 0.0 for row in account_rows)
+    assert sum(row["pnl_long"] for row in account_rows) == pytest.approx(0.5)
 
     coverage = history["hsl_replay_matrix_coverage"]
     assert coverage["candle_covered_start_ms"] <= base_ts

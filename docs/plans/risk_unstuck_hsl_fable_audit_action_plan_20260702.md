@@ -1067,6 +1067,15 @@ Remaining implementation details:
       cooldown/no-restart evidence. Markers are validated fail-loud (grid
       alignment, series-span bounds, ascending order, account-kind only) and
       tamper-checked (missing/invalid/wrong-kind reasons).
+      Partial: cache schema v5 extends the account series with per-minute
+      per-pside realized deltas (`pnl_long`/`pnl_short`), collected from the
+      authoritative per-pside running totals and reproduced by the
+      watermark-extension helper with strict fill-pside attribution
+      (missing pside rejects the cache). Needed because the future
+      pside/unified timeline synthesis must reconstruct
+      `realized_pnl_long/short`, which held-pair matrices alone cannot
+      provide. v4 caches are invalidated by the schema bump and rebuilt on
+      the next full replay.
       Partial: pside/unified startup replay now persists the same write-only
       cache as coin mode after a successful replay (held-pair matrices plus
       the account series; matrix collection in get_balance_equity_history is

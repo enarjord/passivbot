@@ -33,11 +33,11 @@ from utils import make_get_filepath
 _HSL_RISKS_DOC = "docs/equity_hard_stop_loss_risks.md"
 _HSL_REPLAY_MATRIX_INTERVAL_MS = 60_000
 _HSL_REPLAY_MATRIX_RAW_FIELDS = ("ts", "price", "psize", "pprice", "pnl", "upnl")
-_HSL_REPLAY_ACCOUNT_SERIES_FIELDS = ("ts", "pnl")
+_HSL_REPLAY_ACCOUNT_SERIES_FIELDS = ("ts", "pnl", "pnl_long", "pnl_short")
 _HSL_REPLAY_CACHE_SERIES_KINDS = ("pair_matrix", "account_pnl")
 _HSL_REPLAY_CACHE_ACCOUNT_PSIDE = "account"
 _HSL_REPLAY_CACHE_ACCOUNT_SYMBOL = "__account__"
-_HSL_REPLAY_CACHE_SCHEMA_VERSION = 4
+_HSL_REPLAY_CACHE_SCHEMA_VERSION = 5
 _HSL_REPLAY_CACHE_MATRIX_FILENAME = "hsl_replay_matrix.npz"
 _HSL_REPLAY_CACHE_MANIFEST_FILENAME = "hsl_replay_manifest.json"
 _HSL_REPLAY_CACHE_REQUIRED_METADATA = (
@@ -462,12 +462,24 @@ def _hsl_replay_matrix_row(
     }
 
 
-def _hsl_replay_account_series_row(*, ts: int, pnl: float) -> dict[str, float | int]:
-    """Build one non-authoritative account-level realized-PnL row."""
+def _hsl_replay_account_series_row(
+    *, ts: int, pnl: float, pnl_long: float, pnl_short: float
+) -> dict[str, float | int]:
+    """Build one non-authoritative account-level realized-PnL row.
+
+    `pnl` is the per-minute account-level delta (balance accounting, fees
+    included); `pnl_long`/`pnl_short` are the per-minute per-pside realized
+    deltas needed by the future pside/unified timeline synthesis.
+    """
     ts_int = int(ts)
     if ts_int < 0:
         raise ValueError(f"HSL account series ts must be >= 0, got {ts_int}")
-    return {"ts": ts_int, "pnl": _finite_hsl_float(pnl, "pnl")}
+    return {
+        "ts": ts_int,
+        "pnl": _finite_hsl_float(pnl, "pnl"),
+        "pnl_long": _finite_hsl_float(pnl_long, "pnl_long"),
+        "pnl_short": _finite_hsl_float(pnl_short, "pnl_short"),
+    }
 
 
 def _hsl_replay_account_series_arrays(rows: list[dict[str, Any]]) -> dict[str, Any]:
@@ -486,11 +498,19 @@ def _hsl_replay_account_series_arrays(rows: list[dict[str, Any]]) -> dict[str, A
                 "HSL account series rows must be contiguous 1m samples; "
                 f"got previous_ts={prev_ts} ts={ts}"
             )
-        _finite_hsl_float(row["pnl"], "pnl")
+        for field in _HSL_REPLAY_ACCOUNT_SERIES_FIELDS:
+            if field != "ts":
+                _finite_hsl_float(row[field], field)
         prev_ts = ts
     return {
         "ts": np.asarray([int(row["ts"]) for row in rows], dtype=np.int64),
         "pnl": np.asarray([float(row["pnl"]) for row in rows], dtype=np.float64),
+        "pnl_long": np.asarray(
+            [float(row["pnl_long"]) for row in rows], dtype=np.float64
+        ),
+        "pnl_short": np.asarray(
+            [float(row["pnl_short"]) for row in rows], dtype=np.float64
+        ),
     }
 
 
@@ -904,13 +924,32 @@ def _hsl_replay_extend_account_rows(
     for minute in minutes:
         boundary = minute + _HSL_REPLAY_MATRIX_INTERVAL_MS
         minute_pnl = 0.0
+        minute_pnl_pside = {"long": 0.0, "short": 0.0}
         while fill_idx < len(ordered) and int(ordered[fill_idx]["timestamp"]) < boundary:
             fill = ordered[fill_idx]
-            minute_pnl += _finite_hsl_float(fill["pnl"], "pnl") + _finite_hsl_float(
+            fill_pnl = _finite_hsl_float(fill["pnl"], "pnl") + _finite_hsl_float(
                 fill.get("fee", 0.0), "fee"
             )
+            minute_pnl += fill_pnl
+            # Strict pside attribution: the permissive accessor's default of
+            # "long" would silently corrupt per-pside evidence here.
+            raw_pside = fill.get("position_side", fill.get("pside"))
+            pside = str(raw_pside).lower() if raw_pside is not None else None
+            if pside not in minute_pnl_pside:
+                raise ValueError(
+                    "HSL account series extension fill has no usable position "
+                    f"side (ts={fill['timestamp']}); the cache must be rejected"
+                )
+            minute_pnl_pside[pside] += fill_pnl
             fill_idx += 1
-        new_rows.append(_hsl_replay_account_series_row(ts=int(minute), pnl=minute_pnl))
+        new_rows.append(
+            _hsl_replay_account_series_row(
+                ts=int(minute),
+                pnl=minute_pnl,
+                pnl_long=minute_pnl_pside["long"],
+                pnl_short=minute_pnl_pside["short"],
+            )
+        )
     return new_rows
 
 
