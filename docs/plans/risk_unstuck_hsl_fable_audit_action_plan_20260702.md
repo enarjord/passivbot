@@ -953,10 +953,24 @@ Remaining implementation details:
 - [x] `live.hsl_signal_mode` runtime/default alignment.
       Runtime paths should require normalized `live.hsl_signal_mode`, while
       raw-config diagnostics should report the schema default `coin`.
-- [ ] Canonical HSL equity-history signal design.
+- [x] Canonical HSL equity-history signal design.
       Align coin, pside, and unified around one raw per-minute `pnl + upnl`
       data-store model, keep scoped modes on base slot-budget-style
       normalization, and add sample-parity tests before changing semantics.
+      Closure assessment (2026-07-08): all three goals are realized, with
+      the originally sketched five named dataframes superseded by the
+      cache-primitive store. One raw per-minute model now feeds every mode:
+      the authoritative `get_balance_equity_history` builds a single
+      timeline from one fill/candle replay regardless of signal mode, and
+      the persisted store is one primitive set (pair matrices
+      `ts/price/psize/pprice/pnl/upnl` plus the v5 account series
+      `ts/pnl/pnl_long/pnl_short`) from which coin AND pside/unified
+      timelines are synthesized. Scoped modes keep base slot-budget
+      normalization (resolved decision, pinned by tests). Sample-parity
+      tests exist at every trust boundary: coin synthesis row parity,
+      pside/unified field-for-field and initializer state parity, and
+      slice-and-extend 1e-12 parity for cached arrays. No semantics were
+      changed without a parity pin, which was the item's core demand.
       Partial: live HSL now has pure replay-matrix helpers that build
       non-authoritative raw rows (`ts`, `price`, `psize`, `pprice`, `pnl`,
       `upnl`) from authoritative candle/fill inputs, derive UPnL through the
