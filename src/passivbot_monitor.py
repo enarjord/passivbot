@@ -717,7 +717,9 @@ async def _build_monitor_forager_section(self) -> dict[str, dict]:
 
 def _build_monitor_unstuck_section(self) -> dict[str, Any]:
     has_open = bool(self.has_open_unstuck_order())
-    allowances_live = self._calc_unstuck_allowances_live(allow_new_unstuck=not has_open)
+    # Allowances are pure budget facts and stay real while an unstuck order
+    # is open; has_open is reported alongside so the monitor shows both.
+    allowances_live = self._calc_unstuck_allowances_live()
     out: dict[str, Any] = {
         "has_open_order": has_open,
         "open_orders": [],
