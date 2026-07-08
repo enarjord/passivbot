@@ -4,6 +4,14 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Plan tracker: closed the HSL replay performance/readiness item. All
+  sub-items are implemented (persisted npz+manifest checkpoints with
+  watermark extension for all three signal modes, fail-closed reuse gates,
+  doctor coverage, phased timing evidence); dense per-minute replay
+  stepping remains Python->PyO3 by explicit choice, amortized to
+  first-boot-only by cache reuse, with batch vectorization noted as
+  optional future work contingent on production startup timings.
+
 - HSL pside/unified startup replay now attempts cache reuse before the full
   history fetch, completing the replay-cache arc for all signal modes. The
   gate shares the coin-mode core (fresh fill-coverage proof, strict
