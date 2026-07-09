@@ -2204,6 +2204,136 @@ def test_live_smoke_report_summarizes_event_pipeline_health(tmp_path):
     }
 
 
+def test_live_smoke_report_summarizes_resource_pressure(tmp_path):
+    okx_events = tmp_path / "monitor" / "okx" / "okx_01" / "events"
+    gateio_events = tmp_path / "monitor" / "gateio" / "gateio_01" / "events"
+    _write_ndjson(
+        okx_events / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="health.summary",
+                exchange="okx",
+                user="okx_01",
+                seq=1,
+                ts=1000,
+                level="debug",
+                reason_code="periodic_health_summary",
+                ids={"cycle_id": "okx_old"},
+                data={
+                    "cpu_percent": 5.5,
+                    "memory_percent": 10.25,
+                    "rss_bytes": 1000,
+                    "open_fds": 11,
+                    "loadavg_1m": 0.25,
+                },
+            ),
+            _monitor_row(
+                event_type="health.summary",
+                exchange="okx",
+                user="okx_01",
+                seq=2,
+                ts=2000,
+                level="debug",
+                reason_code="periodic_health_summary",
+                ids={"cycle_id": "okx_latest"},
+                data={
+                    "cpu_percent": 12.25,
+                    "memory_percent": 11.5,
+                    "rss_bytes": 1500,
+                    "open_fds": 13,
+                    "loadavg_1m": 0.75,
+                    "loadavg_5m": 0.5,
+                    "loadavg_15m": 0.4,
+                },
+            ),
+            _monitor_row(
+                event_type="health.summary",
+                exchange="okx",
+                user="okx_01",
+                seq=3,
+                ts=3000,
+                level="debug",
+                reason_code="periodic_health_summary",
+                ids={"cycle_id": "okx_ignored"},
+                data={"event_queue_depth": 1},
+            ),
+        ],
+    )
+    _write_ndjson(
+        gateio_events / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="health.summary",
+                exchange="gateio",
+                user="gateio_01",
+                seq=4,
+                ts=1500,
+                level="debug",
+                reason_code="periodic_health_summary",
+                ids={"cycle_id": "gateio_latest"},
+                data={
+                    "memory_percent": 7.5,
+                    "rss_bytes": 2000,
+                    "open_fds": 9,
+                    "loadavg_1m": 0.5,
+                },
+            )
+        ],
+    )
+
+    report = build_live_smoke_report(tmp_path / "monitor", logs_root=None)
+    summary = summarize_live_smoke_report(report, max_groups=1)
+    brief = summarize_live_smoke_report_brief(report)
+    section = project_live_smoke_report_sections(report, ["resources"])
+
+    resource = report["resource_pressure"]
+    assert resource["total"] == 3
+    assert resource["bots"] == 2
+    assert resource["event_types"] == {"health.summary": 3}
+    assert resource["latest_cpu_percent_max"] == 12.25
+    assert resource["latest_cpu_reporting_bots"] == 1
+    assert resource["latest_memory_percent_max"] == 11.5
+    assert resource["latest_memory_reporting_bots"] == 2
+    assert resource["latest_rss_bytes_total"] == 3500
+    assert resource["latest_rss_reporting_bots"] == 2
+    assert resource["latest_open_fds_total"] == 22
+    assert resource["latest_open_fds_reporting_bots"] == 2
+    assert resource["latest_loadavg_1m_max"] == 0.75
+    assert [group["bot"] for group in resource["groups"]] == [
+        "okx/okx_01",
+        "gateio/gateio_01",
+    ]
+    assert resource["groups"][0]["latest_ids"] == {"cycle_id": "okx_latest"}
+    assert resource["groups"][0]["latest_values"] == {
+        "cpu_percent": 12.25,
+        "memory_percent": 11.5,
+        "rss_bytes": 1500,
+        "open_fds": 13,
+        "loadavg_1m": 0.75,
+        "loadavg_5m": 0.5,
+        "loadavg_15m": 0.4,
+    }
+    assert summary["resource_pressure"]["total"] == 3
+    assert summary["resource_pressure"]["groups_truncated"] is True
+    assert summary["resource_pressure"]["groups"][0]["bot"] == "okx/okx_01"
+    assert brief["resource_pressure"] == {
+        "total": 3,
+        "bots": 2,
+        "latest_cpu_percent_max": 12.25,
+        "latest_cpu_reporting_bots": 1,
+        "latest_memory_percent_max": 11.5,
+        "latest_memory_reporting_bots": 2,
+        "latest_rss_bytes_total": 3500,
+        "latest_rss_reporting_bots": 2,
+        "latest_open_fds_total": 22,
+        "latest_open_fds_reporting_bots": 2,
+        "latest_loadavg_1m_max": 0.75,
+        "event_types": {"health.summary": 3},
+    }
+    assert "resource_pressure" in section
+    assert "resource_pressure" in available_live_smoke_report_sections(report)
+
+
 def test_live_smoke_report_event_pipeline_health_aggregates_multi_bot_queue_overflow(tmp_path):
     okx_events = tmp_path / "monitor" / "okx" / "okx_01" / "events"
     gateio_events = tmp_path / "monitor" / "gateio" / "gateio_01" / "events"
