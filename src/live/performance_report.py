@@ -2694,13 +2694,22 @@ class _ResourcePressureAccumulator:
             ),
         )
         limit = max(0, int(group_limit))
-        return {
+        age_values = [
+            int(group["latest_event_age_ms"])
+            for group in groups
+            if group.get("latest_event_age_ms") is not None
+        ]
+        out = {
             "total": sum(int(group.get("count") or 0) for group in groups),
             "bots": len(groups),
             "event_types": dict(self.event_types.most_common()),
             "groups_truncated": len(groups) > limit,
             "groups": groups[:limit],
         }
+        if age_values:
+            out["latest_event_age_ms_max"] = max(age_values)
+        out["latest_event_age_reporting_bots"] = len(age_values)
+        return out
 
 
 class _ShutdownLatencyAccumulator:

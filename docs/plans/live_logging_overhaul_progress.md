@@ -19,18 +19,18 @@ Last updated: 2026-07-09.
 
 Current `origin/v8` head:
 
-- `141e88db` after PR #1154, `Add resource pressure sample age reporting`.
+- `4ac5b309` after PR #1156, `Add smoke resource pressure sample age`.
 
 Current logging-overhaul head:
 
-- `141e88db` after PR #1154, `Add resource pressure sample age reporting`.
+- `4ac5b309` after PR #1156, `Add smoke resource pressure sample age`.
 
 Current work:
 
-- Branch `codex/v8-smoke-resource-pressure-age` adds read-only
-  `latest_event_age_ms` freshness metadata to `live-smoke-report`
-  `resource_pressure` groups and brief output. It uses existing
-  `health.summary` event timestamps only and does not add event producers,
+- Branch `codex/v8-resource-pressure-age-aggregate` adds read-only aggregate
+  `latest_event_age_ms_max` and reporting-bot count fields to
+  `live-performance-report` `resource_pressure`, derived from existing
+  per-bot `health.summary` event timestamps. It does not add event producers,
   exchange calls, order/risk logic, restart orchestration, or trading behavior.
 
 Current review gate:
@@ -61,6 +61,24 @@ Retuned goal boundary:
 
 VPS5 deployment status:
 
+- Repository pulled through PR #1156 at `4ac5b309`.
+- PR #1156 added the read-only smoke-report counterpart for resource-pressure
+  sample age, exposing per-group `latest_event_age_ms`, aggregate
+  `latest_event_age_ms_max`, and reporting-bot count from existing
+  `health.summary` event timestamps. It merged after Hermes approved, Claude
+  Opus 4.8 green-lighted the current head, Grok 4.5 re-approved the rebased
+  head, Codex reviewer posted green, and CI was green. VPS5 was pulled with
+  `git pull --autostash --ff-only origin v8`, preserving the pre-existing
+  tracked Rust-format/local config state. No bot restart was performed because
+  the slice was read-only report projection plus docs. A bounded 2-minute
+  summary smoke reported `ok=true`, `hard_failures=0`, `matched_expected=5`,
+  `missing_expected_count=0`, `remote_calls.failed=0`,
+  `account_critical_remote_calls.failed=0`, `logs.hard_matches=0`, and
+  repository head `4ac5b309`. The 2-minute brief resource-pressure window had
+  no health-summary samples, so `latest_event_age_ms_max=null` and
+  `latest_event_age_reporting_bots=0`; a focused 30-minute `resources` section
+  confirmed four reporting bots with `latest_event_age_ms_max=789479` and a
+  sample group age of `583466`.
 - Repository pulled through PR #1154 at `141e88db`.
 - PR #1154 added read-only `latest_event_age_ms` freshness metadata to
   `live-performance-report` `resource_pressure` groups. It merged after Hermes
@@ -6998,6 +7016,31 @@ VPS5 deployment status:
   latest `health.summary` event timestamp. Keep existing field statistics,
   event parsing, monitor writes, console output, smoke-report output, exchange
   calls, restart behavior, order/risk logic, and trading behavior unchanged.
+- Expected validation: focused resource-pressure performance-report tests, full
+  `tests/test_live_performance_report.py`, `py_compile`, `git diff --check`,
+  and the standard added-line silent-handling scan.
+- Result: PR #1154 was reviewed by Hermes, Claude Opus 4.8, Grok 4.5, and
+  Codex on current head, merged to `v8` as `141e88db`, and deployed to VPS5
+  without restarting bots because the slice was read-only report projection.
+  A bounded smoke reported process/repository health green, and a focused
+  30-minute `live-performance-report --section resource_pressure` check proved
+  one Hyperliquid group with `latest_event_age_ms=624447`.
+
+### Draft Slice: Resource Pressure Sample Age Aggregate
+
+- Branch: `codex/v8-resource-pressure-age-aggregate`.
+- Scope: read-only performance-report projection over existing
+  `health.summary` resource-pressure events.
+- Triggering evidence: PR #1154 made per-bot sample age visible in
+  `live-performance-report`, but operators still need a compact top-level
+  maximum age and reporting-bot count to compare the freshness of the whole
+  resource-pressure section without scanning all groups.
+- Intended result: add aggregate `latest_event_age_ms_max` and
+  `latest_event_age_reporting_bots` fields to `live-performance-report`
+  `resource_pressure`, derived from existing per-group ages. Keep existing
+  field statistics, event parsing, monitor writes, console output, smoke-report
+  output, exchange calls, restart behavior, order/risk logic, and trading
+  behavior unchanged.
 - Expected validation: focused resource-pressure performance-report tests, full
   `tests/test_live_performance_report.py`, `py_compile`, `git diff --check`,
   and the standard added-line silent-handling scan.
