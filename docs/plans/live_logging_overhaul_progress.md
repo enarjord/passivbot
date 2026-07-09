@@ -19,19 +19,18 @@ Last updated: 2026-07-09.
 
 Current `origin/v8` head:
 
-- `1a624989` after PR #1151, `Add health summary scheduling lag telemetry`.
+- `80ea2ea2` after PR #1152, `Add system memory health telemetry`.
 
 Current logging-overhaul head:
 
-- `1a624989` after PR #1151, `Add health summary scheduling lag telemetry`.
+- `80ea2ea2` after PR #1152, `Add system memory health telemetry`.
 
 Current work:
 
-- Branch `codex/v8-health-system-memory` adds optional psutil-backed system
-  memory and swap pressure fields to the existing `health.summary`
-  resource-pressure path and projects them through smoke/performance reports.
-  It does not add exchange calls, order/risk logic, restart orchestration, or
-  trading behavior.
+- Branch `codex/v8-resource-pressure-null-min` keeps no-data
+  `live-smoke-report --brief` resource-pressure minimum fields as null/absent
+  instead of coercing them to zero. It does not add event producers, exchange
+  calls, order/risk logic, restart orchestration, or trading behavior.
 
 Current review gate:
 
@@ -61,6 +60,25 @@ Retuned goal boundary:
 
 VPS5 deployment status:
 
+- Repository pulled through PR #1152 at `80ea2ea2`.
+- PR #1152 added optional psutil-backed system memory and swap pressure fields
+  to existing `health.summary` events and projected them through
+  smoke/performance `resource_pressure` output. It merged after Claude Opus 4.8
+  green-lighted the current head, Hermes approved, Cursor/Grok approved, and CI
+  was green. VPS5 was pulled with `git pull --autostash --ff-only origin v8`
+  to preserve the pre-existing tracked Rust-format/local config state, then
+  bots were restarted from `/root/bots_vps5.yaml` because the slice changed the
+  live health-summary producer. All five old bot processes required exact
+  live-process SIGTERM after two Ctrl-C grace windows; `tmuxp load -d
+  /root/bots_vps5.yaml` started all five configured bots. Immediate 2-minute
+  smoke reported `ok=true`, `hard_failures=0`, `matched_expected=5`,
+  `remote_calls.failed=0`, `account_critical_remote_calls.failed=0`,
+  `fill_refresh.failed=0`, `logs.hard_matches=0`, and repository head
+  `80ea2ea2`. A focused 5-minute `resource_pressure` smoke also reported
+  `ok=true`, `hard_failures=0`, one `health.summary` event, and live projected
+  host pressure fields: `latest_system_memory_percent_max=96.4`,
+  `latest_system_memory_available_bytes_min=35811328`, and
+  `latest_swap_percent_max=49`.
 - Repository pulled through PR #1151 at `1a624989`.
 - PR #1151 added bounded health-summary scheduling lag telemetry to existing
   `health.summary` events and projected it through smoke/performance
