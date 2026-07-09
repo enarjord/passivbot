@@ -1272,13 +1272,17 @@ def _make_order(
 
 
 @pytest.mark.asyncio
-async def test_existing_unstuck_blocks_new(monkeypatch):
+async def test_existing_unstuck_order_does_not_block_rust_emission(monkeypatch):
     cfg = _dummy_config()
     bot = _make_dummy_bot(cfg)
     symbol = _set_basic_state(bot)
     import passivbot_rust as pbr
 
-    # Pretend an unstuck order is already live on the exchange
+    bot._pnls_manager = _DummyPnlsManager([_DummyFillEvent(symbol, "long", 120_000)])
+    monkeypatch.setattr(bot, "_pnls_lookback_start_ms", lambda: None)
+    monkeypatch.setattr(bot, "_assert_pnl_history_safe_for_risk", lambda *a, **k: None)
+
+    # Pretend an unstuck order is already live on the exchange.
     bot.open_orders[symbol] = [
         {
             "symbol": symbol,
@@ -1287,9 +1291,12 @@ async def test_existing_unstuck_blocks_new(monkeypatch):
             "qty": 0.1,
             "price": 100.0,
             "reduce_only": True,
-            "custom_id": "0x1234existing",
+            "custom_id": bot.format_custom_id_single(
+                pbr.get_order_id_type_from_string("close_unstuck_long")
+            ),
         }
     ]
+    assert bot.has_open_unstuck_order() is True
 
     bot.markets_dict = {symbol: _active_market()}
     bot.effective_min_cost = {symbol: 1.0}
@@ -1332,7 +1339,7 @@ async def test_existing_unstuck_blocks_new(monkeypatch):
     await bot.calc_ideal_orders_orchestrator()
 
     payload = json.loads(captured["input"])
-    assert payload["global"]["auto_unstuck_allowed"] is False
+    assert payload["global"]["auto_unstuck_allowed"] is True
     # Allowance values are no longer passed: Rust derives the unstuck
     # allowance internally from the realized-pnl cumsum facts.
     assert "unstuck_allowance_long" not in payload["global"]

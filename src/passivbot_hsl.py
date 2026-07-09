@@ -59,6 +59,30 @@ _HSL_REPLAY_CACHE_REQUIRED_METADATA = (
 _HSL_REPLAY_CACHE_FILL_HISTORY_SCOPES = ("unknown", "window", "all")
 
 
+def _hsl_flat_epsilon(qty_step: Any = 0.0) -> float:
+    try:
+        step = abs(float(qty_step or 0.0))
+    except (TypeError, ValueError):
+        step = 0.0
+    if not math.isfinite(step):
+        step = 0.0
+    return max(1e-12, step * 0.5)
+
+
+def _hsl_qty_step_for_symbol(self: Any, symbol: Any) -> float:
+    qty_steps = getattr(self, "qty_steps", None)
+    if not isinstance(qty_steps, dict):
+        return 0.0
+    try:
+        value = qty_steps.get(symbol)
+        if value is None:
+            value = qty_steps.get(str(symbol))
+        step = abs(float(value or 0.0))
+    except (TypeError, ValueError):
+        return 0.0
+    return step if math.isfinite(step) else 0.0
+
+
 def _hsl_replay_cache_safe_fragment(value: Any) -> str:
     raw = str(value).strip()
     out = []
@@ -736,6 +760,7 @@ def _hsl_replay_pside_timeline_rows_from_cache(
     account_arrays: dict[str, Any],
     *,
     current_balance: float,
+    qty_step_by_pair: dict[tuple[str, str], float] | None = None,
 ) -> list[dict[str, Any]]:
     """Synthesize pside/unified-replay timeline rows from persisted cache arrays.
 
@@ -860,7 +885,10 @@ def _hsl_replay_pside_timeline_rows_from_cache(
         pair_psize = np.asarray(arrays["psize"], dtype=np.float64)
         span = slice(offset, offset + len(pair_ts))
         upnl_by_minute[pside][span] += pair_upnl
-        nonflat_by_minute[pside][span] |= np.abs(pair_psize) > 1e-12
+        flat_epsilon = _hsl_flat_epsilon(
+            (qty_step_by_pair or {}).get((pside, symbol), 0.0)
+        )
+        nonflat_by_minute[pside][span] |= np.abs(pair_psize) > flat_epsilon
     rows: list[dict[str, Any]] = []
     for idx in range(n_rows):
         flat_long = not bool(nonflat_by_minute["long"][idx])
@@ -949,6 +977,7 @@ def _hsl_replay_extend_pair_rows(
     closes_by_minute: dict[int, float],
     end_ts: int,
     c_mult: float,
+    qty_step: float = 0.0,
 ) -> list[dict[str, Any]]:
     """Extend a cached pair matrix from its watermark to `end_ts` (pure).
 
@@ -967,8 +996,9 @@ def _hsl_replay_extend_pair_rows(
     watermark_ts = int(rows[-1]["ts"])
     minutes = _hsl_replay_extension_minutes(watermark_ts, end_ts)
     c_mult_f = _finite_hsl_float(c_mult, "c_mult")
+    flat_epsilon = _hsl_flat_epsilon(qty_step)
     size = abs(float(rows[-1]["psize"]))
-    pprice = float(rows[-1]["pprice"]) if size > 1e-12 else 0.0
+    pprice = float(rows[-1]["pprice"]) if size > flat_epsilon else 0.0
     last_price = float(rows[-1]["price"])
     ordered = sorted(
         (_hsl_replay_extension_require_fill(fill, watermark_ts) for fill in fills),
@@ -1034,8 +1064,8 @@ def _hsl_replay_extend_pair_rows(
                 pside=pside,
                 ts=int(minute),
                 price=last_price,
-                psize=psize if size > 1e-12 else 0.0,
-                pprice=pprice if size > 1e-12 else 0.0,
+                psize=psize if size > flat_epsilon else 0.0,
+                pprice=pprice if size > flat_epsilon else 0.0,
                 pnl=minute_pnl,
                 c_mult=c_mult_f,
             )
@@ -2053,6 +2083,7 @@ async def _hsl_replay_load_extend_and_reconcile_cache(
             closes_by_minute=closes_by_symbol.get(symbol, {}),
             end_ts=end_minute,
             c_mult=float(self.c_mults.get(symbol, 1.0)),
+            qty_step=_hsl_qty_step_for_symbol(self, symbol),
         )
         extended_pairs[(pside, symbol)] = (
             _hsl_replay_rows_from_arrays(arrays, series_kind="pair_matrix") + new_rows
@@ -2074,7 +2105,7 @@ async def _hsl_replay_load_extend_and_reconcile_cache(
         slot = (self.positions or {}).get(symbol, {}).get(pside, {})
         current_size = abs(float(slot.get("size", 0.0) or 0.0))
         current_signed = current_size if pside == "long" else -current_size
-        tolerance = max(float(self.qty_steps.get(symbol, 0.0) or 0.0), 1e-9)
+        tolerance = max(_hsl_qty_step_for_symbol(self, symbol), 1e-9)
         if abs(extended_psize - current_signed) > tolerance:
             logging.warning(
                 "[risk] HSL replay cache reuse rejected: extended %s:%s position "
@@ -2188,6 +2219,10 @@ async def _equity_hard_stop_try_reuse_pside_replay_cache(
         },
         _hsl_replay_account_series_arrays(account_rows),
         current_balance=float(self.get_raw_balance()),
+        qty_step_by_pair={
+            pair: _hsl_qty_step_for_symbol(self, pair[1])
+            for pair in core["extended_pairs"]
+        },
     )
     return self._hsl_reuse_assemble_history(core, timeline, now_ms)
 
@@ -3100,18 +3135,20 @@ def _equity_hard_stop_coin_episode_start_covered(self, pside: str, symbol: str) 
         return False
     slot = (self.positions or {}).get(symbol, {}).get(pside, {})
     size = abs(float(slot.get("size", 0.0) or 0.0))
-    if size <= 1e-12:
+    qty_step = _hsl_qty_step_for_symbol(self, symbol)
+    flat_epsilon = _hsl_flat_epsilon(qty_step)
+    if size <= flat_epsilon:
         # Flat scope: the current episode is empty; nothing to reconstruct.
         return True
     replay_events, ambiguous = _equity_hard_stop_coin_replay_events(
-        list(self._pnls_manager.get_events()), pside, symbol
+        list(self._pnls_manager.get_events()), pside, symbol, qty_step=qty_step
     )
     if ambiguous:
         return False
     running = size
     for _ts, action, qty in reversed(replay_events):
         running = running - qty if action == "increase" else running + qty
-        if running <= 1e-12:
+        if running <= flat_epsilon:
             return True
     return False
 
@@ -3576,11 +3613,12 @@ def _equity_hard_stop_fill_replay_qty(fill: Any) -> Optional[float]:
 
 
 def _equity_hard_stop_coin_replay_events(
-    fill_events: list[Any], pside: str, symbol: str
+    fill_events: list[Any], pside: str, symbol: str, *, qty_step: float = 0.0
 ) -> tuple[list[tuple[int, str, float]], bool]:
     replay_events: list[tuple[int, str, float]] = []
     ambiguous = False
     replay_size = 0.0
+    flat_epsilon = _hsl_flat_epsilon(qty_step)
     for event in fill_events:
         if _equity_hard_stop_fill_pside(event) != pside:
             continue
@@ -3599,7 +3637,7 @@ def _equity_hard_stop_coin_replay_events(
         if action == "increase":
             replay_size += qty
         else:
-            if qty > replay_size + 1e-12:
+            if qty > replay_size + flat_epsilon:
                 ambiguous = True
             replay_size = max(0.0, replay_size - qty)
     return replay_events, ambiguous
@@ -5147,8 +5185,12 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
                 require_coin_timeline_fields = (pside, symbol) in required_replay_pairs
                 required_start_ts = required_replay_start_ts.get((pside, symbol))
                 seen_coin_timeline_fields = False
+                qty_step = _hsl_qty_step_for_symbol(self, symbol)
                 replay_events, replay_ambiguous = _equity_hard_stop_coin_replay_events(
-                    fill_events, pside, symbol
+                    fill_events,
+                    pside,
+                    symbol,
+                    qty_step=qty_step,
                 )
 
                 def reset_rolling_window() -> None:
@@ -5159,6 +5201,7 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
 
                 replay_event_idx = 0
                 replay_size = 0.0
+                flat_epsilon = _hsl_flat_epsilon(qty_step)
                 replay_was_nonflat = False
                 replay_flattened_at_ms: Optional[int] = None
                 ignored_panic_marker_timestamps: set[int] = set()
@@ -5174,7 +5217,7 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
                             replay_size += qty
                         else:
                             replay_size = max(0.0, replay_size - qty)
-                            if replay_size <= 1e-12:
+                            if replay_size <= flat_epsilon:
                                 replay_flattened_at_ms = int(event_ts)
                         replay_event_idx += 1
                     return float(replay_size)
@@ -5255,7 +5298,7 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
                         ),
                     )
                     if not has_unrealized and require_coin_timeline_value:
-                        if replay_ambiguous or replay_position_size > 1e-12:
+                        if replay_ambiguous or replay_position_size > flat_epsilon:
                             if not require_coin_timeline_fields:
                                 continue
                             current_upnl = _equity_hard_stop_history_coin_value(
@@ -5292,7 +5335,7 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
                     applied_rows += 1
                     rows += 1
                     pair_rows_applied[(pside, symbol)] = int(applied_rows)
-                    replay_is_nonflat = replay_position_size > 1e-12
+                    replay_is_nonflat = replay_position_size > flat_epsilon
                     replay_flattened_this_row = (
                         not replay_ambiguous
                         and replay_was_nonflat

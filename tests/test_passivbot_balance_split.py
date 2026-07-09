@@ -1602,6 +1602,123 @@ def test_pside_timeline_synthesis_rejects_inconsistent_pside_pnl():
     assert rows[0]["realized_pnl"] == rows[0]["realized_pnl_long"] == 3.0
 
 
+def test_pside_timeline_synthesis_uses_qty_step_flat_epsilon():
+    account_arrays = passivbot_module.pb_hsl._hsl_replay_account_series_arrays(
+        [
+            passivbot_module.pb_hsl._hsl_replay_account_series_row(
+                ts=60_000, pnl=0.0, pnl_long=0.0, pnl_short=0.0
+            )
+        ]
+    )
+    pair_arrays = {
+        ("long", "BTC/USDT:USDT"): passivbot_module.pb_hsl._hsl_replay_matrix_arrays(
+            [
+                passivbot_module.pb_hsl._hsl_replay_matrix_row(
+                    pside="long",
+                    ts=60_000,
+                    price=100.0,
+                    psize=0.004,
+                    pprice=100.0,
+                    pnl=0.0,
+                    c_mult=1.0,
+                )
+            ]
+        )
+    }
+
+    rows = passivbot_module.pb_hsl._hsl_replay_pside_timeline_rows_from_cache(
+        pair_arrays,
+        account_arrays,
+        current_balance=100.0,
+        qty_step_by_pair={("long", "BTC/USDT:USDT"): 0.01},
+    )
+
+    assert rows[0]["is_flat"] is True
+    assert rows[0]["is_flat_long"] is True
+
+
+@pytest.mark.asyncio
+async def test_authoritative_pside_timeline_uses_qty_step_flat_epsilon(monkeypatch):
+    bot = Passivbot.__new__(Passivbot)
+    bot.config = {"live": {}}
+    bot.exchange = "kucoin"
+    bot.user = "test_user"
+    bot.init_pnls = AsyncMock()
+    bot.live_value = lambda key: "all" if key == "pnls_max_lookback_days" else None
+    base_ts = 1_800_000_000_000
+    ts_now = base_ts + 60_000
+    bot.get_exchange_time = lambda: ts_now
+    bot.get_raw_balance = lambda: 100.0
+    bot.get_symbol_id_inv = lambda symbol: symbol
+    symbol = "BTC/USDT:USDT"
+    bot.positions = {
+        symbol: {
+            "long": {"size": 0.004, "price": 100.0},
+            "short": {"size": 0.0, "price": 0.0},
+        }
+    }
+    bot.qty_steps = {symbol: 0.01}
+    bot._pnls_manager = None
+    bot.inverse = False
+    bot._candle_fetch_concurrency = lambda *, context="runtime": 2
+    bot._get_fetch_delay_seconds = lambda: 0.0
+    bot._live_event_pipeline = LiveEventPipeline(
+        structured_sinks=[ListEventSink()],
+        monitor_sinks=[],
+    )
+    bot._live_event_current_cycle_id = "cy_hsl_authoritative_flat_epsilon"
+    bot._emit_live_event = Passivbot._emit_live_event.__get__(bot, Passivbot)
+    bot.c_mults = {symbol: 1.0}
+    monkeypatch.setattr(
+        passivbot_module, "compute_psize_pprice", lambda *args, **kwargs: None
+    )
+
+    class _CM:
+        async def get_candles(self, sym, **kwargs):
+            assert sym == symbol
+            return np.array(
+                [
+                    (base_ts, 99.0, 101.0, 98.0, 100.0, 1.0),
+                    (base_ts + 60_000, 100.0, 102.0, 99.0, 101.0, 1.0),
+                ],
+                dtype=passivbot_module.CANDLE_DTYPE,
+            )
+
+    bot.cm = _CM()
+    fill_events = [
+        {
+            "timestamp": base_ts,
+            "symbol": symbol,
+            "position_side": "long",
+            "side": "buy",
+            "qty": 0.01,
+            "price": 100.0,
+            "pnl": 0.0,
+        },
+        {
+            "timestamp": base_ts + 1_000,
+            "symbol": symbol,
+            "position_side": "long",
+            "side": "sell",
+            "qty": 0.006,
+            "price": 100.0,
+            "pnl": 0.0,
+        },
+    ]
+
+    history = await bot.get_balance_equity_history(
+        fill_events=fill_events,
+        current_balance=100.0,
+        hsl_replay_signal_mode="unified",
+    )
+
+    first = history["timeline"][0]
+    assert first["is_flat"] is True
+    assert first["is_flat_long"] is True
+    assert first["is_flat_short"] is True
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
+
+
 @pytest.mark.asyncio
 async def test_pside_timeline_synthesis_matches_authoritative_rows(monkeypatch):
     # Trust boundary for the future pside/unified reuse gate: rows synthesized
@@ -5620,11 +5737,10 @@ async def test_update_effective_min_cost_uses_executable_min_qty():
     assert bot.effective_min_cost[symbol] == pytest.approx(88.165)
 
 
-def test_unstuck_allowances_stay_real_while_unstuck_order_is_open(monkeypatch):
-    # The allowance values are pure budget facts; an open unstuck order must
-    # not zero them. Suppression of new unstuck emission rides solely on the
-    # auto_unstuck_allowed flag, which the Rust orchestrator consumes as the
-    # sole gate (pinned in test_auto_unstuck_allowed_flag_is_sole_emission_gate).
+def test_open_unstuck_order_does_not_gate_live_unstuck_emission(monkeypatch):
+    # Rust owns auto-unstuck emission from the realized-PnL cumsum facts. A
+    # resting unstuck order must not add a Python-only suppression path; any
+    # duplicate-order risk rides normal order reconciliation.
     import passivbot as pb_mod
 
     bot = Passivbot.__new__(Passivbot)
@@ -5655,8 +5771,8 @@ def test_unstuck_allowances_stay_real_while_unstuck_order_is_open(monkeypatch):
     out = bot._calc_unstuck_allowances()
     assert out["long"] == pytest.approx(77.0)
 
-    # The emission gate is still off while the order is open.
-    assert bot._auto_unstuck_allowed_live(allow_new_unstuck=False) is False
+    # The emission input stays available while the order is open.
+    assert bot._auto_unstuck_allowed_live() is True
 
 
 def _make_unstuck_custom_id() -> str:
