@@ -63,6 +63,7 @@ _RESOURCE_PRESSURE_FIELDS = (
     "cpu_count",
     "uptime_ms",
     "last_loop_duration_ms",
+    "health_summary_lag_ms",
     "errors_last_hour",
     "ws_reconnects",
     "rate_limits",

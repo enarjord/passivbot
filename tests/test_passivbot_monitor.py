@@ -1317,6 +1317,7 @@ def test_build_health_summary_payload_includes_resource_pressure(monkeypatch):
             }
             self._health_start_ms = 100_000
             self._last_loop_duration_ms = 1234
+            self._health_summary_lag_ms = 2345
             self._monitor_last_equity = 1001.0
             self._health_orders_placed = 5
             self._health_orders_cancelled = 2
@@ -1351,6 +1352,7 @@ def test_build_health_summary_payload_includes_resource_pressure(monkeypatch):
     payload = FakeBot()._build_health_summary_payload(now_ms=160_000)
 
     assert payload["uptime_ms"] == 60_000
+    assert payload["health_summary_lag_ms"] == 2345
     assert payload["positions_long"] == 1
     assert payload["positions_short"] == 1
     assert payload["rss_bytes"] == 123456
@@ -1498,6 +1500,41 @@ def test_log_health_summary_emits_structured_event(caplog, monkeypatch):
     assert event.data["rss_bytes"] == 987654
     assert event.data["errors_last_hour"] == 1
     assert bot._live_event_pipeline.close(timeout=2.0) is True
+
+
+def test_maybe_log_health_summary_tracks_scheduler_lag(monkeypatch):
+    import passivbot as pb_mod
+
+    class FakeBot:
+        _maybe_log_health_summary = pb_mod.Passivbot._maybe_log_health_summary
+
+        def __init__(self):
+            self._health_last_summary_ms = 0
+            self._health_summary_interval_ms = 1_000
+            self._health_summary_lag_ms = "unchanged"
+            self.logged = 0
+
+        def _log_health_summary(self):
+            self.logged += 1
+
+    now_values = iter([1_000, 1_750, 2_250])
+    monkeypatch.setattr(pb_mod, "utc_ms", lambda: next(now_values))
+    bot = FakeBot()
+
+    bot._maybe_log_health_summary()
+    assert bot.logged == 1
+    assert bot._health_last_summary_ms == 1_000
+    assert bot._health_summary_lag_ms is None
+
+    bot._maybe_log_health_summary()
+    assert bot.logged == 1
+    assert bot._health_last_summary_ms == 1_000
+    assert bot._health_summary_lag_ms is None
+
+    bot._maybe_log_health_summary()
+    assert bot.logged == 2
+    assert bot._health_last_summary_ms == 2_250
+    assert bot._health_summary_lag_ms == 250
 
 
 def test_forager_and_ema_summary_emitters_emit_structured_events():
