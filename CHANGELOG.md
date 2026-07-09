@@ -4,6 +4,15 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- `passivbot tool crash-finder` can now regenerate scenario suites from an existing
+  `crash_clusters.csv` without rescanning local OHLCV data, emit market-wide/coin-focused/single-coin
+  filtered suites, merge overlapping stress windows, and add per-coin forced-normal overrides for
+  idiosyncratic non-market-wide crash stress scenarios, capped at two forced coins per scenario.
+  When scanned range metadata is available, generated suites now drop coins with no cached data
+  overlap in the scenario date window. Full discovery now efficiently groups 1m source rows into
+  parameterized crash candles (`1h` by default) without rescanning the full minute array for every
+  candle, while preserving the ordered high-to-later-low metric.
+
 - Connector-local exchange-config failure logs in Binance, Bitget, Defx,
   Hyperliquid, KuCoin, and OKX, plus the parent per-symbol retry log, now keep
   bounded operation, symbol, retry, canonical known-code, and exception-type

@@ -21,6 +21,7 @@ Use this file to decide what to read for a task.
 | Code review | `code_review_prompt.md` |
 | Common implementation mistakes | `pitfalls.md` |
 | Running tools/tests/backtests/optimizer | `commands.md` |
+| Crash discovery and stress-suite generation | `crash_suite_generator.md`, `commands.md` |
 | Feature-specific changes | `features/README.md` + relevant file in `features/` |
 | Deep incident context | `debugging_case_studies.md`, `suite_optimizer_memory_investigation.md` |
 
