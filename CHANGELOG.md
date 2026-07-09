@@ -4,6 +4,14 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Backtests now warn when interior data gaps split a coin's history and real
+  data outside the longest contiguous run is excluded from the backtest
+  (previously silent). Stock-perps (`xyz:`) coins instead log their
+  synthetic-flat-candle share at INFO level. The synthetic-candle backtesting
+  model for stock perps (tradable flat candles during underlying-market
+  closure) is now documented in docs/stock_perps.md with its accepted
+  modeling caveats.
+
 - Hardened OHLCV gap classification against transient exchange conditions. A
   persistent gap (missing tail, leading, or internal range) now gets a short
   one-hour re-verification window on its first observation and keeps the full
