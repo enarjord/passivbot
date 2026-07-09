@@ -330,6 +330,38 @@ This data is suitable for:
 
 For accurate backtesting of actual perp behavior, use native Hyperliquid data where available.
 
+### Synthetic Candles During Market Closure (Backtesting Model)
+
+Hyperliquid HIP-3 stock perps trade 24/7, but TradFi data sources only cover regular
+trading hours (roughly 390 of 1440 minutes per weekday, nothing on weekends). When
+backtesting stock perps from TradFi sources, Passivbot fills every closed-market minute
+with a **synthetic flat candle**: high = low = close = previous real close, volume = 0.
+These synthetic minutes are **tradable** in the backtest, by design:
+
+- The live venue trades continuously, so a backtest that froze trading during
+  underlying-market closures would be *less* faithful to live behavior, not more.
+- Order fills use strict price inequalities (`low < bid`, `high > ask`), so orders
+  resting exactly at the flat price never fill on synthetic candles. Only orders priced
+  through the flat price fill — and such crossing orders would also fill immediately on
+  the live 24/7 venue at approximately that price.
+
+Accepted modeling caveats to keep in mind when interpreting results:
+
+1. **Overnight/weekend drift is modeled as flat.** Real HIP-3 prices drift while the
+   underlying market is closed. Triggers that depend on price movement (trailing
+   entries/closes, auto-unstuck, equity hard stop loss) cannot fire during synthetic
+   minutes in the backtest, and the first real candle after a closure absorbs the whole
+   move as one discontinuity.
+2. **Volume metrics are diluted.** Synthetic minutes carry zero volume, so rolling
+   volume features (forager volume scoring and the volume-drop filter) will rank stock
+   perps below crypto in mixed universes and may exclude them via volume filters.
+3. **Regime seam with native data.** As native Hyperliquid xyz history accumulates
+   (real 24/7 candles), configs optimized on synthetic-filled TradFi history may behave
+   differently across the transition.
+
+The backtest logs each stock coin's synthetic-candle share at INFO level
+(`[hlcvs] xyz:TSLA: N of M tradable minutes (x%) are synthetic flat candles`).
+
 ## Limitations
 
 ### Current Limitations

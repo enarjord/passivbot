@@ -1818,6 +1818,12 @@ def ensure_valid_index_metadata(mss, hlcvs, coins, warmup_map=None):
         meta["trade_start_index"] = trade_start_idx
 
 
+# Interior gaps split a coin's history; only the longest contiguous run is
+# backtested and everything outside it is dropped. Warn when the drop is big
+# enough to change results rather than for occasional single missing minutes.
+INTERIOR_COVERAGE_LOSS_WARN_MINUTES = 60
+
+
 def warn_hlcv_valid_range_coverage(config, coins, mss, timestamps):
     if timestamps is None or len(timestamps) == 0:
         return
@@ -1864,6 +1870,38 @@ def warn_hlcv_valid_range_coverage(config, coins, mss, timestamps):
                 ts_to_date(requested_end_ts),
                 missing_minutes,
             )
+        tradable_rows = last_idx - first_idx + 1
+        synthetic_count = int(meta.get("synthetic_gap_fill_count", 0) or 0)
+        if meta.get("synthetic_gap_fill_tradable"):
+            if synthetic_count:
+                shown = min(synthetic_count, tradable_rows)
+                logging.info(
+                    "[hlcvs] %s: %d of %d tradable minutes (%.1f%%) are synthetic flat "
+                    "candles (source market closed or missing; see docs/stock_perps.md)",
+                    coin,
+                    shown,
+                    tradable_rows,
+                    100.0 * shown / max(1, tradable_rows),
+                )
+        else:
+            coverage_valid_rows = meta.get("coverage_valid_rows")
+            if coverage_valid_rows is not None:
+                excluded_rows = int(coverage_valid_rows) - tradable_rows
+                if excluded_rows >= INTERIOR_COVERAGE_LOSS_WARN_MINUTES:
+                    logging.warning(
+                        "[hlcvs] %s: %d minutes of real data are excluded from the backtest: "
+                        "interior gaps split the history (%d gap(s), %d missing minutes) and "
+                        "only the longest contiguous run %s -> %s (%d minutes) is used of %d "
+                        "valid minutes",
+                        coin,
+                        excluded_rows,
+                        int(meta.get("coverage_internal_gap_count", 0) or 0),
+                        int(meta.get("coverage_internal_gap_minutes", 0) or 0),
+                        ts_to_date(valid_start_ts),
+                        ts_to_date(valid_end_ts),
+                        tradable_rows,
+                        int(coverage_valid_rows),
+                    )
 
 
 def assert_hlcv_has_tradable_coverage(coins, mss):

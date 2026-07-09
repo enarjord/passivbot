@@ -51,6 +51,19 @@ genuine history vanish silently.
 Fix: warn when `source_valid_count` materially exceeds the longest-contiguous span; skip the dead
 fill when `synthetic_gaps_tradable` is false.
 
+**I-2b (follow-up, found during slice 4, UNVERIFIED impact): sparse-exchange truncation may be
+severe.** `_resolve_v2_store_range` deliberately accepts ranges with within-tolerance interior
+holes (`_range_has_tolerable_internal_sparse_gaps`, `hlcv_preparation.py:1521-1532`, the
+"sparse-valid" acceptance), and `fetch_ohlcvs_for_v2_store` writes only real rows to the store —
+no-trade minutes stay invalid. The materializer's `_longest_contiguous_valid_span` is literal
+(any single invalid row splits the span), so a coin on a minute-omitting exchange (KuCoin
+especially) may have its tradable window silently collapse to the longest run of consecutive
+printed minutes — potentially hours out of years for illiquid coins. The interior-loss warning
+added in slice 4 will expose the actual impact on real datasets. If confirmed, the fix is a
+behavioral decision: fill within-tolerance holes in `valid_buffer` *before* the span computation
+(consistent with the resolve layer's tolerance semantics), or compute the tradable span with a
+gap-tolerance parameter. Needs maintainer input since it changes which candles are backtested.
+
 ### I-3. Synthetic *tradable* candles in the stock-perps (`xyz:`) path — BY DESIGN (maintainer decision 2026-07-09); document instead of fix
 
 `_fill_sparse_hlcv_gaps` (`backtest_dataset_materializer.py:36-49`) forward-fills interior gaps
@@ -289,6 +302,11 @@ P-1 (delete the second decompress), P-5's memoryview hash (also in `hash_logical
    permanent (exchange-verified in a single response).
 4. **Coverage-loss visibility**: I-2 warning + skip dead fill; I-3 document the synthetic-candle
    model (maintainer decision: keep tradable) + surface per-coin synthetic share.
+   DONE (PR pending) except "skip dead fill", deferred to slice 5 (it changes artifact bytes and
+   interlocks with the perf work). Interior-loss warning added to
+   `warn_hlcv_valid_range_coverage` (threshold 60 min); xyz coins log synthetic share at INFO;
+   model documented in `docs/stock_perps.md` + `docs/ai/features/stock_perps.md`. Surfaced
+   follow-up finding I-2b (sparse-exchange truncation) — see Part 1.
 5. **Cold-build parallelism**: P-3/P-4/P-7 together (they interlock), fixing I-8 in passing.
 6. **Cleanups**: delete dead `fill_gaps_in_ohlcvs`/`attempt_gap_fix_ohlcvs`, epoch-ms sanity
    assert in `ensure_millis_df`, cache-hash coverage for gap-fill flags (materializer finding 5).
