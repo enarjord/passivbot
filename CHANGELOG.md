@@ -4,6 +4,16 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Hardened OHLCV gap classification against transient exchange conditions. A
+  persistent gap (missing tail, leading, or internal range) now gets a short
+  one-hour re-verification window on its first observation and keeps the full
+  seven-day window only once the identical gap is observed again at least 30
+  minutes later — so an exchange publishing delay or partial response can no
+  longer silently clip a coin's backtest data for a week. KuCoin pagination
+  holes between pages are now recorded as expiring auto-detected gaps
+  (retried on later fetches) instead of permanent no-trade gaps; holes inside
+  a single exchange response remain verified no-trade minutes.
+
 - Faster backtest startup on hlcvs cache hits: the multi-GB hlcvs artifact is
   now decompressed once instead of twice (manifest verification hands its
   arrays to the loader), array/chunk hashing no longer materializes a full

@@ -1805,3 +1805,53 @@ async def test_force_refetch_gaps_clears_gaps(tmp_path):
 
     # Gap should be cleared
     assert len(cm._get_known_gaps(symbol)) == 0
+
+
+def test_kucoin_between_page_holes_recorded_as_expiring_auto_gaps(tmp_path):
+    """Intra-payload holes are exchange-verified no-trade minutes (the exchange
+    returned the surrounding candles in one response) and stay permanent.
+    Between-page holes are indistinguishable from a pagination stall or outage,
+    so they must be recorded with the expiring auto_detected classification and
+    remain retryable instead of being permanently masked as no_trades."""
+
+    class _Ex:
+        id = "kucoinfutures"
+
+    cm = CandlestickManager(
+        exchange=_Ex(), exchange_name="kucoin", cache_dir=str(tmp_path / "caches")
+    )
+    assert cm._record_payload_gaps_as_known
+
+    base = _floor_minute(int(time.time() * 1000)) - 100 * ONE_MIN_MS
+
+    def t(i):
+        return base + i * ONE_MIN_MS
+
+    def row(i):
+        return [t(i), 100.0, 101.0, 99.0, 100.5, 5.0]
+
+    pages = [
+        [row(0), row(1), row(3)],  # intra-payload hole at minute 2
+        [row(6), row(7)],  # between-page hole covering minutes 4-5
+    ]
+
+    async def fake_once(symbol, since_ms, limit, end_exclusive_ms=None, timeframe=None, *, tf=None):
+        return pages.pop(0) if pages else []
+
+    cm._ccxt_fetch_ohlcv_once = fake_once
+    arr = asyncio.run(cm._fetch_ohlcv_paginated("ETH/USDT:USDT", t(0), t(8)))
+    assert arr.shape[0] == 5
+
+    gaps = cm._get_known_gaps_enhanced("ETH/USDT:USDT")
+    by_range = {(int(g["start_ts"]), int(g["end_ts"])): g for g in gaps}
+    assert set(by_range) == {(t(2), t(2)), (t(4), t(5))}
+
+    intra = by_range[(t(2), t(2))]
+    assert intra["reason"] == "no_trades"
+    assert int(intra["retry_count"]) >= _GAP_MAX_RETRIES
+    assert not cm._should_retry_gap(intra)
+
+    between = by_range[(t(4), t(5))]
+    assert between["reason"] == "auto_detected"
+    assert int(between["retry_count"]) < _GAP_MAX_RETRIES
+    assert cm._should_retry_gap(between)

@@ -3570,3 +3570,125 @@ async def test_corrupt_chunk_failed_repair_preserves_existing_rows(tmp_path):
     finally:
         del body
         del valid
+
+
+def test_mark_sparse_fetch_gaps_graduated_retry_windows(tmp_path):
+    """A gap's first observation gets a short re-verification window; only a
+    re-observation separated in time earns the full KNOWN_GAP_RETRY_MS window.
+    Guards against a transient outage or publishing delay masking data for
+    the full retry period on a single sighting."""
+    from hlcv_preparation import (
+        GAP_CORROBORATION_MIN_SEPARATION_MS,
+        GAP_FIRST_OBSERVATION_RETRY_MS,
+        KNOWN_GAP_RETRY_MS,
+        _mark_sparse_fetch_gaps,
+    )
+    from utils import utc_ms
+
+    catalog = OhlcvCatalog(tmp_path / "caches" / "ohlcvs" / "catalog.sqlite")
+    start_ts = month_start_ts(2026, 4)
+    request_end_ts = start_ts + 9 * 60_000
+    # Rows with an internal hole (minute 2 missing) and a missing tail.
+    ts = np.array(
+        [start_ts, start_ts + 60_000, start_ts + 3 * 60_000, start_ts + 4 * 60_000],
+        dtype=np.int64,
+    )
+
+    def mark():
+        _mark_sparse_fetch_gaps(
+            catalog=catalog,
+            exchange="kucoin",
+            timeframe="1m",
+            symbol="ETH/USDT:USDT",
+            request_start_ts=start_ts,
+            request_end_ts=request_end_ts,
+            ts=ts,
+            attempt=1,
+            leading_reason="leading_unavailable",
+            trailing_note="short_tail_return test",
+        )
+
+    mark()
+    now_ms = int(utc_ms())
+    gaps = catalog.get_gaps("kucoin", "1m", "ETH/USDT:USDT", start_ts, request_end_ts)
+    assert {gap.reason for gap in gaps} == {"internal_gap", "trailing_unavailable"}
+    for gap in gaps:
+        assert gap.persistent
+        # First observation: short window, far below the corroborated one.
+        assert gap.next_retry_at <= now_ms + GAP_FIRST_OBSERVATION_RETRY_MS + 5_000
+        assert gap.next_retry_at < now_ms + KNOWN_GAP_RETRY_MS // 2
+
+    # Re-marking immediately (same run / seconds apart) must NOT extend the window.
+    mark()
+    gaps = catalog.get_gaps("kucoin", "1m", "ETH/USDT:USDT", start_ts, request_end_ts)
+    for gap in gaps:
+        assert gap.next_retry_at < now_ms + KNOWN_GAP_RETRY_MS // 2
+
+    # Backdate the recorded observations beyond the corroboration separation,
+    # then re-mark: the identical gaps are now corroborated -> full window.
+    import sqlite3
+
+    with sqlite3.connect(catalog.db_path) as conn:
+        conn.execute(
+            "UPDATE gaps SET last_attempt_at = last_attempt_at - ?",
+            (GAP_CORROBORATION_MIN_SEPARATION_MS + 60_000,),
+        )
+    mark()
+    now_ms = int(utc_ms())
+    gaps = catalog.get_gaps("kucoin", "1m", "ETH/USDT:USDT", start_ts, request_end_ts)
+    for gap in gaps:
+        assert gap.next_retry_at > now_ms + KNOWN_GAP_RETRY_MS - 60_000
+
+
+@pytest.mark.asyncio
+async def test_confirmed_short_tail_gap_gets_short_first_retry_window(tmp_path):
+    """The in-run short-tail confirmation writes a truncated dataset; its
+    trailing gap must carry the short first-observation retry window so a
+    false confirm (exchange publishing delay) self-heals quickly instead of
+    clipping recent-end backtests for the full KNOWN_GAP_RETRY_MS."""
+    from hlcv_preparation import GAP_FIRST_OBSERVATION_RETRY_MS, KNOWN_GAP_RETRY_MS
+    from utils import utc_ms
+
+    catalog = OhlcvCatalog(tmp_path / "caches" / "ohlcvs" / "catalog.sqlite")
+    store = OhlcvStore(tmp_path / "caches" / "ohlcvs", catalog)
+    start_ts = month_start_ts(2026, 4)
+    end_ts = start_ts + 5 * 60_000
+
+    class FakeOhlcvManager:
+        gap_tolerance_ohlcvs_minutes = 0.0
+        cm = None
+
+        def update_timestamp_range(self, new_start_ts, new_end_ts):
+            self.start_ts = int(new_start_ts)
+            self.end_ts = int(new_end_ts)
+
+        async def fetch_ohlcvs_for_v2_store(self, coin, *, start_ts, end_ts):
+            return pd.DataFrame(
+                {
+                    "timestamp": np.array([start_ts, start_ts + 60_000], dtype=np.int64),
+                    "high": np.array([101.0, 102.0], dtype=np.float32),
+                    "low": np.array([99.0, 100.0], dtype=np.float32),
+                    "close": np.array([100.0, 101.0], dtype=np.float32),
+                    "volume": np.array([10.0, 11.0], dtype=np.float32),
+                }
+            )
+
+    manager = FakeOhlcvManager()
+    for _ in range(2):
+        result = await _fetch_coin_range_into_v2_store(
+            om=manager,
+            catalog=catalog,
+            store=store,
+            exchange="bybit",
+            coin="ETH",
+            symbol="ETH/USDT:USDT",
+            start_ts=start_ts,
+            end_ts=end_ts,
+        )
+
+    assert result.ok
+    now_ms = int(utc_ms())
+    gaps = catalog.get_gaps("bybit", "1m", "ETH/USDT:USDT", start_ts, end_ts)
+    assert [gap.reason for gap in gaps] == ["trailing_unavailable"]
+    assert gaps[0].next_retry_at <= now_ms + GAP_FIRST_OBSERVATION_RETRY_MS + 5_000
+    assert gaps[0].next_retry_at < now_ms + KNOWN_GAP_RETRY_MS // 2

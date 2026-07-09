@@ -4249,7 +4249,12 @@ class CandlestickManager:
                     max_step = ONE_MIN_MS
             except Exception:
                 first_ts = last_ts = 0
-            # Record gaps inside payload and between pages as verified no-trade gaps (exchange-provided).
+            # Record intra-payload holes as verified no-trade gaps: the exchange
+            # affirmatively returned the surrounding candles in one response.
+            # Between-page holes are not exchange-verified — a pagination stall
+            # or outage produces the same shape — so they get the expiring
+            # auto-detected classification and are re-verified on later fetches
+            # instead of being permanently masked as no_trades.
             if self._record_payload_gaps_as_known and tf_norm == "1m":
                 try:
                     ts_arr = arr["ts"].astype(np.int64)
@@ -4263,7 +4268,13 @@ class CandlestickManager:
                     if prev_last_ts is not None and first_ts > prev_last_ts + period_ms:
                         gap_start = int(prev_last_ts + period_ms)
                         gap_end = int(first_ts - period_ms)
-                        self._record_verified_gap(symbol, gap_start, gap_end)
+                        self._add_known_gap(
+                            symbol,
+                            gap_start,
+                            gap_end,
+                            reason=GAP_REASON_AUTO,
+                            increment_retry=True,
+                        )
                 except Exception:
                     pass
 
