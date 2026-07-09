@@ -1638,6 +1638,88 @@ def test_pside_timeline_synthesis_uses_qty_step_flat_epsilon():
 
 
 @pytest.mark.asyncio
+async def test_authoritative_pside_timeline_uses_qty_step_flat_epsilon(monkeypatch):
+    bot = Passivbot.__new__(Passivbot)
+    bot.config = {"live": {}}
+    bot.exchange = "kucoin"
+    bot.user = "test_user"
+    bot.init_pnls = AsyncMock()
+    bot.live_value = lambda key: "all" if key == "pnls_max_lookback_days" else None
+    base_ts = 1_800_000_000_000
+    ts_now = base_ts + 60_000
+    bot.get_exchange_time = lambda: ts_now
+    bot.get_raw_balance = lambda: 100.0
+    bot.get_symbol_id_inv = lambda symbol: symbol
+    symbol = "BTC/USDT:USDT"
+    bot.positions = {
+        symbol: {
+            "long": {"size": 0.004, "price": 100.0},
+            "short": {"size": 0.0, "price": 0.0},
+        }
+    }
+    bot.qty_steps = {symbol: 0.01}
+    bot._pnls_manager = None
+    bot.inverse = False
+    bot._candle_fetch_concurrency = lambda *, context="runtime": 2
+    bot._get_fetch_delay_seconds = lambda: 0.0
+    bot._live_event_pipeline = LiveEventPipeline(
+        structured_sinks=[ListEventSink()],
+        monitor_sinks=[],
+    )
+    bot._live_event_current_cycle_id = "cy_hsl_authoritative_flat_epsilon"
+    bot._emit_live_event = Passivbot._emit_live_event.__get__(bot, Passivbot)
+    bot.c_mults = {symbol: 1.0}
+    monkeypatch.setattr(
+        passivbot_module, "compute_psize_pprice", lambda *args, **kwargs: None
+    )
+
+    class _CM:
+        async def get_candles(self, sym, **kwargs):
+            assert sym == symbol
+            return np.array(
+                [
+                    (base_ts, 99.0, 101.0, 98.0, 100.0, 1.0),
+                    (base_ts + 60_000, 100.0, 102.0, 99.0, 101.0, 1.0),
+                ],
+                dtype=passivbot_module.CANDLE_DTYPE,
+            )
+
+    bot.cm = _CM()
+    fill_events = [
+        {
+            "timestamp": base_ts,
+            "symbol": symbol,
+            "position_side": "long",
+            "side": "buy",
+            "qty": 0.01,
+            "price": 100.0,
+            "pnl": 0.0,
+        },
+        {
+            "timestamp": base_ts + 1_000,
+            "symbol": symbol,
+            "position_side": "long",
+            "side": "sell",
+            "qty": 0.006,
+            "price": 100.0,
+            "pnl": 0.0,
+        },
+    ]
+
+    history = await bot.get_balance_equity_history(
+        fill_events=fill_events,
+        current_balance=100.0,
+        hsl_replay_signal_mode="unified",
+    )
+
+    first = history["timeline"][0]
+    assert first["is_flat"] is True
+    assert first["is_flat_long"] is True
+    assert first["is_flat_short"] is True
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
+
+
+@pytest.mark.asyncio
 async def test_pside_timeline_synthesis_matches_authoritative_rows(monkeypatch):
     # Trust boundary for the future pside/unified reuse gate: rows synthesized
     # from the persisted cache arrays must equal the authoritative timeline

@@ -12132,13 +12132,17 @@ class Passivbot:
                         "realized_pnl_by_coin_pside": realized_pnl_coin_pside_window,
                         "is_flat": len(active_symbols) == 0,
                         "is_flat_long": not any(
-                            positions.get(sym, {}).get("long", {}).get("size", 0.0)
-                            > 1e-12
+                            not _is_flat_size(
+                                sym,
+                                positions.get(sym, {}).get("long", {}).get("size", 0.0),
+                            )
                             for sym in positions
                         ),
                         "is_flat_short": not any(
-                            positions.get(sym, {}).get("short", {}).get("size", 0.0)
-                            > 1e-12
+                            not _is_flat_size(
+                                sym,
+                                positions.get(sym, {}).get("short", {}).get("size", 0.0),
+                            )
                             for sym in positions
                         ),
                         "panic_fill_count": int(panic_fill_count),

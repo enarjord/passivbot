@@ -69,6 +69,20 @@ def _hsl_flat_epsilon(qty_step: Any = 0.0) -> float:
     return max(1e-12, step * 0.5)
 
 
+def _hsl_qty_step_for_symbol(self: Any, symbol: Any) -> float:
+    qty_steps = getattr(self, "qty_steps", None)
+    if not isinstance(qty_steps, dict):
+        return 0.0
+    try:
+        value = qty_steps.get(symbol)
+        if value is None:
+            value = qty_steps.get(str(symbol))
+        step = abs(float(value or 0.0))
+    except (TypeError, ValueError):
+        return 0.0
+    return step if math.isfinite(step) else 0.0
+
+
 def _hsl_replay_cache_safe_fragment(value: Any) -> str:
     raw = str(value).strip()
     out = []
@@ -2069,7 +2083,7 @@ async def _hsl_replay_load_extend_and_reconcile_cache(
             closes_by_minute=closes_by_symbol.get(symbol, {}),
             end_ts=end_minute,
             c_mult=float(self.c_mults.get(symbol, 1.0)),
-            qty_step=float(self.qty_steps.get(symbol, 0.0) or 0.0),
+            qty_step=_hsl_qty_step_for_symbol(self, symbol),
         )
         extended_pairs[(pside, symbol)] = (
             _hsl_replay_rows_from_arrays(arrays, series_kind="pair_matrix") + new_rows
@@ -2091,7 +2105,7 @@ async def _hsl_replay_load_extend_and_reconcile_cache(
         slot = (self.positions or {}).get(symbol, {}).get(pside, {})
         current_size = abs(float(slot.get("size", 0.0) or 0.0))
         current_signed = current_size if pside == "long" else -current_size
-        tolerance = max(float(self.qty_steps.get(symbol, 0.0) or 0.0), 1e-9)
+        tolerance = max(_hsl_qty_step_for_symbol(self, symbol), 1e-9)
         if abs(extended_psize - current_signed) > tolerance:
             logging.warning(
                 "[risk] HSL replay cache reuse rejected: extended %s:%s position "
@@ -2206,7 +2220,7 @@ async def _equity_hard_stop_try_reuse_pside_replay_cache(
         _hsl_replay_account_series_arrays(account_rows),
         current_balance=float(self.get_raw_balance()),
         qty_step_by_pair={
-            pair: float(self.qty_steps.get(pair[1], 0.0) or 0.0)
+            pair: _hsl_qty_step_for_symbol(self, pair[1])
             for pair in core["extended_pairs"]
         },
     )
@@ -3121,7 +3135,7 @@ def _equity_hard_stop_coin_episode_start_covered(self, pside: str, symbol: str) 
         return False
     slot = (self.positions or {}).get(symbol, {}).get(pside, {})
     size = abs(float(slot.get("size", 0.0) or 0.0))
-    qty_step = float(self.qty_steps.get(symbol, 0.0) or 0.0)
+    qty_step = _hsl_qty_step_for_symbol(self, symbol)
     flat_epsilon = _hsl_flat_epsilon(qty_step)
     if size <= flat_epsilon:
         # Flat scope: the current episode is empty; nothing to reconstruct.
@@ -5171,11 +5185,12 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
                 require_coin_timeline_fields = (pside, symbol) in required_replay_pairs
                 required_start_ts = required_replay_start_ts.get((pside, symbol))
                 seen_coin_timeline_fields = False
+                qty_step = _hsl_qty_step_for_symbol(self, symbol)
                 replay_events, replay_ambiguous = _equity_hard_stop_coin_replay_events(
                     fill_events,
                     pside,
                     symbol,
-                    qty_step=float(self.qty_steps.get(symbol, 0.0) or 0.0),
+                    qty_step=qty_step,
                 )
 
                 def reset_rolling_window() -> None:
@@ -5186,7 +5201,7 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
 
                 replay_event_idx = 0
                 replay_size = 0.0
-                flat_epsilon = _hsl_flat_epsilon(self.qty_steps.get(symbol, 0.0))
+                flat_epsilon = _hsl_flat_epsilon(qty_step)
                 replay_was_nonflat = False
                 replay_flattened_at_ms: Optional[int] = None
                 ignored_panic_marker_timestamps: set[int] = set()
