@@ -4,6 +4,11 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Fixed Alpha Vantage stock-perps data provider misfiling candles by 4-5 hours:
+  its US-Eastern timestamps were interpreted in the host's local timezone
+  (DST-dependent) instead of America/New_York. Backtest data fetched with
+  `tradfi.provider = "alphavantage"` before this fix should be re-downloaded.
+
 - Live auto-unstuck emission is no longer gated in Python by whether an
   unstuck order is already resting on the exchange. Rust owns whether an
   unstuck ideal order is emitted from the realized-PnL cumsum facts; duplicate
