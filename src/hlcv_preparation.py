@@ -17,7 +17,7 @@ import pandas as pd
 
 from candlestick_manager import CandlestickManager, OhlcvTerminalEmptyPage
 from backtest_dataset_materializer import BacktestDatasetMaterializer, materialize_frames
-from ohlcv_catalog import OhlcvCatalog
+from ohlcv_catalog import KNOWN_GAP_RETRY_MS, OhlcvCatalog
 from ohlcv_legacy_import import import_legacy_range_into_store
 from ohlcv_planner import plan_local_symbol_range
 from ohlcv_store import OhlcvStore, timeframe_to_interval_ms
@@ -3415,6 +3415,37 @@ async def _fetch_coin_range_into_v2_store(
     )
 
 
+# A persistent gap keeps the full KNOWN_GAP_RETRY_MS window only once the
+# identical gap has been observed on two fetches separated in time; a single
+# observation could be an exchange publishing delay, an outage, or a transient
+# partial response, so it gets a short re-verification window instead.
+GAP_FIRST_OBSERVATION_RETRY_MS = 60 * 60 * 1000
+GAP_CORROBORATION_MIN_SEPARATION_MS = 30 * 60 * 1000
+
+
+def _gap_observation_corroborated(
+    catalog: OhlcvCatalog,
+    *,
+    exchange: str,
+    timeframe: str,
+    symbol: str,
+    start_ts: int,
+    end_ts: int,
+    reason: str,
+    now_ms: int,
+) -> bool:
+    for gap in catalog.get_gaps(exchange, timeframe, symbol, start_ts, end_ts):
+        if int(gap.start_ts) != int(start_ts) or int(gap.end_ts) != int(end_ts):
+            continue
+        if str(gap.reason) != str(reason):
+            continue
+        if gap.last_attempt_at is None:
+            continue
+        if now_ms - int(gap.last_attempt_at) >= GAP_CORROBORATION_MIN_SEPARATION_MS:
+            return True
+    return False
+
+
 def _mark_sparse_fetch_gaps(
     *,
     catalog: OhlcvCatalog,
@@ -3451,9 +3482,21 @@ def _mark_sparse_fetch_gaps(
                 gaps.append((gap_start, gap_end, "internal_gap"))
     if mark_trailing_unavailable and trailing_note and last_ts < int(request_end_ts):
         gaps.append((last_ts + interval_ms, int(request_end_ts), "trailing_unavailable"))
+    now_ms = int(utc_ms())
     for gap_start, gap_end, reason in gaps:
         if gap_end < gap_start:
             continue
+        corroborated = _gap_observation_corroborated(
+            catalog,
+            exchange=exchange,
+            timeframe=timeframe,
+            symbol=symbol,
+            start_ts=gap_start,
+            end_ts=gap_end,
+            reason=reason,
+            now_ms=now_ms,
+        )
+        retry_window_ms = KNOWN_GAP_RETRY_MS if corroborated else GAP_FIRST_OBSERVATION_RETRY_MS
         catalog.mark_gap(
             exchange=exchange,
             timeframe=timeframe,
@@ -3463,6 +3506,7 @@ def _mark_sparse_fetch_gaps(
             reason=reason,
             persistent=True,
             retry_count=int(attempt),
+            next_retry_at=now_ms + retry_window_ms,
             note=trailing_note if reason == "trailing_unavailable" and trailing_note else "confirmed_by_v2_fetch",
         )
 

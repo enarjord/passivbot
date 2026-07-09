@@ -275,9 +275,18 @@ P-1 (delete the second decompress), P-5's memoryview hash (also in `hash_logical
 ## Suggested action-plan slices (in order)
 
 1. **Quick integrity fix**: I-1 AlphaVantage timezone (one-line + provider conversion tests).
+   DONE — PR #1155.
 2. **Quick perf wins**: P-1 + P-5 memoryview + P-6 + split timers (all low-risk, measurable).
-3. **Gap-classification hardening**: I-4/I-5/I-6 (corroboration separation, expiring reasons,
-   shorter retry for recent tails) + tests.
+   DONE — PR #1158.
+3. **Gap-classification hardening**: I-4/I-5/I-6 — DONE (PR pending). Implemented as
+   graduated retry windows (first observation → 1h re-verification; the full 7d window only
+   for an identical gap re-observed ≥30 min later) rather than temporally separating the
+   short-tail confirmation: the in-run confirm-by-refetch flow is intentional (blocking it
+   would push every first encounter of a delisted coin to the legacy fallback), and a short
+   first-observation retry gives equivalent protection — a false confirm self-heals within
+   the hour instead of clipping data for a week. KuCoin between-page holes now expire
+   (`auto_detected`, retryable) instead of permanent `no_trades`; intra-payload holes stay
+   permanent (exchange-verified in a single response).
 4. **Coverage-loss visibility**: I-2 warning + skip dead fill; I-3 document the synthetic-candle
    model (maintainer decision: keep tradable) + surface per-coin synthetic share.
 5. **Cold-build parallelism**: P-3/P-4/P-7 together (they interlock), fixing I-8 in passing.
