@@ -4,6 +4,17 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Live auto-unstuck emission is no longer gated in Python by whether an
+  unstuck order is already resting on the exchange. Rust owns whether an
+  unstuck ideal order is emitted from the realized-PnL cumsum facts; duplicate
+  order risk now rides the same live reconciliation path as every other order
+  type.
+
+- HSL flat detection now uses a shared half-qty-step epsilon where symbol
+  precision is available, including replay cache extension, pside/unified cache
+  synthesis, current-episode proof, and coin replay episode transitions. This
+  keeps dust below half a step from extending or restarting HSL episodes.
+
 - Plan tracker: closed the Python-simplification item, the final open item
   of the risk/unstuck/HSL action plan. Removed live-path policy
   re-decisions: execution type, the redundant unstuck-suppression channel,

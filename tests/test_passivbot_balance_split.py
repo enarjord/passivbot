@@ -1602,6 +1602,41 @@ def test_pside_timeline_synthesis_rejects_inconsistent_pside_pnl():
     assert rows[0]["realized_pnl"] == rows[0]["realized_pnl_long"] == 3.0
 
 
+def test_pside_timeline_synthesis_uses_qty_step_flat_epsilon():
+    account_arrays = passivbot_module.pb_hsl._hsl_replay_account_series_arrays(
+        [
+            passivbot_module.pb_hsl._hsl_replay_account_series_row(
+                ts=60_000, pnl=0.0, pnl_long=0.0, pnl_short=0.0
+            )
+        ]
+    )
+    pair_arrays = {
+        ("long", "BTC/USDT:USDT"): passivbot_module.pb_hsl._hsl_replay_matrix_arrays(
+            [
+                passivbot_module.pb_hsl._hsl_replay_matrix_row(
+                    pside="long",
+                    ts=60_000,
+                    price=100.0,
+                    psize=0.004,
+                    pprice=100.0,
+                    pnl=0.0,
+                    c_mult=1.0,
+                )
+            ]
+        )
+    }
+
+    rows = passivbot_module.pb_hsl._hsl_replay_pside_timeline_rows_from_cache(
+        pair_arrays,
+        account_arrays,
+        current_balance=100.0,
+        qty_step_by_pair={("long", "BTC/USDT:USDT"): 0.01},
+    )
+
+    assert rows[0]["is_flat"] is True
+    assert rows[0]["is_flat_long"] is True
+
+
 @pytest.mark.asyncio
 async def test_pside_timeline_synthesis_matches_authoritative_rows(monkeypatch):
     # Trust boundary for the future pside/unified reuse gate: rows synthesized
@@ -5620,11 +5655,10 @@ async def test_update_effective_min_cost_uses_executable_min_qty():
     assert bot.effective_min_cost[symbol] == pytest.approx(88.165)
 
 
-def test_unstuck_allowances_stay_real_while_unstuck_order_is_open(monkeypatch):
-    # The allowance values are pure budget facts; an open unstuck order must
-    # not zero them. Suppression of new unstuck emission rides solely on the
-    # auto_unstuck_allowed flag, which the Rust orchestrator consumes as the
-    # sole gate (pinned in test_auto_unstuck_allowed_flag_is_sole_emission_gate).
+def test_open_unstuck_order_does_not_gate_live_unstuck_emission(monkeypatch):
+    # Rust owns auto-unstuck emission from the realized-PnL cumsum facts. A
+    # resting unstuck order must not add a Python-only suppression path; any
+    # duplicate-order risk rides normal order reconciliation.
     import passivbot as pb_mod
 
     bot = Passivbot.__new__(Passivbot)
@@ -5655,8 +5689,8 @@ def test_unstuck_allowances_stay_real_while_unstuck_order_is_open(monkeypatch):
     out = bot._calc_unstuck_allowances()
     assert out["long"] == pytest.approx(77.0)
 
-    # The emission gate is still off while the order is open.
-    assert bot._auto_unstuck_allowed_live(allow_new_unstuck=False) is False
+    # The emission input stays available while the order is open.
+    assert bot._auto_unstuck_allowed_live() is True
 
 
 def _make_unstuck_custom_id() -> str:

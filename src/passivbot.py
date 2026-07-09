@@ -11323,6 +11323,14 @@ class Passivbot:
         _safe_float = Passivbot._hsl_fill_safe_float
         _normalize_symbol = self._hsl_normalize_fill_symbol
 
+        def _flat_epsilon(symbol: str) -> float:
+            return pb_hsl._hsl_flat_epsilon(
+                (getattr(self, "qty_steps", None) or {}).get(str(symbol), 0.0)
+            )
+
+        def _is_flat_size(symbol: str, size: float) -> bool:
+            return abs(float(size)) <= _flat_epsilon(symbol)
+
         def _ensure_slot(
             container: Dict[str, Dict[str, Dict[str, float]]], symbol: str
         ):
@@ -11345,7 +11353,11 @@ class Passivbot:
                     if not isinstance(pos, dict):
                         continue
                     size = abs(_safe_float(pos.get("size"), 0.0))
-                    price = _safe_float(pos.get("price"), 0.0) if size > 1e-12 else 0.0
+                    price = (
+                        _safe_float(pos.get("price"), 0.0)
+                        if not _is_flat_size(norm_symbol, size)
+                        else 0.0
+                    )
                     out[(norm_symbol, pside)] = (size, price)
             return out
 
@@ -11364,8 +11376,8 @@ class Passivbot:
                 "events": len(events),
                 "current_position_pairs": sum(
                     1
-                    for size, _price in current_position_state.values()
-                    if size > 1e-12
+                    for (sym, _pside), (size, _price) in current_position_state.items()
+                    if not _is_flat_size(sym, size)
                 ),
             },
             reason_code=ReasonCodes.HSL_HISTORY_INPUTS_LOADED,
@@ -11475,7 +11487,7 @@ class Passivbot:
         current_position_symbols = {
             symbol
             for (symbol, _pside), (size, _price) in current_position_state.items()
-            if size > 1e-12
+            if not _is_flat_size(symbol, size)
         }
         symbols = {
             evt["symbol"]
@@ -11711,7 +11723,7 @@ class Passivbot:
         record_start_realized_pnl_pside = {"long": 0.0, "short": 0.0}
         record_start_realized_pnl_coin_pside: Dict[str, Dict[str, float]] = {}
         actual_symbol_pside_flat = {
-            (sym, ps): size <= 1e-12
+            (sym, ps): _is_flat_size(sym, size)
             for (sym, ps), (size, _price) in current_position_state.items()
         }
         last_event_ts_by_symbol_pside = {
@@ -11735,7 +11747,7 @@ class Passivbot:
                 return True
             if "size" not in pside_position:
                 return True
-            return float(pside_position["size"]) <= 1e-12
+            return _is_flat_size(symbol, float(pside_position["size"]))
 
         def _apply_event(evt: dict):
             slot = _ensure_slot(positions, evt["symbol"])[evt["pside"]]
@@ -11758,11 +11770,12 @@ class Passivbot:
                 slot["size"] = max(slot["size"] - qty, 0.0)
                 if slot["size"] <= 0.0:
                     slot["price"] = 0.0
-            has_pos = slot["size"] > 1e-12
+            has_pos = not _is_flat_size(evt["symbol"], slot["size"])
             if has_pos:
                 active_symbols.add(evt["symbol"])
             elif not any(
-                positions[evt["symbol"]][ps]["size"] > 1e-12 for ps in ("long", "short")
+                not _is_flat_size(evt["symbol"], positions[evt["symbol"]][ps]["size"])
+                for ps in ("long", "short")
             ):
                 active_symbols.discard(evt["symbol"])
 
@@ -11784,7 +11797,7 @@ class Passivbot:
             replay_matrix_pairs = {
                 (pside, sym)
                 for (sym, pside), (size, _price) in current_position_state.items()
-                if size > 1e-12 and sym in price_replay_symbols
+                if not _is_flat_size(sym, size) and sym in price_replay_symbols
             }
         replay_matrix_rows: Dict[Tuple[str, str], List[dict]] = {
             pair: [] for pair in replay_matrix_pairs
@@ -11874,7 +11887,7 @@ class Passivbot:
                         continue
                     slot = positions.get(sym, {}).get(pside, {})
                     size = float(slot.get("size", 0.0) or 0.0)
-                    if size > 1e-12:
+                    if not _is_flat_size(sym, size):
                         psize = size if pside == "long" else -size
                         pprice = float(slot.get("price", 0.0) or 0.0)
                     else:
@@ -11946,7 +11959,8 @@ class Passivbot:
                 == evt["timestamp"]
             )
             if authoritative_symbol_flat_override and (
-                not math.isfinite(after_psize) or after_psize > 1e-12
+                not math.isfinite(after_psize)
+                or not _is_flat_size(evt["symbol"], after_psize)
             ):
                 logging.warning(
                     "[risk] balance-equity replay trusting current flat %s symbol state over residual panic replay size | timestamp=%s replay_after_psize=%s symbol=%s",
@@ -11960,7 +11974,7 @@ class Passivbot:
                     Passivbot._log_symbol(evt["symbol"]),
                 )
             if (
-                (math.isfinite(after_psize) and after_psize <= 1e-12)
+                (math.isfinite(after_psize) and _is_flat_size(evt["symbol"], after_psize))
                 or authoritative_symbol_flat_override
                 or _symbol_pside_is_flat(evt["symbol"], evt["pside"])
             ):
@@ -13524,8 +13538,8 @@ class Passivbot:
         """Calculate unstuck allowances using FillEventsManager."""
         return self._calc_unstuck_allowances()
 
-    def _auto_unstuck_allowed_live(self, allow_new_unstuck: bool) -> bool:
-        if not allow_new_unstuck or self._pnls_manager is None:
+    def _auto_unstuck_allowed_live(self) -> bool:
+        if self._pnls_manager is None:
             return False
         start_ms = self._pnls_lookback_start_ms()
         events = self._get_effective_pnl_events()
@@ -13534,7 +13548,7 @@ class Passivbot:
             context="auto unstuck realized PnL",
             start_ms=start_ms,
         )
-        return bool(events)
+        return True
 
     def _calc_orchestrator_unstuck_allowance_for_symbol(
         self, pside: str, symbol: str, realized_pnl_cumsum: dict
@@ -15414,13 +15428,10 @@ class Passivbot:
             self, last_prices, ts=utc_ms(), source=monitor_source
         )
 
-        # The open-order check drives only the auto_unstuck_allowed emission
-        # gate; Rust derives the actual unstuck allowance internally from the
-        # realized-pnl cumsum facts below, so no allowance values are computed
-        # or passed on this path (the monitor computes them on demand for
-        # diagnostics).
-        allow_new_unstuck = not self.has_open_unstuck_order()
-        auto_unstuck_allowed = self._auto_unstuck_allowed_live(allow_new_unstuck)
+        # Python only proves the realized-PnL inputs are safe to expose; Rust
+        # owns unstuck emission from the cumsum facts below, and duplicate
+        # order risk rides normal live reconciliation like any other order.
+        auto_unstuck_allowed = self._auto_unstuck_allowed_live()
         realized_pnl_cumsum = self._get_realized_pnl_cumsum_stats()
         now_ms = int(self.get_exchange_time())
         fill_increase_timestamps = self._get_last_increase_fill_timestamps(
