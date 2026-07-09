@@ -670,9 +670,10 @@ Related detailed plans:
       remain unavailable instead of receiving synthetic ranking tails.
 
 18. [ ] Binance hourly hedge-mode/config refresh traceback classification.
-    Status: structured event plus smoke projection merged; live emission
-    evidence and smoke/report classification remain open after a restarted
-    process has crossed an hourly maintenance refresh.
+    Status: structured event plus smoke projection merged; a performance-report
+    projection is in the current logging-overhaul slice. Live emission evidence
+    and smoke/report classification remain open after a restarted process has
+    crossed an hourly maintenance refresh.
 
     VPS5 smoke after PR #892 deployed to `v8@7e7ce16f` returned hard-red from
     a non-risk text-log traceback in the Binance bot while all five live
@@ -721,6 +722,12 @@ Related detailed plans:
       `exchange.config_refresh` events. This is not yet proof that the Binance
       `-4084` maintenance traceback is fixed or classified, because no sampled
       window has proven an hourly refresh occurrence after restart.
+    - 2026-07-09: Branch `codex/v8-performance-exchange-config-refresh` adds a
+      bounded `live-performance-report` health and elapsed-timing projection
+      over existing `exchange.config_refresh` events. It excludes raw error
+      text and does not change refresh retries, exception propagation, smoke
+      verdicts, exchange I/O, or trading behavior. Live hourly emission
+      evidence remains the prerequisite for any later classification change.
 
 ## Merged Work Log
 
