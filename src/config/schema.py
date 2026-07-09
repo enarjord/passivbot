@@ -13,22 +13,22 @@ def _get_shared_bot_defaults():
         "long": {
             "forager": {
                 "score_weights": {
-                    "ema_readiness": 0.08,
-                    "volatility": 0.48,
-                    "volume": 0.44
+                    "ema_readiness": 0.2,
+                    "volatility": 0.34,
+                    "volume": 0.46
                 },
-                "volatility_ema_span_1m": 661.0,
-                "volume_drop_pct": 0.06,
-                "volume_ema_span_1m": 2369.0
+                "volatility_ema_span_1m": 187.0,
+                "volume_drop_pct": 0.02,
+                "volume_ema_span_1m": 1280.0
             },
             "hsl": {
-                "cooldown_minutes_after_red": 3981.0,
-                "ema_span_minutes": 644.0,
+                "cooldown_minutes_after_red": 4041.0,
+                "ema_span_minutes": 639.0,
                 "enabled": False,
                 "no_restart_drawdown_threshold": 1,
                 "orange_tier_mode": "tp_only_with_active_entry_cancellation",
                 "panic_close_order_type": "limit",
-                "red_threshold": 0.025,
+                "red_threshold": 0.117,
                 "restart_after_red_policy": "threshold",
                 "tier_ratios": {
                     "orange": 0.75,
@@ -36,25 +36,25 @@ def _get_shared_bot_defaults():
                 }
             },
             "risk": {
-                "entry_cooldown_minutes": 7.1,
+                "entry_cooldown_minutes": 7.3,
                 "n_positions": 5.0,
                 "position_exposure_enforcer_enabled": False,
                 "position_exposure_enforcer_threshold": 1.0,
                 "total_exposure_enforcer_enabled": True,
                 "total_exposure_enforcer_policy": "reduce_overweight",
-                "total_exposure_enforcer_threshold": 1.004,
+                "total_exposure_enforcer_threshold": 1.002,
                 "total_exposure_entry_gate_enabled": True,
                 "total_wallet_exposure_limit": 1.5,
                 "we_excess_allowance_mode": "bounded",
                 "we_excess_allowance_pct": 0.5
             },
             "unstuck": {
-                "close_pct": 0.028,
-                "ema_dist": -0.086,
+                "close_pct": 0.024,
+                "ema_dist": -0.1238,
                 "ema_gating_enabled": True,
                 "enabled": True,
-                "loss_allowance_pct": 0.0065,
-                "threshold": 0.46
+                "loss_allowance_pct": 0.0063,
+                "threshold": 0.432
             }
         },
         "short": {
@@ -475,10 +475,8 @@ def get_template_config():
                     "enable_overrides": [],
                     "fixed_params": [],
                     "fixed_runtime_overrides": {
-                        "bot.long.hsl.no_restart_drawdown_threshold": 1,
-                        "bot.long.hsl.restart_after_red_policy": "threshold",
-                        "bot.short.hsl.no_restart_drawdown_threshold": 1,
-                        "bot.short.hsl.restart_after_red_policy": "threshold"
+                        "bot.long.hsl.restart_after_red_policy": "always",
+                        "bot.short.hsl.restart_after_red_policy": "always"
                     },
                     "iters": 200000,
                     "mutation_eta": 20,
