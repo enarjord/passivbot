@@ -2240,6 +2240,12 @@ def test_live_smoke_report_summarizes_resource_pressure(tmp_path):
                     "cpu_percent": 12.25,
                     "memory_percent": 11.5,
                     "rss_bytes": 1500,
+                    "system_memory_total_bytes": 16_000,
+                    "system_memory_available_bytes": 8_000,
+                    "system_memory_percent": 50.0,
+                    "swap_total_bytes": 4_000,
+                    "swap_used_bytes": 1_000,
+                    "swap_percent": 25.0,
                     "open_fds": 13,
                     "loadavg_1m": 0.75,
                     "loadavg_5m": 0.5,
@@ -2275,6 +2281,12 @@ def test_live_smoke_report_summarizes_resource_pressure(tmp_path):
                 data={
                     "memory_percent": 7.5,
                     "rss_bytes": 2000,
+                    "system_memory_total_bytes": 16_000,
+                    "system_memory_available_bytes": 8_500,
+                    "system_memory_percent": 45.0,
+                    "swap_total_bytes": 4_000,
+                    "swap_used_bytes": 400,
+                    "swap_percent": 10.0,
                     "open_fds": 9,
                     "loadavg_1m": 0.5,
                     "health_summary_lag_ms": 500,
@@ -2296,6 +2308,11 @@ def test_live_smoke_report_summarizes_resource_pressure(tmp_path):
     assert resource["latest_cpu_reporting_bots"] == 1
     assert resource["latest_memory_percent_max"] == 11.5
     assert resource["latest_memory_reporting_bots"] == 2
+    assert resource["latest_system_memory_percent_max"] == 50.0
+    assert resource["latest_system_memory_reporting_bots"] == 2
+    assert resource["latest_system_memory_available_bytes_min"] == 8000
+    assert resource["latest_swap_percent_max"] == 25.0
+    assert resource["latest_swap_reporting_bots"] == 2
     assert resource["latest_rss_bytes_total"] == 3500
     assert resource["latest_rss_reporting_bots"] == 2
     assert resource["latest_open_fds_total"] == 22
@@ -2312,6 +2329,12 @@ def test_live_smoke_report_summarizes_resource_pressure(tmp_path):
         "cpu_percent": 12.25,
         "memory_percent": 11.5,
         "rss_bytes": 1500,
+        "system_memory_total_bytes": 16000,
+        "system_memory_available_bytes": 8000,
+        "system_memory_percent": 50.0,
+        "swap_total_bytes": 4000,
+        "swap_used_bytes": 1000,
+        "swap_percent": 25.0,
         "open_fds": 13,
         "loadavg_1m": 0.75,
         "loadavg_5m": 0.5,
@@ -2328,6 +2351,11 @@ def test_live_smoke_report_summarizes_resource_pressure(tmp_path):
         "latest_cpu_reporting_bots": 1,
         "latest_memory_percent_max": 11.5,
         "latest_memory_reporting_bots": 2,
+        "latest_system_memory_percent_max": 50.0,
+        "latest_system_memory_reporting_bots": 2,
+        "latest_system_memory_available_bytes_min": 8000,
+        "latest_swap_percent_max": 25.0,
+        "latest_swap_reporting_bots": 2,
         "latest_rss_bytes_total": 3500,
         "latest_rss_reporting_bots": 2,
         "latest_open_fds_total": 22,

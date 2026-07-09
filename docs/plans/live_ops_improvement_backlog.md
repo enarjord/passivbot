@@ -328,11 +328,16 @@ Related detailed plans:
    process RSS, memory percent when available, open file descriptor count,
    system load averages, CPU count, and live-event pipeline queue/drop/sink
    error counters. `live-smoke-report` now also projects those existing
-   event-pipeline counters into full, summary, and brief smoke reports.
+   event-pipeline counters into full, summary, and brief smoke reports. The
+   resource-pressure path also includes process CPU percent after psutil's
+   non-blocking first-sample priming, health-summary scheduling lag after the
+   first heartbeat, and optional psutil-backed system memory/swap pressure
+   fields for host-level pressure scans.
 
-   Remaining refinements: exchange-call counts, candle-fetch concurrency, loop
-   lag, thresholded console warnings, and richer system memory/swap fields. Keep
-   this off console unless thresholds are crossed.
+   Remaining refinements: exchange-call counts, candle-fetch concurrency,
+   lower-level event-loop lag if heartbeat lag proves too coarse, and
+   thresholded console warnings. Keep this off console unless thresholds are
+   crossed.
 
    Work log:
    - 2026-06-27: Added `live-smoke-report` event-pipeline health summaries

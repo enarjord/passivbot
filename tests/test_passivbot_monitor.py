@@ -1340,6 +1340,18 @@ def test_build_health_summary_payload_includes_resource_pressure(monkeypatch):
     monkeypatch.setattr(pb_mod.pb_monitor, "_get_open_fd_count", lambda: 42)
     monkeypatch.setattr(
         pb_mod.pb_monitor,
+        "_get_system_memory_payload",
+        lambda: {
+            "system_memory_total_bytes": 16_000,
+            "system_memory_available_bytes": 8_000,
+            "system_memory_percent": 50.0,
+            "swap_total_bytes": 4_000,
+            "swap_used_bytes": 1_000,
+            "swap_percent": 25.0,
+        },
+    )
+    monkeypatch.setattr(
+        pb_mod.pb_monitor,
         "_get_loadavg_payload",
         lambda: {
             "loadavg_1m": 1.5,
@@ -1358,6 +1370,12 @@ def test_build_health_summary_payload_includes_resource_pressure(monkeypatch):
     assert payload["rss_bytes"] == 123456
     assert payload["memory_percent"] == 12.5
     assert payload["cpu_percent"] == 34.25
+    assert payload["system_memory_total_bytes"] == 16_000
+    assert payload["system_memory_available_bytes"] == 8_000
+    assert payload["system_memory_percent"] == 50.0
+    assert payload["swap_total_bytes"] == 4_000
+    assert payload["swap_used_bytes"] == 1_000
+    assert payload["swap_percent"] == 25.0
     assert payload["open_fds"] == 42
     assert payload["loadavg_1m"] == 1.5
     assert payload["loadavg_5m"] == 1.25

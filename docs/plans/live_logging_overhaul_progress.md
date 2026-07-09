@@ -19,18 +19,19 @@ Last updated: 2026-07-09.
 
 Current `origin/v8` head:
 
-- `58308f32` after PR #1150, `Add resource pressure smoke projection`.
+- `1a624989` after PR #1151, `Add health summary scheduling lag telemetry`.
 
 Current logging-overhaul head:
 
-- `58308f32` after PR #1150, `Add resource pressure smoke projection`.
+- `1a624989` after PR #1151, `Add health summary scheduling lag telemetry`.
 
 Current work:
 
-- Branch `codex/v8-health-loop-lag` adds bounded health-summary scheduling lag
-  telemetry to the existing `health.summary` resource-pressure path and projects
-  it through smoke/performance reports. It does not add exchange calls,
-  order/risk logic, restart orchestration, or trading behavior.
+- Branch `codex/v8-health-system-memory` adds optional psutil-backed system
+  memory and swap pressure fields to the existing `health.summary`
+  resource-pressure path and projects them through smoke/performance reports.
+  It does not add exchange calls, order/risk logic, restart orchestration, or
+  trading behavior.
 
 Current review gate:
 
@@ -60,6 +61,25 @@ Retuned goal boundary:
 
 VPS5 deployment status:
 
+- Repository pulled through PR #1151 at `1a624989`.
+- PR #1151 added bounded health-summary scheduling lag telemetry to existing
+  `health.summary` events and projected it through smoke/performance
+  `resource_pressure` output. It merged after Claude Opus 4.8 and Grok 4.5
+  green-lighted the current head, Hermes approved, and CI was green. VPS5 was
+  pulled with `git pull --autostash --ff-only origin v8` to preserve the
+  pre-existing tracked Rust-format/local config state, then bots were restarted
+  from `/root/bots_vps5.yaml` because the slice changed the live
+  health-summary producer. Binance exited in the first Ctrl-C window; Kucoin,
+  GateIO, OKX, and Hyperliquid required exact live-process SIGTERM before
+  reload. `tmuxp load -d /root/bots_vps5.yaml` started all five configured
+  bots. Immediate 2-minute smoke reported `ok=true`, `hard_failures=0`,
+  `matched_expected=5`, `remote_calls.failed=0`,
+  `account_critical_remote_calls.failed=0`, `fill_refresh.failed=0`,
+  `logs.hard_matches=0`, and repository head `1a624989`. A focused 5-minute
+  `resource_pressure` smoke also reported `ok=true`, `hard_failures=0`, and
+  two `health.summary` resource-pressure events. The new
+  `health_summary_lag_ms` field was not present in that short post-restart
+  window because first post-start health summaries intentionally omit it.
 - Repository pulled through PR #1042 at `06f04070`.
 - PR #1042 added an opt-in `cache` live-event debug profile for existing cache
   load, flush, and warmup-decision events. It merged after Claude and Hermes

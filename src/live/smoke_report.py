@@ -107,6 +107,12 @@ RESOURCE_PRESSURE_FIELDS = (
     "cpu_percent",
     "memory_percent",
     "rss_bytes",
+    "system_memory_total_bytes",
+    "system_memory_available_bytes",
+    "system_memory_percent",
+    "swap_total_bytes",
+    "swap_used_bytes",
+    "swap_percent",
     "open_fds",
     "loadavg_1m",
     "loadavg_5m",
@@ -2967,6 +2973,22 @@ def _latest_numeric_max(
     return round(out, 6)
 
 
+def _latest_numeric_min(
+    groups: Iterable[dict[str, Any]], field: str
+) -> int | float | None:
+    values = [
+        float(value)
+        for group in groups
+        if (value := _latest_numeric_value(group, field)) is not None
+    ]
+    if not values:
+        return None
+    out = min(values)
+    if out.is_integer():
+        return int(out)
+    return round(out, 6)
+
+
 def _latest_numeric_reporting_bots(groups: Iterable[dict[str, Any]], field: str) -> int:
     return sum(1 for group in groups if _latest_numeric_value(group, field) is not None)
 
@@ -3012,6 +3034,21 @@ def _summarize_resource_pressure(
             ),
             "latest_memory_reporting_bots": _latest_numeric_reporting_bots(
                 groups.values(), "memory_percent"
+            ),
+            "latest_system_memory_percent_max": _latest_numeric_max(
+                groups.values(), "system_memory_percent"
+            ),
+            "latest_system_memory_reporting_bots": _latest_numeric_reporting_bots(
+                groups.values(), "system_memory_percent"
+            ),
+            "latest_system_memory_available_bytes_min": _latest_numeric_min(
+                groups.values(), "system_memory_available_bytes"
+            ),
+            "latest_swap_percent_max": _latest_numeric_max(
+                groups.values(), "swap_percent"
+            ),
+            "latest_swap_reporting_bots": _latest_numeric_reporting_bots(
+                groups.values(), "swap_percent"
             ),
             "latest_rss_bytes_total": _latest_numeric_sum(
                 groups.values(), "rss_bytes"
@@ -6522,6 +6559,17 @@ def _summary_limited_groups(
             "latest_memory_reporting_bots": summary.get(
                 "latest_memory_reporting_bots"
             ),
+            "latest_system_memory_percent_max": summary.get(
+                "latest_system_memory_percent_max"
+            ),
+            "latest_system_memory_reporting_bots": summary.get(
+                "latest_system_memory_reporting_bots"
+            ),
+            "latest_system_memory_available_bytes_min": summary.get(
+                "latest_system_memory_available_bytes_min"
+            ),
+            "latest_swap_percent_max": summary.get("latest_swap_percent_max"),
+            "latest_swap_reporting_bots": summary.get("latest_swap_reporting_bots"),
             "latest_rss_bytes_total": summary.get("latest_rss_bytes_total"),
             "latest_rss_reporting_bots": summary.get("latest_rss_reporting_bots"),
             "latest_open_fds_total": summary.get("latest_open_fds_total"),
@@ -7887,6 +7935,19 @@ def summarize_live_smoke_report_brief(report: dict[str, Any]) -> dict[str, Any]:
             ),
             "latest_memory_reporting_bots": _count_value(
                 resource_pressure.get("latest_memory_reporting_bots")
+            ),
+            "latest_system_memory_percent_max": resource_pressure.get(
+                "latest_system_memory_percent_max"
+            ),
+            "latest_system_memory_reporting_bots": _count_value(
+                resource_pressure.get("latest_system_memory_reporting_bots")
+            ),
+            "latest_system_memory_available_bytes_min": _count_value(
+                resource_pressure.get("latest_system_memory_available_bytes_min")
+            ),
+            "latest_swap_percent_max": resource_pressure.get("latest_swap_percent_max"),
+            "latest_swap_reporting_bots": _count_value(
+                resource_pressure.get("latest_swap_reporting_bots")
             ),
             "latest_rss_bytes_total": _count_value(
                 resource_pressure.get("latest_rss_bytes_total")
