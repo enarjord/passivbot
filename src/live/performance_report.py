@@ -2637,10 +2637,19 @@ class _ResourcePressureAccumulator:
         }
         return out
 
-    def to_dict(self, *, group_limit: int = GROUP_LIMIT) -> dict[str, Any]:
+    def to_dict(
+        self,
+        *,
+        group_limit: int = GROUP_LIMIT,
+        report_ts_ms: int | None = None,
+    ) -> dict[str, Any]:
         groups = []
         for bot, state in self.bots.items():
             latest = state.get("latest") if isinstance(state.get("latest"), dict) else {}
+            latest_ts = state.get("latest_ts")
+            latest_event_age_ms = None
+            if report_ts_ms is not None and latest_ts is not None:
+                latest_event_age_ms = max(0, int(report_ts_ms) - int(latest_ts))
             fields = {}
             for key in _RESOURCE_PRESSURE_FIELDS:
                 values = state["values"].get(key) if isinstance(state.get("values"), dict) else []
@@ -2655,7 +2664,8 @@ class _ResourcePressureAccumulator:
             group = {
                 "bot": bot,
                 "count": int(state.get("count") or 0),
-                "latest_ts": state.get("latest_ts"),
+                "latest_ts": latest_ts,
+                "latest_event_age_ms": latest_event_age_ms,
                 "fields": fields,
                 "latest_event_pipeline_stopping": latest.get("event_pipeline_stopping"),
                 "latest_event_pipeline_worker_alive": latest.get(
@@ -3910,7 +3920,10 @@ def build_live_performance_report(
         "cache_warmup": cache_warmup.to_dict(group_limit=group_limit),
         "fill_refresh": fill_refresh.to_dict(group_limit=group_limit),
         "forager_ema_readiness": forager_ema_readiness.to_dict(group_limit=group_limit),
-        "resource_pressure": resource_pressure.to_dict(group_limit=group_limit),
+        "resource_pressure": resource_pressure.to_dict(
+            group_limit=group_limit,
+            report_ts_ms=report_ts_ms,
+        ),
         "shutdown_latency": shutdown_latency.to_dict(group_limit=group_limit),
         "execution_timing": execution_timing.to_dict(group_limit=group_limit),
         "account_state_changes": account_state_changes.to_dict(group_limit=group_limit),
