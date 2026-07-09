@@ -15,24 +15,21 @@ merge, live smoke evidence changes, or new gaps are discovered.
 
 ## Current Status
 
-Last updated: 2026-07-03.
+Last updated: 2026-07-09.
 
 Current `origin/v8` head:
 
-- `06f04070` after PR #1042, `Add cache live-event debug profile`.
+- `63c60022` after PR #1148, `Add health CPU telemetry to performance reports`.
 
 Current logging-overhaul head:
 
-- `06f04070` after PR #1042, `Add cache live-event debug profile`.
+- `63c60022` after PR #1148, `Add health CPU telemetry to performance reports`.
 
 Current work:
 
-- Branch `codex/v8-smoke-cache-health` adds a read-only `cache_health` smoke
-  report projection over existing cache load, flush, and warmup-decision events.
-  It lets restart/warm-cache smoke loops see cache reuse, cold-path, load, and
-  flush counters without running a separate performance report. It does not add
-  event producers, exchange calls, cache behavior, startup behavior, console
-  routing, order/risk logic, or trading behavior.
+- Branch `codex/v8-live-psutil-requirement` makes `psutil` part of the live
+  install so the deployed health-summary RSS, memory-percent, open-FD, and new
+  CPU-percent probes are available in standard live environments.
 
 Current review gate:
 
@@ -6809,3 +6806,36 @@ VPS5 deployment status:
 - Expected validation: focused health-summary payload test, focused
   live-performance-report resource-pressure test, `py_compile`, `git diff
   --check`, and the standard added-line silent-handling scan.
+- Result: PR #1148 was reviewed by Hermes, Claude Opus 4.8, and Grok 4.5 on
+  current head `5dc295f8`, merged to `v8` as `63c60022`, and deployed to VPS5.
+  Because it changed the live `health.summary` producer, VPS5 was pulled to
+  `63c60022` and the five configured bots were restarted from
+  `/root/bots_vps5.yaml`. The first bounded smoke was hard-red from a transient
+  Kucoin account-critical balance `RequestTimeout`; a later 2-minute smoke
+  reported `ok=true`, `hard_failures=0`, `matched_expected=5`,
+  `missing_expected_count=0`, `remote_calls.failed=0`,
+  `account_critical_remote_calls.failed=0`, and only non-hard EMA readiness plus
+  one active Kucoin HSL replay attention item. A focused 10-minute
+  `resource_pressure` report returned `ok=true` with health summaries from three
+  bots and no event-pipeline drops or sink errors, but VPS5's live venv did not
+  have `psutil`, so `cpu_percent` was omitted. That packaging gap is being
+  handled by the follow-up live requirement slice.
+
+### Draft Slice: Live psutil Requirement
+
+- Branch: `codex/v8-live-psutil-requirement`.
+- Scope: live packaging plus progress evidence.
+- Triggering evidence: PR #1148 added a cached CPU-percent probe and the
+  existing health summary already had optional `psutil`-backed RSS,
+  memory-percent, and open-FD probes. VPS5 deploy proved the live venv installed
+  from `requirements-live.txt` lacks `psutil`, so those probes safely return
+  `None` and the new `cpu_percent` field is not emitted in standard live
+  installs.
+- Intended result: include the already-pinned `psutil` dependency in
+  `requirements-live.txt` so fresh live installs and refreshed VPS live envs can
+  emit the resource-pressure probes. Do not change health-summary fallback
+  behavior, event schemas, monitor routing, console output, exchange calls,
+  order/risk logic, restart behavior, or trading behavior.
+- Expected validation: requirement parsing/import smoke, focused health-summary
+  CPU probe tests, `py_compile` for the touched live monitor/report modules if
+  needed, `git diff --check`, and the standard added-line silent-handling scan.

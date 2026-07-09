@@ -12,3 +12,5 @@ sortedcontainers==2.4.0
 portalocker==3.2.0
 tqdm==4.66.5
 openpyxl==3.1.5
+psutil==5.9.8; python_version < "3.14"
+psutil==7.2.2; python_version >= "3.14"
