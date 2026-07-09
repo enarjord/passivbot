@@ -334,6 +334,9 @@ async def test_exchange_update_config_reraises_hedge_mode_failures(module_name, 
     bot_cls = getattr(module, class_name)
     bot = bot_cls.__new__(bot_cls)
     bot.cca = SimpleNamespace(set_position_mode=AsyncMock(side_effect=RuntimeError("boom")))
+    if class_name == "BitgetBot":
+        # Bitget probes the UTA account mode before setting hedge mode.
+        bot.cca.private_uta_get_v3_account_assets = AsyncMock(return_value={"code": "00000"})
 
     with pytest.raises(RuntimeError, match="boom"):
         await bot.update_exchange_config()
@@ -354,6 +357,9 @@ async def test_exchange_update_config_accepts_live_same_mode_success(
     bot_cls = getattr(module, class_name)
     bot = bot_cls.__new__(bot_cls)
     bot.cca = SimpleNamespace(set_position_mode=AsyncMock(return_value=response))
+    if class_name == "BitgetBot":
+        # Bitget probes the UTA account mode before setting hedge mode.
+        bot.cca.private_uta_get_v3_account_assets = AsyncMock(return_value={"code": "00000"})
 
     await bot.update_exchange_config()
 
