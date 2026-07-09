@@ -262,6 +262,10 @@ if the final replay result is correct.
      existing startup, cycle, state-refresh, remote-call, HSL replay, cache,
      decision-boundary, input-staleness, execution, and shutdown timing groups
      into one bounded report section.
+   - A follow-up slice added each timing group's latest bounded report-safe
+     canonical event IDs to the base timing table, `operation_durations`, and
+     `slowest_blockers`, so a slow row can be correlated directly with the
+     structured event stream without exposing free-form payloads.
    - A follow-up slice corrected `snapshot_to_rust` correlation: planning
      snapshot epochs are not live event cycle IDs, so legacy/current
      `snapshot.built` events without envelope cycle IDs are matched to the
@@ -347,8 +351,11 @@ classification when enough source events exist.
     that normalizes existing duration/staleness groups from performance,
     decision-boundary, input-staleness, execution, and shutdown sections into
     one sortable table with operation category, timing kind, trading impact, and
-    blocking scope. Remaining work: source events for event-pipeline overhead
-    and complete stage coverage where the live loop does not yet emit timings.
+    blocking scope. Timing groups, the normalized table, and ranked
+    `slowest_blockers` also include the latest bounded report-safe canonical
+    event IDs for direct event-stream correlation. Remaining work: source events
+    for event-pipeline overhead and complete stage coverage where the live loop
+    does not yet emit timings.
 - [ ] Exchange writes: create/cancel/close/panic write latency, exchange
   response latency, ambiguous write rate, confirmation latency.
   - Status: partial. The report now derives order-wave total duration,

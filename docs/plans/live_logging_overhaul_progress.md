@@ -19,21 +19,21 @@ Last updated: 2026-07-09.
 
 Current `origin/v8` head:
 
-- `aff9e864` after PR #1162, `Report exchange config refresh performance`.
+- `a0639806` after PR #1164, `Distinguish recovered config refresh failures`.
 
 Current logging-overhaul head:
 
-- `aff9e864` after PR #1162, `Report exchange config refresh performance`
+- `a0639806` after PR #1164, `Distinguish recovered config refresh failures`
   (latest merged logging-overhaul slice).
 
 Current work:
 
-- Branch `codex/v8-exchange-config-refresh-recovery` adds latest-per-bot status,
-  latest-failed-bot, and recovered-bot aggregates to the existing smoke and
-  performance `exchange.config_refresh` projections. Historical failures remain
-  visible, but a later successful refresh is no longer presented as unresolved.
-  The slice is read-only and does not change smoke verdicts, exchange calls,
-  refresh behavior, order/risk logic, restart orchestration, or trading behavior.
+- Branch `codex/v8-performance-correlation-ids` adds one bounded report-safe
+  canonical `latest_ids` mapping to each timing group and carries it into
+  `operation_durations` and `slowest_blockers`. This lets operators jump from a
+  slow timing row to the related structured events without exposing free-form
+  payloads. The slice is read-only and does not change event production,
+  exchange calls, order/risk logic, restart orchestration, or trading behavior.
 
 Current review gate:
 
@@ -63,6 +63,19 @@ Retuned goal boundary:
 
 VPS5 deployment status:
 
+- Repository pulled through PR #1164 at `a0639806`.
+- PR #1164 made the smoke and performance `exchange.config_refresh` projections
+  distinguish historical failures from latest unresolved failures and expose
+  recovered-bot counts. It merged after Hermes, Claude Opus 4.8, and Grok 4.5
+  approved the current head and CI was green. VPS5 was pulled with
+  `git pull --autostash --ff-only origin v8`, preserving the pre-existing
+  tracked Rust change and local config/tmp artifacts. No bot restart was
+  performed because the slice was read-only report projection plus docs. The
+  first bounded smoke observed a transient account-critical remote failure; the
+  next bounded query cleared with `ok=true` and `hard_failures=0`. A current
+  focused performance report returned
+  `latest_statuses={"succeeded":4}`, `latest_failed_bots=0`, and no unresolved
+  config-refresh failures.
 - Repository pulled through PR #1162 at `aff9e864`.
 - PR #1162 added bounded `exchange_config_refresh` health and elapsed-timing
   groups to `live-performance-report`, excluding raw exchange error text. It

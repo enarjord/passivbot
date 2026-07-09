@@ -641,6 +641,9 @@ def test_live_incident_bundle_collects_hashes_snapshots_events_and_window(tmp_pa
         "failed": 1,
         "failure_pct": 100.0,
         "failed_bots": 1,
+        "latest_statuses": {"failed": 1},
+        "latest_failed_bots": 1,
+        "recovered_bots": 0,
         "event_types": {"exchange.config_refresh": 1},
     }
     assert report["smoke_report"]["staged_readiness"] == {

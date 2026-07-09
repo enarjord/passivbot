@@ -10,6 +10,7 @@ from typing import Any
 
 from live.event_bus import (
     LIVE_EVENT_DEBUG_PROFILES,
+    LIVE_EVENT_ID_KEYS,
     LIVE_EVENT_MONITOR_PAYLOAD_KEY,
     utc_ms,
 )
@@ -24,6 +25,20 @@ from live.smoke_report import _user_safe_display_path
 
 GROUP_LIMIT = 80
 SUMMARY_GROUP_LIMIT = 12
+_PERFORMANCE_REPORT_ID_KEY_ALLOWLIST = frozenset(
+    {
+        "bot_id",
+        "cycle_id",
+        "snapshot_id",
+        "plan_id",
+        "order_wave_id",
+        "remote_call_id",
+        "remote_call_group_id",
+    }
+)
+_PERFORMANCE_REPORT_ID_KEYS = tuple(
+    key for key in LIVE_EVENT_ID_KEYS if key in _PERFORMANCE_REPORT_ID_KEY_ALLOWLIST
+)
 _PERFORMANCE_REPORT_SECTION_BASE_KEYS = (
     "ok",
     "root",
@@ -423,6 +438,18 @@ def _safe_label(value: Any, *, max_len: int = 120) -> str | None:
     return text
 
 
+def _bounded_event_ids(live_event: dict[str, Any]) -> dict[str, str]:
+    ids = live_event.get("ids")
+    if not isinstance(ids, dict):
+        return {}
+    out: dict[str, str] = {}
+    for key in _PERFORMANCE_REPORT_ID_KEYS:
+        value = _safe_label(ids.get(key), max_len=160)
+        if value is not None:
+            out[key] = value
+    return out
+
+
 def _elapsed_s_to_ms(value: Any) -> int | None:
     number = _finite_float(value)
     if number is None or number < 0:
@@ -473,6 +500,9 @@ class _MetricGroup:
         self.reason_codes: Counter[str] = Counter()
         self.symbols: Counter[str] = Counter()
         self.latest_ts: int | None = None
+        self.latest_ids: dict[str, str] = {}
+        self._latest_position: tuple[int, int] | None = None
+        self._event_index = 0
 
     def add(
         self,
@@ -481,6 +511,7 @@ class _MetricGroup:
         row: dict[str, Any],
         live_event: dict[str, Any],
     ) -> None:
+        self._event_index += 1
         self.values.append(int(value_ms))
         status = live_event.get("status")
         if status is not None:
@@ -494,6 +525,11 @@ class _MetricGroup:
         ts = _record_ts(row)
         if ts is not None and (self.latest_ts is None or ts > self.latest_ts):
             self.latest_ts = ts
+        if ts is not None:
+            position = (int(ts), self._event_index)
+            if self._latest_position is None or position >= self._latest_position:
+                self._latest_position = position
+                self.latest_ids = _bounded_event_ids(live_event)
 
     def to_dict(self) -> dict[str, Any]:
         values = sorted(self.values)
@@ -514,6 +550,7 @@ class _MetricGroup:
                 "median_ms": int(round(statistics.median(values))) if values else None,
                 "p95_ms": _percentile(values, 0.95),
                 "latest_ts": self.latest_ts,
+                "latest_ids": self.latest_ids,
                 "statuses": dict(sorted(self.statuses.items())),
                 "reason_codes": dict(sorted(self.reason_codes.items())),
                 "symbols_sample": [
@@ -3468,6 +3505,7 @@ def _slowest_blockers(
                     "median_ms",
                     "p95_ms",
                     "latest_ts",
+                    "latest_ids",
                     "statuses",
                     "reason_codes",
                     "symbols_sample",
@@ -3562,6 +3600,7 @@ def _operation_duration_table(
                     "median_ms",
                     "p95_ms",
                     "latest_ts",
+                    "latest_ids",
                     "statuses",
                     "reason_codes",
                     "symbols_sample",

@@ -292,7 +292,11 @@ Monitor commands are documented in detail in [monitor.md](monitor.md). The CLI s
   The startup-readiness section summarizes latest per-bot startup phase timings and HSL
   replay state from existing lifecycle/replay events. The `slowest_blockers` section ranks
   non-diagnostic timing and staleness groups by observed duration so the largest trading-impact
-  delays are visible without scanning every timing group. The `operation_durations` section
+  delays are visible without scanning every timing group. Base timing groups and their
+  `operation_durations`/`slowest_blockers` projections include one bounded `latest_ids` mapping
+  of report-safe canonical event-envelope IDs when available (excluding per-action IDs),
+  allowing direct correlation with `live-event-query` without exposing free-form payloads.
+  The `operation_durations` section
   collates startup, cycle, state-refresh, remote-call, HSL replay, cache, decision-boundary,
   input-staleness, fill-refresh, execution, and shutdown timing groups into one bounded table with operation
   category, trading-impact, blocking-scope, and timing-kind counters. The `resource_pressure` section
