@@ -109,7 +109,6 @@ from hlcv_preparation import (
 from hlcvs_manifest import (
     HlcvsManifestError,
     build_hlcvs_manifest,
-    load_numpy_artifact,
     load_hlcvs_manifest,
     manifest_has_required_schema,
     verify_hlcvs_manifest,
@@ -1552,7 +1551,6 @@ def _get_hlcvs_cache_dir_for_save(config, exchange, coins, cache_hash, timestamp
 def load_coins_hlcvs_from_cache(config, exchange, warmup_minutes=0):
     cache_hash = get_cache_hash(config, exchange)
     cache_dir = _resolve_hlcvs_cache_dir(cache_hash)
-    compress_cache = bool(require_config_value(config, "backtest.compress_cache"))
     if cache_dir and os.path.exists(cache_dir):
         manifest = load_hlcvs_manifest(cache_dir)
         if manifest is None:
@@ -1568,7 +1566,10 @@ def load_coins_hlcvs_from_cache(config, exchange, warmup_minutes=0):
             )
             return None
         else:
-            verify_hlcvs_manifest(cache_dir, manifest)
+            # Collect the arrays the verifier already decompressed so we don't
+            # pay a second multi-GB decompression below.
+            verified_arrays: dict = {}
+            verify_hlcvs_manifest(cache_dir, manifest, out_arrays=verified_arrays)
         # Check warmup sufficiency: cached data must cover at least the needed warmup
         meta_path = cache_dir / "cache_meta.json"
         if meta_path.exists():
@@ -1587,71 +1588,13 @@ def load_coins_hlcvs_from_cache(config, exchange, warmup_minutes=0):
             return None
         coins = json.load(open(cache_dir / "coins.json"))
         mss = json.load(open(cache_dir / "market_specific_settings.json"))
-        def cache_artifact_path(name: str, default_name: str) -> Path:
-            if manifest_has_required_schema(manifest):
-                files = manifest.get("files", {})
-                entry = files.get(name) if isinstance(files, dict) else None
-                if not isinstance(entry, dict):
-                    raise HlcvsManifestError(
-                        f"HLCV manifest missing required file entry {name!r}"
-                    )
-                rel_path = entry.get("path") if isinstance(entry, dict) else None
-                if not rel_path:
-                    raise HlcvsManifestError(
-                        f"HLCV manifest file entry {name!r} is missing path"
-                    )
-                return cache_dir / str(rel_path)
-            return cache_dir / default_name
-
-        if compress_cache:
-            fname = cache_artifact_path("hlcvs", "hlcvs.npy.gz")
-            logging.info(
-                f"{exchange} Attempting to load hlcvs data from cache {fname}..."
-            )
-            hlcvs = load_numpy_artifact(fname)
-            # Load optional timestamps if present
-            ts_fname = cache_artifact_path("timestamps", "timestamps.npy.gz")
-            timestamps = None
-            if os.path.exists(ts_fname):
-                try:
-                    timestamps = load_numpy_artifact(ts_fname)
-                except Exception:
-                    timestamps = None
-            btc_fname = cache_artifact_path("btc_usd_prices", "btc_usd_prices.npy.gz")
-            if os.path.exists(btc_fname):
-                logging.info(
-                    f"{exchange} Attempting to load BTC/USD prices from cache {btc_fname}..."
-                )
-                btc_usd_prices = load_numpy_artifact(btc_fname)
-            else:
-                logging.info(
-                    f"{exchange} No BTC/USD prices in cache; cache invalid for fractional collateral"
-                )
-                return None
-        else:
-            fname = cache_artifact_path("hlcvs", "hlcvs.npy")
-            logging.info(
-                f"{exchange} Attempting to load hlcvs data from cache {fname}..."
-            )
-            hlcvs = load_numpy_artifact(fname)
-            ts_fname = cache_artifact_path("timestamps", "timestamps.npy")
-            timestamps = None
-            if os.path.exists(ts_fname):
-                try:
-                    timestamps = load_numpy_artifact(ts_fname)
-                except Exception:
-                    timestamps = None
-            btc_fname = cache_artifact_path("btc_usd_prices", "btc_usd_prices.npy")
-            if os.path.exists(btc_fname):
-                logging.info(
-                    f"{exchange} Attempting to load BTC/USD prices from cache {btc_fname}..."
-                )
-                btc_usd_prices = load_numpy_artifact(btc_fname)
-            else:
-                logging.info(
-                    f"{exchange} No BTC/USD prices in cache; cache invalid for fractional collateral"
-                )
-                return None
+        # verify_hlcvs_manifest hard-fails unless all three array artifacts
+        # exist and match their recorded hashes, so the verified arrays are
+        # authoritative here — no re-read needed.
+        hlcvs = verified_arrays["hlcvs"]
+        timestamps = verified_arrays["timestamps"]
+        btc_usd_prices = verified_arrays["btc_usd_prices"]
+        logging.info(f"{exchange} Loaded hlcvs data from cache {cache_dir}")
         results_path = oj(
             require_config_value(config, "backtest.base_dir"), exchange, ""
         )

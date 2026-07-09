@@ -543,7 +543,12 @@ def test_run_backend_evaluates_all_starting_configs_before_trim(monkeypatch):
     def _fake_minimize(problem, algorithm, termination, seed, verbose, **kwargs):
         del problem, termination, verbose
         captured["seed"] = seed
-        captured["sampling"] = np.asarray(algorithm.initialization.sampling, dtype=np.float64)
+        sampling = algorithm.initialization.sampling
+        # Starting seeds arrive as an already-evaluated Population (so pymoo
+        # reuses their evaluations); random-only sampling stays an ndarray.
+        if isinstance(sampling, pymoo_backend.Population):
+            sampling = sampling.get("X")
+        captured["sampling"] = np.asarray(sampling, dtype=np.float64)
         return None
 
     monkeypatch.setattr(pymoo_backend, "pymoo_minimize", _fake_minimize)

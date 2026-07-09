@@ -378,12 +378,14 @@ class OhlcvStore:
         try:
             body_arr = np.ascontiguousarray(body)
             valid_arr = np.ascontiguousarray(valid)
+            # C-contiguous buffers hash byte-identically to tobytes(order="C")
+            # without materializing a copy of the chunk.
             hasher.update(str(body_arr.dtype).encode("utf-8"))
             hasher.update(str(body_arr.shape).encode("utf-8"))
-            hasher.update(body_arr.tobytes(order="C"))
+            hasher.update(body_arr.data)
             hasher.update(str(valid_arr.dtype).encode("utf-8"))
             hasher.update(str(valid_arr.shape).encode("utf-8"))
-            hasher.update(valid_arr.tobytes(order="C"))
+            hasher.update(valid_arr.data)
         finally:
             del body
             del valid
