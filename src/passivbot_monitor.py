@@ -78,6 +78,8 @@ def _get_process_cpu_percent() -> Optional[float]:
     try:
         if _PROCESS_CPU_PERCENT_PROBE is None:
             _PROCESS_CPU_PERCENT_PROBE = psutil.Process(os.getpid())
+            _PROCESS_CPU_PERCENT_PROBE.cpu_percent(interval=None)
+            return None
         return float(_PROCESS_CPU_PERCENT_PROBE.cpu_percent(interval=None))
     except error_types as exc:
         _PROCESS_CPU_PERCENT_PROBE = None

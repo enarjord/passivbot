@@ -1401,7 +1401,7 @@ def test_process_cpu_percent_reuses_psutil_process(monkeypatch):
     monkeypatch.setattr(pb_mod.pb_monitor, "_PROCESS_CPU_PERCENT_PROBE", None)
     monkeypatch.setattr(pb_mod.pb_monitor.os, "getpid", lambda: 12345)
 
-    assert pb_mod.pb_monitor._get_process_cpu_percent() == 0.0
+    assert pb_mod.pb_monitor._get_process_cpu_percent() is None
     assert pb_mod.pb_monitor._get_process_cpu_percent() == 42.5
 
     assert len(fake_psutil.processes) == 1
