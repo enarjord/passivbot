@@ -670,10 +670,11 @@ Related detailed plans:
       remain unavailable instead of receiving synthetic ranking tails.
 
 18. [ ] Binance hourly hedge-mode/config refresh traceback classification.
-    Status: structured event plus smoke projection merged; a performance-report
-    projection is in the current logging-overhaul slice. Live emission evidence
-    and smoke/report classification remain open after a restarted process has
-    crossed an hourly maintenance refresh.
+    Status: structured event, smoke projection, performance projection, and live
+    hourly emission evidence are complete. The historical Binance `-4084`
+    classification remains open only if it recurs; current live evidence shows
+    successful Binance refreshes. The current logging slice makes recovered
+    failures explicit without changing smoke verdicts.
 
     VPS5 smoke after PR #892 deployed to `v8@7e7ce16f` returned hard-red from
     a non-risk text-log traceback in the Binance bot while all five live
@@ -722,12 +723,16 @@ Related detailed plans:
       `exchange.config_refresh` events. This is not yet proof that the Binance
       `-4084` maintenance traceback is fixed or classified, because no sampled
       window has proven an hourly refresh occurrence after restart.
-    - 2026-07-09: Branch `codex/v8-performance-exchange-config-refresh` adds a
-      bounded `live-performance-report` health and elapsed-timing projection
-      over existing `exchange.config_refresh` events. It excludes raw error
-      text and does not change refresh retries, exception propagation, smoke
-      verdicts, exchange I/O, or trading behavior. Live hourly emission
-      evidence remains the prerequisite for any later classification change.
+    - 2026-07-09: PR #1162 added a bounded `live-performance-report` health and
+      elapsed-timing projection over existing `exchange.config_refresh` events.
+      Post-deploy VPS evidence found 14 real hourly refresh events across all
+      five bots: 13 succeeded and one Kucoin timeout was followed by success;
+      Binance had three successes. No live `-4084` recurrence was observed.
+    - 2026-07-09: Branch `codex/v8-exchange-config-refresh-recovery` adds
+      latest-per-bot status, latest-failed-bot, and recovered-bot aggregates to
+      smoke and performance reports so a historical timeout followed by success
+      is not presented as unresolved. It does not change verdicts, retries,
+      exception propagation, exchange I/O, or trading behavior.
 
 ## Merged Work Log
 

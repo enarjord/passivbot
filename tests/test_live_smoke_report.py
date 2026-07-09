@@ -1414,6 +1414,9 @@ def test_live_smoke_report_brief_summary_projects_top_level_counters(tmp_path):
         "failed": 0,
         "failure_pct": 0,
         "failed_bots": 0,
+        "latest_failed_bots": 0,
+        "recovered_bots": 0,
+        "latest_statuses": {},
         "event_types": {},
     }
     assert brief["staged_readiness"] == {
@@ -2076,8 +2079,11 @@ def test_live_smoke_report_summarizes_exchange_config_refresh_health(tmp_path):
     assert health["failure_pct"] == 50.0
     assert health["bots"] == 1
     assert health["failed_bots"] == 1
+    assert health["latest_failed_bots"] == 1
+    assert health["recovered_bots"] == 0
     assert health["event_types"] == {"exchange.config_refresh": 2}
     assert health["statuses"] == {"succeeded": 1, "failed": 1}
+    assert health["latest_statuses"] == {"failed": 1}
     assert health["groups"][0]["status"] == "failed"
     assert health["groups"][0]["latest_data"] == {
         "context": "maintain_hourly_cycle",
@@ -2103,8 +2109,57 @@ def test_live_smoke_report_summarizes_exchange_config_refresh_health(tmp_path):
         "failed": 1,
         "failure_pct": 50.0,
         "failed_bots": 1,
+        "latest_failed_bots": 1,
+        "recovered_bots": 0,
+        "latest_statuses": {"failed": 1},
         "event_types": {"exchange.config_refresh": 2},
     }
+
+
+def test_live_smoke_report_marks_recovered_exchange_config_refresh_bot(tmp_path):
+    events_dir = tmp_path / "monitor" / "kucoin" / "kucoin_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="exchange.config_refresh",
+                seq=1,
+                ts=1000,
+                exchange="kucoin",
+                user="kucoin_01",
+                status="failed",
+                reason_code="exchange_config_refresh_failed",
+                data={
+                    "operation": "init_markets",
+                    "elapsed_ms": 33915,
+                    "error_type": "RequestTimeout",
+                },
+            ),
+            _monitor_row(
+                event_type="exchange.config_refresh",
+                seq=2,
+                ts=2000,
+                exchange="kucoin",
+                user="kucoin_01",
+                status="succeeded",
+                reason_code="exchange_config_refresh",
+                data={"operation": "init_markets", "elapsed_ms": 6331},
+            ),
+        ],
+    )
+
+    report = build_live_smoke_report(tmp_path / "monitor", logs_root=None)
+    health = report["exchange_config_refresh_health"]
+    brief = summarize_live_smoke_report_brief(report)["exchange_config_refresh"]
+
+    assert health["failed"] == 1
+    assert health["failed_bots"] == 1
+    assert health["latest_statuses"] == {"succeeded": 1}
+    assert health["latest_failed_bots"] == 0
+    assert health["recovered_bots"] == 1
+    assert brief["latest_statuses"] == {"succeeded": 1}
+    assert brief["latest_failed_bots"] == 0
+    assert brief["recovered_bots"] == 1
 
 
 def test_live_smoke_report_summarizes_event_pipeline_health(tmp_path):

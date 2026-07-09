@@ -670,6 +670,9 @@ All notable user-facing changes will be documented in this file.
   `passivbot tool live-performance-report`, projecting existing structured
   refresh success/failure events without copying raw exchange error text or
   making new exchange calls.
+- Exchange-config refresh summaries in `live-smoke-report` and
+  `live-performance-report` now distinguish historical failures from each
+  bot's latest status and count recovered bots after a later successful refresh.
 - Improved cold `passivbot backtest` materialization by batching legacy OHLCV
   imports by month, vectorizing chunk writes, staging HLCV cache writes with
   rollback on publish failure, and honoring Ctrl+C between expensive
