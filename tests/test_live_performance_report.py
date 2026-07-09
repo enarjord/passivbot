@@ -2817,6 +2817,12 @@ def test_live_performance_report_resource_pressure_from_health_summary(tmp_path)
                     "rss_bytes": 1000,
                     "memory_percent": 5.5,
                     "cpu_percent": 12.0,
+                    "system_memory_total_bytes": 16_000,
+                    "system_memory_available_bytes": 9_000,
+                    "system_memory_percent": 40.0,
+                    "swap_total_bytes": 4_000,
+                    "swap_used_bytes": 800,
+                    "swap_percent": 20.0,
                     "open_fds": 11,
                     "loadavg_1m": 0.25,
                     "cpu_count": 1,
@@ -2840,6 +2846,12 @@ def test_live_performance_report_resource_pressure_from_health_summary(tmp_path)
                     "rss_bytes": 1500,
                     "memory_percent": 6.5,
                     "cpu_percent": 24.0,
+                    "system_memory_total_bytes": 16_000,
+                    "system_memory_available_bytes": 8_000,
+                    "system_memory_percent": 50.0,
+                    "swap_total_bytes": 4_000,
+                    "swap_used_bytes": 1_000,
+                    "swap_percent": 25.0,
                     "open_fds": 13,
                     "loadavg_1m": 0.75,
                     "cpu_count": 1,
@@ -2894,6 +2906,18 @@ def test_live_performance_report_resource_pressure_from_health_summary(tmp_path)
         "median": 18,
         "p95": 23,
     }
+    assert group["fields"]["system_memory_available_bytes"]["latest"] == 8_000
+    assert group["fields"]["system_memory_percent"] == {
+        "latest": 50,
+        "count": 2,
+        "min": 40,
+        "max": 50,
+        "mean": 45,
+        "median": 45,
+        "p95": 50,
+    }
+    assert group["fields"]["swap_used_bytes"]["latest"] == 1_000
+    assert group["fields"]["swap_percent"]["max"] == 25
     assert group["fields"]["event_queue_depth"]["max"] == 5
     assert group["fields"]["event_queue_depth"]["p95"] == 5
     assert group["fields"]["health_summary_lag_ms"] == {
@@ -2926,6 +2950,7 @@ def test_live_performance_report_resource_pressure_whitelists_health_fields(tmp_
                 component="monitor.health",
                 data={
                     "rss_bytes": 1000,
+                    "system_memory_percent": 70.0,
                     "balance_raw": {"leak_marker": "raw-balance"},
                     "balance_snapped": {"leak_marker": "snapped-balance"},
                     "equity": "leak-equity",
@@ -2941,6 +2966,12 @@ def test_live_performance_report_resource_pressure_whitelists_health_fields(tmp_
     rendered = json.dumps(report["resource_pressure"], sort_keys=True)
 
     assert report["resource_pressure"]["groups"][0]["fields"]["rss_bytes"]["latest"] == 1000
+    assert (
+        report["resource_pressure"]["groups"][0]["fields"]["system_memory_percent"][
+            "latest"
+        ]
+        == 70
+    )
     assert "balance_raw" not in rendered
     assert "balance_snapped" not in rendered
     assert "leak-equity" not in rendered

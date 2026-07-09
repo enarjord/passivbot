@@ -367,9 +367,13 @@ classification when enough source events exist.
     post-start sample is used only to prime the psutil delta and is omitted. It
     also includes `health_summary_lag_ms` after the first heartbeat, measuring
     elapsed time beyond the configured health-summary interval, and smoke
-    reports project the same value in their `resource_pressure` section.
+    reports project the same value in their `resource_pressure` section. The
+    source payload now also includes optional psutil-backed system memory and
+    swap totals/usage/percent fields, with smoke reports surfacing max system
+    memory percent, minimum available system memory, and max swap percent for
+    quick operator scans.
     Remaining work: a lower-level event-loop lag probe can be added later if
-    operators need sub-heartbeat scheduling latency, but this heartbeat lag now
+    operators need sub-heartbeat scheduling latency, but the heartbeat lag now
     gives bounded non-misleading evidence for delayed health summaries.
 - [ ] Shutdown: signal to exit flag, cancellation request, blocking task names,
   final monitor flush, process exit.

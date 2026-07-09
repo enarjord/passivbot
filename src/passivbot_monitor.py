@@ -36,6 +36,20 @@ except Exception:
 _PROCESS_CPU_PERCENT_PROBE: Any = None
 
 
+def _psutil_probe_errors() -> tuple[type[BaseException], ...]:
+    error_types: tuple[type[BaseException], ...] = (
+        OSError,
+        RuntimeError,
+        ValueError,
+        AttributeError,
+    )
+    if psutil is not None:
+        psutil_error = getattr(psutil, "Error", None)
+        if isinstance(psutil_error, type):
+            error_types = error_types + (psutil_error,)
+    return error_types
+
+
 def _get_process_rss_bytes() -> Optional[int]:
     """Return current process RSS in bytes or None if unavailable."""
     try:
@@ -66,22 +80,76 @@ def _get_process_memory_percent() -> Optional[float]:
     return None
 
 
+def _finite_non_negative_float(value: Any) -> Optional[float]:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(number) or number < 0.0:
+        return None
+    return number
+
+
+def _finite_non_negative_int(value: Any) -> Optional[int]:
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return None
+    if number < 0:
+        return None
+    return number
+
+
+def _get_system_memory_payload() -> dict[str, Any]:
+    """Return optional system memory/swap pressure when psutil is available."""
+    payload: dict[str, Any] = {}
+    if psutil is None:
+        return payload
+    try:
+        memory = psutil.virtual_memory()
+        fields = {
+            "system_memory_total_bytes": _finite_non_negative_int(
+                getattr(memory, "total", None)
+            ),
+            "system_memory_available_bytes": _finite_non_negative_int(
+                getattr(memory, "available", None)
+            ),
+            "system_memory_percent": _finite_non_negative_float(
+                getattr(memory, "percent", None)
+            ),
+        }
+        payload.update(
+            {key: value for key, value in fields.items() if value is not None}
+        )
+    except _psutil_probe_errors() as exc:
+        logging.debug("[monitor] system memory probe unavailable: %s", exc)
+    try:
+        swap = psutil.swap_memory()
+        fields = {
+            "swap_total_bytes": _finite_non_negative_int(getattr(swap, "total", None)),
+            "swap_used_bytes": _finite_non_negative_int(getattr(swap, "used", None)),
+            "swap_percent": _finite_non_negative_float(getattr(swap, "percent", None)),
+        }
+        payload.update(
+            {key: value for key, value in fields.items() if value is not None}
+        )
+    except _psutil_probe_errors() as exc:
+        logging.debug("[monitor] swap memory probe unavailable: %s", exc)
+    return payload
+
+
 def _get_process_cpu_percent() -> Optional[float]:
     """Return non-blocking process CPU percentage when psutil is available."""
     if psutil is None:
         return None
     global _PROCESS_CPU_PERCENT_PROBE
-    error_types = (OSError, RuntimeError, ValueError, AttributeError)
-    psutil_error = getattr(psutil, "Error", None)
-    if isinstance(psutil_error, type):
-        error_types = error_types + (psutil_error,)
     try:
         if _PROCESS_CPU_PERCENT_PROBE is None:
             _PROCESS_CPU_PERCENT_PROBE = psutil.Process(os.getpid())
             _PROCESS_CPU_PERCENT_PROBE.cpu_percent(interval=None)
             return None
         return float(_PROCESS_CPU_PERCENT_PROBE.cpu_percent(interval=None))
-    except error_types as exc:
+    except _psutil_probe_errors() as exc:
         _PROCESS_CPU_PERCENT_PROBE = None
         logging.debug("[monitor] cpu percent probe unavailable: %s", exc)
     return None
@@ -421,6 +489,7 @@ def _build_health_summary_payload(self, *, now_ms: Optional[int] = None) -> dict
     if open_fds is not None:
         payload["open_fds"] = int(open_fds)
     payload.update(_get_loadavg_payload())
+    payload.update(_get_system_memory_payload())
     pipeline = getattr(self, "_live_event_pipeline", None)
     health_snapshot = getattr(pipeline, "health_snapshot", None)
     if callable(health_snapshot):
