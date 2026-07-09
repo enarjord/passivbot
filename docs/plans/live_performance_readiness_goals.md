@@ -371,7 +371,10 @@ classification when enough source events exist.
     source payload now also includes optional psutil-backed system memory and
     swap totals/usage/percent fields, with smoke reports surfacing max system
     memory percent, minimum available system memory, and max swap percent for
-    quick operator scans.
+    quick operator scans. Performance reports expose per-bot
+    `latest_event_age_ms` plus an aggregate maximum age and reporting-bot count
+    so stale resource-pressure samples are visible without manual timestamp
+    subtraction.
     Remaining work: a lower-level event-loop lag probe can be added later if
     operators need sub-heartbeat scheduling latency, but the heartbeat lag now
     gives bounded non-misleading evidence for delayed health summaries.

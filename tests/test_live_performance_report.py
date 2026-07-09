@@ -2877,6 +2877,8 @@ def test_live_performance_report_resource_pressure_from_health_summary(tmp_path,
     assert pressure["total"] == 2
     assert pressure["bots"] == 1
     assert pressure["event_types"] == {"health.summary": 2}
+    assert pressure["latest_event_age_ms_max"] == 3000
+    assert pressure["latest_event_age_reporting_bots"] == 1
     assert group["bot"] == "binance/binance_01"
     assert group["count"] == 2
     assert group["latest_ts"] == 2000
@@ -2983,7 +2985,8 @@ def test_live_performance_report_resource_pressure_whitelists_health_fields(tmp_
     assert "raw-payload" not in rendered
 
 
-def test_live_performance_report_resource_pressure_summary_is_bounded(tmp_path):
+def test_live_performance_report_resource_pressure_summary_is_bounded(tmp_path, monkeypatch):
+    monkeypatch.setattr(performance_report_module, "utc_ms", lambda: 5000)
     events_dir = tmp_path / "monitor" / "mixed" / "events"
     _write_ndjson(
         events_dir / "current.ndjson",
@@ -3011,10 +3014,14 @@ def test_live_performance_report_resource_pressure_summary_is_bounded(tmp_path):
     summary = summarize_live_performance_report(report, group_limit=1)
 
     assert report["resource_pressure"]["bots"] == 2
+    assert report["resource_pressure"]["latest_event_age_ms_max"] == 4000
+    assert report["resource_pressure"]["latest_event_age_reporting_bots"] == 2
     assert len(summary["resource_pressure"]["groups"]) == 1
     assert summary["resource_pressure"]["groups_truncated"] is True
     assert summary["resource_pressure"]["groups"][0]["bot"] == "okx/okx_faisal"
     assert "latest_event_age_ms" in summary["resource_pressure"]["groups"][0]
+    assert summary["resource_pressure"]["latest_event_age_ms_max"] == 4000
+    assert summary["resource_pressure"]["latest_event_age_reporting_bots"] == 2
 
 
 def test_live_performance_report_shutdown_latency_from_lifecycle_events(tmp_path):
