@@ -25,6 +25,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import datetime, timedelta, UTC
 from typing import Any, Dict, List, Optional, Tuple
+from zoneinfo import ZoneInfo
 
 import aiohttp
 import numpy as np
@@ -45,7 +46,17 @@ ONE_MIN_MS = 60_000
 ONE_HOUR_MS = 3_600_000
 ONE_DAY_MS = 86_400_000
 
+# Alpha Vantage TIME_SERIES_INTRADAY timestamps are US Eastern wall-clock time.
+ALPHA_VANTAGE_TZ = ZoneInfo("America/New_York")
+
 logger = logging.getLogger(__name__)
+
+
+def alpha_vantage_timestamp_to_ms(timestamp_str: str) -> int:
+    """Convert an Alpha Vantage intraday timestamp ("2025-01-15 16:00:00",
+    US Eastern wall-clock, DST-aware) to UTC epoch milliseconds."""
+    dt = datetime.strptime(timestamp_str, "%Y-%m-%d %H:%M:%S").replace(tzinfo=ALPHA_VANTAGE_TZ)
+    return int(dt.timestamp() * 1000)
 
 
 def hip3_to_tradfi_symbol(hip3_symbol: str) -> str:
@@ -299,11 +310,8 @@ class AlphaVantageProvider(TradFiProvider):
                 return []
 
             for timestamp_str, values in time_series.items():
-                # Parse timestamp (format: "2025-01-15 16:00:00")
-                dt = datetime.strptime(timestamp_str, "%Y-%m-%d %H:%M:%S")
-                # Alpha Vantage returns US Eastern time, convert to UTC
-                # This is a simplification - proper timezone handling would need pytz
-                ts_ms = int(dt.timestamp() * 1000)
+                # Timestamps are US Eastern wall-clock (format: "2025-01-15 16:00:00")
+                ts_ms = alpha_vantage_timestamp_to_ms(timestamp_str)
 
                 if start_ts <= ts_ms <= end_ts:
                     candles.append(

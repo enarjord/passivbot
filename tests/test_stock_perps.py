@@ -975,6 +975,103 @@ class TestTradFiProvider:
         with pytest.raises(ValueError, match="Unknown provider"):
             get_provider("unknown_provider")
 
+    def test_alpha_vantage_timestamp_winter_est(self):
+        """EST (UTC-5): 14:30 Eastern is 19:30 UTC."""
+        from datetime import datetime, UTC
+        from tradfi_data import alpha_vantage_timestamp_to_ms
+
+        expected = int(datetime(2025, 1, 15, 19, 30, tzinfo=UTC).timestamp() * 1000)
+        assert alpha_vantage_timestamp_to_ms("2025-01-15 14:30:00") == expected
+
+    def test_alpha_vantage_timestamp_summer_edt(self):
+        """EDT (UTC-4): 14:30 Eastern is 18:30 UTC."""
+        from datetime import datetime, UTC
+        from tradfi_data import alpha_vantage_timestamp_to_ms
+
+        expected = int(datetime(2025, 7, 15, 18, 30, tzinfo=UTC).timestamp() * 1000)
+        assert alpha_vantage_timestamp_to_ms("2025-07-15 14:30:00") == expected
+
+    def test_alpha_vantage_timestamp_host_tz_independent(self):
+        """Conversion must not depend on the host's local timezone."""
+        import os
+        import time
+        from tradfi_data import alpha_vantage_timestamp_to_ms
+
+        reference = alpha_vantage_timestamp_to_ms("2025-01-15 14:30:00")
+        original_tz = os.environ.get("TZ")
+        try:
+            for tz in ("UTC", "Asia/Tokyo", "America/Los_Angeles"):
+                os.environ["TZ"] = tz
+                time.tzset()
+                assert alpha_vantage_timestamp_to_ms("2025-01-15 14:30:00") == reference
+        finally:
+            if original_tz is None:
+                os.environ.pop("TZ", None)
+            else:
+                os.environ["TZ"] = original_tz
+            time.tzset()
+
+    def test_alpha_vantage_timestamp_minute_aligned(self):
+        """Converted timestamps stay minute-aligned."""
+        from tradfi_data import alpha_vantage_timestamp_to_ms, ONE_MIN_MS
+
+        assert alpha_vantage_timestamp_to_ms("2025-03-09 09:31:00") % ONE_MIN_MS == 0
+
+    def test_alpha_vantage_fetch_converts_eastern_payload(self):
+        """Full fetch path: Eastern wall-clock keys land at the correct UTC epoch."""
+        import asyncio
+        from datetime import datetime, UTC
+        from tradfi_data import AlphaVantageProvider
+
+        payload = {
+            "Time Series (1min)": {
+                "2025-01-15 14:30:00": {
+                    "1. open": "100.0",
+                    "2. high": "101.0",
+                    "3. low": "99.0",
+                    "4. close": "100.5",
+                    "5. volume": "1200",
+                },
+                "2025-01-15 14:31:00": {
+                    "1. open": "100.5",
+                    "2. high": "100.6",
+                    "3. low": "100.1",
+                    "4. close": "100.2",
+                    "5. volume": "800",
+                },
+            }
+        }
+
+        class FakeResponse:
+            status = 200
+
+            async def json(self):
+                return payload
+
+            def raise_for_status(self):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                return False
+
+        class FakeSession:
+            def get(self, url, params=None):
+                return FakeResponse()
+
+        provider = AlphaVantageProvider(api_key="test_key")
+        provider._session = FakeSession()
+
+        start = int(datetime(2025, 1, 15, tzinfo=UTC).timestamp() * 1000)
+        end = int(datetime(2025, 1, 16, tzinfo=UTC).timestamp() * 1000)
+        candles = asyncio.run(provider.fetch_1m_candles("TSLA", start, end))
+
+        expected_first = int(datetime(2025, 1, 15, 19, 30, tzinfo=UTC).timestamp() * 1000)
+        assert [c.timestamp_ms for c in candles] == [expected_first, expected_first + 60_000]
+        assert candles[0].close == 100.5
+
     def test_candles_to_array_empty(self):
         """Test converting empty candle list."""
         from tradfi_data import candles_to_array
