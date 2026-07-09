@@ -374,7 +374,10 @@ classification when enough source events exist.
     quick operator scans. Performance reports expose per-bot
     `latest_event_age_ms` plus an aggregate maximum age and reporting-bot count
     so stale resource-pressure samples are visible without manual timestamp
-    subtraction.
+    subtraction. Performance reports also expose aggregate latest event-pipeline
+    queue/drop/sink/degraded counters and unhealthy-bot count, so operators can
+    see whether observability itself is backed up or dropping data without
+    opening every per-bot group.
     Remaining work: a lower-level event-loop lag probe can be added later if
     operators need sub-heartbeat scheduling latency, but the heartbeat lag now
     gives bounded non-misleading evidence for delayed health summaries.

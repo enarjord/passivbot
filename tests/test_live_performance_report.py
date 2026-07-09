@@ -2879,6 +2879,11 @@ def test_live_performance_report_resource_pressure_from_health_summary(tmp_path,
     assert pressure["event_types"] == {"health.summary": 2}
     assert pressure["latest_event_age_ms_max"] == 3000
     assert pressure["latest_event_age_reporting_bots"] == 1
+    assert pressure["latest_event_queue_depth_max"] == 5
+    assert pressure["latest_event_dropped_total_sum"] == 4
+    assert pressure["latest_event_sink_error_total_sum"] == 1
+    assert pressure["latest_event_degraded_count_sum"] == 3
+    assert pressure["event_pipeline_unhealthy_bots"] == 1
     assert group["bot"] == "binance/binance_01"
     assert group["count"] == 2
     assert group["latest_ts"] == 2000
@@ -2997,7 +3002,12 @@ def test_live_performance_report_resource_pressure_summary_is_bounded(tmp_path, 
                 ts=1000,
                 exchange="binance",
                 user="binance_01",
-                data={"rss_bytes": 1000, "event_queue_depth": 1},
+                data={
+                    "rss_bytes": 1000,
+                    "event_queue_depth": 1,
+                    "event_dropped_total": 1,
+                    "event_pipeline_worker_alive": True,
+                },
             ),
             _monitor_row(
                 event_type="health.summary",
@@ -3005,7 +3015,12 @@ def test_live_performance_report_resource_pressure_summary_is_bounded(tmp_path, 
                 ts=2000,
                 exchange="okx",
                 user="okx_faisal",
-                data={"rss_bytes": 2000, "event_queue_depth": 2},
+                data={
+                    "rss_bytes": 2000,
+                    "event_queue_depth": 2,
+                    "event_dropped_total": 0,
+                    "event_pipeline_worker_alive": False,
+                },
             ),
         ],
     )
@@ -3016,12 +3031,20 @@ def test_live_performance_report_resource_pressure_summary_is_bounded(tmp_path, 
     assert report["resource_pressure"]["bots"] == 2
     assert report["resource_pressure"]["latest_event_age_ms_max"] == 4000
     assert report["resource_pressure"]["latest_event_age_reporting_bots"] == 2
+    assert report["resource_pressure"]["latest_event_queue_depth_max"] == 2
+    assert report["resource_pressure"]["latest_event_dropped_total_sum"] == 1
+    assert report["resource_pressure"]["latest_event_sink_error_total_sum"] == 0
+    assert report["resource_pressure"]["latest_event_degraded_count_sum"] == 0
+    assert report["resource_pressure"]["event_pipeline_unhealthy_bots"] == 2
     assert len(summary["resource_pressure"]["groups"]) == 1
     assert summary["resource_pressure"]["groups_truncated"] is True
-    assert summary["resource_pressure"]["groups"][0]["bot"] == "okx/okx_faisal"
+    assert summary["resource_pressure"]["groups"][0]["bot"] == "binance/binance_01"
     assert "latest_event_age_ms" in summary["resource_pressure"]["groups"][0]
     assert summary["resource_pressure"]["latest_event_age_ms_max"] == 4000
     assert summary["resource_pressure"]["latest_event_age_reporting_bots"] == 2
+    assert summary["resource_pressure"]["latest_event_queue_depth_max"] == 2
+    assert summary["resource_pressure"]["latest_event_dropped_total_sum"] == 1
+    assert summary["resource_pressure"]["event_pipeline_unhealthy_bots"] == 2
 
 
 def test_live_performance_report_shutdown_latency_from_lifecycle_events(tmp_path):

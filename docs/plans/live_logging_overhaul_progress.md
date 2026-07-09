@@ -19,19 +19,21 @@ Last updated: 2026-07-09.
 
 Current `origin/v8` head:
 
-- `4ac5b309` after PR #1156, `Add smoke resource pressure sample age`.
+- `14d521fd` after PR #1160, `Surface interior coverage loss and stock-perps
+  synthetic-candle share`.
 
 Current logging-overhaul head:
 
-- `4ac5b309` after PR #1156, `Add smoke resource pressure sample age`.
+- `441d9fe5` after PR #1157, `Summarize resource pressure sample age` (latest
+  merged logging-overhaul slice).
 
 Current work:
 
-- Branch `codex/v8-resource-pressure-age-aggregate` adds read-only aggregate
-  `latest_event_age_ms_max` and reporting-bot count fields to
-  `live-performance-report` `resource_pressure`, derived from existing
-  per-bot `health.summary` event timestamps. It does not add event producers,
-  exchange calls, order/risk logic, restart orchestration, or trading behavior.
+- Branch `codex/v8-resource-pressure-pipeline-summary` adds read-only
+  aggregate event-pipeline health counters to `live-performance-report`
+  `resource_pressure`, derived from existing per-bot `health.summary`
+  queue/drop/sink/worker fields. It does not add event producers, exchange
+  calls, order/risk logic, restart orchestration, or trading behavior.
 
 Current review gate:
 
@@ -61,6 +63,24 @@ Retuned goal boundary:
 
 VPS5 deployment status:
 
+- Repository pulled through PR #1157 at `441d9fe5`.
+- PR #1157 added read-only aggregate resource-pressure sample-age fields to
+  `live-performance-report`, exposing `latest_event_age_ms_max` and
+  `latest_event_age_reporting_bots` from existing per-bot `health.summary`
+  timestamps. It merged after Hermes approved the current head, Claude Opus
+  4.8 green-lighted the rebased head, Grok 4.5 re-approved the current head,
+  Codex reviewer posted green, and CI was green. VPS5 was pulled with
+  `git pull --autostash --ff-only origin v8`, preserving the pre-existing
+  tracked Rust-format/local config state. No bot restart was performed because
+  the slice was read-only report projection plus docs. A bounded 2-minute
+  summary smoke reported `ok=true`, `hard_failures=0`, `matched_expected=5`,
+  `missing_expected_count=0`, `remote_calls.failed=0`,
+  `account_critical_remote_calls.failed=0`, `logs.hard_matches=0`, and
+  repository head `441d9fe5`. A focused 30-minute `resource_pressure` report
+  on VPS5 monitor data reported `ok=true`, `error_count=0`,
+  `resource_total=9`, `resource_bots=5`,
+  `latest_event_age_ms_max=872783`, and
+  `latest_event_age_reporting_bots=5`.
 - Repository pulled through PR #1156 at `4ac5b309`.
 - PR #1156 added the read-only smoke-report counterpart for resource-pressure
   sample age, exposing per-group `latest_event_age_ms`, aggregate
