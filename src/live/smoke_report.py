@@ -7942,8 +7942,8 @@ def summarize_live_smoke_report_brief(report: dict[str, Any]) -> dict[str, Any]:
             "latest_system_memory_reporting_bots": _count_value(
                 resource_pressure.get("latest_system_memory_reporting_bots")
             ),
-            "latest_system_memory_available_bytes_min": _count_value(
-                resource_pressure.get("latest_system_memory_available_bytes_min")
+            "latest_system_memory_available_bytes_min": resource_pressure.get(
+                "latest_system_memory_available_bytes_min"
             ),
             "latest_swap_percent_max": resource_pressure.get("latest_swap_percent_max"),
             "latest_swap_reporting_bots": _count_value(

@@ -2369,6 +2369,16 @@ def test_live_smoke_report_summarizes_resource_pressure(tmp_path):
     assert "resource_pressure" in available_live_smoke_report_sections(report)
 
 
+def test_live_smoke_report_resource_pressure_brief_keeps_missing_min_as_null(tmp_path):
+    report = build_live_smoke_report(tmp_path / "monitor", logs_root=None)
+    brief = summarize_live_smoke_report_brief(report)
+
+    pressure = report["resource_pressure"]
+    assert pressure["total"] == 0
+    assert "latest_system_memory_available_bytes_min" not in pressure
+    assert brief["resource_pressure"]["latest_system_memory_available_bytes_min"] is None
+
+
 def test_live_smoke_report_event_pipeline_health_aggregates_multi_bot_queue_overflow(tmp_path):
     okx_events = tmp_path / "monitor" / "okx" / "okx_01" / "events"
     gateio_events = tmp_path / "monitor" / "gateio" / "gateio_01" / "events"
