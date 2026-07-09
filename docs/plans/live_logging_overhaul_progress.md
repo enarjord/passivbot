@@ -19,18 +19,19 @@ Last updated: 2026-07-09.
 
 Current `origin/v8` head:
 
-- `80ea2ea2` after PR #1152, `Add system memory health telemetry`.
+- `84191c02` after PR #1153, `Keep missing resource pressure minima null`.
 
 Current logging-overhaul head:
 
-- `80ea2ea2` after PR #1152, `Add system memory health telemetry`.
+- `84191c02` after PR #1153, `Keep missing resource pressure minima null`.
 
 Current work:
 
-- Branch `codex/v8-resource-pressure-null-min` keeps no-data
-  `live-smoke-report --brief` resource-pressure minimum fields as null/absent
-  instead of coercing them to zero. It does not add event producers, exchange
-  calls, order/risk logic, restart orchestration, or trading behavior.
+- Branch `codex/v8-resource-pressure-event-age` adds read-only
+  `latest_event_age_ms` freshness metadata to `live-performance-report`
+  `resource_pressure` groups. It uses existing `health.summary` event
+  timestamps only and does not add event producers, exchange calls, order/risk
+  logic, restart orchestration, or trading behavior.
 
 Current review gate:
 
@@ -60,6 +61,20 @@ Retuned goal boundary:
 
 VPS5 deployment status:
 
+- Repository pulled through PR #1153 at `84191c02`.
+- PR #1153 kept no-data `live-smoke-report --brief` resource-pressure minimum
+  fields as null/absent instead of coercing them to zero. It merged after
+  Hermes approved, Claude Opus 4.8 green-lighted the current head, Cursor/Grok
+  approved, and CI was green. VPS5 was pulled with `git pull --autostash
+  --ff-only origin v8` to preserve the pre-existing tracked Rust-format/local
+  config state. No bot restart was performed because the slice was read-only
+  report projection plus docs. A bounded 2-minute smoke with supervisor process
+  check reported `ok=true`, `hard_failures=0`, `matched_expected=5`,
+  `missing_expected_count=0`, `remote_calls.failed=0`,
+  `account_critical_remote_calls.failed=0`, `logs.hard_matches=0`, and
+  repository head `84191c02`. Non-hard attention remained active HSL replay and
+  EMA readiness evidence; the short smoke window contained no
+  `health.summary` resource-pressure samples, so `resource_pressure.total=0`.
 - Repository pulled through PR #1152 at `80ea2ea2`.
 - PR #1152 added optional psutil-backed system memory and swap pressure fields
   to existing `health.summary` events and projected them through
@@ -6948,4 +6963,24 @@ VPS5 deployment status:
   restart behavior, or trading behavior.
 - Expected validation: focused health-summary payload/scheduler tests, focused
   smoke/performance resource-pressure tests, `py_compile`, `git diff --check`,
+  and the standard added-line silent-handling scan.
+
+### Draft Slice: Resource Pressure Sample Age
+
+- Branch: `codex/v8-resource-pressure-event-age`.
+- Scope: read-only performance-report projection over existing
+  `health.summary` resource-pressure events.
+- Triggering evidence: PRs #1148 through #1153 made resource-pressure values
+  available and visible in performance/smoke reports, but
+  `live-performance-report --section resource_pressure` exposed only each bot's
+  `latest_ts`, not a directly comparable age. During bounded post-deploy smoke
+  windows, operators need to distinguish recent pressure samples from stale or
+  absent samples without manually subtracting timestamps.
+- Intended result: add `latest_event_age_ms` to each performance-report
+  `resource_pressure` group, derived from the report timestamp and the group's
+  latest `health.summary` event timestamp. Keep existing field statistics,
+  event parsing, monitor writes, console output, smoke-report output, exchange
+  calls, restart behavior, order/risk logic, and trading behavior unchanged.
+- Expected validation: focused resource-pressure performance-report tests, full
+  `tests/test_live_performance_report.py`, `py_compile`, `git diff --check`,
   and the standard added-line silent-handling scan.

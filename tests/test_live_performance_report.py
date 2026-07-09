@@ -2803,7 +2803,8 @@ def test_live_performance_report_risk_activity_summary_is_bounded(tmp_path):
     assert summary["risk_activity"]["bots_truncated"] is True
 
 
-def test_live_performance_report_resource_pressure_from_health_summary(tmp_path):
+def test_live_performance_report_resource_pressure_from_health_summary(tmp_path, monkeypatch):
+    monkeypatch.setattr(performance_report_module, "utc_ms", lambda: 5000)
     events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
     _write_ndjson(
         events_dir / "current.ndjson",
@@ -2879,6 +2880,7 @@ def test_live_performance_report_resource_pressure_from_health_summary(tmp_path)
     assert group["bot"] == "binance/binance_01"
     assert group["count"] == 2
     assert group["latest_ts"] == 2000
+    assert group["latest_event_age_ms"] == 3000
     assert group["fields"]["rss_bytes"] == {
         "latest": 1500,
         "count": 2,
@@ -3012,6 +3014,7 @@ def test_live_performance_report_resource_pressure_summary_is_bounded(tmp_path):
     assert len(summary["resource_pressure"]["groups"]) == 1
     assert summary["resource_pressure"]["groups_truncated"] is True
     assert summary["resource_pressure"]["groups"][0]["bot"] == "okx/okx_faisal"
+    assert "latest_event_age_ms" in summary["resource_pressure"]["groups"][0]
 
 
 def test_live_performance_report_shutdown_latency_from_lifecycle_events(tmp_path):
