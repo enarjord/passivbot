@@ -16,11 +16,12 @@ from live.event_bus import (
 )
 from live.event_file_rows import event_file_rows
 from live.event_query import (
+    _event_ids,
     _limit_recent_event_files_per_bot,
     _recent_event_file_sort_key,
     discover_event_files_with_metadata,
 )
-from live.smoke_report import _user_safe_display_path
+from live.smoke_report import _sort_event_position_key, _user_safe_display_path
 
 
 GROUP_LIMIT = 80
@@ -39,6 +40,8 @@ _PERFORMANCE_REPORT_ID_KEY_ALLOWLIST = frozenset(
 _PERFORMANCE_REPORT_ID_KEYS = tuple(
     key for key in LIVE_EVENT_ID_KEYS if key in _PERFORMANCE_REPORT_ID_KEY_ALLOWLIST
 )
+_PERFORMANCE_REPORT_SOURCE_PATH_KEY = "_performance_report_source_path"
+_PERFORMANCE_REPORT_SOURCE_LINE_KEY = "_performance_report_source_line"
 _PERFORMANCE_REPORT_SECTION_BASE_KEYS = (
     "ok",
     "root",
@@ -439,15 +442,30 @@ def _safe_label(value: Any, *, max_len: int = 120) -> str | None:
 
 
 def _bounded_event_ids(live_event: dict[str, Any]) -> dict[str, str]:
-    ids = live_event.get("ids")
-    if not isinstance(ids, dict):
-        return {}
+    ids = _event_ids(live_event)
     out: dict[str, str] = {}
     for key in _PERFORMANCE_REPORT_ID_KEYS:
         value = _safe_label(ids.get(key), max_len=160)
         if value is not None:
             out[key] = value
     return out
+
+
+def _metric_event_position(row: dict[str, Any]) -> tuple[int, int, str, int] | None:
+    timestamp_ms = _record_ts(row)
+    if timestamp_ms is None:
+        return None
+    line_no = row.get(_PERFORMANCE_REPORT_SOURCE_LINE_KEY)
+    try:
+        normalized_line_no = int(line_no)
+    except (TypeError, ValueError):
+        normalized_line_no = 0
+    return _sort_event_position_key(
+        ts=timestamp_ms,
+        seq=row.get("seq"),
+        path=row.get(_PERFORMANCE_REPORT_SOURCE_PATH_KEY) or "",
+        line_no=normalized_line_no,
+    )
 
 
 def _elapsed_s_to_ms(value: Any) -> int | None:
@@ -501,8 +519,7 @@ class _MetricGroup:
         self.symbols: Counter[str] = Counter()
         self.latest_ts: int | None = None
         self.latest_ids: dict[str, str] = {}
-        self._latest_position: tuple[int, int] | None = None
-        self._event_index = 0
+        self._latest_position: tuple[int, int, str, int] | None = None
 
     def add(
         self,
@@ -511,7 +528,6 @@ class _MetricGroup:
         row: dict[str, Any],
         live_event: dict[str, Any],
     ) -> None:
-        self._event_index += 1
         self.values.append(int(value_ms))
         status = live_event.get("status")
         if status is not None:
@@ -525,11 +541,12 @@ class _MetricGroup:
         ts = _record_ts(row)
         if ts is not None and (self.latest_ts is None or ts > self.latest_ts):
             self.latest_ts = ts
-        if ts is not None:
-            position = (int(ts), self._event_index)
-            if self._latest_position is None or position >= self._latest_position:
-                self._latest_position = position
-                self.latest_ids = _bounded_event_ids(live_event)
+        position = _metric_event_position(row)
+        if position is not None and (
+            self._latest_position is None or position >= self._latest_position
+        ):
+            self._latest_position = position
+            self.latest_ids = _bounded_event_ids(live_event)
 
     def to_dict(self) -> dict[str, Any]:
         values = sorted(self.values)
@@ -4048,6 +4065,8 @@ def build_live_performance_report(
                 }
             )
             return
+        row[_PERFORMANCE_REPORT_SOURCE_PATH_KEY] = str(path)
+        row[_PERFORMANCE_REPORT_SOURCE_LINE_KEY] = int(line_no)
         live_event = _live_event_payload(row)
         if live_event is None:
             legacy_events += 1

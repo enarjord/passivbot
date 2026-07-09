@@ -265,7 +265,8 @@ if the final replay result is correct.
    - A follow-up slice added each timing group's latest bounded report-safe
      canonical event IDs to the base timing table, `operation_durations`, and
      `slowest_blockers`, so a slow row can be correlated directly with the
-     structured event stream without exposing free-form payloads.
+     structured event stream without exposing free-form payloads. It preserves
+     legacy snapshot-ID query compatibility and stable persistent event ordering.
    - A follow-up slice corrected `snapshot_to_rust` correlation: planning
      snapshot epochs are not live event cycle IDs, so legacy/current
      `snapshot.built` events without envelope cycle IDs are matched to the

@@ -32,8 +32,10 @@ Current work:
   canonical `latest_ids` mapping to each timing group and carries it into
   `operation_durations` and `slowest_blockers`. This lets operators jump from a
   slow timing row to the related structured events without exposing free-form
-  payloads. The slice is read-only and does not change event production,
-  exchange calls, order/risk logic, restart orchestration, or trading behavior.
+  payloads. Legacy snapshot IDs follow the existing event-query normalization,
+  and equal-timestamp samples use persistent event sequence/source position.
+  The slice is read-only and does not change event production, exchange calls,
+  order/risk logic, restart orchestration, or trading behavior.
 
 Current review gate:
 

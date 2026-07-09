@@ -296,6 +296,8 @@ Monitor commands are documented in detail in [monitor.md](monitor.md). The CLI s
   `operation_durations`/`slowest_blockers` projections include one bounded `latest_ids` mapping
   of report-safe canonical event-envelope IDs when available (excluding per-action IDs),
   allowing direct correlation with `live-event-query` without exposing free-form payloads.
+  The mapping uses the same legacy snapshot-ID normalization as `live-event-query` and
+  selects the latest sample by stable event position (`ts`, `seq`, path, and line).
   The `operation_durations` section
   collates startup, cycle, state-refresh, remote-call, HSL replay, cache, decision-boundary,
   input-staleness, fill-refresh, execution, and shutdown timing groups into one bounded table with operation
