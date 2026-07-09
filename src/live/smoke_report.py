@@ -102,6 +102,16 @@ EMA_READINESS_REASON_SYMBOL_SAMPLE_LIMIT = 8
 STAGED_READINESS_GROUP_LIMIT = 20
 STAGED_READINESS_VALUE_LIMIT = 8
 EVENT_PIPELINE_HEALTH_GROUP_LIMIT = 20
+RESOURCE_PRESSURE_GROUP_LIMIT = 20
+RESOURCE_PRESSURE_FIELDS = (
+    "cpu_percent",
+    "memory_percent",
+    "rss_bytes",
+    "open_fds",
+    "loadavg_1m",
+    "loadavg_5m",
+    "loadavg_15m",
+)
 HSL_REPLAY_HEALTH_GROUP_LIMIT = 20
 HSL_REPLAY_STALE_ACTIVE_EVENT_AGE_MS = 5 * 60 * 1000
 HSL_REPLAY_LONG_RUNNING_ACTIVE_MS = 10 * 60 * 1000
@@ -2849,6 +2859,176 @@ def _summarize_event_pipeline_health(
     }
 
 
+def _resource_pressure_group(
+    *,
+    bot_key: str,
+    row: dict[str, Any],
+    live_event: dict[str, Any],
+    path: Path,
+    line_no: int,
+) -> dict[str, Any] | None:
+    data = live_event.get("data")
+    payload = data if isinstance(data, dict) else {}
+    latest_values: dict[str, int | float] = {}
+    for key in RESOURCE_PRESSURE_FIELDS:
+        value = _numeric_value(payload.get(key))
+        if value is None or float(value) < 0.0:
+            continue
+        latest_values[key] = value
+    if not latest_values:
+        return None
+    ids = _event_ids(live_event)
+    return {
+        "bot": bot_key,
+        "count": 1,
+        "latest_ts": row.get("ts"),
+        "latest_seq": row.get("seq"),
+        "latest_path": str(path),
+        "latest_line": int(line_no),
+        "latest_values": latest_values,
+        "latest_ids": {
+            key: ids.get(key)
+            for key in ("cycle_id", "snapshot_id", "plan_id", "action_id")
+            if ids.get(key) is not None
+        },
+    }
+
+
+def _merge_resource_pressure_group(
+    groups: dict[tuple[Any, ...], dict[str, Any]],
+    group: dict[str, Any],
+) -> None:
+    key = (group.get("bot"),)
+    existing = groups.get(key)
+    if existing is None:
+        groups[key] = group
+        return
+    existing["count"] = int(existing["count"]) + 1
+    current_key = _sort_event_position_key(
+        ts=group.get("latest_ts"),
+        seq=group.get("latest_seq"),
+        path=group.get("latest_path") or "",
+        line_no=int(group.get("latest_line") or 0),
+    )
+    existing_key = _sort_event_position_key(
+        ts=existing.get("latest_ts"),
+        seq=existing.get("latest_seq"),
+        path=existing.get("latest_path") or "",
+        line_no=int(existing.get("latest_line") or 0),
+    )
+    if current_key > existing_key:
+        for field in (
+            "latest_ts",
+            "latest_seq",
+            "latest_path",
+            "latest_line",
+            "latest_values",
+            "latest_ids",
+        ):
+            existing[field] = group.get(field)
+
+
+def _latest_numeric_value(group: dict[str, Any], field: str) -> int | float | None:
+    values = group.get("latest_values")
+    if not isinstance(values, dict):
+        return None
+    return _numeric_value(values.get(field))
+
+
+def _latest_numeric_sum(groups: Iterable[dict[str, Any]], field: str) -> int | float:
+    total = 0.0
+    integral = True
+    for group in groups:
+        value = _latest_numeric_value(group, field)
+        if value is None:
+            continue
+        numeric = float(value)
+        total += numeric
+        integral = integral and numeric.is_integer()
+    if integral:
+        return int(total)
+    return round(total, 6)
+
+
+def _latest_numeric_max(
+    groups: Iterable[dict[str, Any]], field: str
+) -> int | float | None:
+    values = [
+        float(value)
+        for group in groups
+        if (value := _latest_numeric_value(group, field)) is not None
+    ]
+    if not values:
+        return None
+    out = max(values)
+    if out.is_integer():
+        return int(out)
+    return round(out, 6)
+
+
+def _latest_numeric_reporting_bots(groups: Iterable[dict[str, Any]], field: str) -> int:
+    return sum(1 for group in groups if _latest_numeric_value(group, field) is not None)
+
+
+def _summarize_resource_pressure(
+    groups: dict[tuple[Any, ...], dict[str, Any]],
+    event_type_counts: Counter[str],
+) -> dict[str, Any]:
+    ordered = sorted(
+        groups.values(),
+        key=lambda item: (
+            -float(_latest_numeric_value(item, "cpu_percent") or 0.0),
+            -float(_latest_numeric_value(item, "memory_percent") or 0.0),
+            -float(_latest_numeric_value(item, "rss_bytes") or 0.0),
+            -int(_non_negative_int(item.get("latest_ts")) or 0),
+            str(item.get("bot") or ""),
+        ),
+    )
+    compact_groups = [
+        {
+            key: value
+            for key, value in group.items()
+            if key not in {"latest_path", "latest_line", "latest_seq"}
+            and value not in (None, {}, [])
+        }
+        for group in ordered[:RESOURCE_PRESSURE_GROUP_LIMIT]
+    ]
+    return {
+        key: value
+        for key, value in {
+            "total": sum(int(group["count"]) for group in groups.values()),
+            "bots": len({group.get("bot") for group in groups.values()}),
+            "groups_truncated": len(ordered) > RESOURCE_PRESSURE_GROUP_LIMIT,
+            "event_types": dict(event_type_counts.most_common()),
+            "latest_cpu_percent_max": _latest_numeric_max(
+                groups.values(), "cpu_percent"
+            ),
+            "latest_cpu_reporting_bots": _latest_numeric_reporting_bots(
+                groups.values(), "cpu_percent"
+            ),
+            "latest_memory_percent_max": _latest_numeric_max(
+                groups.values(), "memory_percent"
+            ),
+            "latest_memory_reporting_bots": _latest_numeric_reporting_bots(
+                groups.values(), "memory_percent"
+            ),
+            "latest_rss_bytes_total": _latest_numeric_sum(
+                groups.values(), "rss_bytes"
+            ),
+            "latest_rss_reporting_bots": _latest_numeric_reporting_bots(
+                groups.values(), "rss_bytes"
+            ),
+            "latest_open_fds_total": _latest_numeric_sum(groups.values(), "open_fds"),
+            "latest_open_fds_reporting_bots": _latest_numeric_reporting_bots(
+                groups.values(), "open_fds"
+            ),
+            "latest_loadavg_1m_max": _latest_numeric_max(groups.values(), "loadavg_1m"),
+            "groups": compact_groups,
+        }.items()
+        if value is not None
+    }
+
+
 def _risk_event_group(
     *,
     bot_key: str,
@@ -5335,6 +5515,8 @@ def _scan_events(
     staged_readiness_event_type_counts: Counter[str] = Counter()
     event_pipeline_health_groups: dict[tuple[Any, ...], dict[str, Any]] = {}
     event_pipeline_health_event_type_counts: Counter[str] = Counter()
+    resource_pressure_groups: dict[tuple[Any, ...], dict[str, Any]] = {}
+    resource_pressure_event_type_counts: Counter[str] = Counter()
     hsl_replay_health_groups: dict[str, dict[str, Any]] = {}
     hsl_replay_health_event_type_counts: Counter[str] = Counter()
     risk_event_groups: dict[tuple[Any, ...], dict[str, Any]] = {}
@@ -5599,6 +5781,19 @@ def _scan_events(
                                 event_pipeline_health_groups,
                                 event_pipeline_health_group,
                             )
+                        resource_pressure_group = _resource_pressure_group(
+                            bot_key=bot_key,
+                            row=row,
+                            live_event=live_event,
+                            path=path,
+                            line_no=line_no,
+                        )
+                        if resource_pressure_group is not None:
+                            resource_pressure_event_type_counts[str(event_type)] += 1
+                            _merge_resource_pressure_group(
+                                resource_pressure_groups,
+                                resource_pressure_group,
+                            )
                     if event_type in HSL_REPLAY_EVENT_TYPES:
                         hsl_replay_health_event_type_counts[str(event_type)] += 1
                         _merge_hsl_replay_group(
@@ -5770,6 +5965,10 @@ def _scan_events(
         "event_pipeline_health": _summarize_event_pipeline_health(
             event_pipeline_health_groups,
             event_pipeline_health_event_type_counts,
+        ),
+        "resource_pressure": _summarize_resource_pressure(
+            resource_pressure_groups,
+            resource_pressure_event_type_counts,
         ),
         "hsl_replay_health": _summarize_hsl_replay_health(
             hsl_replay_health_groups,
@@ -6201,6 +6400,7 @@ def build_live_smoke_report(
         ],
         "staged_readiness_health": event_scan["staged_readiness_health"],
         "event_pipeline_health": event_scan["event_pipeline_health"],
+        "resource_pressure": event_scan["resource_pressure"],
         "hsl_replay_health": event_scan["hsl_replay_health"],
         "risk_events": event_scan["risk_events"],
         "shutdown_events": event_scan["shutdown_events"],
@@ -6309,6 +6509,19 @@ def _summary_limited_groups(
                 "latest_worker_not_alive_count"
             ),
             "latest_stopping_count": summary.get("latest_stopping_count"),
+            "latest_cpu_percent_max": summary.get("latest_cpu_percent_max"),
+            "latest_cpu_reporting_bots": summary.get("latest_cpu_reporting_bots"),
+            "latest_memory_percent_max": summary.get("latest_memory_percent_max"),
+            "latest_memory_reporting_bots": summary.get(
+                "latest_memory_reporting_bots"
+            ),
+            "latest_rss_bytes_total": summary.get("latest_rss_bytes_total"),
+            "latest_rss_reporting_bots": summary.get("latest_rss_reporting_bots"),
+            "latest_open_fds_total": summary.get("latest_open_fds_total"),
+            "latest_open_fds_reporting_bots": summary.get(
+                "latest_open_fds_reporting_bots"
+            ),
+            "latest_loadavg_1m_max": summary.get("latest_loadavg_1m_max"),
             "hsl_flat_finalization_anchors": summary.get(
                 "hsl_flat_finalization_anchors"
             ),
@@ -6494,6 +6707,11 @@ def summarize_live_smoke_report(
         if isinstance(report.get("event_pipeline_health"), dict)
         else {}
     )
+    resource_pressure = (
+        report.get("resource_pressure")
+        if isinstance(report.get("resource_pressure"), dict)
+        else {}
+    )
     hsl_replay_health = (
         report.get("hsl_replay_health")
         if isinstance(report.get("hsl_replay_health"), dict)
@@ -6670,6 +6888,10 @@ def summarize_live_smoke_report(
         ),
         "event_pipeline_health": _summary_limited_groups(
             event_pipeline_health,
+            limit=max_groups,
+        ),
+        "resource_pressure": _summary_limited_groups(
+            resource_pressure,
             limit=max_groups,
         ),
         "hsl_replay_health": _summary_limited_groups(
@@ -7362,6 +7584,11 @@ def summarize_live_smoke_report_brief(report: dict[str, Any]) -> dict[str, Any]:
         if isinstance(report.get("event_pipeline_health"), dict)
         else {}
     )
+    resource_pressure = (
+        report.get("resource_pressure")
+        if isinstance(report.get("resource_pressure"), dict)
+        else {}
+    )
     hsl_replay_health = (
         report.get("hsl_replay_health")
         if isinstance(report.get("hsl_replay_health"), dict)
@@ -7635,6 +7862,34 @@ def summarize_live_smoke_report_brief(report: dict[str, Any]) -> dict[str, Any]:
             ),
             "event_types": event_pipeline_health.get("event_types") or {},
         },
+        "resource_pressure": {
+            "total": _count_value(resource_pressure.get("total")),
+            "bots": _count_value(resource_pressure.get("bots")),
+            "latest_cpu_percent_max": resource_pressure.get("latest_cpu_percent_max"),
+            "latest_cpu_reporting_bots": _count_value(
+                resource_pressure.get("latest_cpu_reporting_bots")
+            ),
+            "latest_memory_percent_max": resource_pressure.get(
+                "latest_memory_percent_max"
+            ),
+            "latest_memory_reporting_bots": _count_value(
+                resource_pressure.get("latest_memory_reporting_bots")
+            ),
+            "latest_rss_bytes_total": _count_value(
+                resource_pressure.get("latest_rss_bytes_total")
+            ),
+            "latest_rss_reporting_bots": _count_value(
+                resource_pressure.get("latest_rss_reporting_bots")
+            ),
+            "latest_open_fds_total": _count_value(
+                resource_pressure.get("latest_open_fds_total")
+            ),
+            "latest_open_fds_reporting_bots": _count_value(
+                resource_pressure.get("latest_open_fds_reporting_bots")
+            ),
+            "latest_loadavg_1m_max": resource_pressure.get("latest_loadavg_1m_max"),
+            "event_types": resource_pressure.get("event_types") or {},
+        },
         "hsl_replay": _brief_hsl_replay_health(hsl_replay_health),
         "risk_events": risk_events_brief,
         "shutdown_events": {
@@ -7670,6 +7925,7 @@ SMOKE_REPORT_SECTION_ALIASES: dict[str, tuple[str, ...]] = {
     "fill_refresh": ("fill_refresh_health",),
     "hsl_replay": ("hsl_replay_health",),
     "remote_calls": ("remote_call_health", "remote_call_timings"),
+    "resources": ("resource_pressure",),
     "staged_readiness": ("staged_readiness_health",),
 }
 

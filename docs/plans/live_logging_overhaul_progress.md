@@ -19,24 +19,25 @@ Last updated: 2026-07-09.
 
 Current `origin/v8` head:
 
-- `63c60022` after PR #1148, `Add health CPU telemetry to performance reports`.
+- `46be5b5b` after PR #1147, `Align unstuck emission and HSL flat epsilon`.
 
 Current logging-overhaul head:
 
-- `63c60022` after PR #1148, `Add health CPU telemetry to performance reports`.
+- `1bb6f620` after PR #1149, `Add psutil to live requirements`.
 
 Current work:
 
-- Branch `codex/v8-live-psutil-requirement` makes `psutil` part of the live
-  install so the deployed health-summary RSS, memory-percent, open-FD, and new
-  CPU-percent probes are available in standard live environments.
+- Branch `codex/v8-smoke-resource-pressure` adds a read-only
+  `live-smoke-report` projection over existing `health.summary`
+  resource-pressure fields so repeated smoke loops can see CPU, memory, RSS,
+  open-FD, and load evidence without a separate performance-report command.
 
 Current review gate:
 
 - Composer has been stopped/retired from this loop. The normal review gate is
-  now Claude + Hermes + Cursor + CI. For low-risk docs/tooling-only slices, a
-  degraded gate may still be used after repeated reviewer absence, but that
-  exception must be called out in the progress evidence.
+  now Claude Opus 4.8 + Hermes + Grok 4.5 + CI. For low-risk docs/tooling-only
+  slices, a degraded gate may still be used after repeated reviewer absence,
+  but that exception must be called out in the progress evidence.
 
 Retuned goal boundary:
 
@@ -6839,3 +6840,36 @@ VPS5 deployment status:
 - Expected validation: requirement parsing/import smoke, focused health-summary
   CPU probe tests, `py_compile` for the touched live monitor/report modules if
   needed, `git diff --check`, and the standard added-line silent-handling scan.
+- Result: PR #1149 was reviewed by Hermes, Claude Opus 4.8, and Grok 4.5 on
+  current head `16c05d8`, merged to `v8` as `1bb6f620`, and deployed to VPS5.
+  The VPS5 checkout was pulled to `1bb6f620`, the live venv installed
+  `psutil==5.9.8` from `requirements-live.txt`, and the five configured bots
+  were restarted from `/root/bots_vps5.yaml`. A 2-minute post-restart smoke
+  reported `ok=true`, `hard_failures=0`, `matched_expected=5`,
+  `missing_expected_count=0`, `remote_calls.failed=0`, and
+  `account_critical_remote_calls.failed=0`, with only non-hard EMA readiness,
+  state refresh-progress, and active HSL replay attention. A focused
+  `health.summary` query then showed `cpu_percent=3.9` for
+  `hyperliquid/hyperliquid_tradfi`, and a 30-minute
+  `live-performance-report --section resource_pressure` showed
+  `cpu_percent.latest=20.4`, `count=2`, and no event-pipeline drops or sink
+  errors.
+
+### Draft Slice: Resource Pressure Smoke Projection
+
+- Branch: `codex/v8-smoke-resource-pressure`.
+- Scope: read-only smoke-report projection over existing periodic
+  `health.summary` resource-pressure fields.
+- Triggering evidence: PRs #1148 and #1149 made CPU, memory, RSS, open-FD, and
+  load evidence available in deployed `health.summary` events and
+  `live-performance-report --section resource_pressure`, but standard repeated
+  smoke loops still did not expose those process-pressure signals directly.
+- Intended result: add `resource_pressure` to full and summary smoke reports,
+  plus a compact `resource_pressure` brief projection and `resources` section
+  alias, using only existing `health.summary` events. Keep output bounded to
+  per-bot latest values and aggregate latest max/total counters. Do not add
+  event producers, exchange calls, monitor writes, console routing, restart
+  behavior, order/risk logic, or trading behavior.
+- Expected validation: focused smoke-report resource-pressure tests,
+  `py_compile`, `git diff --check`, and the standard added-line
+  silent-handling scan.
