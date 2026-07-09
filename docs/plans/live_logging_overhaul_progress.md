@@ -19,19 +19,19 @@ Last updated: 2026-07-09.
 
 Current `origin/v8` head:
 
-- `84191c02` after PR #1153, `Keep missing resource pressure minima null`.
+- `141e88db` after PR #1154, `Add resource pressure sample age reporting`.
 
 Current logging-overhaul head:
 
-- `84191c02` after PR #1153, `Keep missing resource pressure minima null`.
+- `141e88db` after PR #1154, `Add resource pressure sample age reporting`.
 
 Current work:
 
-- Branch `codex/v8-resource-pressure-event-age` adds read-only
-  `latest_event_age_ms` freshness metadata to `live-performance-report`
-  `resource_pressure` groups. It uses existing `health.summary` event
-  timestamps only and does not add event producers, exchange calls, order/risk
-  logic, restart orchestration, or trading behavior.
+- Branch `codex/v8-smoke-resource-pressure-age` adds read-only
+  `latest_event_age_ms` freshness metadata to `live-smoke-report`
+  `resource_pressure` groups and brief output. It uses existing
+  `health.summary` event timestamps only and does not add event producers,
+  exchange calls, order/risk logic, restart orchestration, or trading behavior.
 
 Current review gate:
 
@@ -61,6 +61,23 @@ Retuned goal boundary:
 
 VPS5 deployment status:
 
+- Repository pulled through PR #1154 at `141e88db`.
+- PR #1154 added read-only `latest_event_age_ms` freshness metadata to
+  `live-performance-report` `resource_pressure` groups. It merged after Hermes
+  approved, Claude Opus 4.8 green-lighted the current head, Cursor/Grok
+  approved, Codex reviewer posted green, and CI was green. VPS5 was pulled with
+  `git pull --autostash --ff-only origin v8` to preserve the pre-existing
+  tracked Rust-format/local config state. No bot restart was performed because
+  the slice was read-only report projection plus docs. A bounded 2-minute smoke
+  with supervisor process check reported `ok=true`, `hard_failures=0`,
+  `matched_expected=5`, `missing_expected_count=0`,
+  `remote_calls.failed=0`, `account_critical_remote_calls.failed=0`,
+  `logs.hard_matches=0`, and repository head `141e88db`. Non-hard attention
+  remained active HSL replay and EMA readiness evidence. The short smoke window
+  contained no `health.summary` resource-pressure samples; a focused 30-minute
+  `live-performance-report --section resource_pressure` check reported
+  `ok=true`, `resource_pressure.total=2`, `resource_pressure.bots=1`, and
+  `latest_event_age_ms=624447` on the Hyperliquid resource-pressure group.
 - Repository pulled through PR #1153 at `84191c02`.
 - PR #1153 kept no-data `live-smoke-report --brief` resource-pressure minimum
   fields as null/absent instead of coercing them to zero. It merged after

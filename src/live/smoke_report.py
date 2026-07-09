@@ -2993,10 +2993,55 @@ def _latest_numeric_reporting_bots(groups: Iterable[dict[str, Any]], field: str)
     return sum(1 for group in groups if _latest_numeric_value(group, field) is not None)
 
 
+def _resource_pressure_event_age_ms(
+    group: dict[str, Any],
+    *,
+    report_ts_ms: int,
+) -> int | None:
+    ts = _non_negative_int(group.get("latest_ts"))
+    if ts is None:
+        return None
+    return int(max(0, int(report_ts_ms) - int(ts)))
+
+
+def _resource_pressure_latest_age_max(
+    groups: Iterable[dict[str, Any]],
+) -> int | None:
+    values = [
+        int(value)
+        for group in groups
+        if (value := _non_negative_int(group.get("latest_event_age_ms"))) is not None
+    ]
+    if not values:
+        return None
+    return max(values)
+
+
+def _resource_pressure_age_reporting_bots(
+    groups: Iterable[dict[str, Any]],
+) -> int:
+    return sum(
+        1
+        for group in groups
+        if _non_negative_int(group.get("latest_event_age_ms")) is not None
+    )
+
+
 def _summarize_resource_pressure(
     groups: dict[tuple[Any, ...], dict[str, Any]],
     event_type_counts: Counter[str],
+    *,
+    report_ts_ms: int | None = None,
 ) -> dict[str, Any]:
+    if report_ts_ms is None:
+        report_ts_ms = utc_ms()
+    for group in groups.values():
+        age_ms = _resource_pressure_event_age_ms(
+            group,
+            report_ts_ms=int(report_ts_ms),
+        )
+        if age_ms is not None:
+            group["latest_event_age_ms"] = int(age_ms)
     ordered = sorted(
         groups.values(),
         key=lambda item: (
@@ -3066,6 +3111,12 @@ def _summarize_resource_pressure(
             ),
             "latest_health_summary_lag_reporting_bots": _latest_numeric_reporting_bots(
                 groups.values(), "health_summary_lag_ms"
+            ),
+            "latest_event_age_ms_max": _resource_pressure_latest_age_max(
+                groups.values()
+            ),
+            "latest_event_age_reporting_bots": _resource_pressure_age_reporting_bots(
+                groups.values()
             ),
             "groups": compact_groups,
         }.items()
@@ -6013,6 +6064,7 @@ def _scan_events(
         "resource_pressure": _summarize_resource_pressure(
             resource_pressure_groups,
             resource_pressure_event_type_counts,
+            report_ts_ms=report_ts_ms,
         ),
         "hsl_replay_health": _summarize_hsl_replay_health(
             hsl_replay_health_groups,
@@ -6582,6 +6634,10 @@ def _summary_limited_groups(
             ),
             "latest_health_summary_lag_reporting_bots": summary.get(
                 "latest_health_summary_lag_reporting_bots"
+            ),
+            "latest_event_age_ms_max": summary.get("latest_event_age_ms_max"),
+            "latest_event_age_reporting_bots": summary.get(
+                "latest_event_age_reporting_bots"
             ),
             "hsl_flat_finalization_anchors": summary.get(
                 "hsl_flat_finalization_anchors"
@@ -7967,6 +8023,12 @@ def summarize_live_smoke_report_brief(report: dict[str, Any]) -> dict[str, Any]:
             ),
             "latest_health_summary_lag_reporting_bots": _count_value(
                 resource_pressure.get("latest_health_summary_lag_reporting_bots")
+            ),
+            "latest_event_age_ms_max": resource_pressure.get(
+                "latest_event_age_ms_max"
+            ),
+            "latest_event_age_reporting_bots": _count_value(
+                resource_pressure.get("latest_event_age_reporting_bots")
             ),
             "event_types": resource_pressure.get("event_types") or {},
         },
