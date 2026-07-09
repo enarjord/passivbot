@@ -64,6 +64,21 @@ def _get_process_memory_percent() -> Optional[float]:
     return None
 
 
+def _get_process_cpu_percent() -> Optional[float]:
+    """Return non-blocking process CPU percentage when psutil is available."""
+    if psutil is None:
+        return None
+    error_types = (OSError, RuntimeError, ValueError, AttributeError)
+    psutil_error = getattr(psutil, "Error", None)
+    if isinstance(psutil_error, type):
+        error_types = error_types + (psutil_error,)
+    try:
+        return float(psutil.Process(os.getpid()).cpu_percent(interval=None))
+    except error_types as exc:
+        logging.debug("[monitor] cpu percent probe unavailable: %s", exc)
+    return None
+
+
 def _get_open_fd_count() -> Optional[int]:
     """Return current open file descriptor count when the platform exposes it."""
     try:
@@ -388,6 +403,9 @@ def _build_health_summary_payload(self, *, now_ms: Optional[int] = None) -> dict
     mem_pct = _get_process_memory_percent()
     if mem_pct is not None and math.isfinite(mem_pct):
         payload["memory_percent"] = float(mem_pct)
+    cpu_pct = _get_process_cpu_percent()
+    if cpu_pct is not None and math.isfinite(cpu_pct):
+        payload["cpu_percent"] = max(0.0, float(cpu_pct))
     open_fds = _get_open_fd_count()
     if open_fds is not None:
         payload["open_fds"] = int(open_fds)

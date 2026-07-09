@@ -1335,6 +1335,7 @@ def test_build_health_summary_payload_includes_resource_pressure(monkeypatch):
 
     monkeypatch.setattr(pb_mod.pb_monitor, "_get_process_rss_bytes", lambda: 123456)
     monkeypatch.setattr(pb_mod.pb_monitor, "_get_process_memory_percent", lambda: 12.5)
+    monkeypatch.setattr(pb_mod.pb_monitor, "_get_process_cpu_percent", lambda: 34.25)
     monkeypatch.setattr(pb_mod.pb_monitor, "_get_open_fd_count", lambda: 42)
     monkeypatch.setattr(
         pb_mod.pb_monitor,
@@ -1354,6 +1355,7 @@ def test_build_health_summary_payload_includes_resource_pressure(monkeypatch):
     assert payload["positions_short"] == 1
     assert payload["rss_bytes"] == 123456
     assert payload["memory_percent"] == 12.5
+    assert payload["cpu_percent"] == 34.25
     assert payload["open_fds"] == 42
     assert payload["loadavg_1m"] == 1.5
     assert payload["loadavg_5m"] == 1.25

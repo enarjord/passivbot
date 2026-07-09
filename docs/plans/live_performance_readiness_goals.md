@@ -362,8 +362,10 @@ classification when enough source events exist.
   - Status: partial. Existing `health.summary` events are summarized by
     `live-performance-report` as `resource_pressure`, including whitelisted
     process and event-pipeline fields with count, latest, min, mean, median,
-    p95, and max values where present. Remaining work: CPU percent and loop lag
-    need source event support if they are not already emitted by the active bot.
+    p95, and max values where present. The source payload now includes
+    non-blocking process `cpu_percent` when `psutil` is available. Remaining
+    work: loop lag needs a dedicated source event or heartbeat before it can be
+    reported without misleading operators.
 - [ ] Shutdown: signal to exit flag, cancellation request, blocking task names,
   final monitor flush, process exit.
 
@@ -750,6 +752,11 @@ Trading-impact labels:
 - [ ] Add low-overhead process resource snapshots to the performance report.
   - CPU percent, RSS, open file descriptors if available, event queue depth,
     and monitor sink backlog.
+  - Status: partial. Periodic `health.summary` now emits RSS, memory percent,
+    non-blocking process CPU percent, open FDs, load averages, and event-pipeline
+    queue/drop/sink counters where available; `live-performance-report`
+    aggregates those fields under `resource_pressure`. Loop lag and explicit
+    sink backlog remain open source-event gaps.
 
 - [ ] Identify CPU-bound Python loops.
   - HSL replay is currently the obvious case. Other candidates are EMA
