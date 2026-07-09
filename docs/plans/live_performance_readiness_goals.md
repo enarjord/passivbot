@@ -364,9 +364,13 @@ classification when enough source events exist.
     process and event-pipeline fields with count, latest, min, mean, median,
     p95, and max values where present. The source payload now includes cached,
     non-blocking process `cpu_percent` when `psutil` is available; the first
-    post-start sample is used only to prime the psutil delta and is omitted.
-    Remaining work: loop lag needs a dedicated source event or heartbeat before
-    it can be reported without misleading operators.
+    post-start sample is used only to prime the psutil delta and is omitted. It
+    also includes `health_summary_lag_ms` after the first heartbeat, measuring
+    elapsed time beyond the configured health-summary interval, and smoke
+    reports project the same value in their `resource_pressure` section.
+    Remaining work: a lower-level event-loop lag probe can be added later if
+    operators need sub-heartbeat scheduling latency, but this heartbeat lag now
+    gives bounded non-misleading evidence for delayed health summaries.
 - [ ] Shutdown: signal to exit flag, cancellation request, blocking task names,
   final monitor flush, process exit.
 

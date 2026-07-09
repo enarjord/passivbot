@@ -111,6 +111,7 @@ RESOURCE_PRESSURE_FIELDS = (
     "loadavg_1m",
     "loadavg_5m",
     "loadavg_15m",
+    "health_summary_lag_ms",
 )
 HSL_REPLAY_HEALTH_GROUP_LIMIT = 20
 HSL_REPLAY_STALE_ACTIVE_EVENT_AGE_MS = 5 * 60 * 1000
@@ -3023,6 +3024,12 @@ def _summarize_resource_pressure(
                 groups.values(), "open_fds"
             ),
             "latest_loadavg_1m_max": _latest_numeric_max(groups.values(), "loadavg_1m"),
+            "latest_health_summary_lag_ms_max": _latest_numeric_max(
+                groups.values(), "health_summary_lag_ms"
+            ),
+            "latest_health_summary_lag_reporting_bots": _latest_numeric_reporting_bots(
+                groups.values(), "health_summary_lag_ms"
+            ),
             "groups": compact_groups,
         }.items()
         if value is not None
@@ -6522,6 +6529,12 @@ def _summary_limited_groups(
                 "latest_open_fds_reporting_bots"
             ),
             "latest_loadavg_1m_max": summary.get("latest_loadavg_1m_max"),
+            "latest_health_summary_lag_ms_max": summary.get(
+                "latest_health_summary_lag_ms_max"
+            ),
+            "latest_health_summary_lag_reporting_bots": summary.get(
+                "latest_health_summary_lag_reporting_bots"
+            ),
             "hsl_flat_finalization_anchors": summary.get(
                 "hsl_flat_finalization_anchors"
             ),
@@ -7888,6 +7901,12 @@ def summarize_live_smoke_report_brief(report: dict[str, Any]) -> dict[str, Any]:
                 resource_pressure.get("latest_open_fds_reporting_bots")
             ),
             "latest_loadavg_1m_max": resource_pressure.get("latest_loadavg_1m_max"),
+            "latest_health_summary_lag_ms_max": resource_pressure.get(
+                "latest_health_summary_lag_ms_max"
+            ),
+            "latest_health_summary_lag_reporting_bots": _count_value(
+                resource_pressure.get("latest_health_summary_lag_reporting_bots")
+            ),
             "event_types": resource_pressure.get("event_types") or {},
         },
         "hsl_replay": _brief_hsl_replay_health(hsl_replay_health),

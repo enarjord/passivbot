@@ -1156,6 +1156,7 @@ class Passivbot:
         self._health_ws_reconnects = 0
         self._health_rate_limits = 0
         self._health_last_summary_ms = 0
+        self._health_summary_lag_ms = None
         self._health_summary_interval_ms = 15 * 60 * 1000  # 15 minutes
         self._last_loop_duration_ms = 0
 
@@ -2188,8 +2189,14 @@ class Passivbot:
     def _maybe_log_health_summary(self) -> None:
         """Log periodic health summary if interval has elapsed."""
         now_ms = utc_ms()
-        if (now_ms - self._health_last_summary_ms) < self._health_summary_interval_ms:
+        previous_ms = int(getattr(self, "_health_last_summary_ms", 0) or 0)
+        interval_ms = max(0, int(getattr(self, "_health_summary_interval_ms", 0) or 0))
+        if (now_ms - previous_ms) < interval_ms:
             return
+        if previous_ms > 0:
+            self._health_summary_lag_ms = max(0, int(now_ms - previous_ms - interval_ms))
+        else:
+            self._health_summary_lag_ms = None
         self._health_last_summary_ms = now_ms
         self._log_health_summary()
 

@@ -405,6 +405,9 @@ def _build_health_summary_payload(self, *, now_ms: Optional[int] = None) -> dict
         "ws_reconnects": int(self._health_ws_reconnects),
         "rate_limits": int(self._health_rate_limits),
     }
+    summary_lag_ms = getattr(self, "_health_summary_lag_ms", None)
+    if summary_lag_ms is not None:
+        payload["health_summary_lag_ms"] = max(0, int(summary_lag_ms))
     rss = _get_process_rss_bytes()
     if rss is not None:
         payload["rss_bytes"] = int(rss)

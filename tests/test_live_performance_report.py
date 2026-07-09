@@ -2820,6 +2820,7 @@ def test_live_performance_report_resource_pressure_from_health_summary(tmp_path)
                     "open_fds": 11,
                     "loadavg_1m": 0.25,
                     "cpu_count": 1,
+                    "health_summary_lag_ms": 0,
                     "event_queue_depth": 3,
                     "event_dropped_total": 1,
                     "event_sink_error_total": 0,
@@ -2842,6 +2843,7 @@ def test_live_performance_report_resource_pressure_from_health_summary(tmp_path)
                     "open_fds": 13,
                     "loadavg_1m": 0.75,
                     "cpu_count": 1,
+                    "health_summary_lag_ms": 2500,
                     "event_queue_depth": 5,
                     "event_dropped_total": 4,
                     "event_sink_error_total": 1,
@@ -2894,6 +2896,15 @@ def test_live_performance_report_resource_pressure_from_health_summary(tmp_path)
     }
     assert group["fields"]["event_queue_depth"]["max"] == 5
     assert group["fields"]["event_queue_depth"]["p95"] == 5
+    assert group["fields"]["health_summary_lag_ms"] == {
+        "latest": 2500,
+        "count": 2,
+        "min": 0,
+        "max": 2500,
+        "mean": 1250,
+        "median": 1250,
+        "p95": 2375,
+    }
     assert group["fields"]["event_dropped_total"]["latest"] == 4
     assert group["fields"]["event_sink_error_total"]["latest"] == 1
     assert group["fields"]["event_degraded_count"]["latest"] == 3

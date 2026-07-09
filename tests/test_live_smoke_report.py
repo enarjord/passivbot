@@ -2244,6 +2244,7 @@ def test_live_smoke_report_summarizes_resource_pressure(tmp_path):
                     "loadavg_1m": 0.75,
                     "loadavg_5m": 0.5,
                     "loadavg_15m": 0.4,
+                    "health_summary_lag_ms": 2500,
                 },
             ),
             _monitor_row(
@@ -2276,6 +2277,7 @@ def test_live_smoke_report_summarizes_resource_pressure(tmp_path):
                     "rss_bytes": 2000,
                     "open_fds": 9,
                     "loadavg_1m": 0.5,
+                    "health_summary_lag_ms": 500,
                 },
             )
         ],
@@ -2299,6 +2301,8 @@ def test_live_smoke_report_summarizes_resource_pressure(tmp_path):
     assert resource["latest_open_fds_total"] == 22
     assert resource["latest_open_fds_reporting_bots"] == 2
     assert resource["latest_loadavg_1m_max"] == 0.75
+    assert resource["latest_health_summary_lag_ms_max"] == 2500
+    assert resource["latest_health_summary_lag_reporting_bots"] == 2
     assert [group["bot"] for group in resource["groups"]] == [
         "okx/okx_01",
         "gateio/gateio_01",
@@ -2312,6 +2316,7 @@ def test_live_smoke_report_summarizes_resource_pressure(tmp_path):
         "loadavg_1m": 0.75,
         "loadavg_5m": 0.5,
         "loadavg_15m": 0.4,
+        "health_summary_lag_ms": 2500,
     }
     assert summary["resource_pressure"]["total"] == 3
     assert summary["resource_pressure"]["groups_truncated"] is True
@@ -2328,6 +2333,8 @@ def test_live_smoke_report_summarizes_resource_pressure(tmp_path):
         "latest_open_fds_total": 22,
         "latest_open_fds_reporting_bots": 2,
         "latest_loadavg_1m_max": 0.75,
+        "latest_health_summary_lag_ms_max": 2500,
+        "latest_health_summary_lag_reporting_bots": 2,
         "event_types": {"health.summary": 3},
     }
     assert "resource_pressure" in section

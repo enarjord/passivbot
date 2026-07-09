@@ -1339,6 +1339,9 @@ def _console_health_summary(event: LiveEvent) -> list[str]:
     loop_ms = _data_int(data, "last_loop_duration_ms")
     if loop_ms is not None:
         parts.append(f"loop={loop_ms / 1000.0:.1f}s")
+    summary_lag_ms = _data_int(data, "health_summary_lag_ms")
+    if summary_lag_ms:
+        parts.append(f"health_lag={summary_lag_ms / 1000.0:.1f}s")
     long_count = _data_int(data, "positions_long")
     short_count = _data_int(data, "positions_short")
     if long_count is not None or short_count is not None:

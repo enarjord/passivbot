@@ -19,18 +19,18 @@ Last updated: 2026-07-09.
 
 Current `origin/v8` head:
 
-- `46be5b5b` after PR #1147, `Align unstuck emission and HSL flat epsilon`.
+- `58308f32` after PR #1150, `Add resource pressure smoke projection`.
 
 Current logging-overhaul head:
 
-- `1bb6f620` after PR #1149, `Add psutil to live requirements`.
+- `58308f32` after PR #1150, `Add resource pressure smoke projection`.
 
 Current work:
 
-- Branch `codex/v8-smoke-resource-pressure` adds a read-only
-  `live-smoke-report` projection over existing `health.summary`
-  resource-pressure fields so repeated smoke loops can see CPU, memory, RSS,
-  open-FD, and load evidence without a separate performance-report command.
+- Branch `codex/v8-health-loop-lag` adds bounded health-summary scheduling lag
+  telemetry to the existing `health.summary` resource-pressure path and projects
+  it through smoke/performance reports. It does not add exchange calls,
+  order/risk logic, restart orchestration, or trading behavior.
 
 Current review gate:
 
@@ -6873,3 +6873,41 @@ VPS5 deployment status:
 - Expected validation: focused smoke-report resource-pressure tests,
   `py_compile`, `git diff --check`, and the standard added-line
   silent-handling scan.
+- Result: PR #1150 was reviewed by Hermes, Claude Opus 4.8, and Grok 4.5 on
+  current head `c2e68817`, merged to `v8` as `58308f32`, and deployed to VPS5
+  without restarting running bots because the slice was read-only report
+  projection over existing events. VPS5 was pulled to `58308f32` with
+  `--autostash`, preserving a pre-existing local rustfmt-only tracked diff in
+  `passivbot-rust/src/equity_hard_stop_loss.rs`. A settled 2-minute smoke with
+  dropped-unparsed log policy reported `ok=true`, `hard_failures=0`,
+  `matched_expected=5`, `missing_expected_count=0`, `remote_calls.failed=0`,
+  `account_critical_remote_calls.failed=0`, and event-pipeline dropped/sink
+  errors at zero; non-hard attention remained EMA readiness, one stale dropped
+  traceback sample, and `unstuck.status`. The brief smoke exposed the new
+  `resource_pressure` projection with one reporting bot, `cpu_percent` max
+  `15.1`, RSS total `61177856`, and open FDs total `16`. A focused 30-minute
+  `resource_pressure` section showed four reporting bots, `cpu_percent` max
+  `21.5`, RSS total `363417600`, and open FDs total `61`; the section command
+  exited red only because the report also carried unrelated hard-event and
+  dirty-repository markers.
+
+### Draft Slice: Health Summary Scheduling Lag
+
+- Branch: `codex/v8-health-loop-lag`.
+- Scope: observability producer plus existing smoke/performance report
+  projections for periodic `health.summary` resource-pressure events.
+- Triggering evidence: resource-pressure reports now show CPU/load, memory,
+  RSS, open FDs, event queue depth, dropped event counters, and sink errors, but
+  the performance checklist still lacked loop-lag-style heartbeat evidence.
+  Existing `last_loop_duration_ms` measures the previous cycle body and does
+  not prove whether periodic health summaries themselves are being delayed.
+- Intended result: add non-negative `health_summary_lag_ms` to
+  `health.summary` after the first heartbeat, measuring elapsed time beyond the
+  configured health-summary interval. Project it through
+  `live-performance-report` resource-pressure stats and `live-smoke-report`
+  resource-pressure full/summary/brief output. Do not add exchange calls,
+  monitor files beyond the existing periodic health event, order/risk logic,
+  restart behavior, or trading behavior.
+- Expected validation: focused health-summary payload/scheduler tests, focused
+  smoke/performance resource-pressure tests, `py_compile`, `git diff --check`,
+  and the standard added-line silent-handling scan.
