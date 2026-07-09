@@ -2204,7 +2204,8 @@ def test_live_smoke_report_summarizes_event_pipeline_health(tmp_path):
     }
 
 
-def test_live_smoke_report_summarizes_resource_pressure(tmp_path):
+def test_live_smoke_report_summarizes_resource_pressure(tmp_path, monkeypatch):
+    monkeypatch.setattr(smoke_report_module, "utc_ms", lambda: 5000)
     okx_events = tmp_path / "monitor" / "okx" / "okx_01" / "events"
     gateio_events = tmp_path / "monitor" / "gateio" / "gateio_01" / "events"
     _write_ndjson(
@@ -2320,11 +2321,14 @@ def test_live_smoke_report_summarizes_resource_pressure(tmp_path):
     assert resource["latest_loadavg_1m_max"] == 0.75
     assert resource["latest_health_summary_lag_ms_max"] == 2500
     assert resource["latest_health_summary_lag_reporting_bots"] == 2
+    assert resource["latest_event_age_ms_max"] == 3500
+    assert resource["latest_event_age_reporting_bots"] == 2
     assert [group["bot"] for group in resource["groups"]] == [
         "okx/okx_01",
         "gateio/gateio_01",
     ]
     assert resource["groups"][0]["latest_ids"] == {"cycle_id": "okx_latest"}
+    assert resource["groups"][0]["latest_event_age_ms"] == 3000
     assert resource["groups"][0]["latest_values"] == {
         "cpu_percent": 12.25,
         "memory_percent": 11.5,
@@ -2344,6 +2348,7 @@ def test_live_smoke_report_summarizes_resource_pressure(tmp_path):
     assert summary["resource_pressure"]["total"] == 3
     assert summary["resource_pressure"]["groups_truncated"] is True
     assert summary["resource_pressure"]["groups"][0]["bot"] == "okx/okx_01"
+    assert summary["resource_pressure"]["groups"][0]["latest_event_age_ms"] == 3000
     assert brief["resource_pressure"] == {
         "total": 3,
         "bots": 2,
@@ -2363,6 +2368,8 @@ def test_live_smoke_report_summarizes_resource_pressure(tmp_path):
         "latest_loadavg_1m_max": 0.75,
         "latest_health_summary_lag_ms_max": 2500,
         "latest_health_summary_lag_reporting_bots": 2,
+        "latest_event_age_ms_max": 3500,
+        "latest_event_age_reporting_bots": 2,
         "event_types": {"health.summary": 3},
     }
     assert "resource_pressure" in section
@@ -2376,7 +2383,10 @@ def test_live_smoke_report_resource_pressure_brief_keeps_missing_min_as_null(tmp
     pressure = report["resource_pressure"]
     assert pressure["total"] == 0
     assert "latest_system_memory_available_bytes_min" not in pressure
+    assert "latest_event_age_ms_max" not in pressure
     assert brief["resource_pressure"]["latest_system_memory_available_bytes_min"] is None
+    assert brief["resource_pressure"]["latest_event_age_ms_max"] is None
+    assert brief["resource_pressure"]["latest_event_age_reporting_bots"] == 0
 
 
 def test_live_smoke_report_event_pipeline_health_aggregates_multi_bot_queue_overflow(tmp_path):
