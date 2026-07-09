@@ -666,6 +666,10 @@ All notable user-facing changes will be documented in this file.
   `health.summary` process and event-pipeline fields with count, min, mean,
   median, p95, max, and latest values without raw account or financial
   payloads.
+- Added `exchange_config_refresh` summaries and elapsed timing groups to
+  `passivbot tool live-performance-report`, projecting existing structured
+  refresh success/failure events without copying raw exchange error text or
+  making new exchange calls.
 - Improved cold `passivbot backtest` materialization by batching legacy OHLCV
   imports by month, vectorizing chunk writes, staging HLCV cache writes with
   rollback on publish failure, and honoring Ctrl+C between expensive

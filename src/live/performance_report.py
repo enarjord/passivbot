@@ -282,6 +282,15 @@ _FILL_REFRESH_NUMERIC_FIELDS = (
     "degraded_events_after",
     "legacy_files_quarantined",
 )
+_EXCHANGE_CONFIG_REFRESH_EVENT_TYPES = {
+    "exchange.config_refresh",
+}
+_SAFE_LABEL_CHARS = frozenset(
+    "abcdefghijklmnopqrstuvwxyz"
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    "0123456789"
+    "._:-/"
+)
 
 
 def _open_text(path: Path):
@@ -399,6 +408,19 @@ def _safe_string_list(value: Any, *, limit: int = 12) -> list[str]:
         if len(out) >= int(limit):
             break
     return out
+
+
+def _safe_label(value: Any, *, max_len: int = 120) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    if len(text) > int(max_len):
+        text = text[: int(max_len)]
+    if any(char not in _SAFE_LABEL_CHARS for char in text):
+        return None
+    return text
 
 
 def _elapsed_s_to_ms(value: Any) -> int | None:
@@ -2819,6 +2841,103 @@ class _ShutdownLatencyAccumulator:
         }
 
 
+class _ExchangeConfigRefreshAccumulator:
+    def __init__(self) -> None:
+        self.groups: dict[tuple[str, str, str, str, str], dict[str, Any]] = {}
+        self.event_types: Counter[str] = Counter()
+
+    def add(self, *, row: dict[str, Any], live_event: dict[str, Any]) -> None:
+        event_type = str(live_event.get("event_type") or row.get("kind") or "")
+        if event_type not in _EXCHANGE_CONFIG_REFRESH_EVENT_TYPES:
+            return
+        data = live_event.get("data") if isinstance(live_event.get("data"), dict) else {}
+        bot = _bot_key(row, live_event)
+        status = str(live_event.get("status") or "unknown")
+        reason_code = str(live_event.get("reason_code") or "unknown")
+        operation = _safe_label(data.get("operation"), max_len=80) or "unknown"
+        error_type = _safe_label(data.get("error_type"), max_len=80) or ""
+        key = (bot, status, reason_code, operation, error_type)
+        group = self.groups.get(key)
+        if group is None:
+            group = {
+                "bot": bot,
+                "event_type": event_type,
+                "status": status,
+                "reason_code": reason_code,
+                "level": live_event.get("level"),
+                "component": live_event.get("component"),
+                "count": 0,
+                "latest_ts": None,
+                "latest_data": {},
+            }
+            self.groups[key] = group
+        group["count"] = int(group.get("count") or 0) + 1
+        ts = _record_ts(row)
+        latest_changed = ts is None or group.get("latest_ts") is None
+        if ts is not None and group.get("latest_ts") is not None:
+            latest_changed = int(ts) >= int(group["latest_ts"])
+        if ts is not None and latest_changed:
+            group["latest_ts"] = int(ts)
+        if latest_changed:
+            latest_data: dict[str, Any] = {}
+            for label_key in ("context", "operation", "error_type"):
+                label = _safe_label(data.get(label_key), max_len=80)
+                if label:
+                    latest_data[label_key] = label
+            elapsed_ms = _non_negative_ms(data.get("elapsed_ms"))
+            if elapsed_ms is not None:
+                latest_data["elapsed_ms"] = elapsed_ms
+            started_ms = _non_negative_ms(data.get("started_ms"))
+            if started_ms is not None:
+                latest_data["started_ms"] = started_ms
+            group["latest_data"] = latest_data
+        self.event_types[event_type] += 1
+
+    def to_dict(self, *, group_limit: int = GROUP_LIMIT) -> dict[str, Any]:
+        ordered = sorted(
+            self.groups.values(),
+            key=lambda item: (
+                -int(item.get("latest_ts") or 0),
+                -int(item.get("count") or 0),
+                str(item.get("bot") or ""),
+                str(item.get("status") or ""),
+                str(item.get("reason_code") or ""),
+            ),
+        )
+        compact_groups = [
+            {
+                key: value
+                for key, value in group.items()
+                if value not in (None, {}, [])
+            }
+            for group in ordered[: max(0, int(group_limit))]
+        ]
+        status_counts: Counter[str] = Counter()
+        failed_bots: set[str] = set()
+        for group in self.groups.values():
+            count = int(group.get("count") or 0)
+            status = str(group.get("status") or "unknown")
+            status_counts[status] += count
+            if status == "failed" and group.get("bot") not in (None, ""):
+                failed_bots.add(str(group["bot"]))
+        total = sum(int(group.get("count") or 0) for group in self.groups.values())
+        failed = int(status_counts.get("failed", 0))
+        return {
+            "total": int(total),
+            "bots": len({str(group.get("bot")) for group in self.groups.values()}),
+            "succeeded": int(status_counts.get("succeeded", 0)),
+            "failed": failed,
+            "failure_pct": (
+                _rounded_float((failed / total) * 100.0, 3) if total else None
+            ),
+            "failed_bots": len(failed_bots),
+            "statuses": dict(status_counts.most_common()),
+            "event_types": dict(self.event_types.most_common()),
+            "groups_truncated": len(ordered) > int(group_limit),
+            "groups": compact_groups,
+        }
+
+
 class _ExecutionTimingAccumulator:
     def __init__(self) -> None:
         self.accumulator = _PerformanceAccumulator()
@@ -3357,6 +3476,7 @@ def _operation_category(operation: Any) -> str:
         ("input_staleness.", "input_staleness"),
         ("execution.", "execution"),
         ("order_wave.", "execution"),
+        ("exchange_config_refresh.", "exchange_config_refresh"),
         ("shutdown.", "shutdown"),
         ("cycle.", "cycle"),
     ):
@@ -3519,6 +3639,8 @@ def _trading_impact_for_event(event_type: str, operation: str) -> str:
         return "blocks_or_delays_hsl_readiness"
     if event_type == "bot.startup_timing":
         return "blocks_startup_readiness"
+    if event_type == "exchange.config_refresh":
+        return "exchange_io"
     return "observability"
 
 
@@ -3644,6 +3766,18 @@ def _add_event_timings(
             live_event=live_event,
             operation=operation,
             value_ms=value_ms,
+            trading_impact=_trading_impact_for_event(event_type, operation),
+        )
+        return
+
+    if event_type == "exchange.config_refresh":
+        operation = _safe_label(data.get("operation"), max_len=80) or "unknown"
+        operation = f"exchange_config_refresh.{operation}"
+        accumulator.add(
+            row=row,
+            live_event=live_event,
+            operation=operation,
+            value_ms=_non_negative_ms(data.get("elapsed_ms")),
             trading_impact=_trading_impact_for_event(event_type, operation),
         )
 
@@ -3799,6 +3933,7 @@ def build_live_performance_report(
     forager_ema_readiness = _ForagerEmaReadinessAccumulator()
     resource_pressure = _ResourcePressureAccumulator()
     shutdown_latency = _ShutdownLatencyAccumulator()
+    exchange_config_refresh = _ExchangeConfigRefreshAccumulator()
     execution_timing = _ExecutionTimingAccumulator()
     account_state_changes = _AccountStateChangeAccumulator()
     risk_activity = _RiskActivityAccumulator()
@@ -3893,6 +4028,7 @@ def build_live_performance_report(
         forager_ema_readiness.add(row=row, live_event=live_event)
         resource_pressure.add(row=row, live_event=live_event)
         shutdown_latency.add(row=row, live_event=live_event)
+        exchange_config_refresh.add(row=row, live_event=live_event)
         execution_timing.add(
             row=row,
             live_event=live_event,
@@ -3986,6 +4122,9 @@ def build_live_performance_report(
             report_ts_ms=report_ts_ms,
         ),
         "shutdown_latency": shutdown_latency.to_dict(group_limit=group_limit),
+        "exchange_config_refresh": exchange_config_refresh.to_dict(
+            group_limit=group_limit
+        ),
         "execution_timing": execution_timing.to_dict(group_limit=group_limit),
         "account_state_changes": account_state_changes.to_dict(group_limit=group_limit),
         "risk_activity": risk_activity.to_dict(group_limit=group_limit),
@@ -4169,6 +4308,17 @@ def summarize_live_performance_report(
         if len(shutdown_groups) > max(0, int(group_limit)):
             shutdown_latency["groups_truncated"] = True
         summary["shutdown_latency"] = shutdown_latency
+    if isinstance(report.get("exchange_config_refresh"), dict):
+        exchange_config_refresh = dict(report["exchange_config_refresh"])
+        refresh_groups = (
+            exchange_config_refresh.get("groups")
+            if isinstance(exchange_config_refresh.get("groups"), list)
+            else []
+        )
+        exchange_config_refresh["groups"] = refresh_groups[: max(0, int(group_limit))]
+        if len(refresh_groups) > max(0, int(group_limit)):
+            exchange_config_refresh["groups_truncated"] = True
+        summary["exchange_config_refresh"] = exchange_config_refresh
     if isinstance(report.get("execution_timing"), dict):
         execution_timing = dict(report["execution_timing"])
         execution_groups = (

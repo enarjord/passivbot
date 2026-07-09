@@ -19,21 +19,21 @@ Last updated: 2026-07-09.
 
 Current `origin/v8` head:
 
-- `14d521fd` after PR #1160, `Surface interior coverage loss and stock-perps
-  synthetic-candle share`.
+- `aa9e6623` after PR #1161, `Summarize event pipeline resource pressure`.
 
 Current logging-overhaul head:
 
-- `441d9fe5` after PR #1157, `Summarize resource pressure sample age` (latest
-  merged logging-overhaul slice).
+- `aa9e6623` after PR #1161, `Summarize event pipeline resource pressure`
+  (latest merged logging-overhaul slice).
 
 Current work:
 
-- Branch `codex/v8-resource-pressure-pipeline-summary` adds read-only
-  aggregate event-pipeline health counters to `live-performance-report`
-  `resource_pressure`, derived from existing per-bot `health.summary`
-  queue/drop/sink/worker fields. It does not add event producers, exchange
-  calls, order/risk logic, restart orchestration, or trading behavior.
+- Branch `codex/v8-performance-exchange-config-refresh` adds a read-only,
+  bounded `exchange_config_refresh` health and timing projection to
+  `live-performance-report`, derived from existing structured
+  `exchange.config_refresh` events. It excludes raw error text and does not add
+  event producers, exchange calls, refresh behavior, order/risk logic, restart
+  orchestration, or trading behavior.
 
 Current review gate:
 
@@ -63,6 +63,22 @@ Retuned goal boundary:
 
 VPS5 deployment status:
 
+- Repository pulled through PR #1161 at `aa9e6623`.
+- PR #1161 added top-level event-pipeline queue, drop, sink-error, degraded,
+  and unhealthy-bot aggregates to `live-performance-report`
+  `resource_pressure`. It merged after Hermes, Claude Opus 4.8, and Grok 4.5
+  approved the current head and CI was green. VPS5 was pulled with
+  `git pull --autostash --ff-only origin v8`, preserving the pre-existing
+  tracked Rust change and local config/tmp artifacts. No bot restart was
+  performed because the slice was read-only report projection plus docs. The
+  first bounded two-minute smoke saw one recovered Kucoin balance
+  `RequestTimeout`: the same group already had a later successful balance
+  fetch. A fresh one-minute smoke then reported `ok=true`, `hard_failures=0`,
+  `matched_expected=5`, `missing_expected_count=0`,
+  `remote_calls.failed=0`, `account_critical_remote_calls.failed=0`, and
+  `logs.hard_matches=0`. A focused 30-minute `resource_pressure` report
+  returned `ok=true`, `error_count=0`, `resource_bots=4`, queue depth `0`,
+  zero drop/sink/degraded counters, and zero unhealthy bots.
 - Repository pulled through PR #1157 at `441d9fe5`.
 - PR #1157 added read-only aggregate resource-pressure sample-age fields to
   `live-performance-report`, exposing `latest_event_age_ms_max` and

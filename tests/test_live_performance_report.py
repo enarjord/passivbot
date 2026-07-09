@@ -3047,6 +3047,129 @@ def test_live_performance_report_resource_pressure_summary_is_bounded(tmp_path, 
     assert summary["resource_pressure"]["event_pipeline_unhealthy_bots"] == 2
 
 
+def test_live_performance_report_exchange_config_refresh_health(tmp_path):
+    events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="exchange.config_refresh",
+                seq=1,
+                ts=1000,
+                component="exchange.config_refresh",
+                status="succeeded",
+                reason_code="exchange_config_refresh",
+                ids={"cycle_id": "cy_cfg_1"},
+                data={
+                    "context": "maintain_hourly_cycle",
+                    "operation": "init_markets",
+                    "started_ms": 900,
+                    "elapsed_ms": 100,
+                },
+            ),
+            _monitor_row(
+                event_type="exchange.config_refresh",
+                seq=2,
+                ts=2000,
+                component="exchange.config_refresh",
+                status="failed",
+                level="warning",
+                reason_code="exchange_config_refresh_failed",
+                ids={"cycle_id": "cy_cfg_2"},
+                data={
+                    "context": "maintain_hourly_cycle",
+                    "operation": "init_markets",
+                    "started_ms": 1800,
+                    "elapsed_ms": 200,
+                    "error_type": "ExchangeError",
+                    "error": "binanceusdm apiKey=supersecret code=-4084",
+                },
+            ),
+        ],
+    )
+
+    report = build_live_performance_report(tmp_path / "monitor")
+    summary = summarize_live_performance_report(report)
+
+    refresh = report["exchange_config_refresh"]
+    assert refresh["total"] == 2
+    assert refresh["succeeded"] == 1
+    assert refresh["failed"] == 1
+    assert refresh["failure_pct"] == 50.0
+    assert refresh["bots"] == 1
+    assert refresh["failed_bots"] == 1
+    assert refresh["statuses"] == {"succeeded": 1, "failed": 1}
+    assert refresh["event_types"] == {"exchange.config_refresh": 2}
+    assert refresh["groups"][0]["status"] == "failed"
+    assert refresh["groups"][0]["latest_data"] == {
+        "context": "maintain_hourly_cycle",
+        "operation": "init_markets",
+        "error_type": "ExchangeError",
+        "elapsed_ms": 200,
+        "started_ms": 1800,
+    }
+    rendered = json.dumps(refresh, sort_keys=True)
+    assert "supersecret" not in rendered
+    assert "apiKey" not in rendered
+    assert "code=-4084" not in rendered
+
+    groups = {
+        group["operation"]: group
+        for group in report["operation_durations"]["groups"]
+        if group["operation"].startswith("exchange_config_refresh.")
+    }
+    assert groups["exchange_config_refresh.init_markets"]["trading_impact"] == "exchange_io"
+    assert groups["exchange_config_refresh.init_markets"]["max_ms"] == 200
+    assert summary["exchange_config_refresh"]["total"] == 2
+    assert summary["exchange_config_refresh"]["statuses"] == {
+        "succeeded": 1,
+        "failed": 1,
+    }
+    assert summary["operation_durations"]["operation_category_counts"][
+        "exchange_config_refresh"
+    ] == 1
+
+
+def test_live_performance_report_exchange_config_refresh_summary_is_bounded(tmp_path):
+    events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="exchange.config_refresh",
+                seq=1,
+                ts=1000,
+                exchange="binance",
+                user="binance_01",
+                data={"operation": "init_markets", "elapsed_ms": 100},
+            ),
+            _monitor_row(
+                event_type="exchange.config_refresh",
+                seq=2,
+                ts=2000,
+                exchange="okx",
+                user="okx_faisal",
+                status="failed",
+                reason_code="exchange_config_refresh_failed",
+                data={"operation": "set_position_mode", "elapsed_ms": 300},
+            ),
+        ],
+    )
+
+    report = build_live_performance_report(tmp_path / "monitor")
+    summary = summarize_live_performance_report(report, group_limit=1)
+
+    assert report["exchange_config_refresh"]["total"] == 2
+    assert report["exchange_config_refresh"]["bots"] == 2
+    assert len(summary["exchange_config_refresh"]["groups"]) == 1
+    assert summary["exchange_config_refresh"]["groups_truncated"] is True
+    assert summary["exchange_config_refresh"]["groups"][0]["bot"] == "okx/okx_faisal"
+    assert summary["operation_durations"]["total_groups"] >= 2
+    assert summary["operation_durations"]["operation_category_counts"][
+        "exchange_config_refresh"
+    ] == 2
+
+
 def test_live_performance_report_shutdown_latency_from_lifecycle_events(tmp_path):
     events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
     _write_ndjson(
