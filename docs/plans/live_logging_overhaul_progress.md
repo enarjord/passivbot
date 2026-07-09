@@ -6789,3 +6789,23 @@ VPS5 deployment status:
    becomes the higher leverage next step.
 7. Continue cache-doctor refinements in separate adjacent PRs: deeper metadata
    compatibility checks and synthetic/no-trade assumptions.
+
+### Draft Slice: Health Summary CPU Percent
+
+- Branch: `codex/v8-health-cpu-percent`.
+- Scope: observability producer plus existing performance-report projection for
+  periodic `health.summary` resource-pressure events.
+- Triggering evidence: `live-performance-report` already summarizes
+  `resource_pressure`, and the performance readiness plan calls for CPU/load,
+  RSS, open-FD, event queue, and monitor sink telemetry. RSS, memory percent,
+  load averages, open FDs, and event-pipeline counters were already emitted, but
+  process CPU percent was still absent from the source event.
+- Intended result: add a cached, non-blocking process `cpu_percent` probe when
+  `psutil` is available, omit the first priming sample, include subsequent
+  samples in `health.summary`, and aggregate them through the existing
+  `resource_pressure` performance report field. Do not add exchange calls,
+  monitor writes beyond the existing periodic health event, console routing
+  changes, order/risk logic, restart behavior, or trading behavior.
+- Expected validation: focused health-summary payload test, focused
+  live-performance-report resource-pressure test, `py_compile`, `git diff
+  --check`, and the standard added-line silent-handling scan.

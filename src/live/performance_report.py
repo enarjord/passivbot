@@ -55,6 +55,7 @@ _BLOCKING_SCOPE_BY_IMPACT = {
 _RESOURCE_PRESSURE_FIELDS = (
     "rss_bytes",
     "memory_percent",
+    "cpu_percent",
     "open_fds",
     "loadavg_1m",
     "loadavg_5m",

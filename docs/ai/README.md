@@ -16,6 +16,7 @@ Use this file to decide what to read for a task.
 | CCXT upgrade / dependency refresh | `ccxt_upgrade_workflow.md`, `exchange_api_quirks.md` |
 | Rust/PyO3 build, extension loading, Rust test execution | `build_pitfalls.md` |
 | Logging behavior/levels/tags | `logging_guide.md`, `live_event_registry.md` when touching structured event tags or reason codes |
+| Autonomous PR review loop | `pr_auto_review_loop.md` |
 | Order logic, risk, Python/Rust boundary | `architecture.md`, `decisions.md`, `features/strategy_runtime.md` when strategy behavior is involved |
 | Code review | `code_review_prompt.md` |
 | Common implementation mistakes | `pitfalls.md` |

@@ -33,6 +33,8 @@ try:
 except Exception:
     resource = None
 
+_PROCESS_CPU_PERCENT_PROBE: Any = None
+
 
 def _get_process_rss_bytes() -> Optional[int]:
     """Return current process RSS in bytes or None if unavailable."""
@@ -61,6 +63,27 @@ def _get_process_memory_percent() -> Optional[float]:
             return float(psutil.Process(os.getpid()).memory_percent())
     except Exception as exc:
         logging.debug("[monitor] memory percent probe unavailable: %s", exc)
+    return None
+
+
+def _get_process_cpu_percent() -> Optional[float]:
+    """Return non-blocking process CPU percentage when psutil is available."""
+    if psutil is None:
+        return None
+    global _PROCESS_CPU_PERCENT_PROBE
+    error_types = (OSError, RuntimeError, ValueError, AttributeError)
+    psutil_error = getattr(psutil, "Error", None)
+    if isinstance(psutil_error, type):
+        error_types = error_types + (psutil_error,)
+    try:
+        if _PROCESS_CPU_PERCENT_PROBE is None:
+            _PROCESS_CPU_PERCENT_PROBE = psutil.Process(os.getpid())
+            _PROCESS_CPU_PERCENT_PROBE.cpu_percent(interval=None)
+            return None
+        return float(_PROCESS_CPU_PERCENT_PROBE.cpu_percent(interval=None))
+    except error_types as exc:
+        _PROCESS_CPU_PERCENT_PROBE = None
+        logging.debug("[monitor] cpu percent probe unavailable: %s", exc)
     return None
 
 
@@ -388,6 +411,9 @@ def _build_health_summary_payload(self, *, now_ms: Optional[int] = None) -> dict
     mem_pct = _get_process_memory_percent()
     if mem_pct is not None and math.isfinite(mem_pct):
         payload["memory_percent"] = float(mem_pct)
+    cpu_pct = _get_process_cpu_percent()
+    if cpu_pct is not None and math.isfinite(cpu_pct):
+        payload["cpu_percent"] = max(0.0, float(cpu_pct))
     open_fds = _get_open_fd_count()
     if open_fds is not None:
         payload["open_fds"] = int(open_fds)

@@ -2816,6 +2816,7 @@ def test_live_performance_report_resource_pressure_from_health_summary(tmp_path)
                 data={
                     "rss_bytes": 1000,
                     "memory_percent": 5.5,
+                    "cpu_percent": 12.0,
                     "open_fds": 11,
                     "loadavg_1m": 0.25,
                     "cpu_count": 1,
@@ -2837,6 +2838,7 @@ def test_live_performance_report_resource_pressure_from_health_summary(tmp_path)
                 data={
                     "rss_bytes": 1500,
                     "memory_percent": 6.5,
+                    "cpu_percent": 24.0,
                     "open_fds": 13,
                     "loadavg_1m": 0.75,
                     "cpu_count": 1,
@@ -2880,6 +2882,15 @@ def test_live_performance_report_resource_pressure_from_health_summary(tmp_path)
         "mean": 6,
         "median": 6,
         "p95": 6.45,
+    }
+    assert group["fields"]["cpu_percent"] == {
+        "latest": 24,
+        "count": 2,
+        "min": 12,
+        "max": 24,
+        "mean": 18,
+        "median": 18,
+        "p95": 23,
     }
     assert group["fields"]["event_queue_depth"]["max"] == 5
     assert group["fields"]["event_queue_depth"]["p95"] == 5

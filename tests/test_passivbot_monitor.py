@@ -1335,6 +1335,7 @@ def test_build_health_summary_payload_includes_resource_pressure(monkeypatch):
 
     monkeypatch.setattr(pb_mod.pb_monitor, "_get_process_rss_bytes", lambda: 123456)
     monkeypatch.setattr(pb_mod.pb_monitor, "_get_process_memory_percent", lambda: 12.5)
+    monkeypatch.setattr(pb_mod.pb_monitor, "_get_process_cpu_percent", lambda: 34.25)
     monkeypatch.setattr(pb_mod.pb_monitor, "_get_open_fd_count", lambda: 42)
     monkeypatch.setattr(
         pb_mod.pb_monitor,
@@ -1354,6 +1355,7 @@ def test_build_health_summary_payload_includes_resource_pressure(monkeypatch):
     assert payload["positions_short"] == 1
     assert payload["rss_bytes"] == 123456
     assert payload["memory_percent"] == 12.5
+    assert payload["cpu_percent"] == 34.25
     assert payload["open_fds"] == 42
     assert payload["loadavg_1m"] == 1.5
     assert payload["loadavg_5m"] == 1.25
@@ -1367,6 +1369,46 @@ def test_build_health_summary_payload_includes_resource_pressure(monkeypatch):
     assert payload["event_sink_error_counts"] == {"monitor": 1}
     assert payload["event_degraded_count"] == 4
     assert payload["event_pipeline_worker_alive"] is True
+
+
+def test_process_cpu_percent_reuses_psutil_process(monkeypatch):
+    import passivbot as pb_mod
+
+    calls = []
+
+    class FakeProcess:
+        def __init__(self, pid):
+            self.pid = pid
+            self.samples = [0.0, 42.5]
+
+        def cpu_percent(self, *, interval=None):
+            calls.append((self.pid, interval, id(self)))
+            return self.samples.pop(0)
+
+    class FakePsutil:
+        Error = RuntimeError
+
+        def __init__(self):
+            self.processes = []
+
+        def Process(self, pid):
+            process = FakeProcess(pid)
+            self.processes.append(process)
+            return process
+
+    fake_psutil = FakePsutil()
+    monkeypatch.setattr(pb_mod.pb_monitor, "psutil", fake_psutil)
+    monkeypatch.setattr(pb_mod.pb_monitor, "_PROCESS_CPU_PERCENT_PROBE", None)
+    monkeypatch.setattr(pb_mod.pb_monitor.os, "getpid", lambda: 12345)
+
+    assert pb_mod.pb_monitor._get_process_cpu_percent() is None
+    assert pb_mod.pb_monitor._get_process_cpu_percent() == 42.5
+
+    assert len(fake_psutil.processes) == 1
+    assert calls == [
+        (12345, None, id(fake_psutil.processes[0])),
+        (12345, None, id(fake_psutil.processes[0])),
+    ]
 
 
 def test_log_health_summary_emits_structured_event(caplog, monkeypatch):
