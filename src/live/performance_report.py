@@ -2699,10 +2699,62 @@ class _ResourcePressureAccumulator:
             for group in groups
             if group.get("latest_event_age_ms") is not None
         ]
+        def latest_field_int(group: dict[str, Any], field: str) -> int | None:
+            fields = group.get("fields")
+            if not isinstance(fields, dict):
+                return None
+            stats = fields.get(field)
+            if not isinstance(stats, dict):
+                return None
+            value = stats.get("latest")
+            if value is None:
+                return None
+            return int(value)
+
+        latest_queue_depths = [
+            value
+            for group in groups
+            for value in [latest_field_int(group, "event_queue_depth")]
+            if value is not None
+        ]
+        dropped_total_latest_sum = sum(
+            value
+            for group in groups
+            for value in [latest_field_int(group, "event_dropped_total")]
+            if value is not None
+        )
+        sink_error_total_latest_sum = sum(
+            value
+            for group in groups
+            for value in [latest_field_int(group, "event_sink_error_total")]
+            if value is not None
+        )
+        degraded_count_latest_sum = sum(
+            value
+            for group in groups
+            for value in [latest_field_int(group, "event_degraded_count")]
+            if value is not None
+        )
+        unhealthy_bots = sum(
+            1
+            for group in groups
+            if group.get("latest_event_pipeline_stopping") is True
+            or group.get("latest_event_pipeline_worker_alive") is False
+            or (latest_field_int(group, "event_dropped_total") or 0) > 0
+            or (latest_field_int(group, "event_sink_error_total") or 0) > 0
+            or (latest_field_int(group, "event_degraded_count") or 0) > 0
+        )
         out = {
             "total": sum(int(group.get("count") or 0) for group in groups),
             "bots": len(groups),
             "event_types": dict(self.event_types.most_common()),
+            "latest_event_queue_depth_max": max(latest_queue_depths)
+            if latest_queue_depths
+            else None,
+            "latest_event_dropped_total_sum": dropped_total_latest_sum,
+            "latest_event_sink_error_total_sum": sink_error_total_latest_sum,
+            "latest_event_degraded_count_sum": degraded_count_latest_sum,
+            "event_pipeline_unhealthy_bots": unhealthy_bots,
             "groups_truncated": len(groups) > limit,
             "groups": groups[:limit],
         }
