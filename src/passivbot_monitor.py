@@ -33,6 +33,8 @@ try:
 except Exception:
     resource = None
 
+_PROCESS_CPU_PERCENT_PROBE: Any = None
+
 
 def _get_process_rss_bytes() -> Optional[int]:
     """Return current process RSS in bytes or None if unavailable."""
@@ -68,13 +70,17 @@ def _get_process_cpu_percent() -> Optional[float]:
     """Return non-blocking process CPU percentage when psutil is available."""
     if psutil is None:
         return None
+    global _PROCESS_CPU_PERCENT_PROBE
     error_types = (OSError, RuntimeError, ValueError, AttributeError)
     psutil_error = getattr(psutil, "Error", None)
     if isinstance(psutil_error, type):
         error_types = error_types + (psutil_error,)
     try:
-        return float(psutil.Process(os.getpid()).cpu_percent(interval=None))
+        if _PROCESS_CPU_PERCENT_PROBE is None:
+            _PROCESS_CPU_PERCENT_PROBE = psutil.Process(os.getpid())
+        return float(_PROCESS_CPU_PERCENT_PROBE.cpu_percent(interval=None))
     except error_types as exc:
+        _PROCESS_CPU_PERCENT_PROBE = None
         logging.debug("[monitor] cpu percent probe unavailable: %s", exc)
     return None
 

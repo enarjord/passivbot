@@ -6800,11 +6800,12 @@ VPS5 deployment status:
   RSS, open-FD, event queue, and monitor sink telemetry. RSS, memory percent,
   load averages, open FDs, and event-pipeline counters were already emitted, but
   process CPU percent was still absent from the source event.
-- Intended result: add a non-blocking process `cpu_percent` probe when `psutil`
-  is available, include it in `health.summary`, and aggregate it through the
-  existing `resource_pressure` performance report field. Do not add exchange
-  calls, monitor writes beyond the existing periodic health event, console
-  routing changes, order/risk logic, restart behavior, or trading behavior.
+- Intended result: add a cached, non-blocking process `cpu_percent` probe when
+  `psutil` is available, include it in `health.summary`, and aggregate it
+  through the existing `resource_pressure` performance report field. Do not add
+  exchange calls, monitor writes beyond the existing periodic health event,
+  console routing changes, order/risk logic, restart behavior, or trading
+  behavior.
 - Expected validation: focused health-summary payload test, focused
   live-performance-report resource-pressure test, `py_compile`, `git diff
   --check`, and the standard added-line silent-handling scan.

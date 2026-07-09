@@ -1371,6 +1371,46 @@ def test_build_health_summary_payload_includes_resource_pressure(monkeypatch):
     assert payload["event_pipeline_worker_alive"] is True
 
 
+def test_process_cpu_percent_reuses_psutil_process(monkeypatch):
+    import passivbot as pb_mod
+
+    calls = []
+
+    class FakeProcess:
+        def __init__(self, pid):
+            self.pid = pid
+            self.samples = [0.0, 42.5]
+
+        def cpu_percent(self, *, interval=None):
+            calls.append((self.pid, interval, id(self)))
+            return self.samples.pop(0)
+
+    class FakePsutil:
+        Error = RuntimeError
+
+        def __init__(self):
+            self.processes = []
+
+        def Process(self, pid):
+            process = FakeProcess(pid)
+            self.processes.append(process)
+            return process
+
+    fake_psutil = FakePsutil()
+    monkeypatch.setattr(pb_mod.pb_monitor, "psutil", fake_psutil)
+    monkeypatch.setattr(pb_mod.pb_monitor, "_PROCESS_CPU_PERCENT_PROBE", None)
+    monkeypatch.setattr(pb_mod.pb_monitor.os, "getpid", lambda: 12345)
+
+    assert pb_mod.pb_monitor._get_process_cpu_percent() == 0.0
+    assert pb_mod.pb_monitor._get_process_cpu_percent() == 42.5
+
+    assert len(fake_psutil.processes) == 1
+    assert calls == [
+        (12345, None, id(fake_psutil.processes[0])),
+        (12345, None, id(fake_psutil.processes[0])),
+    ]
+
+
 def test_log_health_summary_emits_structured_event(caplog, monkeypatch):
     import passivbot as pb_mod
 
