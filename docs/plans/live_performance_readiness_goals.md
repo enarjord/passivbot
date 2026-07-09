@@ -833,10 +833,10 @@ Each slice should update this checklist with its result.
      summary explaining the slowest startup and cycle blockers from local
      monitor data only.
    - Status: resource-pressure groups now expose process, sample-age, queue,
-     drop, sink-error, degraded, and unhealthy-bot aggregates. The current
-     `codex/v8-performance-exchange-config-refresh` slice adds bounded
-     exchange-config refresh success/failure groups and elapsed timings from
-     existing `exchange.config_refresh` events without adding exchange calls.
+     drop, sink-error, degraded, and unhealthy-bot aggregates. PR #1162 added
+     bounded exchange-config refresh success/failure groups and elapsed timings
+     from existing `exchange.config_refresh` events. The current recovery slice
+     distinguishes historical failures from each bot's latest observed status.
 
 2. [ ] HSL replay benchmark/profiling slice.
    - Add an offline deterministic benchmark or fixture path for coin-mode HSL

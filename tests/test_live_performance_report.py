@@ -3098,7 +3098,10 @@ def test_live_performance_report_exchange_config_refresh_health(tmp_path):
     assert refresh["failure_pct"] == 50.0
     assert refresh["bots"] == 1
     assert refresh["failed_bots"] == 1
+    assert refresh["latest_failed_bots"] == 1
+    assert refresh["recovered_bots"] == 0
     assert refresh["statuses"] == {"succeeded": 1, "failed": 1}
+    assert refresh["latest_statuses"] == {"failed": 1}
     assert refresh["event_types"] == {"exchange.config_refresh": 2}
     assert refresh["groups"][0]["status"] == "failed"
     assert refresh["groups"][0]["latest_data"] == {
@@ -3128,6 +3131,49 @@ def test_live_performance_report_exchange_config_refresh_health(tmp_path):
     assert summary["operation_durations"]["operation_category_counts"][
         "exchange_config_refresh"
     ] == 1
+
+
+def test_live_performance_report_marks_recovered_exchange_config_refresh_bot(tmp_path):
+    events_dir = tmp_path / "monitor" / "kucoin" / "kucoin_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="exchange.config_refresh",
+                seq=1,
+                ts=1000,
+                exchange="kucoin",
+                user="kucoin_01",
+                status="failed",
+                reason_code="exchange_config_refresh_failed",
+                data={
+                    "operation": "init_markets",
+                    "elapsed_ms": 33915,
+                    "error_type": "RequestTimeout",
+                },
+            ),
+            _monitor_row(
+                event_type="exchange.config_refresh",
+                seq=2,
+                ts=2000,
+                exchange="kucoin",
+                user="kucoin_01",
+                status="succeeded",
+                reason_code="exchange_config_refresh",
+                data={"operation": "init_markets", "elapsed_ms": 6331},
+            ),
+        ],
+    )
+
+    refresh = build_live_performance_report(tmp_path / "monitor")[
+        "exchange_config_refresh"
+    ]
+
+    assert refresh["failed"] == 1
+    assert refresh["failed_bots"] == 1
+    assert refresh["latest_statuses"] == {"succeeded": 1}
+    assert refresh["latest_failed_bots"] == 0
+    assert refresh["recovered_bots"] == 1
 
 
 def test_live_performance_report_exchange_config_refresh_summary_is_bounded(tmp_path):

@@ -2845,11 +2845,13 @@ class _ExchangeConfigRefreshAccumulator:
     def __init__(self) -> None:
         self.groups: dict[tuple[str, str, str, str, str], dict[str, Any]] = {}
         self.event_types: Counter[str] = Counter()
+        self.event_index = 0
 
     def add(self, *, row: dict[str, Any], live_event: dict[str, Any]) -> None:
         event_type = str(live_event.get("event_type") or row.get("kind") or "")
         if event_type not in _EXCHANGE_CONFIG_REFRESH_EVENT_TYPES:
             return
+        self.event_index += 1
         data = live_event.get("data") if isinstance(live_event.get("data"), dict) else {}
         bot = _bot_key(row, live_event)
         status = str(live_event.get("status") or "unknown")
@@ -2869,10 +2871,12 @@ class _ExchangeConfigRefreshAccumulator:
                 "count": 0,
                 "latest_ts": None,
                 "latest_data": {},
+                "_latest_position": None,
             }
             self.groups[key] = group
         group["count"] = int(group.get("count") or 0) + 1
         ts = _record_ts(row)
+        position = (int(ts) if ts is not None else -1, self.event_index)
         latest_changed = ts is None or group.get("latest_ts") is None
         if ts is not None and group.get("latest_ts") is not None:
             latest_changed = int(ts) >= int(group["latest_ts"])
@@ -2891,6 +2895,10 @@ class _ExchangeConfigRefreshAccumulator:
             if started_ms is not None:
                 latest_data["started_ms"] = started_ms
             group["latest_data"] = latest_data
+        if group.get("_latest_position") is None or position >= tuple(
+            group["_latest_position"]
+        ):
+            group["_latest_position"] = position
         self.event_types[event_type] += 1
 
     def to_dict(self, *, group_limit: int = GROUP_LIMIT) -> dict[str, Any]:
@@ -2908,23 +2916,46 @@ class _ExchangeConfigRefreshAccumulator:
             {
                 key: value
                 for key, value in group.items()
-                if value not in (None, {}, [])
+                if not key.startswith("_") and value not in (None, {}, [])
             }
             for group in ordered[: max(0, int(group_limit))]
         ]
         status_counts: Counter[str] = Counter()
         failed_bots: set[str] = set()
+        latest_by_bot: dict[str, dict[str, Any]] = {}
         for group in self.groups.values():
             count = int(group.get("count") or 0)
             status = str(group.get("status") or "unknown")
             status_counts[status] += count
-            if status == "failed" and group.get("bot") not in (None, ""):
-                failed_bots.add(str(group["bot"]))
+            bot = str(group.get("bot") or "")
+            if status == "failed" and bot:
+                failed_bots.add(bot)
+            if not bot:
+                continue
+            current = latest_by_bot.get(bot)
+            if current is None or tuple(group["_latest_position"]) > tuple(
+                current["_latest_position"]
+            ):
+                latest_by_bot[bot] = group
+        latest_status_counts = Counter(
+            str(group.get("status") or "unknown") for group in latest_by_bot.values()
+        )
+        latest_failed_bots = {
+            bot
+            for bot, group in latest_by_bot.items()
+            if str(group.get("status") or "unknown") == "failed"
+        }
+        recovered_bots = {
+            bot
+            for bot, group in latest_by_bot.items()
+            if bot in failed_bots
+            and str(group.get("status") or "unknown") == "succeeded"
+        }
         total = sum(int(group.get("count") or 0) for group in self.groups.values())
         failed = int(status_counts.get("failed", 0))
         return {
             "total": int(total),
-            "bots": len({str(group.get("bot")) for group in self.groups.values()}),
+            "bots": len(latest_by_bot),
             "succeeded": int(status_counts.get("succeeded", 0)),
             "failed": failed,
             "failure_pct": (
@@ -2932,6 +2963,9 @@ class _ExchangeConfigRefreshAccumulator:
             ),
             "failed_bots": len(failed_bots),
             "statuses": dict(status_counts.most_common()),
+            "latest_statuses": dict(latest_status_counts.most_common()),
+            "latest_failed_bots": len(latest_failed_bots),
+            "recovered_bots": len(recovered_bots),
             "event_types": dict(self.event_types.most_common()),
             "groups_truncated": len(ordered) > int(group_limit),
             "groups": compact_groups,

@@ -2424,12 +2424,48 @@ def _summarize_exchange_config_refresh_health(
     ]
     status_counts: Counter[str] = Counter()
     failed_bots: set[str] = set()
+    latest_by_bot: dict[str, dict[str, Any]] = {}
     for group in groups.values():
         count = int(group.get("count") or 0)
         status = str(group.get("status") or "unknown")
         status_counts[status] += count
-        if status == "failed" and count > 0 and group.get("bot") not in (None, ""):
-            failed_bots.add(str(group.get("bot")))
+        bot = str(group.get("bot") or "")
+        if status == "failed" and count > 0 and bot:
+            failed_bots.add(bot)
+        if not bot:
+            continue
+        current = latest_by_bot.get(bot)
+        current_key = (
+            _sort_event_position_key(
+                ts=current.get("latest_ts"),
+                seq=current.get("latest_seq"),
+                path=current.get("latest_path") or "",
+                line_no=int(current.get("latest_line") or 0),
+            )
+            if current is not None
+            else None
+        )
+        group_key = _sort_event_position_key(
+            ts=group.get("latest_ts"),
+            seq=group.get("latest_seq"),
+            path=group.get("latest_path") or "",
+            line_no=int(group.get("latest_line") or 0),
+        )
+        if current_key is None or group_key > current_key:
+            latest_by_bot[bot] = group
+    latest_status_counts = Counter(
+        str(group.get("status") or "unknown") for group in latest_by_bot.values()
+    )
+    latest_failed_bots = {
+        bot
+        for bot, group in latest_by_bot.items()
+        if str(group.get("status") or "unknown") == "failed"
+    }
+    recovered_bots = {
+        bot
+        for bot, group in latest_by_bot.items()
+        if bot in failed_bots and str(group.get("status") or "unknown") == "succeeded"
+    }
     total = sum(int(group.get("count", 0)) for group in groups.values())
     failed = int(status_counts.get("failed", 0))
     return {
@@ -2440,8 +2476,11 @@ def _summarize_exchange_config_refresh_health(
         "groups_truncated": len(ordered) > EXCHANGE_CONFIG_REFRESH_HEALTH_GROUP_LIMIT,
         "event_types": dict(event_type_counts.most_common()),
         "statuses": dict(status_counts.most_common()),
-        "bots": len({group.get("bot") for group in groups.values()}),
+        "latest_statuses": dict(latest_status_counts.most_common()),
+        "bots": len(latest_by_bot),
         "failed_bots": len(failed_bots),
+        "latest_failed_bots": len(latest_failed_bots),
+        "recovered_bots": len(recovered_bots),
         "groups": compact_groups,
     }
 
@@ -7949,6 +7988,15 @@ def summarize_live_smoke_report_brief(report: dict[str, Any]) -> dict[str, Any]:
             "failure_pct": exchange_config_refresh_health.get("failure_pct"),
             "failed_bots": _count_value(
                 exchange_config_refresh_health.get("failed_bots")
+            ),
+            "latest_failed_bots": _count_value(
+                exchange_config_refresh_health.get("latest_failed_bots")
+            ),
+            "recovered_bots": _count_value(
+                exchange_config_refresh_health.get("recovered_bots")
+            ),
+            "latest_statuses": (
+                exchange_config_refresh_health.get("latest_statuses") or {}
             ),
             "event_types": exchange_config_refresh_health.get("event_types") or {},
         },

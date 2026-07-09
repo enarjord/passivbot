@@ -19,21 +19,21 @@ Last updated: 2026-07-09.
 
 Current `origin/v8` head:
 
-- `aa9e6623` after PR #1161, `Summarize event pipeline resource pressure`.
+- `aff9e864` after PR #1162, `Report exchange config refresh performance`.
 
 Current logging-overhaul head:
 
-- `aa9e6623` after PR #1161, `Summarize event pipeline resource pressure`
+- `aff9e864` after PR #1162, `Report exchange config refresh performance`
   (latest merged logging-overhaul slice).
 
 Current work:
 
-- Branch `codex/v8-performance-exchange-config-refresh` adds a read-only,
-  bounded `exchange_config_refresh` health and timing projection to
-  `live-performance-report`, derived from existing structured
-  `exchange.config_refresh` events. It excludes raw error text and does not add
-  event producers, exchange calls, refresh behavior, order/risk logic, restart
-  orchestration, or trading behavior.
+- Branch `codex/v8-exchange-config-refresh-recovery` adds latest-per-bot status,
+  latest-failed-bot, and recovered-bot aggregates to the existing smoke and
+  performance `exchange.config_refresh` projections. Historical failures remain
+  visible, but a later successful refresh is no longer presented as unresolved.
+  The slice is read-only and does not change smoke verdicts, exchange calls,
+  refresh behavior, order/risk logic, restart orchestration, or trading behavior.
 
 Current review gate:
 
@@ -63,6 +63,20 @@ Retuned goal boundary:
 
 VPS5 deployment status:
 
+- Repository pulled through PR #1162 at `aff9e864`.
+- PR #1162 added bounded `exchange_config_refresh` health and elapsed-timing
+  groups to `live-performance-report`, excluding raw exchange error text. It
+  merged after Hermes, Claude Opus 4.8, and Grok 4.5 approved the current head
+  and CI was green. VPS5 was pulled with `git pull --autostash --ff-only origin
+  v8`, preserving the pre-existing tracked Rust change and local config/tmp
+  artifacts. No bot restart was performed because the slice was read-only
+  report projection plus docs. A fresh one-minute smoke reported `ok=true`,
+  `hard_failures=0`, `matched_expected=5`, `missing_expected_count=0`, and zero
+  failed remote/account-critical calls. A bounded 24-hour focused report scanned
+  24 event files and returned `ok=true`, `error_count=0`, with 14 real refresh
+  events across all five bots: 13 succeeded and one Kucoin `RequestTimeout`.
+  Kucoin subsequently succeeded, Binance had three successes, and no raw error
+  text appeared. GateIO had the slowest observed refresh at `max_ms=78920`.
 - Repository pulled through PR #1161 at `aa9e6623`.
 - PR #1161 added top-level event-pipeline queue, drop, sink-error, degraded,
   and unhealthy-bot aggregates to `live-performance-report`
