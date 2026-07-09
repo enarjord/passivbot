@@ -7,6 +7,7 @@ import logging
 import platform
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -43,7 +44,9 @@ def hash_logical_array(array: Any) -> str:
     hasher.update(b"\0")
     hasher.update(json.dumps(list(arr.shape), separators=(",", ":")).encode("utf-8"))
     hasher.update(b"\0")
-    hasher.update(arr.tobytes(order="C"))
+    # arr is C-contiguous, so its buffer is byte-identical to tobytes(order="C")
+    # without materializing a full copy.
+    hasher.update(arr.data)
     return hasher.hexdigest()
 
 
@@ -230,7 +233,7 @@ def manifest_has_required_schema(manifest: dict[str, Any] | None) -> bool:
     )
 
 
-def _verify_array_artifact(cache_dir: Path, name: str, entry: dict[str, Any]) -> None:
+def _verify_array_artifact(cache_dir: Path, name: str, entry: dict[str, Any]) -> np.ndarray:
     rel_path = entry.get("path")
     if not rel_path:
         raise HlcvsManifestError(f"HLCV manifest file entry {name!r} is missing path")
@@ -260,6 +263,7 @@ def _verify_array_artifact(cache_dir: Path, name: str, entry: dict[str, Any]) ->
         raise HlcvsManifestError(
             f"HLCV manifest dtype mismatch for {name}: expected {expected_dtype} got {actual.dtype}"
         )
+    return actual
 
 
 def _verify_json_artifact(cache_dir: Path, name: str, entry: dict[str, Any]) -> None:
@@ -285,7 +289,18 @@ def _verify_json_artifact(cache_dir: Path, name: str, entry: dict[str, Any]) -> 
         )
 
 
-def verify_hlcvs_manifest(cache_dir: Path, manifest: dict[str, Any] | None = None) -> dict[str, Any]:
+def verify_hlcvs_manifest(
+    cache_dir: Path,
+    manifest: dict[str, Any] | None = None,
+    out_arrays: dict[str, np.ndarray] | None = None,
+) -> dict[str, Any]:
+    """Verify all manifest artifacts against their recorded hashes.
+
+    When ``out_arrays`` is passed, the decompressed array artifacts are stored in
+    it under their manifest names so callers can reuse them instead of paying a
+    second decompression of multi-GB files.
+    """
+    start = time.perf_counter()
     manifest = load_hlcvs_manifest(cache_dir) if manifest is None else manifest
     if manifest is None:
         raise HlcvsManifestError(f"HLCV manifest missing from {cache_dir}")
@@ -300,9 +315,15 @@ def verify_hlcvs_manifest(cache_dir: Path, manifest: dict[str, Any] | None = Non
             f"HLCV manifest is missing required file entries in {cache_dir}: {missing}"
         )
     for name in ("hlcvs", "btc_usd_prices", "timestamps"):
-        _verify_array_artifact(cache_dir, name, files[name])
+        array = _verify_array_artifact(cache_dir, name, files[name])
+        if out_arrays is not None:
+            out_arrays[name] = array
     for name in ("coins", "market_specific_settings", "candidate_report"):
         if name in files:
             _verify_json_artifact(cache_dir, name, files[name])
-    logging.info("[hlcvs] verified manifest for %s", cache_dir)
+    logging.info(
+        "[hlcvs] verified manifest for %s in %.2fs",
+        cache_dir,
+        time.perf_counter() - start,
+    )
     return manifest

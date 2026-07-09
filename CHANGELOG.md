@@ -4,6 +4,13 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Faster backtest startup on hlcvs cache hits: the multi-GB hlcvs artifact is
+  now decompressed once instead of twice (manifest verification hands its
+  arrays to the loader), array/chunk hashing no longer materializes a full
+  copy of the data, and the OHLCV catalog reuses its sqlite connection instead
+  of reconnecting per query. Cache formats, hashes, and outputs are unchanged;
+  manifest verification now logs its elapsed time separately.
+
 - Fixed Alpha Vantage stock-perps data provider misfiling candles by 4-5 hours:
   its US-Eastern timestamps were interpreted in the host's local timezone
   (DST-dependent) instead of America/New_York. Backtest data fetched with

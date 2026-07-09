@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -65,11 +66,20 @@ class OhlcvCatalog:
     def __init__(self, db_path: str | Path):
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        self._local = threading.local()
         self._init_db()
 
     def _connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(str(self.db_path))
-        conn.row_factory = sqlite3.Row
+        # One connection per instance per thread: catalog operations run in
+        # tight per-coin loops, and reconnecting on every call is measurable.
+        # sqlite connections are not thread-safe, hence thread-local storage;
+        # the `with conn` blocks in callers commit/rollback transactions but
+        # never close, so reuse is safe.
+        conn = getattr(self._local, "conn", None)
+        if conn is None:
+            conn = sqlite3.connect(str(self.db_path))
+            conn.row_factory = sqlite3.Row
+            self._local.conn = conn
         return conn
 
     def _init_db(self) -> None:

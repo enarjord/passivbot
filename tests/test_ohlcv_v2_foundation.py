@@ -791,3 +791,38 @@ def test_materialize_frames_fills_internal_sparse_gaps(tmp_path):
     assert handle.mss["ETH"]["source_first_valid_index"] == 0
     assert handle.mss["ETH"]["source_last_valid_index"] == 2
     assert handle.mss["ETH"]["synthetic_gap_fill_count"] == 1
+
+
+def test_chunk_checksum_matches_tobytes_reference(tmp_path):
+    """Checksum format is a compatibility contract with checksums already
+    registered in existing catalogs: it must equal the original
+    tobytes(order="C")-based formula exactly."""
+    import hashlib
+
+    catalog = OhlcvCatalog(tmp_path / "caches" / "ohlcvs" / "catalog.sqlite")
+    store = OhlcvStore(tmp_path / "caches" / "ohlcvs", catalog)
+
+    start = month_start_ts(2026, 4)
+    ts = np.array([start, start + 60_000, start + 120_000], dtype=np.int64)
+    vals = np.array(
+        [
+            [101.0, 99.0, 100.0, 10.0],
+            [102.0, 100.0, 101.0, 11.0],
+            [103.0, 101.0, 102.0, 12.0],
+        ],
+        dtype=np.float32,
+    )
+    store.write_rows("binance", "1m", "BTC/USDT", ts, vals)
+    chunk = catalog.list_chunks("binance", "1m", "BTC/USDT", int(ts[0]), int(ts[-1]))[0]
+
+    hasher = hashlib.sha256()
+    body = np.ascontiguousarray(np.load(chunk.body_path))
+    valid = np.ascontiguousarray(np.load(chunk.valid_path))
+    hasher.update(str(body.dtype).encode("utf-8"))
+    hasher.update(str(body.shape).encode("utf-8"))
+    hasher.update(body.tobytes(order="C"))
+    hasher.update(str(valid.dtype).encode("utf-8"))
+    hasher.update(str(valid.shape).encode("utf-8"))
+    hasher.update(valid.tobytes(order="C"))
+
+    assert chunk.checksum == hasher.hexdigest()

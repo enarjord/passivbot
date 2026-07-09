@@ -54,7 +54,7 @@ def _hlcvs_cache_artifact_path(
     return None
 
 
-def _load_hlcvs_cache_arrays(cache_dir: Path, manifest):
+def _load_hlcvs_cache_arrays(cache_dir: Path, manifest, preloaded_arrays=None):
     coins_path = _hlcvs_cache_artifact_path(cache_dir, manifest, "coins", ("coins.json",))
     mss_path = _hlcvs_cache_artifact_path(
         cache_dir, manifest, "market_specific_settings", ("market_specific_settings.json",)
@@ -63,6 +63,16 @@ def _load_hlcvs_cache_arrays(cache_dir: Path, manifest):
         raise FileNotFoundError(f"HLCV dataset missing coins or market settings in {cache_dir}")
     coins = json.load(open(coins_path))
     mss = json.load(open(mss_path))
+    preloaded_arrays = preloaded_arrays or {}
+    if {"hlcvs", "btc_usd_prices", "timestamps"} <= preloaded_arrays.keys():
+        # Reuse arrays already decompressed by manifest verification.
+        return (
+            coins,
+            preloaded_arrays["hlcvs"],
+            mss,
+            preloaded_arrays["btc_usd_prices"],
+            preloaded_arrays["timestamps"],
+        )
     hlcvs_path = _hlcvs_cache_artifact_path(
         cache_dir, manifest, "hlcvs", ("hlcvs.npy.gz", "hlcvs.npy")
     )
@@ -182,15 +192,16 @@ def load_hlcvs_data_override(config, exchange):
     if not cache_dir.is_dir():
         raise FileNotFoundError(f"HLCV dataset override directory does not exist: {cache_dir}")
     manifest = load_hlcvs_manifest(cache_dir)
+    verified_arrays: dict = {}
     if manifest is None:
         raise HlcvsManifestError(f"HLCV dataset override {cache_dir} is missing manifest.json")
     elif manifest_has_required_schema(manifest):
-        verify_hlcvs_manifest(cache_dir, manifest)
+        verify_hlcvs_manifest(cache_dir, manifest, out_arrays=verified_arrays)
     else:
         raise HlcvsManifestError(f"HLCV dataset override {cache_dir} has unsupported manifest schema")
 
     dataset_coins, hlcvs, mss, btc_usd_prices, timestamps = _load_hlcvs_cache_arrays(
-        cache_dir, manifest
+        cache_dir, manifest, preloaded_arrays=verified_arrays
     )
     dataset_coins = [normalize_backtest_coin(coin) for coin in dataset_coins]
     requested_coins = effective_backtest_data_coins(config)
