@@ -4,6 +4,13 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Live performance timing groups now expose their latest bounded report-safe
+  canonical event IDs, including in `operation_durations` and
+  `slowest_blockers`, so an operator can correlate a slow row with the
+  structured event stream without exposing free-form event payloads. Existing
+  legacy snapshot IDs are normalized consistently with `live-event-query`, and
+  equal-timestamp samples use persistent event ordering.
+
 - Backtests now warn when interior data gaps split a coin's history and real
   data outside the longest contiguous run is excluded from the backtest
   (previously silent). Stock-perps (`xyz:`) coins instead log their

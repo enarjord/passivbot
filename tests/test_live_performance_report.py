@@ -447,6 +447,202 @@ def test_live_performance_report_slowest_blockers_summary_is_bounded(tmp_path):
     assert summary["slowest_blockers"]["groups"][0]["operation"] == "state_refresh.wall"
 
 
+def test_live_performance_report_timing_groups_include_latest_safe_ids(tmp_path):
+    events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="cycle.completed",
+                seq=1,
+                ts=1000,
+                ids={"cycle_id": "cy_1", "plan_id": "plan_1"},
+                data={"elapsed_ms": 1000},
+            ),
+            _monitor_row(
+                event_type="cycle.completed",
+                seq=2,
+                ts=2000,
+                ids={
+                    "bot_id": "binance_01",
+                    "cycle_id": "cy_2",
+                    "snapshot_id": "snapshot_2",
+                    "plan_id": "plan_2",
+                    "action_id": "action_2",
+                    "order_wave_id": "wave_2",
+                    "remote_call_id": "rc_2",
+                    "remote_call_group_id": "rcg_2",
+                },
+                data={"elapsed_ms": 2000},
+            ),
+        ],
+    )
+
+    report = build_live_performance_report(tmp_path / "monitor")
+    summary = summarize_live_performance_report(report)
+    expected_ids = {
+        "bot_id": "binance_01",
+        "cycle_id": "cy_2",
+        "snapshot_id": "snapshot_2",
+        "plan_id": "plan_2",
+        "order_wave_id": "wave_2",
+        "remote_call_id": "rc_2",
+        "remote_call_group_id": "rcg_2",
+    }
+
+    performance_group = next(
+        group
+        for group in report["performance"]["groups"]
+        if group["operation"] == "cycle.elapsed"
+    )
+    duration_group = next(
+        group
+        for group in report["operation_durations"]["groups"]
+        if group["operation"] == "cycle.elapsed"
+    )
+    blocker_group = next(
+        group
+        for group in report["slowest_blockers"]["groups"]
+        if group["operation"] == "cycle.elapsed"
+    )
+    summary_duration_group = next(
+        group
+        for group in summary["operation_durations"]["groups"]
+        if group["operation"] == "cycle.elapsed"
+    )
+    summary_blocker_group = next(
+        group
+        for group in summary["slowest_blockers"]["groups"]
+        if group["operation"] == "cycle.elapsed"
+    )
+
+    assert performance_group["latest_ids"] == expected_ids
+    assert duration_group["latest_ids"] == expected_ids
+    assert blocker_group["latest_ids"] == expected_ids
+    assert summary_duration_group["latest_ids"] == expected_ids
+    assert summary_blocker_group["latest_ids"] == expected_ids
+    rendered = json.dumps(report, sort_keys=True)
+    assert "action_2" not in rendered
+
+
+def test_live_performance_report_latest_ids_do_not_stick_to_newer_sample(tmp_path):
+    events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="cycle.completed",
+                seq=1,
+                ts=1000,
+                ids={"cycle_id": "cy_1"},
+                data={"elapsed_ms": 1000},
+            ),
+            _monitor_row(
+                event_type="cycle.completed",
+                seq=2,
+                ts=2000,
+                data={"elapsed_ms": 2000},
+            ),
+        ],
+    )
+
+    report = build_live_performance_report(tmp_path / "monitor")
+    groups = [
+        next(
+            group
+            for group in report[section]["groups"]
+            if group["operation"] == "cycle.elapsed"
+        )
+        for section in ("performance", "operation_durations", "slowest_blockers")
+    ]
+
+    assert all(group["latest_ts"] == 2000 for group in groups)
+    assert all("latest_ids" not in group for group in groups)
+
+
+def test_live_performance_report_latest_ids_use_persistent_event_position(tmp_path):
+    events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="cycle.completed",
+                seq=2,
+                ts=1000,
+                ids={"cycle_id": "cy_2", "plan_id": "plan_2"},
+                data={"elapsed_ms": 2000},
+            ),
+            _monitor_row(
+                event_type="cycle.completed",
+                seq=1,
+                ts=1000,
+                ids={"cycle_id": "cy_1", "plan_id": "plan_1"},
+                data={"elapsed_ms": 1000},
+            ),
+        ],
+    )
+
+    report = build_live_performance_report(tmp_path / "monitor")
+    summary = summarize_live_performance_report(report)
+    expected_ids = {"cycle_id": "cy_2", "plan_id": "plan_2"}
+    groups = [
+        next(
+            group
+            for group in section["groups"]
+            if group["operation"] == "cycle.elapsed"
+        )
+        for section in (
+            report["performance"],
+            report["operation_durations"],
+            report["slowest_blockers"],
+            summary["operation_durations"],
+            summary["slowest_blockers"],
+        )
+    ]
+
+    assert all(group["latest_ts"] == 1000 for group in groups)
+    assert all(group["latest_ids"] == expected_ids for group in groups)
+
+
+def test_live_performance_report_latest_ids_normalize_legacy_snapshot_id(tmp_path):
+    events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="snapshot.built",
+                seq=1,
+                ts=1000,
+                data={
+                    "snapshot_id": "snap_legacy",
+                    "surface_ages": [{"name": "balance", "age_ms": 500}],
+                },
+            )
+        ],
+    )
+
+    report = build_live_performance_report(tmp_path / "monitor")
+    summary = summarize_live_performance_report(report)
+    expected_ids = {"snapshot_id": "snap_legacy"}
+    groups = [
+        next(
+            group
+            for group in section["groups"]
+            if group["operation"] == "input_staleness.surface.balance"
+        )
+        for section in (
+            report["input_staleness"],
+            report["operation_durations"],
+            report["slowest_blockers"],
+            summary["input_staleness"],
+            summary["operation_durations"],
+            summary["slowest_blockers"],
+        )
+    ]
+
+    assert all(group["latest_ids"] == expected_ids for group in groups)
+
+
 def test_live_performance_report_decision_boundary_lag(tmp_path):
     events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
     _write_ndjson(
