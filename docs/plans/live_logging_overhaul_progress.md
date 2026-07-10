@@ -19,21 +19,21 @@ Last updated: 2026-07-10.
 
 Current `origin/v8` head:
 
-- `4a00ff17` after PR #1170, `Add structured websocket reconnect events`,
-  following workflow-doc PR #1171.
+- `50f1dbaf` after PR #1172, `Add offline HSL replay benchmark`.
 
 Current logging-overhaul head:
 
-- `4a00ff17` after PR #1170, `Add structured websocket reconnect events`
+- `50f1dbaf` after PR #1172, `Add offline HSL replay benchmark`
   (latest merged logging-overhaul slice).
 
 Current work:
 
-- PR #1172 (`codex/v8-hsl-replay-benchmark`) adds a bounded deterministic offline
-  benchmark for the current coin-HSL replay initializer. It reports explicit
-  timeline-row and pair-row throughput, profiled timings/counters, fixture and
-  final-state hashes, and zero actual live side effects. Realistic-scale
-  fill/row/pair fixtures and deeper internal-stage profiling remain open.
+- PR #1173 (`codex/v8-forager-eligibility-events`) adds bounded
+  `forager.eligibility_changed` structured/monitor events after existing
+  approved/ignored membership mutations and text logs. Payloads contain fixed
+  source/list/operation context plus bounded per-pside count/symbol rows; no
+  eligibility, entry-gating, exchange, Rust, order, risk, or HSL behavior
+  changes.
 
 Current review gate:
 
@@ -64,6 +64,10 @@ Retuned goal boundary:
 
 VPS5 deployment status:
 
+- PR #1172 merged to `v8` as `50f1dbaf` after exact-head Hermes and Grok 4.5
+  approvals plus green CI. No VPS pull or restart was required because it added
+  bounded offline benchmark tooling and docs only; VPS5 intentionally remains
+  at the green deployed runtime baseline `4a00ff17`.
 - Repository pulled through PR #1170 at `4a00ff17`, including workflow-doc PR
   #1171. PR #1170 merged after exact-head Hermes and Grok 4.5 approvals plus
   green CI; Claude Opus 4.8 remained explicitly waived while rate-limited.

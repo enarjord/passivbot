@@ -53,6 +53,7 @@ across time.
 - `fill.ingested`
 - `fills.refresh_summary`
 - `forager.feature_unavailable`
+- `forager.eligibility_changed`
 - `forager.selection`
 - `health.summary`
 - `market.snapshot_diagnostic_skipped`
@@ -173,6 +174,7 @@ back to exchange-derived replay.
 - `fill_cache_quarantined`
 - `fill_cache_ready`
 - `fill_cache_rebuild_started`
+- `forager_eligibility_membership_changed`
 - `hsl_balance_override_account_level_replay_unsafe`
 - `hsl_history_empty`
 - `hsl_history_inputs_loaded`
@@ -222,6 +224,17 @@ back to exchange-derived replay.
 - `unstuck_status`
 - `warmup_cache_decision`
 - `websocket_reconnect`
+
+## Forager Eligibility Change Events
+
+`forager.eligibility_changed` uses reason code
+`forager_eligibility_membership_changed` for existing approved/ignored membership
+updates. It routes to structured and monitor sinks only, not console or text
+sinks. Its data payload is limited to `source` (`config_sources` or
+`live_value`), `list_kind`, `operation`, and ordered per-pside `changes` rows.
+Each change row contains its total `count` and at most 12 sorted `symbols`; no
+config path, raw source, or full list is retained. Emission is best-effort and
+must not affect eligibility refresh behavior.
 
 Dynamic helpers are part of the same contract:
 

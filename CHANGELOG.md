@@ -10,6 +10,12 @@ All notable user-facing changes will be documented in this file.
   stage timings, replay counters, and side-effect counters without contacting
   exchanges or reading/writing live cache and state artifacts.
 
+- Approved and ignored forager-eligibility membership changes now emit bounded
+  `forager.eligibility_changed` structured and monitor events. Each aggregate
+  event identifies the list, add/remove operation, source kind, and per-side
+  count with at most 12 sorted symbols; existing eligibility behavior and text
+  logs are unchanged.
+
 - `passivbot tool crash-finder` can now regenerate scenario suites from an existing
   `crash_clusters.csv` without rescanning local OHLCV data, emit market-wide/coin-focused/single-coin
   filtered suites, merge overlapping stress windows, and add per-coin forced-normal overrides for
