@@ -265,7 +265,9 @@ class OKXBot(CCXTBot):
             )
         try:
             res = await self.cca.set_position_mode(True)
-            logging.debug("[config] set hedge mode response: %s", res)
+            logging.debug(
+                "[config] set hedge mode response: %s", format_exchange_config_response(res)
+            )
         except Exception as e:
             err_str = str(e)
             if '"code":"59000"' in err_str:

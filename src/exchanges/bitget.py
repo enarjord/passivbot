@@ -797,7 +797,9 @@ class BitgetBot(CCXTBot):
         res = None
         try:
             res = await self.cca.set_position_mode(True)
-            logging.debug("[config] set hedge mode response: %s", res)
+            logging.debug(
+                "[config] set hedge mode response: %s", format_exchange_config_response(res)
+            )
         except Exception as e:
             logging.error("[config] error setting hedge mode: %s %s", e, res)
             raise

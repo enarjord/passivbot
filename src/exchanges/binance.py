@@ -557,7 +557,9 @@ class BinanceBot(CCXTBot):
     async def update_exchange_config(self):
         try:
             res = await self.cca.set_position_mode(True)
-            logging.debug("[config] set hedge mode response: %s", res)
+            logging.debug(
+                "[config] set hedge mode response: %s", format_exchange_config_response(res)
+            )
         except Exception as e:
             if '"code":-4059' in str(e):
                 logging.debug("[config] hedge mode unchanged: %s", e)

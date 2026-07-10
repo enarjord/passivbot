@@ -19,23 +19,21 @@ Last updated: 2026-07-10.
 
 Current `origin/v8` head:
 
-- `b1516253` after PR #1166, `Bound live executor anomaly diagnostics`.
+- `8bb35dea` after PR #1167, `Bound lower-level order write diagnostics`.
 
 Current logging-overhaul head:
 
-- `b1516253` after PR #1166, `Bound live executor anomaly diagnostics`
+- `8bb35dea` after PR #1167, `Bound lower-level order write diagnostics`
   (latest merged logging-overhaul slice).
 
 Current work:
 
-- Branch `codex/v8-order-write-bounded-diagnostics` extends the executor
-  diagnostic contract through the lower-level base and CCXT order-write
-  helpers. Error fallbacks contain only bounded action/symbol/type/error-type
-  fields and are suppressed when structured console projection is available;
-  the OKX already-gone cancel race also stops rendering raw exception text.
-  Exchange calls, exception-result propagation, ambiguous classification,
-  retry/restart behavior, local state, order/risk logic, and trading behavior
-  remain unchanged.
+- Branch `codex/v8-exchange-config-response-diagnostics` makes the shared
+  exchange-config response formatter value-safe and applies it to account-level
+  hedge-mode success logs in the shared CCXT connector plus Binance, Bitget,
+  Bybit, KuCoin, and OKX. It changes logging only; exchange calls, response
+  handling, exception propagation, retry/backoff, and trading behavior remain
+  unchanged.
 
 Current review gate:
 
@@ -66,6 +64,18 @@ Retuned goal boundary:
 
 VPS5 deployment status:
 
+- Repository pulled through PR #1167 at `8bb35dea`. Lower-level base and CCXT
+  order-write failures now fall back to bounded action/symbol/type/error-type
+  context only when structured console projection cannot retain the parent
+  anomaly, and the OKX already-gone cancel race no longer renders raw exception
+  text. The PR merged after current-head Hermes and Grok 4.5 approvals plus
+  green CI; Claude Opus 4.8 was explicitly waived while rate-limited. VPS5 was
+  pulled with `git pull --autostash --ff-only origin v8`, preserving the
+  pre-existing tracked Rust edit and local config/tmp artifacts, and all five
+  configured bots were restarted. A fresh ten-minute smoke on 2026-07-10
+  returned `ok=true`, `hard_failures=0`, all five expected bots matched, zero
+  failed remote/account-critical calls, and zero text-log hard/attention
+  matches. Four HSL replays remained active but non-stale and not long-running.
 - Repository pulled through PR #1166 at `b1516253`.
 - PR #1166 removed raw order dictionaries, exchange responses, exception
   messages, and tracebacks from parent executor anomaly output while preserving

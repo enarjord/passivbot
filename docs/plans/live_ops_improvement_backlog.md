@@ -733,6 +733,13 @@ Related detailed plans:
       smoke and performance reports so a historical timeout followed by success
       is not presented as unresolved. It does not change verdicts, retries,
       exception propagation, exchange I/O, or trading behavior.
+    - 2026-07-10: Branch
+      `codex/v8-exchange-config-response-diagnostics` replaces raw successful
+      response rendering with one bounded, value-safe formatter across the
+      shared CCXT and account-level connector call sites. Connector-specific
+      failure logs and per-symbol methods that currently swallow exceptions are
+      intentionally unchanged; deciding their propagation contract remains
+      separate trading-critical work.
 
 ## Merged Work Log
 

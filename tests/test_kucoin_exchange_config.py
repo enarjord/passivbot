@@ -25,7 +25,7 @@ class DummyCCA:
 
     async def set_position_mode(self, hedged):
         self.position_mode_calls.append(hedged)
-        return {"code": "200000", "hedged": hedged}
+        return {"code": "200000", "hedged": hedged, "apiKey": "SECRET"}
 
     async def set_margin_mode(self, **params):
         self.margin_calls.append(params)
@@ -177,7 +177,8 @@ async def test_update_exchange_config_sets_position_mode_when_supported(caplog):
     bot = make_bot()
     await bot.update_exchange_config()
     assert bot.cca.position_mode_calls == [True]
-    assert "set_position_mode hedged=True" in caplog.text
+    assert "set_position_mode hedged=True result=ok" in caplog.text
+    assert "SECRET" not in caplog.text
 
 
 @pytest.mark.asyncio
