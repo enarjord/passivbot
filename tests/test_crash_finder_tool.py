@@ -61,6 +61,7 @@ def test_crash_finder_identifies_clusters_and_writes_outputs(tmp_path, capsys):
                 "2",
                 "--top-clusters",
                 "10",
+                "--write-filtered-suites",
                 "--output-dir",
                 str(out_dir),
                 "--json",
@@ -87,6 +88,8 @@ def test_crash_finder_identifies_clusters_and_writes_outputs(tmp_path, capsys):
     assert (out_dir / "crash_clusters.csv").exists()
     assert (out_dir / "scanned_ranges.csv").exists()
     assert (out_dir / "scan_errors.csv").exists()
+    for suffix in ["market_wide", "coin_focused", "single_coin"]:
+        assert (out_dir / f"crash_scenarios_{suffix}.hjson").exists()
     suite_payload = json.loads((out_dir / "crash_scenarios.hjson").read_text(encoding="utf-8"))
     scenarios = suite_payload["backtest"]["scenarios"]
     assert len(scenarios) == 2
@@ -362,6 +365,58 @@ def test_suite_builder_can_filter_market_wide_clusters():
 
     scenarios = payload["backtest"]["scenarios"]
     assert [scenario["label"] for scenario in scenarios] == ["crash_market"]
+
+
+def test_suite_builder_can_filter_strict_single_coin_clusters():
+    base = month_start_ts(2025, 4)
+    clusters = [
+        crash_finder.CrashCluster(
+            label="crash_om",
+            timestamp=base,
+            timestamp_iso="2025-04-01T00:00:00Z",
+            start_ts=base,
+            end_ts=base,
+            start_iso="2025-04-01T00:00:00Z",
+            end_iso="2025-04-01T00:00:00Z",
+            severity=-0.9,
+            event_count=1,
+            affected_coin_count=1,
+            affected_coins=["OM"],
+            exchanges=["binance"],
+            market_wide=False,
+        ),
+        crash_finder.CrashCluster(
+            label="crash_dexe_m",
+            timestamp=base + HOUR_MS,
+            timestamp_iso="2025-04-01T01:00:00Z",
+            start_ts=base + HOUR_MS,
+            end_ts=base + HOUR_MS,
+            start_iso="2025-04-01T01:00:00Z",
+            end_iso="2025-04-01T01:00:00Z",
+            severity=-0.8,
+            event_count=2,
+            affected_coin_count=2,
+            affected_coins=["DEXE", "M"],
+            exchanges=["binance"],
+            market_wide=False,
+        ),
+    ]
+
+    payload = crash_finder.build_suite_payload(
+        clusters,
+        pre_days=14,
+        post_days=60,
+        top_clusters=0,
+        coin_mode="affected",
+        scenario_kind="single-coin",
+        force_normal="none",
+        merge_overlaps=False,
+        all_scanned_coins=[],
+    )
+
+    scenarios = payload["backtest"]["scenarios"]
+    assert [scenario["label"] for scenario in scenarios] == ["crash_om"]
+    assert scenarios[0]["coins"] == ["OM"]
 
 
 def test_suite_builder_splits_merged_idiosyncratic_force_targets_into_pairs():
