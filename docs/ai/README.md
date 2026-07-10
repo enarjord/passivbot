@@ -17,6 +17,7 @@ Use this file to decide what to read for a task.
 | Rust/PyO3 build, extension loading, Rust test execution | `build_pitfalls.md` |
 | Logging behavior/levels/tags | `logging_guide.md`, `live_event_registry.md` when touching structured event tags or reason codes |
 | Autonomous PR review loop | `pr_auto_review_loop.md` |
+| Logging-overhaul implementation loop | `../plans/live_logging_overhaul_current_status.md`, then `../plans/live_logging_overhaul_pr_loop_workflow.md`; open the historical progress ledger only when needed |
 | Order logic, risk, Python/Rust boundary | `architecture.md`, `decisions.md`, `features/strategy_runtime.md` when strategy behavior is involved |
 | Code review | `code_review_prompt.md` |
 | Common implementation mistakes | `pitfalls.md` |
