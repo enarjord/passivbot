@@ -4,6 +4,12 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Exchange-config failure logs now keep bounded operation, symbol, retry,
+  canonical known-code, and exception-type context without rendering arbitrary
+  exception messages or partial API responses. Existing connector catches,
+  fail-loud behavior, retries, and per-symbol success/failure handling are
+  unchanged.
+
 - Exchange-config success logs now use one bounded, value-safe formatter across
   the shared CCXT connector and Binance, Bitget, Bybit, KuCoin, and OKX. Raw API
   response values are replaced by canonical status, finite numeric leverage,

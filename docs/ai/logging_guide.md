@@ -51,6 +51,9 @@ Exchange-config response logs at every level must use the shared bounded
 formatter. They may expose only canonical success/unchanged status, finite
 numeric leverage, a bounded numeric response code, or response type/presence;
 they must not render arbitrary response values or full API payloads.
+Exchange-config failure logs may retain bounded operation/symbol/retry context,
+canonical known-code classifications, and a bounded exception type, but must
+not render exception messages or partial response objects.
 
 ## Live Event Debug Profiles
 

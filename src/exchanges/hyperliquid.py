@@ -1295,10 +1295,19 @@ class HyperliquidBot(CCXTBot):
                         to_print = f"margin=ok (unchanged, {margin_mode})"
                     else:
                         log_symbol = symbol_to_coin(symbol, verbose=False) or symbol
-                        logging.error(f"{log_symbol} error setting {margin_mode} mode {e}")
+                        logging.error(
+                            "[config] %s %s-margin update failed | %s",
+                            log_symbol,
+                            margin_mode,
+                            self._format_exchange_config_error(e),
+                        )
             except Exception as e:
                 log_symbol = symbol_to_coin(symbol, verbose=False) or symbol
-                logging.error(f"{log_symbol}: error setting margin mode and leverage {e}")
+                logging.error(
+                    "[config] %s margin/leverage preparation failed | %s",
+                    log_symbol,
+                    self._format_exchange_config_error(e),
+                )
             if to_print:
                 log_symbol = symbol_to_coin(symbol, verbose=False) or symbol
                 logging.debug(f"{log_symbol}: {to_print}")

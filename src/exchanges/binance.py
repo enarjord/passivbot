@@ -545,12 +545,20 @@ class BinanceBot(CCXTBot):
                 res = await coros_to_call_lev[symbol]
                 to_print += f"leverage={format_exchange_config_response(res)} "
             except Exception as e:
-                logging.error(f"{log_symbol}: error setting leverage {e}")
+                logging.error(
+                    "[config] %s leverage update failed | %s",
+                    log_symbol,
+                    self._format_exchange_config_error(e),
+                )
             try:
                 res_margin = await coros_to_call_margin_mode[symbol]
                 to_print += f"margin={format_exchange_config_response(res_margin)}"
             except Exception as e:
-                logging.error(f"{log_symbol}: error setting cross mode {e}")
+                logging.error(
+                    "[config] %s cross-margin update failed | %s",
+                    log_symbol,
+                    self._format_exchange_config_error(e),
+                )
             if to_print:
                 logging.info(f"{log_symbol}: {to_print}")
 
@@ -562,9 +570,12 @@ class BinanceBot(CCXTBot):
             )
         except Exception as e:
             if '"code":-4059' in str(e):
-                logging.debug("[config] hedge mode unchanged: %s", e)
+                logging.debug("[config] hedge mode unchanged | code=-4059")
             else:
-                logging.error("[config] error setting hedge mode: %s", e)
+                logging.error(
+                    "[config] hedge mode update failed | %s",
+                    self._format_exchange_config_error(e),
+                )
                 raise
 
     def format_custom_id_single(self, order_type_id: int) -> str:

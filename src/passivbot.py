@@ -7601,6 +7601,19 @@ class Passivbot:
             return False
         return True
 
+    @staticmethod
+    def _format_exchange_config_error(exc: BaseException) -> str:
+        """Return a bounded error-type label without rendering exception values."""
+        error_type = type(exc).__name__
+        if (
+            not error_type
+            or len(error_type) > 40
+            or not error_type.isascii()
+            or not error_type.replace("_", "").isalnum()
+        ):
+            error_type = "Exception"
+        return f"error_type={error_type}"
+
     async def update_exchange_configs(self, symbols=None):
         """Ensure exchange-specific settings are initialised for all active symbols."""
         if not hasattr(self, "already_updated_exchange_config_symbols"):
@@ -7655,10 +7668,10 @@ class Passivbot:
                         )
                         break
                     logging.warning(
-                        "[config] exchange config update failed for %s; retrying in %.1fs: %s",
+                        "[config] exchange config update failed | symbol=%s retry_in=%.1fs %s",
                         symbol,
                         backoff_s,
-                        e,
+                        Passivbot._format_exchange_config_error(e),
                     )
                 else:
                     if self._shutdown_requested():
