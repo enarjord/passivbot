@@ -93,8 +93,14 @@ slices.
 - [ ] Confirm whether all needed data was already cached in the slow Binance
   XLM incident path; if yes, explain exactly why local replay still took about
   27 minutes.
-- [ ] Add an offline deterministic fixture so rows/s, stage timings, and
+- [x] Add an offline deterministic fixture so rows/s, stage timings, and
   equivalence can be checked without live exchange access.
+  - Result: `passivbot tool hsl-replay-benchmark` replays a bounded in-memory
+    coin-HSL fixture through the current initializer, with distinct profiled
+    timeline-rows/s and pair-rows/s, per-stage timing, counter, fixture-hash,
+    final-state-hash, and side-effect-counter output. Realistic-scale
+    fill/row/pair fixtures and deeper internal-stage profiling remain part of
+    the open benchmark slice.
 - [ ] Acceptance: before optimizing, the report identifies the dominant cost
   category and provides a repeatable local benchmark.
 
@@ -853,8 +859,10 @@ Each slice should update this checklist with its result.
      contacting exchanges or changing live behavior.
    - Status: first report slices add `hsl_replay_profile` from existing live
      events, including per-bot replay records plus aggregate stage/status
-     counters for active/completed/failed replay state. Offline deterministic
-     replay fixtures and internal stage profiling remain open.
+     counters for active/completed/failed replay state. The bounded offline
+     deterministic fixture now covers repeatable elapsed/throughput and state
+     equivalence checks; realistic-scale fixtures and deeper internal-stage
+     profiling remain open.
 
 3. [ ] Held-position protective readiness slice.
    - Classify currently held `coin+pside` pairs before unrelated flat pairs and

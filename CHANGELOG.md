@@ -4,6 +4,12 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Added `passivbot tool hsl-replay-benchmark`, a bounded offline benchmark for
+  the current coin-HSL history initializer. It emits deterministic fixture and
+  final-state hashes, explicit timeline-row and pair-row throughput, profiled
+  stage timings, replay counters, and side-effect counters without contacting
+  exchanges or reading/writing live cache and state artifacts.
+
 - `passivbot tool crash-finder` can now regenerate scenario suites from an existing
   `crash_clusters.csv` without rescanning local OHLCV data, emit market-wide/coin-focused/single-coin
   filtered suites, merge overlapping stress windows, and add per-coin forced-normal overrides for

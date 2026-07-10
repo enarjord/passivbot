@@ -19,20 +19,21 @@ Last updated: 2026-07-10.
 
 Current `origin/v8` head:
 
-- `8f836f30` after PR #1169, `Bound exchange config failure diagnostics`.
+- `4a00ff17` after PR #1170, `Add structured websocket reconnect events`,
+  following workflow-doc PR #1171.
 
 Current logging-overhaul head:
 
-- `8f836f30` after PR #1169, `Bound exchange config failure diagnostics`
+- `4a00ff17` after PR #1170, `Add structured websocket reconnect events`
   (latest merged logging-overhaul slice).
 
 Current work:
 
-- PR #1170 (`codex/v8-websocket-reconnect-events`) adds a bounded
-  `websocket.reconnect` structured event at the existing throttled reconnect
-  logger. It preserves retry timing, warning throttling, traceback cadence,
-  exchange I/O, and trading behavior. The event excludes exception messages,
-  tracebacks, exchange payloads, and URLs.
+- PR #1172 (`codex/v8-hsl-replay-benchmark`) adds a bounded deterministic offline
+  benchmark for the current coin-HSL replay initializer. It reports explicit
+  timeline-row and pair-row throughput, profiled timings/counters, fixture and
+  final-state hashes, and zero actual live side effects. Realistic-scale
+  fill/row/pair fixtures and deeper internal-stage profiling remain open.
 
 Current review gate:
 
@@ -63,6 +64,17 @@ Retuned goal boundary:
 
 VPS5 deployment status:
 
+- Repository pulled through PR #1170 at `4a00ff17`, including workflow-doc PR
+  #1171. PR #1170 merged after exact-head Hermes and Grok 4.5 approvals plus
+  green CI; Claude Opus 4.8 remained explicitly waived while rate-limited.
+  VPS5 was pulled with autostash, preserving the known tracked Rust edit and
+  local config/tmp artifacts. Four bots stopped after the first exact-pane
+  Ctrl-C; KuCoin stopped after a second exact-pane Ctrl-C. The empty session was
+  reloaded from `/root/bots_vps5.yaml`. Immediate two-minute and settled
+  five-minute smoke reports returned `ok=true`, `hard_failures=0`, all five
+  bots matched, zero failed remote/account-critical/fill-refresh calls, and
+  zero text-log hard/attention matches. Four HSL replays remained active but
+  were neither stale nor long-running.
 - Repository pulled through PR #1169 at `8f836f30`. Connector-local
   exchange-config failures and the parent per-symbol retry line now retain only
   bounded operation, symbol, retry, known-code, and exception-type context. The
