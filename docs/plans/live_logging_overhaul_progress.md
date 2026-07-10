@@ -28,7 +28,7 @@ Current logging-overhaul head:
 
 Current work:
 
-- Branch `codex/v8-hsl-coin-denominator-parity` moves coin-HSL slot-budget and
+- PR #1175 (`codex/v8-hsl-coin-denominator-parity`) moves coin-HSL slot-budget and
   raw-drawdown math into one Rust primitive used by backtest and Python
   live/history replay. TWEL remains an activation/validation input but no
   longer scales HSL sensitivity; dynamic effective slot count remains an

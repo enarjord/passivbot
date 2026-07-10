@@ -22,7 +22,7 @@ Estimated completion:
 
 ## Active Review Slice
 
-- PR: pending publication, `Align coin-HSL denominator across live and backtest`
+- PR #1175: `Align coin-HSL denominator across live and backtest`
 - Branch: `codex/v8-hsl-coin-denominator-parity`
 - Head: query live GitHub metadata; this commit cannot embed its own final SHA
   without making that value stale
@@ -51,9 +51,8 @@ Estimated completion:
 
 Next action:
 
-1. Complete Rust/PyO3/Python, fake-live, real backtest, and optimizer validation.
-2. Publish a review-ready PR and resolve every verified finding with focused
-   regression coverage.
+1. Poll PR #1175's exact head, mergeability, CI, and required reviews.
+2. Resolve every verified finding with focused regression coverage.
 3. Merge only after the exact-head gate is satisfied, then perform the declared
    VPS5 restart/smoke validation.
 
