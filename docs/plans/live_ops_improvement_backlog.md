@@ -162,6 +162,10 @@ Related detailed plans:
      parity PR before using full-replay equivalence as the held-readiness gate.
      The current prerequisite branch separately centralizes post-episode
      no-restart/cooldown finalization in Rust without changing trigger math.
+   - 2026-07-10: PR #1174 merged and deployed the shared post-episode
+     transition. The dependent denominator-parity branch now moves coin slot
+     budget/raw drawdown into Rust, removes TWEL scaling from backtest, and
+     preserves TWEL activation plus intentional dynamic backtest slot counts.
 
 1. [x] Incident bundle generator.
    Status: initial implementation plus trace-report integration merged.

@@ -3446,17 +3446,21 @@ def _equity_hard_stop_apply_coin_metrics_sample(
         raise ValueError(
             f"coin HSL n_positions must round to > 0 for {symbol} {pside}, got {n_positions_raw}"
         )
-    # HSL is a drawdown stop, not an exposure scaler. Keep coin-mode live HSL
-    # sensitivity anchored to the configured slot count; TWEL/excess allowance
-    # must not make the RED threshold tolerate a larger percentage drawdown.
-    slot_budget = float(balance) / n_positions
-    if not math.isfinite(slot_budget) or slot_budget <= 0.0:
-        raise ValueError(
-            f"coin HSL slot_budget must be finite and > 0 for {symbol} {pside}, "
-            f"got balance={balance} n_positions={n_positions}"
+    signal = pbr.hsl_coin_drawdown_signal(
+        balance=float(balance),
+        n_positions=n_positions,
+        peak_realized=float(peak_realized),
+        last_realized=float(last_realized),
+        current_upnl=float(current_upnl),
+    )
+    if not isinstance(signal, dict):
+        raise TypeError(
+            "passivbot_rust.hsl_coin_drawdown_signal() must return a dict, "
+            f"got {type(signal).__name__}"
         )
-    drawdown_usd = max(0.0, float(peak_realized) - (float(last_realized) + float(current_upnl)))
-    drawdown_ratio = drawdown_usd / max(slot_budget, 1e-12)
+    slot_budget = float(signal["slot_budget"])
+    drawdown_usd = float(signal["drawdown_usd"])
+    drawdown_ratio = float(signal["drawdown_raw"])
     if last_metrics is not None and int(last_metrics["timestamp_ms"]) // 60_000 == current_minute:
         same_inputs = (
             str(last_metrics.get("signal_mode")) == "coin"

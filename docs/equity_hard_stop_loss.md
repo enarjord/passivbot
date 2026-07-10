@@ -52,7 +52,8 @@ Use `pside` when:
 
 1. realized net PnL is tracked per `coin+pside` inside `live.pnls_max_lookback_days`
 2. the peak realized cumsum in that window is compared to `last_realized_cumsum + current_upnl`
-3. the resulting drawdown is divided by `balance * total_wallet_exposure_limit / config.n_positions`
+3. the resulting drawdown is divided by `balance / config.n_positions`; TWEL
+   controls whether the side is active but does not scale HSL sensitivity
 4. live uses `config.n_positions` directly, not runtime effective position count, so adding/removing active symbols does not silently change HSL sensitivity
 5. RED affects only the stopped `coin+pside`; other coins on the same `pside` continue normally
 
@@ -89,9 +90,14 @@ of a rebased strategy-equity curve:
 peak_realized = max(realized_pnl_cumsum for coin+pside inside lookback)
 last_realized = last(realized_pnl_cumsum for coin+pside inside lookback)
 drawdown_usd = max(0.0, peak_realized - (last_realized + current_upnl))
-slot_budget = balance * total_wallet_exposure_limit / config.n_positions
+slot_budget = balance / applicable_n_positions
 drawdown_raw = drawdown_usd / slot_budget
 ```
+
+Live uses configured `n_positions`. Backtests use configured slots normally and
+effective tradability-aware slots when `backtest.dynamic_wel_by_tradability` is
+enabled. TWEL controls whether the side is active but does not scale either HSL
+denominator.
 
 This avoids false triggers caused only by collateral price moves when strategy PnL itself has not deteriorated.
 

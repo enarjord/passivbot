@@ -148,6 +148,55 @@ impl RollingPeakTracker {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CoinDrawdownSignal {
+    pub slot_budget: f64,
+    pub drawdown_usd: f64,
+    pub drawdown_raw: f64,
+}
+
+/// Derive the shared coin-HSL drawdown signal for live and backtest callers.
+///
+/// HSL is a drawdown stop, not an exposure scaler. The slot budget therefore
+/// uses account balance divided by the caller's applicable slot count; TWEL is
+/// intentionally not an input to this contract. Live supplies configured
+/// slots, while backtests may supply effective tradability-aware slots.
+pub fn coin_drawdown_signal(
+    balance: f64,
+    n_positions: usize,
+    peak_realized: f64,
+    last_realized: f64,
+    current_upnl: f64,
+) -> Result<CoinDrawdownSignal, String> {
+    if !balance.is_finite() || balance <= 0.0 {
+        return Err("balance must be finite and > 0".to_string());
+    }
+    if n_positions == 0 {
+        return Err("n_positions must be > 0".to_string());
+    }
+    if !peak_realized.is_finite() {
+        return Err("peak_realized must be finite".to_string());
+    }
+    if !last_realized.is_finite() {
+        return Err("last_realized must be finite".to_string());
+    }
+    if !current_upnl.is_finite() {
+        return Err("current_upnl must be finite".to_string());
+    }
+
+    let slot_budget = balance / n_positions as f64;
+    if !slot_budget.is_finite() || slot_budget <= 0.0 {
+        return Err("slot_budget must be finite and > 0".to_string());
+    }
+    let drawdown_usd = (peak_realized - (last_realized + current_upnl)).max(0.0);
+    let drawdown_raw = drawdown_usd / slot_budget;
+    Ok(CoinDrawdownSignal {
+        slot_budget,
+        drawdown_usd,
+        drawdown_raw,
+    })
+}
+
 /// Whether the permanent no-restart halt trips for a finalized RED stop.
 ///
 /// Contract (fable audit plan, clarified 2026-07-06): the no-restart trigger
@@ -514,6 +563,27 @@ mod tests {
         assert!(!s.red_active_now);
         assert!(state.red_seen_in_episode);
         assert_ne!(s.tier, HardStopTier::Red);
+    }
+
+    #[test]
+    fn coin_drawdown_signal_uses_caller_supplied_slot_count() {
+        let signal = coin_drawdown_signal(100.0, 4, 2.0, -1.0, -2.5).unwrap();
+        assert!((signal.slot_budget - 25.0).abs() < 1e-12);
+        assert!((signal.drawdown_usd - 5.5).abs() < 1e-12);
+        assert!((signal.drawdown_raw - 0.22).abs() < 1e-12);
+
+        let fewer_slots = coin_drawdown_signal(100.0, 2, 2.0, -1.0, -2.5).unwrap();
+        assert!((fewer_slots.slot_budget - 50.0).abs() < 1e-12);
+        assert!((fewer_slots.drawdown_raw - 0.11).abs() < 1e-12);
+    }
+
+    #[test]
+    fn coin_drawdown_signal_rejects_invalid_inputs() {
+        assert!(coin_drawdown_signal(0.0, 1, 0.0, 0.0, 0.0).is_err());
+        assert!(coin_drawdown_signal(100.0, 0, 0.0, 0.0, 0.0).is_err());
+        assert!(coin_drawdown_signal(100.0, 1, f64::NAN, 0.0, 0.0).is_err());
+        assert!(coin_drawdown_signal(100.0, 1, 0.0, f64::INFINITY, 0.0).is_err());
+        assert!(coin_drawdown_signal(100.0, 1, 0.0, 0.0, f64::NAN).is_err());
     }
 
     #[test]

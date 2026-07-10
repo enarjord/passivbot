@@ -85,6 +85,35 @@ def _install_passivbot_rust_stub():
 
     stub.hsl_no_restart_triggered = _hsl_no_restart_triggered
 
+    def _hsl_coin_drawdown_signal(
+        *, balance, n_positions, peak_realized, last_realized, current_upnl
+    ):
+        balance = float(balance)
+        n_positions = int(n_positions)
+        peak_realized = float(peak_realized)
+        last_realized = float(last_realized)
+        current_upnl = float(current_upnl)
+        if not math.isfinite(balance) or balance <= 0.0:
+            raise ValueError("balance must be finite and > 0")
+        if n_positions <= 0:
+            raise ValueError("n_positions must be > 0")
+        for name, value in (
+            ("peak_realized", peak_realized),
+            ("last_realized", last_realized),
+            ("current_upnl", current_upnl),
+        ):
+            if not math.isfinite(value):
+                raise ValueError(f"{name} must be finite")
+        slot_budget = balance / n_positions
+        drawdown_usd = max(0.0, peak_realized - (last_realized + current_upnl))
+        return {
+            "slot_budget": slot_budget,
+            "drawdown_usd": drawdown_usd,
+            "drawdown_raw": drawdown_usd / slot_budget,
+        }
+
+    stub.hsl_coin_drawdown_signal = _hsl_coin_drawdown_signal
+
     def _hsl_red_episode_finalization(
         *,
         restart_after_red_policy,

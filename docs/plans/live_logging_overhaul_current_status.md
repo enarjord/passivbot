@@ -22,28 +22,25 @@ Estimated completion:
 
 ## Active Review Slice
 
-- PR #1174: `Centralize HSL episode finalization in Rust`
-- Branch: `codex/v8-hsl-startup-transition-contract`
+- PR #1175: `Align coin-HSL denominator across live and backtest`
+- Branch: `codex/v8-hsl-coin-denominator-parity`
 - Head: query live GitHub metadata; this commit cannot embed its own final SHA
   without making that value stale
-- Base: `f5395dda4de815bac4f587795a66deda8fb01bc5`
-- Scope: pure Rust post-RED-episode transition shared by backtest and Python
-  live/history replay. It owns caller-supplied persistent no-restart peak/
-  drawdown evaluation, restart policy, explicit disposition, and exact cooldown
-  deadline; coin live restart now retains that peak like pside/backtest. Python still
-  owns exchange/fill-history proof, scope-flat detection, cache/latch I/O,
-  orchestration, and order supervision.
-- Non-goals: no RED trigger/tier math change, no signal-mode denominator
-  change, no replay ordering/background concurrency change, no exchange call,
-  and no new observability event.
-- Local validation: Rust `207/207`; focused Python HSL/replay/binding suites
-  pass; fake-live `29/29`, including seven real end-to-end pside HSL scenario
-  runs; real Binance HSL backtest and four-evaluation optimizer smoke pass;
-  extension source stamp and `git diff --check` pass.
-- Independent preflight: identified an existing coin-mode slot-budget
-  denominator mismatch between live and backtest plus a direct coin fake-live
-  staged-planner epoch failure after panic flatten. Neither is introduced by
-  this transition refactor; both remain focused follow-up work.
+- Base: `61fbd0eb14efe8a3b77535b461eb1bf7c936fe41`
+- Scope: one Rust-owned coin-HSL drawdown primitive shared by Python live/replay
+  and Rust backtest. Slot budget is balance divided by the caller's applicable
+  slot count; TWEL remains an activation/validation input but cannot scale HSL
+  sensitivity.
+- Non-goals: no TWEL activation change, no dynamic-tradability slot-count
+  change, no RED tier/EMA/finalization change, no replay ordering change, no
+  exchange call, and no new observability event.
+- Local validation: Rust `209/209` plus default-feature test compilation pass;
+  focused Python HSL/replay/binding suites `139/139`; fake-live `29/29`; real
+  Binance BTC backtest and pymoo optimizer smoke pass; extension source stamp,
+  `py_compile`, `cargo fmt --check`, and `git diff --check` pass.
+- Independent preflight: confirmed exactly two prior denominator formulas,
+  identified stale user docs, and verified that dynamic effective slots are an
+  intentional backtest-only input to preserve.
 - Publication state, exact head, mergeability, CI, and current-head review
   verdicts: query live GitHub metadata. Do not encode those transient values in
   the same PR that contains this status file, because every correction would
@@ -54,24 +51,23 @@ Estimated completion:
 
 Next action:
 
-1. Poll PR #1174's exact head, mergeability, CI, and required reviews.
-2. Resolve any verified finding with focused regression coverage.
+1. Poll PR #1175's exact head, mergeability, CI, and required reviews.
+2. Resolve every verified finding with focused regression coverage.
 3. Merge only after the exact-head gate is satisfied, then perform the declared
    VPS5 restart/smoke validation.
 
 ## Deployed Baseline
 
-- Remote `v8`: `f5395dda`, PR #1173
-- VPS5 repository: `f5395dda`, PR #1173
+- Remote `v8`: `61fbd0eb`, PR #1174
+- VPS5 repository: `61fbd0eb`, PR #1174
 - VPS5 expected bots: five; all are running after the controlled restart
-- Latest immediate and settled smoke: `ok=true`, `hard_failures=0`, all five
-  bots matched, zero failed remote/account-critical/fill-refresh calls, and
-  zero text-log hard/attention matches. Four HSL replays remained active but
-  were neither stale nor long-running. Five deployed
-  `forager.eligibility_changed` events were observed, one per bot, with bounded
-  source/list/operation/symbol payloads.
-- Known VPS5 tracked edit to preserve:
-  `passivbot-rust/src/equity_hard_stop_loss.rs`
+- Latest immediate, settled, and fresh smoke: `ok=true`, `hard_failures=0`, all
+  five bots matched, zero account-critical/fill-refresh failures, and zero
+  text-log hard/attention matches. One non-hard Hyperliquid candle rate-limit
+  event in the settled window cleared in the fresh window. Four HSL replays
+  remained active, non-stale, not long-running, and making progress.
+- The prior tracked Rust formatting edit was already fully present in PR #1174.
+  Its patch backup and autostash were retained on VPS5; tracked status is clean.
 - Preserve local/VPS configs, logs, monitor data, reports, and temporary files
 
 ## Review Gate
@@ -94,12 +90,11 @@ Next action:
 
 ## Next Slice
 
-The shared HSL episode-finalization transition is the first prerequisite for
-held-position protective readiness. After it merges and is deployed, reconcile
-the existing coin-mode live/backtest slot-budget denominator mismatch in its
-own behavior PR, then continue with immutable candidate replay and held-first
-protective sequencing. The design must preserve exact HSL reconstruction and
-keep observability events out of the decision authority. Remaining candidates:
+The coin-mode denominator parity correction is the active second prerequisite
+for held-position protective readiness. After it merges and is deployed,
+continue with immutable candidate replay and held-first protective sequencing.
+The design must preserve exact HSL reconstruction and keep observability events
+out of the decision authority. Remaining candidates:
 
 - realistic-scale replay fixtures and deeper internal-stage profiling
 - held-position protective-readiness source events and sequencing
