@@ -662,6 +662,9 @@ class Passivbot:
     _emit_forager_feature_unavailable_event = (
         live_event_emitters.emit_forager_feature_unavailable_event
     )
+    _emit_forager_eligibility_changed_event = (
+        live_event_emitters.emit_forager_eligibility_changed_event
+    )
     _emit_forager_selection_event = live_event_emitters.emit_forager_selection_event
     _emit_ema_bundle_started_event = live_event_emitters.emit_ema_bundle_started_event
     _emit_ema_bundle_completed_event = live_event_emitters.emit_ema_bundle_completed_event
@@ -17546,14 +17549,17 @@ class Passivbot:
         try:
             added_summary = {}
             removed_summary = {}
+            source_by_list_kind = {}
             for k in ("approved_coins", "ignored_coins"):
                 if not hasattr(self, k):
                     setattr(self, k, {"long": set(), "short": set()})
                 config_sources = self.config.get("_coins_sources", {})
                 if k in config_sources:
                     raw_source = config_sources[k]
+                    source_by_list_kind[k] = "config_sources"
                 else:
                     raw_source = self.live_value(k)
+                    source_by_list_kind[k] = "live_value"
                 parsed = normalize_coins_source(
                     raw_source, allow_all=(k == "approved_coins")
                 )
@@ -17636,6 +17642,18 @@ class Passivbot:
                     if parts:
                         logging.info(
                             "removed from ignored_coins | %s", " | ".join(parts)
+                        )
+            for list_kind in ("approved_coins", "ignored_coins"):
+                for operation, summary in (
+                    ("added", added_summary.get(list_kind, {})),
+                    ("removed", removed_summary.get(list_kind, {})),
+                ):
+                    if summary:
+                        self._emit_forager_eligibility_changed_event(
+                            source=source_by_list_kind[list_kind],
+                            list_kind=list_kind,
+                            operation=operation,
+                            changes=summary,
                         )
             try:
                 if not getattr(self, "_stock_perps_warning_logged", False):

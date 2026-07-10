@@ -75,6 +75,7 @@ class EventTypes:
     PLANNING_SYMBOL_STATE = "planning.symbol_state"
     FORAGER_SELECTION = "forager.selection"
     FORAGER_FEATURE_UNAVAILABLE = "forager.feature_unavailable"
+    FORAGER_ELIGIBILITY_CHANGED = "forager.eligibility_changed"
     EMA_BUNDLE_STARTED = "ema.bundle.started"
     EMA_BUNDLE_COMPLETED = "ema.bundle.completed"
     EMA_FALLBACK_USED = "ema.fallback_used"
@@ -228,6 +229,9 @@ class ReasonCodes:
     PRE_CREATE_PLANNING_SNAPSHOT_INVALID = "pre_create_planning_snapshot_invalid"
     QUEUE_FULL = "queue_full"
     RANKING_FEATURES_UNAVAILABLE = "ranking_features_unavailable"
+    FORAGER_ELIGIBILITY_MEMBERSHIP_CHANGED = (
+        "forager_eligibility_membership_changed"
+    )
     RECENT_EXECUTION = "recent_execution"
     REMOTE_FETCH = "remote_fetch"
     RISK_ENTRY_COOLDOWN_POSITION_DELTA = "entry_cooldown_position_delta"
@@ -378,6 +382,7 @@ PHASE1_EVENT_TYPES = {
     EventTypes.PLANNING_SYMBOL_STATE,
     EventTypes.FORAGER_SELECTION,
     EventTypes.FORAGER_FEATURE_UNAVAILABLE,
+    EventTypes.FORAGER_ELIGIBILITY_CHANGED,
     EventTypes.EMA_BUNDLE_STARTED,
     EventTypes.EMA_BUNDLE_COMPLETED,
     EventTypes.EMA_FALLBACK_USED,
@@ -685,6 +690,7 @@ DEFAULT_ROUTES: dict[str, EventRoute] = {
         console=True, text=True, throttle_interval_ms=5 * 60 * 1000
     ),
     EventTypes.FORAGER_FEATURE_UNAVAILABLE: EventRoute(console=False, text=False),
+    EventTypes.FORAGER_ELIGIBILITY_CHANGED: EventRoute(console=False, text=False),
     EventTypes.EMA_BUNDLE_STARTED: EventRoute(console=False, text=False),
     EventTypes.EMA_BUNDLE_COMPLETED: EventRoute(console=False, text=False),
     EventTypes.EMA_FALLBACK_USED: EventRoute(console=False, text=False),

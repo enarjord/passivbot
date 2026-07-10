@@ -231,6 +231,7 @@ def test_route_table_keeps_data_events_off_console_by_default():
     assert DEFAULT_ROUTES[EventTypes.DATA_PACKET_UPDATED].console is False
     for event_type in (
         EventTypes.FORAGER_FEATURE_UNAVAILABLE,
+        EventTypes.FORAGER_ELIGIBILITY_CHANGED,
         EventTypes.ACTION_PLANNED,
         EventTypes.EMA_BUNDLE_STARTED,
         EventTypes.EMA_BUNDLE_COMPLETED,

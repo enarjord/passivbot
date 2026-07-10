@@ -2107,6 +2107,66 @@ def emit_forager_feature_unavailable_event(bot: Any, *args: Any, **kwargs: Any) 
         )
 
 
+def _emit_forager_eligibility_changed_event_unchecked(
+    bot: Any,
+    *,
+    source: str,
+    list_kind: str,
+    operation: str,
+    changes: dict[str, set[str]],
+) -> None:
+    if source not in {"config_sources", "live_value"}:
+        raise ValueError(f"unsupported forager eligibility source {source!r}")
+    if list_kind not in {"approved_coins", "ignored_coins"}:
+        raise ValueError(f"unsupported forager eligibility list kind {list_kind!r}")
+    if operation not in {"added", "removed"}:
+        raise ValueError(f"unsupported forager eligibility operation {operation!r}")
+    pside_changes = []
+    for pside in ("long", "short"):
+        symbols = changes.get(pside)
+        if not symbols:
+            continue
+        ordered_symbols = sorted(str(symbol) for symbol in symbols)
+        pside_changes.append(
+            {
+                "pside": pside,
+                "count": len(ordered_symbols),
+                "symbols": ordered_symbols[:12],
+            }
+        )
+    if not pside_changes:
+        return
+    _safe_emit(
+        bot,
+        EventTypes.FORAGER_ELIGIBILITY_CHANGED,
+        level="info",
+        component="forager.eligibility",
+        tags=(EventTags.FORAGER, EventTags.REFRESH),
+        cycle_id=current_live_event_cycle_id(bot),
+        status="succeeded",
+        reason_code=ReasonCodes.FORAGER_ELIGIBILITY_MEMBERSHIP_CHANGED,
+        data={
+            "source": source,
+            "list_kind": list_kind,
+            "operation": operation,
+            "changes": pside_changes,
+        },
+    )
+
+
+def emit_forager_eligibility_changed_event(
+    bot: Any, *args: Any, **kwargs: Any
+) -> None:
+    try:
+        _emit_forager_eligibility_changed_event_unchecked(bot, *args, **kwargs)
+    except Exception as exc:
+        logging.debug(
+            "[event] failed to emit %s: %s",
+            EventTypes.FORAGER_ELIGIBILITY_CHANGED,
+            exc,
+        )
+
+
 def _emit_forager_selection_event_unchecked(
     bot: Any,
     *,
