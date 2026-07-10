@@ -22,7 +22,7 @@ Estimated completion:
 
 ## Active Review Slice
 
-- PR: pending publication, `Centralize HSL episode finalization in Rust`
+- PR #1174: `Centralize HSL episode finalization in Rust`
 - Branch: `codex/v8-hsl-startup-transition-contract`
 - Head: query live GitHub metadata; this commit cannot embed its own final SHA
   without making that value stale
@@ -54,8 +54,7 @@ Estimated completion:
 
 Next action:
 
-1. Publish the PR, then poll its exact head, mergeability, CI, and required
-   reviews.
+1. Poll PR #1174's exact head, mergeability, CI, and required reviews.
 2. Resolve any verified finding with focused regression coverage.
 3. Merge only after the exact-head gate is satisfied, then perform the declared
    VPS5 restart/smoke validation.
