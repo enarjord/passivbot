@@ -12,6 +12,32 @@ pbr_is_stub = bool(getattr(pbr, "__is_stub__", False)) if pbr is not None else F
     pbr is None or pbr_is_stub,
     reason="passivbot_rust extension not available",
 )
+def test_red_episode_finalization_binding_returns_explicit_disposition():
+    out = pbr.hsl_red_episode_finalization(
+        restart_after_red_policy="threshold",
+        stop_timestamp_ms=125_500,
+        stop_equity=90.0,
+        stop_peak_strategy_equity=100.0,
+        previous_no_restart_peak_strategy_equity=120.0,
+        drawdown_ema=0.10,
+        red_threshold=0.20,
+        no_restart_drawdown_threshold=0.90,
+        cooldown_minutes_after_red=5.0,
+    )
+
+    assert out == {
+        "no_restart_peak_strategy_equity": pytest.approx(120.0),
+        "no_restart_drawdown_raw": pytest.approx(0.25),
+        "no_restart_latched": False,
+        "cooldown_until_ms": 425_500,
+        "disposition": "cooldown",
+    }
+
+
+@pytest.mark.skipif(
+    pbr is None or pbr_is_stub,
+    reason="passivbot_rust extension not available",
+)
 def test_equity_hard_stop_rolling_peak_accepts_negative_values():
     tracker = pbr.EquityHardStopRollingPeak()
 

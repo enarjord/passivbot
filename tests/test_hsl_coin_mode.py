@@ -1511,7 +1511,7 @@ def bind_hsl_methods(bot):
         "_equity_hard_stop_apply_sample",
         "_equity_hard_stop_reset_state",
         "_equity_hard_stop_reset_after_restart",
-        "_equity_hard_stop_record_no_restart_stop",
+        "_equity_hard_stop_red_episode_finalization",
         "_equity_hard_stop_validate_balance_source_for_history_replay",
         "_equity_hard_stop_balance_override_active",
         "_equity_hard_stop_position_symbols",
@@ -1646,6 +1646,21 @@ def make_coin_bot(policy="panic"):
 
 def test_passivbot_binds_coin_hsl_replay_support_helper():
     assert hasattr(Passivbot, "_equity_hard_stop_symbol_supported_for_coin_replay")
+
+
+def test_coin_hsl_restart_reset_preserves_persistent_no_restart_peak():
+    bot = make_coin_bot()
+    state = bot._hsl_coin_state("long", "BTC/USDT:USDT")
+    state["no_restart_peak_strategy_equity"] = 1.25
+    state["pnl_reset_timestamp_ms"] = 123_456
+    state["halted"] = True
+
+    bot._equity_hard_stop_reset_coin_after_restart("long", "BTC/USDT:USDT")
+
+    state = bot._hsl_coin_state("long", "BTC/USDT:USDT")
+    assert state["no_restart_peak_strategy_equity"] == pytest.approx(1.25)
+    assert state["pnl_reset_timestamp_ms"] == 123_456
+    assert state["halted"] is False
 
 
 @pytest.mark.asyncio

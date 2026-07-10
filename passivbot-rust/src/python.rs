@@ -542,6 +542,55 @@ pub fn hsl_no_restart_triggered(
 }
 
 #[pyfunction]
+#[pyo3(signature = (
+    *,
+    restart_after_red_policy,
+    stop_timestamp_ms,
+    stop_equity,
+    stop_peak_strategy_equity,
+    previous_no_restart_peak_strategy_equity,
+    drawdown_ema,
+    red_threshold,
+    no_restart_drawdown_threshold,
+    cooldown_minutes_after_red
+))]
+pub fn hsl_red_episode_finalization(
+    py: Python<'_>,
+    restart_after_red_policy: &str,
+    stop_timestamp_ms: u64,
+    stop_equity: f64,
+    stop_peak_strategy_equity: f64,
+    previous_no_restart_peak_strategy_equity: f64,
+    drawdown_ema: f64,
+    red_threshold: f64,
+    no_restart_drawdown_threshold: f64,
+    cooldown_minutes_after_red: f64,
+) -> PyResult<Py<PyDict>> {
+    let result = ehsl::evaluate_red_episode_finalization(
+        restart_after_red_policy,
+        stop_timestamp_ms,
+        stop_equity,
+        stop_peak_strategy_equity,
+        previous_no_restart_peak_strategy_equity,
+        drawdown_ema,
+        red_threshold,
+        no_restart_drawdown_threshold,
+        cooldown_minutes_after_red,
+    )
+    .map_err(PyValueError::new_err)?;
+    let out = PyDict::new_bound(py);
+    out.set_item(
+        "no_restart_peak_strategy_equity",
+        result.no_restart_peak_strategy_equity,
+    )?;
+    out.set_item("no_restart_drawdown_raw", result.no_restart_drawdown_raw)?;
+    out.set_item("no_restart_latched", result.no_restart_latched)?;
+    out.set_item("cooldown_until_ms", result.cooldown_until_ms)?;
+    out.set_item("disposition", result.disposition.as_str())?;
+    Ok(out.unbind())
+}
+
+#[pyfunction]
 #[pyo3(signature = (highs, lows, closes, bundle=None))]
 pub fn update_trailing_bundle_py(
     highs: PyReadonlyArray1<'_, f64>,

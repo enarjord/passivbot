@@ -1902,7 +1902,9 @@ class Passivbot:
         pb_hsl._equity_hard_stop_format_remaining_time
     )
     _equity_hard_stop_build_latch_payload = pb_hsl._equity_hard_stop_build_latch_payload
-    _equity_hard_stop_record_no_restart_stop = pb_hsl._equity_hard_stop_record_no_restart_stop
+    _equity_hard_stop_red_episode_finalization = (
+        pb_hsl._equity_hard_stop_red_episode_finalization
+    )
     _equity_hard_stop_compute_stop_event = pb_hsl._equity_hard_stop_compute_stop_event
     _equity_hard_stop_compute_coin_stop_event = (
         pb_hsl._equity_hard_stop_compute_coin_stop_event

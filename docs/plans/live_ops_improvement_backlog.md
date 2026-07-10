@@ -154,6 +154,14 @@ Related detailed plans:
      timestamp/nonce recovery by classifying same-cycle successful
      `exchange.time_sync` as recovered problem evidence instead of a persistent
      hard failure.
+   - 2026-07-10: The held-readiness prerequisite audit found that live coin HSL
+     normalizes drawdown by `balance / n_positions`, while the Rust backtest
+     uses `balance * total_wallet_exposure_limit / n_positions`. The live
+     contract and metric regression explicitly make sensitivity independent of
+     exposure limits, so reconcile the backtest denominator in a focused
+     parity PR before using full-replay equivalence as the held-readiness gate.
+     The current prerequisite branch separately centralizes post-episode
+     no-restart/cooldown finalization in Rust without changing trigger math.
 
 1. [x] Incident bundle generator.
    Status: initial implementation plus trace-report integration merged.
@@ -629,6 +637,13 @@ Related detailed plans:
       multi-bot event-pipeline queue/drop/sink-error health aggregation,
       proving existing queue-overflow observability without live bots,
       exchange calls, or behavior changes.
+    - 2026-07-10: A direct two-step coin-HSL fake-live run reached RED, posted
+      and filled the panic close, then failed the next cycle because the staged
+      planner still considered `balance,fills,open_orders,positions` missing
+      for the new epoch before market-snapshot refresh. The existing 29-test
+      fake-live suite and seven pside HSL end-to-end scenarios remain green;
+      add a dedicated coin-mode post-panic scenario and fix the epoch handoff
+      separately from HSL episode-finalization math.
 
 16. [x] Websocket reconnect diagnostics.
     Status: completed by PR #1170.

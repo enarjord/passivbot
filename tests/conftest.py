@@ -84,6 +84,54 @@ def _install_passivbot_rust_stub():
         )
 
     stub.hsl_no_restart_triggered = _hsl_no_restart_triggered
+
+    def _hsl_red_episode_finalization(
+        *,
+        restart_after_red_policy,
+        stop_timestamp_ms,
+        stop_equity,
+        stop_peak_strategy_equity,
+        previous_no_restart_peak_strategy_equity,
+        drawdown_ema,
+        red_threshold,
+        no_restart_drawdown_threshold,
+        cooldown_minutes_after_red,
+    ):
+        if not (0.0 < float(red_threshold) <= float(no_restart_drawdown_threshold) <= 1.0):
+            raise ValueError(
+                "no_restart_drawdown_threshold must satisfy red_threshold <= threshold <= 1"
+            )
+        peak = max(
+            float(previous_no_restart_peak_strategy_equity),
+            float(stop_peak_strategy_equity),
+            float(stop_equity),
+        )
+        raw = max(0.0, 1.0 - float(stop_equity) / peak)
+        no_restart = _hsl_no_restart_triggered(
+            restart_after_red_policy,
+            raw,
+            drawdown_ema,
+            no_restart_drawdown_threshold,
+        )
+        cooldown_until_ms = None
+        if not no_restart and float(cooldown_minutes_after_red) > 0.0:
+            cooldown_ms = max(1, round(float(cooldown_minutes_after_red) * 60_000.0))
+            cooldown_until_ms = int(stop_timestamp_ms) + int(cooldown_ms)
+        return {
+            "no_restart_peak_strategy_equity": peak,
+            "no_restart_drawdown_raw": raw,
+            "no_restart_latched": no_restart,
+            "cooldown_until_ms": cooldown_until_ms,
+            "disposition": (
+                "no_restart"
+                if no_restart
+                else "cooldown"
+                if cooldown_until_ms is not None
+                else "halted_no_cooldown"
+            ),
+        }
+
+    stub.hsl_red_episode_finalization = _hsl_red_episode_finalization
     stub.round_ = _round
     stub.round_dn = _round_dn
     stub.round_up = _round_up
