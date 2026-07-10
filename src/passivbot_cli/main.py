@@ -119,6 +119,10 @@ TOOL_COMMANDS: dict[str, CommandSpec] = {
         "tools.hsl_startup_preview",
         "read-only offline HSL startup preview",
     ),
+    "hsl-replay-benchmark": CommandSpec(
+        "tools.hsl_replay_benchmark",
+        "benchmark the offline coin-HSL replay hot path",
+    ),
     "live-smoke-report": CommandSpec(
         "tools.live_smoke_report",
         "summarize local live monitor events and text logs",

@@ -20,41 +20,43 @@ Estimated completion:
 - expanded logging, performance-readiness, restart, and ops scope: about 65%
   overall, with substantial uncertainty from the intentionally growing backlog
 
-## Active Runtime PR
+## Active Review Slice
 
-- PR #1170: `Add structured websocket reconnect events`
-- Branch: `codex/v8-websocket-reconnect-events`
-- Head: `40ad4a774b775a35ee1d0fcdcc0e11d985b79b33`
-- Current `origin/v8`: `b7c514c0a44931ee09832bc934dce1d48705a38b`
-  after PR #1163
-- Scope: bounded structured/monitor-only websocket reconnect producer; no
-  reconnect or trading behavior change
-- CI: green on the current head
-- Reviews: the prior `CHANGELOG.md` conflict findings are resolved; current-head
-  Hermes and Grok delta reviews are pending
-- Gate: not yet satisfied; GitHub reports `CLEAN`, but prior reviews apply to
-  the superseded head
-- State: runtime loop resumed; docs-only workflow PR #1171 remains orthogonal
+- PR #1172: `Add offline HSL replay benchmark`
+- Branch: `codex/v8-hsl-replay-benchmark`
+- Head: query live GitHub metadata; this commit cannot embed its own final SHA
+  without making that value stale
+- Base: `4a00ff171d9a8ef04e4591c797b7ef24952bd175`
+- Scope: bounded deterministic offline benchmark for the current coin-HSL
+  history initializer; no live/runtime HSL behavior change
+- Output: explicit timeline-row and pair-row throughput, profiled timings and
+  counters, deterministic fixture/final-state hashes, and side-effect counters
+- Local validation: focused benchmark plus coin-HSL suites pass (113 tests),
+  direct compact CLI smoke passes, `py_compile` and `git diff --check` pass
+- Independent preflight: green after correcting the pair-row throughput unit
+- Publication state, exact head, mergeability, CI, and current-head review
+  verdicts: query live GitHub metadata. Do not encode those transient values in
+  the same PR that contains this status file, because every correction would
+  create a different head and immediately stale the embedded value.
+- Expected VPS action: none for correctness; optional pull after merge, no bot
+  restart
 
-Next action after the maintainer resumes the loop:
+Next action:
 
-1. Wait for current-head Hermes and Grok delta reviews.
-2. Reconfirm current `origin/v8`, mergeability, head SHA, reviews, and CI.
-3. Merge PR #1170 only after the current-head gate is satisfied.
-4. Pull VPS5 with autostash while preserving local artifacts.
-5. Restart the five configured bots because #1170 adds a live producer.
-6. Run immediate and settled bounded smoke checks without inducing a websocket
-   or exchange failure.
-7. Record merge/deploy evidence here and in the historical ledger.
+1. Poll live GitHub metadata for PR #1172's current head, mergeability, CI, and
+   required reviews.
+2. Resolve any verified finding with focused regression coverage.
+3. Merge only after the exact-head gate is satisfied.
 
 ## Deployed Baseline
 
-- Remote `v8`: `b7c514c0`, PR #1163
-- VPS5 repository: `8f836f30`, PR #1169
-- VPS5 expected bots: five; all were running after the latest restart
+- Remote `v8`: `4a00ff17`, PR #1170 after workflow-doc PR #1171
+- VPS5 repository: `4a00ff17`, PR #1170
+- VPS5 expected bots: five; all are running after the controlled restart
 - Latest immediate and settled smoke: `ok=true`, `hard_failures=0`, all five
   bots matched, zero failed remote/account-critical/fill-refresh calls, and
-  zero text-log hard/attention matches
+  zero text-log hard/attention matches. Four HSL replays remained active but
+  were neither stale nor long-running.
 - Known VPS5 tracked edit to preserve:
   `passivbot-rust/src/equity_hard_stop_loss.rs`
 - Preserve local/VPS configs, logs, monitor data, reports, and temporary files
@@ -79,11 +81,12 @@ Next action after the maintainer resumes the loop:
 
 ## Next Slice
 
-Do not start a dependent runtime slice until PR #1170 is merged and deployed.
-After deployment, choose one review-worthy item from:
+The offline replay benchmark is the active independent slice. After it merges,
+use its repeatable evidence to choose one review-worthy item from:
 
+- realistic-scale replay fixtures and deeper internal-stage profiling
+- held-position protective-readiness source events and sequencing
 - high-value Phase 5 text-to-event migration
-- missing performance/readiness source events that unblock measurement
 - bounded operator tooling improvements sharing one code and validation surface
 
 Do not create progress-only PRs or resume unrelated logging work from stale

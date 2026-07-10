@@ -205,6 +205,12 @@ Monitor commands are documented in detail in [monitor.md](monitor.md). The CLI s
   local HSL status/cooldown observations when present, while explicitly marking current
   drawdown and startup panic-order prediction unavailable unless a future slice adds safe
   local replay inputs.
+- `passivbot tool hsl-replay-benchmark` runs a bounded deterministic in-memory fixture through
+  the current coin-HSL history replay initializer. It reports machine-readable stage timings,
+  profiled timeline-rows/s and pair-rows/s, replay counters, fixture and final-state hashes,
+  and side-effect counters. It never contacts an
+  exchange or reads/writes live cache, monitor, latch, or state artifacts. Use
+  `--minutes`, `--symbols`, and `--iterations` to change only the bounded synthetic workload.
 - `passivbot tool live-event-query` validates and queries local structured monitor event
   segments. It is read-only and does not contact exchanges. Use `--event-type`,
   `--level`, `--cycle-id`, ID filters, `--symbol`, `--pside`, `--tag`,
