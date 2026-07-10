@@ -512,6 +512,45 @@ class TestCCXTBotBatchOrderDiagnostics:
         assert "RAW_SUPPRESSED_SECRET" not in caplog.text
 
     @pytest.mark.asyncio
+    async def test_restart_raise_forces_bounded_fallback(
+        self, caplog, capsys
+    ):
+        from exchanges.ccxt_bot import CCXTBot
+        from passivbot_exceptions import RestartBotException
+
+        bot = CCXTBot.__new__(CCXTBot)
+        bot.live_event_console_enabled = True
+        bot._live_event_pipeline = object()
+        bot.execute_order = AsyncMock(
+            side_effect=RuntimeError("write failed apiKey=RAW_RESTART_WRITE_SECRET")
+        )
+        bot.restart_bot_on_too_many_errors = AsyncMock(
+            side_effect=RestartBotException(
+                "restart failed Authorization: Bearer RAW_RESTART_SECRET"
+            )
+        )
+        order = {
+            "symbol": "XRP/USDT:USDT",
+            "pb_order_type": "entry_grid_normal_long",
+            "private": "RAW_RESTART_ORDER_SECRET",
+        }
+
+        with caplog.at_level(logging.ERROR):
+            with pytest.raises(RestartBotException, match="restart failed"):
+                await bot.execute_orders([order])
+
+        bot.restart_bot_on_too_many_errors.assert_awaited_once()
+        captured = capsys.readouterr()
+        rendered = captured.out + captured.err + caplog.text
+        assert "RAW_RESTART_WRITE_SECRET" not in rendered
+        assert "RAW_RESTART_SECRET" not in rendered
+        assert "RAW_RESTART_ORDER_SECRET" not in rendered
+        assert (
+            "[order] write failed | action=create symbol=XRP "
+            "type=entry_grid_normal_long error_type=RuntimeError"
+        ) in caplog.text
+
+    @pytest.mark.asyncio
     async def test_base_sequential_writer_bounds_failure(self, caplog, capsys):
         from passivbot import Passivbot
 

@@ -733,10 +733,15 @@ class Passivbot:
         return value if len(value) <= 64 else f"{value[:64]}..."
 
     def _log_order_write_failure(
-        self, *, action: str, order: Any, error: BaseException
+        self,
+        *,
+        action: str,
+        order: Any,
+        error: BaseException,
+        force: bool = False,
     ) -> None:
         """Emit a bounded fallback when structured execution console is unavailable."""
-        if Passivbot._live_event_console_available(self):
+        if not force and Passivbot._live_event_console_available(self):
             return
         symbol = Passivbot._log_symbol(
             order.get("symbol") if isinstance(order, dict) else None
@@ -750,6 +755,29 @@ class Passivbot:
             Passivbot._log_order_type(order),
             type(error).__name__,
         )
+
+    async def _handle_order_write_failures(
+        self, failures: list[tuple[str, Any, BaseException]]
+    ) -> None:
+        """Log bounded fallbacks and preserve restart-budget handling."""
+        if not failures:
+            return
+        for action, order, error in failures:
+            self._log_order_write_failure(
+                action=action, order=order, error=error
+            )
+        try:
+            await self.restart_bot_on_too_many_errors()
+        except BaseException:
+            if Passivbot._live_event_console_available(self):
+                for action, order, error in failures:
+                    self._log_order_write_failure(
+                        action=action,
+                        order=order,
+                        error=error,
+                        force=True,
+                    )
+            raise
 
     @staticmethod
     def _log_symbols(symbols: Iterable[Any], limit: int | None = None) -> str:
@@ -17371,20 +17399,15 @@ class Passivbot:
         if not orders:
             return []
         executions = []
-        any_exceptions = False
+        failures: list[tuple[str, Any, BaseException]] = []
         action = "cancel" if "cancel" in type_ else "create"
         for order in orders:  # sorted by PA dist
             try:
                 task = asyncio.create_task(getattr(self, type_)(order))
                 executions.append((order, task))
             except Exception as e:
-                self._log_order_write_failure(
-                    action=action,
-                    order=order,
-                    error=e,
-                )
+                failures.append((action, order, e))
                 executions.append((order, e))
-                any_exceptions = True
         results = []
         for order, execution in executions:
             if isinstance(execution, Exception):
@@ -17396,15 +17419,9 @@ class Passivbot:
                 result = await execution
                 results.append(result)
             except Exception as e:
-                self._log_order_write_failure(
-                    action=action,
-                    order=order,
-                    error=e,
-                )
+                failures.append((action, order, e))
                 results.append(e)
-                any_exceptions = True
-        if any_exceptions:
-            await self.restart_bot_on_too_many_errors()
+        await self._handle_order_write_failures(failures)
         return results
 
     # Legacy maintain_ohlcvs_1m_REST removed; CandlestickManager handles caching and TTL

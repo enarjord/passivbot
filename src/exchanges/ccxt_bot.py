@@ -1129,14 +1129,12 @@ class CCXTBot(Passivbot):
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
         # Check for exceptions and trigger error handling if needed
-        any_exceptions = any(isinstance(r, Exception) for r in results)
-        if any_exceptions:
-            for i, result in enumerate(results):
-                if isinstance(result, Exception):
-                    self._log_order_write_failure(
-                        action="create", order=orders[i], error=result
-                    )
-            await self.restart_bot_on_too_many_errors()
+        failures = [
+            ("create", orders[i], result)
+            for i, result in enumerate(results)
+            if isinstance(result, Exception)
+        ]
+        await self._handle_order_write_failures(failures)
 
         return results
 
@@ -1148,13 +1146,11 @@ class CCXTBot(Passivbot):
         tasks = [self.execute_cancellation(order) for order in orders]
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
-        any_exceptions = any(isinstance(r, Exception) for r in results)
-        if any_exceptions:
-            for i, result in enumerate(results):
-                if isinstance(result, Exception):
-                    self._log_order_write_failure(
-                        action="cancel", order=orders[i], error=result
-                    )
-            await self.restart_bot_on_too_many_errors()
+        failures = [
+            ("cancel", orders[i], result)
+            for i, result in enumerate(results)
+            if isinstance(result, Exception)
+        ]
+        await self._handle_order_write_failures(failures)
 
         return results
