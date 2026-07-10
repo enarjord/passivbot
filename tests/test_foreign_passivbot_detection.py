@@ -104,7 +104,9 @@ async def test_execute_orders_parent_tracks_acknowledged_custom_id():
 
 
 @pytest.mark.asyncio
-async def test_execute_orders_parent_tracks_ambiguous_create_error_custom_id():
+async def test_execute_orders_parent_tracks_ambiguous_create_error_custom_id(
+    caplog, capsys
+):
     import passivbot as pb_mod
 
     class FakeBot:
@@ -152,7 +154,7 @@ async def test_execute_orders_parent_tracks_ambiguous_create_error_custom_id():
             return None
 
         async def execute_orders(self, orders):
-            return [TimeoutError("create timed out")]
+            return [TimeoutError("create timed out apiKey=RAW_CREATE_SECRET")]
 
         def did_create_order(self, executed):
             return False
@@ -173,7 +175,8 @@ async def test_execute_orders_parent_tracks_ambiguous_create_error_custom_id():
         "pb_order_type": "entry_grid_normal_long",
     }
 
-    res = await pb_mod.Passivbot.execute_orders_parent(bot, [order])
+    with caplog.at_level(logging.WARNING):
+        res = await pb_mod.Passivbot.execute_orders_parent(bot, [order])
 
     assert res == []
     assert len(bot.orders_emitted_to_exchange) == 1
@@ -186,10 +189,18 @@ async def test_execute_orders_parent_tracks_ambiguous_create_error_custom_id():
     assert bot._health_orders_placed == 0
     assert len(bot.recent_order_executions) == 1
     assert bot.recent_order_executions[0]["custom_id"] == custom_id
+    captured = capsys.readouterr()
+    rendered = captured.out + captured.err + caplog.text
+    assert "RAW_CREATE_SECRET" not in rendered
+    assert "create timed out" not in rendered
+    assert "create not acknowledged" in caplog.text
+    assert "error_type=TimeoutError" in caplog.text
 
 
 @pytest.mark.asyncio
-async def test_execute_orders_parent_does_not_throttle_rejected_create_response():
+async def test_execute_orders_parent_does_not_throttle_rejected_create_response(
+    caplog, capsys
+):
     import passivbot as pb_mod
 
     class FakeBot:
@@ -238,7 +249,14 @@ async def test_execute_orders_parent_does_not_throttle_rejected_create_response(
             return None
 
         async def execute_orders(self, orders):
-            return [{"id": "reject-1", "status": "rejected", **orders[0]}]
+            return [
+                {
+                    "id": "reject-1",
+                    "status": "rejected",
+                    "raw_error": "Authorization: Bearer RAW_REJECT_SECRET",
+                    **orders[0],
+                }
+            ]
 
         def add_new_order(self, order, source="POST"):
             raise AssertionError("rejected creates must not be added locally")
@@ -255,11 +273,17 @@ async def test_execute_orders_parent_does_not_throttle_rejected_create_response(
         "pb_order_type": "close_grid_long",
     }
 
-    res = await pb_mod.Passivbot.execute_orders_parent(bot, [order])
+    with caplog.at_level(logging.WARNING):
+        res = await pb_mod.Passivbot.execute_orders_parent(bot, [order])
 
     assert res == []
     assert bot.recent_order_executions == []
     assert bot._health_orders_placed == 0
+    captured = capsys.readouterr()
+    rendered = captured.out + captured.err + caplog.text
+    assert "RAW_REJECT_SECRET" not in rendered
+    assert "raw_error" not in rendered
+    assert "reason=terminal_rejection" in caplog.text
 
 
 @pytest.mark.asyncio
@@ -331,6 +355,82 @@ async def test_execute_orders_parent_tracks_hard_failed_create_as_ambiguous():
 
 
 @pytest.mark.asyncio
+async def test_execute_order_plan_bounds_raised_create_exception_diagnostics(
+    monkeypatch, caplog, capsys
+):
+    import passivbot as pb_mod
+
+    async def keep_fresh_creations(_bot, orders):
+        return orders
+
+    monkeypatch.setattr(
+        pb_mod.Passivbot,
+        "_filter_fresh_market_snapshot_creations",
+        keep_fresh_creations,
+    )
+
+    class FakeBot:
+        debug_mode = False
+        balance_threshold = 0.0
+        quote = "USDT"
+        stop_signal_received = False
+        state_change_detected_by_symbol = set()
+        _shutdown_requested = pb_mod.Passivbot._shutdown_requested
+
+        def __init__(self):
+            self.restart_called = False
+            self.execution_scheduled = False
+
+        def get_raw_balance(self):
+            return 100.0
+
+        async def execute_cancellations_parent(self, orders):
+            assert orders == []
+            return []
+
+        def order_was_recently_updated(self, order):
+            return 0
+
+        async def execute_orders_parent(self, orders):
+            raise RuntimeError(
+                "exchange create failed Authorization: Bearer RAW_BATCH_SECRET"
+            )
+
+        async def restart_bot_on_too_many_errors(self):
+            self.restart_called = True
+
+        def _resolve_pb_order_type(self, order):
+            return str(order.get("pb_order_type") or "")
+
+    bot = FakeBot()
+    order = {
+        "symbol": "TON/USDT:USDT",
+        "side": "buy",
+        "position_side": "long",
+        "qty": 25.0,
+        "price": 2.495,
+        "reduce_only": False,
+        "custom_id": _pb_custom_id("entry_grid_normal_long", "batchfail"),
+        "pb_order_type": "entry_grid_normal_long",
+    }
+
+    with caplog.at_level(logging.ERROR):
+        await pb_mod.Passivbot.execute_order_plan_to_exchange(
+            bot, [], [order], configure_creations=False
+        )
+
+    assert bot.restart_called is True
+    assert bot.execution_scheduled is True
+    captured = capsys.readouterr()
+    rendered = captured.out + captured.err + caplog.text
+    assert "RAW_BATCH_SECRET" not in rendered
+    assert "Authorization" not in rendered
+    assert "Traceback" not in rendered
+    assert "create batch raised before completion" in caplog.text
+    assert "count=1 error_type=RuntimeError" in caplog.text
+
+
+@pytest.mark.asyncio
 async def test_execute_orders_parent_tracks_empty_create_response_as_ambiguous():
     import passivbot as pb_mod
 
@@ -397,7 +497,9 @@ async def test_execute_orders_parent_tracks_empty_create_response_as_ambiguous()
 
 
 @pytest.mark.asyncio
-async def test_execute_orders_parent_tracks_partial_create_response_as_ambiguous():
+async def test_execute_orders_parent_tracks_partial_create_response_as_ambiguous(
+    caplog, capsys
+):
     import passivbot as pb_mod
 
     class FakeBot:
@@ -441,7 +543,13 @@ async def test_execute_orders_parent_tracks_partial_create_response_as_ambiguous
             return None
 
         async def execute_orders(self, orders):
-            return [{"id": "only-first", **orders[0]}]
+            return [
+                {
+                    "id": "only-first",
+                    "raw_response": "api_key=RAW_PARTIAL_SECRET",
+                    **orders[0],
+                }
+            ]
 
     bot = FakeBot()
     orders = [
@@ -467,7 +575,8 @@ async def test_execute_orders_parent_tracks_partial_create_response_as_ambiguous
         },
     ]
 
-    res = await pb_mod.Passivbot.execute_orders_parent(bot, orders)
+    with caplog.at_level(logging.WARNING):
+        res = await pb_mod.Passivbot.execute_orders_parent(bot, orders)
 
     assert res == []
     assert len(bot.recent_order_executions) == 2
@@ -475,6 +584,89 @@ async def test_execute_orders_parent_tracks_partial_create_response_as_ambiguous
         "create_response_partial",
         "create_response_partial",
     ]
+    captured = capsys.readouterr()
+    rendered = captured.out + captured.err + caplog.text
+    assert "RAW_PARTIAL_SECRET" not in rendered
+    assert "raw_response" not in rendered
+    assert "create response count mismatch | requested=2 returned=1" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_execute_cancellations_parent_bounds_partial_response_diagnostics(
+    caplog, capsys
+):
+    import passivbot as pb_mod
+
+    class FakeBot:
+        debug_mode = False
+
+        def __init__(self):
+            self._health_orders_cancelled = 0
+            self._order_wave_in_progress = None
+            self.state_change_detected_by_symbol = set()
+
+        def live_value(self, key):
+            assert key == "max_n_cancellations_per_batch"
+            return 5
+
+        def add_to_recent_order_cancellations(self, order):
+            return None
+
+        def log_order_action(self, *args, **kwargs):
+            return None
+
+        def _log_order_action_summary(self, *args, **kwargs):
+            return None
+
+        async def execute_cancellations(self, orders):
+            return [
+                {
+                    "status": "success",
+                    "raw_response": "apiKey=RAW_CANCEL_SECRET",
+                    **orders[0],
+                }
+            ]
+
+        def _resolve_pb_order_type(self, order):
+            return str(order.get("pb_order_type") or "")
+
+    bot = FakeBot()
+    orders = [
+        {
+            "id": "cancel-1",
+            "symbol": "BTC/USDT:USDT",
+            "side": "buy",
+            "position_side": "long",
+            "qty": 0.01,
+            "price": 100000.0,
+            "reduce_only": True,
+            "pb_order_type": "close_grid_long",
+        },
+        {
+            "id": "cancel-2",
+            "symbol": "ETH/USDT:USDT",
+            "side": "sell",
+            "position_side": "short",
+            "qty": 0.1,
+            "price": 3000.0,
+            "reduce_only": True,
+            "pb_order_type": "close_grid_short",
+        },
+    ]
+
+    with caplog.at_level(logging.WARNING):
+        res = await pb_mod.Passivbot.execute_cancellations_parent(bot, orders)
+
+    assert res == []
+    assert bot.state_change_detected_by_symbol == {
+        "BTC/USDT:USDT",
+        "ETH/USDT:USDT",
+    }
+    captured = capsys.readouterr()
+    rendered = captured.out + captured.err + caplog.text
+    assert "RAW_CANCEL_SECRET" not in rendered
+    assert "raw_response" not in rendered
+    assert "cancel response count mismatch | requested=2 returned=1" in caplog.text
 
 
 def _make_detection_bot(now_ts: int, start_ts: int):

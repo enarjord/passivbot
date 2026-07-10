@@ -4,6 +4,12 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Live executor create/cancel anomalies no longer print raw order dictionaries,
+  exchange responses, exception messages, or tracebacks. Existing bounded
+  structured execution events remain authoritative; when their console
+  projection is unavailable, fallback logs contain only safe count/type/reason
+  context. Exchange behavior is unchanged.
+
 - Live performance timing groups now expose their latest bounded report-safe
   canonical event IDs, including in `operation_durations` and
   `slowest_blockers`, so an operator can correlate a slow row with the

@@ -111,6 +111,10 @@ Low-balance exposure-increasing create skips are also console-visible through
 `execution.create_skipped`; the legacy `[balance] too low` line is only a
 fallback when the structured event console path is unavailable or explicitly
 disabled.
+Executor create/cancel anomalies are console-visible through bounded structured
+execution events. Legacy fallback logs may retain only counts, sanitized
+symbol/order-type labels, reason codes, and exception types; they must not print
+raw order dictionaries, exchange responses, exception messages, or tracebacks.
 Periodic `health.summary` events are console-visible because they provide a
 compact operator heartbeat covering uptime, loop latency, position counts,
 recent order/fill activity, errors, and resource pressure. Degraded

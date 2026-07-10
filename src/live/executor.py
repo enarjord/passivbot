@@ -3,12 +3,10 @@ from __future__ import annotations
 import logging
 import math
 import sys
-import traceback
 from collections import defaultdict
 
 from passivbot_exceptions import RestartBotException
 from live.event_bus import EventTypes, ReasonCodes
-from procedures import print_async_exception
 from pure_funcs import shorten_custom_id
 from utils import utc_ms as _utils_utc_ms
 
@@ -29,6 +27,11 @@ def _utc_ms() -> int:
     if module is not None and hasattr(module, "utc_ms"):
         return int(module.utc_ms())
     return int(_utils_utc_ms())
+
+
+def _live_event_console_available(bot, passivbot_cls) -> bool:
+    checker = getattr(passivbot_cls, "_live_event_console_available", None)
+    return bool(checker(bot)) if callable(checker) else False
 
 
 def _order_is_reduce_only(order: dict) -> bool:
@@ -156,14 +159,22 @@ async def execute_order_plan(
     for elm in to_cancel:
         key = str(elm["price"]) + str(elm["qty"])
         if key in seen:
-            logging.debug("duplicate cancel candidate: %s", elm)
+            logging.debug(
+                "[order] duplicate cancel candidate | symbol=%s type=%s",
+                passivbot_cls._log_symbol(elm.get("symbol")),
+                _order_pb_type(elm),
+            )
         seen.add(key)
 
     seen = set()
     for elm in to_create:
         key = str(elm["price"]) + str(elm["qty"])
         if key in seen:
-            logging.debug("duplicate create candidate: %s", elm)
+            logging.debug(
+                "[order] duplicate create candidate | symbol=%s type=%s",
+                passivbot_cls._log_symbol(elm.get("symbol")),
+                _order_pb_type(elm),
+            )
         seen.add(key)
     low_balance = False
     if not bot.debug_mode:
@@ -201,13 +212,7 @@ async def execute_order_plan(
                         "allowed_protective_create": len(to_create),
                     },
                 )
-            live_event_console_available = False
-            live_event_console_available_fn = getattr(
-                passivbot_cls, "_live_event_console_available", None
-            )
-            if callable(live_event_console_available_fn):
-                live_event_console_available = bool(live_event_console_available_fn(bot))
-            if not live_event_console_available:
+            if not _live_event_console_available(bot, passivbot_cls):
                 logging.info(
                     "[balance] too low: %.2f %s; skipped %d exposure-increasing order creates; "
                     "allowing %d cancellations and %d protective creates",
@@ -219,8 +224,8 @@ async def execute_order_plan(
                 )
     if bot.debug_mode:
         if to_cancel:
-            print(
-                f"would cancel {len(to_cancel)} order{'s' if len(to_cancel) > 1 else ''}"
+            logging.info(
+                "[order] debug mode would cancel orders | count=%d", len(to_cancel)
             )
     else:
         cancel_started_ms = _utc_ms()
@@ -234,8 +239,8 @@ async def execute_order_plan(
             order_wave["cancel_posted"] = len(res or [])
     if bot.debug_mode:
         if to_create:
-            print(
-                f"would create {len(to_create)} order{'s' if len(to_create) > 1 else ''}"
+            logging.info(
+                "[order] debug mode would create orders | count=%d", len(to_create)
             )
     else:
         to_create_mod = []
@@ -390,9 +395,12 @@ async def execute_order_plan(
             except RestartBotException:
                 raise
             except Exception as exc:
-                logging.error(f"error executing orders {to_create_mod} {exc}")
-                print_async_exception(res)
-                traceback.print_exc()
+                if not _live_event_console_available(bot, passivbot_cls):
+                    logging.error(
+                        "[order] create batch raised before completion | count=%d error_type=%s",
+                        len(to_create_mod),
+                        type(exc).__name__,
+                    )
                 await bot.restart_bot_on_too_many_errors()
     if to_cancel or to_create:
         bot.execution_scheduled = True
@@ -497,11 +505,6 @@ async def execute_orders_parent(bot, orders: list[dict]) -> list[dict]:
             )
         return []
     if len(orders) != len(res):
-        print(
-            f"debug unequal lengths execute_orders_parent: "
-            f"{len(orders)} orders, {len(res)} executions",
-            res,
-        )
         for idx, order in enumerate(orders):
             passivbot_cls._emit_execution_order_event(
                 bot,
@@ -523,18 +526,25 @@ async def execute_orders_parent(bot, orders: list[dict]) -> list[dict]:
                 status="create_response_partial",
                 reason=ReasonCodes.LENGTH_MISMATCH,
             )
+        if not _live_event_console_available(bot, passivbot_cls):
+            logging.warning(
+                "[order] create response count mismatch | requested=%d returned=%d",
+                len(orders),
+                len(res),
+            )
         return []
     to_return = []
     for idx, (ex, order) in enumerate(zip(res, orders)):
         if not bot.did_create_order(ex):
             if isinstance(ex, Exception):
+                reason_code = "result_exception"
                 passivbot_cls._emit_execution_order_event(
                     bot,
                     event_type=EventTypes.EXECUTION_AMBIGUOUS,
                     order=order,
                     action="create",
                     status="degraded",
-                    reason_code="result_exception",
+                    reason_code=reason_code,
                     level="warning",
                     index=idx,
                     wave=wave,
@@ -546,7 +556,7 @@ async def execute_orders_parent(bot, orders: list[dict]) -> list[dict]:
                     order,
                     emitted_ts=emitted_ts,
                     status="create_error_ambiguous",
-                    reason="result_exception",
+                    reason=reason_code,
                     error=ex,
                 )
             else:
@@ -568,18 +578,29 @@ async def execute_orders_parent(bot, orders: list[dict]) -> list[dict]:
                     wave=wave,
                     result=ex if isinstance(ex, dict) else None,
                 )
-            print(f"debug did_create_order false {ex}")
+            if not _live_event_console_available(bot, passivbot_cls):
+                logging.warning(
+                    "[order] create not acknowledged | symbol=%s type=%s reason=%s error_type=%s",
+                    passivbot_cls._log_symbol(order.get("symbol")),
+                    bot._resolve_pb_order_type(order),
+                    reason_code,
+                    type(ex).__name__ if isinstance(ex, BaseException) else "",
+                )
             continue
-        debug_prints = {}
+        normalized_fields: dict[str, list[str]] = {}
         for key in order:
             if key not in ex:
-                debug_prints.setdefault("missing", []).append((key, order[key]))
+                normalized_fields.setdefault("missing", []).append(str(key))
                 ex[key] = order[key]
             elif ex[key] is None:
-                debug_prints.setdefault("is_none", []).append((key, order[key]))
+                normalized_fields.setdefault("is_none", []).append(str(key))
                 ex[key] = order[key]
-        if debug_prints and bot.debug_mode:
-            print("debug create_orders", debug_prints)
+        if normalized_fields and bot.debug_mode:
+            logging.debug(
+                "[order] normalized create response fields | missing_keys=%s none_keys=%s",
+                sorted(normalized_fields.get("missing", []))[:12],
+                sorted(normalized_fields.get("is_none", []))[:12],
+            )
         passivbot_cls._record_emitted_order_custom_id(bot, ex, emitted_ts=emitted_ts)
         bot.add_to_recent_order_executions(ex)
         passivbot_cls._emit_execution_order_event(
@@ -624,7 +645,10 @@ async def execute_cancellations_parent(bot, orders: list[dict]) -> list[dict]:
             rest = [x for x in orders if not x["reduce_only"]]
             orders = (reduce_only_orders + rest)[:max_cancellations]
         except Exception as exc:
-            logging.error(f"debug filter cancellations {exc}")
+            logging.error(
+                "[order] cancellation priority filtering failed; using input order | error_type=%s",
+                type(exc).__name__,
+            )
             orders = orders[:max_cancellations]
     grouped_orders: dict[str, list[dict]] = defaultdict(list)
     for order in orders:
@@ -686,11 +710,12 @@ async def execute_cancellations_parent(bot, orders: list[dict]) -> list[dict]:
                 extra={"response_count": len(res), "request_count": len(orders)},
             )
             bot.state_change_detected_by_symbol.add(order["symbol"])
-        print(
-            f"debug unequal lengths execute_cancellations_parent: "
-            f"{len(orders)} orders, {len(res)} executions",
-            res,
-        )
+        if not _live_event_console_available(bot, passivbot_cls):
+            logging.warning(
+                "[order] cancel response count mismatch | requested=%d returned=%d",
+                len(orders),
+                len(res),
+            )
         return []
     for idx, (ex, order) in enumerate(zip(res, orders)):
         if not bot.did_cancel_order(ex, order):
@@ -708,23 +733,33 @@ async def execute_cancellations_parent(bot, orders: list[dict]) -> list[dict]:
                 result=ex if isinstance(ex, dict) else None,
                 error=ex if isinstance(ex, BaseException) else None,
             )
-            print(f"debug did_cancel_order false {ex} {order}")
+            if not _live_event_console_available(bot, passivbot_cls):
+                logging.warning(
+                    "[order] cancel not acknowledged | symbol=%s type=%s error_type=%s",
+                    passivbot_cls._log_symbol(order.get("symbol")),
+                    bot._resolve_pb_order_type(order),
+                    type(ex).__name__ if isinstance(ex, BaseException) else "",
+                )
             continue
         ambiguous_terminal_state = (
             bot._cancel_result_requires_full_authoritative_confirmation(ex)
         )
         if ambiguous_terminal_state:
             bot.state_change_detected_by_symbol.add(order["symbol"])
-        debug_prints = {}
+        normalized_fields: dict[str, list[str]] = {}
         for key in order:
             if key not in ex:
-                debug_prints.setdefault("missing", []).append((key, order[key]))
+                normalized_fields.setdefault("missing", []).append(str(key))
                 ex[key] = order[key]
             elif ex[key] is None:
-                debug_prints.setdefault("is_none", []).append((key, order[key]))
+                normalized_fields.setdefault("is_none", []).append(str(key))
                 ex[key] = order[key]
-        if debug_prints and bot.debug_mode:
-            print("debug cancel_orders", debug_prints)
+        if normalized_fields and bot.debug_mode:
+            logging.debug(
+                "[order] normalized cancel response fields | missing_keys=%s none_keys=%s",
+                sorted(normalized_fields.get("missing", []))[:12],
+                sorted(normalized_fields.get("is_none", []))[:12],
+            )
         if ambiguous_terminal_state:
             passivbot_cls._emit_execution_order_event(
                 bot,
