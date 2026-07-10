@@ -19,23 +19,20 @@ Last updated: 2026-07-10.
 
 Current `origin/v8` head:
 
-- `8b0869e9` after PR #1168, `Bound exchange config response diagnostics`.
+- `8f836f30` after PR #1169, `Bound exchange config failure diagnostics`.
 
 Current logging-overhaul head:
 
-- `8b0869e9` after PR #1168, `Bound exchange config response diagnostics`
+- `8f836f30` after PR #1169, `Bound exchange config failure diagnostics`
   (latest merged logging-overhaul slice).
 
 Current work:
 
-- Branch `codex/v8-exchange-config-error-diagnostics` removes raw exception
-  messages and partial response objects from the parent per-symbol retry log and
-  connector-local exchange-config logs in Binance, Bitget, Defx, Hyperliquid,
-  KuCoin, and OKX. Logs retain bounded operation, symbol, retry, canonical
-  known-code, and exception-type context. Existing catches, exception
-  propagation, retry/backoff, per-symbol handling, exchange I/O, and trading
-  behavior remain unchanged. Outer startup/runtime exception logs and
-  structured-event error retention remain separate logging-policy work.
+- PR #1170 (`codex/v8-websocket-reconnect-events`) adds a bounded
+  `websocket.reconnect` structured event at the existing throttled reconnect
+  logger. It preserves retry timing, warning throttling, traceback cadence,
+  exchange I/O, and trading behavior. The event excludes exception messages,
+  tracebacks, exchange payloads, and URLs.
 
 Current review gate:
 
@@ -66,6 +63,18 @@ Retuned goal boundary:
 
 VPS5 deployment status:
 
+- Repository pulled through PR #1169 at `8f836f30`. Connector-local
+  exchange-config failures and the parent per-symbol retry line now retain only
+  bounded operation, symbol, retry, known-code, and exception-type context. The
+  PR merged after current-head Hermes and Grok 4.5 approvals plus green CI;
+  Claude Opus 4.8 was explicitly waived while rate-limited. VPS5 was pulled
+  with autostash, preserving the pre-existing tracked Rust edit and local
+  artifacts. The first exact-pane Ctrl-C grace window stopped Binance, OKX, and
+  Hyperliquid; a second window targeted only KuCoin and GateIO, and no SIGTERM
+  was required. Immediate two-minute and settled five-minute smoke reports were
+  hard-green: `ok=true`, `hard_failures=0`, all five bots matched, zero failed
+  remote/account-critical/fill-refresh calls, and zero text-log hard/attention
+  matches. Four HSL replays remained active, non-stale, and not long-running.
 - Repository pulled through PR #1168 at `8b0869e9`. Successful account-level
   exchange-config responses now use the shared bounded value-safe formatter in
   the CCXT base plus Binance, Bitget, Bybit, KuCoin, and OKX. The PR merged

@@ -616,6 +616,51 @@ def emit_exchange_time_sync_event(bot: Any, *args: Any, **kwargs: Any) -> None:
         logging.debug("[event] failed to emit exchange time-sync event: %s", exc)
 
 
+def _emit_websocket_reconnect_event_unchecked(
+    bot: Any,
+    *,
+    reconnect_no: int,
+    retry_delay_s: float,
+    reason: str,
+    warning_visible: bool,
+    traceback_emitted: bool,
+    exc: BaseException | None = None,
+    rate_limited: bool = False,
+) -> None:
+    reason_value = str(reason or "connection_lost")
+    if reason_value not in {"connection_lost", "rate_limited", "time_sync"}:
+        reason_value = "other"
+    data = {
+        "reconnect_no": max(0, int(reconnect_no or 0)),
+        "retry_delay_ms": max(0, int(round(float(retry_delay_s or 0.0) * 1000))),
+        "reason": reason_value,
+        "rate_limited": bool(rate_limited),
+        "warning_visible": bool(warning_visible),
+        "traceback_emitted": bool(traceback_emitted),
+    }
+    if exc is not None:
+        data["error_type"] = type(exc).__name__
+    _safe_emit(
+        bot,
+        EventTypes.WEBSOCKET_RECONNECT,
+        level="warning" if warning_visible else "debug",
+        component="exchange.websocket",
+        tags=(EventTags.EXCHANGE, EventTags.WEBSOCKET),
+        cycle_id=current_live_event_cycle_id(bot),
+        status="degraded",
+        reason_code=ReasonCodes.WEBSOCKET_RECONNECT,
+        data=data,
+    )
+
+
+def emit_websocket_reconnect_event(bot: Any, *args: Any, **kwargs: Any) -> None:
+    """Best-effort bounded visibility for websocket reconnect attempts."""
+    try:
+        _emit_websocket_reconnect_event_unchecked(bot, *args, **kwargs)
+    except Exception as exc:
+        logging.debug("[event] failed to emit websocket reconnect event: %s", exc)
+
+
 def _emit_exchange_config_refresh_event_unchecked(
     bot: Any,
     *,

@@ -90,6 +90,7 @@ across time.
 - `trailing.status`
 - `unstuck.selection`
 - `unstuck.status`
+- `websocket.reconnect`
 
 ## HSL Replay Timing Fields
 
@@ -150,6 +151,7 @@ back to exchange-derived replay.
 - `unstuck`
 - `warmup`
 - `wave`
+- `websocket`
 
 ## Reason Codes
 
@@ -219,6 +221,7 @@ back to exchange-derived replay.
 - `unstuck_selection`
 - `unstuck_status`
 - `warmup_cache_decision`
+- `websocket_reconnect`
 
 Dynamic helpers are part of the same contract:
 

@@ -57,6 +57,12 @@ classifications, and a bounded exception type without rendering exception
 messages or partial response objects. Outer startup/runtime exception logs and
 structured-event error retention follow their separate policies.
 
+Websocket reconnect attempts emit `websocket.reconnect` to the structured and
+monitor sinks while retaining the existing throttled `[ws]` text diagnostics.
+The event records bounded retry, classification, warning-visibility, traceback-
+cadence, and exception-type fields only; it must not retain exception messages,
+tracebacks, exchange payloads, or URLs.
+
 ## Live Event Debug Profiles
 
 Use `logging.live_event_debug_profiles` or the
