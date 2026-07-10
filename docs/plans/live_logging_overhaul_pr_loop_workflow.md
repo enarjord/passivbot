@@ -1,102 +1,184 @@
 # Live Logging Overhaul PR Loop Workflow
 
-This note defines the resumed logging-overhaul implementation loop. It
-complements:
+This is the operating workflow for the logging/observability implementation
+loop. Read `live_logging_overhaul_current_status.md` first. Use
+`live_logging_overhaul_progress.md` only for historical evidence.
 
-- `docs/plans/live_logging_overhaul_plan.md`
-- `docs/plans/live_logging_overhaul_progress.md`
-- `docs/plans/live_performance_readiness_goals.md`
-- `docs/plans/live_ops_improvement_backlog.md`
+Architecture and backlog references:
 
-## Roles
+- `live_logging_overhaul_plan.md`
+- `live_performance_readiness_goals.md`
+- `live_ops_improvement_backlog.md`
+- `../ai/pr_auto_review_loop.md`
 
-- Codex owns implementation, local validation, PR creation, review iteration,
-  merge to `v8` after the gate is satisfied, VPS5 deploy/smoke when appropriate,
-  and progress evidence updates.
-- Hermes, Claude Opus, Grok, and any additional reviewer agents review the
-  current PR delta. Reviewers do not implement fixes or merge. Reusable
-  reviewer-loop instructions live in `docs/ai/pr_auto_review_loop.md`.
-- Maintainer-created PRs may also enter the same review loop. It is OK for
-  reviewers to review non-logging-overhaul PRs when they target `v8`.
+## Goal
+
+Deliver bounded, correlated, operator-useful live observability through
+reviewable PRs, current-head review gates, and evidence-based VPS5 validation,
+without moving trading decisions out of Rust or making observability a trading
+control plane.
+
+## Tiered Ownership
+
+Use the cheapest capable execution tier and reserve the strongest reasoning
+tier for consequential decisions.
+
+### Sol: Lead And Safety Owner
+
+- Select architecture and PR boundaries.
+- Own trading-critical, exchange-contract, Rust, risk/HSL/unstuck, security,
+  concurrency, and live-runtime decisions.
+- Adjudicate reviewer findings and conflicting evidence.
+- Inspect delegated diffs and validation before publication.
+- Decide merge readiness and perform or authorize VPS signals/restarts.
+- Interpret incidents and choose the next dependent slice.
+
+### Terra: Scoped Implementation Worker
+
+- Implement straightforward docs, tests, report projections, query/tooling
+  changes, and bounded observability producers with an explicit file scope.
+- Run local validation and return a clean commit/diff plus evidence.
+- Work only in an isolated branch/worktree.
+- Do not merge, deploy, SSH, signal processes, or broaden scope.
+
+### Luna: Polling And Read-Only Triage
+
+- Poll low-token GitHub metadata and notify Sol only when state changes.
+- Summarize CI/reviewer findings, current head/base, and merge state.
+- Run read-only branch checks and parse test, smoke, incident, and performance
+  outputs.
+- Do not edit, approve on Sol's behalf, merge, deploy, SSH, or signal processes.
+
+If these tiers are unavailable, preserve the role boundaries with deterministic
+commands and direct Sol work. Do not spend strong-model context on unchanged
+polls.
+
+## Delegation Contract
+
+Every delegated task must state:
+
+- objective and non-goals
+- base SHA and branch/worktree
+- allowed files and ownership boundary
+- forbidden actions, especially merge/SSH/live exchange/process signals
+- required tests and evidence
+- expected return: findings, diff/commit, validation, and residual risk
+
+Parallel work is allowed only for orthogonal PRs. Work that depends on another
+PR must wait until that PR is merged to `v8`. Sol reviews every delegated diff
+before push or merge.
+
+## Current State And History
+
+- `live_logging_overhaul_current_status.md` is the compact operational source
+  for the active PR, review gate, deployed SHA, VPS state, and next action.
+- `live_logging_overhaul_progress.md` is append-only historical evidence. Do not
+  load or rewrite the entire ledger during routine polls.
+- Update the compact status whenever the active PR, head SHA, gate, deploy
+  state, or next action changes.
+- Append one compact historical entry after merge/deploy. Archive older ledger
+  sections in a separate docs-only slice when size materially impairs use.
 
 ## PR Scope
 
-- Prefer review-worthy slices over progress-only PRs.
-- Keep each PR tied to one behavior/tooling/docs purpose and one validation
-  story.
-- Split PRs for behavior, restart/deploy behavior, exchange contact, HSL/risk,
-  Rust extension behavior, and read-only report/tooling changes.
-- Start dependent work only after its dependency is merged to `v8`; parallel PRs
-  should be orthogonal.
+- Prefer one coherent behavior/tooling/docs purpose and one validation story.
+- Combine adjacent low-risk report or query fields when they share the same
+  producer, consumer, and test surface.
+- Avoid progress-only PRs and excessively small projection PRs.
+- Split changes at safety boundaries: trading behavior, exchange contact,
+  Rust/PyO3, HSL/risk, sink/backpressure, raw retention, restart behavior, and
+  read-only tooling.
+- Keep dependent work serial. Use parallel PRs only when they are truly
+  orthogonal and merge-order independent.
+
+Use a draft PR while implementation or author validation is incomplete. Mark it
+ready only after the branch is clean, the PR body is accurate, and required
+author tests pass.
 
 ## PR Body Contract
 
-Every implementation PR should state:
+State:
 
-- scope category: `read-only tooling`, `observability producer`, `runtime behavior`,
-  `restart/deploy behavior`, or `trading-path`
+- scope category: `docs`, `read-only tooling`, `observability producer`,
+  `runtime behavior`, `restart/deploy behavior`, or `trading-path`
+- touched surfaces and explicit non-goals
 - expected behavior impact
-- expected VPS action: no restart, restart required, or observe only
+- expected VPS action: none, pull/observe, or restart/smoke
 - validation commands and results
-- reviewer-specific notes for subtle contracts
+- reviewer focus requests and known residual risk
 
 ## Review Gate
 
-- Merge only after current-head green reviews from required reviewers and green
-  CI.
-- If the PR head changes after a review, require delta re-review for the new
-  head before merging.
-- For low-risk read-only tooling/docs PRs, use a degraded gate only when a
-  reviewer is unavailable and the PR explicitly justifies that choice.
+- Merge only after every currently required reviewer and CI are green on the
+  exact current head SHA.
+- Prefer formal GitHub reviews or commit-bound checks. If GitHub forbids
+  self-approval, accept a structured comment only when it names the reviewer,
+  verdict, and exact head SHA.
+- A head change invalidates prior approval unless the reviewer explicitly
+  carries it to the new head after delta/integrated review.
+- Findings from optional reviewers still require verification and resolution.
+- Use a degraded gate only with explicit maintainer authorization and record it
+  in the PR and historical evidence.
 
-## Reviewer Output Contract
+## Cost-Aware Waiting
 
-Ask reviewers to post one top-level PR review/comment with:
-
-- findings first, ordered by severity
-- exact file/line references for actionable findings
-- commands run and evidence observed
-- explicit approval/green-light when clean
-- residual risk or untested surface
-
-Reviewer focus areas:
-
-- architecture and intent alignment
-- trading-critical safety and error-contract compliance
-- Rust/Python ownership boundaries
-- statelessness and restart reproducibility
-- tests that prove the claimed behavior
-- operator usefulness in smoke, incident-bundle, debug-profile, and VPS workflows
-- VPS deploy implications and whether restart/smoke evidence is sufficient
+- Use deterministic metadata polling and a compact state digest as defined in
+  `docs/ai/pr_auto_review_loop.md`.
+- Poll every minute only when the scheduler computes the digest without a model
+  and wakes an agent only after a change. If every heartbeat consumes model
+  context, use at least ten minutes; pending CI/reviews do not justify faster
+  model wakeups.
+- Wake Sol only for a new PR/head, a reviewer finding, a completed gate, a
+  persistent blocker, or a deploy decision.
+- Transient GitHub, network, rate-limit, or tool errors back off and retry; they
+  do not end the goal.
 
 ## Implementation Loop
 
-1. Fetch current `origin/v8` and inspect open PRs/branches.
-2. Reconcile `docs/plans/live_logging_overhaul_progress.md` against GitHub and
-   VPS state before choosing the next slice.
-3. Create a clean branch/worktree for the chosen slice when the main checkout is
-   dirty.
-4. Implement the narrow slice, update tests, and update progress docs only when
-   the PR includes a real review-worthy code/tool/docs change.
-5. Run targeted validation, `git diff --check`, and broader/fake-live/VPS tests
-   when relevant.
-6. Open the PR with the body contract above.
-7. Wait for reviewer and CI feedback.
-8. Apply narrow fixes for findings, push, and wait for delta re-review.
-9. Merge only after the gate is satisfied.
-10. Pull `v8` locally. Deploy to VPS5 according to the PR's declared deploy
-    impact, restart bots only when the change requires running processes to load
-    new code, and run bounded smoke/incident checks.
-11. Record compact evidence in the progress ledger: PR, scope, validation,
-    review gate, merge SHA, VPS action, smoke result, and remaining gap.
+1. Read the compact current-status file and fetch current `origin/v8`.
+2. Reconcile the active PR/head/gate from GitHub. Read historical progress only
+   when evidence is needed.
+3. Select one review-worthy slice. Route routine scoped work to Terra when
+   available; keep high-risk work with Sol.
+4. Create a clean branch/worktree. Preserve unrelated tracked and untracked
+   artifacts in the main checkout and on VPS5.
+5. Implement and validate proportionally. Use real fake-live, backtest, or
+   optimize smokes when touched behavior warrants them.
+6. Open a draft PR if work remains; otherwise open ready with the PR body
+   contract.
+7. Let Luna/deterministic polling monitor GitHub. Sol does not wait in a
+   high-cost semantic loop.
+8. Verify every finding against the current branch. Apply the narrow fix,
+   rerun affected tests, push, and require current-head delta review.
+9. Re-fetch `origin/v8`, verify mergeability, gate SHAs, and CI immediately
+   before merge.
+10. Merge only after the gate is satisfied. Update local state.
+11. Deploy according to the declared impact. Sol retains control of actual VPS
+    signals/restarts; read-only preflight and output parsing may be delegated.
+12. Run immediate and settled bounded smoke checks and leave expected bots
+    running.
+13. Update compact status, then append concise merge/deploy evidence to the
+    historical ledger.
 
 ## VPS Policy
 
+- Docs-only changes require no VPS action.
 - Read-only tooling/report changes usually require pull plus bounded smoke, not
   bot restart.
-- Producer/event payload changes require restart and observation.
-- Runtime behavior, exchange contact, order/risk, and Rust changes require
-  restart and observation.
-- For Rust-touching deploys, rebuild and verify the extension before restarting.
-- VPS actions must be explicit and evidence-driven; do not perform broad process
-  kills or live-bot actions outside the declared deploy plan.
+- Producer/event payload, console/text projection, startup/shutdown, live-loop,
+  Rust, exchange-call, and trading-path changes normally require restart and
+  observation.
+- For Rust changes, rebuild and verify the extension before restart.
+- Use exact verified process/session targets. Do not use broad process-pattern
+  signals.
+- Preserve known tracked edits and all local configs, logs, monitor data,
+  reports, and temporary artifacts.
+
+## Goal Health
+
+- Keep the active goal objective short and point it to this workflow plus the
+  compact status file.
+- Do not mark the goal blocked for a single approval, network, quota, or tool
+  failure. Back off and continue with available read-only work.
+- Mark blocked only after the same persistent condition repeats and no useful
+  progress remains possible under the goal policy.
