@@ -124,7 +124,8 @@ Full scans verify cache chunk checksums and write raw event/cluster CSVs plus
 discovery does not need to be repeated; this fast path cannot find crashes in newly downloaded
 candles.
 When a sibling `scanned_ranges.csv` is present, suite generation drops coins whose cached data range
-does not overlap the generated scenario date window.
+does not overlap the generated scenario date window. A targeted scenario is omitted if no coins
+remain, rather than inheriting the suite's base coin universe.
 
 ```shell
 passivbot tool crash-finder \

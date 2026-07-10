@@ -617,11 +617,13 @@ def _merge_overlapping_scenario_specs(scenario_specs: Sequence[dict[str, Any]]) 
         current = merged[-1]
         current["end_dt"] = max(current["end_dt"], spec["end_dt"])
         current["coins"] = sorted(dict.fromkeys([*current["coins"], *spec["coins"]]))
-        current["force_coins"] = sorted(
-            dict.fromkeys([*current["force_coins"], *spec["force_coins"]])
-        )
         current["exchanges"] = sorted(dict.fromkeys([*current["exchanges"], *spec["exchanges"]]))
         current["market_wide"] = bool(current["market_wide"] or spec["market_wide"])
+        current["force_coins"] = (
+            []
+            if current["market_wide"]
+            else sorted(dict.fromkeys([*current["force_coins"], *spec["force_coins"]]))
+        )
         current["labels"].append(spec["label"])
         if spec["severity"] < current["severity"]:
             current["severity"] = spec["severity"]
@@ -646,7 +648,16 @@ def _scenario_spec_to_payload_items(
         exchanges=spec["exchanges"],
         coin_data_ranges=coin_data_ranges,
     )
-    force_coins = [coin for coin in spec["force_coins"] if coin in coins]
+    if spec["coins"] and not coins:
+        logging.warning(
+            "[crash-finder] omitted targeted scenario %s because none of its coins overlap the "
+            "scenario data window",
+            label,
+        )
+        return []
+    force_coins = (
+        [] if spec["market_wide"] else [coin for coin in spec["force_coins"] if coin in coins]
+    )
     force_groups = _force_coin_groups(force_coins, force_normal=force_normal)
     if not force_groups:
         return [
@@ -719,7 +730,7 @@ def _filter_coins_with_data(
         if any(
             item.coin == coin
             and (not exchange_filter or item.exchange in exchange_filter)
-            and item.first_ts < end_ms
+            and item.first_ts <= end_ms
             and item.last_ts >= start_ms
             for item in coin_data_ranges
         ):

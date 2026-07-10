@@ -255,7 +255,7 @@ def test_crash_finder_skips_symbol_with_missing_checksum(tmp_path):
     assert (out_dir / "scan_errors.csv").exists()
 
 
-def test_suite_builder_merges_overlaps_and_forces_normal():
+def test_suite_builder_merged_market_wide_scenario_suppresses_forced_normal():
     market_ts = int(datetime(2025, 10, 10, 21, tzinfo=UTC).timestamp() * 1000)
     coin_ts = int(datetime(2025, 9, 29, 17, tzinfo=UTC).timestamp() * 1000)
     clusters = [
@@ -310,10 +310,7 @@ def test_suite_builder_merges_overlaps_and_forces_normal():
     assert scenario["start_date"] == "2025-09-15"
     assert scenario["end_date"] == "2025-12-09"
     assert scenario["coins"] == ["BTC", "DEXE", "M", "OM"]
-    assert sorted(scenario["overrides"]["coin_overrides"]) == ["DEXE", "M"]
-    assert scenario["overrides"]["coin_overrides"]["M"] == {
-        "live": {"forced_mode_long": "normal"}
-    }
+    assert "overrides" not in scenario
 
 
 def test_suite_builder_can_filter_market_wide_clusters():
@@ -461,6 +458,127 @@ def test_suite_builder_filters_coins_without_data_in_scenario_window():
     scenario = payload["backtest"]["scenarios"][0]
     assert scenario["coins"] == ["M"]
     assert sorted(scenario["overrides"]["coin_overrides"]) == ["M"]
+
+
+def test_suite_builder_skips_targeted_scenario_when_all_coins_are_filtered(caplog):
+    event_ts = int(datetime(2026, 6, 25, tzinfo=UTC).timestamp() * 1000)
+    cluster = crash_finder.CrashCluster(
+        label="crash_2026_06_25_00_legacy",
+        timestamp=event_ts,
+        timestamp_iso="2026-06-25T00:00:00Z",
+        start_ts=event_ts,
+        end_ts=event_ts,
+        start_iso="2026-06-25T00:00:00Z",
+        end_iso="2026-06-25T00:00:00Z",
+        severity=-1.0,
+        event_count=1,
+        affected_coin_count=1,
+        affected_coins=["LEGACY"],
+        exchanges=["binance"],
+        market_wide=False,
+    )
+
+    with caplog.at_level(logging.WARNING):
+        payload = crash_finder.build_suite_payload(
+            [cluster],
+            pre_days=14,
+            post_days=60,
+            top_clusters=0,
+            coin_mode="affected",
+            scenario_kind="coin-focused",
+            force_normal="both",
+            merge_overlaps=False,
+            all_scanned_coins=[],
+            coin_data_ranges=[
+                crash_finder.CoinDataRange(
+                    exchange="binance",
+                    coin="LEGACY",
+                    first_ts=int(datetime(2025, 1, 1, tzinfo=UTC).timestamp() * 1000),
+                    last_ts=int(datetime(2025, 2, 1, tzinfo=UTC).timestamp() * 1000),
+                )
+            ],
+        )
+
+    assert payload["backtest"]["scenarios"] == []
+    assert "omitted targeted scenario crash_2026_06_25_00_legacy" in caplog.text
+
+
+def test_suite_builder_none_coin_mode_keeps_inherit_base_scenario():
+    event_ts = int(datetime(2026, 6, 25, tzinfo=UTC).timestamp() * 1000)
+    cluster = crash_finder.CrashCluster(
+        label="crash_2026_06_25_00_m",
+        timestamp=event_ts,
+        timestamp_iso="2026-06-25T00:00:00Z",
+        start_ts=event_ts,
+        end_ts=event_ts,
+        start_iso="2026-06-25T00:00:00Z",
+        end_iso="2026-06-25T00:00:00Z",
+        severity=-1.0,
+        event_count=1,
+        affected_coin_count=1,
+        affected_coins=["M"],
+        exchanges=["binance"],
+        market_wide=False,
+    )
+
+    payload = crash_finder.build_suite_payload(
+        [cluster],
+        pre_days=14,
+        post_days=60,
+        top_clusters=0,
+        coin_mode="none",
+        scenario_kind="coin-focused",
+        force_normal="both",
+        merge_overlaps=False,
+        all_scanned_coins=[],
+        coin_data_ranges=[],
+    )
+
+    scenario = payload["backtest"]["scenarios"][0]
+    assert "coins" not in scenario
+    assert "overrides" not in scenario
+
+
+def test_suite_builder_includes_coin_with_data_exactly_on_end_date():
+    event_ts = int(datetime(2026, 6, 25, tzinfo=UTC).timestamp() * 1000)
+    end_ts = int(datetime(2026, 8, 24, tzinfo=UTC).timestamp() * 1000)
+    cluster = crash_finder.CrashCluster(
+        label="crash_2026_06_25_00_end",
+        timestamp=event_ts,
+        timestamp_iso="2026-06-25T00:00:00Z",
+        start_ts=event_ts,
+        end_ts=event_ts,
+        start_iso="2026-06-25T00:00:00Z",
+        end_iso="2026-06-25T00:00:00Z",
+        severity=-1.0,
+        event_count=1,
+        affected_coin_count=1,
+        affected_coins=["END"],
+        exchanges=["binance"],
+        market_wide=False,
+    )
+
+    payload = crash_finder.build_suite_payload(
+        [cluster],
+        pre_days=14,
+        post_days=60,
+        top_clusters=0,
+        coin_mode="affected",
+        scenario_kind="coin-focused",
+        force_normal="none",
+        merge_overlaps=False,
+        all_scanned_coins=[],
+        coin_data_ranges=[
+            crash_finder.CoinDataRange(
+                exchange="binance",
+                coin="END",
+                first_ts=end_ts,
+                last_ts=end_ts,
+            )
+        ],
+    )
+
+    assert payload["backtest"]["scenarios"][0]["coins"] == ["END"]
 
 
 def test_clusters_csv_fast_path_copies_source_scan_artifacts(tmp_path):

@@ -129,6 +129,8 @@ data does not overlap a scenario window and copies the other scan artifacts when
   emit repeated scenarios for the same window with force targets split into groups of at most two.
 - A scenario coin must have cached data overlapping that scenario's date range on at least one of
   the scenario's exchanges.
+- If data filtering removes every targeted coin, omit that scenario. Never remove the `coins` key
+  and accidentally broaden a targeted scenario to the suite's base coin universe.
 - Merge scenarios when their 14-day lead-up and 60-day fallout ranges overlap. Preserve the union of
   eligible coins and exchanges, the outer date range, and the worst-severity label.
 - Keep separate all, market-wide, coin-focused, and strict single-coin suite files when
