@@ -542,6 +542,31 @@ pub fn hsl_no_restart_triggered(
 }
 
 #[pyfunction]
+#[pyo3(signature = (*, balance, n_positions, peak_realized, last_realized, current_upnl))]
+pub fn hsl_coin_drawdown_signal(
+    py: Python<'_>,
+    balance: f64,
+    n_positions: usize,
+    peak_realized: f64,
+    last_realized: f64,
+    current_upnl: f64,
+) -> PyResult<Py<PyDict>> {
+    let result = ehsl::coin_drawdown_signal(
+        balance,
+        n_positions,
+        peak_realized,
+        last_realized,
+        current_upnl,
+    )
+    .map_err(PyValueError::new_err)?;
+    let out = PyDict::new_bound(py);
+    out.set_item("slot_budget", result.slot_budget)?;
+    out.set_item("drawdown_usd", result.drawdown_usd)?;
+    out.set_item("drawdown_raw", result.drawdown_raw)?;
+    Ok(out.unbind())
+}
+
+#[pyfunction]
 #[pyo3(signature = (
     *,
     restart_after_red_policy,

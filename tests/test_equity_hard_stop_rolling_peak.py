@@ -12,6 +12,26 @@ pbr_is_stub = bool(getattr(pbr, "__is_stub__", False)) if pbr is not None else F
     pbr is None or pbr_is_stub,
     reason="passivbot_rust extension not available",
 )
+def test_coin_drawdown_signal_binding_uses_caller_supplied_slot_count():
+    out = pbr.hsl_coin_drawdown_signal(
+        balance=100.0,
+        n_positions=4,
+        peak_realized=2.0,
+        last_realized=-1.0,
+        current_upnl=-2.5,
+    )
+
+    assert out == {
+        "slot_budget": pytest.approx(25.0),
+        "drawdown_usd": pytest.approx(5.5),
+        "drawdown_raw": pytest.approx(0.22),
+    }
+
+
+@pytest.mark.skipif(
+    pbr is None or pbr_is_stub,
+    reason="passivbot_rust extension not available",
+)
 def test_red_episode_finalization_binding_returns_explicit_disposition():
     out = pbr.hsl_red_episode_finalization(
         restart_after_red_policy="threshold",

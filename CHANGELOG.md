@@ -4,6 +4,11 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Coin-mode HSL drawdown normalization now uses one Rust-owned live/backtest
+  contract: account balance divided by the applicable slot count. TWEL still
+  enables the side but no longer scales the HSL denominator, so increasing an
+  exposure allowance cannot silently weaken the configured RED threshold.
+
 - HSL RED episode finalization now uses one Rust-owned live/backtest contract
   for caller-supplied persistent no-restart peaks, restart policy, and cooldown
   deadlines. Coin-mode live restart now retains that no-restart peak like

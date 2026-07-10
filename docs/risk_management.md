@@ -280,10 +280,11 @@ This stateless contract has important operational consequences:
    realized-loss gating, and auto-unstuck allowance. Shortening it reduces
    historical memory; lengthening it can expose older drawdown or cooldown
    events.
-5. Changing HSL thresholds, signal mode, `n_positions`, TWEL, or lookback
-   settings can retroactively change reconstructed RED, cooldown, and
-   no-restart decisions. Review those changes as risk-policy changes, not just
-   parameter tuning.
+5. Changing HSL thresholds, signal mode, `n_positions`, TWEL activation
+   (zero/non-zero), or lookback settings can retroactively change reconstructed
+   RED, cooldown, and no-restart decisions. Positive TWEL magnitude does not
+   scale coin-HSL sensitivity. Review these changes as risk-policy changes, not
+   just parameter tuning.
 6. If HSL replay data is missing or incomplete, the bot should fail or defer
    visibly rather than substituting a safe-looking neutral drawdown.
 

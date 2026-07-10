@@ -19,21 +19,22 @@ Last updated: 2026-07-10.
 
 Current `origin/v8` head:
 
-- `f5395dda` after PR #1173, `Emit bounded forager eligibility events`.
+- `61fbd0eb` after PR #1174, `Centralize HSL episode finalization in Rust`.
 
 Current logging-overhaul head:
 
-- `f5395dda` after PR #1173, `Emit bounded forager eligibility events`
+- `61fbd0eb` after PR #1174, `Centralize HSL episode finalization in Rust`
   (latest merged logging-overhaul slice).
 
 Current work:
 
-- Branch `codex/v8-hsl-startup-transition-contract` centralizes post-RED
-  episode finalization in a pure Rust transition used by backtest and Python
-  live/history replay. It owns caller-supplied persistent no-restart peak/
-  drawdown evaluation, policy, disposition, and exact cooldown deadline;
-  coin live restart retains that peak like pside/backtest. Trigger math, history proof,
-  replay scheduling, exchange I/O, and order supervision are unchanged.
+- Branch `codex/v8-hsl-coin-denominator-parity` moves coin-HSL slot-budget and
+  raw-drawdown math into one Rust primitive used by backtest and Python
+  live/history replay. TWEL remains an activation/validation input but no
+  longer scales HSL sensitivity; dynamic effective slot count remains an
+  intentional backtest-only input. Rust `209/209`, default-feature test
+  compilation, focused Python `139/139`, fake-live `29/29`, a real Binance BTC
+  backtest, and a pymoo optimizer smoke pass.
 
 Current review gate:
 
@@ -64,6 +65,19 @@ Retuned goal boundary:
 
 VPS5 deployment status:
 
+- PR #1174 merged to `v8` as `61fbd0eb` after exact-head Hermes and Grok 4.5
+  green reviews plus green CI. VPS5 backed up the known Rust formatting patch,
+  pulled with autostash, and verified the patch was already fully represented
+  in merged `HEAD` before resolving the redundant conflict to a clean tracked
+  tree; both patch backup and autostash remain available. The release extension
+  was rebuilt and its loaded source stamp matched current Rust sources. All
+  five bots stopped after two exact-pane Ctrl-C grace windows, with no SIGTERM,
+  and restarted from `/root/bots_vps5.yaml`. Immediate, settled, and fresh
+  smoke reports returned `ok=true`, `hard_failures=0`, all five bots matched,
+  zero account-critical/fill-refresh failures, and zero text-log hard/attention
+  matches. One non-hard Hyperliquid candle rate-limit event in the settled
+  window cleared in the fresh window; four coin-HSL replays remained active,
+  non-stale, not long-running, and making progress.
 - PR #1173 merged to `v8` as `f5395dda` after exact-head Hermes and Grok 4.5
   approvals plus green CI. VPS5 pulled with autostash, preserving the known
   tracked Rust edit and local artifacts, then all five bots restarted from

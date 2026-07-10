@@ -4783,26 +4783,25 @@ impl<'a> Backtest<'a> {
         }
         let (peak_realized, last_realized) = self.effective_coin_pnl_cumsum(k, idx, pside);
         let current_upnl = self.unrealized_pnl_coin_pside(idx, pside, k)?;
-        let drawdown_usd = (peak_realized - (last_realized + current_upnl)).max(0.0);
-        let slot_budget =
-            self.balance.usd_total_balance * total_wallet_exposure_limit / n_positions as f64;
-        if !slot_budget.is_finite() || slot_budget <= 0.0 {
-            return Err(format!(
-                "invalid coin HSL slot budget at k {} coin {} pside {}: balance={} twel={} n_positions={}",
-                k,
-                idx,
-                pside,
-                self.balance.usd_total_balance,
-                total_wallet_exposure_limit,
-                n_positions
-            ));
-        }
-        Ok((
-            drawdown_usd / slot_budget.max(f64::EPSILON),
+        let signal = ehsl::coin_drawdown_signal(
+            self.balance.usd_total_balance,
+            n_positions,
             peak_realized,
             last_realized,
             current_upnl,
-            slot_budget,
+        )
+        .map_err(|e| {
+            format!(
+                "invalid coin HSL drawdown signal at k {} coin {} pside {}: {}",
+                k, idx, pside, e
+            )
+        })?;
+        Ok((
+            signal.drawdown_raw,
+            peak_realized,
+            last_realized,
+            current_upnl,
+            signal.slot_budget,
         ))
     }
 
@@ -7547,8 +7546,9 @@ mod tests {
         };
         bt.balance.usd_total_balance = 100.0;
 
-        // slot budget = balance * TWEL / n_positions = 100 * 4 / 4 = 100;
-        // RED at drawdown >= 50.
+        // HSL slot budget = balance / configured n_positions = 100 / 4 = 25;
+        // TWEL is intentionally not part of HSL sensitivity. RED at drawdown
+        // >= 12.5.
         bt.record_coin_rolling_pnl(0, 0, LONG, 0.0);
         bt.equities.timestamps_ms.push(0);
         bt.equities.usd_total_equity.push(100.0);
@@ -7590,15 +7590,17 @@ mod tests {
     }
 
     #[test]
-    fn hard_stop_coin_signal_uses_static_configured_slot_budget() {
+    fn hard_stop_coin_signal_uses_configured_slot_budget() {
         let hlcvs = Array3::from_shape_vec((2, 2, 4), vec![100.0; 2 * 2 * 4]).unwrap();
         let btc_usd_prices = Array1::from_vec(vec![20_000.0, 20_000.0]);
 
         let make_bp = || {
             let mut bp_pair = BotParamsPair::default();
             bp_pair.long.n_positions = 4;
-            bp_pair.long.total_wallet_exposure_limit = 4.0;
-            bp_pair.long.wallet_exposure_limit = 1.0;
+            // A non-unit TWEL makes this a regression pin: HSL still uses
+            // balance / n_positions, not balance * TWEL / n_positions.
+            bp_pair.long.total_wallet_exposure_limit = 0.5;
+            bp_pair.long.wallet_exposure_limit = 0.125;
             bp_pair.long.ema_span_0 = 10.0;
             bp_pair.long.ema_span_1 = 20.0;
             bp_pair.long.hsl_enabled = true;
@@ -7671,7 +7673,17 @@ mod tests {
         assert_eq!(bt.hard_stop_coin[LONG][0].tier, ehsl::HardStopTier::Red);
         assert_eq!(bt.hard_stop_coin[LONG][1].tier, ehsl::HardStopTier::Green);
         assert_eq!(bt.hard_stop_drawdown_samples_pside[LONG].len(), 2);
-        assert!((bt.hard_stop_drawdown_samples_pside[LONG][1] - 0.8).abs() < 1e-12);
+        // Runtime projection floors synthetic equity at epsilon, so exported
+        // HSL drawdown_raw saturates at approximately 1.0.
+        assert!((bt.hard_stop_drawdown_samples_pside[LONG][1] - 1.0).abs() < 1e-12);
+
+        for twel in [1.0, 4.0] {
+            bt.bot_params_master.long.total_wallet_exposure_limit = twel;
+            let (drawdown_raw, _, _, _, slot_budget) =
+                bt.hard_stop_coin_drawdown_ratio(1, 0, LONG).unwrap();
+            assert!((slot_budget - 25.0).abs() < 1e-12);
+            assert!((drawdown_raw - 3.2).abs() < 1e-12);
+        }
 
         bt.hard_stop_coin[LONG][0].panic_close_event_start_equity_usd = Some(100.0);
         bt.hard_stop_coin[LONG][0].panic_close_event_loss_usd = 10.0;
@@ -7691,7 +7703,7 @@ mod tests {
     }
 
     #[test]
-    fn hard_stop_coin_signal_uses_dynamic_effective_slot_budget_when_enabled() {
+    fn hard_stop_coin_signal_uses_dynamic_slots_without_twel_scaling() {
         let hlcvs = Array3::from_shape_vec((2, 2, 4), vec![100.0; 2 * 2 * 4]).unwrap();
         let btc_usd_prices = Array1::from_vec(vec![20_000.0, 20_000.0]);
 
@@ -7770,9 +7782,12 @@ mod tests {
         bt.record_hard_stop_coin_drawdown_sample(LONG);
 
         assert_eq!(bt.effective_n_positions.long, 2);
-        assert_eq!(bt.hard_stop_coin[LONG][0].tier, ehsl::HardStopTier::Orange);
+        assert_eq!(bt.configured_n_positions.long, 4);
+        assert_eq!(bt.hard_stop_coin[LONG][0].tier, ehsl::HardStopTier::Red);
         assert_eq!(bt.hard_stop_drawdown_samples_pside[LONG].len(), 2);
-        assert!((bt.hard_stop_drawdown_samples_pside[LONG][1] - 0.4).abs() < 1e-12);
+        // Dynamic availability selects two slots, but TWEL=4.0 does not scale
+        // the HSL denominator: 80 / (100 / 2) = 1.6.
+        assert!((bt.hard_stop_drawdown_samples_pside[LONG][1] - 1.0).abs() < 1e-12);
     }
 
     #[test]
@@ -8186,7 +8201,7 @@ mod tests {
             vec![0, 60_000]
         );
         assert_eq!(bt.hard_stop_drawdown_samples_pside[LONG].len(), 2);
-        assert!((bt.hard_stop_drawdown_samples_pside[LONG][1] - 0.8).abs() < 1e-12);
+        assert!((bt.hard_stop_drawdown_samples_pside[LONG][1] - 1.0).abs() < 1e-12);
     }
 
     #[test]

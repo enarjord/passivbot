@@ -876,6 +876,10 @@ Each slice should update this checklist with its result.
      Independent preflight also found an existing coin-mode slot-budget
      denominator mismatch between live and backtest; reconcile that in a
      focused parity PR before relying on held-pair equivalence.
+   - Status: the dependent parity branch now centralizes coin slot-budget and
+     raw-drawdown math in Rust for live/replay and backtest. TWEL remains an
+     activation/validation input, while configured live slots and intentional
+     dynamic backtest slots remain caller-owned inputs.
 
 4. [ ] Full replay lower-complexity slice.
    - Replace avoidable nested scans and repeated fill/timeline work with exact
