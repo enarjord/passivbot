@@ -111,6 +111,64 @@ passivbot tool iterative-history-plot backtests/.../fills.csv
 - `passivbot tool candle-doctor` – Audits legacy `caches/ohlcv/...` shards for corruption, stale index entries, and legacy-format issues; add `--fix` to apply automatic repairs before importing into the v2 store.
 - `passivbot tool migrate-historical-data` – Converts legacy `historical_data/ohlcvs_<exchange>/...` shards into the current `caches/ohlcv/...` layout.
 
+## Crash finder
+
+`passivbot tool crash-finder` builds larger discovery candles from local v2 1m OHLCV data and
+scans them for severe crash windows. The discovery timeframe is parameterized with `--timeframe`
+and defaults to `1h`; `4h` and `12h` are useful alternatives for slower market-wide moves. The
+scanner groups valid source rows once, while retaining their order inside each candle so a low
+before a later high is not misclassified as a crash.
+
+Full scans verify cache chunk checksums and write raw event/cluster CSVs plus
+`backtest.scenarios` suites. Use `--clusters-csv` only to regenerate suites cheaply when event
+discovery does not need to be repeated; this fast path cannot find crashes in newly downloaded
+candles.
+When a sibling `scanned_ranges.csv` is present, suite generation drops coins whose cached data range
+does not overlap the generated scenario date window. A targeted scenario is omitted if no coins
+remain, rather than inheriting the suite's base coin universe.
+
+```shell
+passivbot tool crash-finder \
+  --root caches/ohlcvs \
+  --exchange binance \
+  --exchange bybit \
+  --source-timeframe 1m \
+  --timeframe 1h \
+  --threshold -0.10 \
+  --pre-days 14 \
+  --post-days 60 \
+  --scenario-force-normal both \
+  --scenario-merge-overlaps \
+  --write-filtered-suites \
+  --output-dir crash_finder_results/$(date +%F)_crash_scenarios
+
+passivbot tool crash-finder \
+  --clusters-csv crash_finder_results/crash_clusters.csv \
+  --pre-days 14 \
+  --post-days 60 \
+  --scenario-force-normal both \
+  --scenario-merge-overlaps \
+  --write-filtered-suites \
+  --output-dir crash_finder_results/$(date +%F)_crash_scenarios
+```
+
+Useful suite controls:
+
+- `--scenario-kind market-wide` keeps broad market crashes only.
+- `--scenario-kind coin-focused` keeps non-market-wide crashes, including isolated multi-coin
+  clusters such as a DEXE/M event.
+- `--scenario-kind single-coin` keeps strict one-coin crashes only.
+- `--write-filtered-suites` writes all three filtered suites alongside the main suite.
+- `--scenario-force-normal long|short|both` emits per-coin `forced_mode_* = "normal"` overrides
+  only for idiosyncratic non-market-wide crash coins. Market-wide scenario coins are not forced.
+  If a merged scenario would contain more than two forced coins, the tool splits it into repeated
+  scenario windows with at most two forced coins per scenario.
+- `--scenario-merge-overlaps` merges scenarios whose generated date windows overlap, preserving
+  the earliest start, latest end, union of coins, and worst-severity label.
+
+See `docs/ai/crash_suite_generator.md` for the complete discovery, download, generation, and
+validation workflow.
+
 ## Fill Events Tooling
 
 `passivbot tool fill-events-dash` launches a Dash UI for inspecting cached fill-event history,

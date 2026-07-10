@@ -5,6 +5,8 @@ import csv
 import hashlib
 import json
 import logging
+import re
+import shutil
 import sqlite3
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime, timedelta
@@ -53,7 +55,8 @@ class ScannedRange:
     first_iso: str
     last_iso: str
     valid_rows: int
-    hours_scanned: int
+    scan_timeframe: str
+    buckets_scanned: int
     events_found: int
 
 
@@ -75,14 +78,15 @@ class CrashEvent:
     exchange: str
     symbol: str
     coin: str
+    timeframe: str
     timestamp: int
     timestamp_iso: str
     valid_minutes: int
     range_log: float
     ordered_high_to_later_low_log: float
     prev_close_low_log: float | None
-    hour_high: float
-    hour_low: float
+    bucket_high: float
+    bucket_low: float
     previous_close: float | None
 
 
@@ -103,6 +107,14 @@ class CrashCluster:
     market_wide: bool
 
 
+@dataclass(frozen=True)
+class CoinDataRange:
+    exchange: str
+    coin: str
+    first_ts: int
+    last_ts: int
+
+
 def _ts_to_iso(ts_ms: int) -> str:
     return datetime.fromtimestamp(int(ts_ms) / 1000, tz=UTC).isoformat().replace("+00:00", "Z")
 
@@ -120,7 +132,7 @@ def _connect(db_path: Path) -> sqlite3.Connection:
 def load_symbol_ranges(
     root: Path,
     *,
-    exchange: str | None,
+    exchanges: Sequence[str] | None,
     timeframe: str,
     symbols: Sequence[str] | None,
 ) -> list[SymbolRange]:
@@ -129,9 +141,10 @@ def load_symbol_ranges(
         raise FileNotFoundError(f"v2 OHLCV catalog not found: {db_path}")
     filters = ["timeframe = ?", "first_ts IS NOT NULL", "last_ts IS NOT NULL"]
     params: list[Any] = [timeframe]
-    if exchange:
-        filters.append("exchange = ?")
-        params.append(exchange)
+    if exchanges:
+        placeholders = ",".join("?" for _ in exchanges)
+        filters.append(f"exchange IN ({placeholders})")
+        params.extend(exchanges)
     if symbols:
         placeholders = ",".join("?" for _ in symbols)
         filters.append(f"symbol IN ({placeholders})")
@@ -183,6 +196,36 @@ def _worst_ordered_high_to_later_low_log(high: np.ndarray, low: np.ndarray) -> f
     prefix_high = np.maximum.accumulate(high)
     ratios = low / prefix_high
     return float(np.log(np.min(ratios)))
+
+
+def _duration_timeframe_to_ms(timeframe: str) -> int:
+    normalized = str(timeframe).strip().lower()
+    match = re.fullmatch(r"([1-9][0-9]*)([mhd])", normalized)
+    if match is None:
+        raise ValueError(
+            f"unsupported scan timeframe {timeframe!r}; expected a positive duration such as "
+            "1h, 4h, or 12h"
+        )
+    count = int(match.group(1))
+    unit_ms = {"m": 60_000, "h": HOUR_MS, "d": 24 * HOUR_MS}[match.group(2)]
+    return count * unit_ms
+
+
+def _group_valid_rows_by_bucket(
+    timestamps: np.ndarray,
+    usable: np.ndarray,
+    bucket_ms: int,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Return valid row indices and contiguous group metadata in one linear pass."""
+    valid_indices = np.flatnonzero(usable)
+    if len(valid_indices) == 0:
+        empty = np.empty(0, dtype=np.int64)
+        return valid_indices, empty, empty, empty
+    valid_bucket_ids = timestamps[valid_indices] // bucket_ms
+    split_points = np.flatnonzero(np.diff(valid_bucket_ids)) + 1
+    starts = np.concatenate((np.array([0], dtype=np.int64), split_points))
+    ends = np.concatenate((split_points, np.array([len(valid_indices)], dtype=np.int64)))
+    return valid_indices, valid_bucket_ids[starts], starts, ends
 
 
 def _compute_chunk_checksum_readonly(body_path: str, valid_path: str) -> str:
@@ -277,6 +320,8 @@ def scan_symbol(
     symbol_range: SymbolRange,
     *,
     interval_ms: int,
+    scan_timeframe: str,
+    bucket_ms: int,
     min_valid_minutes: int,
     threshold: float,
     rank_metric: str,
@@ -303,35 +348,38 @@ def scan_symbol(
             first_iso=_ts_to_iso(start_ts),
             last_iso=_ts_to_iso(end_ts),
             valid_rows=0,
-            hours_scanned=0,
+            scan_timeframe=scan_timeframe,
+            buckets_scanned=0,
             events_found=0,
         )
         return [], scanned
 
-    hour_ids = data.timestamps // HOUR_MS
-    unique_hours = np.unique(hour_ids[usable])
+    valid_indices, bucket_ids, bucket_starts, bucket_ends = _group_valid_rows_by_bucket(
+        data.timestamps,
+        usable,
+        bucket_ms,
+    )
     events: list[CrashEvent] = []
     prev_close: float | None = None
     coin = symbol_to_coin(symbol_range.symbol, verbose=False)
 
-    for hour_id in unique_hours:
-        hour_mask = usable & (hour_ids == hour_id)
-        indices = np.flatnonzero(hour_mask)
+    for bucket_id, bucket_start, bucket_end in zip(bucket_ids, bucket_starts, bucket_ends):
+        indices = valid_indices[bucket_start:bucket_end]
         if len(indices) < min_valid_minutes:
             if len(indices):
                 prev_close = float(data.values[indices[-1], 2])
             continue
-        hour_values = data.values[indices]
-        high = np.asarray(hour_values[:, 0], dtype=np.float64)
-        low = np.asarray(hour_values[:, 1], dtype=np.float64)
-        close = np.asarray(hour_values[:, 2], dtype=np.float64)
-        hour_high = float(np.max(high))
-        hour_low = float(np.min(low))
-        range_log = float(np.log(hour_low / hour_high))
+        bucket_values = data.values[indices]
+        high = np.asarray(bucket_values[:, 0], dtype=np.float64)
+        low = np.asarray(bucket_values[:, 1], dtype=np.float64)
+        close = np.asarray(bucket_values[:, 2], dtype=np.float64)
+        bucket_high = float(np.max(high))
+        bucket_low = float(np.min(low))
+        range_log = float(np.log(bucket_low / bucket_high))
         ordered_log = _worst_ordered_high_to_later_low_log(high, low)
         prev_close_low_log = None
         if prev_close is not None and np.isfinite(prev_close) and prev_close > 0.0:
-            prev_close_low_log = float(np.log(hour_low / prev_close))
+            prev_close_low_log = float(np.log(bucket_low / prev_close))
         if rank_metric == "range":
             threshold_value = range_log
         elif rank_metric == "prev-close":
@@ -339,20 +387,21 @@ def scan_symbol(
         else:
             threshold_value = ordered_log
         if threshold_value <= threshold:
-            event_ts = int(hour_id * HOUR_MS)
+            event_ts = int(bucket_id * bucket_ms)
             events.append(
                 CrashEvent(
                     exchange=symbol_range.exchange,
                     symbol=symbol_range.symbol,
                     coin=coin,
+                    timeframe=scan_timeframe,
                     timestamp=event_ts,
                     timestamp_iso=_ts_to_iso(event_ts),
                     valid_minutes=int(len(indices)),
                     range_log=range_log,
                     ordered_high_to_later_low_log=ordered_log,
                     prev_close_low_log=prev_close_low_log,
-                    hour_high=hour_high,
-                    hour_low=hour_low,
+                    bucket_high=bucket_high,
+                    bucket_low=bucket_low,
                     previous_close=prev_close,
                 )
             )
@@ -367,7 +416,8 @@ def scan_symbol(
         first_iso=_ts_to_iso(start_ts),
         last_iso=_ts_to_iso(end_ts),
         valid_rows=valid_count,
-        hours_scanned=int(len(unique_hours)),
+        scan_timeframe=scan_timeframe,
+        buckets_scanned=int(len(bucket_ids)),
         events_found=len(events),
     )
     return events, scanned
@@ -482,10 +532,17 @@ def build_suite_payload(
     post_days: int,
     top_clusters: int,
     coin_mode: str,
+    scenario_kind: str,
+    force_normal: str,
+    merge_overlaps: bool,
     all_scanned_coins: Sequence[str],
+    coin_data_ranges: Sequence[CoinDataRange] | None = None,
 ) -> dict[str, Any]:
-    selected = list(clusters[:top_clusters] if top_clusters > 0 else clusters)
-    scenarios = []
+    selected = _filter_clusters_by_scenario_kind(
+        list(clusters[:top_clusters] if top_clusters > 0 else clusters),
+        scenario_kind,
+    )
+    scenario_specs = []
     all_coins = sorted(dict.fromkeys(all_scanned_coins))
     for cluster in selected:
         event_dt = datetime.fromtimestamp(cluster.timestamp / 1000, tz=UTC)
@@ -497,16 +554,30 @@ def build_suite_payload(
             coins = []
         else:
             coins = list(cluster.affected_coins)
-        scenario: dict[str, Any] = {
-            "label": cluster.label,
-            "start_date": start_dt.strftime("%Y-%m-%d"),
-            "end_date": end_dt.strftime("%Y-%m-%d"),
-        }
-        if coins:
-            scenario["coins"] = coins
-        if cluster.exchanges:
-            scenario["exchanges"] = list(cluster.exchanges)
-        scenarios.append(scenario)
+        force_coins = list(cluster.affected_coins) if coins and not cluster.market_wide else []
+        scenario_specs.append(
+            {
+                "label": cluster.label,
+                "start_dt": start_dt,
+                "end_dt": end_dt,
+                "coins": coins,
+                "force_coins": force_coins,
+                "exchanges": list(cluster.exchanges),
+                "severity": cluster.severity,
+                "market_wide": cluster.market_wide,
+            }
+        )
+    if merge_overlaps:
+        scenario_specs = _merge_overlapping_scenario_specs(scenario_specs)
+    scenarios = []
+    for spec in scenario_specs:
+        scenarios.extend(
+            _scenario_spec_to_payload_items(
+                spec,
+                force_normal=force_normal,
+                coin_data_ranges=coin_data_ranges,
+            )
+        )
     return {
         "backtest": {
             "suite_enabled": True,
@@ -514,6 +585,175 @@ def build_suite_payload(
             "aggregate": {"default": "mean"},
         }
     }
+
+
+def _filter_clusters_by_scenario_kind(
+    clusters: Sequence[CrashCluster],
+    scenario_kind: str,
+) -> list[CrashCluster]:
+    if scenario_kind == "all":
+        return list(clusters)
+    if scenario_kind == "market-wide":
+        return [cluster for cluster in clusters if cluster.market_wide]
+    if scenario_kind == "coin-focused":
+        return [cluster for cluster in clusters if not cluster.market_wide]
+    if scenario_kind == "single-coin":
+        return [
+            cluster
+            for cluster in clusters
+            if not cluster.market_wide and cluster.affected_coin_count == 1
+        ]
+    raise ValueError(f"unknown scenario kind: {scenario_kind}")
+
+
+def _merge_overlapping_scenario_specs(scenario_specs: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
+    if not scenario_specs:
+        return []
+    merged: list[dict[str, Any]] = []
+    for spec in sorted(scenario_specs, key=lambda item: (item["start_dt"], item["severity"])):
+        if not merged or spec["start_dt"] > merged[-1]["end_dt"]:
+            merged.append({**spec, "labels": [spec["label"]]})
+            continue
+        current = merged[-1]
+        current["end_dt"] = max(current["end_dt"], spec["end_dt"])
+        current["coins"] = sorted(dict.fromkeys([*current["coins"], *spec["coins"]]))
+        current["exchanges"] = sorted(dict.fromkeys([*current["exchanges"], *spec["exchanges"]]))
+        current["market_wide"] = bool(current["market_wide"] or spec["market_wide"])
+        current["force_coins"] = (
+            []
+            if current["market_wide"]
+            else sorted(dict.fromkeys([*current["force_coins"], *spec["force_coins"]]))
+        )
+        current["labels"].append(spec["label"])
+        if spec["severity"] < current["severity"]:
+            current["severity"] = spec["severity"]
+            current["label"] = spec["label"]
+    return merged
+
+
+def _scenario_spec_to_payload_items(
+    spec: dict[str, Any],
+    *,
+    force_normal: str,
+    coin_data_ranges: Sequence[CoinDataRange] | None = None,
+) -> list[dict[str, Any]]:
+    label = str(spec["label"])
+    labels = spec.get("labels") or [label]
+    if len(labels) > 1:
+        label = f"{label}_combined_{len(labels)}"
+    coins = _filter_coins_with_data(
+        spec["coins"],
+        start_dt=spec["start_dt"],
+        end_dt=spec["end_dt"],
+        exchanges=spec["exchanges"],
+        coin_data_ranges=coin_data_ranges,
+    )
+    if spec["coins"] and not coins:
+        logging.warning(
+            "[crash-finder] omitted targeted scenario %s because none of its coins overlap the "
+            "scenario data window",
+            label,
+        )
+        return []
+    force_coins = (
+        [] if spec["market_wide"] else [coin for coin in spec["force_coins"] if coin in coins]
+    )
+    force_groups = _force_coin_groups(force_coins, force_normal=force_normal)
+    if not force_groups:
+        return [
+            _scenario_payload_item(
+                spec,
+                label=label,
+                coins=coins,
+                force_coins=[],
+                force_normal=force_normal,
+            )
+        ]
+    multiple_groups = len(force_groups) > 1
+    scenarios = []
+    for force_group in force_groups:
+        group_label = label
+        if multiple_groups:
+            suffix = "_".join(_sanitize_label_piece(coin) for coin in force_group)
+            group_label = f"{label}_force_{suffix}"
+        scenarios.append(
+            _scenario_payload_item(
+                spec,
+                label=group_label,
+                coins=coins,
+                force_coins=force_group,
+                force_normal=force_normal,
+            )
+        )
+    return scenarios
+
+
+def _scenario_payload_item(
+    spec: dict[str, Any],
+    *,
+    label: str,
+    coins: Sequence[str],
+    force_coins: Sequence[str],
+    force_normal: str,
+) -> dict[str, Any]:
+    scenario: dict[str, Any] = {
+        "label": label,
+        "start_date": spec["start_dt"].strftime("%Y-%m-%d"),
+        "end_date": spec["end_dt"].strftime("%Y-%m-%d"),
+    }
+    if coins:
+        scenario["coins"] = list(coins)
+    if spec["exchanges"]:
+        scenario["exchanges"] = list(spec["exchanges"])
+    overrides = _forced_normal_overrides(force_coins, force_normal=force_normal)
+    if overrides:
+        scenario["overrides"] = {"coin_overrides": overrides}
+    return scenario
+
+
+def _filter_coins_with_data(
+    coins: Sequence[str],
+    *,
+    start_dt: datetime,
+    end_dt: datetime,
+    exchanges: Sequence[str],
+    coin_data_ranges: Sequence[CoinDataRange] | None,
+) -> list[str]:
+    unique = sorted(dict.fromkeys(coins))
+    if coin_data_ranges is None:
+        return unique
+    start_ms = int(datetime(start_dt.year, start_dt.month, start_dt.day, tzinfo=UTC).timestamp() * 1000)
+    end_ms = int(datetime(end_dt.year, end_dt.month, end_dt.day, tzinfo=UTC).timestamp() * 1000)
+    exchange_filter = set(exchanges)
+    filtered = []
+    for coin in unique:
+        if any(
+            item.coin == coin
+            and (not exchange_filter or item.exchange in exchange_filter)
+            and item.first_ts <= end_ms
+            and item.last_ts >= start_ms
+            for item in coin_data_ranges
+        ):
+            filtered.append(coin)
+    return filtered
+
+
+def _force_coin_groups(coins: Sequence[str], *, force_normal: str) -> list[list[str]]:
+    if force_normal == "none":
+        return []
+    unique = sorted(dict.fromkeys(coins))
+    return [unique[idx : idx + 2] for idx in range(0, len(unique), 2)]
+
+
+def _forced_normal_overrides(coins: Sequence[str], *, force_normal: str) -> dict[str, Any]:
+    if force_normal == "none" or not coins:
+        return {}
+    live_payload: dict[str, str] = {}
+    if force_normal in {"long", "both"}:
+        live_payload["forced_mode_long"] = "normal"
+    if force_normal in {"short", "both"}:
+        live_payload["forced_mode_short"] = "normal"
+    return {coin: {"live": dict(live_payload)} for coin in sorted(dict.fromkeys(coins))}
 
 
 def _write_csv(path: Path, rows: Sequence[dict[str, Any]], fieldnames: Sequence[str]) -> None:
@@ -525,6 +765,78 @@ def _write_csv(path: Path, rows: Sequence[dict[str, Any]], fieldnames: Sequence[
             writer.writerow(row)
 
 
+def _parse_csv_list(value: str | None) -> list[str]:
+    if not value:
+        return []
+    return [item.strip() for item in value.split(",") if item.strip()]
+
+
+def _parse_csv_bool(value: str | None) -> bool:
+    return str(value or "").strip().lower() in {"1", "true", "yes"}
+
+
+def load_clusters_csv(path: Path) -> list[CrashCluster]:
+    with path.open("r", newline="", encoding="utf-8") as fh:
+        rows = list(csv.DictReader(fh))
+    clusters = []
+    for row in rows:
+        coins = _parse_csv_list(row.get("affected_coins"))
+        exchanges = _parse_csv_list(row.get("exchanges"))
+        clusters.append(
+            CrashCluster(
+                label=str(row["label"]),
+                timestamp=int(row["timestamp"]),
+                timestamp_iso=str(row["timestamp_iso"]),
+                start_ts=int(row["start_ts"]),
+                end_ts=int(row["end_ts"]),
+                start_iso=str(row["start_iso"]),
+                end_iso=str(row["end_iso"]),
+                severity=float(row["severity"]),
+                event_count=int(row["event_count"]),
+                affected_coin_count=int(row.get("affected_coin_count") or len(coins)),
+                affected_coins=coins,
+                exchanges=exchanges,
+                market_wide=_parse_csv_bool(row.get("market_wide")),
+            )
+        )
+    return sorted(clusters, key=lambda item: (item.severity, item.timestamp))
+
+
+def load_scanned_ranges_csv(path: Path) -> list[ScannedRange]:
+    with path.open("r", newline="", encoding="utf-8") as fh:
+        rows = list(csv.DictReader(fh))
+    scanned = []
+    for row in rows:
+        scanned.append(
+            ScannedRange(
+                exchange=str(row["exchange"]),
+                timeframe=str(row["timeframe"]),
+                symbol=str(row["symbol"]),
+                first_ts=int(row["first_ts"]),
+                last_ts=int(row["last_ts"]),
+                first_iso=str(row["first_iso"]),
+                last_iso=str(row["last_iso"]),
+                valid_rows=int(row["valid_rows"]),
+                scan_timeframe=str(row.get("scan_timeframe") or "1h"),
+                buckets_scanned=int(row.get("buckets_scanned") or row.get("hours_scanned") or 0),
+                events_found=int(row["events_found"]),
+            )
+        )
+    return scanned
+
+
+def coin_data_ranges_from_scanned(scanned: Sequence[ScannedRange]) -> list[CoinDataRange]:
+    return [
+        CoinDataRange(
+            exchange=item.exchange,
+            coin=symbol_to_coin(item.symbol, verbose=False),
+            first_ts=item.first_ts,
+            last_ts=item.last_ts,
+        )
+        for item in scanned
+    ]
+
+
 def write_outputs(
     output_dir: Path,
     *,
@@ -533,6 +845,7 @@ def write_outputs(
     scanned: Sequence[ScannedRange],
     scan_errors: Sequence[ScanError],
     suite_payload: dict[str, Any],
+    extra_suite_payloads: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, str]:
     output_dir.mkdir(parents=True, exist_ok=True)
     event_rows = [asdict(event) for event in events]
@@ -574,36 +887,206 @@ def write_outputs(
     _write_csv(scanned_path, scanned_rows, list(ScannedRange.__dataclass_fields__.keys()))
     _write_csv(scan_errors_path, scan_error_rows, list(ScanError.__dataclass_fields__.keys()))
     suite_path.write_text(json.dumps(suite_payload, indent=2, sort_keys=False) + "\n", encoding="utf-8")
-    return {
+    output_paths = {
         "events_csv": str(events_path),
         "clusters_csv": str(clusters_path),
         "scanned_ranges_csv": str(scanned_path),
         "scan_errors_csv": str(scan_errors_path),
         "suite_hjson": str(suite_path),
     }
+    for suffix, payload in (extra_suite_payloads or {}).items():
+        extra_path = output_dir / f"crash_scenarios_{suffix}.hjson"
+        extra_path.write_text(json.dumps(payload, indent=2, sort_keys=False) + "\n", encoding="utf-8")
+        output_paths[f"suite_{suffix}_hjson"] = str(extra_path)
+    return output_paths
+
+
+def write_cluster_suite_outputs(
+    output_dir: Path,
+    *,
+    clusters_csv: Path,
+    clusters: Sequence[CrashCluster],
+    suite_payload: dict[str, Any],
+    extra_suite_payloads: dict[str, dict[str, Any]] | None = None,
+) -> dict[str, str]:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    cluster_rows = [
+        {
+            **asdict(cluster),
+            "affected_coins": ",".join(cluster.affected_coins),
+            "exchanges": ",".join(cluster.exchanges),
+        }
+        for cluster in clusters
+    ]
+    clusters_path = output_dir / "crash_clusters.csv"
+    suite_path = output_dir / "crash_scenarios.hjson"
+    _write_csv(
+        clusters_path,
+        cluster_rows,
+        [
+            "label",
+            "timestamp",
+            "timestamp_iso",
+            "start_ts",
+            "end_ts",
+            "start_iso",
+            "end_iso",
+            "severity",
+            "event_count",
+            "affected_coin_count",
+            "affected_coins",
+            "exchanges",
+            "market_wide",
+        ],
+    )
+    suite_path.write_text(json.dumps(suite_payload, indent=2, sort_keys=False) + "\n", encoding="utf-8")
+    output_paths = {
+        "clusters_csv": str(clusters_path),
+        "suite_hjson": str(suite_path),
+    }
+    for suffix, payload in (extra_suite_payloads or {}).items():
+        extra_path = output_dir / f"crash_scenarios_{suffix}.hjson"
+        extra_path.write_text(json.dumps(payload, indent=2, sort_keys=False) + "\n", encoding="utf-8")
+        output_paths[f"suite_{suffix}_hjson"] = str(extra_path)
+
+    source_dir = clusters_csv.parent
+    for name, key in [
+        ("crash_events.csv", "events_csv"),
+        ("scanned_ranges.csv", "scanned_ranges_csv"),
+        ("scan_errors.csv", "scan_errors_csv"),
+    ]:
+        source = source_dir / name
+        if not source.exists():
+            continue
+        target = output_dir / name
+        if source.resolve() != target.resolve():
+            shutil.copy2(source, target)
+        output_paths[key] = str(target)
+    return output_paths
+
+
+def _build_suite_payloads_from_clusters(
+    clusters: Sequence[CrashCluster],
+    args: argparse.Namespace,
+    all_scanned_coins: Sequence[str] | None = None,
+    coin_data_ranges: Sequence[CoinDataRange] | None = None,
+) -> tuple[dict[str, Any], dict[str, dict[str, Any]]]:
+    scanned_coins = sorted(
+        dict.fromkeys(
+            all_scanned_coins
+            if all_scanned_coins is not None
+            else [coin for cluster in clusters for coin in cluster.affected_coins]
+        )
+    )
+    suite_payload = build_suite_payload(
+        clusters,
+        pre_days=args.pre_days,
+        post_days=args.post_days,
+        top_clusters=0,
+        coin_mode=args.scenario_coin_mode,
+        scenario_kind=args.scenario_kind,
+        force_normal=args.scenario_force_normal,
+        merge_overlaps=args.scenario_merge_overlaps,
+        all_scanned_coins=scanned_coins,
+        coin_data_ranges=coin_data_ranges,
+    )
+    extra_suite_payloads = {}
+    if args.write_filtered_suites:
+        for kind, suffix in [
+            ("market-wide", "market_wide"),
+            ("coin-focused", "coin_focused"),
+            ("single-coin", "single_coin"),
+        ]:
+            extra_suite_payloads[suffix] = build_suite_payload(
+                clusters,
+                pre_days=args.pre_days,
+                post_days=args.post_days,
+                top_clusters=0,
+                coin_mode=args.scenario_coin_mode,
+                scenario_kind=kind,
+                force_normal=args.scenario_force_normal,
+                merge_overlaps=args.scenario_merge_overlaps,
+                all_scanned_coins=scanned_coins,
+                coin_data_ranges=coin_data_ranges,
+            )
+    return suite_payload, extra_suite_payloads
+
+
+def run_from_clusters_csv(args: argparse.Namespace) -> dict[str, Any]:
+    clusters_csv = Path(args.clusters_csv).expanduser()
+    clusters = load_clusters_csv(clusters_csv)
+    selected_clusters = list(clusters[: args.top_clusters] if args.top_clusters > 0 else clusters)
+    scanned_ranges_path = clusters_csv.parent / "scanned_ranges.csv"
+    scanned_ranges = load_scanned_ranges_csv(scanned_ranges_path) if scanned_ranges_path.exists() else []
+    suite_payload, extra_suite_payloads = _build_suite_payloads_from_clusters(
+        selected_clusters,
+        args,
+        all_scanned_coins=(
+            sorted({symbol_to_coin(item.symbol, verbose=False) for item in scanned_ranges})
+            if scanned_ranges
+            else None
+        ),
+        coin_data_ranges=coin_data_ranges_from_scanned(scanned_ranges) if scanned_ranges else None,
+    )
+    output_paths = None
+    if args.output_dir:
+        output_paths = write_cluster_suite_outputs(
+            Path(args.output_dir).expanduser(),
+            clusters_csv=clusters_csv,
+            clusters=selected_clusters,
+            suite_payload=suite_payload,
+            extra_suite_payloads=extra_suite_payloads,
+        )
+        logging.info("[crash-finder] wrote suite outputs from %s to %s", clusters_csv, args.output_dir)
+    return {
+        "clusters_csv": str(clusters_csv),
+        "clusters_loaded": len(clusters),
+        "clusters_selected": len(selected_clusters),
+        "scanned_ranges_loaded": len(scanned_ranges),
+        "clusters": [asdict(item) for item in selected_clusters],
+        "suite": suite_payload,
+        "output_paths": output_paths,
+    }
 
 
 def run_scan(args: argparse.Namespace) -> dict[str, Any]:
+    if args.clusters_csv:
+        return run_from_clusters_csv(args)
     root = Path(args.root).expanduser()
-    interval_ms = timeframe_to_interval_ms(args.timeframe)
+    source_timeframe = str(args.source_timeframe).strip().lower()
+    scan_timeframe = str(args.timeframe).strip().lower()
+    interval_ms = timeframe_to_interval_ms(source_timeframe)
     if interval_ms != 60_000:
-        raise ValueError("first iteration supports scanning 1m cache data only")
+        raise ValueError("crash discovery currently requires 1m source cache data")
+    bucket_ms = _duration_timeframe_to_ms(scan_timeframe)
+    if bucket_ms < interval_ms or bucket_ms % interval_ms != 0:
+        raise ValueError(
+            f"scan timeframe {scan_timeframe!r} must be an integer multiple of source timeframe "
+            f"{source_timeframe!r}"
+        )
+    if args.min_valid_minutes <= 0:
+        raise ValueError("min-valid-minutes must be positive")
+    exchanges = sorted(
+        dict.fromkeys(str(exchange).strip().lower() for exchange in (args.exchange or []))
+    )
     symbols = args.symbol or None
     symbol_ranges = load_symbol_ranges(
         root,
-        exchange=args.exchange,
-        timeframe=args.timeframe,
+        exchanges=exchanges or None,
+        timeframe=source_timeframe,
         symbols=symbols,
     )
     if not symbol_ranges:
         raise ValueError("no matching cached OHLCV symbols found")
 
     logging.info(
-        "[crash-finder] scanning %d cached symbol range(s) root=%s timeframe=%s exchange=%s",
+        "[crash-finder] scanning %d cached symbol range(s) root=%s source_timeframe=%s "
+        "scan_timeframe=%s exchange=%s",
         len(symbol_ranges),
         root,
-        args.timeframe,
-        args.exchange or "all",
+        source_timeframe,
+        scan_timeframe,
+        ",".join(exchanges) if exchanges else "all",
     )
     catalog = OhlcvCatalog(_db_path(root))
     all_events: list[CrashEvent] = []
@@ -623,6 +1106,8 @@ def run_scan(args: argparse.Namespace) -> dict[str, Any]:
                 catalog,
                 symbol_range,
                 interval_ms=interval_ms,
+                scan_timeframe=scan_timeframe,
+                bucket_ms=bucket_ms,
                 min_valid_minutes=args.min_valid_minutes,
                 threshold=args.threshold,
                 rank_metric=args.rank_metric,
@@ -654,11 +1139,12 @@ def run_scan(args: argparse.Namespace) -> dict[str, Any]:
             scan_errors.append(scan_error)
             continue
         logging.info(
-            "[crash-finder] scanned %s %s valid_rows=%d hours=%d events=%d",
+            "[crash-finder] scanned %s %s valid_rows=%d timeframe=%s buckets=%d events=%d",
             scanned.exchange,
             scanned.symbol,
             scanned.valid_rows,
-            scanned.hours_scanned,
+            scanned.scan_timeframe,
+            scanned.buckets_scanned,
             scanned.events_found,
         )
         all_events.extend(events)
@@ -679,13 +1165,11 @@ def run_scan(args: argparse.Namespace) -> dict[str, Any]:
     if args.top_clusters > 0:
         clusters = clusters[: args.top_clusters]
     scanned_coins = sorted({symbol_to_coin(item.symbol, verbose=False) for item in scanned_ranges})
-    suite_payload = build_suite_payload(
+    suite_payload, extra_suite_payloads = _build_suite_payloads_from_clusters(
         clusters,
-        pre_days=args.pre_days,
-        post_days=args.post_days,
-        top_clusters=0,
-        coin_mode=args.scenario_coin_mode,
+        args,
         all_scanned_coins=scanned_coins,
+        coin_data_ranges=coin_data_ranges_from_scanned(scanned_ranges),
     )
 
     output_paths = None
@@ -697,12 +1181,15 @@ def run_scan(args: argparse.Namespace) -> dict[str, Any]:
             scanned=scanned_ranges,
             scan_errors=scan_errors,
             suite_payload=suite_payload,
+            extra_suite_payloads=extra_suite_payloads,
         )
         logging.info("[crash-finder] wrote outputs to %s", args.output_dir)
 
     return {
         "root": str(root),
-        "timeframe": args.timeframe,
+        "source_timeframe": source_timeframe,
+        "timeframe": scan_timeframe,
+        "exchanges": exchanges,
         "rank_metric": args.rank_metric,
         "threshold": args.threshold,
         "symbols_attempted": len(symbol_ranges),
@@ -726,18 +1213,40 @@ def build_parser() -> argparse.ArgumentParser:
         description="Scan local v2 OHLCV cache data for the worst historical crash windows.",
     )
     parser.add_argument("--root", default=str(DEFAULT_ROOT), help="v2 OHLCV cache root.")
-    parser.add_argument("--exchange", help="Restrict scan to one exchange.")
+    parser.add_argument(
+        "--clusters-csv",
+        help="Build scenario suites from an existing crash_clusters.csv instead of scanning OHLCV.",
+    )
+    parser.add_argument(
+        "--exchange",
+        action="append",
+        help="Restrict discovery to an exchange; repeat to scan multiple exchanges.",
+    )
     parser.add_argument("--symbol", action="append", help="Restrict scan to one symbol; repeatable.")
-    parser.add_argument("--timeframe", default="1m", help="Cache timeframe to scan (default: 1m).")
+    parser.add_argument(
+        "--source-timeframe",
+        default="1m",
+        help="Cached source candle timeframe (default and currently required: 1m).",
+    )
+    parser.add_argument(
+        "--timeframe",
+        default="1h",
+        help="Crash discovery candle timeframe built from source candles (default: 1h).",
+    )
     parser.add_argument(
         "--threshold",
         type=float,
         default=-0.10,
-        help="Only keep hourly crash candidates at or below this log-return severity.",
+        help="Only keep crash candidates at or below this log-return severity.",
     )
     parser.add_argument("--top-per-coin", type=int, default=10)
     parser.add_argument("--top-clusters", type=int, default=30)
-    parser.add_argument("--min-valid-minutes", type=int, default=2)
+    parser.add_argument(
+        "--min-valid-minutes",
+        type=int,
+        default=2,
+        help="Minimum valid 1m source rows required in a discovery candle.",
+    )
     parser.add_argument("--dedupe-coin-window-hours", type=float, default=6.0)
     parser.add_argument("--cluster-window-hours", type=float, default=6.0)
     parser.add_argument("--min-market-wide-coins", type=int, default=3)
@@ -754,6 +1263,31 @@ def build_parser() -> argparse.ArgumentParser:
         choices=("affected", "all-scanned", "none"),
         default="affected",
         help="Which coins to place in generated backtest scenarios.",
+    )
+    parser.add_argument(
+        "--scenario-kind",
+        choices=("all", "market-wide", "coin-focused", "single-coin"),
+        default="all",
+        help="Which crash clusters to include in generated backtest scenarios.",
+    )
+    parser.add_argument(
+        "--scenario-force-normal",
+        choices=("none", "long", "short", "both"),
+        default="none",
+        help=(
+            "Emit forced_mode_* = normal overrides for idiosyncratic non-market-wide "
+            "crash coins, with at most two forced coins per scenario."
+        ),
+    )
+    parser.add_argument(
+        "--scenario-merge-overlaps",
+        action="store_true",
+        help="Merge scenarios whose pre/post crash date windows overlap.",
+    )
+    parser.add_argument(
+        "--write-filtered-suites",
+        action="store_true",
+        help="Also write market-wide, coin-focused, and single-coin suite files.",
     )
     parser.add_argument("--output-dir", help="Write CSV outputs and crash_scenarios.hjson here.")
     parser.add_argument(
@@ -776,17 +1310,25 @@ def _configure_logging(level: str) -> None:
     logging.basicConfig(
         level=getattr(logging, level.upper()),
         format="%(asctime)s %(levelname)s %(message)s",
+        force=True,
     )
 
 
 def _print_text_summary(payload: dict[str, Any]) -> None:
-    print(
-        "Scanned "
-        f"{payload['symbols_scanned']}/{payload['symbols_attempted']} symbol range(s); "
-        f"skipped {payload['symbols_failed']}; "
-        f"selected {payload['events_selected']} event(s), "
-        f"{payload['clusters_selected']} cluster(s)."
-    )
+    if "symbols_scanned" in payload:
+        print(
+            "Scanned "
+            f"{payload['symbols_scanned']}/{payload['symbols_attempted']} symbol range(s); "
+            f"skipped {payload['symbols_failed']}; "
+            f"selected {payload['events_selected']} event(s), "
+            f"{payload['clusters_selected']} cluster(s)."
+        )
+    else:
+        print(
+            "Loaded "
+            f"{payload['clusters_selected']}/{payload['clusters_loaded']} cluster(s) "
+            f"from {payload['clusters_csv']}."
+        )
     if payload.get("output_paths"):
         print("Outputs:")
         for key, value in payload["output_paths"].items():

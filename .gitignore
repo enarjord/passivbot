@@ -390,6 +390,7 @@ Cargo.lock
 /api-keys.json
 /caches
 /optimize_results
+/crash_finder_results/
 
 # Git worktrees
 .worktrees/
