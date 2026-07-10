@@ -384,6 +384,7 @@ async def test_init_pnls_emits_cache_ready_event(monkeypatch):
     route = DEFAULT_ROUTES[EventTypes.FILLS_REFRESH_SUMMARY]
     assert route.console is False
     assert route.text is False
+
     assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 
@@ -2781,6 +2782,79 @@ def test_ws_reconnect_warning_logs_are_throttled(monkeypatch, caplog):
         logging.DEBUG,
         logging.DEBUG,
     ]
+
+
+def test_ws_reconnect_emits_bounded_structured_event(monkeypatch, caplog):
+    sink = ListEventSink()
+    bot = Passivbot.__new__(Passivbot)
+    bot.exchange = "kucoin"
+    bot._live_event_current_cycle_id = "cy_ws"
+    bot._live_event_pipeline = LiveEventPipeline(
+        structured_sinks=[sink],
+        monitor_sinks=[],
+    )
+    now_ms = [1_000]
+    monkeypatch.setattr(passivbot_module, "utc_ms", lambda: now_ms[0])
+
+    with caplog.at_level(logging.DEBUG):
+        Passivbot._log_ws_reconnect(
+            bot,
+            reconnect_no=1,
+            retry_delay_s=1.25,
+            reason="time_sync",
+            exc=TimeoutError("api_key=SECRET ping timeout"),
+        )
+
+    assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    events = [
+        event
+        for event in sink.events
+        if event.event_type == EventTypes.WEBSOCKET_RECONNECT
+    ]
+    assert len(events) == 1
+    event = events[0]
+    assert event.level == "warning"
+    assert event.component == "exchange.websocket"
+    assert event.tags == (EventTags.EXCHANGE, EventTags.WEBSOCKET)
+    assert event.cycle_id == "cy_ws"
+    assert event.status == "degraded"
+    assert event.reason_code == ReasonCodes.WEBSOCKET_RECONNECT
+    assert event.data == {
+        "reconnect_no": 1,
+        "retry_delay_ms": 1_250,
+        "reason": "time_sync",
+        "rate_limited": False,
+        "warning_visible": True,
+        "traceback_emitted": True,
+        "error_type": "TimeoutError",
+    }
+    assert "SECRET" not in json.dumps(event.to_dict())
+    route = DEFAULT_ROUTES[EventTypes.WEBSOCKET_RECONNECT]
+    assert route.structured is True
+    assert route.monitor is True
+    assert route.console is False
+    assert route.text is False
+
+    Passivbot._log_ws_reconnect(
+        bot,
+        reconnect_no=4,
+        retry_delay_s=2.5,
+        reason="rate_limited",
+        rate_limited=True,
+    )
+    assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    rate_limit_event = sink.events[-1]
+    assert rate_limit_event.event_type == EventTypes.WEBSOCKET_RECONNECT
+    assert rate_limit_event.level == "debug"
+    assert rate_limit_event.data == {
+        "reconnect_no": 4,
+        "retry_delay_ms": 2_500,
+        "reason": "rate_limited",
+        "rate_limited": True,
+        "warning_visible": False,
+        "traceback_emitted": False,
+    }
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 
 @pytest.mark.asyncio

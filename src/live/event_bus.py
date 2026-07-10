@@ -86,6 +86,7 @@ class EventTypes:
     CACHE_WARMUP_DECISION = "cache.warmup_decision"
     EXCHANGE_CONFIG_REFRESH = "exchange.config_refresh"
     EXCHANGE_TIME_SYNC = "exchange.time_sync"
+    WEBSOCKET_RECONNECT = "websocket.reconnect"
     REMOTE_CALL_STARTED = "remote_call.started"
     REMOTE_CALL_SUCCEEDED = "remote_call.succeeded"
     REMOTE_CALL_FAILED = "remote_call.failed"
@@ -188,6 +189,7 @@ class EventTags:
     UNSTUCK = "unstuck"
     WARMUP = "warmup"
     WAVE = "wave"
+    WEBSOCKET = "websocket"
 
 
 class ReasonCodes:
@@ -203,6 +205,7 @@ class ReasonCodes:
     EXCHANGE_EXCEPTION = "exchange_exception"
     EXCHANGE_TIME_SYNC = "exchange_time_sync"
     EXCHANGE_TIME_SYNC_UNAVAILABLE = "exchange_time_sync_unavailable"
+    WEBSOCKET_RECONNECT = "websocket_reconnect"
     EXECUTION_LOOP_ERROR_BURST = "execution_loop_error_burst"
     FILL_CACHE_DOCTOR_REPORT = "fill_cache_doctor_report"
     FILL_CACHE_QUARANTINED = "fill_cache_quarantined"
@@ -386,6 +389,7 @@ PHASE1_EVENT_TYPES = {
     EventTypes.CACHE_WARMUP_DECISION,
     EventTypes.EXCHANGE_CONFIG_REFRESH,
     EventTypes.EXCHANGE_TIME_SYNC,
+    EventTypes.WEBSOCKET_RECONNECT,
     EventTypes.REMOTE_CALL_STARTED,
     EventTypes.REMOTE_CALL_SUCCEEDED,
     EventTypes.REMOTE_CALL_FAILED,
@@ -692,6 +696,7 @@ DEFAULT_ROUTES: dict[str, EventRoute] = {
     EventTypes.CACHE_WARMUP_DECISION: EventRoute(console=False, text=False),
     EventTypes.EXCHANGE_CONFIG_REFRESH: EventRoute(console=False, text=False),
     EventTypes.EXCHANGE_TIME_SYNC: EventRoute(console=False, text=False),
+    EventTypes.WEBSOCKET_RECONNECT: EventRoute(console=False, text=False),
     EventTypes.REMOTE_CALL_STARTED: EventRoute(console=False),
     EventTypes.REMOTE_CALL_SUCCEEDED: EventRoute(console=False),
     EventTypes.REMOTE_CALL_FAILED: EventRoute(console=False),

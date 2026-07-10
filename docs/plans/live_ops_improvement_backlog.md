@@ -630,8 +630,8 @@ Related detailed plans:
       proving existing queue-overflow observability without live bots,
       exchange calls, or behavior changes.
 
-16. [ ] Websocket reconnect diagnostics.
-    Status: open.
+16. [x] Websocket reconnect diagnostics.
+    Status: completed by PR #1170.
 
     VPS5 smoke after PR #728 caught a fresh OKX ccxt-pro websocket callback
     traceback after `connection lost ... RequestTimeout`; the bot continued and
@@ -640,6 +640,12 @@ Related detailed plans:
     where practical, or improve smoke classification so known dependency
     callback races are grouped with surrounding reconnect context instead of
     requiring manual log inspection.
+
+    Work log:
+    - 2026-07-10: PR #1170 adds a bounded
+      structured/monitor-only reconnect event at the existing throttled logger.
+      It preserves reconnect control flow and text diagnostics while excluding
+      exception messages, tracebacks, payloads, and URLs from the event.
 
 17. [ ] Forager active-symbol EMA readiness handoff.
     Status: partial. First hardening slice allows active/normal forager symbols

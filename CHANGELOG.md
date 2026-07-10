@@ -14,6 +14,11 @@ All notable user-facing changes will be documented in this file.
   without rescanning the full minute array for every candle, while preserving the ordered
   high-to-later-low metric.
 
+- Websocket reconnect attempts now emit bounded `websocket.reconnect`
+  structured events with retry timing, fixed reason classification, text-log
+  visibility, traceback cadence, and exception type. Existing reconnect timing,
+  warning throttling, traceback logging, and exchange behavior are unchanged.
+
 - Connector-local exchange-config failure logs in Binance, Bitget, Defx,
   Hyperliquid, KuCoin, and OKX, plus the parent per-symbol retry log, now keep
   bounded operation, symbol, retry, canonical known-code, and exception-type

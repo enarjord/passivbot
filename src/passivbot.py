@@ -615,6 +615,9 @@ class Passivbot:
     _emit_exchange_config_refresh_event = (
         live_event_emitters.emit_exchange_config_refresh_event
     )
+    _emit_websocket_reconnect_event = (
+        live_event_emitters.emit_websocket_reconnect_event
+    )
     _emit_execution_confirmation_requested_event = (
         live_event_emitters.emit_execution_confirmation_requested_event
     )
@@ -5939,11 +5942,10 @@ class Passivbot:
         reconnect_no = int(reconnect_no or 0)
         retry_delay_s = max(0.0, float(retry_delay_s or 0.0))
         reason = str(reason or "connection_lost")
-        level = (
-            logging.WARNING
-            if Passivbot._should_log_ws_reconnect_warning(self, reconnect_no)
-            else logging.DEBUG
+        warning_visible = Passivbot._should_log_ws_reconnect_warning(
+            self, reconnect_no
         )
+        level = logging.WARNING if warning_visible else logging.DEBUG
         if rate_limited:
             logging.log(
                 level,
@@ -5962,6 +5964,7 @@ class Passivbot:
                 retry_delay_s,
                 exc_name,
             )
+        traceback_emitted = False
         if exc is not None:
             logging.debug(
                 "[ws] %s: reconnect reason=%s exception=%s", exchange, reason, exc
@@ -5971,6 +5974,7 @@ class Passivbot:
                 getattr(self, "_ws_reconnect_traceback_last_ms", 0) or 0
             )
             if reconnect_no <= 1 or now_ms - last_traceback_ms >= 15 * 60 * 1000:
+                traceback_emitted = True
                 self._ws_reconnect_traceback_last_ms = now_ms
                 logging.debug(
                     "[ws] %s: reconnect traceback follows (throttled)", exchange
@@ -5980,6 +5984,15 @@ class Passivbot:
                         traceback.format_exception(type(exc), exc, exc.__traceback__)
                     )
                 )
+        self._emit_websocket_reconnect_event(
+            reconnect_no=reconnect_no,
+            retry_delay_s=retry_delay_s,
+            reason=reason,
+            warning_visible=warning_visible,
+            traceback_emitted=traceback_emitted,
+            exc=exc,
+            rate_limited=rate_limited,
+        )
 
     def _handle_candle_disk_load_event(self, payload: dict[str, Any]) -> None:
         """Emit summarized candle disk-load events without flooding monitor storage."""
