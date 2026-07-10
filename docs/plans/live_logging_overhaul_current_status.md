@@ -22,45 +22,54 @@ Estimated completion:
 
 ## Active Review Slice
 
-- PR #1173: `Emit bounded forager eligibility events`
-- Branch: `codex/v8-forager-eligibility-events`
+- PR #1174: `Centralize HSL episode finalization in Rust`
+- Branch: `codex/v8-hsl-startup-transition-contract`
 - Head: query live GitHub metadata; this commit cannot embed its own final SHA
   without making that value stale
-- Base: `50f1dbaf582828c434f9f3f54ad482140f7deb0e`
-- Scope: bounded structured/monitor-only events for existing approved/ignored
-  forager membership changes; no eligibility, entry-gating, exchange, Rust,
-  order, risk, or HSL behavior change
-- Output: at most four aggregate events per refresh, with fixed source/list/
-  operation fields and at most 12 sorted symbols per pside change row
-- Local validation: focused coin-list/event-route/registry suites and the full
-  fake-live suite pass; a real two-step fake-live run, `py_compile`, and `git
-  diff --check` pass
-- Independent preflight: green; repeated no-op refresh and `live_value` source
-  coverage were added after its residual-risk review
+- Base: `f5395dda4de815bac4f587795a66deda8fb01bc5`
+- Scope: pure Rust post-RED-episode transition shared by backtest and Python
+  live/history replay. It owns caller-supplied persistent no-restart peak/
+  drawdown evaluation, restart policy, explicit disposition, and exact cooldown
+  deadline; coin live restart now retains that peak like pside/backtest. Python still
+  owns exchange/fill-history proof, scope-flat detection, cache/latch I/O,
+  orchestration, and order supervision.
+- Non-goals: no RED trigger/tier math change, no signal-mode denominator
+  change, no replay ordering/background concurrency change, no exchange call,
+  and no new observability event.
+- Local validation: Rust `207/207`; focused Python HSL/replay/binding suites
+  pass; fake-live `29/29`, including seven real end-to-end pside HSL scenario
+  runs; real Binance HSL backtest and four-evaluation optimizer smoke pass;
+  extension source stamp and `git diff --check` pass.
+- Independent preflight: identified an existing coin-mode slot-budget
+  denominator mismatch between live and backtest plus a direct coin fake-live
+  staged-planner epoch failure after panic flatten. Neither is introduced by
+  this transition refactor; both remain focused follow-up work.
 - Publication state, exact head, mergeability, CI, and current-head review
   verdicts: query live GitHub metadata. Do not encode those transient values in
   the same PR that contains this status file, because every correction would
   create a different head and immediately stale the embedded value.
-- Expected VPS action: pull with autostash, controlled five-bot restart, then
-  immediate and settled bounded smoke reports
+- Expected VPS action: pull with autostash, rebuild and verify the Rust
+  extension, controlled five-bot restart, then immediate and settled bounded
+  smoke reports
 
 Next action:
 
-1. Poll live GitHub metadata for PR #1173's current head, mergeability, CI, and
-   required reviews.
+1. Poll PR #1174's exact head, mergeability, CI, and required reviews.
 2. Resolve any verified finding with focused regression coverage.
 3. Merge only after the exact-head gate is satisfied, then perform the declared
    VPS5 restart/smoke validation.
 
 ## Deployed Baseline
 
-- Remote `v8`: `50f1dbaf`, PR #1172
-- VPS5 repository: `4a00ff17`, PR #1170
+- Remote `v8`: `f5395dda`, PR #1173
+- VPS5 repository: `f5395dda`, PR #1173
 - VPS5 expected bots: five; all are running after the controlled restart
 - Latest immediate and settled smoke: `ok=true`, `hard_failures=0`, all five
   bots matched, zero failed remote/account-critical/fill-refresh calls, and
   zero text-log hard/attention matches. Four HSL replays remained active but
-  were neither stale nor long-running.
+  were neither stale nor long-running. Five deployed
+  `forager.eligibility_changed` events were observed, one per bot, with bounded
+  source/list/operation/symbol payloads.
 - Known VPS5 tracked edit to preserve:
   `passivbot-rust/src/equity_hard_stop_loss.rs`
 - Preserve local/VPS configs, logs, monitor data, reports, and temporary files
@@ -85,9 +94,11 @@ Next action:
 
 ## Next Slice
 
-The forager eligibility event producer is the active Phase 5 slice. After it
-merges and is deployed, the next high-value dependent slice is held-position
-protective readiness. Its design must preserve exact HSL reconstruction and
+The shared HSL episode-finalization transition is the first prerequisite for
+held-position protective readiness. After it merges and is deployed, reconcile
+the existing coin-mode live/backtest slot-budget denominator mismatch in its
+own behavior PR, then continue with immutable candidate replay and held-first
+protective sequencing. The design must preserve exact HSL reconstruction and
 keep observability events out of the decision authority. Remaining candidates:
 
 - realistic-scale replay fixtures and deeper internal-stage profiling

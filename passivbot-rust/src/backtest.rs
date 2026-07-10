@@ -441,21 +441,6 @@ struct HardStopStopSnapshot {
     drawdown_ema: f64,
 }
 
-fn hsl_no_restart_latched(
-    restart_after_red_policy: &str,
-    persistent_drawdown_raw: f64,
-    drawdown_ema: f64,
-    no_restart_drawdown_threshold: f64,
-) -> Result<bool, String> {
-    // Shared live/backtest contract: max(raw, ema) trips the permanent halt.
-    ehsl::no_restart_triggered(
-        restart_after_red_policy,
-        persistent_drawdown_raw,
-        drawdown_ema,
-        no_restart_drawdown_threshold,
-    )
-}
-
 #[derive(Debug, Clone, Default)]
 struct HardStopPsideRuntime {
     state: Option<ehsl::HardStopState>,
@@ -3665,33 +3650,21 @@ impl<'a> Backtest<'a> {
                         }
                         runtime.last_restart_ts_ms = None;
                     }
-                    runtime.no_restart_peak_strategy_equity = runtime
-                        .no_restart_peak_strategy_equity
-                        .max(stop_snapshot.peak_strategy_equity)
-                        .max(stop_snapshot.equity);
-                    let persistent_drawdown_raw = (1.0
-                        - stop_snapshot.equity
-                            / runtime.no_restart_peak_strategy_equity.max(f64::EPSILON))
-                    .max(0.0);
-                    if hsl_no_restart_latched(
+                    let finalization = ehsl::evaluate_red_episode_finalization(
                         hsl_restart_after_red_policy.as_str(),
-                        persistent_drawdown_raw,
+                        stop_snapshot.timestamp_ms,
+                        stop_snapshot.equity,
+                        stop_snapshot.peak_strategy_equity,
+                        runtime.no_restart_peak_strategy_equity,
                         stop_snapshot.drawdown_ema,
+                        hsl_red_threshold,
                         hsl_no_restart_drawdown_threshold,
-                    )? {
-                        runtime.no_restart_latched = true;
-                        runtime.cooldown_until_ms = None;
-                    } else {
-                        let cooldown_minutes = hsl_cooldown_minutes_after_red;
-                        if cooldown_minutes.is_finite() && cooldown_minutes > 0.0 {
-                            let cooldown_ms = ((cooldown_minutes * 60_000.0).round() as u64)
-                                .max(self.interval_ms);
-                            runtime.cooldown_until_ms =
-                                Some(stop_snapshot.timestamp_ms.saturating_add(cooldown_ms));
-                        } else {
-                            runtime.cooldown_until_ms = None;
-                        }
-                    }
+                        hsl_cooldown_minutes_after_red,
+                    )?;
+                    runtime.no_restart_peak_strategy_equity =
+                        finalization.no_restart_peak_strategy_equity;
+                    runtime.no_restart_latched = finalization.no_restart_latched;
+                    runtime.cooldown_until_ms = finalization.cooldown_until_ms;
                     self.hard_stop_plot_events_pside[pside].push(HardStopPlotEvent {
                         kind: "halt".to_string(),
                         timestamp_ms: stop_snapshot.timestamp_ms,
@@ -3859,33 +3832,21 @@ impl<'a> Backtest<'a> {
                         }
                         runtime.last_restart_ts_ms = None;
                     }
-                    runtime.no_restart_peak_strategy_equity = runtime
-                        .no_restart_peak_strategy_equity
-                        .max(stop_snapshot.peak_strategy_equity)
-                        .max(stop_snapshot.equity);
-                    let persistent_drawdown_raw = (1.0
-                        - stop_snapshot.equity
-                            / runtime.no_restart_peak_strategy_equity.max(f64::EPSILON))
-                    .max(0.0);
-                    if hsl_no_restart_latched(
+                    let finalization = ehsl::evaluate_red_episode_finalization(
                         hsl_restart_after_red_policy.as_str(),
-                        persistent_drawdown_raw,
+                        stop_snapshot.timestamp_ms,
+                        stop_snapshot.equity,
+                        stop_snapshot.peak_strategy_equity,
+                        runtime.no_restart_peak_strategy_equity,
                         stop_snapshot.drawdown_ema,
+                        hsl_red_threshold,
                         hsl_no_restart_drawdown_threshold,
-                    )? {
-                        runtime.no_restart_latched = true;
-                        runtime.cooldown_until_ms = None;
-                    } else {
-                        let cooldown_minutes = hsl_cooldown_minutes_after_red;
-                        if cooldown_minutes.is_finite() && cooldown_minutes > 0.0 {
-                            let cooldown_ms = ((cooldown_minutes * 60_000.0).round() as u64)
-                                .max(self.interval_ms);
-                            runtime.cooldown_until_ms =
-                                Some(stop_snapshot.timestamp_ms.saturating_add(cooldown_ms));
-                        } else {
-                            runtime.cooldown_until_ms = None;
-                        }
-                    }
+                        hsl_cooldown_minutes_after_red,
+                    )?;
+                    runtime.no_restart_peak_strategy_equity =
+                        finalization.no_restart_peak_strategy_equity;
+                    runtime.no_restart_latched = finalization.no_restart_latched;
+                    runtime.cooldown_until_ms = finalization.cooldown_until_ms;
                     self.hard_stop_plot_events_pside[pside].push(HardStopPlotEvent {
                         kind: "halt".to_string(),
                         timestamp_ms: stop_snapshot.timestamp_ms,
@@ -8407,13 +8368,13 @@ mod tests {
         Backtest::apply_orange_override(&mut manual, orchestrator::TradingMode::TpOnly);
         assert!(matches!(manual, Some(orchestrator::TradingMode::Manual)));
 
-        assert!(!hsl_no_restart_latched("always", 1.0, 1.0, 0.10).unwrap());
-        assert!(!hsl_no_restart_latched("threshold", 0.09, 0.05, 0.10).unwrap());
-        assert!(hsl_no_restart_latched("threshold", 0.10, 0.0, 0.10).unwrap());
+        assert!(!ehsl::no_restart_triggered("always", 1.0, 1.0, 0.10).unwrap());
+        assert!(!ehsl::no_restart_triggered("threshold", 0.09, 0.05, 0.10).unwrap());
+        assert!(ehsl::no_restart_triggered("threshold", 0.10, 0.0, 0.10).unwrap());
         // Sustained smoothed damage trips the halt even when raw recovered.
-        assert!(hsl_no_restart_latched("threshold", 0.02, 0.11, 0.10).unwrap());
-        assert!(hsl_no_restart_latched("never", 0.0, 0.0, 0.10).unwrap());
-        assert!(hsl_no_restart_latched("sometimes", 1.0, 1.0, 0.10).is_err());
+        assert!(ehsl::no_restart_triggered("threshold", 0.02, 0.11, 0.10).unwrap());
+        assert!(ehsl::no_restart_triggered("never", 0.0, 0.0, 0.10).unwrap());
+        assert!(ehsl::no_restart_triggered("sometimes", 1.0, 1.0, 0.10).is_err());
     }
 
     #[test]

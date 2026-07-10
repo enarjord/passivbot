@@ -3886,35 +3886,43 @@ def _equity_hard_stop_build_latch_payload(
     }
 
 
-def _equity_hard_stop_record_no_restart_stop(
-    self, pside: str, stop_event: dict
-) -> tuple[float, float]:
-    state = self._hsl_state(pside)
-    equity = float(stop_event["equity"])
-    peak_strategy_equity = float(stop_event["peak_strategy_equity"])
-    if not math.isfinite(equity) or equity <= 0.0:
-        raise RuntimeError(f"invalid HSL[{pside}] stop equity for no-restart latch: {equity}")
-    if not math.isfinite(peak_strategy_equity) or peak_strategy_equity <= 0.0:
-        raise RuntimeError(
-            f"invalid HSL[{pside}] stop peak_strategy_equity for no-restart latch: {peak_strategy_equity}"
-        )
-    no_restart_peak_strategy_equity = max(
-        float(state.get("no_restart_peak_strategy_equity", 0.0) or 0.0),
-        peak_strategy_equity,
-        equity,
+def _equity_hard_stop_red_episode_finalization(
+    self,
+    pside: str,
+    stop_event: dict,
+    stop_event_timestamp_ms: int,
+    *,
+    symbol: Optional[str] = None,
+) -> dict[str, Any]:
+    """Apply Rust-owned post-episode restart/cooldown policy math."""
+    state = self._hsl_coin_state(pside, symbol) if symbol else self._hsl_state(pside)
+    cfg = self.hsl[pside]
+    policy = normalize_hsl_restart_after_red_policy(
+        cfg.get("restart_after_red_policy", "threshold"),
+        path="hsl.restart_after_red_policy",
     )
-    if (
-        not math.isfinite(no_restart_peak_strategy_equity)
-        or no_restart_peak_strategy_equity <= 0.0
-    ):
-        raise RuntimeError(
-            f"invalid HSL[{pside}] no_restart_peak_strategy_equity: {no_restart_peak_strategy_equity}"
-        )
-    state["no_restart_peak_strategy_equity"] = no_restart_peak_strategy_equity
-    no_restart_drawdown_raw = max(
-        0.0, 1.0 - equity / max(no_restart_peak_strategy_equity, 1e-12)
+    result = pbr.hsl_red_episode_finalization(
+        restart_after_red_policy=policy,
+        stop_timestamp_ms=int(stop_event_timestamp_ms),
+        stop_equity=float(stop_event["equity"]),
+        stop_peak_strategy_equity=float(stop_event["peak_strategy_equity"]),
+        previous_no_restart_peak_strategy_equity=float(
+            state.get("no_restart_peak_strategy_equity", 0.0) or 0.0
+        ),
+        drawdown_ema=float(stop_event["drawdown_ema"]),
+        red_threshold=float(cfg["red_threshold"]),
+        no_restart_drawdown_threshold=float(cfg["no_restart_drawdown_threshold"]),
+        cooldown_minutes_after_red=float(cfg["cooldown_minutes_after_red"]),
     )
-    return float(no_restart_peak_strategy_equity), float(no_restart_drawdown_raw)
+    if not isinstance(result, dict):
+        raise TypeError(
+            "passivbot_rust.hsl_red_episode_finalization() must return a dict, "
+            f"got {type(result).__name__}"
+        )
+    state["no_restart_peak_strategy_equity"] = float(
+        result["no_restart_peak_strategy_equity"]
+    )
+    return result
 
 
 async def _equity_hard_stop_compute_stop_event(self, pside: str, stop_event_ts_ms: int) -> dict:
@@ -4541,10 +4549,7 @@ async def _equity_hard_stop_initialize_from_history(self) -> None:
             if not self._equity_hard_stop_enabled(pside):
                 continue
             state = self._hsl_state(pside)
-            cfg = self.hsl[pside]
             contract = replay_contracts[pside]
-            cooldown_minutes = float(cfg["cooldown_minutes_after_red"])
-            cooldown_ms = int(round(cooldown_minutes * 60_000.0)) if cooldown_minutes > 0.0 else 0
             if contract["intervention_entry_ts"] is not None and contract["policy"] == "normal":
                 self._equity_hard_stop_reset_after_restart(pside)
                 n_rows[pside] = self._equity_hard_stop_replay_from_boundary(
@@ -4694,24 +4699,23 @@ async def _equity_hard_stop_initialize_from_history(self) -> None:
                 if True:
                     state["pending_red_since_ms"] = int(ts)
                     stop_drawdown_raw = float(current_metrics["drawdown_raw"])
-                    (
-                        no_restart_peak_strategy_equity,
-                        no_restart_drawdown_raw,
-                    ) = self._equity_hard_stop_record_no_restart_stop(
+                    finalization = self._equity_hard_stop_red_episode_finalization(
                         pside,
                         {
                             "equity": float(current_metrics["strategy_equity"]),
                             "peak_strategy_equity": float(current_metrics["peak_strategy_equity"]),
+                            "drawdown_ema": float(current_metrics["drawdown_ema"]),
                         },
+                        stop_ts,
                     )
-                    no_restart_latched = _equity_hard_stop_no_restart_latched(
-                        cfg,
-                        no_restart_drawdown_raw,
-                        float(current_metrics["drawdown_ema"]),
+                    no_restart_peak_strategy_equity = float(
+                        finalization["no_restart_peak_strategy_equity"]
                     )
-                    cooldown_until_ms = None
-                    if not no_restart_latched and cooldown_ms > 0:
-                        cooldown_until_ms = stop_ts + cooldown_ms
+                    no_restart_drawdown_raw = float(
+                        finalization["no_restart_drawdown_raw"]
+                    )
+                    no_restart_latched = bool(finalization["no_restart_latched"])
+                    cooldown_until_ms = finalization["cooldown_until_ms"]
                     payload = self._equity_hard_stop_build_latch_payload(
                         pside,
                         stop_event_timestamp_ms=stop_ts,
@@ -5154,9 +5158,6 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
             check_shutdown("hsl_coin_history_replay_pside")
             if not self._equity_hard_stop_coin_active_pside(pside):
                 continue
-            cfg = self.hsl[pside]
-            cooldown_minutes = float(cfg["cooldown_minutes_after_red"])
-            cooldown_ms = int(round(cooldown_minutes * 60_000.0)) if cooldown_minutes > 0.0 else 0
             for symbol in sorted(replay_symbols):
                 check_shutdown("hsl_coin_history_replay_pair")
                 pair_idx += 1
@@ -5395,12 +5396,18 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
                             )
                             continue
                     stop_drawdown_raw = float(metrics["drawdown_raw"])
-                    no_restart_latched = _equity_hard_stop_no_restart_latched(
-                        cfg, stop_drawdown_raw, float(metrics["drawdown_ema"])
+                    finalization = self._equity_hard_stop_red_episode_finalization(
+                        pside,
+                        {
+                            "equity": float(metrics["equity"]),
+                            "peak_strategy_equity": float(metrics["peak_strategy_equity"]),
+                            "drawdown_ema": float(metrics["drawdown_ema"]),
+                        },
+                        stop_ts,
+                        symbol=symbol,
                     )
-                    cooldown_until_ms = None
-                    if not no_restart_latched and cooldown_ms > 0:
-                        cooldown_until_ms = stop_ts + cooldown_ms
+                    no_restart_latched = bool(finalization["no_restart_latched"])
+                    cooldown_until_ms = finalization["cooldown_until_ms"]
                     state["last_stop_event"] = self._equity_hard_stop_build_latch_payload(
                         pside,
                         symbol=symbol,
@@ -5419,6 +5426,12 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
                         drawdown_score=float(metrics["drawdown_score"]),
                         no_restart_latched=no_restart_latched,
                         cooldown_until_ms=cooldown_until_ms,
+                        no_restart_peak_strategy_equity=float(
+                            finalization["no_restart_peak_strategy_equity"]
+                        ),
+                        no_restart_drawdown_raw=float(
+                            finalization["no_restart_drawdown_raw"]
+                        ),
                     )
                     state["pnl_reset_timestamp_ms"] = stop_ts + 1
                     state["pending_red_since_ms"] = None
@@ -5852,9 +5865,13 @@ def _equity_hard_stop_coin_symbols(self) -> set[str]:
 def _equity_hard_stop_reset_coin_after_restart(self, pside: str, symbol: str) -> None:
     state = self._hsl_coin_state(pside, symbol)
     reset_ts = state.get("pnl_reset_timestamp_ms")
+    no_restart_peak_strategy_equity = float(
+        state.get("no_restart_peak_strategy_equity", 0.0) or 0.0
+    )
     state.clear()
     state.update(self._equity_hard_stop_make_state())
     state["pnl_reset_timestamp_ms"] = reset_ts
+    state["no_restart_peak_strategy_equity"] = no_restart_peak_strategy_equity
     self._equity_hard_stop_clear_coin_runtime_forced_mode(pside, symbol)
 
 
@@ -6382,17 +6399,18 @@ async def _equity_hard_stop_finalize_red_stop(
         stop_event = await self._equity_hard_stop_compute_stop_event(pside, stop_ts_ms)
     else:
         stop_ts_ms = int(stop_event["stop_event_timestamp_ms"])
-    cooldown_minutes = float(cfg["cooldown_minutes_after_red"])
     no_restart_drawdown_threshold = float(cfg["no_restart_drawdown_threshold"])
-    (
-        no_restart_peak_strategy_equity,
-        no_restart_drawdown_raw,
-    ) = self._equity_hard_stop_record_no_restart_stop(pside, stop_event)
-    no_restart_latched = _equity_hard_stop_no_restart_latched(
-        cfg, no_restart_drawdown_raw, float(stop_event["drawdown_ema"])
+    finalization = self._equity_hard_stop_red_episode_finalization(
+        pside,
+        stop_event,
+        stop_ts_ms,
     )
-    cooldown_ms = int(round(cooldown_minutes * 60_000.0)) if cooldown_minutes > 0.0 else 0
-    cooldown_until_ms = None if no_restart_latched or cooldown_ms <= 0 else int(stop_ts_ms + cooldown_ms)
+    no_restart_peak_strategy_equity = float(
+        finalization["no_restart_peak_strategy_equity"]
+    )
+    no_restart_drawdown_raw = float(finalization["no_restart_drawdown_raw"])
+    no_restart_latched = bool(finalization["no_restart_latched"])
+    cooldown_until_ms = finalization["cooldown_until_ms"]
     payload = self._equity_hard_stop_build_latch_payload(
         pside,
         stop_event_timestamp_ms=stop_ts_ms,
@@ -6509,7 +6527,6 @@ async def _equity_hard_stop_finalize_coin_red_stop(
     nonpanic_close_orders: int | None = None,
 ) -> None:
     state = self._hsl_coin_state(pside, symbol)
-    cfg = self.hsl[pside]
     stop_ts_ms = int(self.get_exchange_time())
     stop_event_anchor_source = "provided_stop_event"
     stop_event_anchor_fallback_used = False
@@ -6530,12 +6547,14 @@ async def _equity_hard_stop_finalize_coin_red_stop(
         stop_event = await self._equity_hard_stop_compute_coin_stop_event(pside, symbol, stop_ts_ms)
     else:
         stop_ts_ms = int(stop_event["stop_event_timestamp_ms"])
-    cooldown_minutes = float(cfg["cooldown_minutes_after_red"])
-    no_restart_latched = _equity_hard_stop_no_restart_latched(
-        cfg, stop_event["drawdown_raw"], float(stop_event["drawdown_ema"])
+    finalization = self._equity_hard_stop_red_episode_finalization(
+        pside,
+        stop_event,
+        stop_ts_ms,
+        symbol=symbol,
     )
-    cooldown_ms = int(round(cooldown_minutes * 60_000.0)) if cooldown_minutes > 0.0 else 0
-    cooldown_until_ms = None if no_restart_latched or cooldown_ms <= 0 else int(stop_ts_ms + cooldown_ms)
+    no_restart_latched = bool(finalization["no_restart_latched"])
+    cooldown_until_ms = finalization["cooldown_until_ms"]
     payload = self._equity_hard_stop_build_latch_payload(
         pside,
         symbol=symbol,
@@ -6554,6 +6573,10 @@ async def _equity_hard_stop_finalize_coin_red_stop(
         drawdown_score=float(stop_event["drawdown_score"]),
         no_restart_latched=no_restart_latched,
         cooldown_until_ms=cooldown_until_ms,
+        no_restart_peak_strategy_equity=float(
+            finalization["no_restart_peak_strategy_equity"]
+        ),
+        no_restart_drawdown_raw=float(finalization["no_restart_drawdown_raw"]),
     )
     state["last_stop_event"] = payload
     state["halted"] = True

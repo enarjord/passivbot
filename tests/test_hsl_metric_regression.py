@@ -28,6 +28,7 @@ _BOUND_METHODS = (
     "_equity_hard_stop_apply_coin_metrics_sample",
     "_equity_hard_stop_runtime_tier",
     "_equity_hard_stop_runtime_red_latched",
+    "_equity_hard_stop_red_episode_finalization",
 )
 
 
@@ -286,6 +287,29 @@ def test_no_restart_trigger_uses_max_of_raw_and_ema():
         hsl._equity_hard_stop_no_restart_latched(
             dict(cfg, restart_after_red_policy="sometimes"), 1.0, 1.0
         )
+
+
+def test_red_episode_finalization_uses_rust_owned_persistent_peak_and_deadline():
+    bot = _make_bot("unified")
+    state = bot._hsl_state("long")
+    state["no_restart_peak_strategy_equity"] = 120.0
+
+    out = bot._equity_hard_stop_red_episode_finalization(
+        "long",
+        {
+            "equity": 90.0,
+            "peak_strategy_equity": 100.0,
+            "drawdown_ema": 0.10,
+        },
+        125_500,
+    )
+
+    assert out["no_restart_peak_strategy_equity"] == pytest.approx(120.0)
+    assert out["no_restart_drawdown_raw"] == pytest.approx(0.25)
+    assert out["no_restart_latched"] is False
+    assert out["cooldown_until_ms"] == 425_500
+    assert out["disposition"] == "cooldown"
+    assert state["no_restart_peak_strategy_equity"] == pytest.approx(120.0)
 
 
 def test_red_tier_score_is_min_of_raw_and_ema():

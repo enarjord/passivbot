@@ -4,6 +4,14 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- HSL RED episode finalization now uses one Rust-owned live/backtest contract
+  for caller-supplied persistent no-restart peaks, restart policy, and cooldown
+  deadlines. Coin-mode live restart now retains that no-restart peak like
+  pside live and backtest instead of discarding it with the episode tracker.
+  Python remains responsible for exchange/history proof and supplies the exact
+  scope-flattening fill timestamp; backtests retain the exact configured
+  deadline instead of extending sub-bar cooldowns to a full candle interval.
+
 - Added `passivbot tool hsl-replay-benchmark`, a bounded offline benchmark for
   the current coin-HSL history initializer. It emits deterministic fixture and
   final-state hashes, explicit timeline-row and pair-row throughput, profiled

@@ -19,21 +19,21 @@ Last updated: 2026-07-10.
 
 Current `origin/v8` head:
 
-- `50f1dbaf` after PR #1172, `Add offline HSL replay benchmark`.
+- `f5395dda` after PR #1173, `Emit bounded forager eligibility events`.
 
 Current logging-overhaul head:
 
-- `50f1dbaf` after PR #1172, `Add offline HSL replay benchmark`
+- `f5395dda` after PR #1173, `Emit bounded forager eligibility events`
   (latest merged logging-overhaul slice).
 
 Current work:
 
-- PR #1173 (`codex/v8-forager-eligibility-events`) adds bounded
-  `forager.eligibility_changed` structured/monitor events after existing
-  approved/ignored membership mutations and text logs. Payloads contain fixed
-  source/list/operation context plus bounded per-pside count/symbol rows; no
-  eligibility, entry-gating, exchange, Rust, order, risk, or HSL behavior
-  changes.
+- Branch `codex/v8-hsl-startup-transition-contract` centralizes post-RED
+  episode finalization in a pure Rust transition used by backtest and Python
+  live/history replay. It owns caller-supplied persistent no-restart peak/
+  drawdown evaluation, policy, disposition, and exact cooldown deadline;
+  coin live restart retains that peak like pside/backtest. Trigger math, history proof,
+  replay scheduling, exchange I/O, and order supervision are unchanged.
 
 Current review gate:
 
@@ -64,6 +64,16 @@ Retuned goal boundary:
 
 VPS5 deployment status:
 
+- PR #1173 merged to `v8` as `f5395dda` after exact-head Hermes and Grok 4.5
+  approvals plus green CI. VPS5 pulled with autostash, preserving the known
+  tracked Rust edit and local artifacts, then all five bots restarted from
+  `/root/bots_vps5.yaml`. KuCoin and GateIO required a second exact-pane
+  Ctrl-C. Immediate and settled smoke reports returned `ok=true`,
+  `hard_failures=0`, all five bots matched, zero failed
+  remote/account-critical/fill-refresh calls, and zero text-log hard/attention
+  matches. Four HSL replays remained active but non-stale and not long-running.
+  A direct deployed query returned five bounded
+  `forager.eligibility_changed` events, one per bot.
 - PR #1172 merged to `v8` as `50f1dbaf` after exact-head Hermes and Grok 4.5
   approvals plus green CI. No VPS pull or restart was required because it added
   bounded offline benchmark tooling and docs only; VPS5 intentionally remains

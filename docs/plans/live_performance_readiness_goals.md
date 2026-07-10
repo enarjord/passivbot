@@ -869,6 +869,13 @@ Each slice should update this checklist with its result.
      emit explicit `hsl_protective_*` state events.
    - Acceptance: held-pair state matches existing full replay in tests, and a
      held late-sorting symbol is no longer delayed by broad flat-symbol replay.
+   - Status: the first prerequisite centralizes post-RED episode finalization
+     in Rust for backtest and Python live/history replay, including persistent
+     no-restart peak/drawdown evaluation, explicit disposition, exact cooldown
+     deadline, and coin-live retention of the persistent peak across restart.
+     Independent preflight also found an existing coin-mode slot-budget
+     denominator mismatch between live and backtest; reconcile that in a
+     focused parity PR before relying on held-pair equivalence.
 
 4. [ ] Full replay lower-complexity slice.
    - Replace avoidable nested scans and repeated fill/timeline work with exact
