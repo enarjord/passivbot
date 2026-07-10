@@ -538,4 +538,6 @@ class BybitBot(CCXTBot):
                 logging.debug("[config] hedge mode already set (not modified)")
                 return
             raise
-        logging.debug("[config] set hedge mode response: %s", res)
+        logging.debug(
+            "[config] set hedge mode response: %s", format_exchange_config_response(res)
+        )

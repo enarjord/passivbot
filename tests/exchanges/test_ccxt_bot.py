@@ -1,7 +1,44 @@
 # tests/exchanges/test_ccxt_bot.py
 import logging
+import math
+from unittest.mock import AsyncMock, MagicMock, patch
+
 import pytest
-from unittest.mock import MagicMock, patch, AsyncMock
+
+
+@pytest.mark.parametrize(
+    ("response", "expected"),
+    [
+        ({"code": "200000", "data": {"apiKey": "SECRET"}}, "ok"),
+        ({"status": "ok", "message": "SECRET"}, "ok"),
+        ({"message": "No need SECRET"}, "ok (unchanged)"),
+        ({"leverage": "10", "secret": "SECRET"}, "leverage=10x"),
+        ({"code": "51039", "msg": "SECRET"}, "code=51039"),
+        ({"code": 10**100, "msg": "SECRET"}, "code_present"),
+        ({"code": "unsafe SECRET", "msg": "SECRET"}, "code_present"),
+        ({"msg": "SECRET"}, "message_present"),
+        ({"apiKey": "SECRET"}, "response=dict"),
+        ("SECRET", "result_type=str"),
+    ],
+)
+def test_format_exchange_config_response_is_value_safe(response, expected):
+    from exchanges.ccxt_bot import format_exchange_config_response
+
+    rendered = format_exchange_config_response(response)
+
+    assert rendered == expected
+    assert len(rendered) <= 64
+    assert "SECRET" not in rendered
+
+
+@pytest.mark.parametrize("leverage", [True, math.nan, math.inf, "not-a-number SECRET"])
+def test_format_exchange_config_response_rejects_non_numeric_leverage(leverage):
+    from exchanges.ccxt_bot import format_exchange_config_response
+
+    rendered = format_exchange_config_response({"leverage": leverage, "secret": "SECRET"})
+
+    assert rendered == "response=dict"
+    assert "SECRET" not in rendered
 
 
 class TestCCXTBotSessionCreation:
@@ -284,7 +321,7 @@ class TestCCXTBotUpdateExchangeConfig:
     """Tests for update_exchange_config."""
 
     @pytest.mark.asyncio
-    async def test_update_exchange_config_sets_hedge_mode(self):
+    async def test_update_exchange_config_sets_hedge_mode(self, caplog):
         """Test that hedge mode is set when exchange supports it."""
         from exchanges.ccxt_bot import CCXTBot
 
@@ -293,11 +330,16 @@ class TestCCXTBotUpdateExchangeConfig:
 
         bot.cca = MagicMock()
         bot.cca.has = {"setPositionMode": True}
-        bot.cca.set_position_mode = AsyncMock(return_value={"result": "success"})
+        bot.cca.set_position_mode = AsyncMock(
+            return_value={"result": "success", "apiKey": "SECRET"}
+        )
 
-        await bot.update_exchange_config()
+        with caplog.at_level(logging.DEBUG):
+            await bot.update_exchange_config()
 
         bot.cca.set_position_mode.assert_called_once_with(True)
+        assert "set hedge mode response: response=dict" in caplog.text
+        assert "SECRET" not in caplog.text
 
     @pytest.mark.asyncio
     async def test_update_exchange_config_skips_when_unsupported(self):

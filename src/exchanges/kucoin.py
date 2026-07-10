@@ -534,7 +534,10 @@ class KucoinBot(CCXTBot):
             # Hedge mode enabled so both long/short can coexist.
             if hasattr(self.cca, "set_position_mode"):
                 res = await self.cca.set_position_mode(True)
-                logging.info(f"set_position_mode hedged=True {res}")
+                logging.info(
+                    "[config] set_position_mode hedged=True result=%s",
+                    format_exchange_config_response(res),
+                )
             else:
                 raise NotImplementedError("set_position_mode not supported by current KuCoin client")
         except Exception as e:

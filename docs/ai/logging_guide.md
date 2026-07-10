@@ -47,6 +47,11 @@ exists there. Add new registry values before introducing repeated literals. See
 
 Fallbacks in critical paths log warnings with required context from `error_contract.md`.
 
+Exchange-config response logs at every level must use the shared bounded
+formatter. They may expose only canonical success/unchanged status, finite
+numeric leverage, a bounded numeric response code, or response type/presence;
+they must not render arbitrary response values or full API payloads.
+
 ## Live Event Debug Profiles
 
 Use `logging.live_event_debug_profiles` or the

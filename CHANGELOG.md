@@ -4,6 +4,12 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Exchange-config success logs now use one bounded, value-safe formatter across
+  the shared CCXT connector and Binance, Bitget, Bybit, KuCoin, and OKX. Raw API
+  response values are replaced by canonical status, finite numeric leverage,
+  bounded numeric code, or response type/presence labels; exchange calls and
+  failure behavior are unchanged.
+
 - Live executor create/cancel anomalies, including lower-level base/CCXT order
   write failures, no longer print raw order dictionaries, exchange responses,
   exception messages, or tracebacks. Existing bounded structured execution
