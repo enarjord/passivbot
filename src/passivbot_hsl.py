@@ -11,7 +11,7 @@ import time
 import traceback
 from collections import deque
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Iterable, Optional
 
 import passivbot_rust as pbr
 
@@ -4437,6 +4437,22 @@ def _equity_hard_stop_refresh_halted_runtime_forced_modes(self) -> None:
             )
 
 
+def _hsl_coin_replay_candidate_batches(
+    active_pairs: Iterable[tuple[str, str]],
+    held_pairs: Iterable[tuple[str, str]],
+    cooldown_pairs: Iterable[tuple[str, str]],
+) -> tuple[tuple[tuple[str, str], ...], ...]:
+    """Freeze coin replay candidates into protective-priority batches."""
+    frozen = tuple(active_pairs)
+    held = set(held_pairs)
+    cooldown = set(cooldown_pairs) - held
+    return (
+        tuple(pair for pair in frozen if pair in held),
+        tuple(pair for pair in frozen if pair in cooldown),
+        tuple(pair for pair in frozen if pair not in held and pair not in cooldown),
+    )
+
+
 async def _equity_hard_stop_initialize_from_history(self) -> None:
     if not self._equity_hard_stop_enabled():
         return
@@ -5063,16 +5079,21 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
         pre_replay_elapsed_s = max(0.0, replay_started_s - history_loaded_s)
         last_progress_log_s = replay_started_s
         replay_symbols = set(symbols)
-        active_pairs = [
+        active_pairs = tuple(
             (pside, symbol)
             for pside in self._hsl_psides()
             if self._equity_hard_stop_coin_active_pside(pside)
             for symbol in sorted(replay_symbols)
-        ]
+        )
         active_pair_set = set(active_pairs)
         active_held_pairs = active_pair_set.intersection(current_position_pairs)
         active_panic_pairs = active_pair_set.intersection(panic_replay_pairs)
         active_required_pairs = active_pair_set.intersection(required_replay_pairs)
+        replay_candidate_batches = _hsl_coin_replay_candidate_batches(
+            active_pairs,
+            active_held_pairs,
+            active_panic_pairs,
+        )
         pair_rows_applied: dict[tuple[str, str], int] = {}
         logging.info(
             "[risk] HSL coin history reconstruction loaded | symbols=%d pairs=%d rows=%d fills=%d panic_events=%d",
@@ -5158,13 +5179,18 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
             )
 
         pair_idx = 0
-        for pside in self._hsl_psides():
-            check_shutdown("hsl_coin_history_replay_pside")
-            if not self._equity_hard_stop_coin_active_pside(pside):
-                continue
-            for symbol in sorted(replay_symbols):
+        for replay_candidates in replay_candidate_batches:
+            for pside, symbol in replay_candidates:
                 check_shutdown("hsl_coin_history_replay_pair")
                 pair_idx += 1
+                if pair_idx == 1:
+                    log_replay_progress(
+                        pair_idx,
+                        pside,
+                        symbol,
+                        0,
+                        force=True,
+                    )
                 state = self._hsl_coin_state(pside, symbol)
                 contract = self._equity_hard_stop_infer_coin_replay_contract(
                     pside, symbol, fill_events, now_ms

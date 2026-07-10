@@ -22,50 +22,51 @@ Estimated completion:
 
 ## Active Review Slice
 
-- PR #1175: `Align coin-HSL denominator across live and backtest`
-- Branch: `codex/v8-hsl-coin-denominator-parity`
+- PR: not yet opened; `Prioritize protective coin-HSL replay candidates`
+- Branch: `codex/v8-hsl-held-first-replay`
 - Head: query live GitHub metadata; this commit cannot embed its own final SHA
   without making that value stale
-- Base: `61fbd0eb14efe8a3b77535b461eb1bf7c936fe41`
-- Scope: one Rust-owned coin-HSL drawdown primitive shared by Python live/replay
-  and Rust backtest. Slot budget is balance divided by the caller's applicable
-  slot count; TWEL remains an activation/validation input but cannot scale HSL
-  sensitivity.
-- Non-goals: no TWEL activation change, no dynamic-tradability slot-count
-  change, no RED tier/EMA/finalization change, no replay ordering change, no
-  exchange call, and no new observability event.
-- Local validation: Rust `209/209` plus default-feature test compilation pass;
-  focused Python HSL/replay/binding suites `139/139`; fake-live `29/29`; real
-  Binance BTC backtest and pymoo optimizer smoke pass; extension source stamp,
-  `py_compile`, `cargo fmt --check`, and `git diff --check` pass.
-- Independent preflight: confirmed exactly two prior denominator formulas,
-  identified stale user docs, and verified that dynamic effective slots are an
-  intentional backtest-only input to preserve.
+- Base: `493a61a9cb1659927a8d895fb25597b089988527`
+- Scope: freeze the existing coin-HSL replay candidates and order them held
+  pairs first, cooldown-affected pairs second, then all remaining pairs while
+  preserving deterministic relative order. Force one bounded first-pair
+  progress event so deployed ordering is directly observable.
+- Non-goals: no early startup release, background replay, protective-ready
+  claim, fresh-entry readiness change, HSL math/state change, cache contract,
+  exchange call, or backtest behavior change.
+- Local validation: full coin-HSL suite, focused HSL metric/startup/override
+  suites, fake-live marker suite (`21/21`), Rust `209/209`, and a deterministic
+  30-symbol/1440-minute/two-iteration replay benchmark pass. The loaded Rust
+  extension source stamp matches this worktree; `py_compile`, added-line
+  silent-handling audit, and `git diff --check` pass.
+- Independent preflight: confirmed pair-local HSL state and that a mere sort
+  cannot yet make protective orders executable because startup still awaits
+  full replay. The later readiness split needs explicit protective/full state,
+  fresh-entry blocking, shutdown coordination, and dedicated source events.
 - Publication state, exact head, mergeability, CI, and current-head review
   verdicts: query live GitHub metadata. Do not encode those transient values in
   the same PR that contains this status file, because every correction would
   create a different head and immediately stale the embedded value.
-- Expected VPS action: pull with autostash, rebuild and verify the Rust
-  extension, controlled five-bot restart, then immediate and settled bounded
-  smoke reports
+- Expected VPS action: pull while preserving local artifacts, controlled
+  five-bot restart for the live Python runtime change, then immediate and
+  settled bounded smoke reports. No Rust rebuild is required.
 
 Next action:
 
-1. Poll PR #1175's exact head, mergeability, CI, and required reviews.
-2. Resolve every verified finding with focused regression coverage.
-3. Merge only after the exact-head gate is satisfied, then perform the declared
-   VPS5 restart/smoke validation.
+1. Publish the review-ready PR with the exact non-goals above.
+2. Resolve verified findings and merge only after the exact-head gate, then
+   perform the declared VPS5 restart/smoke validation.
 
 ## Deployed Baseline
 
-- Remote `v8`: `61fbd0eb`, PR #1174
-- VPS5 repository: `61fbd0eb`, PR #1174
+- Remote `v8`: `493a61a9`, PR #1175
+- VPS5 repository: `493a61a9`, PR #1175
 - VPS5 expected bots: five; all are running after the controlled restart
 - Latest immediate, settled, and fresh smoke: `ok=true`, `hard_failures=0`, all
-  five bots matched, zero account-critical/fill-refresh failures, and zero
-  text-log hard/attention matches. One non-hard Hyperliquid candle rate-limit
-  event in the settled window cleared in the fresh window. Four HSL replays
-  remained active, non-stale, not long-running, and making progress.
+  five bots matched, zero remote/account-critical/fill-refresh failures, and
+  zero text-log hard/attention matches. The fresh window contained one
+  non-hard Hyperliquid `ema.unavailable` debug event. Three HSL replays were
+  active, non-stale, not long-running, and making progress.
 - The prior tracked Rust formatting edit was already fully present in PR #1174.
   Its patch backup and autostash were retained on VPS5; tracked status is clean.
 - Preserve local/VPS configs, logs, monitor data, reports, and temporary files
@@ -90,11 +91,13 @@ Next action:
 
 ## Next Slice
 
-The coin-mode denominator parity correction is the active second prerequisite
-for held-position protective readiness. After it merges and is deployed,
-continue with immutable candidate replay and held-first protective sequencing.
-The design must preserve exact HSL reconstruction and keep observability events
-out of the decision authority. Remaining candidates:
+The denominator-parity prerequisite is merged and deployed. The active slice
+adds immutable held/cooldown-first candidate ordering without claiming early
+protective readiness. After that foundation merges, split held-position
+protective readiness from full replay while keeping fresh entries blocked until
+their cooldown eligibility is known. The design must preserve exact HSL
+reconstruction and keep observability events out of decision authority.
+Remaining candidates:
 
 - realistic-scale replay fixtures and deeper internal-stage profiling
 - held-position protective-readiness source events and sequencing

@@ -102,6 +102,11 @@ use `hsl.replay.cache` with `cache_status=hit|miss|rejected`; misses and
 rejections are non-authoritative performance-cache outcomes and should fall
 back to exchange-derived replay.
 
+Coin mode emits one `hsl.replay.progress` event with `stage=pair_replay` when
+the first frozen replay candidate starts, then keeps subsequent pair progress
+time-throttled. `is_held_pair`, `is_cooldown_pair`, and `pair_idx` expose the
+deterministic held/cooldown/remaining ordering without controlling it.
+
 ## Event Tags
 
 - `account`

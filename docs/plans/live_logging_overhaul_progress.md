@@ -19,22 +19,23 @@ Last updated: 2026-07-10.
 
 Current `origin/v8` head:
 
-- `61fbd0eb` after PR #1174, `Centralize HSL episode finalization in Rust`.
+- `493a61a9` after PR #1175, `Align coin-HSL denominator across live and
+  backtest`.
 
 Current logging-overhaul head:
 
-- `61fbd0eb` after PR #1174, `Centralize HSL episode finalization in Rust`
+- `493a61a9` after PR #1175, `Align coin-HSL denominator across live and
+  backtest`
   (latest merged logging-overhaul slice).
 
 Current work:
 
-- PR #1175 (`codex/v8-hsl-coin-denominator-parity`) moves coin-HSL slot-budget and
-  raw-drawdown math into one Rust primitive used by backtest and Python
-  live/history replay. TWEL remains an activation/validation input but no
-  longer scales HSL sensitivity; dynamic effective slot count remains an
-  intentional backtest-only input. Rust `209/209`, default-feature test
-  compilation, focused Python `139/139`, fake-live `29/29`, a real Binance BTC
-  backtest, and a pymoo optimizer smoke pass.
+- Branch `codex/v8-hsl-held-first-replay` freezes coin-HSL replay candidates
+  and orders held pairs first, cooldown pairs second, then remaining pairs.
+  This is the deterministic sequencing foundation only; full replay remains
+  startup-blocking until the later protective/full-readiness split. Full
+  coin-HSL, focused HSL metric/startup/override, fake-live `21/21`, Rust
+  `209/209`, and realistic bounded replay-benchmark validation pass.
 
 Current review gate:
 
@@ -65,6 +66,15 @@ Retuned goal boundary:
 
 VPS5 deployment status:
 
+- PR #1175 merged to `v8` as `493a61a9` after exact-head Hermes and Grok 4.5
+  green reviews plus green CI. VPS5 pulled cleanly, rebuilt the Rust extension,
+  and verified its loaded source stamp. All five bots stopped after two
+  exact-pane Ctrl-C grace windows, with no SIGTERM, and restarted from
+  `/root/bots_vps5.yaml`. Immediate, settled, and fresh smoke reports returned
+  `ok=true`, `hard_failures=0`, all five bots matched, zero failed
+  remote/account-critical/fill-refresh calls, and zero text-log hard/attention
+  matches. The fresh window had one non-hard Hyperliquid `ema.unavailable`
+  debug event; three HSL replays remained active and non-stale.
 - PR #1174 merged to `v8` as `61fbd0eb` after exact-head Hermes and Grok 4.5
   green reviews plus green CI. VPS5 backed up the known Rust formatting patch,
   pulled with autostash, and verified the patch was already fully represented

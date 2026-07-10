@@ -880,6 +880,11 @@ Each slice should update this checklist with its result.
      raw-drawdown math in Rust for live/replay and backtest. TWEL remains an
      activation/validation input, while configured live slots and intentional
      dynamic backtest slots remain caller-owned inputs.
+   - Status: the next sequencing slice freezes the existing replay candidate
+     set and processes held pairs first, cooldown-affected pairs second, then
+     remaining pairs with a bounded first-pair progress event. It deliberately
+     keeps full replay startup-blocking; protective/full readiness separation
+     and explicit protective-ready events remain the dependent behavior slice.
 
 4. [ ] Full replay lower-complexity slice.
    - Replace avoidable nested scans and repeated fill/timeline work with exact
