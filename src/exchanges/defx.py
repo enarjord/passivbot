@@ -9,7 +9,7 @@ import asyncio
 from copy import deepcopy
 
 import passivbot_rust as pbr
-from exchanges.ccxt_bot import CCXTBot
+from exchanges.ccxt_bot import CCXTBot, format_exchange_config_response
 from passivbot import logging
 from utils import utc_ms
 
@@ -176,21 +176,33 @@ class DefxBot(CCXTBot):
                     ),
                     "symbol": symbol,
                 }
-                logging.debug(f"update_exchange_config_by_symbols {params}")
+                logging.debug(
+                    "[config] %s leverage task requested | leverage=%d",
+                    symbol,
+                    params["leverage"],
+                )
                 coros_to_call_leverage[symbol] = asyncio.create_task(self.cca.set_leverage(**params))
             except Exception as e:
-                logging.error(f"{symbol}: error setting leverage {e}")
+                logging.error(
+                    "[config] %s leverage task creation failed | %s",
+                    symbol,
+                    self._format_exchange_config_error(e),
+                )
         for symbol in symbols:
             res = None
             to_print = ""
             try:
                 res = await coros_to_call_leverage[symbol]
-                to_print += f"set leverage {res}"
+                to_print = f"set_leverage {format_exchange_config_response(res)}"
             except Exception as e:
                 if '"code":"59107"' in str(e):
-                    to_print += f" cross mode and leverage: {res} {e}"
+                    to_print = "set_leverage ok (unchanged) code=59107"
                 else:
-                    logging.error(f"{symbol} error setting leverage {res} {e}")
+                    logging.error(
+                        "[config] %s leverage update failed | %s",
+                        symbol,
+                        self._format_exchange_config_error(e),
+                    )
             if to_print:
-                logging.info(f"{symbol}: {to_print}")
+                logging.info("[config] %s: %s", symbol, to_print)
         return

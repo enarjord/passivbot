@@ -740,6 +740,14 @@ Related detailed plans:
       failure logs and per-symbol methods that currently swallow exceptions are
       intentionally unchanged; deciding their propagation contract remains
       separate trading-critical work.
+    - 2026-07-10: Branch `codex/v8-exchange-config-error-diagnostics` bounds
+      the parent per-symbol retry log and connector-local exchange-config logs
+      in Binance, Bitget, Defx, Hyperliquid, KuCoin, and OKX to operation,
+      symbol, retry, canonical known-code, and exception-type context.
+      Catch/rethrow or swallow behavior remains unchanged. Outer startup/runtime
+      traceback and structured-event raw-error retention are separate
+      logging-policy work; connector propagation semantics remain separate
+      trading-critical work.
 
 ## Merged Work Log
 

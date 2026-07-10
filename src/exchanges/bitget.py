@@ -733,13 +733,22 @@ class BitgetBot(CCXTBot):
                         )
                     )
                 except Exception as e:
-                    logging.error(f"{log_symbol}: error setting {margin_mode} mode {e}")
+                    logging.error(
+                        "[config] %s %s-margin task creation failed | %s",
+                        log_symbol,
+                        margin_mode,
+                        self._format_exchange_config_error(e),
+                    )
             try:
                 coros_to_call_lev[symbol] = asyncio.create_task(
                     self.cca.set_leverage(self._calc_leverage_for_symbol(symbol), symbol=symbol)
                 )
             except Exception as e:
-                logging.error(f"{log_symbol}: error setting leverage {e}")
+                logging.error(
+                    "[config] %s leverage task creation failed | %s",
+                    log_symbol,
+                    self._format_exchange_config_error(e),
+                )
         for symbol in symbols:
             log_symbol = symbol_to_coin(symbol, verbose=False) or symbol
             res = None
@@ -748,7 +757,11 @@ class BitgetBot(CCXTBot):
                 res = await coros_to_call_lev[symbol]
                 to_print += f"leverage={format_exchange_config_response(res)} "
             except Exception as e:
-                logging.error(f"{log_symbol} error setting leverage {e}")
+                logging.error(
+                    "[config] %s leverage update failed | %s",
+                    log_symbol,
+                    self._format_exchange_config_error(e),
+                )
             res = None
             if symbol in coros_to_call_margin_mode:
                 try:
@@ -756,7 +769,10 @@ class BitgetBot(CCXTBot):
                     to_print += f"margin={format_exchange_config_response(res)}"
                 except Exception as e:
                     logging.error(
-                        f"{log_symbol} error setting {self._get_margin_mode_for_symbol(symbol)} mode {e}"
+                        "[config] %s %s-margin update failed | %s",
+                        log_symbol,
+                        self._get_margin_mode_for_symbol(symbol),
+                        self._format_exchange_config_error(e),
                     )
             if to_print:
                 logging.info(f"{log_symbol}: {to_print}")
@@ -801,7 +817,10 @@ class BitgetBot(CCXTBot):
                 "[config] set hedge mode response: %s", format_exchange_config_response(res)
             )
         except Exception as e:
-            logging.error("[config] error setting hedge mode: %s %s", e, res)
+            logging.error(
+                "[config] hedge mode update failed | %s",
+                self._format_exchange_config_error(e),
+            )
             raise
 
     def format_custom_id_single(self, order_type_id: int) -> str:

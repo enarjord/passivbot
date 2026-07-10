@@ -70,7 +70,7 @@ def make_kucoin_config_bot():
 
 
 @pytest.mark.asyncio
-async def test_update_exchange_configs_marks_only_successful_symbols(monkeypatch):
+async def test_update_exchange_configs_marks_only_successful_symbols(monkeypatch, caplog):
     import passivbot as pb_mod
 
     class FakeBot:
@@ -88,7 +88,7 @@ async def test_update_exchange_configs_marks_only_successful_symbols(monkeypatch
             symbol = symbols[0]
             self.calls.append(symbol)
             if symbol == "A":
-                raise Exception("boom")
+                raise RuntimeError("SECRET")
 
         _is_rate_limit_like_exception = pb_mod.Passivbot._is_rate_limit_like_exception
         _exchange_config_backoff_seconds = pb_mod.Passivbot._exchange_config_backoff_seconds
@@ -101,13 +101,81 @@ async def test_update_exchange_configs_marks_only_successful_symbols(monkeypatch
     monkeypatch.setattr(asyncio, "sleep", fake_sleep)
 
     bot = FakeBot()
-    await pb_mod.Passivbot.update_exchange_configs(bot)
+    with caplog.at_level(logging.WARNING):
+        await pb_mod.Passivbot.update_exchange_configs(bot)
 
     assert bot.calls == ["A", "B"]
     assert bot.already_updated_exchange_config_symbols == {"B"}
     assert bot._exchange_config_retry_attempts["A"] == 1
     assert bot._exchange_config_retry_after_ms["A"] > 0
     assert bot._health_rate_limits == 0
+    assert "error_type=RuntimeError" in caplog.text
+    assert "SECRET" not in caplog.text
+
+
+def test_format_exchange_config_error_is_bounded_and_value_safe():
+    import passivbot as pb_mod
+
+    assert (
+        pb_mod.Passivbot._format_exchange_config_error(RuntimeError("SECRET"))
+        == "error_type=RuntimeError"
+    )
+    unsafe_type = type("SECRET" * 20, (Exception,), {})
+    assert (
+        pb_mod.Passivbot._format_exchange_config_error(unsafe_type("SECRET"))
+        == "error_type=Exception"
+    )
+
+
+def make_defx_config_bot(cca):
+    from exchanges.defx import DefxBot
+
+    bot = DefxBot.__new__(DefxBot)
+    bot.cca = cca
+    bot.max_leverage = {"BTC/USDC:USDC": 10}
+    bot.config_get = lambda path, *, symbol=None: 5
+    bot.get_wallet_exposure_limit = lambda pside, symbol: 1.0
+    return bot
+
+
+@pytest.mark.asyncio
+async def test_defx_exchange_config_response_is_value_safe(caplog):
+    class SuccessfulCCA:
+        async def set_leverage(self, **params):
+            return {"leverage": params["leverage"], "apiKey": "SECRET"}
+
+    bot = make_defx_config_bot(SuccessfulCCA())
+
+    with caplog.at_level(logging.INFO):
+        await bot.update_exchange_config_by_symbols(["BTC/USDC:USDC"])
+
+    assert "set_leverage leverage=2x" in caplog.text
+    assert "SECRET" not in caplog.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("error", "expected"),
+    [
+        (RuntimeError("SECRET"), "error_type=RuntimeError"),
+        (
+            RuntimeError('{"code":"59107","msg":"SECRET"}'),
+            "set_leverage ok (unchanged) code=59107",
+        ),
+    ],
+)
+async def test_defx_exchange_config_failure_is_value_safe(caplog, error, expected):
+    class FailingCCA:
+        async def set_leverage(self, **_params):
+            raise error
+
+    bot = make_defx_config_bot(FailingCCA())
+
+    with caplog.at_level(logging.INFO):
+        await bot.update_exchange_config_by_symbols(["BTC/USDC:USDC"])
+
+    assert expected in caplog.text
+    assert "SECRET" not in caplog.text
 
 
 @pytest.mark.asyncio
@@ -329,17 +397,23 @@ async def test_update_exchange_configs_stops_after_shutdown_signal(monkeypatch):
         ("exchanges.kucoin", "KucoinBot"),
     ],
 )
-async def test_exchange_update_config_reraises_hedge_mode_failures(module_name, class_name):
+async def test_exchange_update_config_reraises_hedge_mode_failures(
+    module_name, class_name, caplog
+):
     module = __import__(module_name, fromlist=[class_name])
     bot_cls = getattr(module, class_name)
     bot = bot_cls.__new__(bot_cls)
-    bot.cca = SimpleNamespace(set_position_mode=AsyncMock(side_effect=RuntimeError("boom")))
+    bot.cca = SimpleNamespace(set_position_mode=AsyncMock(side_effect=RuntimeError("SECRET")))
     if class_name == "BitgetBot":
         # Bitget probes the UTA account mode before setting hedge mode.
         bot.cca.private_uta_get_v3_account_assets = AsyncMock(return_value={"code": "00000"})
 
-    with pytest.raises(RuntimeError, match="boom"):
-        await bot.update_exchange_config()
+    with caplog.at_level(logging.ERROR):
+        with pytest.raises(RuntimeError, match="SECRET"):
+            await bot.update_exchange_config()
+
+    assert "error_type=RuntimeError" in caplog.text
+    assert "SECRET" not in caplog.text
 
 
 @pytest.mark.asyncio
@@ -367,15 +441,21 @@ async def test_exchange_update_config_accepts_live_same_mode_success(
 
 
 @pytest.mark.asyncio
-async def test_binance_update_config_accepts_already_hedged_response():
+async def test_binance_update_config_accepts_already_hedged_response(caplog):
     from exchanges.binance import BinanceBot
 
     bot = BinanceBot.__new__(BinanceBot)
     bot.cca = SimpleNamespace(
-        set_position_mode=AsyncMock(side_effect=Exception('{"code":-4059,"msg":"No need"}'))
+        set_position_mode=AsyncMock(
+            side_effect=Exception('{"code":-4059,"msg":"No need SECRET"}')
+        )
     )
 
-    await bot.update_exchange_config()
+    with caplog.at_level(logging.DEBUG):
+        await bot.update_exchange_config()
+
+    assert "hedge mode unchanged | code=-4059" in caplog.text
+    assert "SECRET" not in caplog.text
 
 
 @pytest.mark.asyncio
@@ -448,6 +528,29 @@ async def test_okx_update_config_reraises_unknown_hedge_mode_failure():
 
     with pytest.raises(RuntimeError, match="hedge boom"):
         await bot.update_exchange_config()
+
+
+@pytest.mark.asyncio
+async def test_okx_update_config_bounds_known_skip_diagnostic(caplog):
+    from exchanges.okx import OKXBot
+
+    bot = OKXBot.__new__(OKXBot)
+    bot.okx_dual_side = True
+    bot.hedge_mode = True
+    bot.cca = SimpleNamespace(
+        private_get_account_config=AsyncMock(
+            return_value={"data": [{"posMode": "long_short_mode"}]}
+        ),
+        set_position_mode=AsyncMock(
+            side_effect=RuntimeError('{"code":"59000","msg":"SECRET"}')
+        ),
+    )
+
+    with caplog.at_level(logging.INFO):
+        await bot.update_exchange_config()
+
+    assert "hedge mode update skipped | code=59000" in caplog.text
+    assert "SECRET" not in caplog.text
 
 
 @pytest.mark.asyncio

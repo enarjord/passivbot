@@ -19,21 +19,23 @@ Last updated: 2026-07-10.
 
 Current `origin/v8` head:
 
-- `8bb35dea` after PR #1167, `Bound lower-level order write diagnostics`.
+- `8b0869e9` after PR #1168, `Bound exchange config response diagnostics`.
 
 Current logging-overhaul head:
 
-- `8bb35dea` after PR #1167, `Bound lower-level order write diagnostics`
+- `8b0869e9` after PR #1168, `Bound exchange config response diagnostics`
   (latest merged logging-overhaul slice).
 
 Current work:
 
-- Branch `codex/v8-exchange-config-response-diagnostics` makes the shared
-  exchange-config response formatter value-safe and applies it to account-level
-  hedge-mode success logs in the shared CCXT connector plus Binance, Bitget,
-  Bybit, KuCoin, and OKX. It changes logging only; exchange calls, response
-  handling, exception propagation, retry/backoff, and trading behavior remain
-  unchanged.
+- Branch `codex/v8-exchange-config-error-diagnostics` removes raw exception
+  messages and partial response objects from the parent per-symbol retry log and
+  connector-local exchange-config logs in Binance, Bitget, Defx, Hyperliquid,
+  KuCoin, and OKX. Logs retain bounded operation, symbol, retry, canonical
+  known-code, and exception-type context. Existing catches, exception
+  propagation, retry/backoff, per-symbol handling, exchange I/O, and trading
+  behavior remain unchanged. Outer startup/runtime exception logs and
+  structured-event error retention remain separate logging-policy work.
 
 Current review gate:
 
@@ -64,6 +66,22 @@ Retuned goal boundary:
 
 VPS5 deployment status:
 
+- Repository pulled through PR #1168 at `8b0869e9`. Successful account-level
+  exchange-config responses now use the shared bounded value-safe formatter in
+  the CCXT base plus Binance, Bitget, Bybit, KuCoin, and OKX. The PR merged
+  after current-head Hermes and Grok 4.5 approvals plus green CI; Claude Opus
+  4.8 was explicitly waived while rate-limited. VPS5 was pulled with
+  `git pull --autostash --ff-only origin v8`, preserving the pre-existing
+  tracked Rust edit and local config/tmp artifacts. After two exact-pane
+  Ctrl-C grace windows, the four remaining verified HSL-replay PIDs received
+  SIGTERM; the empty tmux session was then reloaded from
+  `/root/bots_vps5.yaml`. Immediate and settled smoke reports returned
+  `ok=true`, `hard_failures=0`, all five expected bots matched, zero failed
+  remote/account-critical calls, zero fill-refresh failures, and zero text-log
+  hard/attention matches. The new KuCoin startup line was observed as
+  `[config] set_position_mode hedged=True result=ok`; the raw response
+  dictionary appeared only in the pre-restart log. Four HSL replays remained
+  active but non-stale and not long-running.
 - Repository pulled through PR #1167 at `8bb35dea`. Lower-level base and CCXT
   order-write failures now fall back to bounded action/symbol/type/error-type
   context only when structured console projection cannot retain the parent

@@ -233,7 +233,12 @@ class OKXBot(CCXTBot):
                     )
                 )
             except Exception as e:
-                logging.error(f"{log_symbol}: error setting {margin_mode} mode and leverage {e}")
+                logging.error(
+                    "[config] %s %s-margin task creation failed | %s",
+                    log_symbol,
+                    margin_mode,
+                    self._format_exchange_config_error(e),
+                )
         for symbol in symbols:
             log_symbol = symbol_to_coin(symbol, verbose=False) or symbol
             res = None
@@ -251,7 +256,11 @@ class OKXBot(CCXTBot):
                     )
                     continue
                 else:
-                    logging.error(f"{log_symbol} error setting cross mode {e}")
+                    logging.error(
+                        "[config] %s cross-margin update failed | %s",
+                        log_symbol,
+                        self._format_exchange_config_error(e),
+                    )
             if to_print:
                 logging.info(f"{log_symbol}: {to_print}")
 
@@ -271,7 +280,7 @@ class OKXBot(CCXTBot):
         except Exception as e:
             err_str = str(e)
             if '"code":"59000"' in err_str:
-                logging.info("[config] hedge mode update skipped: %s", e)
+                logging.info("[config] hedge mode update skipped | code=59000")
             elif '"code":"51039"' in err_str or '"code":"51000"' in err_str:
                 # Cannot switch to dual/hedge (often due to PM or open orders/positions).
                 self.okx_dual_side = False

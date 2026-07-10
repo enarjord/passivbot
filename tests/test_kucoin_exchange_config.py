@@ -279,6 +279,28 @@ async def test_update_exchange_config_by_symbols_treats_missing_max_leverage_as_
 
 
 @pytest.mark.asyncio
+async def test_update_exchange_config_by_symbols_bounds_failure_logs(caplog):
+    class FailingCCA:
+        async def set_margin_mode(self, **_params):
+            raise RuntimeError("SECRET_MARGIN")
+
+        async def set_leverage(self, **_params):
+            raise ValueError("SECRET_LEVERAGE")
+
+    bot = make_bot()
+    bot.cca = FailingCCA()
+    bot.max_leverage = {"BTC/USDT:USDT": 10}
+    bot.config_get = lambda path, *, symbol=None: 5
+
+    with caplog.at_level(logging.WARNING):
+        await bot.update_exchange_config_by_symbols(["BTC/USDT:USDT"])
+
+    assert "error_type=RuntimeError" in caplog.text
+    assert "error_type=ValueError" in caplog.text
+    assert "SECRET" not in caplog.text
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("raw_max_leverage", ["bad", 0, -1, math.inf, math.nan])
 async def test_update_exchange_config_by_symbols_rejects_invalid_max_leverage(
     raw_max_leverage,
