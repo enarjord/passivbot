@@ -15,34 +15,34 @@ merge, live smoke evidence changes, or new gaps are discovered.
 
 ## Current Status
 
-Last updated: 2026-07-09.
+Last updated: 2026-07-10.
 
 Current `origin/v8` head:
 
-- `a0639806` after PR #1164, `Distinguish recovered config refresh failures`.
+- `5e03df42` after PR #1165, `Expose timing correlation IDs`.
 
 Current logging-overhaul head:
 
-- `a0639806` after PR #1164, `Distinguish recovered config refresh failures`
+- `5e03df42` after PR #1165, `Expose timing correlation IDs`
   (latest merged logging-overhaul slice).
 
 Current work:
 
-- Branch `codex/v8-performance-correlation-ids` adds one bounded report-safe
-  canonical `latest_ids` mapping to each timing group and carries it into
-  `operation_durations` and `slowest_blockers`. This lets operators jump from a
-  slow timing row to the related structured events without exposing free-form
-  payloads. Legacy snapshot IDs follow the existing event-query normalization,
-  and equal-timestamp samples use persistent event sequence/source position.
-  The slice is read-only and does not change event production, exchange calls,
-  order/risk logic, restart orchestration, or trading behavior.
+- Branch `codex/v8-executor-bounded-diagnostics` removes raw order dictionaries,
+  exchange responses, exception messages, and tracebacks from executor
+  anomaly stdout/ERROR paths. Existing structured execution events remain the
+  detailed source; fallback text logs are emitted only when the structured
+  console is unavailable and contain bounded symbol/type/count/reason fields.
+  Exchange calls, result classification, retry/restart behavior, local state,
+  order/risk logic, and trading behavior remain unchanged.
 
 Current review gate:
 
-- Composer has been stopped/retired from this loop. The normal review gate is
-  now Claude Opus 4.8 + Hermes + Grok 4.5 + CI. For low-risk docs/tooling-only
-  slices, a degraded gate may still be used after repeated reviewer absence,
-  but that exception must be called out in the progress evidence.
+- Composer has been stopped/retired from this loop. While Claude Opus 4.8 is
+  rate-limited, the required review gate is Hermes + Grok 4.5 + CI; Claude may
+  rejoin when available. Findings from any additional reviewer still require
+  verification and resolution. A degraded gate after reviewer absence must be
+  explicitly authorized and called out in the progress evidence.
 
 Retuned goal boundary:
 
@@ -65,6 +65,21 @@ Retuned goal boundary:
 
 VPS5 deployment status:
 
+- Repository pulled through PR #1165 at `5e03df42`.
+- PR #1165 added bounded report-safe latest correlation IDs to performance
+  timing groups, `operation_durations`, and `slowest_blockers`, with legacy
+  snapshot-ID normalization and stable persistent event ordering. It merged
+  after current-head Hermes, Claude Opus 4.8, Grok 4.5, and Codex reviews were
+  green and CI passed. VPS5 was pulled with
+  `git pull --autostash --ff-only origin v8`, preserving the pre-existing
+  tracked Rust edit and local config/tmp artifacts. No bot restart was
+  performed because the slice was read-only report projection. The first
+  two-minute smoke caught a Kucoin account-state `RequestTimeout` and degraded
+  cycle; a fresh one-minute smoke cleared with `ok=true`, `hard_failures=0`,
+  all five bots matched, and zero failed remote/account-critical calls. A
+  bounded 180-minute real-monitor report returned `ok=true`,
+  `error_count=0`, and 78 of 80 displayed groups carried `latest_ids` in each
+  of the performance, operation-duration, and blocker projections.
 - Repository pulled through PR #1164 at `a0639806`.
 - PR #1164 made the smoke and performance `exchange.config_refresh` projections
   distinguish historical failures from latest unresolved failures and expose

@@ -138,6 +138,11 @@ These are useful for diagnostics but should not stay default INFO console noise:
 - successful cache loads/flushes
 - websocket reconnect debug loops unless user action is needed
 - raw CCXT request/response payloads outside TRACE.
+- executor create/cancel anomaly payloads. Bounded structured execution events
+  are authoritative; text fallback may include only counts, sanitized symbols,
+  order type, reason code, and exception type when the structured console is
+  unavailable. Never print raw order dictionaries, exchange responses, or
+  exception messages from these paths.
 
 Structured events may still retain compact summaries or DEBUG details.
 
