@@ -127,6 +127,57 @@ def test_format_exchange_config_error_is_bounded_and_value_safe():
     )
 
 
+def make_defx_config_bot(cca):
+    from exchanges.defx import DefxBot
+
+    bot = DefxBot.__new__(DefxBot)
+    bot.cca = cca
+    bot.max_leverage = {"BTC/USDC:USDC": 10}
+    bot.config_get = lambda path, *, symbol=None: 5
+    bot.get_wallet_exposure_limit = lambda pside, symbol: 1.0
+    return bot
+
+
+@pytest.mark.asyncio
+async def test_defx_exchange_config_response_is_value_safe(caplog):
+    class SuccessfulCCA:
+        async def set_leverage(self, **params):
+            return {"leverage": params["leverage"], "apiKey": "SECRET"}
+
+    bot = make_defx_config_bot(SuccessfulCCA())
+
+    with caplog.at_level(logging.INFO):
+        await bot.update_exchange_config_by_symbols(["BTC/USDC:USDC"])
+
+    assert "set_leverage leverage=2x" in caplog.text
+    assert "SECRET" not in caplog.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("error", "expected"),
+    [
+        (RuntimeError("SECRET"), "error_type=RuntimeError"),
+        (
+            RuntimeError('{"code":"59107","msg":"SECRET"}'),
+            "set_leverage ok (unchanged) code=59107",
+        ),
+    ],
+)
+async def test_defx_exchange_config_failure_is_value_safe(caplog, error, expected):
+    class FailingCCA:
+        async def set_leverage(self, **_params):
+            raise error
+
+    bot = make_defx_config_bot(FailingCCA())
+
+    with caplog.at_level(logging.INFO):
+        await bot.update_exchange_config_by_symbols(["BTC/USDC:USDC"])
+
+    assert expected in caplog.text
+    assert "SECRET" not in caplog.text
+
+
 @pytest.mark.asyncio
 async def test_update_exchange_configs_does_not_mark_invalid_kucoin_leverage_cap(
     monkeypatch,

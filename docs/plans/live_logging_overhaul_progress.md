@@ -29,11 +29,13 @@ Current logging-overhaul head:
 Current work:
 
 - Branch `codex/v8-exchange-config-error-diagnostics` removes raw exception
-  messages and partial response objects from parent/connector exchange-config
-  failure logs. Logs retain bounded operation, symbol, retry, canonical
+  messages and partial response objects from the parent per-symbol retry log and
+  connector-local exchange-config logs in Binance, Bitget, Defx, Hyperliquid,
+  KuCoin, and OKX. Logs retain bounded operation, symbol, retry, canonical
   known-code, and exception-type context. Existing catches, exception
   propagation, retry/backoff, per-symbol handling, exchange I/O, and trading
-  behavior remain unchanged.
+  behavior remain unchanged. Outer startup/runtime exception logs and
+  structured-event error retention remain separate logging-policy work.
 
 Current review gate:
 
