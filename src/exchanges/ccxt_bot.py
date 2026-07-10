@@ -77,7 +77,11 @@ def format_exchange_config_response(res: object) -> str:
         if leverage_value is not None and math.isfinite(leverage_value):
             return f"leverage={leverage_value:g}x"
 
-    if isinstance(code, int) and not isinstance(code, bool):
+    if (
+        isinstance(code, int)
+        and not isinstance(code, bool)
+        and -999_999_999_999 <= code <= 999_999_999_999
+    ):
         return f"code={code}"
     if (
         isinstance(code, str)

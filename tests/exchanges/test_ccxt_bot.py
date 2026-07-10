@@ -14,6 +14,7 @@ import pytest
         ({"message": "No need SECRET"}, "ok (unchanged)"),
         ({"leverage": "10", "secret": "SECRET"}, "leverage=10x"),
         ({"code": "51039", "msg": "SECRET"}, "code=51039"),
+        ({"code": 10**100, "msg": "SECRET"}, "code_present"),
         ({"code": "unsafe SECRET", "msg": "SECRET"}, "code_present"),
         ({"msg": "SECRET"}, "message_present"),
         ({"apiKey": "SECRET"}, "response=dict"),
