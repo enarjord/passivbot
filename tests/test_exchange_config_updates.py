@@ -473,6 +473,38 @@ async def test_okx_update_config_verified_net_mode_fails_loudly():
 
 
 @pytest.mark.asyncio
+async def test_okx_already_gone_cancel_does_not_log_raw_exception(caplog, capsys):
+    from exchanges.okx import OKXBot
+
+    bot = OKXBot.__new__(OKXBot)
+    bot.cca = SimpleNamespace(
+        cancel_order=AsyncMock(
+            side_effect=Exception(
+                '{"sCode":"51400","apiKey":"RAW_OKX_CANCEL_SECRET"}'
+            )
+        )
+    )
+    order = {
+        "id": "order-1",
+        "symbol": "BTC/USDT:USDT",
+        "raw_payload": "RAW_OKX_ORDER_SECRET",
+    }
+
+    with caplog.at_level(logging.INFO):
+        result = await bot.execute_cancellation(order)
+
+    assert result["status"] == "success"
+    assert result["_passivbot_cancel_requires_full_authoritative_confirmation"] is True
+    captured = capsys.readouterr()
+    rendered = captured.out + captured.err + caplog.text
+    assert "RAW_OKX_CANCEL_SECRET" not in rendered
+    assert "RAW_OKX_ORDER_SECRET" not in rendered
+    assert "sCode" not in rendered
+    assert "cancel skipped: BTC" in caplog.text
+    assert "error_type=Exception" in caplog.text
+
+
+@pytest.mark.asyncio
 async def test_execute_to_exchange_stops_after_exchange_config_shutdown():
     import passivbot as pb_mod
 

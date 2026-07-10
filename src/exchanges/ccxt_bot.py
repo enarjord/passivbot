@@ -1133,7 +1133,9 @@ class CCXTBot(Passivbot):
         if any_exceptions:
             for i, result in enumerate(results):
                 if isinstance(result, Exception):
-                    logging.error(f"error executing order {orders[i]}: {result}")
+                    self._log_order_write_failure(
+                        action="create", order=orders[i], error=result
+                    )
             await self.restart_bot_on_too_many_errors()
 
         return results
@@ -1150,7 +1152,9 @@ class CCXTBot(Passivbot):
         if any_exceptions:
             for i, result in enumerate(results):
                 if isinstance(result, Exception):
-                    logging.error(f"error cancelling order {orders[i]}: {result}")
+                    self._log_order_write_failure(
+                        action="cancel", order=orders[i], error=result
+                    )
             await self.restart_bot_on_too_many_errors()
 
         return results

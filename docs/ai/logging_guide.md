@@ -115,6 +115,8 @@ Executor create/cancel anomalies are console-visible through bounded structured
 execution events. Legacy fallback logs may retain only counts, sanitized
 symbol/order-type labels, reason codes, and exception types; they must not print
 raw order dictionaries, exchange responses, exception messages, or tracebacks.
+This applies at every order-write layer, including connector/base batch helpers
+that run before the parent executor classifies the result.
 Periodic `health.summary` events are console-visible because they provide a
 compact operator heartbeat covering uptime, loop latency, position counts,
 recent order/fill activity, errors, and resource pressure. Degraded

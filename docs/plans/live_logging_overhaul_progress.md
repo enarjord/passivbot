@@ -19,22 +19,23 @@ Last updated: 2026-07-10.
 
 Current `origin/v8` head:
 
-- `5e03df42` after PR #1165, `Expose timing correlation IDs`.
+- `b1516253` after PR #1166, `Bound live executor anomaly diagnostics`.
 
 Current logging-overhaul head:
 
-- `5e03df42` after PR #1165, `Expose timing correlation IDs`
+- `b1516253` after PR #1166, `Bound live executor anomaly diagnostics`
   (latest merged logging-overhaul slice).
 
 Current work:
 
-- Branch `codex/v8-executor-bounded-diagnostics` removes raw order dictionaries,
-  exchange responses, exception messages, and tracebacks from executor
-  anomaly stdout/ERROR paths. Existing structured execution events remain the
-  detailed source; fallback text logs are emitted only when the structured
-  console is unavailable and contain bounded symbol/type/count/reason fields.
-  Exchange calls, result classification, retry/restart behavior, local state,
-  order/risk logic, and trading behavior remain unchanged.
+- Branch `codex/v8-order-write-bounded-diagnostics` extends the executor
+  diagnostic contract through the lower-level base and CCXT order-write
+  helpers. Error fallbacks contain only bounded action/symbol/type/error-type
+  fields and are suppressed when structured console projection is available;
+  the OKX already-gone cancel race also stops rendering raw exception text.
+  Exchange calls, exception-result propagation, ambiguous classification,
+  retry/restart behavior, local state, order/risk logic, and trading behavior
+  remain unchanged.
 
 Current review gate:
 
@@ -65,6 +66,22 @@ Retuned goal boundary:
 
 VPS5 deployment status:
 
+- Repository pulled through PR #1166 at `b1516253`.
+- PR #1166 removed raw order dictionaries, exchange responses, exception
+  messages, and tracebacks from parent executor anomaly output while preserving
+  exchange writes, result classification, ambiguous-order bookkeeping,
+  restart behavior, and state mutation. It merged after current-head Hermes
+  and Grok 4.5 approvals plus green CI; Claude Opus 4.8 was explicitly waived
+  while rate-limited. VPS5 was pulled with `git pull --autostash --ff-only
+  origin v8`, preserving the pre-existing tracked Rust edit and local
+  config/tmp artifacts. All five bots were restarted from
+  `/root/bots_vps5.yaml`; Kucoin required a second exact-pane Ctrl+C, and no
+  broad process-pattern signal was used. Immediate and later smoke reports
+  returned `ok=true`, `hard_failures=0`, all five expected bots matched, and
+  zero failed remote/account-critical calls or text-log hard/attention matches.
+  Four forager bots remained in active, non-stale coin-HSL replay with forward
+  progress, reflecting the known startup-latency gap rather than a #1166
+  regression.
 - Repository pulled through PR #1165 at `5e03df42`.
 - PR #1165 added bounded report-safe latest correlation IDs to performance
   timing groups, `operation_durations`, and `slowest_blockers`, with legacy
