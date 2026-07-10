@@ -192,7 +192,11 @@ class OKXBot(CCXTBot):
         except Exception as e:
             # 51400 = order already cancelled or filled - not an error
             if '"sCode":"51400"' in str(e):
-                logging.info(f"Order already cancelled/filled: {e}")
+                logging.info(
+                    "[order] cancel skipped: %s - order already cancelled or filled | error_type=%s",
+                    self._log_symbol(order.get("symbol")),
+                    type(e).__name__,
+                )
                 return self._ambiguous_cancel_success_result(order)
             raise
 

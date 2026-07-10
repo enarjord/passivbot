@@ -725,6 +725,61 @@ class Passivbot:
         return symbol_to_coin(sym, verbose=False) or sym
 
     @staticmethod
+    def _log_order_type(order: Any) -> str:
+        """Return a bounded order-type label without decoding raw client ids."""
+        if not isinstance(order, dict):
+            return "unknown"
+        value = str(order.get("pb_order_type") or "unknown")
+        return value if len(value) <= 64 else f"{value[:64]}..."
+
+    def _log_order_write_failure(
+        self,
+        *,
+        action: str,
+        order: Any,
+        error: BaseException,
+        force: bool = False,
+    ) -> None:
+        """Emit a bounded fallback when structured execution console is unavailable."""
+        if not force and Passivbot._live_event_console_available(self):
+            return
+        symbol = Passivbot._log_symbol(
+            order.get("symbol") if isinstance(order, dict) else None
+        )
+        if len(symbol) > 80:
+            symbol = f"{symbol[:80]}..."
+        logging.error(
+            "[order] write failed | action=%s symbol=%s type=%s error_type=%s",
+            action,
+            symbol,
+            Passivbot._log_order_type(order),
+            type(error).__name__,
+        )
+
+    async def _handle_order_write_failures(
+        self, failures: list[tuple[str, Any, BaseException]]
+    ) -> None:
+        """Log bounded fallbacks and preserve restart-budget handling."""
+        if not failures:
+            return
+        for action, order, error in failures:
+            self._log_order_write_failure(
+                action=action, order=order, error=error
+            )
+        try:
+            await self.restart_bot_on_too_many_errors()
+        except BaseException:
+            if Passivbot._live_event_console_available(self):
+                for action, order, error in failures:
+                    self._log_order_write_failure(
+                        action=action,
+                        order=order,
+                        error=error,
+                        force=True,
+                    )
+            raise
+
+    @staticmethod
     def _log_symbols(symbols: Iterable[Any], limit: int | None = None) -> str:
         """Format a symbol collection for operator-facing logs."""
         vals = [Passivbot._log_symbol(symbol) for symbol in symbols if symbol]
@@ -17344,18 +17399,15 @@ class Passivbot:
         if not orders:
             return []
         executions = []
-        any_exceptions = False
+        failures: list[tuple[str, Any, BaseException]] = []
+        action = "cancel" if "cancel" in type_ else "create"
         for order in orders:  # sorted by PA dist
-            task = None
             try:
                 task = asyncio.create_task(getattr(self, type_)(order))
                 executions.append((order, task))
             except Exception as e:
-                logging.error(f"error executing {type_} {order} {e}")
-                print_async_exception(task)
-                traceback.print_exc()
+                failures.append((action, order, e))
                 executions.append((order, e))
-                any_exceptions = True
         results = []
         for order, execution in executions:
             if isinstance(execution, Exception):
@@ -17367,13 +17419,9 @@ class Passivbot:
                 result = await execution
                 results.append(result)
             except Exception as e:
-                logging.error(f"error executing {type_} {execution} {e}")
-                print_async_exception(result)
+                failures.append((action, order, e))
                 results.append(e)
-                traceback.print_exc()
-                any_exceptions = True
-        if any_exceptions:
-            await self.restart_bot_on_too_many_errors()
+        await self._handle_order_write_failures(failures)
         return results
 
     # Legacy maintain_ohlcvs_1m_REST removed; CandlestickManager handles caching and TTL
@@ -17673,8 +17721,6 @@ class Passivbot:
                     order.get("id", "?")[:12],
                 )
                 return self._ambiguous_cancel_success_result(order)
-            logging.error(f"error cancelling order {order} {e}")
-            print_async_exception(executed)
             raise
 
     async def execute_cancellations(self, orders: [dict]) -> [dict]:

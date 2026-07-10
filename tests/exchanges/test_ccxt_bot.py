@@ -434,6 +434,156 @@ class TestCCXTBotUpdateExchangeConfigBySymbols:
             await bot.update_exchange_config_by_symbols(["BTC/USDT:USDT"])
 
 
+class TestCCXTBotBatchOrderDiagnostics:
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("batch_method", "single_method", "action"),
+        [
+            ("execute_orders", "execute_order", "create"),
+            ("execute_cancellations", "execute_cancellation", "cancel"),
+        ],
+    )
+    async def test_bounds_failures_and_preserves_restart(
+        self, batch_method, single_method, action, caplog, capsys
+    ):
+        from exchanges.ccxt_bot import CCXTBot
+
+        bot = CCXTBot.__new__(CCXTBot)
+        bot.live_event_console_enabled = False
+        bot._live_event_pipeline = None
+        setattr(
+            bot,
+            single_method,
+            AsyncMock(
+                side_effect=RuntimeError(
+                    "exchange write failed Authorization: Bearer RAW_WRITE_SECRET"
+                )
+            ),
+        )
+        bot.restart_bot_on_too_many_errors = AsyncMock()
+        order = {
+            "id": "order-1",
+            "symbol": "BTC/USDT:USDT",
+            "pb_order_type": "entry_grid_normal_long",
+            "raw_payload": "RAW_ORDER_SECRET",
+        }
+
+        with caplog.at_level(logging.ERROR):
+            results = await getattr(bot, batch_method)([order])
+
+        assert len(results) == 1
+        assert isinstance(results[0], RuntimeError)
+        bot.restart_bot_on_too_many_errors.assert_awaited_once()
+        captured = capsys.readouterr()
+        rendered = captured.out + captured.err + caplog.text
+        assert "RAW_WRITE_SECRET" not in rendered
+        assert "RAW_ORDER_SECRET" not in rendered
+        assert "Authorization" not in rendered
+        assert "raw_payload" not in rendered
+        assert (
+            f"[order] write failed | action={action} symbol=BTC "
+            "type=entry_grid_normal_long error_type=RuntimeError"
+        ) in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_structured_console_suppresses_fallback(self, caplog):
+        from exchanges.ccxt_bot import CCXTBot
+
+        bot = CCXTBot.__new__(CCXTBot)
+        bot.live_event_console_enabled = True
+        bot._live_event_pipeline = object()
+        bot.execute_order = AsyncMock(side_effect=RuntimeError("RAW_SUPPRESSED_SECRET"))
+        bot.restart_bot_on_too_many_errors = AsyncMock()
+
+        with caplog.at_level(logging.ERROR):
+            results = await bot.execute_orders(
+                [
+                    {
+                        "symbol": "ETH/USDT:USDT",
+                        "pb_order_type": "close_grid_long",
+                    }
+                ]
+            )
+
+        assert len(results) == 1
+        assert isinstance(results[0], RuntimeError)
+        bot.restart_bot_on_too_many_errors.assert_awaited_once()
+        assert "write failed" not in caplog.text
+        assert "RAW_SUPPRESSED_SECRET" not in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_restart_raise_forces_bounded_fallback(
+        self, caplog, capsys
+    ):
+        from exchanges.ccxt_bot import CCXTBot
+        from passivbot_exceptions import RestartBotException
+
+        bot = CCXTBot.__new__(CCXTBot)
+        bot.live_event_console_enabled = True
+        bot._live_event_pipeline = object()
+        bot.execute_order = AsyncMock(
+            side_effect=RuntimeError("write failed apiKey=RAW_RESTART_WRITE_SECRET")
+        )
+        bot.restart_bot_on_too_many_errors = AsyncMock(
+            side_effect=RestartBotException(
+                "restart failed Authorization: Bearer RAW_RESTART_SECRET"
+            )
+        )
+        order = {
+            "symbol": "XRP/USDT:USDT",
+            "pb_order_type": "entry_grid_normal_long",
+            "private": "RAW_RESTART_ORDER_SECRET",
+        }
+
+        with caplog.at_level(logging.ERROR):
+            with pytest.raises(RestartBotException, match="restart failed"):
+                await bot.execute_orders([order])
+
+        bot.restart_bot_on_too_many_errors.assert_awaited_once()
+        captured = capsys.readouterr()
+        rendered = captured.out + captured.err + caplog.text
+        assert "RAW_RESTART_WRITE_SECRET" not in rendered
+        assert "RAW_RESTART_SECRET" not in rendered
+        assert "RAW_RESTART_ORDER_SECRET" not in rendered
+        assert (
+            "[order] write failed | action=create symbol=XRP "
+            "type=entry_grid_normal_long error_type=RuntimeError"
+        ) in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_base_sequential_writer_bounds_failure(self, caplog, capsys):
+        from passivbot import Passivbot
+
+        bot = Passivbot.__new__(Passivbot)
+        bot.live_event_console_enabled = False
+        bot._live_event_pipeline = None
+        bot.execute_order = AsyncMock(
+            side_effect=RuntimeError("sequential failed apiKey=RAW_SEQUENTIAL_SECRET")
+        )
+        bot.restart_bot_on_too_many_errors = AsyncMock()
+        order = {
+            "symbol": "SOL/USDT:USDT",
+            "pb_order_type": "entry_grid_normal_long",
+            "private": "RAW_SEQUENTIAL_ORDER_SECRET",
+        }
+
+        with caplog.at_level(logging.ERROR):
+            results = await bot.execute_multiple([order], "execute_order")
+
+        assert len(results) == 1
+        assert isinstance(results[0], RuntimeError)
+        bot.restart_bot_on_too_many_errors.assert_awaited_once()
+        captured = capsys.readouterr()
+        rendered = captured.out + captured.err + caplog.text
+        assert "RAW_SEQUENTIAL_SECRET" not in rendered
+        assert "RAW_SEQUENTIAL_ORDER_SECRET" not in rendered
+        assert "Traceback" not in rendered
+        assert (
+            "[order] write failed | action=create symbol=SOL "
+            "type=entry_grid_normal_long error_type=RuntimeError"
+        ) in caplog.text
+
+
 class TestCCXTBotExecuteCancellation:
     """Tests for execute_cancellation."""
 
@@ -464,18 +614,35 @@ class TestCCXTBotExecuteCancellation:
         assert not any(record.levelname == "ERROR" for record in caplog.records)
 
     @pytest.mark.asyncio
-    async def test_unexpected_cancel_error_propagates(self):
+    async def test_unexpected_cancel_error_propagates_without_raw_output(
+        self, caplog, capsys
+    ):
         from exchanges.ccxt_bot import CCXTBot
 
         bot = CCXTBot.__new__(CCXTBot)
         bot.exchange = "bybit"
         bot.cca = MagicMock()
-        bot.cca.cancel_order = AsyncMock(side_effect=Exception("simulated network outage"))
-
-        with pytest.raises(Exception, match="simulated network outage"):
-            await bot.execute_cancellation(
-                {"id": "abc123def456", "symbol": "SUI/USDT:USDT"}
+        bot.cca.cancel_order = AsyncMock(
+            side_effect=Exception(
+                "simulated network outage Authorization: Bearer RAW_CANCEL_SECRET"
             )
+        )
+
+        with caplog.at_level(logging.ERROR):
+            with pytest.raises(Exception, match="simulated network outage"):
+                await bot.execute_cancellation(
+                    {
+                        "id": "abc123def456",
+                        "symbol": "SUI/USDT:USDT",
+                        "raw_payload": "RAW_CANCEL_ORDER_SECRET",
+                    }
+                )
+
+        captured = capsys.readouterr()
+        rendered = captured.out + captured.err + caplog.text
+        assert "RAW_CANCEL_SECRET" not in rendered
+        assert "RAW_CANCEL_ORDER_SECRET" not in rendered
+        assert "simulated network outage" not in rendered
 
     def test_cross_only_blocks_isolated_only_symbol_for_entries(self, caplog):
         from exchanges.ccxt_bot import CCXTBot
