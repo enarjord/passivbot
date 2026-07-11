@@ -98,9 +98,11 @@ slices.
   - Result: `passivbot tool hsl-replay-benchmark` replays a bounded in-memory
     coin-HSL fixture through the current initializer, with distinct profiled
     timeline-rows/s and pair-rows/s, per-stage timing, counter, fixture-hash,
-    final-state-hash, and side-effect-counter output. Realistic-scale
-    fill/row/pair fixtures and deeper internal-stage profiling remain part of
-    the open benchmark slice.
+    final-state-hash, and side-effect-counter output. The active sparse-replay
+    slice extends this to a 43,201-minute, 30-pair fixture with held and
+    historical-flat pairs, cooldown/panic transitions, same-timestamp fills,
+    account-balance changes, EMA smoothing, and exact dense-reference state and
+    sample-count comparison. Deeper internal-stage profiling remains open.
 - [ ] Acceptance: before optimizing, the report identifies the dominant cost
   category and provides a repeatable local benchmark.
 
@@ -536,8 +538,12 @@ Trading-impact labels:
     aligned NumPy account/pair arrays instead of the rich nested timeline and
     consumes those arrays directly. A 43,201-minute, 30-symbol builder profile
     reduced Python peak allocations from `686242590` to `73499666` bytes
-    (89.3%). Pair iteration remains `rows * pairs`; fill indexing and a true
-    lower-complexity state update remain open.
+    (89.3%). The fill-index prerequisite is deployed. The active sparse-replay
+    candidate keeps held-pair arrays dense and selects exact run, expiry, fill,
+    intervention, and terminal boundaries for historical flat pairs. Its
+    30-pair offline acceptance fixture reduced applied samples from `825430` to
+    `43652` with identical final-state hashes and all `43201` held samples
+    preserved.
   - Preserve current RED/green/current-drawdown semantics: a historical RED
     crossing must not cause a panic now if current replay state is no longer in
     the red zone.
@@ -592,11 +598,11 @@ Trading-impact labels:
     replay, optimized replay, and checkpoint resume.
   - Output metrics: elapsed, rows/s, per-stage timings, current HSL state by
     held pair, cooldown state by affected flat pair, and equivalence diff.
-  - Partial: the benchmark now distinguishes held/background pairs and samples,
-    reports expected cooperative yields, supports an explicit 43,201-minute
-    local-scale mode, compares timeline/compact final-state output, and can
-    report tracemalloc current/peak bytes. A realistic cooldown candidate and
-    detailed equivalence report remain open.
+  - Active candidate: the benchmark distinguishes held/background pairs and
+    samples, reports expected cooperative yields, supports an explicit
+    43,201-minute local-scale mode, includes cooldown/panic and account-balance
+    transitions, and compares candidate and dense-reference final state plus
+    sample counts. It can also report tracemalloc current/peak bytes.
 
 - [ ] Index fill events once by `(pside, symbol)`.
   - Reuse that index for replay contracts, panic detection, position-size
