@@ -31,6 +31,7 @@ from live.event_bus import (
     redact_payload,
     resolve_live_event_console_enabled,
     sink_failed_reason_code,
+    startup_phase_readiness_contract,
 )
 from live.events import DiagnosticEvent
 from monitor_publisher import MonitorPublisher
@@ -79,6 +80,46 @@ def test_live_event_tag_registry_values_are_unique_and_query_safe():
 
 def test_market_compatibility_event_type_is_stable():
     assert EventTypes.CONFIG_MARKET_COMPATIBILITY == "config.market_compatibility"
+
+
+def test_startup_phase_readiness_contract_is_bounded_and_defensive():
+    expected = {
+        "account": {
+            "readiness_scope": "account_critical",
+            "trading_impact": "protective_blocker",
+        },
+        "hsl": {
+            "readiness_scope": "held_position_protective",
+            "trading_impact": "protective_blocker",
+        },
+        "startup": {
+            "readiness_scope": "execution_loop",
+            "trading_impact": "protective_blocker",
+        },
+        "market": {
+            "readiness_scope": "first_market_state",
+            "trading_impact": "cycle_delay",
+        },
+        "full-warmup": {
+            "readiness_scope": "background_candles_complete",
+            "trading_impact": "entry_blocker",
+        },
+    }
+
+    for phase, contract in expected.items():
+        assert startup_phase_readiness_contract(phase) == contract
+        assert set(contract) == {"readiness_scope", "trading_impact"}
+
+    first = startup_phase_readiness_contract("account")
+    second = startup_phase_readiness_contract("account")
+    assert first is not None
+    assert second is not None
+    assert first is not second
+    first["readiness_scope"] = "modified"
+    assert second["readiness_scope"] == "account_critical"
+    assert startup_phase_readiness_contract("active-candle") is None
+    assert startup_phase_readiness_contract("unknown") is None
+    assert startup_phase_readiness_contract(["account"]) is None
 
 
 def test_live_event_reason_code_registry_values_are_unique_and_query_safe():

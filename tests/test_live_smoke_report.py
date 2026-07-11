@@ -3195,6 +3195,8 @@ def test_live_smoke_report_summarizes_startup_phase_baselines(tmp_path):
                     "phase": "account",
                     "elapsed_ms": 3000,
                     "since_previous_ms": 3000,
+                    "readiness_scope": "account_critical",
+                    "trading_impact": "protective_blocker",
                 },
             ),
             _monitor_row(
@@ -3207,6 +3209,8 @@ def test_live_smoke_report_summarizes_startup_phase_baselines(tmp_path):
                     "phase": "startup",
                     "elapsed_ms": 10000,
                     "since_previous_ms": 7000,
+                    "readiness_scope": "execution_loop",
+                    "trading_impact": "protective_blocker",
                     "details": "ready api_key=AKIA123 Authorization: Bearer TOKEN123",
                 },
             ),
@@ -3259,6 +3263,8 @@ def test_live_smoke_report_summarizes_startup_phase_baselines(tmp_path):
                     },
                     "latest_elapsed_vs_p95_pct": 100,
                     "latest_phase_vs_p95_pct": 100,
+                    "readiness_scope": "account_critical",
+                    "trading_impact": "protective_blocker",
                 },
                 "startup": {
                     "samples": 2,
@@ -3297,6 +3303,8 @@ def test_live_smoke_report_summarizes_startup_phase_baselines(tmp_path):
                     },
                     "latest_elapsed_vs_p95_pct": 100,
                     "latest_phase_vs_p95_pct": 100,
+                    "readiness_scope": "execution_loop",
+                    "trading_impact": "protective_blocker",
                     "latest_details": (
                         "ready api_key=[redacted] Authorization: [redacted]"
                     ),
@@ -3321,6 +3329,14 @@ def test_live_smoke_report_summarizes_startup_phase_baselines(tmp_path):
         "max_latest_elapsed_ms": 10000,
         "max_latest_phase_ms": 7000,
         "max_startup_elapsed_ms": 10000,
+        "readiness_scope_counts": {
+            "account_critical": 1,
+            "execution_loop": 1,
+        },
+        "readiness_scope_elapsed_ms_max": {
+            "account_critical": 3000,
+            "execution_loop": 10000,
+        },
     }
 
 
@@ -3339,6 +3355,8 @@ def test_live_smoke_report_startup_budget_no_baseline(tmp_path):
                     "phase": "account",
                     "elapsed_ms": 2000,
                     "since_previous_ms": 2000,
+                    "readiness_scope": "held_position_protective",
+                    "trading_impact": "diagnostics_only",
                 },
             )
         ],
@@ -3357,6 +3375,84 @@ def test_live_smoke_report_startup_budget_no_baseline(tmp_path):
         "source": "prior_p95_ms",
     }
     assert phase["phase_budget"]["status"] == "no_baseline"
+    assert "readiness_scope" not in phase
+    assert "trading_impact" not in phase
+    brief = summarize_live_smoke_report_brief(report)
+    assert "readiness_scope_counts" not in brief["startup_timings"]
+
+
+def test_live_smoke_report_startup_readiness_resets_on_bot_started(tmp_path):
+    events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    _write_ndjson(
+        events_dir / "2026-07-10T00-00-00.ndjson",
+        [
+            _monitor_row(
+                event_type="bot.startup_timing",
+                seq=1,
+                ts=1000,
+                data={
+                    "phase": "hsl",
+                    "elapsed_ms": 9000,
+                    "since_previous_ms": 6000,
+                    "readiness_scope": "held_position_protective",
+                    "trading_impact": "protective_blocker",
+                },
+            ),
+            _monitor_row(
+                event_type="bot.startup_timing",
+                seq=2,
+                ts=2000,
+                data={
+                    "phase": "full-warmup",
+                    "elapsed_ms": 15000,
+                    "since_previous_ms": 6000,
+                    "readiness_scope": "background_candles_complete",
+                    "trading_impact": "entry_blocker",
+                },
+            ),
+        ],
+    )
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(event_type="bot.started", seq=3, ts=3000),
+            _monitor_row(
+                event_type="bot.startup_timing",
+                seq=4,
+                ts=4000,
+                data={
+                    "phase": "account",
+                    "elapsed_ms": 1000,
+                    "since_previous_ms": 1000,
+                    "readiness_scope": "account_critical",
+                    "trading_impact": "protective_blocker",
+                },
+            ),
+        ],
+    )
+
+    report = build_live_smoke_report(
+        tmp_path / "monitor",
+        logs_root=None,
+        include_rotated=True,
+        max_event_files_per_bot=2,
+    )
+    startup = report["startup_timings"]
+
+    assert len(startup) == 1
+    assert set(startup[0]["phases"]) == {"account"}
+    summary = summarize_live_smoke_report(report)
+    assert set(summary["startup_timings"]["groups"][0]["phases"]) == {"account"}
+    assert summarize_live_smoke_report_brief(report)["startup_timings"] == {
+        "bots": 1,
+        "phases": 1,
+        "over_budget_phases": 0,
+        "startup_phase_bots": 0,
+        "max_latest_elapsed_ms": 1000,
+        "max_latest_phase_ms": 1000,
+        "readiness_scope_counts": {"account_critical": 1},
+        "readiness_scope_elapsed_ms_max": {"account_critical": 1000},
+    }
 
 
 def test_live_smoke_report_summarizes_shutdown_events(tmp_path):

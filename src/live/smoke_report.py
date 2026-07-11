@@ -11,7 +11,12 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterable
 
-from live.event_bus import LIVE_EVENT_MONITOR_PAYLOAD_KEY, EventTypes, utc_ms
+from live.event_bus import (
+    LIVE_EVENT_MONITOR_PAYLOAD_KEY,
+    EventTypes,
+    startup_phase_readiness_contract,
+    utc_ms,
+)
 from live.event_file_rows import event_file_rows
 from live.event_query import (
     _limit_recent_event_files_per_bot,
@@ -5433,7 +5438,7 @@ def _startup_timing_record(
     since_previous_ms = _non_negative_int(data.get("since_previous_ms"))
     if elapsed_ms is None and since_previous_ms is None:
         return None
-    return {
+    record = {
         "phase": phase,
         "elapsed_ms": elapsed_ms,
         "since_previous_ms": since_previous_ms,
@@ -5443,6 +5448,14 @@ def _startup_timing_record(
         "path": str(path),
         "line": int(line_no),
     }
+    contract = startup_phase_readiness_contract(phase)
+    if (
+        contract is not None
+        and data.get("readiness_scope") == contract["readiness_scope"]
+        and data.get("trading_impact") == contract["trading_impact"]
+    ):
+        record.update(contract)
+    return record
 
 
 def _sort_startup_record_key(record: dict[str, Any]) -> tuple[int, int, str, int]:
@@ -5454,6 +5467,24 @@ def _sort_startup_record_key(record: dict[str, Any]) -> tuple[int, int, str, int
         str(record.get("path") or ""),
         int(record.get("line") or 0),
     )
+
+
+def _startup_records_after_latest_started(
+    records_by_bot: dict[str, list[dict[str, Any]]],
+    latest_started_by_bot: dict[str, dict[str, Any]],
+) -> dict[str, list[dict[str, Any]]]:
+    current: dict[str, list[dict[str, Any]]] = {}
+    for bot_key, records in records_by_bot.items():
+        marker = latest_started_by_bot.get(bot_key)
+        marker_key = _sort_startup_record_key(marker) if marker is not None else None
+        selected = [
+            record
+            for record in records
+            if marker_key is None or _sort_startup_record_key(record) > marker_key
+        ]
+        if selected:
+            current[bot_key] = selected
+    return current
 
 
 def _summarize_startup_timings(
@@ -5510,6 +5541,9 @@ def _summarize_startup_timings(
                     latest_phase, phase_summary["p95_ms"]
                 ),
             }
+            for key in ("readiness_scope", "trading_impact"):
+                if latest.get(key) is not None:
+                    phase_summaries[phase][key] = latest[key]
             details = latest.get("details")
             if details not in (None, ""):
                 phase_summaries[phase]["latest_details"] = _redact_log_text(
@@ -5782,6 +5816,7 @@ def _scan_events(
     event_files_skipped_by_limit = 0
     event_file_limit_groups = 0
     startup_timing_records: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    startup_latest_started: dict[str, dict[str, Any]] = {}
     remote_call_failure_groups: dict[tuple[Any, ...], dict[str, Any]] = {}
     remote_call_health_groups: dict[tuple[Any, ...], dict[str, Any]] = {}
     remote_call_timing_groups: dict[tuple[Any, ...], dict[str, Any]] = {}
@@ -6127,6 +6162,18 @@ def _scan_events(
                                 "base_hard": is_hard_problem_event(live_event),
                             }
                         )
+                    if event_type == EventTypes.BOT_STARTED:
+                        marker = {
+                            "ts": row.get("ts"),
+                            "seq": row.get("seq"),
+                            "path": str(path),
+                            "line": int(line_no),
+                        }
+                        previous_marker = startup_latest_started.get(bot_key)
+                        if previous_marker is None or _sort_startup_record_key(
+                            marker
+                        ) > _sort_startup_record_key(previous_marker):
+                            startup_latest_started[bot_key] = marker
                     startup_timing = _startup_timing_record(
                         row=row,
                         live_event=live_event,
@@ -6217,7 +6264,12 @@ def _scan_events(
         "hard_problem_event_count": sum(
             int(value["hard_problem_events"]) for value in bots.values()
         ),
-        "startup_timings": _summarize_startup_timings(startup_timing_records),
+        "startup_timings": _summarize_startup_timings(
+            _startup_records_after_latest_started(
+                startup_timing_records,
+                startup_latest_started,
+            )
+        ),
         "remote_call_failures": _summarize_remote_call_failures(
             remote_call_failure_groups
         ),
@@ -6884,6 +6936,8 @@ def _brief_startup_timings(startup_timings: Any) -> dict[str, Any]:
     max_latest_phase_ms: int | None = None
     max_startup_elapsed_ms: int | None = None
     startup_phase_bots = 0
+    readiness_scope_counts: Counter[str] = Counter()
+    readiness_scope_elapsed_ms_max: dict[str, int] = {}
     for row in rows:
         if not isinstance(row, dict):
             continue
@@ -6908,6 +6962,14 @@ def _brief_startup_timings(startup_timings: Any) -> dict[str, Any]:
                         max_startup_elapsed_ms
                         if max_startup_elapsed_ms is not None
                         else 0,
+                    )
+                readiness_scope = phase_data.get("readiness_scope")
+                if readiness_scope is not None:
+                    scope = str(readiness_scope)
+                    readiness_scope_counts[scope] += 1
+                    readiness_scope_elapsed_ms_max[scope] = max(
+                        latest_elapsed,
+                        readiness_scope_elapsed_ms_max.get(scope, 0),
                     )
             if latest_phase is not None:
                 max_latest_phase_ms = max(
@@ -6934,8 +6996,12 @@ def _brief_startup_timings(startup_timings: Any) -> dict[str, Any]:
             "max_latest_elapsed_ms": max_latest_elapsed_ms,
             "max_latest_phase_ms": max_latest_phase_ms,
             "max_startup_elapsed_ms": max_startup_elapsed_ms,
+            "readiness_scope_counts": dict(sorted(readiness_scope_counts.items())),
+            "readiness_scope_elapsed_ms_max": dict(
+                sorted(readiness_scope_elapsed_ms_max.items())
+            ),
         }.items()
-        if value is not None
+        if value not in (None, {})
     }
 
 

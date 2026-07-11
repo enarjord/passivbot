@@ -22,46 +22,59 @@ Estimated completion:
 
 ## Active Review Slice
 
-- PR #1191, `Fix active HSL replay remaining estimates`
-- Branch: `codex/v8-hsl-required-zero-estimate`
-- Base: `6b2da757f2fbc590c12365870475176632269021`
-- Triggering evidence: the PR #1190 deployment reported active optional replay
-  with positive `estimated_dense_remaining_rows` but generic
-  `estimated_remaining_rows=0` because `required_pairs=0`. The same premature
-  zero can occur after required work completes while optional replay remains.
-- Scope: make generic active replay remaining rows/time use the full-replay
-  dense upper bound and label it `dense_rows_upper_bound`. Keep
-  `estimated_required_remaining_*` as the separate protective-work metric and
-  keep terminal `candidate_rows_terminal` estimates exact. Treat legacy
-  `full_replay` events without candidate totals as terminal rather than
-  reporting dense remaining work.
-- Behavior boundary: read-only performance/smoke report derivation and tests
-  only. No event producer, replay candidate/order/application, HSL state,
-  exchange call, process control, smoke verdict, Rust/order/risk logic, or
-  trading behavior change.
-- Validation: full performance-report, smoke-report, incident-bundle, and
-  restart-smoke-plan suites plus Python compilation, `git diff --check`, and
-  the added-line silent-handling scan.
+- Branch: `codex/v8-startup-readiness-sla`
+- Base: `359929007dce0b47c023a36fdef90a7106ae46da`
+- Triggering evidence: existing `bot.startup_timing` events carry elapsed phase
+  timing, but operators and reports cannot distinguish account-critical,
+  held-position protective, execution-loop, market-state, and background
+  readiness semantics without interpreting phase names.
+- Scope: centralize a bounded readiness contract for five existing startup
+  timing phases, emit `readiness_scope` and `trading_impact`, and project
+  per-bot plus aggregate readiness SLA timing in performance and smoke reports.
+  Consumers accept metadata only when it exactly matches the centralized phase
+  contract. The best-effort `active-candle` phase remains timing-only because
+  its warmup failure is tolerated and cannot prove readiness.
+- Behavior boundary: additive structured event metadata and read-only report
+  projection only. No startup ordering, readiness gate, HSL state/replay,
+  exchange call, process-control policy, Rust/order/risk logic, or trading
+  behavior change. This slice does not claim the still-missing true
+  fresh-entry, first-Rust-call, or first-exchange-write milestones.
+- Validation: event-contract/emitter, startup monitor, performance-report,
+  smoke-report, incident-bundle, and restart-smoke-plan suites plus Python
+  compilation, `git diff --check`, and the added-line silent-handling scan.
 - Publication state, exact head, mergeability, CI, and current-head reviewer
   verdicts: query live GitHub metadata; do not embed self-invalidating values.
 - Expected VPS action: after merge, pull while preserving local artifacts and
-  run the bounded HSL replay profile plus smoke projections over the existing
-  PR #1190 replay records. Do not restart or signal bots because this slice
-  changes only on-demand report consumers.
+  restart only the five exact supervised bot panes because the event producer
+  is loaded by running Python processes. Preserve unrelated `misc:0.0`, then
+  query the new startup fields and run immediate plus settled smoke checks.
 
 Next action:
 
-1. Complete exact-head review and CI for the narrow generic active-replay
-   estimate fix, merge only when the full gate is green, then validate the
-   corrected projection against existing VPS5 replay records without a bot
-   restart.
+1. Complete implementation and independent preflight, publish one review-worthy
+   PR, resolve verified findings, and merge only after the exact-head temporary
+   Hermes + Grok 4.5 + green-CI gate is satisfied.
 
 ## Deployed Baseline
 
-- Remote `v8`: `6b2da757f2fbc590c12365870475176632269021`, PR #1190
-- VPS5 repository: `6b2da757f2fbc590c12365870475176632269021`, PR #1190; tracked
+- Remote `v8`: `359929007dce0b47c023a36fdef90a7106ae46da`, PR #1191
+- VPS5 repository: `359929007dce0b47c023a36fdef90a7106ae46da`, PR #1191; tracked
   status clean; only expected untracked artifacts were preserved
-- VPS5 expected bots: five; all running after the shared-code five-pane restart
+- VPS5 expected bots: five; all running with unchanged PIDs after the
+  report-only pull; unrelated `misc:0.0` remains PID `434835`
+- PR #1191 merged as `359929007dce0b47c023a36fdef90a7106ae46da` after
+  exact-head Hermes and Grok 4.5 approval plus green CI, then was pulled to
+  VPS5 without restarting bots. Real optional-replay progress with
+  `required_pairs=0` retained positive generic dense remaining work while
+  required remaining stayed zero; exact candidate terminal records stayed
+  zero. A retained legacy KuCoin terminal record without candidate totals
+  reported `legacy_terminal_no_candidate_rows`, generic remaining zero, and
+  retained its diagnostic dense remainder. The settled two-minute smoke was
+  green with `278/278` remote and `58/58` account-critical calls successful,
+  all five expected bots matched, no hard/log/monitor failures, and a clean
+  repository. Large rotated-history validation briefly produced host I/O waits;
+  after a quiet interval all five bot processes were `Rsl+` with their
+  original PIDs.
 - PR #1190 merged as `6b2da757f2fbc590c12365870475176632269021` and was deployed
   to VPS5. All five exact supervised panes were restarted, unrelated
   `misc:0.0` PID `434835` was preserved, and immediate live evidence showed the
@@ -158,12 +171,11 @@ scorecard, stable per-pair fill index, exact sparse flat-pair replay, and the
 rotated resource-pressure report fix, configured-market skip events, and fatal
 HIP-3 startup compatibility are merged and deployed. PR #1189's isolated-only
 initial-entry filter visibility and PR #1190's HSL replay scanned-row
-throughput are also merged and deployed. The next active slice fixes the
-generic active replay remaining estimate when required work is empty or
-complete while optional replay remains, using the dense upper bound while
-keeping required and terminal candidate estimates separate.
+throughput and PR #1191's corrected active/legacy-terminal replay estimates are
+also merged and deployed. The next active slice adds machine-readable readiness
+SLA semantics to existing startup timing events and reports.
 
-After this active slice is merged and its report-only VPS validation is
+After this active slice is merged and its producer/restart VPS validation is
 recorded, select the next review-worthy candidate from the remaining backlog,
 including:
 

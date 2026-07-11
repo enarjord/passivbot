@@ -334,6 +334,11 @@ Related detailed plans:
      `live-smoke-report` phase summaries, comparing latest elapsed/phase
      timings against prior local p95 baselines without changing startup
      behavior or adding new runtime events.
+   - 2026-07-11: Active branch `codex/v8-startup-readiness-sla` adds
+     centralized readiness scope and trading-impact labels to existing startup
+     timing events plus per-bot/aggregate performance and smoke projections.
+     It remains additive and does not claim fresh-entry, first-Rust-call, or
+     first-exchange-write readiness.
 
 5. [x] Resource pressure telemetry.
    Status: initial implementation merged. `health.summary` events now include
