@@ -57,6 +57,9 @@ _HSL_REPLAY_CACHE_REQUIRED_METADATA = (
     "candle_covered_end_ms",
 )
 _HSL_REPLAY_CACHE_FILL_HISTORY_SCOPES = ("unknown", "window", "all")
+_HSL_COIN_REPLAY_STARTUP_YIELD_ROWS = 1_000
+_HSL_COIN_REPLAY_BACKGROUND_YIELD_ROWS = 100
+_HSL_COIN_REPLAY_BACKGROUND_YIELD_SLEEP_S = 0.01
 
 
 def _hsl_flat_epsilon(qty_step: Any = 0.0) -> float:
@@ -5308,9 +5311,22 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
                         replay_event_idx += 1
                     return float(replay_size)
 
+                background_replay = bool(
+                    self._equity_hard_stop_coin_protective_ready
+                )
+                yield_rows = (
+                    _HSL_COIN_REPLAY_BACKGROUND_YIELD_ROWS
+                    if background_replay
+                    else _HSL_COIN_REPLAY_STARTUP_YIELD_ROWS
+                )
+                yield_sleep_s = (
+                    _HSL_COIN_REPLAY_BACKGROUND_YIELD_SLEEP_S
+                    if background_replay
+                    else 0.0
+                )
                 for row_idx, row in enumerate(timeline_rows, start=1):
-                    if row_idx % 1000 == 0:
-                        await asyncio.sleep(0)
+                    if row_idx % yield_rows == 0:
+                        await asyncio.sleep(yield_sleep_s)
                         check_shutdown("hsl_coin_history_replay_rows")
                         log_replay_progress(pair_idx, pside, symbol, applied_rows)
                     ts = int(row["timestamp"])

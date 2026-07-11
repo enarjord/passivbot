@@ -1993,6 +1993,46 @@ async def test_coin_hsl_start_releases_after_held_pair_and_owns_one_continuation
 
 
 @pytest.mark.asyncio
+async def test_coin_hsl_background_replay_yields_before_one_thousand_rows():
+    bot = make_coin_bot()
+    bot.positions = {}
+    bot.get_exchange_time = lambda: 10_000_000
+
+    async def fake_history(current_balance=None, **kwargs):
+        return {
+            "timeline": [
+                {
+                    "timestamp": minute * 60_000,
+                    "balance": 100.0,
+                    "realized_pnl": 0.0,
+                    "realized_pnl_by_coin_pside": {
+                        "A": {"long": 0.0, "short": 0.0}
+                    },
+                    "unrealized_pnl_by_coin_pside": {
+                        "A": {"long": 0.0, "short": 0.0}
+                    },
+                }
+                for minute in range(1, 151)
+            ],
+            "panic_flatten_events": [],
+            "fill_events": [],
+        }
+
+    bot.get_balance_equity_history = fake_history
+
+    await bot._equity_hard_stop_start_coin_history_replay()
+
+    replay_task = bot._equity_hard_stop_coin_replay_task
+    assert bot._equity_hard_stop_coin_protective_ready is True
+    assert replay_task.done() is False
+    assert bot._equity_hard_stop_coin_replay_pending_pairs == {("long", "A")}
+
+    await asyncio.wait_for(replay_task, timeout=1.0)
+    assert bot._equity_hard_stop_coin_initialized is True
+    assert bot._equity_hard_stop_coin_replay_pending_pairs == set()
+
+
+@pytest.mark.asyncio
 async def test_coin_hsl_partial_replay_restarts_if_pending_pair_becomes_held():
     bot = make_coin_bot()
     bot._equity_hard_stop_coin_protective_ready = True

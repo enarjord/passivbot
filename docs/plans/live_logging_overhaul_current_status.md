@@ -22,31 +22,33 @@ Estimated completion:
 
 ## Active Review Slice
 
-- PR: query live GitHub metadata; `Release coin-HSL startup after held protection`
-- Branch: `codex/v8-hsl-protective-readiness`
+- PR: query live GitHub metadata;
+  `Keep live I/O responsive during background coin-HSL replay`
+- Branch: `codex/v8-hsl-background-replay-cooperative`
 - Head: query live GitHub metadata; this commit cannot embed its own final SHA
   without making that value stale
-- Base: `078a3fead1dc635877b9142cb394dd93e3747d54`
-- Scope: run the existing exact held-first coin replay in one task, release
-  startup after every held pair is protectively ready, and continue remaining
-  pairs in the background. Keep pending pairs blocked from initial-entry
-  creates at both planning and final submission while allowing cancellations
-  and panic/reduce-only creates. Expose protective/full timing and pair counts.
-- Non-goals: no HSL math/state contract change, replay algorithm rewrite,
-  checkpoint/cache schema change, exchange-call change, backtest behavior
-  change, or claim that cold history materialization itself is now fast.
-- Local validation: full coin-HSL, order-orchestration, exchange-config,
-  live-smoke-report, and live-event-bus suites; six focused realized-loss/HSL
-  tests; nine fake-live HSL/replay scenarios; Rust `209/209`, `cargo check
-  --tests`, and `cargo fmt --check`; and the deterministic 30-symbol,
-  1440-minute, two-iteration replay benchmark pass. The rebuilt extension stamp
-  matches this worktree; `py_compile`, reviewed added-line exception handling,
-  and `git diff --check` pass.
-- Independent preflight: one read-only test-surface audit identified the
-  existing replay, order, fake-live, smoke, and shutdown fixtures used by this
-  slice. Runtime design keeps one writer per pending pair and never rebuilds
-  shared HSL state after startup release. A separate current-diff concurrency
-  and safety review reported no P0-P2 findings.
+- Base: `abcc422bebb0ac19fcd50fcb8efa21d77b45d41f`
+- Scope: retain the existing fast 1,000-row cooperative cadence while startup
+  is blocked on held-position reconstruction. After protective readiness,
+  yield every 100 rows with a 10 ms pause so the same-process live event loop
+  can service exchange I/O while flat/cooldown pairs continue replaying.
+- Triggering evidence: after PR #1177 released startup, the four coin-HSL replay
+  bots were simultaneously in `blk_io_schedule`, VPS5 showed 40-44% I/O wait,
+  20-29 MB/s swap-in, 19-23 MB/s swap-out, and zero CPU idle, while fresh
+  account-critical remote failures occurred. The non-replay Hyperliquid bot
+  remained in normal `ep_poll` sleep.
+- Non-goals: no HSL math/state, pair ordering, readiness, entry gate,
+  checkpoint/cache schema, exchange-call, Rust, or backtest behavior change;
+  no replay vectorization or memory-layout rewrite.
+- Local validation: full coin-HSL suite; full order-orchestration and
+  exchange-config suites; 15 selected HSL/coin fake-live and integration tests;
+  benchmark-tool tests; syntax and diff checks. The deterministic 30-symbol,
+  1440-minute, two-iteration held-position benchmark retained its state hash
+  and zero side effects. A realistic flat-background probe reconstructed all
+  30 pairs in 6.37 seconds with no pending pairs.
+- Independent preflight: one read-only test audit confirmed the exact replay
+  task, held/cooldown/flat batch boundary, existing 1,000-row cadence, and
+  benchmark/test surfaces. No delegated edits were used.
 - Publication state, exact head, mergeability, CI, and current-head review
   verdicts: query live GitHub metadata. Do not encode those transient values in
   the same PR that contains this status file, because every correction would
@@ -57,21 +59,21 @@ Estimated completion:
 
 Next action:
 
-1. Resolve verified findings and merge only after the exact-head gate, then
-   perform the declared VPS5 restart/smoke validation.
+1. Publish the hotfix, resolve verified findings, and merge only after the
+   exact-head gate; then perform the declared VPS5 restart/smoke validation.
 
 ## Deployed Baseline
 
-- Remote `v8`: `078a3fea`, PR #1176
-- VPS5 repository: `078a3fea`, PR #1176
+- Remote `v8`: `abcc422b`, PR #1177
+- VPS5 repository: `abcc422b`, PR #1177; tracked status clean
 - VPS5 expected bots: five; all are running after the controlled restart
-- Latest immediate and settled smoke: `ok=true`, `hard_failures=0`, all five
-  bots matched, zero remote/account-critical/fill-refresh failures, and zero
-  text-log hard/attention matches. Four HSL replays were active and non-stale;
-  KuCoin completed, and the only extra settled-window signals were non-hard
-  Hyperliquid EMA/state-refresh events.
-- The prior tracked Rust formatting edit was already fully present in PR #1174.
-  Its patch backup and autostash were retained on VPS5; tracked status is clean.
+- Immediate post-restart smoke was green: `ok=true`, `hard_failures=0`, all five
+  bots matched, and zero remote/account-critical/fill/log failures.
+- Protective-ready events proved startup release for GateIO, KuCoin, and OKX
+  with no held positions, while exact background replay remained active.
+  Settled probes then exposed the resource-pressure incident summarized in the
+  active-slice evidence above. Five bots remain alive; do not restart them
+  reflexively while the dependent hotfix is under review.
 - Preserve local/VPS configs, logs, monitor data, reports, and temporary files
 
 ## Review Gate
@@ -94,11 +96,10 @@ Next action:
 
 ## Next Slice
 
-The denominator-parity and immutable held/cooldown-first ordering prerequisites
-are merged and deployed. The active slice splits held-position protective
-readiness from full replay while keeping fresh entries blocked until their
-pair-specific cooldown eligibility is known. The design preserves exact HSL
-reconstruction and keeps observability events out of decision authority.
+The denominator-parity, immutable held/cooldown-first ordering, and
+held-position protective-readiness split are merged and deployed. The active
+hotfix bounds event-loop monopolization during the resulting background replay
+without changing replay results or pair readiness.
 Remaining candidates:
 
 - realistic-scale replay fixtures and deeper internal-stage profiling

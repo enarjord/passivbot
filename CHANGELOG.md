@@ -10,6 +10,9 @@ All notable user-facing changes will be documented in this file.
   blocked per coin and position side until that pair is reconstructed, while
   cancellations and panic/reduce-only protection remain available. Replay
   events and smoke reports distinguish protective-ready time from full replay.
+  After protective readiness, replay now yields in smaller bounded chunks with
+  a short cooperative pause so live exchange I/O is not starved; held-position
+  reconstruction retains the faster startup cadence.
 
 - Coin-mode HSL drawdown normalization now uses one Rust-owned live/backtest
   contract: account balance divided by the applicable slot count. TWEL still

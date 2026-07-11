@@ -7228,3 +7228,24 @@ VPS5 deployment status:
 - Expected validation: focused resource-pressure performance-report tests, full
   `tests/test_live_performance_report.py`, `py_compile`, `git diff --check`,
   and the standard added-line silent-handling scan.
+
+### Deployed Slice: Coin-HSL Protective Readiness And Cooperative Follow-Up
+
+- PR #1177 was approved by Hermes and Grok 4.5 on exact head `3bc2991f8`,
+  passed CI, and merged to `v8` as `abcc422b`. VPS5 pulled that merge with
+  tracked status clean and preserved local artifacts, then all five configured
+  bots were restarted through the exact `passivbot` tmux session.
+- The immediate two-minute smoke was green with all five bots matched and no
+  remote, account-critical, fill, process, event-pipeline, or text-log hard
+  failures. GateIO, KuCoin, and OKX subsequently emitted protective-ready
+  events before full replay completed, proving the intended startup split.
+- Settled evidence exposed a dependent live-runtime issue: all four coin-HSL
+  replay processes were in `blk_io_schedule` while VPS5 reported 40-44% I/O
+  wait, 20-29 MB/s swap-in, 19-23 MB/s swap-out, zero CPU idle, and fresh
+  account-critical remote failures. The non-replay Hyperliquid bot remained in
+  `ep_poll` with much lower RSS.
+- Follow-up branch `codex/v8-hsl-background-replay-cooperative` keeps the fast
+  held-position cadence but yields every 100 rows with a 10 ms pause after
+  protective readiness. The change is limited to Python live replay scheduling
+  plus one responsiveness regression and docs; HSL state/math, Rust/backtest,
+  exchange calls, pair ordering, readiness, and entry gates are unchanged.
