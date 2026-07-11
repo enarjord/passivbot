@@ -23,48 +23,48 @@ Estimated completion:
 ## Active Review Slice
 
 - PR and publication state: query live GitHub metadata;
-  `Count protective readiness from completion evidence`
-- Branch: `codex/v8-hsl-replay-scorecard-completion-fallback`
+  `Index coin-HSL replay fills once`
+- Branch: `codex/v8-hsl-fill-index`
 - Head: query live GitHub metadata; this commit cannot embed its own final SHA
   without making that value stale
-- Base: `77e111f7277077b4d1c4c37a562a67dad8906665`
-- Scope: when a dedicated `held_protective_ready` event has rotated out of the
-  selected files, `live-performance-report` derives the bounded protective
-  elapsed aggregate from the retained completed replay record. It does not
-  synthesize a milestone record.
-- Triggering evidence: PR #1181's first no-restart VPS5 smoke correctly showed
-  all four compact full-replay completions, but reported
-  `protective_ready_bot_count=0` because the earlier milestone events had
-  rotated while every completion record still carried `protective_elapsed_s`.
-- Non-goals: no live event producer, replay ordering or arithmetic, HSL
-  threshold/episode/cooldown behavior, cache authority, exchange call, process
-  control, Rust, backtest, or smoke-verdict change.
-- Local validation: all `73` live-performance-report tests and `25`
-  incident-bundle integration tests pass. Python compilation and diff hygiene
-  pass; this follow-up does not touch imports.
-- Independent preflight: Terra's initial completion/startup fallback concern
-  was rejected at the pre-split compatibility boundary; after the strict
-  explicit-protective regression and code comment, Terra retracted the finding
-  and reported no blocker. Sol owns final adjudication.
+- Base: `e5b4d26d3235b910c7549675f18dce865431cbb1`
+- Scope: group cold coin-HSL fill history once by `(pside, symbol)` and reuse
+  the stable per-pair lists for cooldown/intervention contract inference and
+  position-size replay reconstruction. This removes repeated broad fill scans
+  before the separate sparse minute-replay slice.
+- Triggering evidence: post-PR #1180 VPS5 full replay remained between
+  `453.980s` and `1728.585s`. Source inspection confirmed both repeated
+  per-pair fill scans and the larger `pairs * timeline_rows` metric loop.
+- Non-goals: no minute-row skipping, replay ordering or arithmetic change, HSL
+  threshold/episode/cooldown behavior change, cache schema, exchange call,
+  process control, Rust, backtest, or smoke-verdict change.
+- Local validation: `144` coin-HSL replay, benchmark, and metric-regression
+  tests pass; Python compilation and diff hygiene pass. A deterministic
+  `30,000`-fill, `30`-pair comparison produced identical replay-event output
+  and reduced this preprocessing substep from `0.181s` to `0.027s` locally.
+- Independent preflight: Terra reported canonical cold-start history green and
+  identified one conflicting-alias edge. The index now fails loudly when
+  `pside` and `position_side` disagree, with a regression test. Sol owns final
+  adjudication.
 - Publication state, exact head, mergeability, CI, and current-head review
   verdicts: query live GitHub metadata. Do not encode those transient values in
   the same PR that contains this status file, because every correction would
   create a different head and immediately stale the embedded value.
 - Expected VPS action: after exact-head approval and merge, pull while
-  preserving local artifacts and run a bounded no-restart performance report
-  against the existing monitor history. Running bots need no restart because
-  this slice changes read-only report consumption only.
+  preserving local artifacts, restart the five supervised bots, and compare
+  replay timings plus the bounded smoke report. The initializer code is loaded
+  only at process start.
 
 Next action:
 
-1. Finish focused validation and independent preflight, publish the completion
-   fallback, resolve verified findings, and merge only after the exact-head
-   gate; then rerun the declared VPS5 no-restart report smoke.
+1. Finish validation and independent preflight, publish the fill-index slice,
+   resolve verified findings, and merge only after the exact-head gate; then
+   run the declared controlled VPS5 restart and smoke comparison.
 
 ## Deployed Baseline
 
-- Remote `v8`: `77e111f7`, PR #1181
-- VPS5 repository: `77e111f7`, PR #1181; tracked status clean
+- Remote `v8`: `e5b4d26d`, PR #1182
+- VPS5 repository: `e5b4d26d`, PR #1182; tracked status clean
 - VPS5 expected bots: five; all are running after the controlled restart
 - Immediate and fresh settled smoke reports were green: all five expected bots
   matched, hard failures were zero, and the fresh window recorded `614/614`
@@ -82,6 +82,10 @@ Next action:
   bounded current-segment scorecard reported four compact full-replay
   completions from `453.98s` to `1728.585s`, but exposed the active slice's
   missing completion fallback for the rotated protective milestones.
+- PR #1182 required no restart and recovered protective elapsed aggregates
+  from explicit completion evidence without synthesizing milestone records.
+  A fresh recovery smoke was green with `279/279` remote and `66/66`
+  account-critical calls successful; all five expected bots matched.
 - Preserve local/VPS configs, logs, monitor data, reports, and temporary files
 
 ## Review Gate
@@ -105,13 +109,13 @@ Next action:
 ## Next Slice
 
 The coin-HSL protective-readiness split, cooperative background cadence,
-current process-pressure query, and compact cold replay payload are merged and
-deployed. The active slice completes the bounded operator scorecard when early
-protective milestones rotate before the later full-replay completion.
+current process-pressure query, compact cold replay payload, and bounded replay
+scorecard are merged and deployed. The active slice removes repeated broad fill
+scans as the first behavior-neutral prerequisite for exact sparse full replay.
 Remaining candidates:
 
-- realistic-scale replay fixtures and deeper internal-stage profiling
-- lower-complexity full replay after the scorecard exposes its baseline
+- realistic sparse replay fixtures and dense-reference equivalence reporting
+- exact lower-complexity minute replay using indexed episode/change boundaries
 - unsupported configured-market and stock-perp compatibility events
 - bounded operator tooling improvements sharing one code and validation surface
 
