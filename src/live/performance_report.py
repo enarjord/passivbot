@@ -127,6 +127,7 @@ _EXECUTION_CONFIRMATION_TERMINALS = {
 }
 _HSL_REPLAY_STRING_FIELDS = (
     "error_type",
+    "history_format",
     "signal_mode",
     "stage",
     "timeframe",
@@ -170,6 +171,7 @@ _HSL_REPLAY_NUMERIC_FIELDS = (
     "price_history_fetch_elapsed_s",
     "timeline_replay_elapsed_s",
     "full_elapsed_s",
+    "protective_elapsed_s",
     "startup_blocking_elapsed_s",
 )
 _CACHE_EVENT_TYPES = {
@@ -1634,6 +1636,7 @@ def _derive_hsl_replay_profile(data: dict[str, Any]) -> dict[str, Any]:
         ("price_history_fetch_elapsed_s", "price_history_fetch_elapsed_ms"),
         ("timeline_replay_elapsed_s", "timeline_replay_elapsed_ms"),
         ("full_elapsed_s", "full_elapsed_ms"),
+        ("protective_elapsed_s", "protective_elapsed_ms"),
         ("startup_blocking_elapsed_s", "startup_blocking_elapsed_ms"),
     ):
         value_ms = _elapsed_s_to_ms(data.get(source_key))
@@ -1641,6 +1644,15 @@ def _derive_hsl_replay_profile(data: dict[str, Any]) -> dict[str, Any]:
             out[target_key] = value_ms
             if source_key == "history_build_elapsed_s" and "latest_elapsed_ms" not in out:
                 out["latest_elapsed_ms"] = value_ms
+    if "latest_elapsed_ms" not in out:
+        for key in (
+            "full_elapsed_ms",
+            "protective_elapsed_ms",
+            "startup_blocking_elapsed_ms",
+        ):
+            if key in out:
+                out["latest_elapsed_ms"] = int(out[key])
+                break
     if data.get("startup_blocking_elapsed_s") is not None:
         out["startup_blocking"] = True
     return out
@@ -1731,9 +1743,19 @@ class _HslReplayProfileAccumulator:
         state["total_events"] = int(state["total_events"]) + 1
         state["event_types"][event_type] += 1
         ts = _record_ts(row)
-        latest_changed = ts is None or state.get("latest_ts") is None
-        if ts is not None and state.get("latest_ts") is not None:
-            latest_changed = int(ts) >= int(state["latest_ts"])
+        position = _metric_event_position(row)
+
+        def is_newer(field: str) -> bool:
+            existing = state.get(f"_{field}_position")
+            if position is None:
+                return existing is None and state.get(field) is None
+            return existing is None or position >= existing
+
+        def retain(field: str, value: Any) -> None:
+            state[field] = value
+            if position is not None:
+                state[f"_{field}_position"] = position
+
         record = {
             key: value
             for key, value in {
@@ -1749,19 +1771,28 @@ class _HslReplayProfileAccumulator:
             if value not in (None, {}, [])
         }
         if event_type == "hsl.replay.progress" and stage == "loaded":
-            state["loaded"] = record
-        elif event_type == "hsl.replay.completed":
-            state["completed"] = record
-        elif event_type == "hsl.replay.failed":
-            state["failed"] = record
-        elif event_type == "hsl.replay.progress":
-            state["progress"] = record
-        elif event_type == "hsl.replay.started":
-            state["started"] = record
-        if latest_changed:
+            if is_newer("loaded"):
+                retain("loaded", record)
+        elif event_type == "hsl.replay.progress" and stage == "held_protective_ready":
+            if is_newer("protective_ready"):
+                retain("protective_ready", record)
+            if is_newer("progress"):
+                retain("progress", record)
+        elif event_type == "hsl.replay.completed" and is_newer("completed"):
+            retain("completed", record)
+        elif event_type == "hsl.replay.failed" and is_newer("failed"):
+            retain("failed", record)
+        elif event_type == "hsl.replay.progress" and is_newer("progress"):
+            retain("progress", record)
+        elif event_type == "hsl.replay.started" and is_newer("started"):
+            retain("started", record)
+        if is_newer("latest"):
             if ts is not None:
                 state["latest_ts"] = int(ts)
-            state["latest"] = record
+            retain("latest", record)
+        history_format = data.get("history_format")
+        if history_format is not None and is_newer("history_format"):
+            retain("history_format", str(history_format))
 
     def to_dict(
         self,
@@ -1775,6 +1806,9 @@ class _HslReplayProfileAccumulator:
         latest_status_counts: Counter[str] = Counter()
         latest_stage_counts: Counter[str] = Counter()
         active_stage_counts: Counter[str] = Counter()
+        history_format_counts: Counter[str] = Counter()
+        protective_ready_elapsed_ms: list[int] = []
+        full_replay_elapsed_ms: list[int] = []
         for bot, state in self.bots.items():
             group = {
                 "bot": bot,
@@ -1786,9 +1820,11 @@ class _HslReplayProfileAccumulator:
                 "latest": state.get("latest"),
                 "started": state.get("started"),
                 "loaded": state.get("loaded"),
+                "protective_ready": state.get("protective_ready"),
                 "progress": state.get("progress"),
                 "completed": state.get("completed"),
                 "failed": state.get("failed"),
+                "history_format": state.get("history_format"),
             }
             group = {
                 key: value for key, value in group.items() if value not in (None, {}, [])
@@ -1807,6 +1843,23 @@ class _HslReplayProfileAccumulator:
                     latest_stage_counts[latest_stage] += 1
                     if latest_status == "active":
                         active_stage_counts[latest_stage] += 1
+            history_format = state.get("history_format")
+            if history_format:
+                history_format_counts[str(history_format)] += 1
+            protective_ready = state.get("protective_ready")
+            if isinstance(protective_ready, dict):
+                derived = protective_ready.get("derived")
+                if isinstance(derived, dict):
+                    elapsed_ms = derived.get("protective_elapsed_ms")
+                    if elapsed_ms is None:
+                        elapsed_ms = derived.get("startup_blocking_elapsed_ms")
+                    if elapsed_ms is not None:
+                        protective_ready_elapsed_ms.append(int(elapsed_ms))
+            completed = state.get("completed")
+            if isinstance(completed, dict):
+                derived = completed.get("derived")
+                if isinstance(derived, dict) and derived.get("full_elapsed_ms") is not None:
+                    full_replay_elapsed_ms.append(int(derived["full_elapsed_ms"]))
             groups.append(
                 _with_hsl_replay_active_age(group, report_ts_ms=int(report_ts_ms))
             )
@@ -1842,9 +1895,15 @@ class _HslReplayProfileAccumulator:
             "latest_status_counts": dict(latest_status_counts.most_common()),
             "latest_stage_counts": dict(latest_stage_counts.most_common()),
             "active_stage_counts": dict(active_stage_counts.most_common()),
+            "history_format_counts": dict(history_format_counts.most_common()),
             "active_bot_count": int(latest_status_counts.get("active", 0)),
             "completed_bot_count": int(latest_status_counts.get("completed", 0)),
             "failed_bot_count": int(latest_status_counts.get("failed", 0)),
+            "protective_ready_bot_count": len(protective_ready_elapsed_ms),
+            "protective_ready_elapsed_ms": _number_summary(
+                protective_ready_elapsed_ms
+            ),
+            "full_replay_elapsed_ms": _number_summary(full_replay_elapsed_ms),
             "groups_truncated": len(groups) > limit,
             "groups": groups[:limit],
         }

@@ -1744,6 +1744,160 @@ def test_live_performance_report_hsl_replay_profile_stage_summary(tmp_path):
     assert profile["failed_bot_count"] == 1
 
 
+def test_live_performance_report_hsl_replay_profile_exposes_protective_scorecard(
+    tmp_path,
+):
+    fixtures = {
+        ("binance", "binance_01"): [
+            _monitor_row(
+                event_type="hsl.replay.progress",
+                seq=1,
+                ts=1000,
+                exchange="binance",
+                user="binance_01",
+                component="risk.hsl",
+                status="started",
+                reason_code="history_loaded",
+                data={
+                    "signal_mode": "coin",
+                    "stage": "loaded",
+                    "history_format": "compact",
+                },
+            ),
+            _monitor_row(
+                event_type="hsl.replay.progress",
+                seq=2,
+                ts=2000,
+                exchange="binance",
+                user="binance_01",
+                component="risk.hsl",
+                status="succeeded",
+                reason_code="hsl_held_protective_ready",
+                data={
+                    "signal_mode": "coin",
+                    "stage": "held_protective_ready",
+                    "protective_elapsed_s": 12.3,
+                    "startup_blocking_elapsed_s": 12.3,
+                },
+            ),
+            _monitor_row(
+                event_type="hsl.replay.completed",
+                seq=3,
+                ts=3000,
+                exchange="binance",
+                user="binance_01",
+                component="risk.hsl",
+                status="succeeded",
+                reason_code="coin_history_replay_completed",
+                data={
+                    "signal_mode": "coin",
+                    "stage": "full_replay",
+                    "history_format": "compact",
+                    "full_elapsed_s": 30.0,
+                },
+            ),
+            _monitor_row(
+                event_type="hsl.replay.progress",
+                seq=4,
+                ts=1500,
+                exchange="binance",
+                user="binance_01",
+                component="risk.hsl",
+                status="succeeded",
+                reason_code="hsl_held_protective_ready",
+                data={
+                    "signal_mode": "coin",
+                    "stage": "held_protective_ready",
+                    "protective_elapsed_s": 99.0,
+                    "startup_blocking_elapsed_s": 99.0,
+                },
+            ),
+            _monitor_row(
+                event_type="hsl.replay.completed",
+                seq=5,
+                ts=2500,
+                exchange="binance",
+                user="binance_01",
+                component="risk.hsl",
+                status="succeeded",
+                reason_code="coin_history_replay_completed",
+                data={
+                    "signal_mode": "coin",
+                    "stage": "full_replay",
+                    "history_format": "timeline",
+                    "full_elapsed_s": 99.0,
+                },
+            ),
+        ],
+        ("gateio", "gateio_01"): [
+            _monitor_row(
+                event_type="hsl.replay.progress",
+                seq=1,
+                ts=1500,
+                exchange="gateio",
+                user="gateio_01",
+                component="risk.hsl",
+                status="started",
+                reason_code="history_loaded",
+                data={
+                    "signal_mode": "coin",
+                    "stage": "loaded",
+                    "history_format": "timeline",
+                },
+            ),
+            _monitor_row(
+                event_type="hsl.replay.progress",
+                seq=2,
+                ts=2500,
+                exchange="gateio",
+                user="gateio_01",
+                component="risk.hsl",
+                status="succeeded",
+                reason_code="hsl_held_protective_ready",
+                data={
+                    "signal_mode": "coin",
+                    "stage": "held_protective_ready",
+                    "startup_blocking_elapsed_s": 20.0,
+                },
+            ),
+        ],
+    }
+    for (exchange, user), rows in fixtures.items():
+        _write_ndjson(
+            tmp_path / "monitor" / exchange / user / "events" / "current.ndjson",
+            rows,
+        )
+
+    report = build_live_performance_report(tmp_path / "monitor")
+    profile = report["hsl_replay_profile"]
+    summary_profile = summarize_live_performance_report(report)["hsl_replay_profile"]
+    groups = {group["bot"]: group for group in profile["groups"]}
+
+    assert profile["history_format_counts"] == {"compact": 1, "timeline": 1}
+    assert profile["protective_ready_bot_count"] == 2
+    assert profile["protective_ready_elapsed_ms"]["count"] == 2
+    assert profile["protective_ready_elapsed_ms"]["min"] == 12300
+    assert profile["protective_ready_elapsed_ms"]["max"] == 20000
+    assert profile["full_replay_elapsed_ms"]["count"] == 1
+    assert profile["full_replay_elapsed_ms"]["max"] == 30000
+    assert summary_profile["history_format_counts"] == {"compact": 1, "timeline": 1}
+    assert summary_profile["protective_ready_elapsed_ms"]["max"] == 20000
+    assert summary_profile["full_replay_elapsed_ms"]["max"] == 30000
+    assert groups["binance/binance_01"]["history_format"] == "compact"
+    assert groups["binance/binance_01"]["protective_ready"]["derived"] == {
+        "latest_elapsed_ms": 12300,
+        "protective_elapsed_ms": 12300,
+        "startup_blocking": True,
+        "startup_blocking_elapsed_ms": 12300,
+    }
+    assert groups["gateio/gateio_01"]["history_format"] == "timeline"
+    assert groups["gateio/gateio_01"]["protective_ready"]["derived"] == {
+        "latest_elapsed_ms": 20000,
+        "startup_blocking": True,
+        "startup_blocking_elapsed_ms": 20000,
+    }
+
+
 def test_live_performance_report_hsl_replay_profile_whitelists_values(tmp_path):
     events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
     _write_ndjson(

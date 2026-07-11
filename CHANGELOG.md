@@ -4,6 +4,12 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- `passivbot tool live-performance-report` now retains each bot's explicit HSL
+  protective-ready replay milestone and summarizes replay history formats,
+  protective-ready elapsed time, and completed full-replay elapsed time from
+  existing structured events. This is read-only reporting and does not change
+  HSL startup or trading behavior.
+
 - Cold coin-mode HSL history reconstruction now uses a private compact
   NumPy-backed replay payload instead of retaining the full nested per-minute,
   per-symbol timeline. Public balance/equity history output, pside/unified HSL,
