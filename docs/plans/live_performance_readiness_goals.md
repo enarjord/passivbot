@@ -871,7 +871,11 @@ Each slice should update this checklist with its result.
      distinguishes historical failures from each bot's latest observed status.
      The active HSL scorecard slice adds per-bot retained protective-ready
      records plus bounded replay history-format, protective elapsed, and
-     completed full-replay elapsed aggregates from existing events.
+     completed full-replay elapsed aggregates from existing events. Its VPS5
+     smoke exposed that early protective milestones may rotate before a
+     current-segment report; the active follow-up uses the completion record's
+     retained protective elapsed value for that aggregate without synthesizing
+     a missing milestone.
 
 2. [ ] HSL replay benchmark/profiling slice.
    - Add an offline deterministic benchmark or fixture path for coin-mode HSL

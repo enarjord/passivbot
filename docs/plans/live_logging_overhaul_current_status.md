@@ -23,31 +23,29 @@ Estimated completion:
 ## Active Review Slice
 
 - PR and publication state: query live GitHub metadata;
-  `Expose HSL replay readiness scorecard`
-- Branch: `codex/v8-hsl-replay-scorecard`
+  `Count protective readiness from completion evidence`
+- Branch: `codex/v8-hsl-replay-scorecard-completion-fallback`
 - Head: query live GitHub metadata; this commit cannot embed its own final SHA
   without making that value stale
-- Base: `6e72f374dca9f3e2d77924e84f9453bbd7561386`
-- Scope: `live-performance-report` retains each bot's explicit
-  `held_protective_ready` record, whitelists replay `history_format` and
-  `protective_elapsed_s`, derives stage elapsed milliseconds, and adds bounded
-  history-format, protective-ready, and completed-full-replay aggregates.
-- Triggering evidence: after PR #1180 deployed, all four coin-HSL bots used the
-  compact path and reached protective readiness in `11.237s` to `79.883s`, but
-  those values and the history format required manual event queries. Kucoin's
-  first full compact replay completed in `453.98s`; three broader background
-  replays remained active. The operator scorecard should expose these existing
-  events directly.
+- Base: `77e111f7277077b4d1c4c37a562a67dad8906665`
+- Scope: when a dedicated `held_protective_ready` event has rotated out of the
+  selected files, `live-performance-report` derives the bounded protective
+  elapsed aggregate from the retained completed replay record. It does not
+  synthesize a milestone record.
+- Triggering evidence: PR #1181's first no-restart VPS5 smoke correctly showed
+  all four compact full-replay completions, but reported
+  `protective_ready_bot_count=0` because the earlier milestone events had
+  rotated while every completion record still carried `protective_elapsed_s`.
 - Non-goals: no live event producer, replay ordering or arithmetic, HSL
   threshold/episode/cooldown behavior, cache authority, exchange call, process
   control, Rust, backtest, or smoke-verdict change.
-- Local validation: all `72` live-performance-report tests and `25`
+- Local validation: all `73` live-performance-report tests and `25`
   incident-bundle integration tests pass. Python compilation and diff hygiene
-  pass. Whole-file import sorting remains nonconforming at the unchanged
-  baseline; this slice does not touch imports.
-- Independent preflight: Terra found and Sol fixed scan-order-dependent retained
-  milestones by applying the existing full event-position ordering contract.
-  Delta re-review found no remaining blocker; Sol owns final adjudication.
+  pass; this follow-up does not touch imports.
+- Independent preflight: Terra's initial completion/startup fallback concern
+  was rejected at the pre-split compatibility boundary; after the strict
+  explicit-protective regression and code comment, Terra retracted the finding
+  and reported no blocker. Sol owns final adjudication.
 - Publication state, exact head, mergeability, CI, and current-head review
   verdicts: query live GitHub metadata. Do not encode those transient values in
   the same PR that contains this status file, because every correction would
@@ -59,14 +57,14 @@ Estimated completion:
 
 Next action:
 
-1. Finish focused validation and independent preflight, publish the scorecard
-   slice, resolve verified findings, and merge only after the exact-head gate;
-   then run the declared VPS5 no-restart report smoke.
+1. Finish focused validation and independent preflight, publish the completion
+   fallback, resolve verified findings, and merge only after the exact-head
+   gate; then rerun the declared VPS5 no-restart report smoke.
 
 ## Deployed Baseline
 
-- Remote `v8`: `6e72f374`, PR #1180
-- VPS5 repository: `6e72f374`, PR #1180; tracked status clean
+- Remote `v8`: `77e111f7`, PR #1181
+- VPS5 repository: `77e111f7`, PR #1181; tracked status clean
 - VPS5 expected bots: five; all are running after the controlled restart
 - Immediate and fresh settled smoke reports were green: all five expected bots
   matched, hard failures were zero, and the fresh window recorded `614/614`
@@ -80,6 +78,10 @@ Next action:
   `555296 KB`, all five processes moved from four `D` states to five `R`
   states, and host swap use fell from `2926 MB` to `906 MB`. CPU remained high
   while background replay continued.
+- PR #1181 required no restart; all five bot pane PIDs remained unchanged. Its
+  bounded current-segment scorecard reported four compact full-replay
+  completions from `453.98s` to `1728.585s`, but exposed the active slice's
+  missing completion fallback for the rotated protective milestones.
 - Preserve local/VPS configs, logs, monitor data, reports, and temporary files
 
 ## Review Gate
@@ -104,8 +106,8 @@ Next action:
 
 The coin-HSL protective-readiness split, cooperative background cadence,
 current process-pressure query, and compact cold replay payload are merged and
-deployed. The active slice turns the resulting readiness and full-replay timing
-events into a bounded operator scorecard without changing live behavior.
+deployed. The active slice completes the bounded operator scorecard when early
+protective milestones rotate before the later full-replay completion.
 Remaining candidates:
 
 - realistic-scale replay fixtures and deeper internal-stage profiling

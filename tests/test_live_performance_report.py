@@ -1861,6 +1861,26 @@ def test_live_performance_report_hsl_replay_profile_exposes_protective_scorecard
                 },
             ),
         ],
+        ("okx", "okx_01"): [
+            _monitor_row(
+                event_type="hsl.replay.completed",
+                seq=1,
+                ts=3500,
+                exchange="okx",
+                user="okx_01",
+                component="risk.hsl",
+                status="succeeded",
+                reason_code="coin_history_replay_completed",
+                data={
+                    "signal_mode": "coin",
+                    "stage": "full_replay",
+                    "history_format": "compact",
+                    "protective_elapsed_s": 5.0,
+                    "startup_blocking_elapsed_s": 5.0,
+                    "full_elapsed_s": 25.0,
+                },
+            ),
+        ],
     }
     for (exchange, user), rows in fixtures.items():
         _write_ndjson(
@@ -1873,14 +1893,14 @@ def test_live_performance_report_hsl_replay_profile_exposes_protective_scorecard
     summary_profile = summarize_live_performance_report(report)["hsl_replay_profile"]
     groups = {group["bot"]: group for group in profile["groups"]}
 
-    assert profile["history_format_counts"] == {"compact": 1, "timeline": 1}
-    assert profile["protective_ready_bot_count"] == 2
-    assert profile["protective_ready_elapsed_ms"]["count"] == 2
-    assert profile["protective_ready_elapsed_ms"]["min"] == 12300
+    assert profile["history_format_counts"] == {"compact": 2, "timeline": 1}
+    assert profile["protective_ready_bot_count"] == 3
+    assert profile["protective_ready_elapsed_ms"]["count"] == 3
+    assert profile["protective_ready_elapsed_ms"]["min"] == 5000
     assert profile["protective_ready_elapsed_ms"]["max"] == 20000
-    assert profile["full_replay_elapsed_ms"]["count"] == 1
+    assert profile["full_replay_elapsed_ms"]["count"] == 2
     assert profile["full_replay_elapsed_ms"]["max"] == 30000
-    assert summary_profile["history_format_counts"] == {"compact": 1, "timeline": 1}
+    assert summary_profile["history_format_counts"] == {"compact": 2, "timeline": 1}
     assert summary_profile["protective_ready_elapsed_ms"]["max"] == 20000
     assert summary_profile["full_replay_elapsed_ms"]["max"] == 30000
     assert groups["binance/binance_01"]["history_format"] == "compact"
@@ -1896,6 +1916,44 @@ def test_live_performance_report_hsl_replay_profile_exposes_protective_scorecard
         "startup_blocking": True,
         "startup_blocking_elapsed_ms": 20000,
     }
+    assert groups["okx/okx_01"]["history_format"] == "compact"
+    assert "protective_ready" not in groups["okx/okx_01"]
+    assert groups["okx/okx_01"]["completed"]["derived"][
+        "protective_elapsed_ms"
+    ] == 5000
+
+
+def test_live_performance_report_completion_requires_explicit_protective_elapsed(
+    tmp_path,
+):
+    events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="hsl.replay.completed",
+                seq=1,
+                ts=1000,
+                component="risk.hsl",
+                status="succeeded",
+                reason_code="coin_history_replay_completed",
+                data={
+                    "signal_mode": "coin",
+                    "stage": "full_replay",
+                    "startup_blocking_elapsed_s": 9.0,
+                    "full_elapsed_s": 10.0,
+                },
+            )
+        ],
+    )
+
+    profile = build_live_performance_report(tmp_path / "monitor")[
+        "hsl_replay_profile"
+    ]
+
+    assert profile["protective_ready_bot_count"] == 0
+    assert profile["protective_ready_elapsed_ms"] == {}
+    assert profile["full_replay_elapsed_ms"]["max"] == 10000
 
 
 def test_live_performance_report_hsl_replay_profile_whitelists_values(tmp_path):

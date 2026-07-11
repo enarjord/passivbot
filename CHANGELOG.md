@@ -7,7 +7,9 @@ All notable user-facing changes will be documented in this file.
 - `passivbot tool live-performance-report` now retains each bot's explicit HSL
   protective-ready replay milestone and summarizes replay history formats,
   protective-ready elapsed time, and completed full-replay elapsed time from
-  existing structured events. This is read-only reporting and does not change
+  existing structured events. If the earlier milestone has rotated out of the
+  selected event files, its aggregate elapsed value is recovered from the
+  retained completion event. This is read-only reporting and does not change
   HSL startup or trading behavior.
 
 - Cold coin-mode HSL history reconstruction now uses a private compact

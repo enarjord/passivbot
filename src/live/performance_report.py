@@ -1846,20 +1846,28 @@ class _HslReplayProfileAccumulator:
             history_format = state.get("history_format")
             if history_format:
                 history_format_counts[str(history_format)] += 1
+            protective_elapsed_ms = None
             protective_ready = state.get("protective_ready")
             if isinstance(protective_ready, dict):
                 derived = protective_ready.get("derived")
                 if isinstance(derived, dict):
-                    elapsed_ms = derived.get("protective_elapsed_ms")
-                    if elapsed_ms is None:
-                        elapsed_ms = derived.get("startup_blocking_elapsed_ms")
-                    if elapsed_ms is not None:
-                        protective_ready_elapsed_ms.append(int(elapsed_ms))
+                    protective_elapsed_ms = derived.get("protective_elapsed_ms")
+                    if protective_elapsed_ms is None:
+                        protective_elapsed_ms = derived.get(
+                            "startup_blocking_elapsed_ms"
+                        )
             completed = state.get("completed")
             if isinstance(completed, dict):
                 derived = completed.get("derived")
-                if isinstance(derived, dict) and derived.get("full_elapsed_ms") is not None:
-                    full_replay_elapsed_ms.append(int(derived["full_elapsed_ms"]))
+                if isinstance(derived, dict):
+                    if protective_elapsed_ms is None:
+                        # Pre-split completions may have startup blocking time
+                        # without an equivalent protective-ready milestone.
+                        protective_elapsed_ms = derived.get("protective_elapsed_ms")
+                    if derived.get("full_elapsed_ms") is not None:
+                        full_replay_elapsed_ms.append(int(derived["full_elapsed_ms"]))
+            if protective_elapsed_ms is not None:
+                protective_ready_elapsed_ms.append(int(protective_elapsed_ms))
             groups.append(
                 _with_hsl_replay_active_age(group, report_ts_ms=int(report_ts_ms))
             )
