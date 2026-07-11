@@ -19,20 +19,22 @@ Last updated: 2026-07-11.
 
 Current `origin/v8` head:
 
-- `6b2da757f2fbc590c12365870475176632269021` after PR #1190, `Expose HSL
-  replay scan throughput`.
+- `359929007dce0b47c023a36fdef90a7106ae46da` after PR #1191, `Fix active
+  HSL replay remaining estimates`.
 
 Current logging-overhaul head:
 
-- `6b2da757f2fbc590c12365870475176632269021` after PR #1190, `Expose HSL
-  replay scan throughput` (latest merged logging-overhaul slice).
+- `359929007dce0b47c023a36fdef90a7106ae46da` after PR #1191, `Fix active
+  HSL replay remaining estimates` (latest merged logging-overhaul slice).
 
 Current work:
 
-- Active narrow slice: fix the generic active replay remaining estimate when
-  `required_pairs=0` or required work has completed while optional replay
-  remains. Use the dense upper bound for the generic active estimate, keep the
-  required metric separate, and retain exact terminal candidate estimates.
+- Active slice: add centralized readiness scope and trading-impact metadata to
+  five existing `bot.startup_timing` phases, then expose per-bot and
+  aggregate readiness SLA timing in performance and smoke reports without
+  changing startup or trading behavior. Keep the best-effort `active-candle`
+  phase timing-only because it cannot prove readiness after a tolerated warmup
+  failure.
 
 Current review gate:
 
@@ -63,6 +65,15 @@ Retuned goal boundary:
 
 VPS5 deployment status:
 
+- PR #1191 merged to `v8` as
+  `359929007dce0b47c023a36fdef90a7106ae46da` and was pulled to VPS5 without
+  restarting bots. Existing optional progress, exact candidate terminal, and
+  retained legacy terminal records all produced the corrected report
+  semantics. The settled smoke was green with `278/278` remote and `58/58`
+  account-critical calls successful, all five expected processes matched, no
+  hard/log/monitor failures, and a clean tracked repository. All bot PIDs and
+  unrelated `misc:0.0` PID `434835` remained unchanged; after the bounded
+  rotated-history scans settled, all five bots were `Rsl+`.
 - PR #1190 merged to `v8` as
   `6b2da757f2fbc590c12365870475176632269021` and was deployed to VPS5. The
   tracked repository was clean and only expected untracked artifacts were
@@ -7532,3 +7543,22 @@ VPS5 deployment status:
   lacked the new diagnostics dedupe set; an explicit initializer and direct
   filter regression resolve the finding, and delta review found no code
   regression.
+
+### Active Slice: Startup Readiness SLA Semantics
+
+- PR #1192, `Expose startup readiness SLA scopes`.
+- Branch: `codex/v8-startup-readiness-sla` from deployed
+  `359929007dce0b47c023a36fdef90a7106ae46da`.
+- Scope: add bounded `readiness_scope` and `trading_impact` fields to five
+  existing `bot.startup_timing` phases through one centralized contract. Keep
+  the best-effort `active-candle` phase timing-only because its tolerated
+  failure path cannot prove readiness.
+  Performance and smoke reports accept only exact contract matches and expose
+  per-bot plus aggregate readiness SLA timing.
+- Non-goals: no new readiness decision, startup ordering, HSL/replay state,
+  exchange call, process policy, Rust/order/risk logic, backtest, optimizer, or
+  trading behavior. True fresh-entry, first-Rust-call, and
+  first-exchange-write milestones remain future source-event work.
+- Expected VPS action: restart only the five exact supervised bot panes after
+  exact-head approval and merge, preserve unrelated `misc:0.0`, query the new
+  startup event/report fields, and run immediate plus settled smoke checks.

@@ -9,6 +9,7 @@ import queue
 import re
 import threading
 import time
+from types import MappingProxyType
 import uuid
 from typing import Any, Iterable, Mapping, Protocol
 
@@ -54,6 +55,29 @@ _LIVE_EVENT_DEBUG_PROFILE_ALIASES = {
     "remote-call": "remote_calls",
     "remote-calls": "remote_calls",
 }
+
+_STARTUP_PHASE_READINESS_CONTRACTS: Mapping[str, tuple[str, str]] = MappingProxyType(
+    {
+        "account": ("account_critical", "protective_blocker"),
+        "hsl": ("held_position_protective", "protective_blocker"),
+        "startup": ("execution_loop", "protective_blocker"),
+        "market": ("first_market_state", "cycle_delay"),
+        "full-warmup": ("background_candles_complete", "entry_blocker"),
+    }
+)
+
+
+def startup_phase_readiness_contract(phase: object) -> dict[str, str] | None:
+    """Return bounded readiness metadata for a known startup phase."""
+    if not isinstance(phase, str):
+        return None
+    values = _STARTUP_PHASE_READINESS_CONTRACTS.get(phase)
+    if values is None:
+        return None
+    return {
+        "readiness_scope": values[0],
+        "trading_impact": values[1],
+    }
 
 
 class EventTypes:

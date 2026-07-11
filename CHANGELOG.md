@@ -4,6 +4,14 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Existing `bot.startup_timing` events now include bounded machine-readable
+  readiness scope and trading-impact labels for account, HSL protective,
+  execution-loop, first-market-state, and background-candle milestones. The
+  best-effort active-candle phase remains timing-only. Live performance and
+  smoke reports expose per-bot and aggregate readiness SLA timing without
+  changing startup sequencing, readiness gates, exchange calls, or trading
+  behavior.
+
 - Coin-mode HSL replay progress now separates scanned candidate rows from
   applied state-update rows. Live performance and smoke reports use scan
   throughput for remaining-work estimates when available, retain explicit

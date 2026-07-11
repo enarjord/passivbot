@@ -200,11 +200,15 @@ def test_startup_timing_mark_emits_structured_event(monkeypatch, caplog):
         "phase": "account",
         "elapsed_ms": 2500,
         "since_previous_ms": 2500,
+        "readiness_scope": "account_critical",
+        "trading_impact": "protective_blocker",
     }
     assert events[1].data == {
         "phase": "hsl",
         "elapsed_ms": 7000,
         "since_previous_ms": 4500,
+        "readiness_scope": "held_position_protective",
+        "trading_impact": "protective_blocker",
         "details": "mode=coin",
     }
     assert events[1].level == "info"
@@ -250,7 +254,9 @@ def test_startup_timing_debug_profile_adds_bounded_phase_shape(
             "details",
             "elapsed_ms",
             "phase",
+            "readiness_scope",
             "since_previous_ms",
+            "trading_impact",
         ],
         "phase": "account",
         "elapsed_ms": 2500,
@@ -306,8 +312,48 @@ def test_startup_timing_mark_suppresses_legacy_log_when_event_console_active(
         "phase": "account",
         "elapsed_ms": 2500,
         "since_previous_ms": 2500,
+        "readiness_scope": "account_critical",
+        "trading_impact": "protective_blocker",
     }
     assert bot._live_event_pipeline.close(timeout=2.0) is True
+
+
+def test_startup_timing_best_effort_active_candle_omits_readiness_contract_fields():
+    class FakeBot:
+        live_event_debug_profiles = ()
+
+        def __init__(self):
+            self.events = []
+
+        def _emit_live_event(self, event_type, **kwargs):
+            self.events.append((event_type, kwargs))
+
+    bot = FakeBot()
+    live_event_emitters.emit_startup_timing_event(
+        bot,
+        phase="active-candle",
+        elapsed_ms=2500,
+        since_previous_ms=500,
+    )
+
+    assert bot.events == [
+        (
+            EventTypes.BOT_STARTUP_TIMING,
+            {
+                "level": "info",
+                "component": "bot.startup",
+                "tags": ("bot", "startup", "timing"),
+                "cycle_id": None,
+                "status": "succeeded",
+                "reason_code": ReasonCodes.STARTUP_PHASE_READY,
+                "data": {
+                    "phase": "active-candle",
+                    "elapsed_ms": 2500,
+                    "since_previous_ms": 500,
+                },
+            },
+        )
+    ]
 
 
 def test_routine_planning_defer_summary_emits_live_event(monkeypatch):

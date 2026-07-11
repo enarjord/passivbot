@@ -1237,14 +1237,26 @@ def test_live_performance_report_startup_readiness_summary(tmp_path, monkeypatch
                 seq=2,
                 ts=2000,
                 component="bot.startup",
-                data={"stage": "account", "elapsed_ms": 900, "since_previous_ms": 900},
+                data={
+                    "stage": "account",
+                    "elapsed_ms": 900,
+                    "since_previous_ms": 900,
+                    "readiness_scope": "account_critical",
+                    "trading_impact": "protective_blocker",
+                },
             ),
             _monitor_row(
                 event_type="bot.startup_timing",
                 seq=3,
                 ts=3000,
                 component="bot.startup",
-                data={"stage": "hsl", "elapsed_s": 2.5, "since_previous_ms": 1600},
+                data={
+                    "stage": "hsl",
+                    "elapsed_s": 2.5,
+                    "since_previous_ms": 1600,
+                    "readiness_scope": "held_position_protective",
+                    "trading_impact": "protective_blocker",
+                },
             ),
             _monitor_row(
                 event_type="hsl.replay.progress",
@@ -1285,6 +1297,30 @@ def test_live_performance_report_startup_readiness_summary(tmp_path, monkeypatch
     assert startup["debug_profile_counts"] == {"ema": 1, "rust": 1}
     assert "api_key=should_not_render" not in json.dumps(startup, sort_keys=True)
     assert bot["startup_phases_ms"] == {"account": 900, "hsl": 2500}
+    assert bot["readiness_sla"] == {
+        "account_critical": {
+            "phase": "account",
+            "elapsed_ms": 900,
+            "trading_impact": "protective_blocker",
+        },
+        "held_position_protective": {
+            "phase": "hsl",
+            "elapsed_ms": 2500,
+            "trading_impact": "protective_blocker",
+        },
+    }
+    assert startup["readiness_scope_counts"] == {
+        "account_critical": 1,
+        "held_position_protective": 1,
+    }
+    assert startup["readiness_scope_elapsed_ms"]["account_critical"]["max"] == 900
+    assert (
+        startup["readiness_scope_elapsed_ms"]["held_position_protective"]["max"]
+        == 2500
+    )
+    assert startup["readiness_trading_impact_counts"] == {
+        "protective_blocker": 2,
+    }
     assert startup["startup_phase_counts"] == {"account": 1, "hsl": 1}
     assert startup["startup_phase_elapsed_ms"]["account"] == {
         "count": 1,
@@ -1302,6 +1338,41 @@ def test_live_performance_report_startup_readiness_summary(tmp_path, monkeypatch
     assert bot["hsl_replay"]["held_pairs"] == 1
     assert bot["hsl_replay"]["rows_per_second"] == 289.4
     assert bot["hsl_replay"]["latest_event_age_ms"] == 60000
+
+
+def test_live_performance_report_rejects_mismatched_startup_readiness_contract(
+    tmp_path,
+):
+    events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="bot.startup_timing",
+                seq=1,
+                ts=1000,
+                data={
+                    "phase": "account",
+                    "elapsed_ms": 900,
+                    "readiness_scope": "held_position_protective",
+                    "trading_impact": "diagnostics_only",
+                },
+            )
+        ],
+    )
+
+    report = build_live_performance_report(tmp_path / "monitor")
+    startup = report["startup_readiness"]
+
+    assert startup["bots"][0]["startup_phases_ms"] == {"account": 900}
+    assert "readiness_sla" not in startup["bots"][0]
+    assert startup["readiness_scope_counts"] == {}
+    startup_groups = {
+        group["operation"]: group for group in report["operation_durations"]["groups"]
+    }
+    assert startup_groups["startup.account"]["trading_impact"] == (
+        "blocks_startup_readiness"
+    )
 
 
 def test_live_performance_report_startup_readiness_completed_hsl_not_active(tmp_path):

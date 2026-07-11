@@ -12,6 +12,7 @@ from live.event_bus import (
     LIVE_EVENT_DEBUG_PROFILES,
     LIVE_EVENT_ID_KEYS,
     LIVE_EVENT_MONITOR_PAYLOAD_KEY,
+    startup_phase_readiness_contract,
     utc_ms,
 )
 from live.event_file_rows import event_file_rows
@@ -1147,12 +1148,28 @@ def _startup_phase_label(value: Any) -> str:
     return "other"
 
 
+def _startup_readiness_contract(
+    data: dict[str, Any], phase: str
+) -> dict[str, str] | None:
+    expected = startup_phase_readiness_contract(phase)
+    if expected is None:
+        return None
+    if data.get("readiness_scope") != expected["readiness_scope"]:
+        return None
+    if data.get("trading_impact") != expected["trading_impact"]:
+        return None
+    return expected
+
+
 class _StartupReadinessAccumulator:
     def __init__(self) -> None:
         self.bots: dict[str, dict[str, Any]] = {}
         self.startup_phase_counts: Counter[str] = Counter()
         self.startup_phase_elapsed_values: dict[str, list[int]] = {}
         self.startup_phase_since_previous_values: dict[str, list[int]] = {}
+        self.readiness_scope_counts: Counter[str] = Counter()
+        self.readiness_scope_elapsed_values: dict[str, list[int]] = {}
+        self.readiness_trading_impact_counts: Counter[str] = Counter()
 
     @staticmethod
     def _update_debug_profiles(state: dict[str, Any], data: dict[str, Any]) -> None:
@@ -1219,6 +1236,24 @@ class _StartupReadinessAccumulator:
                 self.startup_phase_elapsed_values.setdefault(stage, []).append(
                     int(elapsed_ms)
                 )
+                contract = _startup_readiness_contract(data, stage)
+                if contract is not None:
+                    scope = contract["readiness_scope"]
+                    impact = contract["trading_impact"]
+                    readiness_sla = state.get("readiness_sla")
+                    if not isinstance(readiness_sla, dict):
+                        readiness_sla = {}
+                        state["readiness_sla"] = readiness_sla
+                    readiness_sla[scope] = {
+                        "phase": stage,
+                        "elapsed_ms": int(elapsed_ms),
+                        "trading_impact": impact,
+                    }
+                    self.readiness_scope_counts[scope] += 1
+                    self.readiness_scope_elapsed_values.setdefault(scope, []).append(
+                        int(elapsed_ms)
+                    )
+                    self.readiness_trading_impact_counts[impact] += 1
             since_previous_ms = _non_negative_ms(data.get("since_previous_ms"))
             if since_previous_ms is not None:
                 self.startup_phase_since_previous_values.setdefault(stage, []).append(
@@ -1278,6 +1313,12 @@ class _StartupReadinessAccumulator:
                 SUMMARY_GROUP_LIMIT
             )
         ]
+        readiness_scopes = [
+            scope
+            for scope, _count in self.readiness_scope_counts.most_common(
+                SUMMARY_GROUP_LIMIT
+            )
+        ]
         for bot, state in sorted(self.bots.items()):
             phases = dict(sorted(state.get("startup_phases_ms", {}).items()))
             item = {
@@ -1288,6 +1329,11 @@ class _StartupReadinessAccumulator:
             }
             if len(phases) > limit:
                 item["startup_phases_truncated"] = True
+            readiness_sla = dict(sorted((state.get("readiness_sla") or {}).items()))
+            if readiness_sla:
+                item["readiness_sla"] = dict(list(readiness_sla.items())[:limit])
+                if len(readiness_sla) > limit:
+                    item["readiness_sla_truncated"] = True
             if state.get("bot_started_ts") is not None:
                 item["bot_started_ts"] = int(state["bot_started_ts"])
             if state.get("bot_ready_ts") is not None:
@@ -1332,6 +1378,19 @@ class _StartupReadinessAccumulator:
                 for phase in phase_labels
                 if self.startup_phase_since_previous_values.get(phase)
             },
+            "readiness_scope_counts": {
+                scope: int(self.readiness_scope_counts[scope])
+                for scope in readiness_scopes
+            },
+            "readiness_scope_elapsed_ms": {
+                scope: _number_summary(
+                    self.readiness_scope_elapsed_values.get(scope, [])
+                )
+                for scope in readiness_scopes
+            },
+            "readiness_trading_impact_counts": dict(
+                sorted(self.readiness_trading_impact_counts.items())
+            ),
             "bots_truncated": len(bot_items) > limit,
             "bots": bot_items[:limit],
         }
@@ -4002,12 +4061,17 @@ def _add_event_timings(
         value_ms = _non_negative_ms(data.get("elapsed_ms"))
         if value_ms is None:
             value_ms = _elapsed_s_to_ms(data.get("elapsed_s"))
+        contract = _startup_readiness_contract(data, stage)
         accumulator.add(
             row=row,
             live_event=live_event,
             operation=operation,
             value_ms=value_ms,
-            trading_impact=_trading_impact_for_event(event_type, operation),
+            trading_impact=(
+                contract["trading_impact"]
+                if contract is not None
+                else _trading_impact_for_event(event_type, operation)
+            ),
         )
         return
 

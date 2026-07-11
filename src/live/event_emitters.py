@@ -15,6 +15,7 @@ from live.event_bus import (
     authoritative_reason_code,
     emit_event,
     live_event_debug_profile_enabled,
+    startup_phase_readiness_contract,
     utc_ms,
 )
 
@@ -1242,13 +1243,17 @@ def _emit_startup_timing_event_unchecked(
 ) -> None:
     elapsed = _safe_int(elapsed_ms)
     since_previous = _safe_int(since_previous_ms)
+    phase_text = str(phase)
     data: dict[str, Any] = {
-        "phase": str(phase),
+        "phase": phase_text,
         "elapsed_ms": max(0, int(elapsed)) if elapsed is not None else 0,
         "since_previous_ms": (
             max(0, int(since_previous)) if since_previous is not None else 0
         ),
     }
+    readiness_contract = startup_phase_readiness_contract(phase_text)
+    if readiness_contract is not None:
+        data.update(readiness_contract)
     if details:
         data["details"] = str(details)
     if live_event_debug_profile_enabled(bot, "startup"):
