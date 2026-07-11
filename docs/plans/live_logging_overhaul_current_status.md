@@ -22,17 +22,38 @@ Estimated completion:
 
 ## Active Review Slice
 
-- PR #1189, `Record isolated-only entry filtering`, merged as
-  `ff1b2c1f9ee9968a4e46f3ba598f3c7f091efe42` and was deployed to VPS5.
-- Deployment smoke was green with all five supervised bots present and the
-  unrelated `misc` process preserved. The new isolated-only reason had zero
-  production matches because current configs do not exercise it.
+- PR #1190, `Expose HSL replay scan throughput`
+- Branch: `codex/v8-hsl-replay-scan-profile`
+- Base: `ff1b2c1f9ee9968a4e46f3ba598f3c7f091efe42`
+- Scope: expose per-pair and cumulative replay candidate rows scanned
+  separately from HSL state-update rows applied; make performance and smoke
+  ETA projections prefer scanned-row throughput; retain explicit legacy
+  applied-row fallback and exact terminal candidate-work estimates.
+- Behavior boundary: no replay candidate ordering, row application, yield
+  cadence, protective readiness, risk state, exchange call, Rust/order logic,
+  or trading behavior change. Each pair emits one bounded terminal progress
+  sample so halted and zero-apply scan work remains observable.
+- Validation: the focused HSL coin-mode, replay-benchmark, performance-report,
+  smoke-report, event-registry, incident-bundle, and restart-smoke suites pass.
+  Eight real fake-live HSL scenarios pass. Python compilation,
+  `git diff --check`, and the added-line silent-handling scan pass. Independent
+  preflight findings for halted-pair terminal progress and completed sparse
+  candidate-work estimates are resolved with regressions.
+- Publication state, exact head, mergeability, CI, and current-head reviewer
+  verdicts: query live GitHub metadata. Do not embed transient head or gate
+  values in this PR because doing so would immediately invalidate them.
+- Expected VPS action: after exact-head approval and merge, pull while
+  preserving local artifacts, restart the five exact supervised bot panes
+  because the HSL producer is shared live Python, preserve unrelated
+  `misc:0.0`, then query replay progress/completion scan fields and run
+  immediate plus settled smoke checks.
 
 Next action:
 
-1. Review HSL replay scan-throughput observability: add scanned-row counters
-   and scan-rate reporting, and correct ETA estimators while preserving replay
-   behavior and existing applied-row metrics.
+1. Resolve any verified current-head findings. Merge only after the temporary
+   Hermes + Grok 4.5 + green-CI gate is satisfied on the same exact head, then
+   deploy and validate the expected replay fields and process boundaries on
+   VPS5.
 
 ## Deployed Baseline
 
