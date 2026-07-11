@@ -621,8 +621,10 @@ Trading-impact labels:
     `held_pairs`, `cooldown_pairs`, `required_pairs`, `applied_rows`,
     `total_applied_rows`, `skipped_pairs` on completion, `rows_per_second`,
     `full_elapsed_s`, and `startup_blocking_elapsed_s`.
-  - Remaining: add true `protective_elapsed_s` once protective readiness is
-    split from full replay.
+  - Done: the protective-readiness split emits true `protective_elapsed_s`,
+    and the active scorecard slice retains that milestone separately from
+    later pair progress while summarizing protective and full-replay elapsed
+    milliseconds.
 
 - [ ] Set concrete performance acceptance targets after the first optimized
   implementation.
@@ -865,8 +867,11 @@ Each slice should update this checklist with its result.
    - Status: resource-pressure groups now expose process, sample-age, queue,
      drop, sink-error, degraded, and unhealthy-bot aggregates. PR #1162 added
      bounded exchange-config refresh success/failure groups and elapsed timings
-     from existing `exchange.config_refresh` events. The current recovery slice
+     from existing `exchange.config_refresh` events. The recovery slice
      distinguishes historical failures from each bot's latest observed status.
+     The active HSL scorecard slice adds per-bot retained protective-ready
+     records plus bounded replay history-format, protective elapsed, and
+     completed full-replay elapsed aggregates from existing events.
 
 2. [ ] HSL replay benchmark/profiling slice.
    - Add an offline deterministic benchmark or fixture path for coin-mode HSL

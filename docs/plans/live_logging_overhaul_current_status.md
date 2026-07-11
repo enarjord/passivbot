@@ -1,6 +1,6 @@
 # Live Logging Overhaul Current Status
 
-Updated: 2026-07-10.
+Updated: 2026-07-11.
 
 This is the compact operational source for the active logging-overhaul loop.
 Read it before the historical progress ledger. Update it whenever the active
@@ -22,65 +22,64 @@ Estimated completion:
 
 ## Active Review Slice
 
-- PR: [#1180](https://github.com/enarjord/passivbot/pull/1180),
-  `Compact cold coin-HSL replay memory`
-- Branch: `codex/v8-hsl-direct-matrix-replay`
+- PR and publication state: query live GitHub metadata;
+  `Expose HSL replay readiness scorecard`
+- Branch: `codex/v8-hsl-replay-scorecard`
 - Head: query live GitHub metadata; this commit cannot embed its own final SHA
   without making that value stale
-- Base: `c159d955f691085469858c57ed1d6ba7927d7905`
-- Scope: the internal cold coin-HSL history call requests aligned compact
-  timestamp, balance, account-realized, and per-pair realized/unrealized NumPy
-  arrays. `NaN` preserves unavailable pair values. Public history callers and
-  pside/unified replay retain the rich timeline contract. The offline benchmark
-  gains held/background counters, opt-in local-scale bounds, and tracemalloc
-  output.
-- Triggering evidence: after PR #1179, five live processes reported aggregate
-  RSS `648196 KB`; four coin-HSL processes were in uninterruptible sleep while
-  swap/page pressure remained high. A deterministic 43,201-minute, 30-symbol
-  local builder profile measured `686242590` rich-history peak allocation bytes
-  versus `73499666` compact-history bytes, an 89.3% reduction.
-- Non-goals: no HSL thresholds, episode/cooldown/no-restart semantics, cache
-  authority, pair priority, readiness gate, exchange write, process signal,
-  Rust, backtest, or pside/unified behavior change.
-- Local validation: full coin-HSL plus benchmark suites pass; the complete
-  balance-history suite passes with one unrelated known startup test excluded
-  after its asynchronous shutdown fixture stalled. Realized-loss tests pass.
-  Syntax and diff checks pass. Broader validation and exact counts will be
-  refreshed before publication.
-- Independent preflight: two read-only audits independently identified the
-  nested timeline as the dominant retained allocation and recommended a private
-  compact coin-only handoff. A Luna worker changed only the benchmark and its
-  tests; Sol owns the live-path implementation and review.
+- Base: `6e72f374dca9f3e2d77924e84f9453bbd7561386`
+- Scope: `live-performance-report` retains each bot's explicit
+  `held_protective_ready` record, whitelists replay `history_format` and
+  `protective_elapsed_s`, derives stage elapsed milliseconds, and adds bounded
+  history-format, protective-ready, and completed-full-replay aggregates.
+- Triggering evidence: after PR #1180 deployed, all four coin-HSL bots used the
+  compact path and reached protective readiness in `11.237s` to `79.883s`, but
+  those values and the history format required manual event queries. Kucoin's
+  first full compact replay completed in `453.98s`; three broader background
+  replays remained active. The operator scorecard should expose these existing
+  events directly.
+- Non-goals: no live event producer, replay ordering or arithmetic, HSL
+  threshold/episode/cooldown behavior, cache authority, exchange call, process
+  control, Rust, backtest, or smoke-verdict change.
+- Local validation: all `72` live-performance-report tests and `25`
+  incident-bundle integration tests pass. Python compilation and diff hygiene
+  pass. Whole-file import sorting remains nonconforming at the unchanged
+  baseline; this slice does not touch imports.
+- Independent preflight: Terra found and Sol fixed scan-order-dependent retained
+  milestones by applying the existing full event-position ordering contract.
+  Delta re-review found no remaining blocker; Sol owns final adjudication.
 - Publication state, exact head, mergeability, CI, and current-head review
   verdicts: query live GitHub metadata. Do not encode those transient values in
   the same PR that contains this status file, because every correction would
   create a different head and immediately stale the embedded value.
 - Expected VPS action: after exact-head approval and merge, pull while
-  preserving local artifacts, restart the five configured bots with exact
-  tmux/process targeting, then compare protective/full replay time, process
-  states, RSS, swap, I/O wait, remote calls, and hard-failure smoke output.
+  preserving local artifacts and run a bounded no-restart performance report
+  against the existing monitor history. Running bots need no restart because
+  this slice changes read-only report consumption only.
 
 Next action:
 
-1. Finish parity and broad local validation, publish the compact replay slice,
-   resolve verified findings, and merge only after the exact-head gate; then
-   perform the declared controlled VPS5 restart and comparative smoke.
+1. Finish focused validation and independent preflight, publish the scorecard
+   slice, resolve verified findings, and merge only after the exact-head gate;
+   then run the declared VPS5 no-restart report smoke.
 
 ## Deployed Baseline
 
-- Remote `v8`: `c159d955`, PR #1179
-- VPS5 repository: `c159d955`, PR #1179; tracked status clean
+- Remote `v8`: `6e72f374`, PR #1180
+- VPS5 repository: `6e72f374`, PR #1180; tracked status clean
 - VPS5 expected bots: five; all are running after the controlled restart
-- Immediate and settled smoke reports were green: all five expected bots
-  matched, hard failures were zero, 396 remote calls and 43 account-critical
-  calls succeeded across the two windows with zero failures, and no fill,
-  process, event-pipeline, or text-log hard failure appeared.
-- Background replay remains memory/I/O intensive: current process-section
-  output shows four of five bots in `D` state, aggregate RSS `648196 KB`, and
-  the earlier settled direct probes showed
-  four coin-HSL processes in uninterruptible sleep/page wait, 29 MB/s sampled
-  swap-in, 18 MB/s swap-out, 32% I/O wait, and zero idle. PR #1178 restored
-  live-I/O responsiveness but intentionally did not reduce this footprint.
+- Immediate and fresh settled smoke reports were green: all five expected bots
+  matched, hard failures were zero, and the fresh window recorded `614/614`
+  remote plus `90/90` account-critical calls succeeded. One Kucoin
+  `RequestTimeout` cycle failure in the wider restart window recovered before
+  the fresh smoke.
+- All four coin-HSL bots emitted `history_format=compact` and protective-ready
+  success. Kucoin completed full replay in `453.98s`; three background replays
+  remained active with no required pair work pending.
+- Compared with the pre-deploy sample, aggregate RSS fell from `694840 KB` to
+  `555296 KB`, all five processes moved from four `D` states to five `R`
+  states, and host swap use fell from `2926 MB` to `906 MB`. CPU remained high
+  while background replay continued.
 - Preserve local/VPS configs, logs, monitor data, reports, and temporary files
 
 ## Review Gate
@@ -103,14 +102,14 @@ Next action:
 
 ## Next Slice
 
-The coin-HSL protective-readiness split, cooperative background cadence, and
-current process-pressure query are merged and deployed. The active slice
-removes the dominant nested Python allocation from cold coin replay while
-preserving the existing risk contract.
+The coin-HSL protective-readiness split, cooperative background cadence,
+current process-pressure query, and compact cold replay payload are merged and
+deployed. The active slice turns the resulting readiness and full-replay timing
+events into a bounded operator scorecard without changing live behavior.
 Remaining candidates:
 
 - realistic-scale replay fixtures and deeper internal-stage profiling
-- held-position protective-readiness source events and sequencing
+- lower-complexity full replay after the scorecard exposes its baseline
 - unsupported configured-market and stock-perp compatibility events
 - bounded operator tooling improvements sharing one code and validation surface
 

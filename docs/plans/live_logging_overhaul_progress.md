@@ -15,27 +15,23 @@ merge, live smoke evidence changes, or new gaps are discovered.
 
 ## Current Status
 
-Last updated: 2026-07-10.
+Last updated: 2026-07-11.
 
 Current `origin/v8` head:
 
-- `493a61a9` after PR #1175, `Align coin-HSL denominator across live and
-  backtest`.
+- `6e72f374` after PR #1180, `Compact cold coin-HSL replay memory`.
 
 Current logging-overhaul head:
 
-- `493a61a9` after PR #1175, `Align coin-HSL denominator across live and
-  backtest`
+- `6e72f374` after PR #1180, `Compact cold coin-HSL replay memory`
   (latest merged logging-overhaul slice).
 
 Current work:
 
-- Branch `codex/v8-hsl-held-first-replay` freezes coin-HSL replay candidates
-  and orders held pairs first, cooldown pairs second, then remaining pairs.
-  This is the deterministic sequencing foundation only; full replay remains
-  startup-blocking until the later protective/full-readiness split. Full
-  coin-HSL, focused HSL metric/startup/override, fake-live `21/21`, Rust
-  `209/209`, and realistic bounded replay-benchmark validation pass.
+- Branch `codex/v8-hsl-replay-scorecard` makes the read-only performance report
+  retain each bot's protective-ready record and summarize replay history format,
+  protective elapsed time, and completed full-replay elapsed time. It consumes
+  existing events only and does not change HSL or live behavior.
 
 Current review gate:
 
@@ -66,6 +62,15 @@ Retuned goal boundary:
 
 VPS5 deployment status:
 
+- PR #1180 merged to `v8` as `6e72f374` after exact-head Hermes and Grok 4.5
+  green reviews plus green CI. VPS5 pulled cleanly and restarted only the five
+  configured bot panes; one stopped after the first exact-pane Ctrl-C and four
+  after the second, with no SIGTERM. Immediate and fresh settled smokes were
+  green. All four coin-HSL bots used compact history and reached protective
+  readiness in `11.237s` to `79.883s`; Kucoin completed full replay in
+  `453.98s`. Fresh RSS was `555296 KB`, all five processes were `R`, and host
+  swap use was `906 MB`, compared with `694840 KB`, four `D` processes, and
+  `2926 MB` swap before deployment. Three background replays remained active.
 - PR #1175 merged to `v8` as `493a61a9` after exact-head Hermes and Grok 4.5
   green reviews plus green CI. VPS5 pulled cleanly, rebuilt the Rust extension,
   and verified its loaded source stamp. All five bots stopped after two
