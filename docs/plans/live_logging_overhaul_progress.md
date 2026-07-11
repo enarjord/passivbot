@@ -19,20 +19,20 @@ Last updated: 2026-07-11.
 
 Current `origin/v8` head:
 
-- `ff1b2c1f9ee9968a4e46f3ba598f3c7f091efe42` after PR #1189, `Record
-  isolated-only entry filtering`.
+- `6b2da757f2fbc590c12365870475176632269021` after PR #1190, `Expose HSL
+  replay scan throughput`.
 
 Current logging-overhaul head:
 
-- `ff1b2c1f9ee9968a4e46f3ba598f3c7f091efe42` after PR #1189, `Record
-  isolated-only entry filtering` (latest merged logging-overhaul slice).
+- `6b2da757f2fbc590c12365870475176632269021` after PR #1190, `Expose HSL
+  replay scan throughput` (latest merged logging-overhaul slice).
 
 Current work:
 
-- Active review-worthy slice: HSL replay scan-throughput observability, adding
-  scanned-row counters and scan-rate reporting and correcting ETA estimators
-  while preserving replay behavior and existing applied-row metrics. This
-  slice is not yet merged or deployed.
+- Active narrow slice: fix the generic active replay remaining estimate when
+  `required_pairs=0` or required work has completed while optional replay
+  remains. Use the dense upper bound for the generic active estimate, keep the
+  required metric separate, and retain exact terminal candidate estimates.
 
 Current review gate:
 
@@ -63,6 +63,23 @@ Retuned goal boundary:
 
 VPS5 deployment status:
 
+- PR #1190 merged to `v8` as
+  `6b2da757f2fbc590c12365870475176632269021` and was deployed to VPS5. The
+  tracked repository was clean and only expected untracked artifacts were
+  preserved. All five exact supervised panes restarted, while unrelated
+  `misc:0.0` PID `434835` remained preserved. Immediate live evidence showed
+  the new scanned counters, scan rate, and candidate-row source. All four HSL
+  replays completed successfully in `108.782s` to `246.091s`, with
+  protective-ready in `9.920s` to `71.744s`; `total_scanned_rows` equaled
+  `candidate_rows`, `observed_candidate_work_pct=100`, and the source was
+  `candidate_rows_terminal`. Final fresh smoke was `ok=true`, with `333/333`
+  remote and `45/45` account-critical calls successful, all five expected bots
+  matched, no hard/log/monitor failures, and a clean tracked repository. One
+  process was sampled in `D`, but no process hard failure occurred. A prior
+  monitor-row parse boundary immediately revalidated clean.
+  A later direct process check showed `D` cleared: Binance, KuCoin, GateIO, and
+  Hyperliquid were `Ssl+/ep_poll`, OKX was `Rsl+`; `vmstat` showed `b=0` before
+  a transient `b=1` with low or zero sampled iowait.
 - PR #1189 merged to `v8` as
   `ff1b2c1f9ee9968a4e46f3ba598f3c7f091efe42` and was deployed to VPS5. The
   deployment smoke was green with all five supervised bots present and the

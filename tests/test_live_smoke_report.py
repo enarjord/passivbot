@@ -4349,13 +4349,15 @@ def test_compact_hsl_replay_data_exposes_protective_readiness_counts():
     ] == 1250
 
 
-def test_hsl_replay_derived_prefers_scanned_work_for_eta():
+@pytest.mark.parametrize("required_pairs", (0, 1))
+def test_hsl_replay_derived_prefers_scanned_work_for_eta(required_pairs):
     compact = smoke_report_module._compact_hsl_replay_data(
         {
             "data": {
+                "stage": "pair_replay",
                 "timeline_rows": 100,
                 "pairs": 3,
-                "required_pairs": 1,
+                "required_pairs": required_pairs,
                 "total_applied_rows": 10,
                 "rows_per_second": 2.0,
                 "scanned_rows": 75,
@@ -4379,6 +4381,11 @@ def test_hsl_replay_derived_prefers_scanned_work_for_eta():
     assert derived["observed_work_pct"] == 50.0
     assert derived["estimated_dense_remaining_rows"] == 150
     assert derived["estimated_dense_remaining_ms"] == 3000
+    assert derived["estimated_required_remaining_rows"] == 0
+    assert derived["estimated_required_remaining_ms"] == 0
+    assert derived["work_estimate_source"] == "dense_rows_upper_bound"
+    assert derived["estimated_remaining_rows"] == 150
+    assert derived["estimated_remaining_ms"] == 3000
 
     terminal_data = {
         **compact,
@@ -4392,21 +4399,28 @@ def test_hsl_replay_derived_prefers_scanned_work_for_eta():
 
 
 def test_hsl_replay_derived_keeps_legacy_applied_work_fallback():
-    derived = smoke_report_module._hsl_replay_derived(
-        {
-            "timeline_rows": 100,
-            "pairs": 3,
-            "total_applied_rows": 10,
-            "rows_per_second": 2.0,
-        }
-    )
+    data = {
+        "timeline_rows": 100,
+        "pairs": 3,
+        "total_applied_rows": 10,
+        "rows_per_second": 2.0,
+    }
+    derived = smoke_report_module._hsl_replay_derived(data)
 
     assert derived["throughput_source"] == "applied_rows_legacy"
     assert derived["observed_applied_rows"] == 10
     assert "observed_scanned_rows" not in derived
     assert derived["estimated_dense_remaining_rows"] == 290
     assert derived["estimated_dense_remaining_ms"] == 145000
-    assert derived["work_estimate_source"] == "dense_rows"
+    assert derived["work_estimate_source"] == "dense_rows_upper_bound"
+
+    terminal = smoke_report_module._hsl_replay_derived(
+        {**data, "stage": "full_replay"}
+    )
+    assert terminal["estimated_dense_remaining_rows"] == 290
+    assert terminal["work_estimate_source"] == "legacy_terminal_no_candidate_rows"
+    assert terminal["estimated_remaining_rows"] == 0
+    assert terminal["estimated_remaining_ms"] == 0
 
 
 def test_hsl_replay_health_retains_protective_ready_after_later_progress():
@@ -4723,11 +4737,11 @@ def test_live_smoke_report_summarizes_hsl_replay_health(tmp_path, monkeypatch):
         43201 * 20 - 64000
     )
     assert active_group["latest"]["derived"]["estimated_remaining_rows"] == (
-        43201 * 20 - 64000
+        43201 * 29 - 64000
     )
     assert active_group["latest"]["derived"]["estimated_dense_remaining_ms"] == 3733584
     assert active_group["latest"]["derived"]["estimated_required_remaining_ms"] == 2512507
-    assert active_group["latest"]["derived"]["estimated_remaining_ms"] == 2512507
+    assert active_group["latest"]["derived"]["estimated_remaining_ms"] == 3733584
     assert active_group["latest"]["derived"]["observed_work_pct"] == pytest.approx(
         5.108
     )
@@ -4775,8 +4789,8 @@ def test_live_smoke_report_summarizes_hsl_replay_health(tmp_path, monkeypatch):
         "failed_attention_bots": 1,
         "max_active_latest_elapsed_ms": 755750,
         "max_active_latest_event_age_ms": 360000,
-        "max_active_estimated_remaining_rows": 800020,
-        "max_active_estimated_remaining_ms": 2512507,
+        "max_active_estimated_remaining_rows": 43201 * 29 - 64000,
+        "max_active_estimated_remaining_ms": 3733584,
         "max_active_estimated_dense_remaining_rows": 43201 * 29 - 64000,
         "max_active_estimated_dense_remaining_ms": 3733584,
         "max_active_estimated_required_remaining_rows": 43201 * 20 - 64000,
@@ -4802,15 +4816,15 @@ def test_live_smoke_report_summarizes_hsl_replay_health(tmp_path, monkeypatch):
                 "total_applied_rows": 64000,
                 "rows_per_second": 318.415,
                 "throughput_source": "applied_rows_legacy",
-                "work_estimate_source": "required_dense_rows",
+                "work_estimate_source": "dense_rows_upper_bound",
                 "observed_required_work_pct": 7.407,
                 "observed_work_pct": 5.108,
                 "estimated_dense_remaining_rows": 43201 * 29 - 64000,
                 "estimated_dense_remaining_ms": 3733584,
                 "estimated_required_remaining_rows": 43201 * 20 - 64000,
                 "estimated_required_remaining_ms": 2512507,
-                "estimated_remaining_rows": 800020,
-                "estimated_remaining_ms": 2512507,
+                "estimated_remaining_rows": 43201 * 29 - 64000,
+                "estimated_remaining_ms": 3733584,
             }
         ],
         "event_types": {
