@@ -4399,14 +4399,13 @@ def test_hsl_replay_derived_prefers_scanned_work_for_eta(required_pairs):
 
 
 def test_hsl_replay_derived_keeps_legacy_applied_work_fallback():
-    derived = smoke_report_module._hsl_replay_derived(
-        {
-            "timeline_rows": 100,
-            "pairs": 3,
-            "total_applied_rows": 10,
-            "rows_per_second": 2.0,
-        }
-    )
+    data = {
+        "timeline_rows": 100,
+        "pairs": 3,
+        "total_applied_rows": 10,
+        "rows_per_second": 2.0,
+    }
+    derived = smoke_report_module._hsl_replay_derived(data)
 
     assert derived["throughput_source"] == "applied_rows_legacy"
     assert derived["observed_applied_rows"] == 10
@@ -4414,6 +4413,14 @@ def test_hsl_replay_derived_keeps_legacy_applied_work_fallback():
     assert derived["estimated_dense_remaining_rows"] == 290
     assert derived["estimated_dense_remaining_ms"] == 145000
     assert derived["work_estimate_source"] == "dense_rows_upper_bound"
+
+    terminal = smoke_report_module._hsl_replay_derived(
+        {**data, "stage": "full_replay"}
+    )
+    assert terminal["estimated_dense_remaining_rows"] == 290
+    assert terminal["work_estimate_source"] == "legacy_terminal_no_candidate_rows"
+    assert terminal["estimated_remaining_rows"] == 0
+    assert terminal["estimated_remaining_ms"] == 0
 
 
 def test_hsl_replay_health_retains_protective_ready_after_later_progress():

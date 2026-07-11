@@ -9,9 +9,10 @@ All notable user-facing changes will be documented in this file.
   throughput for remaining-work estimates when available, retain explicit
   legacy applied-row fallback labeling for older events, use the dense upper
   bound for the generic active replay estimate while keeping required-pair
-  estimates separate, and preserve exact terminal candidate-work estimates.
-  These report semantics do not change HSL replay ordering, readiness, or
-  trading behavior.
+  estimates separate, preserve exact terminal candidate-work estimates, and
+  keep legacy terminal events without candidate totals from reporting active
+  remaining work. These report semantics do not change HSL replay ordering,
+  readiness, or trading behavior.
 
 - Isolated-only markets excluded from new entries by cross-margin preference
   now emit bounded per-side `config.market_compatibility` events while

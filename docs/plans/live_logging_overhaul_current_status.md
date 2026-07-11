@@ -22,6 +22,7 @@ Estimated completion:
 
 ## Active Review Slice
 
+- PR #1191, `Fix active HSL replay remaining estimates`
 - Branch: `codex/v8-hsl-required-zero-estimate`
 - Base: `6b2da757f2fbc590c12365870475176632269021`
 - Triggering evidence: the PR #1190 deployment reported active optional replay
@@ -31,7 +32,9 @@ Estimated completion:
 - Scope: make generic active replay remaining rows/time use the full-replay
   dense upper bound and label it `dense_rows_upper_bound`. Keep
   `estimated_required_remaining_*` as the separate protective-work metric and
-  keep terminal `candidate_rows_terminal` estimates exact.
+  keep terminal `candidate_rows_terminal` estimates exact. Treat legacy
+  `full_replay` events without candidate totals as terminal rather than
+  reporting dense remaining work.
 - Behavior boundary: read-only performance/smoke report derivation and tests
   only. No event producer, replay candidate/order/application, HSL state,
   exchange call, process control, smoke verdict, Rust/order/risk logic, or
