@@ -2045,7 +2045,7 @@ class _CacheWarmupAccumulator:
                 )
             state["latest_flush_completed"] = record
 
-        latest_changed = state.get("latest_ts") is None
+        latest_changed = ts is None or state.get("latest_ts") is None
         if ts is not None and state.get("latest_ts") is not None:
             latest_changed = int(ts) >= int(state["latest_ts"])
         if latest_changed:
