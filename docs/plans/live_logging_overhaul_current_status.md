@@ -22,6 +22,7 @@ Estimated completion:
 
 ## Active Review Slice
 
+- PR #1192, `Expose startup readiness SLA scopes`
 - Branch: `codex/v8-startup-readiness-sla`
 - Base: `359929007dce0b47c023a36fdef90a7106ae46da`
 - Triggering evidence: existing `bot.startup_timing` events carry elapsed phase

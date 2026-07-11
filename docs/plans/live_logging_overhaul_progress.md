@@ -7546,6 +7546,7 @@ VPS5 deployment status:
 
 ### Active Slice: Startup Readiness SLA Semantics
 
+- PR #1192, `Expose startup readiness SLA scopes`.
 - Branch: `codex/v8-startup-readiness-sla` from deployed
   `359929007dce0b47c023a36fdef90a7106ae46da`.
 - Scope: add bounded `readiness_scope` and `trading_impact` fields to five
