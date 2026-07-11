@@ -7562,3 +7562,38 @@ VPS5 deployment status:
 - Expected VPS action: restart only the five exact supervised bot panes after
   exact-head approval and merge, preserve unrelated `misc:0.0`, query the new
   startup event/report fields, and run immediate plus settled smoke checks.
+
+### Deployed Slice: Startup Readiness SLA Semantics
+
+- PR #1192 was approved by Hermes and Grok 4.5 on exact head `9eb8e4a96`; CI
+  passed and it merged to `v8` as `3b4b043eb`.
+- VPS5 fast-forwarded cleanly and sequentially restarted only the five exact
+  supervised panes. Bot PIDs `842617/842655/842687/842721/842757` became
+  `850148/850296/850370/850436/850495`; unrelated `misc:0.0` stayed PID
+  `434835`.
+- Live performance evidence accepted all five account and execution-loop
+  scopes, four held-position protective scopes, three first-market-state
+  scopes, and a later completed background-candle scope with canonical impact
+  labels. The best-effort `active-candle` phase remained timing-only.
+- The immediate smoke caught three real KuCoin balance timeouts. After they
+  aged out, the settled two-minute smoke was hard-green with `380/380` remote
+  and `16/16` account-critical calls successful, all five expected bots
+  matched, no event-pipeline drops or sink errors, and a clean tracked repo.
+  Two cache/replay-time `D` samples cleared to `R/S` on the quiet follow-up.
+
+### Active Slice: Performance Startup Lifecycle Ordering
+
+- PR #1193, `Keep startup reports on latest lifecycle`.
+- Branch: `codex/v8-performance-startup-lifecycle` from deployed
+  `3b4b043eb66e8d0b42d792a5b94686b409901220`.
+- Triggering evidence: the bounded per-bot file selector reads current first,
+  then the selected rotated segment. The performance startup accumulator reset
+  inline, allowing older lifecycle records encountered later to overwrite the
+  current per-bot snapshot.
+- Scope: use event ordering for current per-bot startup state while preserving
+  historical aggregate phase/readiness distributions; cover the production
+  `include_rotated` plus `max_event_files_per_bot=2` path.
+- Non-goals: no producer, event schema, startup/readiness decision, exchange
+  call, HSL/risk/order behavior, process control, smoke verdict, Rust,
+  backtest, optimizer, or trading change. Expected VPS action is pull plus a
+  bounded rotated report and settled smoke, with no bot restart.

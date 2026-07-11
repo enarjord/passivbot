@@ -4,6 +4,11 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Capped rotated `live-performance-report` scans now keep each bot's startup
+  readiness snapshot on the latest observed lifecycle even though recent-file
+  selection reads `current.ndjson` before older segments. Historical aggregate
+  startup distributions remain unchanged.
+
 - Existing `bot.startup_timing` events now include bounded machine-readable
   readiness scope and trading-impact labels for account, HSL protective,
   execution-loop, first-market-state, and background-candle milestones. The

@@ -1380,7 +1380,12 @@ def test_live_performance_report_startup_readiness_completed_hsl_not_active(tmp_
     _write_ndjson(
         events_dir / "current.ndjson",
         [
-            _monitor_row(event_type="bot.started", seq=1, ts=1000),
+            _monitor_row(
+                event_type="bot.started",
+                seq=1,
+                ts=1000,
+                data={"live_event_debug_profiles": ["rust"]},
+            ),
             _monitor_row(
                 event_type="hsl.replay.completed",
                 seq=2,
@@ -1452,6 +1457,92 @@ def test_live_performance_report_startup_readiness_resets_on_restart(tmp_path):
     assert "bot_ready_ts" not in bot
     assert "startup_phases_ms" not in bot
     assert "hsl_replay" not in bot
+
+
+@pytest.mark.parametrize("current_started_ts", [None, 1000])
+def test_live_performance_report_startup_readiness_uses_event_order_with_file_cap(
+    tmp_path, current_started_ts
+):
+    events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    _write_ndjson(
+        events_dir / "2026-07-10T00-00-00.ndjson",
+        [
+            _monitor_row(event_type="bot.started", seq=1, ts=1000),
+            _monitor_row(
+                event_type="bot.startup_timing",
+                seq=2,
+                ts=1100,
+                data={
+                    "stage": "hsl",
+                    "elapsed_ms": 9000,
+                    "readiness_scope": "held_position_protective",
+                    "trading_impact": "protective_blocker",
+                },
+            ),
+            _monitor_row(
+                event_type="hsl.replay.completed",
+                seq=3,
+                ts=1200,
+                status="succeeded",
+                data={"stage": "full_replay", "pairs": 2},
+            ),
+            _monitor_row(event_type="bot.ready", seq=4, ts=1300),
+        ],
+    )
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="bot.started",
+                seq=1,
+                ts=current_started_ts,
+                data={"live_event_debug_profiles": ["state"]},
+            ),
+            _monitor_row(
+                event_type="bot.startup_timing",
+                seq=2,
+                ts=2100,
+                data={
+                    "stage": "account",
+                    "elapsed_ms": 300,
+                    "readiness_scope": "account_critical",
+                    "trading_impact": "protective_blocker",
+                },
+            ),
+            _monitor_row(event_type="bot.ready", seq=3, ts=2200),
+        ],
+    )
+
+    report = build_live_performance_report(
+        tmp_path / "monitor",
+        include_rotated=True,
+        max_event_files_per_bot=2,
+    )
+    startup = report["startup_readiness"]
+    bot = startup["bots"][0]
+
+    assert bot["lifecycle_status"] == "ready"
+    if current_started_ts is None:
+        assert "bot_started_ts" not in bot
+    else:
+        assert bot["bot_started_ts"] == current_started_ts
+    assert bot["bot_ready_ts"] == 2200
+    assert bot["debug_profiles"] == ["state"]
+    assert bot["startup_phases_ms"] == {"account": 300}
+    assert bot["readiness_sla"] == {
+        "account_critical": {
+            "phase": "account",
+            "elapsed_ms": 300,
+            "trading_impact": "protective_blocker",
+        }
+    }
+    assert "hsl_replay" not in bot
+    assert startup["startup_phase_counts"] == {"account": 1, "hsl": 1}
+    assert startup["startup_phase_elapsed_ms"]["hsl"]["max"] == 9000
+    assert startup["readiness_scope_counts"] == {
+        "account_critical": 1,
+        "held_position_protective": 1,
+    }
 
 
 def test_live_performance_report_startup_readiness_is_bounded(tmp_path):

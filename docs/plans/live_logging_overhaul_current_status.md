@@ -22,47 +22,55 @@ Estimated completion:
 
 ## Active Review Slice
 
-- PR #1192, `Expose startup readiness SLA scopes`
-- Branch: `codex/v8-startup-readiness-sla`
-- Base: `359929007dce0b47c023a36fdef90a7106ae46da`
-- Triggering evidence: existing `bot.startup_timing` events carry elapsed phase
-  timing, but operators and reports cannot distinguish account-critical,
-  held-position protective, execution-loop, market-state, and background
-  readiness semantics without interpreting phase names.
-- Scope: centralize a bounded readiness contract for five existing startup
-  timing phases, emit `readiness_scope` and `trading_impact`, and project
-  per-bot plus aggregate readiness SLA timing in performance and smoke reports.
-  Consumers accept metadata only when it exactly matches the centralized phase
-  contract. The best-effort `active-candle` phase remains timing-only because
-  its warmup failure is tolerated and cannot prove readiness.
-- Behavior boundary: additive structured event metadata and read-only report
-  projection only. No startup ordering, readiness gate, HSL state/replay,
-  exchange call, process-control policy, Rust/order/risk logic, or trading
-  behavior change. This slice does not claim the still-missing true
-  fresh-entry, first-Rust-call, or first-exchange-write milestones.
-- Validation: event-contract/emitter, startup monitor, performance-report,
-  smoke-report, incident-bundle, and restart-smoke-plan suites plus Python
-  compilation, `git diff --check`, and the added-line silent-handling scan.
+- PR #1193, `Keep startup reports on latest lifecycle`
+- Branch: `codex/v8-performance-startup-lifecycle`
+- Base: `3b4b043eb66e8d0b42d792a5b94686b409901220`
+- Triggering evidence: capped rotated performance-report selection intentionally
+  processes `current.ndjson` before the selected older segment. The startup
+  accumulator reset per-bot state inline, so an older lifecycle encountered
+  later could overwrite the current startup snapshot.
+- Scope: make per-bot startup readiness state use event order rather than file
+  traversal order while preserving historical aggregate startup distributions.
+  Add a current-before-rotated regression with the production per-bot file cap.
+- Behavior boundary: read-only `live-performance-report` derivation and tests
+  only. No event producer, startup sequence/readiness decision, HSL state,
+  exchange call, process control, Rust/order/risk logic, smoke verdict, or
+  trading behavior change.
+- Validation: focused and full performance-report tests, Python compilation,
+  `git diff --check`, the added-line silent-handling scan, and independent
+  preflight.
 - Publication state, exact head, mergeability, CI, and current-head reviewer
   verdicts: query live GitHub metadata; do not embed self-invalidating values.
 - Expected VPS action: after merge, pull while preserving local artifacts and
-  restart only the five exact supervised bot panes because the event producer
-  is loaded by running Python processes. Preserve unrelated `misc:0.0`, then
-  query the new startup fields and run immediate plus settled smoke checks.
+  run the exact bounded rotated startup-readiness report plus a settled smoke.
+  Do not restart or signal bots because this slice changes only an on-demand
+  report consumer.
 
 Next action:
 
-1. Complete implementation and independent preflight, publish one review-worthy
-   PR, resolve verified findings, and merge only after the exact-head temporary
-   Hermes + Grok 4.5 + green-CI gate is satisfied.
+1. Complete the narrow traversal-order fix and regression, publish after clean
+   independent preflight, and merge only after the exact-head temporary Hermes
+   + Grok 4.5 + green-CI gate is satisfied.
 
 ## Deployed Baseline
 
-- Remote `v8`: `359929007dce0b47c023a36fdef90a7106ae46da`, PR #1191
-- VPS5 repository: `359929007dce0b47c023a36fdef90a7106ae46da`, PR #1191; tracked
+- Remote `v8`: `3b4b043eb66e8d0b42d792a5b94686b409901220`, PR #1192
+- VPS5 repository: `3b4b043eb66e8d0b42d792a5b94686b409901220`, PR #1192; tracked
   status clean; only expected untracked artifacts were preserved
-- VPS5 expected bots: five; all running with unchanged PIDs after the
-  report-only pull; unrelated `misc:0.0` remains PID `434835`
+- VPS5 expected bots: five; all running after exact sequential pane restarts;
+  unrelated `misc:0.0` remains PID `434835`
+- PR #1192 merged after exact-head Hermes and Grok 4.5 approval plus green CI.
+  VPS5 replaced bot PIDs `842617/842655/842687/842721/842757` with
+  `850148/850296/850370/850436/850495`, preserving `misc:0.0` PID `434835`.
+  Live reports accepted five account and execution-loop scopes, four
+  held-position protective scopes, three first-market-state scopes, and a
+  completed background-candle scope using canonical impact labels;
+  `active-candle` remained timing-only. The immediate smoke caught three real
+  KuCoin balance timeouts, then the settled two-minute smoke was hard-green
+  with `380/380` remote and `16/16` account-critical calls successful, all five
+  configured bots matched, no pipeline drops/sink errors, and a clean tracked
+  repository. Two transient `D` states during cache/replay work cleared to
+  `R/S` on the quiet follow-up sample.
 - PR #1191 merged as `359929007dce0b47c023a36fdef90a7106ae46da` after
   exact-head Hermes and Grok 4.5 approval plus green CI, then was pulled to
   VPS5 without restarting bots. Real optional-replay progress with
@@ -172,14 +180,16 @@ scorecard, stable per-pair fill index, exact sparse flat-pair replay, and the
 rotated resource-pressure report fix, configured-market skip events, and fatal
 HIP-3 startup compatibility are merged and deployed. PR #1189's isolated-only
 initial-entry filter visibility and PR #1190's HSL replay scanned-row
-throughput and PR #1191's corrected active/legacy-terminal replay estimates are
-also merged and deployed. The next active slice adds machine-readable readiness
-SLA semantics to existing startup timing events and reports.
+throughput, PR #1191's corrected active/legacy-terminal replay estimates, and
+PR #1192's machine-readable startup readiness SLA semantics are also merged and
+deployed. The next active slice makes the performance report's per-bot startup
+snapshot independent of capped current-before-rotated traversal order.
 
-After this active slice is merged and its producer/restart VPS validation is
-recorded, select the next review-worthy candidate from the remaining backlog,
-including:
+After this report-only follow-up is merged and validated, select the next
+review-worthy candidate from the remaining backlog, including:
 
+- bounded startup-to-first-action milestone evidence for true fresh-entry,
+  first-Rust-call, and first actual exchange-write observations
 - bounded operator tooling improvements sharing one code and validation surface
 
 Do not create progress-only PRs or resume unrelated logging work from stale

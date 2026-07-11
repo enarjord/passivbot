@@ -1113,6 +1113,24 @@ def _startup_elapsed_ms(data: dict[str, Any]) -> int | None:
     return _elapsed_s_to_ms(data.get("elapsed_s"))
 
 
+def _startup_event_order_key(
+    row: dict[str, Any],
+) -> tuple[str, int, str, int, int, int]:
+    timestamp_ms = _record_ts(row)
+    sequence = _non_negative_ms(row.get("seq"))
+    source_path_text = str(row.get(_PERFORMANCE_REPORT_SOURCE_PATH_KEY) or "")
+    source_path = Path(source_path_text)
+    source_line = _non_negative_ms(row.get(_PERFORMANCE_REPORT_SOURCE_LINE_KEY))
+    return (
+        str(source_path.parent) if source_path_text else "",
+        1 if source_path.name == "current.ndjson" else 0,
+        source_path.name,
+        -1 if source_line is None else int(source_line),
+        -1 if timestamp_ms is None else int(timestamp_ms),
+        -1 if sequence is None else int(sequence),
+    )
+
+
 _LIVE_EVENT_DEBUG_PROFILE_SET = set(LIVE_EVENT_DEBUG_PROFILES)
 _STARTUP_PHASE_LABELS = {
     "account",
@@ -1170,6 +1188,9 @@ class _StartupReadinessAccumulator:
         self.readiness_scope_counts: Counter[str] = Counter()
         self.readiness_scope_elapsed_values: dict[str, list[int]] = {}
         self.readiness_trading_impact_counts: Counter[str] = Counter()
+        self.lifecycle_started_order: dict[
+            str, tuple[str, int, str, int, int, int]
+        ] = {}
 
     @staticmethod
     def _update_debug_profiles(state: dict[str, Any], data: dict[str, Any]) -> None:
@@ -1203,7 +1224,43 @@ class _StartupReadinessAccumulator:
         event_type = str(live_event.get("event_type") or row.get("kind") or "")
         data = live_event.get("data") if isinstance(live_event.get("data"), dict) else {}
         ts = _record_ts(row)
+        bot = _bot_key(row, live_event)
+        event_order = _startup_event_order_key(row)
+
+        stage: str | None = None
+        elapsed_ms: int | None = None
+        contract: dict[str, str] | None = None
+        if event_type == "bot.startup_timing":
+            stage = _startup_phase_label(data.get("stage") or data.get("phase"))
+            elapsed_ms = _startup_elapsed_ms(data)
+            if elapsed_ms is not None:
+                self.startup_phase_counts[stage] += 1
+                self.startup_phase_elapsed_values.setdefault(stage, []).append(
+                    int(elapsed_ms)
+                )
+                contract = _startup_readiness_contract(data, stage)
+                if contract is not None:
+                    scope = contract["readiness_scope"]
+                    impact = contract["trading_impact"]
+                    self.readiness_scope_counts[scope] += 1
+                    self.readiness_scope_elapsed_values.setdefault(scope, []).append(
+                        int(elapsed_ms)
+                    )
+                    self.readiness_trading_impact_counts[impact] += 1
+            since_previous_ms = _non_negative_ms(data.get("since_previous_ms"))
+            if since_previous_ms is not None:
+                self.startup_phase_since_previous_values.setdefault(stage, []).append(
+                    int(since_previous_ms)
+                )
+
         if event_type == "bot.started":
+            previous_started_order = self.lifecycle_started_order.get(bot)
+            if (
+                previous_started_order is not None
+                and event_order <= previous_started_order
+            ):
+                return
+            self.lifecycle_started_order[bot] = event_order
             state = self._bot_state(row=row, live_event=live_event)
             bot = str(state["bot"])
             state.clear()
@@ -1219,6 +1276,9 @@ class _StartupReadinessAccumulator:
             state["lifecycle_status"] = "started"
             self._update_debug_profiles(state, data)
             return
+        started_order = self.lifecycle_started_order.get(bot)
+        if started_order is not None and event_order <= started_order:
+            return
         if event_type == "bot.ready":
             state = self._bot_state(row=row, live_event=live_event)
             if ts is not None:
@@ -1228,15 +1288,9 @@ class _StartupReadinessAccumulator:
             return
         if event_type == "bot.startup_timing":
             state = self._bot_state(row=row, live_event=live_event)
-            stage = _startup_phase_label(data.get("stage") or data.get("phase"))
-            elapsed_ms = _startup_elapsed_ms(data)
+            assert stage is not None
             if elapsed_ms is not None:
                 state["startup_phases_ms"][stage] = int(elapsed_ms)
-                self.startup_phase_counts[stage] += 1
-                self.startup_phase_elapsed_values.setdefault(stage, []).append(
-                    int(elapsed_ms)
-                )
-                contract = _startup_readiness_contract(data, stage)
                 if contract is not None:
                     scope = contract["readiness_scope"]
                     impact = contract["trading_impact"]
@@ -1249,16 +1303,6 @@ class _StartupReadinessAccumulator:
                         "elapsed_ms": int(elapsed_ms),
                         "trading_impact": impact,
                     }
-                    self.readiness_scope_counts[scope] += 1
-                    self.readiness_scope_elapsed_values.setdefault(scope, []).append(
-                        int(elapsed_ms)
-                    )
-                    self.readiness_trading_impact_counts[impact] += 1
-            since_previous_ms = _non_negative_ms(data.get("since_previous_ms"))
-            if since_previous_ms is not None:
-                self.startup_phase_since_previous_values.setdefault(stage, []).append(
-                    int(since_previous_ms)
-                )
             return
         if event_type.startswith("hsl.replay."):
             state = self._bot_state(row=row, live_event=live_event)

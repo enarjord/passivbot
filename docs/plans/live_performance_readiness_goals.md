@@ -309,8 +309,8 @@ classification when enough source events exist.
 - [ ] Startup: process start to account-critical ready.
 - Status: partial. Existing `bot.startup_timing` events are summarized by
   `live-performance-report` as `startup_readiness`, including per-bot startup
-  phases and aggregate bounded phase elapsed/since-previous timing. The active
-  readiness-SLA slice adds centralized machine-readable scope and
+  phases and aggregate bounded phase elapsed/since-previous timing. PR #1192
+  added centralized machine-readable scope and
   trading-impact metadata for existing account-critical, held-position
   protective, execution-loop, market-state, and background-candle readiness
   milestones. The best-effort active-position candle phase remains timing-only
@@ -737,10 +737,12 @@ Trading-impact labels:
   - Group by exchange/user/bot so VPS-class regressions are visible before a
     panic incident.
 - Status: partial. Startup phase timing aggregation is available from
-  existing phase events. The active readiness-SLA slice adds per-bot and
-  aggregate scope timing for the readiness milestones already emitted, while
-  true fresh-entry, first-Rust-call, and first-exchange-write milestones remain
-  missing.
+  existing phase events. PR #1192 added per-bot and
+  aggregate scope timing for the readiness milestones already emitted. The
+  active follow-up makes current per-bot lifecycle snapshots independent of
+  capped current-before-rotated traversal order while preserving historical
+  aggregate distributions. True fresh-entry, first-Rust-call, and
+  first-exchange-write milestones remain missing.
 
 - [ ] Add a full live-operation duration table.
   - Include startup, account refresh, fill refresh, cache proof, HSL replay,
