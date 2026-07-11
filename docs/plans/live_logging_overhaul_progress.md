@@ -7353,5 +7353,40 @@ VPS5 deployment status:
 - The affected benchmark, coin-HSL, HSL metric-regression, and performance
   report suites pass. Terra's final delta preflight reported no findings after
   held-density, equivalence-state, fallback-telemetry, and warning-clean test
-  fixes. Publication, exact-head reviews/CI, and post-merge VPS
-  timing/process-pressure validation remain pending.
+  fixes.
+- PR #1184 was approved by Hermes and Grok 4.5 on exact head `9177dfed9`, CI
+  passed, and it merged to `v8` as `5526d5de`. VPS5 fast-forwarded cleanly and
+  restarted only the five supervised bots; unrelated `misc:0.0` remained PID
+  `434835`. Immediate and settled smokes were hard-green. The settled two-minute
+  window matched all five expected bots, recorded `249/249` successful remote
+  and `34/34` account-critical calls, process states `R=4, S=1`, no
+  uninterruptible sleep, and tracked repository status clean.
+- All four deployed replays completed with strategy `mixed`: KuCoin `140.746s`
+  at `89.975%` candidate reduction, Binance `208.098s` at `86.865%`, GateIO
+  `229.248s` at `93.449%`, and OKX `269.711s` at `93.235%`. Compared with the
+  post-PR #1183 baseline of `601.246s` to `2279.519s`, full replay improved by
+  about `77%` to `89%` while held and ambiguous pairs remained dense.
+
+### Active Slice: Missing Resource-Pressure Latest Value
+
+- Branch: `codex/v8-resource-pressure-none` from deployed `5526d5de`.
+- Triggering evidence: the post-deploy command `live-performance-report
+  --include-rotated --event-tail-lines 5000 --max-event-files-per-bot 2
+  --section hsl_replay_profile` crashed before projection because a historical
+  `health.summary` record had an explicit null resource-pressure field and
+  `_field_stats.clean()` called `float(None)`. `live-event-query` over the same
+  bounded rotated segments remained healthy and recovered all four new
+  completion records.
+- Scope: make the read-only resource-pressure accumulator tolerate unavailable
+  latest numeric values without fabricating a zero or dropping valid zeroes;
+  add a focused regression and preserve the existing output schema.
+- Non-goals: no producer, monitor/event parsing, smoke verdict, exchange call,
+  restart, process, HSL/risk/order, Rust, backtest, or optimizer change.
+- Expected validation: focused and full performance-report tests, Python
+  compilation, diff hygiene, silent-handling scan, independent Terra preflight,
+  and the exact bounded rotated VPS5 command after merge. No bot restart is
+  expected.
+- Local result: the full performance-report suite, focused chronological and
+  current-before-rotated regressions, Python compilation, diff hygiene, and
+  added-line silent-handling scan pass. Luna's focused delta review reported no
+  findings after stale-latest and bounded-command corrections.

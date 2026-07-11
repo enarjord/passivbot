@@ -108,17 +108,20 @@ slices.
 
 ### Goal 4: Optimize Exact HSL Replay
 
-- [ ] Replay currently held pairs first, cooldown-affected symbols second, and
+- [x] Replay currently held pairs first, cooldown-affected symbols second, and
   remaining flat symbols last or in background.
-- [ ] Replace avoidable `timeline_rows * pairs` work, repeated fill scans, and
+- [x] Replace avoidable `timeline_rows * pairs` work, repeated fill scans, and
   repeated data conversions with indexed, sparse, vectorized, or single-pass
   logic where exact equivalence is proven.
-- [ ] Keep panic/order-triggering decisions equivalent to the current HSL
+- [x] Keep panic/order-triggering decisions equivalent to the current HSL
   contract unless an explicit contract change is reviewed.
 - [ ] Add equivalence tests against the current full replay for
   `ema_span_minutes=1` and `ema_span_minutes>1`.
-- [ ] Acceptance: full HSL replay for 25-30 pairs over the configured lookback
+- [x] Acceptance: full HSL replay for 25-30 pairs over the configured lookback
   is no longer a 20-40 minute operation on VPS5-class hardware.
+  - Deployed PR #1184 completed four 30-day live replays in `140.746s` to
+    `269.711s`, with `86.865%` to `93.449%` candidate-row reduction and no
+    dense held/ambiguous-pair relaxation.
 
 ### Goal 5: Add Conservative HSL Checkpoints
 
@@ -524,7 +527,7 @@ Trading-impact labels:
 
 ### P0: HSL Replay Speed
 
-- [ ] Replace `timeline_rows * pairs` replay with an exact lower-complexity
+- [x] Replace `timeline_rows * pairs` replay with an exact lower-complexity
   path.
   - First optimization slice: finite-lookback replay now seeds pre-window state
     from fills, clamps dense candle/timeline construction to the configured
@@ -534,16 +537,17 @@ Trading-impact labels:
     states that have values on that row, or per-pair sparse series built once.
   - Avoid repeated nested dict scans and repeated full fill-list scans per
     symbol.
-  - Compact-memory slice implemented locally: cold coin replay now builds
+  - Compact-memory slice deployed: cold coin replay now builds
     aligned NumPy account/pair arrays instead of the rich nested timeline and
     consumes those arrays directly. A 43,201-minute, 30-symbol builder profile
     reduced Python peak allocations from `686242590` to `73499666` bytes
-    (89.3%). The fill-index prerequisite is deployed. The active sparse-replay
-    candidate keeps held-pair arrays dense and selects exact run, expiry, fill,
+    (89.3%). The fill-index prerequisite is deployed. Sparse replay keeps
+    held-pair arrays dense and selects exact run, expiry, fill,
     intervention, and terminal boundaries for historical flat pairs. Its
     30-pair offline acceptance fixture reduced applied samples from `825430` to
     `43652` with identical final-state hashes and all `43201` held samples
-    preserved.
+    preserved. VPS5 then completed the four live 30-day replays in `140.746s`
+    to `269.711s`, versus `601.246s` to `2279.519s` before sparse replay.
   - Preserve current RED/green/current-drawdown semantics: a historical RED
     crossing must not cause a panic now if current replay state is no longer in
     the red zone.
