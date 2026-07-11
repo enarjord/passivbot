@@ -7249,3 +7249,29 @@ VPS5 deployment status:
   protective readiness. The change is limited to Python live replay scheduling
   plus one responsiveness regression and docs; HSL state/math, Rust/backtest,
   exchange calls, pair ordering, readiness, and entry gates are unchanged.
+- PR #1178 was approved by Hermes and Grok 4.5 on exact head `d5129fac6`,
+  passed CI, and merged as `d83797b7`. The clean VPS5 checkout was pulled and
+  the five configured bots restarted with exact pane/process targeting. The
+  old I/O-bound processes required the documented escalation ladder: second
+  Ctrl-C for Binance/GateIO and exact-PID SIGTERM for KuCoin/OKX.
+- Immediate and settled post-restart smoke reports were hard-green with all
+  five bots matched. Across the two windows, 396 remote calls and 43
+  account-critical calls succeeded with zero failures while background replay
+  remained active. Replay memory/swap pressure remained high, matching the
+  declared residual risk.
+
+### Active Slice: Current Live-Process Pressure In Smoke Reports
+
+- Branch: `codex/v8-smoke-current-process-pressure`.
+- Scope: read-only `live-smoke-report` process aggregation and projection over
+  fields already returned by the local `ps` scan.
+- Triggering evidence: settled PR #1178 smoke had only one event-derived
+  `resource_pressure` bot even though direct process probes showed four
+  replay-heavy bots in `D` state with high RSS and sustained swap/I/O pressure.
+- Intended result: expose bounded process state counts,
+  uninterruptible-sleep count, and CPU, memory, and RSS
+  totals/maxima/reporting counts in full, summary, and brief process output.
+  Missing metrics remain null; the fields do not change smoke verdicts.
+- Non-goals: no live event producer, monitor write, process signal, exchange
+  call, restart policy, threshold, trading/risk/order behavior, Rust, or
+  backtest change.

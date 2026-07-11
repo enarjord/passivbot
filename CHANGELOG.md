@@ -4,6 +4,11 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- `passivbot tool live-smoke-report --processes` now includes bounded current
+  live-process state counts, uninterruptible-sleep count, and CPU, memory, and
+  RSS totals/maxima/reporting counts in full, summary, and brief output. These
+  read-only fields remain observational and unavailable metrics stay null.
+
 - Coin-mode HSL startup now reconstructs currently held pairs before declaring
   protective readiness, then continues cooldown-affected and remaining flat
   pairs in one shutdown-owned background replay. Initial entries remain

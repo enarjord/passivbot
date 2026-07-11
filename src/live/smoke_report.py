@@ -67,6 +67,19 @@ SMOKE_REPORT_SUMMARY_GROUP_LIMIT = 8
 SMOKE_REPORT_BRIEF_LOG_SAMPLE_LIMIT = 3
 SMOKE_REPORT_BRIEF_REMOTE_CALL_SLOWEST_LIMIT = 3
 SMOKE_REPORT_BRIEF_HSL_REPLAY_ACTIVE_LIMIT = 5
+CURRENT_PROCESS_PRESSURE_FIELDS = (
+    "state_counts",
+    "uninterruptible_sleep_count",
+    "rss_kb_total",
+    "rss_kb_max",
+    "rss_reporting_processes",
+    "cpu_pct_total",
+    "cpu_pct_max",
+    "cpu_reporting_processes",
+    "mem_pct_total",
+    "mem_pct_max",
+    "mem_reporting_processes",
+)
 _SMOKE_REPORT_SECTION_BASE_KEYS = (
     "ok",
     "attention",
@@ -4798,9 +4811,10 @@ def _build_repository_report(
 
 def _float_or_none(value: str) -> float | None:
     try:
-        return float(value)
+        parsed = float(value)
     except (TypeError, ValueError):
         return None
+    return parsed if math.isfinite(parsed) and parsed >= 0.0 else None
 
 
 def _int_or_none(value: str) -> int | None:
@@ -4879,6 +4893,45 @@ def _running_live_processes(*, command_match: str) -> dict[str, Any]:
     return {
         "scan_error": error,
         "running": processes,
+    }
+
+
+def _summarize_current_process_pressure(
+    processes: Iterable[dict[str, Any]],
+) -> dict[str, Any]:
+    process_rows = list(processes)
+    state_counts: Counter[str] = Counter()
+    rss_values: list[int] = []
+    cpu_values: list[float] = []
+    mem_values: list[float] = []
+    for process in process_rows:
+        process_state = str(process.get("stat") or "").strip()[:1].upper()
+        if process_state:
+            state_counts[process_state] += 1
+        rss_kb = process.get("rss_kb")
+        if isinstance(rss_kb, int) and not isinstance(rss_kb, bool) and rss_kb >= 0:
+            rss_values.append(rss_kb)
+        for field, values in (("cpu_pct", cpu_values), ("mem_pct", mem_values)):
+            value = process.get(field)
+            if (
+                isinstance(value, (int, float))
+                and not isinstance(value, bool)
+                and math.isfinite(float(value))
+                and float(value) >= 0.0
+            ):
+                values.append(float(value))
+    return {
+        "state_counts": dict(sorted(state_counts.items())),
+        "uninterruptible_sleep_count": int(state_counts["D"]),
+        "rss_kb_total": sum(rss_values) if rss_values else None,
+        "rss_kb_max": max(rss_values) if rss_values else None,
+        "rss_reporting_processes": len(rss_values),
+        "cpu_pct_total": round(sum(cpu_values), 3) if cpu_values else None,
+        "cpu_pct_max": max(cpu_values) if cpu_values else None,
+        "cpu_reporting_processes": len(cpu_values),
+        "mem_pct_total": round(sum(mem_values), 3) if mem_values else None,
+        "mem_pct_max": max(mem_values) if mem_values else None,
+        "mem_reporting_processes": len(mem_values),
     }
 
 
@@ -5104,6 +5157,7 @@ def _build_process_report(
             "unexpected_running": [],
             "duplicate_configured_command_matches": [],
             "extra_passivbot_live_processes": [],
+            **_summarize_current_process_pressure([]),
             "config_checks": {
                 "enabled": False,
                 "ok": True,
@@ -5192,6 +5246,7 @@ def _build_process_report(
         "extra_passivbot_live_processes": unexpected,
         "unexpected_running": unexpected,
         "running": [_public_process_record(process) for process in running],
+        **_summarize_current_process_pressure(running),
         "config_checks": config_checks,
     }
 
@@ -6942,6 +6997,7 @@ def summarize_live_smoke_report(
                 "classification_source",
                 "tmux_pane_ownership",
                 "scan_error",
+                *CURRENT_PROCESS_PRESSURE_FIELDS,
             )
             if key in processes
         }
@@ -7924,6 +7980,7 @@ def summarize_live_smoke_report_brief(report: dict[str, Any]) -> dict[str, Any]:
                 "classification_source",
                 "tmux_pane_ownership",
                 "scan_error",
+                *CURRENT_PROCESS_PRESSURE_FIELDS,
             )
             if key in processes
         }
