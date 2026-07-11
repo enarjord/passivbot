@@ -40,6 +40,7 @@ passivbot tool pareto optimize_results/... -m utility \
   --weight adg_strategy_eq=4 \
   --weight drawdown_worst_strategy_eq=2 \
   --show-top 5
+passivbot tool pareto optimize_results/... --scenario opt_2025_to_present
 passivbot tool pareto --json
 ```
 
@@ -56,6 +57,14 @@ The explorer applies limits first, then ranks the retained candidates. It is int
 promoting one config out of a large Pareto front without opening the dashboard. Its selection
 methods are practical decision heuristics for high-dimensional Passivbot fronts, not full formal
 multi-criteria decision-analysis implementations.
+
+For suite optimization results, `--scenario LABEL` projects every saved Pareto member onto that
+scenario's stored metric values, applies CLI limits in that scenario context, rebuilds a
+nondominated sub-front using the original `optimize.scoring` goals, and then runs the selected
+decision method. Suite artifacts store one mean value per scenario and metric, so explicit
+non-`mean` limit statistics are unavailable in this mode. The rebuilt front covers only members of
+the saved aggregate-suite Pareto front: candidates already discarded by the optimizer cannot be
+recovered, so it is not the complete scenario Pareto front across all evaluated candidates.
 
 `passivbot tool pareto-explorer` is a CLI alias for the same tool.
 

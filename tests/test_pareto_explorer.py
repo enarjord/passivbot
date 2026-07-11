@@ -8,9 +8,11 @@ from pathlib import Path
 import pytest
 
 from pareto_explorer import (
+    build_scenario_front,
     build_parser,
     filter_candidates,
     load_candidates,
+    project_candidates_to_scenario,
     run_from_args,
     select_candidate,
 )
@@ -151,6 +153,83 @@ def _write_fill_suite_candidate(
     }
     with open(path / f"{name}.json", "w") as f:
         json.dump(payload, f, indent=2)
+
+
+def _write_scenario_candidate(
+    path: Path,
+    name: str,
+    *,
+    aggregate: dict[str, float],
+    scenarios: dict[str, dict[str, float]],
+) -> None:
+    scoring = [
+        {"metric": "metric_a", "goal": "max"},
+        {"metric": "metric_b", "goal": "min"},
+    ]
+    metric_names = set(aggregate)
+    for values in scenarios.values():
+        metric_names.update(values)
+    suite_metrics = {}
+    for metric in sorted(metric_names):
+        scenario_values = {
+            label: values[metric]
+            for label, values in scenarios.items()
+            if metric in values
+        }
+        suite_metrics[metric] = {
+            "stats": _metric_stats(aggregate[metric]),
+            "aggregated": aggregate[metric],
+            "scenarios": scenario_values,
+        }
+    payload = {
+        "optimize": {"scoring": scoring},
+        "metrics": {"objectives": aggregate},
+        "suite_metrics": {
+            "metrics": suite_metrics,
+            "scenario_labels": list(scenarios),
+        },
+    }
+    with open(path / f"{name}.json", "w") as f:
+        json.dump(payload, f, indent=2)
+
+
+@pytest.fixture()
+def scenario_pareto_dir(tmp_path: Path) -> Path:
+    pareto_dir = tmp_path / "suite_run" / "pareto"
+    pareto_dir.mkdir(parents=True)
+    values = {
+        "a": {
+            "bull": {"metric_a": 0.9, "metric_b": 0.4, "sharpe_ratio_strategy_eq": 1.2},
+            "bear": {"metric_a": 0.2, "metric_b": 0.8, "sharpe_ratio_strategy_eq": 0.2},
+        },
+        "b": {
+            "bull": {"metric_a": 0.8, "metric_b": 0.3, "sharpe_ratio_strategy_eq": 1.0},
+            "bear": {"metric_a": 0.8, "metric_b": 0.5, "sharpe_ratio_strategy_eq": 1.5},
+        },
+        "c_dominated": {
+            "bull": {"metric_a": 0.7, "metric_b": 0.5, "sharpe_ratio_strategy_eq": 0.8},
+            "bear": {"metric_a": 0.6, "metric_b": 0.7, "sharpe_ratio_strategy_eq": 0.7},
+        },
+        "d": {
+            "bull": {"metric_a": 0.5, "metric_b": 0.1, "sharpe_ratio_strategy_eq": 0.5},
+            "bear": {"metric_a": 0.9, "metric_b": 0.9, "sharpe_ratio_strategy_eq": 1.1},
+        },
+    }
+    for name, scenario_values in values.items():
+        _write_scenario_candidate(
+            pareto_dir,
+            name,
+            aggregate={
+                "metric_a": 0.5,
+                "metric_b": 0.5,
+                "sharpe_ratio_strategy_eq": 0.5,
+            },
+            scenarios={
+                "bull": scenario_values["bull"],
+                "bear": scenario_values["bear"],
+            },
+        )
+    return pareto_dir
 
 
 @pytest.fixture()
@@ -354,6 +433,125 @@ def test_build_parser_defaults_to_ideal_method():
     parser = build_parser()
     args = parser.parse_args([])
     assert args.method == "ideal"
+
+
+def test_build_parser_accepts_scenario():
+    args = build_parser().parse_args(["--scenario", "bull"])
+    assert args.scenario == "bull"
+
+
+def test_project_and_rebuild_scenario_front(scenario_pareto_dir: Path):
+    _pareto_dir, candidates, specs = load_candidates(scenario_pareto_dir)
+
+    bull = project_candidates_to_scenario(candidates, specs, "bull")
+    bull_front = build_scenario_front(bull, specs)
+    bear = project_candidates_to_scenario(candidates, specs, "bear")
+    bear_front = build_scenario_front(bear, specs)
+
+    assert [candidate.path.stem for candidate in bull_front] == ["a", "b", "d"]
+    assert [candidate.path.stem for candidate in bear_front] == ["b", "d"]
+    assert bull_front[0].objectives == {"metric_a": 0.9, "metric_b": 0.4}
+
+
+def test_scenario_front_keeps_first_exact_objective_vector(scenario_pareto_dir: Path):
+    duplicate = json.loads((scenario_pareto_dir / "a.json").read_text())
+    (scenario_pareto_dir / "z_duplicate.json").write_text(json.dumps(duplicate))
+    _pareto_dir, candidates, specs = load_candidates(scenario_pareto_dir)
+
+    front = build_scenario_front(
+        project_candidates_to_scenario(candidates, specs, "bull"),
+        specs,
+    )
+
+    assert "a" in [candidate.path.stem for candidate in front]
+    assert "z_duplicate" not in [candidate.path.stem for candidate in front]
+
+
+def test_scenario_projection_fails_for_non_suite_candidate(sample_pareto_dir: Path):
+    _pareto_dir, candidates, specs = load_candidates(sample_pareto_dir)
+    with pytest.raises(ValueError, match="requires suite Pareto artifacts"):
+        project_candidates_to_scenario(candidates, specs, "bull")
+
+
+def test_scenario_projection_lists_available_labels(scenario_pareto_dir: Path):
+    _pareto_dir, candidates, specs = load_candidates(scenario_pareto_dir)
+    with pytest.raises(ValueError, match="Available scenarios: bear, bull"):
+        project_candidates_to_scenario(candidates, specs, "sideways")
+
+
+def test_scenario_projection_fails_when_scoring_metric_is_missing(
+    scenario_pareto_dir: Path,
+):
+    candidate_path = scenario_pareto_dir / "a.json"
+    payload = json.loads(candidate_path.read_text())
+    del payload["suite_metrics"]["metrics"]["metric_b"]["scenarios"]["bull"]
+    candidate_path.write_text(json.dumps(payload))
+    _pareto_dir, candidates, specs = load_candidates(scenario_pareto_dir)
+
+    with pytest.raises(ValueError, match="missing scoring metric.*metric_b"):
+        project_candidates_to_scenario(candidates, specs, "bull")
+
+
+def test_scenario_limit_uses_scalar_and_rejects_non_mean_stat(
+    scenario_pareto_dir: Path,
+):
+    _pareto_dir, candidates, specs = load_candidates(scenario_pareto_dir)
+    projected = project_candidates_to_scenario(candidates, specs, "bull")
+
+    filtered, _limits = filter_candidates(
+        projected,
+        limits_payload=None,
+        limit_entries=["metric_a>0.75"],
+    )
+    assert [candidate.path.stem for candidate in filtered] == ["a", "b"]
+
+    with pytest.raises(ValueError, match="stores one mean value.*stat='max'.*unavailable"):
+        filter_candidates(
+            projected,
+            limits_payload=None,
+            limit_entries=["metric_a>0.75 stat=max"],
+        )
+
+
+def test_run_from_args_scenario_json_reports_scope_and_uses_scenario_metrics(
+    scenario_pareto_dir: Path,
+    capsys,
+):
+    args = build_parser().parse_args(
+        [
+            str(scenario_pareto_dir),
+            "--scenario",
+            "bear",
+            "--objectives",
+            "sharpe_ratio_strategy_eq",
+            "--json",
+        ]
+    )
+    result = run_from_args(args)
+    payload = json.loads(capsys.readouterr().out)
+
+    assert result.candidate.path.stem == "b"
+    assert payload["scenario"] == "bear"
+    assert payload["front_scope"] == "saved_aggregate_pareto_members"
+    assert payload["scenario_front_complete"] is False
+    assert payload["loaded_count"] == 4
+    assert payload["retained_count"] == 4
+    assert payload["scenario_front_count"] == 2
+    assert payload["selected"]["objectives"]["sharpe_ratio_strategy_eq"] == pytest.approx(1.5)
+
+
+def test_run_from_args_scenario_text_documents_incomplete_front(
+    scenario_pareto_dir: Path,
+    capsys,
+):
+    args = build_parser().parse_args([str(scenario_pareto_dir), "--scenario", "bull"])
+    run_from_args(args)
+    output = capsys.readouterr().out
+
+    assert "| Scenario              | bull" in output
+    assert "| Scenario front        | 3" in output
+    assert "saved aggregate Pareto members" in output
+    assert "candidates discarded by the suite optimizer are not recoverable" in output
 
 
 def test_run_from_args_prints_summary(sample_pareto_dir: Path, capsys):
