@@ -3543,6 +3543,37 @@ def test_live_performance_report_resource_pressure_latest_snapshot_clears_invali
     assert "latest_event_pipeline_worker_alive" not in group
 
 
+def test_live_performance_report_resource_pressure_unordered_row_keeps_ordered_latest(tmp_path):
+    events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="health.summary",
+                seq=1,
+                ts=1000,
+                component="monitor.health",
+                data={"rss_bytes": 1000},
+            ),
+            _monitor_row(
+                event_type="health.summary",
+                seq=2,
+                ts="invalid",
+                component="monitor.health",
+                data={"rss_bytes": None},
+            ),
+        ],
+    )
+
+    report = build_live_performance_report(tmp_path / "monitor")
+    group = report["resource_pressure"]["groups"][0]
+
+    assert group["count"] == 2
+    assert group["latest_ts"] == 1000
+    assert group["fields"]["rss_bytes"]["latest"] == 1000
+    assert group["fields"]["rss_bytes"]["count"] == 1
+
+
 def test_live_performance_report_resource_pressure_summary_is_bounded(tmp_path, monkeypatch):
     monkeypatch.setattr(performance_report_module, "utc_ms", lambda: 5000)
     events_dir = tmp_path / "monitor" / "mixed" / "events"

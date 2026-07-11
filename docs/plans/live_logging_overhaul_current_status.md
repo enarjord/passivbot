@@ -45,8 +45,11 @@ Estimated completion:
 - Local validation: the full performance-report suite, focused chronological
   and rotated regressions, Python compilation, diff hygiene, and added-line
   silent-handling scan pass. Terra implemented the isolated report/test patch;
-  Luna's focused delta review reported no findings and green-lit publication;
-  Sol adjudicated the contract.
+  Luna's focused delta review caught stale-latest and bounded-command gaps,
+  which were fixed before publication. A Codex PR review then found that an
+  unorderable trailing row could erase an established ordered snapshot; the
+  accumulator now preserves the ordered snapshot and has a regression. Sol
+  adjudicated the contract.
 - Publication state, exact head, mergeability, CI, and current-head review
   verdicts: query live GitHub metadata. Do not encode those transient values in
   the same PR that contains this status file, because every correction would

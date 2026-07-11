@@ -7388,5 +7388,8 @@ VPS5 deployment status:
   expected.
 - Local result: the full performance-report suite, focused chronological and
   current-before-rotated regressions, Python compilation, diff hygiene, and
-  added-line silent-handling scan pass. Luna's focused delta review reported no
-  findings after stale-latest and bounded-command corrections.
+  added-line silent-handling scan pass. Luna's focused review found and cleared
+  stale-latest plus bounded-command gaps before publication. A Codex PR review
+  then found that an unorderable trailing row could erase an established
+  ordered snapshot; the guard now preserves the ordered latest state and the
+  full report suite passes with a focused regression.
