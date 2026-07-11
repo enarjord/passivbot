@@ -339,6 +339,11 @@ Related detailed plans:
      timing events plus per-bot/aggregate performance and smoke projections.
      It remains additive and does not claim fresh-entry, first-Rust-call, or
      first-exchange-write readiness.
+   - 2026-07-11: Follow-up branch
+     `codex/v8-performance-startup-lifecycle` makes capped rotated performance
+     reports retain the latest lifecycle's per-bot startup snapshot independent
+     of current-before-rotated file traversal while preserving historical
+     aggregate distributions.
 
 5. [x] Resource pressure telemetry.
    Status: initial implementation merged. `health.summary` events now include
