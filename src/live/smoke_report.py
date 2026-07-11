@@ -4094,10 +4094,14 @@ def _compact_hsl_replay_data(live_event: dict[str, Any]) -> dict[str, Any]:
         "record_start_ts",
         "pair_idx",
         "applied_rows",
+        "scanned_rows",
         "total_applied_rows",
+        "total_scanned_rows",
         "rows",
         "skipped_pairs",
         "rows_per_second",
+        "scanned_rows_per_second",
+        "pair_elapsed_s",
         "elapsed_s",
         "history_build_elapsed_s",
         "price_history_fetch_elapsed_s",
@@ -4112,12 +4116,26 @@ def _compact_hsl_replay_data(live_event: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
-def _hsl_observed_rows(data: dict[str, Any]) -> int | None:
+def _hsl_observed_applied_rows(data: dict[str, Any]) -> int | None:
     for key in ("total_applied_rows", "rows", "applied_rows"):
         value = _non_negative_int(data.get(key))
         if value is not None:
             return value
     return None
+
+
+def _hsl_replay_work_observation(
+    data: dict[str, Any],
+) -> tuple[int | None, Any, str | None]:
+    scanned_rows = _non_negative_int(data.get("total_scanned_rows"))
+    if scanned_rows is not None:
+        return scanned_rows, data.get("scanned_rows_per_second"), "scanned_rows"
+    applied_rows = _hsl_observed_applied_rows(data)
+    return (
+        applied_rows,
+        data.get("rows_per_second"),
+        "applied_rows_legacy" if applied_rows is not None else None,
+    )
 
 
 def _hsl_replay_remaining_rows(
@@ -4152,7 +4170,10 @@ def _hsl_replay_derived(data: dict[str, Any]) -> dict[str, Any]:
     required_pairs = _non_negative_int(data.get("required_pairs"))
     held_pairs = _non_negative_int(data.get("held_pairs"))
     cooldown_pairs = _non_negative_int(data.get("cooldown_pairs"))
-    observed_rows = _hsl_observed_rows(data)
+    observed_applied_rows = _hsl_observed_applied_rows(data)
+    observed_rows, throughput_rate, throughput_source = _hsl_replay_work_observation(
+        data
+    )
     out: dict[str, Any] = {}
     dense_work: int | None = None
     required_work: int | None = None
@@ -4176,8 +4197,13 @@ def _hsl_replay_derived(data: dict[str, Any]) -> dict[str, Any]:
         out["estimated_held_pair_row_work"] = int(timeline_rows) * int(held_pairs)
     if timeline_rows is not None and cooldown_pairs is not None:
         out["estimated_cooldown_pair_row_work"] = int(timeline_rows) * int(cooldown_pairs)
-    if observed_rows is not None:
-        out["observed_applied_rows"] = int(observed_rows)
+    if observed_applied_rows is not None:
+        out["observed_applied_rows"] = int(observed_applied_rows)
+    observed_scanned_rows = _non_negative_int(data.get("total_scanned_rows"))
+    if observed_scanned_rows is not None:
+        out["observed_scanned_rows"] = observed_scanned_rows
+    if throughput_source is not None:
+        out["throughput_source"] = throughput_source
     dense_remaining_rows = _hsl_replay_remaining_rows(
         estimated_work=dense_work,
         observed_rows=observed_rows,
@@ -4186,7 +4212,7 @@ def _hsl_replay_derived(data: dict[str, Any]) -> dict[str, Any]:
         out["estimated_dense_remaining_rows"] = dense_remaining_rows
         dense_remaining_ms = _hsl_replay_eta_ms(
             remaining_rows=dense_remaining_rows,
-            rows_per_second=data.get("rows_per_second"),
+            rows_per_second=throughput_rate,
         )
         if dense_remaining_ms is not None:
             out["estimated_dense_remaining_ms"] = dense_remaining_ms
@@ -4198,7 +4224,7 @@ def _hsl_replay_derived(data: dict[str, Any]) -> dict[str, Any]:
         out["estimated_required_remaining_rows"] = required_remaining_rows
         required_remaining_ms = _hsl_replay_eta_ms(
             remaining_rows=required_remaining_rows,
-            rows_per_second=data.get("rows_per_second"),
+            rows_per_second=throughput_rate,
         )
         if required_remaining_ms is not None:
             out["estimated_required_remaining_ms"] = required_remaining_ms
@@ -4211,7 +4237,7 @@ def _hsl_replay_derived(data: dict[str, Any]) -> dict[str, Any]:
         out["estimated_remaining_rows"] = primary_remaining_rows
         primary_remaining_ms = _hsl_replay_eta_ms(
             remaining_rows=primary_remaining_rows,
-            rows_per_second=data.get("rows_per_second"),
+            rows_per_second=throughput_rate,
         )
         if primary_remaining_ms is not None:
             out["estimated_remaining_ms"] = primary_remaining_ms
@@ -7293,7 +7319,15 @@ def _brief_hsl_replay_active_groups(groups: Any) -> list[dict[str, Any]]:
             "held_pairs": _non_negative_int(data.get("held_pairs")),
             "cooldown_pairs": _non_negative_int(data.get("cooldown_pairs")),
             "total_applied_rows": _non_negative_int(data.get("total_applied_rows")),
+            "total_scanned_rows": _non_negative_int(data.get("total_scanned_rows")),
             "rows_per_second": _numeric_value(data.get("rows_per_second")),
+            "scanned_rows_per_second": _numeric_value(
+                data.get("scanned_rows_per_second")
+            ),
+            "throughput_source": derived.get("throughput_source"),
+            "observed_scanned_rows": _non_negative_int(
+                derived.get("observed_scanned_rows")
+            ),
             "observed_required_work_pct": derived.get("observed_required_work_pct"),
             "observed_work_pct": derived.get("observed_work_pct"),
             "estimated_dense_remaining_rows": _non_negative_int(

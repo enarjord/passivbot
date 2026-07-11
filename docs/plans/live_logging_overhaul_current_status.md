@@ -22,53 +22,23 @@ Estimated completion:
 
 ## Active Review Slice
 
-- PR and publication state: query live GitHub metadata;
-  `Record isolated-only entry filtering`
-- Branch: `codex/v8-isolated-market-compatibility-events`
-- Head: query live GitHub metadata; this commit cannot embed its own final SHA
-  without making that value stale
-- Base: `bd16974743d5dc4bfd25491d052e62e90ecc3982`
-- Scope: when the existing generic CCXT margin-policy filter excludes an
-  isolated-only symbol from new entries under cross-margin preference, emit one
-  bounded, per-side, off-console/off-text `config.market_compatibility` event.
-  Keep warning and event dedupe independent so a failed enqueue retries without
-  duplicating the existing text warning.
-- Triggering evidence: `_filter_approved_symbols()` already emits a once-per-
-  process warning for the exact compatibility decision, but durable structured
-  history cannot answer which side/symbols were blocked or distinguish this
-  decision from an unavailable exchange market.
-- Non-goals: no margin capability/preference resolution, metadata or exchange
-  call, approved-symbol result, existing-position/order manageability, warning,
-  smoke verdict, process control, HSL/risk/order behavior, Rust, backtest, or
-  optimizer change.
-- Local validation: the focused margin-filter, CCXT contract-helper, event-bus,
-  smoke projection, and registry-doc suite passes with 213 tests; Python
-  compilation and `git diff --check` pass. Added-line silent handling is
-  limited to the explicitly best-effort event producer/caller guards. Luna's
-  first preflight found the manual `build_contract_bot()` initialization gap;
-  the explicit initializer and regression resolve it, and delta review found
-  no code regressions. Terra implemented the isolated producer/tests; Sol owns
-  the event contract, final preflight, and publication.
-- Publication state, exact head, mergeability, CI, and current-head review
-  verdicts: query live GitHub metadata. Do not encode those transient values in
-  the same PR that contains this status file, because every correction would
-  create a different head and immediately stale the embedded value.
-- Expected VPS action: after exact-head approval and merge, pull while
-  preserving local artifacts, restart the five exact supervised bot panes
-  because the producer is in shared CCXT filtering, query any emitted
-  compatibility records, and run immediate plus settled smoke checks.
+- PR #1189, `Record isolated-only entry filtering`, merged as
+  `ff1b2c1f9ee9968a4e46f3ba598f3c7f091efe42` and was deployed to VPS5.
+- Deployment smoke was green with all five supervised bots present and the
+  unrelated `misc` process preserved. The new isolated-only reason had zero
+  production matches because current configs do not exercise it.
 
 Next action:
 
-1. Complete the bounded isolated-only entry-filter producer and regressions,
-   obtain independent preflight plus exact-head reviewers and CI, resolve
-   verified findings, and merge only when the full gate is green.
+1. Review HSL replay scan-throughput observability: add scanned-row counters
+   and scan-rate reporting, and correct ETA estimators while preserving replay
+   behavior and existing applied-row metrics.
 
 ## Deployed Baseline
 
-- Remote `v8`: `bd169747`, PR #1188
-- VPS5 repository: `bd169747`, PR #1188; tracked status clean
-- VPS5 expected bots: five; all running after the Hyperliquid-only restart
+- Remote `v8`: `ff1b2c1f9ee9968a4e46f3ba598f3c7f091efe42`, PR #1189
+- VPS5 repository: `ff1b2c1f9ee9968a4e46f3ba598f3c7f091efe42`, PR #1189; tracked status clean
+- VPS5 expected bots: five; all running after the shared-code five-pane restart
 - PR #1188 was approved on exact head `363eca852` by Hermes and Grok 4.5;
   CI passed and it merged as `bd169747`. VPS5 fast-forwarded cleanly and
   gracefully restarted only `passivbot:4.0`; Hyperliquid bot PID `842779` was
@@ -149,11 +119,12 @@ current process-pressure query, compact cold replay payload, bounded replay
 scorecard, stable per-pair fill index, exact sparse flat-pair replay, and the
 rotated resource-pressure report fix, configured-market skip events, and fatal
 HIP-3 startup compatibility are merged and deployed. The active slice makes
-the remaining isolated-only initial-entry filter visible in durable structured
-history.
+the isolated-only initial-entry filter visible in durable structured history.
 Remaining candidates:
 
-- deeper internal-stage profiling if live residual cost remains material
+- HSL replay scan-throughput observability: scanned-row counters and rates plus
+  corrected ETA estimators, while preserving replay behavior and existing
+  applied-row metrics. This is selected for review; it is not yet complete.
 - bounded operator tooling improvements sharing one code and validation surface
 
 Do not create progress-only PRs or resume unrelated logging work from stale

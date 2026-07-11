@@ -4349,6 +4349,53 @@ def test_compact_hsl_replay_data_exposes_protective_readiness_counts():
     ] == 1250
 
 
+def test_hsl_replay_derived_prefers_scanned_work_for_eta():
+    compact = smoke_report_module._compact_hsl_replay_data(
+        {
+            "data": {
+                "timeline_rows": 100,
+                "pairs": 3,
+                "required_pairs": 1,
+                "total_applied_rows": 10,
+                "rows_per_second": 2.0,
+                "scanned_rows": 75,
+                "total_scanned_rows": 150,
+                "scanned_rows_per_second": 50.0,
+                "pair_elapsed_s": 1.5,
+                "secret": "must-not-render",
+            }
+        }
+    )
+    derived = smoke_report_module._hsl_replay_derived(compact)
+
+    assert compact["scanned_rows"] == 75
+    assert compact["pair_elapsed_s"] == 1.5
+    assert "secret" not in compact
+    assert derived["throughput_source"] == "scanned_rows"
+    assert derived["observed_applied_rows"] == 10
+    assert derived["observed_scanned_rows"] == 150
+    assert derived["observed_work_pct"] == 50.0
+    assert derived["estimated_dense_remaining_rows"] == 150
+    assert derived["estimated_dense_remaining_ms"] == 3000
+
+
+def test_hsl_replay_derived_keeps_legacy_applied_work_fallback():
+    derived = smoke_report_module._hsl_replay_derived(
+        {
+            "timeline_rows": 100,
+            "pairs": 3,
+            "total_applied_rows": 10,
+            "rows_per_second": 2.0,
+        }
+    )
+
+    assert derived["throughput_source"] == "applied_rows_legacy"
+    assert derived["observed_applied_rows"] == 10
+    assert "observed_scanned_rows" not in derived
+    assert derived["estimated_dense_remaining_rows"] == 290
+    assert derived["estimated_dense_remaining_ms"] == 145000
+
+
 def test_hsl_replay_health_retains_protective_ready_after_later_progress():
     groups = {}
     path = Path("events.ndjson")
@@ -4741,6 +4788,7 @@ def test_live_smoke_report_summarizes_hsl_replay_health(tmp_path, monkeypatch):
                 "cooldown_pairs": 1,
                 "total_applied_rows": 64000,
                 "rows_per_second": 318.415,
+                "throughput_source": "applied_rows_legacy",
                 "observed_required_work_pct": 7.407,
                 "observed_work_pct": 5.108,
                 "estimated_dense_remaining_rows": 43201 * 29 - 64000,

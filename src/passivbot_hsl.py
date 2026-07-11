@@ -5304,6 +5304,7 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
 
         balance = float(self.get_raw_balance())
         rows = 0
+        total_scanned_rows = 0
         replay_started_s = time.monotonic()
         pre_replay_elapsed_s = max(0.0, replay_started_s - history_loaded_s)
         last_progress_log_s = replay_started_s
@@ -5373,6 +5374,8 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
             pside: str,
             symbol: str,
             applied_rows: int,
+            scanned_rows: int,
+            pair_started_s: float,
             *,
             force: bool = False,
         ) -> None:
@@ -5383,14 +5386,20 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
             last_progress_log_s = now_s
             elapsed_s = max(0.0, now_s - replay_started_s)
             rows_per_second = float(rows) / elapsed_s if elapsed_s > 0.0 else None
+            scanned_rows_per_second = (
+                float(total_scanned_rows) / elapsed_s if elapsed_s > 0.0 else None
+            )
+            pair_elapsed_s = max(0.0, now_s - pair_started_s)
             logging.info(
-                "[risk] HSL coin history reconstruction progress | pair=%d/%d pside=%s symbol=%s applied_rows=%d total_rows=%d elapsed=%.1fs",
+                "[risk] HSL coin history reconstruction progress | pair=%d/%d pside=%s symbol=%s applied_rows=%d scanned_rows=%d total_rows=%d total_scanned_rows=%d elapsed=%.1fs",
                 pair_idx,
                 len(active_pairs),
                 pside,
                 symbol,
                 applied_rows,
+                scanned_rows,
                 rows,
+                total_scanned_rows,
                 now_s - replay_started_s,
             )
             _emit_hsl_replay_event(
@@ -5406,13 +5415,19 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
                     "required_pairs": len(active_required_pairs),
                     "timeline_rows": replay_row_count,
                     "applied_rows": int(applied_rows),
+                    "scanned_rows": int(scanned_rows),
                     "candidate_rows": pair_candidate_rows.get((pside, symbol)),
                     "total_applied_rows": int(rows),
+                    "total_scanned_rows": int(total_scanned_rows),
                     "rows_per_second": round(rows_per_second, 3)
                     if rows_per_second is not None
                     else None,
+                    "scanned_rows_per_second": round(scanned_rows_per_second, 3)
+                    if scanned_rows_per_second is not None
+                    else None,
                     "is_held_pair": (pside, symbol) in active_held_pairs,
                     "is_cooldown_pair": (pside, symbol) in active_panic_pairs,
+                    "pair_elapsed_s": round(pair_elapsed_s, 3),
                     "elapsed_s": round(elapsed_s, 3),
                 },
                 pside=pside,
@@ -5470,12 +5485,16 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
             for pside, symbol in replay_candidates:
                 check_shutdown("hsl_coin_history_replay_pair")
                 pair_idx += 1
+                pair_started_s = time.monotonic()
+                scanned_rows = 0
                 if pair_idx == 1:
                     log_replay_progress(
                         pair_idx,
                         pside,
                         symbol,
                         0,
+                        scanned_rows,
+                        pair_started_s,
                         force=True,
                     )
                 state = self._hsl_coin_state(pside, symbol)
@@ -5730,10 +5749,19 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
                     unrealized_value,
                     source_row,
                 ) in enumerate(iter_replay_rows(), start=1):
+                    scanned_rows += 1
+                    total_scanned_rows += 1
                     if replay_iteration_idx % yield_rows == 0:
                         await asyncio.sleep(yield_sleep_s)
                         check_shutdown("hsl_coin_history_replay_rows")
-                        log_replay_progress(pair_idx, pside, symbol, applied_rows)
+                        log_replay_progress(
+                            pair_idx,
+                            pside,
+                            symbol,
+                            applied_rows,
+                            scanned_rows,
+                            pair_started_s,
+                        )
                     if replay_start_boundary_ts is not None and ts < replay_start_boundary_ts:
                         continue
                     if state["halted"]:
@@ -6091,13 +6119,24 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
                     )
                 pair_rows_applied[(pside, symbol)] = int(applied_rows)
                 mark_pair_ready(pside, symbol)
-                log_replay_progress(pair_idx, pside, symbol, applied_rows)
+                log_replay_progress(
+                    pair_idx,
+                    pside,
+                    symbol,
+                    applied_rows,
+                    scanned_rows,
+                    pair_started_s,
+                    force=True,
+                )
             if batch_idx == 0:
                 mark_protective_ready()
         self._equity_hard_stop_coin_initialized = True
         elapsed_s = max(0.0, time.monotonic() - replay_started_s)
         total_elapsed_s = max(0.0, time.monotonic() - initialization_started_s)
         rows_per_second = float(rows) / elapsed_s if elapsed_s > 0.0 else None
+        scanned_rows_per_second = (
+            float(total_scanned_rows) / elapsed_s if elapsed_s > 0.0 else None
+        )
         skipped_pairs = sum(1 for pair in active_pairs if pair_rows_applied.get(pair, 0) == 0)
         dense_equivalent_rows = int(replay_row_count * len(active_pairs))
         candidate_rows = int(sum(pair_candidate_rows.values()))
@@ -6137,6 +6176,8 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
                 "replay_strategy": replay_strategy,
                 "rows": int(rows),
                 "applied_rows": int(rows),
+                "total_applied_rows": int(rows),
+                "total_scanned_rows": int(total_scanned_rows),
                 "candidate_rows": candidate_rows,
                 "dense_equivalent_rows": dense_equivalent_rows,
                 "candidate_reduction_pct": round(candidate_reduction_pct, 3),
@@ -6153,6 +6194,9 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
                 "panic_events": len(panic_flatten_events),
                 "rows_per_second": round(rows_per_second, 3)
                 if rows_per_second is not None
+                else None,
+                "scanned_rows_per_second": round(scanned_rows_per_second, 3)
+                if scanned_rows_per_second is not None
                 else None,
                 "history_fetch_elapsed_s": round(history_fetch_elapsed_s, 3),
                 "pre_replay_elapsed_s": round(pre_replay_elapsed_s, 3),
