@@ -76,6 +76,7 @@ class EventTypes:
     FORAGER_SELECTION = "forager.selection"
     FORAGER_FEATURE_UNAVAILABLE = "forager.feature_unavailable"
     FORAGER_ELIGIBILITY_CHANGED = "forager.eligibility_changed"
+    CONFIG_MARKET_COMPATIBILITY = "config.market_compatibility"
     EMA_BUNDLE_STARTED = "ema.bundle.started"
     EMA_BUNDLE_COMPLETED = "ema.bundle.completed"
     EMA_FALLBACK_USED = "ema.fallback_used"
@@ -232,6 +233,9 @@ class ReasonCodes:
     FORAGER_ELIGIBILITY_MEMBERSHIP_CHANGED = (
         "forager_eligibility_membership_changed"
     )
+    CONFIG_MARKET_UNSUPPORTED = "config_market_unsupported"
+    CONFIG_STOCK_PERP_WRONG_EXCHANGE = "config_stock_perp_wrong_exchange"
+    CONFIG_STOCK_PERP_UNAVAILABLE_MARKET = "config_stock_perp_unavailable_market"
     RECENT_EXECUTION = "recent_execution"
     REMOTE_FETCH = "remote_fetch"
     RISK_ENTRY_COOLDOWN_POSITION_DELTA = "entry_cooldown_position_delta"
@@ -385,6 +389,7 @@ PHASE1_EVENT_TYPES = {
     EventTypes.FORAGER_SELECTION,
     EventTypes.FORAGER_FEATURE_UNAVAILABLE,
     EventTypes.FORAGER_ELIGIBILITY_CHANGED,
+    EventTypes.CONFIG_MARKET_COMPATIBILITY,
     EventTypes.EMA_BUNDLE_STARTED,
     EventTypes.EMA_BUNDLE_COMPLETED,
     EventTypes.EMA_FALLBACK_USED,
@@ -693,6 +698,7 @@ DEFAULT_ROUTES: dict[str, EventRoute] = {
     ),
     EventTypes.FORAGER_FEATURE_UNAVAILABLE: EventRoute(console=False, text=False),
     EventTypes.FORAGER_ELIGIBILITY_CHANGED: EventRoute(console=False, text=False),
+    EventTypes.CONFIG_MARKET_COMPATIBILITY: EventRoute(console=False, text=False),
     EventTypes.EMA_BUNDLE_STARTED: EventRoute(console=False, text=False),
     EventTypes.EMA_BUNDLE_COMPLETED: EventRoute(console=False, text=False),
     EventTypes.EMA_FALLBACK_USED: EventRoute(console=False, text=False),

@@ -23,6 +23,7 @@ across time.
 - `cache.warmup_decision`
 - `candle.coverage_checked`
 - `candle.tail_projected`
+- `config.market_compatibility`
 - `cycle.completed`
 - `cycle.degraded`
 - `cycle.started`
@@ -171,6 +172,9 @@ full-replay terminal event.
 - `balance_changed`
 - `candle_disk_flush_completed`
 - `candle_disk_load_completed`
+- `config_market_unsupported`
+- `config_stock_perp_unavailable_market`
+- `config_stock_perp_wrong_exchange`
 - `ema_fallback_used`
 - `exchange_acknowledged`
 - `exchange_config_refresh`
@@ -247,6 +251,24 @@ sinks. Its data payload is limited to `source` (`config_sources` or
 Each change row contains its total `count` and at most 12 sorted `symbols`; no
 config path, raw source, or full list is retained. Emission is best-effort and
 must not affect eligibility refresh behavior.
+
+## Configured Market Compatibility Events
+
+`config.market_compatibility` records configured symbols removed by the
+existing eligible-market filter. It routes to structured and monitor sinks
+only and preserves the existing text-log warning. Unsupported approved symbols
+use status `degraded`, making them non-hard problem events; unsupported ignored
+symbols use status `skipped` because they do not weaken configured trading
+intent.
+
+The event envelope identifies one affected `pside`. The payload contains
+`list_kind`, total `skipped_count`, at most 12 sorted `skipped_symbols`, a
+truncation flag, bounded `reason_counts`, and bounded
+per-reason samples. Symbol samples are value-redacted and length-bounded before
+durable publication. Stable reasons distinguish generic unsupported markets,
+stock perps configured on a non-Hyperliquid exchange, and unavailable
+Hyperliquid stock-perp markets. Emission is best-effort and must not change
+coin filtering, exchange calls, or trading behavior.
 
 Dynamic helpers are part of the same contract:
 

@@ -4,6 +4,11 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Unsupported configured markets now emit bounded
+  `config.market_compatibility` structured and monitor events with list,
+  position-side, count, redacted symbol sample, and stable reason context.
+  Existing coin filtering and text-log warnings are unchanged.
+
 - Added `passivbot tool pareto --scenario LABEL` for rebuilding and selecting from a
   scenario-specific nondominated sub-front of a suite optimization's saved aggregate Pareto
   members. Scenario metrics are used consistently for limits, objectives, and ranking, and output

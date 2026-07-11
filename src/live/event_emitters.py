@@ -2167,6 +2167,113 @@ def emit_forager_eligibility_changed_event(
         )
 
 
+_MARKET_COMPATIBILITY_SAMPLE_LIMIT = 12
+_MARKET_COMPATIBILITY_SYMBOL_MAX_LEN = 160
+_STOCK_PERP_PREFIXES = ("xyz:", "xyz-")
+
+
+def _market_compatibility_reason(symbol: str, exchange: str) -> str:
+    base = symbol.split("/", 1)[0].casefold()
+    if not base.startswith(_STOCK_PERP_PREFIXES):
+        return ReasonCodes.CONFIG_MARKET_UNSUPPORTED
+    if exchange.casefold() != "hyperliquid":
+        return ReasonCodes.CONFIG_STOCK_PERP_WRONG_EXCHANGE
+    return ReasonCodes.CONFIG_STOCK_PERP_UNAVAILABLE_MARKET
+
+
+def _emit_config_market_compatibility_event_unchecked(
+    bot: Any,
+    *,
+    list_kind: str,
+    pside: str,
+    skipped_symbols: set[str],
+) -> bool:
+    if list_kind not in {"approved_coins", "ignored_coins"}:
+        raise ValueError(f"unsupported configured market list kind {list_kind!r}")
+    if pside not in {"long", "short"}:
+        raise ValueError(f"unsupported configured market pside {pside!r}")
+    symbols = sorted({str(symbol) for symbol in skipped_symbols if symbol})
+    if not symbols:
+        return False
+    safe_symbols = {
+        symbol: _sanitize_remote_text(
+            symbol,
+            max_len=_MARKET_COMPATIBILITY_SYMBOL_MAX_LEN,
+        )
+        for symbol in symbols
+    }
+    exchange = str(getattr(bot, "exchange", "") or "")
+    by_reason: dict[str, list[str]] = {}
+    for symbol in symbols:
+        reason_code = _market_compatibility_reason(symbol, exchange)
+        by_reason.setdefault(reason_code, []).append(symbol)
+    reason_samples = [
+        {
+            "reason_code": reason_code,
+            "count": len(reason_symbols),
+            "symbols": [
+                safe_symbols[symbol]
+                for symbol in reason_symbols[:_MARKET_COMPATIBILITY_SAMPLE_LIMIT]
+            ],
+            "symbols_truncated": (
+                len(reason_symbols) > _MARKET_COMPATIBILITY_SAMPLE_LIMIT
+            ),
+        }
+        for reason_code, reason_symbols in sorted(by_reason.items())
+    ]
+    event_reason = (
+        next(iter(by_reason))
+        if len(by_reason) == 1
+        else ReasonCodes.CONFIG_MARKET_UNSUPPORTED
+    )
+    return (
+        _safe_emit(
+            bot,
+            EventTypes.CONFIG_MARKET_COMPATIBILITY,
+            level="info",
+            component="config.market_compatibility",
+            tags=(EventTags.MARKET, EventTags.AVAILABILITY),
+            cycle_id=current_live_event_cycle_id(bot),
+            pside=pside,
+            status="degraded" if list_kind == "approved_coins" else "skipped",
+            reason_code=event_reason,
+            data={
+                "list_kind": list_kind,
+                "skipped_count": len(symbols),
+                "skipped_symbols": [
+                    safe_symbols[symbol]
+                    for symbol in symbols[:_MARKET_COMPATIBILITY_SAMPLE_LIMIT]
+                ],
+                "skipped_symbols_truncated": (
+                    len(symbols) > _MARKET_COMPATIBILITY_SAMPLE_LIMIT
+                ),
+                "reason_counts": {
+                    reason_code: len(reason_symbols)
+                    for reason_code, reason_symbols in sorted(by_reason.items())
+                },
+                "reason_samples": reason_samples,
+            },
+            require_enqueue=True,
+        )
+        is not None
+    )
+
+
+def emit_config_market_compatibility_event(
+    bot: Any, *args: Any, **kwargs: Any
+) -> bool:
+    """Best-effort visibility for configured symbols skipped before eligibility."""
+    try:
+        return _emit_config_market_compatibility_event_unchecked(bot, *args, **kwargs)
+    except Exception as exc:
+        logging.debug(
+            "[event] failed to emit %s: %s",
+            EventTypes.CONFIG_MARKET_COMPATIBILITY,
+            exc,
+        )
+        return False
+
+
 def _emit_forager_selection_event_unchecked(
     bot: Any,
     *,

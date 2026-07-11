@@ -7393,3 +7393,45 @@ VPS5 deployment status:
   then found that an unorderable trailing row could erase an established
   ordered snapshot; the guard now preserves the ordered latest state and the
   full report suite passes with a focused regression.
+
+### Deployed Slice: Missing Resource-Pressure Latest Value
+
+- PR #1186 was approved on exact head `65d61702f` by Hermes, Grok 4.5, and the
+  independent Codex reviewer that raised the ordering findings. CI passed and
+  the PR merged to `v8` as `b9748247`.
+- VPS5 fast-forwarded while preserving untracked artifacts. Because the change
+  was a read-only report consumer, no bot restart occurred; all five original
+  bot PIDs and unrelated `misc:0.0` PID `434835` remained unchanged.
+- The exact bounded rotated command with `--event-tail-lines 5000`,
+  `--max-event-files-per-bot 2`, and `--section hsl_replay_profile` completed
+  with `ok=true`, zero errors/warnings, and no resource-pressure crash.
+- The first two-minute smoke exposed one real KuCoin authoritative-state
+  timeout cycle. After it aged out, the settled smoke was hard-green with all
+  five expected bots matched, `216/216` remote calls and `56/56`
+  account-critical calls successful, no text-log hard matches, and tracked
+  repository status clean. A direct process check showed all five unchanged
+  bot PIDs in `Rl+`.
+
+### Active Slice: Configured-Market Compatibility Events
+
+- Branch: `codex/v8-market-compatibility-events` from current remote `v8`
+  `60357a00`; VPS5 remains on deployed `b9748247` until this producer slice is
+  approved for restart.
+- Triggering evidence: current VPS5 text logs repeatedly report unsupported
+  approved coins for Binance (`CRO,MNT`) and OKX (`KAS,MNT,XMR`), but no
+  structured event records which configured markets were discarded or why.
+- Scope: emit one bounded off-console/off-text
+  `config.market_compatibility` event from the existing configured-coin skip
+  path, preserving text-log dedupe and all filtering behavior. Include safe
+  per-side list/count/sample context and classify stock-perp-looking skipped
+  symbols without changing stock-perp policy.
+- Non-goals: no exchange calls, eligible-market calculation, stock-perp
+  margin/account policy, Hyperliquid fatal startup enforcement, isolated-only
+  entry filtering, smoke verdict, HSL/risk/order behavior, Rust, backtest, or
+  optimizer change. Existing generic query/problem-event tooling consumes the
+  event; this slice does not add a bespoke report aggregator.
+- Focused live-event, coin-list, smoke, query, incident, registry-doc,
+  compilation, diff, and silent-handling checks pass. Luna's independent
+  preflight found and then cleared per-side query provenance, durable symbol
+  bounds/redaction, retryable enqueue dedupe, changelog, and equal-side query
+  gaps across two delta rounds.

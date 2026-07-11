@@ -1798,6 +1798,46 @@ def test_live_smoke_report_problem_events_include_allowlisted_ema_data(tmp_path)
     assert "ignored_extra" not in latest_data
 
 
+def test_live_smoke_report_problem_events_include_market_compatibility_data(tmp_path):
+    events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="config.market_compatibility",
+                seq=1,
+                ts=1000,
+                status="degraded",
+                level="info",
+                reason_code="config_market_unsupported",
+                pside="long",
+                data={
+                    "list_kind": "approved_coins",
+                    "skipped_count": 2,
+                    "skipped_symbols": ["CRO/USDT:USDT", "MNT/USDT:USDT"],
+                    "skipped_symbols_truncated": False,
+                    "reason_counts": {"config_market_unsupported": 2},
+                    "reason_samples": [{"do_not_surface": "extra detail"}],
+                },
+            )
+        ],
+    )
+
+    report = build_live_smoke_report(tmp_path / "monitor", logs_root=None)
+
+    assert report["ok"] is True
+    event = report["problem_events"][0]
+    assert event["event_type"] == "config.market_compatibility"
+    assert event["hard"] is False
+    assert event["pside"] == "long"
+    assert event["latest_data"] == {
+        "list_kind": "approved_coins",
+        "skipped_count": 2,
+        "skipped_symbols": ["CRO/USDT:USDT", "MNT/USDT:USDT"],
+        "reason_counts": {"config_market_unsupported": 2},
+    }
+
+
 def test_live_smoke_report_summarizes_ema_readiness_health(tmp_path):
     events_dir = tmp_path / "monitor" / "gateio" / "gateio_01" / "events"
     _write_ndjson(

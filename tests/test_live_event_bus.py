@@ -77,6 +77,10 @@ def test_live_event_tag_registry_values_are_unique_and_query_safe():
     assert all(re.fullmatch(r"[a-z][a-z0-9_]*", value) for value in values)
 
 
+def test_market_compatibility_event_type_is_stable():
+    assert EventTypes.CONFIG_MARKET_COMPATIBILITY == "config.market_compatibility"
+
+
 def test_live_event_reason_code_registry_values_are_unique_and_query_safe():
     values = _registry_values(ReasonCodes)
 
@@ -85,6 +89,15 @@ def test_live_event_reason_code_registry_values_are_unique_and_query_safe():
     assert ReasonCodes.EXCHANGE_CONFIG_REFRESH == "exchange_config_refresh"
     assert ReasonCodes.EXECUTION_LOOP_ERROR_BURST == "execution_loop_error_burst"
     assert ReasonCodes.WARMUP_CACHE_DECISION == "warmup_cache_decision"
+    assert ReasonCodes.CONFIG_MARKET_UNSUPPORTED == "config_market_unsupported"
+    assert (
+        ReasonCodes.CONFIG_STOCK_PERP_WRONG_EXCHANGE
+        == "config_stock_perp_wrong_exchange"
+    )
+    assert (
+        ReasonCodes.CONFIG_STOCK_PERP_UNAVAILABLE_MARKET
+        == "config_stock_perp_unavailable_market"
+    )
     assert authoritative_reason_code("balance") == "authoritative_balance"
     assert sink_failed_reason_code("monitor") == "monitor_sink_failed"
     assert len(values) == len(set(values))
@@ -232,6 +245,7 @@ def test_route_table_keeps_data_events_off_console_by_default():
     for event_type in (
         EventTypes.FORAGER_FEATURE_UNAVAILABLE,
         EventTypes.FORAGER_ELIGIBILITY_CHANGED,
+        EventTypes.CONFIG_MARKET_COMPATIBILITY,
         EventTypes.ACTION_PLANNED,
         EventTypes.EMA_BUNDLE_STARTED,
         EventTypes.EMA_BUNDLE_COMPLETED,
