@@ -68,14 +68,14 @@ slices.
 
 ### Goal 2: Remove HSL Broad Replay From The Protective Critical Path
 
-- [ ] A held `coin+pside` must not wait behind unrelated flat coins before its
+- [x] A held `coin+pside` must not wait behind unrelated flat coins before its
   exact HSL state is known.
-- [ ] HSL startup must expose separate states for account-critical ready,
+- [x] HSL startup must expose separate states for account-critical ready,
   held-position protective ready, fresh-entry/cooldown eligibility unknown,
   and full replay ready.
 - [ ] Current drawdown state takes precedence: a historical red crossing must
   not trigger a new panic if the exact current state is no longer red.
-- [ ] Full historical/cooldown reconstruction may continue after held positions
+- [x] Full historical/cooldown reconstruction may continue after held positions
   are protectively ready, but fresh entries remain blocked for symbols whose
   cooldown/trading eligibility is still unknown.
 - [ ] Acceptance: with 25-30 configured pairs and one held position,
@@ -864,7 +864,7 @@ Each slice should update this checklist with its result.
      equivalence checks; realistic-scale fixtures and deeper internal-stage
      profiling remain open.
 
-3. [ ] Held-position protective readiness slice.
+3. [x] Held-position protective readiness slice.
    - Classify currently held `coin+pside` pairs before unrelated flat pairs and
      emit explicit `hsl_protective_*` state events.
    - Acceptance: held-pair state matches existing full replay in tests, and a
@@ -880,11 +880,15 @@ Each slice should update this checklist with its result.
      raw-drawdown math in Rust for live/replay and backtest. TWEL remains an
      activation/validation input, while configured live slots and intentional
      dynamic backtest slots remain caller-owned inputs.
-   - Status: the next sequencing slice freezes the existing replay candidate
+   - Status: the sequencing slice freezes the existing replay candidate
      set and processes held pairs first, cooldown-affected pairs second, then
      remaining pairs with a bounded first-pair progress event. It deliberately
-     keeps full replay startup-blocking; protective/full readiness separation
-     and explicit protective-ready events remain the dependent behavior slice.
+     originally kept full replay startup-blocking. The dependent readiness
+     slice now releases startup after exact held-pair reconstruction, keeps
+     pending pair initial entries blocked at planning and final submission,
+     continues the same replay task under shutdown ownership, and emits bounded
+     protective/full timing plus ready/pending pair counts. Production elapsed
+     acceptance remains to be measured on VPS5 after merge.
 
 4. [ ] Full replay lower-complexity slice.
    - Replace avoidable nested scans and repeated fill/timeline work with exact

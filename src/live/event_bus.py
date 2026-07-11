@@ -242,6 +242,7 @@ class ReasonCodes:
     )
     HSL_HISTORY_EMPTY = "hsl_history_empty"
     HSL_HISTORY_INPUTS_LOADED = "hsl_history_inputs_loaded"
+    HSL_HELD_PROTECTIVE_READY = "hsl_held_protective_ready"
     HSL_PRICE_HISTORY_FETCH_COMPLETED = "hsl_price_history_fetch_completed"
     HSL_PRICE_HISTORY_FETCH_STARTED = "hsl_price_history_fetch_started"
     HSL_PRICE_HISTORY_SYMBOL_FETCH_COMPLETED = (
@@ -253,6 +254,7 @@ class ReasonCodes:
     HSL_REPLAY_CACHE_REJECTED = "hsl_replay_cache_rejected"
     HSL_REPLAY_CACHE_WRITTEN = "hsl_replay_cache_written"
     HSL_REPLAY_CACHE_WRITE_FAILED = "hsl_replay_cache_write_failed"
+    HSL_REPLAY_PENDING = "hsl_replay_pending"
     HSL_RAW_RED_PENDING_EMA_CONFIRMATION = "hsl_raw_red_pending_ema_confirmation"
     HSL_RED_FINALIZED_WITHOUT_EXCHANGE_ORDER = (
         "hsl_red_finalized_without_exchange_order"

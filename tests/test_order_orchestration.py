@@ -85,6 +85,48 @@ def _make_order(
     }
 
 
+def test_coin_hsl_pending_replay_mode_override_is_pair_scoped():
+    bot = Passivbot.__new__(Passivbot)
+    bot.hsl = {
+        "long": {"orange_tier_mode": "graceful_stop"},
+        "short": {"orange_tier_mode": "graceful_stop"},
+    }
+    bot._runtime_forced_modes = {
+        "long": {"BTC/USDT:USDT": "panic", "ETH/USDT:USDT": "panic"},
+        "short": {},
+    }
+    bot._equity_hard_stop_coin_replay_pending_pairs = {
+        ("long", "BTC/USDT:USDT"),
+        ("long", "MANUAL/USDT:USDT"),
+    }
+    bot._equity_hard_stop_enabled = lambda pside=None: True
+    bot._equity_hard_stop_signal_mode = lambda: "coin"
+    bot._hsl_state = lambda pside: {"halted": False}
+    bot._equity_hard_stop_runtime_red_latched = lambda pside: False
+    bot._equity_hard_stop_runtime_tier = lambda pside: "green"
+    bot.config_get = lambda path, symbol=None: (
+        "manual" if symbol == "MANUAL/USDT:USDT" else None
+    )
+    bot.markets_dict = {
+        "BTC/USDT:USDT": {"active": True},
+        "ETH/USDT:USDT": {"active": True},
+        "MANUAL/USDT:USDT": {"active": True},
+    }
+    bot.ineligible_symbols = {}
+    bot._apply_ignored_coin_mode = lambda pside, symbol, mode=None: mode
+
+    assert (
+        bot._orchestrator_mode_override("long", "BTC/USDT:USDT")
+        == "graceful_stop"
+    )
+    assert bot.get_forced_PB_mode("long", "BTC/USDT:USDT") == "graceful_stop"
+    assert bot._orchestrator_mode_override("short", "BTC/USDT:USDT") is None
+    assert bot._orchestrator_mode_override("long", "ETH/USDT:USDT") == "panic"
+    assert bot.get_forced_PB_mode("long", "ETH/USDT:USDT") == "panic"
+    assert bot._orchestrator_mode_override("long", "MANUAL/USDT:USDT") == "manual"
+    assert bot.get_forced_PB_mode("long", "MANUAL/USDT:USDT") == "manual"
+
+
 @pytest.mark.parametrize(
     ("order_type", "qty", "position_side", "position_size"),
     [

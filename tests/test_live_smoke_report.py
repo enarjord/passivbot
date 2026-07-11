@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import os
+from collections import Counter
+from pathlib import Path
 
 import pytest
 
@@ -4187,6 +4189,94 @@ def test_live_smoke_report_summarizes_cache_health(tmp_path):
     rendered = json.dumps(report["cache_health"], sort_keys=True)
     assert "private-cache" not in rendered
     assert "raw-cache-row" not in rendered
+
+
+def test_compact_hsl_replay_data_exposes_protective_readiness_counts():
+    compact = smoke_report_module._compact_hsl_replay_data(
+        {
+            "data": {
+                "signal_mode": "coin",
+                "stage": "held_protective_ready",
+                "pairs": 12,
+                "held_pairs": 2,
+                "ready_pairs": 2,
+                "pending_pairs": 10,
+                "protective_elapsed_s": 1.25,
+                "secret": "must-not-render",
+            }
+        }
+    )
+
+    assert compact == {
+        "signal_mode": "coin",
+        "stage": "held_protective_ready",
+        "pairs": 12,
+        "held_pairs": 2,
+        "ready_pairs": 2,
+        "pending_pairs": 10,
+        "protective_elapsed_s": 1.25,
+    }
+    assert smoke_report_module._hsl_replay_derived(compact)[
+        "protective_elapsed_ms"
+    ] == 1250
+
+
+def test_hsl_replay_health_retains_protective_ready_after_later_progress():
+    groups = {}
+    path = Path("events.ndjson")
+    ready = _monitor_row(
+        event_type="hsl.replay.progress",
+        seq=1,
+        ts=1000,
+        reason_code="hsl_held_protective_ready",
+        status="succeeded",
+        data={
+            "signal_mode": "coin",
+            "stage": "held_protective_ready",
+            "pairs": 10,
+            "ready_pairs": 1,
+            "pending_pairs": 9,
+            "protective_elapsed_s": 2.0,
+        },
+    )
+    later = _monitor_row(
+        event_type="hsl.replay.progress",
+        seq=2,
+        ts=2000,
+        reason_code="pair_replay_progress",
+        status="started",
+        data={
+            "signal_mode": "coin",
+            "stage": "pair_replay",
+            "pairs": 10,
+            "pair_idx": 2,
+        },
+    )
+    for line_no, row in enumerate((ready, later), start=1):
+        smoke_report_module._merge_hsl_replay_group(
+            groups,
+            bot_key="binance/test",
+            row=row,
+            live_event=row["payload"]["_live_event"],
+            path=path,
+            line_no=line_no,
+        )
+
+    summary = smoke_report_module._summarize_hsl_replay_health(
+        groups,
+        Counter({"hsl.replay.progress": 2}),
+        report_ts_ms=2500,
+    )
+    group = summary["groups"][0]
+    assert group["latest"]["data"]["stage"] == "pair_replay"
+    assert group["protective_ready"]["data"] == {
+        "signal_mode": "coin",
+        "stage": "held_protective_ready",
+        "pairs": 10,
+        "ready_pairs": 1,
+        "pending_pairs": 9,
+        "protective_elapsed_s": 2,
+    }
 
 
 def test_live_smoke_report_summarizes_hsl_replay_health(tmp_path, monkeypatch):

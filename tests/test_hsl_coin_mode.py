@@ -5,6 +5,8 @@ from types import MethodType, SimpleNamespace
 import pytest
 
 from passivbot import Passivbot
+from passivbot_exceptions import RestartBotException
+from live.event_bus import ReasonCodes
 
 pbr = pytest.importorskip("passivbot_rust", reason="passivbot_rust extension not available")
 hsl = pytest.importorskip("passivbot_hsl", reason="live HSL dependencies not available")
@@ -401,7 +403,7 @@ def test_hsl_replay_matrix_cache_try_load_emits_hit_event(tmp_path):
 
 
 def test_hsl_replay_matrix_cache_try_load_emits_miss_event(tmp_path):
-    from live.event_bus import EventTypes, ListEventSink, LiveEventPipeline, ReasonCodes
+    from live.event_bus import EventTypes, ListEventSink, LiveEventPipeline
 
     metadata = _hsl_cache_metadata()
     bot = FakeHslBot()
@@ -1528,6 +1530,7 @@ def bind_hsl_methods(bot):
         "_equity_hard_stop_count_blocking_open_orders_symbol",
         "_equity_hard_stop_history_coin_value",
         "_equity_hard_stop_initialize_coin_from_history",
+        "_equity_hard_stop_start_coin_history_replay",
         "_equity_hard_stop_initialize_from_history",
         "_equity_hard_stop_infer_replay_contract",
         "_equity_hard_stop_apply_sample",
@@ -1687,7 +1690,7 @@ def test_coin_hsl_restart_reset_preserves_persistent_no_restart_peak():
 
 @pytest.mark.asyncio
 async def test_coin_hsl_replay_cancels_when_shutdown_requested_after_history_load():
-    from live.event_bus import EventTypes, ListEventSink, LiveEventPipeline
+    from live.event_bus import EventTypes, ListEventSink, LiveEventPipeline, ReasonCodes
 
     bot = make_coin_bot()
     bot.stop_signal_received = False
@@ -1745,7 +1748,7 @@ async def test_coin_hsl_replay_cancels_when_shutdown_requested_after_history_loa
 
 @pytest.mark.asyncio
 async def test_coin_hsl_history_replay_emits_lifecycle_events():
-    from live.event_bus import EventTypes, ListEventSink, LiveEventPipeline
+    from live.event_bus import EventTypes, ListEventSink, LiveEventPipeline, ReasonCodes
 
     bot = make_coin_bot()
     symbol = "A"
@@ -1805,6 +1808,7 @@ async def test_coin_hsl_history_replay_emits_lifecycle_events():
         EventTypes.HSL_REPLAY_STARTED,
         EventTypes.HSL_REPLAY_PROGRESS,
         EventTypes.HSL_REPLAY_PROGRESS,
+        EventTypes.HSL_REPLAY_PROGRESS,
         EventTypes.HSL_REPLAY_COMPLETED,
     ]
     assert {event.cycle_id for event in events} == {"cy_hsl_replay"}
@@ -1825,31 +1829,39 @@ async def test_coin_hsl_history_replay_emits_lifecycle_events():
     assert events[2].data["pair_idx"] == 1
     assert events[2].data["is_held_pair"] is True
     assert events[3].status == "succeeded"
-    assert events[3].reason_code == "coin_history_replay_completed"
-    assert events[3].data["rows"] == 2
-    assert events[3].data["applied_rows"] == 2
-    assert events[3].data["pairs"] == 1
-    assert events[3].data["held_pairs"] == 1
-    assert events[3].data["cooldown_pairs"] == 0
-    assert events[3].data["required_pairs"] == 1
-    assert events[3].data["skipped_pairs"] == 0
-    assert events[3].data["timeline_rows"] == 2
-    assert events[3].data["fill_events"] == 0
-    assert events[3].data["panic_events"] == 0
-    assert events[3].data["rows_per_second"] is not None
-    assert events[3].data["history_fetch_elapsed_s"] is not None
-    assert events[3].data["pre_replay_elapsed_s"] is not None
-    assert events[3].data["replay_loop_elapsed_s"] is not None
-    assert events[3].data["full_elapsed_s"] is not None
-    assert events[3].data["startup_blocking_elapsed_s"] is not None
-    assert events[3].data["elapsed_s"] is not None
-    assert events[3].data["history_fetch_elapsed_s"] > 0.0
+    assert events[3].reason_code == ReasonCodes.HSL_HELD_PROTECTIVE_READY
+    assert events[3].data["stage"] == "held_protective_ready"
+    assert events[3].data["ready_pairs"] == 1
+    assert events[3].data["pending_pairs"] == 0
+    assert events[3].data["protective_elapsed_s"] is not None
+    completed = events[4]
+    assert completed.status == "succeeded"
+    assert completed.reason_code == "coin_history_replay_completed"
+    assert completed.data["rows"] == 2
+    assert completed.data["applied_rows"] == 2
+    assert completed.data["pairs"] == 1
+    assert completed.data["held_pairs"] == 1
+    assert completed.data["cooldown_pairs"] == 0
+    assert completed.data["required_pairs"] == 1
+    assert completed.data["skipped_pairs"] == 0
+    assert completed.data["timeline_rows"] == 2
+    assert completed.data["fill_events"] == 0
+    assert completed.data["panic_events"] == 0
+    assert completed.data["rows_per_second"] is not None
+    assert completed.data["history_fetch_elapsed_s"] is not None
+    assert completed.data["pre_replay_elapsed_s"] is not None
+    assert completed.data["replay_loop_elapsed_s"] is not None
+    assert completed.data["full_elapsed_s"] is not None
+    assert completed.data["protective_elapsed_s"] is not None
+    assert completed.data["startup_blocking_elapsed_s"] is not None
+    assert completed.data["elapsed_s"] is not None
+    assert completed.data["history_fetch_elapsed_s"] > 0.0
     phase_elapsed_s = (
-        events[3].data["history_fetch_elapsed_s"]
-        + events[3].data["pre_replay_elapsed_s"]
-        + events[3].data["replay_loop_elapsed_s"]
+        completed.data["history_fetch_elapsed_s"]
+        + completed.data["pre_replay_elapsed_s"]
+        + completed.data["replay_loop_elapsed_s"]
     )
-    assert phase_elapsed_s <= events[3].data["startup_blocking_elapsed_s"] + 0.006
+    assert phase_elapsed_s <= completed.data["startup_blocking_elapsed_s"] + 0.006
     assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 
@@ -1912,6 +1924,174 @@ async def test_coin_hsl_history_replay_processes_held_late_symbol_first():
     assert pair_events[0].data["is_held_pair"] is True
     assert set(bot._equity_hard_stop_coin["long"]) == {"A", "Z"}
     assert bot._live_event_pipeline.close(timeout=2.0) is True
+
+
+@pytest.mark.asyncio
+async def test_coin_hsl_start_releases_after_held_pair_and_owns_one_continuation():
+    bot = make_coin_bot()
+    bot.positions = {
+        "Z": {
+            "long": {"size": 1.0, "price": 100.0},
+            "short": {"size": 0.0, "price": 0.0},
+        }
+    }
+    flat_pair_started = asyncio.Event()
+    release_flat_pair = asyncio.Event()
+
+    async def fake_history(current_balance=None, **kwargs):
+        return {
+            "timeline": [
+                {
+                    "timestamp": 60_000,
+                    "balance": 100.0,
+                    "realized_pnl": 0.0,
+                    "realized_pnl_by_coin_pside": {
+                        "A": {"long": 0.0, "short": 0.0},
+                        "Z": {"long": 0.0, "short": 0.0},
+                    },
+                    "unrealized_pnl_by_coin_pside": {
+                        "A": {"long": 0.0, "short": 0.0},
+                        "Z": {"long": -1.0, "short": 0.0},
+                    },
+                }
+            ],
+            "panic_flatten_events": [],
+            "fill_events": [],
+        }
+
+    async def gated_upnl(pside=None, symbol=None):
+        if symbol == "A":
+            flat_pair_started.set()
+            await release_flat_pair.wait()
+        return 0.0
+
+    bot.get_balance_equity_history = fake_history
+    bot._calc_upnl_sum_strict = gated_upnl
+
+    await bot._equity_hard_stop_start_coin_history_replay()
+
+    assert bot._equity_hard_stop_coin_protective_ready is True
+    assert getattr(bot, "_equity_hard_stop_coin_initialized", False) is False
+    assert bot._equity_hard_stop_coin_replay_ready_pairs == {("long", "Z")}
+    assert bot._equity_hard_stop_coin_replay_pending_pairs == {("long", "A")}
+    assert bot._equity_hard_stop_coin_replay_task.done() is False
+    assert bot.maintainers["hsl_coin_replay"] is bot._equity_hard_stop_coin_replay_task
+    await asyncio.wait_for(flat_pair_started.wait(), timeout=1.0)
+
+    same_task = bot._equity_hard_stop_coin_replay_task
+    await bot._equity_hard_stop_start_coin_history_replay()
+    assert bot._equity_hard_stop_coin_replay_task is same_task
+
+    release_flat_pair.set()
+    await asyncio.wait_for(same_task, timeout=1.0)
+    assert bot._equity_hard_stop_coin_initialized is True
+    assert bot._equity_hard_stop_coin_replay_pending_pairs == set()
+    assert bot._equity_hard_stop_coin_replay_ready_pairs == {
+        ("long", "A"),
+        ("long", "Z"),
+    }
+
+
+@pytest.mark.asyncio
+async def test_coin_hsl_partial_replay_restarts_if_pending_pair_becomes_held():
+    bot = make_coin_bot()
+    bot._equity_hard_stop_coin_protective_ready = True
+    bot._equity_hard_stop_coin_initialized = False
+    bot._equity_hard_stop_coin_replay_ready_pairs = set()
+    bot._equity_hard_stop_coin_replay_pending_pairs = {("long", "A")}
+    bot.positions = {
+        "A": {
+            "long": {"size": 1.0, "price": 100.0},
+            "short": {"size": 0.0, "price": 0.0},
+        }
+    }
+
+    with pytest.raises(
+        RestartBotException,
+        match="restart required for held-first reconstruction: long:A",
+    ):
+        await bot._equity_hard_stop_check_coin()
+
+
+@pytest.mark.asyncio
+async def test_coin_hsl_background_failure_keeps_pending_pair_blocked_without_retry():
+    bot = make_coin_bot()
+    bot.positions = {
+        "Z": {
+            "long": {"size": 1.0, "price": 100.0},
+            "short": {"size": 0.0, "price": 0.0},
+        }
+    }
+
+    async def fake_history(current_balance=None, **kwargs):
+        return {
+            "timeline": [
+                {
+                    "timestamp": 60_000,
+                    "balance": 100.0,
+                    "realized_pnl": 0.0,
+                    "realized_pnl_by_coin_pside": {
+                        "A": {"long": 0.0, "short": 0.0},
+                        "Z": {"long": 0.0, "short": 0.0},
+                    },
+                    "unrealized_pnl_by_coin_pside": {
+                        "A": {"long": 0.0, "short": 0.0},
+                        "Z": {"long": -1.0, "short": 0.0},
+                    },
+                }
+            ],
+            "panic_flatten_events": [],
+            "fill_events": [],
+        }
+
+    async def failing_upnl(pside=None, symbol=None):
+        if symbol == "A":
+            raise RuntimeError("flat replay failed")
+        return 0.0
+
+    bot.get_balance_equity_history = fake_history
+    bot._calc_upnl_sum_strict = failing_upnl
+
+    await bot._equity_hard_stop_start_coin_history_replay()
+    replay_task = bot._equity_hard_stop_coin_replay_task
+    await asyncio.wait_for(replay_task, timeout=1.0)
+
+    assert getattr(bot, "_equity_hard_stop_coin_initialized", False) is False
+    assert bot._equity_hard_stop_coin_replay_ready_pairs == {("long", "Z")}
+    assert bot._equity_hard_stop_coin_replay_pending_pairs == {("long", "A")}
+    assert "flat replay failed" in bot._equity_hard_stop_coin_replay_failure
+    await bot._equity_hard_stop_start_coin_history_replay()
+    assert bot._equity_hard_stop_coin_replay_task is replay_task
+
+    metrics = await bot._equity_hard_stop_check_coin()
+    assert "long:Z" in metrics
+    assert "long:A" not in metrics
+
+
+@pytest.mark.asyncio
+async def test_data_maintainers_own_active_coin_hsl_replay_task():
+    bot = Passivbot.__new__(Passivbot)
+    bot.ws_enabled = False
+    blocker = asyncio.Event()
+
+    async def maintain_hourly_cycle():
+        await blocker.wait()
+
+    async def continue_replay():
+        await blocker.wait()
+
+    bot.maintain_hourly_cycle = maintain_hourly_cycle
+    replay_task = asyncio.create_task(continue_replay())
+    bot._equity_hard_stop_coin_replay_task = replay_task
+
+    await bot.start_data_maintainers()
+
+    assert bot.maintainers["hsl_coin_replay"] is replay_task
+    hourly_task = bot.maintainers["maintain_hourly_cycle"]
+    bot.stop_data_maintainers(verbose=False)
+    await asyncio.gather(replay_task, hourly_task, return_exceptions=True)
+    assert replay_task.cancelled()
+    assert hourly_task.cancelled()
 
 
 async def _run_parity_history(monkeypatch):

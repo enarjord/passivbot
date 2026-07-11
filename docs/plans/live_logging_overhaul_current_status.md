@@ -22,27 +22,31 @@ Estimated completion:
 
 ## Active Review Slice
 
-- PR: not yet opened; `Prioritize protective coin-HSL replay candidates`
-- Branch: `codex/v8-hsl-held-first-replay`
+- PR: query live GitHub metadata; `Release coin-HSL startup after held protection`
+- Branch: `codex/v8-hsl-protective-readiness`
 - Head: query live GitHub metadata; this commit cannot embed its own final SHA
   without making that value stale
-- Base: `493a61a9cb1659927a8d895fb25597b089988527`
-- Scope: freeze the existing coin-HSL replay candidates and order them held
-  pairs first, cooldown-affected pairs second, then all remaining pairs while
-  preserving deterministic relative order. Force one bounded first-pair
-  progress event so deployed ordering is directly observable.
-- Non-goals: no early startup release, background replay, protective-ready
-  claim, fresh-entry readiness change, HSL math/state change, cache contract,
-  exchange call, or backtest behavior change.
-- Local validation: full coin-HSL suite, focused HSL metric/startup/override
-  suites, fake-live marker suite (`21/21`), Rust `209/209`, and a deterministic
-  30-symbol/1440-minute/two-iteration replay benchmark pass. The loaded Rust
-  extension source stamp matches this worktree; `py_compile`, added-line
-  silent-handling audit, and `git diff --check` pass.
-- Independent preflight: confirmed pair-local HSL state and that a mere sort
-  cannot yet make protective orders executable because startup still awaits
-  full replay. The later readiness split needs explicit protective/full state,
-  fresh-entry blocking, shutdown coordination, and dedicated source events.
+- Base: `078a3fead1dc635877b9142cb394dd93e3747d54`
+- Scope: run the existing exact held-first coin replay in one task, release
+  startup after every held pair is protectively ready, and continue remaining
+  pairs in the background. Keep pending pairs blocked from initial-entry
+  creates at both planning and final submission while allowing cancellations
+  and panic/reduce-only creates. Expose protective/full timing and pair counts.
+- Non-goals: no HSL math/state contract change, replay algorithm rewrite,
+  checkpoint/cache schema change, exchange-call change, backtest behavior
+  change, or claim that cold history materialization itself is now fast.
+- Local validation: full coin-HSL, order-orchestration, exchange-config,
+  live-smoke-report, and live-event-bus suites; six focused realized-loss/HSL
+  tests; nine fake-live HSL/replay scenarios; Rust `209/209`, `cargo check
+  --tests`, and `cargo fmt --check`; and the deterministic 30-symbol,
+  1440-minute, two-iteration replay benchmark pass. The rebuilt extension stamp
+  matches this worktree; `py_compile`, reviewed added-line exception handling,
+  and `git diff --check` pass.
+- Independent preflight: one read-only test-surface audit identified the
+  existing replay, order, fake-live, smoke, and shutdown fixtures used by this
+  slice. Runtime design keeps one writer per pending pair and never rebuilds
+  shared HSL state after startup release. A separate current-diff concurrency
+  and safety review reported no P0-P2 findings.
 - Publication state, exact head, mergeability, CI, and current-head review
   verdicts: query live GitHub metadata. Do not encode those transient values in
   the same PR that contains this status file, because every correction would
@@ -53,20 +57,19 @@ Estimated completion:
 
 Next action:
 
-1. Publish the review-ready PR with the exact non-goals above.
-2. Resolve verified findings and merge only after the exact-head gate, then
+1. Resolve verified findings and merge only after the exact-head gate, then
    perform the declared VPS5 restart/smoke validation.
 
 ## Deployed Baseline
 
-- Remote `v8`: `493a61a9`, PR #1175
-- VPS5 repository: `493a61a9`, PR #1175
+- Remote `v8`: `078a3fea`, PR #1176
+- VPS5 repository: `078a3fea`, PR #1176
 - VPS5 expected bots: five; all are running after the controlled restart
-- Latest immediate, settled, and fresh smoke: `ok=true`, `hard_failures=0`, all
-  five bots matched, zero remote/account-critical/fill-refresh failures, and
-  zero text-log hard/attention matches. The fresh window contained one
-  non-hard Hyperliquid `ema.unavailable` debug event. Three HSL replays were
-  active, non-stale, not long-running, and making progress.
+- Latest immediate and settled smoke: `ok=true`, `hard_failures=0`, all five
+  bots matched, zero remote/account-critical/fill-refresh failures, and zero
+  text-log hard/attention matches. Four HSL replays were active and non-stale;
+  KuCoin completed, and the only extra settled-window signals were non-hard
+  Hyperliquid EMA/state-refresh events.
 - The prior tracked Rust formatting edit was already fully present in PR #1174.
   Its patch backup and autostash were retained on VPS5; tracked status is clean.
 - Preserve local/VPS configs, logs, monitor data, reports, and temporary files
@@ -91,12 +94,11 @@ Next action:
 
 ## Next Slice
 
-The denominator-parity prerequisite is merged and deployed. The active slice
-adds immutable held/cooldown-first candidate ordering without claiming early
-protective readiness. After that foundation merges, split held-position
-protective readiness from full replay while keeping fresh entries blocked until
-their cooldown eligibility is known. The design must preserve exact HSL
-reconstruction and keep observability events out of decision authority.
+The denominator-parity and immutable held/cooldown-first ordering prerequisites
+are merged and deployed. The active slice splits held-position protective
+readiness from full replay while keeping fresh entries blocked until their
+pair-specific cooldown eligibility is known. The design preserves exact HSL
+reconstruction and keeps observability events out of decision authority.
 Remaining candidates:
 
 - realistic-scale replay fixtures and deeper internal-stage profiling

@@ -77,6 +77,43 @@ def _order_is_protective_create(order: dict) -> bool:
     return _order_is_reduce_only(order) or _order_is_panic(order)
 
 
+def _filter_hsl_replay_pending_creates(
+    bot, passivbot_cls, orders: list[dict], order_wave
+) -> list[dict]:
+    pending_pairs = set(
+        getattr(bot, "_equity_hard_stop_coin_replay_pending_pairs", set()) or set()
+    )
+    if not pending_pairs:
+        return orders
+    blocked = [
+        order
+        for order in orders
+        if not _order_is_protective_create(order)
+        and (
+            str(order.get("position_side") or order.get("positionSide") or "").lower(),
+            str(order.get("symbol") or ""),
+        )
+        in pending_pairs
+    ]
+    if not blocked:
+        return orders
+    blocked_ids = {id(order) for order in blocked}
+    if order_wave is not None:
+        order_wave["skipped_create"] += len(blocked)
+    passivbot_cls._emit_execution_create_filter_event(
+        bot,
+        event_type=EventTypes.EXECUTION_CREATE_SKIPPED,
+        status="skipped",
+        reason_code=ReasonCodes.HSL_REPLAY_PENDING,
+        order_count=len(blocked),
+        symbols=_symbols_from_orders(blocked),
+        wave=order_wave,
+        message="initial-entry creates skipped until coin HSL replay is ready",
+        data={"pending_pairs_count": len(pending_pairs)},
+    )
+    return [order for order in orders if id(order) not in blocked_ids]
+
+
 def _symbols_from_orders(orders: list[dict]) -> list[str]:
     return sorted(str(order["symbol"]) for order in orders if order.get("symbol"))
 
@@ -222,6 +259,9 @@ async def execute_order_plan(
                     len(to_cancel),
                     len(to_create),
                 )
+    to_create = _filter_hsl_replay_pending_creates(
+        bot, passivbot_cls, to_create, order_wave
+    )
     if bot.debug_mode:
         if to_cancel:
             logging.info(

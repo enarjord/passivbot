@@ -95,8 +95,9 @@ across time.
 
 ## HSL Replay Timing Fields
 
-For `hsl.replay.completed`, `full_elapsed_s`, `startup_blocking_elapsed_s`, and
-`elapsed_s` measure total blocking startup time for the replay. Use
+For coin-mode `hsl.replay.completed`, `full_elapsed_s` measures total replay
+time, while `protective_elapsed_s` and `startup_blocking_elapsed_s` measure the
+time until all currently held pairs are protectively ready. Use
 `replay_loop_elapsed_s` for the replay-loop-only duration. Cache status events
 use `hsl.replay.cache` with `cache_status=hit|miss|rejected`; misses and
 rejections are non-authoritative performance-cache outcomes and should fall
@@ -106,6 +107,10 @@ Coin mode emits one `hsl.replay.progress` event with `stage=pair_replay` when
 the first frozen replay candidate starts, then keeps subsequent pair progress
 time-throttled. `is_held_pair`, `is_cooldown_pair`, and `pair_idx` expose the
 deterministic held/cooldown/remaining ordering without controlling it.
+After the held batch completes, `stage=held_protective_ready` exposes bounded
+`ready_pairs`, `pending_pairs`, and `protective_elapsed_s` fields. Remaining
+pairs continue in the same replay task; `hsl.replay.completed` remains the
+full-replay terminal event.
 
 ## Event Tags
 
@@ -183,6 +188,7 @@ deterministic held/cooldown/remaining ordering without controlling it.
 - `hsl_balance_override_account_level_replay_unsafe`
 - `hsl_history_empty`
 - `hsl_history_inputs_loaded`
+- `hsl_held_protective_ready`
 - `hsl_price_history_fetch_completed`
 - `hsl_price_history_fetch_started`
 - `hsl_price_history_symbol_fetch_completed`
@@ -194,6 +200,7 @@ deterministic held/cooldown/remaining ordering without controlling it.
 - `hsl_replay_cache_rejected`
 - `hsl_replay_cache_write_failed`
 - `hsl_replay_cache_written`
+- `hsl_replay_pending`
 - `hsl_timeline_replay_completed`
 - `hsl_timeline_replay_started`
 - `initial_entry_distance_gate`

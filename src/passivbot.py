@@ -1280,6 +1280,12 @@ class Passivbot:
         }
         self._equity_hard_stop_coin = {"long": {}, "short": {}}
         self._equity_hard_stop_coin_initialized = False
+        self._equity_hard_stop_coin_protective_ready = False
+        self._equity_hard_stop_coin_replay_ready_pairs = set()
+        self._equity_hard_stop_coin_replay_pending_pairs = set()
+        self._equity_hard_stop_coin_replay_failure = None
+        self._equity_hard_stop_coin_replay_ready_event = None
+        self._equity_hard_stop_coin_replay_task = None
 
     _monitor_record_event = pb_monitor._monitor_record_event
     _monitor_record_error = pb_monitor._monitor_record_error
@@ -1935,6 +1941,9 @@ class Passivbot:
     )
     _equity_hard_stop_initialize_coin_from_history = (
         pb_hsl._equity_hard_stop_initialize_coin_from_history
+    )
+    _equity_hard_stop_start_coin_history_replay = (
+        pb_hsl._equity_hard_stop_start_coin_history_replay
     )
     _equity_hard_stop_log_status = pb_hsl._equity_hard_stop_log_status
     _equity_hard_stop_check = pb_hsl._equity_hard_stop_check
@@ -2996,7 +3005,7 @@ class Passivbot:
                 hsl_mode = self._equity_hard_stop_signal_mode()
                 if hsl_mode == "coin":
                     boot_stage = "equity_hard_stop_initialize_coin_from_history"
-                    await self._equity_hard_stop_initialize_coin_from_history()
+                    await self._equity_hard_stop_start_coin_history_replay()
                 else:
                     await self._equity_hard_stop_initialize_from_history()
                 Passivbot._startup_timing_mark(self, "hsl", details=f"mode={hsl_mode}")
@@ -5331,7 +5340,10 @@ class Passivbot:
         max_n_fails = 10
         if self._equity_hard_stop_enabled():
             if self._equity_hard_stop_signal_mode() == "coin":
-                if not getattr(self, "_equity_hard_stop_coin_initialized", False):
+                if not (
+                    getattr(self, "_equity_hard_stop_coin_initialized", False)
+                    or getattr(self, "_equity_hard_stop_coin_protective_ready", False)
+                ):
                     await self._equity_hard_stop_initialize_coin_from_history()
             elif not all(
                 self._equity_hard_stop_runtime_initialized(pside)
@@ -8345,6 +8357,22 @@ class Passivbot:
                     return "graceful_stop"
                 return self._equity_hard_stop_halted_mode(pside, symbol)
         if symbol is not None:
+            if (
+                self._equity_hard_stop_enabled(pside)
+                and self._equity_hard_stop_signal_mode() == "coin"
+                and (pside, symbol)
+                in getattr(
+                    self, "_equity_hard_stop_coin_replay_pending_pairs", set()
+                )
+            ):
+                configured_mode = self.config_get(
+                    ["live", f"forced_mode_{pside}"], symbol
+                )
+                if configured_mode:
+                    expanded_mode = expand_PB_mode(configured_mode)
+                    if expanded_mode != "normal":
+                        return expanded_mode
+                return "graceful_stop"
             runtime_forced = (
                 getattr(self, "_runtime_forced_modes", {}).get(pside, {}).get(symbol)
             )
@@ -13571,6 +13599,27 @@ class Passivbot:
                 if orange_mode == "tp_only_with_active_entry_cancellation":
                     return "tp_only_with_active_entry_cancellation"
 
+        if (
+            self._equity_hard_stop_enabled(pside)
+            and self._equity_hard_stop_signal_mode() == "coin"
+        ):
+            replay_pending = getattr(
+                self, "_equity_hard_stop_coin_replay_pending_pairs", set()
+            )
+            if (pside, symbol) in replay_pending:
+                configured_mode = self.config_get(
+                    ["live", f"forced_mode_{pside}"], symbol
+                )
+                if configured_mode:
+                    expanded_mode = expand_PB_mode(configured_mode)
+                    if expanded_mode != "normal":
+                        return self._apply_ignored_coin_mode(
+                            pside, symbol, expanded_mode
+                        )
+                return self._apply_ignored_coin_mode(
+                    pside, symbol, "graceful_stop"
+                )
+
         runtime_forced = (
             getattr(self, "_runtime_forced_modes", {}).get(pside, {}).get(symbol)
         )
@@ -17167,7 +17216,10 @@ class Passivbot:
 
     async def start_data_maintainers(self):
         """Spawn background tasks responsible for market metadata and order watching."""
+        hsl_replay_task = getattr(self, "_equity_hard_stop_coin_replay_task", None)
         if hasattr(self, "maintainers"):
+            if self.maintainers.get("hsl_coin_replay") is hsl_replay_task:
+                self.maintainers.pop("hsl_coin_replay")
             self.stop_data_maintainers()
         maintainer_names = ["maintain_hourly_cycle"]
         if self.ws_enabled:
@@ -17180,6 +17232,8 @@ class Passivbot:
             name: asyncio.create_task(getattr(self, name)())
             for name in maintainer_names
         }
+        if hsl_replay_task is not None and not hsl_replay_task.done():
+            self.maintainers["hsl_coin_replay"] = hsl_replay_task
 
     # Legacy websocket 1m ohlcv watchers removed; CandlestickManager is authoritative
 

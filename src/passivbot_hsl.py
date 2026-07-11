@@ -4870,6 +4870,16 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
     prev_stage = getattr(self, "_log_silence_watchdog_stage", "idle")
     raise_if_shutdown = getattr(self, "_raise_if_shutdown_requested", None)
     initialization_started_s = time.monotonic()
+    watchdog_context_restored = False
+    protective_ready_elapsed_s: Optional[float] = None
+    ready_event = getattr(self, "_equity_hard_stop_coin_replay_ready_event", None)
+    if ready_event is None:
+        ready_event = asyncio.Event()
+        self._equity_hard_stop_coin_replay_ready_event = ready_event
+    self._equity_hard_stop_coin_protective_ready = False
+    self._equity_hard_stop_coin_replay_ready_pairs = set()
+    self._equity_hard_stop_coin_replay_pending_pairs = set()
+    self._equity_hard_stop_coin_replay_failure = None
 
     def check_shutdown(stage: str) -> None:
         if callable(raise_if_shutdown):
@@ -5094,6 +5104,7 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
             active_held_pairs,
             active_panic_pairs,
         )
+        self._equity_hard_stop_coin_replay_pending_pairs = set(active_pairs)
         pair_rows_applied: dict[tuple[str, str], int] = {}
         logging.info(
             "[risk] HSL coin history reconstruction loaded | symbols=%d pairs=%d rows=%d fills=%d panic_events=%d",
@@ -5178,8 +5189,52 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
                 reason_code="pair_replay_progress",
             )
 
+        def mark_pair_ready(pside: str, symbol: str) -> None:
+            pair = (pside, symbol)
+            self._equity_hard_stop_coin_replay_pending_pairs.discard(pair)
+            self._equity_hard_stop_coin_replay_ready_pairs.add(pair)
+
+        def mark_protective_ready() -> None:
+            nonlocal protective_ready_elapsed_s, watchdog_context_restored
+            if self._equity_hard_stop_coin_protective_ready:
+                return
+            self._equity_hard_stop_coin_protective_ready = True
+            startup_blocking_elapsed_s = max(
+                0.0, time.monotonic() - initialization_started_s
+            )
+            protective_ready_elapsed_s = startup_blocking_elapsed_s
+            _emit_hsl_replay_event(
+                self,
+                EventTypes.HSL_REPLAY_PROGRESS,
+                {
+                    "signal_mode": "coin",
+                    "stage": "held_protective_ready",
+                    "held_pairs": len(active_held_pairs),
+                    "ready_pairs": len(
+                        self._equity_hard_stop_coin_replay_ready_pairs
+                    ),
+                    "pending_pairs": len(
+                        self._equity_hard_stop_coin_replay_pending_pairs
+                    ),
+                    "pairs": len(active_pairs),
+                    "startup_blocking_elapsed_s": round(
+                        startup_blocking_elapsed_s, 3
+                    ),
+                    "protective_elapsed_s": round(startup_blocking_elapsed_s, 3),
+                    "elapsed_s": round(startup_blocking_elapsed_s, 3),
+                },
+                status="succeeded",
+                reason_code=ReasonCodes.HSL_HELD_PROTECTIVE_READY,
+            )
+            if hasattr(self, "_set_log_silence_watchdog_context"):
+                self._set_log_silence_watchdog_context(
+                    phase=prev_phase, stage=prev_stage
+                )
+                watchdog_context_restored = True
+            ready_event.set()
+
         pair_idx = 0
-        for replay_candidates in replay_candidate_batches:
+        for batch_idx, replay_candidates in enumerate(replay_candidate_batches):
             for pside, symbol in replay_candidates:
                 check_shutdown("hsl_coin_history_replay_pair")
                 pair_idx += 1
@@ -5594,6 +5649,7 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
                             reason,
                         )
                 if state["halted"]:
+                    mark_pair_ready(pside, symbol)
                     continue
                 if applied_rows == 0:
                     self._equity_hard_stop_prime_coin_runtime_for_replay(pside, symbol, now_ms)
@@ -5613,7 +5669,10 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
                         realized_pnl_total=float(self._equity_hard_stop_realized_pnl_now()),
                     )
                 pair_rows_applied[(pside, symbol)] = int(applied_rows)
+                mark_pair_ready(pside, symbol)
                 log_replay_progress(pair_idx, pside, symbol, applied_rows)
+            if batch_idx == 0:
+                mark_protective_ready()
         self._equity_hard_stop_coin_initialized = True
         elapsed_s = max(0.0, time.monotonic() - replay_started_s)
         total_elapsed_s = max(0.0, time.monotonic() - initialization_started_s)
@@ -5648,7 +5707,18 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
                 "pre_replay_elapsed_s": round(pre_replay_elapsed_s, 3),
                 "replay_loop_elapsed_s": round(elapsed_s, 3),
                 "full_elapsed_s": round(total_elapsed_s, 3),
-                "startup_blocking_elapsed_s": round(total_elapsed_s, 3),
+                "startup_blocking_elapsed_s": round(
+                    protective_ready_elapsed_s
+                    if protective_ready_elapsed_s is not None
+                    else total_elapsed_s,
+                    3,
+                ),
+                "protective_elapsed_s": round(
+                    protective_ready_elapsed_s
+                    if protective_ready_elapsed_s is not None
+                    else total_elapsed_s,
+                    3,
+                ),
                 "elapsed_s": round(total_elapsed_s, 3),
                 "cache_reused": bool(cache_reused),
             },
@@ -5668,6 +5738,8 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
                 exc,
             )
     except asyncio.CancelledError:
+        self._equity_hard_stop_coin_replay_failure = "shutdown_cancelled"
+        ready_event.set()
         _emit_hsl_replay_event(
             self,
             EventTypes.HSL_REPLAY_FAILED,
@@ -5689,6 +5761,10 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
         )
         raise
     except Exception as exc:
+        self._equity_hard_stop_coin_replay_failure = (
+            f"{type(exc).__name__}: {exc}"
+        )
+        ready_event.set()
         _emit_hsl_replay_event(
             self,
             EventTypes.HSL_REPLAY_FAILED,
@@ -5712,8 +5788,51 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
         )
         raise
     finally:
-        if hasattr(self, "_set_log_silence_watchdog_context"):
+        if (
+            not watchdog_context_restored
+            and hasattr(self, "_set_log_silence_watchdog_context")
+        ):
             self._set_log_silence_watchdog_context(phase=prev_phase, stage=prev_stage)
+
+
+async def _equity_hard_stop_start_coin_history_replay(self) -> None:
+    if getattr(self, "_equity_hard_stop_coin_initialized", False):
+        return
+    if getattr(self, "_equity_hard_stop_coin_protective_ready", False):
+        return
+    task = getattr(self, "_equity_hard_stop_coin_replay_task", None)
+    if task is None or task.done():
+        ready_event = asyncio.Event()
+        self._equity_hard_stop_coin_replay_ready_event = ready_event
+
+        async def run_replay() -> None:
+            try:
+                await self._equity_hard_stop_initialize_coin_from_history()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                # The initializer already emitted/stored the failure. After
+                # protective readiness, keep held-pair management alive while
+                # unreplayed flat pairs remain explicitly entry-blocked.
+                if not getattr(
+                    self, "_equity_hard_stop_coin_protective_ready", False
+                ):
+                    raise
+
+        task = asyncio.create_task(run_replay(), name="hsl_coin_replay")
+        self._equity_hard_stop_coin_replay_task = task
+        if not isinstance(getattr(self, "maintainers", None), dict):
+            self.maintainers = {}
+        self.maintainers["hsl_coin_replay"] = task
+    ready_event = self._equity_hard_stop_coin_replay_ready_event
+    await ready_event.wait()
+    if not getattr(self, "_equity_hard_stop_coin_protective_ready", False):
+        await task
+        failure = getattr(self, "_equity_hard_stop_coin_replay_failure", None)
+        raise RuntimeError(
+            "coin HSL replay failed before held-position protective readiness"
+            + (f": {failure}" if failure else "")
+        )
 
 
 def _equity_hard_stop_log_status(self, pside: str, metrics: dict) -> None:
@@ -5779,7 +5898,10 @@ async def _equity_hard_stop_check(self) -> Optional[dict]:
     if not self._equity_hard_stop_enabled():
         return None
     if self._equity_hard_stop_signal_mode() == "coin":
-        if not getattr(self, "_equity_hard_stop_coin_initialized", False):
+        if not (
+            getattr(self, "_equity_hard_stop_coin_initialized", False)
+            or getattr(self, "_equity_hard_stop_coin_protective_ready", False)
+        ):
             await self._equity_hard_stop_initialize_coin_from_history()
         return await self._equity_hard_stop_check_coin()
     if not all(
@@ -6033,10 +6155,34 @@ async def _equity_hard_stop_check_coin(self) -> Optional[dict]:
     ts_ms = int(self.get_exchange_time())
     out = {}
     symbols = sorted(self._equity_hard_stop_coin_symbols())
+    partial_replay = (
+        getattr(self, "_equity_hard_stop_coin_protective_ready", False)
+        and not getattr(self, "_equity_hard_stop_coin_initialized", False)
+    )
+    ready_pairs = set(
+        getattr(self, "_equity_hard_stop_coin_replay_ready_pairs", set()) or set()
+    )
+    pending_pairs = set(
+        getattr(self, "_equity_hard_stop_coin_replay_pending_pairs", set()) or set()
+    )
+    if partial_replay:
+        newly_held_pending = sorted(
+            pair
+            for pair in pending_pairs
+            if self._equity_hard_stop_has_open_position_symbol(*pair)
+        )
+        if newly_held_pending:
+            rendered = ",".join(f"{pside}:{symbol}" for pside, symbol in newly_held_pending)
+            raise RestartBotException(
+                "coin HSL replay still pending for newly held pair(s); "
+                f"restart required for held-first reconstruction: {rendered}"
+            )
     for pside in self._hsl_psides():
         if not self._equity_hard_stop_coin_active_pside(pside):
             continue
         for symbol in symbols:
+            if partial_replay and (pside, symbol) not in ready_pairs:
+                continue
             state = self._hsl_coin_state(pside, symbol)
             if state["halted"]:
                 if await self._equity_hard_stop_handle_coin_position_during_cooldown(
