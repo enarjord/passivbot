@@ -665,6 +665,9 @@ class Passivbot:
     _emit_forager_eligibility_changed_event = (
         live_event_emitters.emit_forager_eligibility_changed_event
     )
+    _emit_config_market_compatibility_event = (
+        live_event_emitters.emit_config_market_compatibility_event
+    )
     _emit_forager_selection_event = live_event_emitters.emit_forager_selection_event
     _emit_ema_bundle_started_event = live_event_emitters.emit_ema_bundle_started_event
     _emit_ema_bundle_completed_event = live_event_emitters.emit_ema_bundle_completed_event
@@ -17712,6 +17715,31 @@ class Passivbot:
                                     symbol_list,
                                 )
                                 warned.add(warn_key)
+                            event_keys = getattr(
+                                self,
+                                "_market_compatibility_event_keys",
+                                None,
+                            )
+                            if event_keys is None:
+                                event_keys = set()
+                                setattr(
+                                    self,
+                                    "_market_compatibility_event_keys",
+                                    event_keys,
+                                )
+                            affected_psides = (
+                                ("long", "short") if psides_equal else (pside,)
+                            )
+                            for affected_pside in affected_psides:
+                                event_key = (*warn_key, affected_pside)
+                                if event_key not in event_keys:
+                                    emitted = self._emit_config_market_compatibility_event(
+                                        list_kind=k_coins,
+                                        pside=affected_pside,
+                                        skipped_symbols=set(skipped),
+                                    )
+                                    if emitted:
+                                        event_keys.add(event_key)
                             symbols = symbols - set(skipped)
             symbols_already = getattr(self, k_coins)[pside]
             if symbols_already != symbols:

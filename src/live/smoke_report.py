@@ -189,6 +189,12 @@ EXECUTION_HEALTH_EVENT_TYPES = {
     EventTypes.EXECUTION_CONFIRMATION_TIMEOUT,
 }
 PROBLEM_EVENT_DATA_KEYS: dict[str, tuple[str, ...]] = {
+    EventTypes.CONFIG_MARKET_COMPATIBILITY: (
+        "list_kind",
+        "skipped_count",
+        "skipped_symbols",
+        "reason_counts",
+    ),
     EventTypes.CYCLE_DEGRADED: ("details", "authoritative_epoch"),
     EventTypes.EMA_UNAVAILABLE: (
         "optional_drop_count",

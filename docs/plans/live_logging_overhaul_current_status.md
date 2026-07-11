@@ -23,52 +23,63 @@ Estimated completion:
 ## Active Review Slice
 
 - PR and publication state: query live GitHub metadata;
-  `Tolerate missing resource-pressure latest values`
-- Branch: `codex/v8-resource-pressure-none`
+  `Emit configured-market compatibility events`
+- Branch: `codex/v8-market-compatibility-events`
 - Head: query live GitHub metadata; this commit cannot embed its own final SHA
   without making that value stale
-- Base: `5526d5de21cf1b43cacc69f9b380a15bdf82e93b`
-- Scope: make the read-only resource-pressure accumulator tolerate a historical
-  `health.summary` field whose latest value is explicitly `null`, preserving
-  valid zeroes and omitting unavailable numeric statistics according to the
-  existing report contract. Add a focused regression and record PR #1184
-  deployment evidence.
-- Triggering evidence: after PR #1184 deployment,
-  `live-performance-report --include-rotated --event-tail-lines 5000
-  --max-event-files-per-bot 2 --section hsl_replay_profile` crashed in
-  `_ResourcePressureAccumulator._field_stats` when `clean(None)` called
-  `float(None)`. The lower-level event query with the same file/tail bounds
-  remained healthy and recovered all four replay completion records.
-- Non-goals: no live event producer, event parsing, monitor write, smoke verdict,
-  exchange call, process control, restart behavior, HSL/risk/order behavior,
-  Rust, backtest, or optimizer change.
-- Local validation: the full performance-report suite, focused chronological
-  and rotated regressions, Python compilation, diff hygiene, and added-line
-  silent-handling scan pass. Terra implemented the isolated report/test patch;
-  Luna's focused delta review caught stale-latest and bounded-command gaps,
-  which were fixed before publication. A Codex PR review then found that an
-  unorderable trailing row could erase an established ordered snapshot; the
-  accumulator now preserves the ordered snapshot and has a regression. Sol
-  adjudicated the contract.
+- Base: `60357a0071eca8fac80c76fa64f60d328d5ed4a0`
+- Scope: emit one bounded, off-console/off-text
+  `config.market_compatibility` event when an approved or ignored configured
+  symbol is removed because it is absent from the exchange's eligible market
+  set. Preserve the existing once-per-change text logs and filtering behavior;
+  classify stock-perp-looking skipped symbols without changing compatibility
+  policy. Existing generic event-query, timeline, problem-event, smoke, and
+  incident-bundle surfaces consume the event without a bespoke aggregator.
+- Triggering evidence: current VPS5 text logs repeatedly report unsupported
+  approved coins for Binance (`CRO,MNT`) and OKX (`KAS,MNT,XMR`), including the
+  current July 11 log segments, but the condition is absent from structured
+  monitor history and cannot be reconstructed without scraping text logs.
+- Non-goals: no exchange call, eligible-market calculation, configured-coin
+  filtering, stock-perp margin/account policy, Hyperliquid fatal startup path,
+  isolated-only entry filtering, smoke verdict, process control, HSL/risk/order
+  behavior, Rust, backtest, or optimizer change.
+- Local validation: focused live-event, coin-list, smoke, query, incident,
+  registry-doc, compilation, diff, and added-line silent-handling checks pass.
+  Terra implemented the isolated producer/tests. Luna's independent preflight
+  found per-side query provenance, durable symbol bounds/redaction, retryable
+  enqueue dedupe, and changelog gaps; two delta rounds resolved all findings
+  and the final preflight is green. Sol owns event-contract adjudication and
+  publication.
 - Publication state, exact head, mergeability, CI, and current-head review
   verdicts: query live GitHub metadata. Do not encode those transient values in
   the same PR that contains this status file, because every correction would
   create a different head and immediately stale the embedded value.
 - Expected VPS action: after exact-head approval and merge, pull while
-  preserving local artifacts and rerun the exact rotated report query. No bot
-  restart is expected because this slice changes only read-only report code.
+  preserving local artifacts, restart only the five supervised bots because
+  this is a live event producer, verify bounded compatibility events for the
+  known Binance/OKX skips, and run immediate plus settled smoke checks.
 
 Next action:
 
-1. Advance the read-only report fix through focused validation, independent
-   preflight, exact-head reviewers, and CI; resolve verified findings and merge
-   only when the full gate is green, then rerun the rotated VPS5 query.
+1. Complete the bounded configured-market event producer and regressions,
+   obtain independent preflight plus exact-head reviewers and CI, resolve
+   verified findings, and merge only when the full gate is green.
 
 ## Deployed Baseline
 
-- Remote `v8`: `5526d5de`, PR #1184
-- VPS5 repository: `5526d5de`, PR #1184; tracked status clean
-- VPS5 expected bots: five; all are running after the controlled restart
+- Remote `v8`: `60357a00`; the post-#1186 delta is an unrelated example-config update
+- VPS5 repository: `b9748247`, PR #1186; tracked status clean
+- VPS5 expected bots: five; all remained running without restart
+- PR #1186 was approved on exact head `65d61702f` by Hermes, Grok 4.5, and the
+  independent Codex reviewer that found both ordering regressions; CI passed
+  and it merged as `b9748247`. VPS5 fast-forwarded without restarting bots.
+  The exact bounded rotated `hsl_replay_profile` report returned `ok=true`,
+  zero errors/warnings, and no resource-pressure crash. A settled two-minute
+  smoke was hard-green with `216/216` remote and `56/56` account-critical calls
+  successful, all five expected bots matched, and no text-log hard matches.
+  The original five bot PIDs remained unchanged and returned to `Rl+`; unrelated
+  `misc:0.0` remained PID `434835`. An earlier smoke window caught one real
+  KuCoin timeout cycle, which aged out before the settled green window.
 - PR #1184 was approved by Hermes and Grok 4.5 on exact head `9177dfed9`, CI
   passed, and it merged as `5526d5de`. VPS5 fast-forwarded cleanly while
   preserving untracked artifacts. The five old bots stopped after the second
@@ -115,13 +126,13 @@ Next action:
 
 The coin-HSL protective-readiness split, cooperative background cadence,
 current process-pressure query, compact cold replay payload, bounded replay
-scorecard, stable per-pair fill index, and exact sparse flat-pair replay are
-merged and deployed. The active slice fixes the rotated resource-pressure
-report crash exposed during post-deploy evidence collection.
+scorecard, stable per-pair fill index, exact sparse flat-pair replay, and the
+rotated resource-pressure report fix are merged and deployed. The active slice
+makes configured-market compatibility skips available in structured history.
 Remaining candidates:
 
 - deeper internal-stage profiling if live residual cost remains material
-- unsupported configured-market and stock-perp compatibility events
+- stock-perp account, isolated-only, and fatal-live-state compatibility events
 - bounded operator tooling improvements sharing one code and validation surface
 
 Do not create progress-only PRs or resume unrelated logging work from stale
