@@ -19,19 +19,19 @@ Last updated: 2026-07-11.
 
 Current `origin/v8` head:
 
-- `6e72f374` after PR #1180, `Compact cold coin-HSL replay memory`.
+- `77e111f7` after PR #1181, `Expose HSL replay readiness scorecard`.
 
 Current logging-overhaul head:
 
-- `6e72f374` after PR #1180, `Compact cold coin-HSL replay memory`
+- `77e111f7` after PR #1181, `Expose HSL replay readiness scorecard`
   (latest merged logging-overhaul slice).
 
 Current work:
 
-- Branch `codex/v8-hsl-replay-scorecard` makes the read-only performance report
-  retain each bot's protective-ready record and summarize replay history format,
-  protective elapsed time, and completed full-replay elapsed time. It consumes
-  existing events only and does not change HSL or live behavior.
+- Branch `codex/v8-hsl-replay-scorecard-completion-fallback` makes the
+  protective elapsed aggregate use retained completion evidence when the
+  dedicated readiness milestone has rotated out of the selected event files.
+  It consumes existing events only and does not change HSL or live behavior.
 
 Current review gate:
 
@@ -62,6 +62,13 @@ Retuned goal boundary:
 
 VPS5 deployment status:
 
+- PR #1181 merged to `v8` as `77e111f7` after exact-head Hermes and Grok 4.5
+  green reviews plus green CI. VPS5 pulled cleanly without restarting bots; all
+  five pane PIDs remained unchanged. A bounded current-segment scorecard
+  reported four compact full-replay completions from `453.98s` to `1728.585s`
+  but `protective_ready_bot_count=0`, because the dedicated milestones had
+  rotated while each completion record retained `protective_elapsed_s`. The
+  active follow-up closes that report-only aggregation gap.
 - PR #1180 merged to `v8` as `6e72f374` after exact-head Hermes and Grok 4.5
   green reviews plus green CI. VPS5 pulled cleanly and restarted only the five
   configured bot panes; one stopped after the first exact-pane Ctrl-C and four
