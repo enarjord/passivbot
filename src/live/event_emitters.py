@@ -2170,6 +2170,95 @@ def emit_forager_eligibility_changed_event(
 _MARKET_COMPATIBILITY_SAMPLE_LIMIT = 12
 _MARKET_COMPATIBILITY_SYMBOL_MAX_LEN = 160
 _STOCK_PERP_PREFIXES = ("xyz:", "xyz-")
+_HIP3_ACCOUNT_MODE_FLUSH_TIMEOUT_S = 0.1
+
+
+def _bounded_market_symbol_summary(symbols: Any) -> dict[str, Any]:
+    raw_symbols = sorted({str(symbol) for symbol in (symbols or []) if symbol})
+    safe_symbols = [
+        _sanitize_remote_text(
+            symbol,
+            max_len=_MARKET_COMPATIBILITY_SYMBOL_MAX_LEN,
+        )
+        for symbol in raw_symbols[:_MARKET_COMPATIBILITY_SAMPLE_LIMIT]
+    ]
+    return {
+        "count": len(raw_symbols),
+        "sample": safe_symbols,
+        "truncated": len(raw_symbols) > _MARKET_COMPATIBILITY_SAMPLE_LIMIT,
+    }
+
+
+def _flush_live_event_pipeline_after_terminal_emit(bot: Any) -> None:
+    pipeline = getattr(bot, "_live_event_pipeline", None)
+    flush = getattr(pipeline, "flush", None)
+    if not callable(flush):
+        return
+    try:
+        flush(timeout=_HIP3_ACCOUNT_MODE_FLUSH_TIMEOUT_S)
+    except Exception as exc:
+        logging.debug(
+            "[event] terminal market compatibility flush failed: %s",
+            type(exc).__name__,
+        )
+
+
+def _emit_hip3_account_mode_unsupported_event_unchecked(
+    bot: Any,
+    *,
+    account_abstraction: Any,
+    action: str,
+    approved_symbols: Any,
+    position_symbols: Any,
+    open_order_symbols: Any,
+    isolated_only_symbols: Any,
+    live_isolated_symbols: Any,
+) -> bool:
+    emitted = _safe_emit(
+        bot,
+        EventTypes.CONFIG_MARKET_COMPATIBILITY,
+        level="error",
+        component="config.market_compatibility",
+        tags=(
+            EventTags.MARKET,
+            EventTags.ACCOUNT,
+            EventTags.MODE,
+            EventTags.AVAILABILITY,
+        ),
+        cycle_id=current_live_event_cycle_id(bot),
+        status="failed",
+        reason_code=ReasonCodes.CONFIG_HIP3_ACCOUNT_MODE_UNSUPPORTED,
+        data={
+            "account_abstraction": _sanitize_remote_text(
+                account_abstraction or "unknown",
+                max_len=96,
+            ),
+            "action": _sanitize_remote_text(action, max_len=96),
+            "approved_symbols": _bounded_market_symbol_summary(approved_symbols),
+            "position_symbols": _bounded_market_symbol_summary(position_symbols),
+            "open_order_symbols": _bounded_market_symbol_summary(open_order_symbols),
+            "isolated_only_symbols": _bounded_market_symbol_summary(isolated_only_symbols),
+            "live_isolated_symbols": _bounded_market_symbol_summary(live_isolated_symbols),
+        },
+        require_enqueue=True,
+    )
+    if emitted is not None:
+        _flush_live_event_pipeline_after_terminal_emit(bot)
+    return emitted is not None
+
+
+def emit_hip3_account_mode_unsupported_event(
+    bot: Any, *args: Any, **kwargs: Any
+) -> bool:
+    """Best-effort terminal visibility for unsupported Hyperliquid HIP-3 account state."""
+    try:
+        return _emit_hip3_account_mode_unsupported_event_unchecked(bot, *args, **kwargs)
+    except Exception as exc:
+        logging.debug(
+            "[event] failed to emit HIP-3 account-mode compatibility event: %s",
+            type(exc).__name__,
+        )
+        return False
 
 
 def _market_compatibility_reason(symbol: str, exchange: str) -> str:

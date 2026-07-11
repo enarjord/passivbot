@@ -7435,3 +7435,41 @@ VPS5 deployment status:
   preflight found and then cleared per-side query provenance, durable symbol
   bounds/redaction, retryable enqueue dedupe, changelog, and equal-side query
   gaps across two delta rounds.
+
+### Deployed Slice: Configured-Market Compatibility Events
+
+- PR #1187 was approved by Hermes, Grok 4.5, and independent Codex on exact
+  head `74766c7cb`; CI passed and it merged to `v8` as `b99d1b05`.
+- VPS5 fast-forwarded cleanly and restarted only the five supervised bots.
+  The first graceful signal stopped OKX and Hyperliquid; a second exact-pane
+  Ctrl+C stopped Binance, KuCoin, and GateIO. The unrelated `misc:0.0` pane
+  remained PID `434835`.
+- A bounded current-segment query returned four exact
+  `config.market_compatibility` events: long and short records for Binance
+  `CRO,MNT` and OKX `KAS,MNT,XMR`, with bounded payloads, stable generic reason,
+  and non-hard degraded status.
+- The immediate smoke caught one real KuCoin authoritative-state timeout. The
+  settled two-minute smoke was hard-green with all five expected processes
+  matched, `370/370` remote calls and `26/26` account-critical calls
+  successful, `R=4,S=1`, no uninterruptible sleep, and tracked repository
+  status clean.
+
+### Active Slice: HIP-3 Fatal Startup Compatibility Event
+
+- Branch: `codex/v8-stock-perp-compatibility-events` from deployed
+  `b99d1b05`.
+- Scope: emit and boundedly flush one off-console/off-text
+  `config.market_compatibility` event before Hyperliquid's existing non-unified
+  HIP-3 startup gate raises. Retain only safe bounded counts/samples for
+  approved symbols, positions, open-order symbols, isolated-only capability,
+  live isolated margin state, and account abstraction.
+- Non-goals: no fatal decision/message, market/margin/account policy, exchange
+  call, generic isolated-only entry filtering, configured-coin filtering,
+  smoke verdict, HSL/risk/order behavior, Rust, backtest, or optimizer change.
+  Emission and flush remain best-effort and must never suppress or replace the
+  existing `FatalBotException`.
+- Focused validation passes 184 Hyperliquid fatal-state, event-bus, smoke,
+  enqueue/flush-failure, and registry-doc tests plus Python compilation and
+  `git diff --check`. Independent Luna preflight is green after verifying the
+  producer adds no metadata/policy/exchange call before the existing fatal
+  path; approved-only symbols do not recompute isolated-margin policy.

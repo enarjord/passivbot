@@ -194,6 +194,13 @@ PROBLEM_EVENT_DATA_KEYS: dict[str, tuple[str, ...]] = {
         "skipped_count",
         "skipped_symbols",
         "reason_counts",
+        "account_abstraction",
+        "action",
+        "approved_symbols",
+        "position_symbols",
+        "open_order_symbols",
+        "isolated_only_symbols",
+        "live_isolated_symbols",
     ),
     EventTypes.CYCLE_DEGRADED: ("details", "authoritative_epoch"),
     EventTypes.EMA_UNAVAILABLE: (

@@ -668,6 +668,9 @@ class Passivbot:
     _emit_config_market_compatibility_event = (
         live_event_emitters.emit_config_market_compatibility_event
     )
+    _emit_hip3_account_mode_unsupported_event = (
+        live_event_emitters.emit_hip3_account_mode_unsupported_event
+    )
     _emit_forager_selection_event = live_event_emitters.emit_forager_selection_event
     _emit_ema_bundle_started_event = live_event_emitters.emit_ema_bundle_started_event
     _emit_ema_bundle_completed_event = live_event_emitters.emit_ema_bundle_completed_event
