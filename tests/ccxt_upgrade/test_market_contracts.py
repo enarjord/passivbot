@@ -222,6 +222,23 @@ def test_margin_policy_uses_margin_modes_and_live_state_consistently():
     assert both_policy["capability"] == "both"
 
 
+def test_contract_bot_margin_filter_initializes_observability_dedupe():
+    bot = build_contract_bot("testexchange")
+    symbol = "ISO/USDT:USDT"
+    bot.markets_dict = {
+        symbol: {
+            "info": {"onlyIsolated": True},
+            "marginModes": {"cross": False, "isolated": True},
+        }
+    }
+
+    assert bot._filter_approved_symbols("long", {symbol}) == set()
+    assert bot._blocked_margin_symbols_warned == {
+        ("long", symbol, "isolated_only")
+    }
+    assert bot._blocked_margin_symbols_evented == set()
+
+
 def test_market_snapshot_summary_contains_contracts_filtering_and_maps():
     markets = {
         "BTC/USDT:USDT": {
