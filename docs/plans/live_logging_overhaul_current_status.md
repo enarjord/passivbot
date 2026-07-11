@@ -22,7 +22,7 @@ Estimated completion:
 
 ## Active Review Slice
 
-- PR: not yet published;
+- PR: [#1180](https://github.com/enarjord/passivbot/pull/1180),
   `Compact cold coin-HSL replay memory`
 - Branch: `codex/v8-hsl-direct-matrix-replay`
 - Head: query live GitHub metadata; this commit cannot embed its own final SHA
