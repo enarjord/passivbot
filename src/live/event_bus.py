@@ -236,6 +236,7 @@ class ReasonCodes:
     CONFIG_MARKET_UNSUPPORTED = "config_market_unsupported"
     CONFIG_STOCK_PERP_WRONG_EXCHANGE = "config_stock_perp_wrong_exchange"
     CONFIG_STOCK_PERP_UNAVAILABLE_MARKET = "config_stock_perp_unavailable_market"
+    CONFIG_HIP3_ACCOUNT_MODE_UNSUPPORTED = "config_hip3_account_mode_unsupported"
     RECENT_EXECUTION = "recent_execution"
     REMOTE_FETCH = "remote_fetch"
     RISK_ENTRY_COOLDOWN_POSITION_DELTA = "entry_cooldown_position_delta"

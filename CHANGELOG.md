@@ -4,6 +4,11 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Hyperliquid non-unified HIP-3 startup rejection now emits a bounded terminal
+  `config.market_compatibility` event before preserving the existing fatal
+  error. The event records only redacted account/capability counts and symbol
+  samples and does not change market, margin, or startup policy.
+
 - Unsupported configured markets now emit bounded
   `config.market_compatibility` structured and monitor events with list,
   position-side, count, redacted symbol sample, and stable reason context.

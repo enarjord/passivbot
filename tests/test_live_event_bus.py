@@ -98,6 +98,10 @@ def test_live_event_reason_code_registry_values_are_unique_and_query_safe():
         ReasonCodes.CONFIG_STOCK_PERP_UNAVAILABLE_MARKET
         == "config_stock_perp_unavailable_market"
     )
+    assert (
+        ReasonCodes.CONFIG_HIP3_ACCOUNT_MODE_UNSUPPORTED
+        == "config_hip3_account_mode_unsupported"
+    )
     assert authoritative_reason_code("balance") == "authoritative_balance"
     assert sink_failed_reason_code("monitor") == "monitor_sink_failed"
     assert len(values) == len(set(values))
@@ -271,6 +275,8 @@ def test_route_table_keeps_data_events_off_console_by_default():
         assert DEFAULT_ROUTES[event_type].monitor is True
         assert DEFAULT_ROUTES[event_type].console is False
         assert DEFAULT_ROUTES[event_type].text is False
+    assert DEFAULT_ROUTES[EventTypes.CONFIG_MARKET_COMPATIBILITY].structured is True
+    assert DEFAULT_ROUTES[EventTypes.CONFIG_MARKET_COMPATIBILITY].monitor is True
     assert DEFAULT_ROUTES[EventTypes.ORDER_WAVE_COMPLETED].console is True
     assert DEFAULT_ROUTES[EventTypes.ORDER_WAVE_COMPLETED].text is True
     assert DEFAULT_ROUTES[EventTypes.EXECUTION_CREATE_DEFERRED].console is False

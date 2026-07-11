@@ -530,12 +530,48 @@ class TestHyperliquidBotHIP3:
                 "marginModes": {"cross": False, "isolated": True},
             }
         }
+        bot._requires_isolated_margin = MagicMock(
+            side_effect=AssertionError("approved-only diagnostics must not recompute policy")
+        )
+        emitted = []
+        pipeline = MagicMock()
+        pipeline.emit.side_effect = lambda event, *, require_enqueue: (
+            emitted.append((event, require_enqueue)) or event
+        )
+        bot._live_event_pipeline = pipeline
 
         with pytest.raises(
             FatalBotException,
             match="require unifiedAccount or portfolioMargin mode",
-        ):
+        ) as exc_info:
             bot._assert_supported_live_state()
+
+        assert str(exc_info.value) == (
+            "Hyperliquid HIP-3/non-standard perps require unifiedAccount or portfolioMargin "
+            "mode in Passivbot. Current abstraction=unknown. Unsupported HIP-3 state detected: "
+            "approved_coins=xyz:TSLA. Upgrade the Hyperliquid account to unifiedAccount/"
+            "portfolioMargin or remove all HIP-3 symbols, positions, and open orders before "
+            "running the bot."
+        )
+
+        assert len(emitted) == 1
+        event, require_enqueue = emitted[0]
+        assert require_enqueue is True
+        assert event.event_type == "config.market_compatibility"
+        assert event.level == "error"
+        assert event.status == "failed"
+        assert event.reason_code == "config_hip3_account_mode_unsupported"
+        assert event.data == {
+            "account_abstraction": "unknown",
+            "action": "fatal_live_state_rejected",
+            "approved_symbols": {"count": 1, "sample": ["xyz:TSLA/USDC:USDC"], "truncated": False},
+            "position_symbols": {"count": 0, "sample": [], "truncated": False},
+            "open_order_symbols": {"count": 0, "sample": [], "truncated": False},
+            "isolated_only_symbols": {"count": 0, "sample": [], "truncated": False},
+            "live_isolated_symbols": {"count": 0, "sample": [], "truncated": False},
+        }
+        pipeline.flush.assert_called_once_with(timeout=0.1)
+        bot._requires_isolated_margin.assert_not_called()
 
     def test_isolated_only_hip3_open_orders_hard_fail(self, bot_class):
         bot = object.__new__(bot_class)
@@ -555,13 +591,149 @@ class TestHyperliquidBotHIP3:
             }
         }
         bot.open_orders = {"xyz:SP500/USDC:USDC": [{"id": "1"}]}
-        bot._hl_live_margin_modes = {}
+        bot._hl_live_margin_modes = {"xyz:SP500/USDC:USDC": "isolated"}
         bot._hl_unified_enabled = False
         bot._hl_user_abstraction = "unknown"
         bot.approved_coins_minus_ignored_coins = {"long": set(), "short": set()}
+        emitted = []
+        pipeline = MagicMock()
+        pipeline.emit.side_effect = lambda event, *, require_enqueue: (
+            emitted.append((event, require_enqueue)) or event
+        )
+        bot._live_event_pipeline = pipeline
 
         with pytest.raises(FatalBotException, match="Unsupported HIP-3 state detected"):
             bot._assert_supported_live_state()
+
+        event, require_enqueue = emitted[0]
+        assert require_enqueue is True
+        assert event.data["approved_symbols"]["count"] == 0
+        assert event.data["position_symbols"] == {
+            "count": 0,
+            "sample": [],
+            "truncated": False,
+        }
+        assert event.data["open_order_symbols"] == {
+            "count": 1,
+            "sample": ["xyz:SP500/USDC:USDC"],
+            "truncated": False,
+        }
+        assert event.data["isolated_only_symbols"]["count"] == 1
+        assert event.data["live_isolated_symbols"] == {
+            "count": 1,
+            "sample": ["xyz:SP500/USDC:USDC"],
+            "truncated": False,
+        }
+        pipeline.flush.assert_called_once_with(timeout=0.1)
+
+    def test_hip3_account_mode_event_payload_is_bounded_and_pre_redacted(self):
+        from live import event_emitters
+
+        bot = types.SimpleNamespace()
+        emitted = []
+        pipeline = MagicMock()
+        pipeline.emit.side_effect = lambda event, *, require_enqueue: (
+            emitted.append((event, require_enqueue)) or event
+        )
+        bot._live_event_pipeline = pipeline
+        bot._emit_live_event = lambda event_type, **kwargs: event_emitters.emit_live_event(
+            bot, event_type, **kwargs
+        )
+
+        assert event_emitters.emit_hip3_account_mode_unsupported_event(
+            bot,
+            account_abstraction="api_key=account-secret",
+            action="fatal_live_state_rejected",
+            approved_symbols=[f"xyz:SYM{i}" for i in range(14)],
+            position_symbols=["xyz:api_key=position-secret"],
+            open_order_symbols=["xyz:SP500"],
+            isolated_only_symbols=["xyz:SP500"],
+            live_isolated_symbols=[],
+        )
+
+        event, require_enqueue = emitted[0]
+        assert require_enqueue is True
+        assert event.data["account_abstraction"] == "api_key=[redacted]"
+        assert event.data["approved_symbols"]["count"] == 14
+        assert len(event.data["approved_symbols"]["sample"]) == 12
+        assert event.data["approved_symbols"]["truncated"] is True
+        assert event.data["position_symbols"]["sample"] == ["xyz:api_key=[redacted]"]
+        assert not {"order_ids", "sizes", "prices", "raw_payload", "config_path"} & set(
+            event.data
+        )
+        pipeline.flush.assert_called_once_with(timeout=0.1)
+
+    def test_hip3_account_mode_event_flushes_real_pipeline_before_fatal_raise(self, bot_class):
+        from live.event_bus import ListEventSink, LiveEventPipeline
+
+        bot = object.__new__(bot_class)
+        bot.HIP3_PREFIX = bot_class.HIP3_PREFIX
+        bot.HIP3_ALT_PREFIXES = bot_class.HIP3_ALT_PREFIXES
+        bot._hl_unified_enabled = False
+        bot._hl_user_abstraction = "unknown"
+        bot.approved_coins_minus_ignored_coins = {
+            "long": {"xyz:TSLA/USDC:USDC"},
+            "short": set(),
+        }
+        bot.positions = {}
+        bot.open_orders = {}
+        bot.markets_dict = {
+            "xyz:TSLA/USDC:USDC": {
+                "baseName": "xyz:TSLA",
+                "info": {"onlyIsolated": True},
+                "marginModes": {"cross": False, "isolated": True},
+            }
+        }
+        structured = ListEventSink()
+        bot._live_event_pipeline = LiveEventPipeline(structured_sinks=[structured])
+
+        with pytest.raises(FatalBotException):
+            bot._assert_supported_live_state()
+
+        assert len(structured.events) == 1
+        assert structured.events[0].reason_code == (
+            "config_hip3_account_mode_unsupported"
+        )
+        assert bot._live_event_pipeline.close(timeout=2.0) is True
+
+    @pytest.mark.parametrize("failure_stage", ["enqueue", "flush"])
+    def test_hip3_account_mode_event_failures_do_not_replace_fatal_raise(
+        self, bot_class, failure_stage
+    ):
+        bot = object.__new__(bot_class)
+        bot.HIP3_PREFIX = bot_class.HIP3_PREFIX
+        bot.HIP3_ALT_PREFIXES = bot_class.HIP3_ALT_PREFIXES
+        bot._hl_unified_enabled = False
+        bot._hl_user_abstraction = "unknown"
+        bot.approved_coins_minus_ignored_coins = {"long": {"xyz:TSLA/USDC:USDC"}, "short": set()}
+        bot.positions = {}
+        bot.open_orders = {}
+        bot.markets_dict = {
+            "xyz:TSLA/USDC:USDC": {
+                "baseName": "xyz:TSLA",
+                "info": {"onlyIsolated": True},
+                "marginModes": {"cross": False, "isolated": True},
+            }
+        }
+        pipeline = MagicMock()
+        if failure_stage == "enqueue":
+            pipeline.emit.side_effect = RuntimeError("enqueue failure")
+        else:
+            pipeline.emit.side_effect = lambda event, *, require_enqueue: event
+            pipeline.flush.side_effect = RuntimeError("flush failure")
+        bot._live_event_pipeline = pipeline
+
+        with pytest.raises(
+            FatalBotException,
+            match="require unifiedAccount or portfolioMargin mode",
+        ):
+            bot._assert_supported_live_state()
+
+        pipeline.emit.assert_called_once()
+        if failure_stage == "enqueue":
+            pipeline.flush.assert_not_called()
+        else:
+            pipeline.flush.assert_called_once_with(timeout=0.1)
 
     @pytest.mark.asyncio
     async def test_fetch_open_orders_queries_explicit_hip3_symbol_with_symbol_scope(self, bot_class):

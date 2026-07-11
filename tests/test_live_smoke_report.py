@@ -1838,6 +1838,52 @@ def test_live_smoke_report_problem_events_include_market_compatibility_data(tmp_
     }
 
 
+def test_live_smoke_report_projects_safe_hip3_account_mode_compatibility_data(tmp_path):
+    events_dir = tmp_path / "monitor" / "hyperliquid" / "hl_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="config.market_compatibility",
+                seq=1,
+                ts=1000,
+                exchange="hyperliquid",
+                user="hl_01",
+                status="failed",
+                level="error",
+                reason_code="config_hip3_account_mode_unsupported",
+                data={
+                    "account_abstraction": "unknown",
+                    "action": "fatal_live_state_rejected",
+                    "approved_symbols": {"count": 1, "sample": ["xyz:TSLA"], "truncated": False},
+                    "position_symbols": {"count": 0, "sample": [], "truncated": False},
+                    "open_order_symbols": {"count": 1, "sample": ["xyz:SP500"], "truncated": False},
+                    "isolated_only_symbols": {"count": 2, "sample": ["xyz:SP500", "xyz:TSLA"], "truncated": False},
+                    "live_isolated_symbols": {"count": 1, "sample": ["xyz:SP500"], "truncated": False},
+                    "order_ids": ["must_not_surface"],
+                    "config_path": "/private/secret.json",
+                    "error": "free form exception text",
+                },
+            )
+        ],
+    )
+
+    report = build_live_smoke_report(tmp_path / "monitor", logs_root=None)
+
+    assert report["ok"] is False
+    event = report["problem_events"][0]
+    assert event["hard"] is True
+    assert event["latest_data"] == {
+        "account_abstraction": "unknown",
+        "action": "fatal_live_state_rejected",
+        "approved_symbols": {"count": 1, "sample": ["xyz:TSLA"], "truncated": False},
+        "position_symbols": {"count": 0, "truncated": False},
+        "open_order_symbols": {"count": 1, "sample": ["xyz:SP500"], "truncated": False},
+        "isolated_only_symbols": {"count": 2, "sample": ["xyz:SP500", "xyz:TSLA"], "truncated": False},
+        "live_isolated_symbols": {"count": 1, "sample": ["xyz:SP500"], "truncated": False},
+    }
+
+
 def test_live_smoke_report_summarizes_ema_readiness_health(tmp_path):
     events_dir = tmp_path / "monitor" / "gateio" / "gateio_01" / "events"
     _write_ndjson(

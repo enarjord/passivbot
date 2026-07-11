@@ -173,6 +173,7 @@ full-replay terminal event.
 - `candle_disk_flush_completed`
 - `candle_disk_load_completed`
 - `config_market_unsupported`
+- `config_hip3_account_mode_unsupported`
 - `config_stock_perp_unavailable_market`
 - `config_stock_perp_wrong_exchange`
 - `ema_fallback_used`
@@ -269,6 +270,14 @@ durable publication. Stable reasons distinguish generic unsupported markets,
 stock perps configured on a non-Hyperliquid exchange, and unavailable
 Hyperliquid stock-perp markets. Emission is best-effort and must not change
 coin filtering, exchange calls, or trading behavior.
+
+Before the existing Hyperliquid non-unified HIP-3 startup guard raises,
+`config_hip3_account_mode_unsupported` records one hard failed compatibility
+event. Its account-level payload contains only a bounded, pre-redacted account
+abstraction, a stable action, and count/sample summaries for approved,
+position, open-order, isolated-only, and live-isolated symbols. The producer
+requires enqueue and waits at most 0.1 seconds for a best-effort terminal flush;
+emission or flush failure never suppresses or replaces the fatal startup error.
 
 Dynamic helpers are part of the same contract:
 
