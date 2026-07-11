@@ -1403,6 +1403,135 @@ async def test_execute_order_plan_posts_replacement_matching_cancel_same_cycle()
 
 
 @pytest.mark.asyncio
+async def test_execute_order_plan_blocks_pending_hsl_entry_but_allows_cancel_and_close():
+    import passivbot as pb_mod
+
+    class FakeBot:
+        _current_live_event_cycle_id = pb_mod.Passivbot._current_live_event_cycle_id
+        _emit_execution_create_filter_event = (
+            pb_mod.Passivbot._emit_execution_create_filter_event
+        )
+        _emit_live_event = pb_mod.Passivbot._emit_live_event
+        _shutdown_requested = pb_mod.Passivbot._shutdown_requested
+        _ensure_freshness_ledger = pb_mod.Passivbot._ensure_freshness_ledger
+
+        debug_mode = False
+        balance_threshold = 0.0
+        quote = "USDT"
+        stop_signal_received = False
+        state_change_detected_by_symbol = set()
+        config = {"live": {}, "_raw_effective": {"live": {}}}
+
+        def __init__(self):
+            self._live_event_current_cycle_id = "cy_hsl_replay_pending"
+            self._live_event_sink = ListEventSink()
+            self._live_event_pipeline = LiveEventPipeline(
+                structured_sinks=[self._live_event_sink], monitor_sinks=[]
+            )
+            self._equity_hard_stop_coin_replay_pending_pairs = {
+                ("long", "BTC/USDT:USDT")
+            }
+            self.cancelled_orders = None
+            self.config_symbols = None
+            self.created_orders = None
+            self.execution_scheduled = False
+            self._current_planning_snapshot = FreshPlanningSnapshot()
+            self.market_snapshot_provider = FreshMarketSnapshotProvider()
+
+        def get_raw_balance(self):
+            return 100.0
+
+        async def execute_cancellations_parent(self, orders):
+            self.cancelled_orders = list(orders)
+            return list(orders)
+
+        async def update_exchange_configs(self, symbols=None):
+            self.config_symbols = list(symbols or [])
+            return set(symbols or [])
+
+        def order_was_recently_updated(self, order):
+            return 0
+
+        async def execute_orders_parent(self, orders):
+            self.created_orders = list(orders)
+            return list(orders)
+
+        def _current_planning_snapshot_invalid_for_creations(self, symbols):
+            return []
+
+        async def _get_live_market_snapshots(
+            self,
+            symbols,
+            *,
+            max_age_ms=10_000,
+            context="live",
+            allow_completed_candle_fallback=False,
+        ):
+            return await self.market_snapshot_provider.get_snapshots(
+                symbols, max_age_ms=max_age_ms
+            )
+
+        def _live_market_snapshot_max_age_ms(self):
+            return 10_000
+
+        def _record_market_snapshot_surface(self, symbols, snapshots):
+            return None
+
+        def _market_snapshot_signature_invalid(self, symbols):
+            return []
+
+    symbol = "BTC/USDT:USDT"
+    to_cancel = [
+        {
+            "symbol": symbol,
+            "side": "buy",
+            "position_side": "long",
+            "price": 0.9,
+            "qty": 1.0,
+            "reduce_only": False,
+        }
+    ]
+    entry = {
+        "symbol": symbol,
+        "side": "buy",
+        "position_side": "long",
+        "price": 0.9,
+        "qty": 1.0,
+        "reduce_only": False,
+        "pb_order_type": "entry_grid_long",
+    }
+    close = {
+        "symbol": symbol,
+        "side": "sell",
+        "position_side": "long",
+        "price": 1.1,
+        "qty": 1.0,
+        "reduce_only": True,
+        "pb_order_type": "close_grid_long",
+    }
+
+    bot = FakeBot()
+    await pb_mod.Passivbot.execute_order_plan_to_exchange(
+        bot, to_cancel, [entry, close]
+    )
+
+    assert bot.cancelled_orders == to_cancel
+    assert bot.config_symbols == [symbol]
+    assert bot.created_orders == [close]
+    assert bot.execution_scheduled is True
+    assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    skipped = [
+        event
+        for event in bot._live_event_sink.events
+        if event.reason_code == ReasonCodes.HSL_REPLAY_PENDING
+    ]
+    assert len(skipped) == 1
+    assert skipped[0].data["order_count"] == 1
+    assert skipped[0].data["pending_pairs_count"] == 1
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
+
+
+@pytest.mark.asyncio
 async def test_execute_to_exchange_skips_creations_pending_exchange_config():
     import passivbot as pb_mod
 

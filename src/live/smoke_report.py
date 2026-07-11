@@ -4040,6 +4040,8 @@ def _compact_hsl_replay_data(live_event: dict[str, Any]) -> dict[str, Any]:
         "symbols",
         "pairs",
         "held_pairs",
+        "ready_pairs",
+        "pending_pairs",
         "cooldown_pairs",
         "required_pairs",
         "timeline_rows",
@@ -4070,6 +4072,7 @@ def _compact_hsl_replay_data(live_event: dict[str, Any]) -> dict[str, Any]:
         "price_history_fetch_elapsed_s",
         "timeline_replay_elapsed_s",
         "full_elapsed_s",
+        "protective_elapsed_s",
         "startup_blocking_elapsed_s",
     ):
         value = _numeric_value(data.get(key))
@@ -4187,6 +4190,7 @@ def _hsl_replay_derived(data: dict[str, Any]) -> dict[str, Any]:
         ("price_history_fetch_elapsed_s", "price_history_fetch_elapsed_ms"),
         ("timeline_replay_elapsed_s", "timeline_replay_elapsed_ms"),
         ("full_elapsed_s", "full_elapsed_ms"),
+        ("protective_elapsed_s", "protective_elapsed_ms"),
         ("startup_blocking_elapsed_s", "startup_blocking_elapsed_ms"),
     ):
         value = data.get(source_key)
@@ -4261,6 +4265,7 @@ def _merge_hsl_replay_group(
             "latest": None,
             "started": None,
             "loaded": None,
+            "protective_ready": None,
             "progress": None,
             "completed": None,
         }
@@ -4296,6 +4301,12 @@ def _merge_hsl_replay_group(
         and is_newer(record, group.get("loaded"))
     ):
         group["loaded"] = record
+    elif (
+        event_type == EventTypes.HSL_REPLAY_PROGRESS
+        and data.get("stage") == "held_protective_ready"
+        and is_newer(record, group.get("protective_ready"))
+    ):
+        group["protective_ready"] = record
     elif event_type == EventTypes.HSL_REPLAY_PROGRESS and is_newer(
         record, group.get("progress")
     ):
@@ -4351,6 +4362,7 @@ def _hsl_replay_record_elapsed_ms(record: Any) -> int | None:
             "latest_elapsed_ms",
             "startup_blocking_elapsed_ms",
             "full_elapsed_ms",
+            "protective_elapsed_ms",
             "history_build_elapsed_ms",
             "price_history_fetch_elapsed_ms",
             "timeline_replay_elapsed_ms",
@@ -4453,6 +4465,9 @@ def _summarize_hsl_replay_health(
             "latest": latest,
             "started": _public_hsl_replay_record(group.get("started")),
             "loaded": _public_hsl_replay_record(group.get("loaded")),
+            "protective_ready": _public_hsl_replay_record(
+                group.get("protective_ready")
+            ),
             "progress": _public_hsl_replay_record(group.get("progress")),
             "completed": completed,
             "failed": failed,

@@ -4,10 +4,12 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
-- Coin-mode HSL startup now freezes its replay candidate set and reconstructs
-  currently held pairs first, cooldown-affected pairs second, and remaining
-  historical pairs last. Full replay still completes before normal startup;
-  the first pair-progress event now makes the deterministic ordering visible.
+- Coin-mode HSL startup now reconstructs currently held pairs before declaring
+  protective readiness, then continues cooldown-affected and remaining flat
+  pairs in one shutdown-owned background replay. Initial entries remain
+  blocked per coin and position side until that pair is reconstructed, while
+  cancellations and panic/reduce-only protection remain available. Replay
+  events and smoke reports distinguish protective-ready time from full replay.
 
 - Coin-mode HSL drawdown normalization now uses one Rust-owned live/backtest
   contract: account balance divided by the applicable slot count. TWEL still
