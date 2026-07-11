@@ -139,13 +139,15 @@ The coin-HSL protective-readiness split, cooperative background cadence,
 current process-pressure query, compact cold replay payload, bounded replay
 scorecard, stable per-pair fill index, exact sparse flat-pair replay, and the
 rotated resource-pressure report fix, configured-market skip events, and fatal
-HIP-3 startup compatibility are merged and deployed. The active slice makes
-the isolated-only initial-entry filter visible in durable structured history.
-Remaining candidates:
+HIP-3 startup compatibility are merged and deployed. PR #1189's isolated-only
+initial-entry filter visibility is also merged and deployed. Active PR #1190
+implements HSL replay scanned-row throughput and corrected ETA projections; it
+is under exact-head review and is not yet merged or deployed.
 
-- HSL replay scan-throughput observability: scanned-row counters and rates plus
-  corrected ETA estimators, while preserving replay behavior and existing
-  applied-row metrics. This is selected for review; it is not yet complete.
+Do not begin a dependent next slice until PR #1190 is merged and its VPS5
+restart/query/smoke boundary is validated. After that evidence is recorded,
+select the next review-worthy candidate from the remaining backlog, including:
+
 - bounded operator tooling improvements sharing one code and validation surface
 
 Do not create progress-only PRs or resume unrelated logging work from stale
