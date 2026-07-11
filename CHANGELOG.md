@@ -4,6 +4,14 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Cold coin-mode HSL history reconstruction now uses a private compact
+  NumPy-backed replay payload instead of retaining the full nested per-minute,
+  per-symbol timeline. Public balance/equity history output, pside/unified HSL,
+  cache authority, episode/cooldown rules, and Rust risk math are unchanged.
+  The offline replay benchmark can now separate held and background work, opt
+  into a 30-day local-scale fixture, compare rich and compact history formats,
+  and report Python allocation peaks.
+
 - `passivbot tool live-smoke-report --processes` now includes bounded current
   live-process state counts, uninterruptible-sleep count, and CPU, memory, and
   RSS totals/maxima/reporting counts in full, summary, and brief output. These

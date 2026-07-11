@@ -22,53 +22,62 @@ Estimated completion:
 
 ## Active Review Slice
 
-- PR: query live GitHub metadata;
-  `Expose current live-process pressure in smoke reports`
-- Branch: `codex/v8-smoke-current-process-pressure`
+- PR: not yet published;
+  `Compact cold coin-HSL replay memory`
+- Branch: `codex/v8-hsl-direct-matrix-replay`
 - Head: query live GitHub metadata; this commit cannot embed its own final SHA
   without making that value stale
-- Base: `d83797b700091100fd357bcb48f90be98d0b97e4`
-- Scope: aggregate already-parsed local `ps` fields under the existing
-  `processes` section: state counts, uninterruptible-sleep count, and bounded
-  CPU, memory, and RSS totals/maxima/reporting counts. Project the same fields
-  through full, summary, and brief smoke output.
-- Triggering evidence: after PR #1178, immediate and settled smokes were hard
-  green with live I/O succeeding, but event-derived `resource_pressure`
-  reported only Hyperliquid because replay-heavy bots could not emit timely
-  `health.summary` samples. Direct process probes simultaneously showed four
-  coin-HSL bots in `D` state with high RSS and swap/I/O pressure.
-- Non-goals: no event producer, monitor write, process signal, verdict/attention
-  threshold, exchange call, restart behavior, HSL/risk/order logic, Rust, or
-  backtest change.
-- Local validation: focused process parsing/projection tests plus full
-  smoke-report (77), restart-smoke-plan (24), and incident-bundle (25) suites
-  pass; syntax and diff checks pass. Missing RSS remains null with a zero
-  reporting count, and non-finite CPU or memory samples are excluded.
-- Independent preflight: one read-only audit confirmed the existing `ps`
-  parser, full process report, summary/brief whitelists, compatibility fallbacks,
-  and targeted test surfaces. No delegated edits were used.
+- Base: `c159d955f691085469858c57ed1d6ba7927d7905`
+- Scope: the internal cold coin-HSL history call requests aligned compact
+  timestamp, balance, account-realized, and per-pair realized/unrealized NumPy
+  arrays. `NaN` preserves unavailable pair values. Public history callers and
+  pside/unified replay retain the rich timeline contract. The offline benchmark
+  gains held/background counters, opt-in local-scale bounds, and tracemalloc
+  output.
+- Triggering evidence: after PR #1179, five live processes reported aggregate
+  RSS `648196 KB`; four coin-HSL processes were in uninterruptible sleep while
+  swap/page pressure remained high. A deterministic 43,201-minute, 30-symbol
+  local builder profile measured `686242590` rich-history peak allocation bytes
+  versus `73499666` compact-history bytes, an 89.3% reduction.
+- Non-goals: no HSL thresholds, episode/cooldown/no-restart semantics, cache
+  authority, pair priority, readiness gate, exchange write, process signal,
+  Rust, backtest, or pside/unified behavior change.
+- Local validation: full coin-HSL plus benchmark suites pass; the complete
+  balance-history suite passes with one unrelated known startup test excluded
+  after its asynchronous shutdown fixture stalled. Realized-loss tests pass.
+  Syntax and diff checks pass. Broader validation and exact counts will be
+  refreshed before publication.
+- Independent preflight: two read-only audits independently identified the
+  nested timeline as the dominant retained allocation and recommended a private
+  compact coin-only handoff. A Luna worker changed only the benchmark and its
+  tests; Sol owns the live-path implementation and review.
 - Publication state, exact head, mergeability, CI, and current-head review
   verdicts: query live GitHub metadata. Do not encode those transient values in
   the same PR that contains this status file, because every correction would
   create a different head and immediately stale the embedded value.
-- Expected VPS action: pull while preserving local artifacts and run a bounded
-  read-only process-section smoke. No bot restart or Rust rebuild is required.
+- Expected VPS action: after exact-head approval and merge, pull while
+  preserving local artifacts, restart the five configured bots with exact
+  tmux/process targeting, then compare protective/full replay time, process
+  states, RSS, swap, I/O wait, remote calls, and hard-failure smoke output.
 
 Next action:
 
-1. Publish the read-only tooling slice, resolve verified findings, and merge
-   only after the exact-head gate; then perform the declared VPS5 query smoke.
+1. Finish parity and broad local validation, publish the compact replay slice,
+   resolve verified findings, and merge only after the exact-head gate; then
+   perform the declared controlled VPS5 restart and comparative smoke.
 
 ## Deployed Baseline
 
-- Remote `v8`: `d83797b7`, PR #1178
-- VPS5 repository: `d83797b7`, PR #1178; tracked status clean
+- Remote `v8`: `c159d955`, PR #1179
+- VPS5 repository: `c159d955`, PR #1179; tracked status clean
 - VPS5 expected bots: five; all are running after the controlled restart
 - Immediate and settled smoke reports were green: all five expected bots
   matched, hard failures were zero, 396 remote calls and 43 account-critical
   calls succeeded across the two windows with zero failures, and no fill,
   process, event-pipeline, or text-log hard failure appeared.
-- Background replay remains memory/I/O intensive: settled direct probes showed
+- Background replay remains memory/I/O intensive: current process-section
+  output shows four of five bots in `D` state, aggregate RSS `648196 KB`, and
+  the earlier settled direct probes showed
   four coin-HSL processes in uninterruptible sleep/page wait, 29 MB/s sampled
   swap-in, 18 MB/s swap-out, 32% I/O wait, and zero idle. PR #1178 restored
   live-I/O responsiveness but intentionally did not reduce this footprint.
@@ -94,9 +103,10 @@ Next action:
 
 ## Next Slice
 
-The coin-HSL protective-readiness split and cooperative background cadence are
-merged and deployed. The active read-only slice makes current process pressure
-visible even when periodic event-derived health samples are absent or stale.
+The coin-HSL protective-readiness split, cooperative background cadence, and
+current process-pressure query are merged and deployed. The active slice
+removes the dominant nested Python allocation from cold coin replay while
+preserving the existing risk contract.
 Remaining candidates:
 
 - realistic-scale replay fixtures and deeper internal-stage profiling

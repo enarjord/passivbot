@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import math
 from types import MethodType, SimpleNamespace
 
 import pytest
@@ -2134,7 +2135,12 @@ async def test_data_maintainers_own_active_coin_hsl_replay_task():
     assert hourly_task.cancelled()
 
 
-async def _run_parity_history(monkeypatch):
+async def _run_parity_history(
+    monkeypatch,
+    *,
+    compact: bool = False,
+    fill_events_override: list[dict] | None = None,
+):
     """Run the real coin-mode collection over a small two-close scenario."""
     import numpy as np
     from unittest.mock import AsyncMock
@@ -2207,13 +2213,81 @@ async def _run_parity_history(monkeypatch):
             "pnl": 0.5,
         },
     ]
+    if fill_events_override is not None:
+        fill_events = fill_events_override
     history = await bot.get_balance_equity_history(
         fill_events=fill_events,
         current_balance=100.0,
         hsl_replay_signal_mode="coin",
+        hsl_coin_compact_replay=compact,
     )
     assert bot._live_event_pipeline.close(timeout=2.0) is True
     return history, symbol
+
+
+@pytest.mark.asyncio
+async def test_hsl_compact_coin_history_matches_authoritative_values(monkeypatch):
+    history, symbol = await _run_parity_history(monkeypatch)
+    compact_history, compact_symbol = await _run_parity_history(
+        monkeypatch, compact=True
+    )
+    assert compact_symbol == symbol
+    assert "timeline" not in compact_history
+    assert "balances" not in compact_history
+    assert "equities" not in compact_history
+    assert history["metadata"]["history_format"] == "timeline"
+    assert compact_history["metadata"]["history_format"] == "compact"
+    assert compact_history["hsl_replay_matrices"] == history["hsl_replay_matrices"]
+    assert (
+        compact_history["hsl_replay_account_series"]
+        == history["hsl_replay_account_series"]
+    )
+    compact = compact_history["hsl_coin_compact_replay"]
+    pair = compact["pair_values"][("long", symbol)]
+    assert compact["timestamps"].tolist() == [
+        int(row["timestamp"]) for row in history["timeline"]
+    ]
+    assert compact["balances"].tolist() == pytest.approx(
+        [float(row["balance"]) for row in history["timeline"]], abs=1e-9
+    )
+    assert compact["realized_pnl"].tolist() == pytest.approx(
+        [float(row["realized_pnl"]) for row in history["timeline"]], abs=1e-9
+    )
+    for idx, row in enumerate(history["timeline"]):
+        realized = row["realized_pnl_by_coin_pside"].get(symbol, {}).get("long")
+        unrealized = row["unrealized_pnl_by_coin_pside"].get(symbol, {}).get("long")
+        if realized is None:
+            assert math.isnan(pair["realized_pnl"][idx])
+        else:
+            assert pair["realized_pnl"][idx] == pytest.approx(realized, abs=1e-9)
+        if unrealized is None:
+            assert math.isnan(pair["unrealized_pnl"][idx])
+        else:
+            assert pair["unrealized_pnl"][idx] == pytest.approx(unrealized, abs=1e-9)
+
+
+@pytest.mark.asyncio
+async def test_hsl_compact_coin_history_zero_fill_shape(monkeypatch):
+    history, _symbol = await _run_parity_history(
+        monkeypatch,
+        compact=True,
+        fill_events_override=[],
+    )
+
+    assert set(history) == {
+        "hsl_coin_compact_replay",
+        "panic_flatten_events",
+        "fill_events",
+        "metadata",
+        "hsl_replay_matrices",
+        "hsl_replay_account_series",
+    }
+    compact = history["hsl_coin_compact_replay"]
+    assert compact["timestamps"].shape == (1,)
+    assert compact["balances"].tolist() == [100.0]
+    assert compact["realized_pnl"].tolist() == [0.0]
+    assert compact["pair_values"] == {}
+    assert history["metadata"]["history_format"] == "compact"
 
 
 @pytest.mark.asyncio
@@ -2273,6 +2347,10 @@ async def test_hsl_cache_synthesized_rows_match_authoritative_timeline(monkeypat
 @pytest.mark.asyncio
 async def test_hsl_cache_synthesized_replay_reaches_identical_coin_state(monkeypatch):
     history, symbol = await _run_parity_history(monkeypatch)
+    compact_history, compact_symbol = await _run_parity_history(
+        monkeypatch, compact=True
+    )
+    assert compact_symbol == symbol
     pair_arrays = hsl._hsl_replay_matrix_arrays(
         history["hsl_replay_matrices"]["long"][symbol]
     )
@@ -2286,7 +2364,7 @@ async def test_hsl_cache_synthesized_replay_reaches_identical_coin_state(monkeyp
     )
     end_ts = int(history["timeline"][-1]["timestamp"])
 
-    async def run_replay(timeline):
+    async def run_replay(payload):
         bot = make_coin_bot()
         bot.positions = {
             symbol: {
@@ -2298,11 +2376,7 @@ async def test_hsl_cache_synthesized_replay_reaches_identical_coin_state(monkeyp
         bot.get_exchange_time = lambda: end_ts
 
         async def fake_history(current_balance=None, **kwargs):
-            return {
-                "timeline": timeline,
-                "panic_flatten_events": [],
-                "fill_events": history["fill_events"],
-            }
+            return payload
 
         bot.get_balance_equity_history = fake_history
         samples = []
@@ -2326,8 +2400,21 @@ async def test_hsl_cache_synthesized_replay_reaches_identical_coin_state(monkeyp
         await bot._equity_hard_stop_initialize_coin_from_history()
         return bot, samples
 
-    bot_auth, samples_auth = await run_replay(history["timeline"])
-    bot_synth, samples_synth = await run_replay(synthesized)
+    def timeline_payload(timeline):
+        return {
+            "timeline": timeline,
+            "panic_flatten_events": [],
+            "fill_events": history["fill_events"],
+        }
+
+    compact_payload = {
+        "hsl_coin_compact_replay": compact_history["hsl_coin_compact_replay"],
+        "panic_flatten_events": [],
+        "fill_events": history["fill_events"],
+    }
+    bot_auth, samples_auth = await run_replay(timeline_payload(history["timeline"]))
+    bot_synth, samples_synth = await run_replay(timeline_payload(synthesized))
+    bot_compact, samples_compact = await run_replay(compact_payload)
 
     # The scenario dips through the orange tier mid-replay, so the sequences
     # prove parity across tier transitions rather than only green states.
@@ -2341,9 +2428,11 @@ async def test_hsl_cache_synthesized_replay_reaches_identical_coin_state(monkeyp
     assert [s for s in samples_synth if s[0] in auth_ts] == samples_auth
     extra = [s for s in samples_synth if s[0] not in auth_ts]
     assert all(tier == "green" and dd == 0.0 for _, tier, dd, *_ in extra)
+    assert samples_compact == samples_auth
 
     state_auth = bot_auth._hsl_coin_state("long", symbol)
     state_synth = bot_synth._hsl_coin_state("long", symbol)
+    state_compact = bot_compact._hsl_coin_state("long", symbol)
     metrics_auth = state_auth["last_metrics"]
     metrics_synth = state_synth["last_metrics"]
     assert metrics_auth is not None and metrics_synth is not None
@@ -2361,6 +2450,8 @@ async def test_hsl_cache_synthesized_replay_reaches_identical_coin_state(monkeyp
         assert metrics_synth[key] == pytest.approx(metrics_auth[key], abs=1e-9)
     assert state_synth["halted"] == state_auth["halted"]
     assert state_synth["cooldown_until_ms"] == state_auth["cooldown_until_ms"]
+    assert state_compact["halted"] == state_auth["halted"]
+    assert state_compact["cooldown_until_ms"] == state_auth["cooldown_until_ms"]
 
 
 async def _run_extension_history(monkeypatch):
@@ -3835,6 +3926,45 @@ def _red_episode_history(symbol, *, flatten_pnl, rows_upnl, flatten_ts=150_000):
     return {"timeline": timeline, "panic_flatten_events": [], "fill_events": fills}
 
 
+def _coin_history_as_compact(history, symbol):
+    import numpy as np
+
+    rows = history["timeline"]
+    return {
+        "hsl_coin_compact_replay": {
+            "timestamps": np.asarray(
+                [row["timestamp"] for row in rows], dtype=np.int64
+            ),
+            "balances": np.asarray(
+                [row["balance"] for row in rows], dtype=np.float64
+            ),
+            "realized_pnl": np.asarray(
+                [row["realized_pnl"] for row in rows], dtype=np.float64
+            ),
+            "pair_values": {
+                ("long", symbol): {
+                    "realized_pnl": np.asarray(
+                        [
+                            row["realized_pnl_by_coin_pside"][symbol]["long"]
+                            for row in rows
+                        ],
+                        dtype=np.float64,
+                    ),
+                    "unrealized_pnl": np.asarray(
+                        [
+                            row["unrealized_pnl_by_coin_pside"][symbol]["long"]
+                            for row in rows
+                        ],
+                        dtype=np.float64,
+                    ),
+                }
+            },
+        },
+        "panic_flatten_events": history["panic_flatten_events"],
+        "fill_events": history["fill_events"],
+    }
+
+
 def _flat_position_bot(symbol):
     bot = make_coin_bot()
     bot.positions = {
@@ -3844,7 +3974,10 @@ def _flat_position_bot(symbol):
 
 
 @pytest.mark.asyncio
-async def test_coin_hsl_replay_latches_cooldown_from_red_episode_ordinary_flatten():
+@pytest.mark.parametrize("compact", [False, True])
+async def test_coin_hsl_replay_latches_cooldown_from_red_episode_ordinary_flatten(
+    compact,
+):
     # Episode crosses RED (drawdown 0.6 >= 0.5) and is flattened at 150_000 by an
     # ordinary close with no panic marker: cooldown must anchor at the flatten fill.
     symbol = "A"
@@ -3852,7 +3985,10 @@ async def test_coin_hsl_replay_latches_cooldown_from_red_episode_ordinary_flatte
     bot.get_exchange_time = lambda: 180_000
 
     async def fake_history(current_balance=None, **kwargs):
-        return _red_episode_history(symbol, flatten_pnl=-30.0, rows_upnl=[0.0, 0.0])
+        history = _red_episode_history(
+            symbol, flatten_pnl=-30.0, rows_upnl=[0.0, 0.0]
+        )
+        return _coin_history_as_compact(history, symbol) if compact else history
 
     bot.get_balance_equity_history = fake_history
 
@@ -3868,7 +4004,10 @@ async def test_coin_hsl_replay_latches_cooldown_from_red_episode_ordinary_flatte
 
 
 @pytest.mark.asyncio
-async def test_coin_hsl_replay_latches_no_restart_from_red_episode_ordinary_flatten():
+@pytest.mark.parametrize("compact", [False, True])
+async def test_coin_hsl_replay_latches_no_restart_from_red_episode_ordinary_flatten(
+    compact,
+):
     # Same shape but the episode drawdown (1.6) breaches the no-restart threshold
     # (0.9) under policy=threshold: terminal halt, no cooldown.
     symbol = "A"
@@ -3876,7 +4015,10 @@ async def test_coin_hsl_replay_latches_no_restart_from_red_episode_ordinary_flat
     bot.get_exchange_time = lambda: 180_000
 
     async def fake_history(current_balance=None, **kwargs):
-        return _red_episode_history(symbol, flatten_pnl=-80.0, rows_upnl=[0.0, 0.0])
+        history = _red_episode_history(
+            symbol, flatten_pnl=-80.0, rows_upnl=[0.0, 0.0]
+        )
+        return _coin_history_as_compact(history, symbol) if compact else history
 
     bot.get_balance_equity_history = fake_history
 
@@ -4534,6 +4676,52 @@ async def test_coin_hsl_history_replay_requires_coin_timeline_fields():
     bot.get_balance_equity_history = fake_history
 
     with pytest.raises(ValueError, match="realized_pnl_by_coin_pside"):
+        await bot._equity_hard_stop_initialize_coin_from_history()
+
+
+@pytest.mark.asyncio
+async def test_coin_hsl_compact_replay_requires_nonflat_upnl():
+    import numpy as np
+
+    bot = make_coin_bot()
+    symbol = "A"
+    bot.positions = {
+        symbol: {
+            "long": {"size": 1.0, "price": 100.0},
+            "short": {"size": 0.0},
+        }
+    }
+
+    async def fake_history(current_balance=None, **kwargs):
+        return {
+            "hsl_coin_compact_replay": {
+                "timestamps": np.asarray([60_000], dtype=np.int64),
+                "balances": np.asarray([100.0], dtype=np.float64),
+                "realized_pnl": np.asarray([0.0], dtype=np.float64),
+                "pair_values": {
+                    ("long", symbol): {
+                        "realized_pnl": np.asarray([0.0], dtype=np.float64),
+                        "unrealized_pnl": np.asarray([np.nan], dtype=np.float64),
+                    }
+                },
+            },
+            "panic_flatten_events": [],
+            "fill_events": [
+                {
+                    "timestamp": 60_000,
+                    "symbol": symbol,
+                    "pside": "long",
+                    "action": "increase",
+                    "qty": 1.0,
+                    "price": 100.0,
+                    "pnl": 0.0,
+                }
+            ],
+        }
+
+    bot.get_balance_equity_history = fake_history
+
+    with pytest.raises(ValueError, match="unrealized_pnl_by_coin_pside"):
         await bot._equity_hard_stop_initialize_coin_from_history()
 
 

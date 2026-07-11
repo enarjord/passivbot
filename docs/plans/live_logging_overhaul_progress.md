@@ -7275,3 +7275,24 @@ VPS5 deployment status:
 - Non-goals: no live event producer, monitor write, process signal, exchange
   call, restart policy, threshold, trading/risk/order behavior, Rust, or
   backtest change.
+
+### Draft Slice: Compact Cold Coin-HSL Replay Memory
+
+- Branch: `codex/v8-hsl-direct-matrix-replay` from deployed `c159d955`.
+- Triggering evidence: PR #1179 exposed four of five live processes in `D`
+  state with aggregate RSS `648196 KB`; prior direct probes showed sustained
+  swap and I/O wait during 30-day coin replay.
+- Scope: cold coin replay requests a private aligned NumPy payload for account
+  and per-pair history instead of retaining the public nested timeline. Missing
+  pair values remain explicit `NaN`, and currently held cache matrices remain
+  non-authoritative accelerators. Public history, cache reuse, pside/unified,
+  Rust HSL math, and backtest behavior are unchanged.
+- Measured local result: a deterministic 43,201-minute, 30-symbol builder with
+  one held and 29 historical-flat symbols reduced traced Python peak allocation
+  from `686242590` bytes to `73499666` bytes (89.3%).
+- Benchmark support now separates held/background pairs and samples, exposes
+  expected cooperative yields, allows an explicit 30-day local-scale run, and
+  optionally records tracemalloc current/peak bytes.
+- Validation in progress: coin-HSL and benchmark suites, compact/rich sample and
+  final-state parity, balance-history regressions, syntax/diff checks, and a
+  controlled post-merge VPS5 restart with process/RSS/swap/I/O comparison.
