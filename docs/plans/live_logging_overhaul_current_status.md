@@ -22,69 +22,67 @@ Estimated completion:
 
 ## Active Review Slice
 
-- PR and publication state: PR #1184; query live GitHub metadata for current
-  state; `Replay flat coin-HSL history at exact change points`
-- Branch: `codex/v8-hsl-sparse-replay`
+- PR and publication state: query live GitHub metadata;
+  `Tolerate missing resource-pressure latest values`
+- Branch: `codex/v8-resource-pressure-none`
 - Head: query live GitHub metadata; this commit cannot embed its own final SHA
   without making that value stale
-- Base: `b29d5ca5fd3ffc2d75657459c0ab549e5484596d`
-- Scope: compact cold coin-HSL replay keeps currently held pair history dense,
-  but evaluates historical flat pairs only at exact account/pair run
-  boundaries, rolling-lookback expiries, fill/marker/cooldown/required/restart
-  boundaries, and the final row. Ambiguous fill replay falls back to the dense
-  path. Structured replay events and the performance report expose bounded
-  candidate/dense-equivalent row counts and strategy labels.
-- Triggering evidence: post-PR #1183 full replay completed in `601.246s` for
-  KuCoin, `914.691s` for Binance, `2009.120s` for GateIO, and `2279.519s` for
-  OKX. The indexed-fill load stage took only `0.103s` to `0.213s`, confirming
-  the per-pair minute loop is the dominant remaining local cost.
-- Non-goals: no held-pair sample skipping, HSL arithmetic or threshold change,
-  panic/cooldown/restart contract change, cache authority/schema, exchange
-  call, process control, Rust, backtest, or smoke-verdict change.
-- Local validation: the affected benchmark, coin-HSL, metric-regression, and
-  performance-report suites pass. A deterministic 43,201-minute, 30-pair
-  fixture with one held pair produced identical candidate/dense final-state
-  hashes while reducing replay samples from `825430` to `43652`; all `43201`
-  held-pair samples remained dense. The benchmark is offline and recorded zero
-  network, cache-read, and cache-write side effects.
-- Independent preflight: Terra identified three valid issues: held-pair density
-  was data-dependent, benchmark equivalence omitted restart/cooldown state, and
-  dense fallback telemetry was mislabeled. The implementation now forces held
-  pairs dense, hashes the behavior-relevant runtime state, reports mixed/dense
-  fallback counts, and has independent warning-clean regressions. Terra's final
-  delta review reported no findings and green-lit publication; Sol adjudicated
-  the fixes.
+- Base: `5526d5de21cf1b43cacc69f9b380a15bdf82e93b`
+- Scope: make the read-only resource-pressure accumulator tolerate a historical
+  `health.summary` field whose latest value is explicitly `null`, preserving
+  valid zeroes and omitting unavailable numeric statistics according to the
+  existing report contract. Add a focused regression and record PR #1184
+  deployment evidence.
+- Triggering evidence: after PR #1184 deployment,
+  `live-performance-report --include-rotated --event-tail-lines 5000
+  --max-event-files-per-bot 2 --section hsl_replay_profile` crashed in
+  `_ResourcePressureAccumulator._field_stats` when `clean(None)` called
+  `float(None)`. The lower-level event query with the same file/tail bounds
+  remained healthy and recovered all four replay completion records.
+- Non-goals: no live event producer, event parsing, monitor write, smoke verdict,
+  exchange call, process control, restart behavior, HSL/risk/order behavior,
+  Rust, backtest, or optimizer change.
+- Local validation: the full performance-report suite, focused chronological
+  and rotated regressions, Python compilation, diff hygiene, and added-line
+  silent-handling scan pass. Terra implemented the isolated report/test patch;
+  Luna's focused delta review caught stale-latest and bounded-command gaps,
+  which were fixed before publication. A Codex PR review then found that an
+  unorderable trailing row could erase an established ordered snapshot; the
+  accumulator now preserves the ordered snapshot and has a regression. Sol
+  adjudicated the contract.
 - Publication state, exact head, mergeability, CI, and current-head review
   verdicts: query live GitHub metadata. Do not encode those transient values in
   the same PR that contains this status file, because every correction would
   create a different head and immediately stale the embedded value.
 - Expected VPS action: after exact-head approval and merge, pull while
-  preserving local artifacts, restart the five supervised bots, and compare
-  candidate counts, full-replay timings, process pressure, and the bounded
-  smoke report. The initializer code is loaded only at process start.
+  preserving local artifacts and rerun the exact rotated report query. No bot
+  restart is expected because this slice changes only read-only report code.
 
 Next action:
 
-1. Resolve verified PR #1184 findings and merge only after the exact-head
-   reviewer and CI gate; then run the declared controlled VPS5 restart and
-   smoke comparison.
+1. Advance the read-only report fix through focused validation, independent
+   preflight, exact-head reviewers, and CI; resolve verified findings and merge
+   only when the full gate is green, then rerun the rotated VPS5 query.
 
 ## Deployed Baseline
 
-- Remote `v8`: `b29d5ca5`, PR #1183
-- VPS5 repository: `b29d5ca5`, PR #1183; tracked status clean
+- Remote `v8`: `5526d5de`, PR #1184
+- VPS5 repository: `5526d5de`, PR #1184; tracked status clean
 - VPS5 expected bots: five; all are running after the controlled restart
-- Immediate and fresh settled smoke reports were green: all five expected bots
-  matched, hard failures were zero, and the fresh recovery window recorded
-  `380/380` remote plus `42/42` account-critical calls succeeded. One Kucoin
-  `RequestTimeout` cycle failure in the wider restart window recovered before
-  the fresh smoke.
-- All four coin-HSL bots emitted `history_format=compact` and protective-ready
-  success in `13.337s` to `78.832s`. The first observed post-PR #1183 full
-  completions were KuCoin at `601.246s` and Binance at `914.691s`; OKX and
-  GateIO remained active without failures. The fill-index prerequisite reduced
-  history-loaded work to `0.103s` to `0.213s`, but did not remove the dominant
-  pair-minute loop.
+- PR #1184 was approved by Hermes and Grok 4.5 on exact head `9177dfed9`, CI
+  passed, and it merged as `5526d5de`. VPS5 fast-forwarded cleanly while
+  preserving untracked artifacts. The five old bots stopped after the second
+  exact-pane Ctrl-C; only the `passivbot` session was reloaded, and unrelated
+  `misc:0.0` remained PID `434835`.
+- Immediate and fresh settled smoke reports were hard-green with all five
+  expected bots matched and zero hard failures. The settled window recorded
+  `249/249` successful remote and `34/34` account-critical calls, process states
+  `R=4, S=1`, no uninterruptible sleep, and tracked repository status clean.
+- All four coin-HSL replays completed with strategy `mixed` and candidate
+  reduction from `86.865%` to `93.449%`: KuCoin `140.746s`, Binance `208.098s`,
+  GateIO `229.248s`, and OKX `269.711s`. The post-PR #1183 baseline was
+  `601.246s` to `2279.519s`, so the deployed replay is about `77%` to `89%`
+  faster while preserving dense held/ambiguous pairs.
 - PR #1181 required no restart; all five bot pane PIDs remained unchanged. Its
   bounded current-segment scorecard reported four compact full-replay
   completions from `453.98s` to `1728.585s`, but exposed the active slice's
@@ -117,12 +115,11 @@ Next action:
 
 The coin-HSL protective-readiness split, cooperative background cadence,
 current process-pressure query, compact cold replay payload, bounded replay
-scorecard, and stable per-pair fill index are merged and deployed. The active
-slice uses exact sparse change points for historical flat-pair replay while
-keeping held-pair work dense.
+scorecard, stable per-pair fill index, and exact sparse flat-pair replay are
+merged and deployed. The active slice fixes the rotated resource-pressure
+report crash exposed during post-deploy evidence collection.
 Remaining candidates:
 
-- exact sparse replay deployment and VPS timing/process-pressure proof
 - deeper internal-stage profiling if live residual cost remains material
 - unsupported configured-market and stock-perp compatibility events
 - bounded operator tooling improvements sharing one code and validation surface

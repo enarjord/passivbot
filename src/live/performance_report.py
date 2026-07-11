@@ -2726,14 +2726,19 @@ class _ResourcePressureAccumulator:
             if counters:
                 observed_counters[key] = counters
         observed_bools = {
-            key: bool(data.get(key))
+            key: data[key]
             for key in _RESOURCE_PRESSURE_BOOL_FIELDS
-            if key in data
+            if isinstance(data.get(key), bool)
         }
-        if not observed_values and not observed_counters and not observed_bools:
-            return
         bot = _bot_key(row, live_event)
         state = self.bots.get(bot)
+        if (
+            state is None
+            and not observed_values
+            and not observed_counters
+            and not observed_bools
+        ):
+            return
         if state is None:
             state = {
                 "bot": bot,
@@ -2746,22 +2751,23 @@ class _ResourcePressureAccumulator:
             self.bots[bot] = state
         state["count"] = int(state["count"]) + 1
         ts = _record_ts(row)
-        latest_changed = ts is None or state.get("latest_ts") is None
+        latest_changed = state.get("latest_ts") is None
         if ts is not None and state.get("latest_ts") is not None:
             latest_changed = int(ts) >= int(state["latest_ts"])
         if ts is not None and latest_changed:
             state["latest_ts"] = int(ts)
         for key, value in observed_values.items():
             state["values"][key].append(value)
-            if latest_changed:
-                state["latest"][key] = value
         if latest_changed:
-            state["latest"].update(observed_bools)
+            state["latest"] = {**observed_values, **observed_bools}
             state["latest_counters"] = observed_counters
         self.event_types[event_type] += 1
 
     @staticmethod
     def _field_stats(values: list[float | int], latest: Any) -> dict[str, Any]:
+        latest_value = _non_negative_number(latest)
+        if latest_value is None:
+            return {}
         numeric = sorted(float(value) for value in values)
         if not numeric:
             return {}
@@ -2786,7 +2792,7 @@ class _ResourcePressureAccumulator:
             return rounded
 
         out: dict[str, Any] = {
-            "latest": clean(latest),
+            "latest": clean(latest_value),
             "count": len(numeric),
             "min": clean(numeric[0]),
             "max": clean(numeric[-1]),

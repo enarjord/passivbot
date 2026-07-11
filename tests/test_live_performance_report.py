@@ -3438,6 +3438,142 @@ def test_live_performance_report_resource_pressure_whitelists_health_fields(tmp_
     assert "raw-payload" not in rendered
 
 
+def test_live_performance_report_resource_pressure_omits_missing_latest_rotated_field(tmp_path):
+    events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    stale_rotated = events_dir / "2026-06-24T00-00-00.ndjson"
+    rotated = events_dir / "2026-06-25T00-00-00.ndjson"
+    current = events_dir / "current.ndjson"
+    _write_ndjson(
+        stale_rotated,
+        [
+            _monitor_row(
+                event_type="cycle.completed",
+                seq=1,
+                ts=500,
+                data={"elapsed_ms": 1000},
+            )
+        ],
+    )
+    _write_ndjson(
+        rotated,
+        [
+            _monitor_row(
+                event_type="health.summary",
+                seq=2,
+                ts=1000,
+                component="monitor.health",
+                data={"rss_bytes": 1000},
+            )
+        ],
+    )
+    _write_ndjson(
+        current,
+        [
+            _monitor_row(
+                event_type="health.summary",
+                seq=3,
+                ts=2000,
+                component="monitor.health",
+                data={"rss_bytes": None, "event_queue_depth": 0},
+            )
+        ],
+    )
+    os.utime(stale_rotated, (1000, 1000))
+    os.utime(rotated, (1500, 1500))
+    os.utime(current, (2000, 2000))
+
+    report = build_live_performance_report(
+        tmp_path / "monitor",
+        include_rotated=True,
+        max_event_files=2,
+    )
+    group = report["resource_pressure"]["groups"][0]
+
+    assert report["files_scanned"] == 2
+    assert group["count"] == 2
+    assert "rss_bytes" not in group["fields"]
+    assert group["fields"]["event_queue_depth"]["latest"] == 0
+
+
+def test_live_performance_report_resource_pressure_latest_snapshot_clears_invalid_fields(tmp_path):
+    events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="health.summary",
+                seq=1,
+                ts=1000,
+                component="monitor.health",
+                data={
+                    "rss_bytes": 1000,
+                    "memory_percent": 6.5,
+                    "cpu_percent": 12.0,
+                    "event_queue_depth": 5,
+                    "event_pipeline_worker_alive": True,
+                },
+            ),
+            _monitor_row(
+                event_type="health.summary",
+                seq=2,
+                ts=2000,
+                component="monitor.health",
+                data={
+                    "rss_bytes": None,
+                    "memory_percent": float("nan"),
+                    "cpu_percent": -1,
+                    "event_queue_depth": 0,
+                    "event_pipeline_worker_alive": None,
+                },
+            ),
+        ],
+    )
+
+    report = build_live_performance_report(tmp_path / "monitor")
+    group = report["resource_pressure"]["groups"][0]
+
+    assert group["count"] == 2
+    assert "rss_bytes" not in group["fields"]
+    assert "memory_percent" not in group["fields"]
+    assert "cpu_percent" not in group["fields"]
+    assert group["fields"]["event_queue_depth"]["latest"] == 0
+    assert group["fields"]["event_queue_depth"]["count"] == 2
+    assert group["fields"]["event_queue_depth"]["min"] == 0
+    assert group["fields"]["event_queue_depth"]["max"] == 5
+    assert "latest_event_pipeline_worker_alive" not in group
+
+
+def test_live_performance_report_resource_pressure_unordered_row_keeps_ordered_latest(tmp_path):
+    events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="health.summary",
+                seq=1,
+                ts=1000,
+                component="monitor.health",
+                data={"rss_bytes": 1000},
+            ),
+            _monitor_row(
+                event_type="health.summary",
+                seq=2,
+                ts="invalid",
+                component="monitor.health",
+                data={"rss_bytes": None},
+            ),
+        ],
+    )
+
+    report = build_live_performance_report(tmp_path / "monitor")
+    group = report["resource_pressure"]["groups"][0]
+
+    assert group["count"] == 2
+    assert group["latest_ts"] == 1000
+    assert group["fields"]["rss_bytes"]["latest"] == 1000
+    assert group["fields"]["rss_bytes"]["count"] == 1
+
+
 def test_live_performance_report_resource_pressure_summary_is_bounded(tmp_path, monkeypatch):
     monkeypatch.setattr(performance_report_module, "utc_ms", lambda: 5000)
     events_dir = tmp_path / "monitor" / "mixed" / "events"
