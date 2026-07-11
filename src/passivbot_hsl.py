@@ -3619,6 +3619,31 @@ def _equity_hard_stop_fill_replay_qty(fill: Any) -> Optional[float]:
     return None
 
 
+def _equity_hard_stop_index_coin_fill_events(
+    fill_events: list[Any],
+) -> dict[tuple[str, str], list[Any]]:
+    """Group fills by coin HSL scope without changing their source order."""
+    indexed: dict[tuple[str, str], list[Any]] = {}
+    for event in fill_events:
+        pside_alias = _equity_hard_stop_event_value(event, "pside")
+        position_side_alias = _equity_hard_stop_event_value(event, "position_side")
+        if (
+            pside_alias is not None
+            and position_side_alias is not None
+            and str(pside_alias).lower() != str(position_side_alias).lower()
+        ):
+            raise ValueError(
+                "coin HSL fill has conflicting pside aliases: "
+                f"pside={pside_alias!r} position_side={position_side_alias!r}"
+            )
+        pair = (
+            _equity_hard_stop_fill_pside(event),
+            _equity_hard_stop_fill_symbol(event),
+        )
+        indexed.setdefault(pair, []).append(event)
+    return indexed
+
+
 def _equity_hard_stop_coin_replay_events(
     fill_events: list[Any], pside: str, symbol: str, *, qty_step: float = 0.0
 ) -> tuple[list[tuple[int, str, float]], bool]:
@@ -4968,6 +4993,7 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
             raise TypeError(
                 f"get_balance_equity_history()['fill_events'] must be a list, got {type(fill_events).__name__}"
             )
+        fill_events_by_pair = _equity_hard_stop_index_coin_fill_events(fill_events)
 
         compact_replay = history.get("hsl_coin_compact_replay")
         timeline = history.get("timeline")
@@ -5362,8 +5388,9 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
                         force=True,
                     )
                 state = self._hsl_coin_state(pside, symbol)
+                pair_fill_events = fill_events_by_pair.get((pside, symbol), [])
                 contract = self._equity_hard_stop_infer_coin_replay_contract(
-                    pside, symbol, fill_events, now_ms
+                    pside, symbol, pair_fill_events, now_ms
                 )
                 replay_start_boundary_ts = None
                 if contract["intervention_entry_ts"] is not None and contract["policy"] == "normal":
@@ -5388,7 +5415,7 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
                 seen_coin_timeline_fields = False
                 qty_step = _hsl_qty_step_for_symbol(self, symbol)
                 replay_events, replay_ambiguous = _equity_hard_stop_coin_replay_events(
-                    fill_events,
+                    pair_fill_events,
                     pside,
                     symbol,
                     qty_step=qty_step,

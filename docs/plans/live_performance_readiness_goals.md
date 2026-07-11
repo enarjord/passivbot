@@ -601,6 +601,9 @@ Trading-impact labels:
 - [ ] Index fill events once by `(pside, symbol)`.
   - Reuse that index for replay contracts, panic detection, position-size
     replay, realized-PnL peak/current calculations, and cooldown discovery.
+  - Partial: the cold coin-HSL initializer now builds one stable pair index and
+    reuses it for replay-contract inference and position-size reconstruction.
+    Panic/cooldown indexing and sparse realized-PnL replay remain open.
 
 - [ ] Parallelize only where correctness boundaries are independent.
   - Coin-mode held-pair protective reconstruction may classify independent

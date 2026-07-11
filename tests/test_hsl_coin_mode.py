@@ -85,6 +85,107 @@ def test_hsl_coin_replay_candidate_batches_are_frozen_and_scope_prioritized():
     )
 
 
+def test_coin_hsl_fill_index_preserves_pair_order_and_event_identity():
+    long_first = {
+        "timestamp": 30,
+        "symbol": "A",
+        "pside": "long",
+        "action": "increase",
+        "qty": 1.0,
+    }
+    short_fill = {
+        "timestamp": 20,
+        "symbol": "A",
+        "pside": "short",
+        "action": "increase",
+        "qty": 2.0,
+    }
+    long_second = {
+        "timestamp": 10,
+        "symbol": "A",
+        "pside": "long",
+        "action": "decrease",
+        "qty": 1.0,
+    }
+
+    indexed = hsl._equity_hard_stop_index_coin_fill_events(
+        [long_first, short_fill, long_second]
+    )
+
+    assert indexed == {
+        ("long", "A"): [long_first, long_second],
+        ("short", "A"): [short_fill],
+    }
+    assert indexed[("long", "A")][0] is long_first
+    assert indexed[("long", "A")][1] is long_second
+
+
+def test_coin_hsl_fill_index_rejects_conflicting_pside_aliases():
+    with pytest.raises(ValueError, match="conflicting pside aliases"):
+        hsl._equity_hard_stop_index_coin_fill_events(
+            [
+                {
+                    "timestamp": 1,
+                    "symbol": "A",
+                    "pside": "long",
+                    "position_side": "short",
+                    "action": "increase",
+                    "qty": 1.0,
+                }
+            ]
+        )
+
+
+def test_coin_hsl_fill_index_keeps_replay_and_contract_results_identical():
+    fills = [
+        {
+            "timestamp": 1,
+            "symbol": "A",
+            "pside": "long",
+            "action": "increase",
+            "qty": 1.0,
+        },
+        {
+            "timestamp": 2,
+            "symbol": "B",
+            "pside": "short",
+            "action": "increase",
+            "qty": 3.0,
+        },
+        {
+            "timestamp": 3,
+            "symbol": "A",
+            "pside": "long",
+            "action": "decrease",
+            "qty": 1.0,
+            "pb_order_type": "panic_close",
+        },
+        {
+            "timestamp": 4,
+            "symbol": "A",
+            "pside": "long",
+            "action": "increase",
+            "qty": 0.5,
+        },
+    ]
+    pair_fills = hsl._equity_hard_stop_index_coin_fill_events(fills)[("long", "A")]
+    bot = FakeHslBot(
+        hsl={"long": {"cooldown_minutes_after_red": 1.0}},
+        positions={"A": {"long": {"size": 0.5}}},
+    )
+    bot._equity_hard_stop_cooldown_position_policy = lambda: "normal"
+    bot._equity_hard_stop_has_open_position_symbol = lambda pside, symbol: True
+
+    assert hsl._equity_hard_stop_coin_replay_events(
+        pair_fills, "long", "A"
+    ) == hsl._equity_hard_stop_coin_replay_events(fills, "long", "A")
+    assert hsl._equity_hard_stop_infer_coin_replay_contract(
+        bot, "long", "A", pair_fills, 30_000
+    ) == hsl._equity_hard_stop_infer_coin_replay_contract(
+        bot, "long", "A", fills, 30_000
+    )
+
+
 def test_parse_hsl_config_warns_about_history_reinterpretation(caplog):
     bot = FakeHslBot(config={"live": {"hsl_signal_mode": "coin"}})
     values = {
