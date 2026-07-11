@@ -22,8 +22,8 @@ Estimated completion:
 
 ## Active Review Slice
 
-- PR and publication state: unpublished; query live GitHub metadata after
-  publication; `Replay flat coin-HSL history at exact change points`
+- PR and publication state: PR #1184; query live GitHub metadata for current
+  state; `Replay flat coin-HSL history at exact change points`
 - Branch: `codex/v8-hsl-sparse-replay`
 - Head: query live GitHub metadata; this commit cannot embed its own final SHA
   without making that value stale
@@ -35,9 +35,9 @@ Estimated completion:
   path. Structured replay events and the performance report expose bounded
   candidate/dense-equivalent row counts and strategy labels.
 - Triggering evidence: post-PR #1183 full replay completed in `601.246s` for
-  KuCoin and `914.691s` for Binance while OKX and GateIO remained active.
-  The indexed-fill load stage took only `0.103s` to `0.213s`, confirming the
-  per-pair minute loop is the dominant remaining local cost.
+  KuCoin, `914.691s` for Binance, `2009.120s` for GateIO, and `2279.519s` for
+  OKX. The indexed-fill load stage took only `0.103s` to `0.213s`, confirming
+  the per-pair minute loop is the dominant remaining local cost.
 - Non-goals: no held-pair sample skipping, HSL arithmetic or threshold change,
   panic/cooldown/restart contract change, cache authority/schema, exchange
   call, process control, Rust, backtest, or smoke-verdict change.
@@ -65,9 +65,9 @@ Estimated completion:
 
 Next action:
 
-1. Finish validation and independent preflight, publish the sparse-replay
-   slice, resolve verified findings, and merge only after the exact-head gate;
-   then run the declared controlled VPS5 restart and smoke comparison.
+1. Resolve verified PR #1184 findings and merge only after the exact-head
+   reviewer and CI gate; then run the declared controlled VPS5 restart and
+   smoke comparison.
 
 ## Deployed Baseline
 
