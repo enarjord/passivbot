@@ -174,6 +174,7 @@ full-replay terminal event.
 - `candle_disk_load_completed`
 - `config_market_unsupported`
 - `config_hip3_account_mode_unsupported`
+- `config_isolated_only_market_blocked`
 - `config_stock_perp_unavailable_market`
 - `config_stock_perp_wrong_exchange`
 - `ema_fallback_used`
@@ -278,6 +279,14 @@ abstraction, a stable action, and count/sample summaries for approved,
 position, open-order, isolated-only, and live-isolated symbols. The producer
 requires enqueue and waits at most 0.1 seconds for a best-effort terminal flush;
 emission or flush failure never suppresses or replaces the fatal startup error.
+
+When the existing generic CCXT margin-policy filter blocks isolated-only
+markets from new entries under cross-margin preference,
+`config_isolated_only_market_blocked` records one bounded per-side degraded
+compatibility event. Its payload contains only a stable action and margin
+capability/preference plus count/sample/truncation context for blocked symbols.
+Event enqueue failure is retryable independently of the existing text-warning
+dedupe; observability must not alter filtering or existing-state handling.
 
 Dynamic helpers are part of the same contract:
 

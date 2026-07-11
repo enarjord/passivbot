@@ -1838,6 +1838,48 @@ def test_live_smoke_report_problem_events_include_market_compatibility_data(tmp_
     }
 
 
+def test_live_smoke_report_projects_safe_isolated_only_market_compatibility_data(tmp_path):
+    events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="config.market_compatibility",
+                seq=1,
+                ts=1000,
+                status="degraded",
+                level="info",
+                reason_code="config_isolated_only_market_blocked",
+                pside="short",
+                data={
+                    "action": "initial_entries_blocked",
+                    "margin_mode_preference": "cross",
+                    "capability": "isolated_only",
+                    "blocked_count": 2,
+                    "blocked_symbols": ["ISO1/USDT:USDT", "ISO2/USDT:USDT"],
+                    "blocked_symbols_truncated": False,
+                    "raw_exchange_payload": "must_not_surface",
+                },
+            )
+        ],
+    )
+
+    report = build_live_smoke_report(tmp_path / "monitor", logs_root=None)
+
+    assert report["ok"] is True
+    event = report["problem_events"][0]
+    assert event["hard"] is False
+    assert event["pside"] == "short"
+    assert event["latest_data"] == {
+        "action": "initial_entries_blocked",
+        "margin_mode_preference": "cross",
+        "capability": "isolated_only",
+        "blocked_count": 2,
+        "blocked_symbols": ["ISO1/USDT:USDT", "ISO2/USDT:USDT"],
+        "blocked_symbols_truncated": False,
+    }
+
+
 def test_live_smoke_report_projects_safe_hip3_account_mode_compatibility_data(tmp_path):
     events_dir = tmp_path / "monitor" / "hyperliquid" / "hl_01" / "events"
     _write_ndjson(

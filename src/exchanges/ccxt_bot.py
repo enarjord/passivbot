@@ -107,6 +107,7 @@ class CCXTBot(Passivbot):
         self.quote = self.user_info.get("quote", "USDT")
         self._live_margin_modes = {}
         self._blocked_margin_symbols_warned = set()
+        self._blocked_margin_symbols_evented = set()
 
     # ═══════════════════ ORDER WATCHING HOOKS ═══════════════════
 
@@ -813,12 +814,19 @@ class CCXTBot(Passivbot):
     def _filter_approved_symbols(self, pside: str, symbols: set[str]) -> set[str]:
         symbols = super()._filter_approved_symbols(pside, symbols)
         kept = set()
+        newly_unevented_blocked_symbols = set()
         for symbol in symbols:
             policy = self._resolve_margin_policy_for_symbol(symbol)
             if not policy["blocked"]:
                 kept.add(symbol)
                 continue
             warn_key = (pside, symbol, policy["capability"])
+            event_key = (pside, symbol, policy["capability"])
+            if (
+                policy["capability"] == "isolated_only"
+                and event_key not in self._blocked_margin_symbols_evented
+            ):
+                newly_unevented_blocked_symbols.add(symbol)
             if warn_key in self._blocked_margin_symbols_warned:
                 continue
             self._blocked_margin_symbols_warned.add(warn_key)
@@ -832,6 +840,23 @@ class CCXTBot(Passivbot):
                 blocked_reason,
                 getattr(self, "exchange", "this exchange"),
             )
+        if newly_unevented_blocked_symbols:
+            try:
+                emitted = self._emit_isolated_only_market_blocked_event(
+                    pside=pside,
+                    blocked_symbols=newly_unevented_blocked_symbols,
+                )
+            except Exception as exc:
+                logging.debug(
+                    "[event] failed to emit isolated-only market compatibility event: %s",
+                    type(exc).__name__,
+                )
+                emitted = False
+            if emitted:
+                self._blocked_margin_symbols_evented.update(
+                    (pside, symbol, "isolated_only")
+                    for symbol in newly_unevented_blocked_symbols
+                )
         return kept
 
     async def update_exchange_config_by_symbols(self, symbols: list):

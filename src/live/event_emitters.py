@@ -2363,6 +2363,68 @@ def emit_config_market_compatibility_event(
         return False
 
 
+def _emit_isolated_only_market_blocked_event_unchecked(
+    bot: Any,
+    *,
+    pside: str,
+    blocked_symbols: set[str],
+) -> bool:
+    if pside not in {"long", "short"}:
+        raise ValueError(f"unsupported configured market pside {pside!r}")
+    symbols = sorted({str(symbol) for symbol in blocked_symbols if symbol})
+    if not symbols:
+        return False
+    safe_symbols = {
+        symbol: _sanitize_remote_text(
+            symbol,
+            max_len=_MARKET_COMPATIBILITY_SYMBOL_MAX_LEN,
+        )
+        for symbol in symbols
+    }
+    return (
+        _safe_emit(
+            bot,
+            EventTypes.CONFIG_MARKET_COMPATIBILITY,
+            level="info",
+            component="config.market_compatibility",
+            tags=(EventTags.MARKET, EventTags.MODE, EventTags.AVAILABILITY),
+            cycle_id=current_live_event_cycle_id(bot),
+            pside=pside,
+            status="degraded",
+            reason_code=ReasonCodes.CONFIG_ISOLATED_ONLY_MARKET_BLOCKED,
+            data={
+                "action": "initial_entries_blocked",
+                "margin_mode_preference": "cross",
+                "capability": "isolated_only",
+                "blocked_count": len(symbols),
+                "blocked_symbols": [
+                    safe_symbols[symbol]
+                    for symbol in symbols[:_MARKET_COMPATIBILITY_SAMPLE_LIMIT]
+                ],
+                "blocked_symbols_truncated": (
+                    len(symbols) > _MARKET_COMPATIBILITY_SAMPLE_LIMIT
+                ),
+            },
+            require_enqueue=True,
+        )
+        is not None
+    )
+
+
+def emit_isolated_only_market_blocked_event(
+    bot: Any, *args: Any, **kwargs: Any
+) -> bool:
+    """Best-effort visibility for isolated-only symbols blocked from new entries."""
+    try:
+        return _emit_isolated_only_market_blocked_event_unchecked(bot, *args, **kwargs)
+    except Exception as exc:
+        logging.debug(
+            "[event] failed to emit isolated-only market compatibility event: %s",
+            type(exc).__name__,
+        )
+        return False
+
+
 def _emit_forager_selection_event_unchecked(
     bot: Any,
     *,

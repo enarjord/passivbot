@@ -23,56 +23,63 @@ Estimated completion:
 ## Active Review Slice
 
 - PR and publication state: query live GitHub metadata;
-  `Record HIP-3 fatal startup compatibility`
-- Branch: `codex/v8-stock-perp-compatibility-events`
+  `Record isolated-only entry filtering`
+- Branch: `codex/v8-isolated-market-compatibility-events`
 - Head: query live GitHub metadata; this commit cannot embed its own final SHA
   without making that value stale
-- Base: `b99d1b0520149299298252999864ac848c42ce42`
-- Scope: before Hyperliquid's existing non-unified HIP-3 startup gate raises
-  `FatalBotException`, emit and boundedly flush one off-console/off-text
-  `config.market_compatibility` event. The payload aggregates only safe,
-  bounded approved-position-open-order and margin-capability evidence; it does
-  not retain order IDs, sizes, prices, raw payloads, config paths, or free-form
-  exception text.
-- Triggering evidence: the fatal gate distinguishes approved HIP-3 symbols,
-  existing positions/open orders, isolated-only markets, and live isolated
-  margin state in one human exception, but structured history contains only a
-  generic startup error. A process can exit before queued semantic evidence is
-  durable, leaving incident tooling unable to classify the compatibility
-  failure without text-log parsing.
-- Non-goals: no account abstraction detection, market/margin policy,
-  fatal-decision or exception-message change; no generic isolated-only entry
-  filter event, exchange call, configured-coin filtering, smoke verdict,
-  process control, HSL/risk/order behavior, Rust, backtest, or optimizer change.
-- Local validation: the focused Hyperliquid fatal-state, event-bus, smoke,
-  enqueue/flush-failure, and registry-doc suite passes with 184 tests; Python
-  compilation and `git diff --check` pass. Added-line silent handling is limited
-  to the explicitly best-effort event enqueue/terminal flush. Independent Luna
-  preflight is green after confirming approved-only diagnostics make no new
-  margin-policy call and existing position/open-order paths preserve the prior
-  fatal contract. Terra implemented the isolated producer/tests; Sol owns the
-  terminal-event contract and publication.
+- Base: `bd16974743d5dc4bfd25491d052e62e90ecc3982`
+- Scope: when the existing generic CCXT margin-policy filter excludes an
+  isolated-only symbol from new entries under cross-margin preference, emit one
+  bounded, per-side, off-console/off-text `config.market_compatibility` event.
+  Keep warning and event dedupe independent so a failed enqueue retries without
+  duplicating the existing text warning.
+- Triggering evidence: `_filter_approved_symbols()` already emits a once-per-
+  process warning for the exact compatibility decision, but durable structured
+  history cannot answer which side/symbols were blocked or distinguish this
+  decision from an unavailable exchange market.
+- Non-goals: no margin capability/preference resolution, metadata or exchange
+  call, approved-symbol result, existing-position/order manageability, warning,
+  smoke verdict, process control, HSL/risk/order behavior, Rust, backtest, or
+  optimizer change.
+- Local validation: the focused margin-filter, CCXT contract-helper, event-bus,
+  smoke projection, and registry-doc suite passes with 213 tests; Python
+  compilation and `git diff --check` pass. Added-line silent handling is
+  limited to the explicitly best-effort event producer/caller guards. Luna's
+  first preflight found the manual `build_contract_bot()` initialization gap;
+  the explicit initializer and regression resolve it, and delta review found
+  no code regressions. Terra implemented the isolated producer/tests; Sol owns
+  the event contract, final preflight, and publication.
 - Publication state, exact head, mergeability, CI, and current-head review
   verdicts: query live GitHub metadata. Do not encode those transient values in
   the same PR that contains this status file, because every correction would
   create a different head and immediately stale the embedded value.
 - Expected VPS action: after exact-head approval and merge, pull while
-  preserving local artifacts, restart the exact supervised Hyperliquid pane to
-  load the Hyperliquid-only producer, and run immediate plus settled smoke
-  checks. The configured VPS5 account is unified, so no fatal event is expected
-  from healthy production startup; unit evidence owns the incompatible path.
+  preserving local artifacts, restart the five exact supervised bot panes
+  because the producer is in shared CCXT filtering, query any emitted
+  compatibility records, and run immediate plus settled smoke checks.
 
 Next action:
 
-1. Complete the bounded HIP-3 fatal compatibility producer and regressions,
+1. Complete the bounded isolated-only entry-filter producer and regressions,
    obtain independent preflight plus exact-head reviewers and CI, resolve
    verified findings, and merge only when the full gate is green.
 
 ## Deployed Baseline
 
-- Remote `v8`: `b99d1b05`, PR #1187
-- VPS5 repository: `b99d1b05`, PR #1187; tracked status clean
-- VPS5 expected bots: five; all running after the controlled restart
+- Remote `v8`: `bd169747`, PR #1188
+- VPS5 repository: `bd169747`, PR #1188; tracked status clean
+- VPS5 expected bots: five; all running after the Hyperliquid-only restart
+- PR #1188 was approved on exact head `363eca852` by Hermes and Grok 4.5;
+  CI passed and it merged as `bd169747`. VPS5 fast-forwarded cleanly and
+  gracefully restarted only `passivbot:4.0`; Hyperliquid bot PID `842779` was
+  replaced by `844272`, while the other four bot PIDs and unrelated
+  `misc:0.0` PID `434835` remained unchanged. The unified account reached
+  startup-ready in `48.00s` and full-warmup-ready in `74.77s`. A focused query
+  found zero fatal HIP-3 compatibility events, as expected. The final settled
+  smoke was hard-green with all five processes matched, `327/327` remote and
+  `45/45` account-critical calls successful, states `R=4,S=1`, no
+  uninterruptible sleep, no hard/log failures, and tracked repository status
+  clean.
 - PR #1187 was approved on exact head `74766c7cb` by Hermes, Grok 4.5, and the
   independent Codex reviewer; CI passed and it merged as `b99d1b05`. VPS5
   restarted only the five supervised bots, preserving `misc:0.0` PID `434835`.
@@ -140,13 +147,13 @@ Next action:
 The coin-HSL protective-readiness split, cooperative background cadence,
 current process-pressure query, compact cold replay payload, bounded replay
 scorecard, stable per-pair fill index, exact sparse flat-pair replay, and the
-rotated resource-pressure report fix plus configured-market skip events are
-merged and deployed. The active slice makes fatal HIP-3 startup compatibility
-available in durable structured history.
+rotated resource-pressure report fix, configured-market skip events, and fatal
+HIP-3 startup compatibility are merged and deployed. The active slice makes
+the remaining isolated-only initial-entry filter visible in durable structured
+history.
 Remaining candidates:
 
 - deeper internal-stage profiling if live residual cost remains material
-- generic isolated-only entry-filter compatibility events
 - bounded operator tooling improvements sharing one code and validation surface
 
 Do not create progress-only PRs or resume unrelated logging work from stale

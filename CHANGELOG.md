@@ -4,6 +4,10 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Isolated-only markets excluded from new entries by cross-margin preference
+  now emit bounded per-side `config.market_compatibility` events while
+  preserving the existing filter and warning behavior.
+
 - Hyperliquid non-unified HIP-3 startup rejection now emits a bounded terminal
   `config.market_compatibility` event before preserving the existing fatal
   error. The event records only redacted account/capability counts and symbol

@@ -7473,3 +7473,38 @@ VPS5 deployment status:
   `git diff --check`. Independent Luna preflight is green after verifying the
   producer adds no metadata/policy/exchange call before the existing fatal
   path; approved-only symbols do not recompute isolated-margin policy.
+
+### Deployed Slice: HIP-3 Fatal Startup Compatibility Event
+
+- PR #1188 was approved by Hermes and Grok 4.5 on exact head `363eca852`; CI
+  passed and it merged to `v8` as `bd169747`.
+- VPS5 fast-forwarded cleanly and gracefully restarted only the exact
+  Hyperliquid pane. Bot PID `842779` was replaced by `844272`; the other four
+  bot PIDs and unrelated `misc:0.0` PID `434835` remained unchanged.
+- The unified account reached startup-ready in `48.00s` and full-warmup-ready
+  in `74.77s`. A bounded focused query matched zero
+  `config_hip3_account_mode_unsupported` events, as expected for healthy
+  unified-account startup.
+- The immediate smoke was hard-green with `662/662` remote and `71/71`
+  account-critical calls successful. The final settled two-minute smoke was
+  hard-green with all five expected processes matched, `327/327` remote and
+  `45/45` account-critical calls successful, `R=4,S=1`, no uninterruptible
+  sleep, no hard/log failures, and tracked repository status clean.
+
+### Active Slice: Isolated-Only Entry-Filter Compatibility Event
+
+- Branch: `codex/v8-isolated-market-compatibility-events` from deployed
+  `bd169747`.
+- Scope: emit one bounded per-side `config.market_compatibility` event when the
+  existing generic CCXT filter blocks isolated-only symbols from new entries
+  under cross-margin preference. Use separate retryable event dedupe while
+  preserving the current once-per-process warning.
+- Non-goals: no margin policy/capability, metadata/exchange call, approved-list
+  result, existing-position/order handling, warning, smoke verdict,
+  HSL/risk/order behavior, Rust, backtest, or optimizer change.
+- Focused margin-filter, CCXT contract-helper, event-bus, smoke, and registry
+  validation passes 213 tests plus Python compilation and `git diff --check`.
+  Luna's first preflight found that the manually constructed CCXT contract bot
+  lacked the new diagnostics dedupe set; an explicit initializer and direct
+  filter regression resolve the finding, and delta review found no code
+  regression.

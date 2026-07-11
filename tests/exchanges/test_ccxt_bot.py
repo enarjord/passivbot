@@ -693,6 +693,7 @@ class TestCCXTBotExecuteCancellation:
         bot.exchange = "testexchange"
         bot.config = {"live": {"margin_mode_preference": "cross"}}
         bot._blocked_margin_symbols_warned = set()
+        bot._blocked_margin_symbols_evented = set()
         bot.markets_dict = {
             "ISO/USDT:USDT": {
                 "info": {"onlyIsolated": True},
@@ -707,12 +708,128 @@ class TestCCXTBotExecuteCancellation:
         assert bot._get_margin_mode_for_symbol("ISO/USDT:USDT") == "isolated"
         assert "isolated margin support is currently disabled" in caplog.text
 
+    def test_isolated_only_market_event_is_bounded_and_requires_enqueue(self):
+        from exchanges.ccxt_bot import CCXTBot
+        from live.event_bus import EventTags, EventTypes, ReasonCodes
+
+        symbols = {f"ISO{idx:02d}/USDT:USDT" for idx in range(14)}
+        cross_symbol = "CROSS/USDT:USDT"
+        bot = CCXTBot.__new__(CCXTBot)
+        bot.exchange = "testexchange"
+        bot.config = {"live": {"margin_mode_preference": "cross"}}
+        bot._blocked_margin_symbols_warned = set()
+        bot._blocked_margin_symbols_evented = set()
+        bot.markets_dict = {
+            symbol: {"info": {"onlyIsolated": True}}
+            for symbol in symbols
+        }
+        bot.markets_dict[cross_symbol] = {"info": {}}
+        bot._emit_live_event = MagicMock(return_value=object())
+
+        assert bot._filter_approved_symbols("long", symbols | {cross_symbol}) == {
+            cross_symbol
+        }
+
+        bot._emit_live_event.assert_called_once()
+        args, kwargs = bot._emit_live_event.call_args
+        assert args == (EventTypes.CONFIG_MARKET_COMPATIBILITY,)
+        assert kwargs["level"] == "info"
+        assert kwargs["component"] == "config.market_compatibility"
+        assert kwargs["tags"] == (
+            EventTags.MARKET,
+            EventTags.MODE,
+            EventTags.AVAILABILITY,
+        )
+        assert kwargs["pside"] == "long"
+        assert kwargs["status"] == "degraded"
+        assert kwargs["reason_code"] == ReasonCodes.CONFIG_ISOLATED_ONLY_MARKET_BLOCKED
+        assert kwargs["require_enqueue"] is True
+        assert kwargs["data"] == {
+            "action": "initial_entries_blocked",
+            "margin_mode_preference": "cross",
+            "capability": "isolated_only",
+            "blocked_count": 14,
+            "blocked_symbols": sorted(symbols)[:12],
+            "blocked_symbols_truncated": True,
+        }
+
+    def test_isolated_only_market_warning_and_event_dedupe_are_separate(self, caplog):
+        from exchanges.ccxt_bot import CCXTBot
+
+        symbol = "ISO/USDT:USDT"
+        bot = CCXTBot.__new__(CCXTBot)
+        bot.exchange = "testexchange"
+        bot.config = {"live": {"margin_mode_preference": "cross"}}
+        bot._blocked_margin_symbols_warned = set()
+        bot._blocked_margin_symbols_evented = set()
+        bot.markets_dict = {symbol: {"info": {"onlyIsolated": True}}}
+        bot._emit_live_event = MagicMock(return_value=object())
+
+        with caplog.at_level(logging.WARNING):
+            assert bot._filter_approved_symbols("long", {symbol}) == set()
+            assert bot._filter_approved_symbols("long", {symbol}) == set()
+            assert bot._filter_approved_symbols("short", {symbol}) == set()
+
+        assert bot._emit_live_event.call_count == 2
+        assert [call.kwargs["pside"] for call in bot._emit_live_event.call_args_list] == [
+            "long",
+            "short",
+        ]
+        warnings = [
+            record
+            for record in caplog.records
+            if "disabling" in record.getMessage()
+        ]
+        assert len(warnings) == 2
+        assert bot._blocked_margin_symbols_warned == {
+            ("long", symbol, "isolated_only"),
+            ("short", symbol, "isolated_only"),
+        }
+        assert bot._blocked_margin_symbols_evented == {
+            ("long", symbol, "isolated_only"),
+            ("short", symbol, "isolated_only"),
+        }
+
+    def test_isolated_only_market_event_retries_after_enqueue_failure_without_warning(
+        self, caplog
+    ):
+        from exchanges.ccxt_bot import CCXTBot
+
+        symbol = "ISO/USDT:USDT"
+        bot = CCXTBot.__new__(CCXTBot)
+        bot.exchange = "testexchange"
+        bot.config = {"live": {"margin_mode_preference": "cross"}}
+        bot._blocked_margin_symbols_warned = set()
+        bot._blocked_margin_symbols_evented = set()
+        bot.markets_dict = {symbol: {"info": {"onlyIsolated": True}}}
+        bot._emit_live_event = MagicMock(
+            side_effect=[RuntimeError("event enqueue failed"), None, object()]
+        )
+
+        with caplog.at_level(logging.WARNING):
+            assert bot._filter_approved_symbols("long", {symbol}) == set()
+            assert bot._filter_approved_symbols("long", {symbol}) == set()
+            assert bot._filter_approved_symbols("long", {symbol}) == set()
+            assert bot._filter_approved_symbols("long", {symbol}) == set()
+
+        assert bot._emit_live_event.call_count == 3
+        assert bot._blocked_margin_symbols_evented == {
+            ("long", symbol, "isolated_only")
+        }
+        warnings = [
+            record
+            for record in caplog.records
+            if "disabling" in record.getMessage()
+        ]
+        assert len(warnings) == 1
+
     def test_live_margin_mode_is_preserved_when_symbol_has_existing_state(self):
         from exchanges.ccxt_bot import CCXTBot
 
         bot = CCXTBot.__new__(CCXTBot)
         bot.config = {"live": {"margin_mode_preference": "cross"}}
         bot._blocked_margin_symbols_warned = set()
+        bot._blocked_margin_symbols_evented = set()
         bot.markets_dict = {
             "ISO/USDT:USDT": {
                 "marginModes": {"cross": True, "isolated": True},
@@ -733,6 +850,30 @@ class TestCCXTBotExecuteCancellation:
         assert policy["mode"] == "isolated"
         assert policy["blocked"] is False
         assert policy["live_margin_mode"] == "isolated"
+
+    def test_isolated_only_existing_live_state_is_not_blocked_or_emitted(self):
+        from exchanges.ccxt_bot import CCXTBot
+
+        symbol = "ISO/USDT:USDT"
+        bot = CCXTBot.__new__(CCXTBot)
+        bot.config = {"live": {"margin_mode_preference": "cross"}}
+        bot._blocked_margin_symbols_warned = set()
+        bot._blocked_margin_symbols_evented = set()
+        bot.markets_dict = {symbol: {"info": {"onlyIsolated": True}}}
+        bot.positions = {
+            symbol: {
+                "long": {"size": 1.0},
+                "short": {"size": 0.0},
+            }
+        }
+        bot.open_orders = {}
+        bot._live_margin_modes = {symbol: "isolated"}
+        bot._emit_live_event = MagicMock(return_value=object())
+
+        assert bot._filter_approved_symbols("long", {symbol}) == {symbol}
+        bot._emit_live_event.assert_not_called()
+        assert bot._blocked_margin_symbols_warned == set()
+        assert bot._blocked_margin_symbols_evented == set()
 
     def test_normalize_positions_records_live_margin_mode(self):
         from exchanges.ccxt_bot import CCXTBot

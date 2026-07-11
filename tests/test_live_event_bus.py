@@ -91,6 +91,10 @@ def test_live_event_reason_code_registry_values_are_unique_and_query_safe():
     assert ReasonCodes.WARMUP_CACHE_DECISION == "warmup_cache_decision"
     assert ReasonCodes.CONFIG_MARKET_UNSUPPORTED == "config_market_unsupported"
     assert (
+        ReasonCodes.CONFIG_ISOLATED_ONLY_MARKET_BLOCKED
+        == "config_isolated_only_market_blocked"
+    )
+    assert (
         ReasonCodes.CONFIG_STOCK_PERP_WRONG_EXCHANGE
         == "config_stock_perp_wrong_exchange"
     )
@@ -277,6 +281,8 @@ def test_route_table_keeps_data_events_off_console_by_default():
         assert DEFAULT_ROUTES[event_type].text is False
     assert DEFAULT_ROUTES[EventTypes.CONFIG_MARKET_COMPATIBILITY].structured is True
     assert DEFAULT_ROUTES[EventTypes.CONFIG_MARKET_COMPATIBILITY].monitor is True
+    assert DEFAULT_ROUTES[EventTypes.CONFIG_MARKET_COMPATIBILITY].console is False
+    assert DEFAULT_ROUTES[EventTypes.CONFIG_MARKET_COMPATIBILITY].text is False
     assert DEFAULT_ROUTES[EventTypes.ORDER_WAVE_COMPLETED].console is True
     assert DEFAULT_ROUTES[EventTypes.ORDER_WAVE_COMPLETED].text is True
     assert DEFAULT_ROUTES[EventTypes.EXECUTION_CREATE_DEFERRED].console is False
