@@ -186,6 +186,41 @@ def test_coin_hsl_fill_index_keeps_replay_and_contract_results_identical():
     )
 
 
+def test_compact_sparse_replay_indices_keep_run_and_explicit_boundaries():
+    import numpy as np
+
+    timestamps = np.arange(20, dtype=np.int64) * 60_000
+    constant = np.zeros(20, dtype=np.float64)
+
+    indices = hsl._hsl_compact_sparse_replay_indices(
+        timestamps,
+        np.full(20, 100.0, dtype=np.float64),
+        constant,
+        constant,
+        lookback_ms=30 * 24 * 60 * 60 * 1_000,
+        boundary_timestamps=(10 * 60_000,),
+    )
+
+    assert indices.tolist() == [0, 9, 10, 19]
+
+
+def test_compact_sparse_replay_indices_keep_rolling_window_expiry_boundary():
+    import numpy as np
+
+    timestamps = np.arange(10, dtype=np.int64) * 60_000
+    realized = np.asarray([0.0, 0.0, 0.0] + [1.0] * 7, dtype=np.float64)
+
+    indices = hsl._hsl_compact_sparse_replay_indices(
+        timestamps,
+        np.full(10, 100.0, dtype=np.float64),
+        realized,
+        np.zeros(10, dtype=np.float64),
+        lookback_ms=2 * 60_000,
+    )
+
+    assert indices.tolist() == [0, 2, 3, 4, 5, 9]
+
+
 def test_parse_hsl_config_warns_about_history_reinterpretation(caplog):
     bot = FakeHslBot(config={"live": {"hsl_signal_mode": "coin"}})
     values = {
@@ -4072,6 +4107,219 @@ def _flat_position_bot(symbol):
         symbol: {"long": {"size": 0.0, "price": 0.0}, "short": {"size": 0.0, "price": 0.0}}
     }
     return bot
+
+
+@pytest.mark.asyncio
+async def test_compact_sparse_replay_matches_dense_state_across_flat_gaps():
+    symbol = "A"
+    rows = []
+    for minute in range(1, 21):
+        balance = 100.0 if minute < 10 else 90.0
+        realized = 0.0 if minute < 3 else -1.0
+        upnl = -1.0 if minute == 2 else 0.0
+        rows.append(
+            {
+                "timestamp": minute * 60_000,
+                "balance": balance,
+                "realized_pnl": realized,
+                "realized_pnl_by_coin_pside": {
+                    symbol: {"long": realized, "short": 0.0}
+                },
+                "unrealized_pnl_by_coin_pside": {
+                    symbol: {"long": upnl, "short": 0.0}
+                },
+            }
+        )
+    history = {
+        "timeline": rows,
+        "panic_flatten_events": [],
+        "fill_events": [
+            {
+                "timestamp": 120_001,
+                "symbol": symbol,
+                "pside": "long",
+                "action": "increase",
+                "qty": 1.0,
+            },
+            {
+                "timestamp": 180_001,
+                "symbol": symbol,
+                "pside": "long",
+                "action": "decrease",
+                "qty": 1.0,
+                "pnl": -1.0,
+            },
+        ],
+    }
+
+    async def run(payload):
+        bot = _flat_position_bot(symbol)
+        bot.hsl["long"]["ema_span_minutes"] = 5.0
+        bot.get_exchange_time = lambda: rows[-1]["timestamp"]
+
+        async def fake_history(current_balance=None, **kwargs):
+            return payload
+
+        bot.get_balance_equity_history = fake_history
+        calls = 0
+        original_apply = bot._equity_hard_stop_apply_coin_metrics_sample
+
+        def count_apply(*args, **kwargs):
+            nonlocal calls
+            calls += 1
+            return original_apply(*args, **kwargs)
+
+        bot._equity_hard_stop_apply_coin_metrics_sample = count_apply
+        await bot._equity_hard_stop_initialize_coin_from_history()
+        state = bot._hsl_coin_state("long", symbol)
+        return state, calls
+
+    dense_state, dense_calls = await run(history)
+    sparse_state, sparse_calls = await run(_coin_history_as_compact(history, symbol))
+
+    assert sparse_calls < dense_calls
+    assert sparse_state["halted"] == dense_state["halted"]
+    assert sparse_state["no_restart_latched"] == dense_state["no_restart_latched"]
+    assert sparse_state["cooldown_until_ms"] == dense_state["cooldown_until_ms"]
+    assert sparse_state["pnl_reset_timestamp_ms"] == dense_state["pnl_reset_timestamp_ms"]
+    assert sparse_state["runtime"].red_seen_in_episode() == (
+        dense_state["runtime"].red_seen_in_episode()
+    )
+    for key in (
+        "timestamp_ms",
+        "tier",
+        "red_active_now",
+        "red_seen_in_episode",
+        "balance",
+        "slot_budget",
+        "peak_realized_pnl",
+        "realized_pnl",
+        "unrealized_pnl",
+        "drawdown_raw",
+        "drawdown_ema",
+        "drawdown_score",
+    ):
+        if isinstance(dense_state["last_metrics"][key], float):
+            assert sparse_state["last_metrics"][key] == pytest.approx(
+                dense_state["last_metrics"][key], abs=1e-12
+            )
+        else:
+            assert sparse_state["last_metrics"][key] == dense_state["last_metrics"][key]
+
+
+@pytest.mark.asyncio
+async def test_compact_replay_keeps_held_and_ambiguous_pairs_dense():
+    import numpy as np
+
+    symbol = "A"
+    row_count = 20
+
+    async def run(position_size, fill_events):
+        bot = _flat_position_bot(symbol)
+        bot.positions[symbol]["long"] = {"size": position_size, "price": 100.0}
+        captured = []
+
+        def record_event(event_type, tags, data, **kwargs):
+            captured.append((event_type, data))
+
+        bot._monitor_record_event = record_event
+        payload = {
+            "hsl_coin_compact_replay": {
+                "timestamps": np.arange(1, row_count + 1, dtype=np.int64) * 60_000,
+                "balances": np.full(row_count, 100.0, dtype=np.float64),
+                "realized_pnl": np.zeros(row_count, dtype=np.float64),
+                "pair_values": {
+                    ("long", symbol): {
+                        "realized_pnl": np.zeros(row_count, dtype=np.float64),
+                        "unrealized_pnl": np.zeros(row_count, dtype=np.float64),
+                    }
+                },
+            },
+            "panic_flatten_events": [],
+            "fill_events": fill_events,
+        }
+
+        async def fake_history(current_balance=None, **kwargs):
+            return payload
+
+        bot.get_balance_equity_history = fake_history
+        bot.get_exchange_time = lambda: row_count * 60_000
+        await bot._equity_hard_stop_initialize_coin_from_history()
+        return next(data for event_type, data in captured if event_type == "hsl.replay.completed")
+
+    held = await run(1.0, [])
+    assert held["candidate_rows"] == row_count
+    assert held["dense_replay_pairs"] == 1
+    assert held["dense_fallback_pairs"] == 0
+    assert held["sparse_replay_pairs"] == 0
+
+    ambiguous = await run(
+        0.0,
+        [
+            {
+                "timestamp": 60_001,
+                "symbol": symbol,
+                "pside": "long",
+                "action": "unknown",
+                "qty": 1.0,
+            }
+        ],
+    )
+    assert ambiguous["replay_strategy"] == "dense_compact"
+    assert ambiguous["candidate_rows"] == row_count
+    assert ambiguous["dense_equivalent_rows"] == row_count
+    assert ambiguous["dense_replay_pairs"] == 1
+    assert ambiguous["dense_fallback_pairs"] == 1
+    assert ambiguous["sparse_replay_pairs"] == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("compact", [False, True])
+async def test_sparse_and_dense_replay_reject_nan_after_pair_coverage(compact):
+    symbol = "A"
+    history = {
+        "timeline": [
+            {
+                "timestamp": minute * 60_000,
+                "balance": 100.0,
+                "realized_pnl": 0.0,
+                "realized_pnl_by_coin_pside": {
+                    symbol: {"long": value, "short": 0.0}
+                },
+                "unrealized_pnl_by_coin_pside": {
+                    symbol: {"long": value, "short": 0.0}
+                },
+            }
+            for minute, value in ((1, 0.0), (2, 0.0), (3, float("nan")))
+        ],
+        "panic_flatten_events": [],
+        "fill_events": [
+            {
+                "timestamp": 60_001,
+                "symbol": symbol,
+                "pside": "long",
+                "action": "increase",
+                "qty": 1.0,
+            },
+            {
+                "timestamp": 120_001,
+                "symbol": symbol,
+                "pside": "long",
+                "action": "decrease",
+                "qty": 1.0,
+            },
+        ],
+    }
+    bot = _flat_position_bot(symbol)
+
+    async def fake_history(current_balance=None, **kwargs):
+        return _coin_history_as_compact(history, symbol) if compact else history
+
+    bot.get_balance_equity_history = fake_history
+    bot.get_exchange_time = lambda: 180_000
+
+    with pytest.raises(ValueError, match="realized_pnl_by_coin_pside"):
+        await bot._equity_hard_stop_initialize_coin_from_history()
 
 
 @pytest.mark.asyncio

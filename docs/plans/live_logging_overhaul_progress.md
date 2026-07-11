@@ -7308,3 +7308,50 @@ VPS5 deployment status:
 - Validation in progress: coin-HSL and benchmark suites, compact/rich sample and
   final-state parity, balance-history regressions, syntax/diff checks, and a
   controlled post-merge VPS5 restart with process/RSS/swap/I/O comparison.
+
+### Deployed Slices: Compact Replay, Scorecard, And Fill Index
+
+- PR #1180 merged the compact cold replay payload after exact-head Hermes and
+  Grok approval plus green CI. VPS5 was restarted on the merge; all five bots
+  reached a settled hard-green smoke, and four coin-HSL bots emitted compact
+  protective-ready evidence. Full replay still took `453.980s` to `1728.585s`,
+  proving memory pressure improved without removing pair-minute complexity.
+- PRs #1181 and #1182 added bounded replay scorecard fields and recovered
+  protective elapsed aggregates from completion events. Both were read-only
+  report slices and required no bot restart.
+- PR #1183 grouped cold replay fills once by `(pside, symbol)` and reused the
+  stable index for replay-contract inference and position-size reconstruction.
+  Hermes and Grok approved exact head `73a0b935`, CI passed, and it merged as
+  `b29d5ca5`. VPS5 pulled the clean merge and restarted all five bots while
+  preserving local artifacts and the unrelated `misc` tmux session.
+- Immediate and fresh settled smoke windows were hard-green; the recovery
+  window recorded `380/380` successful remote and `42/42` account-critical
+  calls. The indexed history-loaded stage took only `0.103s` to `0.213s` for
+  `1406` to `5359` fills. KuCoin and Binance full replay later completed in
+  `601.246s` and `914.691s`; OKX and GateIO remained active without replay
+  failures. The remaining cost is the pair-minute metric loop.
+
+### Active Slice: Exact Sparse Flat-Pair HSL Replay
+
+- Branch: `codex/v8-hsl-sparse-replay` from deployed `b29d5ca5`.
+- Scope: keep currently held pair history dense, but replay historical flat
+  pairs only at exact account/pair value-run boundaries, rolling-lookback
+  expiry boundaries, fill/marker/cooldown/required/restart boundaries, and the
+  final row. Ambiguous fill replay falls back to dense iteration.
+- Structured replay events and `live-performance-report` expose bounded
+  strategy, candidate-row, dense-equivalent-row, and reduction fields.
+- Offline acceptance evidence: a 43,201-minute, 30-pair fixture with one held
+  pair, same-timestamp fills, account-balance changes, EMA smoothing, and
+  cooldown/panic transitions produced identical candidate/dense final-state
+  hashes. Candidate replay applied `43652` samples versus `825430` dense,
+  eliminating `781778` historical samples while preserving all `43201` held
+  samples. Network, cache-read, and cache-write side-effect counters stayed
+  zero.
+- Reproduce the full-scale proof offline with `passivbot tool
+  hsl-replay-benchmark --minutes 43201 --symbols 30 --held-symbols 1
+  --local-scale --compact`.
+- The affected benchmark, coin-HSL, HSL metric-regression, and performance
+  report suites pass. Terra's final delta preflight reported no findings after
+  held-density, equivalence-state, fallback-telemetry, and warning-clean test
+  fixes. Publication, exact-head reviews/CI, and post-merge VPS
+  timing/process-pressure validation remain pending.

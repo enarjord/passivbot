@@ -1793,6 +1793,13 @@ def test_live_performance_report_hsl_replay_profile_exposes_protective_scorecard
                     "signal_mode": "coin",
                     "stage": "full_replay",
                     "history_format": "compact",
+                    "replay_strategy": "sparse_change_points",
+                    "candidate_rows": 120,
+                    "dense_equivalent_rows": 1200,
+                    "candidate_reduction_pct": 90.0,
+                    "dense_replay_pairs": 1,
+                    "dense_fallback_pairs": 0,
+                    "sparse_replay_pairs": 9,
                     "full_elapsed_s": 30.0,
                 },
             ),
@@ -1843,6 +1850,7 @@ def test_live_performance_report_hsl_replay_profile_exposes_protective_scorecard
                     "signal_mode": "coin",
                     "stage": "loaded",
                     "history_format": "timeline",
+                    "replay_strategy": "dense_timeline",
                 },
             ),
             _monitor_row(
@@ -1875,6 +1883,10 @@ def test_live_performance_report_hsl_replay_profile_exposes_protective_scorecard
                     "signal_mode": "coin",
                     "stage": "full_replay",
                     "history_format": "compact",
+                    "replay_strategy": "sparse_change_points",
+                    "candidate_rows": 100,
+                    "dense_equivalent_rows": 1000,
+                    "candidate_reduction_pct": 90.0,
                     "protective_elapsed_s": 5.0,
                     "startup_blocking_elapsed_s": 5.0,
                     "full_elapsed_s": 25.0,
@@ -1894,6 +1906,10 @@ def test_live_performance_report_hsl_replay_profile_exposes_protective_scorecard
     groups = {group["bot"]: group for group in profile["groups"]}
 
     assert profile["history_format_counts"] == {"compact": 2, "timeline": 1}
+    assert profile["replay_strategy_counts"] == {
+        "sparse_change_points": 2,
+        "dense_timeline": 1,
+    }
     assert profile["protective_ready_bot_count"] == 3
     assert profile["protective_ready_elapsed_ms"]["count"] == 3
     assert profile["protective_ready_elapsed_ms"]["min"] == 5000
@@ -1901,9 +1917,32 @@ def test_live_performance_report_hsl_replay_profile_exposes_protective_scorecard
     assert profile["full_replay_elapsed_ms"]["count"] == 2
     assert profile["full_replay_elapsed_ms"]["max"] == 30000
     assert summary_profile["history_format_counts"] == {"compact": 2, "timeline": 1}
+    assert summary_profile["replay_strategy_counts"] == {
+        "sparse_change_points": 2,
+        "dense_timeline": 1,
+    }
     assert summary_profile["protective_ready_elapsed_ms"]["max"] == 20000
     assert summary_profile["full_replay_elapsed_ms"]["max"] == 30000
     assert groups["binance/binance_01"]["history_format"] == "compact"
+    assert groups["binance/binance_01"]["replay_strategy"] == "sparse_change_points"
+    assert groups["binance/binance_01"]["completed"]["data"]["candidate_rows"] == 120
+    assert (
+        groups["binance/binance_01"]["completed"]["data"]["dense_equivalent_rows"]
+        == 1200
+    )
+    assert (
+        groups["binance/binance_01"]["completed"]["data"]["candidate_reduction_pct"]
+        == 90.0
+    )
+    assert groups["binance/binance_01"]["completed"]["data"][
+        "dense_replay_pairs"
+    ] == 1
+    assert groups["binance/binance_01"]["completed"]["data"][
+        "dense_fallback_pairs"
+    ] == 0
+    assert groups["binance/binance_01"]["completed"]["data"][
+        "sparse_replay_pairs"
+    ] == 9
     assert groups["binance/binance_01"]["protective_ready"]["derived"] == {
         "latest_elapsed_ms": 12300,
         "protective_elapsed_ms": 12300,
@@ -1911,6 +1950,7 @@ def test_live_performance_report_hsl_replay_profile_exposes_protective_scorecard
         "startup_blocking_elapsed_ms": 12300,
     }
     assert groups["gateio/gateio_01"]["history_format"] == "timeline"
+    assert groups["gateio/gateio_01"]["replay_strategy"] == "dense_timeline"
     assert groups["gateio/gateio_01"]["protective_ready"]["derived"] == {
         "latest_elapsed_ms": 20000,
         "startup_blocking": True,

@@ -3644,6 +3644,87 @@ def _equity_hard_stop_index_coin_fill_events(
     return indexed
 
 
+def _hsl_compact_sparse_replay_indices(
+    timestamps: Any,
+    balances: Any,
+    realized_values: Any,
+    unrealized_values: Any,
+    *,
+    lookback_ms: Optional[int],
+    boundary_timestamps: tuple[int, ...] = (),
+) -> Any:
+    """Select exact change-point rows for compact coin-HSL metric stepping.
+
+    Rust advances EMA state across elapsed constant-input minutes exactly. Run
+    endpoints preserve the dense rolling-window timestamp semantics; expiry
+    boundaries preserve changes caused only by the configured lookback.
+    """
+    import numpy as np
+
+    ts = np.asarray(timestamps, dtype=np.int64)
+    balance = np.asarray(balances, dtype=np.float64)
+    if ts.ndim != 1 or balance.ndim != 1 or len(ts) != len(balance):
+        raise ValueError("compact sparse replay timestamps/balances must be equal 1D arrays")
+    row_count = len(ts)
+    if row_count == 0:
+        return np.empty(0, dtype=np.int64)
+
+    selected = np.zeros(row_count, dtype=bool)
+
+    def mark_run_boundaries(values: Any) -> Any:
+        if values is None:
+            return np.empty(0, dtype=np.int64)
+        arr = np.asarray(values, dtype=np.float64)
+        if arr.ndim != 1 or len(arr) != row_count:
+            raise ValueError("compact sparse replay values must match timestamp length")
+        if row_count == 1:
+            starts = np.array([0], dtype=np.int64)
+        else:
+            finite = np.isfinite(arr)
+            same = (finite[1:] == finite[:-1]) & (
+                (~finite[1:]) | (arr[1:] == arr[:-1])
+            )
+            starts = np.concatenate(
+                (
+                    np.array([0], dtype=np.int64),
+                    np.flatnonzero(~same).astype(np.int64) + 1,
+                )
+            )
+        ends = np.concatenate((starts[1:] - 1, np.array([row_count - 1])))
+        selected[starts] = True
+        selected[ends] = True
+        return ends
+
+    mark_run_boundaries(balance)
+    realized_run_ends = mark_run_boundaries(realized_values)
+    mark_run_boundaries(unrealized_values)
+
+    if lookback_ms is not None:
+        lookback_ms = int(lookback_ms)
+        for run_end in realized_run_ends:
+            expiry_idx = int(
+                np.searchsorted(
+                    ts,
+                    int(ts[int(run_end)]) + lookback_ms,
+                    side="right",
+                )
+            )
+            if expiry_idx < row_count:
+                selected[expiry_idx] = True
+                if expiry_idx > 0:
+                    selected[expiry_idx - 1] = True
+
+    for boundary_ts in boundary_timestamps:
+        boundary_idx = int(np.searchsorted(ts, int(boundary_ts), side="left"))
+        if boundary_idx < row_count:
+            selected[boundary_idx] = True
+        if boundary_idx > 0:
+            selected[boundary_idx - 1] = True
+
+    selected[-1] = True
+    return np.flatnonzero(selected).astype(np.int64)
+
+
 def _equity_hard_stop_coin_replay_events(
     fill_events: list[Any], pside: str, symbol: str, *, qty_step: float = 0.0
 ) -> tuple[list[tuple[int, str, float]], bool]:
@@ -5244,6 +5325,10 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
         )
         self._equity_hard_stop_coin_replay_pending_pairs = set(active_pairs)
         pair_rows_applied: dict[tuple[str, str], int] = {}
+        pair_candidate_rows: dict[tuple[str, str], int] = {}
+        dense_replay_pairs = 0
+        dense_fallback_pairs = 0
+        sparse_replay_pairs = 0
         logging.info(
             "[risk] HSL coin history reconstruction loaded | symbols=%d pairs=%d rows=%d fills=%d panic_events=%d",
             len(symbols),
@@ -5260,6 +5345,11 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
                 "stage": "loaded",
                 "history_format": (
                     "compact" if compact_replay is not None else "timeline"
+                ),
+                "replay_strategy": (
+                    "compact_pending_classification"
+                    if compact_replay is not None
+                    else "dense_timeline"
                 ),
                 "symbols": len(symbols),
                 "pairs": len(active_pairs),
@@ -5316,6 +5406,7 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
                     "required_pairs": len(active_required_pairs),
                     "timeline_rows": replay_row_count,
                     "applied_rows": int(applied_rows),
+                    "candidate_rows": pair_candidate_rows.get((pside, symbol)),
                     "total_applied_rows": int(rows),
                     "rows_per_second": round(rows_per_second, 3)
                     if rows_per_second is not None
@@ -5388,6 +5479,14 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
                         force=True,
                     )
                 state = self._hsl_coin_state(pside, symbol)
+                cooldown_minutes = float(
+                    self.hsl[pside]["cooldown_minutes_after_red"]
+                )
+                cooldown_ms = (
+                    int(round(cooldown_minutes * 60_000.0))
+                    if cooldown_minutes > 0.0
+                    else 0
+                )
                 pair_fill_events = fill_events_by_pair.get((pside, symbol), [])
                 contract = self._equity_hard_stop_infer_coin_replay_contract(
                     pside, symbol, pair_fill_events, now_ms
@@ -5420,6 +5519,43 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
                     symbol,
                     qty_step=qty_step,
                 )
+                pair_uses_dense_replay = (
+                    compact_replay is None
+                    or replay_ambiguous
+                    or (pside, symbol) in active_held_pairs
+                )
+                if pair_uses_dense_replay:
+                    dense_replay_pairs += 1
+                    if compact_replay is not None and replay_ambiguous:
+                        dense_fallback_pairs += 1
+                else:
+                    sparse_replay_pairs += 1
+                sparse_boundary_timestamps = []
+                if required_start_ts is not None:
+                    sparse_boundary_timestamps.append(int(required_start_ts))
+                if replay_start_boundary_ts is not None:
+                    sparse_boundary_timestamps.append(int(replay_start_boundary_ts))
+                if contract["cooldown_until_ms"] is not None:
+                    sparse_boundary_timestamps.append(int(contract["cooldown_until_ms"]))
+                for event_ts, _action, _qty in replay_events:
+                    sparse_boundary_timestamps.append(
+                        int(event_ts) // _HSL_REPLAY_MATRIX_INTERVAL_MS
+                        * _HSL_REPLAY_MATRIX_INTERVAL_MS
+                    )
+                    if cooldown_ms > 0:
+                        sparse_boundary_timestamps.append(int(event_ts) + cooldown_ms)
+                for (
+                    marker_pside,
+                    marker_symbol,
+                    marker_minute_ts,
+                ), marker_payload in latest_panic_by_coin_minute.items():
+                    if marker_pside != pside or marker_symbol != symbol:
+                        continue
+                    sparse_boundary_timestamps.append(int(marker_minute_ts))
+                    if cooldown_ms > 0:
+                        sparse_boundary_timestamps.append(
+                            int(marker_payload["timestamp"]) + cooldown_ms
+                        )
 
                 def reset_rolling_window() -> None:
                     nonlocal window_base_realized
@@ -5462,9 +5598,33 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
                         if compact_values is None
                         else compact_values["unrealized_pnl"]
                     )
+                    compact_replay_indices = (
+                        np.arange(replay_row_count, dtype=np.int64)
+                        if pair_uses_dense_replay
+                        else _hsl_compact_sparse_replay_indices(
+                            compact_timestamps[:replay_row_count],
+                            compact_balances[:replay_row_count],
+                            (
+                                None
+                                if compact_realized_values is None
+                                else compact_realized_values[:replay_row_count]
+                            ),
+                            (
+                                None
+                                if compact_unrealized_values is None
+                                else compact_unrealized_values[:replay_row_count]
+                            ),
+                            lookback_ms=lookback_ms,
+                            boundary_timestamps=tuple(sparse_boundary_timestamps),
+                        )
+                    )
+                    pair_candidate_rows[(pside, symbol)] = int(
+                        len(compact_replay_indices)
+                    )
 
                     def iter_replay_rows():
-                        for compact_idx in range(replay_row_count):
+                        for compact_idx in compact_replay_indices:
+                            compact_idx = int(compact_idx)
                             realized_value = (
                                 math.nan
                                 if compact_realized_values is None
@@ -5488,6 +5648,7 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
                             )
 
                 else:
+                    pair_candidate_rows[(pside, symbol)] = int(replay_row_count)
 
                     def iter_replay_rows():
                         for legacy_idx, row in enumerate(timeline_rows, start=1):
@@ -5558,7 +5719,7 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
                     if background_replay
                     else 0.0
                 )
-                for (
+                for replay_iteration_idx, (
                     row_idx,
                     ts,
                     row_balance,
@@ -5568,8 +5729,8 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
                     has_unrealized,
                     unrealized_value,
                     source_row,
-                ) in iter_replay_rows():
-                    if row_idx % yield_rows == 0:
+                ) in enumerate(iter_replay_rows(), start=1):
+                    if replay_iteration_idx % yield_rows == 0:
                         await asyncio.sleep(yield_sleep_s)
                         check_shutdown("hsl_coin_history_replay_rows")
                         log_replay_progress(pair_idx, pside, symbol, applied_rows)
@@ -5938,6 +6099,26 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
         total_elapsed_s = max(0.0, time.monotonic() - initialization_started_s)
         rows_per_second = float(rows) / elapsed_s if elapsed_s > 0.0 else None
         skipped_pairs = sum(1 for pair in active_pairs if pair_rows_applied.get(pair, 0) == 0)
+        dense_equivalent_rows = int(replay_row_count * len(active_pairs))
+        candidate_rows = int(sum(pair_candidate_rows.values()))
+        candidate_reduction_pct = (
+            0.0
+            if dense_equivalent_rows <= 0
+            else max(
+                0.0,
+                (dense_equivalent_rows - candidate_rows)
+                / dense_equivalent_rows
+                * 100.0,
+            )
+        )
+        replay_strategy = "dense_timeline"
+        if compact_replay is not None:
+            if sparse_replay_pairs > 0 and dense_replay_pairs > 0:
+                replay_strategy = "mixed"
+            elif sparse_replay_pairs > 0:
+                replay_strategy = "sparse_change_points"
+            else:
+                replay_strategy = "dense_compact"
         logging.info(
             "[risk] HSL coin history reconstruction completed | rows=%d pairs=%d elapsed=%.1fs",
             rows,
@@ -5953,8 +6134,15 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
                 "history_format": (
                     "compact" if compact_replay is not None else "timeline"
                 ),
+                "replay_strategy": replay_strategy,
                 "rows": int(rows),
                 "applied_rows": int(rows),
+                "candidate_rows": candidate_rows,
+                "dense_equivalent_rows": dense_equivalent_rows,
+                "candidate_reduction_pct": round(candidate_reduction_pct, 3),
+                "dense_replay_pairs": int(dense_replay_pairs),
+                "dense_fallback_pairs": int(dense_fallback_pairs),
+                "sparse_replay_pairs": int(sparse_replay_pairs),
                 "pairs": len(active_pairs),
                 "held_pairs": len(active_held_pairs),
                 "cooldown_pairs": len(active_panic_pairs),

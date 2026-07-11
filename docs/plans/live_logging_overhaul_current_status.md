@@ -22,62 +22,69 @@ Estimated completion:
 
 ## Active Review Slice
 
-- PR and publication state: query live GitHub metadata;
-  `Index coin-HSL replay fills once`
-- Branch: `codex/v8-hsl-fill-index`
+- PR and publication state: PR #1184; query live GitHub metadata for current
+  state; `Replay flat coin-HSL history at exact change points`
+- Branch: `codex/v8-hsl-sparse-replay`
 - Head: query live GitHub metadata; this commit cannot embed its own final SHA
   without making that value stale
-- Base: `e5b4d26d3235b910c7549675f18dce865431cbb1`
-- Scope: group cold coin-HSL fill history once by `(pside, symbol)` and reuse
-  the stable per-pair lists for cooldown/intervention contract inference and
-  position-size replay reconstruction. This removes repeated broad fill scans
-  before the separate sparse minute-replay slice.
-- Triggering evidence: post-PR #1180 VPS5 full replay remained between
-  `453.980s` and `1728.585s`. Source inspection confirmed both repeated
-  per-pair fill scans and the larger `pairs * timeline_rows` metric loop.
-- Non-goals: no minute-row skipping, replay ordering or arithmetic change, HSL
-  threshold/episode/cooldown behavior change, cache schema, exchange call,
-  process control, Rust, backtest, or smoke-verdict change.
-- Local validation: `144` coin-HSL replay, benchmark, and metric-regression
-  tests pass; Python compilation and diff hygiene pass. A deterministic
-  `30,000`-fill, `30`-pair comparison produced identical replay-event output
-  and reduced this preprocessing substep from `0.181s` to `0.027s` locally.
-- Independent preflight: Terra reported canonical cold-start history green and
-  identified one conflicting-alias edge. The index now fails loudly when
-  `pside` and `position_side` disagree, with a regression test. Sol owns final
-  adjudication.
+- Base: `b29d5ca5fd3ffc2d75657459c0ab549e5484596d`
+- Scope: compact cold coin-HSL replay keeps currently held pair history dense,
+  but evaluates historical flat pairs only at exact account/pair run
+  boundaries, rolling-lookback expiries, fill/marker/cooldown/required/restart
+  boundaries, and the final row. Ambiguous fill replay falls back to the dense
+  path. Structured replay events and the performance report expose bounded
+  candidate/dense-equivalent row counts and strategy labels.
+- Triggering evidence: post-PR #1183 full replay completed in `601.246s` for
+  KuCoin, `914.691s` for Binance, `2009.120s` for GateIO, and `2279.519s` for
+  OKX. The indexed-fill load stage took only `0.103s` to `0.213s`, confirming
+  the per-pair minute loop is the dominant remaining local cost.
+- Non-goals: no held-pair sample skipping, HSL arithmetic or threshold change,
+  panic/cooldown/restart contract change, cache authority/schema, exchange
+  call, process control, Rust, backtest, or smoke-verdict change.
+- Local validation: the affected benchmark, coin-HSL, metric-regression, and
+  performance-report suites pass. A deterministic 43,201-minute, 30-pair
+  fixture with one held pair produced identical candidate/dense final-state
+  hashes while reducing replay samples from `825430` to `43652`; all `43201`
+  held-pair samples remained dense. The benchmark is offline and recorded zero
+  network, cache-read, and cache-write side effects.
+- Independent preflight: Terra identified three valid issues: held-pair density
+  was data-dependent, benchmark equivalence omitted restart/cooldown state, and
+  dense fallback telemetry was mislabeled. The implementation now forces held
+  pairs dense, hashes the behavior-relevant runtime state, reports mixed/dense
+  fallback counts, and has independent warning-clean regressions. Terra's final
+  delta review reported no findings and green-lit publication; Sol adjudicated
+  the fixes.
 - Publication state, exact head, mergeability, CI, and current-head review
   verdicts: query live GitHub metadata. Do not encode those transient values in
   the same PR that contains this status file, because every correction would
   create a different head and immediately stale the embedded value.
 - Expected VPS action: after exact-head approval and merge, pull while
   preserving local artifacts, restart the five supervised bots, and compare
-  replay timings plus the bounded smoke report. The initializer code is loaded
-  only at process start.
+  candidate counts, full-replay timings, process pressure, and the bounded
+  smoke report. The initializer code is loaded only at process start.
 
 Next action:
 
-1. Finish validation and independent preflight, publish the fill-index slice,
-   resolve verified findings, and merge only after the exact-head gate; then
-   run the declared controlled VPS5 restart and smoke comparison.
+1. Resolve verified PR #1184 findings and merge only after the exact-head
+   reviewer and CI gate; then run the declared controlled VPS5 restart and
+   smoke comparison.
 
 ## Deployed Baseline
 
-- Remote `v8`: `e5b4d26d`, PR #1182
-- VPS5 repository: `e5b4d26d`, PR #1182; tracked status clean
+- Remote `v8`: `b29d5ca5`, PR #1183
+- VPS5 repository: `b29d5ca5`, PR #1183; tracked status clean
 - VPS5 expected bots: five; all are running after the controlled restart
 - Immediate and fresh settled smoke reports were green: all five expected bots
-  matched, hard failures were zero, and the fresh window recorded `614/614`
-  remote plus `90/90` account-critical calls succeeded. One Kucoin
+  matched, hard failures were zero, and the fresh recovery window recorded
+  `380/380` remote plus `42/42` account-critical calls succeeded. One Kucoin
   `RequestTimeout` cycle failure in the wider restart window recovered before
   the fresh smoke.
 - All four coin-HSL bots emitted `history_format=compact` and protective-ready
-  success. Kucoin completed full replay in `453.98s`; three background replays
-  remained active with no required pair work pending.
-- Compared with the pre-deploy sample, aggregate RSS fell from `694840 KB` to
-  `555296 KB`, all five processes moved from four `D` states to five `R`
-  states, and host swap use fell from `2926 MB` to `906 MB`. CPU remained high
-  while background replay continued.
+  success in `13.337s` to `78.832s`. The first observed post-PR #1183 full
+  completions were KuCoin at `601.246s` and Binance at `914.691s`; OKX and
+  GateIO remained active without failures. The fill-index prerequisite reduced
+  history-loaded work to `0.103s` to `0.213s`, but did not remove the dominant
+  pair-minute loop.
 - PR #1181 required no restart; all five bot pane PIDs remained unchanged. Its
   bounded current-segment scorecard reported four compact full-replay
   completions from `453.98s` to `1728.585s`, but exposed the active slice's
@@ -109,13 +116,14 @@ Next action:
 ## Next Slice
 
 The coin-HSL protective-readiness split, cooperative background cadence,
-current process-pressure query, compact cold replay payload, and bounded replay
-scorecard are merged and deployed. The active slice removes repeated broad fill
-scans as the first behavior-neutral prerequisite for exact sparse full replay.
+current process-pressure query, compact cold replay payload, bounded replay
+scorecard, and stable per-pair fill index are merged and deployed. The active
+slice uses exact sparse change points for historical flat-pair replay while
+keeping held-pair work dense.
 Remaining candidates:
 
-- realistic sparse replay fixtures and dense-reference equivalence reporting
-- exact lower-complexity minute replay using indexed episode/change boundaries
+- exact sparse replay deployment and VPS timing/process-pressure proof
+- deeper internal-stage profiling if live residual cost remains material
 - unsupported configured-market and stock-perp compatibility events
 - bounded operator tooling improvements sharing one code and validation surface
 

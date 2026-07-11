@@ -128,6 +128,7 @@ _EXECUTION_CONFIRMATION_TERMINALS = {
 _HSL_REPLAY_STRING_FIELDS = (
     "error_type",
     "history_format",
+    "replay_strategy",
     "signal_mode",
     "stage",
     "timeframe",
@@ -162,6 +163,12 @@ _HSL_REPLAY_NUMERIC_FIELDS = (
     "record_start_ts",
     "pair_idx",
     "applied_rows",
+    "candidate_rows",
+    "dense_equivalent_rows",
+    "candidate_reduction_pct",
+    "dense_replay_pairs",
+    "dense_fallback_pairs",
+    "sparse_replay_pairs",
     "total_applied_rows",
     "rows",
     "skipped_pairs",
@@ -1793,6 +1800,9 @@ class _HslReplayProfileAccumulator:
         history_format = data.get("history_format")
         if history_format is not None and is_newer("history_format"):
             retain("history_format", str(history_format))
+        replay_strategy = data.get("replay_strategy")
+        if replay_strategy is not None and is_newer("replay_strategy"):
+            retain("replay_strategy", str(replay_strategy))
 
     def to_dict(
         self,
@@ -1807,6 +1817,7 @@ class _HslReplayProfileAccumulator:
         latest_stage_counts: Counter[str] = Counter()
         active_stage_counts: Counter[str] = Counter()
         history_format_counts: Counter[str] = Counter()
+        replay_strategy_counts: Counter[str] = Counter()
         protective_ready_elapsed_ms: list[int] = []
         full_replay_elapsed_ms: list[int] = []
         for bot, state in self.bots.items():
@@ -1825,6 +1836,7 @@ class _HslReplayProfileAccumulator:
                 "completed": state.get("completed"),
                 "failed": state.get("failed"),
                 "history_format": state.get("history_format"),
+                "replay_strategy": state.get("replay_strategy"),
             }
             group = {
                 key: value for key, value in group.items() if value not in (None, {}, [])
@@ -1846,6 +1858,9 @@ class _HslReplayProfileAccumulator:
             history_format = state.get("history_format")
             if history_format:
                 history_format_counts[str(history_format)] += 1
+            replay_strategy = state.get("replay_strategy")
+            if replay_strategy:
+                replay_strategy_counts[str(replay_strategy)] += 1
             protective_elapsed_ms = None
             protective_ready = state.get("protective_ready")
             if isinstance(protective_ready, dict):
@@ -1904,6 +1919,7 @@ class _HslReplayProfileAccumulator:
             "latest_stage_counts": dict(latest_stage_counts.most_common()),
             "active_stage_counts": dict(active_stage_counts.most_common()),
             "history_format_counts": dict(history_format_counts.most_common()),
+            "replay_strategy_counts": dict(replay_strategy_counts.most_common()),
             "active_bot_count": int(latest_status_counts.get("active", 0)),
             "completed_bot_count": int(latest_status_counts.get("completed", 0)),
             "failed_bot_count": int(latest_status_counts.get("failed", 0)),
