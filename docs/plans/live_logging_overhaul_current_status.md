@@ -22,7 +22,7 @@ Estimated completion:
 
 ## Active Review Slice
 
-- PR: not yet opened; `Release coin-HSL startup after held protection`
+- PR: query live GitHub metadata; `Release coin-HSL startup after held protection`
 - Branch: `codex/v8-hsl-protective-readiness`
 - Head: query live GitHub metadata; this commit cannot embed its own final SHA
   without making that value stale
@@ -57,9 +57,7 @@ Estimated completion:
 
 Next action:
 
-1. Finish author validation and publish the review-ready PR with the exact
-   non-goals above.
-2. Resolve verified findings and merge only after the exact-head gate, then
+1. Resolve verified findings and merge only after the exact-head gate, then
    perform the declared VPS5 restart/smoke validation.
 
 ## Deployed Baseline
