@@ -22,44 +22,58 @@ Estimated completion:
 
 ## Active Review Slice
 
-- PR #1190, `Expose HSL replay scan throughput`
-- Branch: `codex/v8-hsl-replay-scan-profile`
-- Base: `ff1b2c1f9ee9968a4e46f3ba598f3c7f091efe42`
-- Scope: expose per-pair and cumulative replay candidate rows scanned
-  separately from HSL state-update rows applied; make performance and smoke
-  ETA projections prefer scanned-row throughput; retain explicit legacy
-  applied-row fallback and exact terminal candidate-work estimates.
-- Behavior boundary: no replay candidate ordering, row application, yield
-  cadence, protective readiness, risk state, exchange call, Rust/order logic,
-  or trading behavior change. Each pair emits one bounded terminal progress
-  sample so halted and zero-apply scan work remains observable.
-- Validation: the focused HSL coin-mode, replay-benchmark, performance-report,
-  smoke-report, event-registry, incident-bundle, and restart-smoke suites pass.
-  Eight real fake-live HSL scenarios pass. Python compilation,
-  `git diff --check`, and the added-line silent-handling scan pass. Independent
-  preflight findings for halted-pair terminal progress and completed sparse
-  candidate-work estimates are resolved with regressions.
+- Branch: `codex/v8-hsl-required-zero-estimate`
+- Base: `6b2da757f2fbc590c12365870475176632269021`
+- Triggering evidence: the PR #1190 deployment reported active optional replay
+  with positive `estimated_dense_remaining_rows` but generic
+  `estimated_remaining_rows=0` because `required_pairs=0`. The same premature
+  zero can occur after required work completes while optional replay remains.
+- Scope: make generic active replay remaining rows/time use the full-replay
+  dense upper bound and label it `dense_rows_upper_bound`. Keep
+  `estimated_required_remaining_*` as the separate protective-work metric and
+  keep terminal `candidate_rows_terminal` estimates exact.
+- Behavior boundary: read-only performance/smoke report derivation and tests
+  only. No event producer, replay candidate/order/application, HSL state,
+  exchange call, process control, smoke verdict, Rust/order/risk logic, or
+  trading behavior change.
+- Validation: full performance-report, smoke-report, incident-bundle, and
+  restart-smoke-plan suites plus Python compilation, `git diff --check`, and
+  the added-line silent-handling scan.
 - Publication state, exact head, mergeability, CI, and current-head reviewer
-  verdicts: query live GitHub metadata. Do not embed transient head or gate
-  values in this PR because doing so would immediately invalidate them.
-- Expected VPS action: after exact-head approval and merge, pull while
-  preserving local artifacts, restart the five exact supervised bot panes
-  because the HSL producer is shared live Python, preserve unrelated
-  `misc:0.0`, then query replay progress/completion scan fields and run
-  immediate plus settled smoke checks.
+  verdicts: query live GitHub metadata; do not embed self-invalidating values.
+- Expected VPS action: after merge, pull while preserving local artifacts and
+  run the bounded HSL replay profile plus smoke projections over the existing
+  PR #1190 replay records. Do not restart or signal bots because this slice
+  changes only on-demand report consumers.
 
 Next action:
 
-1. Resolve any verified current-head findings. Merge only after the temporary
-   Hermes + Grok 4.5 + green-CI gate is satisfied on the same exact head, then
-   deploy and validate the expected replay fields and process boundaries on
-   VPS5.
+1. Complete exact-head review and CI for the narrow generic active-replay
+   estimate fix, merge only when the full gate is green, then validate the
+   corrected projection against existing VPS5 replay records without a bot
+   restart.
 
 ## Deployed Baseline
 
-- Remote `v8`: `ff1b2c1f9ee9968a4e46f3ba598f3c7f091efe42`, PR #1189
-- VPS5 repository: `ff1b2c1f9ee9968a4e46f3ba598f3c7f091efe42`, PR #1189; tracked status clean
+- Remote `v8`: `6b2da757f2fbc590c12365870475176632269021`, PR #1190
+- VPS5 repository: `6b2da757f2fbc590c12365870475176632269021`, PR #1190; tracked
+  status clean; only expected untracked artifacts were preserved
 - VPS5 expected bots: five; all running after the shared-code five-pane restart
+- PR #1190 merged as `6b2da757f2fbc590c12365870475176632269021` and was deployed
+  to VPS5. All five exact supervised panes were restarted, unrelated
+  `misc:0.0` PID `434835` was preserved, and immediate live evidence showed the
+  new scanned counters, scan rate, and candidate-row source. All four HSL
+  replays completed successfully in `108.782s` to `246.091s`, reaching
+  protective-ready in `9.920s` to `71.744s`; `total_scanned_rows` equaled
+  `candidate_rows`, `observed_candidate_work_pct=100`, and the source was
+  `candidate_rows_terminal`. The final fresh smoke was `ok=true` with `333/333`
+  remote and `45/45` account-critical calls successful, all five expected bots
+  matched, no hard/log/monitor failures, and a clean tracked repository. One
+  process was sampled in `D`, but no process hard failure occurred. A prior
+  monitor-row parse boundary was immediately revalidated clean.
+  A later direct process check showed `D` cleared: Binance, KuCoin, GateIO, and
+  Hyperliquid were `Ssl+/ep_poll`, OKX was `Rsl+`; `vmstat` showed `b=0` before
+  a transient `b=1` with low or zero sampled iowait.
 - PR #1188 was approved on exact head `363eca852` by Hermes and Grok 4.5;
   CI passed and it merged as `bd169747`. VPS5 fast-forwarded cleanly and
   gracefully restarted only `passivbot:4.0`; Hyperliquid bot PID `842779` was
@@ -140,13 +154,15 @@ current process-pressure query, compact cold replay payload, bounded replay
 scorecard, stable per-pair fill index, exact sparse flat-pair replay, and the
 rotated resource-pressure report fix, configured-market skip events, and fatal
 HIP-3 startup compatibility are merged and deployed. PR #1189's isolated-only
-initial-entry filter visibility is also merged and deployed. Active PR #1190
-implements HSL replay scanned-row throughput and corrected ETA projections; it
-is under exact-head review and is not yet merged or deployed.
+initial-entry filter visibility and PR #1190's HSL replay scanned-row
+throughput are also merged and deployed. The next active slice fixes the
+generic active replay remaining estimate when required work is empty or
+complete while optional replay remains, using the dense upper bound while
+keeping required and terminal candidate estimates separate.
 
-Do not begin a dependent next slice until PR #1190 is merged and its VPS5
-restart/query/smoke boundary is validated. After that evidence is recorded,
-select the next review-worthy candidate from the remaining backlog, including:
+After this active slice is merged and its report-only VPS validation is
+recorded, select the next review-worthy candidate from the remaining backlog,
+including:
 
 - bounded operator tooling improvements sharing one code and validation surface
 

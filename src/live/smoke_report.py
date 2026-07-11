@@ -4257,18 +4257,12 @@ def _hsl_replay_derived(data: dict[str, Any]) -> dict[str, Any]:
     primary_remaining_rows = (
         candidate_remaining_rows
         if candidate_remaining_rows is not None
-        else (
-            required_remaining_rows
-            if required_remaining_rows is not None
-            else dense_remaining_rows
-        )
+        else dense_remaining_rows
     )
     if candidate_remaining_rows is not None:
         out["work_estimate_source"] = "candidate_rows_terminal"
-    elif required_remaining_rows is not None:
-        out["work_estimate_source"] = "required_dense_rows"
     elif dense_remaining_rows is not None:
-        out["work_estimate_source"] = "dense_rows"
+        out["work_estimate_source"] = "dense_rows_upper_bound"
     if primary_remaining_rows is not None:
         out["estimated_remaining_rows"] = primary_remaining_rows
         primary_remaining_ms = _hsl_replay_eta_ms(

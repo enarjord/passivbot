@@ -7,8 +7,11 @@ All notable user-facing changes will be documented in this file.
 - Coin-mode HSL replay progress now separates scanned candidate rows from
   applied state-update rows. Live performance and smoke reports use scan
   throughput for remaining-work estimates when available, retain explicit
-  legacy applied-row fallback labeling for older events, and do not change HSL
-  replay ordering, readiness, or trading behavior.
+  legacy applied-row fallback labeling for older events, use the dense upper
+  bound for the generic active replay estimate while keeping required-pair
+  estimates separate, and preserve exact terminal candidate-work estimates.
+  These report semantics do not change HSL replay ordering, readiness, or
+  trading behavior.
 
 - Isolated-only markets excluded from new entries by cross-margin preference
   now emit bounded per-side `config.market_compatibility` events while
