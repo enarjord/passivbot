@@ -4948,6 +4948,7 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
             history = await self.get_balance_equity_history(
                 current_balance=self.get_raw_balance(),
                 hsl_replay_signal_mode="coin",
+                hsl_coin_compact_replay=True,
             )
         history_loaded_s = time.monotonic()
         history_fetch_elapsed_s = max(0.0, history_loaded_s - history_fetch_started_s)
@@ -4968,13 +4969,105 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
                 f"get_balance_equity_history()['fill_events'] must be a list, got {type(fill_events).__name__}"
             )
 
-        if "timeline" not in history:
-            raise ValueError("get_balance_equity_history() missing required key: timeline")
-        timeline = history["timeline"]
-        if not isinstance(timeline, list):
-            raise TypeError(
-                f"get_balance_equity_history()['timeline'] must be a list, got {type(timeline).__name__}"
+        compact_replay = history.get("hsl_coin_compact_replay")
+        timeline = history.get("timeline")
+        if compact_replay is None:
+            if timeline is None:
+                raise ValueError(
+                    "get_balance_equity_history() missing required coin replay payload: "
+                    "timeline or hsl_coin_compact_replay"
+                )
+            if not isinstance(timeline, list):
+                raise TypeError(
+                    "get_balance_equity_history()['timeline'] must be a list, "
+                    f"got {type(timeline).__name__}"
+                )
+        else:
+            import numpy as np
+
+            if cache_reused:
+                raise ValueError("cache-reused coin HSL history must use the timeline contract")
+            if not isinstance(compact_replay, dict):
+                raise TypeError(
+                    "get_balance_equity_history()['hsl_coin_compact_replay'] must be a dict, "
+                    f"got {type(compact_replay).__name__}"
+                )
+            required_compact_fields = {
+                "timestamps",
+                "balances",
+                "realized_pnl",
+                "pair_values",
+            }
+            actual_compact_fields = set(compact_replay)
+            if actual_compact_fields != required_compact_fields:
+                raise ValueError(
+                    "compact coin HSL replay fields mismatch: "
+                    f"missing={sorted(required_compact_fields - actual_compact_fields)} "
+                    f"extra={sorted(actual_compact_fields - required_compact_fields)}"
+                )
+            compact_timestamps = np.asarray(compact_replay["timestamps"], dtype=np.int64)
+            compact_balances = np.asarray(compact_replay["balances"], dtype=np.float64)
+            compact_realized_pnl = np.asarray(
+                compact_replay["realized_pnl"], dtype=np.float64
             )
+            compact_pair_values = compact_replay["pair_values"]
+            if not isinstance(compact_pair_values, dict):
+                raise TypeError(
+                    "compact coin HSL replay pair_values must be a dict, "
+                    f"got {type(compact_pair_values).__name__}"
+                )
+            compact_len = len(compact_timestamps)
+            if compact_len == 0:
+                raise ValueError("compact coin HSL replay must contain at least one row")
+            if len(compact_balances) != compact_len or len(compact_realized_pnl) != compact_len:
+                raise ValueError("compact coin HSL replay account arrays must have equal lengths")
+            if compact_len > 1 and not bool(
+                np.all(np.diff(compact_timestamps) == _HSL_REPLAY_MATRIX_INTERVAL_MS)
+            ):
+                raise ValueError(
+                    "compact coin HSL replay timestamps must be contiguous 1m samples"
+                )
+            if not bool(np.all(np.isfinite(compact_balances))) or bool(
+                np.any(compact_balances <= 0.0)
+            ):
+                raise ValueError(
+                    "compact coin HSL replay balances must be finite and > 0"
+                )
+            if not bool(np.all(np.isfinite(compact_realized_pnl))):
+                raise ValueError("compact coin HSL replay realized_pnl must be finite")
+            normalized_pair_values: dict[tuple[str, str], dict[str, Any]] = {}
+            for pair, values in compact_pair_values.items():
+                if (
+                    not isinstance(pair, tuple)
+                    or len(pair) != 2
+                    or str(pair[0]) not in self._hsl_psides()
+                    or not str(pair[1])
+                ):
+                    raise ValueError(f"invalid compact coin HSL replay pair key: {pair!r}")
+                if not isinstance(values, dict) or set(values) != {
+                    "realized_pnl",
+                    "unrealized_pnl",
+                }:
+                    raise ValueError(
+                        f"invalid compact coin HSL replay values for {pair!r}"
+                    )
+                realized_values = np.asarray(values["realized_pnl"], dtype=np.float64)
+                unrealized_values = np.asarray(values["unrealized_pnl"], dtype=np.float64)
+                if len(realized_values) != compact_len or len(unrealized_values) != compact_len:
+                    raise ValueError(
+                        f"compact coin HSL replay pair arrays must match account length for {pair!r}"
+                    )
+                if bool(np.any(np.isinf(realized_values))) or bool(
+                    np.any(np.isinf(unrealized_values))
+                ):
+                    raise ValueError(
+                        f"compact coin HSL replay pair values must be finite or NaN for {pair!r}"
+                    )
+                normalized_pair_values[(str(pair[0]), str(pair[1]))] = {
+                    "realized_pnl": realized_values,
+                    "unrealized_pnl": unrealized_values,
+                }
+            compact_pair_values = normalized_pair_values
 
         now_ms = int(self.get_exchange_time())
         lookback_ms = self._equity_hard_stop_lookback_ms()
@@ -5017,25 +5110,37 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
                 if (pside, symbol) in current_position_pairs:
                     required_replay_pairs.add((pside, symbol))
                     remember_required_replay_start(pside, symbol, ts)
-        for row in timeline:
-            if not isinstance(row, dict):
-                continue
-            for key in ("realized_pnl_by_coin_pside", "unrealized_pnl_by_coin_pside"):
-                if key not in row or row[key] is None:
+        if compact_replay is not None:
+            for _pside, symbol in compact_pair_values:
+                if not self._equity_hard_stop_symbol_supported_for_coin_replay(symbol):
+                    skipped_unsupported_symbols.add(symbol)
                     continue
-                if not isinstance(row[key], dict):
-                    raise TypeError(
-                        f"get_balance_equity_history()['timeline'][]['{key}'] must be a dict, "
-                        f"got {type(row[key]).__name__}"
-                    )
-                for symbol in row[key].keys():
-                    symbol = str(symbol)
-                    if not symbol:
+                symbols.add(symbol)
+        else:
+            for row in timeline:
+                if not isinstance(row, dict):
+                    continue
+                for key in (
+                    "realized_pnl_by_coin_pside",
+                    "unrealized_pnl_by_coin_pside",
+                ):
+                    if key not in row or row[key] is None:
                         continue
-                    if not self._equity_hard_stop_symbol_supported_for_coin_replay(symbol):
-                        skipped_unsupported_symbols.add(symbol)
-                        continue
-                    symbols.add(symbol)
+                    if not isinstance(row[key], dict):
+                        raise TypeError(
+                            f"get_balance_equity_history()['timeline'][]['{key}'] must be a dict, "
+                            f"got {type(row[key]).__name__}"
+                        )
+                    for symbol in row[key].keys():
+                        symbol = str(symbol)
+                        if not symbol:
+                            continue
+                        if not self._equity_hard_stop_symbol_supported_for_coin_replay(
+                            symbol
+                        ):
+                            skipped_unsupported_symbols.add(symbol)
+                            continue
+                        symbols.add(symbol)
 
         latest_panic_by_coin_minute: dict[tuple[str, str, int], dict[str, Any]] = {}
         for item in panic_flatten_events:
@@ -5076,15 +5181,19 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
             )
 
         timeline_rows: list[dict[str, Any]] = []
-        for row in timeline:
-            if not isinstance(row, dict):
-                continue
-            if "timestamp" not in row or "balance" not in row:
-                continue
-            ts = int(row["timestamp"])
-            if ts > now_ms:
-                break
-            timeline_rows.append(row)
+        if compact_replay is None:
+            for row in timeline:
+                if not isinstance(row, dict):
+                    continue
+                if "timestamp" not in row or "balance" not in row:
+                    continue
+                ts = int(row["timestamp"])
+                if ts > now_ms:
+                    break
+                timeline_rows.append(row)
+            replay_row_count = len(timeline_rows)
+        else:
+            replay_row_count = int(np.searchsorted(compact_timestamps, now_ms, side="right"))
 
         balance = float(self.get_raw_balance())
         rows = 0
@@ -5113,7 +5222,7 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
             "[risk] HSL coin history reconstruction loaded | symbols=%d pairs=%d rows=%d fills=%d panic_events=%d",
             len(symbols),
             len(active_pairs),
-            len(timeline_rows),
+            replay_row_count,
             len(fill_events),
             len(panic_flatten_events),
         )
@@ -5123,12 +5232,15 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
             {
                 "signal_mode": "coin",
                 "stage": "loaded",
+                "history_format": (
+                    "compact" if compact_replay is not None else "timeline"
+                ),
                 "symbols": len(symbols),
                 "pairs": len(active_pairs),
                 "held_pairs": len(active_held_pairs),
                 "cooldown_pairs": len(active_panic_pairs),
                 "required_pairs": len(active_required_pairs),
-                "timeline_rows": len(timeline_rows),
+                "timeline_rows": replay_row_count,
                 "fill_events": len(fill_events),
                 "panic_events": len(panic_flatten_events),
                 "skipped_unsupported_symbols": len(skipped_unsupported_symbols),
@@ -5176,7 +5288,7 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
                     "held_pairs": len(active_held_pairs),
                     "cooldown_pairs": len(active_panic_pairs),
                     "required_pairs": len(active_required_pairs),
-                    "timeline_rows": len(timeline_rows),
+                    "timeline_rows": replay_row_count,
                     "applied_rows": int(applied_rows),
                     "total_applied_rows": int(rows),
                     "rows_per_second": round(rows_per_second, 3)
@@ -5311,6 +5423,101 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
                         replay_event_idx += 1
                     return float(replay_size)
 
+                if compact_replay is not None:
+                    compact_values = compact_pair_values.get((pside, symbol))
+                    compact_realized_values = (
+                        None
+                        if compact_values is None
+                        else compact_values["realized_pnl"]
+                    )
+                    compact_unrealized_values = (
+                        None
+                        if compact_values is None
+                        else compact_values["unrealized_pnl"]
+                    )
+
+                    def iter_replay_rows():
+                        for compact_idx in range(replay_row_count):
+                            realized_value = (
+                                math.nan
+                                if compact_realized_values is None
+                                else float(compact_realized_values[compact_idx])
+                            )
+                            unrealized_value = (
+                                math.nan
+                                if compact_unrealized_values is None
+                                else float(compact_unrealized_values[compact_idx])
+                            )
+                            yield (
+                                compact_idx + 1,
+                                int(compact_timestamps[compact_idx]),
+                                float(compact_balances[compact_idx]),
+                                float(compact_realized_pnl[compact_idx]),
+                                not math.isnan(realized_value),
+                                realized_value,
+                                not math.isnan(unrealized_value),
+                                unrealized_value,
+                                None,
+                            )
+
+                else:
+
+                    def iter_replay_rows():
+                        for legacy_idx, row in enumerate(timeline_rows, start=1):
+                            has_realized_value = (
+                                _equity_hard_stop_history_coin_has_value(
+                                    row,
+                                    "realized_pnl_by_coin_pside",
+                                    symbol,
+                                    pside,
+                                )
+                            )
+                            has_unrealized_value = (
+                                _equity_hard_stop_history_coin_has_value(
+                                    row,
+                                    "unrealized_pnl_by_coin_pside",
+                                    symbol,
+                                    pside,
+                                )
+                            )
+                            yield (
+                                legacy_idx,
+                                int(row["timestamp"]),
+                                float(row["balance"]),
+                                (
+                                    float(row["realized_pnl"])
+                                    if "realized_pnl" in row
+                                    else None
+                                ),
+                                has_realized_value,
+                                (
+                                    _equity_hard_stop_history_coin_value(
+                                        row,
+                                        "realized_pnl_by_coin_pside",
+                                        symbol,
+                                        pside,
+                                        require_key=has_realized_value,
+                                        require_value=has_realized_value,
+                                    )
+                                    if has_realized_value
+                                    else 0.0
+                                ),
+                                has_unrealized_value,
+                                (
+                                    _equity_hard_stop_history_coin_value(
+                                        row,
+                                        "unrealized_pnl_by_coin_pside",
+                                        symbol,
+                                        pside,
+                                        require_key=has_unrealized_value,
+                                        require_value=has_unrealized_value,
+                                    )
+                                    if has_unrealized_value
+                                    else 0.0
+                                ),
+                                row,
+                            )
+
                 background_replay = bool(
                     self._equity_hard_stop_coin_protective_ready
                 )
@@ -5324,12 +5531,21 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
                     if background_replay
                     else 0.0
                 )
-                for row_idx, row in enumerate(timeline_rows, start=1):
+                for (
+                    row_idx,
+                    ts,
+                    row_balance,
+                    row_realized_pnl,
+                    has_realized,
+                    realized_value,
+                    has_unrealized,
+                    unrealized_value,
+                    source_row,
+                ) in iter_replay_rows():
                     if row_idx % yield_rows == 0:
                         await asyncio.sleep(yield_sleep_s)
                         check_shutdown("hsl_coin_history_replay_rows")
                         log_replay_progress(pair_idx, pside, symbol, applied_rows)
-                    ts = int(row["timestamp"])
                     if replay_start_boundary_ts is not None and ts < replay_start_boundary_ts:
                         continue
                     if state["halted"]:
@@ -5345,12 +5561,6 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
                             reset_rolling_window()
                         else:
                             continue
-                    has_realized = _equity_hard_stop_history_coin_has_value(
-                        row, "realized_pnl_by_coin_pside", symbol, pside
-                    )
-                    has_unrealized = _equity_hard_stop_history_coin_has_value(
-                        row, "unrealized_pnl_by_coin_pside", symbol, pside
-                    )
                     row_has_coin_fields = has_realized or has_unrealized
                     require_coin_timeline_value = (
                         (
@@ -5364,14 +5574,22 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
                     if not require_coin_timeline_value:
                         continue
                     replay_position_size = replay_size_at(ts)
-                    abs_realized = _equity_hard_stop_history_coin_value(
-                        row,
-                        "realized_pnl_by_coin_pside",
-                        symbol,
-                        pside,
-                        require_key=require_coin_timeline_value,
-                        require_value=require_coin_timeline_value,
-                    )
+                    if not has_realized:
+                        if source_row is not None:
+                            _equity_hard_stop_history_coin_value(
+                                source_row,
+                                "realized_pnl_by_coin_pside",
+                                symbol,
+                                pside,
+                                require_key=True,
+                                require_value=True,
+                            )
+                        raise ValueError(
+                            "coin HSL replay missing required "
+                            "realized_pnl_by_coin_pside value for "
+                            f"{pside}:{symbol} at {ts}"
+                        )
+                    abs_realized = float(realized_value)
                     seen_coin_timeline_fields = True
                     last_realized = abs_realized - reset_baseline_realized
                     start_ms = None if lookback_ms is None else ts - int(lookback_ms)
@@ -5403,32 +5621,31 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
                         if replay_ambiguous or replay_position_size > flat_epsilon:
                             if not require_coin_timeline_fields:
                                 continue
-                            current_upnl = _equity_hard_stop_history_coin_value(
-                                row,
-                                "unrealized_pnl_by_coin_pside",
-                                symbol,
-                                pside,
-                                require_key=True,
-                                require_value=True,
+                            if source_row is not None:
+                                _equity_hard_stop_history_coin_value(
+                                    source_row,
+                                    "unrealized_pnl_by_coin_pside",
+                                    symbol,
+                                    pside,
+                                    require_key=True,
+                                    require_value=True,
+                                )
+                            raise ValueError(
+                                "coin HSL replay missing required "
+                                "unrealized_pnl_by_coin_pside value for "
+                                f"{pside}:{symbol} at {ts}"
                             )
                         else:
                             current_upnl = 0.0
                     else:
-                        current_upnl = _equity_hard_stop_history_coin_value(
-                            row,
-                            "unrealized_pnl_by_coin_pside",
-                            symbol,
-                            pside,
-                            require_key=require_coin_timeline_value,
-                            require_value=require_coin_timeline_value,
-                        )
+                        current_upnl = float(unrealized_value)
                     self._equity_hard_stop_prime_coin_runtime_for_replay(pside, symbol, ts)
                     marker = latest_panic_by_coin_minute.get((pside, symbol, ts))
                     metrics = self._equity_hard_stop_apply_coin_metrics_sample(
                         pside,
                         symbol,
                         ts,
-                        float(row["balance"]),
+                        row_balance,
                         peak_realized,
                         window_last_realized,
                         current_upnl,
@@ -5514,7 +5731,7 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
                         symbol=symbol,
                         stop_event_timestamp_ms=stop_ts,
                         balance=float(metrics["balance"]),
-                        realized_pnl_total=float(row["realized_pnl"]) if "realized_pnl" in row else None,
+                        realized_pnl_total=row_realized_pnl,
                         realized_pnl=float(metrics["realized_pnl"]),
                         unrealized_pnl=float(metrics["unrealized_pnl"]),
                         strategy_pnl=float(metrics["strategy_pnl"]),
@@ -5706,6 +5923,9 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
             {
                 "signal_mode": "coin",
                 "stage": "full_replay",
+                "history_format": (
+                    "compact" if compact_replay is not None else "timeline"
+                ),
                 "rows": int(rows),
                 "applied_rows": int(rows),
                 "pairs": len(active_pairs),
@@ -5713,7 +5933,7 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
                 "cooldown_pairs": len(active_panic_pairs),
                 "required_pairs": len(active_required_pairs),
                 "skipped_pairs": int(skipped_pairs),
-                "timeline_rows": len(timeline_rows),
+                "timeline_rows": replay_row_count,
                 "fill_events": len(fill_events),
                 "panic_events": len(panic_flatten_events),
                 "rows_per_second": round(rows_per_second, 3)

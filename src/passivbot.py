@@ -11398,8 +11398,18 @@ class Passivbot:
         fill_events: Optional[List[dict]] = None,
         current_balance: Optional[float] = None,
         hsl_replay_signal_mode: Optional[str] = None,
+        hsl_coin_compact_replay: bool = False,
     ) -> Dict[str, Any]:
-        """Replay canonical fill events to produce historical balance/equity curves."""
+        """Replay canonical fills into public curves or private compact coin-HSL input.
+
+        `hsl_coin_compact_replay` is internal to cold coin-HSL startup. In that
+        mode the result omits the rich `timeline`, `balances`, and `equities`
+        projections and exposes `hsl_coin_compact_replay` instead.
+        """
+        if hsl_coin_compact_replay and str(hsl_replay_signal_mode or "").lower() != "coin":
+            raise ValueError(
+                "hsl_coin_compact_replay requires hsl_replay_signal_mode='coin'"
+            )
         history_started_s = time.monotonic()
         external_fill_events = fill_events is not None
         await self.init_pnls()
@@ -11546,6 +11556,30 @@ class Passivbot:
                 status="succeeded",
                 reason_code=ReasonCodes.HSL_HISTORY_EMPTY,
             )
+            if hsl_coin_compact_replay:
+                return {
+                    "hsl_coin_compact_replay": {
+                        "timestamps": np.asarray([int(ts_now)], dtype=np.int64),
+                        "balances": np.asarray([balance_now], dtype=np.float64),
+                        "realized_pnl": np.asarray([0.0], dtype=np.float64),
+                        "pair_values": {},
+                    },
+                    "panic_flatten_events": [],
+                    "fill_events": [],
+                    "metadata": {
+                        "lookback_days": parse_pnls_max_lookback_days(
+                            self.live_value("pnls_max_lookback_days"),
+                            field_name="live.pnls_max_lookback_days",
+                        ).display_value,
+                        "resolution_ms": ONE_MIN_MS,
+                        "events_used": 0,
+                        "symbols_covered": [],
+                        "missing_price_symbols": [],
+                        "history_format": "compact",
+                    },
+                    "hsl_replay_matrices": {},
+                    "hsl_replay_account_series": [],
+                }
             return {
                 "timeline": [point],
                 "panic_flatten_events": [],
@@ -11567,6 +11601,7 @@ class Passivbot:
                     "events_used": 0,
                     "symbols_covered": [],
                     "missing_price_symbols": [],
+                    "history_format": "timeline",
                 },
             }
 
@@ -12038,12 +12073,49 @@ class Passivbot:
                     )
 
         history_minutes = int(max(0, (end_minute - start_minute) // ONE_MIN_MS)) + 1
+        compact_coin_replay = bool(hsl_coin_compact_replay)
+        compact_record_minutes = (
+            int(max(0, (end_minute - record_start_minute) // ONE_MIN_MS)) + 1
+        )
+        compact_timestamps = (
+            np.empty(compact_record_minutes, dtype=np.int64)
+            if compact_coin_replay
+            else None
+        )
+        compact_balances = (
+            np.empty(compact_record_minutes, dtype=np.float64)
+            if compact_coin_replay
+            else None
+        )
+        compact_realized_pnl = (
+            np.empty(compact_record_minutes, dtype=np.float64)
+            if compact_coin_replay
+            else None
+        )
+        compact_pair_values: Dict[Tuple[str, str], Dict[str, np.ndarray]] = (
+            {
+                (pside, sym): {
+                    "realized_pnl": np.full(
+                        compact_record_minutes, np.nan, dtype=np.float64
+                    ),
+                    "unrealized_pnl": np.full(
+                        compact_record_minutes, np.nan, dtype=np.float64
+                    ),
+                }
+                for sym in sorted(symbols)
+                for pside in ("long", "short")
+            }
+            if compact_coin_replay
+            else {}
+        )
+        compact_row_idx = 0
         _emit_hsl_history_progress(
             "timeline_replay_started",
             {
                 "events": len(events),
                 "symbols": len(symbols),
                 "price_replay_symbols": len(price_replay_symbols),
+                "history_format": "compact" if compact_coin_replay else "timeline",
                 "history_minutes": history_minutes,
                 "record_start_ts": int(record_start_ts),
                 "start_ts": int(start_minute),
@@ -12211,64 +12283,98 @@ class Passivbot:
                         - record_start_realized_pnl_pside.get("short", 0.0)
                     ),
                 }
-                realized_pnl_coin_pside_window: Dict[str, Dict[str, float]] = {}
-                for sym in sorted(
-                    set(realized_pnl_coin_pside_running)
-                    | set(record_start_realized_pnl_coin_pside)
-                ):
-                    values = realized_pnl_coin_pside_running.get(
-                        sym, {"long": 0.0, "short": 0.0}
-                    )
-                    anchor = record_start_realized_pnl_coin_pside.get(
-                        sym, {"long": 0.0, "short": 0.0}
-                    )
-                    realized_pnl_coin_pside_window[sym] = {
-                        "long": float(values["long"] - anchor.get("long", 0.0)),
-                        "short": float(values["short"] - anchor.get("short", 0.0)),
-                    }
-                timeline_upnl_by_coin_pside = {
-                    sym: {
-                        "long": float(values["long"]),
-                        "short": float(values["short"]),
-                    }
-                    for sym, values in sorted(upnl_by_coin_pside.items())
-                }
-                for sym in sorted(realized_pnl_coin_pside_running):
-                    if sym not in active_symbols:
-                        timeline_upnl_by_coin_pside.setdefault(
+                if compact_coin_replay:
+                    if compact_row_idx >= compact_record_minutes:
+                        raise RuntimeError(
+                            "compact coin HSL replay row count exceeded allocated minute grid"
+                        )
+                    compact_timestamps[compact_row_idx] = int(minute)
+                    compact_balances[compact_row_idx] = float(balance)
+                    compact_realized_pnl[compact_row_idx] = float(realized_pnl_window)
+                    for sym, values in realized_pnl_coin_pside_running.items():
+                        anchor = record_start_realized_pnl_coin_pside.get(
                             sym, {"long": 0.0, "short": 0.0}
                         )
-                timeline.append(
-                    {
-                        "timestamp": minute,
-                        "balance": balance,
-                        "equity": balance + upnl,
-                        "unrealized_pnl": upnl,
-                        "realized_pnl": realized_pnl_window,
-                        "unrealized_pnl_long": upnl_by_pside["long"],
-                        "unrealized_pnl_short": upnl_by_pside["short"],
-                        "realized_pnl_long": realized_pnl_pside_window["long"],
-                        "realized_pnl_short": realized_pnl_pside_window["short"],
-                        "unrealized_pnl_by_coin_pside": timeline_upnl_by_coin_pside,
-                        "realized_pnl_by_coin_pside": realized_pnl_coin_pside_window,
-                        "is_flat": len(active_symbols) == 0,
-                        "is_flat_long": not any(
-                            not _is_flat_size(
-                                sym,
-                                positions.get(sym, {}).get("long", {}).get("size", 0.0),
+                        for pside in ("long", "short"):
+                            pair_values = compact_pair_values.get((pside, sym))
+                            if pair_values is None:
+                                continue
+                            pair_values["realized_pnl"][compact_row_idx] = float(
+                                values[pside] - anchor.get(pside, 0.0)
                             )
-                            for sym in positions
-                        ),
-                        "is_flat_short": not any(
-                            not _is_flat_size(
-                                sym,
-                                positions.get(sym, {}).get("short", {}).get("size", 0.0),
-                            )
-                            for sym in positions
-                        ),
-                        "panic_fill_count": int(panic_fill_count),
+                            if sym not in active_symbols:
+                                pair_values["unrealized_pnl"][compact_row_idx] = 0.0
+                    for sym, values in upnl_by_coin_pside.items():
+                        for pside, value in values.items():
+                            pair_values = compact_pair_values.get((pside, sym))
+                            if pair_values is not None:
+                                pair_values["unrealized_pnl"][compact_row_idx] = float(
+                                    value
+                                )
+                    compact_row_idx += 1
+                else:
+                    realized_pnl_coin_pside_window: Dict[str, Dict[str, float]] = {}
+                    for sym in sorted(
+                        set(realized_pnl_coin_pside_running)
+                        | set(record_start_realized_pnl_coin_pside)
+                    ):
+                        values = realized_pnl_coin_pside_running.get(
+                            sym, {"long": 0.0, "short": 0.0}
+                        )
+                        anchor = record_start_realized_pnl_coin_pside.get(
+                            sym, {"long": 0.0, "short": 0.0}
+                        )
+                        realized_pnl_coin_pside_window[sym] = {
+                            "long": float(values["long"] - anchor.get("long", 0.0)),
+                            "short": float(values["short"] - anchor.get("short", 0.0)),
+                        }
+                    timeline_upnl_by_coin_pside = {
+                        sym: {
+                            "long": float(values["long"]),
+                            "short": float(values["short"]),
+                        }
+                        for sym, values in sorted(upnl_by_coin_pside.items())
                     }
-                )
+                    for sym in sorted(realized_pnl_coin_pside_running):
+                        if sym not in active_symbols:
+                            timeline_upnl_by_coin_pside.setdefault(
+                                sym, {"long": 0.0, "short": 0.0}
+                            )
+                    timeline.append(
+                        {
+                            "timestamp": minute,
+                            "balance": balance,
+                            "equity": balance + upnl,
+                            "unrealized_pnl": upnl,
+                            "realized_pnl": realized_pnl_window,
+                            "unrealized_pnl_long": upnl_by_pside["long"],
+                            "unrealized_pnl_short": upnl_by_pside["short"],
+                            "realized_pnl_long": realized_pnl_pside_window["long"],
+                            "realized_pnl_short": realized_pnl_pside_window["short"],
+                            "unrealized_pnl_by_coin_pside": timeline_upnl_by_coin_pside,
+                            "realized_pnl_by_coin_pside": realized_pnl_coin_pside_window,
+                            "is_flat": len(active_symbols) == 0,
+                            "is_flat_long": not any(
+                                not _is_flat_size(
+                                    sym,
+                                    positions.get(sym, {})
+                                    .get("long", {})
+                                    .get("size", 0.0),
+                                )
+                                for sym in positions
+                            ),
+                            "is_flat_short": not any(
+                                not _is_flat_size(
+                                    sym,
+                                    positions.get(sym, {})
+                                    .get("short", {})
+                                    .get("size", 0.0),
+                                )
+                                for sym in positions
+                            ),
+                            "panic_fill_count": int(panic_fill_count),
+                        }
+                    )
             _collect_replay_matrix_rows(
                 int(minute), record=minute >= record_start_minute
             )
@@ -12277,7 +12383,12 @@ class Passivbot:
             )
             minute += ONE_MIN_MS
 
-        if not timeline:
+        if compact_coin_replay and compact_row_idx != compact_record_minutes:
+            raise RuntimeError(
+                "compact coin HSL replay row count does not match allocated minute grid: "
+                f"expected={compact_record_minutes} actual={compact_row_idx}"
+            )
+        if not compact_coin_replay and not timeline:
             point = {
                 "timestamp": ts_now,
                 "balance": balance_now,
@@ -12314,6 +12425,7 @@ class Passivbot:
             "symbols_covered": sorted(price_replay_symbols),
             "missing_price_symbols": sorted(missing_price_symbols),
             "approximate_price_sources": approximate_price_sources,
+            "history_format": "compact" if compact_coin_replay else "timeline",
         }
         _emit_hsl_history_progress(
             "timeline_replay_completed",
@@ -12321,7 +12433,10 @@ class Passivbot:
                 "events": len(events),
                 "symbols": len(symbols),
                 "price_replay_symbols": len(price_replay_symbols),
-                "timeline_rows": len(timeline),
+                "history_format": "compact" if compact_coin_replay else "timeline",
+                "timeline_rows": (
+                    compact_record_minutes if compact_coin_replay else len(timeline)
+                ),
                 "panic_events": len(panic_flatten_events),
                 "missing_price_symbols": len(missing_price_symbols),
                 "history_minutes": history_minutes,
@@ -12350,12 +12465,9 @@ class Passivbot:
                 end_ms=int(ts_now),
                 lookback=lookback,
             )
-        return {
-            "timeline": timeline,
+        result = {
             "panic_flatten_events": panic_flatten_events,
             "fill_events": events,
-            "balances": balances,
-            "equities": equities,
             "metadata": metadata,
             "hsl_replay_matrices": hsl_replay_matrices,
             "hsl_replay_account_series": (
@@ -12375,6 +12487,18 @@ class Passivbot:
                 "candle_covered_end_ms": int(end_minute),
             },
         }
+        if compact_coin_replay:
+            result["hsl_coin_compact_replay"] = {
+                "timestamps": compact_timestamps,
+                "balances": compact_balances,
+                "realized_pnl": compact_realized_pnl,
+                "pair_values": compact_pair_values,
+            }
+        else:
+            result["timeline"] = timeline
+            result["balances"] = balances
+            result["equities"] = equities
+        return result
 
     async def update_open_orders(self):
         """Refresh open orders from the exchange and reconcile the local cache."""

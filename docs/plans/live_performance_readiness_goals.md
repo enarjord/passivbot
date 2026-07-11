@@ -532,6 +532,12 @@ Trading-impact labels:
     states that have values on that row, or per-pair sparse series built once.
   - Avoid repeated nested dict scans and repeated full fill-list scans per
     symbol.
+  - Compact-memory slice implemented locally: cold coin replay now builds
+    aligned NumPy account/pair arrays instead of the rich nested timeline and
+    consumes those arrays directly. A 43,201-minute, 30-symbol builder profile
+    reduced Python peak allocations from `686242590` to `73499666` bytes
+    (89.3%). Pair iteration remains `rows * pairs`; fill indexing and a true
+    lower-complexity state update remain open.
   - Preserve current RED/green/current-drawdown semantics: a historical RED
     crossing must not cause a panic now if current replay state is no longer in
     the red zone.
@@ -545,6 +551,11 @@ Trading-impact labels:
     `coin+pside` pairs unnecessarily.
   - Confirm whether unrelated flat pairs can delay held-pair protective
     readiness.
+  - Answered for the observed VPS incident: retained nested Python history and
+    overlapping replay representations drove swap/page pressure. One-day
+    synthetic replay arithmetic completed 43,200 pair-minutes in about 0.3s,
+    while the 30-day rich builder retained about 686 MB of traced Python
+    allocations.
 
 - [ ] Prove whether coin-mode HSL needs cross-coin synchronization.
   - If one coin's HSL state depends only on that coin's fill/PnL and candle
@@ -581,6 +592,11 @@ Trading-impact labels:
     replay, optimized replay, and checkpoint resume.
   - Output metrics: elapsed, rows/s, per-stage timings, current HSL state by
     held pair, cooldown state by affected flat pair, and equivalence diff.
+  - Partial: the benchmark now distinguishes held/background pairs and samples,
+    reports expected cooperative yields, supports an explicit 43,201-minute
+    local-scale mode, compares timeline/compact final-state output, and can
+    report tracemalloc current/peak bytes. A realistic cooldown candidate and
+    detailed equivalence report remain open.
 
 - [ ] Index fill events once by `(pside, symbol)`.
   - Reuse that index for replay contracts, panic detection, position-size
