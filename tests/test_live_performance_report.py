@@ -1670,6 +1670,7 @@ def test_hsl_replay_profile_prefers_scanned_work_for_eta():
         "total_applied_rows": 10,
         "rows_per_second": 2.0,
         "scanned_rows": 75,
+        "candidate_rows": 150,
         "total_scanned_rows": 150,
         "scanned_rows_per_second": 50.0,
         "pair_elapsed_s": 1.5,
@@ -1679,6 +1680,7 @@ def test_hsl_replay_profile_prefers_scanned_work_for_eta():
     derived = performance_report_module._derive_hsl_replay_profile(bounded)
 
     assert bounded["scanned_rows"] == 75
+    assert bounded["candidate_rows"] == 150
     assert bounded["pair_elapsed_s"] == 1.5
     assert "secret" not in bounded
     assert derived["throughput_source"] == "scanned_rows"
@@ -1687,6 +1689,14 @@ def test_hsl_replay_profile_prefers_scanned_work_for_eta():
     assert derived["observed_work_pct"] == 50.0
     assert derived["estimated_dense_remaining_rows"] == 150
     assert derived["estimated_dense_remaining_ms"] == 3000
+
+    terminal = performance_report_module._derive_hsl_replay_profile(
+        {**bounded, "stage": "full_replay"}
+    )
+    assert terminal["work_estimate_source"] == "candidate_rows_terminal"
+    assert terminal["estimated_candidate_pair_row_work"] == 150
+    assert terminal["estimated_candidate_remaining_rows"] == 0
+    assert terminal["estimated_remaining_rows"] == 0
 
 
 def test_hsl_replay_profile_keeps_legacy_applied_work_fallback():
@@ -1704,6 +1714,7 @@ def test_hsl_replay_profile_keeps_legacy_applied_work_fallback():
     assert "observed_scanned_rows" not in derived
     assert derived["estimated_dense_remaining_rows"] == 290
     assert derived["estimated_dense_remaining_ms"] == 145000
+    assert derived["work_estimate_source"] == "dense_rows"
 
 
 def test_live_performance_report_hsl_replay_profile_stage_summary(tmp_path):

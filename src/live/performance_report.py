@@ -1605,6 +1605,7 @@ def _derive_hsl_replay_profile(data: dict[str, Any]) -> dict[str, Any]:
     out: dict[str, Any] = {}
     dense_work: int | None = None
     required_work: int | None = None
+    candidate_work: int | None = None
     if timeline_rows is not None and pairs is not None:
         dense_work = int(timeline_rows) * int(pairs)
         out["estimated_dense_pair_row_work"] = dense_work
@@ -1623,6 +1624,18 @@ def _derive_hsl_replay_profile(data: dict[str, Any]) -> dict[str, Any]:
         out["estimated_held_pair_row_work"] = int(timeline_rows) * int(held_pairs)
     if timeline_rows is not None and cooldown_pairs is not None:
         out["estimated_cooldown_pair_row_work"] = int(timeline_rows) * int(cooldown_pairs)
+    if data.get("stage") == "full_replay":
+        candidate_value = _non_negative_number(data.get("candidate_rows"))
+        if candidate_value is not None:
+            candidate_work = int(candidate_value)
+            out["estimated_candidate_pair_row_work"] = candidate_work
+            if observed_rows is not None and candidate_work > 0:
+                out["observed_candidate_work_pct"] = _rounded_float(
+                    min(
+                        100.0,
+                        max(0.0, 100.0 * float(observed_rows) / float(candidate_work)),
+                    )
+                )
     if observed_applied_rows is not None:
         out["observed_applied_rows"] = int(observed_applied_rows)
     observed_scanned_rows = _non_negative_number(data.get("total_scanned_rows"))
@@ -1654,11 +1667,33 @@ def _derive_hsl_replay_profile(data: dict[str, Any]) -> dict[str, Any]:
         )
         if required_remaining_ms is not None:
             out["estimated_required_remaining_ms"] = required_remaining_ms
-    primary_remaining_rows = (
-        required_remaining_rows
-        if required_remaining_rows is not None
-        else dense_remaining_rows
+    candidate_remaining_rows = _hsl_replay_remaining_rows(
+        estimated_work=candidate_work,
+        observed_rows=observed_rows,
     )
+    if candidate_remaining_rows is not None:
+        out["estimated_candidate_remaining_rows"] = candidate_remaining_rows
+        candidate_remaining_ms = _hsl_replay_eta_ms(
+            remaining_rows=candidate_remaining_rows,
+            rows_per_second=throughput_rate,
+        )
+        if candidate_remaining_ms is not None:
+            out["estimated_candidate_remaining_ms"] = candidate_remaining_ms
+    primary_remaining_rows = (
+        candidate_remaining_rows
+        if candidate_remaining_rows is not None
+        else (
+            required_remaining_rows
+            if required_remaining_rows is not None
+            else dense_remaining_rows
+        )
+    )
+    if candidate_remaining_rows is not None:
+        out["work_estimate_source"] = "candidate_rows_terminal"
+    elif required_remaining_rows is not None:
+        out["work_estimate_source"] = "required_dense_rows"
+    elif dense_remaining_rows is not None:
+        out["work_estimate_source"] = "dense_rows"
     if primary_remaining_rows is not None:
         out["estimated_remaining_rows"] = primary_remaining_rows
         primary_remaining_ms = _hsl_replay_eta_ms(

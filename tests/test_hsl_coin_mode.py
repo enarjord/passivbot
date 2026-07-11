@@ -2067,6 +2067,23 @@ async def test_coin_hsl_history_replay_reports_scanned_optional_rows_without_app
         }
 
     bot.get_balance_equity_history = fake_history
+    now_ms = bot.get_exchange_time()
+
+    def active_cooldown_contract(self, pside, replay_symbol, fill_events, replay_now_ms):
+        del self, pside, replay_symbol, fill_events, replay_now_ms
+        return {
+            "policy": "normal",
+            "latest_panic_ts": 60_000,
+            "cooldown_until_ms": now_ms + 60_000,
+            "intervention_entry_ts": None,
+            "active_cooldown_now": True,
+            "intervention_active": False,
+            "unresolved_residue": False,
+        }
+
+    bot._equity_hard_stop_infer_coin_replay_contract = MethodType(
+        active_cooldown_contract, bot
+    )
 
     await bot._equity_hard_stop_initialize_coin_from_history()
 
@@ -2084,6 +2101,7 @@ async def test_coin_hsl_history_replay_reports_scanned_optional_rows_without_app
     assert pair_event.data["rows_per_second"] is not None
     assert pair_event.data["scanned_rows_per_second"] is not None
     assert pair_event.data["pair_elapsed_s"] is not None
+    assert bot._hsl_coin_state("long", symbol)["halted"] is True
 
     completed = next(
         event

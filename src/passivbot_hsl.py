@@ -6098,7 +6098,17 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
                             reason,
                         )
                 if state["halted"]:
+                    pair_rows_applied[(pside, symbol)] = int(applied_rows)
                     mark_pair_ready(pside, symbol)
+                    log_replay_progress(
+                        pair_idx,
+                        pside,
+                        symbol,
+                        applied_rows,
+                        scanned_rows,
+                        pair_started_s,
+                        force=True,
+                    )
                     continue
                 if applied_rows == 0:
                     self._equity_hard_stop_prime_coin_runtime_for_replay(pside, symbol, now_ms)
