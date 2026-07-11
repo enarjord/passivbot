@@ -264,7 +264,11 @@ Monitor commands are documented in detail in [monitor.md](monitor.md). The CLI s
   `passivbot live` commands to the local process table and reports matched, missing,
   duplicate-command, and extra/orphan-like live processes. This does not prove tmux pane
   ownership; the fields are command-match diagnostics intended to make stale process leftovers
-  obvious before any restart orchestration. Shutdown orchestration should follow an explicit
+  obvious before any restart orchestration. Full, summary, and brief process output also
+  includes bounded current state counts, uninterruptible-sleep count, and CPU, memory, and RSS
+  totals/maxima/reporting counts from the same local process scan. These fields are observational;
+  missing platform fields remain null and do not change the smoke verdict. Shutdown orchestration
+  should follow an explicit
   escalation ladder as policy only: graceful Ctrl+C/request stop, bounded wait, a second
   graceful signal when warranted, SIGTERM, then SIGKILL. The smoke report never sends those
   signals.

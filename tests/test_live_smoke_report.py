@@ -6121,9 +6121,69 @@ def test_live_smoke_report_process_status_parses_no_rss_etimes_passivbot_rows(
     assert report["processes"]["running"][0]["pid"] == 123
     assert report["processes"]["running"][0]["age_s"] == 42
     assert "rss_kb" not in report["processes"]["running"][0]
+    assert report["processes"]["rss_kb_total"] is None
+    assert report["processes"]["rss_kb_max"] is None
+    assert report["processes"]["rss_reporting_processes"] == 0
     assert report["processes"]["running"][0]["command_key"] == (
         "passivbot live configs/forager.json -u binance_01"
     )
+
+
+def test_live_smoke_report_summarizes_current_process_pressure(
+    tmp_path,
+    monkeypatch,
+):
+    _write_minimal_monitor_event(tmp_path / "monitor")
+    monkeypatch.setattr(
+        smoke_report_module,
+        "_ps_process_rows",
+        lambda: (
+            [
+                (
+                    "123 1 42 Dl+ 9.5 15.0 150000 "
+                    "/root/passivbot/venv/bin/passivbot live "
+                    "configs/forager.json -u binance_01"
+                ),
+                (
+                    "456 1 43 Sl+ 10.25 5.5 50000 "
+                    "/root/passivbot/venv/bin/passivbot live "
+                    "configs/forager.json -u gateio_01"
+                ),
+                (
+                    "789 1 44 R nan inf 25000 "
+                    "/root/passivbot/venv/bin/passivbot live "
+                    "configs/forager.json -u okx_01"
+                ),
+            ],
+            None,
+        ),
+    )
+
+    report = build_live_smoke_report(
+        tmp_path / "monitor",
+        logs_root=None,
+        include_processes=True,
+    )
+    summary = summarize_live_smoke_report(report)
+    brief = summarize_live_smoke_report_brief(report)
+    expected = {
+        "state_counts": {"D": 1, "R": 1, "S": 1},
+        "uninterruptible_sleep_count": 1,
+        "rss_kb_total": 225000,
+        "rss_kb_max": 150000,
+        "rss_reporting_processes": 3,
+        "cpu_pct_total": 19.75,
+        "cpu_pct_max": 10.25,
+        "cpu_reporting_processes": 2,
+        "mem_pct_total": 20.5,
+        "mem_pct_max": 15.0,
+        "mem_reporting_processes": 2,
+    }
+
+    assert {key: report["processes"][key] for key in expected} == expected
+    assert {key: summary["processes"][key] for key in expected} == expected
+    assert {key: brief["processes"][key] for key in expected} == expected
+    json.dumps(report["processes"], allow_nan=False)
 
 
 def test_live_smoke_report_process_status_reports_duplicates_and_extra_live_processes(

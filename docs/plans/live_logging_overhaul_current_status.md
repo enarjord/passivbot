@@ -23,57 +23,55 @@ Estimated completion:
 ## Active Review Slice
 
 - PR: query live GitHub metadata;
-  `Keep live I/O responsive during background coin-HSL replay`
-- Branch: `codex/v8-hsl-background-replay-cooperative`
+  `Expose current live-process pressure in smoke reports`
+- Branch: `codex/v8-smoke-current-process-pressure`
 - Head: query live GitHub metadata; this commit cannot embed its own final SHA
   without making that value stale
-- Base: `abcc422bebb0ac19fcd50fcb8efa21d77b45d41f`
-- Scope: retain the existing fast 1,000-row cooperative cadence while startup
-  is blocked on held-position reconstruction. After protective readiness,
-  yield every 100 rows with a 10 ms pause so the same-process live event loop
-  can service exchange I/O while flat/cooldown pairs continue replaying.
-- Triggering evidence: after PR #1177 released startup, the four coin-HSL replay
-  bots were simultaneously in `blk_io_schedule`, VPS5 showed 40-44% I/O wait,
-  20-29 MB/s swap-in, 19-23 MB/s swap-out, and zero CPU idle, while fresh
-  account-critical remote failures occurred. The non-replay Hyperliquid bot
-  remained in normal `ep_poll` sleep.
-- Non-goals: no HSL math/state, pair ordering, readiness, entry gate,
-  checkpoint/cache schema, exchange-call, Rust, or backtest behavior change;
-  no replay vectorization or memory-layout rewrite.
-- Local validation: full coin-HSL suite; full order-orchestration and
-  exchange-config suites; 15 selected HSL/coin fake-live and integration tests;
-  benchmark-tool tests; syntax and diff checks. The deterministic 30-symbol,
-  1440-minute, two-iteration held-position benchmark retained its state hash
-  and zero side effects. A realistic flat-background probe reconstructed all
-  30 pairs in 6.37 seconds with no pending pairs.
-- Independent preflight: one read-only test audit confirmed the exact replay
-  task, held/cooldown/flat batch boundary, existing 1,000-row cadence, and
-  benchmark/test surfaces. No delegated edits were used.
+- Base: `d83797b700091100fd357bcb48f90be98d0b97e4`
+- Scope: aggregate already-parsed local `ps` fields under the existing
+  `processes` section: state counts, uninterruptible-sleep count, and bounded
+  CPU, memory, and RSS totals/maxima/reporting counts. Project the same fields
+  through full, summary, and brief smoke output.
+- Triggering evidence: after PR #1178, immediate and settled smokes were hard
+  green with live I/O succeeding, but event-derived `resource_pressure`
+  reported only Hyperliquid because replay-heavy bots could not emit timely
+  `health.summary` samples. Direct process probes simultaneously showed four
+  coin-HSL bots in `D` state with high RSS and swap/I/O pressure.
+- Non-goals: no event producer, monitor write, process signal, verdict/attention
+  threshold, exchange call, restart behavior, HSL/risk/order logic, Rust, or
+  backtest change.
+- Local validation: focused process parsing/projection tests plus full
+  smoke-report (77), restart-smoke-plan (24), and incident-bundle (25) suites
+  pass; syntax and diff checks pass. Missing RSS remains null with a zero
+  reporting count, and non-finite CPU or memory samples are excluded.
+- Independent preflight: one read-only audit confirmed the existing `ps`
+  parser, full process report, summary/brief whitelists, compatibility fallbacks,
+  and targeted test surfaces. No delegated edits were used.
 - Publication state, exact head, mergeability, CI, and current-head review
   verdicts: query live GitHub metadata. Do not encode those transient values in
   the same PR that contains this status file, because every correction would
   create a different head and immediately stale the embedded value.
-- Expected VPS action: pull while preserving local artifacts, controlled
-  five-bot restart for the live Python runtime change, then immediate and
-  settled bounded smoke reports. No Rust rebuild is required.
+- Expected VPS action: pull while preserving local artifacts and run a bounded
+  read-only process-section smoke. No bot restart or Rust rebuild is required.
 
 Next action:
 
-1. Publish the hotfix, resolve verified findings, and merge only after the
-   exact-head gate; then perform the declared VPS5 restart/smoke validation.
+1. Publish the read-only tooling slice, resolve verified findings, and merge
+   only after the exact-head gate; then perform the declared VPS5 query smoke.
 
 ## Deployed Baseline
 
-- Remote `v8`: `abcc422b`, PR #1177
-- VPS5 repository: `abcc422b`, PR #1177; tracked status clean
+- Remote `v8`: `d83797b7`, PR #1178
+- VPS5 repository: `d83797b7`, PR #1178; tracked status clean
 - VPS5 expected bots: five; all are running after the controlled restart
-- Immediate post-restart smoke was green: `ok=true`, `hard_failures=0`, all five
-  bots matched, and zero remote/account-critical/fill/log failures.
-- Protective-ready events proved startup release for GateIO, KuCoin, and OKX
-  with no held positions, while exact background replay remained active.
-  Settled probes then exposed the resource-pressure incident summarized in the
-  active-slice evidence above. Five bots remain alive; do not restart them
-  reflexively while the dependent hotfix is under review.
+- Immediate and settled smoke reports were green: all five expected bots
+  matched, hard failures were zero, 396 remote calls and 43 account-critical
+  calls succeeded across the two windows with zero failures, and no fill,
+  process, event-pipeline, or text-log hard failure appeared.
+- Background replay remains memory/I/O intensive: settled direct probes showed
+  four coin-HSL processes in uninterruptible sleep/page wait, 29 MB/s sampled
+  swap-in, 18 MB/s swap-out, 32% I/O wait, and zero idle. PR #1178 restored
+  live-I/O responsiveness but intentionally did not reduce this footprint.
 - Preserve local/VPS configs, logs, monitor data, reports, and temporary files
 
 ## Review Gate
@@ -96,10 +94,9 @@ Next action:
 
 ## Next Slice
 
-The denominator-parity, immutable held/cooldown-first ordering, and
-held-position protective-readiness split are merged and deployed. The active
-hotfix bounds event-loop monopolization during the resulting background replay
-without changing replay results or pair readiness.
+The coin-HSL protective-readiness split and cooperative background cadence are
+merged and deployed. The active read-only slice makes current process pressure
+visible even when periodic event-derived health samples are absent or stale.
 Remaining candidates:
 
 - realistic-scale replay fixtures and deeper internal-stage profiling
