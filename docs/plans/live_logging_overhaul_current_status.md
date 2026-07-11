@@ -22,6 +22,7 @@ Estimated completion:
 
 ## Active Review Slice
 
+- PR #1193, `Keep startup reports on latest lifecycle`
 - Branch: `codex/v8-performance-startup-lifecycle`
 - Base: `3b4b043eb66e8d0b42d792a5b94686b409901220`
 - Triggering evidence: capped rotated performance-report selection intentionally

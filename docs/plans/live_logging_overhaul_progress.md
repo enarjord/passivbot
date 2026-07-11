@@ -7583,6 +7583,7 @@ VPS5 deployment status:
 
 ### Active Slice: Performance Startup Lifecycle Ordering
 
+- PR #1193, `Keep startup reports on latest lifecycle`.
 - Branch: `codex/v8-performance-startup-lifecycle` from deployed
   `3b4b043eb66e8d0b42d792a5b94686b409901220`.
 - Triggering evidence: the bounded per-bot file selector reads current first,
