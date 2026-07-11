@@ -19,19 +19,20 @@ Last updated: 2026-07-11.
 
 Current `origin/v8` head:
 
-- `77e111f7` after PR #1181, `Expose HSL replay readiness scorecard`.
+- `ff1b2c1f9ee9968a4e46f3ba598f3c7f091efe42` after PR #1189, `Record
+  isolated-only entry filtering`.
 
 Current logging-overhaul head:
 
-- `77e111f7` after PR #1181, `Expose HSL replay readiness scorecard`
-  (latest merged logging-overhaul slice).
+- `ff1b2c1f9ee9968a4e46f3ba598f3c7f091efe42` after PR #1189, `Record
+  isolated-only entry filtering` (latest merged logging-overhaul slice).
 
 Current work:
 
-- Branch `codex/v8-hsl-replay-scorecard-completion-fallback` makes the
-  protective elapsed aggregate use retained completion evidence when the
-  dedicated readiness milestone has rotated out of the selected event files.
-  It consumes existing events only and does not change HSL or live behavior.
+- Active review-worthy slice: HSL replay scan-throughput observability, adding
+  scanned-row counters and scan-rate reporting and correcting ETA estimators
+  while preserving replay behavior and existing applied-row metrics. This
+  slice is not yet merged or deployed.
 
 Current review gate:
 
@@ -61,6 +62,12 @@ Retuned goal boundary:
   with explicit no-SSH/no-merge boundaries.
 
 VPS5 deployment status:
+
+- PR #1189 merged to `v8` as
+  `ff1b2c1f9ee9968a4e46f3ba598f3c7f091efe42` and was deployed to VPS5. The
+  deployment smoke was green with all five supervised bots present and the
+  unrelated `misc` process preserved. The new isolated-only reason had zero
+  production matches because current configs do not exercise it.
 
 - PR #1181 merged to `v8` as `77e111f7` after exact-head Hermes and Grok 4.5
   green reviews plus green CI. VPS5 pulled cleanly without restarting bots; all

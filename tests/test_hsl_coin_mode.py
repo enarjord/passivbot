@@ -1946,6 +1946,7 @@ async def test_coin_hsl_history_replay_emits_lifecycle_events():
         EventTypes.HSL_REPLAY_PROGRESS,
         EventTypes.HSL_REPLAY_PROGRESS,
         EventTypes.HSL_REPLAY_PROGRESS,
+        EventTypes.HSL_REPLAY_PROGRESS,
         EventTypes.HSL_REPLAY_COMPLETED,
     ]
     assert {event.cycle_id for event in events} == {"cy_hsl_replay"}
@@ -1965,17 +1966,35 @@ async def test_coin_hsl_history_replay_emits_lifecycle_events():
     assert events[2].reason_code == "pair_replay_progress"
     assert events[2].data["pair_idx"] == 1
     assert events[2].data["is_held_pair"] is True
-    assert events[3].status == "succeeded"
-    assert events[3].reason_code == ReasonCodes.HSL_HELD_PROTECTIVE_READY
-    assert events[3].data["stage"] == "held_protective_ready"
-    assert events[3].data["ready_pairs"] == 1
-    assert events[3].data["pending_pairs"] == 0
-    assert events[3].data["protective_elapsed_s"] is not None
-    completed = events[4]
+    assert events[2].data["applied_rows"] == 0
+    assert events[2].data["scanned_rows"] == 0
+    assert events[2].data["total_applied_rows"] == 0
+    assert events[2].data["total_scanned_rows"] == 0
+    assert events[2].data["rows_per_second"] is not None
+    assert events[2].data["scanned_rows_per_second"] is not None
+    assert events[2].data["pair_elapsed_s"] is not None
+    assert events[3].reason_code == "pair_replay_progress"
+    assert events[3].data["applied_rows"] == 2
+    assert events[3].data["scanned_rows"] == 2
+    assert events[3].data["total_applied_rows"] == 2
+    assert events[3].data["total_scanned_rows"] == 2
+    assert events[3].data["rows_per_second"] is not None
+    assert events[3].data["scanned_rows_per_second"] is not None
+    assert events[3].data["pair_elapsed_s"] is not None
+    assert events[4].status == "succeeded"
+    assert events[4].reason_code == ReasonCodes.HSL_HELD_PROTECTIVE_READY
+    assert events[4].data["stage"] == "held_protective_ready"
+    assert events[4].data["ready_pairs"] == 1
+    assert events[4].data["pending_pairs"] == 0
+    assert events[4].data["protective_elapsed_s"] is not None
+    completed = events[5]
     assert completed.status == "succeeded"
     assert completed.reason_code == "coin_history_replay_completed"
     assert completed.data["rows"] == 2
     assert completed.data["applied_rows"] == 2
+    assert completed.data["total_applied_rows"] == 2
+    assert completed.data["total_scanned_rows"] == 2
+    assert completed.data["total_scanned_rows"] == completed.data["candidate_rows"]
     assert completed.data["pairs"] == 1
     assert completed.data["held_pairs"] == 1
     assert completed.data["cooldown_pairs"] == 0
@@ -1985,6 +2004,7 @@ async def test_coin_hsl_history_replay_emits_lifecycle_events():
     assert completed.data["fill_events"] == 0
     assert completed.data["panic_events"] == 0
     assert completed.data["rows_per_second"] is not None
+    assert completed.data["scanned_rows_per_second"] is not None
     assert completed.data["history_fetch_elapsed_s"] is not None
     assert completed.data["pre_replay_elapsed_s"] is not None
     assert completed.data["replay_loop_elapsed_s"] is not None
@@ -1999,6 +2019,101 @@ async def test_coin_hsl_history_replay_emits_lifecycle_events():
         + completed.data["replay_loop_elapsed_s"]
     )
     assert phase_elapsed_s <= completed.data["startup_blocking_elapsed_s"] + 0.006
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
+
+
+@pytest.mark.asyncio
+async def test_coin_hsl_history_replay_reports_scanned_optional_rows_without_apply():
+    from live.event_bus import EventTypes, ListEventSink, LiveEventPipeline
+
+    bot = make_coin_bot()
+    symbol = "A"
+    bot._hsl_coin_state("long", symbol)
+    sink = ListEventSink()
+    bot._live_event_pipeline = LiveEventPipeline(
+        structured_sinks=[sink],
+        monitor_sinks=[],
+    )
+    bot._emit_live_event = MethodType(Passivbot._emit_live_event, bot)
+
+    async def fake_history(current_balance=None, **kwargs):
+        return {
+            "timeline": [
+                {
+                    "timestamp": 60_000,
+                    "balance": 100.0,
+                    "realized_pnl": 0.0,
+                    "realized_pnl_by_coin_pside": {},
+                    "unrealized_pnl_by_coin_pside": {},
+                },
+                {
+                    "timestamp": 120_000,
+                    "balance": 100.0,
+                    "realized_pnl": 0.0,
+                    "realized_pnl_by_coin_pside": {},
+                    "unrealized_pnl_by_coin_pside": {},
+                },
+            ],
+            "panic_flatten_events": [],
+            "fill_events": [
+                {
+                    "timestamp": 60_000,
+                    "symbol": symbol,
+                    "pside": "long",
+                    "action": "increase",
+                    "qty": 1.0,
+                }
+            ],
+        }
+
+    bot.get_balance_equity_history = fake_history
+    now_ms = bot.get_exchange_time()
+
+    def active_cooldown_contract(self, pside, replay_symbol, fill_events, replay_now_ms):
+        del self, pside, replay_symbol, fill_events, replay_now_ms
+        return {
+            "policy": "normal",
+            "latest_panic_ts": 60_000,
+            "cooldown_until_ms": now_ms + 60_000,
+            "intervention_entry_ts": None,
+            "active_cooldown_now": True,
+            "intervention_active": False,
+            "unresolved_residue": False,
+        }
+
+    bot._equity_hard_stop_infer_coin_replay_contract = MethodType(
+        active_cooldown_contract, bot
+    )
+
+    await bot._equity_hard_stop_initialize_coin_from_history()
+
+    assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    pair_event = [
+        event
+        for event in sink.events
+        if event.event_type == EventTypes.HSL_REPLAY_PROGRESS
+        and event.reason_code == "pair_replay_progress"
+    ][-1]
+    assert pair_event.data["applied_rows"] == 0
+    assert pair_event.data["scanned_rows"] == 2
+    assert pair_event.data["total_applied_rows"] == 0
+    assert pair_event.data["total_scanned_rows"] == 2
+    assert pair_event.data["rows_per_second"] is not None
+    assert pair_event.data["scanned_rows_per_second"] is not None
+    assert pair_event.data["pair_elapsed_s"] is not None
+    assert bot._hsl_coin_state("long", symbol)["halted"] is True
+
+    completed = next(
+        event
+        for event in sink.events
+        if event.event_type == EventTypes.HSL_REPLAY_COMPLETED
+    )
+    assert completed.data["applied_rows"] == 0
+    assert completed.data["total_applied_rows"] == 0
+    assert completed.data["total_scanned_rows"] == 2
+    assert completed.data["total_scanned_rows"] == completed.data["candidate_rows"]
+    assert completed.data["rows_per_second"] is not None
+    assert completed.data["scanned_rows_per_second"] is not None
     assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 
@@ -2052,13 +2167,16 @@ async def test_coin_hsl_history_replay_processes_held_late_symbol_first():
         if event.event_type == EventTypes.HSL_REPLAY_PROGRESS
         and event.reason_code == "pair_replay_progress"
     ]
-    assert len(pair_events) == 1
+    assert len(pair_events) == 3
     assert pair_events[0].symbol == "Z"
     assert pair_events[0].pside == "long"
     assert pair_events[0].data["pair_idx"] == 1
     assert pair_events[0].data["pairs"] == 2
     assert pair_events[0].data["held_pairs"] == 1
     assert pair_events[0].data["is_held_pair"] is True
+    assert pair_events[1].symbol == "Z"
+    assert pair_events[1].data["scanned_rows"] == 1
+    assert pair_events[2].symbol == "A"
     assert set(bot._equity_hard_stop_coin["long"]) == {"A", "Z"}
     assert bot._live_event_pipeline.close(timeout=2.0) is True
 

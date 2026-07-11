@@ -1662,6 +1662,61 @@ def test_live_performance_report_hsl_replay_profile(tmp_path):
     assert group["completed"]["derived"]["estimated_remaining_ms"] == 0
 
 
+def test_hsl_replay_profile_prefers_scanned_work_for_eta():
+    data = {
+        "timeline_rows": 100,
+        "pairs": 3,
+        "required_pairs": 1,
+        "total_applied_rows": 10,
+        "rows_per_second": 2.0,
+        "scanned_rows": 75,
+        "candidate_rows": 150,
+        "total_scanned_rows": 150,
+        "scanned_rows_per_second": 50.0,
+        "pair_elapsed_s": 1.5,
+        "secret": "must-not-render",
+    }
+    bounded = performance_report_module._bounded_hsl_replay_data(data)
+    derived = performance_report_module._derive_hsl_replay_profile(bounded)
+
+    assert bounded["scanned_rows"] == 75
+    assert bounded["candidate_rows"] == 150
+    assert bounded["pair_elapsed_s"] == 1.5
+    assert "secret" not in bounded
+    assert derived["throughput_source"] == "scanned_rows"
+    assert derived["observed_applied_rows"] == 10
+    assert derived["observed_scanned_rows"] == 150
+    assert derived["observed_work_pct"] == 50.0
+    assert derived["estimated_dense_remaining_rows"] == 150
+    assert derived["estimated_dense_remaining_ms"] == 3000
+
+    terminal = performance_report_module._derive_hsl_replay_profile(
+        {**bounded, "stage": "full_replay"}
+    )
+    assert terminal["work_estimate_source"] == "candidate_rows_terminal"
+    assert terminal["estimated_candidate_pair_row_work"] == 150
+    assert terminal["estimated_candidate_remaining_rows"] == 0
+    assert terminal["estimated_remaining_rows"] == 0
+
+
+def test_hsl_replay_profile_keeps_legacy_applied_work_fallback():
+    derived = performance_report_module._derive_hsl_replay_profile(
+        {
+            "timeline_rows": 100,
+            "pairs": 3,
+            "total_applied_rows": 10,
+            "rows_per_second": 2.0,
+        }
+    )
+
+    assert derived["throughput_source"] == "applied_rows_legacy"
+    assert derived["observed_applied_rows"] == 10
+    assert "observed_scanned_rows" not in derived
+    assert derived["estimated_dense_remaining_rows"] == 290
+    assert derived["estimated_dense_remaining_ms"] == 145000
+    assert derived["work_estimate_source"] == "dense_rows"
+
+
 def test_live_performance_report_hsl_replay_profile_stage_summary(tmp_path):
     rows = [
         _monitor_row(
@@ -2061,6 +2116,7 @@ def test_live_performance_report_hsl_replay_profile_whitelists_values(tmp_path):
         "latest_elapsed_ms": 4500,
         "observed_applied_rows": 9,
         "price_history_fetch_elapsed_ms": 16500,
+        "throughput_source": "applied_rows_legacy",
         "timeline_replay_elapsed_ms": 3200,
     }
     assert "balance" not in rendered

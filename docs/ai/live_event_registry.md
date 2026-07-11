@@ -105,9 +105,13 @@ rejections are non-authoritative performance-cache outcomes and should fall
 back to exchange-derived replay.
 
 Coin mode emits one `hsl.replay.progress` event with `stage=pair_replay` when
-the first frozen replay candidate starts, then keeps subsequent pair progress
-time-throttled. `is_held_pair`, `is_cooldown_pair`, and `pair_idx` expose the
-deterministic held/cooldown/remaining ordering without controlling it.
+the first frozen replay candidate starts, keeps in-pair progress time-throttled,
+and emits one terminal progress sample for each pair. `applied_rows` and
+`total_applied_rows` retain state-update counts; `scanned_rows`,
+`total_scanned_rows`, `scanned_rows_per_second`, and `pair_elapsed_s` expose
+candidate-row scan cost, including pairs which apply no rows. `is_held_pair`,
+`is_cooldown_pair`, and `pair_idx` expose the deterministic
+held/cooldown/remaining ordering without controlling it.
 After the held batch completes, `stage=held_protective_ready` exposes bounded
 `ready_pairs`, `pending_pairs`, and `protective_elapsed_s` fields. Remaining
 pairs continue in the same replay task; `hsl.replay.completed` remains the

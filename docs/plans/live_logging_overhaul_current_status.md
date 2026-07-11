@@ -22,53 +22,44 @@ Estimated completion:
 
 ## Active Review Slice
 
-- PR and publication state: query live GitHub metadata;
-  `Record isolated-only entry filtering`
-- Branch: `codex/v8-isolated-market-compatibility-events`
-- Head: query live GitHub metadata; this commit cannot embed its own final SHA
-  without making that value stale
-- Base: `bd16974743d5dc4bfd25491d052e62e90ecc3982`
-- Scope: when the existing generic CCXT margin-policy filter excludes an
-  isolated-only symbol from new entries under cross-margin preference, emit one
-  bounded, per-side, off-console/off-text `config.market_compatibility` event.
-  Keep warning and event dedupe independent so a failed enqueue retries without
-  duplicating the existing text warning.
-- Triggering evidence: `_filter_approved_symbols()` already emits a once-per-
-  process warning for the exact compatibility decision, but durable structured
-  history cannot answer which side/symbols were blocked or distinguish this
-  decision from an unavailable exchange market.
-- Non-goals: no margin capability/preference resolution, metadata or exchange
-  call, approved-symbol result, existing-position/order manageability, warning,
-  smoke verdict, process control, HSL/risk/order behavior, Rust, backtest, or
-  optimizer change.
-- Local validation: the focused margin-filter, CCXT contract-helper, event-bus,
-  smoke projection, and registry-doc suite passes with 213 tests; Python
-  compilation and `git diff --check` pass. Added-line silent handling is
-  limited to the explicitly best-effort event producer/caller guards. Luna's
-  first preflight found the manual `build_contract_bot()` initialization gap;
-  the explicit initializer and regression resolve it, and delta review found
-  no code regressions. Terra implemented the isolated producer/tests; Sol owns
-  the event contract, final preflight, and publication.
-- Publication state, exact head, mergeability, CI, and current-head review
-  verdicts: query live GitHub metadata. Do not encode those transient values in
-  the same PR that contains this status file, because every correction would
-  create a different head and immediately stale the embedded value.
+- PR #1190, `Expose HSL replay scan throughput`
+- Branch: `codex/v8-hsl-replay-scan-profile`
+- Base: `ff1b2c1f9ee9968a4e46f3ba598f3c7f091efe42`
+- Scope: expose per-pair and cumulative replay candidate rows scanned
+  separately from HSL state-update rows applied; make performance and smoke
+  ETA projections prefer scanned-row throughput; retain explicit legacy
+  applied-row fallback and exact terminal candidate-work estimates.
+- Behavior boundary: no replay candidate ordering, row application, yield
+  cadence, protective readiness, risk state, exchange call, Rust/order logic,
+  or trading behavior change. Each pair emits one bounded terminal progress
+  sample so halted and zero-apply scan work remains observable.
+- Validation: the focused HSL coin-mode, replay-benchmark, performance-report,
+  smoke-report, event-registry, incident-bundle, and restart-smoke suites pass.
+  Eight real fake-live HSL scenarios pass. Python compilation,
+  `git diff --check`, and the added-line silent-handling scan pass. Independent
+  preflight findings for halted-pair terminal progress and completed sparse
+  candidate-work estimates are resolved with regressions.
+- Publication state, exact head, mergeability, CI, and current-head reviewer
+  verdicts: query live GitHub metadata. Do not embed transient head or gate
+  values in this PR because doing so would immediately invalidate them.
 - Expected VPS action: after exact-head approval and merge, pull while
   preserving local artifacts, restart the five exact supervised bot panes
-  because the producer is in shared CCXT filtering, query any emitted
-  compatibility records, and run immediate plus settled smoke checks.
+  because the HSL producer is shared live Python, preserve unrelated
+  `misc:0.0`, then query replay progress/completion scan fields and run
+  immediate plus settled smoke checks.
 
 Next action:
 
-1. Complete the bounded isolated-only entry-filter producer and regressions,
-   obtain independent preflight plus exact-head reviewers and CI, resolve
-   verified findings, and merge only when the full gate is green.
+1. Resolve any verified current-head findings. Merge only after the temporary
+   Hermes + Grok 4.5 + green-CI gate is satisfied on the same exact head, then
+   deploy and validate the expected replay fields and process boundaries on
+   VPS5.
 
 ## Deployed Baseline
 
-- Remote `v8`: `bd169747`, PR #1188
-- VPS5 repository: `bd169747`, PR #1188; tracked status clean
-- VPS5 expected bots: five; all running after the Hyperliquid-only restart
+- Remote `v8`: `ff1b2c1f9ee9968a4e46f3ba598f3c7f091efe42`, PR #1189
+- VPS5 repository: `ff1b2c1f9ee9968a4e46f3ba598f3c7f091efe42`, PR #1189; tracked status clean
+- VPS5 expected bots: five; all running after the shared-code five-pane restart
 - PR #1188 was approved on exact head `363eca852` by Hermes and Grok 4.5;
   CI passed and it merged as `bd169747`. VPS5 fast-forwarded cleanly and
   gracefully restarted only `passivbot:4.0`; Hyperliquid bot PID `842779` was
@@ -148,12 +139,15 @@ The coin-HSL protective-readiness split, cooperative background cadence,
 current process-pressure query, compact cold replay payload, bounded replay
 scorecard, stable per-pair fill index, exact sparse flat-pair replay, and the
 rotated resource-pressure report fix, configured-market skip events, and fatal
-HIP-3 startup compatibility are merged and deployed. The active slice makes
-the remaining isolated-only initial-entry filter visible in durable structured
-history.
-Remaining candidates:
+HIP-3 startup compatibility are merged and deployed. PR #1189's isolated-only
+initial-entry filter visibility is also merged and deployed. Active PR #1190
+implements HSL replay scanned-row throughput and corrected ETA projections; it
+is under exact-head review and is not yet merged or deployed.
 
-- deeper internal-stage profiling if live residual cost remains material
+Do not begin a dependent next slice until PR #1190 is merged and its VPS5
+restart/query/smoke boundary is validated. After that evidence is recorded,
+select the next review-worthy candidate from the remaining backlog, including:
+
 - bounded operator tooling improvements sharing one code and validation surface
 
 Do not create progress-only PRs or resume unrelated logging work from stale
