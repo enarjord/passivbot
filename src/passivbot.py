@@ -6188,7 +6188,14 @@ class Passivbot:
                 user=getattr(self, "user", None),
                 bot_id=getattr(self, "bot_id", None),
             ),
-            monitor_sinks=[MonitorEventSink(publisher)] if publisher is not None else [],
+            monitor_sinks=[
+                MonitorEventSink(
+                    publisher,
+                    publisher_phase_timing=isinstance(publisher, MonitorPublisher),
+                )
+            ]
+            if publisher is not None
+            else [],
             console_sink=console_sink,
             debug_profiles=getattr(self, "live_event_debug_profiles", ()),
         )

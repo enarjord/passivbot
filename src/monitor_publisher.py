@@ -13,6 +13,18 @@ from pathlib import Path
 from typing import Any, Iterable, Optional
 
 
+_MONITOR_EVENT_PHASE_TIMING_KEYS = (
+    "lock_wait_ns",
+    "rotation_ns",
+    "persist_ns",
+    "maintenance_ns",
+)
+
+
+def _empty_monitor_event_phase_timing() -> dict[str, int]:
+    return {key: 0 for key in _MONITOR_EVENT_PHASE_TIMING_KEYS}
+
+
 def _json_default(value: Any) -> Any:
     if isinstance(value, Path):
         return str(value)
@@ -575,38 +587,79 @@ class MonitorPublisher:
         symbol: Optional[str] = None,
         pside: Optional[str] = None,
     ) -> Optional[dict]:
+        result, _timing = self._record_event_timed(
+            kind,
+            tags,
+            payload,
+            ts=ts,
+            symbol=symbol,
+            pside=pside,
+        )
+        return result
+
+    def _record_event_timed(
+        self,
+        kind: str,
+        tags: Iterable[str],
+        payload: Optional[dict] = None,
+        *,
+        ts: Optional[int] = None,
+        symbol: Optional[str] = None,
+        pside: Optional[str] = None,
+    ) -> tuple[Optional[dict], dict[str, int]]:
+        timing = _empty_monitor_event_phase_timing()
+        lock_wait_started_ns = time.monotonic_ns()
         with self._lock:
+            timing["lock_wait_ns"] = max(0, time.monotonic_ns() - lock_wait_started_ns)
             now_ms = self._now_ms() if ts is None else int(ts)
             try:
-                self._rotate_events_if_needed(now_ms=now_ms)
-                self.seq += 1
-                envelope = {
-                    "ts": now_ms,
-                    "seq": self.seq,
-                    "kind": str(kind),
-                    "tags": [str(tag) for tag in tags],
-                    "exchange": self.exchange,
-                    "user": self.user,
-                    "payload": payload or {},
-                }
-                if symbol is not None:
-                    envelope["symbol"] = str(symbol)
-                if pside is not None:
-                    envelope["pside"] = str(pside)
-                line = json.dumps(
-                    envelope,
-                    separators=(",", ":"),
-                    sort_keys=True,
-                    default=_json_default,
-                )
-                with open(self.current_events_path, "a", encoding="utf-8") as f:
-                    f.write(line + "\n")
-                self._write_manifest(now_ms=now_ms)
-                self._prune_retention(now_ms=now_ms)
-                return envelope
+                rotation_started_ns = time.monotonic_ns()
+                try:
+                    self._rotate_events_if_needed(now_ms=now_ms)
+                finally:
+                    timing["rotation_ns"] = max(
+                        0, time.monotonic_ns() - rotation_started_ns
+                    )
+
+                persist_started_ns = time.monotonic_ns()
+                try:
+                    self.seq += 1
+                    envelope = {
+                        "ts": now_ms,
+                        "seq": self.seq,
+                        "kind": str(kind),
+                        "tags": [str(tag) for tag in tags],
+                        "exchange": self.exchange,
+                        "user": self.user,
+                        "payload": payload or {},
+                    }
+                    if symbol is not None:
+                        envelope["symbol"] = str(symbol)
+                    if pside is not None:
+                        envelope["pside"] = str(pside)
+                    line = json.dumps(
+                        envelope,
+                        separators=(",", ":"),
+                        sort_keys=True,
+                        default=_json_default,
+                    )
+                    with open(self.current_events_path, "a", encoding="utf-8") as f:
+                        f.write(line + "\n")
+                finally:
+                    timing["persist_ns"] = max(0, time.monotonic_ns() - persist_started_ns)
+
+                maintenance_started_ns = time.monotonic_ns()
+                try:
+                    self._write_manifest(now_ms=now_ms)
+                    self._prune_retention(now_ms=now_ms)
+                finally:
+                    timing["maintenance_ns"] = max(
+                        0, time.monotonic_ns() - maintenance_started_ns
+                    )
+                return envelope, timing
             except Exception as exc:
                 self._log_write_failure(f"recording event {kind}", exc)
-                return None
+                return None, timing
 
     def record_error(
         self,

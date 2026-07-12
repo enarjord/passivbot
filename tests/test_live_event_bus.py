@@ -581,6 +581,231 @@ def test_pipeline_health_snapshot_tracks_and_consumes_queue_timing(monkeypatch):
     assert pipeline.close(timeout=2.0) is True
 
 
+def test_pipeline_aggregates_and_resets_monitor_publisher_phase_timing(monkeypatch):
+    clock = {"ns": 1_000_000_000}
+    monkeypatch.setattr(
+        live_event_bus_module.time,
+        "monotonic_ns",
+        lambda: clock["ns"],
+    )
+    original_to_monitor_event = LiveEvent.to_monitor_event
+
+    def timed_to_monitor_event(event):
+        clock["ns"] += 1_000_000
+        return original_to_monitor_event(event)
+
+    class TimedPublisher:
+        def __init__(self):
+            self.timings = iter(
+                (
+                    {
+                        "lock_wait_ns": 2_000_000,
+                        "rotation_ns": 3_000_000,
+                        "persist_ns": 5_000_000,
+                        "maintenance_ns": 7_000_000,
+                    },
+                    {
+                        "lock_wait_ns": 11_000_000,
+                        "rotation_ns": 13_000_000,
+                        "persist_ns": 17_000_000,
+                        "maintenance_ns": 19_000_000,
+                    },
+                )
+            )
+
+        def _record_event_timed(self, kind, *_args, **_kwargs):
+            return {"kind": kind}, next(self.timings)
+
+    monkeypatch.setattr(LiveEvent, "to_monitor_event", timed_to_monitor_event)
+    pipeline = LiveEventPipeline(
+        start=False,
+        monitor_sinks=[
+            MonitorEventSink(TimedPublisher(), publisher_phase_timing=True)
+        ],
+        routes={EventTypes.SNAPSHOT_BUILT: EventRoute(structured=False, monitor=True)},
+    )
+
+    assert pipeline.emit(LiveEvent(EventTypes.SNAPSHOT_BUILT)) is not None
+    assert pipeline.emit(LiveEvent(EventTypes.SNAPSHOT_BUILT)) is not None
+    pipeline.start()
+    assert pipeline.flush(timeout=2.0) is True
+
+    expected = {
+        "event_monitor_prepare_ms_total": 2.0,
+        "event_monitor_prepare_ms_max": 1.0,
+        "event_monitor_publisher_lock_wait_ms_total": 13.0,
+        "event_monitor_publisher_lock_wait_ms_max": 11.0,
+        "event_monitor_publisher_rotation_ms_total": 16.0,
+        "event_monitor_publisher_rotation_ms_max": 13.0,
+        "event_monitor_publisher_persist_ms_total": 22.0,
+        "event_monitor_publisher_persist_ms_max": 17.0,
+        "event_monitor_publisher_maintenance_ms_total": 26.0,
+        "event_monitor_publisher_maintenance_ms_max": 19.0,
+    }
+    snapshot = pipeline.health_snapshot()
+    assert {key: snapshot[key] for key in expected} == expected
+    _consumed, token = pipeline.consume_timing_snapshot()
+    pipeline.confirm_timing_snapshot(token)
+    reset = pipeline.health_snapshot()
+    assert {key: reset[key] for key in expected} == {key: 0.0 for key in expected}
+    assert pipeline.close(timeout=2.0) is True
+
+
+def test_pipeline_monitor_phase_timing_restores_overlapping_window(monkeypatch):
+    clock = {"ns": 1_000_000_000}
+    monkeypatch.setattr(
+        live_event_bus_module.time,
+        "monotonic_ns",
+        lambda: clock["ns"],
+    )
+    pipeline = LiveEventPipeline(start=False)
+    pipeline._timing_monitor_prepare_ns_total = 2_000_000
+    pipeline._timing_monitor_prepare_ns_max = 2_000_000
+    pipeline._timing_monitor_publisher_persist_ns_total = 3_000_000
+    pipeline._timing_monitor_publisher_persist_ns_max = 3_000_000
+
+    first, first_token = pipeline.consume_timing_snapshot()
+    pipeline._timing_monitor_prepare_ns_total = 5_000_000
+    pipeline._timing_monitor_prepare_ns_max = 5_000_000
+    pipeline._timing_monitor_publisher_persist_ns_total = 7_000_000
+    pipeline._timing_monitor_publisher_persist_ns_max = 7_000_000
+    _second, second_token = pipeline.consume_timing_snapshot()
+    pipeline.confirm_timing_snapshot(first_token)
+    pipeline.restore_timing_snapshot(second_token)
+
+    assert first["event_monitor_prepare_ms_total"] == 2.0
+    assert first["event_monitor_publisher_persist_ms_total"] == 3.0
+    restored = pipeline.health_snapshot()
+    assert restored["event_monitor_prepare_ms_total"] == 5.0
+    assert restored["event_monitor_prepare_ms_max"] == 5.0
+    assert restored["event_monitor_publisher_persist_ms_total"] == 7.0
+    assert restored["event_monitor_publisher_persist_ms_max"] == 7.0
+
+
+def test_pipeline_custom_monitor_sink_reports_zero_internal_phase_timing():
+    class CustomMonitorSink:
+        def write(self, event):
+            return event
+
+    pipeline = LiveEventPipeline(
+        monitor_sinks=[CustomMonitorSink()],
+        routes={EventTypes.SNAPSHOT_BUILT: EventRoute(structured=False, monitor=True)},
+    )
+
+    assert pipeline.emit(LiveEvent(EventTypes.SNAPSHOT_BUILT)) is not None
+    assert pipeline.flush(timeout=2.0) is True
+    timing = pipeline.health_snapshot()
+    assert {
+        key: timing[key]
+        for key in timing
+        if key.startswith("event_monitor_prepare_ms")
+        or key.startswith("event_monitor_publisher_")
+    } == {
+        "event_monitor_prepare_ms_total": 0.0,
+        "event_monitor_prepare_ms_max": 0.0,
+        "event_monitor_publisher_lock_wait_ms_total": 0.0,
+        "event_monitor_publisher_lock_wait_ms_max": 0.0,
+        "event_monitor_publisher_rotation_ms_total": 0.0,
+        "event_monitor_publisher_rotation_ms_max": 0.0,
+        "event_monitor_publisher_persist_ms_total": 0.0,
+        "event_monitor_publisher_persist_ms_max": 0.0,
+        "event_monitor_publisher_maintenance_ms_total": 0.0,
+        "event_monitor_publisher_maintenance_ms_max": 0.0,
+    }
+    assert pipeline.close(timeout=2.0) is True
+
+
+def test_monitor_event_sink_custom_publisher_ignores_private_timing_name_collision():
+    class CustomPublisher:
+        def __init__(self):
+            self.recorded = []
+
+        def record_event(self, kind, *_args, **_kwargs):
+            self.recorded.append(kind)
+            return {"kind": kind}
+
+        def _record_event_timed(self, *_args, **_kwargs):
+            raise AssertionError("private timing hook must require explicit opt-in")
+
+    publisher = CustomPublisher()
+    event = LiveEvent(EventTypes.SNAPSHOT_BUILT)
+
+    result = MonitorEventSink(publisher).write(event)
+
+    assert result == {"kind": EventTypes.SNAPSHOT_BUILT}
+    assert publisher.recorded == [EventTypes.SNAPSHOT_BUILT]
+
+
+def test_pipeline_monitor_publisher_failure_retains_phase_timing(monkeypatch):
+    clock = {"ns": 1_000_000_000}
+    monkeypatch.setattr(
+        live_event_bus_module.time,
+        "monotonic_ns",
+        lambda: clock["ns"],
+    )
+
+    class FailingPublisher:
+        def _record_event_timed(self, *_args, **_kwargs):
+            return (
+                None,
+                {
+                    "lock_wait_ns": 2_000_000,
+                    "rotation_ns": 3_000_000,
+                    "persist_ns": 5_000_000,
+                    "maintenance_ns": 0,
+                },
+            )
+
+    pipeline = LiveEventPipeline(
+        monitor_sinks=[
+            MonitorEventSink(FailingPublisher(), publisher_phase_timing=True)
+        ],
+        routes={EventTypes.SNAPSHOT_BUILT: EventRoute(structured=False, monitor=True)},
+    )
+
+    assert pipeline.emit(LiveEvent(EventTypes.SNAPSHOT_BUILT)) is not None
+    assert pipeline.flush(timeout=2.0) is True
+    timing = pipeline.health_snapshot()
+    assert timing["event_monitor_publisher_lock_wait_ms_total"] == 2.0
+    assert timing["event_monitor_publisher_rotation_ms_total"] == 3.0
+    assert timing["event_monitor_publisher_persist_ms_total"] == 5.0
+    assert timing["event_monitor_publisher_maintenance_ms_total"] == 0.0
+    assert pipeline.sink_error_counters["monitor"] == 1
+    assert pipeline.close(timeout=2.0) is True
+
+
+def test_pipeline_retains_prepare_timing_when_monitor_conversion_fails(monkeypatch):
+    clock = {"ns": 1_000_000_000}
+    monkeypatch.setattr(
+        live_event_bus_module.time,
+        "monotonic_ns",
+        lambda: clock["ns"],
+    )
+
+    def fail_to_monitor_event(_event):
+        clock["ns"] += 4_000_000
+        raise ValueError("bad monitor event")
+
+    class Publisher:
+        def record_event(self, *_args, **_kwargs):
+            raise AssertionError("publisher must not receive a failed conversion")
+
+    monkeypatch.setattr(LiveEvent, "to_monitor_event", fail_to_monitor_event)
+    pipeline = LiveEventPipeline(
+        monitor_sinks=[MonitorEventSink(Publisher())],
+        routes={EventTypes.SNAPSHOT_BUILT: EventRoute(structured=False, monitor=True)},
+    )
+
+    assert pipeline.emit(LiveEvent(EventTypes.SNAPSHOT_BUILT)) is not None
+    assert pipeline.flush(timeout=2.0) is True
+    timing = pipeline.health_snapshot()
+    assert timing["event_monitor_prepare_ms_total"] == 4.0
+    assert timing["event_monitor_prepare_ms_max"] == 4.0
+    assert timing["event_monitor_publisher_lock_wait_ms_total"] == 0.0
+    assert pipeline.sink_error_counters["monitor"] == 1
+    assert pipeline.close(timeout=2.0) is True
+
+
 def test_pipeline_overlapping_timing_snapshots_resolve_by_token(monkeypatch):
     clock = {"ns": 1_000_000_000}
     monkeypatch.setattr(

@@ -2717,6 +2717,16 @@ def test_live_smoke_report_projects_multi_bot_event_pipeline_timing(tmp_path):
                     "event_monitor_sink_write_count": 8,
                     "event_monitor_sink_service_ms_total": 8.0,
                     "event_monitor_sink_service_ms_max": 4.0,
+                    "event_monitor_prepare_ms_total": 1.0,
+                    "event_monitor_prepare_ms_max": 0.4,
+                    "event_monitor_publisher_lock_wait_ms_total": 0.5,
+                    "event_monitor_publisher_lock_wait_ms_max": 0.3,
+                    "event_monitor_publisher_rotation_ms_total": 0.6,
+                    "event_monitor_publisher_rotation_ms_max": 0.4,
+                    "event_monitor_publisher_persist_ms_total": 4.0,
+                    "event_monitor_publisher_persist_ms_max": 2.0,
+                    "event_monitor_publisher_maintenance_ms_total": 2.5,
+                    "event_monitor_publisher_maintenance_ms_max": 1.5,
                 },
             )
         ],
@@ -2743,6 +2753,16 @@ def test_live_smoke_report_projects_multi_bot_event_pipeline_timing(tmp_path):
                     "event_monitor_sink_write_count": 3,
                     "event_monitor_sink_service_ms_total": 2.0,
                     "event_monitor_sink_service_ms_max": 2.0,
+                    "event_monitor_prepare_ms_total": 0.3,
+                    "event_monitor_prepare_ms_max": 0.3,
+                    "event_monitor_publisher_lock_wait_ms_total": 0.2,
+                    "event_monitor_publisher_lock_wait_ms_max": 0.2,
+                    "event_monitor_publisher_rotation_ms_total": 0.4,
+                    "event_monitor_publisher_rotation_ms_max": 0.4,
+                    "event_monitor_publisher_persist_ms_total": 0.7,
+                    "event_monitor_publisher_persist_ms_max": 0.7,
+                    "event_monitor_publisher_maintenance_ms_total": 0.4,
+                    "event_monitor_publisher_maintenance_ms_max": 0.4,
                 },
             )
         ],
@@ -2759,6 +2779,7 @@ def test_live_smoke_report_projects_multi_bot_event_pipeline_timing(tmp_path):
     assert groups["gateio/gateio_01"].get("latest_worker_service_ms_max") == 7.75
     assert groups["okx/okx_01"].get("latest_structured_sink_write_count") == 8
     assert groups["gateio/gateio_01"].get("latest_monitor_sink_service_ms_max") == 2
+    assert groups["okx/okx_01"].get("latest_monitor_publisher_persist_ms_max") == 2
     expected = {
         "latest_processed_total": 11,
         "latest_timing_window_ms_max": 1250,
@@ -2772,6 +2793,16 @@ def test_live_smoke_report_projects_multi_bot_event_pipeline_timing(tmp_path):
         "latest_monitor_sink_write_count_sum": 11,
         "latest_monitor_sink_service_ms_total_sum": 10,
         "latest_monitor_sink_service_ms_max": 4,
+        "latest_monitor_prepare_ms_total_sum": 1.3,
+        "latest_monitor_prepare_ms_max": 0.4,
+        "latest_monitor_publisher_lock_wait_ms_total_sum": 0.7,
+        "latest_monitor_publisher_lock_wait_ms_max": 0.3,
+        "latest_monitor_publisher_rotation_ms_total_sum": 1,
+        "latest_monitor_publisher_rotation_ms_max": 0.4,
+        "latest_monitor_publisher_persist_ms_total_sum": 4.7,
+        "latest_monitor_publisher_persist_ms_max": 2,
+        "latest_monitor_publisher_maintenance_ms_total_sum": 2.9,
+        "latest_monitor_publisher_maintenance_ms_max": 1.5,
     }
     assert {key: health[key] for key in expected} == expected
     assert {key: summary["event_pipeline_health"][key] for key in expected} == expected

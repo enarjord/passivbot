@@ -22,28 +22,32 @@ Estimated completion:
 
 ## Active Review Slice
 
-- Branch: `codex/v8-event-pipeline-sink-attribution`
-- Base: `cbf1e5ed5bf8bfed4bd967a02d853c099105eabc`
-- Triggering evidence: PR #1200 measured live worker-service maxima above one
-  second while drops, sink errors, and degraded counts remained zero, but the
-  aggregate cannot identify whether the fixed structured or monitor sink class
-  accounted for the delay.
-- Scope: time each queued worker `sink.write()` attempt with a monotonic clock
-  and aggregate fixed structured/monitor write counts plus service total/max
-  over the existing health-summary timing window. Preserve aggregate worker
-  service timing. Rotate, confirm, and restore the new counters with the same
-  opaque timing token, including failed health-event enqueue and overlapping
-  snapshots. Project the fixed numeric fields through event-pipeline smoke
-  summaries and performance resource-pressure reports.
+- Branch: `codex/v8-monitor-publisher-phase-timing`
+- Base: `381f6a3f70f1da19abc85f75607541b5082cfb39`
+- Triggering evidence: deployed PR #1203 attributed essentially all queued
+  worker service to the monitor sink. Four fresh bots reported 2,525 monitor
+  writes, zero structured writes, monitor service total/max
+  `62842.105/5321.841ms`, and aggregate worker service total/max
+  `62937.772/5321.883ms`, with no drops, sink errors, degradation, or unhealthy
+  pipelines. The outer sink timing cannot identify which synchronous monitor
+  persistence phase caused the long tail.
+- Scope: attribute each real `MonitorEventSink` write to fixed monotonic phases:
+  live-event conversion, publisher lock wait, top-level rotation check/work,
+  envelope serialization plus NDJSON append, and post-append manifest/retention
+  maintenance. Aggregate total/max for each phase over the existing
+  health-summary timing window and rotate, confirm, or restore them with the
+  same opaque token. Project only those fixed numeric fields through smoke and
+  performance reports. Generic monitor sinks retain zero internal phase timing.
 - Behavior boundary: observability only. Do not make timing evidence a trading
-  gate, time synchronous console/text sinks, change queue capacity,
-  backpressure, routing, drop/error policy, add raw payloads or unbounded
-  labels, or alter order, risk, HSL, Rust, backtest, optimizer, or exchange
-  behavior.
-- Validation: event-bus route/timing and transactional restore tests, full
-  smoke/performance projection tests, health-payload passthrough tests, fake-live
-  event markers, Python compilation, `git diff --check`, added-line
-  silent-handling audit, and independent preflight.
+  gate; change publisher locking, fsync/durability, rotation, compression,
+  retention, queue capacity, backpressure, routing, or drop/error policy; add
+  raw payloads, dynamic labels, alerts, thresholds, or verdicts; or alter
+  order, risk, HSL, Rust, backtest, optimizer, or exchange behavior.
+- Validation: deterministic publisher/event-bus phase and failure timing,
+  transactional reset/restore/overlap tests, generic-sink zero tests, full
+  smoke/performance projections, health-payload passthrough, fake-live event
+  markers, Python compilation, `git diff --check`, added-line silent-handling
+  audit, and independent preflight.
 - Publication state, exact head, mergeability, CI, and current-head reviewer
   verdicts: query live GitHub metadata; do not embed self-invalidating values.
 - Expected VPS action: exact five-bot graceful restart, then bounded
@@ -57,18 +61,34 @@ Next action:
    and require fresh exact-head verdicts after every push.
 2. Merge only after that gate is green, then gracefully restart the five exact
    VPS5 bot panes while preserving unrelated processes and local artifacts.
-3. Verify fresh fixed structured/monitor sink timing with bounded
+3. Verify fresh fixed monitor-publisher phase timing with bounded
    `health.summary`, smoke, and performance reports, including immediate and
    settled process and repository-state checks.
 
 ## Deployed Baseline
 
-- Remote `v8`: `cbf1e5ed5bf8bfed4bd967a02d853c099105eabc`, PR #1200
-- VPS5 repository: `cbf1e5ed5bf8bfed4bd967a02d853c099105eabc`, PR #1200; tracked
+- Remote `v8`: `381f6a3f70f1da19abc85f75607541b5082cfb39`, PR #1203
+- VPS5 repository: `381f6a3f70f1da19abc85f75607541b5082cfb39`, PR #1203; tracked
   status clean; only expected untracked artifacts were preserved
-- VPS5 expected bots: five; running with PR #1200 restart PIDs
-  `865892/865897/865901/865903/865905`;
+- VPS5 expected bots: five; running with PR #1203 restart PIDs
+  `867321/867324/867328/867331/867333`;
   unrelated `misc:0.0` remains PID `434835`
+- PR #1203 merged after exact-head Hermes and Grok 4.5 approval plus green CI.
+  VPS5 fast-forwarded cleanly and gracefully restarted only the five exact bot
+  panes. All old bot processes exited naturally; pane PIDs
+  `856294/856332/856364/856398/856434` and unrelated `misc:0.0` PID `434835`
+  were preserved.
+- Four fresh bots reported 2,525 processed events and monitor writes, zero
+  structured writes, monitor service total/max `62842.105/5321.841ms`, worker
+  service total/max `62937.772/5321.883ms`, and queue-wait total/max
+  `18035.11/2350.05ms`. Queue depth and unfinished work returned to zero; drops,
+  sink errors, degraded counts, and unhealthy pipelines remained zero. The
+  performance report independently projected the same fields and omitted them
+  from historical rows that predated the producer.
+- The final settled two-minute smoke was green with `360/360` remote and
+  `55/55` account-critical calls successful, all five expected processes
+  matched, exact states `R/R/R/R/S`, pane and unrelated process IDs preserved,
+  and a clean tracked repository.
 - PR #1200 merged after exact-head Hermes and Grok 4.5 approval plus green CI.
   VPS5 fast-forwarded cleanly and gracefully stopped only the five exact bot
   panes; all old Python PIDs exited naturally, including KuCoin after a bounded
@@ -286,10 +306,13 @@ latest-lifecycle report ordering, PR #1194's bounded startup action milestones,
 PR #1195's startup consumer correctness fixes, PR #1196's true fresh-entry
 eligibility producer, PR #1197's fresh-entry startup milestone, PR #1198's
 local connector-call boundary evidence, and PR #1199's startup fill-cache proof
-correlation are also merged and deployed. The active slice is selecting bounded
-event-pipeline service-time evidence.
+correlation, PR #1200's event-pipeline service timing, and PR #1203's fixed
+sink-class attribution are also merged and deployed. The active slice attributes
+the deployed monitor-sink long tail to fixed synchronous publisher phases.
 
-After the active service-time slice is merged and validated, select the next
+After the phase-attribution slice is merged and validated, use production
+evidence to decide whether a monitor persistence optimization is warranted;
+otherwise select the next
 review-worthy bounded operator-tooling improvement sharing one code and
 validation surface.
 

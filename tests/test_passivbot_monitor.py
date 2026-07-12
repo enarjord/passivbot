@@ -1369,6 +1369,16 @@ def test_build_health_summary_payload_includes_resource_pressure(monkeypatch):
                 "event_monitor_sink_write_count": 120,
                 "event_monitor_sink_service_ms_total": 40.25,
                 "event_monitor_sink_service_ms_max": 6.75,
+                "event_monitor_prepare_ms_total": 4.5,
+                "event_monitor_prepare_ms_max": 0.75,
+                "event_monitor_publisher_lock_wait_ms_total": 1.5,
+                "event_monitor_publisher_lock_wait_ms_max": 0.5,
+                "event_monitor_publisher_rotation_ms_total": 2.5,
+                "event_monitor_publisher_rotation_ms_max": 1.25,
+                "event_monitor_publisher_persist_ms_total": 15.5,
+                "event_monitor_publisher_persist_ms_max": 3.25,
+                "event_monitor_publisher_maintenance_ms_total": 16.25,
+                "event_monitor_publisher_maintenance_ms_max": 4.5,
             }
 
     class FakeBot:
@@ -1472,6 +1482,32 @@ def test_build_health_summary_payload_includes_resource_pressure(monkeypatch):
     assert payload["event_monitor_sink_write_count"] == 120
     assert payload["event_monitor_sink_service_ms_total"] == 40.25
     assert payload["event_monitor_sink_service_ms_max"] == 6.75
+    assert {
+        key: payload[key]
+        for key in (
+            "event_monitor_prepare_ms_total",
+            "event_monitor_prepare_ms_max",
+            "event_monitor_publisher_lock_wait_ms_total",
+            "event_monitor_publisher_lock_wait_ms_max",
+            "event_monitor_publisher_rotation_ms_total",
+            "event_monitor_publisher_rotation_ms_max",
+            "event_monitor_publisher_persist_ms_total",
+            "event_monitor_publisher_persist_ms_max",
+            "event_monitor_publisher_maintenance_ms_total",
+            "event_monitor_publisher_maintenance_ms_max",
+        )
+    } == {
+        "event_monitor_prepare_ms_total": 4.5,
+        "event_monitor_prepare_ms_max": 0.75,
+        "event_monitor_publisher_lock_wait_ms_total": 1.5,
+        "event_monitor_publisher_lock_wait_ms_max": 0.5,
+        "event_monitor_publisher_rotation_ms_total": 2.5,
+        "event_monitor_publisher_rotation_ms_max": 1.25,
+        "event_monitor_publisher_persist_ms_total": 15.5,
+        "event_monitor_publisher_persist_ms_max": 3.25,
+        "event_monitor_publisher_maintenance_ms_total": 16.25,
+        "event_monitor_publisher_maintenance_ms_max": 4.5,
+    }
     assert bot._live_event_pipeline.consume_timing_calls == [False]
 
     consumed_payload, timing_token = bot._build_health_summary_payload(

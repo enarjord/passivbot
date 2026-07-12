@@ -4,6 +4,12 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Periodic structured health summaries now split real monitor-sink service time
+  into fixed event-conversion, publisher lock-wait, rotation, persistence, and
+  maintenance totals/maxima. Live smoke and performance reports project the
+  same bounded fields without changing monitor persistence, event delivery,
+  verdicts, or trading behavior.
+
 - Periodic structured health summaries now attribute queued worker sink time to
   fixed structured and monitor sink classes with bounded per-window write
   counts and service totals/maxima. Live smoke and performance reports project

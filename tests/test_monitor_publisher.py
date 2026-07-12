@@ -215,3 +215,105 @@ def test_monitor_disk_full_errors_are_coalesced(tmp_path, monkeypatch, caplog):
     disk_messages = [msg for msg in messages if "disk full" in msg]
     assert len(disk_messages) == 1
     assert "suppressing repeat disk-full monitor errors for 60s" in disk_messages[0]
+
+
+def test_monitor_publisher_event_phase_timing_uses_fixed_boundaries(tmp_path, monkeypatch):
+    publisher = _make_publisher(tmp_path)
+    clock = {"ns": 1_000_000_000}
+    monkeypatch.setattr(
+        monitor_publisher_module.time,
+        "monotonic_ns",
+        lambda: clock["ns"],
+    )
+
+    class TimedLock:
+        def __enter__(self):
+            clock["ns"] += 1_000_000
+
+        def __exit__(self, exc_type, exc_value, traceback):
+            return False
+
+    original_dumps = monitor_publisher_module.json.dumps
+    original_open = open
+
+    def timed_dumps(*args, **kwargs):
+        clock["ns"] += 3_000_000
+        return original_dumps(*args, **kwargs)
+
+    class TimedFile:
+        def __init__(self, file):
+            self.file = file
+
+        def __enter__(self):
+            self.file.__enter__()
+            return self
+
+        def __exit__(self, exc_type, exc_value, traceback):
+            return self.file.__exit__(exc_type, exc_value, traceback)
+
+        def write(self, value):
+            clock["ns"] += 5_000_000
+            return self.file.write(value)
+
+    def timed_open(*args, **kwargs):
+        return TimedFile(original_open(*args, **kwargs))
+
+    publisher._lock = TimedLock()
+    monkeypatch.setattr(
+        publisher,
+        "_rotate_events_if_needed",
+        lambda **_kwargs: clock.__setitem__("ns", clock["ns"] + 2_000_000),
+    )
+    monkeypatch.setattr(
+        publisher,
+        "_write_manifest",
+        lambda **_kwargs: clock.__setitem__("ns", clock["ns"] + 7_000_000),
+    )
+    monkeypatch.setattr(
+        publisher,
+        "_prune_retention",
+        lambda **_kwargs: clock.__setitem__("ns", clock["ns"] + 11_000_000),
+    )
+    monkeypatch.setattr(monitor_publisher_module.json, "dumps", timed_dumps)
+    monkeypatch.setattr(monitor_publisher_module, "open", timed_open, raising=False)
+
+    event, timing = publisher._record_event_timed("test.event", ("test",), {"value": 1})
+
+    assert event is not None
+    assert timing == {
+        "lock_wait_ns": 1_000_000,
+        "rotation_ns": 2_000_000,
+        "persist_ns": 8_000_000,
+        "maintenance_ns": 18_000_000,
+    }
+
+
+def test_monitor_publisher_event_failure_retains_reached_phase_timing(tmp_path, monkeypatch):
+    publisher = _make_publisher(tmp_path)
+    clock = {"ns": 1_000_000_000}
+    monkeypatch.setattr(
+        monitor_publisher_module.time,
+        "monotonic_ns",
+        lambda: clock["ns"],
+    )
+
+    def fail_dumps(*_args, **_kwargs):
+        clock["ns"] += 3_000_000
+        raise TypeError("not serializable")
+
+    monkeypatch.setattr(
+        publisher,
+        "_rotate_events_if_needed",
+        lambda **_kwargs: clock.__setitem__("ns", clock["ns"] + 2_000_000),
+    )
+    monkeypatch.setattr(monitor_publisher_module.json, "dumps", fail_dumps)
+
+    event, timing = publisher._record_event_timed("test.event", ("test",), {"value": 1})
+
+    assert event is None
+    assert timing == {
+        "lock_wait_ns": 0,
+        "rotation_ns": 2_000_000,
+        "persist_ns": 3_000_000,
+        "maintenance_ns": 0,
+    }
