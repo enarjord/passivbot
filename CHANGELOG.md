@@ -4,6 +4,11 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Periodic structured health summaries now expose bounded event-pipeline queue
+  wait and worker sink-service timing windows. Live smoke and performance
+  reports project the processed counts, totals, and maxima without changing
+  event delivery, smoke verdicts, or trading behavior.
+
 - `live-performance-report` now correlates current-startup fill-cache loading
   with exact post-start fill-history coverage proof. Cache presence alone never
   claims proof, cache/proof ordering is explicit, and incomplete or absent

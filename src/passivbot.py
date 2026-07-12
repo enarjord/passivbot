@@ -2374,9 +2374,32 @@ class Passivbot:
         )
         emit_health_summary = getattr(self, "_emit_health_summary_event", None)
         if callable(emit_health_summary):
+            pipeline = getattr(self, "_live_event_pipeline", None)
+            confirm_timing = getattr(pipeline, "confirm_timing_snapshot", None)
+            restore_timing = getattr(pipeline, "restore_timing_snapshot", None)
+            timing_snapshot_token = None
             try:
-                emit_health_summary(self._build_health_summary_payload(now_ms=now_ms))
+                payload_result = self._build_health_summary_payload(
+                    now_ms=now_ms,
+                    reset_event_pipeline_timing=True,
+                )
+                if isinstance(payload_result, tuple):
+                    health_payload, timing_snapshot_token = payload_result
+                else:
+                    health_payload = payload_result
+                    timing_snapshot_token = None
+                emitted = emit_health_summary(health_payload)
+                if emitted is None:
+                    if callable(restore_timing) and timing_snapshot_token is not None:
+                        restore_timing(timing_snapshot_token)
+                elif callable(confirm_timing) and timing_snapshot_token is not None:
+                    confirm_timing(timing_snapshot_token)
             except Exception as exc:
+                if (
+                    callable(restore_timing)
+                    and timing_snapshot_token is not None
+                ):
+                    restore_timing(timing_snapshot_token)
                 logging.debug("[event] failed preparing health summary event: %s", exc)
         self._maybe_log_candle_health_summary()
 

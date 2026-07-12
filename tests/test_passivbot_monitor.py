@@ -1335,7 +1335,19 @@ def test_build_health_summary_payload_includes_resource_pressure(monkeypatch):
     import passivbot as pb_mod
 
     class FakePipeline:
+        def __init__(self):
+            self.consume_timing_calls = []
+
         def health_snapshot(self):
+            self.consume_timing_calls.append(False)
+            return self._snapshot()
+
+        def consume_timing_snapshot(self):
+            self.consume_timing_calls.append(True)
+            return self._snapshot(), 41
+
+        @staticmethod
+        def _snapshot():
             return {
                 "event_queue_depth": 3,
                 "event_queue_maxsize": 100,
@@ -1345,6 +1357,12 @@ def test_build_health_summary_payload_includes_resource_pressure(monkeypatch):
                 "event_sink_error_counts": {"monitor": 1},
                 "event_degraded_count": 4,
                 "event_pipeline_worker_alive": True,
+                "event_pipeline_timing_window_ms": 60_000.5,
+                "event_pipeline_processed_count": 120,
+                "event_queue_wait_ms_total": 45.25,
+                "event_queue_wait_ms_max": 7.5,
+                "event_worker_service_ms_total": 98.75,
+                "event_worker_service_ms_max": 12.25,
             }
 
     class FakeBot:
@@ -1407,7 +1425,8 @@ def test_build_health_summary_payload_includes_resource_pressure(monkeypatch):
         },
     )
 
-    payload = FakeBot()._build_health_summary_payload(now_ms=160_000)
+    bot = FakeBot()
+    payload = bot._build_health_summary_payload(now_ms=160_000)
 
     assert payload["uptime_ms"] == 60_000
     assert payload["health_summary_lag_ms"] == 2345
@@ -1435,6 +1454,21 @@ def test_build_health_summary_payload_includes_resource_pressure(monkeypatch):
     assert payload["event_sink_error_counts"] == {"monitor": 1}
     assert payload["event_degraded_count"] == 4
     assert payload["event_pipeline_worker_alive"] is True
+    assert payload["event_pipeline_timing_window_ms"] == 60_000.5
+    assert payload["event_pipeline_processed_count"] == 120
+    assert payload["event_queue_wait_ms_total"] == 45.25
+    assert payload["event_queue_wait_ms_max"] == 7.5
+    assert payload["event_worker_service_ms_total"] == 98.75
+    assert payload["event_worker_service_ms_max"] == 12.25
+    assert bot._live_event_pipeline.consume_timing_calls == [False]
+
+    consumed_payload, timing_token = bot._build_health_summary_payload(
+        now_ms=160_000,
+        reset_event_pipeline_timing=True,
+    )
+    assert consumed_payload["event_pipeline_processed_count"] == 120
+    assert timing_token == 41
+    assert bot._live_event_pipeline.consume_timing_calls == [False, True]
 
 
 def test_process_cpu_percent_reuses_psutil_process(monkeypatch):
@@ -1512,6 +1546,7 @@ def test_log_health_summary_emits_structured_event(caplog, monkeypatch):
             self.error_counts = [190000]
             self.candle_health_called = False
             self.payload_now_ms = None
+            self.payload_reset_event_pipeline_timing = None
             self._live_event_current_cycle_id = "cy_health"
             self._live_event_pipeline = LiveEventPipeline(
                 structured_sinks=[sink],
@@ -1524,9 +1559,15 @@ def test_log_health_summary_emits_structured_event(caplog, monkeypatch):
         def get_hysteresis_snapped_balance(self):
             return 999.5
 
-        def _build_health_summary_payload(self, *, now_ms=None):
+        def _build_health_summary_payload(
+            self,
+            *,
+            now_ms=None,
+            reset_event_pipeline_timing=False,
+        ):
             self.payload_now_ms = now_ms
-            return {
+            self.payload_reset_event_pipeline_timing = reset_event_pipeline_timing
+            payload = {
                 "uptime_ms": 60000,
                 "last_loop_duration_ms": 2500,
                 "positions_long": 1,
@@ -1542,12 +1583,27 @@ def test_log_health_summary_emits_structured_event(caplog, monkeypatch):
                 "rate_limits": 5,
                 "rss_bytes": 987654,
             }
+            return (payload, 17) if reset_event_pipeline_timing else payload
 
         def _maybe_log_candle_health_summary(self):
             self.candle_health_called = True
 
     monkeypatch.setattr(pb_mod, "utc_ms", lambda: 200000)
     bot = FakeBot()
+    confirmed = []
+    restored = []
+    original_confirm = bot._live_event_pipeline.confirm_timing_snapshot
+    original_restore = bot._live_event_pipeline.restore_timing_snapshot
+    def confirm_timing(token):
+        confirmed.append(token)
+        original_confirm(token)
+
+    def restore_timing(token):
+        restored.append(token)
+        original_restore(token)
+
+    bot._live_event_pipeline.confirm_timing_snapshot = confirm_timing
+    bot._live_event_pipeline.restore_timing_snapshot = restore_timing
 
     with caplog.at_level(logging.INFO):
         bot._log_health_summary()
@@ -1557,13 +1613,41 @@ def test_log_health_summary_emits_structured_event(caplog, monkeypatch):
     assert "orders=+2/-1" in caplog.text
     assert bot.candle_health_called is True
     assert bot.payload_now_ms == 200000
+    assert bot.payload_reset_event_pipeline_timing is True
     assert bot._live_event_pipeline.flush(timeout=2.0) is True
     event = sink.events[0]
     assert event.event_type == EventTypes.HEALTH_SUMMARY
     assert event.cycle_id == "cy_health"
     assert event.data["rss_bytes"] == 987654
     assert event.data["errors_last_hour"] == 1
+    assert confirmed == [17]
+    assert restored == []
+
+    bot._emit_health_summary_event = lambda _payload: None
+    bot._log_health_summary()
+    assert confirmed == [17]
+    assert restored == [17]
     assert bot._live_event_pipeline.close(timeout=2.0) is True
+
+
+def test_health_summary_event_requires_successful_enqueue():
+    class FakeBot:
+        exchange = "okx"
+        user = "okx_01"
+        bot_id = "bot_1"
+        _live_event_current_cycle_id = "cy_health"
+
+        def __init__(self):
+            self.kwargs = None
+
+        def _emit_live_event(self, _event_type, **kwargs):
+            self.kwargs = kwargs
+            return None
+
+    bot = FakeBot()
+
+    assert live_event_emitters.emit_health_summary_event(bot, {"uptime_ms": 1}) is None
+    assert bot.kwargs["require_enqueue"] is True
 
 
 def test_maybe_log_health_summary_tracks_scheduler_lag(monkeypatch):

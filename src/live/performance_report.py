@@ -99,6 +99,12 @@ _RESOURCE_PRESSURE_FIELDS = (
     "event_dropped_total",
     "event_sink_error_total",
     "event_degraded_count",
+    "event_pipeline_timing_window_ms",
+    "event_pipeline_processed_count",
+    "event_queue_wait_ms_total",
+    "event_queue_wait_ms_max",
+    "event_worker_service_ms_total",
+    "event_worker_service_ms_max",
 )
 _RESOURCE_PRESSURE_COUNTER_FIELDS = (
     "event_drop_counts",
@@ -3889,7 +3895,9 @@ class _ResourcePressureAccumulator:
             for group in groups
             if group.get("latest_event_age_ms") is not None
         ]
-        def latest_field_int(group: dict[str, Any], field: str) -> int | None:
+        def latest_field_number(
+            group: dict[str, Any], field: str
+        ) -> float | int | None:
             fields = group.get("fields")
             if not isinstance(fields, dict):
                 return None
@@ -3897,9 +3905,32 @@ class _ResourcePressureAccumulator:
             if not isinstance(stats, dict):
                 return None
             value = stats.get("latest")
-            if value is None:
+            return _non_negative_number(value)
+
+        def latest_field_int(group: dict[str, Any], field: str) -> int | None:
+            value = latest_field_number(group, field)
+            return None if value is None else int(value)
+
+        def latest_field_max(field: str) -> float | int | None:
+            values = [
+                value
+                for group in groups
+                for value in [latest_field_number(group, field)]
+                if value is not None
+            ]
+            return max(values) if values else None
+
+        def latest_field_sum(field: str) -> float | int | None:
+            values = [
+                value
+                for group in groups
+                for value in [latest_field_number(group, field)]
+                if value is not None
+            ]
+            if not values:
                 return None
-            return int(value)
+            total = sum(float(value) for value in values)
+            return int(total) if total.is_integer() else round(total, 3)
 
         latest_queue_depths = [
             value
@@ -3944,6 +3975,24 @@ class _ResourcePressureAccumulator:
             "latest_event_dropped_total_sum": dropped_total_latest_sum,
             "latest_event_sink_error_total_sum": sink_error_total_latest_sum,
             "latest_event_degraded_count_sum": degraded_count_latest_sum,
+            "latest_event_pipeline_processed_total": latest_field_sum(
+                "event_pipeline_processed_count"
+            ),
+            "latest_event_pipeline_timing_window_ms_max": latest_field_max(
+                "event_pipeline_timing_window_ms"
+            ),
+            "latest_event_queue_wait_ms_total_sum": latest_field_sum(
+                "event_queue_wait_ms_total"
+            ),
+            "latest_event_queue_wait_ms_max": latest_field_max(
+                "event_queue_wait_ms_max"
+            ),
+            "latest_event_worker_service_ms_total_sum": latest_field_sum(
+                "event_worker_service_ms_total"
+            ),
+            "latest_event_worker_service_ms_max": latest_field_max(
+                "event_worker_service_ms_max"
+            ),
             "event_pipeline_unhealthy_bots": unhealthy_bots,
             "groups_truncated": len(groups) > limit,
             "groups": groups[:limit],

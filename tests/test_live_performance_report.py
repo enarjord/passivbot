@@ -4811,6 +4811,105 @@ def test_live_performance_report_resource_pressure_from_health_summary(tmp_path,
     assert group["latest_event_pipeline_worker_alive"] is True
 
 
+def test_live_performance_report_resource_pressure_projects_event_pipeline_timing(
+    tmp_path,
+):
+    binance_events = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    okx_events = tmp_path / "monitor" / "okx" / "okx_01" / "events"
+    _write_ndjson(
+        binance_events / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="health.summary",
+                seq=1,
+                ts=1000,
+                data={
+                    "event_pipeline_timing_window_ms": 60,
+                    "event_pipeline_processed_count": 2,
+                    "event_queue_wait_ms_total": 1.5,
+                    "event_queue_wait_ms_max": 1.0,
+                    "event_worker_service_ms_total": 2.0,
+                    "event_worker_service_ms_max": 2.0,
+                },
+            ),
+            _monitor_row(
+                event_type="health.summary",
+                seq=2,
+                ts=2000,
+                data={
+                    "event_pipeline_timing_window_ms": 120,
+                    "event_pipeline_processed_count": 5,
+                    "event_queue_wait_ms_total": 4.5,
+                    "event_queue_wait_ms_max": 3.0,
+                    "event_worker_service_ms_total": 7.5,
+                    "event_worker_service_ms_max": 4.0,
+                },
+            ),
+        ],
+    )
+    _write_ndjson(
+        okx_events / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="health.summary",
+                exchange="okx",
+                user="okx_01",
+                seq=3,
+                ts=1500,
+                data={
+                    "event_pipeline_timing_window_ms": 90,
+                    "event_pipeline_processed_count": 3,
+                    "event_queue_wait_ms_total": 2.25,
+                    "event_queue_wait_ms_max": 2.25,
+                    "event_worker_service_ms_total": 3.5,
+                    "event_worker_service_ms_max": 3.5,
+                },
+            )
+        ],
+    )
+
+    pressure = build_live_performance_report(tmp_path / "monitor")["resource_pressure"]
+    groups = {group["bot"]: group for group in pressure["groups"]}
+    binance_fields = groups["binance/binance_01"]["fields"]
+    assert binance_fields["event_pipeline_processed_count"] == {
+        "latest": 5,
+        "count": 2,
+        "min": 2,
+        "max": 5,
+        "mean": 4,
+        "median": 4,
+        "p95": 5,
+    }
+    assert binance_fields["event_queue_wait_ms_total"] == {
+        "latest": 4.5,
+        "count": 2,
+        "min": 1.5,
+        "max": 4.5,
+        "mean": 3,
+        "median": 3,
+        "p95": 4.35,
+    }
+    assert binance_fields["event_worker_service_ms_max"]["latest"] == 4
+    assert {
+        key: pressure[key]
+        for key in (
+            "latest_event_pipeline_processed_total",
+            "latest_event_pipeline_timing_window_ms_max",
+            "latest_event_queue_wait_ms_total_sum",
+            "latest_event_queue_wait_ms_max",
+            "latest_event_worker_service_ms_total_sum",
+            "latest_event_worker_service_ms_max",
+        )
+    } == {
+        "latest_event_pipeline_processed_total": 8,
+        "latest_event_pipeline_timing_window_ms_max": 120,
+        "latest_event_queue_wait_ms_total_sum": 6.75,
+        "latest_event_queue_wait_ms_max": 3,
+        "latest_event_worker_service_ms_total_sum": 11,
+        "latest_event_worker_service_ms_max": 4,
+    }
+
+
 def test_live_performance_report_resource_pressure_whitelists_health_fields(tmp_path):
     events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
     _write_ndjson(

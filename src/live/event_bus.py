@@ -1780,6 +1780,23 @@ def _logging_level(level: str) -> int:
     return logging.INFO
 
 
+@dataclass(frozen=True)
+class _QueuedLiveEvent:
+    event: LiveEvent
+    enqueued_ns: int
+
+
+@dataclass(frozen=True)
+class _EventPipelineTimingWindow:
+    started_ns: int
+    ended_ns: int
+    processed_count: int
+    queue_wait_ns_total: int
+    queue_wait_ns_max: int
+    worker_service_ns_total: int
+    worker_service_ns_max: int
+
+
 class LiveEventPipeline:
     def __init__(
         self,
@@ -1807,10 +1824,20 @@ class LiveEventPipeline:
         self.sink_error_counters: Counter[str] = Counter()
         self.degraded_events: deque[LiveEvent] = deque(maxlen=1_000)
         self._throttle_last_emit_ms: dict[tuple[str, str], int] = {}
-        self._queue: queue.Queue[LiveEvent | None] = queue.Queue(maxsize=queue_maxsize)
+        self._queue: queue.Queue[_QueuedLiveEvent | None] = queue.Queue(
+            maxsize=queue_maxsize
+        )
         self._stop = threading.Event()
         self._enqueue_lock = threading.RLock()
         self._state_lock = threading.RLock()
+        self._timing_window_started_ns = time.monotonic_ns()
+        self._timing_processed_count = 0
+        self._timing_queue_wait_ns_total = 0
+        self._timing_queue_wait_ns_max = 0
+        self._timing_worker_service_ns_total = 0
+        self._timing_worker_service_ns_max = 0
+        self._pending_timing_windows: dict[int, _EventPipelineTimingWindow] = {}
+        self._next_timing_snapshot_token = 1
         self._worker: threading.Thread | None = None
         if start:
             self.start()
@@ -1832,8 +1859,23 @@ class LiveEventPipeline:
         self.context = self.context.with_ids(**kwargs)
         return self.context
 
+    @staticmethod
+    def _timing_ms(value_ns: int) -> float:
+        return round(max(0, int(value_ns)) / 1_000_000.0, 3)
+
     def health_snapshot(self) -> dict[str, Any]:
         """Return best-effort operational counters for periodic health events."""
+        snapshot, _token = self._health_snapshot(consume_timing=False)
+        return snapshot
+
+    def consume_timing_snapshot(self) -> tuple[dict[str, Any], int]:
+        snapshot, token = self._health_snapshot(consume_timing=True)
+        assert token is not None
+        return snapshot, token
+
+    def _health_snapshot(
+        self, *, consume_timing: bool
+    ) -> tuple[dict[str, Any], int | None]:
         try:
             queue_depth = int(self._queue.qsize())
         except (AttributeError, NotImplementedError, TypeError, ValueError):
@@ -1850,6 +1892,27 @@ class LiveEventPipeline:
             drop_counts = dict(self.drop_counters)
             sink_error_counts = dict(self.sink_error_counters)
             degraded_count = len(self.degraded_events)
+            timing_now_ns = time.monotonic_ns()
+            timing_window = _EventPipelineTimingWindow(
+                started_ns=int(self._timing_window_started_ns),
+                ended_ns=int(timing_now_ns),
+                processed_count=int(self._timing_processed_count),
+                queue_wait_ns_total=int(self._timing_queue_wait_ns_total),
+                queue_wait_ns_max=int(self._timing_queue_wait_ns_max),
+                worker_service_ns_total=int(self._timing_worker_service_ns_total),
+                worker_service_ns_max=int(self._timing_worker_service_ns_max),
+            )
+            timing_snapshot_token = None
+            if consume_timing:
+                timing_snapshot_token = int(self._next_timing_snapshot_token)
+                self._next_timing_snapshot_token += 1
+                self._pending_timing_windows[timing_snapshot_token] = timing_window
+                self._timing_window_started_ns = int(timing_now_ns)
+                self._timing_processed_count = 0
+                self._timing_queue_wait_ns_total = 0
+                self._timing_queue_wait_ns_max = 0
+                self._timing_worker_service_ns_total = 0
+                self._timing_worker_service_ns_max = 0
         snapshot: dict[str, Any] = {
             "event_queue_depth": queue_depth,
             "event_queue_maxsize": queue_maxsize,
@@ -1863,8 +1926,51 @@ class LiveEventPipeline:
             "event_pipeline_worker_alive": bool(
                 self._worker is not None and self._worker.is_alive()
             ),
+            "event_pipeline_timing_window_ms": self._timing_ms(
+                max(0, timing_window.ended_ns - timing_window.started_ns)
+            ),
+            "event_pipeline_processed_count": timing_window.processed_count,
+            "event_queue_wait_ms_total": self._timing_ms(
+                timing_window.queue_wait_ns_total
+            ),
+            "event_queue_wait_ms_max": self._timing_ms(timing_window.queue_wait_ns_max),
+            "event_worker_service_ms_total": self._timing_ms(
+                timing_window.worker_service_ns_total
+            ),
+            "event_worker_service_ms_max": self._timing_ms(
+                timing_window.worker_service_ns_max
+            ),
         }
-        return {key: value for key, value in snapshot.items() if value is not None}
+        return (
+            {key: value for key, value in snapshot.items() if value is not None},
+            timing_snapshot_token,
+        )
+
+    def confirm_timing_snapshot(self, token: int) -> None:
+        with self._state_lock:
+            self._pending_timing_windows.pop(int(token), None)
+
+    def restore_timing_snapshot(self, token: int) -> None:
+        with self._state_lock:
+            pending = self._pending_timing_windows.pop(int(token), None)
+            if pending is not None:
+                self._restore_timing_window_locked(pending)
+
+    def _restore_timing_window_locked(
+        self, pending: _EventPipelineTimingWindow
+    ) -> None:
+        self._timing_window_started_ns = min(
+            int(pending.started_ns), int(self._timing_window_started_ns)
+        )
+        self._timing_processed_count += int(pending.processed_count)
+        self._timing_queue_wait_ns_total += int(pending.queue_wait_ns_total)
+        self._timing_queue_wait_ns_max = max(
+            self._timing_queue_wait_ns_max, int(pending.queue_wait_ns_max)
+        )
+        self._timing_worker_service_ns_total += int(pending.worker_service_ns_total)
+        self._timing_worker_service_ns_max = max(
+            self._timing_worker_service_ns_max, int(pending.worker_service_ns_max)
+        )
 
     def emit(
         self,
@@ -1909,7 +2015,12 @@ class LiveEventPipeline:
                     )
                 else:
                     try:
-                        self._queue.put_nowait(live_event)
+                        self._queue.put_nowait(
+                            _QueuedLiveEvent(
+                                event=live_event,
+                                enqueued_ns=time.monotonic_ns(),
+                            )
+                        )
                     except queue.Full:
                         enqueued = False
                         with self._state_lock:
@@ -1981,14 +2092,34 @@ class LiveEventPipeline:
             try:
                 if item is None:
                     return
-                route = self.route_for(item)
+                service_started_ns = time.monotonic_ns()
+                live_event = item.event
+                route = self.route_for(live_event)
                 if route.structured:
                     for sink in self.structured_sinks:
-                        self._write_sink("structured", sink, item)
+                        self._write_sink("structured", sink, live_event)
                 if route.monitor:
                     for sink in self.monitor_sinks:
-                        self._write_sink("monitor", sink, item)
+                        self._write_sink("monitor", sink, live_event)
             finally:
+                if item is not None:
+                    service_finished_ns = time.monotonic_ns()
+                    queue_wait_ns = max(
+                        0, int(service_started_ns) - int(item.enqueued_ns)
+                    )
+                    service_ns = max(
+                        0, int(service_finished_ns) - int(service_started_ns)
+                    )
+                    with self._state_lock:
+                        self._timing_processed_count += 1
+                        self._timing_queue_wait_ns_total += queue_wait_ns
+                        self._timing_queue_wait_ns_max = max(
+                            self._timing_queue_wait_ns_max, queue_wait_ns
+                        )
+                        self._timing_worker_service_ns_total += service_ns
+                        self._timing_worker_service_ns_max = max(
+                            self._timing_worker_service_ns_max, service_ns
+                        )
                 self._queue.task_done()
 
     def _write_sink(self, name: str, sink: LiveEventSink, event: LiveEvent) -> Any:

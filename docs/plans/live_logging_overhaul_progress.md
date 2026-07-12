@@ -7799,3 +7799,43 @@ VPS5 deployment status:
   reinterpretation, process action, order/HSL/Rust/backtest/optimizer/exchange
   behavior, or smoke-verdict change. Expected VPS action is pull plus bounded
   report and settled smoke, with no bot restart.
+
+### Deployed Slice: Startup Fill-Cache Proof Correlation
+
+- PR #1199 was approved by Hermes and Grok 4.5 on exact head `3bd521424`; CI
+  passed and it merged to `v8` as `7eca90037`.
+- VPS5 fast-forwarded without bot signals or restarts. A bounded four-segment
+  per-bot `startup_fill_cache_proof` report returned `ok=true` with zero issues,
+  reported all five current bots `proven`, observed every cache load before
+  proof, and measured proof elapsed from `5.851s` to `38.306s`.
+- The first smoke retained a real KuCoin balance timeout; the next retained a
+  recovered KuCoin nonce error. After both aged out, the final two-minute smoke
+  was green with `283/283` remote and `39/39` account-critical calls successful,
+  zero hard/log/monitor/process failures, and a clean tracked repository.
+- One report-time `D` sample cleared. The final exact process check showed all
+  five bots in `R/S`; bot PIDs `861949/861950/861953/861955/861957`, pane PIDs
+  `856294/856332/856364/856398/856434`, and unrelated `misc:0.0` PID `434835`
+  remained unchanged.
+
+### Active Slice: Event-Pipeline Service-Time Evidence
+
+- Branch: `codex/v8-event-pipeline-service-time` from deployed `7eca90037`.
+- Triggering evidence: current event-pipeline health exposes queue depth,
+  unfinished work, drops, sink errors, and worker liveness but not bounded
+  queue-wait or worker service-time evidence.
+- Architecture selection is in progress. The slice must remain observability
+  only, bounded, low-cardinality, and isolated from trading decisions and event
+  delivery policy.
+- Selected design: private queue envelopes carry monotonic enqueue timestamps.
+  The worker aggregates processed count, queue-wait total/max, and sink-service
+  total/max over each health-summary window. Periodic structured health emission
+  rotates the timing window; accepted enqueue commits it, while failed enqueue
+  merges it back into the active window. Ordinary monitor snapshots do not
+  consume timing evidence.
+- Consumers: project only fixed numeric fields through smoke event-pipeline
+  summaries and performance resource-pressure statistics. Do not add timing
+  verdicts, alerts, thresholds, histograms, sampled slow events, labels, raw
+  payloads, queue/drop-policy changes, or trading/readiness gates.
+- Expected VPS action: exact five-bot graceful restart, bounded timing evidence,
+  and immediate plus settled smoke while preserving unrelated processes and
+  local artifacts.

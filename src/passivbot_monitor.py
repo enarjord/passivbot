@@ -444,7 +444,12 @@ def _monitor_handle_candlestick_persist(
     publisher.record_completed_candles(symbol, timeframe, candles)
 
 
-def _build_health_summary_payload(self, *, now_ms: Optional[int] = None) -> dict:
+def _build_health_summary_payload(
+    self,
+    *,
+    now_ms: Optional[int] = None,
+    reset_event_pipeline_timing: bool = False,
+) -> dict | tuple[dict, int | None]:
     now_ms = utc_ms() if now_ms is None else int(now_ms)
     n_long = 0
     n_short = 0
@@ -492,14 +497,28 @@ def _build_health_summary_payload(self, *, now_ms: Optional[int] = None) -> dict
     payload.update(_get_system_memory_payload())
     pipeline = getattr(self, "_live_event_pipeline", None)
     health_snapshot = getattr(pipeline, "health_snapshot", None)
+    timing_snapshot_token = None
     if callable(health_snapshot):
         try:
-            pipeline_payload = health_snapshot()
+            if reset_event_pipeline_timing:
+                consume_timing_snapshot = getattr(
+                    pipeline, "consume_timing_snapshot", None
+                )
+                if callable(consume_timing_snapshot):
+                    pipeline_payload, timing_snapshot_token = (
+                        consume_timing_snapshot()
+                    )
+                else:
+                    pipeline_payload = health_snapshot()
+            else:
+                pipeline_payload = health_snapshot()
         except Exception as exc:
             logging.debug("[monitor] event pipeline health snapshot unavailable: %s", exc)
             pipeline_payload = {}
         if isinstance(pipeline_payload, dict):
             payload.update(pipeline_payload)
+    if reset_event_pipeline_timing:
+        return payload, timing_snapshot_token
     return payload
 
 

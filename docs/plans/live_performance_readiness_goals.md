@@ -374,8 +374,9 @@ classification when enough source events exist.
     blocking scope. Timing groups, the normalized table, and ranked
     `slowest_blockers` also include the latest bounded report-safe canonical
     event IDs for direct event-stream correlation. Remaining work: source events
-    for event-pipeline overhead and complete stage coverage where the live loop
-    does not yet emit timings.
+    for complete stage coverage where the live loop does not yet emit timings.
+    The active event-pipeline slice adds per-heartbeat queue-wait and worker
+    sink-service count/total/max source evidence without affecting delivery.
 - [ ] Exchange writes: create/cancel/close/panic write latency, exchange
   response latency, ambiguous write rate, confirmation latency.
   - Status: partial. The report now derives order-wave total duration,
@@ -404,7 +405,10 @@ classification when enough source events exist.
     subtraction. Performance reports also expose aggregate latest event-pipeline
     queue/drop/sink/degraded counters and unhealthy-bot count, so operators can
     see whether observability itself is backed up or dropping data without
-    opening every per-bot group.
+    opening every per-bot group. The active slice adds fixed numeric
+    health-window processed counts, queue-wait total/max, and worker sink-service
+    total/max; reports retain per-field distributions and bounded latest
+    cross-bot aggregates.
     Remaining work: a lower-level event-loop lag probe can be added later if
     operators need sub-heartbeat scheduling latency, but the heartbeat lag now
     gives bounded non-misleading evidence for delayed health summaries.

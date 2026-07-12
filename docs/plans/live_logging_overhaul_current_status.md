@@ -22,48 +22,63 @@ Estimated completion:
 
 ## Active Review Slice
 
-- Branch: `codex/v8-startup-fill-cache-proof`
-- Base: `e94da301bbaa52786e0cb218fa27f48263b80e6d`
-- Triggering evidence: startup lifecycle and fill-refresh evidence are reported
-  separately. Operators cannot yet correlate a current-startup cache load with
-  exact fill-history coverage proof or distinguish their observed ordering and
-  relation to relevant readiness phases.
-- Scope: add one bounded `startup_fill_cache_proof` performance-report section
-  that joins existing `bot.started`, startup timing, and
-  `fills.refresh_summary` evidence within the current lifecycle. Distinguish
-  cache presence from exact coverage proof, expose their observed ordering, and
-  preserve explicit unknown output when source completeness or proof evidence
-  is insufficient.
-- Behavior boundary: read-only report and tests only. Do not add or reinterpret
-  a startup/readiness/risk gate, infer proof from cache load, alter existing
-  startup/fill sections, or change live producer, order, HSL, Rust, backtest,
-  optimizer, exchange, or process behavior.
-- Validation: focused and full performance-report tests, Python compilation,
-  `git diff --check`, added-line silent-handling audit, and independent
-  preflight.
+- Branch: `codex/v8-event-pipeline-service-time`
+- Base: `7eca900379873e2124e1782601551e3b08c3e2ee`
+- Triggering evidence: event-pipeline health currently exposes queue depth,
+  unfinished work, drops, sink errors, and worker liveness but not bounded
+  worker service-time or queue-wait evidence.
+- Scope: timestamp private queue envelopes with a monotonic clock and aggregate
+  processed count, queue-wait total/max, and worker sink-service total/max over
+  each health-summary window. Periodic `health.summary` consumes/resets the
+  timing window transactionally: accepted enqueue commits it, while failed
+  enqueue merges it back into the active window. Ordinary monitor snapshots are
+  non-consuming. Project the fixed numeric fields through event-pipeline smoke
+  summaries and performance resource-pressure reports.
+- Behavior boundary: observability only. Do not make timing evidence a trading
+  gate, change queue capacity/backpressure/drop policy, add raw payloads or
+  unbounded labels, or alter order, risk, HSL, Rust, backtest, optimizer, or
+  exchange behavior.
+- Validation: event-bus concurrency/timing tests, health-payload reset tests,
+  full smoke/performance projection tests, fake-live event markers, Python
+  compilation, `git diff --check`, added-line silent-handling audit, and
+  independent preflight.
 - Publication state, exact head, mergeability, CI, and current-head reviewer
   verdicts: query live GitHub metadata; do not embed self-invalidating values.
-- Expected VPS action: pull while preserving local artifacts, run a bounded
-  current-plus-rotated `startup_fill_cache_proof` report and settled smoke, and
-  verify bot plus unrelated-process PIDs remain unchanged. Do not restart bots
-  because this slice changes only a read-only consumer.
+- Expected VPS action: exact five-bot graceful restart, then bounded
+  `health.summary`/report evidence and immediate plus settled smoke. Preserve
+  unrelated processes and local artifacts.
 
 Next action:
 
-1. Complete local validation and independent preflight, publishing the branch
-   if it is not already a PR. Once published, wait for the temporary Hermes +
-   Grok 4.5 + green-CI gate on the exact current head. After merge, pull `v8`
-   on VPS5 without restarting bots, run the bounded proof report and settled
-   smoke, and verify all expected PIDs are unchanged.
+1. Hold the published PR at the exact-current-head review gate until Hermes,
+   Grok 4.5, and CI are green; resolve any findings with narrow delta validation
+   and require fresh exact-head verdicts after every push.
+2. Merge only after that gate is green, then gracefully restart the five exact
+   VPS5 bot panes while preserving unrelated processes and local artifacts.
+3. Verify fresh event-pipeline timing fields with bounded `health.summary`,
+   smoke, and performance reports, including immediate and settled process and
+   repository-state checks.
 
 ## Deployed Baseline
 
-- Remote `v8`: `e94da301bbaa52786e0cb218fa27f48263b80e6d`, PR #1198
-- VPS5 repository: `e94da301bbaa52786e0cb218fa27f48263b80e6d`, PR #1198; tracked
+- Remote `v8`: `7eca900379873e2124e1782601551e3b08c3e2ee`, PR #1199
+- VPS5 repository: `7eca900379873e2124e1782601551e3b08c3e2ee`, PR #1199; tracked
   status clean; only expected untracked artifacts were preserved
 - VPS5 expected bots: five; running with PR #1198 restart PIDs
   `861950/861949/861953/861955/861957`;
   unrelated `misc:0.0` remains PID `434835`
+- PR #1199 merged after exact-head Hermes and Grok 4.5 approval plus green CI.
+  VPS5 fast-forwarded without bot signals or restarts. A bounded four-segment
+  per-bot proof report returned `ok=true` with zero issues and reported all five
+  current bots `proven`; cache loads preceded proof, and proof elapsed ranged
+  from `5.851s` to `38.306s`.
+- The first smoke retained a real KuCoin balance timeout; the next retained a
+  recovered KuCoin nonce error. After both aged out, the final two-minute smoke
+  was green with `283/283` remote and `39/39` account-critical calls successful,
+  zero hard/log/monitor/process failures, and a clean tracked repository. A
+  report-time `D` sample cleared; all five bots were `R/S` on the final exact
+  state check. Bot PIDs, pane PIDs, and unrelated `misc:0.0` PID `434835`
+  remained unchanged.
 - PR #1198 merged after exact-head Hermes and Grok 4.5 approval plus green CI.
   VPS5 fast-forwarded cleanly and gracefully stopped only the five exact bot
   panes; all old Python PIDs exited naturally. Existing pane PIDs and unrelated
@@ -254,16 +269,14 @@ throughput, PR #1191's corrected active/legacy-terminal replay estimates,
 PR #1192's machine-readable startup readiness SLA semantics, PR #1193's
 latest-lifecycle report ordering, PR #1194's bounded startup action milestones,
 PR #1195's startup consumer correctness fixes, PR #1196's true fresh-entry
-eligibility producer, PR #1197's fresh-entry startup milestone, and PR #1198's
-local connector-call boundary evidence are also merged and deployed. The active
-slice correlates existing startup fill-cache and exact history-proof evidence
-without changing either producer or any readiness decision.
+eligibility producer, PR #1197's fresh-entry startup milestone, PR #1198's
+local connector-call boundary evidence, and PR #1199's startup fill-cache proof
+correlation are also merged and deployed. The active slice is selecting bounded
+event-pipeline service-time evidence.
 
-After this report slice is merged and validated, select the next review-worthy
-candidate from the remaining backlog, including:
-
-- bounded event-pipeline service-time evidence
-- bounded operator tooling improvements sharing one code and validation surface
+After the active service-time slice is merged and validated, select the next
+review-worthy bounded operator-tooling improvement sharing one code and
+validation surface.
 
 Do not create progress-only PRs or resume unrelated logging work from stale
 worktrees.

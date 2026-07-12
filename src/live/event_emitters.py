@@ -1292,9 +1292,9 @@ def emit_startup_timing_event(bot: Any, *args: Any, **kwargs: Any) -> None:
 def _emit_health_summary_event_unchecked(
     bot: Any,
     payload: dict[str, Any],
-) -> None:
+) -> Any:
     data = dict(payload or {})
-    _safe_emit(
+    return _safe_emit(
         bot,
         EventTypes.HEALTH_SUMMARY,
         level="info",
@@ -1304,14 +1304,16 @@ def _emit_health_summary_event_unchecked(
         status="succeeded",
         reason_code=ReasonCodes.PERIODIC_HEALTH_SUMMARY,
         data=data,
+        require_enqueue=True,
     )
 
 
-def emit_health_summary_event(bot: Any, *args: Any, **kwargs: Any) -> None:
+def emit_health_summary_event(bot: Any, *args: Any, **kwargs: Any) -> Any:
     try:
-        _emit_health_summary_event_unchecked(bot, *args, **kwargs)
+        return _emit_health_summary_event_unchecked(bot, *args, **kwargs)
     except Exception as exc:
         logging.debug("[event] failed to emit health summary event: %s", exc)
+        return None
 
 
 def _emit_market_snapshot_diagnostic_skipped_event_unchecked(
