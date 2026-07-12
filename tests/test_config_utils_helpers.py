@@ -13,6 +13,7 @@ from config import load_input_config, prepare_config
 from config.coerce import normalize_hsl_restart_after_red_policy, normalize_hsl_signal_mode
 from config.project import project_config
 from config.runtime_compile import compile_runtime_config
+from config.strategy_spec import get_strategy_defaults
 from config.validate import validate_config
 from config_transform import ConfigTransformTracker, record_transform
 from utils import normalize_coins_source
@@ -117,6 +118,18 @@ def test_default_example_config_loads_with_grouped_shape_and_live_execution_sett
     assert "market_orders_allowed" in loaded["live"]
     assert "market_order_near_touch_threshold" in loaded["live"]
     assert "pnls_max_lookback_days" in loaded["live"]
+
+
+def test_default_trailing_martingale_long_example_matches_template_and_rust_defaults():
+    raw = json.loads(Path("configs/examples/default_trailing_martingale_long.json").read_text())
+    template_long = get_template_config()["bot"]["long"]
+
+    for section in ("forager", "hsl", "risk", "unstuck"):
+        assert raw["bot"]["long"][section] == template_long[section]
+
+    assert raw["bot"]["long"]["strategy"]["trailing_martingale"] == get_strategy_defaults(
+        "trailing_martingale"
+    )["long"]
 
 
 def test_shipped_example_configs_load_with_grouped_canonical_shape():
