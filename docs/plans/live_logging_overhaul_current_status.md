@@ -52,10 +52,11 @@ Estimated completion:
 
 Next action:
 
-1. Complete integrated validation and publish one review-worthy console PR.
-2. Hold its exact current head until Hermes, Grok 4.5, and CI are green;
-   resolve findings narrowly and require fresh exact-head verdicts after every
-   push.
+1. Hold the active console PR's exact current head until Hermes, Grok 4.5, and
+   CI are green;
+2. Resolve findings narrowly and require fresh exact-head verdicts after every
+   push, then merge and validate the exact five-bot VPS restart without creating
+   or altering a live position merely to exercise console formatting.
 3. In parallel, scope a separate retention optimization from PR #1206's fresh
    phase evidence without mixing persistence behavior into console formatting.
 
@@ -355,14 +356,15 @@ PR #1195's startup consumer correctness fixes, PR #1196's true fresh-entry
 eligibility producer, PR #1197's fresh-entry startup milestone, PR #1198's
 local connector-call boundary evidence, and PR #1199's startup fill-cache proof
 correlation, PR #1200's event-pipeline service timing, and PR #1203's fixed
-sink-class attribution are also merged and deployed. The active slice attributes
-the deployed monitor-sink long tail to fixed synchronous publisher phases.
+sink-class attribution, PR #1205's coalesced monitor manifest checkpoints, and
+PR #1206's monitor-maintenance phase attribution are also merged and deployed.
+The active slice polishes the human console projection of `position.changed`
+while preserving the structured event payload.
 
-After the phase-attribution slice is merged and validated, use production
-evidence to decide whether a monitor persistence optimization is warranted;
-otherwise select the next
-review-worthy bounded operator-tooling improvement sharing one code and
-validation surface.
+After the console slice is merged and validated, use PR #1206's production
+evidence to optimize the recurring retention path in a separate review-worthy
+slice. Keep persistence behavior and console presentation on separate code and
+validation surfaces.
 
 Do not create progress-only PRs or resume unrelated logging work from stale
 worktrees.
