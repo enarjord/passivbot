@@ -3419,6 +3419,39 @@ def emit_execution_create_filter_event(
         )
 
 
+def emit_initial_entry_eligibility_event(
+    bot: Any,
+    *,
+    data: dict[str, Any],
+    wave: dict | None = None,
+) -> None:
+    """Emit bounded cycle-local fresh-entry eligibility evidence."""
+    try:
+        order_wave_id, _action_id = _execution_event_ids(
+            wave,
+            action="create",
+            index=None,
+        )
+        _safe_emit(
+            bot,
+            EventTypes.ENTRY_INITIAL_ELIGIBILITY,
+            level="debug",
+            component="entry.initial_eligibility",
+            tags=(EventTags.ENTRY, EventTags.AVAILABILITY, EventTags.EXECUTION),
+            cycle_id=current_live_event_cycle_id(bot),
+            order_wave_id=order_wave_id,
+            status="succeeded",
+            reason_code=ReasonCodes.FRESH_ENTRY_ELIGIBILITY,
+            data=dict(data),
+        )
+    except Exception as exc:
+        logging.debug(
+            "[event] failed to emit %s: %s",
+            EventTypes.ENTRY_INITIAL_ELIGIBILITY,
+            exc,
+        )
+
+
 def emit_execution_order_event(
     bot: Any,
     *,

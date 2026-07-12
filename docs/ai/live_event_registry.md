@@ -50,6 +50,7 @@ across time.
 - `execution.create_succeeded`
 - `entry.initial_distance_gate_blocked`
 - `entry.initial_distance_gate_cleared`
+- `entry.initial_eligibility`
 - `entry.min_effective_cost_blocked`
 - `fill.ingested`
 - `fills.refresh_summary`
@@ -94,6 +95,62 @@ across time.
 - `unstuck.status`
 - `websocket.reconnect`
 
+## Fresh-Entry Eligibility Contract
+
+Completed normal live order plans emit one `entry.initial_eligibility` event
+to structured and monitor sinks only. The producer observes the existing Rust
+plan, Python reconciliation, and local pre-connector filters; it does not add
+or re-evaluate a trading gate.
+
+Each evaluated symbol/position-side record has one outcome, in this precedence:
+
+1. `eligible`: an initial-entry order survived the final batch cap and was
+   selected for the connector-bound `execute_orders` list immediately before
+   invocation.
+2. `blocked_candidate`: an initial candidate existed but no candidate reached
+   that boundary.
+3. `already_satisfied`: reconciliation removed the candidate because an open
+   order matched exactly or within the configured order-match tolerance.
+4. `protective_only`: the pair had protective/reduce-only/panic actions but no
+   initial candidate.
+5. `no_candidate`: the evaluated pair had no initial candidate; the stable
+   default reason is `rust_no_initial_candidate`.
+
+Stable per-record `reason_counts` values are:
+
+- `batch_capacity`
+- `conversion_zero_or_duplicate`
+- `debug_mode`
+- `exact_reconciliation_match`
+- `freshness_creation_guardrail`
+- `hsl_replay_pending`
+- `initial_entry_distance_gate`
+- `limit_order_create_market_distance`
+- `low_balance`
+- `malformed_actual_orders`
+- `mode_filter`
+- `order_match_tolerance`
+- `pending_exchange_config`
+- `pre_create_market_snapshot_unavailable`
+- `pre_create_planning_snapshot_invalid`
+- `protective_actions_only`
+- `recent_execution`
+- `rust_no_initial_candidate`
+- `state_change_detected`
+- `trailing_unavailable`
+- `unclassified_candidate` for an initial candidate not accounted for by a
+  known observation point
+- `reason_overflow` when a record exceeds its bounded reason-key limit
+
+`eligible` does not claim connector invocation completed, exchange acceptance,
+or order acknowledgement. Connector and exchange outcomes remain in the
+`execution.*` event family. The event retains full aggregate counts, samples at
+most 32 deterministic pair records, and contains no order price, quantity, raw
+payload, path, secret, or exception text. Planning failures, deferrals,
+shutdown interruption, and diagnostic tracing failures omit the event instead
+of emitting a misleading candidate-free result. Diagnostic and sink failures
+must not change order lists or execution results.
+
 ## HSL Replay Timing Fields
 
 For coin-mode `hsl.replay.completed`, `full_elapsed_s` measures total replay
@@ -133,6 +190,7 @@ full-replay terminal event.
 - `defer`
 - `degraded`
 - `ema`
+- `entry`
 - `execution`
 - `exchange`
 - `fallback`
@@ -189,6 +247,7 @@ full-replay terminal event.
 - `exchange_time_sync`
 - `exchange_time_sync_unavailable`
 - `execution_loop_error_burst`
+- `fresh_entry_eligibility`
 - `entry_cooldown_position_delta`
 - `fill_cache_doctor_report`
 - `fill_cache_quarantined`

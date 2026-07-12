@@ -4,6 +4,15 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Completed normal live order plans now emit one bounded structured/monitor
+  `entry.initial_eligibility` event. It distinguishes fresh initial entries
+  that were absent, already satisfied, blocked by an existing local gate,
+  accompanied only by protective actions, or selected for the final
+  connector-bound create batch immediately before invocation. The event
+  observes existing reconciliation
+  and execution decisions only; it does not add a gate, change order batches,
+  or claim exchange acknowledgement.
+
 - Startup readiness reporting now uses one canonical phase parser across
   performance and smoke consumers, rejects conflicting `phase`/legacy `stage`
   records, rejects stale rotated lifecycle data after any incomplete current
