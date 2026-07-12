@@ -7671,3 +7671,32 @@ VPS5 deployment status:
   process control, HSL/risk/order behavior, Rust, backtest, optimizer, or smoke
   verdict change. Expected VPS action is pull plus bounded reports and settled
   smoke, with no bot restart.
+
+### Deployed Slice: Startup Readiness Consumer Correctness
+
+- PR #1195 was approved by Hermes and Grok 4.5 on exact head `e9aab6b97`; CI
+  passed and it merged to `v8` as `739ebd49d`.
+- VPS5 fast-forwarded without signals or restarts. Bot PIDs
+  `850148/850296/850370/850436/850495` and unrelated `misc:0.0` PID
+  `434835` remained unchanged.
+- Bounded readiness and milestone reports scanned 12 files with zero issues.
+  Incomplete current sources no longer attached stale rotated lifecycle data;
+  KuCoin retained its bounded sparse HSL terminal context and exposed its first
+  cycle at `220.123s`.
+- The first smoke caught a real KuCoin balance timeout. After it aged out, the
+  retry was green with `284/284` remote and `57/57` account-critical calls
+  successful, all five bots matched, no hard/log/monitor failures, no event
+  pipeline errors, and a clean tracked repository. Two report-time `D`
+  samples cleared; all five bots were `Rsl+` on the quiet follow-up.
+
+### Active Slice: Fresh-Entry Eligibility Evidence
+
+- Branch: `codex/v8-fresh-entry-eligibility` from deployed `739ebd49d`.
+- Scope: emit one bounded, correlated observability contract that distinguishes
+  `no_candidate`, `blocked_candidate`, `protective_only`,
+  `already_satisfied`, and `eligible` after existing reconciliation and
+  local pre-connector filters.
+- Non-goals: no duplicate or changed entry gate, no `to_create` mutation, no
+  connector/exchange outcome claim, no Rust/order/risk/HSL behavior change, and
+  no event-sink failure propagation into execution. Expected VPS action is an
+  exact five-bot restart, bounded event query, and immediate plus settled smoke.

@@ -1,6 +1,6 @@
 # Live Logging Overhaul Current Status
 
-Updated: 2026-07-11.
+Updated: 2026-07-12.
 
 This is the compact operational source for the active logging-overhaul loop.
 Read it before the historical progress ledger. Update it whenever the active
@@ -22,49 +22,55 @@ Estimated completion:
 
 ## Active Review Slice
 
-- PR #1195, `Fix startup readiness report lifecycle handling`
-- Branch: `codex/v8-startup-readiness-correctness`
-- Base: `b15d349be5c544f9a8ac83618977b8a0cfd11ba5`
-- Triggering evidence: post-merge review reproduced three startup-report
-  correctness gaps: performance readiness lost current events when their start
-  marker was in a rotated segment; smoke discarded prior restart samples before
-  computing timing budgets; and performance/smoke interpreted `phase` and
-  legacy `stage` differently.
-- Scope: use one canonical phase parser (`phase`, then legacy `stage`, reject
-  conflicts), retain bounded current-lifecycle performance candidates across
-  rotation, reject stale rotated readiness/milestone candidates whenever any
-  retained current row proves the source is incomplete, preserve bounded HSL
-  replay context across sparse terminal events, and separate smoke's current
-  lifecycle projection from its bounded historical restart baseline.
-- Behavior boundary: read-only `live-performance-report` derivation and tests
-  only. No event producer, startup/readiness decision, exchange call, process
-  control, Rust/order/risk logic, smoke verdict, or trading behavior change.
-  Per-bot readiness/milestone records are current-lifecycle projections;
-  aggregate startup phase counts and timing summaries remain statistics over
-  all selected history.
-- Validation: focused and full performance-report tests, Python compilation,
-  `git diff --check`, the added-line silent-handling scan, and independent
-  preflight.
+- Branch: `codex/v8-fresh-entry-eligibility`
+- Base: `739ebd49d7de40966145c5a1ca2c8aa3fe01a235`
+- Triggering evidence: existing planning, reconciliation, create-filter, and
+  pre-call submission events cannot answer why a fresh entry did or did not
+  become locally submit-ready in a completed cycle.
+- Scope: add one bounded, correlated fresh-entry eligibility producer contract
+  that distinguishes `no_candidate`, `blocked_candidate`,
+  `protective_only`, `already_satisfied`, and `eligible` after the
+  existing reconciler/executor gates.
+- Behavior boundary: observability must derive from existing order-path facts,
+  never add or duplicate a trading gate, mutate `to_create`, affect connector
+  calls, or treat event failure as an execution failure. Rust remains the order
+  authority; Python only reports the existing live reconciliation/I/O boundary.
+- Validation: 244 focused/adjacent tests and all 21 fake-live marker scenarios
+  pass, including outcome precedence, boundedness, reconciler/executor
+  mixed cases, exact pre-create gate attribution, schema validation, and event
+  failure isolation. Python compilation and `git diff --check` also pass;
+  independent exact-commit preflight remains before publication.
 - Publication state, exact head, mergeability, CI, and current-head reviewer
   verdicts: query live GitHub metadata; do not embed self-invalidating values.
-- Expected VPS action: after merge, pull while preserving local artifacts and
-  run bounded rotated startup-readiness/performance and settled smoke reports.
-  Do not restart or signal bots because this slice changes only an on-demand
-  report consumer.
+- Expected VPS action: after merge, pull while preserving local artifacts,
+  restart only the five exact supervised bot panes so the producer is loaded,
+  query the new event by cycle/pside, and run immediate plus settled smoke.
 
 Next action:
 
-1. Complete the three startup-consumer regressions, publish after clean
-   independent preflight, and merge only after the exact-head temporary Hermes
-   + Grok 4.5 + green-CI gate is satisfied.
+1. Freeze the validated implementation in one commit, run independent
+   exact-commit preflight, then publish for the temporary Hermes + Grok 4.5 +
+   green-CI current-head gate.
 
 ## Deployed Baseline
 
-- Remote `v8`: `b15d349be5c544f9a8ac83618977b8a0cfd11ba5`, PR #1194
-- VPS5 repository: `b15d349be5c544f9a8ac83618977b8a0cfd11ba5`, PR #1194; tracked
+- Remote `v8`: `739ebd49d7de40966145c5a1ca2c8aa3fe01a235`, PR #1195
+- VPS5 repository: `739ebd49d7de40966145c5a1ca2c8aa3fe01a235`, PR #1195; tracked
   status clean; only expected untracked artifacts were preserved
 - VPS5 expected bots: five; all running with the PR #1192 restart PIDs;
   unrelated `misc:0.0` remains PID `434835`
+- PR #1195 merged after exact-head Hermes and Grok 4.5 approval plus green CI.
+  VPS5 fast-forwarded without bot signals or restarts, preserving bot PIDs
+  `850148/850296/850370/850436/850495` and unrelated `misc:0.0` PID
+  `434835`. Bounded readiness and milestone reports scanned 12 files with
+  zero issues; incomplete sources no longer attached stale rotated lifecycle
+  data, while KuCoin retained its bounded sparse HSL context and first-cycle
+  milestone at `220.123s`. The first smoke caught a real KuCoin balance
+  timeout. After it aged out, the retry was green with `284/284` remote and
+  `57/57` account-critical calls successful, 5/5 bots matched, no hard/log/
+  monitor failures, no event-pipeline errors, and a clean tracked repository.
+  Two report-time `D` samples cleared; the quiet follow-up showed all five bots
+  `Rsl+`.
 - PR #1194 merged after exact-head Hermes and Grok 4.5 approval plus green CI.
   VPS5 fast-forwarded without process signals, preserving bot PIDs
   `850148/850296/850370/850436/850495` and unrelated `misc:0.0` PID `434835`.
@@ -212,15 +218,13 @@ initial-entry filter visibility and PR #1190's HSL replay scanned-row
 throughput, PR #1191's corrected active/legacy-terminal replay estimates,
 PR #1192's machine-readable startup readiness SLA semantics, PR #1193's
 latest-lifecycle report ordering, and PR #1194's bounded startup action
-milestones are also merged and deployed. The active slice corrects the
-remaining startup-readiness lifecycle, baseline, and phase-parity findings.
+milestones, plus PR #1195's startup consumer correctness fixes, are also merged
+and deployed. The active slice adds the missing true fresh-entry eligibility
+producer after all existing local pre-connector gates.
 
-After this report-only follow-up is merged and validated, select the next
-review-worthy candidate from the remaining backlog, including:
+After this producer is merged and validated, select the next review-worthy
+candidate from the remaining backlog, including:
 
-- a separate producer contract for true fresh-entry eligibility, distinguishing
-  no candidate, blocked candidate, protective-only, already-satisfied, and
-  eligible outcomes
 - optional connector-boundary evidence if operators need actual exchange-write
   invocation rather than the existing pre-call submitted event
 - bounded operator tooling improvements sharing one code and validation surface

@@ -3,10 +3,11 @@ from __future__ import annotations
 import logging
 import math
 import sys
-from collections import defaultdict
+from collections import Counter, defaultdict
 
 from passivbot_exceptions import RestartBotException
 from live.event_bus import EventTypes, ReasonCodes
+from live.fresh_entry_eligibility import FreshEntryEligibilityTrace
 from pure_funcs import shorten_custom_id
 from utils import utc_ms as _utils_utc_ms
 
@@ -118,6 +119,69 @@ def _symbols_from_orders(orders: list[dict]) -> list[str]:
     return sorted(str(order["symbol"]) for order in orders if order.get("symbol"))
 
 
+def _orders_removed_by_identity(before: list[dict], after: list[dict]) -> list[dict]:
+    remaining = Counter(id(order) for order in after)
+    removed = []
+    for order in before:
+        order_id = id(order)
+        if remaining[order_id] > 0:
+            remaining[order_id] -= 1
+        else:
+            removed.append(order)
+    return removed
+
+
+def _fresh_entry_trace(bot) -> FreshEntryEligibilityTrace | None:
+    trace = getattr(bot, "_fresh_entry_eligibility_trace", None)
+    return trace if isinstance(trace, FreshEntryEligibilityTrace) else None
+
+
+def _record_fresh_entry_orders(
+    bot, method: str, orders: list[dict], reason: str | None = None
+) -> None:
+    """Record one existing executor decision without allowing diagnostics to affect it."""
+    trace = _fresh_entry_trace(bot)
+    if trace is None:
+        return
+    try:
+        recorder = getattr(trace, method)
+        if reason is None:
+            recorder(orders)
+        else:
+            recorder(orders, reason)
+    except Exception as exc:
+        bot._fresh_entry_eligibility_trace = None
+        logging.debug(
+            "[entry] fresh-entry eligibility trace disabled during execution | "
+            "method=%s error_type=%s",
+            method,
+            type(exc).__name__,
+        )
+
+
+def _emit_fresh_entry_eligibility(bot, passivbot_cls, wave) -> None:
+    """Consume and emit the cycle trace exactly once on a completed local plan."""
+    trace = _fresh_entry_trace(bot)
+    bot._fresh_entry_eligibility_trace = None
+    if trace is None:
+        return
+    try:
+        data = trace.to_event_data()
+    except Exception as exc:
+        logging.debug(
+            "[entry] fresh-entry eligibility payload build failed | error_type=%s",
+            type(exc).__name__,
+        )
+        return
+    try:
+        passivbot_cls._emit_initial_entry_eligibility_event(bot, data=data, wave=wave)
+    except Exception as exc:
+        logging.debug(
+            "[entry] fresh-entry eligibility event emission failed | error_type=%s",
+            type(exc).__name__,
+        )
+
+
 def _create_rejection_reason(result) -> str:
     if isinstance(result, BaseException):
         return "result_exception"
@@ -175,10 +239,14 @@ def _remember_ambiguous_create(
 
 async def execute_to_exchange(bot, *, prepare_cycle: bool = True):
     """Run one execution cycle including config sync and order placement/cancellation."""
-    if prepare_cycle:
-        await bot.execution_cycle()
-    to_cancel, to_create = await bot.calc_orders_to_cancel_and_create()
-    return await execute_order_plan(bot, to_cancel, to_create)
+    bot._fresh_entry_eligibility_trace = None
+    try:
+        if prepare_cycle:
+            await bot.execution_cycle()
+        to_cancel, to_create = await bot.calc_orders_to_cancel_and_create()
+        return await execute_order_plan(bot, to_cancel, to_create)
+    finally:
+        bot._fresh_entry_eligibility_trace = None
 
 
 async def execute_order_plan(
@@ -232,6 +300,9 @@ async def execute_order_plan(
             if order_wave is not None:
                 order_wave["skipped_create"] += len(blocked_creates)
             if blocked_creates:
+                _record_fresh_entry_orders(
+                    bot, "record_blocked_orders", blocked_creates, "low_balance"
+                )
                 passivbot_cls._emit_execution_create_filter_event(
                     bot,
                     event_type=EventTypes.EXECUTION_CREATE_SKIPPED,
@@ -259,8 +330,15 @@ async def execute_order_plan(
                     len(to_cancel),
                     len(to_create),
                 )
+    before_hsl_filter = list(to_create)
     to_create = _filter_hsl_replay_pending_creates(
         bot, passivbot_cls, to_create, order_wave
+    )
+    _record_fresh_entry_orders(
+        bot,
+        "record_blocked_orders",
+        _orders_removed_by_identity(before_hsl_filter, to_create),
+        "hsl_replay_pending",
     )
     if bot.debug_mode:
         if to_cancel:
@@ -279,6 +357,9 @@ async def execute_order_plan(
             order_wave["cancel_posted"] = len(res or [])
     if bot.debug_mode:
         if to_create:
+            _record_fresh_entry_orders(
+                bot, "record_blocked_orders", to_create, "debug_mode"
+            )
             logging.info(
                 "[order] debug mode would create orders | count=%d", len(to_create)
             )
@@ -300,6 +381,12 @@ async def execute_order_plan(
             else:
                 to_create_mod.append(order)
         if recent_execution_deferred:
+            _record_fresh_entry_orders(
+                bot,
+                "record_blocked_orders",
+                [order for order, _delay in recent_execution_deferred],
+                "recent_execution",
+            )
             passivbot_cls._emit_execution_create_filter_event(
                 bot,
                 event_type=EventTypes.EXECUTION_CREATE_DEFERRED,
@@ -336,6 +423,12 @@ async def execute_order_plan(
                 ),
             )
             if state_filtered_orders:
+                _record_fresh_entry_orders(
+                    bot,
+                    "record_blocked_orders",
+                    state_filtered_orders,
+                    "state_change_detected",
+                )
                 passivbot_cls._emit_execution_create_filter_event(
                     bot,
                     event_type=EventTypes.EXECUTION_CREATE_SKIPPED,
@@ -366,6 +459,7 @@ async def execute_order_plan(
             configured_symbols = await bot.update_exchange_configs(creation_symbols)
             if bot._shutdown_requested():
                 bot._order_wave_in_progress = None
+                bot._fresh_entry_eligibility_trace = None
                 return None
             pending_config = sorted(
                 set(creation_symbols) - set(configured_symbols or set())
@@ -379,6 +473,12 @@ async def execute_order_plan(
                     passivbot_cls._log_symbols(pending_config, limit=12),
                 )
                 if pending_config_orders:
+                    _record_fresh_entry_orders(
+                        bot,
+                        "record_blocked_orders",
+                        pending_config_orders,
+                        "pending_exchange_config",
+                    )
                     passivbot_cls._emit_execution_create_filter_event(
                         bot,
                         event_type=EventTypes.EXECUTION_CREATE_SKIPPED,
@@ -442,6 +542,7 @@ async def execute_order_plan(
                         type(exc).__name__,
                     )
                 await bot.restart_bot_on_too_many_errors()
+    _emit_fresh_entry_eligibility(bot, passivbot_cls, order_wave)
     if to_cancel or to_create:
         bot.execution_scheduled = True
     if not passivbot_cls._shutdown_requested(bot):
@@ -459,7 +560,14 @@ async def execute_order_plan(
 async def execute_orders_parent(bot, orders: list[dict]) -> list[dict]:
     """Submit a batch of orders after throttling and bookkeeping."""
     passivbot_cls = _pb_attr("Passivbot")
-    orders = orders[: int(bot.live_value("max_n_creations_per_batch"))]
+    requested_orders = list(orders)
+    orders = requested_orders[: int(bot.live_value("max_n_creations_per_batch"))]
+    _record_fresh_entry_orders(
+        bot,
+        "record_blocked_orders",
+        _orders_removed_by_identity(requested_orders, orders),
+        "batch_capacity",
+    )
     grouped_orders: dict[str, list[dict]] = defaultdict(list)
     emitted_ts = (
         int(bot.get_exchange_time()) if hasattr(bot, "get_exchange_time") else _utc_ms()
@@ -493,6 +601,8 @@ async def execute_orders_parent(bot, orders: list[dict]) -> list[dict]:
             index=idx,
             wave=wave,
         )
+    _record_fresh_entry_orders(bot, "record_eligible_orders", orders)
+    _emit_fresh_entry_eligibility(bot, passivbot_cls, wave)
     try:
         res = await bot.execute_orders(orders)
     except RestartBotException:

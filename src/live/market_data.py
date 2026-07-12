@@ -84,6 +84,24 @@ def _emit_pre_create_skip_event(
     )
 
 
+def _record_fresh_entry_blocks(bot, orders: list[dict], reason: str) -> None:
+    """Observe an existing pre-create filter without affecting its decision."""
+    trace = getattr(bot, "_fresh_entry_eligibility_trace", None)
+    recorder = getattr(trace, "record_blocked_orders", None)
+    if not callable(recorder):
+        return
+    try:
+        recorder(orders, reason)
+    except Exception as exc:
+        bot._fresh_entry_eligibility_trace = None
+        logging.debug(
+            "[entry] fresh-entry eligibility trace disabled during market filter | "
+            "reason=%s error_type=%s",
+            reason,
+            type(exc).__name__,
+        )
+
+
 def market_snapshot_ticker_strategy(bot) -> str:
     """Choose the cheapest safe ticker endpoint shape for market snapshots."""
     explicit = get_optional_live_value(
@@ -145,6 +163,9 @@ async def filter_fresh_market_snapshot_creations(
                 message="create orders skipped because planning snapshot is invalid before create",
                 details=planning_snapshot_invalid,
             )
+            _record_fresh_entry_blocks(
+                bot, orders, "pre_create_planning_snapshot_invalid"
+            )
             return []
         logging.info(
             "[market] refreshing stale planning market snapshot before create | symbols=%s stale=%s",
@@ -176,6 +197,9 @@ async def filter_fresh_market_snapshot_creations(
             message="create orders skipped because pre-create market snapshot refresh failed",
             error_type=type(exc).__name__,
         )
+        _record_fresh_entry_blocks(
+            bot, orders, "pre_create_market_snapshot_unavailable"
+        )
         return []
     if invalid:
         logging.warning(
@@ -191,6 +215,9 @@ async def filter_fresh_market_snapshot_creations(
             stage="market_snapshot_validation",
             message="create orders skipped because pre-create market snapshots are stale",
             details=invalid,
+        )
+        _record_fresh_entry_blocks(
+            bot, orders, "pre_create_market_snapshot_unavailable"
         )
         return []
     orders = _filter_limit_order_creations_by_market_distance(bot, orders, snapshots)
@@ -252,6 +279,11 @@ def _filter_limit_order_creations_by_market_distance(
             continue
         kept.append(order)
     if skipped:
+        _record_fresh_entry_blocks(
+            bot,
+            [item["order"] for item in skipped],
+            "limit_order_create_market_distance",
+        )
         _log_limit_order_distance_skips(
             bot,
             skipped,

@@ -631,6 +631,9 @@ class Passivbot:
     _emit_execution_create_filter_event = (
         live_event_emitters.emit_execution_create_filter_event
     )
+    _emit_initial_entry_eligibility_event = (
+        live_event_emitters.emit_initial_entry_eligibility_event
+    )
     _emit_initial_entry_distance_gate_event = (
         live_event_emitters.emit_initial_entry_distance_gate_event
     )
@@ -16186,6 +16189,7 @@ class Passivbot:
             apply_initial_entry_gate=False,
             apply_creation_guardrails=False,
             apply_mode_filters=False,
+            collect_fresh_entry_eligibility=False,
         )
 
     def _snapshot_actual_orders(
@@ -16207,7 +16211,8 @@ class Passivbot:
         keys: tuple[str, ...],
         *,
         apply_mode_filters: bool = True,
-    ) -> tuple[list[dict], list[dict]]:
+        return_unfiltered_create: bool = False,
+    ) -> tuple[list[dict], list[dict]] | tuple[list[dict], list[dict], list[dict]]:
         """Return cancel/create lists for a single symbol after mode filtering."""
         return reconciler.reconcile_symbol_orders(
             self,
@@ -16216,6 +16221,7 @@ class Passivbot:
             ideal_orders,
             keys,
             apply_mode_filters=apply_mode_filters,
+            return_unfiltered_create=return_unfiltered_create,
         )
 
     def _annotate_order_deltas(

@@ -154,6 +154,7 @@ class EventTypes:
     EXECUTION_CREATE_REJECTED = "execution.create_rejected"
     EXECUTION_CREATE_DEFERRED = "execution.create_deferred"
     EXECUTION_CREATE_SKIPPED = "execution.create_skipped"
+    ENTRY_INITIAL_ELIGIBILITY = "entry.initial_eligibility"
     ENTRY_INITIAL_DISTANCE_GATE_BLOCKED = "entry.initial_distance_gate_blocked"
     ENTRY_INITIAL_DISTANCE_GATE_CLEARED = "entry.initial_distance_gate_cleared"
     ENTRY_MIN_EFFECTIVE_COST_BLOCKED = "entry.min_effective_cost_blocked"
@@ -205,6 +206,7 @@ class EventTags:
     DEFER = "defer"
     DEGRADED = "degraded"
     EMA = "ema"
+    ENTRY = "entry"
     EXECUTION = "execution"
     EXCHANGE = "exchange"
     FALLBACK = "fallback"
@@ -257,6 +259,7 @@ class ReasonCodes:
     EXCHANGE_TIME_SYNC_UNAVAILABLE = "exchange_time_sync_unavailable"
     WEBSOCKET_RECONNECT = "websocket_reconnect"
     EXECUTION_LOOP_ERROR_BURST = "execution_loop_error_burst"
+    FRESH_ENTRY_ELIGIBILITY = "fresh_entry_eligibility"
     FILL_CACHE_DOCTOR_REPORT = "fill_cache_doctor_report"
     FILL_CACHE_QUARANTINED = "fill_cache_quarantined"
     FILL_CACHE_READY = "fill_cache_ready"
@@ -467,6 +470,7 @@ PHASE1_EVENT_TYPES = {
     EventTypes.EXECUTION_CREATE_REJECTED,
     EventTypes.EXECUTION_CREATE_DEFERRED,
     EventTypes.EXECUTION_CREATE_SKIPPED,
+    EventTypes.ENTRY_INITIAL_ELIGIBILITY,
     EventTypes.ENTRY_INITIAL_DISTANCE_GATE_BLOCKED,
     EventTypes.ENTRY_INITIAL_DISTANCE_GATE_CLEARED,
     EventTypes.ENTRY_MIN_EFFECTIVE_COST_BLOCKED,
@@ -778,6 +782,7 @@ DEFAULT_ROUTES: dict[str, EventRoute] = {
     EventTypes.EXECUTION_CREATE_REJECTED: EventRoute(console=True, text=True),
     EventTypes.EXECUTION_CREATE_DEFERRED: EventRoute(console=False, text=False),
     EventTypes.EXECUTION_CREATE_SKIPPED: EventRoute(console=True, text=True),
+    EventTypes.ENTRY_INITIAL_ELIGIBILITY: EventRoute(console=False, text=False),
     EventTypes.ENTRY_INITIAL_DISTANCE_GATE_BLOCKED: EventRoute(
         console=True, text=True
     ),
