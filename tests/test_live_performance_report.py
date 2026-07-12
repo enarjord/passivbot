@@ -1648,8 +1648,8 @@ def test_live_performance_report_startup_milestones_current_lifecycle(tmp_path):
     assert write["symbol"] == "BTCUSDT"
     assert write["pside"] == "long"
     assert write["side"] == "buy"
-    assert write["action_id"] == "action_1"
     assert write["remote_call_id"] == "remote_1"
+    assert "action_1" not in json.dumps(report["startup_milestones"], sort_keys=True)
 
 
 def test_startup_milestone_accumulator_retains_one_candidate_per_milestone():

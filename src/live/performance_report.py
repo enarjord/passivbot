@@ -1529,9 +1529,6 @@ class _StartupMilestoneAccumulator:
         if event_id is not None:
             item["event_id"] = event_id
         item.update(_bounded_event_ids(live_event))
-        action_id = _safe_label(_event_ids(live_event).get("action_id"), max_len=160)
-        if action_id is not None:
-            item["action_id"] = action_id
         for key in ("symbol", "pside", "side"):
             value = _safe_label(live_event.get(key) or row.get(key), max_len=120)
             if value is not None:
