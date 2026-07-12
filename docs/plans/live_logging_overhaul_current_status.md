@@ -50,8 +50,14 @@ Estimated completion:
 
 Next action:
 
-1. Complete producer/consumer implementation and focused validation, then run
-   independent preflight and publish only when the branch is review-ready.
+1. Hold the published PR at the exact-current-head review gate until Hermes,
+   Grok 4.5, and CI are green; resolve any findings with narrow delta validation
+   and require fresh exact-head verdicts after every push.
+2. Merge only after that gate is green, then gracefully restart the five exact
+   VPS5 bot panes while preserving unrelated processes and local artifacts.
+3. Verify fresh event-pipeline timing fields with bounded `health.summary`,
+   smoke, and performance reports, including immediate and settled process and
+   repository-state checks.
 
 ## Deployed Baseline
 
