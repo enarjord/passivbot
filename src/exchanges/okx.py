@@ -188,6 +188,11 @@ class OKXBot(CCXTBot):
     async def execute_cancellation(self, order: dict) -> dict:
         """OKX: Cancel order with special handling for 51400 (already cancelled/filled)."""
         try:
+            self._emit_execution_connector_call_started_event(
+                order=order,
+                action="cancel",
+                connector_route="okx",
+            )
             return await self.cca.cancel_order(order["id"], symbol=order["symbol"])
         except Exception as e:
             # 51400 = order already cancelled or filled - not an error

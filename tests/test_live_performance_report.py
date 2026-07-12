@@ -1822,8 +1822,26 @@ def test_live_performance_report_startup_milestones_current_lifecycle(tmp_path):
                 ids={"cycle_id": "cy_1", "snapshot_id": "snap_1"},
             ),
             _monitor_row(
-                event_type="execution.create_sent",
+                event_type="execution.create_connector_call_started",
                 seq=4,
+                ts=1500,
+                symbol="BTCUSDT",
+                pside="long",
+                side="buy",
+                ids={
+                    "cycle_id": "cy_1",
+                    "order_wave_id": "ow_1",
+                    "action_id": "ow_1:create:0",
+                },
+                data={
+                    "action": "create",
+                    "connector_method": "cca.create_order",
+                    "connector_route": "base",
+                },
+            ),
+            _monitor_row(
+                event_type="execution.create_sent",
+                seq=5,
                 ts=1600,
                 symbol="BTCUSDT",
                 pside="long",

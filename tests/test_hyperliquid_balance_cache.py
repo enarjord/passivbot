@@ -87,9 +87,11 @@ class DummyCCA:
 @pytest.mark.asyncio
 async def test_hyperliquid_already_gone_cancel_requests_full_confirmation(stubbed_modules):
     HyperliquidBot = importlib.import_module("exchanges.hyperliquid").HyperliquidBot
+    markers = []
 
     class _AlreadyGoneCancelCCA:
         async def cancel_order(self, order_id, symbol=None, params=None):
+            markers.append(("connector", order_id, symbol, params))
             assert order_id == "abc123"
             assert symbol == "BTC/USDC:USDC"
             assert params == {}
@@ -98,12 +100,18 @@ async def test_hyperliquid_already_gone_cancel_requests_full_confirmation(stubbe
     bot = HyperliquidBot.__new__(HyperliquidBot)
     bot.user_info = {"is_vault": False}
     bot.cca = _AlreadyGoneCancelCCA()
+    bot._emit_execution_connector_call_started_event = lambda **kwargs: markers.append(
+        ("event", kwargs)
+    )
 
     res = await bot.execute_cancellation({"id": "abc123", "symbol": "BTC/USDC:USDC"})
 
     assert res["status"] == "success"
     assert res["_passivbot_cancel_requires_full_authoritative_confirmation"] is True
     assert bot.did_cancel_order(res) is True
+    assert [marker[0] for marker in markers] == ["event", "connector"]
+    assert markers[0][1]["action"] == "cancel"
+    assert markers[0][1]["connector_route"] == "hyperliquid"
 
 
 @pytest.mark.asyncio

@@ -36,12 +36,14 @@ across time.
 - `exchange.time_sync`
 - `execution.ambiguous`
 - `execution.cancel_ambiguous_terminal`
+- `execution.cancel_connector_call_started`
 - `execution.cancel_failed`
 - `execution.cancel_sent`
 - `execution.cancel_succeeded`
 - `execution.confirmation_requested`
 - `execution.confirmation_satisfied`
 - `execution.confirmation_timeout`
+- `execution.create_connector_call_started`
 - `execution.create_deferred`
 - `execution.create_failed`
 - `execution.create_rejected`
@@ -151,6 +153,30 @@ shutdown interruption, and diagnostic tracing failures omit the event instead
 of emitting a misleading candidate-free result. Diagnostic and sink failures
 must not change order lists or execution results.
 
+## Connector Call Boundary Contract
+
+`execution.create_connector_call_started` and
+`execution.cancel_connector_call_started` are emitted to structured and monitor
+sinks only, immediately before Passivbot calls the concrete
+`cca.create_order` or `cca.cancel_order` coroutine. They mean only that local
+execution reached that connector call site. They do not claim that bytes were
+sent, that the exchange received or accepted the request, or that an order was
+acknowledged.
+
+The fixed payload fields are `action=create|cancel`,
+`connector_method=cca.create_order|cca.cancel_order`, and
+`connector_route=base|hyperliquid|okx`, plus bounded order shape fields and
+finite numeric values. Normal order-plan calls retain their cycle,
+`order_wave_id`, and `action_id` correlation. The events must not contain raw
+connector params, vault addresses, URLs, responses, exception text, paths, or
+arbitrary payloads. Diagnostic and sink failures must not prevent or alter the
+connector call.
+
+These events are distinct from the existing `execution.create_sent` and
+`execution.cancel_sent` pre-call submission-intent events and from terminal
+exchange outcome events. They do not define another startup performance
+milestone.
+
 ## HSL Replay Timing Fields
 
 For coin-mode `hsl.replay.completed`, `full_elapsed_s` measures total replay
@@ -239,6 +265,7 @@ full-replay terminal event.
 - `config_isolated_only_market_blocked`
 - `config_stock_perp_unavailable_market`
 - `config_stock_perp_wrong_exchange`
+- `connector_call_started`
 - `ema_fallback_used`
 - `exchange_acknowledged`
 - `exchange_config_refresh`

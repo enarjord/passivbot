@@ -7735,3 +7735,35 @@ VPS5 deployment status:
   claim, process action, Rust/order/risk/HSL behavior, backtest, optimizer, or
   smoke verdict change. Expected VPS action is pull plus a bounded
   current-plus-rotated report and settled smoke, with no bot restart.
+
+### Deployed Slice: Fresh-Entry Startup Milestone
+
+- PR #1197 was approved by Hermes and Grok 4.5 on exact head `cb76fd5b9`; CI
+  passed and it merged to `v8` as `fda0e1323`.
+- VPS5 fast-forwarded without bot signals or restarts. Bot PIDs
+  `856325/856354/856386/856420/856456`, their exact pane PIDs, and unrelated
+  `misc:0.0` PID `434835` remained unchanged; the tracked repository was clean.
+- A bounded eight-segment Binance lifecycle report returned `ok=true` with no
+  issues and observed first cycle at `84.484s`, first Rust call at `239.008s`,
+  first submitted write at `240.106s`, and
+  `first_fresh_entry_eligible` at `240.110s`.
+- The settled two-minute smoke was hard-green with `208/208` remote and `53/53`
+  account-critical calls successful, all five expected processes matched, no
+  hard/log/monitor failures, and a clean tracked repository. One sampled `D`
+  state cleared; all five bots were `R` on the final exact-state check.
+
+### Active Slice: Connector Call Boundary Evidence
+
+- Branch: `codex/v8-connector-invocation-events` from deployed `fda0e1323`.
+- Scope: emit one bounded structured/monitor event immediately before each
+  concrete `cca.create_order` or `cca.cancel_order` call through the base,
+  Hyperliquid, and OKX routes. Preserve normal cycle/order-wave/action
+  correlation without adding fields to connector payloads.
+- Contract: the events prove only local connector call-site arrival. They do
+  not claim bytes sent, exchange receipt, acceptance, or acknowledgement, and
+  they do not create another startup milestone. Diagnostic failures remain
+  isolated from connector execution.
+- Non-goals: no order, risk, HSL, Rust, backtest, optimizer, connector payload,
+  or exchange-error behavior change. Expected VPS action is an exact five-bot
+  graceful restart, legitimate-activity event query, and immediate plus settled
+  smoke; validation must not create synthetic live orders.

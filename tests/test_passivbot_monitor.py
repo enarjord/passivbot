@@ -3869,6 +3869,10 @@ async def test_execute_orders_parent_records_order_opened_event():
             return None
 
         async def execute_orders(self, orders):
+            context = self._execution_connector_call_context
+            assert context["action"] == "create"
+            assert context["orders"][0] is orders[0]
+            assert context["wave"] is self._order_wave_in_progress
             return [{"id": "abc123", **orders[0]}]
 
         def did_create_order(self, executed):
@@ -3894,6 +3898,7 @@ async def test_execute_orders_parent_records_order_opened_event():
     res = await pb_mod.Passivbot.execute_orders_parent(bot, [order])
 
     assert len(res) == 1
+    assert bot._execution_connector_call_context is None
     assert bot._health_orders_placed == 1
     assert bot.monitor_publisher.events[-1]["kind"] == "order.opened"
     assert bot.monitor_publisher.events[-1]["symbol"] == "BTC/USDT:USDT"
@@ -3998,6 +4003,79 @@ def test_execution_debug_profile_adds_bounded_order_write_shape():
     assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 
+def test_connector_call_event_is_bounded_and_correlated_to_batch_action():
+    import passivbot as pb_mod
+
+    sink = ListEventSink()
+
+    class FakeBot:
+        _emit_execution_connector_call_started_event = (
+            pb_mod.Passivbot._emit_execution_connector_call_started_event
+        )
+        _emit_live_event = pb_mod.Passivbot._emit_live_event
+
+        def __init__(self):
+            self.exchange = "binance"
+            self.user = "binance_01"
+            self.bot_id = "bot_1"
+            self._live_event_current_cycle_id = "cy_21"
+            self._live_event_pipeline = LiveEventPipeline(
+                structured_sinks=[sink],
+                monitor_sinks=[],
+            )
+
+    bot = FakeBot()
+    order = {
+        "symbol": "BTC/USDT:USDT",
+        "side": "buy",
+        "position_side": "long",
+        "type": "limit" * 20,
+        "pb_order_type": "entry_grid_normal_long" * 8,
+        "qty": 0.01,
+        "price": 100000.0,
+        "reduce_only": False,
+        "custom_id": "cid-connector-1234567890",
+        "id": "oid-connector-1234567890",
+        "raw_payload": "RAW_CONNECTOR_SECRET",
+        "_context": "/private/operator/path",
+        "_reason": "RAW_CONNECTOR_REASON_SECRET",
+        "_delta": {"price_pct_diff": float("inf"), "qty_pct_diff": 0.002},
+    }
+    bot._execution_connector_call_context = {
+        "action": "create",
+        "orders": [order],
+        "wave": {"id": 4, "event_id": "ow_4"},
+    }
+
+    bot._emit_execution_connector_call_started_event(
+        order=order,
+        action="create",
+        connector_route="base",
+    )
+
+    assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    event = sink.events[-1]
+    assert event.event_type == EventTypes.EXECUTION_CREATE_CONNECTOR_CALL_STARTED
+    assert event.component == "execution.connector_call"
+    assert event.status == "started"
+    assert event.reason_code == ReasonCodes.CONNECTOR_CALL_STARTED
+    assert event.cycle_id == "cy_21"
+    assert event.order_wave_id == "ow_4"
+    assert event.action_id == "ow_4:create:0"
+    assert event.order_id == "oid-connector-1234567890"
+    assert event.client_order_id == "cid-connector-1234567890"
+    assert event.data["connector_method"] == "cca.create_order"
+    assert event.data["connector_route"] == "base"
+    assert len(event.data["order_type"]) == 64
+    assert len(event.data["pb_order_type"]) == 64
+    assert event.data["delta"] == {"qty_pct_diff": 0.002}
+    rendered = json.dumps(event.to_dict(), sort_keys=True)
+    assert "RAW_CONNECTOR_SECRET" not in rendered
+    assert "RAW_CONNECTOR_REASON_SECRET" not in rendered
+    assert "/private/operator/path" not in rendered
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
+
+
 @pytest.mark.asyncio
 async def test_execute_cancellations_parent_emits_ambiguous_confirmation_events():
     import passivbot as pb_mod
@@ -4048,6 +4126,10 @@ async def test_execute_cancellations_parent_emits_ambiguous_confirmation_events(
             return None
 
         async def execute_cancellations(self, orders):
+            context = self._execution_connector_call_context
+            assert context["action"] == "cancel"
+            assert context["orders"][0] is orders[0]
+            assert context["wave"] is self._order_wave_in_progress
             return [
                 {
                     "status": "success",
@@ -4083,6 +4165,7 @@ async def test_execute_cancellations_parent_emits_ambiguous_confirmation_events(
     res = await pb_mod.Passivbot.execute_cancellations_parent(bot, [order])
 
     assert len(res) == 1
+    assert bot._execution_connector_call_context is None
     assert bot._authoritative_pending_confirmations == {
         "balance": 5,
         "positions": 5,

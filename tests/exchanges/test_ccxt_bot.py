@@ -626,6 +626,86 @@ class TestCCXTBotBatchOrderDiagnostics:
         ) in caplog.text
 
 
+class TestCCXTBotConnectorCallEvents:
+    @pytest.mark.asyncio
+    async def test_execute_order_emits_before_connector_with_batch_ids(self):
+        from exchanges.ccxt_bot import CCXTBot
+        from live.event_bus import EventTypes, ReasonCodes
+
+        markers = []
+        order = {
+            "symbol": "BTC/USDT:USDT",
+            "type": "limit",
+            "side": "buy",
+            "position_side": "long",
+            "qty": 0.01,
+            "price": 100000.0,
+            "reduce_only": False,
+            "custom_id": "cid-1",
+        }
+
+        class CCA:
+            async def create_order(self, **params):
+                markers.append(("connector", params))
+                return {"id": "oid-1", "status": "open"}
+
+        bot = CCXTBot.__new__(CCXTBot)
+        bot.exchange = "binance"
+        bot.user = "binance_01"
+        bot.bot_id = "bot-1"
+        bot.cca = CCA()
+        bot._build_order_params = lambda _order: {"postOnly": True}
+        bot._live_event_current_cycle_id = "cy_3"
+        bot._execution_connector_call_context = {
+            "action": "create",
+            "orders": [order],
+            "wave": {"event_id": "ow_3"},
+        }
+
+        def capture(event_type, **kwargs):
+            markers.append(("event", event_type, kwargs))
+
+        bot._emit_live_event = capture
+
+        result = await bot.execute_order(order)
+
+        assert result == {"id": "oid-1", "status": "open"}
+        assert [marker[0] for marker in markers] == ["event", "connector"]
+        _, event_type, event = markers[0]
+        assert event_type == EventTypes.EXECUTION_CREATE_CONNECTOR_CALL_STARTED
+        assert event["reason_code"] == ReasonCodes.CONNECTOR_CALL_STARTED
+        assert event["order_wave_id"] == "ow_3"
+        assert event["action_id"] == "ow_3:create:0"
+        assert event["data"]["connector_route"] == "base"
+        assert event["data"]["connector_method"] == "cca.create_order"
+
+    @pytest.mark.asyncio
+    async def test_cancel_connector_call_survives_event_failure(self):
+        from exchanges.ccxt_bot import CCXTBot
+
+        connector_calls = []
+
+        class CCA:
+            async def cancel_order(self, order_id, symbol=None):
+                connector_calls.append((order_id, symbol))
+                return {"id": order_id, "status": "canceled"}
+
+        bot = CCXTBot.__new__(CCXTBot)
+        bot.exchange = "binance"
+        bot.cca = CCA()
+
+        def fail_emit(*_args, **_kwargs):
+            raise RuntimeError("diagnostic sink unavailable")
+
+        bot._emit_live_event = fail_emit
+        result = await bot.execute_cancellation(
+            {"id": "oid-2", "symbol": "ETH/USDT:USDT"}
+        )
+
+        assert result == {"id": "oid-2", "status": "canceled"}
+        assert connector_calls == [("oid-2", "ETH/USDT:USDT")]
+
+
 class TestCCXTBotExecuteCancellation:
     """Tests for execute_cancellation."""
 
