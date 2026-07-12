@@ -60,6 +60,12 @@ _MONITOR_PUBLISHER_PHASE_TIMING_KEYS = (
     "rotation_ns",
     "persist_ns",
     "maintenance_ns",
+    "manifest_checkpoint_count",
+    "manifest_checkpoint_ns_total",
+    "manifest_checkpoint_ns_max",
+    "retention_run_count",
+    "retention_ns_total",
+    "retention_ns_max",
 )
 _MONITOR_PHASE_TIMING_KEYS = ("prepare_ns", *_MONITOR_PUBLISHER_PHASE_TIMING_KEYS)
 
@@ -1863,6 +1869,12 @@ class _EventPipelineTimingWindow:
     monitor_publisher_persist_ns_max: int
     monitor_publisher_maintenance_ns_total: int
     monitor_publisher_maintenance_ns_max: int
+    monitor_publisher_manifest_checkpoint_count: int
+    monitor_publisher_manifest_checkpoint_ns_total: int
+    monitor_publisher_manifest_checkpoint_ns_max: int
+    monitor_publisher_retention_run_count: int
+    monitor_publisher_retention_ns_total: int
+    monitor_publisher_retention_ns_max: int
 
 
 @dataclass
@@ -1883,6 +1895,12 @@ class _EventPipelineSinkWriteTiming:
     monitor_publisher_persist_ns_max: int = 0
     monitor_publisher_maintenance_ns_total: int = 0
     monitor_publisher_maintenance_ns_max: int = 0
+    monitor_publisher_manifest_checkpoint_count: int = 0
+    monitor_publisher_manifest_checkpoint_ns_total: int = 0
+    monitor_publisher_manifest_checkpoint_ns_max: int = 0
+    monitor_publisher_retention_run_count: int = 0
+    monitor_publisher_retention_ns_total: int = 0
+    monitor_publisher_retention_ns_max: int = 0
 
     def record(self, sink_name: str, service_ns: int) -> None:
         service_ns = max(0, int(service_ns))
@@ -1912,6 +1930,25 @@ class _EventPipelineSinkWriteTiming:
             max_field = f"{field_prefix}_max"
             setattr(self, total_field, int(getattr(self, total_field)) + value_ns)
             setattr(self, max_field, max(int(getattr(self, max_field)), value_ns))
+        for source_key, field_name in (
+            ("manifest_checkpoint_count", "monitor_publisher_manifest_checkpoint_count"),
+            ("retention_run_count", "monitor_publisher_retention_run_count"),
+        ):
+            setattr(
+                self,
+                field_name,
+                int(getattr(self, field_name)) + max(0, int(timing.get(source_key, 0))),
+            )
+        for source_key, field_prefix in (
+            ("manifest_checkpoint_ns", "monitor_publisher_manifest_checkpoint_ns"),
+            ("retention_ns", "monitor_publisher_retention_ns"),
+        ):
+            total_field = f"{field_prefix}_total"
+            max_field = f"{field_prefix}_max"
+            value_total_ns = max(0, int(timing.get(f"{source_key}_total", 0)))
+            value_max_ns = max(0, int(timing.get(f"{source_key}_max", 0)))
+            setattr(self, total_field, int(getattr(self, total_field)) + value_total_ns)
+            setattr(self, max_field, max(int(getattr(self, max_field)), value_max_ns))
 
 
 class LiveEventPipeline:
@@ -1969,6 +2006,12 @@ class LiveEventPipeline:
         self._timing_monitor_publisher_persist_ns_max = 0
         self._timing_monitor_publisher_maintenance_ns_total = 0
         self._timing_monitor_publisher_maintenance_ns_max = 0
+        self._timing_monitor_publisher_manifest_checkpoint_count = 0
+        self._timing_monitor_publisher_manifest_checkpoint_ns_total = 0
+        self._timing_monitor_publisher_manifest_checkpoint_ns_max = 0
+        self._timing_monitor_publisher_retention_run_count = 0
+        self._timing_monitor_publisher_retention_ns_total = 0
+        self._timing_monitor_publisher_retention_ns_max = 0
         self._pending_timing_windows: dict[int, _EventPipelineTimingWindow] = {}
         self._next_timing_snapshot_token = 1
         self._worker: threading.Thread | None = None
@@ -2076,6 +2119,24 @@ class LiveEventPipeline:
                 monitor_publisher_maintenance_ns_max=int(
                     self._timing_monitor_publisher_maintenance_ns_max
                 ),
+                monitor_publisher_manifest_checkpoint_count=int(
+                    self._timing_monitor_publisher_manifest_checkpoint_count
+                ),
+                monitor_publisher_manifest_checkpoint_ns_total=int(
+                    self._timing_monitor_publisher_manifest_checkpoint_ns_total
+                ),
+                monitor_publisher_manifest_checkpoint_ns_max=int(
+                    self._timing_monitor_publisher_manifest_checkpoint_ns_max
+                ),
+                monitor_publisher_retention_run_count=int(
+                    self._timing_monitor_publisher_retention_run_count
+                ),
+                monitor_publisher_retention_ns_total=int(
+                    self._timing_monitor_publisher_retention_ns_total
+                ),
+                monitor_publisher_retention_ns_max=int(
+                    self._timing_monitor_publisher_retention_ns_max
+                ),
             )
             timing_snapshot_token = None
             if consume_timing:
@@ -2104,6 +2165,12 @@ class LiveEventPipeline:
                 self._timing_monitor_publisher_persist_ns_max = 0
                 self._timing_monitor_publisher_maintenance_ns_total = 0
                 self._timing_monitor_publisher_maintenance_ns_max = 0
+                self._timing_monitor_publisher_manifest_checkpoint_count = 0
+                self._timing_monitor_publisher_manifest_checkpoint_ns_total = 0
+                self._timing_monitor_publisher_manifest_checkpoint_ns_max = 0
+                self._timing_monitor_publisher_retention_run_count = 0
+                self._timing_monitor_publisher_retention_ns_total = 0
+                self._timing_monitor_publisher_retention_ns_max = 0
         snapshot: dict[str, Any] = {
             "event_queue_depth": queue_depth,
             "event_queue_maxsize": queue_maxsize,
@@ -2175,6 +2242,24 @@ class LiveEventPipeline:
             "event_monitor_publisher_maintenance_ms_max": self._timing_ms(
                 timing_window.monitor_publisher_maintenance_ns_max
             ),
+            "event_monitor_publisher_manifest_checkpoint_count": (
+                timing_window.monitor_publisher_manifest_checkpoint_count
+            ),
+            "event_monitor_publisher_manifest_checkpoint_ms_total": self._timing_ms(
+                timing_window.monitor_publisher_manifest_checkpoint_ns_total
+            ),
+            "event_monitor_publisher_manifest_checkpoint_ms_max": self._timing_ms(
+                timing_window.monitor_publisher_manifest_checkpoint_ns_max
+            ),
+            "event_monitor_publisher_retention_run_count": (
+                timing_window.monitor_publisher_retention_run_count
+            ),
+            "event_monitor_publisher_retention_ms_total": self._timing_ms(
+                timing_window.monitor_publisher_retention_ns_total
+            ),
+            "event_monitor_publisher_retention_ms_max": self._timing_ms(
+                timing_window.monitor_publisher_retention_ns_max
+            ),
         }
         return (
             {key: value for key, value in snapshot.items() if value is not None},
@@ -2230,6 +2315,10 @@ class LiveEventPipeline:
             "monitor_publisher_rotation_ns_total",
             "monitor_publisher_persist_ns_total",
             "monitor_publisher_maintenance_ns_total",
+            "monitor_publisher_manifest_checkpoint_count",
+            "monitor_publisher_manifest_checkpoint_ns_total",
+            "monitor_publisher_retention_run_count",
+            "monitor_publisher_retention_ns_total",
         ):
             setattr(
                 self,
@@ -2242,6 +2331,8 @@ class LiveEventPipeline:
             "monitor_publisher_rotation_ns_max",
             "monitor_publisher_persist_ns_max",
             "monitor_publisher_maintenance_ns_max",
+            "monitor_publisher_manifest_checkpoint_ns_max",
+            "monitor_publisher_retention_ns_max",
         ):
             setattr(
                 self,
@@ -2456,6 +2547,26 @@ class LiveEventPipeline:
                         self._timing_monitor_publisher_maintenance_ns_max = max(
                             self._timing_monitor_publisher_maintenance_ns_max,
                             sink_write_timing.monitor_publisher_maintenance_ns_max,
+                        )
+                        self._timing_monitor_publisher_manifest_checkpoint_count += (
+                            sink_write_timing.monitor_publisher_manifest_checkpoint_count
+                        )
+                        self._timing_monitor_publisher_manifest_checkpoint_ns_total += (
+                            sink_write_timing.monitor_publisher_manifest_checkpoint_ns_total
+                        )
+                        self._timing_monitor_publisher_manifest_checkpoint_ns_max = max(
+                            self._timing_monitor_publisher_manifest_checkpoint_ns_max,
+                            sink_write_timing.monitor_publisher_manifest_checkpoint_ns_max,
+                        )
+                        self._timing_monitor_publisher_retention_run_count += (
+                            sink_write_timing.monitor_publisher_retention_run_count
+                        )
+                        self._timing_monitor_publisher_retention_ns_total += (
+                            sink_write_timing.monitor_publisher_retention_ns_total
+                        )
+                        self._timing_monitor_publisher_retention_ns_max = max(
+                            self._timing_monitor_publisher_retention_ns_max,
+                            sink_write_timing.monitor_publisher_retention_ns_max,
                         )
                 self._queue.task_done()
 

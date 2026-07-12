@@ -121,6 +121,12 @@ _RESOURCE_PRESSURE_FIELDS = (
     "event_monitor_publisher_persist_ms_max",
     "event_monitor_publisher_maintenance_ms_total",
     "event_monitor_publisher_maintenance_ms_max",
+    "event_monitor_publisher_manifest_checkpoint_count",
+    "event_monitor_publisher_manifest_checkpoint_ms_total",
+    "event_monitor_publisher_manifest_checkpoint_ms_max",
+    "event_monitor_publisher_retention_run_count",
+    "event_monitor_publisher_retention_ms_total",
+    "event_monitor_publisher_retention_ms_max",
 )
 _RESOURCE_PRESSURE_COUNTER_FIELDS = (
     "event_drop_counts",
@@ -4056,6 +4062,24 @@ class _ResourcePressureAccumulator:
             ),
             "latest_event_monitor_publisher_maintenance_ms_max": latest_field_max(
                 "event_monitor_publisher_maintenance_ms_max"
+            ),
+            "latest_event_monitor_publisher_manifest_checkpoint_count_sum": latest_field_sum(
+                "event_monitor_publisher_manifest_checkpoint_count"
+            ),
+            "latest_event_monitor_publisher_manifest_checkpoint_ms_total_sum": latest_field_sum(
+                "event_monitor_publisher_manifest_checkpoint_ms_total"
+            ),
+            "latest_event_monitor_publisher_manifest_checkpoint_ms_max": latest_field_max(
+                "event_monitor_publisher_manifest_checkpoint_ms_max"
+            ),
+            "latest_event_monitor_publisher_retention_run_count_sum": latest_field_sum(
+                "event_monitor_publisher_retention_run_count"
+            ),
+            "latest_event_monitor_publisher_retention_ms_total_sum": latest_field_sum(
+                "event_monitor_publisher_retention_ms_total"
+            ),
+            "latest_event_monitor_publisher_retention_ms_max": latest_field_max(
+                "event_monitor_publisher_retention_ms_max"
             ),
             "event_pipeline_unhealthy_bots": unhealthy_bots,
             "groups_truncated": len(groups) > limit,

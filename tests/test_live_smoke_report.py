@@ -2727,6 +2727,12 @@ def test_live_smoke_report_projects_multi_bot_event_pipeline_timing(tmp_path):
                     "event_monitor_publisher_persist_ms_max": 2.0,
                     "event_monitor_publisher_maintenance_ms_total": 2.5,
                     "event_monitor_publisher_maintenance_ms_max": 1.5,
+                    "event_monitor_publisher_manifest_checkpoint_count": 2,
+                    "event_monitor_publisher_manifest_checkpoint_ms_total": 0.5,
+                    "event_monitor_publisher_manifest_checkpoint_ms_max": 0.3,
+                    "event_monitor_publisher_retention_run_count": 3,
+                    "event_monitor_publisher_retention_ms_total": 1.0,
+                    "event_monitor_publisher_retention_ms_max": 0.6,
                 },
             )
         ],
@@ -2763,6 +2769,12 @@ def test_live_smoke_report_projects_multi_bot_event_pipeline_timing(tmp_path):
                     "event_monitor_publisher_persist_ms_max": 0.7,
                     "event_monitor_publisher_maintenance_ms_total": 0.4,
                     "event_monitor_publisher_maintenance_ms_max": 0.4,
+                    "event_monitor_publisher_manifest_checkpoint_count": 1,
+                    "event_monitor_publisher_manifest_checkpoint_ms_total": 0.1,
+                    "event_monitor_publisher_manifest_checkpoint_ms_max": 0.1,
+                    "event_monitor_publisher_retention_run_count": 1,
+                    "event_monitor_publisher_retention_ms_total": 0.2,
+                    "event_monitor_publisher_retention_ms_max": 0.2,
                 },
             )
         ],
@@ -2780,6 +2792,8 @@ def test_live_smoke_report_projects_multi_bot_event_pipeline_timing(tmp_path):
     assert groups["okx/okx_01"].get("latest_structured_sink_write_count") == 8
     assert groups["gateio/gateio_01"].get("latest_monitor_sink_service_ms_max") == 2
     assert groups["okx/okx_01"].get("latest_monitor_publisher_persist_ms_max") == 2
+    assert groups["okx/okx_01"].get("latest_monitor_publisher_manifest_checkpoint_count") == 2
+    assert groups["gateio/gateio_01"].get("latest_monitor_publisher_retention_run_count") == 1
     expected = {
         "latest_processed_total": 11,
         "latest_timing_window_ms_max": 1250,
@@ -2803,12 +2817,56 @@ def test_live_smoke_report_projects_multi_bot_event_pipeline_timing(tmp_path):
         "latest_monitor_publisher_persist_ms_max": 2,
         "latest_monitor_publisher_maintenance_ms_total_sum": 2.9,
         "latest_monitor_publisher_maintenance_ms_max": 1.5,
+        "latest_monitor_publisher_manifest_checkpoint_count_sum": 3,
+        "latest_monitor_publisher_manifest_checkpoint_ms_total_sum": 0.6,
+        "latest_monitor_publisher_manifest_checkpoint_ms_max": 0.3,
+        "latest_monitor_publisher_retention_run_count_sum": 4,
+        "latest_monitor_publisher_retention_ms_total_sum": 1.2,
+        "latest_monitor_publisher_retention_ms_max": 0.6,
     }
     assert {key: health[key] for key in expected} == expected
     assert {key: summary["event_pipeline_health"][key] for key in expected} == expected
     assert {key: brief["event_pipeline"][key] for key in expected} == expected
     assert report["ok"] is True
     assert report["attention"] is False
+
+
+def test_live_smoke_report_omits_missing_monitor_maintenance_attribution(tmp_path):
+    events_dir = tmp_path / "monitor" / "okx" / "okx_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="health.summary",
+                exchange="okx",
+                user="okx_01",
+                seq=1,
+                ts=2000,
+                data={
+                    "event_pipeline_processed_count": 3,
+                    "event_monitor_publisher_maintenance_ms_total": 2.5,
+                    "event_monitor_publisher_maintenance_ms_max": 1.5,
+                },
+            )
+        ],
+    )
+
+    report = build_live_smoke_report(tmp_path / "monitor", logs_root=None)
+    summary = summarize_live_smoke_report(report)
+    brief = summarize_live_smoke_report_brief(report)
+    health = report["event_pipeline_health"]
+    group = health["groups"][0]
+    new_prefixes = (
+        "latest_monitor_publisher_manifest_checkpoint",
+        "latest_monitor_publisher_retention",
+    )
+
+    assert not any(key.startswith(new_prefixes) for key in group)
+    assert not any(key.startswith(new_prefixes) for key in health)
+    assert not any(
+        key.startswith(new_prefixes) for key in summary["event_pipeline_health"]
+    )
+    assert not any(key.startswith(new_prefixes) for key in brief["event_pipeline"])
 
 
 def test_live_smoke_report_problem_events_include_cycle_degraded_details(tmp_path):

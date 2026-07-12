@@ -4,6 +4,12 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Periodic structured health summaries now separate event-path manifest
+  checkpoint and retention run counts and service totals/maxima within the
+  existing inclusive monitor maintenance timing. Live smoke and performance
+  reports project the fixed fields without changing persistence cadence,
+  retention policy, event delivery, verdicts, or trading behavior.
+
 - Monitor event and history appends now coalesce the best-effort manifest
   checkpoint to the existing snapshot cadence while forcing it at lifecycle
   and rotation boundaries. Startup also recovers the event sequence from a

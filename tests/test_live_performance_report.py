@@ -4865,6 +4865,12 @@ def test_live_performance_report_resource_pressure_projects_event_pipeline_timin
                     "event_monitor_publisher_persist_ms_max": 0.6,
                     "event_monitor_publisher_maintenance_ms_total": 0.5,
                     "event_monitor_publisher_maintenance_ms_max": 0.3,
+                    "event_monitor_publisher_manifest_checkpoint_count": 2,
+                    "event_monitor_publisher_manifest_checkpoint_ms_total": 0.1,
+                    "event_monitor_publisher_manifest_checkpoint_ms_max": 0.08,
+                    "event_monitor_publisher_retention_run_count": 3,
+                    "event_monitor_publisher_retention_ms_total": 0.2,
+                    "event_monitor_publisher_retention_ms_max": 0.15,
                 },
             ),
         ],
@@ -4901,6 +4907,12 @@ def test_live_performance_report_resource_pressure_projects_event_pipeline_timin
                     "event_monitor_publisher_persist_ms_max": 0.5,
                     "event_monitor_publisher_maintenance_ms_total": 0.3,
                     "event_monitor_publisher_maintenance_ms_max": 0.3,
+                    "event_monitor_publisher_manifest_checkpoint_count": 1,
+                    "event_monitor_publisher_manifest_checkpoint_ms_total": 0.1,
+                    "event_monitor_publisher_manifest_checkpoint_ms_max": 0.1,
+                    "event_monitor_publisher_retention_run_count": 1,
+                    "event_monitor_publisher_retention_ms_total": 0.1,
+                    "event_monitor_publisher_retention_ms_max": 0.1,
                 },
             )
         ],
@@ -4939,6 +4951,15 @@ def test_live_performance_report_resource_pressure_projects_event_pipeline_timin
         "median": 1,
         "p95": 1,
     }
+    assert binance_fields["event_monitor_publisher_manifest_checkpoint_count"] == {
+        "latest": 2,
+        "count": 1,
+        "min": 2,
+        "max": 2,
+        "mean": 2,
+        "median": 2,
+        "p95": 2,
+    }
     assert {
         key: pressure[key]
         for key in (
@@ -4964,6 +4985,12 @@ def test_live_performance_report_resource_pressure_projects_event_pipeline_timin
             "latest_event_monitor_publisher_persist_ms_max",
             "latest_event_monitor_publisher_maintenance_ms_total_sum",
             "latest_event_monitor_publisher_maintenance_ms_max",
+            "latest_event_monitor_publisher_manifest_checkpoint_count_sum",
+            "latest_event_monitor_publisher_manifest_checkpoint_ms_total_sum",
+            "latest_event_monitor_publisher_manifest_checkpoint_ms_max",
+            "latest_event_monitor_publisher_retention_run_count_sum",
+            "latest_event_monitor_publisher_retention_ms_total_sum",
+            "latest_event_monitor_publisher_retention_ms_max",
         )
     } == {
         "latest_event_pipeline_processed_total": 8,
@@ -4988,6 +5015,12 @@ def test_live_performance_report_resource_pressure_projects_event_pipeline_timin
         "latest_event_monitor_publisher_persist_ms_max": 0.6,
         "latest_event_monitor_publisher_maintenance_ms_total_sum": 0.8,
         "latest_event_monitor_publisher_maintenance_ms_max": 0.3,
+        "latest_event_monitor_publisher_manifest_checkpoint_count_sum": 3,
+        "latest_event_monitor_publisher_manifest_checkpoint_ms_total_sum": 0.2,
+        "latest_event_monitor_publisher_manifest_checkpoint_ms_max": 0.1,
+        "latest_event_monitor_publisher_retention_run_count_sum": 4,
+        "latest_event_monitor_publisher_retention_ms_total_sum": 0.3,
+        "latest_event_monitor_publisher_retention_ms_max": 0.15,
     }
 
 
@@ -5024,6 +5057,11 @@ def test_live_performance_report_resource_pressure_whitelists_health_fields(tmp_
             "latest"
         ]
         == 70
+    )
+    assert not any(
+        key.startswith("event_monitor_publisher_manifest_checkpoint")
+        or key.startswith("event_monitor_publisher_retention")
+        for key in report["resource_pressure"]["groups"][0]["fields"]
     )
     assert "balance_raw" not in rendered
     assert "balance_snapped" not in rendered
