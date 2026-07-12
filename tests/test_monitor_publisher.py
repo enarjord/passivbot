@@ -36,6 +36,7 @@ def test_monitor_publisher_writes_manifest_events_and_snapshot(tmp_path):
     event = publisher.record_event("bot.start", ("bot", "lifecycle"), {"status": "starting"}, ts=1000)
     assert event["seq"] == 1
     publisher.record_error("error.bot", RuntimeError("boom"), payload={"source": "test"}, ts=1001)
+    publisher.close()
 
     root = tmp_path / "bybit" / "user01"
     manifest = json.loads((root / "manifest.json").read_text())
@@ -188,6 +189,7 @@ def test_monitor_publisher_concurrent_event_writes_keep_seq_and_manifest(tmp_pat
     seqs = sorted(event["seq"] for event in results)
     assert seqs == list(range(1, n_threads * n_per_thread + 1))
 
+    publisher.close()
     root = tmp_path / "bybit" / "user01"
     manifest = json.loads((root / "manifest.json").read_text())
     assert manifest["last_seq"] == n_threads * n_per_thread
@@ -215,6 +217,264 @@ def test_monitor_disk_full_errors_are_coalesced(tmp_path, monkeypatch, caplog):
     disk_messages = [msg for msg in messages if "disk full" in msg]
     assert len(disk_messages) == 1
     assert "suppressing repeat disk-full monitor errors for 60s" in disk_messages[0]
+
+
+def test_monitor_manifest_coalesces_event_and_history_writes_within_cadence(
+    tmp_path, monkeypatch
+):
+    publisher = _make_publisher(tmp_path, snapshot_interval_seconds=1.0)
+    original_atomic_write = monitor_publisher_module._atomic_write_json
+    manifest_writes = []
+
+    def count_manifest_writes(path, payload):
+        if path == publisher.manifest_path:
+            manifest_writes.append(payload)
+        return original_atomic_write(path, payload)
+
+    monkeypatch.setattr(monitor_publisher_module, "_atomic_write_json", count_manifest_writes)
+    monkeypatch.setattr(publisher, "_monotonic_ms", lambda: 1_001)
+    publisher._last_manifest_write_monotonic_ms = 1_000
+    for offset in range(1, 6):
+        assert publisher.record_event("test.event", ("test",), ts=1_000 + offset)
+        assert publisher.record_history_entry(
+            "fills", "fill", {"id": offset}, ts=1_000 + offset
+        )
+
+    assert manifest_writes == []
+    assert publisher._manifest_dirty is True
+    root = tmp_path / "bybit" / "user01"
+    assert len((root / "events" / "current.ndjson").read_text().splitlines()) == 5
+    assert len((root / "history" / "fills.current.ndjson").read_text().splitlines()) == 5
+
+
+def test_monitor_manifest_checkpoints_latest_seq_after_cadence_expires(tmp_path, monkeypatch):
+    publisher = _make_publisher(tmp_path, snapshot_interval_seconds=1.0)
+    original_atomic_write = monitor_publisher_module._atomic_write_json
+    manifest_writes = []
+
+    def count_manifest_writes(path, payload):
+        if path == publisher.manifest_path:
+            manifest_writes.append(payload)
+        return original_atomic_write(path, payload)
+
+    monkeypatch.setattr(monitor_publisher_module, "_atomic_write_json", count_manifest_writes)
+    monkeypatch.setattr(publisher, "_monotonic_ms", lambda: 2_000)
+    publisher._last_manifest_write_monotonic_ms = 1_000
+    event = publisher.record_event("test.event", ("test",), ts=2_000)
+
+    assert event["seq"] == 1
+    assert len(manifest_writes) == 1
+    assert manifest_writes[0]["last_seq"] == 1
+    assert publisher._manifest_dirty is False
+
+
+def test_monitor_manifest_cadence_ignores_old_and_decreasing_record_timestamps(
+    tmp_path, monkeypatch
+):
+    publisher = _make_publisher(tmp_path, snapshot_interval_seconds=1.0)
+    original_atomic_write = monitor_publisher_module._atomic_write_json
+    manifest_writes = []
+
+    def count_manifest_writes(path, payload):
+        if path == publisher.manifest_path:
+            manifest_writes.append(payload)
+        return original_atomic_write(path, payload)
+
+    monkeypatch.setattr(monitor_publisher_module, "_atomic_write_json", count_manifest_writes)
+    monkeypatch.setattr(publisher, "_monotonic_ms", lambda: 1_001)
+    publisher._last_manifest_write_monotonic_ms = 1_000
+
+    assert publisher.record_history_entry("fills", "fill", {"id": 1}, ts=10_000)
+    assert publisher.record_history_entry("fills", "fill", {"id": 2}, ts=5_000)
+    assert publisher.record_history_entry("fills", "fill", {"id": 3}, ts=1)
+
+    assert manifest_writes == []
+    assert publisher._manifest_dirty is True
+
+
+def test_monitor_failed_due_manifest_checkpoint_retries_on_next_write(tmp_path, monkeypatch):
+    publisher = _make_publisher(tmp_path, snapshot_interval_seconds=1.0)
+    original_atomic_write = monitor_publisher_module._atomic_write_json
+    manifest_attempts = []
+
+    def fail_first_manifest_write(path, payload):
+        if path == publisher.manifest_path:
+            manifest_attempts.append(payload)
+            if len(manifest_attempts) == 1:
+                raise OSError(errno.ENOSPC, "No space left on device")
+        return original_atomic_write(path, payload)
+
+    monkeypatch.setattr(
+        monitor_publisher_module, "_atomic_write_json", fail_first_manifest_write
+    )
+    monkeypatch.setattr(publisher, "_monotonic_ms", lambda: 2_000)
+    publisher._last_manifest_write_monotonic_ms = 1_000
+
+    first = publisher.record_event("test.event", ("test",), ts=2_000)
+    assert first["seq"] == 1
+    assert publisher._manifest_dirty is True
+    assert publisher._manifest_retry_needed is True
+
+    second = publisher.record_event("test.event", ("test",), ts=2_001)
+    assert second["seq"] == 2
+    assert len(manifest_attempts) == 2
+    assert publisher._manifest_dirty is False
+    assert publisher._manifest_retry_needed is False
+    manifest = json.loads(publisher.manifest_path.read_text())
+    assert manifest["last_seq"] == 2
+
+
+def test_monitor_recovers_seq_from_stale_manifest_after_unclean_restart(tmp_path):
+    publisher = _make_publisher(tmp_path)
+    manifest = json.loads(publisher.manifest_path.read_text())
+    manifest["last_seq"] = 3
+    publisher.manifest_path.write_text(json.dumps(manifest) + "\n")
+    publisher.current_events_path.write_text(json.dumps({"seq": 8, "kind": "persisted"}) + "\n")
+
+    restarted = _make_publisher(tmp_path)
+    assert restarted.seq == 8
+    event = restarted.record_event("test.event", ("test",), ts=1_000)
+    assert event["seq"] == 9
+
+
+def test_monitor_recovery_skips_blank_malformed_and_invalid_utf8_trailing_rows(tmp_path):
+    publisher = _make_publisher(tmp_path)
+    manifest = json.loads(publisher.manifest_path.read_text())
+    manifest["last_seq"] = 3
+    publisher.manifest_path.write_text(json.dumps(manifest) + "\n")
+    publisher.current_events_path.write_bytes(
+        b'{"seq":8,"kind":"persisted"}\n\n{not-json}\n\xff\xfe\n'
+    )
+
+    restarted = _make_publisher(tmp_path)
+    assert restarted.seq == 8
+
+
+def test_monitor_recovery_reads_only_bounded_current_segment_tail(tmp_path, monkeypatch):
+    publisher = _make_publisher(tmp_path)
+    publisher.current_events_path.write_bytes(
+        b"x" * (monitor_publisher_module._CURRENT_EVENTS_TAIL_BYTES * 2)
+        + b'\n{"seq":42,"kind":"persisted"}'
+    )
+    original_open = open
+    read_sizes = []
+
+    class TrackingFile:
+        def __init__(self, file):
+            self.file = file
+
+        def __enter__(self):
+            self.file.__enter__()
+            return self
+
+        def __exit__(self, exc_type, exc_value, traceback):
+            return self.file.__exit__(exc_type, exc_value, traceback)
+
+        def __getattr__(self, name):
+            return getattr(self.file, name)
+
+        def read(self, size=-1):
+            read_sizes.append(size)
+            return self.file.read(size)
+
+    def tracking_open(path, *args, **kwargs):
+        file = original_open(path, *args, **kwargs)
+        if path == publisher.current_events_path and args and args[0] == "rb":
+            return TrackingFile(file)
+        return file
+
+    monkeypatch.setattr(monitor_publisher_module, "open", tracking_open, raising=False)
+
+    assert publisher._latest_valid_event_seq_in_current_segment() == 42
+    assert read_sizes == [monitor_publisher_module._CURRENT_EVENTS_TAIL_BYTES + 1]
+
+
+def test_monitor_event_rotation_forces_pre_and_post_manifest_checkpoints(tmp_path, monkeypatch):
+    publisher = _make_publisher(tmp_path, event_rotation_mb=0.00001)
+    publisher._last_manifest_write_monotonic_ms = publisher._monotonic_ms()
+    assert publisher.record_event("one", ("test",), ts=1_001)
+    original_write_manifest = publisher._write_manifest
+    checkpoints = []
+
+    def capture_checkpoint(**kwargs):
+        checkpoints.append((publisher.seq, publisher.current_segment_started_ms))
+        return original_write_manifest(**kwargs)
+
+    monkeypatch.setattr(publisher, "_write_manifest", capture_checkpoint)
+    assert publisher.record_event("two", ("test",), ts=1_002)
+
+    assert [seq for seq, _started_ms in checkpoints] == [1, 1]
+    assert checkpoints[0][1] != 1_002
+    assert checkpoints[1][1] == 1_002
+    manifest = json.loads(publisher.manifest_path.read_text())
+    assert manifest["last_seq"] == 1
+    assert manifest["current_segment_started_ms"] == 1_002
+
+
+def test_monitor_event_rotation_waits_for_successful_pre_rotation_checkpoint(
+    tmp_path, monkeypatch
+):
+    publisher = _make_publisher(tmp_path, event_rotation_mb=0.00001)
+    publisher._last_manifest_write_monotonic_ms = publisher._monotonic_ms()
+    assert publisher.record_event("one", ("test",), ts=1_001)
+    current_before = publisher.current_events_path.read_text()
+    original_write_manifest = publisher._write_manifest
+    attempts = []
+
+    def fail_first_checkpoint(**kwargs):
+        attempts.append(kwargs)
+        if len(attempts) == 1:
+            publisher._manifest_dirty = True
+            publisher._manifest_retry_needed = True
+            return False
+        return original_write_manifest(**kwargs)
+
+    monkeypatch.setattr(publisher, "_write_manifest", fail_first_checkpoint)
+
+    event = publisher.record_event("two", ("test",), ts=1_002)
+
+    assert event["seq"] == 2
+    assert current_before in publisher.current_events_path.read_text()
+    assert list(publisher.events_dir.glob("*.ndjson")) == [publisher.current_events_path]
+    assert publisher.current_segment_started_ms != 1_002
+    assert len(attempts) == 2
+    assert publisher._manifest_dirty is False
+    assert publisher._manifest_retry_needed is False
+    assert json.loads(publisher.manifest_path.read_text())["last_seq"] == 2
+
+    third = publisher.record_event("three", ("test",), ts=1_003)
+
+    assert third["seq"] == 3
+    rotated = [
+        path
+        for path in publisher.events_dir.glob("*.ndjson")
+        if path != publisher.current_events_path
+    ]
+    assert len(rotated) == 1
+    assert publisher.current_segment_started_ms == 1_003
+
+
+def test_monitor_history_rotation_snapshot_and_close_force_manifest_checkpoints(
+    tmp_path, monkeypatch
+):
+    publisher = _make_publisher(tmp_path, event_rotation_mb=0.00001)
+    publisher._last_manifest_write_monotonic_ms = publisher._monotonic_ms()
+    original_write_manifest = publisher._write_manifest
+    checkpoints = []
+
+    def capture_checkpoint(**kwargs):
+        checkpoints.append((publisher.seq, dict(publisher.history_segment_started_ms)))
+        return original_write_manifest(**kwargs)
+
+    monkeypatch.setattr(publisher, "_write_manifest", capture_checkpoint)
+    assert publisher.record_history_entry("fills", "fill", {"id": 1}, ts=1_001)
+    assert publisher.record_history_entry("fills", "fill", {"id": 2}, ts=1_002)
+    assert len(checkpoints) == 1
+    assert checkpoints[0][1]["fills"] == 1_002
+
+    assert publisher.write_snapshot({"account": {}}, ts=1_003, force=True)
+    publisher.close()
+    assert len(checkpoints) == 3
 
 
 def test_monitor_publisher_event_phase_timing_uses_fixed_boundaries(tmp_path, monkeypatch):
@@ -266,7 +526,7 @@ def test_monitor_publisher_event_phase_timing_uses_fixed_boundaries(tmp_path, mo
     )
     monkeypatch.setattr(
         publisher,
-        "_write_manifest",
+        "_write_manifest_if_due",
         lambda **_kwargs: clock.__setitem__("ns", clock["ns"] + 7_000_000),
     )
     monkeypatch.setattr(

@@ -19,6 +19,7 @@ _MONITOR_EVENT_PHASE_TIMING_KEYS = (
     "persist_ns",
     "maintenance_ns",
 )
+_CURRENT_EVENTS_TAIL_BYTES = 64 * 1024
 
 
 def _empty_monitor_event_phase_timing() -> dict[str, int]:
@@ -133,8 +134,12 @@ class MonitorPublisher:
         self._disk_full_suppressed = 0
         self._lock = threading.RLock()
         self.seq = 0
+        self._manifest_dirty = False
+        self._manifest_retry_needed = False
+        self._last_manifest_write_monotonic_ms: Optional[int] = None
         self._ensure_layout()
         self._load_manifest_state()
+        self._recover_seq_from_current_events()
         self._write_manifest()
 
     @classmethod
@@ -160,6 +165,9 @@ class MonitorPublisher:
 
     def _now_ms(self) -> int:
         return int(time.time() * 1000)
+
+    def _monotonic_ms(self) -> int:
+        return int(time.monotonic() * 1000)
 
     def _ensure_layout(self) -> None:
         for path in (self.root, self.events_dir, self.history_dir, self.checkpoints_dir):
@@ -200,6 +208,46 @@ class MonitorPublisher:
                 }
         except Exception:
             self.history_segment_started_ms = {}
+
+    def _recover_seq_from_current_events(self) -> None:
+        latest_seq = self._latest_valid_event_seq_in_current_segment()
+        if latest_seq is not None:
+            self.seq = max(self.seq, latest_seq)
+
+    def _latest_valid_event_seq_in_current_segment(self) -> Optional[int]:
+        """Return the latest valid event seq from a fixed-size tail of the active segment."""
+        try:
+            with open(self.current_events_path, "rb") as f:
+                f.seek(0, os.SEEK_END)
+                end_offset = f.tell()
+                start_offset = max(0, end_offset - _CURRENT_EVENTS_TAIL_BYTES)
+                read_offset = max(0, start_offset - 1)
+                f.seek(read_offset)
+                tail = f.read(end_offset - read_offset)
+        except OSError as exc:
+            logging.warning(
+                "[monitor] unable to read current event segment %s: %s",
+                self.current_events_path,
+                exc,
+            )
+            return None
+
+        rows = tail.splitlines()
+        if start_offset and tail[:1] not in (b"\n", b"\r") and rows:
+            rows = rows[1:]
+        for raw_row in reversed(rows):
+            raw_row = raw_row.strip()
+            if not raw_row:
+                continue
+            try:
+                row = json.loads(raw_row.decode("utf-8"))
+                seq = row["seq"]
+            except (UnicodeDecodeError, json.JSONDecodeError, KeyError, TypeError):
+                continue
+            if isinstance(seq, bool) or not isinstance(seq, int) or seq < 0:
+                continue
+            return seq
+        return None
 
     def _build_manifest(self, now_ms: Optional[int] = None) -> dict:
         now_ms = self._now_ms() if now_ms is None else int(now_ms)
@@ -253,12 +301,37 @@ class MonitorPublisher:
             },
         }
 
-    def _write_manifest(self, now_ms: Optional[int] = None) -> None:
+    def _mark_manifest_dirty(self) -> None:
+        self._manifest_dirty = True
+
+    def _write_manifest(self, now_ms: Optional[int] = None) -> bool:
         with self._lock:
             try:
                 _atomic_write_json(self.manifest_path, self._build_manifest(now_ms=now_ms))
             except Exception as exc:
+                self._manifest_dirty = True
+                self._manifest_retry_needed = True
                 self._log_write_failure("writing manifest", exc)
+                return False
+            self._manifest_dirty = False
+            self._manifest_retry_needed = False
+            self._last_manifest_write_monotonic_ms = self._monotonic_ms()
+            return True
+
+    def _write_manifest_if_due(self, now_ms: Optional[int] = None) -> bool:
+        with self._lock:
+            if not self._manifest_dirty:
+                return False
+            cadence_now_ms = self._monotonic_ms()
+            if (
+                self._manifest_retry_needed
+                or self._last_manifest_write_monotonic_ms is None
+                or cadence_now_ms < self._last_manifest_write_monotonic_ms
+                or cadence_now_ms - self._last_manifest_write_monotonic_ms
+                >= self.snapshot_interval_ms
+            ):
+                return self._write_manifest(now_ms=now_ms)
+            return False
 
     def _log_write_failure(self, action: str, exc: BaseException) -> None:
         if not _is_disk_full_error(exc):
@@ -380,11 +453,15 @@ class MonitorPublisher:
                 rotated = self._rotated_path(
                     self.events_dir, self._segment_label(now_ms), ".ndjson"
                 )
+                # Preserve the current sequence before the active segment moves.
+                if not self._write_manifest(now_ms=now_ms):
+                    return
                 os.replace(self.current_events_path, rotated)
                 if self.compress_rotated_segments:
                     rotated = self._gzip_file(rotated)
                 self.current_events_path.touch()
                 self.current_segment_started_ms = now_ms
+                self._mark_manifest_dirty()
                 self._write_manifest(now_ms=now_ms)
                 self._prune_retention(now_ms=now_ms)
             except Exception as exc:
@@ -420,6 +497,7 @@ class MonitorPublisher:
                     rotated = self._gzip_file(rotated)
                 current_path.touch()
                 self.history_segment_started_ms[stream] = now_ms
+                self._mark_manifest_dirty()
                 self._write_manifest(now_ms=now_ms)
                 self._prune_retention(now_ms=now_ms)
             except Exception as exc:
@@ -466,7 +544,8 @@ class MonitorPublisher:
                 )
                 with open(current_path, "a", encoding="utf-8") as f:
                     f.write(line + "\n")
-                self._write_manifest(now_ms=now_ms)
+                self._mark_manifest_dirty()
+                self._write_manifest_if_due(now_ms=now_ms)
                 self._prune_retention(now_ms=now_ms)
                 return envelope
             except Exception as exc:
@@ -650,7 +729,8 @@ class MonitorPublisher:
 
                 maintenance_started_ns = time.monotonic_ns()
                 try:
-                    self._write_manifest(now_ms=now_ms)
+                    self._mark_manifest_dirty()
+                    self._write_manifest_if_due(now_ms=now_ms)
                     self._prune_retention(now_ms=now_ms)
                 finally:
                     timing["maintenance_ns"] = max(
@@ -704,6 +784,7 @@ class MonitorPublisher:
                 payload["meta"] = meta
                 _atomic_write_json(self.state_latest_path, payload)
                 self.last_snapshot_ms = now_ms
+                self._write_manifest(now_ms=now_ms)
                 if self.checkpoint_interval_ms > 0 and (
                     force or now_ms - self.last_checkpoint_ms >= self.checkpoint_interval_ms
                 ):
@@ -716,7 +797,6 @@ class MonitorPublisher:
                     if self.compress_rotated_segments:
                         self._gzip_file(checkpoint)
                     self.last_checkpoint_ms = now_ms
-                self._write_manifest(now_ms=now_ms)
                 self._prune_retention(now_ms=now_ms)
                 return True
             except Exception as exc:

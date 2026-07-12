@@ -378,10 +378,13 @@ classification when enough source events exist.
     PR #1200 added per-heartbeat queue-wait and worker sink-service
     count/total/max source evidence without affecting delivery. PR #1203
     attributed worker service to fixed structured and monitor sink classes with
-    per-window write counts and service total/max. Deployed evidence localized
-    the long tail to the monitor sink; the active follow-up attributes real
+    per-window write counts and service total/max. PR #1204 attributed real
     monitor writes to fixed conversion, publisher lock-wait, rotation,
-    persistence, and maintenance phases.
+    persistence, and maintenance phases. Fresh VPS5 evidence found maintenance
+    was 88.08% of cumulative monitor service while a separate 1,661.187ms lock
+    wait dominated the worst individual write. The active follow-up coalesces
+    best-effort manifest checkpoints to the existing snapshot cadence and adds
+    bounded crash-safe event-sequence recovery without changing delivery.
 - [ ] Exchange writes: create/cancel/close/panic write latency, exchange
   response latency, ambiguous write rate, confirmation latency.
   - Status: partial. The report now derives order-wave total duration,

@@ -4,6 +4,13 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Monitor event and history appends now coalesce the best-effort manifest
+  checkpoint to the existing snapshot cadence while forcing it at lifecycle
+  and rotation boundaries. Startup also recovers the event sequence from a
+  bounded tail scan when an unclean exit leaves the manifest stale, avoiding
+  ordinary sequence reuse without changing NDJSON append durability or trading
+  behavior.
+
 - Periodic structured health summaries now split real monitor-sink service time
   into fixed event-conversion, publisher lock-wait, rotation, persistence, and
   maintenance totals/maxima. Live smoke and performance reports project the
