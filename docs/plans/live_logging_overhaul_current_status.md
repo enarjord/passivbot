@@ -22,50 +22,60 @@ Estimated completion:
 
 ## Active Review Slice
 
-- Branch: `codex/v8-connector-invocation-events`
-- Base: `fda0e1323135a3db1bc69ff154d066d103ac6c9e`
-- Triggering evidence: existing `execution.create_sent` and
-  `execution.cancel_sent` events are emitted before the batch executor reaches
-  a concrete connector call. They prove submission intent but not local
-  arrival at `cca.create_order` or `cca.cancel_order`.
-- Scope: emit bounded structured/monitor-only
-  `execution.create_connector_call_started` and
-  `execution.cancel_connector_call_started` events immediately before the
-  concrete base, Hyperliquid, and OKX connector call sites. Preserve normal
-  cycle, order-wave, and action correlation without adding fields to connector
-  payloads.
-- Behavior boundary: observability only. The events claim local call-site
-  arrival, not bytes sent, exchange receipt, acceptance, or acknowledgement.
-  Event failures must not prevent or alter connector calls. Do not add another
-  startup milestone or change order, risk, HSL, Rust, backtest, or optimizer
-  behavior.
-- Validation: focused and adjacent event/executor/connector/report tests, full
-  fake-live marker suite, Python compilation, `git diff --check`, added-line
-  silent-handling audit, and independent preflight.
+- Branch: `codex/v8-startup-fill-cache-proof`
+- Base: `e94da301bbaa52786e0cb218fa27f48263b80e6d`
+- Triggering evidence: startup lifecycle and fill-refresh evidence are reported
+  separately. Operators cannot yet correlate a current-startup cache load with
+  exact fill-history coverage proof or distinguish their observed ordering and
+  relation to relevant readiness phases.
+- Scope: add one bounded `startup_fill_cache_proof` performance-report section
+  that joins existing `bot.started`, startup timing, and
+  `fills.refresh_summary` evidence within the current lifecycle. Distinguish
+  cache presence from exact coverage proof, expose their observed ordering, and
+  preserve explicit unknown output when source completeness or proof evidence
+  is insufficient.
+- Behavior boundary: read-only report and tests only. Do not add or reinterpret
+  a startup/readiness/risk gate, infer proof from cache load, alter existing
+  startup/fill sections, or change live producer, order, HSL, Rust, backtest,
+  optimizer, exchange, or process behavior.
+- Validation: focused and full performance-report tests, Python compilation,
+  `git diff --check`, added-line silent-handling audit, and independent
+  preflight.
 - Publication state, exact head, mergeability, CI, and current-head reviewer
   verdicts: query live GitHub metadata; do not embed self-invalidating values.
-- Expected VPS action: pull while preserving local artifacts, gracefully
-  restart only the five exact supervised bot panes because this is a producer
-  change, query the call-boundary chain only when legitimate order activity
-  occurs, and run immediate plus settled smoke. Do not create synthetic live
-  orders for validation.
+- Expected VPS action: pull while preserving local artifacts, run a bounded
+  current-plus-rotated `startup_fill_cache_proof` report and settled smoke, and
+  verify bot plus unrelated-process PIDs remain unchanged. Do not restart bots
+  because this slice changes only a read-only consumer.
 
 Next action:
 
-1. Wait for the temporary Hermes + Grok 4.5 + green-CI gate on the exact current
-   PR head. After merge, pull `v8` on VPS5, gracefully restart only the five
-   exact supervised bot panes, query the call-boundary chain from legitimate
-   order activity, and complete immediate plus settled smoke while preserving
-   unrelated processes and local artifacts.
+1. Complete local validation and independent preflight, publishing the branch
+   if it is not already a PR. Once published, wait for the temporary Hermes +
+   Grok 4.5 + green-CI gate on the exact current head. After merge, pull `v8`
+   on VPS5 without restarting bots, run the bounded proof report and settled
+   smoke, and verify all expected PIDs are unchanged.
 
 ## Deployed Baseline
 
-- Remote `v8`: `fda0e1323135a3db1bc69ff154d066d103ac6c9e`, PR #1197
-- VPS5 repository: `fda0e1323135a3db1bc69ff154d066d103ac6c9e`, PR #1197; tracked
+- Remote `v8`: `e94da301bbaa52786e0cb218fa27f48263b80e6d`, PR #1198
+- VPS5 repository: `e94da301bbaa52786e0cb218fa27f48263b80e6d`, PR #1198; tracked
   status clean; only expected untracked artifacts were preserved
-- VPS5 expected bots: five; all still running with the PR #1196 restart PIDs
-  `856325/856354/856386/856420/856456`;
+- VPS5 expected bots: five; running with PR #1198 restart PIDs
+  `861950/861949/861953/861955/861957`;
   unrelated `misc:0.0` remains PID `434835`
+- PR #1198 merged after exact-head Hermes and Grok 4.5 approval plus green CI.
+  VPS5 fast-forwarded cleanly and gracefully stopped only the five exact bot
+  panes; all old Python PIDs exited naturally. Existing pane PIDs and unrelated
+  `misc:0.0` PID `434835` were preserved, then the exact supervisor commands
+  started the five new bots.
+- The immediate smoke retained a real KuCoin authoritative-state timeout:
+  `264/267` remote and `15/18` account-critical calls succeeded. After recovery,
+  the settled two-minute smoke was hard-green with `325/325` remote and `53/53`
+  account-critical calls successful, all five expected processes matched, no
+  hard/log/monitor/pipeline failures, no `D` states, and a clean tracked repo.
+  Current post-restart segments contained neither `execution.*_sent` nor
+  connector-call events, so no live order was fabricated for validation.
 - PR #1197 merged after exact-head Hermes and Grok 4.5 approval plus green CI.
   VPS5 fast-forwarded without bot signals or restarts. A bounded eight-segment
   Binance lifecycle report returned `ok=true` with zero issues and observed
@@ -244,14 +254,14 @@ throughput, PR #1191's corrected active/legacy-terminal replay estimates,
 PR #1192's machine-readable startup readiness SLA semantics, PR #1193's
 latest-lifecycle report ordering, PR #1194's bounded startup action milestones,
 PR #1195's startup consumer correctness fixes, PR #1196's true fresh-entry
-eligibility producer, and PR #1197's fresh-entry startup milestone are also
-merged and deployed. The active PR #1198 slice adds the missing local
-connector-call boundary evidence without claiming exchange receipt or outcome.
+eligibility producer, PR #1197's fresh-entry startup milestone, and PR #1198's
+local connector-call boundary evidence are also merged and deployed. The active
+slice correlates existing startup fill-cache and exact history-proof evidence
+without changing either producer or any readiness decision.
 
-After PR #1198 is merged and validated, select the next review-worthy
+After this report slice is merged and validated, select the next review-worthy
 candidate from the remaining backlog, including:
 
-- bounded startup fill-cache proof correlation/reporting
 - bounded event-pipeline service-time evidence
 - bounded operator tooling improvements sharing one code and validation surface
 

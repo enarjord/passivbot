@@ -1905,6 +1905,401 @@ class _StartupMilestoneAccumulator:
         }
 
 
+class _StartupFillCacheProofAccumulator:
+    """Derive bounded fill-history coverage evidence for each current lifecycle."""
+
+    _CACHE_STATUSES = frozenset({"deferred", "failed", "succeeded"})
+    _CACHE_REASONS = frozenset({"fill_cache_ready"})
+    _COVERAGE_REASONS = frozenset(
+        {
+            "full_history",
+            "full_history_scope_not_proven",
+            "known_gap_overlaps_lookback",
+            "missing_cache",
+            "missing_pnl_manager",
+            "window_coverage_not_proven",
+            "window_covered",
+        }
+    )
+    _HISTORY_SCOPES = frozenset({"all", "unknown", "window"})
+    _GAP_REASONS = frozenset(
+        {
+            "auto_detected",
+            "confirmed_legitimate",
+            "fetch_failed",
+            "manual",
+            "unknown",
+        }
+    )
+
+    def __init__(
+        self,
+        *,
+        source_completeness: _StartupSourceCompletenessTracker | None = None,
+    ) -> None:
+        self.bots: dict[str, dict[str, Any]] = {}
+        self.source_completeness = (
+            source_completeness or _StartupSourceCompletenessTracker()
+        )
+
+    @staticmethod
+    def _event_ts(row: dict[str, Any]) -> int | None:
+        value = row.get("ts")
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            return None
+        return int(value)
+
+    @staticmethod
+    def _bounded_enum(value: Any, allowed: frozenset[str]) -> str | None:
+        label = _safe_label(value, max_len=120)
+        if label is None:
+            return None
+        return label if label in allowed else "other"
+
+    @staticmethod
+    def _cache_load_summary(live_event: dict[str, Any]) -> dict[str, Any] | None:
+        data = live_event.get("data")
+        if not isinstance(data, dict):
+            return None
+        if data.get("source") != "startup" or data.get("refresh_mode") != "cache_load":
+            return None
+        summary: dict[str, Any] = {}
+        status = _StartupFillCacheProofAccumulator._bounded_enum(
+            live_event.get("status"),
+            _StartupFillCacheProofAccumulator._CACHE_STATUSES,
+        )
+        if status is not None:
+            summary["status"] = status
+        reason = _StartupFillCacheProofAccumulator._bounded_enum(
+            live_event.get("reason_code"),
+            _StartupFillCacheProofAccumulator._CACHE_REASONS,
+        )
+        if reason is not None:
+            summary["reason"] = reason
+        history_scope = _StartupFillCacheProofAccumulator._bounded_enum(
+            data.get("history_scope"),
+            _StartupFillCacheProofAccumulator._HISTORY_SCOPES,
+        )
+        if history_scope is not None:
+            summary["history_scope"] = history_scope
+        return summary
+
+    @staticmethod
+    def _proof_summary(live_event: dict[str, Any]) -> dict[str, Any] | None:
+        data = live_event.get("data")
+        if not isinstance(data, dict):
+            return None
+        coverage_after = data.get("coverage_after")
+        if not isinstance(coverage_after, dict):
+            return None
+        ready = coverage_after.get("ready")
+        if not isinstance(ready, bool):
+            return None
+        summary: dict[str, Any] = {"ready": ready}
+        enum_fields = {
+            "reason": _StartupFillCacheProofAccumulator._COVERAGE_REASONS,
+            "history_scope": _StartupFillCacheProofAccumulator._HISTORY_SCOPES,
+            "gap_reason": _StartupFillCacheProofAccumulator._GAP_REASONS,
+        }
+        for key, allowed in enum_fields.items():
+            value = _StartupFillCacheProofAccumulator._bounded_enum(
+                coverage_after.get(key), allowed
+            )
+            if value is not None:
+                summary[key] = value
+        for key in ("covered_start_ms", "oldest_event_ts", "gap_start_ts", "gap_end_ts"):
+            value = coverage_after.get(key)
+            if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+                summary[key] = int(value)
+        return summary
+
+    def _discard_superseded_state(self, bot: str) -> None:
+        state = self.bots.get(bot)
+        if state is None:
+            return
+        retained: dict[str, Any] = {}
+        for key, candidate in state.items():
+            if key == "bot" or candidate is None:
+                continue
+            if not self.source_completeness.supersedes(
+                bot=bot,
+                event_order=candidate[0],
+            ):
+                retained[key] = candidate
+        if not retained:
+            self.bots.pop(bot, None)
+            return
+        state.clear()
+        state.update({"bot": bot, **retained})
+
+    @staticmethod
+    def _candidate_is_after(
+        candidate: tuple[Any, ...], started_order: tuple[str, int, str, int, int, int]
+    ) -> bool:
+        return candidate[0] > started_order and bool(candidate[-1])
+
+    @staticmethod
+    def _replace_earliest(
+        state: dict[str, Any], key: str, candidate: tuple[Any, ...]
+    ) -> None:
+        existing = state.get(key)
+        if existing is None or candidate[0] < existing[0]:
+            state[key] = candidate
+
+    @staticmethod
+    def _replace_latest(
+        state: dict[str, Any], key: str, candidate: tuple[Any, ...]
+    ) -> None:
+        existing = state.get(key)
+        if existing is None or candidate[0] > existing[0]:
+            state[key] = candidate
+
+    def add(
+        self,
+        *,
+        row: dict[str, Any],
+        live_event: dict[str, Any],
+        source_complete: bool = True,
+    ) -> None:
+        event_type = str(live_event.get("event_type") or row.get("kind") or "")
+        bot = _bot_key(row, live_event)
+        event_order = _startup_event_order_key(row)
+        self.source_completeness.observe(
+            row=row,
+            live_event=live_event,
+            source_complete=source_complete,
+        )
+        self._discard_superseded_state(bot)
+
+        if event_type == "bot.started":
+            existing_state = self.bots.get(bot)
+            previous_started = (
+                existing_state.get("started") if existing_state is not None else None
+            )
+            if previous_started is not None and event_order <= previous_started[0]:
+                return
+            if (
+                previous_started is None
+                and self.source_completeness.supersedes(
+                    bot=bot,
+                    event_order=event_order,
+                )
+            ):
+                return
+            retained: dict[str, Any] = {}
+            if existing_state is not None:
+                for key, candidate in existing_state.items():
+                    if key == "bot" or candidate is None:
+                        continue
+                    if self._candidate_is_after(candidate, event_order):
+                        retained[key] = candidate
+            state = self.bots.setdefault(bot, {"bot": bot})
+            state.clear()
+            state.update(
+                {
+                    "bot": bot,
+                    "started": (
+                        event_order,
+                        self._event_ts(row),
+                        bool(source_complete),
+                    ),
+                    **retained,
+                }
+            )
+            return
+
+        cache_load = (
+            self._cache_load_summary(live_event)
+            if event_type == "fills.refresh_summary"
+            else None
+        )
+        proof = (
+            self._proof_summary(live_event)
+            if event_type == "fills.refresh_summary"
+            else None
+        )
+        phase = None
+        if event_type == "bot.startup_timing":
+            phase = startup_timing_phase(live_event.get("data"))
+            if phase not in {"hsl", "startup"}:
+                phase = None
+        if cache_load is None and proof is None and phase is None:
+            return
+
+        existing_state = self.bots.get(bot)
+        if (
+            existing_state is None
+            and self.source_completeness.supersedes(
+                bot=bot,
+                event_order=event_order,
+            )
+        ):
+            return
+        state = self.bots.setdefault(bot, {"bot": bot})
+        started = state.get("started")
+        if started is not None and event_order <= started[0]:
+            return
+        # Retain the newer incomplete-source boundary while older rotated rows
+        # are processed so they cannot repopulate stale lifecycle evidence.
+        self._replace_latest(
+            state,
+            "source_observation",
+            (event_order, bool(source_complete)),
+        )
+
+        if cache_load is not None:
+            cache_candidate = (
+                event_order,
+                cache_load,
+                self._event_ts(row),
+                bool(source_complete),
+            )
+            self._replace_earliest(
+                state,
+                "cache_load" if cache_candidate[2] is not None else "invalid_cache_load",
+                cache_candidate,
+            )
+        if proof is not None:
+            candidate = (
+                event_order,
+                proof,
+                self._event_ts(row),
+                bool(source_complete),
+            )
+            if candidate[2] is None:
+                self._replace_latest(state, "invalid_proof", candidate)
+            elif proof["ready"]:
+                self._replace_earliest(state, "first_ready_proof", candidate)
+            else:
+                self._replace_latest(state, "latest_unproven_proof", candidate)
+        if phase is not None:
+            phase_candidate = (
+                event_order,
+                self._event_ts(row),
+                bool(source_complete),
+            )
+            if phase_candidate[1] is not None and phase_candidate[2]:
+                self._replace_earliest(state, f"first_{phase}_phase", phase_candidate)
+                self._replace_latest(state, f"last_{phase}_phase", phase_candidate)
+
+    @staticmethod
+    def _phase_relation(
+        state: dict[str, Any],
+        proof: tuple[Any, ...] | None,
+        *,
+        lifecycle_source_complete: bool,
+    ) -> str:
+        if not lifecycle_source_complete or proof is None or proof[2] is None:
+            return "unknown"
+        proof_order = proof[0]
+        proof_ts = int(proof[2])
+        first_startup = state.get("first_startup_phase")
+        if (
+            first_startup is not None
+            and first_startup[0] < proof_order
+            and int(first_startup[1]) <= proof_ts
+        ):
+            return "after_startup"
+        last_hsl = state.get("last_hsl_phase")
+        if (
+            last_hsl is not None
+            and last_hsl[0] > proof_order
+            and int(last_hsl[1]) >= proof_ts
+        ):
+            return "before_hsl"
+        first_hsl = state.get("first_hsl_phase")
+        if (
+            first_hsl is not None
+            and first_hsl[0] < proof_order
+            and int(first_hsl[1]) <= proof_ts
+        ):
+            return "after_hsl"
+        return "unknown"
+
+    def to_dict(self, *, group_limit: int = GROUP_LIMIT) -> dict[str, Any]:
+        bot_items: list[dict[str, Any]] = []
+        for bot, state in sorted(self.bots.items()):
+            started = state.get("started")
+            proof = (
+                state.get("first_ready_proof")
+                or state.get("latest_unproven_proof")
+                or state.get("invalid_proof")
+            )
+            lifecycle_source_complete = bool(
+                started is not None
+                and started[2]
+                and (proof is None or proof[3])
+            )
+            item: dict[str, Any] = {
+                "bot": bot,
+                "lifecycle_source_complete": lifecycle_source_complete,
+                "status": "unknown",
+                "cache_load_relation": "not_observed",
+                "startup_phase_relation": "unknown",
+            }
+            started_ts = started[1] if started is not None else None
+            if started_ts is not None:
+                item["bot_started_ts"] = int(started_ts)
+            if started is None:
+                bot_items.append(item)
+                continue
+
+            cache_load = state.get("cache_load") or state.get("invalid_cache_load")
+            if cache_load is not None and cache_load[1]:
+                cache_load_summary = dict(cache_load[1])
+                cache_load_ts = cache_load[2]
+                if cache_load_ts is not None:
+                    cache_load_summary["ts_ms"] = int(cache_load_ts)
+                    if started_ts is not None and int(cache_load_ts) >= int(started_ts):
+                        cache_load_summary["elapsed_ms_from_start"] = int(
+                            cache_load_ts
+                        ) - int(started_ts)
+                item["cache_load"] = cache_load_summary
+
+            if cache_load is not None and proof is not None:
+                if cache_load[0] < proof[0]:
+                    item["cache_load_relation"] = "before_proof"
+                elif cache_load[0] > proof[0]:
+                    item["cache_load_relation"] = "after_proof"
+                else:
+                    item["cache_load_relation"] = "same_event"
+
+            proof_ts = proof[2] if proof is not None else None
+            if proof is not None and proof_ts is not None:
+                item["proof"] = dict(proof[1])
+            if (
+                proof is not None
+                and lifecycle_source_complete
+                and started_ts is not None
+                and proof_ts is not None
+                and int(proof_ts) >= int(started_ts)
+            ):
+                item["status"] = "proven" if proof[1]["ready"] else "unproven"
+                item["proof_elapsed_ms_from_start"] = int(proof_ts) - int(started_ts)
+                item["startup_phase_relation"] = self._phase_relation(
+                    state,
+                    proof,
+                    lifecycle_source_complete=lifecycle_source_complete,
+                )
+            bot_items.append(item)
+
+        limit = max(0, int(group_limit))
+        status_counts = Counter(str(item.get("status") or "unknown") for item in bot_items)
+        proof_elapsed_values = [
+            int(item["proof_elapsed_ms_from_start"])
+            for item in bot_items
+            if isinstance(item.get("proof_elapsed_ms_from_start"), int)
+            and not isinstance(item.get("proof_elapsed_ms_from_start"), bool)
+        ]
+        return {
+            "bot_count": len(bot_items),
+            "status_counts": dict(sorted(status_counts.items())),
+            "proof_elapsed_ms": _number_summary(proof_elapsed_values),
+            "bots_truncated": len(bot_items) > limit,
+            "bots": bot_items[:limit],
+        }
+
+
 def _bounded_hsl_replay_data(data: Any) -> dict[str, Any]:
     if not isinstance(data, dict):
         return {}
@@ -4749,6 +5144,9 @@ def build_live_performance_report(
     startup_milestones = _StartupMilestoneAccumulator(
         source_completeness=startup_source_completeness
     )
+    startup_fill_cache_proof = _StartupFillCacheProofAccumulator(
+        source_completeness=startup_source_completeness
+    )
     report_ts_ms = utc_ms()
     hsl_replay_profile = _HslReplayProfileAccumulator()
     cache_warmup = _CacheWarmupAccumulator()
@@ -4862,6 +5260,11 @@ def build_live_performance_report(
             live_event=live_event,
             source_complete=source_complete,
         )
+        startup_fill_cache_proof.add(
+            row=row,
+            live_event=live_event,
+            source_complete=source_complete,
+        )
         hsl_replay_profile.add(row=row, live_event=live_event)
         cache_warmup.add(row=row, live_event=live_event)
         fill_refresh.add(row=row, live_event=live_event)
@@ -4959,6 +5362,9 @@ def build_live_performance_report(
             report_ts_ms=report_ts_ms,
         ),
         "startup_milestones": startup_milestones.to_dict(group_limit=group_limit),
+        "startup_fill_cache_proof": startup_fill_cache_proof.to_dict(
+            group_limit=group_limit
+        ),
         "hsl_replay_profile": hsl_replay_profile.to_dict(
             group_limit=group_limit,
             report_ts_ms=report_ts_ms,
@@ -5102,6 +5508,17 @@ def summarize_live_performance_report(
         if len(milestone_bots) > max(0, int(group_limit)):
             startup_milestones["bots_truncated"] = True
         summary["startup_milestones"] = startup_milestones
+    if isinstance(report.get("startup_fill_cache_proof"), dict):
+        startup_fill_cache_proof = dict(report["startup_fill_cache_proof"])
+        proof_bots = (
+            startup_fill_cache_proof.get("bots")
+            if isinstance(startup_fill_cache_proof.get("bots"), list)
+            else []
+        )
+        startup_fill_cache_proof["bots"] = proof_bots[: max(0, int(group_limit))]
+        if len(proof_bots) > max(0, int(group_limit)):
+            startup_fill_cache_proof["bots_truncated"] = True
+        summary["startup_fill_cache_proof"] = startup_fill_cache_proof
     if isinstance(report.get("hsl_replay_profile"), dict):
         hsl_replay_profile = dict(report["hsl_replay_profile"])
         hsl_groups = (

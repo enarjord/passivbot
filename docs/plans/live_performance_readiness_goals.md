@@ -317,9 +317,9 @@ classification when enough source events exist.
   because its tolerated warmup failure cannot prove readiness.
   PR #1194 derives the first cycle, first Rust call, and first locally submitted
   exchange write from existing events. PR #1196 added true local fresh-entry
-  eligibility evidence; the active consumer projects its first qualifying
-  event as startup readiness. Remaining work is actual connector-invocation
-  evidence rather than another pre-call proxy.
+  eligibility evidence, and PR #1197 projects its first qualifying event as
+  startup readiness. PR #1198 adds distinct local connector-call boundary
+  evidence without claiming exchange receipt or acknowledgement.
 - [ ] Startup: process start to held-position protective HSL ready.
 - [ ] Startup: process start to fresh-entry ready.
 - [ ] Startup: process start to first planning cycle started/completed.
@@ -341,8 +341,9 @@ classification when enough source events exist.
     summarized by `live-performance-report` as `cache_warmup`, including
     bounded warm-cache reuse/cold-path decisions, candle load/flush row counts,
     source/reason counters, and elapsed timing where present. Remaining work:
-    fill-cache coverage proof, HSL/checkpoint compatibility decisions, repair
-    scope, and repair elapsed time.
+    the active report slice correlates existing fill-cache load and exact
+    coverage-proof evidence to the current startup lifecycle. HSL/checkpoint
+    compatibility decisions, repair scope, and repair elapsed time remain.
 - [ ] Account state: balance, positions, open orders, fills, state-refresh wall
   time, surface max/sum time, retry/degraded counts.
 - [ ] Market data: ticker/market price age, candle close age, EMA bundle age,
