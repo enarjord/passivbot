@@ -22,6 +22,7 @@ Estimated completion:
 
 ## Active Review Slice
 
+- PR #1194, `Report startup action milestones`
 - Branch: `codex/v8-startup-action-milestones`
 - Base: `60f1f042dfbe7ece2f3f56faa0e3fdf9c4299d74`
 - Triggering evidence: existing `cycle.started`, `rust_orchestrator.called`, and

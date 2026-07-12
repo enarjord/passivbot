@@ -7617,6 +7617,7 @@ VPS5 deployment status:
 
 ### Active Slice: Startup Action Milestones
 
+- PR #1194, `Report startup action milestones`.
 - Branch: `codex/v8-startup-action-milestones` from deployed `60f1f042d`.
 - Scope: add a bounded read-only `startup_milestones` performance-report
   section deriving the current lifecycle's first cycle, first Rust call, and
