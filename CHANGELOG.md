@@ -4,6 +4,11 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- `live-performance-report` now correlates current-startup fill-cache loading
+  with exact post-start fill-history coverage proof. Cache presence alone never
+  claims proof, cache/proof ordering is explicit, and incomplete or absent
+  lifecycle evidence remains unknown.
+
 - Live order writes now emit bounded structured/monitor evidence immediately
   before concrete connector create and cancel calls. The events distinguish
   local connector-call arrival from pre-call submission intent and exchange

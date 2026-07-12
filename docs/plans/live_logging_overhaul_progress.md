@@ -7767,3 +7767,35 @@ VPS5 deployment status:
   or exchange-error behavior change. Expected VPS action is an exact five-bot
   graceful restart, legitimate-activity event query, and immediate plus settled
   smoke; validation must not create synthetic live orders.
+
+### Deployed Slice: Connector Call Boundary Evidence
+
+- PR #1198 was approved by Hermes and Grok 4.5 on exact head `c13d27143`; CI
+  passed and it merged to `v8` as `e94da301b`.
+- VPS5 fast-forwarded cleanly and gracefully stopped only the five exact bot
+  panes. All old Python processes exited naturally. Existing pane PIDs and
+  unrelated `misc:0.0` PID `434835` remained preserved; the exact supervisor
+  commands then started bot PIDs `861950/861949/861953/861955/861957`.
+- The immediate smoke retained one real KuCoin authoritative-state timeout:
+  `264/267` remote and `15/18` account-critical calls succeeded. After recovery,
+  the settled two-minute smoke was hard-green with `325/325` remote and `53/53`
+  account-critical calls successful, all five expected processes matched, no
+  hard/log/monitor/pipeline failures, no `D` states, and a clean tracked repo.
+- Current post-restart segments contained neither `execution.*_sent` nor
+  connector-call events. Validation therefore retained explicit no-observation
+  evidence and did not manufacture a live order.
+
+### Active Slice: Startup Fill-Cache Proof Correlation
+
+- Branch: `codex/v8-startup-fill-cache-proof` from deployed `e94da301b`.
+- Scope: add one bounded performance-report section that joins the current
+  `bot.started` lifecycle with existing startup cache-load and exact fill-history
+  proof evidence. Cache presence alone must never claim coverage proof.
+- Contract: report `proven`, `unproven`, or explicit `unknown` from valid
+  post-start proof evidence only, preserve incomplete-source barriers and
+  lifecycle resets, expose cache/proof ordering, and retain only bounded
+  allowlisted proof values plus valid elapsed/phase relation evidence.
+- Non-goals: no event producer, startup/readiness/risk gate, existing report
+  reinterpretation, process action, order/HSL/Rust/backtest/optimizer/exchange
+  behavior, or smoke-verdict change. Expected VPS action is pull plus bounded
+  report and settled smoke, with no bot restart.

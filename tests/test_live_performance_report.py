@@ -2179,6 +2179,577 @@ def test_live_performance_report_startup_milestones_are_bounded_and_projectable(
     assert "startup_readiness" not in projected
 
 
+def test_live_performance_report_startup_fill_cache_proof_uses_exact_post_start_proof(
+    tmp_path,
+):
+    events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(event_type="bot.started", seq=1, ts=1000),
+            _monitor_row(
+                event_type="fills.refresh_summary",
+                seq=2,
+                ts=1100,
+                status="succeeded",
+                reason_code="fill_cache_ready",
+                data={
+                    "source": "startup",
+                    "refresh_mode": "cache_load",
+                    "history_scope": "window",
+                    "event_count_after": 99,
+                },
+            ),
+            _monitor_row(
+                event_type="fills.refresh_summary",
+                seq=3,
+                ts=1200,
+                status="deferred",
+                reason_code="fill_history_coverage_unavailable",
+                data={
+                    "coverage_after": {
+                        "ready": False,
+                        "reason": "window_coverage_not_proven",
+                        "history_scope": "window",
+                        "covered_start_ms": 0,
+                        "oldest_event_ts": 500,
+                    }
+                },
+            ),
+            _monitor_row(
+                event_type="bot.startup_timing",
+                seq=4,
+                ts=1300,
+                data={"phase": "hsl", "elapsed_ms": 300},
+            ),
+            _monitor_row(
+                event_type="fills.refresh_summary",
+                seq=5,
+                ts=1400,
+                status="succeeded",
+                reason_code="fills_refresh_succeeded",
+                data={
+                    "coverage_after": {
+                        "ready": True,
+                        "reason": "window_covered",
+                        "history_scope": "window",
+                        "covered_start_ms": 400,
+                        "oldest_event_ts": 300,
+                    }
+                },
+            ),
+            _monitor_row(
+                event_type="fills.refresh_summary",
+                seq=6,
+                ts=1500,
+                data={
+                    "coverage_after": {
+                        "ready": True,
+                        "reason": "full_history",
+                        "history_scope": "all",
+                    }
+                },
+            ),
+        ],
+    )
+
+    section = build_live_performance_report(tmp_path / "monitor")[
+        "startup_fill_cache_proof"
+    ]
+    proof = section["bots"][0]
+
+    assert proof == {
+        "bot": "binance/binance_01",
+        "bot_started_ts": 1000,
+        "lifecycle_source_complete": True,
+        "status": "proven",
+        "cache_load_relation": "before_proof",
+        "cache_load": {
+            "status": "succeeded",
+            "reason": "fill_cache_ready",
+            "history_scope": "window",
+            "ts_ms": 1100,
+            "elapsed_ms_from_start": 100,
+        },
+        "proof": {
+            "ready": True,
+            "reason": "window_covered",
+            "history_scope": "window",
+            "covered_start_ms": 400,
+            "oldest_event_ts": 300,
+        },
+        "proof_elapsed_ms_from_start": 400,
+        "startup_phase_relation": "after_hsl",
+    }
+    assert section["status_counts"] == {"proven": 1}
+    assert section["proof_elapsed_ms"] == {
+        "count": 1,
+        "min": 400,
+        "max": 400,
+        "mean": 400,
+        "median": 400,
+        "p95": 400,
+    }
+
+
+def test_live_performance_report_startup_fill_cache_proof_keeps_cache_without_proof_unknown(
+    tmp_path,
+):
+    events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(event_type="bot.started", seq=1, ts=1000),
+            _monitor_row(
+                event_type="fills.refresh_summary",
+                seq=2,
+                ts=1100,
+                status="succeeded",
+                reason_code="fill_cache_ready",
+                data={
+                    "source": "startup",
+                    "refresh_mode": "cache_load",
+                    "history_scope": "all",
+                    "coverage_ready_after": True,
+                },
+            ),
+        ],
+    )
+
+    proof = build_live_performance_report(tmp_path / "monitor")[
+        "startup_fill_cache_proof"
+    ]["bots"][0]
+
+    assert proof == {
+        "bot": "binance/binance_01",
+        "bot_started_ts": 1000,
+        "lifecycle_source_complete": True,
+        "status": "unknown",
+        "cache_load_relation": "not_observed",
+        "cache_load": {
+            "status": "succeeded",
+            "reason": "fill_cache_ready",
+            "history_scope": "all",
+            "ts_ms": 1100,
+            "elapsed_ms_from_start": 100,
+        },
+        "startup_phase_relation": "unknown",
+    }
+
+
+def test_live_performance_report_startup_fill_cache_proof_reports_reverse_cache_order(
+    tmp_path,
+):
+    events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(event_type="bot.started", seq=1, ts=1000),
+            _monitor_row(
+                event_type="fills.refresh_summary",
+                seq=2,
+                ts=1200,
+                data={"coverage_after": {"ready": True, "reason": "full_history"}},
+            ),
+            _monitor_row(
+                event_type="fills.refresh_summary",
+                seq=3,
+                ts=1300,
+                status="succeeded",
+                reason_code="fill_cache_ready",
+                data={"source": "startup", "refresh_mode": "cache_load"},
+            ),
+        ],
+    )
+
+    proof = build_live_performance_report(tmp_path / "monitor")[
+        "startup_fill_cache_proof"
+    ]["bots"][0]
+
+    assert proof["status"] == "proven"
+    assert proof["cache_load_relation"] == "after_proof"
+
+
+def test_live_performance_report_startup_fill_cache_proof_uses_latest_unproven_reason(
+    tmp_path,
+):
+    events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(event_type="bot.started", seq=1, ts=1000),
+            _monitor_row(
+                event_type="fills.refresh_summary",
+                seq=2,
+                ts=1200,
+                data={
+                    "coverage_after": {
+                        "ready": False,
+                        "reason": "window_coverage_not_proven",
+                        "history_scope": "window",
+                        "covered_start_ms": 100,
+                    }
+                },
+            ),
+            _monitor_row(
+                event_type="fills.refresh_summary",
+                seq=3,
+                ts=1300,
+                data={
+                    "coverage_after": {
+                        "ready": False,
+                        "reason": "known_gap_overlaps_lookback",
+                        "history_scope": "window",
+                        "covered_start_ms": 100,
+                        "oldest_event_ts": 90,
+                        "gap_reason": "fetch_failed",
+                        "gap_start_ts": 120,
+                        "gap_end_ts": 180,
+                    }
+                },
+            ),
+        ],
+    )
+
+    proof = build_live_performance_report(tmp_path / "monitor")[
+        "startup_fill_cache_proof"
+    ]["bots"][0]
+
+    assert proof["status"] == "unproven"
+    assert proof["cache_load_relation"] == "not_observed"
+    assert proof["proof"] == {
+        "ready": False,
+        "reason": "known_gap_overlaps_lookback",
+        "history_scope": "window",
+        "covered_start_ms": 100,
+        "oldest_event_ts": 90,
+        "gap_reason": "fetch_failed",
+        "gap_start_ts": 120,
+        "gap_end_ts": 180,
+    }
+    assert proof["proof_elapsed_ms_from_start"] == 300
+
+
+@pytest.mark.parametrize(
+    "phase, phase_ts, proof_ts, expected_relation",
+    [
+        ("hsl", 1300, 1200, "before_hsl"),
+        ("startup", 1100, 1200, "after_startup"),
+    ],
+)
+def test_live_performance_report_startup_fill_cache_proof_uses_only_exact_phase_anchors(
+    tmp_path, phase, phase_ts, proof_ts, expected_relation
+):
+    events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    rows = [_monitor_row(event_type="bot.started", seq=1, ts=1000)]
+    if phase_ts < proof_ts:
+        rows.append(
+            _monitor_row(
+                event_type="bot.startup_timing",
+                seq=2,
+                ts=phase_ts,
+                data={"phase": phase, "elapsed_ms": phase_ts - 1000},
+            )
+        )
+    rows.append(
+        _monitor_row(
+            event_type="fills.refresh_summary",
+            seq=3,
+            ts=proof_ts,
+            data={"coverage_after": {"ready": True, "reason": "full_history"}},
+        )
+    )
+    if phase_ts > proof_ts:
+        rows.append(
+            _monitor_row(
+                event_type="bot.startup_timing",
+                seq=4,
+                ts=phase_ts,
+                data={"phase": phase, "elapsed_ms": phase_ts - 1000},
+            )
+        )
+    _write_ndjson(events_dir / "current.ndjson", rows)
+
+    proof = build_live_performance_report(tmp_path / "monitor")[
+        "startup_fill_cache_proof"
+    ]["bots"][0]
+
+    assert proof["status"] == "proven"
+    assert proof["startup_phase_relation"] == expected_relation
+
+
+def test_live_performance_report_startup_fill_cache_proof_prefers_after_startup_relation(
+    tmp_path,
+):
+    events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(event_type="bot.started", seq=1, ts=1000),
+            _monitor_row(
+                event_type="bot.startup_timing",
+                seq=2,
+                ts=1100,
+                data={"phase": "hsl", "elapsed_ms": 100},
+            ),
+            _monitor_row(
+                event_type="bot.startup_timing",
+                seq=3,
+                ts=1200,
+                data={"phase": "startup", "elapsed_ms": 200},
+            ),
+            _monitor_row(
+                event_type="fills.refresh_summary",
+                seq=4,
+                ts=1300,
+                data={"coverage_after": {"ready": True, "reason": "full_history"}},
+            ),
+        ],
+    )
+
+    proof = build_live_performance_report(tmp_path / "monitor")[
+        "startup_fill_cache_proof"
+    ]["bots"][0]
+
+    assert proof["startup_phase_relation"] == "after_startup"
+
+
+def test_live_performance_report_startup_fill_cache_proof_resets_and_rejects_incomplete_sources(
+    tmp_path,
+):
+    events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    _write_ndjson(
+        events_dir / "2026-07-10T00-00-00.ndjson",
+        [
+            _monitor_row(event_type="bot.started", seq=1, ts=1000),
+            _monitor_row(
+                event_type="fills.refresh_summary",
+                seq=2,
+                ts=1200,
+                data={"coverage_after": {"ready": True, "reason": "full_history"}},
+            ),
+        ],
+    )
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(event_type="bot.started", seq=3, ts=2000),
+            _monitor_row(event_type="health.summary", seq=4, ts=2100),
+        ],
+    )
+
+    reset = build_live_performance_report(
+        tmp_path / "monitor",
+        include_rotated=True,
+        max_event_files_per_bot=2,
+    )["startup_fill_cache_proof"]["bots"][0]
+
+    assert reset == {
+        "bot": "binance/binance_01",
+        "bot_started_ts": 2000,
+        "lifecycle_source_complete": True,
+        "status": "unknown",
+        "cache_load_relation": "not_observed",
+        "startup_phase_relation": "unknown",
+    }
+
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(event_type="health.summary", seq=4, ts=2100),
+            _monitor_row(
+                event_type="bot.startup_timing",
+                seq=5,
+                ts=2200,
+                data={"phase": "hsl", "elapsed_ms": 200},
+            ),
+        ],
+    )
+    stale = build_live_performance_report(
+        tmp_path / "monitor",
+        include_rotated=True,
+        max_event_files_per_bot=2,
+        event_tail_lines=1,
+    )["startup_fill_cache_proof"]["bots"][0]
+
+    assert stale == {
+        "bot": "binance/binance_01",
+        "lifecycle_source_complete": False,
+        "status": "unknown",
+        "cache_load_relation": "not_observed",
+        "startup_phase_relation": "unknown",
+    }
+
+
+@pytest.mark.parametrize("started_ts, proof_ts", [(None, 1200), (1000, None), (1000, -1)])
+def test_live_performance_report_startup_fill_cache_proof_rejects_invalid_timestamps(
+    tmp_path, started_ts, proof_ts
+):
+    events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(event_type="bot.started", seq=1, ts=started_ts),
+            _monitor_row(
+                event_type="fills.refresh_summary",
+                seq=2,
+                ts=proof_ts,
+                data={"coverage_after": {"ready": True, "reason": "full_history"}},
+            ),
+        ],
+    )
+
+    proof = build_live_performance_report(tmp_path / "monitor")[
+        "startup_fill_cache_proof"
+    ]["bots"][0]
+
+    assert proof["status"] == "unknown"
+    assert "proof_elapsed_ms_from_start" not in proof
+    assert proof["startup_phase_relation"] == "unknown"
+
+
+def test_live_performance_report_startup_fill_cache_proof_uses_later_valid_evidence(
+    tmp_path,
+):
+    events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(event_type="bot.started", seq=1, ts=1000),
+            _monitor_row(
+                event_type="fills.refresh_summary",
+                seq=2,
+                ts=None,
+                status="succeeded",
+                reason_code="malformed_cache_ts",
+                data={"source": "startup", "refresh_mode": "cache_load"},
+            ),
+            _monitor_row(
+                event_type="fills.refresh_summary",
+                seq=3,
+                ts=1100,
+                status="succeeded",
+                reason_code="fill_cache_ready",
+                data={"source": "startup", "refresh_mode": "cache_load"},
+            ),
+            _monitor_row(
+                event_type="fills.refresh_summary",
+                seq=4,
+                ts=None,
+                data={"coverage_after": {"ready": True, "reason": "malformed_ts"}},
+            ),
+            _monitor_row(
+                event_type="fills.refresh_summary",
+                seq=5,
+                ts=1200,
+                data={"coverage_after": {"ready": True, "reason": "full_history"}},
+            ),
+        ],
+    )
+
+    proof = build_live_performance_report(tmp_path / "monitor")[
+        "startup_fill_cache_proof"
+    ]["bots"][0]
+
+    assert proof["status"] == "proven"
+    assert proof["cache_load_relation"] == "before_proof"
+    assert proof["cache_load"] == {
+        "status": "succeeded",
+        "reason": "fill_cache_ready",
+        "ts_ms": 1100,
+        "elapsed_ms_from_start": 100,
+    }
+    assert proof["proof"] == {"ready": True, "reason": "full_history"}
+    assert proof["proof_elapsed_ms_from_start"] == 200
+
+
+def test_live_performance_report_startup_fill_cache_proof_is_bounded_whitelisted_and_projectable(
+    tmp_path,
+):
+    for index in range(3):
+        events_dir = tmp_path / "monitor" / "binance" / f"user_{index}" / "events"
+        _write_ndjson(
+            events_dir / "current.ndjson",
+            [
+                _monitor_row(
+                    event_type="bot.started",
+                    seq=1,
+                    ts=1000 + index,
+                    user=f"user_{index}",
+                ),
+                _monitor_row(
+                    event_type="fills.refresh_summary",
+                    seq=2,
+                    ts=1100 + index,
+                    user=f"user_{index}",
+                    data={
+                        "coverage_after": {
+                            "ready": False,
+                            "reason": (
+                                "private_secret"
+                                if index == 0
+                                else "known_gap_overlaps_lookback"
+                            ),
+                            "history_scope": "private/secret" if index == 0 else "window",
+                            "gap_reason": (
+                                "/private/secret/api_key_abc"
+                                if index == 0
+                                else "fetch_failed"
+                            ),
+                            "gap_start_ts": 100,
+                            "gap_end_ts": 200,
+                            "raw_payload": "leak_marker",
+                            "path": "/root/passivbot/private",
+                        },
+                        "error": "api_key=secret",
+                        "debug": {"raw_payload": "leak_marker"},
+                    },
+                ),
+            ],
+        )
+
+    report = build_live_performance_report(tmp_path / "monitor", group_limit=2)
+    summary = summarize_live_performance_report(report, group_limit=1)
+    projected = project_live_performance_report_sections(
+        report, ["startup_fill_cache_proof"]
+    )
+    section = report["startup_fill_cache_proof"]
+    rendered = json.dumps(section, sort_keys=True)
+
+    assert section["bot_count"] == 3
+    assert section["status_counts"] == {"unproven": 3}
+    assert section["proof_elapsed_ms"]["count"] == 3
+    assert section["bots_truncated"] is True
+    assert len(section["bots"]) == 2
+    assert set(section["bots"][0]) == {
+        "bot",
+        "bot_started_ts",
+        "lifecycle_source_complete",
+        "status",
+        "cache_load_relation",
+        "proof",
+        "proof_elapsed_ms_from_start",
+        "startup_phase_relation",
+    }
+    assert set(section["bots"][0]["proof"]) == {
+        "ready",
+        "reason",
+        "history_scope",
+        "gap_reason",
+        "gap_start_ts",
+        "gap_end_ts",
+    }
+    assert section["bots"][0]["proof"]["reason"] == "other"
+    assert section["bots"][0]["proof"]["history_scope"] == "other"
+    assert section["bots"][0]["proof"]["gap_reason"] == "other"
+    assert "leak_marker" not in rendered
+    assert "/root/passivbot" not in rendered
+    assert "api_key" not in rendered
+    assert len(summary["startup_fill_cache_proof"]["bots"]) == 1
+    assert "startup_fill_cache_proof" in projected
+    assert "startup_milestones" not in projected
+
+
 def test_live_performance_report_startup_readiness_hsl_whitelist(tmp_path, monkeypatch):
     monkeypatch.setattr(performance_report_module, "utc_ms", lambda: 122000)
     events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
