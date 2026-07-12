@@ -7700,3 +7700,38 @@ VPS5 deployment status:
   connector/exchange outcome claim, no Rust/order/risk/HSL behavior change, and
   no event-sink failure propagation into execution. Expected VPS action is an
   exact five-bot restart, bounded event query, and immediate plus settled smoke.
+
+### Deployed Slice: Fresh-Entry Eligibility Evidence
+
+- PR #1196 was approved by Hermes and Grok 4.5 on exact head `baf7d6794`; CI
+  passed and it merged to `v8` as `2f6f61da6`.
+- VPS5 fast-forwarded cleanly and gracefully restarted only the five exact bot
+  panes. Python process PIDs became
+  `856325/856354/856386/856420/856456`; unrelated `misc:0.0` remained PID
+  `434835`.
+- A bounded current-segment query observed three
+  `entry.initial_eligibility` events. The payloads exposed eligible,
+  `initial_entry_distance_gate` blocked, and `rust_no_initial_candidate`
+  outcomes with full aggregates, 32-record sampling, cycle IDs, and order-wave
+  IDs without price/quantity/raw payload leakage.
+- The immediate smoke retained one real pre-restart KuCoin balance timeout;
+  KuCoin also had one post-restart authoritative-state timeout. After recovery,
+  a two-minute smoke was hard-green with `348/348` remote and `43/43`
+  account-critical calls successful, all five expected processes matched, no
+  hard/log/pipeline failures, and a clean tracked repository. The quiet
+  one-minute smoke remained green at `175/175` and `34/34`; transient sampled
+  `D` states cleared to exact `R/S` process states.
+
+### Active Slice: Fresh-Entry Startup Milestone
+
+- Branch: `codex/v8-fresh-entry-startup-milestone` from deployed
+  `2f6f61da6`.
+- Scope: derive bounded current-lifecycle
+  `first_fresh_entry_eligible` performance-report evidence only from an
+  `entry.initial_eligibility` event whose eligible outcome count is a positive
+  integer. Mark the milestone `entry_blocker` and keep absent evidence
+  explicitly unknown.
+- Non-goals: no producer, trading/readiness gate, connector/exchange outcome
+  claim, process action, Rust/order/risk/HSL behavior, backtest, optimizer, or
+  smoke verdict change. Expected VPS action is pull plus a bounded
+  current-plus-rotated report and settled smoke, with no bot restart.

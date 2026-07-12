@@ -1642,10 +1642,41 @@ class _StartupReadinessAccumulator:
 _STARTUP_MILESTONE_EVENT_TYPES = {
     "cycle.started": "first_cycle_started",
     "rust_orchestrator.called": "first_rust_called",
+    "entry.initial_eligibility": "first_fresh_entry_eligible",
     "execution.create_sent": "first_exchange_write_submitted",
     "execution.cancel_sent": "first_exchange_write_submitted",
 }
 _STARTUP_MILESTONE_LABELS = tuple(dict.fromkeys(_STARTUP_MILESTONE_EVENT_TYPES.values()))
+_STARTUP_MILESTONE_TRADING_IMPACTS = {
+    "first_cycle_started": "cycle_delay",
+    "first_rust_called": "cycle_delay",
+    "first_fresh_entry_eligible": "entry_blocker",
+    "first_exchange_write_submitted": "cycle_delay",
+}
+
+
+def _startup_milestone_label(
+    event_type: str, live_event: dict[str, Any]
+) -> str | None:
+    label = _STARTUP_MILESTONE_EVENT_TYPES.get(event_type)
+    if label is None:
+        return None
+    if event_type != "entry.initial_eligibility":
+        return label
+    data = live_event.get("data")
+    if not isinstance(data, dict):
+        return None
+    outcome_counts = data.get("outcome_counts")
+    if not isinstance(outcome_counts, dict):
+        return None
+    eligible_count = outcome_counts.get("eligible")
+    if (
+        not isinstance(eligible_count, int)
+        or isinstance(eligible_count, bool)
+        or eligible_count <= 0
+    ):
+        return None
+    return label
 
 
 class _StartupMilestoneAccumulator:
@@ -1711,7 +1742,12 @@ class _StartupMilestoneAccumulator:
             source_complete=source_complete,
         )
         self._discard_superseded_state(bot)
-        if event_type != "bot.started" and event_type not in _STARTUP_MILESTONE_EVENT_TYPES:
+        label = (
+            None
+            if event_type == "bot.started"
+            else _startup_milestone_label(event_type, live_event)
+        )
+        if event_type != "bot.started" and label is None:
             return
         existing_state = self.bots.get(bot)
         previous_started_order = (
@@ -1754,13 +1790,14 @@ class _StartupMilestoneAccumulator:
         started_order = state.get("started_order")
         if started_order is not None and event_order <= started_order:
             return
-        label = _STARTUP_MILESTONE_EVENT_TYPES[event_type]
+        assert label is not None
         existing = state["milestones"].get(label)
         if existing is not None and event_order >= existing[0]:
             return
         milestone = self._observed_milestone(
             row=row,
             live_event=live_event,
+            label=label,
             started_ts=state.get("started_ts"),
         )
         state["milestones"][label] = (event_order, milestone, bool(source_complete))
@@ -1777,13 +1814,14 @@ class _StartupMilestoneAccumulator:
         *,
         row: dict[str, Any],
         live_event: dict[str, Any],
+        label: str,
         started_ts: int | None,
     ) -> dict[str, Any]:
         event_type = str(live_event.get("event_type") or row.get("kind") or "")
         item: dict[str, Any] = {
             "status": "observed",
             "event_type": event_type,
-            "trading_impact": "cycle_delay",
+            "trading_impact": _STARTUP_MILESTONE_TRADING_IMPACTS[label],
         }
         event_ts = _record_ts(row)
         if event_ts is not None:
@@ -1822,7 +1860,9 @@ class _StartupMilestoneAccumulator:
                             label: {
                                 "status": "unknown",
                                 "reason": "bot_started_not_observed_in_selected_events",
-                                "trading_impact": "cycle_delay",
+                                "trading_impact": _STARTUP_MILESTONE_TRADING_IMPACTS[
+                                    label
+                                ],
                             }
                             for label in _STARTUP_MILESTONE_LABELS
                         },
@@ -1834,7 +1874,7 @@ class _StartupMilestoneAccumulator:
                 label: {
                     "status": "unknown",
                     "reason": "not_observed_in_selected_events",
-                    "trading_impact": "cycle_delay",
+                    "trading_impact": _STARTUP_MILESTONE_TRADING_IMPACTS[label],
                 }
                 for label in _STARTUP_MILESTONE_LABELS
             }

@@ -22,44 +22,50 @@ Estimated completion:
 
 ## Active Review Slice
 
-- Branch: `codex/v8-fresh-entry-eligibility`
-- Base: `739ebd49d7de40966145c5a1ca2c8aa3fe01a235`
-- Triggering evidence: existing planning, reconciliation, create-filter, and
-  pre-call submission events cannot answer why a fresh entry did or did not
-  become locally submit-ready in a completed cycle.
-- Scope: add one bounded, correlated fresh-entry eligibility producer contract
-  that distinguishes `no_candidate`, `blocked_candidate`,
-  `protective_only`, `already_satisfied`, and `eligible` after the
-  existing reconciler/executor gates.
-- Behavior boundary: observability must derive from existing order-path facts,
-  never add or duplicate a trading gate, mutate `to_create`, affect connector
-  calls, or treat event failure as an execution failure. Rust remains the order
-  authority; Python only reports the existing live reconciliation/I/O boundary.
-- Validation: 244 focused/adjacent tests and all 21 fake-live marker scenarios
-  pass, including outcome precedence, boundedness, reconciler/executor
-  mixed cases, exact pre-create gate attribution, schema validation, and event
-  failure isolation. Python compilation and `git diff --check` also pass. An
-  independent exact-commit preflight approved the executable delta with no
-  findings; its focused eligibility/event suite also passed.
+- Branch: `codex/v8-fresh-entry-startup-milestone`
+- Base: `2f6f61da6fdd6d61c8edbf204e2690d5ebf02e8d`
+- Triggering evidence: PR #1196 now emits true local fresh-entry eligibility,
+  but the startup milestone report cannot yet answer when the first initial
+  entry survived every local pre-connector gate.
+- Scope: derive one bounded current-lifecycle
+  `first_fresh_entry_eligible` startup milestone only when an
+  `entry.initial_eligibility` event reports a positive integer eligible count.
+  Classify it as `entry_blocker` and preserve explicit unknown output when the
+  qualifying event is absent from selected history.
+- Behavior boundary: read-only performance report and tests only. Do not add or
+  reinterpret a trading gate, treat blocked/candidate-free/protective-only
+  events as readiness, or claim connector invocation or exchange success.
+- Validation: focused and full performance-report tests, Python compilation,
+  `git diff --check`, added-line silent-handling audit, and independent
+  preflight.
 - Publication state, exact head, mergeability, CI, and current-head reviewer
   verdicts: query live GitHub metadata; do not embed self-invalidating values.
-- Expected VPS action: after merge, pull while preserving local artifacts,
-  restart only the five exact supervised bot panes so the producer is loaded,
-  query the new event by cycle/pside, and run immediate plus settled smoke.
+- Expected VPS action: pull while preserving local artifacts, run an exact
+  bounded current-plus-rotated startup milestone report, and settled smoke.
+  Do not restart bots because this slice changes only a read-only consumer.
 
 Next action:
 
-1. Wait for the temporary Hermes + Grok 4.5 + green-CI current-head gate on PR
-   #1196, resolve any findings narrowly, then merge and run the declared exact
-   five-bot VPS5 restart plus immediate and settled smoke.
+1. Complete the strict eligibility predicate and lifecycle regressions, run
+   independent preflight, then publish for the temporary Hermes + Grok 4.5 +
+   green-CI current-head gate.
 
 ## Deployed Baseline
 
-- Remote `v8`: `739ebd49d7de40966145c5a1ca2c8aa3fe01a235`, PR #1195
-- VPS5 repository: `739ebd49d7de40966145c5a1ca2c8aa3fe01a235`, PR #1195; tracked
+- Remote `v8`: `2f6f61da6fdd6d61c8edbf204e2690d5ebf02e8d`, PR #1196
+- VPS5 repository: `2f6f61da6fdd6d61c8edbf204e2690d5ebf02e8d`, PR #1196; tracked
   status clean; only expected untracked artifacts were preserved
-- VPS5 expected bots: five; all running with the PR #1192 restart PIDs;
+- VPS5 expected bots: five; all running with the PR #1196 restart PIDs
+  `856325/856354/856386/856420/856456`;
   unrelated `misc:0.0` remains PID `434835`
+- PR #1196 merged after exact-head Hermes and Grok 4.5 approval plus green CI.
+  VPS5 fast-forwarded and restarted only the five supervised panes. A focused
+  query observed three bounded eligibility events with eligible,
+  distance-blocked, and no-candidate outcomes. The first smoke retained a real
+  KuCoin timeout; after recovery, the settled two-minute smoke was hard-green
+  with `348/348` remote and `43/43` account-critical calls successful. The
+  quiet one-minute smoke remained green at `175/175` and `34/34`; transient
+  report-time `D` samples cleared to exact `R/S` process states.
 - PR #1195 merged after exact-head Hermes and Grok 4.5 approval plus green CI.
   VPS5 fast-forwarded without bot signals or restarts, preserving bot PIDs
   `850148/850296/850370/850436/850495` and unrelated `misc:0.0` PID
