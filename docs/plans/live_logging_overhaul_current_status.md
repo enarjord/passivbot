@@ -55,13 +55,12 @@ Estimated completion:
 
 Next action:
 
-1. Complete implementation and author validation, then publish one ready PR
-   with the runtime behavior and restart requirement explicit.
-2. Hold the exact current head until Hermes, Grok 4.5, and CI are green; resolve
-   findings narrowly and require fresh exact-head verdicts after every push.
-3. Merge only after that gate is green, then gracefully restart the five exact
+1. Hold PR #1205 at the exact current head until Hermes, Grok 4.5, and CI are
+   green; resolve findings narrowly and require fresh exact-head verdicts after
+   every push.
+2. Merge only after that gate is green, then gracefully restart the five exact
    VPS5 bot panes while preserving unrelated processes and local artifacts.
-4. Compare fresh monitor maintenance and lock-wait totals/maxima against the
+3. Compare fresh monitor maintenance and lock-wait totals/maxima against the
    PR #1204 baseline using immediate and settled smoke/performance evidence.
 
 ## Deployed Baseline
