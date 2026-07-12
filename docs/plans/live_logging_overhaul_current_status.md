@@ -22,6 +22,7 @@ Estimated completion:
 
 ## Active Review Slice
 
+- PR #1195, `Fix startup readiness report lifecycle handling`
 - Branch: `codex/v8-startup-readiness-correctness`
 - Base: `b15d349be5c544f9a8ac83618977b8a0cfd11ba5`
 - Triggering evidence: post-merge review reproduced three startup-report

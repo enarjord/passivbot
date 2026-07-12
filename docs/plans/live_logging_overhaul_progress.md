@@ -7653,6 +7653,7 @@ VPS5 deployment status:
 
 ### Active Slice: Startup Readiness Consumer Correctness
 
+- PR #1195, `Fix startup readiness report lifecycle handling`.
 - Branch: `codex/v8-startup-readiness-correctness` from deployed `b15d349be`.
 - Scope: resolve the three post-merge startup consumer findings together: keep
   performance readiness state when one lifecycle spans rotated/current files;
