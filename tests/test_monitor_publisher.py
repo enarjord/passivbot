@@ -1,7 +1,9 @@
 import errno
 import json
 import logging
+import os
 import threading
+from pathlib import Path
 
 from monitor_publisher import MonitorPublisher
 import monitor_publisher as monitor_publisher_module
@@ -744,15 +746,17 @@ def test_monitor_publisher_event_timing_counts_due_maintenance_only(tmp_path):
 def test_monitor_publisher_event_timing_counts_failed_due_attempts(tmp_path, monkeypatch, caplog):
     publisher = _make_publisher(tmp_path)
     publisher._last_manifest_write_monotonic_ms = None
+    inventory_attempts = []
 
     def fail_atomic_write(*_args, **_kwargs):
         raise OSError("manifest unavailable")
 
-    def fail_rotatable_files():
+    def fail_retention_inventory():
+        inventory_attempts.append(None)
         raise OSError("retention unavailable")
 
     monkeypatch.setattr(monitor_publisher_module, "_atomic_write_json", fail_atomic_write)
-    monkeypatch.setattr(publisher, "_rotatable_files", fail_rotatable_files)
+    monkeypatch.setattr(publisher, "_retention_inventory", fail_retention_inventory)
 
     event, timing = publisher._record_event_timed(
         "test.event", ("test",), {"value": 1}, ts=100_000
@@ -765,3 +769,206 @@ def test_monitor_publisher_event_timing_counts_failed_due_attempts(tmp_path, mon
     assert timing["retention_ns_total"] >= timing["retention_ns_max"]
     assert "writing manifest" in caplog.text
     assert "retention pruning failed" in caplog.text
+    assert len(inventory_attempts) == 1
+
+    publisher._prune_retention(now_ms=100_001)
+    assert len(inventory_attempts) == 1
+    publisher._prune_retention(now_ms=160_000)
+    assert len(inventory_attempts) == 2
+
+
+def _write_retention_file(path, *, size, mtime_ms):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"x" * size)
+    os.utime(path, ns=(mtime_ms * 1_000_000, mtime_ms * 1_000_000))
+
+
+def test_monitor_retention_age_cutoff_orders_direct_candidates_and_protects_current_paths(
+    tmp_path, monkeypatch
+):
+    publisher = _make_publisher(tmp_path, retain_days=1.0)
+    now_ms = 200_000_000
+    cutoff_ms = now_ms - 86_400_000
+    oldest = publisher.events_dir / "oldest.ndjson"
+    newer = publisher.checkpoints_dir / "newer.json"
+    at_cutoff = publisher.history_dir / "at-cutoff.ndjson"
+    protected_history = publisher._history_current_path("fills")
+    _write_retention_file(oldest, size=1, mtime_ms=cutoff_ms - 2)
+    _write_retention_file(newer, size=1, mtime_ms=cutoff_ms - 1)
+    _write_retention_file(at_cutoff, size=1, mtime_ms=cutoff_ms)
+    _write_retention_file(publisher.current_events_path, size=1, mtime_ms=cutoff_ms - 3)
+    _write_retention_file(protected_history, size=1, mtime_ms=cutoff_ms - 3)
+    unlinked = []
+    original_unlink = Path.unlink
+
+    def record_unlink(path, *args, **kwargs):
+        unlinked.append(path)
+        return original_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", record_unlink)
+    publisher._prune_retention(now_ms=now_ms)
+
+    assert unlinked == [oldest, newer]
+    assert not oldest.exists()
+    assert not newer.exists()
+    assert at_cutoff.exists()
+    assert publisher.current_events_path.exists()
+    assert protected_history.exists()
+
+
+def test_monitor_retention_counts_nested_unknown_files_but_never_deletes_them(tmp_path):
+    publisher = _make_publisher(tmp_path, retain_days=-1.0)
+    direct_candidate = publisher.events_dir / "rotated.ndjson"
+    nested_unknown = publisher.root / "unknown" / "nested" / "keep.bin"
+    _write_retention_file(direct_candidate, size=10, mtime_ms=1)
+    _write_retention_file(nested_unknown, size=40, mtime_ms=2)
+    total_bytes = sum(path.stat().st_size for path in publisher.root.rglob("*") if path.is_file())
+    publisher.max_total_bytes = 0
+
+    publisher._prune_retention(now_ms=100_000)
+
+    assert not direct_candidate.exists()
+    assert nested_unknown.exists()
+
+
+def test_monitor_retention_age_disappearance_updates_total_before_cap(tmp_path, monkeypatch):
+    publisher = _make_publisher(tmp_path, retain_days=0.0)
+    disappeared = publisher.events_dir / "disappeared.ndjson"
+    at_cutoff = publisher.history_dir / "at-cutoff.ndjson"
+    _write_retention_file(disappeared, size=10, mtime_ms=1)
+    _write_retention_file(at_cutoff, size=10, mtime_ms=100_000)
+    total_bytes = sum(path.stat().st_size for path in publisher.root.rglob("*") if path.is_file())
+    publisher.max_total_bytes = total_bytes - disappeared.stat().st_size
+    original_unlink = Path.unlink
+
+    def disappear_then_unlink(path, *args, **kwargs):
+        if path == disappeared:
+            original_unlink(path, *args, **kwargs)
+            raise FileNotFoundError(path)
+        return original_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", disappear_then_unlink)
+    publisher._prune_retention(now_ms=100_000)
+
+    assert not disappeared.exists()
+    assert at_cutoff.exists()
+
+
+def test_monitor_retention_logs_cap_unlink_failure_and_keeps_due_interval(
+    tmp_path, monkeypatch, caplog
+):
+    publisher = _make_publisher(tmp_path, retain_days=-1.0)
+    candidate = publisher.events_dir / "rotated.ndjson"
+    _write_retention_file(candidate, size=10, mtime_ms=1)
+    publisher.max_total_bytes = 0
+    inventory_attempts = []
+    original_inventory = publisher._retention_inventory
+    original_unlink = Path.unlink
+
+    def count_inventory():
+        inventory_attempts.append(None)
+        return original_inventory()
+
+    def fail_candidate_unlink(path, *args, **kwargs):
+        if path == candidate:
+            raise OSError("candidate unavailable")
+        return original_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(publisher, "_retention_inventory", count_inventory)
+    monkeypatch.setattr(Path, "unlink", fail_candidate_unlink)
+    publisher._prune_retention(now_ms=100_000)
+
+    assert candidate.exists()
+    assert inventory_attempts == [None]
+    assert "retention pruning failed: candidate unavailable" in caplog.text
+
+    publisher._prune_retention(now_ms=100_001)
+    assert inventory_attempts == [None]
+
+
+def test_monitor_retention_counts_and_unlinks_direct_file_symlink_only(tmp_path):
+    publisher = _make_publisher(tmp_path, retain_days=-1.0)
+    outside_file = tmp_path / "outside.bin"
+    outside_file.write_bytes(b"outside")
+    file_link = publisher.events_dir / "linked.bin"
+    file_link.symlink_to(outside_file)
+    outside_dir = tmp_path / "outside-dir"
+    outside_dir.mkdir()
+    (outside_dir / "nested.bin").write_bytes(b"nested")
+    directory_link = publisher.root / "linked-dir"
+    directory_link.symlink_to(outside_dir, target_is_directory=True)
+
+    total_bytes, candidates = publisher._retention_inventory()
+    candidate_sizes = {path: size for path, size, _mtime in candidates}
+    assert candidate_sizes[file_link] == outside_file.stat().st_size
+    publisher.max_total_bytes = total_bytes - candidate_sizes[file_link]
+
+    publisher._prune_retention(now_ms=100_000)
+
+    assert not file_link.is_symlink()
+    assert outside_file.exists()
+    assert directory_link.exists()
+    assert (outside_dir / "nested.bin").exists()
+
+
+def test_monitor_retention_byte_cap_deletes_surviving_candidates_oldest_first(tmp_path, monkeypatch):
+    publisher = _make_publisher(tmp_path, retain_days=-1.0)
+    oldest = publisher.history_dir / "oldest.ndjson"
+    newer = publisher.events_dir / "newer.ndjson"
+    _write_retention_file(oldest, size=10, mtime_ms=1)
+    _write_retention_file(newer, size=10, mtime_ms=2)
+    total_bytes = sum(path.stat().st_size for path in publisher.root.rglob("*") if path.is_file())
+    publisher.max_total_bytes = total_bytes - oldest.stat().st_size - newer.stat().st_size
+    unlinked = []
+    original_unlink = Path.unlink
+
+    def record_unlink(path, *args, **kwargs):
+        unlinked.append(path)
+        return original_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", record_unlink)
+    publisher._prune_retention(now_ms=100_000)
+
+    assert unlinked == [oldest, newer]
+    assert not oldest.exists()
+    assert not newer.exists()
+
+
+def test_monitor_retention_uses_one_recursive_traversal_when_over_byte_cap(tmp_path, monkeypatch):
+    publisher = _make_publisher(tmp_path, retain_days=-1.0)
+    candidate = publisher.events_dir / "rotated.ndjson"
+    _write_retention_file(candidate, size=10, mtime_ms=1)
+    total_bytes = sum(path.stat().st_size for path in publisher.root.rglob("*") if path.is_file())
+    publisher.max_total_bytes = total_bytes - candidate.stat().st_size
+    original_rglob = Path.rglob
+    original_iterdir = Path.iterdir
+    original_stat = Path.stat
+    traversals = []
+    candidate_directory_listings = []
+    regular_files = {path for path in publisher.root.rglob("*") if path.is_file()}
+    regular_file_stats = {path: 0 for path in regular_files}
+
+    def count_root_rglob(path, pattern):
+        if path == publisher.root and pattern == "*":
+            traversals.append(path)
+        return original_rglob(path, pattern)
+
+    def count_candidate_directory_listing(path):
+        if path in {publisher.events_dir, publisher.history_dir, publisher.checkpoints_dir}:
+            candidate_directory_listings.append(path)
+        return original_iterdir(path)
+
+    def count_regular_file_stat(path, *args, **kwargs):
+        if path in regular_file_stats:
+            regular_file_stats[path] += 1
+        return original_stat(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "rglob", count_root_rglob)
+    monkeypatch.setattr(Path, "iterdir", count_candidate_directory_listing)
+    monkeypatch.setattr(Path, "stat", count_regular_file_stat)
+    publisher._prune_retention(now_ms=100_000)
+
+    assert traversals == [publisher.root]
+    assert candidate_directory_listings == []
+    assert set(regular_file_stats.values()) == {1}
+    assert not candidate.exists()
