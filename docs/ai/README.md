@@ -1,34 +1,65 @@
-# AI Docs Router
+# AI Documentation Router
 
-Use this file to decide what to read for a task.
+Read `../../AGENTS.md` and `principles.md` first. Then load only the documents required by the
+current task.
 
-## Always Read
-
-1. `../../AGENTS.md`
-2. `principles.yaml`
-3. `error_contract.md`
-
-## Read By Task
+## Canonical Contracts
 
 | Task | Read |
-|------|------|
-| Exchange/API integration, pagination, data fetch | `exchange_api_quirks.md` |
-| CCXT upgrade / dependency refresh | `ccxt_upgrade_workflow.md`, `exchange_api_quirks.md` |
-| Rust/PyO3 build, extension loading, Rust test execution | `build_pitfalls.md` |
-| Logging behavior/levels/tags | `logging_guide.md`, `live_event_registry.md` when touching structured event tags or reason codes |
-| Autonomous PR review loop | `pr_auto_review_loop.md` |
-| Logging-overhaul implementation loop | `../plans/live_logging_overhaul_current_status.md`, then `../plans/live_logging_overhaul_pr_loop_workflow.md`; open the historical progress ledger only when needed |
-| Order logic, risk, Python/Rust boundary | `architecture.md`, `decisions.md`, `features/strategy_runtime.md` when strategy behavior is involved |
-| Code review | `code_review_prompt.md` |
-| Common implementation mistakes | `pitfalls.md` |
-| Running tools/tests/backtests/optimizer | `commands.md` |
-| Crash discovery and stress-suite generation | `crash_suite_generator.md`, `commands.md` |
-| Feature-specific changes | `features/README.md` + relevant file in `features/` |
-| Deep incident context | `debugging_case_studies.md`, `suite_optimizer_memory_investigation.md` |
+|---|---|
+| Trading-critical failure, fallback, readiness, or data availability | `error_contract.md` |
+| Component ownership, live/backtest/optimizer flow | `architecture.md` |
+| Validation selection or code review | `validation.md` |
+| Logging levels, redaction, sinks, console behavior | `logging_policy.md` |
+| Active architectural rationale | `decisions.md` |
 
-## Rules For AI Docs
+## Task-Specific Routing
 
-1. Keep core docs short and normative.
-2. Avoid repeating the same rule across many files.
-3. Keep historical notes separate from core instructions.
-4. Include code references only where they add non-obvious context.
+| Task | Read |
+|---|---|
+| Exchange/API integration, pagination, broker attribution | `features/exchange_integrations.md` |
+| CCXT dependency upgrade | `runbooks/ccxt_upgrade.md` |
+| Rust/PyO3 build, extension loading, Rust tests | `runbooks/rust_extension.md` |
+| Strategy schema, order logic, risk, unstuck | `architecture.md`, `error_contract.md`, `features/strategy_runtime.md` |
+| Candles, OHLCV coverage, gaps, projections | `error_contract.md`, `features/candlestick_manager.md`; add `features/exchange_integrations.md` for remote fetch behavior |
+| Fill/PnL ingestion, fees, coverage | `error_contract.md`, `features/fill_events_manager.md`, relevant exchange contract |
+| Commands, tests, backtests, optimizer, execution safety | `runbooks/commands.md` |
+| Autonomous PR review | `runbooks/pr_review.md` |
+| Crash discovery and stress-suite generation | `runbooks/crash_discovery.md` |
+| Structured live events | `features/live_events.md`, `generated/live_event_registry.md` |
+| Feature-specific change | `features/README.md` and the relevant feature contract |
+| Historical incident rationale | relevant file under `case_studies/` |
+
+Logging-overhaul implementation work should additionally read
+`../plans/live_logging_overhaul_current_status.md` and
+`../plans/live_logging_overhaul_pr_loop_workflow.md`. Those files are temporary project state, not
+canonical engineering policy.
+
+## Document Classes
+
+- Canonical contracts state current normative behavior.
+- Feature contracts add subsystem-specific invariants, failure semantics, validation, and code maps.
+- Runbooks describe procedures and may contain commands.
+- Generated references mirror code-owned registries.
+- Case studies and plans explain history; they do not override current contracts.
+
+Keep canonical documents timeless, compact, and free of progress ledgers. Put each durable rule in
+one canonical location and link to it elsewhere.
+
+Run documentation checks with:
+
+```bash
+PYTHONPATH=src python src/tools/check_ai_docs.py
+PYTHONPATH=src python src/tools/generate_live_event_registry.py --check
+pytest tests/test_ai_docs.py tests/test_live_event_registry_docs.py
+```
+
+The mandatory-context ceiling is 1,500 words and is warning-only. Missing routed files and stale
+generated registries remain test failures.
+
+## Temporary Compatibility Paths
+
+`principles.yaml`, `pr_auto_review_loop.md`, and `code_review_prompt.md` remain as narrow routes for
+active external automations. Their canonical content lives in `principles.md`,
+`runbooks/pr_review.md`, and `validation.md`. Remove the routes only after every scheduled consumer
+has migrated and a changed-head wake proves the new reads succeed.

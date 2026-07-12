@@ -1,45 +1,11 @@
 from pathlib import Path
-import re
 
-from live.event_bus import (
-    EventTags,
-    EventTypes,
-    LIVE_EVENT_DEBUG_PROFILES,
-    ReasonCodes,
-)
+from tools.generate_live_event_registry import render_registry
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-REGISTRY_DOC = REPO_ROOT / "docs" / "ai" / "live_event_registry.md"
+REGISTRY_DOC = REPO_ROOT / "docs" / "ai" / "generated" / "live_event_registry.md"
 
 
-def _registry_values(registry: type) -> list[str]:
-    return sorted(
-        value
-        for name, value in vars(registry).items()
-        if name.isupper() and isinstance(value, str)
-    )
-
-
-def _documented_values(section: str) -> list[str]:
-    text = REGISTRY_DOC.read_text()
-    pattern = rf"^## {re.escape(section)}\n(?P<body>.*?)(?=^## |\Z)"
-    match = re.search(pattern, text, re.M | re.S)
-    assert match is not None, f"missing registry doc section: {section}"
-    return sorted(re.findall(r"^- `([^`]+)`$", match.group("body"), re.M))
-
-
-def test_live_event_type_docs_match_registry():
-    assert _documented_values("Event Types") == _registry_values(EventTypes)
-
-
-def test_live_event_tag_docs_match_registry():
-    assert _documented_values("Event Tags") == _registry_values(EventTags)
-
-
-def test_live_event_reason_code_docs_match_registry():
-    assert _documented_values("Reason Codes") == _registry_values(ReasonCodes)
-
-
-def test_live_event_debug_profile_docs_match_registry():
-    assert _documented_values("Debug Profiles") == sorted(LIVE_EVENT_DEBUG_PROFILES)
+def test_generated_live_event_registry_is_current():
+    assert REGISTRY_DOC.read_text(encoding="utf-8") == render_registry()

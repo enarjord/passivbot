@@ -1,8 +1,8 @@
 # Strategy Runtime Contracts
 
-## V8 Clean Break
+## Canonical And Legacy Strategy Schemas
 
-The canonical v8 strategy kind is `trailing_martingale`. The v7 `trailing_grid` schema is not
+The canonical strategy kind is `trailing_martingale`. The released v7 `trailing_grid` schema is not
 aliased to it. Do not add compatibility migrations, duplicate strategy names, or silent shims for
 removed fields unless the user explicitly asks for released-version compatibility.
 
@@ -21,7 +21,7 @@ Removed v7 trailing-grid concepts:
 - linear `markup_start` to `markup_end` TP grids
 - separate entry grid spacing vs trailing threshold knobs
 
-Canonical v8 config path:
+Canonical config path:
 
 ```text
 bot.<side>.strategy.trailing_martingale
@@ -42,7 +42,7 @@ Optimizer selector contract:
   `bot.long.strategy.<active_strategy>.close.*`, or a leaf selector such as
   `we_excess_allowance_pct` to match every bound ending with that parameter name.
 - `*` is allowed as a one-segment wildcard, for example `*.strategy.close`.
-- Do not use flattened underscore selector names such as `long_entry_*` in v8 user-facing docs
+- Do not use flattened underscore selector names such as `long_entry_*` in current user-facing docs
   or agent instructions.
 - When `--fine_tune_params` is combined with `--start`, the starting configs are anchor configs:
   non-tuned optimizer-bound bot params are fixed from the selected anchor, while the fine-tune
@@ -76,7 +76,7 @@ capped/floored by the EMA entry band:
   best bid/ask; re-entries use normal threshold/retracement logic.
 - `all`: initial entries, partial initial entries, and re-entries are capped/floored by EMA.
 - `initial`: normal initial and partial initial entries are capped/floored by EMA. Re-entries are
-  not EMA capped/floored. This is the default and preserves the previous v8 behavior.
+  not EMA capped/floored. This is the default and preserves the previous canonical behavior.
 - `reentry`: flat initial entries are not capped/floored by EMA; re-entries are capped/floored by
   EMA.
 
@@ -122,3 +122,20 @@ is effectively moot because multiple same-price slices would be redundant.
 Rust owns strategy dispatch and order behavior. If Python docs, adapters, or tests imply old
 `trailing_grid` behavior, update those surfaces to match Rust rather than adding Python-side
 behavior patches.
+
+## Validation
+
+- Rust unit tests cover strategy dispatch, entries, closes, recursion, risk, and unstuck behavior.
+- Python tests use the verified real extension when asserting Rust output.
+- Live/backtest parity tests compare optimized behavior with a simple reference contract.
+- Config migration/schema tests reject removed fields outside `trailing_grid_v7`.
+- Behaviorally relevant changes include a bounded real backtest smoke.
+
+## Key Code And Tests
+
+- `passivbot-rust/src/orchestrator.rs`
+- `passivbot-rust/src/entries.rs`
+- `passivbot-rust/src/closes.rs`
+- `tests/test_orchestrator_json_api.py`
+- `tests/test_orchestrator_integration.py`
+- `tests/test_auto_unstuck_allowance.py`

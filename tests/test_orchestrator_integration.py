@@ -847,7 +847,7 @@ class TestOrchestratorErrorHandling:
 
 
 class TestSignedQuantitiesConvention:
-    """Test that signed quantities follow conventions from passivbot_agent_principles.yaml."""
+    """Test that signed quantities follow the canonical AI engineering principles."""
 
     def test_long_entry_qty_positive(self):
         """Test that long entry quantities are positive."""

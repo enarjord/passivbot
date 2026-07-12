@@ -57,7 +57,7 @@ Current code already has useful pieces to build on:
   - fake exchange scenario execution
 - `src/monitor_publisher.py`
   - structured monitor event publishing
-- `docs/ai/ccxt_upgrade_workflow.md`
+- `docs/ai/runbooks/ccxt_upgrade.md`
   - CCXT snapshot and fixture drift workflow
 - `docs/plans/container_deployment_design.md`
   - container path as a deployment contract, not a replacement architecture

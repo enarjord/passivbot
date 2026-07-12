@@ -175,7 +175,7 @@ Useful suite controls:
 - `--scenario-merge-overlaps` merges scenarios whose generated date windows overlap, preserving
   the earliest start, latest end, union of coins, and worst-severity label.
 
-See `docs/ai/crash_suite_generator.md` for the complete discovery, download, generation, and
+See `docs/ai/runbooks/crash_discovery.md` for the complete discovery, download, generation, and
 validation workflow.
 
 ## Fill Events Tooling

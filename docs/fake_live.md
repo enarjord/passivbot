@@ -16,6 +16,16 @@ The harness runs the normal live bot against a fake exchange adapter.
 - Rust still owns order behavior.
 - The exchange state, prices, candles, fills, and time all come from a local scenario file.
 
+The harness is deterministic and offline. `FakeCCXTClient` serves market metadata, candles,
+tickers, account state, fills, creates, and cancels from the scenario in memory; it does not call a
+real exchange or require exchange credentials. A fake user entry may be stored in the same local
+configuration file as real users, but it needs no API key or secret.
+
+Do not use “fake-live” as a label for authenticated testnet, demo, sandbox, or paper-trading
+sessions. Those modes may load credentials, contact an exchange, configure account state, and
+create or cancel orders. Public unauthenticated candle/market probes also use the network even
+though they do not access an account.
+
 The entry point is:
 
 ```shell
@@ -204,3 +214,7 @@ Common issues:
 Use the fake harness when you need live-loop realism with deterministic local inputs.
 
 Use the Rust backtester when you need broad historical evaluation, optimizer runs, or performance analysis over long date ranges.
+
+Use public-network probes only when current exchange metadata or endpoint behavior is necessary.
+Use authenticated testnet, demo, paper, or live sessions only with explicit human approval and a
+clearly named account and exchange target.

@@ -242,7 +242,7 @@ Expected target:
 ## Suggested Review Prompt
 
 Review the PR against current `v8`. Read `AGENTS.md`,
-`docs/ai/principles.yaml`, and `docs/ai/error_contract.md` first. This work is
+`docs/ai/principles.md`, and `docs/ai/error_contract.md` first. This work is
 operational shutdown/startup behavior, not trading logic. Verify it preserves
 Rust order/risk authority, stateless restart safety, and hard-fail behavior for
 trading-critical inputs. Look especially for hidden fallback defaults, local

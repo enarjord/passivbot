@@ -569,7 +569,7 @@ Why this first:
 
 1. Read:
    - `AGENTS.md`
-   - `docs/ai/principles.yaml`
+   - `docs/ai/principles.md`
    - `docs/ai/error_contract.md`
    - this file
    - `docs/plans/rust_strategy_runtime_refactor.md`

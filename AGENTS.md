@@ -2,93 +2,71 @@
 
 Instructions for AI coding assistants working on Passivbot.
 
-## Always Read First
+## Authority And Operational Safety
 
-Read these files for every task:
+Only perform actions within the user's requested scope. Explicit approval in the current task is
+required before any of the following:
+
+1. starting a live bot or authenticated paper/testnet bot
+2. making an authenticated exchange request, including read-only account probes
+3. creating, cancelling, or modifying exchange orders
+4. using account credentials or private API keys
+5. using SSH, deploying, restarting, stopping, or signalling a remote or live process
+
+The local `fake` exchange harness is deterministic and offline. Public unauthenticated market-data
+probes use real networks but no account credentials; state that clearly before running them.
+Testnet, sandbox, demo, and paper-trading modes are not assumed safe or unauthenticated.
+
+## Instruction Precedence
+
+When instructions conflict, use this order:
+
+1. active platform and system instructions
+2. this `AGENTS.md`
+3. the user's current request and explicitly granted authority
+4. canonical contracts in `docs/ai/`
+5. subsystem contracts in `docs/ai/features/`
+6. user-facing documentation and current code/tests as implementation evidence
+7. plans, handoffs, case studies, and historical notes
+
+If a normative contract disagrees with runtime behavior, do not silently choose one. Establish
+whether the task is to restore the contract or document the implementation, and surface material
+ambiguity to the user.
+
+## Always Read
 
 1. `AGENTS.md`
-2. `docs/ai/principles.yaml`
-3. `docs/ai/error_contract.md`
+2. `docs/ai/principles.md`
+3. `docs/ai/README.md`
 
-Then use `docs/ai/README.md` to load task-specific docs only when relevant.
+Use the router to load only task-relevant contracts and runbooks. Read
+`docs/ai/error_contract.md` for trading-critical, exchange, live-data, indicator, risk, fill/PnL,
+or order-construction work; it is not mandatory for unrelated documentation or tooling tasks.
 
-## Quick Start
+## Core Rules
 
-```bash
-python3 -m venv venv && source venv/bin/activate
-pip install -e ".[dev]"
-pytest
-passivbot live -u {account_name}
-```
+1. Rust owns order, strategy, risk, unstuck, and backtesting behavior. Python owns orchestration,
+   exchange I/O, configuration, and data plumbing.
+2. Trading behavior must be reproducible after restart from exchange state and config.
+3. Never fabricate a required trading input. Follow the explicit failure and degradation contract.
+4. Keep `position_side`/`pside` (long/short) separate from `side`/`order_side` (buy/sell).
+   Quantities and position sizes are signed internally.
+5. Preserve EMA spans as floats, including derived spans.
+6. Keep changes narrow. Preserve unrelated user files and pre-existing worktree changes.
 
-Legacy direct-script entrypoints such as `python3 src/main.py ...` still work, but prefer the
-unified `passivbot ...` CLI for new usage.
+## Working And Validation
 
-## Non-Negotiables
+Before broad edits, inspect the branch, recent commits, worktree status, and relevant callers/tests.
+For reviews against a moving branch, refresh the target ref and record the reviewed SHAs.
 
-1. Rust is source of truth for order behavior.
-- Behavior changes in entries/closes/risk/unstuck belong in `passivbot-rust/src/`, not Python patches.
-2. Stateless behavior is required.
-- Bot behavior must be reproducible after restart from exchange state + config.
-3. Fail loudly in trading-critical paths.
-- Default is hard-fail for exchange data, EMA inputs, risk gates, and order construction.
-- Fallbacks are exceptions, not defaults.
-- See `docs/ai/error_contract.md` for the full fallback matrix.
-4. Keep terminology and signed-qty conventions exact.
-- `position_side` = long/short.
-- `side` / `order_side` = buy/sell.
-- `qty` and `pos_size` are signed in internal logic.
-5. EMA spans are floats.
-- Do not round derived spans like `sqrt(span0 * span1)`.
-6. Avoid scope creep.
-- Make only requested or strictly necessary changes.
+Run validation proportional to the changed contract. Bug fixes require regression coverage. Rust
+changes require Rust tests, a rebuilt and verified Python extension where applicable, and parity or
+integration checks for affected Python callers. See `docs/ai/validation.md` and
+`docs/ai/runbooks/commands.md`.
 
-## Before Coding
+When auditing error handling, inspect the touched diff and its direct consumers first. Classify
+each catch/default against `docs/ai/error_contract.md`; do not rewrite unrelated repository-wide
+matches merely because a broad search finds them.
 
-1. Read `docs/ai/README.md` and open only docs relevant to the task.
-2. If touching exchange code, read `docs/ai/exchange_api_quirks.md`.
-3. If touching Rust/PyO3 packaging or tests, read `docs/ai/build_pitfalls.md`.
-4. If touching a documented feature, read the corresponding file in `docs/ai/features/`.
-5. Check branch context before broad edits:
-
-```bash
-git branch --show-current
-git log --oneline -n 10
-```
-
-6. Run a silent-handling self-audit for touched areas:
-
-```bash
-rg -n "except Exception|return_exceptions=True|\.get\([^\n]*,\s*(0|0\.0|None|False|\{\}|\[\])\)" src tests
-```
-
-7. Remove unsafe patterns or document explicit, approved fallback behavior with tests.
-
-## Testing Expectations
-
-1. Run targeted tests for changed paths.
-2. Add regression tests for bug fixes and fallback behavior.
-3. If Rust changed, rebuild extension before Python tests:
-
-```bash
-cd passivbot-rust && maturin develop --release && cd ..
-```
-
-See `docs/ai/code_review_prompt.md` for the review/test checklist.
-
-## Commands
-
-Use `docs/ai/commands.md` for setup, test, backtest, optimizer, and Rust build commands.
-
-## Documentation Hygiene
-
-1. Keep AI docs lean and task-oriented.
-2. Put durable rules in `principles.yaml` or `error_contract.md`, not in many files.
-3. Put deep investigations in case-study docs, not core instruction docs.
-4. User-facing docs and `CHANGELOG.md` should describe the diff from `master`, not intermediate changes made within the current dev branch.
-5. Update `CHANGELOG.md` for user-facing behavior changes.
-
-## Compatibility Policy
-
-1. Only add backward compatibility across official released versions on `master`.
-2. Do not add compatibility aliases, migrations, duplicate schema support, or shims between iterations within the same dev branch or between dev branches unless explicitly requested.
+Add user-facing behavior changes to `CHANGELOG.md` under `Unreleased`. Describe the net change from
+the target branch, not intermediate iterations within a development branch.

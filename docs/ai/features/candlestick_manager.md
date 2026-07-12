@@ -27,7 +27,10 @@
 6. Projection is stateless per read. Real candles always win on the next read, and bounded internal
    gaps continue to use the normal synthetic gap path with replacement/invalidation tracking.
 
-## Failure Modes To Watch
+Cache paths use `to_standard_exchange_name()` rather than raw CCXT identifiers such as
+`binanceusdm` or `kucoinfutures`.
+
+## Failure Semantics And Risks
 
 1. Cache path mismatch by exchange naming.
 2. Pagination edge behavior causing boundary gaps.
@@ -38,7 +41,7 @@
 6. Forager ranking bias if unknown stale candidate tails are converted into zero quote-volume or
    zero log-range instead of carrying forward the latest known ranking EMA within policy.
 
-## Test Focus
+## Validation
 
 1. Gap fill behavior and continuity.
 2. Replacement/invalidation behavior when real data arrives.
@@ -49,4 +52,4 @@
 
 - `src/candlestick_manager.py`
 - `src/tools/verify_hlcvs_data.py`
-- `docs/ai/exchange_api_quirks.md`
+- `exchange_integrations.md`

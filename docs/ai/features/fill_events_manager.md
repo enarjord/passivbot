@@ -34,13 +34,17 @@
 2. Bybit requires hybrid pagination for better closed-PnL completeness.
 3. Historical retention limits can make old PnL records unavailable.
 
-## Failure Modes To Watch
+## Failure Semantics And Risks
 
 1. Missing records from pagination assumptions.
 2. Duplicate events from multi-source merge logic.
 3. PnL mismatch between trade feed and positions-history feed.
 
-## Test Focus
+Exchange fetch methods propagate endpoint failures. The manager or caller may repair, retry,
+quarantine, rebuild, or defer according to `../error_contract.md`; it must not attach neutral PnL
+merely because an auxiliary endpoint failed.
+
+## Validation
 
 1. Deduplication correctness.
 2. Pagination completeness for high-activity windows.
@@ -49,5 +53,5 @@
 ## Key Code
 
 - `src/fill_events_manager.py`
-- `docs/ai/exchange_api_quirks.md`
-- `docs/ai/debugging_case_studies.md`
+- `exchange_integrations.md`
+- `../case_studies/debugging.md`

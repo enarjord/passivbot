@@ -1,4 +1,4 @@
-# Debugging Case Studies (Condensed)
+# Debugging Case Studies
 
 Use these patterns for non-trivial incident work.
 
