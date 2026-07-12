@@ -22,56 +22,78 @@ Estimated completion:
 
 ## Active Review Slice
 
-- Branch: `codex/v8-monitor-manifest-coalescing`
-- Base: `d1303f55b353e3a59d524afe12c7d72baeef6db6`
-- Triggering evidence: deployed PR #1204 attributed 47,478.85 of 53,903.942ms
-  monitor service time across 2,643 writes to post-append maintenance, or
-  88.08% cumulative and 17.964ms per write. Persistence totaled 3,619.444ms;
-  rotation 245.173ms; conversion 54.686ms. The worst single monitor write was
-  instead dominated by 1,661.187ms of publisher lock wait, so cumulative
-  maintenance and tail lock contention remain distinct concerns.
-- Scope: coalesce the best-effort monitor manifest checkpoint to at most once
-  per existing snapshot interval during ordinary event/history appends. Force
-  checkpoints during initialization, before and after rotation, after a
-  successful snapshot, and at close. Recover startup sequence from the maximum
-  of the manifest and checksummed current-segment recovery trailers using a
-  fixed-memory reverse chunk scan so unclean exits between checkpoints do not
-  reuse an event sequence or confuse payload fields with envelope metadata.
-- Behavior boundary: monitor persistence runtime only. Preserve NDJSON append
-  and fsync semantics, RLock ordering, retention/compression, routing, queue and
-  backpressure policy, error visibility, event payloads, all trading behavior,
-  and existing configuration. Do not add threads, queues, dynamic labels,
-  alerts, thresholds, verdicts, or lock-holder attribution in this slice.
-- Validation: deterministic checkpoint cadence and force-point tests; failed
-  checkpoint retry; bounded startup recovery from stale manifest, malformed or
-  invalid trailing rows, and a final row without newline; relay discoverability;
-  publisher/event-bus/passivbot monitor regressions; smoke, performance,
-  incident-bundle, and fake-live coverage; Python compilation; `git diff
+- Branch: `codex/v8-monitor-maintenance-attribution`
+- Base: `435b20fb08d3221be6520f216ddc210612656d0d`, PR #1205
+- Triggering evidence: PR #1205 roughly halved per-write maintenance, but four
+  fresh settled health windows still attributed `77452.154ms` of
+  `83557.728ms` monitor service across 8,959 writes to inclusive maintenance.
+  Maintenance remained 92.69% of service, or `8.645ms` per write, and one
+  recurring event-path maintenance operation reached `7148.422ms` while queue
+  wait reached `7123.965ms`. Existing timing cannot distinguish the periodic
+  manifest checkpoint from retention's once-per-minute recursive scan.
+- Scope: preserve the inclusive maintenance metric and add fixed event-path
+  manifest-checkpoint and retention count/total/max timing. Propagate those
+  fields through the event pipeline timing window, `health.summary`,
+  `live-performance-report`, and `live-smoke-report` while keeping historical
+  rows that lack the fields valid.
+- Behavior boundary: attribution only. Preserve manifest cadence and retry,
+  retention cadence and policy, NDJSON append semantics, RLock ordering,
+  routing, queue/backpressure policy, error visibility, all event payloads,
+  all trading behavior, and existing configuration. Do not add file scans,
+  thresholds, alerts, verdicts, dynamic labels, threads, or queues.
+- Validation: due versus skipped and failed maintenance attempts; fixed timing
+  aggregation and consume/restore semantics; historical-row omission;
+  performance/smoke projection; publisher, event-bus, relay, monitor,
+  incident-bundle, and fake-live regressions; Python compilation; `git diff
   --check`; added-line silent-handling audit; and independent preflight.
 - Publication state, exact head, mergeability, CI, and current-head reviewer
   verdicts: query live GitHub metadata; do not embed self-invalidating values.
 - Expected VPS action: exact five-bot graceful restart, then bounded
-  `health.summary`/report evidence and immediate plus settled smoke. Preserve
-  unrelated processes and local artifacts.
+  `health.summary` evidence identifying manifest versus retention service time
+  plus immediate and settled smoke. Preserve unrelated processes and artifacts.
 
 Next action:
 
-1. Hold PR #1205 at the exact current head until Hermes, Grok 4.5, and CI are
-   green; resolve findings narrowly and require fresh exact-head verdicts after
-   every push.
-2. Merge only after that gate is green, then gracefully restart the five exact
-   VPS5 bot panes while preserving unrelated processes and local artifacts.
-3. Compare fresh monitor maintenance and lock-wait totals/maxima against the
-   PR #1204 baseline using immediate and settled smoke/performance evidence.
+1. Complete local validation and independent preflight, then publish one
+   review-worthy attribution PR.
+2. Hold the exact current head until Hermes, Grok 4.5, and CI are green;
+   resolve findings narrowly and require fresh exact-head verdicts after every
+   push.
+3. Merge only after that gate is green, restart the five exact VPS5 bot panes,
+   and use fresh phase metrics to choose the next retention/persistence action.
 
 ## Deployed Baseline
 
-- Remote `v8`: `d1303f55b353e3a59d524afe12c7d72baeef6db6`, PR #1204
-- VPS5 repository: `d1303f55b353e3a59d524afe12c7d72baeef6db6`, PR #1204; tracked
-  status clean; only expected untracked artifacts were preserved
-- VPS5 expected bots: five; running with PR #1204 restart PIDs
-  `869404/869406/869556/869558/869564`;
+- Remote `v8`: `435b20fb08d3221be6520f216ddc210612656d0d`, PR #1205
+- VPS5 repository: `435b20fb08d3221be6520f216ddc210612656d0d`, PR #1205; tracked
+  status clean; expected untracked artifacts were preserved
+- VPS5 expected bots: five; running with PR #1205 restart PIDs
+  `871504/871509/871512/871516/871523`;
   unrelated `misc:0.0` remains PID `434835`
+- PR #1205 merged after exact-head Hermes and Grok 4.5 approval plus green CI.
+  VPS5 fast-forwarded cleanly and gracefully restarted only the five exact bot
+  panes. All old bot processes exited naturally; pane PIDs
+  `856294/856332/856364/856398/856434` and unrelated `misc:0.0` PID `434835`
+  were preserved.
+- The settled two-minute smoke was hard-green with `471/471` remote and
+  `61/61` account-critical calls successful, all five expected processes
+  matched, zero monitor parse/errors, and a clean tracked repository. One
+  report-time `D` sample caused no process hard failure.
+- Four initial fresh health windows covered 2,490 monitor writes. Monitor
+  service total/max was `20064.057/5543.611ms`; maintenance
+  `16914.708/5543.163ms`; persistence `1733.352/119.369ms`; lock wait
+  `544.284/487.369ms`; rotation `286.78/22.825ms`; and conversion
+  `48.654/0.325ms`. Drops, sink errors, degraded counts, unhealthy pipelines,
+  and final queue depth were zero.
+- Four later settled health windows covered 8,959 writes. Monitor service
+  total/max was `83557.728/7148.911ms`; maintenance
+  `77452.154/7148.422ms`; persistence `3084.764/111.555ms`; lock wait
+  `1507.36/508.744ms`; rotation `586.952/32.995ms`; and conversion
+  `206.946/32.574ms`. Maintenance fell from the PR #1204 baseline's
+  `17.964ms` to `8.645ms` per write, but remained the recurring long-tail
+  source. Drops, sink errors, degraded counts, unhealthy pipelines, and final
+  queue depth were zero. One unrelated hard exchange event remained in that
+  five-minute report window.
 - PR #1204 merged after exact-head Hermes and Grok 4.5 approval plus green CI.
   VPS5 fast-forwarded cleanly and gracefully restarted only the five exact bot
   panes. All old bot processes exited naturally; pane PIDs

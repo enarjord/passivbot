@@ -603,12 +603,24 @@ def test_pipeline_aggregates_and_resets_monitor_publisher_phase_timing(monkeypat
                         "rotation_ns": 3_000_000,
                         "persist_ns": 5_000_000,
                         "maintenance_ns": 7_000_000,
+                        "manifest_checkpoint_count": 1,
+                        "manifest_checkpoint_ns_total": 2_000_000,
+                        "manifest_checkpoint_ns_max": 2_000_000,
+                        "retention_run_count": 1,
+                        "retention_ns_total": 4_000_000,
+                        "retention_ns_max": 4_000_000,
                     },
                     {
                         "lock_wait_ns": 11_000_000,
                         "rotation_ns": 13_000_000,
                         "persist_ns": 17_000_000,
                         "maintenance_ns": 19_000_000,
+                        "manifest_checkpoint_count": 0,
+                        "manifest_checkpoint_ns_total": 0,
+                        "manifest_checkpoint_ns_max": 0,
+                        "retention_run_count": 0,
+                        "retention_ns_total": 0,
+                        "retention_ns_max": 0,
                     },
                 )
             )
@@ -641,6 +653,12 @@ def test_pipeline_aggregates_and_resets_monitor_publisher_phase_timing(monkeypat
         "event_monitor_publisher_persist_ms_max": 17.0,
         "event_monitor_publisher_maintenance_ms_total": 26.0,
         "event_monitor_publisher_maintenance_ms_max": 19.0,
+        "event_monitor_publisher_manifest_checkpoint_count": 1,
+        "event_monitor_publisher_manifest_checkpoint_ms_total": 2.0,
+        "event_monitor_publisher_manifest_checkpoint_ms_max": 2.0,
+        "event_monitor_publisher_retention_run_count": 1,
+        "event_monitor_publisher_retention_ms_total": 4.0,
+        "event_monitor_publisher_retention_ms_max": 4.0,
     }
     snapshot = pipeline.health_snapshot()
     assert {key: snapshot[key] for key in expected} == expected
@@ -663,23 +681,43 @@ def test_pipeline_monitor_phase_timing_restores_overlapping_window(monkeypatch):
     pipeline._timing_monitor_prepare_ns_max = 2_000_000
     pipeline._timing_monitor_publisher_persist_ns_total = 3_000_000
     pipeline._timing_monitor_publisher_persist_ns_max = 3_000_000
+    pipeline._timing_monitor_publisher_manifest_checkpoint_count = 2
+    pipeline._timing_monitor_publisher_manifest_checkpoint_ns_total = 13_000_000
+    pipeline._timing_monitor_publisher_manifest_checkpoint_ns_max = 8_000_000
+    pipeline._timing_monitor_publisher_retention_run_count = 3
+    pipeline._timing_monitor_publisher_retention_ns_total = 17_000_000
+    pipeline._timing_monitor_publisher_retention_ns_max = 9_000_000
 
     first, first_token = pipeline.consume_timing_snapshot()
     pipeline._timing_monitor_prepare_ns_total = 5_000_000
     pipeline._timing_monitor_prepare_ns_max = 5_000_000
     pipeline._timing_monitor_publisher_persist_ns_total = 7_000_000
     pipeline._timing_monitor_publisher_persist_ns_max = 7_000_000
+    pipeline._timing_monitor_publisher_manifest_checkpoint_count = 5
+    pipeline._timing_monitor_publisher_manifest_checkpoint_ns_total = 19_000_000
+    pipeline._timing_monitor_publisher_manifest_checkpoint_ns_max = 12_000_000
+    pipeline._timing_monitor_publisher_retention_run_count = 7
+    pipeline._timing_monitor_publisher_retention_ns_total = 23_000_000
+    pipeline._timing_monitor_publisher_retention_ns_max = 14_000_000
     _second, second_token = pipeline.consume_timing_snapshot()
     pipeline.confirm_timing_snapshot(first_token)
     pipeline.restore_timing_snapshot(second_token)
 
     assert first["event_monitor_prepare_ms_total"] == 2.0
     assert first["event_monitor_publisher_persist_ms_total"] == 3.0
+    assert first["event_monitor_publisher_manifest_checkpoint_count"] == 2
+    assert first["event_monitor_publisher_retention_run_count"] == 3
     restored = pipeline.health_snapshot()
     assert restored["event_monitor_prepare_ms_total"] == 5.0
     assert restored["event_monitor_prepare_ms_max"] == 5.0
     assert restored["event_monitor_publisher_persist_ms_total"] == 7.0
     assert restored["event_monitor_publisher_persist_ms_max"] == 7.0
+    assert restored["event_monitor_publisher_manifest_checkpoint_count"] == 5
+    assert restored["event_monitor_publisher_manifest_checkpoint_ms_total"] == 19.0
+    assert restored["event_monitor_publisher_manifest_checkpoint_ms_max"] == 12.0
+    assert restored["event_monitor_publisher_retention_run_count"] == 7
+    assert restored["event_monitor_publisher_retention_ms_total"] == 23.0
+    assert restored["event_monitor_publisher_retention_ms_max"] == 14.0
 
 
 def test_pipeline_custom_monitor_sink_reports_zero_internal_phase_timing():
@@ -711,6 +749,12 @@ def test_pipeline_custom_monitor_sink_reports_zero_internal_phase_timing():
         "event_monitor_publisher_persist_ms_max": 0.0,
         "event_monitor_publisher_maintenance_ms_total": 0.0,
         "event_monitor_publisher_maintenance_ms_max": 0.0,
+        "event_monitor_publisher_manifest_checkpoint_count": 0,
+        "event_monitor_publisher_manifest_checkpoint_ms_total": 0.0,
+        "event_monitor_publisher_manifest_checkpoint_ms_max": 0.0,
+        "event_monitor_publisher_retention_run_count": 0,
+        "event_monitor_publisher_retention_ms_total": 0.0,
+        "event_monitor_publisher_retention_ms_max": 0.0,
     }
     assert pipeline.close(timeout=2.0) is True
 

@@ -69,6 +69,21 @@ Retuned goal boundary:
 
 VPS5 deployment status:
 
+- PR #1205 merged to `v8` as
+  `435b20fb08d3221be6520f216ddc210612656d0d` after exact-head Hermes and
+  Grok 4.5 approval plus green CI. It coalesced ordinary best-effort manifest
+  checkpoints while retaining forced durability points, and authenticated
+  current-segment sequence recovery with a fixed-memory reverse scan. VPS5
+  fast-forwarded cleanly and gracefully restarted only the five configured bot
+  panes; all old bots exited naturally, pane PIDs remained unchanged, and
+  unrelated `misc:0.0` PID `434835` was preserved. The settled two-minute smoke
+  was hard-green with `471/471` remote and `61/61` account-critical calls
+  successful, all five processes matched, zero monitor errors, and a clean
+  tracked repository. Four later settled health windows reduced maintenance
+  from the PR #1204 baseline's `17.964ms` to `8.645ms` per write, but still
+  recorded `77452.154ms` maintenance across 8,959 writes and a recurring
+  `7148.422ms` maximum. The next attribution slice separates periodic manifest
+  checkpoints from retention runs before changing persistence behavior.
 - PR #1191 merged to `v8` as
   `359929007dce0b47c023a36fdef90a7106ae46da` and was pulled to VPS5 without
   restarting bots. Existing optional progress, exact candidate terminal, and

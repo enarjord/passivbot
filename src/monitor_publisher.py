@@ -11,7 +11,7 @@ import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterable, Optional
+from typing import Any, Callable, Iterable, Optional
 
 
 _MONITOR_EVENT_PHASE_TIMING_KEYS = (
@@ -19,6 +19,12 @@ _MONITOR_EVENT_PHASE_TIMING_KEYS = (
     "rotation_ns",
     "persist_ns",
     "maintenance_ns",
+    "manifest_checkpoint_count",
+    "manifest_checkpoint_ns_total",
+    "manifest_checkpoint_ns_max",
+    "retention_run_count",
+    "retention_ns_total",
+    "retention_ns_max",
 )
 _CURRENT_EVENTS_REVERSE_READ_BYTES = 64 * 1024
 _EVENT_RECOVERY_CHECKSUM_BYTES = 16
@@ -395,20 +401,30 @@ class MonitorPublisher:
             self._last_manifest_write_monotonic_ms = self._monotonic_ms()
             return True
 
-    def _write_manifest_if_due(self, now_ms: Optional[int] = None) -> bool:
-        with self._lock:
-            if not self._manifest_dirty:
-                return False
-            cadence_now_ms = self._monotonic_ms()
-            if (
-                self._manifest_retry_needed
-                or self._last_manifest_write_monotonic_ms is None
-                or cadence_now_ms < self._last_manifest_write_monotonic_ms
-                or cadence_now_ms - self._last_manifest_write_monotonic_ms
-                >= self.snapshot_interval_ms
-            ):
-                return self._write_manifest(now_ms=now_ms)
+    def _manifest_checkpoint_due(self) -> bool:
+        if not self._manifest_dirty:
             return False
+        cadence_now_ms = self._monotonic_ms()
+        return (
+            self._manifest_retry_needed
+            or self._last_manifest_write_monotonic_ms is None
+            or cadence_now_ms < self._last_manifest_write_monotonic_ms
+            or cadence_now_ms - self._last_manifest_write_monotonic_ms
+            >= self.snapshot_interval_ms
+        )
+
+    def _write_manifest_if_due(
+        self,
+        now_ms: Optional[int] = None,
+        *,
+        on_attempt: Optional[Callable[[], None]] = None,
+    ) -> bool:
+        with self._lock:
+            if not self._manifest_checkpoint_due():
+                return False
+            if on_attempt is not None:
+                on_attempt()
+            return self._write_manifest(now_ms=now_ms)
 
     def _log_write_failure(self, action: str, exc: BaseException) -> None:
         if not _is_disk_full_error(exc):
@@ -456,12 +472,24 @@ class MonitorPublisher:
                 files.append(path)
         return sorted(files, key=lambda path: path.stat().st_mtime)
 
-    def _prune_retention(self, now_ms: Optional[int] = None) -> None:
+    def _retention_due(self, now_ms: int) -> bool:
+        return not (
+            self.last_retention_ms and now_ms - self.last_retention_ms < 60_000
+        )
+
+    def _prune_retention(
+        self,
+        now_ms: Optional[int] = None,
+        *,
+        on_run: Optional[Callable[[], None]] = None,
+    ) -> None:
         with self._lock:
             now_ms = self._now_ms() if now_ms is None else int(now_ms)
-            if self.last_retention_ms and now_ms - self.last_retention_ms < 60_000:
+            if not self._retention_due(now_ms):
                 return
             self.last_retention_ms = now_ms
+            if on_run is not None:
+                on_run()
             try:
                 cutoff_ms = now_ms - int(self.retain_days * 24.0 * 60.0 * 60.0 * 1000.0)
                 if self.retain_days >= 0.0:
@@ -802,8 +830,42 @@ class MonitorPublisher:
                 maintenance_started_ns = time.monotonic_ns()
                 try:
                     self._mark_manifest_dirty()
-                    self._write_manifest_if_due(now_ms=now_ms)
-                    self._prune_retention(now_ms=now_ms)
+                    manifest_checkpoint_started_ns: int | None = None
+
+                    def on_manifest_checkpoint_attempt() -> None:
+                        nonlocal manifest_checkpoint_started_ns
+                        manifest_checkpoint_started_ns = time.monotonic_ns()
+                        timing["manifest_checkpoint_count"] += 1
+
+                    try:
+                        self._write_manifest_if_due(
+                            now_ms=now_ms, on_attempt=on_manifest_checkpoint_attempt
+                        )
+                    finally:
+                        if manifest_checkpoint_started_ns is not None:
+                            manifest_checkpoint_ns = max(
+                                0, time.monotonic_ns() - manifest_checkpoint_started_ns
+                            )
+                            timing["manifest_checkpoint_ns_total"] += manifest_checkpoint_ns
+                            timing["manifest_checkpoint_ns_max"] = max(
+                                timing["manifest_checkpoint_ns_max"], manifest_checkpoint_ns
+                            )
+                    retention_started_ns: int | None = None
+
+                    def on_retention_run() -> None:
+                        nonlocal retention_started_ns
+                        retention_started_ns = time.monotonic_ns()
+                        timing["retention_run_count"] += 1
+
+                    try:
+                        self._prune_retention(now_ms=now_ms, on_run=on_retention_run)
+                    finally:
+                        if retention_started_ns is not None:
+                            retention_ns = max(0, time.monotonic_ns() - retention_started_ns)
+                            timing["retention_ns_total"] += retention_ns
+                            timing["retention_ns_max"] = max(
+                                timing["retention_ns_max"], retention_ns
+                            )
                 finally:
                     timing["maintenance_ns"] = max(
                         0, time.monotonic_ns() - maintenance_started_ns

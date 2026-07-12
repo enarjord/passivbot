@@ -649,15 +649,22 @@ def test_monitor_publisher_event_phase_timing_uses_fixed_boundaries(tmp_path, mo
     monkeypatch.setattr(
         publisher,
         "_write_manifest_if_due",
-        lambda **_kwargs: clock.__setitem__("ns", clock["ns"] + 7_000_000),
+        lambda **kwargs: (
+            kwargs["on_attempt"](),
+            clock.__setitem__("ns", clock["ns"] + 7_000_000),
+        ),
     )
     monkeypatch.setattr(
         publisher,
         "_prune_retention",
-        lambda **_kwargs: clock.__setitem__("ns", clock["ns"] + 11_000_000),
+        lambda **kwargs: (
+            kwargs["on_run"](),
+            clock.__setitem__("ns", clock["ns"] + 11_000_000),
+        ),
     )
     monkeypatch.setattr(monitor_publisher_module.json, "dumps", timed_dumps)
     monkeypatch.setattr(monitor_publisher_module, "open", timed_open, raising=False)
+    publisher._last_manifest_write_monotonic_ms = None
 
     event, timing = publisher._record_event_timed("test.event", ("test",), {"value": 1})
 
@@ -667,6 +674,12 @@ def test_monitor_publisher_event_phase_timing_uses_fixed_boundaries(tmp_path, mo
         "rotation_ns": 2_000_000,
         "persist_ns": 8_000_000,
         "maintenance_ns": 18_000_000,
+        "manifest_checkpoint_count": 1,
+        "manifest_checkpoint_ns_total": 7_000_000,
+        "manifest_checkpoint_ns_max": 7_000_000,
+        "retention_run_count": 1,
+        "retention_ns_total": 11_000_000,
+        "retention_ns_max": 11_000_000,
     }
 
 
@@ -698,4 +711,57 @@ def test_monitor_publisher_event_failure_retains_reached_phase_timing(tmp_path, 
         "rotation_ns": 2_000_000,
         "persist_ns": 3_000_000,
         "maintenance_ns": 0,
+        "manifest_checkpoint_count": 0,
+        "manifest_checkpoint_ns_total": 0,
+        "manifest_checkpoint_ns_max": 0,
+        "retention_run_count": 0,
+        "retention_ns_total": 0,
+        "retention_ns_max": 0,
     }
+
+
+def test_monitor_publisher_event_timing_counts_due_maintenance_only(tmp_path):
+    publisher = _make_publisher(tmp_path)
+    publisher._last_manifest_write_monotonic_ms = None
+
+    _first_event, first_timing = publisher._record_event_timed(
+        "test.event", ("test",), {"value": 1}, ts=100_000
+    )
+    _second_event, second_timing = publisher._record_event_timed(
+        "test.event", ("test",), {"value": 2}, ts=100_001
+    )
+
+    assert first_timing["manifest_checkpoint_count"] == 1
+    assert first_timing["retention_run_count"] == 1
+    assert first_timing["manifest_checkpoint_ns_total"] >= 0
+    assert first_timing["retention_ns_total"] >= 0
+    assert second_timing["manifest_checkpoint_count"] == 0
+    assert second_timing["retention_run_count"] == 0
+    assert second_timing["manifest_checkpoint_ns_total"] == 0
+    assert second_timing["retention_ns_total"] == 0
+
+
+def test_monitor_publisher_event_timing_counts_failed_due_attempts(tmp_path, monkeypatch, caplog):
+    publisher = _make_publisher(tmp_path)
+    publisher._last_manifest_write_monotonic_ms = None
+
+    def fail_atomic_write(*_args, **_kwargs):
+        raise OSError("manifest unavailable")
+
+    def fail_rotatable_files():
+        raise OSError("retention unavailable")
+
+    monkeypatch.setattr(monitor_publisher_module, "_atomic_write_json", fail_atomic_write)
+    monkeypatch.setattr(publisher, "_rotatable_files", fail_rotatable_files)
+
+    event, timing = publisher._record_event_timed(
+        "test.event", ("test",), {"value": 1}, ts=100_000
+    )
+
+    assert event is not None
+    assert timing["manifest_checkpoint_count"] == 1
+    assert timing["retention_run_count"] == 1
+    assert timing["manifest_checkpoint_ns_total"] >= timing["manifest_checkpoint_ns_max"]
+    assert timing["retention_ns_total"] >= timing["retention_ns_max"]
+    assert "writing manifest" in caplog.text
+    assert "retention pruning failed" in caplog.text

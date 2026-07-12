@@ -382,9 +382,13 @@ classification when enough source events exist.
     monitor writes to fixed conversion, publisher lock-wait, rotation,
     persistence, and maintenance phases. Fresh VPS5 evidence found maintenance
     was 88.08% of cumulative monitor service while a separate 1,661.187ms lock
-    wait dominated the worst individual write. The active follow-up coalesces
-    best-effort manifest checkpoints to the existing snapshot cadence and adds
-    bounded crash-safe event-sequence recovery without changing delivery.
+    wait dominated the worst individual write. PR #1205 coalesced best-effort
+    manifest checkpoints to the existing snapshot cadence and added bounded
+    crash-safe event-sequence recovery without changing delivery. Fresh settled
+    evidence reduced maintenance from `17.964ms` to `8.645ms` per write but
+    retained a recurring `7148.422ms` maintenance maximum. The active follow-up
+    separates periodic manifest-checkpoint and retention count/total/max timing
+    before changing persistence behavior.
 - [ ] Exchange writes: create/cancel/close/panic write latency, exchange
   response latency, ambiguous write rate, confirmation latency.
   - Status: partial. The report now derives order-wave total duration,
