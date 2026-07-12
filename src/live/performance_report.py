@@ -13,6 +13,7 @@ from live.event_bus import (
     LIVE_EVENT_ID_KEYS,
     LIVE_EVENT_MONITOR_PAYLOAD_KEY,
     startup_phase_readiness_contract,
+    startup_timing_phase,
     utc_ms,
 )
 from live.event_file_rows import event_file_rows
@@ -1188,9 +1189,6 @@ class _StartupReadinessAccumulator:
         self.readiness_scope_counts: Counter[str] = Counter()
         self.readiness_scope_elapsed_values: dict[str, list[int]] = {}
         self.readiness_trading_impact_counts: Counter[str] = Counter()
-        self.lifecycle_started_order: dict[
-            str, tuple[str, int, str, int, int, int]
-        ] = {}
 
     @staticmethod
     def _update_debug_profiles(state: dict[str, Any], data: dict[str, Any]) -> None:
@@ -1209,6 +1207,7 @@ class _StartupReadinessAccumulator:
         if state is None:
             state = {
                 "bot": bot,
+                "_candidates": {},
                 "startup_phases_ms": {},
                 "latest_ts": None,
             }
@@ -1220,7 +1219,48 @@ class _StartupReadinessAccumulator:
             state["latest_ts"] = int(ts)
         return state
 
-    def add(self, *, row: dict[str, Any], live_event: dict[str, Any]) -> None:
+    @staticmethod
+    def _apply_candidate(state: dict[str, Any], candidate: dict[str, Any]) -> None:
+        ts = candidate.get("ts")
+        if ts is not None and (
+            state.get("latest_ts") is None or int(ts) > int(state["latest_ts"])
+        ):
+            state["latest_ts"] = int(ts)
+        event_type = candidate["event_type"]
+        if event_type == "bot.ready":
+            if ts is not None:
+                state["bot_ready_ts"] = int(ts)
+            state["lifecycle_status"] = "ready"
+            _StartupReadinessAccumulator._update_debug_profiles(
+                state,
+                candidate["data"],
+            )
+            return
+        if event_type == "bot.startup_timing":
+            stage = candidate["stage"]
+            elapsed_ms = candidate.get("elapsed_ms")
+            if elapsed_ms is None:
+                return
+            state["startup_phases_ms"][stage] = int(elapsed_ms)
+            contract = candidate.get("contract")
+            if contract is not None:
+                readiness_sla = state.setdefault("readiness_sla", {})
+                readiness_sla[contract["readiness_scope"]] = {
+                    "phase": stage,
+                    "elapsed_ms": int(elapsed_ms),
+                    "trading_impact": contract["trading_impact"],
+                }
+            return
+        if event_type.startswith("hsl.replay."):
+            state["hsl_replay"] = candidate["hsl_replay"]
+
+    def add(
+        self,
+        *,
+        row: dict[str, Any],
+        live_event: dict[str, Any],
+        source_complete: bool = True,
+    ) -> None:
         event_type = str(live_event.get("event_type") or row.get("kind") or "")
         data = live_event.get("data") if isinstance(live_event.get("data"), dict) else {}
         ts = _record_ts(row)
@@ -1231,7 +1271,10 @@ class _StartupReadinessAccumulator:
         elapsed_ms: int | None = None
         contract: dict[str, str] | None = None
         if event_type == "bot.startup_timing":
-            stage = _startup_phase_label(data.get("stage") or data.get("phase"))
+            raw_phase = startup_timing_phase(data)
+            if raw_phase is None:
+                return
+            stage = _startup_phase_label(raw_phase)
             elapsed_ms = _startup_elapsed_ms(data)
             if elapsed_ms is not None:
                 self.startup_phase_counts[stage] += 1
@@ -1254,19 +1297,32 @@ class _StartupReadinessAccumulator:
                 )
 
         if event_type == "bot.started":
-            previous_started_order = self.lifecycle_started_order.get(bot)
+            state = self._bot_state(row=row, live_event=live_event)
+            previous_started_order = state.get("_started_order")
             if (
                 previous_started_order is not None
                 and event_order <= previous_started_order
             ):
                 return
-            self.lifecycle_started_order[bot] = event_order
-            state = self._bot_state(row=row, live_event=live_event)
-            bot = str(state["bot"])
+            incomplete_order = state.get("_latest_incomplete_unanchored_order")
+            if (
+                previous_started_order is None
+                and incomplete_order is not None
+                and incomplete_order > event_order
+            ):
+                return
+            retained = {
+                key: candidate
+                for key, candidate in state["_candidates"].items()
+                if candidate[0] > event_order and candidate[2]
+            }
+            bot_name = str(state["bot"])
             state.clear()
             state.update(
                 {
-                    "bot": bot,
+                    "bot": bot_name,
+                    "_candidates": retained,
+                    "_started_order": event_order,
                     "startup_phases_ms": {},
                     "latest_ts": int(ts) if ts is not None else None,
                 }
@@ -1275,41 +1331,49 @@ class _StartupReadinessAccumulator:
                 state["bot_started_ts"] = int(ts)
             state["lifecycle_status"] = "started"
             self._update_debug_profiles(state, data)
+            for _key, (_order, candidate, _complete) in sorted(
+                retained.items(),
+                key=lambda item: item[1][0],
+            ):
+                self._apply_candidate(state, candidate)
             return
-        started_order = self.lifecycle_started_order.get(bot)
+        if event_type not in {
+            "bot.ready",
+            "bot.startup_timing",
+        } and not event_type.startswith("hsl.replay."):
+            return
+        state = self._bot_state(row=row, live_event=live_event)
+        started_order = state.get("_started_order")
         if started_order is not None and event_order <= started_order:
             return
-        if event_type == "bot.ready":
-            state = self._bot_state(row=row, live_event=live_event)
-            if ts is not None:
-                state["bot_ready_ts"] = int(ts)
-            state["lifecycle_status"] = "ready"
-            self._update_debug_profiles(state, data)
-            return
+        if started_order is None and not source_complete:
+            incomplete_order = state.get("_latest_incomplete_unanchored_order")
+            if incomplete_order is None or event_order > incomplete_order:
+                state["_latest_incomplete_unanchored_order"] = event_order
+
+        candidate_data: dict[str, Any] = {}
+        debug_profiles = _known_debug_profiles(data.get("live_event_debug_profiles"))
+        if debug_profiles:
+            candidate_data["live_event_debug_profiles"] = debug_profiles
+        candidate: dict[str, Any] = {
+            "event_type": event_type,
+            "ts": int(ts) if ts is not None else None,
+            "data": candidate_data,
+        }
+        candidate_key = event_type
         if event_type == "bot.startup_timing":
-            state = self._bot_state(row=row, live_event=live_event)
             assert stage is not None
-            if elapsed_ms is not None:
-                state["startup_phases_ms"][stage] = int(elapsed_ms)
-                if contract is not None:
-                    scope = contract["readiness_scope"]
-                    impact = contract["trading_impact"]
-                    readiness_sla = state.get("readiness_sla")
-                    if not isinstance(readiness_sla, dict):
-                        readiness_sla = {}
-                        state["readiness_sla"] = readiness_sla
-                    readiness_sla[scope] = {
-                        "phase": stage,
-                        "elapsed_ms": int(elapsed_ms),
-                        "trading_impact": impact,
-                    }
-            return
+            candidate_key = f"startup:{stage}"
+            candidate.update(
+                {
+                    "stage": stage,
+                    "elapsed_ms": elapsed_ms,
+                    "contract": contract,
+                }
+            )
         if event_type.startswith("hsl.replay."):
-            state = self._bot_state(row=row, live_event=live_event)
-            hsl_state = state.get("hsl_replay")
-            if not isinstance(hsl_state, dict):
-                hsl_state = {}
-                state["hsl_replay"] = hsl_state
+            candidate_key = "hsl.replay"
+            hsl_state: dict[str, Any] = {}
             if ts is not None:
                 hsl_state["latest_ts"] = int(ts)
             hsl_state["event_type"] = event_type
@@ -1337,6 +1401,18 @@ class _StartupReadinessAccumulator:
             ):
                 if key in data:
                     hsl_state[key] = data[key]
+            candidate["hsl_replay"] = hsl_state
+
+        existing = state["_candidates"].get(candidate_key)
+        if existing is not None and event_order <= existing[0]:
+            return
+        state["_candidates"][candidate_key] = (
+            event_order,
+            candidate,
+            bool(source_complete),
+        )
+        if started_order is not None or source_complete:
+            self._apply_candidate(state, candidate)
 
     def to_dict(
         self,
@@ -4278,7 +4354,10 @@ def _add_event_timings(
         return
 
     if event_type == "bot.startup_timing":
-        stage = _startup_phase_label(data.get("stage") or data.get("phase"))
+        raw_phase = startup_timing_phase(data)
+        if raw_phase is None:
+            return
+        stage = _startup_phase_label(raw_phase)
         operation = f"startup.{stage}"
         value_ms = _non_negative_ms(data.get("elapsed_ms"))
         if value_ms is None:
@@ -4557,7 +4636,11 @@ def build_live_performance_report(
             live_event=live_event,
             cycle_scope=cycle_scope,
         )
-        startup_readiness.add(row=row, live_event=live_event)
+        startup_readiness.add(
+            row=row,
+            live_event=live_event,
+            source_complete=source_complete,
+        )
         startup_milestones.add(
             row=row,
             live_event=live_event,

@@ -4,6 +4,11 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Startup readiness reporting now uses one canonical phase parser across
+  performance and smoke consumers, rejects conflicting `phase`/legacy `stage`
+  records, preserves current lifecycle state across event rotation, and keeps
+  prior restart samples available for smoke timing budgets.
+
 - `live-performance-report` now derives bounded current-lifecycle startup
   milestones for the first cycle, first Rust call, and first submitted
   exchange write from existing structured events. Missing observations remain

@@ -7633,3 +7633,33 @@ VPS5 deployment status:
   fresh-entry gate, process control, HSL/risk/order behavior, Rust, backtest,
   optimizer, or smoke-verdict change. Expected VPS action is pull plus an exact
   bounded rotated report and settled smoke, with no bot restart.
+
+### Deployed Slice: Startup Action Milestones
+
+- PR #1194 was approved by Hermes and Grok 4.5 on exact head `a35e44eb2`; CI
+  passed and it merged to `v8` as `b15d349be`.
+- VPS5 fast-forwarded without bot signals or restarts. Bot PIDs
+  `850148/850296/850370/850436/850495` and unrelated `misc:0.0` PID `434835`
+  remained unchanged.
+- The exact bounded rotated `startup_milestones` report returned `ok=true`,
+  scanned 12 files / 46,748 records with zero errors/warnings, retained
+  truncated lifecycle evidence as explicit unknowns, and observed KuCoin's
+  first cycle at `110.653s` without claiming unseen Rust/write milestones.
+- The first smoke caught one recovered Binance `InvalidNonce` and two transient
+  `D` samples during report I/O. After settling, all `D` states cleared; the
+  final two-minute smoke was hard-green with `384/384` remote and `76/76`
+  account-critical calls successful, 5/5 processes matched (`R=4,S=1`), no
+  hard/log failures, no pipeline drops/sink errors, and a clean tracked repo.
+
+### Active Slice: Startup Readiness Consumer Correctness
+
+- Branch: `codex/v8-startup-readiness-correctness` from deployed `b15d349be`.
+- Scope: resolve the three post-merge startup consumer findings together: keep
+  performance readiness state when one lifecycle spans rotated/current files;
+  preserve prior restart timing samples for smoke p95 budgets while projecting
+  current readiness only; and make `phase` canonical with `stage` as fallback
+  only, rejecting conflicts in every performance/smoke timing consumer.
+- Non-goals: no event producer, readiness/startup decision, exchange call,
+  process control, HSL/risk/order behavior, Rust, backtest, optimizer, or smoke
+  verdict change. Expected VPS action is pull plus bounded reports and settled
+  smoke, with no bot restart.

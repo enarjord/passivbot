@@ -15,6 +15,7 @@ from live.event_bus import (
     LIVE_EVENT_MONITOR_PAYLOAD_KEY,
     EventTypes,
     startup_phase_readiness_contract,
+    startup_timing_phase,
     utc_ms,
 )
 from live.event_file_rows import event_file_rows
@@ -5431,8 +5432,8 @@ def _startup_timing_record(
     data = live_event.get("data")
     if not isinstance(data, dict):
         return None
-    phase = str(data.get("phase") or "").strip()
-    if not phase:
+    phase = startup_timing_phase(data)
+    if phase is None:
         return None
     elapsed_ms = _non_negative_int(data.get("elapsed_ms"))
     since_previous_ms = _non_negative_int(data.get("since_previous_ms"))
@@ -5489,6 +5490,8 @@ def _startup_records_after_latest_started(
 
 def _summarize_startup_timings(
     records_by_bot: dict[str, list[dict[str, Any]]],
+    *,
+    baseline_records_by_bot: dict[str, list[dict[str, Any]]] | None = None,
 ) -> list[dict[str, Any]]:
     summaries: list[dict[str, Any]] = []
     for bot_key, records in sorted(records_by_bot.items()):
@@ -5497,8 +5500,24 @@ def _summarize_startup_timings(
             phases[str(record["phase"])].append(record)
         phase_summaries: dict[str, dict[str, Any]] = {}
         for phase, phase_records in sorted(phases.items()):
-            window = phase_records[-STARTUP_TIMING_BASELINE_WINDOW:]
-            latest = window[-1]
+            latest = phase_records[-1]
+            baseline_records = (
+                baseline_records_by_bot[bot_key]
+                if baseline_records_by_bot is not None
+                and bot_key in baseline_records_by_bot
+                else records
+            )
+            latest_key = _sort_startup_record_key(latest)
+            historical_phase_records = [
+                record
+                for record in sorted(
+                    baseline_records,
+                    key=_sort_startup_record_key,
+                )
+                if record.get("phase") == phase
+                and _sort_startup_record_key(record) <= latest_key
+            ]
+            window = historical_phase_records[-STARTUP_TIMING_BASELINE_WINDOW:]
             elapsed_values = [
                 int(record["elapsed_ms"])
                 for record in window
@@ -6268,7 +6287,8 @@ def _scan_events(
             _startup_records_after_latest_started(
                 startup_timing_records,
                 startup_latest_started,
-            )
+            ),
+            baseline_records_by_bot=startup_timing_records,
         ),
         "remote_call_failures": _summarize_remote_call_failures(
             remote_call_failure_groups

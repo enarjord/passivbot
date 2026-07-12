@@ -32,6 +32,7 @@ from live.event_bus import (
     resolve_live_event_console_enabled,
     sink_failed_reason_code,
     startup_phase_readiness_contract,
+    startup_timing_phase,
 )
 from live.events import DiagnosticEvent
 from monitor_publisher import MonitorPublisher
@@ -120,6 +121,18 @@ def test_startup_phase_readiness_contract_is_bounded_and_defensive():
     assert startup_phase_readiness_contract("active-candle") is None
     assert startup_phase_readiness_contract("unknown") is None
     assert startup_phase_readiness_contract(["account"]) is None
+
+
+def test_startup_timing_phase_is_canonical_and_rejects_conflicts():
+    assert startup_timing_phase({"phase": "account"}) == "account"
+    assert startup_timing_phase({"stage": "hsl"}) == "hsl"
+    assert startup_timing_phase({"phase": "startup", "stage": "startup"}) == (
+        "startup"
+    )
+    assert startup_timing_phase({"phase": "account", "stage": "hsl"}) is None
+    assert startup_timing_phase({"phase": "custom-phase"}) == "other"
+    assert startup_timing_phase({}) is None
+    assert startup_timing_phase(None) is None
 
 
 def test_live_event_reason_code_registry_values_are_unique_and_query_safe():
