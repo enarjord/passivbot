@@ -22,53 +22,67 @@ Estimated completion:
 
 ## Active Review Slice
 
-- Branch: `codex/v8-monitor-maintenance-attribution`
-- Base: `435b20fb08d3221be6520f216ddc210612656d0d`, PR #1205
-- Triggering evidence: PR #1205 roughly halved per-write maintenance, but four
-  fresh settled health windows still attributed `77452.154ms` of
-  `83557.728ms` monitor service across 8,959 writes to inclusive maintenance.
-  Maintenance remained 92.69% of service, or `8.645ms` per write, and one
-  recurring event-path maintenance operation reached `7148.422ms` while queue
-  wait reached `7123.965ms`. Existing timing cannot distinguish the periodic
-  manifest checkpoint from retention's once-per-minute recursive scan.
-- Scope: preserve the inclusive maintenance metric and add fixed event-path
-  manifest-checkpoint and retention count/total/max timing. Propagate those
-  fields through the event pipeline timing window, `health.summary`,
-  `live-performance-report`, and `live-smoke-report` while keeping historical
-  rows that lack the fields valid.
-- Behavior boundary: attribution only. Preserve manifest cadence and retry,
-  retention cadence and policy, NDJSON append semantics, RLock ordering,
-  routing, queue/backpressure policy, error visibility, all event payloads,
-  all trading behavior, and existing configuration. Do not add file scans,
-  thresholds, alerts, verdicts, dynamic labels, threads, or queues.
-- Validation: due versus skipped and failed maintenance attempts; fixed timing
-  aggregation and consume/restore semantics; historical-row omission;
-  performance/smoke projection; publisher, event-bus, relay, monitor,
-  incident-bundle, and fake-live regressions; Python compilation; `git diff
+- Branch: `codex/v8-position-console-polish`
+- Base: `d61b3e18f6a6c0755d663e3e7fc72e8294fb7760`, PR #1206
+- Triggering evidence: live `position.changed` console lines expose the durable
+  event as a dense parser-oriented `key=value` sequence. They omit the already
+  persisted `wele_ratio`, even though operators need both base-WEL and
+  effective-WEL utilization and the legacy fallback previously aligned the
+  position transition for human scanning.
+- Scope: give only the event-derived position console/text projection one
+  compact aligned line containing action, coin, pside, old/new size and price,
+  WE, WEL, effective WEL, TWEL, and uPnL. Keep zeros visible, missing/non-finite
+  values explicit, long values untruncated, common coin aliases readable, and
+  labels free of ANSI/control characters.
+- Behavior boundary: console/text formatting only. Preserve the complete
+  structured `position.changed` event, event routing and volume, every other
+  event formatter, monitor persistence, smoke verdicts, configuration, and all
+  order/risk/trading behavior. Do not add multiline output or terminal colors
+  that could pollute text logs.
+- Validation: new/added/reduced/closed actions; signed shorts; zero, missing,
+  and non-finite metrics; fixed minimum columns; long values; common aliases;
+  control-character stripping; structured-event immutability; event-bus,
+  registry-doc, and fake-live regressions; Python compilation; `git diff
   --check`; added-line silent-handling audit; and independent preflight.
 - Publication state, exact head, mergeability, CI, and current-head reviewer
   verdicts: query live GitHub metadata; do not embed self-invalidating values.
-- Expected VPS action: exact five-bot graceful restart, then bounded
-  `health.summary` evidence identifying manifest versus retention service time
-  plus immediate and settled smoke. Preserve unrelated processes and artifacts.
+- Expected VPS action: exact five-bot graceful restart, immediate and settled
+  smoke, and inspection of the next naturally emitted position change. Do not
+  create or alter a live position merely to exercise console formatting.
 
 Next action:
 
-1. Hold the active PR's exact current head until Hermes, Grok 4.5, and CI are
-   green; resolve findings narrowly and require fresh exact-head verdicts after
-   every push.
-2. Merge only after that gate is green, then restart the five exact VPS5 bot
-   panes while preserving unrelated processes and local artifacts.
-3. Use fresh phase metrics to choose the next retention/persistence action.
+1. Complete integrated validation and publish one review-worthy console PR.
+2. Hold its exact current head until Hermes, Grok 4.5, and CI are green;
+   resolve findings narrowly and require fresh exact-head verdicts after every
+   push.
+3. In parallel, scope a separate retention optimization from PR #1206's fresh
+   phase evidence without mixing persistence behavior into console formatting.
 
 ## Deployed Baseline
 
-- Remote `v8`: `435b20fb08d3221be6520f216ddc210612656d0d`, PR #1205
-- VPS5 repository: `435b20fb08d3221be6520f216ddc210612656d0d`, PR #1205; tracked
+- Remote `v8`: `d61b3e18f6a6c0755d663e3e7fc72e8294fb7760`, PR #1206
+- VPS5 repository: `d61b3e18f6a6c0755d663e3e7fc72e8294fb7760`, PR #1206; tracked
   status clean; expected untracked artifacts were preserved
-- VPS5 expected bots: five; running with PR #1205 restart PIDs
-  `871504/871509/871512/871516/871523`;
+- VPS5 expected bots: five; running with PR #1206 restart PIDs
+  `873338/873395/873458/873515/873576`;
   unrelated `misc:0.0` remains PID `434835`
+- PR #1206 merged after exact-head Hermes and Grok 4.5 approval plus green CI.
+  VPS5 fast-forwarded cleanly and gracefully restarted only the five exact bot
+  panes. All old bot processes exited naturally; pane PIDs
+  `856294/856332/856364/856398/856434` and unrelated `misc:0.0` PID `434835`
+  were preserved.
+- The settled two-minute smoke was hard-green with `575/575` remote and
+  `17/17` account-critical calls successful, all five expected processes
+  matched, states `R=3/S=2`, zero monitor or pipeline errors, and a clean
+  tracked repository. One HSL replay remained active but non-stale.
+- Four fresh health windows covered 2,328 monitor writes. Inclusive maintenance
+  was `23651.665ms`: 12 retention runs consumed `16210.383ms` with an
+  `8953.523ms` maximum, while 352 periodic manifest checkpoints consumed
+  `7377.475ms` with a `347.039ms` maximum. Retention therefore explains the
+  recurring long tail and is the next persistence optimization target. Drops,
+  sink errors, degraded counts, unhealthy pipelines, and final queue depth
+  were zero.
 - PR #1205 merged after exact-head Hermes and Grok 4.5 approval plus green CI.
   VPS5 fast-forwarded cleanly and gracefully restarted only the five exact bot
   panes. All old bot processes exited naturally; pane PIDs

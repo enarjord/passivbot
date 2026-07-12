@@ -386,9 +386,12 @@ classification when enough source events exist.
     manifest checkpoints to the existing snapshot cadence and added bounded
     crash-safe event-sequence recovery without changing delivery. Fresh settled
     evidence reduced maintenance from `17.964ms` to `8.645ms` per write but
-    retained a recurring `7148.422ms` maintenance maximum. The active follow-up
-    separates periodic manifest-checkpoint and retention count/total/max timing
-    before changing persistence behavior.
+    retained a recurring `7148.422ms` maintenance maximum. PR #1206 separated
+    periodic manifest-checkpoint and retention count/total/max timing without
+    changing persistence behavior. Fresh VPS5 evidence attributed
+    `16210.383ms` and an `8953.523ms` maximum to 12 retention runs, versus
+    `7377.475ms` and a `347.039ms` maximum across 352 manifest checkpoints.
+    Retention is therefore the next persistence optimization target.
 - [ ] Exchange writes: create/cancel/close/panic write latency, exchange
   response latency, ambiguous write rate, confirmation latency.
   - Status: partial. The report now derives order-wave total duration,
