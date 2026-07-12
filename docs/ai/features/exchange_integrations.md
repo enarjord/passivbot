@@ -1,6 +1,7 @@
-# Exchange API Quirks
+# Exchange Integration Contracts
 
-Only task-specific, high-impact quirks are listed here.
+Only task-specific, high-impact contracts and quirks are listed here. Authenticated verification
+requires explicit user approval; prefer offline request-construction tests.
 
 ## Broker Agreement Attribution
 
@@ -45,7 +46,7 @@ Primary reference: `src/fill_events_manager.py` (`BybitFetcher._fetch_positions_
 
 ## KuCoin Futures
 
-### Hedge-mode refresh
+### KuCoin hedge-mode refresh
 
 Problem:
 
@@ -72,7 +73,7 @@ Handling:
 
 ## Bitget Futures
 
-### Hedge-mode refresh
+### Bitget hedge-mode refresh
 
 Problem:
 
@@ -142,3 +143,17 @@ Handling:
 1. Check raw exchange payloads when CCXT abstraction is insufficient.
 2. Treat intra-page gaps and inter-page gaps differently.
 3. For missing data incidents, verify source data before changing logic.
+
+## Validation
+
+- Exercise actual CCXT/raw request construction for payload, header, broker, and client-ID changes.
+- Use sanitized response fixtures for normalization and ambiguous-side cases.
+- Test pagination overlap, deduplication, and retention boundaries with multi-page fixtures.
+- Keep authenticated exchange checks outside the default suite and require explicit approval.
+
+## Key Code And Tests
+
+- `src/exchanges/`
+- `src/fill_events_manager.py`
+- `tests/exchanges/`
+- `tests/ccxt_upgrade/`

@@ -1,105 +1,65 @@
-# Passivbot Architecture (Lean)
+# Passivbot Architecture
 
-## Purpose
+## Ownership Boundary
 
-Passivbot is split between Python orchestration and Rust trading logic.
-
-## High-Level Map
-
-```
-Python (src/)                          Rust (passivbot-rust/src/)
-├── passivbot.py (live loop)    ────►  ├── orchestrator.rs (order calc)
-├── backtest.py (coordinator)   ────►  ├── backtest.rs (simulation)
-├── optimize.py (optimizer)     ────►  └── analysis.rs (metrics)
-├── candlestick_manager.py (OHLCV)
-├── fill_events_manager.py (fills/PnL)
-└── exchanges/ (API wrappers)
+```text
+Python (src/)                              Rust (passivbot-rust/src/)
+├── live orchestration and exchange I/O ─►├── strategy and order calculation
+├── config and data preparation          ├── risk and unstuck behavior
+├── reconciliation and execution gating  ├── backtest simulation
+└── backtest/optimizer coordination      └── behavioral analysis metrics
 ```
 
-## Source-of-Truth Boundary
+Rust owns trading behavior. Python may determine whether a proposed action is currently executable
+from fresh exchange state, but must not reimplement strategy intent.
 
-1. Rust (`passivbot-rust/src/`) owns order behavior.
-- Includes orchestrator, entries, closes, risk, backtest simulation, and analysis metrics.
-2. Python (`src/`) owns orchestration.
-- Includes exchange API calls, config loading, data collection/caching, reconciliation, and
-  execution gating.
+## Core Python Components
 
-If behavior changes in entries/closes/risk/unstuck, implement in Rust.
+| Component | Responsibility |
+|---|---|
+| `src/passivbot.py` and `src/live/` | Live orchestration, state refresh, reconciliation, gating, execution |
+| `src/backtest.py` | Historical-run coordination |
+| `src/optimize.py` | Optimizer coordination |
+| `src/candlestick_manager.py` | OHLCV fetch, cache, continuity, and projections |
+| `src/fill_events_manager.py` | Fill/PnL ingestion and coverage |
+| `src/exchanges/` | Exchange adapters and payload normalization |
+| `src/config/` | Canonical config loading and access |
 
-## Core Runtime Components
+## Live Data Flow
 
-| Component | Role |
-|-----------|------|
-| `src/passivbot.py` | Live loop, reconciliation, execution |
-| `src/backtest.py` | Historical run coordinator |
-| `src/optimize.py` | Optimizer driver |
-| `src/candlestick_manager.py` | OHLCV fetch/cache/synthetic candles |
-| `src/fill_events_manager.py` | Fill/PnL event ingestion |
-| `src/exchanges/*` | Exchange adapters |
+1. Refresh account and relevant market state.
+2. Build canonical strategy and risk inputs.
+3. Ask Rust for ideal orders.
+4. Reconcile ideal orders with exchange orders.
+5. Evaluate concrete create/cancel actions against freshness and safety gates.
+6. Submit only approved actions.
+7. Confirm or classify ambiguous exchange outcomes before retrying.
 
-## Data Flows
+Reconciliation owns equivalence decisions such as `satisfied_existing`. Gatekeeper decisions are
+structured (`approved`, `deferred`, `rejected`, or `satisfied_existing`) and include stable reason
+codes plus required/missing surfaces. The executor submits approved requests; it does not invent
+strategy policy.
 
-### Live
+`graceful_stop` blocks new initial entries once flat, but does not disable management of an existing
+position, including configured DCA and closes.
 
-1. Fetch exchange state (positions/balance/orders).
-2. Refresh candles and indicators.
-3. Build orchestrator input.
-4. Call Rust orchestrator.
-5. Reconcile ideal vs actual orders.
-6. Gate proposed cancel/create actions.
-7. Create/cancel gate-approved orders.
+## Backtest And Optimize Flows
 
-### Intended Live Execution Contract
+Backtest loads config and OHLCV, invokes the Rust simulation, and emits results. Optimize generates
+candidate configs and evaluates them through the same Rust backtest contract. Differences between
+live and backtest runtime inputs require explicit parity tests rather than duplicated assumptions.
 
-Rust remains the source of truth for ideal order behavior. Python live code should orchestrate
-exchange I/O, state refresh, reconciliation, and execution gating without reimplementing strategy
-intent.
+## Configuration Surfaces
 
-The intended live path is:
+Use `config.live` only for behavior consumed by live and shared with backtest/optimizer.
+Simulation-only settings belong in `config.backtest`; optimizer-only settings belong in
+`config.optimize`. See `principles.md` for the canonical ownership rule.
 
-1. Rust proposes ideal order behavior.
-2. The reconciler owns ideal-vs-actual matching and equivalence decisions, including
-   `satisfied_existing` outcomes when current exchange orders already satisfy the ideal action.
-3. A pure gatekeeper evaluates proposed order actions between reconciliation and exchange I/O.
-4. The executor submits only gate-approved cancels/creates.
+## Exchange-Write Safety
 
-Gatekeeper decisions should be structured, not bare booleans:
+Create/cancel retries must account for ambiguous outcomes: a timeout does not prove that the
+exchange rejected the request. Correlation IDs, reconciliation, and authoritative confirmation
+should establish the outcome before a retry could duplicate or reverse an exchange action.
 
-1. decision: `approved`, `deferred`, `rejected`, or `satisfied_existing`
-2. reason code
-3. required and missing freshness surfaces
-4. log severity and context
-
-The gatekeeper evaluates concrete proposed actions, not strategy intent alone. The executor should
-eventually be dumb: it should submit approved exchange requests and avoid scattered policy checks.
-
-Use exact terminology in this boundary: `position_side`/`pside` means `long`/`short`;
-`side`/`order_side` means `buy`/`sell`.
-
-`graceful_stop` does not mean no management. It blocks new initial entries once flat, while still
-allowing position management, risk-increasing DCA while a position exists, and all closes.
-
-### Backtest
-
-1. Load config + date range.
-2. Load/prep OHLCV.
-3. Run Rust backtest.
-4. Emit metrics/results.
-
-### Optimize
-
-1. Generate candidate configs.
-2. Evaluate with Rust backtest.
-3. Select next generation.
-
-## Config Hierarchy
-
-1. `config.live`: behavior shared by live/backtest/optimizer.
-2. `config.backtest`: simulation-only settings.
-3. `config.optimize`: optimizer-only settings.
-
-Rule: if unsure, prefer `config.live`.
-
-## Stateless Requirement
-
-Trading decisions must remain reproducible after restart from exchange state + config.
+Shutdown and task cancellation must not strand partially classified exchange writes. Exact
+exchange-specific behavior belongs in `features/exchange_integrations.md` and focused tests.

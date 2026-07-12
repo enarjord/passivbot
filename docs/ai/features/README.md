@@ -1,22 +1,18 @@
-# Feature Docs Router
+# Feature Contract Router
 
-Open these only when touching the relevant subsystem.
+Open only the contract for the subsystem being changed.
 
-| Feature | File | Read when |
-|---------|------|-----------|
-| Stock perps (HIP-3) | `stock_perps.md` | Hyperliquid stock symbols, routing, margin mode |
-| Candlestick manager | `candlestick_manager.md` | OHLCV fetch/cache/synthetic candle behavior |
-| Fill events manager | `fill_events_manager.md` | Fill/PnL ingestion and pagination |
-| Balance routing | `balance_routing.md` | Raw vs snapped balance semantics |
-| Monitor relay | `monitor_relay.md` | Disk-backed monitor publisher/relay/TUI/dashboard contract |
-| Trailing diagnostics | `trailing_diagnostics.md` | Standalone trailing-logic exploration tool and pure diagnostic helpers |
-| Strategy runtime | `strategy_runtime.md` | Strategy config shape, Rust strategy dispatch, entries/closes behavior |
+| Feature | Contract |
+|---|---|
+| Exchange integrations and broker attribution | `exchange_integrations.md` |
+| Stock perpetuals (HIP-3) | `stock_perps.md` |
+| Candles, cache continuity, and projections | `candlestick_manager.md` |
+| Fill/PnL ingestion and coverage | `fill_events_manager.md` |
+| Raw versus snapped balance | `balance_routing.md` |
+| Monitor publisher/relay/dashboard | `monitor_relay.md` |
+| Structured live events | `live_events.md` and `../generated/live_event_registry.md` |
+| Trailing diagnostics tool | `trailing_diagnostics.md` |
+| Strategy schema and Rust runtime | `strategy_runtime.md` |
 
-## Authoring Rule
-
-Feature docs should include only:
-
-1. Contract/invariants
-2. Non-obvious edge cases
-3. Test targets
-4. Key code locations
+Feature contracts contain current invariants, failure semantics, non-obvious edge cases,
+validation, and code/test locations. They do not carry progress ledgers or generic coding advice.

@@ -15,6 +15,13 @@ All notable user-facing changes will be documented in this file.
   reports project the processed counts, totals, and maxima without changing
   event delivery, smoke verdicts, or trading behavior.
 
+- Reorganized AI-facing engineering documentation around a compact mandatory instruction set,
+  explicit live/authenticated-operation approval boundaries, task-routed feature contracts and
+  runbooks, generated live-event references, and warning-only documentation size/structure checks.
+  The local fake-live harness is now explicitly distinguished from public-network and authenticated
+  exchange validation. Temporary compatibility routes preserve active external review automations
+  while they migrate to the canonical Markdown principles, validation matrix, and PR-review runbook.
+
 - `live-performance-report` now correlates current-startup fill-cache loading
   with exact post-start fill-history coverage proof. Cache presence alone never
   claims proof, cache/proof ordering is explicit, and incomplete or absent

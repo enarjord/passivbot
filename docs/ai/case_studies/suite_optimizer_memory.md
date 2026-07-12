@@ -1,4 +1,4 @@
-# Suite Optimizer Memory Notes (Condensed)
+# Suite Optimizer Memory Case Study
 
 ## Incident
 

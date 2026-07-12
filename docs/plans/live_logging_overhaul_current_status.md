@@ -303,4 +303,4 @@ worktrees.
 - Historical evidence: `live_logging_overhaul_progress.md`
 - Performance goals: `live_performance_readiness_goals.md`
 - Operational backlog: `live_ops_improvement_backlog.md`
-- Reviewer loop: `../ai/pr_auto_review_loop.md`
+- Reviewer contract: `../ai/runbooks/pr_review.md`

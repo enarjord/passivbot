@@ -1,6 +1,11 @@
-# Development Commands
+# Development And Validation Commands
 
 Use from repo root unless noted.
+
+Commands are grouped by authority tier. Local tests, local fake-live scenarios, and backtests with
+already cached data are offline. Downloads and public probes contact unauthenticated network
+endpoints. Live commands and account probes may use credentials and require explicit approval under
+`AGENTS.md`.
 
 ## Setup
 
@@ -20,12 +25,28 @@ pytest tests/test_specific.py
 pytest tests/test_specific.py::test_name
 ```
 
-## Live Bot
+## Live Bot (Explicit Approval Required)
 
 ```bash
 passivbot live -u {account_name}
 passivbot live path/to/config.json --log-level {warning|info|debug|trace|0-3}
 ```
+
+Do not use these as smoke-test commands. They may load private keys, configure an account, and
+create or cancel orders.
+
+## Offline Fake-Live Harness
+
+```bash
+PYTHONPATH=src python src/tools/run_fake_live.py \
+  configs/fake_live_hsl_btc.hjson \
+  scenarios/fake_live/hsl_long_red_restart.hjson \
+  --user fake_hsl_restart_test
+pytest tests/test_run_fake_live.py -m fake_live
+```
+
+The `fake` exchange uses only local scenario state. Do not describe authenticated testnet, demo,
+sandbox, or paper-trading sessions as this offline fake-live tier.
 
 ## Backtest
 
@@ -68,4 +89,5 @@ passivbot tool streamline-json configs/examples/default_trailing_martingale_long
 
 ## High-Signal Gotcha
 
-If Rust changes seem ignored by tests/runtime, rebuild extension again before debugging behavior.
+If Rust changes seem ignored, follow `rust_extension.md` to verify the loaded artifact and source
+stamp before debugging behavior.

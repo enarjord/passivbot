@@ -9,7 +9,7 @@ Architecture and backlog references:
 - `live_logging_overhaul_plan.md`
 - `live_performance_readiness_goals.md`
 - `live_ops_improvement_backlog.md`
-- `../ai/pr_auto_review_loop.md`
+- `../ai/runbooks/pr_review.md`
 
 ## Goal
 
@@ -123,7 +123,7 @@ State:
 ## Cost-Aware Waiting
 
 - Use deterministic metadata polling and a compact state digest as defined in
-  `docs/ai/pr_auto_review_loop.md`.
+  `docs/ai/runbooks/pr_review.md`.
 - Poll every minute only when the scheduler computes the digest without a model
   and wakes an agent only after a change. If every heartbeat consumes model
   context, use at least ten minutes; pending CI/reviews do not justify faster

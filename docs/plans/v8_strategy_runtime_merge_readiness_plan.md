@@ -139,7 +139,7 @@ Acceptance:
 Stop conditions:
 
 - If the rebuild appears too fast or the loaded module is still stale, use a clean rebuild per
-  `docs/ai/build_pitfalls.md`:
+  `docs/ai/runbooks/rust_extension.md`:
 
 ```bash
 cd passivbot-rust && cargo clean && maturin develop --release && cd ..
