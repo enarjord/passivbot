@@ -3455,6 +3455,96 @@ def test_live_smoke_report_startup_readiness_resets_on_bot_started(tmp_path):
     }
 
 
+def test_live_smoke_report_startup_budget_keeps_prior_restart_samples(tmp_path):
+    events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    _write_ndjson(
+        events_dir / "2026-07-10T00-00-00.ndjson",
+        [
+            _monitor_row(event_type="bot.started", seq=1, ts=1000),
+            _monitor_row(
+                event_type="bot.startup_timing",
+                seq=2,
+                ts=2000,
+                data={
+                    "phase": "account",
+                    "elapsed_ms": 1000,
+                    "since_previous_ms": 1000,
+                },
+            ),
+        ],
+    )
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(event_type="bot.started", seq=3, ts=3000),
+            _monitor_row(
+                event_type="bot.startup_timing",
+                seq=4,
+                ts=4000,
+                data={
+                    "phase": "account",
+                    "elapsed_ms": 2000,
+                    "since_previous_ms": 2000,
+                },
+            ),
+        ],
+    )
+
+    report = build_live_smoke_report(
+        tmp_path / "monitor",
+        logs_root=None,
+        include_rotated=True,
+        max_event_files_per_bot=2,
+    )
+    phase = report["startup_timings"][0]["phases"]["account"]
+
+    assert phase["latest_elapsed_ms"] == 2000
+    assert phase["samples"] == 2
+    assert phase["elapsed_budget"] == {
+        "status": "over_budget",
+        "latest_ms": 2000,
+        "budget_ms": 1000,
+        "baseline_samples": 1,
+        "usage_pct": 200,
+        "over_budget_by_ms": 1000,
+        "source": "prior_p95_ms",
+    }
+
+
+def test_live_smoke_report_startup_phase_uses_stage_only_as_legacy_fallback(tmp_path):
+    events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="bot.startup_timing",
+                seq=1,
+                ts=1000,
+                data={
+                    "stage": "hsl",
+                    "elapsed_ms": 1000,
+                    "since_previous_ms": 1000,
+                },
+            ),
+            _monitor_row(
+                event_type="bot.startup_timing",
+                seq=2,
+                ts=2000,
+                data={
+                    "phase": "account",
+                    "stage": "hsl",
+                    "elapsed_ms": 2000,
+                    "since_previous_ms": 1000,
+                },
+            ),
+        ],
+    )
+
+    report = build_live_smoke_report(tmp_path / "monitor", logs_root=None)
+
+    assert set(report["startup_timings"][0]["phases"]) == {"hsl"}
+
+
 def test_live_smoke_report_summarizes_shutdown_events(tmp_path):
     events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
     _write_ndjson(

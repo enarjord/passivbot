@@ -65,6 +65,16 @@ _STARTUP_PHASE_READINESS_CONTRACTS: Mapping[str, tuple[str, str]] = MappingProxy
         "full-warmup": ("background_candles_complete", "entry_blocker"),
     }
 )
+_STARTUP_TIMING_PHASES = frozenset(
+    {
+        "account",
+        "active-candle",
+        "full-warmup",
+        "hsl",
+        "market",
+        "startup",
+    }
+)
 
 
 def startup_phase_readiness_contract(phase: object) -> dict[str, str] | None:
@@ -78,6 +88,20 @@ def startup_phase_readiness_contract(phase: object) -> dict[str, str] | None:
         "readiness_scope": values[0],
         "trading_impact": values[1],
     }
+
+
+def startup_timing_phase(data: object) -> str | None:
+    """Return canonical startup phase, with stage accepted only as legacy fallback."""
+    if not isinstance(data, Mapping):
+        return None
+    phase = str(data.get("phase") or "").strip()
+    stage = str(data.get("stage") or "").strip()
+    if phase and stage and phase != stage:
+        return None
+    value = phase or stage
+    if not value:
+        return None
+    return value if value in _STARTUP_TIMING_PHASES else "other"
 
 
 class EventTypes:

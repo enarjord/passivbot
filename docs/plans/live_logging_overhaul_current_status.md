@@ -22,47 +22,61 @@ Estimated completion:
 
 ## Active Review Slice
 
-- PR #1194, `Report startup action milestones`
-- Branch: `codex/v8-startup-action-milestones`
-- Base: `60f1f042dfbe7ece2f3f56faa0e3fdf9c4299d74`
-- Triggering evidence: existing `cycle.started`, `rust_orchestrator.called`, and
-  `execution.create_sent` / `execution.cancel_sent` events provide enough
-  bounded evidence to measure startup-to-first-action progress without a new
-  producer or live hot-path cost.
-- Scope: derive current-lifecycle `first_cycle_started`, `first_rust_called`,
-  and `first_exchange_write_submitted` observations in a new bounded
-  `startup_milestones` performance-report section. Missing selected evidence is
-  explicitly unknown, never zero. Use source order so capped
-  current-before-rotated scans retain the latest lifecycle.
+- PR #1195, `Fix startup readiness report lifecycle handling`
+- Branch: `codex/v8-startup-readiness-correctness`
+- Base: `b15d349be5c544f9a8ac83618977b8a0cfd11ba5`
+- Triggering evidence: post-merge review reproduced three startup-report
+  correctness gaps: performance readiness lost current events when their start
+  marker was in a rotated segment; smoke discarded prior restart samples before
+  computing timing budgets; and performance/smoke interpreted `phase` and
+  legacy `stage` differently.
+- Scope: use one canonical phase parser (`phase`, then legacy `stage`, reject
+  conflicts), retain bounded current-lifecycle performance candidates across
+  rotation, reject stale rotated readiness/milestone candidates whenever any
+  retained current row proves the source is incomplete, preserve bounded HSL
+  replay context across sparse terminal events, and separate smoke's current
+  lifecycle projection from its bounded historical restart baseline.
 - Behavior boundary: read-only `live-performance-report` derivation and tests
-  only. A sent event proves submission intent before the connector call; it
-  does not prove connector/exchange success. Protective-only writes do not
-  prove fresh-entry eligibility. No event producer, startup/readiness decision,
-  exchange call, process control, Rust/order/risk logic, smoke verdict, or
-  trading behavior change.
+  only. No event producer, startup/readiness decision, exchange call, process
+  control, Rust/order/risk logic, smoke verdict, or trading behavior change.
+  Per-bot readiness/milestone records are current-lifecycle projections;
+  aggregate startup phase counts and timing summaries remain statistics over
+  all selected history.
 - Validation: focused and full performance-report tests, Python compilation,
   `git diff --check`, the added-line silent-handling scan, and independent
   preflight.
 - Publication state, exact head, mergeability, CI, and current-head reviewer
   verdicts: query live GitHub metadata; do not embed self-invalidating values.
 - Expected VPS action: after merge, pull while preserving local artifacts and
-  run the exact bounded rotated startup-milestones report plus a settled smoke.
+  run bounded rotated startup-readiness/performance and settled smoke reports.
   Do not restart or signal bots because this slice changes only an on-demand
   report consumer.
 
 Next action:
 
-1. Complete the bounded startup-milestone derivation and regressions, publish
-   after clean independent preflight, and merge only after the exact-head
-   temporary Hermes + Grok 4.5 + green-CI gate is satisfied.
+1. Complete the three startup-consumer regressions, publish after clean
+   independent preflight, and merge only after the exact-head temporary Hermes
+   + Grok 4.5 + green-CI gate is satisfied.
 
 ## Deployed Baseline
 
-- Remote `v8`: `60f1f042dfbe7ece2f3f56faa0e3fdf9c4299d74`, PR #1193
-- VPS5 repository: `60f1f042dfbe7ece2f3f56faa0e3fdf9c4299d74`, PR #1193; tracked
+- Remote `v8`: `b15d349be5c544f9a8ac83618977b8a0cfd11ba5`, PR #1194
+- VPS5 repository: `b15d349be5c544f9a8ac83618977b8a0cfd11ba5`, PR #1194; tracked
   status clean; only expected untracked artifacts were preserved
 - VPS5 expected bots: five; all running with the PR #1192 restart PIDs;
   unrelated `misc:0.0` remains PID `434835`
+- PR #1194 merged after exact-head Hermes and Grok 4.5 approval plus green CI.
+  VPS5 fast-forwarded without process signals, preserving bot PIDs
+  `850148/850296/850370/850436/850495` and unrelated `misc:0.0` PID `434835`.
+  The exact bounded rotated `startup_milestones` report returned `ok=true`,
+  scanned 12 files / 46,748 records with zero errors/warnings, kept truncated
+  lifecycle evidence explicitly unknown, and observed KuCoin's first cycle at
+  `110.653s` without claiming unseen Rust/write milestones. The first smoke
+  caught one recovered Binance `InvalidNonce` and two transient `D` samples.
+  After settling, all `D` states cleared and the final two-minute smoke was
+  hard-green: `384/384` remote and `76/76` account-critical calls successful,
+  5/5 processes matched (`R=4,S=1`), no hard/log failures, no pipeline
+  drops/sink errors, and a clean tracked repository.
 - PR #1193 merged after exact-head Hermes and Grok 4.5 approval plus green CI.
   VPS5 fast-forwarded without bot signals or restarts, preserving bot PIDs
   `850148/850296/850370/850436/850495` and unrelated `misc:0.0` PID `434835`.
@@ -196,10 +210,10 @@ rotated resource-pressure report fix, configured-market skip events, and fatal
 HIP-3 startup compatibility are merged and deployed. PR #1189's isolated-only
 initial-entry filter visibility and PR #1190's HSL replay scanned-row
 throughput, PR #1191's corrected active/legacy-terminal replay estimates,
-PR #1192's machine-readable startup readiness SLA semantics, and PR #1193's
-latest-lifecycle report ordering are also merged and deployed. The active
-slice derives bounded startup-to-first-cycle, first-Rust-call, and first
-exchange-write-submission observations from existing events.
+PR #1192's machine-readable startup readiness SLA semantics, PR #1193's
+latest-lifecycle report ordering, and PR #1194's bounded startup action
+milestones are also merged and deployed. The active slice corrects the
+remaining startup-readiness lifecycle, baseline, and phase-parity findings.
 
 After this report-only follow-up is merged and validated, select the next
 review-worthy candidate from the remaining backlog, including:
