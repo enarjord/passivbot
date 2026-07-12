@@ -1759,6 +1759,7 @@ def test_live_performance_report_rejects_old_startup_data_after_unrelated_tail(
     assert report["startup_milestones"]["observed_counts"] == {
         "first_cycle_started": 0,
         "first_rust_called": 0,
+        "first_fresh_entry_eligible": 0,
         "first_exchange_write_submitted": 0,
     }
 
@@ -1844,6 +1845,7 @@ def test_live_performance_report_startup_milestones_current_lifecycle(tmp_path):
     assert startup["observed_counts"] == {
         "first_cycle_started": 1,
         "first_rust_called": 1,
+        "first_fresh_entry_eligible": 0,
         "first_exchange_write_submitted": 1,
     }
     assert startup["elapsed_ms"]["first_cycle_started"]["max"] == 100
@@ -1868,6 +1870,74 @@ def test_live_performance_report_startup_milestones_current_lifecycle(tmp_path):
     assert write["side"] == "buy"
     assert write["remote_call_id"] == "remote_1"
     assert "action_1" not in json.dumps(report["startup_milestones"], sort_keys=True)
+
+
+def test_live_performance_report_startup_milestone_requires_eligible_initial_entry(
+    tmp_path,
+):
+    events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(event_type="bot.started", seq=1, ts=1000),
+            _monitor_row(
+                event_type="entry.initial_eligibility",
+                seq=2,
+                ts=1200,
+                ids={"cycle_id": "cy_1", "order_wave_id": "ow_1"},
+                data={"outcome_counts": {"blocked_candidate": 2, "eligible": 0}},
+            ),
+            _monitor_row(
+                event_type="entry.initial_eligibility",
+                seq=3,
+                ts=1300,
+                data={"outcome_counts": {"eligible": "1"}},
+            ),
+            _monitor_row(
+                event_type="entry.initial_eligibility",
+                seq=4,
+                ts=1400,
+                data={"outcome_counts": {"eligible": True}},
+            ),
+            _monitor_row(
+                event_type="entry.initial_eligibility",
+                seq=5,
+                ts=1500,
+                data={"outcome_counts": {"eligible": 1.0}},
+            ),
+            _monitor_row(
+                event_type="entry.initial_eligibility",
+                seq=6,
+                ts=1600,
+                ids={"cycle_id": "cy_2", "order_wave_id": "ow_2"},
+                data={"outcome_counts": {"eligible": 1, "no_candidate": 37}},
+            ),
+            _monitor_row(
+                event_type="entry.initial_eligibility",
+                seq=7,
+                ts=1700,
+                data={"outcome_counts": {"eligible": 2}},
+            ),
+        ],
+    )
+
+    startup = build_live_performance_report(tmp_path / "monitor")[
+        "startup_milestones"
+    ]
+
+    assert startup["observed_counts"]["first_fresh_entry_eligible"] == 1
+    assert startup["elapsed_ms"]["first_fresh_entry_eligible"]["max"] == 600
+    milestone = startup["bots"][0]["milestones"]["first_fresh_entry_eligible"]
+    assert milestone == {
+        "status": "observed",
+        "event_type": "entry.initial_eligibility",
+        "trading_impact": "entry_blocker",
+        "ts_ms": 1600,
+        "elapsed_ms": 600,
+        "event_id": "evt_6",
+        "cycle_id": "cy_2",
+        "order_wave_id": "ow_2",
+    }
 
 
 def test_startup_milestone_accumulator_retains_one_candidate_per_milestone():

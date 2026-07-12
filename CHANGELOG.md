@@ -4,6 +4,11 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- `live-performance-report` now derives the current lifecycle's first
+  connector-bound initial-entry eligibility milestone from
+  `entry.initial_eligibility`. Blocked, candidate-free, protective-only, and
+  malformed eligibility events do not claim fresh-entry readiness.
+
 - Completed normal live order plans now emit one bounded structured/monitor
   `entry.initial_eligibility` event. It distinguishes fresh initial entries
   that were absent, already satisfied, blocked by an existing local gate,

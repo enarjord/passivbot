@@ -315,8 +315,11 @@ classification when enough source events exist.
   protective, execution-loop, market-state, and background-candle readiness
   milestones. The best-effort active-position candle phase remains timing-only
   because its tolerated warmup failure cannot prove readiness.
-  Remaining work: true fresh-entry ready, first Rust call, and first
-  exchange-write readiness events.
+  PR #1194 derives the first cycle, first Rust call, and first locally submitted
+  exchange write from existing events. PR #1196 added true local fresh-entry
+  eligibility evidence; the active consumer projects its first qualifying
+  event as startup readiness. Remaining work is actual connector-invocation
+  evidence rather than another pre-call proxy.
 - [ ] Startup: process start to held-position protective HSL ready.
 - [ ] Startup: process start to fresh-entry ready.
 - [ ] Startup: process start to first planning cycle started/completed.
@@ -741,8 +744,10 @@ Trading-impact labels:
   aggregate scope timing for the readiness milestones already emitted. The
   active follow-up makes current per-bot lifecycle snapshots independent of
   capped current-before-rotated traversal order while preserving historical
-  aggregate distributions. True fresh-entry, first-Rust-call, and
-  first-exchange-write milestones remain missing.
+  aggregate distributions. PR #1194 added first-cycle, first-Rust-call, and
+  first locally submitted write milestones. PR #1196 added the source event
+  for true local fresh-entry eligibility, and the active consumer adds its
+  current-lifecycle milestone. Actual connector invocation remains distinct.
 
 - [ ] Add a full live-operation duration table.
   - Include startup, account refresh, fill refresh, cache proof, HSL replay,
