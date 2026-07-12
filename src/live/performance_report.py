@@ -1455,7 +1455,13 @@ class _StartupMilestoneAccumulator:
     def __init__(self) -> None:
         self.bots: dict[str, dict[str, Any]] = {}
 
-    def add(self, *, row: dict[str, Any], live_event: dict[str, Any]) -> None:
+    def add(
+        self,
+        *,
+        row: dict[str, Any],
+        live_event: dict[str, Any],
+        source_complete: bool = True,
+    ) -> None:
         event_type = str(live_event.get("event_type") or row.get("kind") or "")
         if event_type != "bot.started" and event_type not in _STARTUP_MILESTONE_EVENT_TYPES:
             return
@@ -1473,15 +1479,23 @@ class _StartupMilestoneAccumulator:
             previous_started_order = state.get("started_order")
             if previous_started_order is not None and event_order <= previous_started_order:
                 return
+            incomplete_order = state.get("latest_incomplete_unanchored_order")
+            if (
+                previous_started_order is None
+                and incomplete_order is not None
+                and incomplete_order > event_order
+            ):
+                return
             state["started_order"] = event_order
             state["started_ts"] = _record_ts(row)
+            state.pop("latest_incomplete_unanchored_order", None)
             retained = {
                 label: candidate
                 for label, candidate in state["milestones"].items()
-                if candidate[0] > event_order
+                if candidate[0] > event_order and candidate[2]
             }
             state["milestones"] = retained
-            for _label, (_order, milestone) in retained.items():
+            for _label, (_order, milestone, _source_complete) in retained.items():
                 self._set_elapsed(milestone, started_ts=state["started_ts"])
             return
 
@@ -1489,6 +1503,10 @@ class _StartupMilestoneAccumulator:
         started_order = state.get("started_order")
         if started_order is not None and event_order <= started_order:
             return
+        if started_order is None and not source_complete:
+            incomplete_order = state.get("latest_incomplete_unanchored_order")
+            if incomplete_order is None or event_order > incomplete_order:
+                state["latest_incomplete_unanchored_order"] = event_order
         label = _STARTUP_MILESTONE_EVENT_TYPES[event_type]
         existing = state["milestones"].get(label)
         if existing is not None and event_order >= existing[0]:
@@ -1498,7 +1516,7 @@ class _StartupMilestoneAccumulator:
             live_event=live_event,
             started_ts=state.get("started_ts"),
         )
-        state["milestones"][label] = (event_order, milestone)
+        state["milestones"][label] = (event_order, milestone, bool(source_complete))
 
     @staticmethod
     def _set_elapsed(item: dict[str, Any], *, started_ts: int | None) -> None:
@@ -1573,7 +1591,7 @@ class _StartupMilestoneAccumulator:
                 }
                 for label in _STARTUP_MILESTONE_LABELS
             }
-            for label, (_order, observed) in state["milestones"].items():
+            for label, (_order, observed, _source_complete) in state["milestones"].items():
                 milestones[label] = observed
                 observed_counts[label] += 1
                 if observed.get("elapsed_ms") is not None:
@@ -4455,7 +4473,13 @@ def build_live_performance_report(
     bots: Counter[str] = Counter()
     event_tail_methods: Counter[str] = Counter()
 
-    def process_event_row(path: Path, line_no: int, raw_line: str) -> None:
+    def process_event_row(
+        path: Path,
+        line_no: int,
+        raw_line: str,
+        *,
+        source_complete: bool = True,
+    ) -> None:
         nonlocal records_total, live_events, legacy_events
         line = raw_line.strip()
         if not line:
@@ -4534,7 +4558,11 @@ def build_live_performance_report(
             cycle_scope=cycle_scope,
         )
         startup_readiness.add(row=row, live_event=live_event)
-        startup_milestones.add(row=row, live_event=live_event)
+        startup_milestones.add(
+            row=row,
+            live_event=live_event,
+            source_complete=source_complete,
+        )
         hsl_replay_profile.add(row=row, live_event=live_event)
         cache_warmup.add(row=row, live_event=live_event)
         fill_refresh.add(row=row, live_event=live_event)
@@ -4572,8 +4600,16 @@ def build_live_performance_report(
                             and row_window.line_numbers_exact
                         )
                         event_tail_methods[str(row_window.method)] += 1
+                    source_complete = (
+                        not row_window.limited or row_window.skipped_lines == 0
+                    )
                     for line_no, raw_line in row_iter:
-                        process_event_row(path, int(line_no), raw_line)
+                        process_event_row(
+                            path,
+                            int(line_no),
+                            raw_line,
+                            source_complete=source_complete,
+                        )
             else:
                 with _open_text(path) as stream:
                     for line_no, raw_line in enumerate(stream, start=1):

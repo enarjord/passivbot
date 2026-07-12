@@ -1757,6 +1757,68 @@ def test_live_performance_report_startup_milestones_use_latest_ordered_lifecycle
     assert startup["observed_counts"]["first_exchange_write_submitted"] == 0
 
 
+def test_live_performance_report_startup_milestones_reject_old_tail_anchor(tmp_path):
+    events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    _write_ndjson(
+        events_dir / "2026-07-10T00-00-00.ndjson",
+        [_monitor_row(event_type="bot.started", seq=1, ts=1000)],
+    )
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(event_type="bot.started", seq=1, ts=4000),
+            _monitor_row(event_type="execution.create_sent", seq=2, ts=5000),
+        ],
+    )
+
+    report = build_live_performance_report(
+        tmp_path / "monitor",
+        include_rotated=True,
+        max_event_files_per_bot=2,
+        event_tail_lines=1,
+    )
+    startup = report["startup_milestones"]
+    bot = startup["bots"][0]
+
+    assert report["event_window"]["event_tail_skipped_lines"] == 1
+    assert "bot_started_ts" not in bot
+    assert bot["milestones"]["first_exchange_write_submitted"] == {
+        "status": "unknown",
+        "reason": "bot_started_not_observed_in_selected_events",
+        "trading_impact": "cycle_delay",
+    }
+    assert startup["events_without_start"] == 1
+
+
+def test_live_performance_report_startup_milestones_join_complete_rotated_lifecycle(
+    tmp_path,
+):
+    events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    _write_ndjson(
+        events_dir / "2026-07-10T00-00-00.ndjson",
+        [_monitor_row(event_type="bot.started", seq=1, ts=1000)],
+    )
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(event_type="rust_orchestrator.called", seq=2, ts=2000),
+            _monitor_row(event_type="execution.create_sent", seq=3, ts=3000),
+        ],
+    )
+
+    startup = build_live_performance_report(
+        tmp_path / "monitor",
+        include_rotated=True,
+        max_event_files_per_bot=2,
+        event_tail_lines=10,
+    )["startup_milestones"]
+    bot = startup["bots"][0]
+
+    assert bot["bot_started_ts"] == 1000
+    assert bot["milestones"]["first_rust_called"]["elapsed_ms"] == 1000
+    assert bot["milestones"]["first_exchange_write_submitted"]["elapsed_ms"] == 2000
+
+
 def test_live_performance_report_startup_milestones_are_bounded_and_projectable(
     tmp_path,
 ):
