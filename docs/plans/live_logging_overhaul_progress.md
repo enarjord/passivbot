@@ -7915,3 +7915,36 @@ VPS5 deployment status:
 - Expected VPS action: exact five-bot graceful restart, bounded phase timing
   evidence, and immediate plus settled smoke while preserving unrelated
   processes and local artifacts.
+
+### Deployed Slice: Monitor-Publisher Phase Attribution
+
+- PR #1204 was approved by Hermes and Grok 4.5 on exact head `a538b27c2`; CI
+  passed and it merged to `v8` as `d1303f55b`.
+- VPS5 fast-forwarded cleanly and gracefully restarted only the five exact bot
+  panes. All old bot processes exited naturally. Pane PIDs
+  `856294/856332/856364/856398/856434` and unrelated `misc:0.0` PID `434835`
+  were preserved; new bot PIDs were `869404/869406/869556/869558/869564`.
+- Four complete fresh health windows covered 2,643 monitor writes. Monitor
+  service total/max was `53903.942/1676.541ms`; maintenance
+  `47478.85/900.321ms`; persistence `3619.444/77.067ms`; lock wait
+  `2190.037/1661.187ms`; rotation `245.173/20.658ms`; and conversion
+  `54.686/1.139ms`. Maintenance represented 88.08% of cumulative monitor
+  service and averaged 17.964ms per write. The worst individual write was
+  instead almost entirely publisher lock wait.
+- The settled two-minute smoke was hard-green with `346/346` remote and
+  `51/51` account-critical calls successful, all five expected processes
+  matched, exact states `R/R/R/R/S`, and a clean tracked repository.
+
+### Active Slice: Monitor Manifest Checkpoint Coalescing
+
+- Branch: `codex/v8-monitor-manifest-coalescing` from deployed `d1303f55b`.
+- Scope: coalesce ordinary best-effort manifest checkpoints to the existing
+  snapshot interval, force checkpoints at lifecycle and rotation boundaries,
+  and recover the maximum checksummed current-segment event sequence with a
+  fixed-memory reverse chunk scan when the manifest is stale after an unclean
+  exit.
+- Non-goals: no change to NDJSON append/fsync semantics, lock ordering,
+  retention/compression, event payloads, routing, queue/backpressure policy,
+  monitor configuration, trading behavior, or lock-holder attribution.
+- Expected VPS action: exact five-bot graceful restart, immediate and settled
+  smoke, and before/after monitor maintenance plus lock-wait evidence.

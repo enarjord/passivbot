@@ -358,10 +358,13 @@ Related detailed plans:
    processed count, queue-wait total/max, and aggregate worker sink-service
    total/max with non-consuming ordinary monitor snapshots. PR #1203 attributed
    that worker time to fixed structured/monitor sink write counts and service
-   total/max. Deployed evidence found essentially all worker service in the
-   monitor sink, including a `5321.841ms` maximum. The active follow-up splits
-   real monitor writes into fixed conversion, publisher lock-wait, rotation,
-   persistence, and maintenance timing without changing delivery or verdicts.
+   total/max. PR #1204 then split real monitor writes into fixed conversion,
+   publisher lock-wait, rotation, persistence, and maintenance timing. Fresh
+   VPS5 evidence attributed 47,478.85 of 53,903.942ms cumulative monitor time
+   across 2,643 writes to maintenance, while a separate 1,661.187ms lock wait
+   dominated the worst single write. The active follow-up coalesces the
+   best-effort manifest checkpoint to the existing snapshot cadence, adds
+   bounded crash-safe sequence recovery, and preserves delivery and verdicts.
 
    Remaining refinements: exchange-call counts, candle-fetch concurrency,
    lower-level event-loop lag if heartbeat lag proves too coarse, and

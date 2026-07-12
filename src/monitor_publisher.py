@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import gzip
+import hashlib
 import errno
 import json
 import logging
@@ -19,6 +20,11 @@ _MONITOR_EVENT_PHASE_TIMING_KEYS = (
     "persist_ns",
     "maintenance_ns",
 )
+_CURRENT_EVENTS_REVERSE_READ_BYTES = 64 * 1024
+_EVENT_RECOVERY_CHECKSUM_BYTES = 16
+_EVENT_RECOVERY_MARKER = b',"_recovery":{"checksum":"'
+_EVENT_RECOVERY_SEQ_SEPARATOR = b'","seq":'
+_EVENT_RECOVERY_TRAILER_MAX_BYTES = 160
 
 
 def _empty_monitor_event_phase_timing() -> dict[str, int]:
@@ -133,8 +139,12 @@ class MonitorPublisher:
         self._disk_full_suppressed = 0
         self._lock = threading.RLock()
         self.seq = 0
+        self._manifest_dirty = False
+        self._manifest_retry_needed = False
+        self._last_manifest_write_monotonic_ms: Optional[int] = None
         self._ensure_layout()
         self._load_manifest_state()
+        self._recover_seq_from_current_events()
         self._write_manifest()
 
     @classmethod
@@ -160,6 +170,9 @@ class MonitorPublisher:
 
     def _now_ms(self) -> int:
         return int(time.time() * 1000)
+
+    def _monotonic_ms(self) -> int:
+        return int(time.monotonic() * 1000)
 
     def _ensure_layout(self) -> None:
         for path in (self.root, self.events_dir, self.history_dir, self.checkpoints_dir):
@@ -200,6 +213,118 @@ class MonitorPublisher:
                 }
         except Exception:
             self.history_segment_started_ms = {}
+
+    def _recover_seq_from_current_events(self) -> None:
+        recovered_seq = self._max_recoverable_event_seq_in_current_segment()
+        if recovered_seq is not None:
+            self.seq = max(self.seq, recovered_seq)
+
+    def _max_recoverable_event_seq_in_current_segment(self) -> Optional[int]:
+        """Return the maximum recoverable seq without buffering whole rows."""
+
+        def iter_line_ranges_reverse(f, file_size: int):
+            line_end = file_size
+            scan_end = file_size
+            while scan_end > 0:
+                read_size = min(_CURRENT_EVENTS_REVERSE_READ_BYTES, scan_end)
+                scan_start = scan_end - read_size
+                f.seek(scan_start)
+                chunk = f.read(read_size)
+                search_end = len(chunk)
+                while True:
+                    newline_idx = chunk.rfind(b"\n", 0, search_end)
+                    if newline_idx < 0:
+                        break
+                    line_start = scan_start + newline_idx + 1
+                    yield line_start, line_end
+                    line_end = scan_start + newline_idx
+                    search_end = newline_idx
+                scan_end = scan_start
+            yield 0, line_end
+
+        def seq_from_line_range(f, line_start: int, line_end: int) -> Optional[int]:
+            if line_end > line_start:
+                f.seek(line_end - 1)
+                if f.read(1) == b"\r":
+                    line_end -= 1
+            suffix_size = min(_EVENT_RECOVERY_TRAILER_MAX_BYTES, line_end - line_start)
+            if suffix_size <= 0:
+                return None
+            f.seek(line_end - suffix_size)
+            suffix = f.read(suffix_size)
+            marker_idx = suffix.rfind(_EVENT_RECOVERY_MARKER)
+            if marker_idx < 0:
+                return None
+            marker_offset = line_end - suffix_size + marker_idx
+            trailer = suffix[marker_idx + len(_EVENT_RECOVERY_MARKER) :]
+            checksum, separator, seq_tail = trailer.partition(_EVENT_RECOVERY_SEQ_SEPARATOR)
+            if separator != _EVENT_RECOVERY_SEQ_SEPARATOR:
+                return None
+            if len(checksum) != _EVENT_RECOVERY_CHECKSUM_BYTES * 2:
+                return None
+            if not seq_tail.endswith(b"}}"):
+                return None
+            seq_raw = seq_tail[:-2]
+            if not seq_raw or len(seq_raw) > 32 or not seq_raw.isdigit():
+                return None
+
+            digest = hashlib.blake2b(digest_size=_EVENT_RECOVERY_CHECKSUM_BYTES)
+            scan_offset = line_start
+            while scan_offset < marker_offset:
+                f.seek(scan_offset)
+                chunk = f.read(
+                    min(_CURRENT_EVENTS_REVERSE_READ_BYTES, marker_offset - scan_offset)
+                )
+                if not chunk:
+                    return None
+                digest.update(chunk)
+                scan_offset += len(chunk)
+            digest.update(b"}")
+            digest.update(b"\0seq:")
+            digest.update(seq_raw)
+            if digest.hexdigest().encode("ascii") != checksum:
+                return None
+            return int(seq_raw)
+
+        try:
+            with open(self.current_events_path, "rb") as f:
+                f.seek(0, os.SEEK_END)
+                file_size = f.tell()
+                max_seq = None
+                for line_start, line_end in iter_line_ranges_reverse(f, file_size):
+                    seq = seq_from_line_range(f, line_start, line_end)
+                    if seq is not None and (max_seq is None or seq > max_seq):
+                        max_seq = seq
+                return max_seq
+        except OSError as exc:
+            logging.warning(
+                "[monitor] unable to read current event segment %s: %s",
+                self.current_events_path,
+                exc,
+            )
+            return None
+
+    def _serialize_event_line(self, envelope: dict) -> str:
+        base_line = json.dumps(
+            envelope,
+            separators=(",", ":"),
+            sort_keys=True,
+            default=_json_default,
+        )
+        seq_text = str(int(envelope["seq"]))
+        digest = hashlib.blake2b(digest_size=_EVENT_RECOVERY_CHECKSUM_BYTES)
+        digest.update(base_line.encode("utf-8"))
+        digest.update(b"\0seq:")
+        digest.update(seq_text.encode("ascii"))
+        checksum = digest.hexdigest()
+        trailer = (
+            ',"_recovery":{"checksum":"'
+            + checksum
+            + '","seq":'
+            + seq_text
+            + "}}"
+        )
+        return base_line[:-1] + trailer
 
     def _build_manifest(self, now_ms: Optional[int] = None) -> dict:
         now_ms = self._now_ms() if now_ms is None else int(now_ms)
@@ -253,12 +378,37 @@ class MonitorPublisher:
             },
         }
 
-    def _write_manifest(self, now_ms: Optional[int] = None) -> None:
+    def _mark_manifest_dirty(self) -> None:
+        self._manifest_dirty = True
+
+    def _write_manifest(self, now_ms: Optional[int] = None) -> bool:
         with self._lock:
             try:
                 _atomic_write_json(self.manifest_path, self._build_manifest(now_ms=now_ms))
             except Exception as exc:
+                self._manifest_dirty = True
+                self._manifest_retry_needed = True
                 self._log_write_failure("writing manifest", exc)
+                return False
+            self._manifest_dirty = False
+            self._manifest_retry_needed = False
+            self._last_manifest_write_monotonic_ms = self._monotonic_ms()
+            return True
+
+    def _write_manifest_if_due(self, now_ms: Optional[int] = None) -> bool:
+        with self._lock:
+            if not self._manifest_dirty:
+                return False
+            cadence_now_ms = self._monotonic_ms()
+            if (
+                self._manifest_retry_needed
+                or self._last_manifest_write_monotonic_ms is None
+                or cadence_now_ms < self._last_manifest_write_monotonic_ms
+                or cadence_now_ms - self._last_manifest_write_monotonic_ms
+                >= self.snapshot_interval_ms
+            ):
+                return self._write_manifest(now_ms=now_ms)
+            return False
 
     def _log_write_failure(self, action: str, exc: BaseException) -> None:
         if not _is_disk_full_error(exc):
@@ -380,11 +530,15 @@ class MonitorPublisher:
                 rotated = self._rotated_path(
                     self.events_dir, self._segment_label(now_ms), ".ndjson"
                 )
+                # Preserve the current sequence before the active segment moves.
+                if not self._write_manifest(now_ms=now_ms):
+                    return
                 os.replace(self.current_events_path, rotated)
                 if self.compress_rotated_segments:
                     rotated = self._gzip_file(rotated)
                 self.current_events_path.touch()
                 self.current_segment_started_ms = now_ms
+                self._mark_manifest_dirty()
                 self._write_manifest(now_ms=now_ms)
                 self._prune_retention(now_ms=now_ms)
             except Exception as exc:
@@ -420,6 +574,7 @@ class MonitorPublisher:
                     rotated = self._gzip_file(rotated)
                 current_path.touch()
                 self.history_segment_started_ms[stream] = now_ms
+                self._mark_manifest_dirty()
                 self._write_manifest(now_ms=now_ms)
                 self._prune_retention(now_ms=now_ms)
             except Exception as exc:
@@ -466,7 +621,8 @@ class MonitorPublisher:
                 )
                 with open(current_path, "a", encoding="utf-8") as f:
                     f.write(line + "\n")
-                self._write_manifest(now_ms=now_ms)
+                self._mark_manifest_dirty()
+                self._write_manifest_if_due(now_ms=now_ms)
                 self._prune_retention(now_ms=now_ms)
                 return envelope
             except Exception as exc:
@@ -637,12 +793,7 @@ class MonitorPublisher:
                         envelope["symbol"] = str(symbol)
                     if pside is not None:
                         envelope["pside"] = str(pside)
-                    line = json.dumps(
-                        envelope,
-                        separators=(",", ":"),
-                        sort_keys=True,
-                        default=_json_default,
-                    )
+                    line = self._serialize_event_line(envelope)
                     with open(self.current_events_path, "a", encoding="utf-8") as f:
                         f.write(line + "\n")
                 finally:
@@ -650,7 +801,8 @@ class MonitorPublisher:
 
                 maintenance_started_ns = time.monotonic_ns()
                 try:
-                    self._write_manifest(now_ms=now_ms)
+                    self._mark_manifest_dirty()
+                    self._write_manifest_if_due(now_ms=now_ms)
                     self._prune_retention(now_ms=now_ms)
                 finally:
                     timing["maintenance_ns"] = max(
@@ -704,6 +856,7 @@ class MonitorPublisher:
                 payload["meta"] = meta
                 _atomic_write_json(self.state_latest_path, payload)
                 self.last_snapshot_ms = now_ms
+                self._write_manifest(now_ms=now_ms)
                 if self.checkpoint_interval_ms > 0 and (
                     force or now_ms - self.last_checkpoint_ms >= self.checkpoint_interval_ms
                 ):
@@ -716,7 +869,6 @@ class MonitorPublisher:
                     if self.compress_rotated_segments:
                         self._gzip_file(checkpoint)
                     self.last_checkpoint_ms = now_ms
-                self._write_manifest(now_ms=now_ms)
                 self._prune_retention(now_ms=now_ms)
                 return True
             except Exception as exc:
