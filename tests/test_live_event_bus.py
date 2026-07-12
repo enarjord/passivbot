@@ -7,6 +7,7 @@ import time
 
 import pytest
 
+import live.event_bus as live_event_bus_module
 from live.event_bus import (
     DEFAULT_ROUTES,
     EventRoute,
@@ -486,6 +487,117 @@ def test_pipeline_health_snapshot_reports_queue_and_degraded_counters():
     pipeline._queue.task_done()
 
 
+def test_pipeline_health_snapshot_tracks_and_consumes_queue_timing(monkeypatch):
+    clock = {"ns": 1_000_000_000}
+    monkeypatch.setattr(
+        live_event_bus_module.time,
+        "monotonic_ns",
+        lambda: clock["ns"],
+    )
+
+    class ControlledSink:
+        def write(self, event):
+            clock["ns"] += 3_000_000
+            return event
+
+    pipeline = LiveEventPipeline(
+        start=False,
+        structured_sinks=[ControlledSink()],
+        routes={
+            EventTypes.DATA_PACKET_UPDATED: EventRoute(
+                structured=True, monitor=False, console=False
+            )
+        },
+    )
+
+    assert pipeline.emit(LiveEvent(EventTypes.DATA_PACKET_UPDATED)) is not None
+    clock["ns"] += 7_000_000
+    pipeline.start()
+    assert pipeline.flush(timeout=2.0) is True
+
+    expected_timing = {
+        "event_pipeline_timing_window_ms": 10.0,
+        "event_pipeline_processed_count": 1,
+        "event_queue_wait_ms_total": 7.0,
+        "event_queue_wait_ms_max": 7.0,
+        "event_worker_service_ms_total": 3.0,
+        "event_worker_service_ms_max": 3.0,
+    }
+    non_consuming_snapshot = pipeline.health_snapshot()
+    assert {key: non_consuming_snapshot[key] for key in expected_timing} == expected_timing
+    repeated_snapshot = pipeline.health_snapshot()
+    assert {key: repeated_snapshot[key] for key in expected_timing} == expected_timing
+    consumed_snapshot, consumed_token = pipeline.consume_timing_snapshot()
+    assert {key: consumed_snapshot[key] for key in expected_timing} == expected_timing
+    pipeline.restore_timing_snapshot(consumed_token)
+    restored_snapshot = pipeline.health_snapshot()
+    assert {key: restored_snapshot[key] for key in expected_timing} == expected_timing
+    _confirmed_snapshot, confirmed_token = pipeline.consume_timing_snapshot()
+    pipeline.confirm_timing_snapshot(confirmed_token)
+    reset_snapshot = pipeline.health_snapshot()
+    assert {key: reset_snapshot[key] for key in expected_timing} == {
+        "event_pipeline_timing_window_ms": 0.0,
+        "event_pipeline_processed_count": 0,
+        "event_queue_wait_ms_total": 0.0,
+        "event_queue_wait_ms_max": 0.0,
+        "event_worker_service_ms_total": 0.0,
+        "event_worker_service_ms_max": 0.0,
+    }
+    assert pipeline.close(timeout=2.0) is True
+
+
+def test_pipeline_overlapping_timing_snapshots_resolve_by_token(monkeypatch):
+    clock = {"ns": 1_000_000_000}
+    monkeypatch.setattr(
+        live_event_bus_module.time,
+        "monotonic_ns",
+        lambda: clock["ns"],
+    )
+    pipeline = LiveEventPipeline(start=False)
+    pipeline._timing_processed_count = 7
+
+    first, first_token = pipeline.consume_timing_snapshot()
+    pipeline._timing_processed_count = 3
+    clock["ns"] += 1_000_000
+    second, second_token = pipeline.consume_timing_snapshot()
+    pipeline.confirm_timing_snapshot(first_token)
+    pipeline.restore_timing_snapshot(second_token)
+
+    assert first["event_pipeline_processed_count"] == 7
+    assert second["event_pipeline_processed_count"] == 3
+    assert pipeline.health_snapshot()["event_pipeline_processed_count"] == 3
+
+
+def test_pipeline_restore_merges_newly_processed_timing(monkeypatch):
+    clock = {"ns": 1_000_000_000}
+    monkeypatch.setattr(
+        live_event_bus_module.time,
+        "monotonic_ns",
+        lambda: clock["ns"],
+    )
+    pipeline = LiveEventPipeline(start=False)
+    pipeline._timing_processed_count = 5
+    pipeline._timing_queue_wait_ns_total = 8_000_000
+    pipeline._timing_queue_wait_ns_max = 3_000_000
+    pipeline._timing_worker_service_ns_total = 12_000_000
+    pipeline._timing_worker_service_ns_max = 5_000_000
+    _snapshot, token = pipeline.consume_timing_snapshot()
+
+    pipeline._timing_processed_count = 2
+    pipeline._timing_queue_wait_ns_total = 7_000_000
+    pipeline._timing_queue_wait_ns_max = 6_000_000
+    pipeline._timing_worker_service_ns_total = 4_000_000
+    pipeline._timing_worker_service_ns_max = 3_000_000
+    pipeline.restore_timing_snapshot(token)
+
+    restored = pipeline.health_snapshot()
+    assert restored["event_pipeline_processed_count"] == 7
+    assert restored["event_queue_wait_ms_total"] == 15
+    assert restored["event_queue_wait_ms_max"] == 6
+    assert restored["event_worker_service_ms_total"] == 16
+    assert restored["event_worker_service_ms_max"] == 5
+
+
 def test_pipeline_queue_overflow_is_logged_and_monitor_visible(caplog):
     monitor = ListEventSink()
     pipeline = LiveEventPipeline(
@@ -614,7 +726,7 @@ def test_pipeline_close_waits_for_in_flight_enqueue_before_sentinel():
             self.release_put_nowait = threading.Event()
 
         def put_nowait(self, item):
-            if isinstance(item, LiveEvent):
+            if isinstance(getattr(item, "event", item), LiveEvent):
                 self.entered_put_nowait.set()
                 assert self.release_put_nowait.wait(timeout=2.0)
             return super().put_nowait(item)

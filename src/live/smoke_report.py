@@ -2800,6 +2800,12 @@ def _event_pipeline_health_group(
         "event_degraded_count",
         "event_pipeline_stopping",
         "event_pipeline_worker_alive",
+        "event_pipeline_timing_window_ms",
+        "event_pipeline_processed_count",
+        "event_queue_wait_ms_total",
+        "event_queue_wait_ms_max",
+        "event_worker_service_ms_total",
+        "event_worker_service_ms_max",
     }
     if not any(key in payload for key in observed_keys):
         return None
@@ -2825,6 +2831,24 @@ def _event_pipeline_health_group(
             payload.get("event_sink_error_counts")
         ),
         "latest_degraded_count": _non_negative_int(payload.get("event_degraded_count")),
+        "latest_timing_window_ms": _non_negative_number(
+            payload.get("event_pipeline_timing_window_ms")
+        ),
+        "latest_processed_count": _non_negative_int(
+            payload.get("event_pipeline_processed_count")
+        ),
+        "latest_queue_wait_ms_total": _non_negative_number(
+            payload.get("event_queue_wait_ms_total")
+        ),
+        "latest_queue_wait_ms_max": _non_negative_number(
+            payload.get("event_queue_wait_ms_max")
+        ),
+        "latest_worker_service_ms_total": _non_negative_number(
+            payload.get("event_worker_service_ms_total")
+        ),
+        "latest_worker_service_ms_max": _non_negative_number(
+            payload.get("event_worker_service_ms_max")
+        ),
         "latest_pipeline_stopping": (
             bool(payload.get("event_pipeline_stopping"))
             if "event_pipeline_stopping" in payload
@@ -2879,6 +2903,12 @@ def _merge_event_pipeline_health_group(
             "latest_sink_error_total",
             "latest_sink_error_counts",
             "latest_degraded_count",
+            "latest_timing_window_ms",
+            "latest_processed_count",
+            "latest_queue_wait_ms_total",
+            "latest_queue_wait_ms_max",
+            "latest_worker_service_ms_total",
+            "latest_worker_service_ms_max",
             "latest_pipeline_stopping",
             "latest_worker_alive",
             "latest_ids",
@@ -2910,7 +2940,7 @@ def _summarize_event_pipeline_health(
         }
         for group in ordered[:EVENT_PIPELINE_HEALTH_GROUP_LIMIT]
     ]
-    return {
+    out = {
         "total": sum(int(group.get("count", 0)) for group in groups.values()),
         "groups_truncated": len(ordered) > EVENT_PIPELINE_HEALTH_GROUP_LIMIT,
         "event_types": dict(event_type_counts.most_common()),
@@ -2940,6 +2970,33 @@ def _summarize_event_pipeline_health(
         ),
         "groups": compact_groups,
     }
+    processed_counts = [
+        int(value)
+        for group in groups.values()
+        if (value := _non_negative_int(group.get("latest_processed_count")))
+        is not None
+    ]
+    timing_fields = {
+        "latest_timing_window_ms_max": _max_optional_numbers(
+            group.get("latest_timing_window_ms") for group in groups.values()
+        ),
+        "latest_queue_wait_ms_total_sum": _sum_optional_numbers(
+            group.get("latest_queue_wait_ms_total") for group in groups.values()
+        ),
+        "latest_queue_wait_ms_max": _max_optional_numbers(
+            group.get("latest_queue_wait_ms_max") for group in groups.values()
+        ),
+        "latest_worker_service_ms_total_sum": _sum_optional_numbers(
+            group.get("latest_worker_service_ms_total") for group in groups.values()
+        ),
+        "latest_worker_service_ms_max": _max_optional_numbers(
+            group.get("latest_worker_service_ms_max") for group in groups.values()
+        ),
+    }
+    if processed_counts:
+        out["latest_processed_total"] = sum(processed_counts)
+    out.update({key: value for key, value in timing_fields.items() if value is not None})
+    return out
 
 
 def _resource_pressure_group(
@@ -4057,6 +4114,37 @@ def _numeric_value(value: Any) -> int | float | None:
     if parsed.is_integer():
         return int(parsed)
     return round(parsed, 6)
+
+
+def _non_negative_number(value: Any) -> int | float | None:
+    parsed = _numeric_value(value)
+    if parsed is None or float(parsed) < 0.0:
+        return None
+    return parsed
+
+
+def _sum_optional_numbers(values: Iterable[Any]) -> int | float | None:
+    parsed = [
+        value
+        for item in values
+        if (value := _non_negative_number(item)) is not None
+    ]
+    if not parsed:
+        return None
+    total = sum(float(value) for value in parsed)
+    return int(total) if total.is_integer() else round(total, 6)
+
+
+def _max_optional_numbers(values: Iterable[Any]) -> int | float | None:
+    parsed = [
+        value
+        for item in values
+        if (value := _non_negative_number(item)) is not None
+    ]
+    if not parsed:
+        return None
+    maximum = max(float(value) for value in parsed)
+    return int(maximum) if maximum.is_integer() else round(maximum, 6)
 
 
 def _compact_hsl_replay_data(live_event: dict[str, Any]) -> dict[str, Any]:
@@ -6859,6 +6947,20 @@ def _summary_limited_groups(
             "latest_dropped_total": summary.get("latest_dropped_total"),
             "latest_sink_error_total": summary.get("latest_sink_error_total"),
             "latest_degraded_total": summary.get("latest_degraded_total"),
+            "latest_processed_total": summary.get("latest_processed_total"),
+            "latest_timing_window_ms_max": summary.get(
+                "latest_timing_window_ms_max"
+            ),
+            "latest_queue_wait_ms_total_sum": summary.get(
+                "latest_queue_wait_ms_total_sum"
+            ),
+            "latest_queue_wait_ms_max": summary.get("latest_queue_wait_ms_max"),
+            "latest_worker_service_ms_total_sum": summary.get(
+                "latest_worker_service_ms_total_sum"
+            ),
+            "latest_worker_service_ms_max": summary.get(
+                "latest_worker_service_ms_max"
+            ),
             "latest_worker_not_alive_count": summary.get(
                 "latest_worker_not_alive_count"
             ),
@@ -8246,30 +8348,52 @@ def summarize_live_smoke_report_brief(report: dict[str, Any]) -> dict[str, Any]:
         },
         "staged_readiness": staged_readiness_brief,
         "event_pipeline": {
-            "total": _count_value(event_pipeline_health.get("total")),
-            "bots": _count_value(event_pipeline_health.get("bots")),
-            "latest_queue_depth_total": _count_value(
-                event_pipeline_health.get("latest_queue_depth_total")
-            ),
-            "latest_queue_unfinished_total": _count_value(
-                event_pipeline_health.get("latest_queue_unfinished_total")
-            ),
-            "latest_dropped_total": _count_value(
-                event_pipeline_health.get("latest_dropped_total")
-            ),
-            "latest_sink_error_total": _count_value(
-                event_pipeline_health.get("latest_sink_error_total")
-            ),
-            "latest_degraded_total": _count_value(
-                event_pipeline_health.get("latest_degraded_total")
-            ),
-            "latest_worker_not_alive_count": _count_value(
-                event_pipeline_health.get("latest_worker_not_alive_count")
-            ),
-            "latest_stopping_count": _count_value(
-                event_pipeline_health.get("latest_stopping_count")
-            ),
-            "event_types": event_pipeline_health.get("event_types") or {},
+            key: value
+            for key, value in {
+                "total": _count_value(event_pipeline_health.get("total")),
+                "bots": _count_value(event_pipeline_health.get("bots")),
+                "latest_queue_depth_total": _count_value(
+                    event_pipeline_health.get("latest_queue_depth_total")
+                ),
+                "latest_queue_unfinished_total": _count_value(
+                    event_pipeline_health.get("latest_queue_unfinished_total")
+                ),
+                "latest_dropped_total": _count_value(
+                    event_pipeline_health.get("latest_dropped_total")
+                ),
+                "latest_sink_error_total": _count_value(
+                    event_pipeline_health.get("latest_sink_error_total")
+                ),
+                "latest_degraded_total": _count_value(
+                    event_pipeline_health.get("latest_degraded_total")
+                ),
+                "latest_processed_total": event_pipeline_health.get(
+                    "latest_processed_total"
+                ),
+                "latest_timing_window_ms_max": event_pipeline_health.get(
+                    "latest_timing_window_ms_max"
+                ),
+                "latest_queue_wait_ms_total_sum": event_pipeline_health.get(
+                    "latest_queue_wait_ms_total_sum"
+                ),
+                "latest_queue_wait_ms_max": event_pipeline_health.get(
+                    "latest_queue_wait_ms_max"
+                ),
+                "latest_worker_service_ms_total_sum": event_pipeline_health.get(
+                    "latest_worker_service_ms_total_sum"
+                ),
+                "latest_worker_service_ms_max": event_pipeline_health.get(
+                    "latest_worker_service_ms_max"
+                ),
+                "latest_worker_not_alive_count": _count_value(
+                    event_pipeline_health.get("latest_worker_not_alive_count")
+                ),
+                "latest_stopping_count": _count_value(
+                    event_pipeline_health.get("latest_stopping_count")
+                ),
+                "event_types": event_pipeline_health.get("event_types") or {},
+            }.items()
+            if value is not None
         },
         "resource_pressure": {
             "total": _count_value(resource_pressure.get("total")),

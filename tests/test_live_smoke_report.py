@@ -2692,6 +2692,74 @@ def test_live_smoke_report_event_pipeline_health_aggregates_multi_bot_queue_over
     }
 
 
+def test_live_smoke_report_projects_multi_bot_event_pipeline_timing(tmp_path):
+    okx_events = tmp_path / "monitor" / "okx" / "okx_01" / "events"
+    gateio_events = tmp_path / "monitor" / "gateio" / "gateio_01" / "events"
+    _write_ndjson(
+        okx_events / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="health.summary",
+                exchange="okx",
+                user="okx_01",
+                seq=1,
+                ts=2000,
+                data={
+                    "event_pipeline_timing_window_ms": 1250.0,
+                    "event_pipeline_processed_count": 8,
+                    "event_queue_wait_ms_total": 12.5,
+                    "event_queue_wait_ms_max": 8.5,
+                    "event_worker_service_ms_total": 20.25,
+                    "event_worker_service_ms_max": 15.5,
+                },
+            )
+        ],
+    )
+    _write_ndjson(
+        gateio_events / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="health.summary",
+                exchange="gateio",
+                user="gateio_01",
+                seq=2,
+                ts=1500,
+                data={
+                    "event_pipeline_timing_window_ms": 900.0,
+                    "event_pipeline_processed_count": 3,
+                    "event_queue_wait_ms_total": 6.5,
+                    "event_queue_wait_ms_max": 6.5,
+                    "event_worker_service_ms_total": 7.75,
+                    "event_worker_service_ms_max": 7.75,
+                },
+            )
+        ],
+    )
+
+    report = build_live_smoke_report(tmp_path / "monitor", logs_root=None)
+    summary = summarize_live_smoke_report(report)
+    brief = summarize_live_smoke_report_brief(report)
+    health = report["event_pipeline_health"]
+
+    groups = {group["bot"]: group for group in health["groups"]}
+    assert groups["okx/okx_01"].get("latest_processed_count") == 8
+    assert groups["okx/okx_01"].get("latest_queue_wait_ms_max") == 8.5
+    assert groups["gateio/gateio_01"].get("latest_worker_service_ms_max") == 7.75
+    expected = {
+        "latest_processed_total": 11,
+        "latest_timing_window_ms_max": 1250,
+        "latest_queue_wait_ms_total_sum": 19,
+        "latest_queue_wait_ms_max": 8.5,
+        "latest_worker_service_ms_total_sum": 28,
+        "latest_worker_service_ms_max": 15.5,
+    }
+    assert {key: health[key] for key in expected} == expected
+    assert {key: summary["event_pipeline_health"][key] for key in expected} == expected
+    assert {key: brief["event_pipeline"][key] for key in expected} == expected
+    assert report["ok"] is True
+    assert report["attention"] is False
+
+
 def test_live_smoke_report_problem_events_include_cycle_degraded_details(tmp_path):
     events_dir = tmp_path / "monitor" / "gateio" / "gateio_01" / "events"
     _write_ndjson(
