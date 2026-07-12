@@ -7597,3 +7597,38 @@ VPS5 deployment status:
   call, HSL/risk/order behavior, process control, smoke verdict, Rust,
   backtest, optimizer, or trading change. Expected VPS action is pull plus a
   bounded rotated report and settled smoke, with no bot restart.
+
+### Deployed Slice: Performance Startup Lifecycle Ordering
+
+- PR #1193 was approved by Hermes and Grok 4.5 on exact head `955fe215d`; CI
+  passed and it merged to `v8` as `60f1f042d`.
+- VPS5 fast-forwarded without bot signals or restarts. The five bot PIDs
+  `850148/850296/850370/850436/850495` and unrelated `misc:0.0` PID `434835`
+  remained unchanged.
+- The exact bounded current-plus-rotated startup-readiness report returned
+  `ok=true`, scanned 12 files with zero errors/warnings, retained all five
+  current lifecycle snapshots, and preserved historical aggregate timing
+  (`account` phase count six versus five current bots).
+- The settled smoke was hard-green with `322/322` remote and `57/57`
+  account-critical calls successful, all five bots matched, no event-pipeline
+  drops/sink errors, and a clean tracked repository. Three transient `D`
+  process samples during report I/O cleared; all five bots sampled `R` after a
+  quiet interval.
+
+### Active Slice: Startup Action Milestones
+
+- Branch: `codex/v8-startup-action-milestones` from deployed `60f1f042d`.
+- Scope: add a bounded read-only `startup_milestones` performance-report
+  section deriving the current lifecycle's first cycle, first Rust call, and
+  first exchange-write submission from existing structured events. Absence in
+  selected files remains explicitly unknown, and elapsed values require valid
+  lifecycle and event timestamps.
+- Contract boundary: `execution.create_sent` / `execution.cancel_sent` occur
+  before connector invocation, so the report says `submitted`, not actual or
+  successful exchange write. A protective-only write does not establish
+  fresh-entry eligibility. That eligibility needs a separate producer contract
+  after all reconciler/executor filters.
+- Non-goals: no event producer, exchange call, startup/readiness decision,
+  fresh-entry gate, process control, HSL/risk/order behavior, Rust, backtest,
+  optimizer, or smoke-verdict change. Expected VPS action is pull plus an exact
+  bounded rotated report and settled smoke, with no bot restart.
