@@ -1180,9 +1180,57 @@ def _startup_readiness_contract(
     return expected
 
 
-class _StartupReadinessAccumulator:
+class _StartupSourceCompletenessTracker:
+    """Track newer incomplete event sources without retaining their rows."""
+
     def __init__(self) -> None:
+        self.latest_incomplete_order: dict[
+            str, tuple[str, int, str, int, int, int]
+        ] = {}
+
+    def observe(
+        self,
+        *,
+        row: dict[str, Any],
+        live_event: dict[str, Any],
+        source_complete: bool,
+    ) -> None:
+        if source_complete:
+            return
+        bot = _bot_key(row, live_event)
+        event_order = _startup_event_order_key(row)
+        previous = self.latest_incomplete_order.get(bot)
+        if previous is None or event_order > previous:
+            self.latest_incomplete_order[bot] = event_order
+
+    def latest_for(
+        self,
+        bot: str,
+    ) -> tuple[str, int, str, int, int, int] | None:
+        return self.latest_incomplete_order.get(bot)
+
+    def supersedes(
+        self,
+        *,
+        bot: str,
+        event_order: tuple[str, int, str, int, int, int],
+    ) -> bool:
+        incomplete_order = self.latest_for(bot)
+        if incomplete_order is None or incomplete_order <= event_order:
+            return False
+        return incomplete_order[:3] != event_order[:3]
+
+
+class _StartupReadinessAccumulator:
+    def __init__(
+        self,
+        *,
+        source_completeness: _StartupSourceCompletenessTracker | None = None,
+    ) -> None:
         self.bots: dict[str, dict[str, Any]] = {}
+        self.source_completeness = (
+            source_completeness or _StartupSourceCompletenessTracker()
+        )
         self.startup_phase_counts: Counter[str] = Counter()
         self.startup_phase_elapsed_values: dict[str, list[int]] = {}
         self.startup_phase_since_previous_values: dict[str, list[int]] = {}
@@ -1218,6 +1266,47 @@ class _StartupReadinessAccumulator:
         ):
             state["latest_ts"] = int(ts)
         return state
+
+    def _discard_superseded_state(self, bot: str) -> None:
+        state = self.bots.get(bot)
+        if state is None:
+            return
+        started_order = state.get("_started_order")
+        started_superseded = (
+            started_order is not None
+            and self.source_completeness.supersedes(
+                bot=bot,
+                event_order=started_order,
+            )
+        )
+        retained = {
+            key: candidate
+            for key, candidate in state["_candidates"].items()
+            if not self.source_completeness.supersedes(
+                bot=bot,
+                event_order=candidate[0],
+            )
+        }
+        if not started_superseded and len(retained) == len(state["_candidates"]):
+            return
+        if not retained:
+            self.bots.pop(bot, None)
+            return
+        state.clear()
+        state.update(
+            {
+                "bot": bot,
+                "_candidates": retained,
+                "startup_phases_ms": {},
+                "latest_ts": None,
+            }
+        )
+        for _key, (_order, candidate, source_complete) in sorted(
+            retained.items(),
+            key=lambda item: item[1][0],
+        ):
+            if source_complete:
+                self._apply_candidate(state, candidate)
 
     @staticmethod
     def _apply_candidate(state: dict[str, Any], candidate: dict[str, Any]) -> None:
@@ -1266,6 +1355,12 @@ class _StartupReadinessAccumulator:
         ts = _record_ts(row)
         bot = _bot_key(row, live_event)
         event_order = _startup_event_order_key(row)
+        self.source_completeness.observe(
+            row=row,
+            live_event=live_event,
+            source_complete=source_complete,
+        )
+        self._discard_superseded_state(bot)
 
         stage: str | None = None
         elapsed_ms: int | None = None
@@ -1297,20 +1392,26 @@ class _StartupReadinessAccumulator:
                 )
 
         if event_type == "bot.started":
-            state = self._bot_state(row=row, live_event=live_event)
-            previous_started_order = state.get("_started_order")
+            existing_state = self.bots.get(bot)
+            previous_started_order = (
+                existing_state.get("_started_order")
+                if existing_state is not None
+                else None
+            )
             if (
                 previous_started_order is not None
                 and event_order <= previous_started_order
             ):
                 return
-            incomplete_order = state.get("_latest_incomplete_unanchored_order")
             if (
                 previous_started_order is None
-                and incomplete_order is not None
-                and incomplete_order > event_order
+                and self.source_completeness.supersedes(
+                    bot=bot,
+                    event_order=event_order,
+                )
             ):
                 return
+            state = self._bot_state(row=row, live_event=live_event)
             retained = {
                 key: candidate
                 for key, candidate in state["_candidates"].items()
@@ -1342,14 +1443,24 @@ class _StartupReadinessAccumulator:
             "bot.startup_timing",
         } and not event_type.startswith("hsl.replay."):
             return
+        existing_state = self.bots.get(bot)
+        started_order = (
+            existing_state.get("_started_order")
+            if existing_state is not None
+            else None
+        )
+        if (
+            started_order is None
+            and self.source_completeness.supersedes(
+                bot=bot,
+                event_order=event_order,
+            )
+        ):
+            return
         state = self._bot_state(row=row, live_event=live_event)
         started_order = state.get("_started_order")
         if started_order is not None and event_order <= started_order:
             return
-        if started_order is None and not source_complete:
-            incomplete_order = state.get("_latest_incomplete_unanchored_order")
-            if incomplete_order is None or event_order > incomplete_order:
-                state["_latest_incomplete_unanchored_order"] = event_order
 
         candidate_data: dict[str, Any] = {}
         debug_profiles = _known_debug_profiles(data.get("live_event_debug_profiles"))
@@ -1373,12 +1484,24 @@ class _StartupReadinessAccumulator:
             )
         if event_type.startswith("hsl.replay."):
             candidate_key = "hsl.replay"
+            existing = state["_candidates"].get(candidate_key)
             hsl_state: dict[str, Any] = {}
+            if existing is not None:
+                previous_hsl_state = existing[1].get("hsl_replay")
+                if isinstance(previous_hsl_state, dict):
+                    hsl_state.update(previous_hsl_state)
             if ts is not None:
                 hsl_state["latest_ts"] = int(ts)
-            hsl_state["event_type"] = event_type
-            hsl_state["status"] = live_event.get("status")
-            hsl_state["reason_code"] = live_event.get("reason_code")
+            hsl_state["event_type"] = _safe_label(event_type, max_len=120)
+            hsl_state["status"] = _safe_label(
+                live_event.get("status"),
+                max_len=120,
+            )
+            hsl_state["reason_code"] = _safe_label(
+                live_event.get("reason_code"),
+                max_len=120,
+            )
+            bounded_hsl_data = _bounded_hsl_replay_data(data)
             for key in (
                 "signal_mode",
                 "stage",
@@ -1399,8 +1522,8 @@ class _StartupReadinessAccumulator:
                 "full_elapsed_s",
                 "startup_blocking_elapsed_s",
             ):
-                if key in data:
-                    hsl_state[key] = data[key]
+                if key in bounded_hsl_data:
+                    hsl_state[key] = bounded_hsl_data[key]
             candidate["hsl_replay"] = hsl_state
 
         existing = state["_candidates"].get(candidate_key)
@@ -1528,8 +1651,49 @@ _STARTUP_MILESTONE_LABELS = tuple(dict.fromkeys(_STARTUP_MILESTONE_EVENT_TYPES.v
 class _StartupMilestoneAccumulator:
     """Derive current-lifecycle startup milestones from selected monitor events."""
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        source_completeness: _StartupSourceCompletenessTracker | None = None,
+    ) -> None:
         self.bots: dict[str, dict[str, Any]] = {}
+        self.source_completeness = (
+            source_completeness or _StartupSourceCompletenessTracker()
+        )
+
+    def _discard_superseded_state(self, bot: str) -> None:
+        state = self.bots.get(bot)
+        if state is None:
+            return
+        started_order = state.get("started_order")
+        started_superseded = (
+            started_order is not None
+            and self.source_completeness.supersedes(
+                bot=bot,
+                event_order=started_order,
+            )
+        )
+        retained = {
+            label: candidate
+            for label, candidate in state["milestones"].items()
+            if not self.source_completeness.supersedes(
+                bot=bot,
+                event_order=candidate[0],
+            )
+        }
+        if not started_superseded and len(retained) == len(state["milestones"]):
+            return
+        if not retained:
+            self.bots.pop(bot, None)
+            return
+        state.clear()
+        state.update(
+            {
+                "bot": bot,
+                "milestone_events_seen": len(retained),
+                "milestones": retained,
+            }
+        )
 
     def add(
         self,
@@ -1539,9 +1703,30 @@ class _StartupMilestoneAccumulator:
         source_complete: bool = True,
     ) -> None:
         event_type = str(live_event.get("event_type") or row.get("kind") or "")
+        bot = _bot_key(row, live_event)
+        event_order = _startup_event_order_key(row)
+        self.source_completeness.observe(
+            row=row,
+            live_event=live_event,
+            source_complete=source_complete,
+        )
+        self._discard_superseded_state(bot)
         if event_type != "bot.started" and event_type not in _STARTUP_MILESTONE_EVENT_TYPES:
             return
-        bot = _bot_key(row, live_event)
+        existing_state = self.bots.get(bot)
+        previous_started_order = (
+            existing_state.get("started_order")
+            if existing_state is not None
+            else None
+        )
+        if (
+            previous_started_order is None
+            and self.source_completeness.supersedes(
+                bot=bot,
+                event_order=event_order,
+            )
+        ):
+            return
         state = self.bots.setdefault(
             bot,
             {
@@ -1550,21 +1735,11 @@ class _StartupMilestoneAccumulator:
                 "milestones": {},
             },
         )
-        event_order = _startup_event_order_key(row)
         if event_type == "bot.started":
-            previous_started_order = state.get("started_order")
             if previous_started_order is not None and event_order <= previous_started_order:
-                return
-            incomplete_order = state.get("latest_incomplete_unanchored_order")
-            if (
-                previous_started_order is None
-                and incomplete_order is not None
-                and incomplete_order > event_order
-            ):
                 return
             state["started_order"] = event_order
             state["started_ts"] = _record_ts(row)
-            state.pop("latest_incomplete_unanchored_order", None)
             retained = {
                 label: candidate
                 for label, candidate in state["milestones"].items()
@@ -1579,10 +1754,6 @@ class _StartupMilestoneAccumulator:
         started_order = state.get("started_order")
         if started_order is not None and event_order <= started_order:
             return
-        if started_order is None and not source_complete:
-            incomplete_order = state.get("latest_incomplete_unanchored_order")
-            if incomplete_order is None or event_order > incomplete_order:
-                state["latest_incomplete_unanchored_order"] = event_order
         label = _STARTUP_MILESTONE_EVENT_TYPES[event_type]
         existing = state["milestones"].get(label)
         if existing is not None and event_order >= existing[0]:
@@ -1699,9 +1870,9 @@ def _bounded_hsl_replay_data(data: Any) -> dict[str, Any]:
         return {}
     out: dict[str, Any] = {}
     for key in _HSL_REPLAY_STRING_FIELDS:
-        value = data.get(key)
+        value = _safe_label(data.get(key), max_len=120)
         if value is not None:
-            out[key] = str(value)
+            out[key] = value
     for key in _HSL_REPLAY_BOOL_FIELDS:
         if key in data:
             out[key] = bool(data.get(key))
@@ -4531,8 +4702,13 @@ def build_live_performance_report(
     accumulator = _PerformanceAccumulator()
     decision_boundary = _DecisionBoundaryAccumulator()
     input_staleness = _InputStalenessAccumulator()
-    startup_readiness = _StartupReadinessAccumulator()
-    startup_milestones = _StartupMilestoneAccumulator()
+    startup_source_completeness = _StartupSourceCompletenessTracker()
+    startup_readiness = _StartupReadinessAccumulator(
+        source_completeness=startup_source_completeness
+    )
+    startup_milestones = _StartupMilestoneAccumulator(
+        source_completeness=startup_source_completeness
+    )
     report_ts_ms = utc_ms()
     hsl_replay_profile = _HslReplayProfileAccumulator()
     cache_warmup = _CacheWarmupAccumulator()

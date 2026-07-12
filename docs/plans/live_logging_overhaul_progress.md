@@ -7664,6 +7664,9 @@ VPS5 deployment status:
   preserve prior restart timing samples for smoke p95 budgets while projecting
   current readiness only; and make `phase` canonical with `stage` as fallback
   only, rejecting conflicts in every performance/smoke timing consumer.
+  Review follow-up also applies one bounded incomplete-source barrier to
+  readiness and milestones and preserves prior HSL replay context when a sparse
+  terminal event becomes the latest lifecycle candidate.
 - Non-goals: no event producer, readiness/startup decision, exchange call,
   process control, HSL/risk/order behavior, Rust, backtest, optimizer, or smoke
   verdict change. Expected VPS action is pull plus bounded reports and settled

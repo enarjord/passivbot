@@ -32,11 +32,16 @@ Estimated completion:
   legacy `stage` differently.
 - Scope: use one canonical phase parser (`phase`, then legacy `stage`, reject
   conflicts), retain bounded current-lifecycle performance candidates across
-  rotation, and separate smoke's current lifecycle projection from its bounded
-  historical restart baseline.
+  rotation, reject stale rotated readiness/milestone candidates whenever any
+  retained current row proves the source is incomplete, preserve bounded HSL
+  replay context across sparse terminal events, and separate smoke's current
+  lifecycle projection from its bounded historical restart baseline.
 - Behavior boundary: read-only `live-performance-report` derivation and tests
   only. No event producer, startup/readiness decision, exchange call, process
   control, Rust/order/risk logic, smoke verdict, or trading behavior change.
+  Per-bot readiness/milestone records are current-lifecycle projections;
+  aggregate startup phase counts and timing summaries remain statistics over
+  all selected history.
 - Validation: focused and full performance-report tests, Python compilation,
   `git diff --check`, the added-line silent-handling scan, and independent
   preflight.
