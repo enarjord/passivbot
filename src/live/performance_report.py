@@ -105,6 +105,12 @@ _RESOURCE_PRESSURE_FIELDS = (
     "event_queue_wait_ms_max",
     "event_worker_service_ms_total",
     "event_worker_service_ms_max",
+    "event_structured_sink_write_count",
+    "event_structured_sink_service_ms_total",
+    "event_structured_sink_service_ms_max",
+    "event_monitor_sink_write_count",
+    "event_monitor_sink_service_ms_total",
+    "event_monitor_sink_service_ms_max",
 )
 _RESOURCE_PRESSURE_COUNTER_FIELDS = (
     "event_drop_counts",
@@ -3992,6 +3998,24 @@ class _ResourcePressureAccumulator:
             ),
             "latest_event_worker_service_ms_max": latest_field_max(
                 "event_worker_service_ms_max"
+            ),
+            "latest_event_structured_sink_write_count_sum": latest_field_sum(
+                "event_structured_sink_write_count"
+            ),
+            "latest_event_structured_sink_service_ms_total_sum": latest_field_sum(
+                "event_structured_sink_service_ms_total"
+            ),
+            "latest_event_structured_sink_service_ms_max": latest_field_max(
+                "event_structured_sink_service_ms_max"
+            ),
+            "latest_event_monitor_sink_write_count_sum": latest_field_sum(
+                "event_monitor_sink_write_count"
+            ),
+            "latest_event_monitor_sink_service_ms_total_sum": latest_field_sum(
+                "event_monitor_sink_service_ms_total"
+            ),
+            "latest_event_monitor_sink_service_ms_max": latest_field_max(
+                "event_monitor_sink_service_ms_max"
             ),
             "event_pipeline_unhealthy_bots": unhealthy_bots,
             "groups_truncated": len(groups) > limit,

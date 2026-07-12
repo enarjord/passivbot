@@ -354,9 +354,11 @@ Related detailed plans:
    resource-pressure path also includes process CPU percent after psutil's
    non-blocking first-sample priming, health-summary scheduling lag after the
    first heartbeat, and optional psutil-backed system memory/swap pressure
-   fields for host-level pressure scans. The active event-pipeline timing slice
-   adds per-health-window processed count, queue-wait total/max, and worker
-   sink-service total/max with non-consuming ordinary monitor snapshots.
+   fields for host-level pressure scans. PR #1200 added per-health-window
+   processed count, queue-wait total/max, and aggregate worker sink-service
+   total/max with non-consuming ordinary monitor snapshots. The active
+   follow-up attributes that worker time to fixed structured/monitor sink write
+   counts and service total/max.
 
    Remaining refinements: exchange-call counts, candle-fetch concurrency,
    lower-level event-loop lag if heartbeat lag proves too coarse, and

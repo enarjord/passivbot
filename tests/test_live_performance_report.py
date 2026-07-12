@@ -4830,6 +4830,12 @@ def test_live_performance_report_resource_pressure_projects_event_pipeline_timin
                     "event_queue_wait_ms_max": 1.0,
                     "event_worker_service_ms_total": 2.0,
                     "event_worker_service_ms_max": 2.0,
+                    "event_structured_sink_write_count": 2,
+                    "event_structured_sink_service_ms_total": 1.2,
+                    "event_structured_sink_service_ms_max": 0.8,
+                    "event_monitor_sink_write_count": 2,
+                    "event_monitor_sink_service_ms_total": 0.8,
+                    "event_monitor_sink_service_ms_max": 0.5,
                 },
             ),
             _monitor_row(
@@ -4843,6 +4849,12 @@ def test_live_performance_report_resource_pressure_projects_event_pipeline_timin
                     "event_queue_wait_ms_max": 3.0,
                     "event_worker_service_ms_total": 7.5,
                     "event_worker_service_ms_max": 4.0,
+                    "event_structured_sink_write_count": 5,
+                    "event_structured_sink_service_ms_total": 3.5,
+                    "event_structured_sink_service_ms_max": 1.5,
+                    "event_monitor_sink_write_count": 5,
+                    "event_monitor_sink_service_ms_total": 2.5,
+                    "event_monitor_sink_service_ms_max": 1.2,
                 },
             ),
         ],
@@ -4863,6 +4875,12 @@ def test_live_performance_report_resource_pressure_projects_event_pipeline_timin
                     "event_queue_wait_ms_max": 2.25,
                     "event_worker_service_ms_total": 3.5,
                     "event_worker_service_ms_max": 3.5,
+                    "event_structured_sink_write_count": 3,
+                    "event_structured_sink_service_ms_total": 2.0,
+                    "event_structured_sink_service_ms_max": 1.0,
+                    "event_monitor_sink_write_count": 3,
+                    "event_monitor_sink_service_ms_total": 1.5,
+                    "event_monitor_sink_service_ms_max": 0.9,
                 },
             )
         ],
@@ -4890,6 +4908,8 @@ def test_live_performance_report_resource_pressure_projects_event_pipeline_timin
         "p95": 4.35,
     }
     assert binance_fields["event_worker_service_ms_max"]["latest"] == 4
+    assert binance_fields["event_structured_sink_service_ms_total"]["latest"] == 3.5
+    assert binance_fields["event_monitor_sink_write_count"]["latest"] == 5
     assert {
         key: pressure[key]
         for key in (
@@ -4899,6 +4919,12 @@ def test_live_performance_report_resource_pressure_projects_event_pipeline_timin
             "latest_event_queue_wait_ms_max",
             "latest_event_worker_service_ms_total_sum",
             "latest_event_worker_service_ms_max",
+            "latest_event_structured_sink_write_count_sum",
+            "latest_event_structured_sink_service_ms_total_sum",
+            "latest_event_structured_sink_service_ms_max",
+            "latest_event_monitor_sink_write_count_sum",
+            "latest_event_monitor_sink_service_ms_total_sum",
+            "latest_event_monitor_sink_service_ms_max",
         )
     } == {
         "latest_event_pipeline_processed_total": 8,
@@ -4907,6 +4933,12 @@ def test_live_performance_report_resource_pressure_projects_event_pipeline_timin
         "latest_event_queue_wait_ms_max": 3,
         "latest_event_worker_service_ms_total_sum": 11,
         "latest_event_worker_service_ms_max": 4,
+        "latest_event_structured_sink_write_count_sum": 8,
+        "latest_event_structured_sink_service_ms_total_sum": 5.5,
+        "latest_event_structured_sink_service_ms_max": 1.5,
+        "latest_event_monitor_sink_write_count_sum": 8,
+        "latest_event_monitor_sink_service_ms_total_sum": 4,
+        "latest_event_monitor_sink_service_ms_max": 1.2,
     }
 
 

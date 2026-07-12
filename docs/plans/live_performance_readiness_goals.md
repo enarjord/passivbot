@@ -375,8 +375,10 @@ classification when enough source events exist.
     `slowest_blockers` also include the latest bounded report-safe canonical
     event IDs for direct event-stream correlation. Remaining work: source events
     for complete stage coverage where the live loop does not yet emit timings.
-    The active event-pipeline slice adds per-heartbeat queue-wait and worker
-    sink-service count/total/max source evidence without affecting delivery.
+    PR #1200 added per-heartbeat queue-wait and worker sink-service
+    count/total/max source evidence without affecting delivery. The active
+    follow-up attributes worker service to fixed structured and monitor sink
+    classes with per-window write counts and service total/max.
 - [ ] Exchange writes: create/cancel/close/panic write latency, exchange
   response latency, ambiguous write rate, confirmation latency.
   - Status: partial. The report now derives order-wave total duration,
@@ -405,10 +407,12 @@ classification when enough source events exist.
     subtraction. Performance reports also expose aggregate latest event-pipeline
     queue/drop/sink/degraded counters and unhealthy-bot count, so operators can
     see whether observability itself is backed up or dropping data without
-    opening every per-bot group. The active slice adds fixed numeric
-    health-window processed counts, queue-wait total/max, and worker sink-service
+    opening every per-bot group. PR #1200 added fixed numeric health-window
+    processed counts, queue-wait total/max, and aggregate worker sink-service
     total/max; reports retain per-field distributions and bounded latest
-    cross-bot aggregates.
+    cross-bot aggregates. The active follow-up adds fixed structured/monitor
+    sink write counts and service total/max so aggregate worker delay can be
+    attributed without labels or sampled payloads.
     Remaining work: a lower-level event-loop lag probe can be added later if
     operators need sub-heartbeat scheduling latency, but the heartbeat lag now
     gives bounded non-misleading evidence for delayed health summaries.

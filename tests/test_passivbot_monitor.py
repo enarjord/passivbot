@@ -1363,6 +1363,12 @@ def test_build_health_summary_payload_includes_resource_pressure(monkeypatch):
                 "event_queue_wait_ms_max": 7.5,
                 "event_worker_service_ms_total": 98.75,
                 "event_worker_service_ms_max": 12.25,
+                "event_structured_sink_write_count": 120,
+                "event_structured_sink_service_ms_total": 55.5,
+                "event_structured_sink_service_ms_max": 8.25,
+                "event_monitor_sink_write_count": 120,
+                "event_monitor_sink_service_ms_total": 40.25,
+                "event_monitor_sink_service_ms_max": 6.75,
             }
 
     class FakeBot:
@@ -1460,6 +1466,12 @@ def test_build_health_summary_payload_includes_resource_pressure(monkeypatch):
     assert payload["event_queue_wait_ms_max"] == 7.5
     assert payload["event_worker_service_ms_total"] == 98.75
     assert payload["event_worker_service_ms_max"] == 12.25
+    assert payload["event_structured_sink_write_count"] == 120
+    assert payload["event_structured_sink_service_ms_total"] == 55.5
+    assert payload["event_structured_sink_service_ms_max"] == 8.25
+    assert payload["event_monitor_sink_write_count"] == 120
+    assert payload["event_monitor_sink_service_ms_total"] == 40.25
+    assert payload["event_monitor_sink_service_ms_max"] == 6.75
     assert bot._live_event_pipeline.consume_timing_calls == [False]
 
     consumed_payload, timing_token = bot._build_health_summary_payload(

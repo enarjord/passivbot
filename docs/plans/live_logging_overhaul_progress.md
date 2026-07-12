@@ -7839,3 +7839,42 @@ VPS5 deployment status:
 - Expected VPS action: exact five-bot graceful restart, bounded timing evidence,
   and immediate plus settled smoke while preserving unrelated processes and
   local artifacts.
+
+### Deployed Slice: Event-Pipeline Service-Time Evidence
+
+- PR #1200 was approved by Hermes and Grok 4.5 on exact head `9b7baf0b6`; CI
+  passed and it merged to `v8` as `cbf1e5ed5`.
+- VPS5 fast-forwarded cleanly and gracefully stopped only the five exact bot
+  panes. All old Python processes exited naturally, including KuCoin after a
+  bounded uninterruptible wait. Existing pane PIDs and unrelated `misc:0.0` PID
+  `434835` remained preserved; the exact supervisor commands then started bot
+  PIDs `865892/865897/865901/865903/865905`.
+- Fresh smoke and performance reports projected three health windows with
+  `1517` processed events, queue-wait total/max `29858.257/1077.844ms`, and
+  worker-service total/max `63316.18/1033.432ms`; drops, sink errors, degraded
+  counts, and unhealthy pipelines were zero.
+- A real GateIO authoritative-balance timeout made one intermediate smoke red.
+  After recovery, the final two-minute smoke was hard-green with `432/432`
+  remote and `59/59` account-critical calls successful, all five expected
+  processes matched, exact states `R/R/R/R/S`, and a clean tracked repository.
+
+### Active Slice: Event-Pipeline Sink Attribution
+
+- Branch: `codex/v8-event-pipeline-sink-attribution` from deployed
+  `cbf1e5ed5`.
+- Triggering evidence: live worker-service maxima exceeded one second while
+  drops, sink errors, and degraded counts remained zero, but the aggregate
+  timing cannot distinguish structured from monitor sink cost.
+- Scope: add fixed per-health-window structured/monitor sink write counts and
+  per-write service total/max. Use the existing monotonic worker clock and
+  transactional timing-window token; preserve aggregate worker timing and all
+  queue/routing/delivery behavior.
+- Consumers: project only fixed numeric fields through smoke event-pipeline
+  summaries and performance resource-pressure statistics. Historical events
+  without these fields remain absent rather than synthetic zero.
+- Non-goals: no console/text timing, labels, samples, thresholds, verdict
+  changes, queue policy, routing, event payload, order, risk, HSL, Rust,
+  backtest, optimizer, exchange, or trading behavior changes.
+- Expected VPS action: exact five-bot graceful restart, bounded per-sink timing
+  evidence, and immediate plus settled smoke while preserving unrelated
+  processes and local artifacts.
