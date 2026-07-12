@@ -13,9 +13,13 @@ merge, live smoke evidence changes, or new gaps are discovered.
 - Do not use this file for design churn; unresolved design details belong in the
   plan or a focused handoff doc.
 
-## Current Status
+## Historical Status Snapshot (PR #1191)
 
-Last updated: 2026-07-11.
+Snapshot captured: 2026-07-11.
+
+This block is retained as historical context and is not the operational current
+status. Use `docs/plans/live_logging_overhaul_current_status.md` for the active
+PR, deployed head, review gate, VPS state, and next action.
 
 Current `origin/v8` head:
 
