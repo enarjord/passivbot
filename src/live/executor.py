@@ -603,6 +603,12 @@ async def execute_orders_parent(bot, orders: list[dict]) -> list[dict]:
         )
     _record_fresh_entry_orders(bot, "record_eligible_orders", orders)
     _emit_fresh_entry_eligibility(bot, passivbot_cls, wave)
+    connector_call_context = {
+        "action": "create",
+        "orders": orders,
+        "wave": wave,
+    }
+    bot._execution_connector_call_context = connector_call_context
     try:
         res = await bot.execute_orders(orders)
     except RestartBotException:
@@ -631,6 +637,12 @@ async def execute_orders_parent(bot, orders: list[dict]) -> list[dict]:
                 error=exc,
             )
         raise
+    finally:
+        if (
+            getattr(bot, "_execution_connector_call_context", None)
+            is connector_call_context
+        ):
+            bot._execution_connector_call_context = None
     if not res:
         for idx, order in enumerate(orders):
             passivbot_cls._emit_execution_order_event(
@@ -824,6 +836,12 @@ async def execute_cancellations_parent(bot, orders: list[dict]) -> list[dict]:
             index=idx,
             wave=wave,
         )
+    connector_call_context = {
+        "action": "cancel",
+        "orders": orders,
+        "wave": wave,
+    }
+    bot._execution_connector_call_context = connector_call_context
     try:
         res = await bot.execute_cancellations(orders)
     except RestartBotException:
@@ -843,6 +861,12 @@ async def execute_cancellations_parent(bot, orders: list[dict]) -> list[dict]:
                 error=exc,
             )
         raise
+    finally:
+        if (
+            getattr(bot, "_execution_connector_call_context", None)
+            is connector_call_context
+        ):
+            bot._execution_connector_call_context = None
     to_return = []
     if len(orders) != len(res):
         bot.execution_scheduled = True

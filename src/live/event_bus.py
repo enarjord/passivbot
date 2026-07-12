@@ -149,6 +149,9 @@ class EventTypes:
     ORDER_WAVE_STARTED = "order_wave.started"
     ORDER_WAVE_COMPLETED = "order_wave.completed"
     EXECUTION_CREATE_SENT = "execution.create_sent"
+    EXECUTION_CREATE_CONNECTOR_CALL_STARTED = (
+        "execution.create_connector_call_started"
+    )
     EXECUTION_CREATE_SUCCEEDED = "execution.create_succeeded"
     EXECUTION_CREATE_FAILED = "execution.create_failed"
     EXECUTION_CREATE_REJECTED = "execution.create_rejected"
@@ -159,6 +162,9 @@ class EventTypes:
     ENTRY_INITIAL_DISTANCE_GATE_CLEARED = "entry.initial_distance_gate_cleared"
     ENTRY_MIN_EFFECTIVE_COST_BLOCKED = "entry.min_effective_cost_blocked"
     EXECUTION_CANCEL_SENT = "execution.cancel_sent"
+    EXECUTION_CANCEL_CONNECTOR_CALL_STARTED = (
+        "execution.cancel_connector_call_started"
+    )
     EXECUTION_CANCEL_SUCCEEDED = "execution.cancel_succeeded"
     EXECUTION_CANCEL_FAILED = "execution.cancel_failed"
     EXECUTION_CANCEL_AMBIGUOUS_TERMINAL = "execution.cancel_ambiguous_terminal"
@@ -250,6 +256,7 @@ class ReasonCodes:
     BALANCE_CHANGED = "balance_changed"
     CANDLE_DISK_FLUSH_COMPLETED = "candle_disk_flush_completed"
     CANDLE_DISK_LOAD_COMPLETED = "candle_disk_load_completed"
+    CONNECTOR_CALL_STARTED = "connector_call_started"
     EMA_FALLBACK_USED = "ema_fallback_used"
     EXCHANGE_ACKNOWLEDGED = "exchange_acknowledged"
     EXCHANGE_CONFIG_REFRESH = "exchange_config_refresh"
@@ -465,6 +472,7 @@ PHASE1_EVENT_TYPES = {
     EventTypes.ORDER_WAVE_STARTED,
     EventTypes.ORDER_WAVE_COMPLETED,
     EventTypes.EXECUTION_CREATE_SENT,
+    EventTypes.EXECUTION_CREATE_CONNECTOR_CALL_STARTED,
     EventTypes.EXECUTION_CREATE_SUCCEEDED,
     EventTypes.EXECUTION_CREATE_FAILED,
     EventTypes.EXECUTION_CREATE_REJECTED,
@@ -475,6 +483,7 @@ PHASE1_EVENT_TYPES = {
     EventTypes.ENTRY_INITIAL_DISTANCE_GATE_CLEARED,
     EventTypes.ENTRY_MIN_EFFECTIVE_COST_BLOCKED,
     EventTypes.EXECUTION_CANCEL_SENT,
+    EventTypes.EXECUTION_CANCEL_CONNECTOR_CALL_STARTED,
     EventTypes.EXECUTION_CANCEL_SUCCEEDED,
     EventTypes.EXECUTION_CANCEL_FAILED,
     EventTypes.EXECUTION_CANCEL_AMBIGUOUS_TERMINAL,
@@ -777,6 +786,9 @@ DEFAULT_ROUTES: dict[str, EventRoute] = {
     EventTypes.ORDER_WAVE_STARTED: EventRoute(console=False),
     EventTypes.ORDER_WAVE_COMPLETED: EventRoute(console=True, text=True),
     EventTypes.EXECUTION_CREATE_SENT: EventRoute(console=False),
+    EventTypes.EXECUTION_CREATE_CONNECTOR_CALL_STARTED: EventRoute(
+        console=False, text=False
+    ),
     EventTypes.EXECUTION_CREATE_SUCCEEDED: EventRoute(console=True, text=True),
     EventTypes.EXECUTION_CREATE_FAILED: EventRoute(console=True, text=True),
     EventTypes.EXECUTION_CREATE_REJECTED: EventRoute(console=True, text=True),
@@ -791,6 +803,9 @@ DEFAULT_ROUTES: dict[str, EventRoute] = {
     ),
     EventTypes.ENTRY_MIN_EFFECTIVE_COST_BLOCKED: EventRoute(console=True, text=True),
     EventTypes.EXECUTION_CANCEL_SENT: EventRoute(console=False),
+    EventTypes.EXECUTION_CANCEL_CONNECTOR_CALL_STARTED: EventRoute(
+        console=False, text=False
+    ),
     EventTypes.EXECUTION_CANCEL_SUCCEEDED: EventRoute(console=True, text=True),
     EventTypes.EXECUTION_CANCEL_FAILED: EventRoute(console=True, text=True),
     EventTypes.EXECUTION_CANCEL_AMBIGUOUS_TERMINAL: EventRoute(console=True, text=True),

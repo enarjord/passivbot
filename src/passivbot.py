@@ -699,6 +699,9 @@ class Passivbot:
     )
     _emit_order_wave_started_event = live_event_emitters.emit_order_wave_started_event
     _emit_order_wave_completed_event = live_event_emitters.emit_order_wave_completed_event
+    _emit_execution_connector_call_started_event = (
+        live_event_emitters.emit_execution_connector_call_started_event
+    )
     _emit_planning_defer_summary_event = (
         live_event_emitters.emit_planning_defer_summary_event
     )
@@ -17948,6 +17951,11 @@ class Passivbot:
             "price": order["price"],
             "params": self._build_order_params(order),
         }
+        self._emit_execution_connector_call_started_event(
+            order=order,
+            action="create",
+            connector_route="base",
+        )
         executed = await self.cca.create_order(**params)
         return executed
 
@@ -17959,6 +17967,11 @@ class Passivbot:
         """Cancel a single order via the exchange client."""
         executed = None
         try:
+            self._emit_execution_connector_call_started_event(
+                order=order,
+                action="cancel",
+                connector_route="base",
+            )
             executed = await self.cca.cancel_order(order["id"], symbol=order["symbol"])
             return executed
         except Exception as e:

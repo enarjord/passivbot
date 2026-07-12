@@ -579,13 +579,16 @@ async def test_okx_update_config_verified_net_mode_fails_loudly():
 async def test_okx_already_gone_cancel_does_not_log_raw_exception(caplog, capsys):
     from exchanges.okx import OKXBot
 
+    markers = []
+
+    async def cancel_order(*_args, **_kwargs):
+        markers.append("connector")
+        raise Exception('{"sCode":"51400","apiKey":"RAW_OKX_CANCEL_SECRET"}')
+
     bot = OKXBot.__new__(OKXBot)
-    bot.cca = SimpleNamespace(
-        cancel_order=AsyncMock(
-            side_effect=Exception(
-                '{"sCode":"51400","apiKey":"RAW_OKX_CANCEL_SECRET"}'
-            )
-        )
+    bot.cca = SimpleNamespace(cancel_order=cancel_order)
+    bot._emit_execution_connector_call_started_event = lambda **kwargs: markers.append(
+        ("event", kwargs)
     )
     order = {
         "id": "order-1",
@@ -605,6 +608,10 @@ async def test_okx_already_gone_cancel_does_not_log_raw_exception(caplog, capsys
     assert "sCode" not in rendered
     assert "cancel skipped: BTC" in caplog.text
     assert "error_type=Exception" in caplog.text
+    assert markers[0][0] == "event"
+    assert markers[0][1]["action"] == "cancel"
+    assert markers[0][1]["connector_route"] == "okx"
+    assert markers[1] == "connector"
 
 
 @pytest.mark.asyncio

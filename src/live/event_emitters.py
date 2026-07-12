@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import hashlib
+import math
 import re
 from collections import Counter
 from urllib.parse import urlsplit, urlunsplit
@@ -1071,6 +1072,11 @@ def _safe_float(value: Any) -> float | None:
     except (TypeError, ValueError):
         return None
     return number if number == number else None
+
+
+def _safe_finite_float(value: Any) -> float | None:
+    number = _safe_float(value)
+    return number if number is not None and math.isfinite(number) else None
 
 
 def _safe_int(value: Any) -> int | None:
@@ -3356,6 +3362,135 @@ def _execution_event_ids(
         if index is not None:
             action_id = f"{order_wave_id}:{action}:{int(index)}"
     return order_wave_id, action_id
+
+
+def _execution_connector_call_context(
+    bot: Any,
+    order: dict | None,
+    *,
+    action: str,
+) -> tuple[dict | None, int | None]:
+    wave = getattr(bot, "_order_wave_in_progress", None)
+    index = None
+    context = getattr(bot, "_execution_connector_call_context", None)
+    if isinstance(context, dict) and context.get("action") == action:
+        if isinstance(context.get("wave"), dict):
+            wave = context["wave"]
+        for candidate_index, candidate in enumerate(context.get("orders") or []):
+            if candidate is order:
+                index = candidate_index
+                break
+    return wave, index
+
+
+def emit_execution_connector_call_started_event(
+    bot: Any,
+    *,
+    order: dict | None,
+    action: str,
+    connector_route: str,
+) -> None:
+    """Emit bounded evidence immediately before a concrete connector call."""
+    try:
+        event_types = {
+            "create": EventTypes.EXECUTION_CREATE_CONNECTOR_CALL_STARTED,
+            "cancel": EventTypes.EXECUTION_CANCEL_CONNECTOR_CALL_STARTED,
+        }
+        connector_methods = {
+            "create": "cca.create_order",
+            "cancel": "cca.cancel_order",
+        }
+        allowed_routes = {"base", "hyperliquid", "okx"}
+        if action not in event_types:
+            raise ValueError(f"unsupported connector action: {action}")
+        if connector_route not in allowed_routes:
+            raise ValueError(f"unsupported connector route: {connector_route}")
+
+        wave, index = _execution_connector_call_context(
+            bot,
+            order,
+            action=action,
+        )
+        order_wave_id, action_id = _execution_event_ids(
+            wave,
+            action=action,
+            index=index,
+        )
+        order_data = _order_event_data(order, index=index)
+        data: dict[str, Any] = {
+            "action": action,
+            "connector_method": connector_methods[action],
+            "connector_route": connector_route,
+        }
+        if index is not None:
+            data["index"] = int(index)
+        for key in ("pb_order_type", "order_type"):
+            if order_data.get(key) is not None:
+                data[key] = str(order_data[key])[:64]
+        if "reduce_only" in order_data:
+            data["reduce_only"] = bool(order_data["reduce_only"])
+        for key in ("client_order_id_short", "order_id_short"):
+            if order_data.get(key) is not None:
+                data[key] = str(order_data[key])[:64]
+        for key in ("price", "qty"):
+            if (safe_value := _safe_finite_float(order_data.get(key))) is not None:
+                data[key] = safe_value
+        delta = order_data.get("delta")
+        if isinstance(delta, dict):
+            safe_delta = {
+                key: safe_value
+                for key in ("price_pct_diff", "qty_pct_diff")
+                if (safe_value := _safe_finite_float(delta.get(key))) is not None
+            }
+            if safe_delta:
+                data["delta"] = safe_delta
+        _safe_emit(
+            bot,
+            event_types[action],
+            level="debug",
+            component="execution.connector_call",
+            tags=(EventTags.EXECUTION, EventTags.ORDER, action),
+            cycle_id=current_live_event_cycle_id(bot),
+            order_wave_id=order_wave_id,
+            action_id=action_id,
+            symbol=(
+                str(order.get("symbol"))
+                if isinstance(order, dict) and order.get("symbol")
+                else None
+            ),
+            pside=(
+                str(order.get("position_side"))
+                if isinstance(order, dict) and order.get("position_side")
+                else None
+            ),
+            side=(
+                str(order.get("side"))
+                if isinstance(order, dict) and order.get("side")
+                else None
+            ),
+            order_id=(
+                str(order.get("id") or order.get("order_id"))
+                if isinstance(order, dict)
+                and (order.get("id") or order.get("order_id"))
+                else None
+            ),
+            client_order_id=(
+                str(order.get("custom_id") or order.get("clientOrderId"))
+                if isinstance(order, dict)
+                and (order.get("custom_id") or order.get("clientOrderId"))
+                else None
+            ),
+            status="started",
+            reason_code=ReasonCodes.CONNECTOR_CALL_STARTED,
+            data=data,
+        )
+    except Exception as exc:
+        logging.debug(
+            "[event] failed to emit connector call event action=%s route=%s error_type=%s",
+            action,
+            connector_route,
+            type(exc).__name__,
+        )
 
 
 def emit_execution_create_filter_event(

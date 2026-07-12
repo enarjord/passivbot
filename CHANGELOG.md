@@ -4,6 +4,11 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Live order writes now emit bounded structured/monitor evidence immediately
+  before concrete connector create and cancel calls. The events distinguish
+  local connector-call arrival from pre-call submission intent and exchange
+  acknowledgement without changing order payloads or execution behavior.
+
 - `live-performance-report` now derives the current lifecycle's first
   connector-bound initial-entry eligibility milestone from
   `entry.initial_eligibility`. Blocked, candidate-free, protective-only, and

@@ -22,44 +22,58 @@ Estimated completion:
 
 ## Active Review Slice
 
-- Branch: `codex/v8-fresh-entry-startup-milestone`
-- Base: `2f6f61da6fdd6d61c8edbf204e2690d5ebf02e8d`
-- Triggering evidence: PR #1196 now emits true local fresh-entry eligibility,
-  but the startup milestone report cannot yet answer when the first initial
-  entry survived every local pre-connector gate.
-- Scope: derive one bounded current-lifecycle
-  `first_fresh_entry_eligible` startup milestone only when an
-  `entry.initial_eligibility` event reports a positive integer eligible count.
-  Classify it as `entry_blocker` and preserve explicit unknown output when the
-  qualifying event is absent from selected history.
-- Behavior boundary: read-only performance report and tests only. Do not add or
-  reinterpret a trading gate, treat blocked/candidate-free/protective-only
-  events as readiness, or claim connector invocation or exchange success.
-- Validation: focused and full performance-report tests, Python compilation,
-  `git diff --check`, added-line silent-handling audit, and independent
-  preflight.
+- Branch: `codex/v8-connector-invocation-events`
+- Base: `fda0e1323135a3db1bc69ff154d066d103ac6c9e`
+- Triggering evidence: existing `execution.create_sent` and
+  `execution.cancel_sent` events are emitted before the batch executor reaches
+  a concrete connector call. They prove submission intent but not local
+  arrival at `cca.create_order` or `cca.cancel_order`.
+- Scope: emit bounded structured/monitor-only
+  `execution.create_connector_call_started` and
+  `execution.cancel_connector_call_started` events immediately before the
+  concrete base, Hyperliquid, and OKX connector call sites. Preserve normal
+  cycle, order-wave, and action correlation without adding fields to connector
+  payloads.
+- Behavior boundary: observability only. The events claim local call-site
+  arrival, not bytes sent, exchange receipt, acceptance, or acknowledgement.
+  Event failures must not prevent or alter connector calls. Do not add another
+  startup milestone or change order, risk, HSL, Rust, backtest, or optimizer
+  behavior.
+- Validation: focused and adjacent event/executor/connector/report tests, full
+  fake-live marker suite, Python compilation, `git diff --check`, added-line
+  silent-handling audit, and independent preflight.
 - Publication state, exact head, mergeability, CI, and current-head reviewer
   verdicts: query live GitHub metadata; do not embed self-invalidating values.
-- Expected VPS action: pull while preserving local artifacts, run an exact
-  bounded current-plus-rotated startup milestone report, and settled smoke.
-  Do not restart bots because this slice changes only a read-only consumer.
+- Expected VPS action: pull while preserving local artifacts, gracefully
+  restart only the five exact supervised bot panes because this is a producer
+  change, query the call-boundary chain only when legitimate order activity
+  occurs, and run immediate plus settled smoke. Do not create synthetic live
+  orders for validation.
 
 Next action:
 
-1. Wait for the temporary Hermes + Grok 4.5 + green-CI gate on the exact current
-   PR head. After merge, pull `v8` on VPS5 without restarting bots, run the
-   bounded current-plus-rotated `startup_milestones` report, and complete a
-   settled smoke while verifying the bot and unrelated-process PIDs are
-   unchanged.
+1. Complete the connector-boundary regressions and fake-live suite, run
+   independent preflight, then publish for the temporary Hermes + Grok 4.5 +
+   green-CI current-head gate.
 
 ## Deployed Baseline
 
-- Remote `v8`: `2f6f61da6fdd6d61c8edbf204e2690d5ebf02e8d`, PR #1196
-- VPS5 repository: `2f6f61da6fdd6d61c8edbf204e2690d5ebf02e8d`, PR #1196; tracked
+- Remote `v8`: `fda0e1323135a3db1bc69ff154d066d103ac6c9e`, PR #1197
+- VPS5 repository: `fda0e1323135a3db1bc69ff154d066d103ac6c9e`, PR #1197; tracked
   status clean; only expected untracked artifacts were preserved
-- VPS5 expected bots: five; all running with the PR #1196 restart PIDs
+- VPS5 expected bots: five; all still running with the PR #1196 restart PIDs
   `856325/856354/856386/856420/856456`;
   unrelated `misc:0.0` remains PID `434835`
+- PR #1197 merged after exact-head Hermes and Grok 4.5 approval plus green CI.
+  VPS5 fast-forwarded without bot signals or restarts. A bounded eight-segment
+  Binance lifecycle report returned `ok=true` with zero issues and observed
+  `first_fresh_entry_eligible` at `240.110s`, alongside first cycle, Rust call,
+  and submitted write evidence. The settled two-minute smoke was hard-green
+  with `208/208` remote and `53/53` account-critical calls successful, all five
+  expected processes matched, no hard/log/monitor failures, and a clean tracked
+  repository. One report-time `D` sample cleared; all five bots were `R` on the
+  final exact-state check. Bot, pane, and unrelated `misc:0.0` PIDs remained
+  unchanged.
 - PR #1196 merged after exact-head Hermes and Grok 4.5 approval plus green CI.
   VPS5 fast-forwarded and restarted only the five supervised panes. A focused
   query observed three bounded eligibility events with eligible,

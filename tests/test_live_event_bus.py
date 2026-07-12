@@ -308,6 +308,8 @@ def test_route_table_keeps_data_events_off_console_by_default():
         EventTypes.FORAGER_FEATURE_UNAVAILABLE,
         EventTypes.FORAGER_ELIGIBILITY_CHANGED,
         EventTypes.ENTRY_INITIAL_ELIGIBILITY,
+        EventTypes.EXECUTION_CREATE_CONNECTOR_CALL_STARTED,
+        EventTypes.EXECUTION_CANCEL_CONNECTOR_CALL_STARTED,
         EventTypes.CONFIG_MARKET_COMPATIBILITY,
         EventTypes.ACTION_PLANNED,
         EventTypes.EMA_BUNDLE_STARTED,

@@ -177,22 +177,45 @@ def test_apply_assertions_supports_remote_call_paths():
 @pytest.mark.asyncio
 @pytest.mark.fake_live
 async def test_fake_client_request_log_counts_order_writes():
+    from exchanges.ccxt_bot import CCXTBot
+
     client = FakeCCXTClient(_scenario(), quote="USDT")
-    order = await client.create_order(
-        "BTC/USDT:USDT",
-        "limit",
-        "buy",
-        0.01,
-        90.0,
-        {"positionSide": "LONG", "clientOrderId": "pb-test"},
+    emitted = []
+    bot = CCXTBot.__new__(CCXTBot)
+    bot.exchange = "fake"
+    bot.user = "fake_01"
+    bot.bot_id = "fake_bot"
+    bot.cca = client
+    bot._build_order_params = lambda _order: {
+        "positionSide": "LONG",
+        "clientOrderId": "pb-test",
+    }
+    bot._emit_live_event = lambda event_type, **kwargs: emitted.append(
+        (event_type, kwargs)
     )
-    await client.cancel_order(order["id"], "BTC/USDT:USDT")
+    requested = {
+        "symbol": "BTC/USDT:USDT",
+        "type": "limit",
+        "side": "buy",
+        "position_side": "long",
+        "qty": 0.01,
+        "price": 90.0,
+        "reduce_only": False,
+        "custom_id": "pb-test",
+    }
+
+    order = await bot.execute_order(requested)
+    await bot.execute_cancellation(order)
 
     summary = _summarize_remote_calls(client.export_request_log())
 
     assert summary["by_method"]["create_order"] == 1
     assert summary["by_method"]["cancel_order"] == 1
     assert summary["by_category"]["order_write"] == 2
+    assert [event_type for event_type, _kwargs in emitted] == [
+        "execution.create_connector_call_started",
+        "execution.cancel_connector_call_started",
+    ]
 
 
 @pytest.mark.fake_live

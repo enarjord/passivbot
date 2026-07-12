@@ -1161,6 +1161,11 @@ class HyperliquidBot(CCXTBot):
             return False
 
         try:
+            self._emit_execution_connector_call_started_event(
+                order=order,
+                action="cancel",
+                connector_route="hyperliquid",
+            )
             res = await self.cca.cancel_order(order["id"], symbol=order["symbol"], params=params)
             # Sometimes hyperliquid returns an "ok" wrapper with an embedded error; treat as non-fatal.
             if _is_already_gone(res):
