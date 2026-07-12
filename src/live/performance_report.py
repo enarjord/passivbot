@@ -1440,6 +1440,184 @@ class _StartupReadinessAccumulator:
         }
 
 
+_STARTUP_MILESTONE_EVENT_TYPES = {
+    "cycle.started": "first_cycle_started",
+    "rust_orchestrator.called": "first_rust_called",
+    "execution.create_sent": "first_exchange_write_submitted",
+    "execution.cancel_sent": "first_exchange_write_submitted",
+}
+_STARTUP_MILESTONE_LABELS = tuple(dict.fromkeys(_STARTUP_MILESTONE_EVENT_TYPES.values()))
+
+
+class _StartupMilestoneAccumulator:
+    """Derive current-lifecycle startup milestones from selected monitor events."""
+
+    def __init__(self) -> None:
+        self.bots: dict[str, dict[str, Any]] = {}
+
+    def add(
+        self,
+        *,
+        row: dict[str, Any],
+        live_event: dict[str, Any],
+        source_complete: bool = True,
+    ) -> None:
+        event_type = str(live_event.get("event_type") or row.get("kind") or "")
+        if event_type != "bot.started" and event_type not in _STARTUP_MILESTONE_EVENT_TYPES:
+            return
+        bot = _bot_key(row, live_event)
+        state = self.bots.setdefault(
+            bot,
+            {
+                "bot": bot,
+                "milestone_events_seen": 0,
+                "milestones": {},
+            },
+        )
+        event_order = _startup_event_order_key(row)
+        if event_type == "bot.started":
+            previous_started_order = state.get("started_order")
+            if previous_started_order is not None and event_order <= previous_started_order:
+                return
+            incomplete_order = state.get("latest_incomplete_unanchored_order")
+            if (
+                previous_started_order is None
+                and incomplete_order is not None
+                and incomplete_order > event_order
+            ):
+                return
+            state["started_order"] = event_order
+            state["started_ts"] = _record_ts(row)
+            state.pop("latest_incomplete_unanchored_order", None)
+            retained = {
+                label: candidate
+                for label, candidate in state["milestones"].items()
+                if candidate[0] > event_order and candidate[2]
+            }
+            state["milestones"] = retained
+            for _label, (_order, milestone, _source_complete) in retained.items():
+                self._set_elapsed(milestone, started_ts=state["started_ts"])
+            return
+
+        state["milestone_events_seen"] += 1
+        started_order = state.get("started_order")
+        if started_order is not None and event_order <= started_order:
+            return
+        if started_order is None and not source_complete:
+            incomplete_order = state.get("latest_incomplete_unanchored_order")
+            if incomplete_order is None or event_order > incomplete_order:
+                state["latest_incomplete_unanchored_order"] = event_order
+        label = _STARTUP_MILESTONE_EVENT_TYPES[event_type]
+        existing = state["milestones"].get(label)
+        if existing is not None and event_order >= existing[0]:
+            return
+        milestone = self._observed_milestone(
+            row=row,
+            live_event=live_event,
+            started_ts=state.get("started_ts"),
+        )
+        state["milestones"][label] = (event_order, milestone, bool(source_complete))
+
+    @staticmethod
+    def _set_elapsed(item: dict[str, Any], *, started_ts: int | None) -> None:
+        item.pop("elapsed_ms", None)
+        event_ts = _non_negative_ms(item.get("ts_ms"))
+        if event_ts is not None and started_ts is not None and event_ts >= int(started_ts):
+            item["elapsed_ms"] = int(event_ts) - int(started_ts)
+
+    @staticmethod
+    def _observed_milestone(
+        *,
+        row: dict[str, Any],
+        live_event: dict[str, Any],
+        started_ts: int | None,
+    ) -> dict[str, Any]:
+        event_type = str(live_event.get("event_type") or row.get("kind") or "")
+        item: dict[str, Any] = {
+            "status": "observed",
+            "event_type": event_type,
+            "trading_impact": "cycle_delay",
+        }
+        event_ts = _record_ts(row)
+        if event_ts is not None:
+            item["ts_ms"] = int(event_ts)
+            if started_ts is not None and int(event_ts) >= int(started_ts):
+                item["elapsed_ms"] = int(event_ts) - int(started_ts)
+        event_id = _safe_label(live_event.get("event_id"), max_len=160)
+        if event_id is not None:
+            item["event_id"] = event_id
+        item.update(_bounded_event_ids(live_event))
+        for key in ("symbol", "pside", "side"):
+            value = _safe_label(live_event.get(key) or row.get(key), max_len=120)
+            if value is not None:
+                item[key] = value
+        if event_type == "execution.create_sent":
+            item["action"] = "create"
+        elif event_type == "execution.cancel_sent":
+            item["action"] = "cancel"
+        return item
+
+    def to_dict(self, *, group_limit: int = GROUP_LIMIT) -> dict[str, Any]:
+        bot_items: list[dict[str, Any]] = []
+        observed_counts: Counter[str] = Counter()
+        elapsed_values: dict[str, list[int]] = {
+            label: [] for label in _STARTUP_MILESTONE_LABELS
+        }
+        events_without_start = 0
+
+        for bot, state in sorted(self.bots.items()):
+            if state.get("started_order") is None:
+                events_without_start += int(state["milestone_events_seen"])
+                bot_items.append(
+                    {
+                        "bot": bot,
+                        "milestones": {
+                            label: {
+                                "status": "unknown",
+                                "reason": "bot_started_not_observed_in_selected_events",
+                                "trading_impact": "cycle_delay",
+                            }
+                            for label in _STARTUP_MILESTONE_LABELS
+                        },
+                    }
+                )
+                continue
+            started_ts = state.get("started_ts")
+            milestones: dict[str, dict[str, Any]] = {
+                label: {
+                    "status": "unknown",
+                    "reason": "not_observed_in_selected_events",
+                    "trading_impact": "cycle_delay",
+                }
+                for label in _STARTUP_MILESTONE_LABELS
+            }
+            for label, (_order, observed, _source_complete) in state["milestones"].items():
+                milestones[label] = observed
+                observed_counts[label] += 1
+                if observed.get("elapsed_ms") is not None:
+                    elapsed_values[label].append(int(observed["elapsed_ms"]))
+            item: dict[str, Any] = {"bot": bot, "milestones": milestones}
+            if started_ts is not None:
+                item["bot_started_ts"] = int(started_ts)
+            bot_items.append(item)
+
+        limit = max(0, int(group_limit))
+        return {
+            "bot_count": len(bot_items),
+            "observed_counts": {
+                label: int(observed_counts[label]) for label in _STARTUP_MILESTONE_LABELS
+            },
+            "elapsed_ms": {
+                label: _number_summary(elapsed_values[label])
+                for label in _STARTUP_MILESTONE_LABELS
+                if elapsed_values[label]
+            },
+            "events_without_start": int(events_without_start),
+            "bots_truncated": len(bot_items) > limit,
+            "bots": bot_items[:limit],
+        }
+
+
 def _bounded_hsl_replay_data(data: Any) -> dict[str, Any]:
     if not isinstance(data, dict):
         return {}
@@ -4275,6 +4453,7 @@ def build_live_performance_report(
     decision_boundary = _DecisionBoundaryAccumulator()
     input_staleness = _InputStalenessAccumulator()
     startup_readiness = _StartupReadinessAccumulator()
+    startup_milestones = _StartupMilestoneAccumulator()
     report_ts_ms = utc_ms()
     hsl_replay_profile = _HslReplayProfileAccumulator()
     cache_warmup = _CacheWarmupAccumulator()
@@ -4294,7 +4473,13 @@ def build_live_performance_report(
     bots: Counter[str] = Counter()
     event_tail_methods: Counter[str] = Counter()
 
-    def process_event_row(path: Path, line_no: int, raw_line: str) -> None:
+    def process_event_row(
+        path: Path,
+        line_no: int,
+        raw_line: str,
+        *,
+        source_complete: bool = True,
+    ) -> None:
         nonlocal records_total, live_events, legacy_events
         line = raw_line.strip()
         if not line:
@@ -4373,6 +4558,11 @@ def build_live_performance_report(
             cycle_scope=cycle_scope,
         )
         startup_readiness.add(row=row, live_event=live_event)
+        startup_milestones.add(
+            row=row,
+            live_event=live_event,
+            source_complete=source_complete,
+        )
         hsl_replay_profile.add(row=row, live_event=live_event)
         cache_warmup.add(row=row, live_event=live_event)
         fill_refresh.add(row=row, live_event=live_event)
@@ -4410,8 +4600,16 @@ def build_live_performance_report(
                             and row_window.line_numbers_exact
                         )
                         event_tail_methods[str(row_window.method)] += 1
+                    source_complete = (
+                        not row_window.limited or row_window.skipped_lines == 0
+                    )
                     for line_no, raw_line in row_iter:
-                        process_event_row(path, int(line_no), raw_line)
+                        process_event_row(
+                            path,
+                            int(line_no),
+                            raw_line,
+                            source_complete=source_complete,
+                        )
             else:
                 with _open_text(path) as stream:
                     for line_no, raw_line in enumerate(stream, start=1):
@@ -4461,6 +4659,7 @@ def build_live_performance_report(
             group_limit=group_limit,
             report_ts_ms=report_ts_ms,
         ),
+        "startup_milestones": startup_milestones.to_dict(group_limit=group_limit),
         "hsl_replay_profile": hsl_replay_profile.to_dict(
             group_limit=group_limit,
             report_ts_ms=report_ts_ms,
@@ -4593,6 +4792,17 @@ def summarize_live_performance_report(
         if len(startup_bots) > max(0, int(group_limit)):
             startup_readiness["bots_truncated"] = True
         summary["startup_readiness"] = startup_readiness
+    if isinstance(report.get("startup_milestones"), dict):
+        startup_milestones = dict(report["startup_milestones"])
+        milestone_bots = (
+            startup_milestones.get("bots")
+            if isinstance(startup_milestones.get("bots"), list)
+            else []
+        )
+        startup_milestones["bots"] = milestone_bots[: max(0, int(group_limit))]
+        if len(milestone_bots) > max(0, int(group_limit)):
+            startup_milestones["bots_truncated"] = True
+        summary["startup_milestones"] = startup_milestones
     if isinstance(report.get("hsl_replay_profile"), dict):
         hsl_replay_profile = dict(report["hsl_replay_profile"])
         hsl_groups = (

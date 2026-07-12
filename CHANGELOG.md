@@ -4,6 +4,12 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- `live-performance-report` now derives bounded current-lifecycle startup
+  milestones for the first cycle, first Rust call, and first submitted
+  exchange write from existing structured events. Missing observations remain
+  explicitly unknown; submitted write events do not claim connector success
+  or fresh-entry eligibility.
+
 - Capped rotated `live-performance-report` scans now keep each bot's startup
   readiness snapshot on the latest observed lifecycle even though recent-file
   selection reads `current.ndjson` before older segments. Historical aggregate

@@ -22,18 +22,22 @@ Estimated completion:
 
 ## Active Review Slice
 
-- PR #1193, `Keep startup reports on latest lifecycle`
-- Branch: `codex/v8-performance-startup-lifecycle`
-- Base: `3b4b043eb66e8d0b42d792a5b94686b409901220`
-- Triggering evidence: capped rotated performance-report selection intentionally
-  processes `current.ndjson` before the selected older segment. The startup
-  accumulator reset per-bot state inline, so an older lifecycle encountered
-  later could overwrite the current startup snapshot.
-- Scope: make per-bot startup readiness state use event order rather than file
-  traversal order while preserving historical aggregate startup distributions.
-  Add a current-before-rotated regression with the production per-bot file cap.
+- PR #1194, `Report startup action milestones`
+- Branch: `codex/v8-startup-action-milestones`
+- Base: `60f1f042dfbe7ece2f3f56faa0e3fdf9c4299d74`
+- Triggering evidence: existing `cycle.started`, `rust_orchestrator.called`, and
+  `execution.create_sent` / `execution.cancel_sent` events provide enough
+  bounded evidence to measure startup-to-first-action progress without a new
+  producer or live hot-path cost.
+- Scope: derive current-lifecycle `first_cycle_started`, `first_rust_called`,
+  and `first_exchange_write_submitted` observations in a new bounded
+  `startup_milestones` performance-report section. Missing selected evidence is
+  explicitly unknown, never zero. Use source order so capped
+  current-before-rotated scans retain the latest lifecycle.
 - Behavior boundary: read-only `live-performance-report` derivation and tests
-  only. No event producer, startup sequence/readiness decision, HSL state,
+  only. A sent event proves submission intent before the connector call; it
+  does not prove connector/exchange success. Protective-only writes do not
+  prove fresh-entry eligibility. No event producer, startup/readiness decision,
   exchange call, process control, Rust/order/risk logic, smoke verdict, or
   trading behavior change.
 - Validation: focused and full performance-report tests, Python compilation,
@@ -42,23 +46,34 @@ Estimated completion:
 - Publication state, exact head, mergeability, CI, and current-head reviewer
   verdicts: query live GitHub metadata; do not embed self-invalidating values.
 - Expected VPS action: after merge, pull while preserving local artifacts and
-  run the exact bounded rotated startup-readiness report plus a settled smoke.
+  run the exact bounded rotated startup-milestones report plus a settled smoke.
   Do not restart or signal bots because this slice changes only an on-demand
   report consumer.
 
 Next action:
 
-1. Complete the narrow traversal-order fix and regression, publish after clean
-   independent preflight, and merge only after the exact-head temporary Hermes
-   + Grok 4.5 + green-CI gate is satisfied.
+1. Complete the bounded startup-milestone derivation and regressions, publish
+   after clean independent preflight, and merge only after the exact-head
+   temporary Hermes + Grok 4.5 + green-CI gate is satisfied.
 
 ## Deployed Baseline
 
-- Remote `v8`: `3b4b043eb66e8d0b42d792a5b94686b409901220`, PR #1192
-- VPS5 repository: `3b4b043eb66e8d0b42d792a5b94686b409901220`, PR #1192; tracked
+- Remote `v8`: `60f1f042dfbe7ece2f3f56faa0e3fdf9c4299d74`, PR #1193
+- VPS5 repository: `60f1f042dfbe7ece2f3f56faa0e3fdf9c4299d74`, PR #1193; tracked
   status clean; only expected untracked artifacts were preserved
-- VPS5 expected bots: five; all running after exact sequential pane restarts;
+- VPS5 expected bots: five; all running with the PR #1192 restart PIDs;
   unrelated `misc:0.0` remains PID `434835`
+- PR #1193 merged after exact-head Hermes and Grok 4.5 approval plus green CI.
+  VPS5 fast-forwarded without bot signals or restarts, preserving bot PIDs
+  `850148/850296/850370/850436/850495` and unrelated `misc:0.0` PID `434835`.
+  The exact capped current-plus-rotated report returned `ok=true`, scanned 12
+  files with zero errors/warnings, retained all five current per-bot lifecycle
+  snapshots, and preserved historical aggregates (`account` phase count six
+  versus five current bots). The settled smoke was hard-green with `322/322`
+  remote and `57/57` account-critical calls successful, all five bots matched,
+  no event-pipeline drops/sink errors, and a clean tracked repository. Report
+  I/O briefly produced three `D` samples; all five bots returned to `R` after
+  the quiet follow-up.
 - PR #1192 merged after exact-head Hermes and Grok 4.5 approval plus green CI.
   VPS5 replaced bot PIDs `842617/842655/842687/842721/842757` with
   `850148/850296/850370/850436/850495`, preserving `misc:0.0` PID `434835`.
@@ -180,16 +195,20 @@ scorecard, stable per-pair fill index, exact sparse flat-pair replay, and the
 rotated resource-pressure report fix, configured-market skip events, and fatal
 HIP-3 startup compatibility are merged and deployed. PR #1189's isolated-only
 initial-entry filter visibility and PR #1190's HSL replay scanned-row
-throughput, PR #1191's corrected active/legacy-terminal replay estimates, and
-PR #1192's machine-readable startup readiness SLA semantics are also merged and
-deployed. The next active slice makes the performance report's per-bot startup
-snapshot independent of capped current-before-rotated traversal order.
+throughput, PR #1191's corrected active/legacy-terminal replay estimates,
+PR #1192's machine-readable startup readiness SLA semantics, and PR #1193's
+latest-lifecycle report ordering are also merged and deployed. The active
+slice derives bounded startup-to-first-cycle, first-Rust-call, and first
+exchange-write-submission observations from existing events.
 
 After this report-only follow-up is merged and validated, select the next
 review-worthy candidate from the remaining backlog, including:
 
-- bounded startup-to-first-action milestone evidence for true fresh-entry,
-  first-Rust-call, and first actual exchange-write observations
+- a separate producer contract for true fresh-entry eligibility, distinguishing
+  no candidate, blocked candidate, protective-only, already-satisfied, and
+  eligible outcomes
+- optional connector-boundary evidence if operators need actual exchange-write
+  invocation rather than the existing pre-call submitted event
 - bounded operator tooling improvements sharing one code and validation surface
 
 Do not create progress-only PRs or resume unrelated logging work from stale

@@ -1584,6 +1584,295 @@ def test_live_performance_report_startup_readiness_is_bounded(tmp_path):
     assert list(startup["bots"][0]["startup_phases_ms"]) == ["account"]
 
 
+def test_live_performance_report_startup_milestones_current_lifecycle(tmp_path):
+    events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(event_type="bot.started", seq=1, ts=1000),
+            _monitor_row(
+                event_type="cycle.started",
+                seq=2,
+                ts=1100,
+                ids={"cycle_id": "cy_1"},
+            ),
+            _monitor_row(
+                event_type="rust_orchestrator.called",
+                seq=3,
+                ts=1300,
+                ids={"cycle_id": "cy_1", "snapshot_id": "snap_1"},
+            ),
+            _monitor_row(
+                event_type="execution.create_sent",
+                seq=4,
+                ts=1600,
+                symbol="BTCUSDT",
+                pside="long",
+                side="buy",
+                ids={
+                    "cycle_id": "cy_1",
+                    "action_id": "action_1",
+                    "remote_call_id": "remote_1",
+                },
+            ),
+        ],
+    )
+
+    report = build_live_performance_report(tmp_path / "monitor")
+    startup = report["startup_milestones"]
+
+    assert startup["bot_count"] == 1
+    assert startup["events_without_start"] == 0
+    assert startup["observed_counts"] == {
+        "first_cycle_started": 1,
+        "first_rust_called": 1,
+        "first_exchange_write_submitted": 1,
+    }
+    assert startup["elapsed_ms"]["first_cycle_started"]["max"] == 100
+    assert startup["elapsed_ms"]["first_rust_called"]["max"] == 300
+    assert startup["elapsed_ms"]["first_exchange_write_submitted"]["max"] == 600
+    bot = startup["bots"][0]
+    assert bot["bot_started_ts"] == 1000
+    assert bot["milestones"]["first_cycle_started"] == {
+        "status": "observed",
+        "event_type": "cycle.started",
+        "trading_impact": "cycle_delay",
+        "ts_ms": 1100,
+        "elapsed_ms": 100,
+        "event_id": "evt_2",
+        "cycle_id": "cy_1",
+    }
+    write = bot["milestones"]["first_exchange_write_submitted"]
+    assert write["event_type"] == "execution.create_sent"
+    assert write["action"] == "create"
+    assert write["symbol"] == "BTCUSDT"
+    assert write["pside"] == "long"
+    assert write["side"] == "buy"
+    assert write["remote_call_id"] == "remote_1"
+    assert "action_1" not in json.dumps(report["startup_milestones"], sort_keys=True)
+
+
+def test_startup_milestone_accumulator_retains_one_candidate_per_milestone():
+    accumulator = performance_report_module._StartupMilestoneAccumulator()
+    started = _monitor_row(event_type="bot.started", seq=1, ts=1000)
+    accumulator.add(row=started, live_event=started["payload"]["_live_event"])
+
+    event_types = (
+        "cycle.started",
+        "rust_orchestrator.called",
+        "execution.create_sent",
+    )
+    for index in range(1000):
+        for offset, event_type in enumerate(event_types):
+            row = _monitor_row(
+                event_type=event_type,
+                seq=2 + index * len(event_types) + offset,
+                ts=1100 + index * len(event_types) + offset,
+            )
+            accumulator.add(row=row, live_event=row["payload"]["_live_event"])
+
+    state = accumulator.bots["binance/binance_01"]
+    assert state["milestone_events_seen"] == 3000
+    assert len(state["milestones"]) == 3
+    assert accumulator.to_dict()["bots"][0]["milestones"]["first_cycle_started"][
+        "event_id"
+    ] == "evt_2"
+
+
+def test_live_performance_report_startup_milestones_cancel_only_and_unknown(tmp_path):
+    events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(event_type="bot.started", seq=1, ts=1000),
+            _monitor_row(event_type="execution.create_skipped", seq=2, ts=1100),
+            _monitor_row(event_type="execution.create_deferred", seq=3, ts=1200),
+            _monitor_row(
+                event_type="execution.cancel_sent",
+                seq=4,
+                ts=1300,
+                ids={"remote_call_id": "cancel_1"},
+            ),
+        ],
+    )
+
+    startup = build_live_performance_report(tmp_path / "monitor")[
+        "startup_milestones"
+    ]
+    milestones = startup["bots"][0]["milestones"]
+
+    assert milestones["first_cycle_started"] == {
+        "status": "unknown",
+        "reason": "not_observed_in_selected_events",
+        "trading_impact": "cycle_delay",
+    }
+    assert milestones["first_rust_called"]["status"] == "unknown"
+    assert milestones["first_exchange_write_submitted"]["action"] == "cancel"
+    assert milestones["first_exchange_write_submitted"]["event_type"] == (
+        "execution.cancel_sent"
+    )
+
+
+@pytest.mark.parametrize("current_started_ts", [None, 1000])
+def test_live_performance_report_startup_milestones_use_latest_ordered_lifecycle(
+    tmp_path, current_started_ts
+):
+    events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    _write_ndjson(
+        events_dir / "2026-07-10T00-00-00.ndjson",
+        [
+            _monitor_row(event_type="bot.started", seq=1, ts=1000),
+            _monitor_row(event_type="cycle.started", seq=2, ts=1100),
+            _monitor_row(event_type="rust_orchestrator.called", seq=3, ts=1200),
+            _monitor_row(event_type="execution.create_sent", seq=4, ts=1300),
+        ],
+    )
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(event_type="bot.started", seq=1, ts=current_started_ts),
+            _monitor_row(event_type="cycle.started", seq=2, ts=2100),
+        ],
+    )
+
+    startup = build_live_performance_report(
+        tmp_path / "monitor",
+        include_rotated=True,
+        max_event_files_per_bot=2,
+    )["startup_milestones"]
+    bot = startup["bots"][0]
+
+    if current_started_ts is None:
+        assert "bot_started_ts" not in bot
+        assert "elapsed_ms" not in bot["milestones"]["first_cycle_started"]
+    else:
+        assert bot["bot_started_ts"] == current_started_ts
+        assert bot["milestones"]["first_cycle_started"]["elapsed_ms"] == 1100
+    assert bot["milestones"]["first_cycle_started"]["ts_ms"] == 2100
+    assert bot["milestones"]["first_rust_called"]["status"] == "unknown"
+    assert bot["milestones"]["first_exchange_write_submitted"]["status"] == (
+        "unknown"
+    )
+    assert startup["observed_counts"]["first_rust_called"] == 0
+    assert startup["observed_counts"]["first_exchange_write_submitted"] == 0
+
+
+def test_live_performance_report_startup_milestones_reject_old_tail_anchor(tmp_path):
+    events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    _write_ndjson(
+        events_dir / "2026-07-10T00-00-00.ndjson",
+        [_monitor_row(event_type="bot.started", seq=1, ts=1000)],
+    )
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(event_type="bot.started", seq=1, ts=4000),
+            _monitor_row(event_type="execution.create_sent", seq=2, ts=5000),
+        ],
+    )
+
+    report = build_live_performance_report(
+        tmp_path / "monitor",
+        include_rotated=True,
+        max_event_files_per_bot=2,
+        event_tail_lines=1,
+    )
+    startup = report["startup_milestones"]
+    bot = startup["bots"][0]
+
+    assert report["event_window"]["event_tail_skipped_lines"] == 1
+    assert "bot_started_ts" not in bot
+    assert bot["milestones"]["first_exchange_write_submitted"] == {
+        "status": "unknown",
+        "reason": "bot_started_not_observed_in_selected_events",
+        "trading_impact": "cycle_delay",
+    }
+    assert startup["events_without_start"] == 1
+
+
+def test_live_performance_report_startup_milestones_join_complete_rotated_lifecycle(
+    tmp_path,
+):
+    events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    _write_ndjson(
+        events_dir / "2026-07-10T00-00-00.ndjson",
+        [_monitor_row(event_type="bot.started", seq=1, ts=1000)],
+    )
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(event_type="rust_orchestrator.called", seq=2, ts=2000),
+            _monitor_row(event_type="execution.create_sent", seq=3, ts=3000),
+        ],
+    )
+
+    startup = build_live_performance_report(
+        tmp_path / "monitor",
+        include_rotated=True,
+        max_event_files_per_bot=2,
+        event_tail_lines=10,
+    )["startup_milestones"]
+    bot = startup["bots"][0]
+
+    assert bot["bot_started_ts"] == 1000
+    assert bot["milestones"]["first_rust_called"]["elapsed_ms"] == 1000
+    assert bot["milestones"]["first_exchange_write_submitted"]["elapsed_ms"] == 2000
+
+
+def test_live_performance_report_startup_milestones_are_bounded_and_projectable(
+    tmp_path,
+):
+    for index in range(3):
+        events_dir = tmp_path / "monitor" / "binance" / f"user_{index}" / "events"
+        _write_ndjson(
+            events_dir / "current.ndjson",
+            [
+                _monitor_row(
+                    event_type="bot.started",
+                    seq=1,
+                    ts=1000,
+                    user=f"user_{index}",
+                ),
+                _monitor_row(
+                    event_type="cycle.started",
+                    seq=2,
+                    ts=1100,
+                    user=f"user_{index}",
+                ),
+            ],
+        )
+    orphan_dir = tmp_path / "monitor" / "okx" / "orphan" / "events"
+    _write_ndjson(
+        orphan_dir / "current.ndjson",
+        [_monitor_row(event_type="cycle.started", seq=1, ts=1000, user="orphan")],
+    )
+
+    full_report = build_live_performance_report(tmp_path / "monitor", group_limit=10)
+    report = build_live_performance_report(tmp_path / "monitor", group_limit=2)
+    startup = report["startup_milestones"]
+    summary = summarize_live_performance_report(report, group_limit=1)
+    projected = project_live_performance_report_sections(
+        report, ["startup_milestones"]
+    )
+
+    assert startup["bot_count"] == 4
+    assert startup["bots_truncated"] is True
+    assert len(startup["bots"]) == 2
+    assert startup["events_without_start"] == 1
+    orphan = next(
+        item
+        for item in full_report["startup_milestones"]["bots"]
+        if item["bot"] == "binance/orphan"
+    )
+    assert orphan["milestones"]["first_cycle_started"]["reason"] == (
+        "bot_started_not_observed_in_selected_events"
+    )
+    assert summary["startup_milestones"]["bot_count"] == 4
+    assert len(summary["startup_milestones"]["bots"]) == 1
+    assert "startup_milestones" in projected
+    assert "startup_readiness" not in projected
+
+
 def test_live_performance_report_startup_readiness_hsl_whitelist(tmp_path, monkeypatch):
     monkeypatch.setattr(performance_report_module, "utc_ms", lambda: 122000)
     events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
