@@ -350,12 +350,20 @@ def test_monitor_recovery_skips_blank_malformed_and_invalid_utf8_trailing_rows(t
     assert restarted.seq == 8
 
 
-def test_monitor_recovery_reads_only_bounded_current_segment_tail(tmp_path, monkeypatch):
+def test_monitor_recovery_reads_oversized_final_row_in_bounded_chunks(tmp_path, monkeypatch):
     publisher = _make_publisher(tmp_path)
-    publisher.current_events_path.write_bytes(
-        b"x" * (monitor_publisher_module._CURRENT_EVENTS_TAIL_BYTES * 2)
-        + b'\n{"seq":42,"kind":"persisted"}'
-    )
+    oversized_row = json.dumps(
+        {
+            "seq": 42,
+            "kind": "persisted",
+            "payload": {
+                "blob": "x"
+                * (monitor_publisher_module._CURRENT_EVENTS_REVERSE_READ_BYTES * 2)
+            },
+        },
+        separators=(",", ":"),
+    ).encode("utf-8")
+    publisher.current_events_path.write_bytes(oversized_row)
     original_open = open
     read_sizes = []
 
@@ -385,8 +393,54 @@ def test_monitor_recovery_reads_only_bounded_current_segment_tail(tmp_path, monk
 
     monkeypatch.setattr(monitor_publisher_module, "open", tracking_open, raising=False)
 
-    assert publisher._latest_valid_event_seq_in_current_segment() == 42
-    assert read_sizes == [monitor_publisher_module._CURRENT_EVENTS_TAIL_BYTES + 1]
+    assert publisher._max_recoverable_event_seq_in_current_segment() == 42
+    assert len(read_sizes) >= 3
+    assert max(read_sizes) <= monitor_publisher_module._CURRENT_EVENTS_REVERSE_READ_BYTES
+
+
+def test_monitor_restart_does_not_reuse_seq_after_oversized_uncheckpointed_event(tmp_path):
+    publisher = _make_publisher(tmp_path, snapshot_interval_seconds=3600.0)
+    first = publisher.record_event(
+        "test.oversized",
+        ("test",),
+        {
+            "blob": "x"
+            * (monitor_publisher_module._CURRENT_EVENTS_REVERSE_READ_BYTES + 1024)
+        },
+        ts=1_000,
+    )
+    assert first["seq"] == 1
+    assert json.loads(publisher.manifest_path.read_text())["last_seq"] == 0
+
+    restarted = _make_publisher(tmp_path, snapshot_interval_seconds=3600.0)
+    second = restarted.record_event("test.after_restart", ("test",), {}, ts=2_000)
+
+    assert restarted.seq == 2
+    assert second["seq"] == 2
+    rows = [
+        json.loads(line) for line in restarted.current_events_path.read_text().splitlines()
+    ]
+    assert [row["seq"] for row in rows] == [1, 2]
+
+
+def test_monitor_recovery_ignores_lower_malformed_marker_after_newer_valid_rows(tmp_path):
+    publisher = _make_publisher(tmp_path, snapshot_interval_seconds=3600.0)
+    manifest = json.loads(publisher.manifest_path.read_text())
+    manifest["last_seq"] = 3
+    publisher.manifest_path.write_text(json.dumps(manifest) + "\n")
+    publisher.current_events_path.write_text(
+        "".join(
+            json.dumps({"seq": seq, "kind": "persisted"}) + "\n"
+            for seq in range(4, 9)
+        )
+        + '{"seq":3,garbage}\n'
+    )
+
+    restarted = _make_publisher(tmp_path, snapshot_interval_seconds=3600.0)
+    event = restarted.record_event("test.after_restart", ("test",), {}, ts=2_000)
+
+    assert restarted.seq == 9
+    assert event["seq"] == 9
 
 
 def test_monitor_event_rotation_forces_pre_and_post_manifest_checkpoints(tmp_path, monkeypatch):

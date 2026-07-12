@@ -34,8 +34,9 @@ Estimated completion:
   per existing snapshot interval during ordinary event/history appends. Force
   checkpoints during initialization, before and after rotation, after a
   successful snapshot, and at close. Recover startup sequence from the maximum
-  of the manifest and the latest valid event row in a bounded reverse tail so
-  ordinary unclean exits between checkpoints do not reuse an event sequence.
+  of the manifest and recoverable current-segment sequence markers using a
+  fixed-memory reverse chunk scan so unclean exits between checkpoints do not
+  reuse an event sequence.
 - Behavior boundary: monitor persistence runtime only. Preserve NDJSON append
   and fsync semantics, RLock ordering, retention/compression, routing, queue and
   backpressure policy, error visibility, event payloads, all trading behavior,

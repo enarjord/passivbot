@@ -19,7 +19,7 @@ _MONITOR_EVENT_PHASE_TIMING_KEYS = (
     "persist_ns",
     "maintenance_ns",
 )
-_CURRENT_EVENTS_TAIL_BYTES = 64 * 1024
+_CURRENT_EVENTS_REVERSE_READ_BYTES = 64 * 1024
 
 
 def _empty_monitor_event_phase_timing() -> dict[str, int]:
@@ -210,20 +210,123 @@ class MonitorPublisher:
             self.history_segment_started_ms = {}
 
     def _recover_seq_from_current_events(self) -> None:
-        latest_seq = self._latest_valid_event_seq_in_current_segment()
-        if latest_seq is not None:
-            self.seq = max(self.seq, latest_seq)
+        recovered_seq = self._max_recoverable_event_seq_in_current_segment()
+        if recovered_seq is not None:
+            self.seq = max(self.seq, recovered_seq)
 
-    def _latest_valid_event_seq_in_current_segment(self) -> Optional[int]:
-        """Return the latest valid event seq from a fixed-size tail of the active segment."""
+    def _max_recoverable_event_seq_in_current_segment(self) -> Optional[int]:
+        """Return the maximum recoverable seq without buffering whole rows."""
+
+        seq_marker = b'"seq"'
+
+        def iter_line_ranges_reverse(f, file_size: int):
+            line_end = file_size
+            scan_end = file_size
+            while scan_end > 0:
+                read_size = min(_CURRENT_EVENTS_REVERSE_READ_BYTES, scan_end)
+                scan_start = scan_end - read_size
+                f.seek(scan_start)
+                chunk = f.read(read_size)
+                search_end = len(chunk)
+                while True:
+                    newline_idx = chunk.rfind(b"\n", 0, search_end)
+                    if newline_idx < 0:
+                        break
+                    line_start = scan_start + newline_idx + 1
+                    yield line_start, line_end
+                    line_end = scan_start + newline_idx
+                    search_end = newline_idx
+                scan_end = scan_start
+            yield 0, line_end
+
+        def edge_byte(f, start: int, end: int, *, reverse: bool) -> Optional[int]:
+            if reverse:
+                cursor = end
+                while start < cursor:
+                    read_size = min(_CURRENT_EVENTS_REVERSE_READ_BYTES, cursor - start)
+                    cursor -= read_size
+                    f.seek(cursor)
+                    for value in reversed(f.read(read_size)):
+                        if value not in b" \t\r\n":
+                            return value
+            else:
+                cursor = start
+                while cursor < end:
+                    read_size = min(_CURRENT_EVENTS_REVERSE_READ_BYTES, end - cursor)
+                    f.seek(cursor)
+                    cursor += read_size
+                    for value in f.read(read_size):
+                        if value not in b" \t\r\n":
+                            return value
+            return None
+
+        def parse_seq_value(f, value_offset: int, line_end: int) -> Optional[int]:
+            f.seek(value_offset)
+            raw = f.read(min(64, line_end - value_offset))
+            cursor = 0
+            while cursor < len(raw) and raw[cursor] in b" \t\r\n":
+                cursor += 1
+            if cursor >= len(raw) or raw[cursor] != ord(":"):
+                return None
+            cursor += 1
+            while cursor < len(raw) and raw[cursor] in b" \t\r\n":
+                cursor += 1
+            digit_start = cursor
+            while cursor < len(raw) and 48 <= raw[cursor] <= 57:
+                cursor += 1
+            if digit_start == cursor:
+                return None
+            while cursor < len(raw) and raw[cursor] in b" \t\r\n":
+                cursor += 1
+            if cursor >= len(raw) or raw[cursor] not in b",}":
+                return None
+            return int(raw[digit_start:cursor].strip())
+
+        def seq_from_line_range(f, line_start: int, line_end: int) -> Optional[int]:
+            if edge_byte(f, line_start, line_end, reverse=False) != ord("{"):
+                return None
+            if edge_byte(f, line_start, line_end, reverse=True) != ord("}"):
+                return None
+
+            # record_event() serializes with sorted keys, so the envelope's
+            # top-level seq marker follows any matching marker in payload.
+            last_seq = None
+            overlap = b""
+            scan_offset = line_start
+            while scan_offset < line_end:
+                f.seek(scan_offset)
+                chunk = f.read(
+                    min(_CURRENT_EVENTS_REVERSE_READ_BYTES, line_end - scan_offset)
+                )
+                data = overlap + chunk
+                data_offset = scan_offset - len(overlap)
+                search_offset = 0
+                while True:
+                    marker_idx = data.find(seq_marker, search_offset)
+                    if marker_idx < 0:
+                        break
+                    seq = parse_seq_value(
+                        f,
+                        data_offset + marker_idx + len(seq_marker),
+                        line_end,
+                    )
+                    if seq is not None:
+                        last_seq = seq
+                    search_offset = marker_idx + 1
+                overlap = data[-(len(seq_marker) - 1) :]
+                scan_offset += len(chunk)
+            return last_seq
+
         try:
             with open(self.current_events_path, "rb") as f:
                 f.seek(0, os.SEEK_END)
-                end_offset = f.tell()
-                start_offset = max(0, end_offset - _CURRENT_EVENTS_TAIL_BYTES)
-                read_offset = max(0, start_offset - 1)
-                f.seek(read_offset)
-                tail = f.read(end_offset - read_offset)
+                file_size = f.tell()
+                max_seq = None
+                for line_start, line_end in iter_line_ranges_reverse(f, file_size):
+                    seq = seq_from_line_range(f, line_start, line_end)
+                    if seq is not None and (max_seq is None or seq > max_seq):
+                        max_seq = seq
+                return max_seq
         except OSError as exc:
             logging.warning(
                 "[monitor] unable to read current event segment %s: %s",
@@ -231,23 +334,6 @@ class MonitorPublisher:
                 exc,
             )
             return None
-
-        rows = tail.splitlines()
-        if start_offset and tail[:1] not in (b"\n", b"\r") and rows:
-            rows = rows[1:]
-        for raw_row in reversed(rows):
-            raw_row = raw_row.strip()
-            if not raw_row:
-                continue
-            try:
-                row = json.loads(raw_row.decode("utf-8"))
-                seq = row["seq"]
-            except (UnicodeDecodeError, json.JSONDecodeError, KeyError, TypeError):
-                continue
-            if isinstance(seq, bool) or not isinstance(seq, int) or seq < 0:
-                continue
-            return seq
-        return None
 
     def _build_manifest(self, now_ms: Optional[int] = None) -> dict:
         now_ms = self._now_ms() if now_ms is None else int(now_ms)
