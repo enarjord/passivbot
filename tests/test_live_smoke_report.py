@@ -2711,6 +2711,12 @@ def test_live_smoke_report_projects_multi_bot_event_pipeline_timing(tmp_path):
                     "event_queue_wait_ms_max": 8.5,
                     "event_worker_service_ms_total": 20.25,
                     "event_worker_service_ms_max": 15.5,
+                    "event_structured_sink_write_count": 8,
+                    "event_structured_sink_service_ms_total": 12.0,
+                    "event_structured_sink_service_ms_max": 7.0,
+                    "event_monitor_sink_write_count": 8,
+                    "event_monitor_sink_service_ms_total": 8.0,
+                    "event_monitor_sink_service_ms_max": 4.0,
                 },
             )
         ],
@@ -2731,6 +2737,12 @@ def test_live_smoke_report_projects_multi_bot_event_pipeline_timing(tmp_path):
                     "event_queue_wait_ms_max": 6.5,
                     "event_worker_service_ms_total": 7.75,
                     "event_worker_service_ms_max": 7.75,
+                    "event_structured_sink_write_count": 3,
+                    "event_structured_sink_service_ms_total": 4.0,
+                    "event_structured_sink_service_ms_max": 3.0,
+                    "event_monitor_sink_write_count": 3,
+                    "event_monitor_sink_service_ms_total": 2.0,
+                    "event_monitor_sink_service_ms_max": 2.0,
                 },
             )
         ],
@@ -2745,6 +2757,8 @@ def test_live_smoke_report_projects_multi_bot_event_pipeline_timing(tmp_path):
     assert groups["okx/okx_01"].get("latest_processed_count") == 8
     assert groups["okx/okx_01"].get("latest_queue_wait_ms_max") == 8.5
     assert groups["gateio/gateio_01"].get("latest_worker_service_ms_max") == 7.75
+    assert groups["okx/okx_01"].get("latest_structured_sink_write_count") == 8
+    assert groups["gateio/gateio_01"].get("latest_monitor_sink_service_ms_max") == 2
     expected = {
         "latest_processed_total": 11,
         "latest_timing_window_ms_max": 1250,
@@ -2752,6 +2766,12 @@ def test_live_smoke_report_projects_multi_bot_event_pipeline_timing(tmp_path):
         "latest_queue_wait_ms_max": 8.5,
         "latest_worker_service_ms_total_sum": 28,
         "latest_worker_service_ms_max": 15.5,
+        "latest_structured_sink_write_count_sum": 11,
+        "latest_structured_sink_service_ms_total_sum": 16,
+        "latest_structured_sink_service_ms_max": 7,
+        "latest_monitor_sink_write_count_sum": 11,
+        "latest_monitor_sink_service_ms_total_sum": 10,
+        "latest_monitor_sink_service_ms_max": 4,
     }
     assert {key: health[key] for key in expected} == expected
     assert {key: summary["event_pipeline_health"][key] for key in expected} == expected

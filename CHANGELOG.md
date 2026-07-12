@@ -4,6 +4,12 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Periodic structured health summaries now attribute queued worker sink time to
+  fixed structured and monitor sink classes with bounded per-window write
+  counts and service totals/maxima. Live smoke and performance reports project
+  the same fields without changing routing, delivery, verdicts, or trading
+  behavior.
+
 - Periodic structured health summaries now expose bounded event-pipeline queue
   wait and worker sink-service timing windows. Live smoke and performance
   reports project the processed counts, totals, and maxima without changing

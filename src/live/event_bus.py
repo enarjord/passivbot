@@ -1795,6 +1795,37 @@ class _EventPipelineTimingWindow:
     queue_wait_ns_max: int
     worker_service_ns_total: int
     worker_service_ns_max: int
+    structured_sink_write_count: int
+    structured_sink_service_ns_total: int
+    structured_sink_service_ns_max: int
+    monitor_sink_write_count: int
+    monitor_sink_service_ns_total: int
+    monitor_sink_service_ns_max: int
+
+
+@dataclass
+class _EventPipelineSinkWriteTiming:
+    structured_sink_write_count: int = 0
+    structured_sink_service_ns_total: int = 0
+    structured_sink_service_ns_max: int = 0
+    monitor_sink_write_count: int = 0
+    monitor_sink_service_ns_total: int = 0
+    monitor_sink_service_ns_max: int = 0
+
+    def record(self, sink_name: str, service_ns: int) -> None:
+        service_ns = max(0, int(service_ns))
+        if sink_name == "structured":
+            self.structured_sink_write_count += 1
+            self.structured_sink_service_ns_total += service_ns
+            self.structured_sink_service_ns_max = max(
+                self.structured_sink_service_ns_max, service_ns
+            )
+        elif sink_name == "monitor":
+            self.monitor_sink_write_count += 1
+            self.monitor_sink_service_ns_total += service_ns
+            self.monitor_sink_service_ns_max = max(
+                self.monitor_sink_service_ns_max, service_ns
+            )
 
 
 class LiveEventPipeline:
@@ -1836,6 +1867,12 @@ class LiveEventPipeline:
         self._timing_queue_wait_ns_max = 0
         self._timing_worker_service_ns_total = 0
         self._timing_worker_service_ns_max = 0
+        self._timing_structured_sink_write_count = 0
+        self._timing_structured_sink_service_ns_total = 0
+        self._timing_structured_sink_service_ns_max = 0
+        self._timing_monitor_sink_write_count = 0
+        self._timing_monitor_sink_service_ns_total = 0
+        self._timing_monitor_sink_service_ns_max = 0
         self._pending_timing_windows: dict[int, _EventPipelineTimingWindow] = {}
         self._next_timing_snapshot_token = 1
         self._worker: threading.Thread | None = None
@@ -1901,6 +1938,22 @@ class LiveEventPipeline:
                 queue_wait_ns_max=int(self._timing_queue_wait_ns_max),
                 worker_service_ns_total=int(self._timing_worker_service_ns_total),
                 worker_service_ns_max=int(self._timing_worker_service_ns_max),
+                structured_sink_write_count=int(
+                    self._timing_structured_sink_write_count
+                ),
+                structured_sink_service_ns_total=int(
+                    self._timing_structured_sink_service_ns_total
+                ),
+                structured_sink_service_ns_max=int(
+                    self._timing_structured_sink_service_ns_max
+                ),
+                monitor_sink_write_count=int(self._timing_monitor_sink_write_count),
+                monitor_sink_service_ns_total=int(
+                    self._timing_monitor_sink_service_ns_total
+                ),
+                monitor_sink_service_ns_max=int(
+                    self._timing_monitor_sink_service_ns_max
+                ),
             )
             timing_snapshot_token = None
             if consume_timing:
@@ -1913,6 +1966,12 @@ class LiveEventPipeline:
                 self._timing_queue_wait_ns_max = 0
                 self._timing_worker_service_ns_total = 0
                 self._timing_worker_service_ns_max = 0
+                self._timing_structured_sink_write_count = 0
+                self._timing_structured_sink_service_ns_total = 0
+                self._timing_structured_sink_service_ns_max = 0
+                self._timing_monitor_sink_write_count = 0
+                self._timing_monitor_sink_service_ns_total = 0
+                self._timing_monitor_sink_service_ns_max = 0
         snapshot: dict[str, Any] = {
             "event_queue_depth": queue_depth,
             "event_queue_maxsize": queue_maxsize,
@@ -1939,6 +1998,20 @@ class LiveEventPipeline:
             ),
             "event_worker_service_ms_max": self._timing_ms(
                 timing_window.worker_service_ns_max
+            ),
+            "event_structured_sink_write_count": timing_window.structured_sink_write_count,
+            "event_structured_sink_service_ms_total": self._timing_ms(
+                timing_window.structured_sink_service_ns_total
+            ),
+            "event_structured_sink_service_ms_max": self._timing_ms(
+                timing_window.structured_sink_service_ns_max
+            ),
+            "event_monitor_sink_write_count": timing_window.monitor_sink_write_count,
+            "event_monitor_sink_service_ms_total": self._timing_ms(
+                timing_window.monitor_sink_service_ns_total
+            ),
+            "event_monitor_sink_service_ms_max": self._timing_ms(
+                timing_window.monitor_sink_service_ns_max
             ),
         }
         return (
@@ -1970,6 +2043,24 @@ class LiveEventPipeline:
         self._timing_worker_service_ns_total += int(pending.worker_service_ns_total)
         self._timing_worker_service_ns_max = max(
             self._timing_worker_service_ns_max, int(pending.worker_service_ns_max)
+        )
+        self._timing_structured_sink_write_count += int(
+            pending.structured_sink_write_count
+        )
+        self._timing_structured_sink_service_ns_total += int(
+            pending.structured_sink_service_ns_total
+        )
+        self._timing_structured_sink_service_ns_max = max(
+            self._timing_structured_sink_service_ns_max,
+            int(pending.structured_sink_service_ns_max),
+        )
+        self._timing_monitor_sink_write_count += int(pending.monitor_sink_write_count)
+        self._timing_monitor_sink_service_ns_total += int(
+            pending.monitor_sink_service_ns_total
+        )
+        self._timing_monitor_sink_service_ns_max = max(
+            self._timing_monitor_sink_service_ns_max,
+            int(pending.monitor_sink_service_ns_max),
         )
 
     def emit(
@@ -2093,14 +2184,19 @@ class LiveEventPipeline:
                 if item is None:
                     return
                 service_started_ns = time.monotonic_ns()
+                sink_write_timing = _EventPipelineSinkWriteTiming()
                 live_event = item.event
                 route = self.route_for(live_event)
                 if route.structured:
                     for sink in self.structured_sinks:
-                        self._write_sink("structured", sink, live_event)
+                        self._write_sink_in_worker(
+                            "structured", sink, live_event, sink_write_timing
+                        )
                 if route.monitor:
                     for sink in self.monitor_sinks:
-                        self._write_sink("monitor", sink, live_event)
+                        self._write_sink_in_worker(
+                            "monitor", sink, live_event, sink_write_timing
+                        )
             finally:
                 if item is not None:
                     service_finished_ns = time.monotonic_ns()
@@ -2120,20 +2216,69 @@ class LiveEventPipeline:
                         self._timing_worker_service_ns_max = max(
                             self._timing_worker_service_ns_max, service_ns
                         )
+                        self._timing_structured_sink_write_count += (
+                            sink_write_timing.structured_sink_write_count
+                        )
+                        self._timing_structured_sink_service_ns_total += (
+                            sink_write_timing.structured_sink_service_ns_total
+                        )
+                        self._timing_structured_sink_service_ns_max = max(
+                            self._timing_structured_sink_service_ns_max,
+                            sink_write_timing.structured_sink_service_ns_max,
+                        )
+                        self._timing_monitor_sink_write_count += (
+                            sink_write_timing.monitor_sink_write_count
+                        )
+                        self._timing_monitor_sink_service_ns_total += (
+                            sink_write_timing.monitor_sink_service_ns_total
+                        )
+                        self._timing_monitor_sink_service_ns_max = max(
+                            self._timing_monitor_sink_service_ns_max,
+                            sink_write_timing.monitor_sink_service_ns_max,
+                        )
                 self._queue.task_done()
 
     def _write_sink(self, name: str, sink: LiveEventSink, event: LiveEvent) -> Any:
         try:
             return sink.write(event)
         except Exception as exc:
-            with self._state_lock:
-                self.sink_error_counters[name] += 1
-            self._record_degraded(
-                reason_code=sink_failed_reason_code(name),
-                message=f"{name} sink failed: {type(exc).__name__}",
-                data={"sink": name, "error_type": type(exc).__name__, "error": str(exc)},
-            )
+            self._handle_sink_failure(name, exc)
             return None
+
+    def _write_sink_in_worker(
+        self,
+        name: str,
+        sink: LiveEventSink,
+        event: LiveEvent,
+        sink_write_timing: _EventPipelineSinkWriteTiming,
+    ) -> Any:
+        sink_started_ns = time.monotonic_ns()
+        try:
+            try:
+                return sink.write(event)
+            finally:
+                sink_write_timing.record(
+                    name, time.monotonic_ns() - sink_started_ns
+                )
+        except Exception as exc:
+            self._handle_sink_failure(name, exc, sink_write_timing=sink_write_timing)
+            return None
+
+    def _handle_sink_failure(
+        self,
+        name: str,
+        exc: Exception,
+        *,
+        sink_write_timing: _EventPipelineSinkWriteTiming | None = None,
+    ) -> None:
+        with self._state_lock:
+            self.sink_error_counters[name] += 1
+        self._record_degraded(
+            reason_code=sink_failed_reason_code(name),
+            message=f"{name} sink failed: {type(exc).__name__}",
+            data={"sink": name, "error_type": type(exc).__name__, "error": str(exc)},
+            sink_write_timing=sink_write_timing,
+        )
 
     def _record_degraded(
         self,
@@ -2141,6 +2286,7 @@ class LiveEventPipeline:
         reason_code: str,
         message: str,
         data: Mapping[str, Any] | None = None,
+        sink_write_timing: _EventPipelineSinkWriteTiming | None = None,
     ) -> None:
         degraded = LiveEvent(
             EventTypes.SINK_DEGRADED,
@@ -2164,6 +2310,9 @@ class LiveEventPipeline:
                     self.sink_error_counters["console"] += 1
         if reason_code != "monitor_sink_failed":
             for sink in self.monitor_sinks:
+                sink_started_ns = (
+                    time.monotonic_ns() if sink_write_timing is not None else 0
+                )
                 try:
                     sink.write(degraded)
                 except Exception as exc:
@@ -2173,6 +2322,11 @@ class LiveEventPipeline:
                         "[event] failed to emit sink.degraded to monitor: %s",
                         type(exc).__name__,
                     )
+                finally:
+                    if sink_write_timing is not None:
+                        sink_write_timing.record(
+                            "monitor", time.monotonic_ns() - sink_started_ns
+                        )
 
 
 def emit_event(

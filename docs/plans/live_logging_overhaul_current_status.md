@@ -22,26 +22,28 @@ Estimated completion:
 
 ## Active Review Slice
 
-- Branch: `codex/v8-event-pipeline-service-time`
-- Base: `7eca900379873e2124e1782601551e3b08c3e2ee`
-- Triggering evidence: event-pipeline health currently exposes queue depth,
-  unfinished work, drops, sink errors, and worker liveness but not bounded
-  worker service-time or queue-wait evidence.
-- Scope: timestamp private queue envelopes with a monotonic clock and aggregate
-  processed count, queue-wait total/max, and worker sink-service total/max over
-  each health-summary window. Periodic `health.summary` consumes/resets the
-  timing window transactionally: accepted enqueue commits it, while failed
-  enqueue merges it back into the active window. Ordinary monitor snapshots are
-  non-consuming. Project the fixed numeric fields through event-pipeline smoke
+- Branch: `codex/v8-event-pipeline-sink-attribution`
+- Base: `cbf1e5ed5bf8bfed4bd967a02d853c099105eabc`
+- Triggering evidence: PR #1200 measured live worker-service maxima above one
+  second while drops, sink errors, and degraded counts remained zero, but the
+  aggregate cannot identify whether the fixed structured or monitor sink class
+  accounted for the delay.
+- Scope: time each queued worker `sink.write()` attempt with a monotonic clock
+  and aggregate fixed structured/monitor write counts plus service total/max
+  over the existing health-summary timing window. Preserve aggregate worker
+  service timing. Rotate, confirm, and restore the new counters with the same
+  opaque timing token, including failed health-event enqueue and overlapping
+  snapshots. Project the fixed numeric fields through event-pipeline smoke
   summaries and performance resource-pressure reports.
 - Behavior boundary: observability only. Do not make timing evidence a trading
-  gate, change queue capacity/backpressure/drop policy, add raw payloads or
-  unbounded labels, or alter order, risk, HSL, Rust, backtest, optimizer, or
-  exchange behavior.
-- Validation: event-bus concurrency/timing tests, health-payload reset tests,
-  full smoke/performance projection tests, fake-live event markers, Python
-  compilation, `git diff --check`, added-line silent-handling audit, and
-  independent preflight.
+  gate, time synchronous console/text sinks, change queue capacity,
+  backpressure, routing, drop/error policy, add raw payloads or unbounded
+  labels, or alter order, risk, HSL, Rust, backtest, optimizer, or exchange
+  behavior.
+- Validation: event-bus route/timing and transactional restore tests, full
+  smoke/performance projection tests, health-payload passthrough tests, fake-live
+  event markers, Python compilation, `git diff --check`, added-line
+  silent-handling audit, and independent preflight.
 - Publication state, exact head, mergeability, CI, and current-head reviewer
   verdicts: query live GitHub metadata; do not embed self-invalidating values.
 - Expected VPS action: exact five-bot graceful restart, then bounded
@@ -55,18 +57,31 @@ Next action:
    and require fresh exact-head verdicts after every push.
 2. Merge only after that gate is green, then gracefully restart the five exact
    VPS5 bot panes while preserving unrelated processes and local artifacts.
-3. Verify fresh event-pipeline timing fields with bounded `health.summary`,
-   smoke, and performance reports, including immediate and settled process and
-   repository-state checks.
+3. Verify fresh fixed structured/monitor sink timing with bounded
+   `health.summary`, smoke, and performance reports, including immediate and
+   settled process and repository-state checks.
 
 ## Deployed Baseline
 
-- Remote `v8`: `7eca900379873e2124e1782601551e3b08c3e2ee`, PR #1199
-- VPS5 repository: `7eca900379873e2124e1782601551e3b08c3e2ee`, PR #1199; tracked
+- Remote `v8`: `cbf1e5ed5bf8bfed4bd967a02d853c099105eabc`, PR #1200
+- VPS5 repository: `cbf1e5ed5bf8bfed4bd967a02d853c099105eabc`, PR #1200; tracked
   status clean; only expected untracked artifacts were preserved
-- VPS5 expected bots: five; running with PR #1198 restart PIDs
-  `861950/861949/861953/861955/861957`;
+- VPS5 expected bots: five; running with PR #1200 restart PIDs
+  `865892/865897/865901/865903/865905`;
   unrelated `misc:0.0` remains PID `434835`
+- PR #1200 merged after exact-head Hermes and Grok 4.5 approval plus green CI.
+  VPS5 fast-forwarded cleanly and gracefully stopped only the five exact bot
+  panes; all old Python PIDs exited naturally, including KuCoin after a bounded
+  uninterruptible wait. Pane PIDs and unrelated `misc:0.0` PID `434835` were
+  preserved before the exact supervisor commands started the five new bots.
+- Fresh smoke and performance reports projected three health windows with
+  `1517` processed events, queue-wait total/max `29858.257/1077.844ms`, and
+  worker-service total/max `63316.18/1033.432ms`; drops, sink errors, degraded
+  counts, and unhealthy pipelines were zero. A real GateIO authoritative
+  balance timeout made one intermediate smoke red. After recovery, the final
+  two-minute smoke was green with `432/432` remote and `59/59`
+  account-critical calls successful, all five expected processes matched,
+  exact states `R/R/R/R/S`, and a clean tracked repository.
 - PR #1199 merged after exact-head Hermes and Grok 4.5 approval plus green CI.
   VPS5 fast-forwarded without bot signals or restarts. A bounded four-segment
   per-bot proof report returned `ok=true` with zero issues and reported all five

@@ -2806,6 +2806,12 @@ def _event_pipeline_health_group(
         "event_queue_wait_ms_max",
         "event_worker_service_ms_total",
         "event_worker_service_ms_max",
+        "event_structured_sink_write_count",
+        "event_structured_sink_service_ms_total",
+        "event_structured_sink_service_ms_max",
+        "event_monitor_sink_write_count",
+        "event_monitor_sink_service_ms_total",
+        "event_monitor_sink_service_ms_max",
     }
     if not any(key in payload for key in observed_keys):
         return None
@@ -2848,6 +2854,24 @@ def _event_pipeline_health_group(
         ),
         "latest_worker_service_ms_max": _non_negative_number(
             payload.get("event_worker_service_ms_max")
+        ),
+        "latest_structured_sink_write_count": _non_negative_int(
+            payload.get("event_structured_sink_write_count")
+        ),
+        "latest_structured_sink_service_ms_total": _non_negative_number(
+            payload.get("event_structured_sink_service_ms_total")
+        ),
+        "latest_structured_sink_service_ms_max": _non_negative_number(
+            payload.get("event_structured_sink_service_ms_max")
+        ),
+        "latest_monitor_sink_write_count": _non_negative_int(
+            payload.get("event_monitor_sink_write_count")
+        ),
+        "latest_monitor_sink_service_ms_total": _non_negative_number(
+            payload.get("event_monitor_sink_service_ms_total")
+        ),
+        "latest_monitor_sink_service_ms_max": _non_negative_number(
+            payload.get("event_monitor_sink_service_ms_max")
         ),
         "latest_pipeline_stopping": (
             bool(payload.get("event_pipeline_stopping"))
@@ -2909,6 +2933,12 @@ def _merge_event_pipeline_health_group(
             "latest_queue_wait_ms_max",
             "latest_worker_service_ms_total",
             "latest_worker_service_ms_max",
+            "latest_structured_sink_write_count",
+            "latest_structured_sink_service_ms_total",
+            "latest_structured_sink_service_ms_max",
+            "latest_monitor_sink_write_count",
+            "latest_monitor_sink_service_ms_total",
+            "latest_monitor_sink_service_ms_max",
             "latest_pipeline_stopping",
             "latest_worker_alive",
             "latest_ids",
@@ -2991,6 +3021,28 @@ def _summarize_event_pipeline_health(
         ),
         "latest_worker_service_ms_max": _max_optional_numbers(
             group.get("latest_worker_service_ms_max") for group in groups.values()
+        ),
+        "latest_structured_sink_write_count_sum": _sum_optional_numbers(
+            group.get("latest_structured_sink_write_count") for group in groups.values()
+        ),
+        "latest_structured_sink_service_ms_total_sum": _sum_optional_numbers(
+            group.get("latest_structured_sink_service_ms_total")
+            for group in groups.values()
+        ),
+        "latest_structured_sink_service_ms_max": _max_optional_numbers(
+            group.get("latest_structured_sink_service_ms_max")
+            for group in groups.values()
+        ),
+        "latest_monitor_sink_write_count_sum": _sum_optional_numbers(
+            group.get("latest_monitor_sink_write_count") for group in groups.values()
+        ),
+        "latest_monitor_sink_service_ms_total_sum": _sum_optional_numbers(
+            group.get("latest_monitor_sink_service_ms_total")
+            for group in groups.values()
+        ),
+        "latest_monitor_sink_service_ms_max": _max_optional_numbers(
+            group.get("latest_monitor_sink_service_ms_max")
+            for group in groups.values()
         ),
     }
     if processed_counts:
@@ -6961,6 +7013,24 @@ def _summary_limited_groups(
             "latest_worker_service_ms_max": summary.get(
                 "latest_worker_service_ms_max"
             ),
+            "latest_structured_sink_write_count_sum": summary.get(
+                "latest_structured_sink_write_count_sum"
+            ),
+            "latest_structured_sink_service_ms_total_sum": summary.get(
+                "latest_structured_sink_service_ms_total_sum"
+            ),
+            "latest_structured_sink_service_ms_max": summary.get(
+                "latest_structured_sink_service_ms_max"
+            ),
+            "latest_monitor_sink_write_count_sum": summary.get(
+                "latest_monitor_sink_write_count_sum"
+            ),
+            "latest_monitor_sink_service_ms_total_sum": summary.get(
+                "latest_monitor_sink_service_ms_total_sum"
+            ),
+            "latest_monitor_sink_service_ms_max": summary.get(
+                "latest_monitor_sink_service_ms_max"
+            ),
             "latest_worker_not_alive_count": summary.get(
                 "latest_worker_not_alive_count"
             ),
@@ -8384,6 +8454,24 @@ def summarize_live_smoke_report_brief(report: dict[str, Any]) -> dict[str, Any]:
                 ),
                 "latest_worker_service_ms_max": event_pipeline_health.get(
                     "latest_worker_service_ms_max"
+                ),
+                "latest_structured_sink_write_count_sum": event_pipeline_health.get(
+                    "latest_structured_sink_write_count_sum"
+                ),
+                "latest_structured_sink_service_ms_total_sum": event_pipeline_health.get(
+                    "latest_structured_sink_service_ms_total_sum"
+                ),
+                "latest_structured_sink_service_ms_max": event_pipeline_health.get(
+                    "latest_structured_sink_service_ms_max"
+                ),
+                "latest_monitor_sink_write_count_sum": event_pipeline_health.get(
+                    "latest_monitor_sink_write_count_sum"
+                ),
+                "latest_monitor_sink_service_ms_total_sum": event_pipeline_health.get(
+                    "latest_monitor_sink_service_ms_total_sum"
+                ),
+                "latest_monitor_sink_service_ms_max": event_pipeline_health.get(
+                    "latest_monitor_sink_service_ms_max"
                 ),
                 "latest_worker_not_alive_count": _count_value(
                     event_pipeline_health.get("latest_worker_not_alive_count")

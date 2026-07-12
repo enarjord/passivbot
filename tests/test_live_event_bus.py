@@ -496,32 +496,59 @@ def test_pipeline_health_snapshot_tracks_and_consumes_queue_timing(monkeypatch):
     )
 
     class ControlledSink:
+        def __init__(self, service_ns):
+            self.service_ns = service_ns
+            self.events = []
+
         def write(self, event):
-            clock["ns"] += 3_000_000
+            self.events.append(event)
+            clock["ns"] += self.service_ns
             return event
 
+    structured = ControlledSink(3_000_000)
+    structured_secondary = ControlledSink(2_000_000)
+    monitor = ControlledSink(5_000_000)
+    console = ControlledSink(11_000_000)
+    text = ControlledSink(13_000_000)
     pipeline = LiveEventPipeline(
         start=False,
-        structured_sinks=[ControlledSink()],
+        structured_sinks=[structured, structured_secondary],
+        monitor_sinks=[monitor],
+        console_sink=console,
+        text_sink=text,
         routes={
             EventTypes.DATA_PACKET_UPDATED: EventRoute(
                 structured=True, monitor=False, console=False
-            )
+            ),
+            EventTypes.SNAPSHOT_BUILT: EventRoute(
+                structured=False, monitor=True, console=False
+            ),
+            EventTypes.CYCLE_STARTED: EventRoute(
+                structured=True, monitor=True, console=True, text=True
+            ),
         },
     )
 
     assert pipeline.emit(LiveEvent(EventTypes.DATA_PACKET_UPDATED)) is not None
+    assert pipeline.emit(LiveEvent(EventTypes.SNAPSHOT_BUILT)) is not None
+    assert pipeline.emit(LiveEvent(EventTypes.CYCLE_STARTED)) is not None
     clock["ns"] += 7_000_000
     pipeline.start()
     assert pipeline.flush(timeout=2.0) is True
 
     expected_timing = {
-        "event_pipeline_timing_window_ms": 10.0,
-        "event_pipeline_processed_count": 1,
-        "event_queue_wait_ms_total": 7.0,
-        "event_queue_wait_ms_max": 7.0,
-        "event_worker_service_ms_total": 3.0,
-        "event_worker_service_ms_max": 3.0,
+        "event_pipeline_timing_window_ms": 51.0,
+        "event_pipeline_processed_count": 3,
+        "event_queue_wait_ms_total": 84.0,
+        "event_queue_wait_ms_max": 36.0,
+        "event_worker_service_ms_total": 20.0,
+        "event_worker_service_ms_max": 10.0,
+        "event_structured_sink_write_count": 4,
+        "event_structured_sink_service_ms_total": 10.0,
+        "event_structured_sink_service_ms_max": 3.0,
+        "event_monitor_sink_write_count": 2,
+        "event_monitor_sink_service_ms_total": 10.0,
+        "event_monitor_sink_service_ms_max": 5.0,
     }
     non_consuming_snapshot = pipeline.health_snapshot()
     assert {key: non_consuming_snapshot[key] for key in expected_timing} == expected_timing
@@ -542,7 +569,15 @@ def test_pipeline_health_snapshot_tracks_and_consumes_queue_timing(monkeypatch):
         "event_queue_wait_ms_max": 0.0,
         "event_worker_service_ms_total": 0.0,
         "event_worker_service_ms_max": 0.0,
+        "event_structured_sink_write_count": 0,
+        "event_structured_sink_service_ms_total": 0.0,
+        "event_structured_sink_service_ms_max": 0.0,
+        "event_monitor_sink_write_count": 0,
+        "event_monitor_sink_service_ms_total": 0.0,
+        "event_monitor_sink_service_ms_max": 0.0,
     }
+    assert len(console.events) == 1
+    assert len(text.events) == 1
     assert pipeline.close(timeout=2.0) is True
 
 
@@ -555,17 +590,40 @@ def test_pipeline_overlapping_timing_snapshots_resolve_by_token(monkeypatch):
     )
     pipeline = LiveEventPipeline(start=False)
     pipeline._timing_processed_count = 7
+    pipeline._timing_structured_sink_write_count = 2
+    pipeline._timing_structured_sink_service_ns_total = 3_000_000
+    pipeline._timing_structured_sink_service_ns_max = 2_000_000
+    pipeline._timing_monitor_sink_write_count = 3
+    pipeline._timing_monitor_sink_service_ns_total = 8_000_000
+    pipeline._timing_monitor_sink_service_ns_max = 4_000_000
 
     first, first_token = pipeline.consume_timing_snapshot()
     pipeline._timing_processed_count = 3
+    pipeline._timing_structured_sink_write_count = 5
+    pipeline._timing_structured_sink_service_ns_total = 11_000_000
+    pipeline._timing_structured_sink_service_ns_max = 7_000_000
+    pipeline._timing_monitor_sink_write_count = 1
+    pipeline._timing_monitor_sink_service_ns_total = 6_000_000
+    pipeline._timing_monitor_sink_service_ns_max = 6_000_000
     clock["ns"] += 1_000_000
     second, second_token = pipeline.consume_timing_snapshot()
     pipeline.confirm_timing_snapshot(first_token)
     pipeline.restore_timing_snapshot(second_token)
 
     assert first["event_pipeline_processed_count"] == 7
+    assert first["event_structured_sink_write_count"] == 2
+    assert first["event_monitor_sink_write_count"] == 3
     assert second["event_pipeline_processed_count"] == 3
-    assert pipeline.health_snapshot()["event_pipeline_processed_count"] == 3
+    assert second["event_structured_sink_write_count"] == 5
+    assert second["event_structured_sink_service_ms_total"] == 11
+    assert second["event_structured_sink_service_ms_max"] == 7
+    assert second["event_monitor_sink_write_count"] == 1
+    assert second["event_monitor_sink_service_ms_total"] == 6
+    assert second["event_monitor_sink_service_ms_max"] == 6
+    restored = pipeline.health_snapshot()
+    assert restored["event_pipeline_processed_count"] == 3
+    assert restored["event_structured_sink_write_count"] == 5
+    assert restored["event_monitor_sink_write_count"] == 1
 
 
 def test_pipeline_restore_merges_newly_processed_timing(monkeypatch):
@@ -581,6 +639,12 @@ def test_pipeline_restore_merges_newly_processed_timing(monkeypatch):
     pipeline._timing_queue_wait_ns_max = 3_000_000
     pipeline._timing_worker_service_ns_total = 12_000_000
     pipeline._timing_worker_service_ns_max = 5_000_000
+    pipeline._timing_structured_sink_write_count = 3
+    pipeline._timing_structured_sink_service_ns_total = 21_000_000
+    pipeline._timing_structured_sink_service_ns_max = 9_000_000
+    pipeline._timing_monitor_sink_write_count = 4
+    pipeline._timing_monitor_sink_service_ns_total = 30_000_000
+    pipeline._timing_monitor_sink_service_ns_max = 11_000_000
     _snapshot, token = pipeline.consume_timing_snapshot()
 
     pipeline._timing_processed_count = 2
@@ -588,6 +652,12 @@ def test_pipeline_restore_merges_newly_processed_timing(monkeypatch):
     pipeline._timing_queue_wait_ns_max = 6_000_000
     pipeline._timing_worker_service_ns_total = 4_000_000
     pipeline._timing_worker_service_ns_max = 3_000_000
+    pipeline._timing_structured_sink_write_count = 2
+    pipeline._timing_structured_sink_service_ns_total = 8_000_000
+    pipeline._timing_structured_sink_service_ns_max = 6_000_000
+    pipeline._timing_monitor_sink_write_count = 1
+    pipeline._timing_monitor_sink_service_ns_total = 12_000_000
+    pipeline._timing_monitor_sink_service_ns_max = 12_000_000
     pipeline.restore_timing_snapshot(token)
 
     restored = pipeline.health_snapshot()
@@ -596,6 +666,12 @@ def test_pipeline_restore_merges_newly_processed_timing(monkeypatch):
     assert restored["event_queue_wait_ms_max"] == 6
     assert restored["event_worker_service_ms_total"] == 16
     assert restored["event_worker_service_ms_max"] == 5
+    assert restored["event_structured_sink_write_count"] == 5
+    assert restored["event_structured_sink_service_ms_total"] == 29
+    assert restored["event_structured_sink_service_ms_max"] == 9
+    assert restored["event_monitor_sink_write_count"] == 5
+    assert restored["event_monitor_sink_service_ms_total"] == 42
+    assert restored["event_monitor_sink_service_ms_max"] == 12
 
 
 def test_pipeline_queue_overflow_is_logged_and_monitor_visible(caplog):
@@ -627,12 +703,25 @@ def test_pipeline_queue_overflow_is_logged_and_monitor_visible(caplog):
     assert any("live event queue full" in record.message for record in caplog.records)
 
 
-def test_sink_failure_degrades_observability_without_raising():
+def test_sink_failure_degrades_observability_without_raising(monkeypatch):
+    clock = {"ns": 1_000_000_000}
+    monkeypatch.setattr(
+        live_event_bus_module.time,
+        "monotonic_ns",
+        lambda: clock["ns"],
+    )
+
     class FailingSink:
         def write(self, event):
+            clock["ns"] += 3_000_000
             raise OSError("disk full")
 
-    monitor = ListEventSink()
+    class ControlledMonitorSink(ListEventSink):
+        def write(self, event):
+            clock["ns"] += 5_000_000
+            return super().write(event)
+
+    monitor = ControlledMonitorSink()
     pipeline = LiveEventPipeline(
         structured_sinks=[FailingSink()],
         monitor_sinks=[monitor],
@@ -644,6 +733,13 @@ def test_sink_failure_degrades_observability_without_raising():
     assert event.event_type == EventTypes.SNAPSHOT_BUILT
     assert pipeline.flush(timeout=2.0) is True
     assert pipeline.sink_error_counters["structured"] == 1
+    timing = pipeline.health_snapshot()
+    assert timing["event_structured_sink_write_count"] == 1
+    assert timing["event_structured_sink_service_ms_total"] == 3
+    assert timing["event_structured_sink_service_ms_max"] == 3
+    assert timing["event_monitor_sink_write_count"] == 1
+    assert timing["event_monitor_sink_service_ms_total"] == 5
+    assert timing["event_monitor_sink_service_ms_max"] == 5
     assert pipeline.degraded_events[-1].reason_code == "structured_sink_failed"
     assert monitor.events[-1].event_type == EventTypes.SINK_DEGRADED
     assert monitor.events[-1].reason_code == "structured_sink_failed"
@@ -665,6 +761,7 @@ def test_monitor_sink_none_ack_records_monitor_sink_failure():
     assert event.event_type == EventTypes.SNAPSHOT_BUILT
     assert pipeline.flush(timeout=2.0) is True
     assert pipeline.sink_error_counters["monitor"] == 1
+    assert pipeline.health_snapshot()["event_monitor_sink_write_count"] == 1
     assert pipeline.degraded_events[-1].reason_code == "monitor_sink_failed"
     assert pipeline.close(timeout=2.0) is True
 
