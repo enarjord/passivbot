@@ -4,6 +4,11 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Position-change console and text lines now use a compact aligned transition
+  with old/new size and price plus WE, base-WEL, effective-WEL, TWEL, and uPnL.
+  The complete structured event remains unchanged for queries and incident
+  reconstruction.
+
 - Periodic structured health summaries now separate event-path manifest
   checkpoint and retention run counts and service totals/maxima within the
   existing inclusive monitor maintenance timing. Live smoke and performance

@@ -5,6 +5,7 @@ from dataclasses import asdict, dataclass, field, replace
 import hashlib
 import json
 import logging
+import math
 import queue
 import re
 import threading
@@ -68,6 +69,8 @@ _MONITOR_PUBLISHER_PHASE_TIMING_KEYS = (
     "retention_ns_max",
 )
 _MONITOR_PHASE_TIMING_KEYS = ("prepare_ns", *_MONITOR_PUBLISHER_PHASE_TIMING_KEYS)
+_ANSI_ESCAPE_RE = re.compile(r"\x1b(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
+_CONTROL_CHARACTER_RE = re.compile(r"[\x00-\x1f\x7f-\x9f]")
 
 
 def _empty_monitor_phase_timing() -> dict[str, int]:
@@ -1272,42 +1275,75 @@ def _console_fill_ingested_summary(event: LiveEvent) -> list[str]:
     return parts
 
 
-def _console_position_changed_summary(event: LiveEvent) -> list[str]:
+def _format_position_console_number(value: float | None) -> str:
+    if value is None or not math.isfinite(value):
+        return "-"
+    if value == 0.0:
+        return "0"
+    return f"{value:.10g}"
+
+
+def _format_position_console_percentage(value: float | None) -> str:
+    if value is None or not math.isfinite(value):
+        return "-"
+    percentage = value * 100.0
+    if not math.isfinite(percentage):
+        return "-"
+    if percentage == 0.0:
+        percentage = 0.0
+    return f"{percentage:.4f}%"
+
+
+def _format_position_console_label(value: object) -> str:
+    text = _ANSI_ESCAPE_RE.sub("", str(value or ""))
+    text = _CONTROL_CHARACTER_RE.sub(" ", text)
+    return " ".join(text.split()) or "-"
+
+
+def _format_position_console_coin(symbol: object) -> str:
+    coin = str(symbol or "").partition("/")[0]
+    if "1000" in coin:
+        start = coin.find("1000")
+        end = start + 1
+        while end < len(coin) and coin[end] == "0":
+            end += 1
+        coin = coin[:start] + coin[end:]
+    if coin.startswith("k") and coin[1:].isupper():
+        coin = coin[1:]
+    return _format_position_console_label(coin)
+
+
+def _format_console_position_changed(event: LiveEvent) -> str:
     data = event.data if isinstance(event.data, Mapping) else {}
-    parts: list[str] = []
-    action = _data_str(data, "action")
-    if action:
-        parts.append(f"action={action}")
-    old_size = _data_float(data, "old_size")
-    new_size = _data_float(data, "new_size")
-    if old_size is not None and new_size is not None:
-        parts.append(f"size={old_size}->{new_size}")
-    else:
-        if old_size is not None:
-            parts.append(f"old_size={old_size}")
-        if new_size is not None:
-            parts.append(f"new_size={new_size}")
-    size_delta = _data_float(data, "size_delta")
-    if size_delta:
-        parts.append(f"delta={size_delta}")
-    new_price = _data_float(data, "new_price")
-    if new_price:
-        parts.append(f"price={new_price}")
-    last_price = _data_float(data, "last_price")
-    if last_price:
-        parts.append(f"last={last_price}")
-    for label, key in (
-        ("we", "wallet_exposure"),
-        ("wel", "wel_ratio"),
-        ("twel", "twel_ratio"),
-    ):
-        value = _data_number(data, key)
-        if value is not None:
-            parts.append(f"{label}={value * 100.0:.4f}%")
-    upnl = _data_float(data, "upnl")
-    if upnl:
-        parts.append(f"upnl={upnl}")
-    return parts
+    action = _format_position_console_label(_data_str(data, "action"))
+    coin = _format_position_console_coin(event.symbol)
+    pside = _format_position_console_label(event.pside)
+    old_leg = (
+        f"{_format_position_console_number(_data_number(data, 'old_size'))} @ "
+        f"{_format_position_console_number(_data_number(data, 'old_price'))}"
+    )
+    new_leg = (
+        f"{_format_position_console_number(_data_number(data, 'new_size'))} @ "
+        f"{_format_position_console_number(_data_number(data, 'new_price'))}"
+    )
+    metrics = " ".join(
+        (
+            "WE="
+            f"{_format_position_console_percentage(_data_number(data, 'wallet_exposure'))}",
+            "WEL="
+            f"{_format_position_console_percentage(_data_number(data, 'wel_ratio'))}",
+            "eWEL="
+            f"{_format_position_console_percentage(_data_number(data, 'wele_ratio'))}",
+            "TWEL="
+            f"{_format_position_console_percentage(_data_number(data, 'twel_ratio'))}",
+            "uPnL="
+            f"{_format_position_console_number(_data_number(data, 'upnl'))}",
+        )
+    )
+    return (
+        f"[pos] {action:>7} {coin:<10} {pside:<5} {old_leg:<22} "
+        f"-> {new_leg:<22} | {metrics}"
+    )
 
 
 def _console_balance_changed_summary(event: LiveEvent) -> list[str]:
@@ -1756,8 +1792,6 @@ def _console_data_summary(event: LiveEvent) -> list[str]:
         return _console_health_summary(event)
     if event.event_type == EventTypes.FILL_INGESTED:
         return _console_fill_ingested_summary(event)
-    if event.event_type == EventTypes.POSITION_CHANGED:
-        return _console_position_changed_summary(event)
     if event.event_type == EventTypes.BALANCE_CHANGED:
         return _console_balance_changed_summary(event)
     if event.event_type == EventTypes.RISK_MODE_CHANGED:
@@ -1795,6 +1829,8 @@ def _operator_sink_event_visible(event: LiveEvent) -> bool:
 
 
 def format_console_event(event: LiveEvent) -> str:
+    if event.event_type == EventTypes.POSITION_CHANGED:
+        return _format_console_position_changed(event)
     base = f"[{_console_tag(event)}]"
     if event.status:
         base += f" {event.status}"

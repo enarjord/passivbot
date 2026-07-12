@@ -1859,34 +1859,217 @@ def test_console_format_summarizes_fill_ingested():
     )
 
 
-def test_console_format_summarizes_position_changed():
+@pytest.mark.parametrize(
+    ("action", "old_size", "old_price", "new_size", "new_price"),
+    [
+        ("new", 0.0, 0.0, 0.07328, 67_352.9),
+        ("added", 0.07328, 67_352.9, 0.12, 67_000.0),
+        ("reduced", 0.12, 67_000.0, 0.07328, 67_352.9),
+        ("closed", 0.07328, 67_352.9, 0.0, 0.0),
+    ],
+)
+def test_console_format_position_changed_renders_all_actions(
+    action, old_size, old_price, new_size, new_price
+):
     event = LiveEvent(
         EventTypes.POSITION_CHANGED,
         status="succeeded",
         cycle_id="cy_pos",
-        symbol="ETH/USDT:USDT",
-        pside="short",
-        reason_code="short_increased",
+        symbol="BTC/USDT:USDT",
+        pside="long",
+        reason_code=action,
         data={
-            "action": "short_increased",
-            "old_size": -0.2,
-            "new_size": -0.35,
-            "size_delta": -0.15,
-            "new_price": 2_500.0,
-            "last_price": 2_480.0,
-            "wallet_exposure": 0.12,
-            "wel_ratio": 0.6,
-            "twel_ratio": 0.24,
-            "upnl": 7.5,
+            "action": action,
+            "old_size": old_size,
+            "old_price": old_price,
+            "new_size": new_size,
+            "new_price": new_price,
+            "wallet_exposure": 0.234841,
+            "wel_ratio": 1.095924,
+            "wele_ratio": 0.862929,
+            "twel_ratio": 0.178443,
+            "upnl": -265.815872,
         },
     )
 
-    assert format_console_event(event) == (
-        "[pos] succeeded cycle=cy_pos action=short_increased size=-0.2->-0.35 "
-        "delta=-0.15 price=2500 last=2480 we=12.0000% wel=60.0000% "
-        "twel=24.0000% upnl=7.5 symbol=ETH/USDT:USDT pside=short "
-        "reason=short_increased"
+    rendered = format_console_event(event)
+
+    assert rendered.startswith(f"[pos] {action:>7} BTC        long  ")
+    assert "succeeded" not in rendered
+    assert "cycle=" not in rendered
+    assert "symbol=" not in rendered
+    assert "pside=" not in rendered
+    assert "reason=" not in rendered
+    assert "WE=23.4841% WEL=109.5924% eWEL=86.2929% TWEL=17.8443%" in rendered
+    assert "uPnL=-265.815872" in rendered
+
+
+def test_console_format_position_changed_aligns_columns_and_preserves_event_data():
+    event = LiveEvent(
+        EventTypes.POSITION_CHANGED,
+        status="succeeded",
+        cycle_id="cy_pos",
+        symbol="BTC/USDT:USDT",
+        pside="long",
+        reason_code="new",
+        data={
+            "action": "new",
+            "old_size": 0.0,
+            "old_price": 0.0,
+            "new_size": 0.07328,
+            "new_price": 67_352.9,
+            "wallet_exposure": 0.234841,
+            "wel_ratio": 1.095924,
+            "wele_ratio": 0.862929,
+            "twel_ratio": 0.178443,
+            "upnl": -265.815872,
+        },
     )
+    before = event.to_dict()
+
+    rendered = format_console_event(event)
+
+    assert rendered == (
+        "[pos]     new BTC        long  0 @ 0                  "
+        "-> 0.07328 @ 67352.9      | WE=23.4841% WEL=109.5924% "
+        "eWEL=86.2929% TWEL=17.8443% uPnL=-265.815872"
+    )
+    assert event.to_dict() == before
+
+
+def test_console_format_position_changed_renders_zero_and_missing_metrics():
+    event = LiveEvent(
+        EventTypes.POSITION_CHANGED,
+        symbol="ETH/USDT:USDT",
+        pside="short",
+        data={
+            "action": "closed",
+            "old_size": 0.0,
+            "old_price": 0.0,
+            "new_size": 0.0,
+            "new_price": 0.0,
+            "wallet_exposure": 0.0,
+            "wel_ratio": 0.0,
+            "upnl": 0.0,
+        },
+    )
+
+    rendered = format_console_event(event)
+
+    assert "0 @ 0" in rendered
+    assert "WE=0.0000% WEL=0.0000% eWEL=- TWEL=- uPnL=0" in rendered
+
+
+def test_console_format_position_changed_does_not_truncate_long_values():
+    event = LiveEvent(
+        EventTypes.POSITION_CHANGED,
+        symbol="VERYLONGCOINNAME/USDT:USDT",
+        pside="very_long_position_side",
+        data={
+            "action": "very_long_action_name",
+            "old_size": 12345678901.2345,
+            "old_price": 98765432109.8765,
+            "new_size": 12345678902.2345,
+            "new_price": 98765432110.8765,
+        },
+    )
+
+    rendered = format_console_event(event)
+
+    assert "VERYLONGCOINNAME" in rendered
+    assert "very_long_action_name" in rendered
+    assert "very_long_position_side" in rendered
+    assert "1.23456789e+10 @ 9.876543211e+10" in rendered
+    assert "WE=- WEL=- eWEL=- TWEL=- uPnL=-" in rendered
+
+
+def test_console_format_position_changed_preserves_signed_short_values():
+    event = LiveEvent(
+        EventTypes.POSITION_CHANGED,
+        symbol="BTC/USDT:USDT",
+        pside="short",
+        data={
+            "action": "added",
+            "old_size": -0.2,
+            "old_price": 67_000.0,
+            "new_size": -0.35,
+            "new_price": 66_500.0,
+            "wallet_exposure": 0.12,
+            "wel_ratio": 0.6,
+            "wele_ratio": 0.5,
+            "twel_ratio": 0.24,
+            "upnl": -7.5,
+        },
+    )
+
+    rendered = format_console_event(event)
+
+    assert "short -0.2 @ 67000" in rendered
+    assert "-> -0.35 @ 66500" in rendered
+    assert "eWEL=50.0000%" in rendered
+    assert "uPnL=-7.5" in rendered
+
+
+def test_console_format_position_changed_handles_nonfinite_and_missing_values():
+    event = LiveEvent(
+        EventTypes.POSITION_CHANGED,
+        data={
+            "old_size": float("nan"),
+            "old_price": float("inf"),
+            "new_size": float("-inf"),
+            "new_price": None,
+            "wallet_exposure": float("nan"),
+            "wel_ratio": float("inf"),
+            "wele_ratio": float("-inf"),
+            "twel_ratio": None,
+            "upnl": float("nan"),
+        },
+    )
+
+    rendered = format_console_event(event)
+
+    assert rendered.startswith("[pos]       - -          -     - @ -")
+    assert "-> - @ -" in rendered
+    assert "WE=- WEL=- eWEL=- TWEL=- uPnL=-" in rendered
+    assert "nan" not in rendered.lower()
+    assert "inf" not in rendered.lower()
+
+
+@pytest.mark.parametrize(
+    ("symbol", "expected_coin"),
+    [
+        ("1000PEPE/USDT:USDT", "PEPE"),
+        ("kSHIB/USDC:USDC", "SHIB"),
+    ],
+)
+def test_console_format_position_changed_normalizes_common_coin_aliases(
+    symbol, expected_coin
+):
+    event = LiveEvent(
+        EventTypes.POSITION_CHANGED,
+        symbol=symbol,
+        pside="long",
+        data={"action": "new"},
+    )
+
+    rendered = format_console_event(event)
+
+    assert rendered.startswith(f"[pos]     new {expected_coin:<10} long  ")
+
+
+def test_console_format_position_changed_strips_ansi_and_control_characters():
+    event = LiveEvent(
+        EventTypes.POSITION_CHANGED,
+        symbol="BTC\n/USDT:USDT",
+        pside="long\r",
+        data={"action": "\x1b[31mnew\x1b[0m\t"},
+    )
+
+    rendered = format_console_event(event)
+
+    assert rendered.startswith("[pos]     new BTC        long  ")
+    assert "\x1b" not in rendered
+    assert not any(ord(char) < 32 or 127 <= ord(char) <= 159 for char in rendered)
 
 
 def test_console_format_summarizes_balance_changed():

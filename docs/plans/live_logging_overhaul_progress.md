@@ -69,6 +69,20 @@ Retuned goal boundary:
 
 VPS5 deployment status:
 
+- PR #1206 merged to `v8` as
+  `d61b3e18f6a6c0755d663e3e7fc72e8294fb7760` after exact-head Hermes and
+  Grok 4.5 approval plus green CI. It preserved inclusive maintenance timing
+  while adding fixed event-path manifest-checkpoint and retention
+  count/total/max attribution through health, performance, and smoke reports.
+  VPS5 fast-forwarded cleanly and gracefully restarted only the five configured
+  bot panes; all old bots exited naturally, pane PIDs remained unchanged, and
+  unrelated `misc:0.0` PID `434835` was preserved. The settled smoke was
+  hard-green with `575/575` remote and `17/17` account-critical calls
+  successful, all five processes matched, and zero monitor/pipeline errors.
+  Four fresh health windows attributed `16210.383ms` of `23651.665ms`
+  maintenance to 12 retention runs, including an `8953.523ms` maximum;
+  352 periodic manifest checkpoints consumed `7377.475ms` with a `347.039ms`
+  maximum. Retention is the next persistence optimization target.
 - PR #1205 merged to `v8` as
   `435b20fb08d3221be6520f216ddc210612656d0d` after exact-head Hermes and
   Grok 4.5 approval plus green CI. It coalesced ordinary best-effort manifest
