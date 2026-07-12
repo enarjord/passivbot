@@ -52,9 +52,11 @@ Estimated completion:
 
 Next action:
 
-1. Complete the connector-boundary regressions and fake-live suite, run
-   independent preflight, then publish for the temporary Hermes + Grok 4.5 +
-   green-CI current-head gate.
+1. Wait for the temporary Hermes + Grok 4.5 + green-CI gate on the exact current
+   PR head. After merge, pull `v8` on VPS5, gracefully restart only the five
+   exact supervised bot panes, query the call-boundary chain from legitimate
+   order activity, and complete immediate plus settled smoke while preserving
+   unrelated processes and local artifacts.
 
 ## Deployed Baseline
 
@@ -240,16 +242,17 @@ HIP-3 startup compatibility are merged and deployed. PR #1189's isolated-only
 initial-entry filter visibility and PR #1190's HSL replay scanned-row
 throughput, PR #1191's corrected active/legacy-terminal replay estimates,
 PR #1192's machine-readable startup readiness SLA semantics, PR #1193's
-latest-lifecycle report ordering, and PR #1194's bounded startup action
-milestones, plus PR #1195's startup consumer correctness fixes, are also merged
-and deployed. The active slice adds the missing true fresh-entry eligibility
-producer after all existing local pre-connector gates.
+latest-lifecycle report ordering, PR #1194's bounded startup action milestones,
+PR #1195's startup consumer correctness fixes, PR #1196's true fresh-entry
+eligibility producer, and PR #1197's fresh-entry startup milestone are also
+merged and deployed. The active PR #1198 slice adds the missing local
+connector-call boundary evidence without claiming exchange receipt or outcome.
 
-After this producer is merged and validated, select the next review-worthy
+After PR #1198 is merged and validated, select the next review-worthy
 candidate from the remaining backlog, including:
 
-- optional connector-boundary evidence if operators need actual exchange-write
-  invocation rather than the existing pre-call submitted event
+- bounded startup fill-cache proof correlation/reporting
+- bounded event-pipeline service-time evidence
 - bounded operator tooling improvements sharing one code and validation surface
 
 Do not create progress-only PRs or resume unrelated logging work from stale
