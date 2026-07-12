@@ -356,9 +356,12 @@ Related detailed plans:
    first heartbeat, and optional psutil-backed system memory/swap pressure
    fields for host-level pressure scans. PR #1200 added per-health-window
    processed count, queue-wait total/max, and aggregate worker sink-service
-   total/max with non-consuming ordinary monitor snapshots. The active
-   follow-up attributes that worker time to fixed structured/monitor sink write
-   counts and service total/max.
+   total/max with non-consuming ordinary monitor snapshots. PR #1203 attributed
+   that worker time to fixed structured/monitor sink write counts and service
+   total/max. Deployed evidence found essentially all worker service in the
+   monitor sink, including a `5321.841ms` maximum. The active follow-up splits
+   real monitor writes into fixed conversion, publisher lock-wait, rotation,
+   persistence, and maintenance timing without changing delivery or verdicts.
 
    Remaining refinements: exchange-call counts, candle-fetch concurrency,
    lower-level event-loop lag if heartbeat lag proves too coarse, and

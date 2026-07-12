@@ -4855,6 +4855,16 @@ def test_live_performance_report_resource_pressure_projects_event_pipeline_timin
                     "event_monitor_sink_write_count": 5,
                     "event_monitor_sink_service_ms_total": 2.5,
                     "event_monitor_sink_service_ms_max": 1.2,
+                    "event_monitor_prepare_ms_total": 0.3,
+                    "event_monitor_prepare_ms_max": 0.2,
+                    "event_monitor_publisher_lock_wait_ms_total": 0.2,
+                    "event_monitor_publisher_lock_wait_ms_max": 0.1,
+                    "event_monitor_publisher_rotation_ms_total": 0.4,
+                    "event_monitor_publisher_rotation_ms_max": 0.25,
+                    "event_monitor_publisher_persist_ms_total": 1.0,
+                    "event_monitor_publisher_persist_ms_max": 0.6,
+                    "event_monitor_publisher_maintenance_ms_total": 0.5,
+                    "event_monitor_publisher_maintenance_ms_max": 0.3,
                 },
             ),
         ],
@@ -4881,6 +4891,16 @@ def test_live_performance_report_resource_pressure_projects_event_pipeline_timin
                     "event_monitor_sink_write_count": 3,
                     "event_monitor_sink_service_ms_total": 1.5,
                     "event_monitor_sink_service_ms_max": 0.9,
+                    "event_monitor_prepare_ms_total": 0.2,
+                    "event_monitor_prepare_ms_max": 0.2,
+                    "event_monitor_publisher_lock_wait_ms_total": 0.1,
+                    "event_monitor_publisher_lock_wait_ms_max": 0.1,
+                    "event_monitor_publisher_rotation_ms_total": 0.2,
+                    "event_monitor_publisher_rotation_ms_max": 0.2,
+                    "event_monitor_publisher_persist_ms_total": 0.5,
+                    "event_monitor_publisher_persist_ms_max": 0.5,
+                    "event_monitor_publisher_maintenance_ms_total": 0.3,
+                    "event_monitor_publisher_maintenance_ms_max": 0.3,
                 },
             )
         ],
@@ -4910,6 +4930,15 @@ def test_live_performance_report_resource_pressure_projects_event_pipeline_timin
     assert binance_fields["event_worker_service_ms_max"]["latest"] == 4
     assert binance_fields["event_structured_sink_service_ms_total"]["latest"] == 3.5
     assert binance_fields["event_monitor_sink_write_count"]["latest"] == 5
+    assert binance_fields["event_monitor_publisher_persist_ms_total"] == {
+        "latest": 1,
+        "count": 1,
+        "min": 1,
+        "max": 1,
+        "mean": 1,
+        "median": 1,
+        "p95": 1,
+    }
     assert {
         key: pressure[key]
         for key in (
@@ -4925,6 +4954,16 @@ def test_live_performance_report_resource_pressure_projects_event_pipeline_timin
             "latest_event_monitor_sink_write_count_sum",
             "latest_event_monitor_sink_service_ms_total_sum",
             "latest_event_monitor_sink_service_ms_max",
+            "latest_event_monitor_prepare_ms_total_sum",
+            "latest_event_monitor_prepare_ms_max",
+            "latest_event_monitor_publisher_lock_wait_ms_total_sum",
+            "latest_event_monitor_publisher_lock_wait_ms_max",
+            "latest_event_monitor_publisher_rotation_ms_total_sum",
+            "latest_event_monitor_publisher_rotation_ms_max",
+            "latest_event_monitor_publisher_persist_ms_total_sum",
+            "latest_event_monitor_publisher_persist_ms_max",
+            "latest_event_monitor_publisher_maintenance_ms_total_sum",
+            "latest_event_monitor_publisher_maintenance_ms_max",
         )
     } == {
         "latest_event_pipeline_processed_total": 8,
@@ -4939,6 +4978,16 @@ def test_live_performance_report_resource_pressure_projects_event_pipeline_timin
         "latest_event_monitor_sink_write_count_sum": 8,
         "latest_event_monitor_sink_service_ms_total_sum": 4,
         "latest_event_monitor_sink_service_ms_max": 1.2,
+        "latest_event_monitor_prepare_ms_total_sum": 0.5,
+        "latest_event_monitor_prepare_ms_max": 0.2,
+        "latest_event_monitor_publisher_lock_wait_ms_total_sum": 0.3,
+        "latest_event_monitor_publisher_lock_wait_ms_max": 0.1,
+        "latest_event_monitor_publisher_rotation_ms_total_sum": 0.6,
+        "latest_event_monitor_publisher_rotation_ms_max": 0.25,
+        "latest_event_monitor_publisher_persist_ms_total_sum": 1.5,
+        "latest_event_monitor_publisher_persist_ms_max": 0.6,
+        "latest_event_monitor_publisher_maintenance_ms_total_sum": 0.8,
+        "latest_event_monitor_publisher_maintenance_ms_max": 0.3,
     }
 
 

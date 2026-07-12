@@ -55,6 +55,17 @@ _LIVE_EVENT_DEBUG_PROFILE_ALIASES = {
     "remote-call": "remote_calls",
     "remote-calls": "remote_calls",
 }
+_MONITOR_PUBLISHER_PHASE_TIMING_KEYS = (
+    "lock_wait_ns",
+    "rotation_ns",
+    "persist_ns",
+    "maintenance_ns",
+)
+_MONITOR_PHASE_TIMING_KEYS = ("prepare_ns", *_MONITOR_PUBLISHER_PHASE_TIMING_KEYS)
+
+
+def _empty_monitor_phase_timing() -> dict[str, int]:
+    return {key: 0 for key in _MONITOR_PHASE_TIMING_KEYS}
 
 _STARTUP_PHASE_READINESS_CONTRACTS: Mapping[str, tuple[str, str]] = MappingProxyType(
     {
@@ -846,12 +857,55 @@ class LiveEventSink(Protocol):
         ...
 
 
+class _MonitorEventPrepareError(Exception):
+    def __init__(self, error: Exception, timing: dict[str, int]):
+        super().__init__(str(error))
+        self.error = error
+        self.timing = timing
+
+
 class MonitorEventSink:
-    def __init__(self, publisher: Any):
+    def __init__(self, publisher: Any, *, publisher_phase_timing: bool = False):
         self.publisher = publisher
+        self.publisher_phase_timing = bool(publisher_phase_timing)
 
     def write(self, event: LiveEvent) -> Any:
-        kind, tags, payload = event.to_monitor_event()
+        try:
+            result, _timing = self._write_with_timing(event)
+        except _MonitorEventPrepareError as exc:
+            raise exc.error from exc
+        if result is None:
+            raise RuntimeError(f"monitor publisher returned None for {event.event_type}")
+        return result
+
+    def _write_with_timing(self, event: LiveEvent) -> tuple[Any, dict[str, int]]:
+        timing = _empty_monitor_phase_timing()
+        prepare_started_ns = time.monotonic_ns()
+        try:
+            kind, tags, payload = event.to_monitor_event()
+        except Exception as exc:
+            raise _MonitorEventPrepareError(exc, timing) from exc
+        finally:
+            timing["prepare_ns"] = max(0, time.monotonic_ns() - prepare_started_ns)
+
+        if self.publisher_phase_timing:
+            record_event_timed = getattr(self.publisher, "_record_event_timed", None)
+            if not callable(record_event_timed):
+                raise TypeError(
+                    "monitor publisher phase timing requires _record_event_timed()"
+                )
+            result, publisher_timing = record_event_timed(
+                kind,
+                tags,
+                payload,
+                ts=event.ts_ms,
+                symbol=event.symbol,
+                pside=event.pside,
+            )
+            for key in _MONITOR_PUBLISHER_PHASE_TIMING_KEYS:
+                timing[key] = max(0, int(publisher_timing.get(key, 0)))
+            return result, timing
+
         result = self.publisher.record_event(
             kind,
             tags,
@@ -860,9 +914,7 @@ class MonitorEventSink:
             symbol=event.symbol,
             pside=event.pside,
         )
-        if result is None:
-            raise RuntimeError(f"monitor publisher returned None for {kind}")
-        return result
+        return result, timing
 
 
 class ListEventSink:
@@ -1801,6 +1853,16 @@ class _EventPipelineTimingWindow:
     monitor_sink_write_count: int
     monitor_sink_service_ns_total: int
     monitor_sink_service_ns_max: int
+    monitor_prepare_ns_total: int
+    monitor_prepare_ns_max: int
+    monitor_publisher_lock_wait_ns_total: int
+    monitor_publisher_lock_wait_ns_max: int
+    monitor_publisher_rotation_ns_total: int
+    monitor_publisher_rotation_ns_max: int
+    monitor_publisher_persist_ns_total: int
+    monitor_publisher_persist_ns_max: int
+    monitor_publisher_maintenance_ns_total: int
+    monitor_publisher_maintenance_ns_max: int
 
 
 @dataclass
@@ -1811,6 +1873,16 @@ class _EventPipelineSinkWriteTiming:
     monitor_sink_write_count: int = 0
     monitor_sink_service_ns_total: int = 0
     monitor_sink_service_ns_max: int = 0
+    monitor_prepare_ns_total: int = 0
+    monitor_prepare_ns_max: int = 0
+    monitor_publisher_lock_wait_ns_total: int = 0
+    monitor_publisher_lock_wait_ns_max: int = 0
+    monitor_publisher_rotation_ns_total: int = 0
+    monitor_publisher_rotation_ns_max: int = 0
+    monitor_publisher_persist_ns_total: int = 0
+    monitor_publisher_persist_ns_max: int = 0
+    monitor_publisher_maintenance_ns_total: int = 0
+    monitor_publisher_maintenance_ns_max: int = 0
 
     def record(self, sink_name: str, service_ns: int) -> None:
         service_ns = max(0, int(service_ns))
@@ -1826,6 +1898,20 @@ class _EventPipelineSinkWriteTiming:
             self.monitor_sink_service_ns_max = max(
                 self.monitor_sink_service_ns_max, service_ns
             )
+
+    def record_monitor_phase_timing(self, timing: Mapping[str, int]) -> None:
+        for source_key, field_prefix in (
+            ("prepare_ns", "monitor_prepare_ns"),
+            ("lock_wait_ns", "monitor_publisher_lock_wait_ns"),
+            ("rotation_ns", "monitor_publisher_rotation_ns"),
+            ("persist_ns", "monitor_publisher_persist_ns"),
+            ("maintenance_ns", "monitor_publisher_maintenance_ns"),
+        ):
+            value_ns = max(0, int(timing.get(source_key, 0)))
+            total_field = f"{field_prefix}_total"
+            max_field = f"{field_prefix}_max"
+            setattr(self, total_field, int(getattr(self, total_field)) + value_ns)
+            setattr(self, max_field, max(int(getattr(self, max_field)), value_ns))
 
 
 class LiveEventPipeline:
@@ -1873,6 +1959,16 @@ class LiveEventPipeline:
         self._timing_monitor_sink_write_count = 0
         self._timing_monitor_sink_service_ns_total = 0
         self._timing_monitor_sink_service_ns_max = 0
+        self._timing_monitor_prepare_ns_total = 0
+        self._timing_monitor_prepare_ns_max = 0
+        self._timing_monitor_publisher_lock_wait_ns_total = 0
+        self._timing_monitor_publisher_lock_wait_ns_max = 0
+        self._timing_monitor_publisher_rotation_ns_total = 0
+        self._timing_monitor_publisher_rotation_ns_max = 0
+        self._timing_monitor_publisher_persist_ns_total = 0
+        self._timing_monitor_publisher_persist_ns_max = 0
+        self._timing_monitor_publisher_maintenance_ns_total = 0
+        self._timing_monitor_publisher_maintenance_ns_max = 0
         self._pending_timing_windows: dict[int, _EventPipelineTimingWindow] = {}
         self._next_timing_snapshot_token = 1
         self._worker: threading.Thread | None = None
@@ -1954,6 +2050,32 @@ class LiveEventPipeline:
                 monitor_sink_service_ns_max=int(
                     self._timing_monitor_sink_service_ns_max
                 ),
+                monitor_prepare_ns_total=int(self._timing_monitor_prepare_ns_total),
+                monitor_prepare_ns_max=int(self._timing_monitor_prepare_ns_max),
+                monitor_publisher_lock_wait_ns_total=int(
+                    self._timing_monitor_publisher_lock_wait_ns_total
+                ),
+                monitor_publisher_lock_wait_ns_max=int(
+                    self._timing_monitor_publisher_lock_wait_ns_max
+                ),
+                monitor_publisher_rotation_ns_total=int(
+                    self._timing_monitor_publisher_rotation_ns_total
+                ),
+                monitor_publisher_rotation_ns_max=int(
+                    self._timing_monitor_publisher_rotation_ns_max
+                ),
+                monitor_publisher_persist_ns_total=int(
+                    self._timing_monitor_publisher_persist_ns_total
+                ),
+                monitor_publisher_persist_ns_max=int(
+                    self._timing_monitor_publisher_persist_ns_max
+                ),
+                monitor_publisher_maintenance_ns_total=int(
+                    self._timing_monitor_publisher_maintenance_ns_total
+                ),
+                monitor_publisher_maintenance_ns_max=int(
+                    self._timing_monitor_publisher_maintenance_ns_max
+                ),
             )
             timing_snapshot_token = None
             if consume_timing:
@@ -1972,6 +2094,16 @@ class LiveEventPipeline:
                 self._timing_monitor_sink_write_count = 0
                 self._timing_monitor_sink_service_ns_total = 0
                 self._timing_monitor_sink_service_ns_max = 0
+                self._timing_monitor_prepare_ns_total = 0
+                self._timing_monitor_prepare_ns_max = 0
+                self._timing_monitor_publisher_lock_wait_ns_total = 0
+                self._timing_monitor_publisher_lock_wait_ns_max = 0
+                self._timing_monitor_publisher_rotation_ns_total = 0
+                self._timing_monitor_publisher_rotation_ns_max = 0
+                self._timing_monitor_publisher_persist_ns_total = 0
+                self._timing_monitor_publisher_persist_ns_max = 0
+                self._timing_monitor_publisher_maintenance_ns_total = 0
+                self._timing_monitor_publisher_maintenance_ns_max = 0
         snapshot: dict[str, Any] = {
             "event_queue_depth": queue_depth,
             "event_queue_maxsize": queue_maxsize,
@@ -2012,6 +2144,36 @@ class LiveEventPipeline:
             ),
             "event_monitor_sink_service_ms_max": self._timing_ms(
                 timing_window.monitor_sink_service_ns_max
+            ),
+            "event_monitor_prepare_ms_total": self._timing_ms(
+                timing_window.monitor_prepare_ns_total
+            ),
+            "event_monitor_prepare_ms_max": self._timing_ms(
+                timing_window.monitor_prepare_ns_max
+            ),
+            "event_monitor_publisher_lock_wait_ms_total": self._timing_ms(
+                timing_window.monitor_publisher_lock_wait_ns_total
+            ),
+            "event_monitor_publisher_lock_wait_ms_max": self._timing_ms(
+                timing_window.monitor_publisher_lock_wait_ns_max
+            ),
+            "event_monitor_publisher_rotation_ms_total": self._timing_ms(
+                timing_window.monitor_publisher_rotation_ns_total
+            ),
+            "event_monitor_publisher_rotation_ms_max": self._timing_ms(
+                timing_window.monitor_publisher_rotation_ns_max
+            ),
+            "event_monitor_publisher_persist_ms_total": self._timing_ms(
+                timing_window.monitor_publisher_persist_ns_total
+            ),
+            "event_monitor_publisher_persist_ms_max": self._timing_ms(
+                timing_window.monitor_publisher_persist_ns_max
+            ),
+            "event_monitor_publisher_maintenance_ms_total": self._timing_ms(
+                timing_window.monitor_publisher_maintenance_ns_total
+            ),
+            "event_monitor_publisher_maintenance_ms_max": self._timing_ms(
+                timing_window.monitor_publisher_maintenance_ns_max
             ),
         }
         return (
@@ -2062,6 +2224,30 @@ class LiveEventPipeline:
             self._timing_monitor_sink_service_ns_max,
             int(pending.monitor_sink_service_ns_max),
         )
+        for field_name in (
+            "monitor_prepare_ns_total",
+            "monitor_publisher_lock_wait_ns_total",
+            "monitor_publisher_rotation_ns_total",
+            "monitor_publisher_persist_ns_total",
+            "monitor_publisher_maintenance_ns_total",
+        ):
+            setattr(
+                self,
+                f"_timing_{field_name}",
+                int(getattr(self, f"_timing_{field_name}")) + int(getattr(pending, field_name)),
+            )
+        for field_name in (
+            "monitor_prepare_ns_max",
+            "monitor_publisher_lock_wait_ns_max",
+            "monitor_publisher_rotation_ns_max",
+            "monitor_publisher_persist_ns_max",
+            "monitor_publisher_maintenance_ns_max",
+        ):
+            setattr(
+                self,
+                f"_timing_{field_name}",
+                max(int(getattr(self, f"_timing_{field_name}")), int(getattr(pending, field_name))),
+            )
 
     def emit(
         self,
@@ -2194,8 +2380,8 @@ class LiveEventPipeline:
                         )
                 if route.monitor:
                     for sink in self.monitor_sinks:
-                        self._write_sink_in_worker(
-                            "monitor", sink, live_event, sink_write_timing
+                        self._write_monitor_sink_in_worker(
+                            sink, live_event, sink_write_timing
                         )
             finally:
                 if item is not None:
@@ -2236,6 +2422,41 @@ class LiveEventPipeline:
                             self._timing_monitor_sink_service_ns_max,
                             sink_write_timing.monitor_sink_service_ns_max,
                         )
+                        self._timing_monitor_prepare_ns_total += (
+                            sink_write_timing.monitor_prepare_ns_total
+                        )
+                        self._timing_monitor_prepare_ns_max = max(
+                            self._timing_monitor_prepare_ns_max,
+                            sink_write_timing.monitor_prepare_ns_max,
+                        )
+                        self._timing_monitor_publisher_lock_wait_ns_total += (
+                            sink_write_timing.monitor_publisher_lock_wait_ns_total
+                        )
+                        self._timing_monitor_publisher_lock_wait_ns_max = max(
+                            self._timing_monitor_publisher_lock_wait_ns_max,
+                            sink_write_timing.monitor_publisher_lock_wait_ns_max,
+                        )
+                        self._timing_monitor_publisher_rotation_ns_total += (
+                            sink_write_timing.monitor_publisher_rotation_ns_total
+                        )
+                        self._timing_monitor_publisher_rotation_ns_max = max(
+                            self._timing_monitor_publisher_rotation_ns_max,
+                            sink_write_timing.monitor_publisher_rotation_ns_max,
+                        )
+                        self._timing_monitor_publisher_persist_ns_total += (
+                            sink_write_timing.monitor_publisher_persist_ns_total
+                        )
+                        self._timing_monitor_publisher_persist_ns_max = max(
+                            self._timing_monitor_publisher_persist_ns_max,
+                            sink_write_timing.monitor_publisher_persist_ns_max,
+                        )
+                        self._timing_monitor_publisher_maintenance_ns_total += (
+                            sink_write_timing.monitor_publisher_maintenance_ns_total
+                        )
+                        self._timing_monitor_publisher_maintenance_ns_max = max(
+                            self._timing_monitor_publisher_maintenance_ns_max,
+                            sink_write_timing.monitor_publisher_maintenance_ns_max,
+                        )
                 self._queue.task_done()
 
     def _write_sink(self, name: str, sink: LiveEventSink, event: LiveEvent) -> Any:
@@ -2263,6 +2484,34 @@ class LiveEventPipeline:
         except Exception as exc:
             self._handle_sink_failure(name, exc, sink_write_timing=sink_write_timing)
             return None
+
+    def _write_monitor_sink_in_worker(
+        self,
+        sink: LiveEventSink,
+        event: LiveEvent,
+        sink_write_timing: _EventPipelineSinkWriteTiming,
+    ) -> Any:
+        if not isinstance(sink, MonitorEventSink):
+            return self._write_sink_in_worker("monitor", sink, event, sink_write_timing)
+
+        sink_started_ns = time.monotonic_ns()
+        try:
+            result, phase_timing = sink._write_with_timing(event)
+            sink_write_timing.record_monitor_phase_timing(phase_timing)
+            if result is None:
+                raise RuntimeError(
+                    f"monitor publisher returned None for {event.event_type}"
+                )
+            return result
+        except _MonitorEventPrepareError as exc:
+            sink_write_timing.record_monitor_phase_timing(exc.timing)
+            self._handle_sink_failure("monitor", exc.error, sink_write_timing=sink_write_timing)
+            return None
+        except Exception as exc:
+            self._handle_sink_failure("monitor", exc, sink_write_timing=sink_write_timing)
+            return None
+        finally:
+            sink_write_timing.record("monitor", time.monotonic_ns() - sink_started_ns)
 
     def _handle_sink_failure(
         self,
@@ -2314,7 +2563,25 @@ class LiveEventPipeline:
                     time.monotonic_ns() if sink_write_timing is not None else 0
                 )
                 try:
-                    sink.write(degraded)
+                    if isinstance(sink, MonitorEventSink):
+                        result, phase_timing = sink._write_with_timing(degraded)
+                        if sink_write_timing is not None:
+                            sink_write_timing.record_monitor_phase_timing(phase_timing)
+                        if result is None:
+                            raise RuntimeError(
+                                f"monitor publisher returned None for {degraded.event_type}"
+                            )
+                    else:
+                        sink.write(degraded)
+                except _MonitorEventPrepareError as exc:
+                    if sink_write_timing is not None:
+                        sink_write_timing.record_monitor_phase_timing(exc.timing)
+                    with self._state_lock:
+                        self.sink_error_counters["monitor"] += 1
+                    logging.warning(
+                        "[event] failed to emit sink.degraded to monitor: %s",
+                        type(exc.error).__name__,
+                    )
                 except Exception as exc:
                     with self._state_lock:
                         self.sink_error_counters["monitor"] += 1

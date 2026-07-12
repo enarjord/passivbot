@@ -376,9 +376,12 @@ classification when enough source events exist.
     event IDs for direct event-stream correlation. Remaining work: source events
     for complete stage coverage where the live loop does not yet emit timings.
     PR #1200 added per-heartbeat queue-wait and worker sink-service
-    count/total/max source evidence without affecting delivery. The active
-    follow-up attributes worker service to fixed structured and monitor sink
-    classes with per-window write counts and service total/max.
+    count/total/max source evidence without affecting delivery. PR #1203
+    attributed worker service to fixed structured and monitor sink classes with
+    per-window write counts and service total/max. Deployed evidence localized
+    the long tail to the monitor sink; the active follow-up attributes real
+    monitor writes to fixed conversion, publisher lock-wait, rotation,
+    persistence, and maintenance phases.
 - [ ] Exchange writes: create/cancel/close/panic write latency, exchange
   response latency, ambiguous write rate, confirmation latency.
   - Status: partial. The report now derives order-wave total duration,

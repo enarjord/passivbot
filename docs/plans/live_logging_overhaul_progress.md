@@ -7878,3 +7878,40 @@ VPS5 deployment status:
 - Expected VPS action: exact five-bot graceful restart, bounded per-sink timing
   evidence, and immediate plus settled smoke while preserving unrelated
   processes and local artifacts.
+
+### Deployed Slice: Event-Pipeline Sink Attribution
+
+- PR #1203 was approved by Hermes and Grok 4.5 on exact head `3239c6678`; CI
+  passed and it merged to `v8` as `381f6a3f7`.
+- VPS5 fast-forwarded cleanly and gracefully restarted only the five exact bot
+  panes. Old bot processes exited naturally. Pane PIDs
+  `856294/856332/856364/856398/856434` and unrelated `misc:0.0` PID `434835`
+  were preserved; new bot PIDs were `867321/867324/867328/867331/867333`.
+- Four fresh bots reported 2,525 processed events and monitor writes, zero
+  structured writes, monitor service total/max `62842.105/5321.841ms`, worker
+  service total/max `62937.772/5321.883ms`, and queue-wait total/max
+  `18035.11/2350.05ms`. Drops, sink errors, degraded counts, and unhealthy
+  pipelines remained zero, so the runtime bottleneck was localized to the
+  monitor sink without changing delivery policy.
+- The final settled two-minute smoke was hard-green with `360/360` remote and
+  `55/55` account-critical calls successful, all five expected processes
+  matched, exact states `R/R/R/R/S`, and a clean tracked repository.
+
+### Active Slice: Monitor-Publisher Phase Attribution
+
+- Branch: `codex/v8-monitor-publisher-phase-timing` from deployed `381f6a3f7`.
+- Scope: attribute each real `MonitorEventSink` write to fixed monotonic
+  event-conversion, publisher lock-wait, top-level rotation, serialization plus
+  NDJSON append, and post-append manifest/retention maintenance phases. Retain
+  the existing monitor-sink total and rotate/confirm/restore all new totals and
+  maxima with the existing opaque health-window token.
+- Consumers: project only fixed numeric fields through smoke event-pipeline
+  summaries and performance resource-pressure statistics. Generic monitor sinks
+  report zero internal phases; historical records omit absent fields.
+- Non-goals: no publisher lock, fsync/durability, rotation, compression,
+  retention, routing, queue/backpressure, drop/error policy, payload, label,
+  threshold, alert, verdict, order, risk, HSL, Rust, backtest, optimizer,
+  exchange, or trading behavior change.
+- Expected VPS action: exact five-bot graceful restart, bounded phase timing
+  evidence, and immediate plus settled smoke while preserving unrelated
+  processes and local artifacts.
