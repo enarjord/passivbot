@@ -38,8 +38,9 @@ Estimated completion:
 - Validation: 244 focused/adjacent tests and all 21 fake-live marker scenarios
   pass, including outcome precedence, boundedness, reconciler/executor
   mixed cases, exact pre-create gate attribution, schema validation, and event
-  failure isolation. Python compilation and `git diff --check` also pass;
-  independent exact-commit preflight remains before publication.
+  failure isolation. Python compilation and `git diff --check` also pass. An
+  independent exact-commit preflight approved the executable delta with no
+  findings; its focused eligibility/event suite also passed.
 - Publication state, exact head, mergeability, CI, and current-head reviewer
   verdicts: query live GitHub metadata; do not embed self-invalidating values.
 - Expected VPS action: after merge, pull while preserving local artifacts,
@@ -48,9 +49,9 @@ Estimated completion:
 
 Next action:
 
-1. Freeze the validated implementation in one commit, run independent
-   exact-commit preflight, then publish for the temporary Hermes + Grok 4.5 +
-   green-CI current-head gate.
+1. Wait for the temporary Hermes + Grok 4.5 + green-CI current-head gate on PR
+   #1196, resolve any findings narrowly, then merge and run the declared exact
+   five-bot VPS5 restart plus immediate and settled smoke.
 
 ## Deployed Baseline
 
