@@ -46,9 +46,11 @@ Estimated completion:
 
 Next action:
 
-1. Complete the strict eligibility predicate and lifecycle regressions, run
-   independent preflight, then publish for the temporary Hermes + Grok 4.5 +
-   green-CI current-head gate.
+1. Wait for the temporary Hermes + Grok 4.5 + green-CI gate on the exact current
+   PR head. After merge, pull `v8` on VPS5 without restarting bots, run the
+   bounded current-plus-rotated `startup_milestones` report, and complete a
+   settled smoke while verifying the bot and unrelated-process PIDs are
+   unchanged.
 
 ## Deployed Baseline
 
