@@ -508,9 +508,10 @@ Related detailed plans:
     summaries. EMA/candle/cache internals should stay structured DEBUG unless
     they directly explain a blocked trading action.
 
-    Active follow-up: render `position.changed` as an aligned human transition
-    with base/effective WEL utilization while preserving the complete
-    structured event. Remaining small readability gaps include zero-valued
+    PR #1207 deployed an aligned `position.changed` human transition with
+    base/effective WEL utilization while preserving the complete structured
+    event; a natural live Hyperliquid change verified the projection. Remaining
+    small readability gaps include zero-valued
     fill/balance/entry-gate fields currently hidden by truthiness checks; handle
     those as separate bounded formatter slices rather than broad console churn.
 

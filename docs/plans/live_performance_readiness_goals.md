@@ -391,7 +391,10 @@ classification when enough source events exist.
     changing persistence behavior. Fresh VPS5 evidence attributed
     `16210.383ms` and an `8953.523ms` maximum to 12 retention runs, versus
     `7377.475ms` and a `347.039ms` maximum across 352 manifest checkpoints.
-    Retention is therefore the next persistence optimization target.
+    Retention is therefore the next persistence optimization target. The active
+    follow-up replaces repeated candidate/full-tree scans with one per-run
+    inventory while preserving cadence and deletion policy; fresh VPS timing
+    after review and merge must determine whether the long tail improves.
 - [ ] Exchange writes: create/cancel/close/panic write latency, exchange
   response latency, ambiguous write rate, confirmation latency.
   - Status: partial. The report now derives order-wave total duration,

@@ -4,6 +4,11 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Monitor retention pruning now inventories retained files once per due run and
+  reuses the same size/mtime snapshot for age and byte-cap deletion. Retention
+  cadence, protected files, recursive byte accounting, direct-only deletion,
+  and oldest-first policy are unchanged.
+
 - Position-change console and text lines now use a compact aligned transition
   with old/new size and price plus WE, base-WEL, effective-WEL, TWEL, and uPnL.
   The complete structured event remains unchanged for queries and incident
