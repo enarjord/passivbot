@@ -69,6 +69,16 @@ Retuned goal boundary:
 
 VPS5 deployment status:
 
+- PR #1207 merged to `v8` as
+  `de6022432dae9f4513f7a56287535ba21120a39f` after exact-head Hermes and
+  Grok 4.5 approval plus green CI. VPS5 fast-forwarded cleanly and gracefully
+  restarted only the five exact bot panes; all old bots exited naturally, pane
+  PIDs remained unchanged, and unrelated `misc:0.0` PID `434835` was preserved.
+  The settled two-minute smoke was hard-green with `359/359` remote and `51/51`
+  account-critical calls successful, all five processes matched, states
+  `R=4/S=1`, zero hard/log/monitor failures, and a clean tracked repository.
+  A natural Hyperliquid position change proved the aligned console projection
+  and effective-WEL field without synthetic trading activity.
 - PR #1206 merged to `v8` as
   `d61b3e18f6a6c0755d663e3e7fc72e8294fb7760` after exact-head Hermes and
   Grok 4.5 approval plus green CI. It preserved inclusive maintenance timing

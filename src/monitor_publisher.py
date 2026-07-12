@@ -6,6 +6,7 @@ import errno
 import json
 import logging
 import os
+import stat
 import threading
 import time
 import uuid
@@ -459,18 +460,29 @@ class MonitorPublisher:
         path.unlink()
         return gz_path
 
-    def _rotatable_files(self) -> list[Path]:
-        files: list[Path] = []
-        for directory in (self.events_dir, self.history_dir, self.checkpoints_dir):
-            if not directory.exists():
+    def _retention_inventory(self) -> tuple[int, list[tuple[Path, int, float]]]:
+        """Return total retained bytes and direct rotated-file deletion candidates."""
+
+        protected = {
+            self.manifest_path,
+            self.state_latest_path,
+            self.current_events_path,
+            *self._current_history_paths.values(),
+        }
+        candidate_dirs = {self.events_dir, self.history_dir, self.checkpoints_dir}
+        total_bytes = 0
+        candidates: list[tuple[Path, int, float]] = []
+        for path in self.root.rglob("*"):
+            try:
+                file_stat = path.stat()
+            except FileNotFoundError:
                 continue
-            for path in directory.iterdir():
-                if not path.is_file():
-                    continue
-                if path == self.current_events_path or path in self._current_history_paths.values():
-                    continue
-                files.append(path)
-        return sorted(files, key=lambda path: path.stat().st_mtime)
+            if not stat.S_ISREG(file_stat.st_mode):
+                continue
+            total_bytes += file_stat.st_size
+            if path.parent in candidate_dirs and path not in protected:
+                candidates.append((path, file_stat.st_size, file_stat.st_mtime))
+        return total_bytes, sorted(candidates, key=lambda candidate: candidate[2])
 
     def _retention_due(self, now_ms: int) -> bool:
         return not (
@@ -492,38 +504,27 @@ class MonitorPublisher:
                 on_run()
             try:
                 cutoff_ms = now_ms - int(self.retain_days * 24.0 * 60.0 * 60.0 * 1000.0)
+                total_bytes, candidates = self._retention_inventory()
                 if self.retain_days >= 0.0:
-                    for path in list(self._rotatable_files()):
-                        try:
-                            if int(path.stat().st_mtime * 1000.0) < cutoff_ms:
+                    survivors = []
+                    for path, size, mtime in candidates:
+                        if int(mtime * 1000.0) < cutoff_ms:
+                            try:
                                 path.unlink()
-                        except FileNotFoundError:
-                            continue
-
-                total_bytes = 0
-                all_files: list[Path] = []
-                for path in self.root.rglob("*"):
-                    if not path.is_file():
-                        continue
-                    total_bytes += path.stat().st_size
-                    all_files.append(path)
+                            except FileNotFoundError:
+                                total_bytes -= size
+                                continue
+                            total_bytes -= size
+                        else:
+                            survivors.append((path, size, mtime))
+                else:
+                    survivors = candidates
                 if total_bytes <= self.max_total_bytes:
                     return
 
-                protected = {
-                    self.manifest_path,
-                    self.state_latest_path,
-                    self.current_events_path,
-                    *self._current_history_paths.values(),
-                }
-                candidates = [path for path in self._rotatable_files() if path not in protected]
-                for path in candidates:
+                for path, size, _mtime in survivors:
                     if total_bytes <= self.max_total_bytes:
                         break
-                    try:
-                        size = path.stat().st_size
-                    except FileNotFoundError:
-                        continue
                     path.unlink()
                     total_bytes -= size
             except Exception as exc:

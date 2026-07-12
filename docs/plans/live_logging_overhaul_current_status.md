@@ -22,52 +22,57 @@ Estimated completion:
 
 ## Active Review Slice
 
-- Branch: `codex/v8-position-console-polish`
-- Base: `d61b3e18f6a6c0755d663e3e7fc72e8294fb7760`, PR #1206
-- Triggering evidence: live `position.changed` console lines expose the durable
-  event as a dense parser-oriented `key=value` sequence. They omit the already
-  persisted `wele_ratio`, even though operators need both base-WEL and
-  effective-WEL utilization and the legacy fallback previously aligned the
-  position transition for human scanning.
-- Scope: give only the event-derived position console/text projection one
-  compact aligned line containing action, coin, pside, old/new size and price,
-  WE, WEL, effective WEL, TWEL, and uPnL. Keep zeros visible, missing/non-finite
-  values explicit, long values untruncated, common coin aliases readable, and
-  labels free of ANSI/control characters.
-- Behavior boundary: console/text formatting only. Preserve the complete
-  structured `position.changed` event, event routing and volume, every other
-  event formatter, monitor persistence, smoke verdicts, configuration, and all
-  order/risk/trading behavior. Do not add multiline output or terminal colors
-  that could pollute text logs.
-- Validation: new/added/reduced/closed actions; signed shorts; zero, missing,
-  and non-finite metrics; fixed minimum columns; long values; common aliases;
-  control-character stripping; structured-event immutability; event-bus,
-  registry-doc, and fake-live regressions; Python compilation; `git diff
-  --check`; added-line silent-handling audit; and independent preflight.
+- Branch: `codex/v8-monitor-retention-inventory`
+- Base: `de6022432dae9f4513f7a56287535ba21120a39f`, PR #1207
+- Triggering evidence: PR #1206 attributed `16210.383ms` of fresh maintenance
+  time and an `8953.523ms` maximum to 12 retention runs. The current retention
+  path repeatedly scans candidate directories, recursively inventories bytes,
+  and rescans candidates when over cap.
+- Scope: build one bounded per-run recursive file inventory, stat each visited
+  path once, count every regular file toward the byte cap, classify only direct
+  non-current files in the three managed directories as deletion candidates,
+  and reuse their inventoried size/mtime for age and cap pruning.
+- Behavior boundary: preserve the 60-second due rule, callback and lock timing,
+  recursive byte accounting, direct-only deletion domain, protected current
+  files, strict age cutoff, oldest-first order, compression compatibility,
+  logging, and existing retry/error semantics. No cache, schema, configuration,
+  cadence, event, report, verdict, order, risk, or trading behavior change.
+- Validation: exact cutoff/order/protection, nested unknown files, candidate
+  exhaustion, byte-cap order, one traversal/stat per file, age/cap races,
+  file/directory symlinks, timing callbacks, concurrent publisher coverage,
+  monitor-publisher and integrated event/report regressions, Python compilation,
+  `git diff --check`, added-line silent-handling audit, and independent preflight.
 - Publication state, exact head, mergeability, CI, and current-head reviewer
   verdicts: query live GitHub metadata; do not embed self-invalidating values.
 - Expected VPS action: exact five-bot graceful restart, immediate and settled
-  smoke, and inspection of the next naturally emitted position change. Do not
-  create or alter a live position merely to exercise console formatting.
+  smoke, and fresh maintenance/retention timing comparison.
 
 Next action:
 
-1. Hold the active console PR's exact current head until Hermes, Grok 4.5, and
-   CI are green;
+1. Hold the active retention PR's exact current head until Hermes, Grok 4.5,
+   and CI are green.
 2. Resolve findings narrowly and require fresh exact-head verdicts after every
-   push, then merge and validate the exact five-bot VPS restart without creating
-   or altering a live position merely to exercise console formatting.
-3. In parallel, scope a separate retention optimization from PR #1206's fresh
-   phase evidence without mixing persistence behavior into console formatting.
+   push.
+3. Merge and validate the exact five-bot VPS restart, then compare fresh
+   retention totals/maxima against PR #1206's deployed evidence.
 
 ## Deployed Baseline
 
-- Remote `v8`: `d61b3e18f6a6c0755d663e3e7fc72e8294fb7760`, PR #1206
-- VPS5 repository: `d61b3e18f6a6c0755d663e3e7fc72e8294fb7760`, PR #1206; tracked
+- Remote `v8`: `de6022432dae9f4513f7a56287535ba21120a39f`, PR #1207
+- VPS5 repository: `de6022432dae9f4513f7a56287535ba21120a39f`, PR #1207; tracked
   status clean; expected untracked artifacts were preserved
-- VPS5 expected bots: five; running with PR #1206 restart PIDs
-  `873338/873395/873458/873515/873576`;
+- VPS5 expected bots: five; running with PR #1207 restart PIDs
+  `874984/875044/875152/875026/875150`;
   unrelated `misc:0.0` remains PID `434835`
+- PR #1207 merged after exact-head Hermes and Grok 4.5 approval plus green CI.
+  VPS5 fast-forwarded cleanly and gracefully restarted only the five exact bot
+  panes; every old bot exited naturally and pane PIDs remained unchanged.
+- Immediate and settled two-minute smokes were hard-green. The settled window
+  reported `359/359` remote and `51/51` account-critical calls successful,
+  all five expected processes matched, states `R=4/S=1`, zero hard/log/monitor
+  failures, and a clean tracked repository. Hyperliquid naturally emitted the
+  aligned position line with `WE`, `WEL`, `eWEL`, `TWEL`, and `uPnL`; no live
+  position was created or altered for validation.
 - PR #1206 merged after exact-head Hermes and Grok 4.5 approval plus green CI.
   VPS5 fast-forwarded cleanly and gracefully restarted only the five exact bot
   panes. All old bot processes exited naturally; pane PIDs
@@ -358,13 +363,12 @@ local connector-call boundary evidence, and PR #1199's startup fill-cache proof
 correlation, PR #1200's event-pipeline service timing, and PR #1203's fixed
 sink-class attribution, PR #1205's coalesced monitor manifest checkpoints, and
 PR #1206's monitor-maintenance phase attribution are also merged and deployed.
-The active slice polishes the human console projection of `position.changed`
-while preserving the structured event payload.
+PR #1207's human console projection of `position.changed` is also merged and
+deployed, with the structured event payload preserved.
 
-After the console slice is merged and validated, use PR #1206's production
-evidence to optimize the recurring retention path in a separate review-worthy
-slice. Keep persistence behavior and console presentation on separate code and
-validation surfaces.
+The active slice now uses PR #1206's production evidence to optimize the
+recurring retention path with one per-run inventory. Keep its persistence
+behavior and validation surface separate from further console readability work.
 
 Do not create progress-only PRs or resume unrelated logging work from stale
 worktrees.
