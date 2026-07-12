@@ -329,7 +329,9 @@ def test_monitor_recovers_seq_from_stale_manifest_after_unclean_restart(tmp_path
     manifest = json.loads(publisher.manifest_path.read_text())
     manifest["last_seq"] = 3
     publisher.manifest_path.write_text(json.dumps(manifest) + "\n")
-    publisher.current_events_path.write_text(json.dumps({"seq": 8, "kind": "persisted"}) + "\n")
+    publisher.current_events_path.write_text(
+        publisher._serialize_event_line({"seq": 8, "kind": "persisted"}) + "\n"
+    )
 
     restarted = _make_publisher(tmp_path)
     assert restarted.seq == 8
@@ -343,7 +345,8 @@ def test_monitor_recovery_skips_blank_malformed_and_invalid_utf8_trailing_rows(t
     manifest["last_seq"] = 3
     publisher.manifest_path.write_text(json.dumps(manifest) + "\n")
     publisher.current_events_path.write_bytes(
-        b'{"seq":8,"kind":"persisted"}\n\n{not-json}\n\xff\xfe\n'
+        publisher._serialize_event_line({"seq": 8, "kind": "persisted"}).encode("utf-8")
+        + b"\n\n{not-json}\n\xff\xfe\n"
     )
 
     restarted = _make_publisher(tmp_path)
@@ -352,7 +355,7 @@ def test_monitor_recovery_skips_blank_malformed_and_invalid_utf8_trailing_rows(t
 
 def test_monitor_recovery_reads_oversized_final_row_in_bounded_chunks(tmp_path, monkeypatch):
     publisher = _make_publisher(tmp_path)
-    oversized_row = json.dumps(
+    oversized_row = publisher._serialize_event_line(
         {
             "seq": 42,
             "kind": "persisted",
@@ -361,7 +364,6 @@ def test_monitor_recovery_reads_oversized_final_row_in_bounded_chunks(tmp_path, 
                 * (monitor_publisher_module._CURRENT_EVENTS_REVERSE_READ_BYTES * 2)
             },
         },
-        separators=(",", ":"),
     ).encode("utf-8")
     publisher.current_events_path.write_bytes(oversized_row)
     original_open = open
@@ -398,6 +400,23 @@ def test_monitor_recovery_reads_oversized_final_row_in_bounded_chunks(tmp_path, 
     assert max(read_sizes) <= monitor_publisher_module._CURRENT_EVENTS_REVERSE_READ_BYTES
 
 
+def test_monitor_recovery_accepts_checksummed_crlf_row(tmp_path):
+    publisher = _make_publisher(tmp_path, snapshot_interval_seconds=3600.0)
+    manifest = json.loads(publisher.manifest_path.read_text())
+    manifest["last_seq"] = 3
+    publisher.manifest_path.write_text(json.dumps(manifest) + "\n")
+    publisher.current_events_path.write_bytes(
+        publisher._serialize_event_line({"seq": 8, "kind": "persisted"}).encode("utf-8")
+        + b"\r\n"
+    )
+
+    restarted = _make_publisher(tmp_path, snapshot_interval_seconds=3600.0)
+    event = restarted.record_event("test.after_restart", ("test",), {}, ts=2_000)
+
+    assert restarted.seq == 9
+    assert event["seq"] == 9
+
+
 def test_monitor_restart_does_not_reuse_seq_after_oversized_uncheckpointed_event(tmp_path):
     publisher = _make_publisher(tmp_path, snapshot_interval_seconds=3600.0)
     first = publisher.record_event(
@@ -428,12 +447,24 @@ def test_monitor_recovery_ignores_lower_malformed_marker_after_newer_valid_rows(
     manifest = json.loads(publisher.manifest_path.read_text())
     manifest["last_seq"] = 3
     publisher.manifest_path.write_text(json.dumps(manifest) + "\n")
+    corrupted_trailer = publisher._serialize_event_line(
+        {"seq": 999_999, "kind": "persisted"}
+    ).replace('"kind":"persisted"', '"kind":"tampered"')
+    tampered_trailer_seq = publisher._serialize_event_line(
+        {"seq": 42, "kind": "persisted"}
+    ).replace(',"seq":42}}', ',"seq":9007199254740993}}')
     publisher.current_events_path.write_text(
         "".join(
-            json.dumps({"seq": seq, "kind": "persisted"}) + "\n"
+            publisher._serialize_event_line({"seq": seq, "kind": "persisted"}) + "\n"
             for seq in range(4, 9)
         )
         + '{"seq":3,garbage}\n'
+        + '{"seq":9007199254740993,garbage}\n'
+        + '{"seq":3,"seq":9007199254740993}\n'
+        + corrupted_trailer
+        + "\n"
+        + tampered_trailer_seq
+        + "\n"
     )
 
     restarted = _make_publisher(tmp_path, snapshot_interval_seconds=3600.0)
@@ -441,6 +472,43 @@ def test_monitor_recovery_ignores_lower_malformed_marker_after_newer_valid_rows(
 
     assert restarted.seq == 9
     assert event["seq"] == 9
+
+
+def test_monitor_recovery_ignores_nested_seq_in_torn_event_payload(tmp_path):
+    publisher = _make_publisher(tmp_path, snapshot_interval_seconds=3600.0)
+    manifest = json.loads(publisher.manifest_path.read_text())
+    manifest["last_seq"] = 3
+    publisher.manifest_path.write_text(json.dumps(manifest) + "\n")
+    publisher.current_events_path.write_text(
+        "".join(
+            publisher._serialize_event_line({"seq": seq, "kind": "persisted"}) + "\n"
+            for seq in range(4, 9)
+        )
+        + '{"exchange":"x","kind":"test","payload":{"seq":9007199254740993}'
+    )
+
+    restarted = _make_publisher(tmp_path, snapshot_interval_seconds=3600.0)
+    event = restarted.record_event("test.after_restart", ("test",), {}, ts=2_000)
+
+    assert restarted.seq == 9
+    assert event["seq"] == 9
+
+
+def test_monitor_recovery_uses_envelope_seq_after_nested_payload_seq(tmp_path):
+    publisher = _make_publisher(tmp_path, snapshot_interval_seconds=3600.0)
+    event = publisher.record_event(
+        "test.nested_seq",
+        ("test",),
+        {"seq": 999_999},
+        ts=1_000,
+    )
+    assert event["seq"] == 1
+
+    restarted = _make_publisher(tmp_path, snapshot_interval_seconds=3600.0)
+    next_event = restarted.record_event("test.after_restart", ("test",), {}, ts=2_000)
+
+    assert restarted.seq == 2
+    assert next_event["seq"] == 2
 
 
 def test_monitor_event_rotation_forces_pre_and_post_manifest_checkpoints(tmp_path, monkeypatch):

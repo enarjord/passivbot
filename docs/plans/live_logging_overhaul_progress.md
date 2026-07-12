@@ -7940,8 +7940,9 @@ VPS5 deployment status:
 - Branch: `codex/v8-monitor-manifest-coalescing` from deployed `d1303f55b`.
 - Scope: coalesce ordinary best-effort manifest checkpoints to the existing
   snapshot interval, force checkpoints at lifecycle and rotation boundaries,
-  and recover the maximum current-segment event sequence with a fixed-memory
-  reverse chunk scan when the manifest is stale after an unclean exit.
+  and recover the maximum checksummed current-segment event sequence with a
+  fixed-memory reverse chunk scan when the manifest is stale after an unclean
+  exit.
 - Non-goals: no change to NDJSON append/fsync semantics, lock ordering,
   retention/compression, event payloads, routing, queue/backpressure policy,
   monitor configuration, trading behavior, or lock-holder attribution.

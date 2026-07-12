@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import gzip
+import hashlib
 import errno
 import json
 import logging
@@ -20,6 +21,10 @@ _MONITOR_EVENT_PHASE_TIMING_KEYS = (
     "maintenance_ns",
 )
 _CURRENT_EVENTS_REVERSE_READ_BYTES = 64 * 1024
+_EVENT_RECOVERY_CHECKSUM_BYTES = 16
+_EVENT_RECOVERY_MARKER = b',"_recovery":{"checksum":"'
+_EVENT_RECOVERY_SEQ_SEPARATOR = b'","seq":'
+_EVENT_RECOVERY_TRAILER_MAX_BYTES = 160
 
 
 def _empty_monitor_event_phase_timing() -> dict[str, int]:
@@ -217,8 +222,6 @@ class MonitorPublisher:
     def _max_recoverable_event_seq_in_current_segment(self) -> Optional[int]:
         """Return the maximum recoverable seq without buffering whole rows."""
 
-        seq_marker = b'"seq"'
-
         def iter_line_ranges_reverse(f, file_size: int):
             line_end = file_size
             scan_end = file_size
@@ -239,83 +242,49 @@ class MonitorPublisher:
                 scan_end = scan_start
             yield 0, line_end
 
-        def edge_byte(f, start: int, end: int, *, reverse: bool) -> Optional[int]:
-            if reverse:
-                cursor = end
-                while start < cursor:
-                    read_size = min(_CURRENT_EVENTS_REVERSE_READ_BYTES, cursor - start)
-                    cursor -= read_size
-                    f.seek(cursor)
-                    for value in reversed(f.read(read_size)):
-                        if value not in b" \t\r\n":
-                            return value
-            else:
-                cursor = start
-                while cursor < end:
-                    read_size = min(_CURRENT_EVENTS_REVERSE_READ_BYTES, end - cursor)
-                    f.seek(cursor)
-                    cursor += read_size
-                    for value in f.read(read_size):
-                        if value not in b" \t\r\n":
-                            return value
-            return None
-
-        def parse_seq_value(f, value_offset: int, line_end: int) -> Optional[int]:
-            f.seek(value_offset)
-            raw = f.read(min(64, line_end - value_offset))
-            cursor = 0
-            while cursor < len(raw) and raw[cursor] in b" \t\r\n":
-                cursor += 1
-            if cursor >= len(raw) or raw[cursor] != ord(":"):
-                return None
-            cursor += 1
-            while cursor < len(raw) and raw[cursor] in b" \t\r\n":
-                cursor += 1
-            digit_start = cursor
-            while cursor < len(raw) and 48 <= raw[cursor] <= 57:
-                cursor += 1
-            if digit_start == cursor:
-                return None
-            while cursor < len(raw) and raw[cursor] in b" \t\r\n":
-                cursor += 1
-            if cursor >= len(raw) or raw[cursor] not in b",}":
-                return None
-            return int(raw[digit_start:cursor].strip())
-
         def seq_from_line_range(f, line_start: int, line_end: int) -> Optional[int]:
-            if edge_byte(f, line_start, line_end, reverse=False) != ord("{"):
+            if line_end > line_start:
+                f.seek(line_end - 1)
+                if f.read(1) == b"\r":
+                    line_end -= 1
+            suffix_size = min(_EVENT_RECOVERY_TRAILER_MAX_BYTES, line_end - line_start)
+            if suffix_size <= 0:
                 return None
-            if edge_byte(f, line_start, line_end, reverse=True) != ord("}"):
+            f.seek(line_end - suffix_size)
+            suffix = f.read(suffix_size)
+            marker_idx = suffix.rfind(_EVENT_RECOVERY_MARKER)
+            if marker_idx < 0:
+                return None
+            marker_offset = line_end - suffix_size + marker_idx
+            trailer = suffix[marker_idx + len(_EVENT_RECOVERY_MARKER) :]
+            checksum, separator, seq_tail = trailer.partition(_EVENT_RECOVERY_SEQ_SEPARATOR)
+            if separator != _EVENT_RECOVERY_SEQ_SEPARATOR:
+                return None
+            if len(checksum) != _EVENT_RECOVERY_CHECKSUM_BYTES * 2:
+                return None
+            if not seq_tail.endswith(b"}}"):
+                return None
+            seq_raw = seq_tail[:-2]
+            if not seq_raw or len(seq_raw) > 32 or not seq_raw.isdigit():
                 return None
 
-            # record_event() serializes with sorted keys, so the envelope's
-            # top-level seq marker follows any matching marker in payload.
-            last_seq = None
-            overlap = b""
+            digest = hashlib.blake2b(digest_size=_EVENT_RECOVERY_CHECKSUM_BYTES)
             scan_offset = line_start
-            while scan_offset < line_end:
+            while scan_offset < marker_offset:
                 f.seek(scan_offset)
                 chunk = f.read(
-                    min(_CURRENT_EVENTS_REVERSE_READ_BYTES, line_end - scan_offset)
+                    min(_CURRENT_EVENTS_REVERSE_READ_BYTES, marker_offset - scan_offset)
                 )
-                data = overlap + chunk
-                data_offset = scan_offset - len(overlap)
-                search_offset = 0
-                while True:
-                    marker_idx = data.find(seq_marker, search_offset)
-                    if marker_idx < 0:
-                        break
-                    seq = parse_seq_value(
-                        f,
-                        data_offset + marker_idx + len(seq_marker),
-                        line_end,
-                    )
-                    if seq is not None:
-                        last_seq = seq
-                    search_offset = marker_idx + 1
-                overlap = data[-(len(seq_marker) - 1) :]
+                if not chunk:
+                    return None
+                digest.update(chunk)
                 scan_offset += len(chunk)
-            return last_seq
+            digest.update(b"}")
+            digest.update(b"\0seq:")
+            digest.update(seq_raw)
+            if digest.hexdigest().encode("ascii") != checksum:
+                return None
+            return int(seq_raw)
 
         try:
             with open(self.current_events_path, "rb") as f:
@@ -334,6 +303,28 @@ class MonitorPublisher:
                 exc,
             )
             return None
+
+    def _serialize_event_line(self, envelope: dict) -> str:
+        base_line = json.dumps(
+            envelope,
+            separators=(",", ":"),
+            sort_keys=True,
+            default=_json_default,
+        )
+        seq_text = str(int(envelope["seq"]))
+        digest = hashlib.blake2b(digest_size=_EVENT_RECOVERY_CHECKSUM_BYTES)
+        digest.update(base_line.encode("utf-8"))
+        digest.update(b"\0seq:")
+        digest.update(seq_text.encode("ascii"))
+        checksum = digest.hexdigest()
+        trailer = (
+            ',"_recovery":{"checksum":"'
+            + checksum
+            + '","seq":'
+            + seq_text
+            + "}}"
+        )
+        return base_line[:-1] + trailer
 
     def _build_manifest(self, now_ms: Optional[int] = None) -> dict:
         now_ms = self._now_ms() if now_ms is None else int(now_ms)
@@ -802,12 +793,7 @@ class MonitorPublisher:
                         envelope["symbol"] = str(symbol)
                     if pside is not None:
                         envelope["pside"] = str(pside)
-                    line = json.dumps(
-                        envelope,
-                        separators=(",", ":"),
-                        sort_keys=True,
-                        default=_json_default,
-                    )
+                    line = self._serialize_event_line(envelope)
                     with open(self.current_events_path, "a", encoding="utf-8") as f:
                         f.write(line + "\n")
                 finally:
