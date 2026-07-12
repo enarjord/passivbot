@@ -54,13 +54,12 @@ Estimated completion:
 
 Next action:
 
-1. Complete local validation and independent preflight, then publish one
-   review-worthy attribution PR.
-2. Hold the exact current head until Hermes, Grok 4.5, and CI are green;
-   resolve findings narrowly and require fresh exact-head verdicts after every
-   push.
-3. Merge only after that gate is green, restart the five exact VPS5 bot panes,
-   and use fresh phase metrics to choose the next retention/persistence action.
+1. Hold the active PR's exact current head until Hermes, Grok 4.5, and CI are
+   green; resolve findings narrowly and require fresh exact-head verdicts after
+   every push.
+2. Merge only after that gate is green, then restart the five exact VPS5 bot
+   panes while preserving unrelated processes and local artifacts.
+3. Use fresh phase metrics to choose the next retention/persistence action.
 
 ## Deployed Baseline
 
