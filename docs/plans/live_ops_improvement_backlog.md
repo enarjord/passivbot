@@ -804,6 +804,27 @@ Related detailed plans:
       logging-policy work; connector propagation semantics remain separate
       trading-critical work.
 
+19. [ ] Exact-head semantic review check enforcement.
+    Status: open. The autonomous review loop already re-checks a PR head before
+    posting and avoids duplicate reviews, but its comments and polling cadence
+    are advisory. PR #1205's final recovery head merged between polling wakes
+    before every intended semantic reviewer had independently reviewed that
+    exact head. This is a repository-governance race, not a defect in the merged
+    monitor behavior.
+
+    Target contract: when a semantic reviewer is configured as mandatory, expose
+    its verdict as a GitHub status/check bound to the exact PR head and enforce
+    that check through repository merge protection. Every new head must return
+    the check to pending. Older reviews, comments, or successful checks must not
+    satisfy the new head, and merge readiness must still require all configured
+    current-head review and CI gates.
+
+    Implementation directions: use deterministic metadata polling, preserve
+    reviewer identity plus reviewed SHA when reconciling review history, grant
+    only the GitHub permissions needed to publish the check, and make failure to
+    publish visible without substituting a comment as success. Keep advisory
+    review loops clearly labeled until branch protection enforces the check.
+
 ## Merged Work Log
 
 | Date | Item | PR / Commit | Result | Remaining |

@@ -9,7 +9,8 @@ Open only the contract for the subsystem being changed.
 | Candles, cache continuity, and projections | `candlestick_manager.md` |
 | Fill/PnL ingestion and coverage | `fill_events_manager.md` |
 | Raw versus snapped balance | `balance_routing.md` |
-| Monitor publisher/relay/dashboard | `monitor_relay.md` |
+| Monitor persistence, recovery, rotation, retention | `monitor_persistence.md` |
+| Monitor relay/dashboard | `monitor_relay.md` |
 | Structured live events | `live_events.md` and `../generated/live_event_registry.md` |
 | Trailing diagnostics tool | `trailing_diagnostics.md` |
 | Strategy schema and Rust runtime | `strategy_runtime.md` |
