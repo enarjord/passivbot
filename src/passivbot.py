@@ -10962,6 +10962,15 @@ class Passivbot:
         if not visible_blocks:
             return
         detail_limit = 3
+        emit_blocked_event = getattr(
+            self, "_emit_entry_min_effective_cost_blocked_event", None
+        )
+        pipeline = getattr(self, "_live_event_pipeline", None)
+        structured_console_available = bool(
+            callable(emit_blocked_event)
+            and Passivbot._live_event_console_available(self)
+            and getattr(pipeline, "console_sink", None) is not None
+        )
         for symbol, pside, block in visible_blocks[:detail_limit]:
             balance = float(block.get("balance", 0.0) or 0.0)
             effective_limit = float(block.get("effective_limit", 0.0) or 0.0)
@@ -10972,13 +10981,14 @@ class Passivbot:
                 block.get("projected_initial_cost", 0.0) or 0.0
             )
             effective_min_cost = float(block.get("effective_min_cost", 0.0) or 0.0)
-            logging.info(
-                "[entry] initial entry blocked by min effective cost | %s %s notional wanted/required=%.6f/%.6f action=skip_create docs=docs/configuration.md#filter_by_min_effective_cost",
-                Passivbot._log_symbol(symbol),
-                pside,
-                projected_initial_cost,
-                effective_min_cost,
-            )
+            if not structured_console_available:
+                logging.info(
+                    "[entry] initial entry blocked by min effective cost | %s %s notional wanted/required=%.6f/%.6f action=skip_create docs=docs/configuration.md#filter_by_min_effective_cost",
+                    Passivbot._log_symbol(symbol),
+                    pside,
+                    projected_initial_cost,
+                    effective_min_cost,
+                )
             logging.debug(
                 "[entry] initial entry min effective cost detail | symbol=%s pside=%s projected_initial_cost=%.6f required_effective_min_cost=%.6f balance=%.6f effective_limit=%.6f entry_initial_qty_pct=%.6f next_steps=increase_balance_or_reduce_bot.%s.n_positions_or_increase_per_slot_sizing override=live.filter_by_min_effective_cost=false caution=override_may_create_exchange-min-sized_entries",
                 Passivbot._log_symbol(symbol),
@@ -10990,15 +11000,16 @@ class Passivbot:
                 entry_initial_qty_pct,
                 pside,
             )
-            self._emit_entry_min_effective_cost_blocked_event(
-                symbol=symbol,
-                pside=pside,
-                projected_initial_cost=projected_initial_cost,
-                effective_min_cost=effective_min_cost,
-                balance=balance,
-                effective_limit=effective_limit,
-                entry_initial_qty_pct=entry_initial_qty_pct,
-            )
+            if callable(emit_blocked_event):
+                emit_blocked_event(
+                    symbol=symbol,
+                    pside=pside,
+                    projected_initial_cost=projected_initial_cost,
+                    effective_min_cost=effective_min_cost,
+                    balance=balance,
+                    effective_limit=effective_limit,
+                    entry_initial_qty_pct=entry_initial_qty_pct,
+                )
         if len(eligible_blocks) > detail_limit:
             examples = ",".join(
                 f"{Passivbot._log_symbol(symbol)}:{pside}"

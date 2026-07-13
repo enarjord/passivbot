@@ -22,23 +22,24 @@ Estimated completion:
 
 ## Active Review Slice
 
-- Branch: `codex/v8-entry-distance-console-migration`.
-- Base: `4bf7706d79f2e2404f785195973d13ea49c31efb`, merged PR #1218.
-- Slice: initial-entry distance-gate console ownership.
-- Triggering evidence: fresh post-PR #1218 Binance, GateIO, and OKX logs showed
-  the throttled legacy `[entry] initial entry staged but not placed` line
-  immediately followed by structured `entry.initial_distance_gate_blocked`
-  output for the same symbol and decision.
-- Scope: make the existing structured blocked/cleared events the sole normal
-  console/text owners when an enabled live-event pipeline has an actual console
-  sink. Preserve the legacy INFO summaries when the emitter, pipeline, or
-  console sink is unavailable. Enqueue or sink degradation must remain
-  single-owner and surface through pipeline health rather than trigger dynamic
-  dual writing.
-- Behavior boundary: preserve the one-hour blocked-event/INFO throttle,
-  repeated DEBUG diagnostics, gate state transitions, order filtering,
-  configuration validation, payloads, routes, exchange calls, and all trading
-  behavior.
+- Branch: `codex/v8-min-effective-cost-console-migration`.
+- Base: `23d9e72af180e8636de7f80cdff8178a60e61937`, merged PR #1219.
+- Slice: min-effective-cost entry-block console ownership.
+- Triggering evidence: fresh post-PR #1219 GateIO logs showed legacy `[entry]
+  initial entry blocked by min effective cost` immediately followed by the
+  structured `entry.min_effective_cost_blocked` line for the same SOL-long
+  decision.
+- Scope: make each existing structured min-effective-cost block event the sole
+  normal console/text owner when an enabled live-event pipeline has an actual
+  console sink. Preserve legacy detail when the emitter, pipeline, or console
+  sink is unavailable. Keep the distinct throttled aggregate summary for more
+  than three eligible blocks and every DEBUG detail/suppression line. Enqueue or
+  sink degradation must remain single-owner and surface through pipeline health
+  rather than trigger dynamic dual writing.
+- Behavior boundary: preserve Rust-owned diagnostics, side eligibility,
+  unchanged-set and per-symbol throttles, detail limit, aggregate cadence and
+  counts, payloads, routes, configuration, order filtering, exchange calls,
+  and all trading behavior.
 - Publication state, exact head, mergeability, CI, and current-head reviewer
   verdicts: query live GitHub metadata; do not embed self-invalidating values.
 - Expected VPS action: restart and observe only after this slice merges;
@@ -46,12 +47,27 @@ Estimated completion:
 
 ## Deployed Baseline
 
-- Remote `v8`: `4bf7706d79f2e2404f785195973d13ea49c31efb`, PR #1218
-- VPS5 repository: `4bf7706d79f2e2404f785195973d13ea49c31efb`, PR #1218; exact
+- Remote `v8`: `23d9e72af180e8636de7f80cdff8178a60e61937`, PR #1219
+- VPS5 repository: `23d9e72af180e8636de7f80cdff8178a60e61937`, PR #1219; exact
   tracked status clean and expected untracked artifacts preserved
-- VPS5 expected bots: five; running with PR #1218 restart PIDs
-  `908144/908203/908262/908320/908382`; pane PIDs unchanged; unrelated
+- VPS5 expected bots: five; running with PR #1219 restart PIDs
+  `912288/912290/912292/912293/912294`; pane PIDs unchanged; unrelated
   `misc:0.0` remains PID `434835`
+- PR #1219 merged and deployed at
+  `23d9e72af180e8636de7f80cdff8178a60e61937`. It made structured
+  initial-entry distance-gate blocked/cleared events own normal console/text
+  output while preserving throttles, state transitions, fallback, and trading
+  behavior. All five old bot processes exited naturally after one signal round;
+  KuCoin was last at 45 seconds, with no force action. Pane PIDs and unrelated
+  `misc:0.0` PID `434835` remained unchanged. Immediate and settled smoke
+  reports were `ok=true`. The final bounded report recorded `299/299` remote
+  calls, `32/32` account-critical calls, six successful fill refreshes, five
+  config-valid processes, zero hard/log/monitor/pipeline failures, and complete
+  required work for every active HSL replay. A transient `D` state cleared; the
+  final exact process sample showed all five bots `R` and a clean repository.
+  Natural blocked events on Binance, KuCoin, GateIO, and OKX appeared only as
+  the structured line, proving runtime single ownership without manufacturing
+  a transition.
 - PR #1218 merged and deployed at
   `4bf7706d79f2e2404f785195973d13ea49c31efb`. It made the structured
   ambiguous-cancel terminal warning the sole normal console/text owner and
@@ -486,11 +502,12 @@ retention wall-time tail is host descheduling/contention evidence and does not
 justify another retention optimization.
 
 PR #1215's fill console/text migration, PR #1216's periodic health console
-migration, PR #1217's execution-loop error-burst console migration, and PR
-#1218's ambiguous-cancel console migration are merged and deployed. PR #1216
-proved compact periodic-health ownership and sane RSS across four natural
-lines. Fresh Binance, GateIO, and OKX entry-distance-gate sequences exposed the
-next adjacent legacy/structured duplicate, tracked by the active slice above.
+migration, PR #1217's execution-loop error-burst console migration, PR #1218's
+ambiguous-cancel console migration, and PR #1219's entry-distance-gate console
+migration are merged and deployed. Natural post-PR #1219 blocked events on four
+bots proved structured single ownership. The same fresh GateIO log exposed the
+next adjacent legacy/structured duplicate for min-effective-cost entry blocks,
+tracked by the active slice above.
 
 Do not create progress-only PRs or resume unrelated logging work from stale
 worktrees.

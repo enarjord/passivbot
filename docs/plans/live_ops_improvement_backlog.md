@@ -545,6 +545,18 @@ Related detailed plans:
     structured events already carry the bounded operator context and should own
     normal console/text output while retaining legacy fallback when structured
     console infrastructure is absent.
+    PR #1219 removed that entry-distance duplicate and deployed at
+    `23d9e72af180e8636de7f80cdff8178a60e61937`. Its final bounded smoke was
+    green with five config-valid bots, `299/299` remote and `32/32`
+    account-critical calls, six fill refreshes, complete required HSL replay
+    work, zero hard/log/monitor/pipeline failures, and a clean repository.
+    Natural post-deploy blocked events on Binance, KuCoin, GateIO, and OKX
+    proved structured single ownership. The same GateIO log exposed a separate
+    duplicate: legacy `initial entry blocked by min effective cost` immediately
+    followed by structured `entry.min_effective_cost_blocked`. The per-block
+    structured event should own normal detail output when its console sink is
+    available, while the distinct throttled aggregate summary for larger block
+    sets remains operator-visible.
 
     Work log:
     - 2026-06-30: Added value-safe `live-smoke-report` HSL status projections

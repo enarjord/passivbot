@@ -69,6 +69,25 @@ Retuned goal boundary:
 
 VPS5 deployment status:
 
+- PR #1219 merged to `v8` as
+  `23d9e72af180e8636de7f80cdff8178a60e61937` after exact-head Hermes and
+  Grok 4.5 green reviews plus green CI. Structured initial-entry distance-gate
+  blocked/cleared events now own normal console/text output, with legacy
+  fallback retained and all throttle/state/order behavior unchanged. VPS5
+  gracefully restarted only the five exact bot panes; every old process exited
+  naturally after one signal round, KuCoin was last at 45 seconds, and no force
+  action was needed. Pane PIDs and unrelated `misc:0.0` PID `434835` were
+  unchanged; new bot PIDs were `912288/912290/912292/912293/912294`. Immediate
+  and settled smoke reports were green. The final bounded report recorded
+  `299/299` remote calls, `32/32` account-critical calls, six successful fill
+  refreshes, five config-valid processes, zero hard/log/monitor/pipeline
+  failures, and complete required work for every active HSL replay. A transient
+  `D` state cleared and the final exact sample showed all five bots `R` at a
+  clean repository. Natural blocked events on Binance, KuCoin, GateIO, and OKX
+  appeared only as structured lines, proving runtime single ownership. Fresh
+  GateIO output then exposed the next duplicate: legacy min-effective-cost
+  detail immediately followed by structured
+  `entry.min_effective_cost_blocked`.
 - PR #1218 merged to `v8` as
   `4bf7706d79f2e2404f785195973d13ea49c31efb` after exact-head Hermes and
   Grok 4.5 green reviews plus green CI. Structured ambiguous-cancel terminal
