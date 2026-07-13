@@ -4,6 +4,11 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Realized-loss gate blocks now use their structured warning as the sole normal
+  console/text line when a live-event console sink is available. The legacy
+  warning remains the fallback; gate decisions, diagnostics, and throttling are
+  unchanged.
+
 - Detailed min-effective-cost entry blocks now use their structured events as
   the sole normal console/text lines when a live-event console sink is
   available. Legacy detail lines remain the fallback, while the distinct

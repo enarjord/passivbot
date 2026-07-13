@@ -69,6 +69,21 @@ Retuned goal boundary:
 
 VPS5 deployment status:
 
+- PR #1220 merged to `v8` as
+  `9773889ecb8a396bec31e1e11c326aed9fa2cbe7` after exact-head Hermes and
+  Grok 4.5 green reviews plus green CI. Structured min-effective-cost block
+  events now own normal per-block console/text output while legacy fallback,
+  DEBUG detail, aggregate summaries, throttles, and trading behavior remain
+  unchanged. The five old bot processes exited naturally within ten seconds
+  after one signal round; pane PIDs and unrelated `misc:0.0` PID `434835`
+  remained unchanged. New PIDs are `913308/913310/913312/913314/913316`.
+  Fresh two-minute smoke windows were green; the final recorded `279/279`
+  remote calls, `44/44` account-critical calls, seven successful fill
+  refreshes, five config-valid processes, zero hard/log/pipeline failures, and
+  complete required protective work for every active HSL replay. A sampled OKX
+  `D` state cleared and stayed `R` across five consecutive checks. Natural
+  GateIO output showed only the structured min-effective-cost line, with no
+  adjacent legacy warning.
 - PR #1219 merged to `v8` as
   `23d9e72af180e8636de7f80cdff8178a60e61937` after exact-head Hermes and
   Grok 4.5 green reviews plus green CI. Structured initial-entry distance-gate
