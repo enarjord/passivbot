@@ -19,6 +19,7 @@ from live.event_bus import (
     EventTags,
     EventTypes,
     ListEventSink,
+    LiveEvent,
     LiveEventPipeline,
     ReasonCodes,
 )
@@ -9520,16 +9521,19 @@ def test_execution_loop_error_burst_summarizes_repeated_endpoints(caplog, monkey
     assert "action=restart_backoff_continues" in messages[0]
 
 
-def test_execution_loop_error_burst_emits_structured_health_event(caplog, monkeypatch):
+def test_execution_loop_error_burst_structured_console_owns_warning(caplog, monkeypatch):
     sink = ListEventSink()
+    console_sink = ListEventSink()
     bot = Passivbot.__new__(Passivbot)
     bot.exchange = "kucoin"
     bot.user = "kucoin_01"
     bot.bot_id = "bot_1"
+    bot.live_event_console_enabled = True
     bot._live_event_current_cycle_id = "cy_error"
     bot._live_event_pipeline = LiveEventPipeline(
         structured_sinks=[sink],
         monitor_sinks=[],
+        console_sink=console_sink,
     )
     now = {"value": 1_000_000}
     monkeypatch.setattr(passivbot_module, "utc_ms", lambda: now["value"])
@@ -9550,6 +9554,11 @@ def test_execution_loop_error_burst_emits_structured_health_event(caplog, monkey
         bot._log_execution_loop_error_burst(fields)
 
     assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    assert not [
+        record
+        for record in caplog.records
+        if "[health] execution loop error burst" in record.message
+    ]
     events = sink.events
     assert len(events) == 1
     event = events[0]
@@ -9573,7 +9582,130 @@ def test_execution_loop_error_burst_emits_structured_health_event(caplog, monkey
     assert "SECRET" not in event.data["latest_error"]
     assert "SIG" not in event.data["latest_error"]
     assert "[redacted]" in event.data["latest_error"]
+    assert console_sink.events == [event]
     assert bot._live_event_pipeline.close(timeout=2.0) is True
+
+
+@pytest.mark.parametrize(
+    ("console_enabled", "has_pipeline"),
+    [
+        (True, False),
+        (False, True),
+        (True, True),
+    ],
+)
+def test_execution_loop_error_burst_uses_legacy_fallback_without_structured_console(
+    caplog, monkeypatch, console_enabled, has_pipeline
+):
+    bot = Passivbot.__new__(Passivbot)
+    bot.live_event_console_enabled = console_enabled
+    structured_sink = ListEventSink()
+    if has_pipeline:
+        bot._live_event_pipeline = LiveEventPipeline(
+            structured_sinks=[structured_sink],
+            monitor_sinks=[],
+            console_sink=None,
+        )
+    now = {"value": 1_000_000}
+    monkeypatch.setattr(passivbot_module, "utc_ms", lambda: now["value"])
+    fields = {
+        "error_type": "RequestTimeout",
+        "status": "-",
+        "code": "-",
+        "error": "kucoinfutures GET https://api-futures.kucoin.com/api/v1/account-overview",
+    }
+
+    with caplog.at_level(logging.WARNING):
+        for _ in range(3):
+            bot._log_execution_loop_error_burst(fields)
+
+    messages = [record.message for record in caplog.records]
+    assert len(messages) == 1
+    assert "[health] execution loop error burst" in messages[0]
+    if has_pipeline:
+        assert bot._live_event_pipeline.flush(timeout=2.0) is True
+        assert [event.reason_code for event in structured_sink.events] == [
+            ReasonCodes.EXECUTION_LOOP_ERROR_BURST
+        ]
+        assert bot._live_event_pipeline.close(timeout=2.0) is True
+
+
+@pytest.mark.parametrize("emitter_state", ["missing", "noncallable"])
+def test_execution_loop_error_burst_uses_legacy_fallback_when_emitter_unavailable(
+    caplog, monkeypatch, emitter_state
+):
+    bot = Passivbot.__new__(Passivbot)
+    bot.live_event_console_enabled = True
+    if emitter_state == "missing":
+        monkeypatch.delattr(Passivbot, "_emit_execution_loop_error_burst_event")
+    else:
+        bot._emit_execution_loop_error_burst_event = object()
+    bot._live_event_pipeline = LiveEventPipeline(
+        structured_sinks=[],
+        monitor_sinks=[],
+        console_sink=ListEventSink(),
+    )
+    now = {"value": 1_000_000}
+    monkeypatch.setattr(passivbot_module, "utc_ms", lambda: now["value"])
+    fields = {
+        "error_type": "RequestTimeout",
+        "status": "-",
+        "code": "-",
+        "error": "kucoinfutures GET https://api-futures.kucoin.com/api/v1/account-overview",
+    }
+
+    with caplog.at_level(logging.WARNING):
+        for _ in range(3):
+            bot._log_execution_loop_error_burst(fields)
+
+    messages = [record.message for record in caplog.records]
+    assert len(messages) == 1
+    assert "[health] execution loop error burst" in messages[0]
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
+
+
+def test_execution_loop_error_burst_keeps_structured_console_owner_when_queue_is_full(
+    caplog, monkeypatch
+):
+    console_sink = ListEventSink()
+    pipeline = LiveEventPipeline(
+        structured_sinks=[ListEventSink()],
+        monitor_sinks=[],
+        console_sink=console_sink,
+        queue_maxsize=1,
+        start=False,
+    )
+    pipeline.emit(LiveEvent(EventTypes.CYCLE_STARTED))
+    bot = Passivbot.__new__(Passivbot)
+    bot.live_event_console_enabled = True
+    bot._live_event_pipeline = pipeline
+    now = {"value": 1_000_000}
+    monkeypatch.setattr(passivbot_module, "utc_ms", lambda: now["value"])
+    fields = {
+        "error_type": "RequestTimeout",
+        "status": "-",
+        "code": "-",
+        "error": "kucoinfutures GET https://api-futures.kucoin.com/api/v1/account-overview",
+    }
+
+    with caplog.at_level(logging.WARNING):
+        for _ in range(3):
+            bot._log_execution_loop_error_burst(fields)
+
+    assert not [
+        record
+        for record in caplog.records
+        if "[health] execution loop error burst" in record.message
+    ]
+    assert [
+        event.reason_code
+        for event in console_sink.events
+        if event.reason_code == ReasonCodes.EXECUTION_LOOP_ERROR_BURST
+    ] == [ReasonCodes.EXECUTION_LOOP_ERROR_BURST]
+    assert pipeline.health_snapshot()["event_dropped_total"] == 1
+    pipeline._queue.get_nowait()
+    pipeline._queue.task_done()
+    assert pipeline.close(timeout=2.0) is True
 
 
 def test_staged_refresh_timing_summary_aggregates_routine_fast_refreshes(

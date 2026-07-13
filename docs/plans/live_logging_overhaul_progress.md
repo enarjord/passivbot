@@ -69,6 +69,17 @@ Retuned goal boundary:
 
 VPS5 deployment status:
 
+- PR #1216 merged to `v8` as
+  `13e6e484cf20b1265f2b4874b14ff7ab32d10bfd` and was deployed after the exact
+  review gate. The five new bot PIDs were
+  `905310/905312/905314/905315/905316`; pane PIDs and unrelated `misc:0.0` PID
+  `434835` were unchanged. Settled smoke returned `ok=true`, `414/414` remote
+  calls, `70/70` account-critical calls, five green process/config checks,
+  `12/12` fill refreshes, and the exact repository head with zero tracked
+  changes. Four natural
+  periodic health lines proved compact single ownership and sane RSS. A natural
+  KuCoin error burst exposed a separate structured/legacy duplicate, retained
+  as the next focused console-ownership slice.
 - PR #1215 merged to `v8` as
   `6af983c539d00acd802aabad66044868afd45aa4` after exact-head Hermes and
   Grok 4.5 approval plus green CI. Structured `fill.ingested` events now own
