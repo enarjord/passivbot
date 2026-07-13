@@ -4,6 +4,13 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Monitor retention now builds the same complete recursive inventory with one
+  healthy-path `os.scandir` traversal and one explicit `DirEntry.stat` per
+  visited entry, avoiding the duplicate directory scans performed by the prior
+  `Path.rglob` path. A failed directory scan gets one bounded immediate retry;
+  persistent errors still isolate that subtree. Cadence, symlink handling,
+  protected paths, accounting, and deletion policy are unchanged.
+
 - Periodic structured health summaries now split monitor retention work into
   fixed inventory, age-unlink, and byte-cap-unlink timings plus bounded work
   counts. Live smoke and performance reports project the same fields without

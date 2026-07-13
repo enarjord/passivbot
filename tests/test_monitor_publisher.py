@@ -2,6 +2,7 @@ import errno
 import json
 import logging
 import os
+import stat
 import threading
 from pathlib import Path
 
@@ -807,13 +808,14 @@ def test_monitor_publisher_event_timing_records_retention_phases_for_due_run(
     _write_retention_file(cap_candidate, size=10, mtime_ms=100_000)
     expected_entries_visited = len(list(publisher.root.rglob("*")))
     clock = {"ns": 0}
-    original_rglob = Path.rglob
+    original_scandir = monitor_publisher_module.os.scandir
     original_unlink = Path.unlink
+    inventory_scans = []
 
-    def timed_rglob(path, pattern):
-        for entry in original_rglob(path, pattern):
-            yield entry
-            clock["ns"] += 1_000
+    def timed_scandir(path):
+        inventory_scans.append(Path(path))
+        clock["ns"] += 1_000
+        return original_scandir(path)
 
     def timed_unlink(path, *args, **kwargs):
         if path == old_candidate:
@@ -823,7 +825,7 @@ def test_monitor_publisher_event_timing_records_retention_phases_for_due_run(
         return original_unlink(path, *args, **kwargs)
 
     monkeypatch.setattr(monitor_publisher_module.time, "monotonic_ns", lambda: clock["ns"])
-    monkeypatch.setattr(Path, "rglob", timed_rglob)
+    monkeypatch.setattr(monitor_publisher_module.os, "scandir", timed_scandir)
     monkeypatch.setattr(Path, "unlink", timed_unlink)
 
     event, timing = publisher._record_event_timed(
@@ -832,8 +834,9 @@ def test_monitor_publisher_event_timing_records_retention_phases_for_due_run(
 
     assert event is not None
     assert timing["retention_run_count"] == 1
-    assert timing["retention_inventory_ns_total"] == expected_entries_visited * 1_000
-    assert timing["retention_inventory_ns_max"] == expected_entries_visited * 1_000
+    expected_inventory_ns = len(inventory_scans) * 1_000
+    assert timing["retention_inventory_ns_total"] == expected_inventory_ns
+    assert timing["retention_inventory_ns_max"] == expected_inventory_ns
     assert timing["retention_age_unlink_ns_total"] == 2_000
     assert timing["retention_age_unlink_ns_max"] == 2_000
     assert timing["retention_cap_unlink_ns_total"] == 3_000
@@ -903,12 +906,11 @@ def test_monitor_publisher_event_timing_keeps_completed_phases_after_cap_unlink_
     candidate = publisher.events_dir / "candidate.ndjson"
     _write_retention_file(candidate, size=10, mtime_ms=1)
     clock = {"ns": 0}
-    original_rglob = Path.rglob
+    original_scandir = monitor_publisher_module.os.scandir
 
-    def timed_rglob(path, pattern):
-        for entry in original_rglob(path, pattern):
-            yield entry
-            clock["ns"] += 1_000
+    def timed_scandir(path):
+        clock["ns"] += 1_000
+        return original_scandir(path)
 
     def fail_candidate_unlink(path, *args, **_kwargs):
         if path == candidate:
@@ -917,7 +919,7 @@ def test_monitor_publisher_event_timing_keeps_completed_phases_after_cap_unlink_
         raise AssertionError(f"unexpected unlink: {path}")
 
     monkeypatch.setattr(monitor_publisher_module.time, "monotonic_ns", lambda: clock["ns"])
-    monkeypatch.setattr(Path, "rglob", timed_rglob)
+    monkeypatch.setattr(monitor_publisher_module.os, "scandir", timed_scandir)
     monkeypatch.setattr(Path, "unlink", fail_candidate_unlink)
 
     event, timing = publisher._record_event_timed(
@@ -987,6 +989,113 @@ def test_monitor_retention_counts_nested_unknown_files_but_never_deletes_them(tm
 
     assert not direct_candidate.exists()
     assert nested_unknown.exists()
+
+
+def test_monitor_retention_inventory_tolerates_entry_disappearing_before_stat(
+    tmp_path, monkeypatch
+):
+    publisher = _make_publisher(tmp_path, retain_days=-1.0)
+    disappeared = publisher.events_dir / "disappeared.ndjson"
+    _write_retention_file(disappeared, size=10, mtime_ms=1)
+    original_scandir = monitor_publisher_module.os.scandir
+    original_unlink = Path.unlink
+    entries_visited = []
+
+    class DisappearedEntry:
+        def __init__(self, entry):
+            self._entry = entry
+
+        def __getattr__(self, name):
+            return getattr(self._entry, name)
+
+        def stat(self, *_args, **_kwargs):
+            original_unlink(disappeared)
+            raise FileNotFoundError(disappeared)
+
+    class WrappedScandir:
+        def __init__(self, iterator):
+            self._iterator = iterator
+
+        def __enter__(self):
+            self._iterator.__enter__()
+            return self
+
+        def __exit__(self, *args):
+            return self._iterator.__exit__(*args)
+
+        def __iter__(self):
+            for entry in self._iterator:
+                if Path(entry.path) == disappeared:
+                    yield DisappearedEntry(entry)
+                else:
+                    yield entry
+
+    def wrapped_scandir(path):
+        return WrappedScandir(original_scandir(path))
+
+    monkeypatch.setattr(monitor_publisher_module.os, "scandir", wrapped_scandir)
+    total_bytes, candidates = publisher._retention_inventory(
+        on_entry=lambda: entries_visited.append(None)
+    )
+
+    assert not disappeared.exists()
+    assert total_bytes >= 0
+    assert all(path != disappeared for path, _size, _mtime in candidates)
+    assert len(entries_visited) > 0
+
+
+def test_monitor_retention_inventory_tolerates_directory_disappearing_before_scan(
+    tmp_path, monkeypatch
+):
+    publisher = _make_publisher(tmp_path, retain_days=-1.0)
+    vanished_dir = publisher.root / "unknown" / "vanished"
+    nested = vanished_dir / "nested.bin"
+    _write_retention_file(nested, size=10, mtime_ms=1)
+    original_scandir = monitor_publisher_module.os.scandir
+    vanished_scan_attempts = []
+
+    def disappearing_scandir(path):
+        if Path(path) == vanished_dir:
+            vanished_scan_attempts.append(None)
+            if nested.exists():
+                nested.unlink()
+                vanished_dir.rmdir()
+            raise FileNotFoundError(vanished_dir)
+        return original_scandir(path)
+
+    monkeypatch.setattr(monitor_publisher_module.os, "scandir", disappearing_scandir)
+    total_bytes, candidates = publisher._retention_inventory()
+
+    assert not vanished_dir.exists()
+    assert len(vanished_scan_attempts) == 2
+    assert total_bytes >= 0
+    assert all(path != nested for path, _size, _mtime in candidates)
+
+
+def test_monitor_retention_inventory_retries_one_transient_directory_scan_error(
+    tmp_path, monkeypatch
+):
+    publisher = _make_publisher(tmp_path, retain_days=-1.0)
+    candidate = publisher.events_dir / "candidate.ndjson"
+    nested_unknown = publisher.root / "unknown" / "nested" / "keep.bin"
+    _write_retention_file(candidate, size=11, mtime_ms=1)
+    _write_retention_file(nested_unknown, size=13, mtime_ms=2)
+    original_scandir = monitor_publisher_module.os.scandir
+    root_scan_attempts = []
+
+    def transient_scandir(path):
+        if Path(path) == publisher.root:
+            root_scan_attempts.append(None)
+            if len(root_scan_attempts) == 1:
+                raise OSError("transient scan failure")
+        return original_scandir(path)
+
+    monkeypatch.setattr(monitor_publisher_module.os, "scandir", transient_scandir)
+    total_bytes, candidates = publisher._retention_inventory()
+
+    assert len(root_scan_attempts) == 2
+    assert total_bytes >= candidate.stat().st_size + nested_unknown.stat().st_size
+    assert [path for path, _size, _mtime in candidates] == [candidate]
 
 
 def test_monitor_retention_age_disappearance_updates_total_before_cap(tmp_path, monkeypatch):
@@ -1069,6 +1178,53 @@ def test_monitor_retention_counts_and_unlinks_direct_file_symlink_only(tmp_path)
     assert (outside_dir / "nested.bin").exists()
 
 
+def test_monitor_retention_scandir_inventory_matches_pathlib_semantics(tmp_path):
+    publisher = _make_publisher(tmp_path, retain_days=-1.0)
+    direct_events = publisher.events_dir / "events.ndjson"
+    direct_history = publisher.history_dir / "history.ndjson"
+    nested_unknown = publisher.root / "unknown" / "nested" / "keep.bin"
+    _write_retention_file(direct_events, size=11, mtime_ms=10)
+    _write_retention_file(direct_history, size=13, mtime_ms=10)
+    _write_retention_file(nested_unknown, size=17, mtime_ms=10)
+    outside_file = tmp_path / "outside.bin"
+    outside_file.write_bytes(b"outside")
+    file_link = publisher.checkpoints_dir / "linked.bin"
+    file_link.symlink_to(outside_file)
+    outside_dir = tmp_path / "outside-dir"
+    outside_dir.mkdir()
+    (outside_dir / "not-managed.bin").write_bytes(b"outside-dir")
+    (publisher.root / "linked-dir").symlink_to(outside_dir, target_is_directory=True)
+    protected = {
+        publisher.manifest_path,
+        publisher.state_latest_path,
+        publisher.current_events_path,
+        *publisher._current_history_paths.values(),
+    }
+    candidate_dirs = {
+        publisher.events_dir,
+        publisher.history_dir,
+        publisher.checkpoints_dir,
+    }
+    expected_total = 0
+    expected_candidates = []
+    for path in publisher.root.rglob("*"):
+        try:
+            file_stat = path.stat()
+        except FileNotFoundError:
+            continue
+        if not stat.S_ISREG(file_stat.st_mode):
+            continue
+        expected_total += file_stat.st_size
+        if path.parent in candidate_dirs and path not in protected:
+            expected_candidates.append((path, file_stat.st_size, file_stat.st_mtime))
+    expected_candidates.sort(key=lambda candidate: candidate[2])
+
+    total_bytes, candidates = publisher._retention_inventory()
+
+    assert total_bytes == expected_total
+    assert candidates == expected_candidates
+
+
 def test_monitor_retention_byte_cap_deletes_surviving_candidates_oldest_first(tmp_path, monkeypatch):
     publisher = _make_publisher(tmp_path, retain_days=-1.0)
     oldest = publisher.history_dir / "oldest.ndjson"
@@ -1098,35 +1254,53 @@ def test_monitor_retention_uses_one_recursive_traversal_when_over_byte_cap(tmp_p
     _write_retention_file(candidate, size=10, mtime_ms=1)
     total_bytes = sum(path.stat().st_size for path in publisher.root.rglob("*") if path.is_file())
     publisher.max_total_bytes = total_bytes - candidate.stat().st_size
-    original_rglob = Path.rglob
-    original_iterdir = Path.iterdir
-    original_stat = Path.stat
-    traversals = []
-    candidate_directory_listings = []
-    regular_files = {path for path in publisher.root.rglob("*") if path.is_file()}
-    regular_file_stats = {path: 0 for path in regular_files}
+    visited_paths = set(publisher.root.rglob("*"))
+    expected_directories = {
+        publisher.root,
+        *(path for path in visited_paths if path.is_dir() and not path.is_symlink()),
+    }
+    original_scandir = monitor_publisher_module.os.scandir
+    scanned_directories = []
+    entry_stat_counts = {path: 0 for path in visited_paths}
 
-    def count_root_rglob(path, pattern):
-        if path == publisher.root and pattern == "*":
-            traversals.append(path)
-        return original_rglob(path, pattern)
+    class CountingEntry:
+        def __init__(self, entry):
+            self._entry = entry
 
-    def count_candidate_directory_listing(path):
-        if path in {publisher.events_dir, publisher.history_dir, publisher.checkpoints_dir}:
-            candidate_directory_listings.append(path)
-        return original_iterdir(path)
+        def __getattr__(self, name):
+            return getattr(self._entry, name)
 
-    def count_regular_file_stat(path, *args, **kwargs):
-        if path in regular_file_stats:
-            regular_file_stats[path] += 1
-        return original_stat(path, *args, **kwargs)
+        def stat(self, *args, **kwargs):
+            entry_stat_counts[Path(self._entry.path)] += 1
+            return self._entry.stat(*args, **kwargs)
 
-    monkeypatch.setattr(Path, "rglob", count_root_rglob)
-    monkeypatch.setattr(Path, "iterdir", count_candidate_directory_listing)
-    monkeypatch.setattr(Path, "stat", count_regular_file_stat)
+    class CountingScandir:
+        def __init__(self, iterator):
+            self._iterator = iterator
+
+        def __enter__(self):
+            self._iterator.__enter__()
+            return self
+
+        def __exit__(self, *args):
+            return self._iterator.__exit__(*args)
+
+        def __iter__(self):
+            return (CountingEntry(entry) for entry in self._iterator)
+
+    def count_scandir(path):
+        scanned_directories.append(Path(path))
+        return CountingScandir(original_scandir(path))
+
+    def fail_legacy_traversal(*_args, **_kwargs):
+        raise AssertionError("legacy Path traversal used")
+
+    monkeypatch.setattr(monitor_publisher_module.os, "scandir", count_scandir)
+    monkeypatch.setattr(Path, "rglob", fail_legacy_traversal)
+    monkeypatch.setattr(Path, "iterdir", fail_legacy_traversal)
     publisher._prune_retention(now_ms=100_000)
 
-    assert traversals == [publisher.root]
-    assert candidate_directory_listings == []
-    assert set(regular_file_stats.values()) == {1}
+    assert set(scanned_directories) == expected_directories
+    assert len(scanned_directories) == len(expected_directories)
+    assert set(entry_stat_counts.values()) == {1}
     assert not candidate.exists()
