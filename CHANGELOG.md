@@ -4,6 +4,11 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Initial-entry distance-gate blocked and cleared transitions now use their
+  structured events as the sole normal console/text lines when a live-event
+  console sink is available. The throttled legacy summaries remain the
+  fallback; gate state, eligibility, and order filtering are unchanged.
+
 - Ambiguous-cancel terminal states now use the structured execution warning as
   the sole normal console/text line when a live-event console sink is
   available, with an explicit full-account-confirmation cue in its compact

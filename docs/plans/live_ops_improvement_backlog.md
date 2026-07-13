@@ -532,6 +532,19 @@ Related detailed plans:
     exposed the next adjacent duplicate: structured
     `execution.cancel_ambiguous_terminal` followed by the legacy full-account
     confirmation summary for the same symbol.
+    PR #1218 removed that ambiguous-cancel duplicate and added the compact
+    full-account-confirmation cue without changing cancellation or confirmation
+    behavior. It merged and deployed at
+    `4bf7706d79f2e2404f785195973d13ea49c31efb`; the settled two-minute smoke was
+    green with five matching bots, `472/472` remote calls, `25/25`
+    account-critical calls, `7/7` fill refreshes, four complete active HSL
+    replays, zero hard/log/monitor/pipeline failures, and a clean repository.
+    Fresh Binance, GateIO, and OKX logs then exposed the next adjacent duplicate:
+    legacy `[entry] initial entry staged but not placed` immediately followed by
+    structured `entry.initial_distance_gate_blocked`. The blocked and cleared
+    structured events already carry the bounded operator context and should own
+    normal console/text output while retaining legacy fallback when structured
+    console infrastructure is absent.
 
     Work log:
     - 2026-06-30: Added value-safe `live-smoke-report` HSL status projections

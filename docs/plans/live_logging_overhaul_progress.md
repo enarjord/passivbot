@@ -69,6 +69,22 @@ Retuned goal boundary:
 
 VPS5 deployment status:
 
+- PR #1218 merged to `v8` as
+  `4bf7706d79f2e2404f785195973d13ea49c31efb` after exact-head Hermes and
+  Grok 4.5 green reviews plus green CI. Structured ambiguous-cancel terminal
+  warnings now own normal console/text output and include the compact
+  full-account-confirmation cue; the legacy fallback remains for runtimes
+  without a usable structured console. VPS5 gracefully restarted only the five
+  exact bot panes; old processes exited naturally, pane PIDs and unrelated
+  `misc:0.0` PID `434835` were unchanged, and new bot PIDs were
+  `908144/908203/908262/908320/908382`. The settled two-minute smoke was green
+  with `472/472` remote calls, `25/25` account-critical calls, `7/7` fill
+  refreshes, all five processes/configs matched, zero hard/log/monitor/pipeline
+  failures, four complete active HSL replays, and an exact clean repository. A
+  transient `D` state cleared within 20 seconds. No natural ambiguous cancel
+  occurred after restart; fresh Binance, GateIO, and OKX logs instead exposed
+  the next adjacent duplicate between legacy and structured initial-entry
+  distance-gate blocked lines.
 - PR #1217 merged to `v8` as
   `6599fba08cadffac99ce6a1ce2bfd3f58ca3fa15` after exact-head Hermes and
   Grok 4.5 green reviews plus green CI. The structured execution-loop
