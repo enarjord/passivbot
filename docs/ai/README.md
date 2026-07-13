@@ -27,6 +27,7 @@ current task.
 | Autonomous PR review | `runbooks/pr_review.md` |
 | Crash discovery and stress-suite generation | `runbooks/crash_discovery.md` |
 | Structured live events | `features/live_events.md`, `generated/live_event_registry.md` |
+| Monitor persistence, recovery, rotation, retention | `features/monitor_persistence.md` |
 | Feature-specific change | `features/README.md` and the relevant feature contract |
 | Historical incident rationale | relevant file under `case_studies/` |
 

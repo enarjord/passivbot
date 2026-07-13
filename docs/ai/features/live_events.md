@@ -104,6 +104,18 @@ must not alter filtering or existing-position handling.
 - `authoritative_reason_code(surface)` produces `authoritative_<surface>`.
 - `sink_failed_reason_code(name)` produces `<name>_sink_failed`.
 
+## Pipeline Timing Semantics
+
+`health.summary` pipeline timings describe observed work; they are not a partition that callers may
+sum indiscriminately. Parent service and maintenance timings are inclusive, while child phase
+timings attribute selected work inside those parents and may be non-exhaustive. Counts represent
+actual attempts or runs. A failed attempt remains counted and contributes measured elapsed time;
+work that was not attempted has a zero count.
+
+Consumers must distinguish an observed zero from unavailable historical evidence. Producers omit
+fields that were not captured by that runtime version, and reports preserve that absence rather than
+converting it to zero. Totals may be summed across compatible windows; maxima remain maxima.
+
 ## Validation
 
 - Generated registry values match code.

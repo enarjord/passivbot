@@ -11,7 +11,7 @@ commands run, outcomes, environmental limitations, and any intentionally unteste
 | Python orchestration | Focused pytest for changed callers and failure paths; compile/lint if configured |
 | Rust strategy/order/risk | Focused Rust tests, extension rebuild/verification, Python parity tests, bounded real backtest when behaviorally relevant |
 | Exchange adapter | Offline fixtures and request-construction tests; documented exchange contract review; no authenticated calls without approval |
-| Config/schema | Loader/default/roundtrip tests, affected example configs, CLI parse or bounded smoke |
+| Config/schema | Loader/default/roundtrip tests, parity across every canonical default-producing surface, affected example configs, CLI parse or bounded smoke |
 | Candles/data preparation | Gap/coverage/integrity tests and a bounded local-cache or CLI smoke when performance/integration changes |
 | Fill/PnL/risk readiness | Coverage, degraded/unavailable, recovery, and restart/parity tests |
 | Logging/monitor/events | Routing, boundedness, redaction, sink-failure isolation, event-registry parity, fake-live when useful |

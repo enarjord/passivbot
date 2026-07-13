@@ -29,6 +29,11 @@ Persist only compact state outside the repository, such as:
 Do not persist credentials, full comments, diffs, test output, or exchange data. GitHub and fetched
 repository refs remain authoritative.
 
+Scope review state by reviewer identity and head SHA. One reviewer's approval does not supersede
+another's request for changes, and old-head verdicts do not apply to a new head. Preserve reviewer,
+head, decision, and submission time instead of collapsing review history. Ambiguity wakes semantic
+review rather than being resolved by the polling tier.
+
 ### Cost-Aware Polling
 
 Unchanged polls are deterministic metadata work, not semantic-review work:
@@ -66,6 +71,20 @@ change does not duplicate semantic review. Do not approve drafts unless explicit
 
 After a changed head, review the delta and then the integrated full PR. Post one current verdict;
 do not repeat unchanged approvals or status narration.
+
+### Enforceable Review Gates
+
+When repository policy makes semantic review mandatory, publish the result as a status or check
+bound to the exact head SHA and enforce that check with repository merge protection. Comments,
+polling cadence, and reviewer narration alone cannot prevent a new or unreviewed head from merging.
+
+- A new head makes the semantic-review check pending until that head is reviewed.
+- A stale check, comment, or approval cannot satisfy the current-head gate.
+- The posting path re-fetches the head immediately before publishing the verdict.
+- Merge readiness still requires every configured review and CI gate to be green for the same head.
+
+If the automation cannot publish or enforce a SHA-bound check, describe it as advisory monitoring,
+not a mandatory merge gate.
 
 ## Fresh Isolated Checkout
 
