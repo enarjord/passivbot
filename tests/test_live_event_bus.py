@@ -609,6 +609,10 @@ def test_pipeline_aggregates_and_resets_monitor_publisher_phase_timing(monkeypat
                         "retention_run_count": 1,
                         "retention_ns_total": 4_000_000,
                         "retention_ns_max": 4_000_000,
+                        "retention_thread_cpu_ns_total": 1_500_000,
+                        "retention_thread_cpu_ns_max": 1_500_000,
+                        "retention_non_cpu_ns_total": 2_500_000,
+                        "retention_non_cpu_ns_max": 2_500_000,
                         "retention_inventory_ns_total": 3_000_000,
                         "retention_inventory_ns_max": 3_000_000,
                         "retention_age_filter_ns_total": 1_800_000,
@@ -635,6 +639,10 @@ def test_pipeline_aggregates_and_resets_monitor_publisher_phase_timing(monkeypat
                         "retention_run_count": 0,
                         "retention_ns_total": 0,
                         "retention_ns_max": 0,
+                        "retention_thread_cpu_ns_total": 0,
+                        "retention_thread_cpu_ns_max": 0,
+                        "retention_non_cpu_ns_total": 0,
+                        "retention_non_cpu_ns_max": 0,
                         "retention_inventory_ns_total": 0,
                         "retention_inventory_ns_max": 0,
                         "retention_age_filter_ns_total": 0,
@@ -687,6 +695,10 @@ def test_pipeline_aggregates_and_resets_monitor_publisher_phase_timing(monkeypat
         "event_monitor_publisher_retention_run_count": 1,
         "event_monitor_publisher_retention_ms_total": 4.0,
         "event_monitor_publisher_retention_ms_max": 4.0,
+        "event_monitor_publisher_retention_thread_cpu_ms_total": 1.5,
+        "event_monitor_publisher_retention_thread_cpu_ms_max": 1.5,
+        "event_monitor_publisher_retention_non_cpu_ms_total": 2.5,
+        "event_monitor_publisher_retention_non_cpu_ms_max": 2.5,
         "event_monitor_publisher_retention_inventory_ms_total": 3.0,
         "event_monitor_publisher_retention_inventory_ms_max": 3.0,
         "event_monitor_publisher_retention_age_filter_ms_total": 1.8,
@@ -729,6 +741,10 @@ def test_pipeline_monitor_phase_timing_restores_overlapping_window(monkeypatch):
     pipeline._timing_monitor_publisher_retention_run_count = 3
     pipeline._timing_monitor_publisher_retention_ns_total = 17_000_000
     pipeline._timing_monitor_publisher_retention_ns_max = 9_000_000
+    pipeline._timing_monitor_publisher_retention_thread_cpu_ns_total = 7_000_000
+    pipeline._timing_monitor_publisher_retention_thread_cpu_ns_max = 4_000_000
+    pipeline._timing_monitor_publisher_retention_non_cpu_ns_total = 10_000_000
+    pipeline._timing_monitor_publisher_retention_non_cpu_ns_max = 5_000_000
     pipeline._timing_monitor_publisher_retention_inventory_ns_total = 11_000_000
     pipeline._timing_monitor_publisher_retention_inventory_ns_max = 6_000_000
     pipeline._timing_monitor_publisher_retention_age_filter_ns_total = 8_000_000
@@ -755,6 +771,10 @@ def test_pipeline_monitor_phase_timing_restores_overlapping_window(monkeypatch):
     pipeline._timing_monitor_publisher_retention_run_count = 7
     pipeline._timing_monitor_publisher_retention_ns_total = 23_000_000
     pipeline._timing_monitor_publisher_retention_ns_max = 14_000_000
+    pipeline._timing_monitor_publisher_retention_thread_cpu_ns_total = 8_000_000
+    pipeline._timing_monitor_publisher_retention_thread_cpu_ns_max = 5_000_000
+    pipeline._timing_monitor_publisher_retention_non_cpu_ns_total = 15_000_000
+    pipeline._timing_monitor_publisher_retention_non_cpu_ns_max = 9_000_000
     pipeline._timing_monitor_publisher_retention_inventory_ns_total = 17_000_000
     pipeline._timing_monitor_publisher_retention_inventory_ns_max = 10_000_000
     pipeline._timing_monitor_publisher_retention_age_filter_ns_total = 13_000_000
@@ -788,6 +808,10 @@ def test_pipeline_monitor_phase_timing_restores_overlapping_window(monkeypatch):
     assert restored["event_monitor_publisher_retention_run_count"] == 7
     assert restored["event_monitor_publisher_retention_ms_total"] == 23.0
     assert restored["event_monitor_publisher_retention_ms_max"] == 14.0
+    assert restored["event_monitor_publisher_retention_thread_cpu_ms_total"] == 8.0
+    assert restored["event_monitor_publisher_retention_thread_cpu_ms_max"] == 5.0
+    assert restored["event_monitor_publisher_retention_non_cpu_ms_total"] == 15.0
+    assert restored["event_monitor_publisher_retention_non_cpu_ms_max"] == 9.0
     assert restored["event_monitor_publisher_retention_inventory_ms_total"] == 17.0
     assert restored["event_monitor_publisher_retention_inventory_ms_max"] == 10.0
     assert restored["event_monitor_publisher_retention_age_filter_ms_total"] == 13.0
@@ -839,6 +863,10 @@ def test_pipeline_custom_monitor_sink_reports_zero_internal_phase_timing():
         "event_monitor_publisher_retention_run_count": 0,
         "event_monitor_publisher_retention_ms_total": 0.0,
         "event_monitor_publisher_retention_ms_max": 0.0,
+        "event_monitor_publisher_retention_thread_cpu_ms_total": 0.0,
+        "event_monitor_publisher_retention_thread_cpu_ms_max": 0.0,
+        "event_monitor_publisher_retention_non_cpu_ms_total": 0.0,
+        "event_monitor_publisher_retention_non_cpu_ms_max": 0.0,
         "event_monitor_publisher_retention_inventory_ms_total": 0.0,
         "event_monitor_publisher_retention_inventory_ms_max": 0.0,
         "event_monitor_publisher_retention_age_filter_ms_total": 0.0,

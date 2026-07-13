@@ -67,6 +67,10 @@ _MONITOR_PUBLISHER_PHASE_TIMING_KEYS = (
     "retention_run_count",
     "retention_ns_total",
     "retention_ns_max",
+    "retention_thread_cpu_ns_total",
+    "retention_thread_cpu_ns_max",
+    "retention_non_cpu_ns_total",
+    "retention_non_cpu_ns_max",
     "retention_inventory_ns_total",
     "retention_inventory_ns_max",
     "retention_age_filter_ns_total",
@@ -1945,6 +1949,10 @@ class _EventPipelineTimingWindow:
     monitor_publisher_retention_run_count: int
     monitor_publisher_retention_ns_total: int
     monitor_publisher_retention_ns_max: int
+    monitor_publisher_retention_thread_cpu_ns_total: int
+    monitor_publisher_retention_thread_cpu_ns_max: int
+    monitor_publisher_retention_non_cpu_ns_total: int
+    monitor_publisher_retention_non_cpu_ns_max: int
     monitor_publisher_retention_inventory_ns_total: int
     monitor_publisher_retention_inventory_ns_max: int
     monitor_publisher_retention_age_filter_ns_total: int
@@ -1985,6 +1993,10 @@ class _EventPipelineSinkWriteTiming:
     monitor_publisher_retention_run_count: int = 0
     monitor_publisher_retention_ns_total: int = 0
     monitor_publisher_retention_ns_max: int = 0
+    monitor_publisher_retention_thread_cpu_ns_total: int = 0
+    monitor_publisher_retention_thread_cpu_ns_max: int = 0
+    monitor_publisher_retention_non_cpu_ns_total: int = 0
+    monitor_publisher_retention_non_cpu_ns_max: int = 0
     monitor_publisher_retention_inventory_ns_total: int = 0
     monitor_publisher_retention_inventory_ns_max: int = 0
     monitor_publisher_retention_age_filter_ns_total: int = 0
@@ -2051,6 +2063,14 @@ class _EventPipelineSinkWriteTiming:
         for source_key, field_prefix in (
             ("manifest_checkpoint_ns", "monitor_publisher_manifest_checkpoint_ns"),
             ("retention_ns", "monitor_publisher_retention_ns"),
+            (
+                "retention_thread_cpu_ns",
+                "monitor_publisher_retention_thread_cpu_ns",
+            ),
+            (
+                "retention_non_cpu_ns",
+                "monitor_publisher_retention_non_cpu_ns",
+            ),
             ("retention_inventory_ns", "monitor_publisher_retention_inventory_ns"),
             ("retention_age_filter_ns", "monitor_publisher_retention_age_filter_ns"),
             ("retention_cap_prune_ns", "monitor_publisher_retention_cap_prune_ns"),
@@ -2126,6 +2146,10 @@ class LiveEventPipeline:
         self._timing_monitor_publisher_retention_run_count = 0
         self._timing_monitor_publisher_retention_ns_total = 0
         self._timing_monitor_publisher_retention_ns_max = 0
+        self._timing_monitor_publisher_retention_thread_cpu_ns_total = 0
+        self._timing_monitor_publisher_retention_thread_cpu_ns_max = 0
+        self._timing_monitor_publisher_retention_non_cpu_ns_total = 0
+        self._timing_monitor_publisher_retention_non_cpu_ns_max = 0
         self._timing_monitor_publisher_retention_inventory_ns_total = 0
         self._timing_monitor_publisher_retention_inventory_ns_max = 0
         self._timing_monitor_publisher_retention_age_filter_ns_total = 0
@@ -2265,6 +2289,18 @@ class LiveEventPipeline:
                 monitor_publisher_retention_ns_max=int(
                     self._timing_monitor_publisher_retention_ns_max
                 ),
+                monitor_publisher_retention_thread_cpu_ns_total=int(
+                    self._timing_monitor_publisher_retention_thread_cpu_ns_total
+                ),
+                monitor_publisher_retention_thread_cpu_ns_max=int(
+                    self._timing_monitor_publisher_retention_thread_cpu_ns_max
+                ),
+                monitor_publisher_retention_non_cpu_ns_total=int(
+                    self._timing_monitor_publisher_retention_non_cpu_ns_total
+                ),
+                monitor_publisher_retention_non_cpu_ns_max=int(
+                    self._timing_monitor_publisher_retention_non_cpu_ns_max
+                ),
                 monitor_publisher_retention_inventory_ns_total=int(
                     self._timing_monitor_publisher_retention_inventory_ns_total
                 ),
@@ -2341,6 +2377,10 @@ class LiveEventPipeline:
                 self._timing_monitor_publisher_retention_run_count = 0
                 self._timing_monitor_publisher_retention_ns_total = 0
                 self._timing_monitor_publisher_retention_ns_max = 0
+                self._timing_monitor_publisher_retention_thread_cpu_ns_total = 0
+                self._timing_monitor_publisher_retention_thread_cpu_ns_max = 0
+                self._timing_monitor_publisher_retention_non_cpu_ns_total = 0
+                self._timing_monitor_publisher_retention_non_cpu_ns_max = 0
                 self._timing_monitor_publisher_retention_inventory_ns_total = 0
                 self._timing_monitor_publisher_retention_inventory_ns_max = 0
                 self._timing_monitor_publisher_retention_age_filter_ns_total = 0
@@ -2444,6 +2484,18 @@ class LiveEventPipeline:
             "event_monitor_publisher_retention_ms_max": self._timing_ms(
                 timing_window.monitor_publisher_retention_ns_max
             ),
+            "event_monitor_publisher_retention_thread_cpu_ms_total": self._timing_ms(
+                timing_window.monitor_publisher_retention_thread_cpu_ns_total
+            ),
+            "event_monitor_publisher_retention_thread_cpu_ms_max": self._timing_ms(
+                timing_window.monitor_publisher_retention_thread_cpu_ns_max
+            ),
+            "event_monitor_publisher_retention_non_cpu_ms_total": self._timing_ms(
+                timing_window.monitor_publisher_retention_non_cpu_ns_total
+            ),
+            "event_monitor_publisher_retention_non_cpu_ms_max": self._timing_ms(
+                timing_window.monitor_publisher_retention_non_cpu_ns_max
+            ),
             "event_monitor_publisher_retention_inventory_ms_total": self._timing_ms(
                 timing_window.monitor_publisher_retention_inventory_ns_total
             ),
@@ -2545,6 +2597,8 @@ class LiveEventPipeline:
             "monitor_publisher_manifest_checkpoint_ns_total",
             "monitor_publisher_retention_run_count",
             "monitor_publisher_retention_ns_total",
+            "monitor_publisher_retention_thread_cpu_ns_total",
+            "monitor_publisher_retention_non_cpu_ns_total",
             "monitor_publisher_retention_inventory_ns_total",
             "monitor_publisher_retention_age_filter_ns_total",
             "monitor_publisher_retention_cap_prune_ns_total",
@@ -2569,6 +2623,8 @@ class LiveEventPipeline:
             "monitor_publisher_maintenance_ns_max",
             "monitor_publisher_manifest_checkpoint_ns_max",
             "monitor_publisher_retention_ns_max",
+            "monitor_publisher_retention_thread_cpu_ns_max",
+            "monitor_publisher_retention_non_cpu_ns_max",
             "monitor_publisher_retention_inventory_ns_max",
             "monitor_publisher_retention_age_filter_ns_max",
             "monitor_publisher_retention_cap_prune_ns_max",
@@ -2813,6 +2869,8 @@ class LiveEventPipeline:
                             sink_write_timing.monitor_publisher_retention_ns_max,
                         )
                         for field_name in (
+                            "monitor_publisher_retention_thread_cpu_ns_total",
+                            "monitor_publisher_retention_non_cpu_ns_total",
                             "monitor_publisher_retention_inventory_ns_total",
                             "monitor_publisher_retention_age_filter_ns_total",
                             "monitor_publisher_retention_cap_prune_ns_total",
@@ -2831,6 +2889,8 @@ class LiveEventPipeline:
                                 + int(getattr(sink_write_timing, field_name)),
                             )
                         for field_name in (
+                            "monitor_publisher_retention_thread_cpu_ns_max",
+                            "monitor_publisher_retention_non_cpu_ns_max",
                             "monitor_publisher_retention_inventory_ns_max",
                             "monitor_publisher_retention_age_filter_ns_max",
                             "monitor_publisher_retention_cap_prune_ns_max",

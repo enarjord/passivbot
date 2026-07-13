@@ -1,6 +1,6 @@
 # Live Logging Overhaul Current Status
 
-Updated: 2026-07-12.
+Updated: 2026-07-13.
 
 This is the compact operational source for the active logging-overhaul loop.
 Read it before the historical progress ledger. Update it whenever the active
@@ -22,54 +22,74 @@ Estimated completion:
 
 ## Active Review Slice
 
-- Branch: `codex/v8-monitor-retention-loop-timing`
-- Base: `f68f10c4a3754c5603cfd7d97e5bc3e5a861f8cc`, PR #1212
-- Triggering evidence: 59 post-PR #1212 due runs visited 99,393 entries.
-  Inventory normalized per-window per-run p50/p95/max was
-  `766.188/1763.343/2254.624ms`, and inventory maximum fell about 78% from the
-  PR #1211 baseline's `10241.787ms`. The overall retention maximum nevertheless
-  remained `9772.147ms`; its window exposed only `1309.122ms` inventory maximum
-  and millisecond-scale unlink maxima. Existing independently aggregated maxima
-  cannot identify which unmeasured loop contained that run's remaining wall time.
-- Scope: add fixed whole-loop `age_filter` and `cap_prune` total/max timing.
-  `age_filter` contains classification, survivor construction, and nested age
-  unlinks. `cap_prune` contains the cap decision, survivor traversal, and nested
-  cap unlinks, including the under-cap return. Preserve the existing nested
-  unlink timings and project all fields through transactional event-pipeline
-  health windows, smoke reports, and performance reports.
+- Branch: `codex/v8-monitor-retention-cpu-attribution`
+- Base: `157fe0db6e2ec1348d47ff62155ae7a6f2d2b4df`, PR #1213
+- Triggering evidence: four post-PR #1213 health windows contained 54 natural
+  retention runs. Retention total/max was `60803.819/11066.952ms`; inventory
+  total/max was `59485.603/11039.628ms`; and age-filter total/max was only
+  `528.574/44.451ms`. The preceding six-run sample instead contained one
+  `8460ms` age-filter outlier with only `0.107ms` age-unlink work. The long tail
+  therefore moves between phases while VPS5 is CPU-saturated rather than
+  identifying a stable phase algorithm to optimize. The 54-run sample visited
+  90,972 entries, found 90,404 candidates, deleted 10 files by age and none by
+  cap, and retained zero drops, sink errors, degraded counts, final queue depth,
+  or unfinished work.
+- Scope: add paired whole-retention thread-CPU and directly computed non-CPU
+  total/max timing. Each due run captures wall and thread CPU clocks at the same
+  boundaries and computes `max(0, wall - thread_cpu)` for that run before
+  aggregation. Project both fields through transactional event-pipeline health
+  windows, smoke reports, and performance reports. Do not infer non-CPU time by
+  subtracting independently aggregated maxima.
 - Behavior boundary: additive diagnostics only. Preserve retention cadence,
   `last_retention_ms`, lock scope, traversal, accounting, candidate order and
   deletion domain, age/cap policy, error handling, configuration, and every
   order/risk/trading behavior. Do not add caching, staggering, workers,
-  thresholds, verdicts, or derived maximum arithmetic.
-- Validation: due/not-due and under-cap phase boundaries, nested unlink
-  containment, failure/finally retention, event-pipeline aggregation/reset/
-  restore, historical absence behavior, smoke/performance projections,
-  integrated monitor regressions, Python compilation, `git diff --check`,
-  silent-handling audit, and independent preflight.
+  thresholds, verdicts, or phase optimizations.
+- Validation: paired deterministic clock behavior, due/not-due boundaries,
+  failure/finally retention, event-pipeline aggregation/reset/restore,
+  historical absence behavior, smoke/performance projections, integrated
+  monitor regressions, Python compilation, `git diff --check`, silent-handling
+  audit, and independent preflight.
 - Publication state, exact head, mergeability, CI, and current-head reviewer
   verdicts: query live GitHub metadata; do not embed self-invalidating values.
 - Expected VPS action: exact five-bot graceful restart, immediate and settled
-  smoke, then at least 30 naturally emitted due runs comparing whole-loop
-  age/cap attribution with retention and process I/O-wait evidence.
+  smoke, then at least 30 naturally emitted due runs comparing paired retention
+  wall, thread-CPU, and directly computed non-CPU evidence. Select no retention
+  phase optimization unless the paired evidence supports it.
 
 Next action:
 
-1. Hold PR #1213's exact current head until Hermes, Grok 4.5, and CI are green.
+1. Hold PR #1214's exact current head until Hermes, Grok 4.5, and CI are green.
 2. Resolve findings narrowly and require fresh exact-head verdicts after every
    push.
-3. Merge, perform the exact five-bot graceful VPS restart, run immediate and
-   settled smoke, then collect at least 30 natural due runs. Select no further
-   persistence change unless correlated phase and process evidence justifies it.
+3. Merge only when the complete gate is green, then perform the exact five-bot
+   graceful VPS5 restart, immediate and settled smoke, and at least 30 natural
+   due runs comparing paired wall, thread-CPU, and non-CPU evidence.
 
 ## Deployed Baseline
 
-- Remote `v8`: `f68f10c4a3754c5603cfd7d97e5bc3e5a861f8cc`, PR #1212
-- VPS5 repository: `f68f10c4a3754c5603cfd7d97e5bc3e5a861f8cc`, PR #1212; tracked
+- Remote `v8`: `157fe0db6e2ec1348d47ff62155ae7a6f2d2b4df`, PR #1213
+- VPS5 repository: `157fe0db6e2ec1348d47ff62155ae7a6f2d2b4df`, PR #1213; tracked
   status clean; expected untracked artifacts were preserved
-- VPS5 expected bots: five; running with PR #1212 restart PIDs
-  `894485/894487/894489/894491/894493`;
+- VPS5 expected bots: five; running with PR #1213 restart PIDs
+  `899640/899643/899647/899648/899650`;
   unrelated `misc:0.0` remains PID `434835`
+- PR #1213 merged after exact-head Hermes and Grok 4.5 approval plus green CI.
+  VPS5 fast-forwarded cleanly and gracefully restarted only the five exact bot
+  panes; every old bot exited naturally, including KuCoin after about 132
+  seconds, with no force kill. Pane PIDs and unrelated `misc:0.0` PID `434835`
+  were preserved. A real KuCoin timeout correctly made one settled smoke red;
+  after it aged out, the final two-minute smoke was hard-green with `403/403`
+  remote and `67/67` account-critical calls, all five expected processes, zero
+  hard/log/monitor failures, no active HSL replay, and a clean tracked
+  repository. A later quiet check found all five bots `R` at the deployed head.
+- Four fresh health windows contained 54 natural retention runs with
+  `60803.819ms` total and an `11066.952ms` maximum. Inventory accounted for
+  `59485.603ms` total and an `11039.628ms` maximum, while age-filter total/max
+  was `528.574/44.451ms`. Combined with the earlier isolated age-filter outlier,
+  this proves the wall-time tail moves between phases under VPS5 contention;
+  it does not justify another phase optimization. Drops, sink errors, degraded
+  counts, final queue depth, and unfinished work remained zero.
 - PR #1212 merged after exact-head Hermes and Grok 4.5 approval plus green CI.
   VPS5 fast-forwarded cleanly and gracefully restarted only the five exact bot
   panes; every old bot exited naturally, and pane PIDs plus unrelated
@@ -421,14 +441,16 @@ PR #1207's position console projection and PR #1208's one-pass monitor
 retention inventory are also merged and deployed with their behavior boundaries
 preserved. PR #1210's balance console transition is merged, deployed, and
 validated from natural balance changes on all five bots. PR #1211's retention
-phase attribution and PR #1212's direct `os.scandir` inventory are merged and
-deployed. PR #1212 reduced inventory maximum about 78%, while a remaining
-overall retention maximum lacked whole-loop age/cap attribution.
+phase attribution, PR #1212's direct `os.scandir` inventory, and PR #1213's
+whole-loop age/cap attribution are merged and deployed. The long retention
+wall-time tail moves between phases under VPS5 contention and does not justify
+another phase optimization.
 
-The active slice adds only whole-loop `age_filter` and `cap_prune` timing while
-preserving nested unlink timing and all retention behavior. Keep fill formatting
-separate: its legacy and event-routed lines currently overlap and require an
-explicit migration contract for timestamps, pending PnL, and bulk summaries.
+The active slice adds paired whole-retention thread-CPU and directly computed
+non-CPU timing for every due run while preserving all retention behavior. Keep
+fill formatting separate: its legacy and event-routed lines currently overlap
+and require an explicit migration contract for timestamps, pending PnL, and
+bulk summaries.
 
 Do not create progress-only PRs or resume unrelated logging work from stale
 worktrees.
