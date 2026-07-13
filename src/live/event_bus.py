@@ -1290,6 +1290,22 @@ def _format_balance_console_delta(value: float | None) -> str:
     return rendered
 
 
+def _format_balance_console_transition(
+    previous: float | None, current: float | None, delta: float | None
+) -> str:
+    if (
+        previous is None
+        or current is None
+        or not math.isfinite(previous)
+        or not math.isfinite(current)
+    ):
+        return "unavailable"
+    return (
+        f"{_format_console_number(previous)} -> {_format_console_number(current)} "
+        f"({_format_balance_console_delta(delta)})"
+    )
+
+
 def _format_position_console_percentage(value: float | None) -> str:
     if value is None or not math.isfinite(value):
         return "-"
@@ -1355,21 +1371,21 @@ def _format_console_position_changed(event: LiveEvent) -> str:
 
 def _format_console_balance_changed(event: LiveEvent) -> str:
     data = event.data if isinstance(event.data, Mapping) else {}
-    previous_raw = _format_console_number(_data_number(data, "previous_balance_raw"))
-    raw = _format_console_number(_data_number(data, "balance_raw"))
-    raw_delta = _format_balance_console_delta(_data_number(data, "balance_raw_delta"))
-    previous_snapped = _format_console_number(
-        _data_number(data, "previous_balance_snapped")
+    raw_transition = _format_balance_console_transition(
+        _data_number(data, "previous_balance_raw"),
+        _data_number(data, "balance_raw"),
+        _data_number(data, "balance_raw_delta"),
     )
-    snapped = _format_console_number(_data_number(data, "balance_snapped"))
-    snapped_delta = _format_balance_console_delta(
-        _data_number(data, "balance_snapped_delta")
+    snapped_transition = _format_balance_console_transition(
+        _data_number(data, "previous_balance_snapped"),
+        _data_number(data, "balance_snapped"),
+        _data_number(data, "balance_snapped_delta"),
     )
     equity = _format_console_number(_data_number(data, "equity"))
     source = _format_console_label(_data_str(data, "source"))
     return (
-        f"[balance] {'raw':<5}{previous_raw} -> {raw} ({raw_delta}) | "
-        f"{'snap':<5}{previous_snapped} -> {snapped} ({snapped_delta}) | "
+        f"[balance] {'raw':<5}{raw_transition} | "
+        f"{'snap':<5}{snapped_transition} | "
         f"equity={equity} source={source}"
     )
 

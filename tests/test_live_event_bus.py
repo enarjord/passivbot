@@ -2175,7 +2175,65 @@ def test_console_format_balance_changed_handles_missing_and_nonfinite_values():
 
     rendered = format_console_event(event)
 
-    assert rendered == "[balance] raw  - -> - (-) | snap - -> - (-) | equity=- source=-"
+    assert rendered == (
+        "[balance] raw  unavailable | snap unavailable | equity=- source=-"
+    )
+    assert "nan" not in rendered.lower()
+    assert "inf" not in rendered.lower()
+
+
+@pytest.mark.parametrize(
+    ("previous_raw", "raw"),
+    [(None, 100.0), (100.0, None), (float("nan"), 100.0), (100.0, float("inf"))],
+)
+def test_console_format_balance_changed_does_not_infer_partial_raw_transition(
+    previous_raw, raw
+):
+    event = LiveEvent(
+        EventTypes.BALANCE_CHANGED,
+        data={
+            "previous_balance_raw": previous_raw,
+            "balance_raw": raw,
+            "balance_raw_delta": 5.0,
+            "previous_balance_snapped": 90.0,
+            "balance_snapped": 91.0,
+            "balance_snapped_delta": 1.0,
+            "equity": 100.0,
+            "source": "REST",
+        },
+    )
+
+    assert format_console_event(event) == (
+        "[balance] raw  unavailable | snap 90 -> 91 (+1) | "
+        "equity=100 source=REST"
+    )
+
+
+@pytest.mark.parametrize(
+    "delta",
+    [None, float("nan"), float("inf"), float("-inf")],
+)
+def test_console_format_balance_changed_keeps_known_transition_when_delta_unavailable(delta):
+    event = LiveEvent(
+        EventTypes.BALANCE_CHANGED,
+        data={
+            "previous_balance_raw": 100.0,
+            "balance_raw": 105.0,
+            "balance_raw_delta": delta,
+            "previous_balance_snapped": 200.0,
+            "balance_snapped": 205.0,
+            "balance_snapped_delta": delta,
+            "equity": 105.0,
+            "source": "REST",
+        },
+    )
+
+    rendered = format_console_event(event)
+
+    assert rendered == (
+        "[balance] raw  100 -> 105 (-) | snap 200 -> 205 (-) | "
+        "equity=105 source=REST"
+    )
     assert "nan" not in rendered.lower()
     assert "inf" not in rendered.lower()
 
