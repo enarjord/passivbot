@@ -47,10 +47,10 @@ Estimated completion:
 
 Next action:
 
-1. Complete integrated validation and publish one review-worthy balance-console
-   PR.
-2. Hold its exact current head until Hermes, Grok 4.5, and CI are green; resolve
-   findings narrowly and require fresh exact-head verdicts after every push.
+1. Hold the active balance-console PR's exact current head until Hermes,
+   Grok 4.5, and CI are green.
+2. Resolve findings narrowly and require fresh exact-head verdicts after every
+   push.
 3. Merge and validate the exact five-bot VPS restart using naturally emitted
    balance changes only.
 
