@@ -54,12 +54,11 @@ Estimated completion:
 
 Next action:
 
-1. Implement and validate the bounded periodic health console migration.
-2. Publish one review-worthy PR, then hold its exact current head for Hermes,
-   Grok 4.5, and CI.
-3. Resolve findings narrowly and require fresh exact-head verdicts after every
-   push. Merge only when the complete gate is green, then perform the exact
-   five-bot graceful VPS5 restart and immediate/settled smoke.
+1. Hold PR #1216 at its exact current head for Hermes, Grok 4.5, and CI.
+2. Resolve findings narrowly and require fresh exact-head verdicts after every
+   push.
+3. Merge only when the complete gate is green, then perform the exact five-bot
+   graceful VPS5 restart and immediate/settled smoke.
 
 ## Deployed Baseline
 
@@ -470,10 +469,11 @@ showed only `13.774%` thread CPU and `86.226%` direct non-CPU time. The long
 retention wall-time tail is host descheduling/contention evidence and does not
 justify another retention optimization.
 
-The active slice migrates normal fill console/text output to the structured
-event projection. Preserve durable per-fill events, historical timestamps,
-pending versus known PnL, bounded traceability, and one-line bulk summaries;
-keep the stdlib line only as fallback when the event console is unavailable.
+PR #1215's fill console/text migration is merged and deployed. The active slice
+is PR #1216's periodic health console migration: preserve durable health events,
+timing snapshot transactions, scheduler cadence, and error-burst formatting;
+render one compact normal health line and keep the stdlib line only as fallback
+when the structured console sink is unavailable.
 
 Do not create progress-only PRs or resume unrelated logging work from stale
 worktrees.
