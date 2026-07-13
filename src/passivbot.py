@@ -649,6 +649,9 @@ class Passivbot:
         live_event_emitters.emit_fills_refresh_summary_event
     )
     _emit_fill_ingested_event = live_event_emitters.emit_fill_ingested_event
+    _emit_fills_ingested_summary_event = (
+        live_event_emitters.emit_fills_ingested_summary_event
+    )
     _emit_risk_mode_changed_event = live_event_emitters.emit_risk_mode_changed_event
     _emit_realized_loss_gate_blocked_event = (
         live_event_emitters.emit_realized_loss_gate_blocked_event
@@ -10542,25 +10545,37 @@ class Passivbot:
             fill_event_net_pnl(ev) for ev in new_events if not fill_event_pnl_pending(ev)
         )
 
-        if len(new_events) > 20:
+        batch_summary = len(new_events) > 20
+        pending_count = 0
+        known_pnl_count = 0
+        total_pnl = 0.0
+        if batch_summary:
             # Truncate to summary
             pending_count = sum(1 for ev in new_events if fill_event_pnl_pending(ev))
+            known_pnl_count = len(new_events) - pending_count
             total_pnl = sum(
                 fill_event_net_pnl(ev) for ev in new_events if not fill_event_pnl_pending(ev)
             )
-            pnl_sign = "+" if total_pnl >= 0 else ""
-            pending_suffix = f", pnl_pending={pending_count}" if pending_count else ""
-            logging.info(
-                "[fill] %d fills, pnl=%s%s USDT%s",
-                len(new_events),
-                pnl_sign,
-                round_dynamic(total_pnl, 3),
-                pending_suffix,
-            )
-        else:
-            # Log each event
-            for event in sorted(new_events, key=lambda e: e.timestamp):
-                logging.info(self._log_fill_event(event))
+        if not self._live_event_console_available():
+            if batch_summary:
+                if known_pnl_count:
+                    pnl_sign = "+" if total_pnl >= 0 else ""
+                    pnl_label = f"{pnl_sign}{round_dynamic(total_pnl, 3)} USDT"
+                else:
+                    pnl_label = "-"
+                pending_suffix = f", pnl_pending={pending_count}" if pending_count else ""
+                logging.info(
+                    "[fill] %d fills, pnl=%s, pnl_known=%d%s",
+                    len(new_events),
+                    pnl_label,
+                    known_pnl_count,
+                    pending_suffix,
+                )
+            else:
+                # Log each event
+                for event in sorted(new_events, key=lambda e: e.timestamp):
+                    logging.info(self._log_fill_event(event))
+
         for event in sorted(new_events, key=lambda e: e.timestamp):
             self._monitor_record_fill_history(event)
             fill_payload = self._monitor_fill_payload(event)
@@ -10574,7 +10589,20 @@ class Passivbot:
             )
             emit_fill_ingested = getattr(self, "_emit_fill_ingested_event", None)
             if callable(emit_fill_ingested):
-                emit_fill_ingested(event, payload=fill_payload)
+                emit_fill_ingested(
+                    event,
+                    payload=fill_payload,
+                    operator_visible=not batch_summary,
+                )
+        if batch_summary:
+            emit_summary = getattr(self, "_emit_fills_ingested_summary_event", None)
+            if callable(emit_summary):
+                emit_summary(
+                    count=len(new_events),
+                    known_net_realized_pnl=total_pnl,
+                    known_pnl_count=known_pnl_count,
+                    pending_pnl_count=pending_count,
+                )
 
     def _log_enriched_fill_events(self, events: list) -> None:
         """Log realized-PnL enrichment for already seen close fills."""

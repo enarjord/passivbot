@@ -4,6 +4,12 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Live fill console/text output now projects structured `fill.ingested` events,
+  avoiding duplicate legacy lines when the structured console is available.
+  Large fill batches emit one `fills.ingested_summary` console/text event while
+  retaining every per-fill structured and monitor event; fill accounting,
+  history, and PnL semantics are unchanged.
+
 - Monitor retention now builds the same complete recursive inventory with one
   healthy-path `os.scandir` traversal and one explicit `DirEntry.stat` per
   visited entry, avoiding the duplicate directory scans performed by the prior

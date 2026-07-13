@@ -513,10 +513,10 @@ Related detailed plans:
     event; a natural live Hyperliquid change verified the projection. Zero
     values in fill, balance, and entry-gate summaries are already retained
     because their numeric helper returns formatted strings; the prior
-    truthiness-gap note was incorrect. The active follow-up renders frequent
-    balance changes as exact raw/snapped transitions. Fill readability remains
-    separate because the legacy and event-routed lines overlap and the legacy
-    path still owns timestamp, pending-PnL, and bulk-summary semantics.
+    truthiness-gap note was incorrect. PR #1210 renders frequent balance changes
+    as exact raw/snapped transitions. The active fill follow-up removes the
+    legacy/event duplicate only after the structured projection owns timestamp,
+    pending-PnL, bounded traceability, and bulk-summary semantics.
 
     Work log:
     - 2026-06-30: Added value-safe `live-smoke-report` HSL status projections

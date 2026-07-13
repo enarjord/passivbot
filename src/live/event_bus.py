@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import Counter, deque
 from dataclasses import asdict, dataclass, field, replace
+from datetime import datetime, timezone
 import hashlib
 import json
 import logging
@@ -212,6 +213,7 @@ class EventTypes:
     EXECUTION_CONFIRMATION_TIMEOUT = "execution.confirmation_timeout"
     FILLS_REFRESH_SUMMARY = "fills.refresh_summary"
     FILL_INGESTED = "fill.ingested"
+    FILLS_INGESTED_SUMMARY = "fills.ingested_summary"
     POSITION_CHANGED = "position.changed"
     BALANCE_CHANGED = "balance.changed"
     RISK_MODE_CHANGED = "risk.mode_changed"
@@ -316,6 +318,7 @@ class ReasonCodes:
     MARKET_SNAPSHOT_DIAGNOSTIC_SKIPPED = "market_snapshot_diagnostic_skipped"
     MIN_EFFECTIVE_COST_BLOCKED = "min_effective_cost_blocked"
     NEW_FILL = "new_fill"
+    NEW_FILL_BATCH = "new_fill_batch"
     OPEN_TAIL_PROJECTION = "open_tail_projection"
     OPTIONAL_EMA_DROPPED = "optional_ema_dropped"
     PENDING_EXCHANGE_CONFIG = "pending_exchange_config"
@@ -531,6 +534,7 @@ PHASE1_EVENT_TYPES = {
     EventTypes.EXECUTION_CONFIRMATION_TIMEOUT,
     EventTypes.FILLS_REFRESH_SUMMARY,
     EventTypes.FILL_INGESTED,
+    EventTypes.FILLS_INGESTED_SUMMARY,
     EventTypes.POSITION_CHANGED,
     EventTypes.BALANCE_CHANGED,
     EventTypes.RISK_MODE_CHANGED,
@@ -853,6 +857,7 @@ DEFAULT_ROUTES: dict[str, EventRoute] = {
     EventTypes.EXECUTION_CONFIRMATION_TIMEOUT: EventRoute(console=True, text=True),
     EventTypes.FILLS_REFRESH_SUMMARY: EventRoute(console=False, text=False),
     EventTypes.FILL_INGESTED: EventRoute(console=True, text=True),
+    EventTypes.FILLS_INGESTED_SUMMARY: EventRoute(console=True, text=True),
     EventTypes.POSITION_CHANGED: EventRoute(console=True, text=True),
     EventTypes.BALANCE_CHANGED: EventRoute(console=True, text=True),
     EventTypes.RISK_MODE_CHANGED: EventRoute(console=True, text=True),
@@ -983,6 +988,7 @@ _CONSOLE_EVENT_TAGS = {
     EventTypes.EXECUTION_CONFIRMATION_SATISFIED: "execute",
     EventTypes.EXECUTION_CONFIRMATION_TIMEOUT: "execute",
     EventTypes.FILL_INGESTED: "fill",
+    EventTypes.FILLS_INGESTED_SUMMARY: "fill",
     EventTypes.POSITION_CHANGED: "pos",
     EventTypes.BALANCE_CHANGED: "balance",
     EventTypes.RISK_MODE_CHANGED: "risk",
@@ -1267,30 +1273,85 @@ def _console_rust_summary(event: LiveEvent) -> list[str]:
     return parts
 
 
-def _console_fill_ingested_summary(event: LiveEvent) -> list[str]:
+def _format_fill_console_timestamp(value: object) -> str | None:
+    try:
+        timestamp = int(value)
+    except (TypeError, ValueError):
+        return None
+    if timestamp <= 0:
+        return None
+    try:
+        return datetime.fromtimestamp(timestamp / 1000.0, tz=timezone.utc).strftime(
+            "%Y-%m-%dT%H:%M:%SZ"
+        )
+    except (OverflowError, OSError, ValueError):
+        return None
+
+
+def _format_console_fill_ingested(event: LiveEvent) -> str:
     data = event.data if isinstance(event.data, Mapping) else {}
-    parts: list[str] = []
-    if event.side:
-        parts.append(f"side={event.side}")
-    order_type = _data_str(data, "pb_order_type")
-    if order_type:
-        parts.append(f"type={order_type}")
-    qty = _data_float(data, "qty")
-    price = _data_float(data, "price")
-    if qty:
-        parts.append(f"qty={qty}")
-    if price:
-        parts.append(f"price={price}")
-    pnl = _data_float(data, "pnl")
-    if pnl:
-        parts.append(f"pnl={pnl}")
-    fee = _data_float(data, "fee")
-    if fee:
-        parts.append(f"fee={fee}")
-    client_id = _data_str(data, "client_order_id_short")
-    if client_id:
-        parts.append(f"client_id={client_id}")
-    return parts
+    parts = ["[fill]"]
+    timestamp = _format_fill_console_timestamp(data.get("timestamp"))
+    if timestamp:
+        parts.append(timestamp)
+    parts.append(_format_position_console_coin(event.symbol))
+    parts.append(_format_console_label(event.pside))
+    order_type = _format_console_label(_data_str(data, "pb_order_type"))
+    parts.append(order_type)
+
+    qty = _data_number(data, "qty")
+    signed_qty = qty
+    if qty is not None and str(event.side or "").lower() == "sell":
+        signed_qty = -abs(qty)
+    elif qty is not None and str(event.side or "").lower() == "buy":
+        signed_qty = abs(qty)
+    qty_rendered = _format_console_number(signed_qty)
+    if signed_qty is not None and str(event.side or "").lower() == "buy":
+        qty_rendered = f"+{qty_rendered}"
+    parts.append(qty_rendered)
+    parts.extend(("@", _format_console_number(_data_number(data, "price"))))
+
+    is_close = "close" in str(_data_str(data, "pb_order_type") or "").lower()
+    pnl = _data_number(data, "pnl")
+    pnl_status = str(_data_str(data, "pnl_status") or "complete").lower()
+    if is_close or (pnl is not None and pnl != 0.0):
+        if pnl_status == "pending":
+            parts.append(", pnl=pending")
+        elif pnl is not None:
+            pnl_rendered = _format_console_number(pnl)
+            pnl_sign = "+" if pnl >= 0.0 else ""
+            parts.append(f", pnl={pnl_sign}{pnl_rendered} USDT")
+    fee = _data_number(data, "fee")
+    if fee is not None and fee != 0.0:
+        parts.append(f", fee={_format_console_number(fee)} USDT")
+    if order_type == "unknown":
+        client_id = _data_str(data, "client_order_id_short")
+        if client_id:
+            parts.append(f"(coid={_format_console_label(client_id)})")
+    fill_id_hash = _data_str(data, "fill_id_hash")
+    if fill_id_hash:
+        parts.append(f"id={fill_id_hash[:12]}")
+    return " ".join(parts).replace(" ,", ",")
+
+
+def _format_console_fills_ingested_summary(event: LiveEvent) -> str:
+    data = event.data if isinstance(event.data, Mapping) else {}
+    count = _data_int(data, "count")
+    total_pnl = _data_number(data, "known_net_realized_pnl")
+    known_pnl_count = _data_int(data, "known_pnl_count")
+    pending_pnl_count = _data_int(data, "pending_pnl_count")
+    count_label = "-" if count is None else str(count)
+    if known_pnl_count == 0:
+        message = f"[fill] {count_label} fills, pnl=-"
+    else:
+        pnl_label = "-" if total_pnl is None else _format_console_number(total_pnl)
+        pnl_sign = "+" if total_pnl is not None and total_pnl >= 0.0 else ""
+        message = f"[fill] {count_label} fills, pnl={pnl_sign}{pnl_label} USDT"
+    if known_pnl_count is not None:
+        message += f", pnl_known={known_pnl_count}"
+    if pending_pnl_count:
+        message += f", pnl_pending={pending_pnl_count}"
+    return message
 
 
 def _format_console_number(value: float | None) -> str:
@@ -1828,8 +1889,6 @@ def _console_data_summary(event: LiveEvent) -> list[str]:
         return _console_forager_selection_summary(event)
     if event.event_type == EventTypes.HEALTH_SUMMARY:
         return _console_health_summary(event)
-    if event.event_type == EventTypes.FILL_INGESTED:
-        return _console_fill_ingested_summary(event)
     if event.event_type == EventTypes.RISK_MODE_CHANGED:
         return _console_risk_mode_changed_summary(event)
     if event.event_type == EventTypes.HSL_TRANSITION:
@@ -1859,12 +1918,19 @@ def _hsl_status_operator_visible(event: LiveEvent) -> bool:
 
 
 def _operator_sink_event_visible(event: LiveEvent) -> bool:
+    if event.event_type == EventTypes.FILL_INGESTED:
+        data = event.data if isinstance(event.data, Mapping) else {}
+        return data.get("operator_visible") is not False
     if event.event_type == EventTypes.HSL_STATUS:
         return _hsl_status_operator_visible(event)
     return True
 
 
 def format_console_event(event: LiveEvent) -> str:
+    if event.event_type == EventTypes.FILL_INGESTED:
+        return _format_console_fill_ingested(event)
+    if event.event_type == EventTypes.FILLS_INGESTED_SUMMARY:
+        return _format_console_fills_ingested_summary(event)
     if event.event_type == EventTypes.POSITION_CHANGED:
         return _format_console_position_changed(event)
     if event.event_type == EventTypes.BALANCE_CHANGED:

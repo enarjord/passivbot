@@ -51,6 +51,7 @@ The code-owned registries live in `src/live/event_bus.py`. Payload and emission 
 - `execution.create_skipped`
 - `execution.create_succeeded`
 - `fill.ingested`
+- `fills.ingested_summary`
 - `fills.refresh_summary`
 - `forager.eligibility_changed`
 - `forager.feature_unavailable`
@@ -199,6 +200,7 @@ The code-owned registries live in `src/live/event_bus.py`. Payload and emission 
 - `market_snapshot_diagnostic_skipped`
 - `min_effective_cost_blocked`
 - `new_fill`
+- `new_fill_batch`
 - `open_tail_projection`
 - `optional_ema_dropped`
 - `pending_exchange_config`

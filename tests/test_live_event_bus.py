@@ -356,6 +356,8 @@ def test_route_table_keeps_data_events_off_console_by_default():
     assert DEFAULT_ROUTES[EventTypes.ENTRY_MIN_EFFECTIVE_COST_BLOCKED].text is True
     assert DEFAULT_ROUTES[EventTypes.FILL_INGESTED].console is True
     assert DEFAULT_ROUTES[EventTypes.FILL_INGESTED].text is True
+    assert DEFAULT_ROUTES[EventTypes.FILLS_INGESTED_SUMMARY].console is True
+    assert DEFAULT_ROUTES[EventTypes.FILLS_INGESTED_SUMMARY].text is True
     assert DEFAULT_ROUTES[EventTypes.POSITION_CHANGED].console is True
     assert DEFAULT_ROUTES[EventTypes.POSITION_CHANGED].text is True
     assert DEFAULT_ROUTES[EventTypes.BALANCE_CHANGED].console is True
@@ -1961,28 +1963,139 @@ def test_console_format_summarizes_health_error_burst_without_raw_error():
 def test_console_format_summarizes_fill_ingested():
     event = LiveEvent(
         EventTypes.FILL_INGESTED,
-        status="succeeded",
-        cycle_id="cy_fill",
         symbol="BTC/USDT:USDT",
         pside="long",
         side="buy",
-        reason_code="new_fill",
         data={
+            "timestamp": 1_782_271_234_000,
             "pb_order_type": "entry_grid_normal_long",
             "qty": 0.001,
             "price": 101_234.5,
             "pnl": -1.25,
             "fee": -0.04,
-            "client_order_id_short": "abc123",
             "fill_id_hash": "9f54f33d005de125ca93371eeda0374f039e520574633e8335066351e275c6a2",
         },
     )
 
     assert format_console_event(event) == (
-        "[fill] succeeded cycle=cy_fill side=buy type=entry_grid_normal_long "
-        "qty=0.001 price=101234.5 pnl=-1.25 fee=-0.04 client_id=abc123 "
-        "symbol=BTC/USDT:USDT pside=long reason=new_fill"
+        "[fill] 2026-06-24T03:20:34Z BTC long entry_grid_normal_long +0.001 @ 101234.5, "
+        "pnl=-1.25 USDT, fee=-0.04 USDT id=9f54f33d005d"
     )
+
+
+def test_console_format_fill_ingested_preserves_pending_and_known_zero_close_pnl():
+    pending = LiveEvent(
+        EventTypes.FILL_INGESTED,
+        symbol="ETH/USDT:USDT",
+        pside="short",
+        side="sell",
+        data={
+            "timestamp": 1_704_067_200_000,
+            "pb_order_type": "close_grid_normal_short",
+            "qty": 0.5,
+            "price": 2_500.0,
+            "pnl": 0.0,
+            "pnl_status": "pending",
+        },
+    )
+    known_zero = LiveEvent(
+        EventTypes.FILL_INGESTED,
+        symbol="ETH/USDT:USDT",
+        pside="short",
+        side="sell",
+        data={
+            "timestamp": 1_704_067_200_000,
+            "pb_order_type": "close_grid_normal_short",
+            "qty": 0.5,
+            "price": 2_500.0,
+            "pnl": 0.0,
+            "pnl_status": "complete",
+        },
+    )
+
+    assert format_console_event(pending).endswith("-0.5 @ 2500, pnl=pending")
+    assert format_console_event(known_zero).endswith("-0.5 @ 2500, pnl=+0 USDT")
+
+
+def test_console_format_fill_ingested_uses_hash_prefix_and_bounded_unknown_client_id():
+    raw_fill_id = "exchange-fill-id-should-never-be-rendered"
+    event = LiveEvent(
+        EventTypes.FILL_INGESTED,
+        symbol="SOL/USDT:USDT",
+        pside="long",
+        side="buy",
+        data={
+            "pb_order_type": "unknown",
+            "qty": 2.0,
+            "price": 100.0,
+            "client_order_id_short": "pbot_unknown...7b51e9d2",
+            "fill_id_hash": "a1b2c3d4e5f67890aabbccddeeff00112233445566778899aabbccddeeff0011",
+        },
+    )
+
+    rendered = format_console_event(event)
+
+    assert "(coid=pbot_unknown...7b51e9d2)" in rendered
+    assert "id=a1b2c3d4e5f6" in rendered
+    assert raw_fill_id not in rendered
+
+
+def test_console_format_fills_ingested_summary():
+    event = LiveEvent(
+        EventTypes.FILLS_INGESTED_SUMMARY,
+        data={
+            "count": 21,
+            "known_net_realized_pnl": 4.25,
+            "known_pnl_count": 19,
+            "pending_pnl_count": 2,
+        },
+    )
+
+    assert format_console_event(event) == (
+        "[fill] 21 fills, pnl=+4.25 USDT, pnl_known=19, pnl_pending=2"
+    )
+
+
+def test_console_format_fills_ingested_summary_does_not_claim_zero_for_all_pending():
+    event = LiveEvent(
+        EventTypes.FILLS_INGESTED_SUMMARY,
+        data={
+            "count": 21,
+            "known_net_realized_pnl": 0.0,
+            "known_pnl_count": 0,
+            "pending_pnl_count": 21,
+        },
+    )
+
+    assert format_console_event(event) == (
+        "[fill] 21 fills, pnl=-, pnl_known=0, pnl_pending=21"
+    )
+
+
+def test_operator_visibility_suppresses_fill_console_and_text_only():
+    structured = ListEventSink()
+    monitor = ListEventSink()
+    console = ListEventSink()
+    text = ListEventSink()
+    pipeline = LiveEventPipeline(
+        structured_sinks=[structured],
+        monitor_sinks=[monitor],
+        console_sink=console,
+        text_sink=text,
+    )
+    event = LiveEvent(
+        EventTypes.FILL_INGESTED,
+        data={"operator_visible": False, "qty": 1.0, "price": 100.0},
+    )
+
+    pipeline.emit(event)
+
+    assert pipeline.flush(timeout=2.0) is True
+    assert structured.events == [event]
+    assert monitor.events == [event]
+    assert console.events == []
+    assert text.events == []
+    assert pipeline.close(timeout=2.0) is True
 
 
 @pytest.mark.parametrize(

@@ -4513,7 +4513,13 @@ def emit_fills_refresh_summary_event(bot: Any, *args: Any, **kwargs: Any) -> Non
         logging.debug("[event] failed to emit fills refresh summary event: %s", exc)
 
 
-def emit_fill_ingested_event(bot: Any, event: Any, *, payload: dict | None = None) -> None:
+def emit_fill_ingested_event(
+    bot: Any,
+    event: Any,
+    *,
+    payload: dict | None = None,
+    operator_visible: bool = True,
+) -> None:
     try:
         fill_payload = dict(payload or {})
         fill_id = getattr(event, "id", None)
@@ -4528,6 +4534,10 @@ def emit_fill_ingested_event(bot: Any, event: Any, *, payload: dict | None = Non
             "pnl": _safe_float(getattr(event, "pnl", None)),
             "fee": _safe_float(getattr(event, "fee", None)),
             "pb_order_type": str(getattr(event, "pb_order_type", "") or "").lower(),
+            "pnl_status": str(
+                getattr(event, "pnl_status", "complete") or "complete"
+            ).lower()[:80],
+            "operator_visible": bool(operator_visible),
             "source_ids_count": len(source_ids),
         }
         for key in ("qty", "price", "pnl", "fee", "pb_order_type", "timestamp"):
@@ -4554,6 +4564,34 @@ def emit_fill_ingested_event(bot: Any, event: Any, *, payload: dict | None = Non
         )
     except Exception as exc:
         logging.debug("[event] failed to emit fill ingested event: %s", exc)
+
+
+def emit_fills_ingested_summary_event(
+    bot: Any,
+    *,
+    count: int,
+    known_net_realized_pnl: float,
+    known_pnl_count: int,
+    pending_pnl_count: int,
+) -> None:
+    try:
+        bot._emit_live_event(
+            EventTypes.FILLS_INGESTED_SUMMARY,
+            level="info",
+            component="fills.ingest",
+            tags=(EventTags.FILLS, EventTags.FILL, EventTags.SUMMARY),
+            cycle_id=bot._current_live_event_cycle_id(),
+            status="succeeded",
+            reason_code=ReasonCodes.NEW_FILL_BATCH,
+            data={
+                "count": max(0, int(count)),
+                "known_net_realized_pnl": _safe_finite_float(known_net_realized_pnl),
+                "known_pnl_count": max(0, int(known_pnl_count)),
+                "pending_pnl_count": max(0, int(pending_pnl_count)),
+            },
+        )
+    except Exception as exc:
+        logging.debug("[event] failed to emit fills ingested summary event: %s", exc)
 
 
 def emit_position_changed_event(
