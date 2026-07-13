@@ -3671,7 +3671,11 @@ def test_log_new_fill_events_emits_fill_ingested_event():
     class FakeBot:
         _current_live_event_cycle_id = pb_mod.Passivbot._current_live_event_cycle_id
         _emit_fill_ingested_event = pb_mod.Passivbot._emit_fill_ingested_event
+        _emit_fills_ingested_summary_event = (
+            pb_mod.Passivbot._emit_fills_ingested_summary_event
+        )
         _emit_live_event = pb_mod.Passivbot._emit_live_event
+        _live_event_console_available = pb_mod.Passivbot._live_event_console_available
         _log_fill_event = pb_mod.Passivbot._log_fill_event
         _log_new_fill_events = pb_mod.Passivbot._log_new_fill_events
         _monitor_fill_payload = pb_mod.Passivbot._monitor_fill_payload
@@ -3687,6 +3691,7 @@ def test_log_new_fill_events_emits_fill_ingested_event():
                 structured_sinks=[sink],
                 monitor_sinks=[],
             )
+            self.live_event_console_enabled = False
             self.monitor_publisher = RecorderPublisher()
             self._health_fills = 0
             self._health_pnl = 0.0
@@ -3725,6 +3730,8 @@ def test_log_new_fill_events_emits_fill_ingested_event():
     assert live_event.side == "sell"
     assert live_event.data["qty"] == pytest.approx(0.5)
     assert live_event.data["pnl"] == pytest.approx(12.0)
+    assert live_event.data["pnl_status"] == "complete"
+    assert live_event.data["operator_visible"] is True
     assert live_event.data["fill_id_hash"] == hashlib.sha256(
         source_derived_fill_id.encode("utf-8")
     ).hexdigest()
@@ -3733,6 +3740,292 @@ def test_log_new_fill_events_emits_fill_ingested_event():
     assert "source_ids" not in live_event.data
     assert "trade-a" not in str(live_event.data)
     assert "trade-b" not in str(live_event.data)
+    assert "trade-a" not in live_event.to_json()
+    assert "trade-b" not in live_event.to_json()
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
+
+
+def test_log_new_fill_events_uses_structured_console_without_legacy_duplicate(caplog):
+    import passivbot as pb_mod
+
+    structured = ListEventSink()
+    console = ListEventSink()
+    text = ListEventSink()
+
+    class FakeBot:
+        _current_live_event_cycle_id = pb_mod.Passivbot._current_live_event_cycle_id
+        _emit_fill_ingested_event = pb_mod.Passivbot._emit_fill_ingested_event
+        _emit_fills_ingested_summary_event = (
+            pb_mod.Passivbot._emit_fills_ingested_summary_event
+        )
+        _emit_live_event = pb_mod.Passivbot._emit_live_event
+        _live_event_console_available = pb_mod.Passivbot._live_event_console_available
+        _log_fill_event = pb_mod.Passivbot._log_fill_event
+        _log_new_fill_events = pb_mod.Passivbot._log_new_fill_events
+        _monitor_fill_payload = pb_mod.Passivbot._monitor_fill_payload
+        _monitor_record_event = pb_mod.Passivbot._monitor_record_event
+        _monitor_record_fill_history = pb_mod.Passivbot._monitor_record_fill_history
+
+        def __init__(self):
+            self.exchange = "bybit"
+            self.user = "bybit_01"
+            self.bot_id = "bot_1"
+            self._live_event_current_cycle_id = "cy_console"
+            self.live_event_console_enabled = True
+            self._live_event_pipeline = LiveEventPipeline(
+                structured_sinks=[structured],
+                monitor_sinks=[],
+                console_sink=console,
+                text_sink=text,
+            )
+            self.monitor_publisher = RecorderPublisher()
+            self._health_fills = 0
+            self._health_pnl = 0.0
+
+    event = SimpleNamespace(
+        id="fill-1",
+        timestamp=1_704_067_200_000,
+        symbol="BTC/USDT:USDT",
+        side="buy",
+        position_side="long",
+        qty=0.1,
+        price=40_000.0,
+        pnl=0.0,
+        fee=-0.1,
+        fee_paid=-0.1,
+        pb_order_type="entry_grid_normal_long",
+        client_order_id="pbot-1",
+        source_ids=["source-1"],
+        pnl_status="complete",
+    )
+    bot = FakeBot()
+
+    with caplog.at_level(logging.INFO):
+        bot._log_new_fill_events([event])
+
+    assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    assert [event.event_type for event in structured.events] == [EventTypes.FILL_INGESTED]
+    assert [event.event_type for event in console.events] == [EventTypes.FILL_INGESTED]
+    assert [event.event_type for event in text.events] == [EventTypes.FILL_INGESTED]
+    assert not any(record.message.startswith("[fill]") for record in caplog.records)
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
+
+
+@pytest.mark.parametrize("console_enabled,pipeline_available", [(False, True), (True, False)])
+def test_log_new_fill_events_uses_legacy_fallback_when_console_is_disabled_or_unavailable(
+    caplog, console_enabled, pipeline_available
+):
+    import passivbot as pb_mod
+
+    class FakeBot:
+        _current_live_event_cycle_id = pb_mod.Passivbot._current_live_event_cycle_id
+        _emit_fill_ingested_event = pb_mod.Passivbot._emit_fill_ingested_event
+        _emit_fills_ingested_summary_event = (
+            pb_mod.Passivbot._emit_fills_ingested_summary_event
+        )
+        _emit_live_event = pb_mod.Passivbot._emit_live_event
+        _live_event_console_available = pb_mod.Passivbot._live_event_console_available
+        _log_fill_event = pb_mod.Passivbot._log_fill_event
+        _log_new_fill_events = pb_mod.Passivbot._log_new_fill_events
+        _monitor_fill_payload = pb_mod.Passivbot._monitor_fill_payload
+        _monitor_record_event = pb_mod.Passivbot._monitor_record_event
+        _monitor_record_fill_history = pb_mod.Passivbot._monitor_record_fill_history
+
+        def __init__(self):
+            self.exchange = "bybit"
+            self.user = "bybit_01"
+            self.bot_id = "bot_1"
+            self._live_event_current_cycle_id = "cy_fallback"
+            self.live_event_console_enabled = console_enabled
+            self._live_event_pipeline = (
+                LiveEventPipeline(structured_sinks=[], monitor_sinks=[])
+                if pipeline_available
+                else None
+            )
+            self.monitor_publisher = RecorderPublisher()
+            self._health_fills = 0
+            self._health_pnl = 0.0
+
+    event = SimpleNamespace(
+        id="fill-2",
+        timestamp=1_704_067_200_000,
+        symbol="BTC/USDT:USDT",
+        side="buy",
+        position_side="long",
+        qty=0.1,
+        price=40_000.0,
+        pnl=0.0,
+        fee=0.0,
+        fee_paid=0.0,
+        pb_order_type="entry_grid_normal_long",
+        client_order_id="pbot-2",
+        source_ids=["source-2"],
+        pnl_status="complete",
+    )
+    bot = FakeBot()
+
+    with caplog.at_level(logging.INFO):
+        bot._log_new_fill_events([event])
+
+    assert any(record.message.startswith("[fill]") for record in caplog.records)
+    if bot._live_event_pipeline is not None:
+        assert bot._live_event_pipeline.close(timeout=2.0) is True
+
+
+def test_log_new_fill_events_legacy_batch_fallback_does_not_claim_all_pending_zero_pnl(
+    caplog,
+):
+    import passivbot as pb_mod
+
+    class FakeBot:
+        _current_live_event_cycle_id = pb_mod.Passivbot._current_live_event_cycle_id
+        _emit_fill_ingested_event = pb_mod.Passivbot._emit_fill_ingested_event
+        _emit_fills_ingested_summary_event = (
+            pb_mod.Passivbot._emit_fills_ingested_summary_event
+        )
+        _emit_live_event = pb_mod.Passivbot._emit_live_event
+        _live_event_console_available = pb_mod.Passivbot._live_event_console_available
+        _log_fill_event = pb_mod.Passivbot._log_fill_event
+        _log_new_fill_events = pb_mod.Passivbot._log_new_fill_events
+        _monitor_fill_payload = pb_mod.Passivbot._monitor_fill_payload
+        _monitor_record_event = pb_mod.Passivbot._monitor_record_event
+        _monitor_record_fill_history = pb_mod.Passivbot._monitor_record_fill_history
+
+        def __init__(self):
+            self.exchange = "bybit"
+            self.user = "bybit_01"
+            self.bot_id = "bot_1"
+            self._live_event_current_cycle_id = "cy_pending_fallback"
+            self.live_event_console_enabled = False
+            self._live_event_pipeline = LiveEventPipeline(
+                structured_sinks=[], monitor_sinks=[]
+            )
+            self.monitor_publisher = RecorderPublisher()
+            self._health_fills = 0
+            self._health_pnl = 0.0
+
+    events = [
+        SimpleNamespace(
+            id=f"pending-{idx}",
+            timestamp=1_704_067_200_000 + idx,
+            symbol="ETH/USDT:USDT",
+            side="sell",
+            position_side="long",
+            qty=0.1,
+            price=2_500.0,
+            pnl=0.0,
+            fee=0.0,
+            fee_paid=0.0,
+            pb_order_type="close_grid_normal_long",
+            client_order_id=f"pbot-{idx}",
+            source_ids=[f"source-{idx}"],
+            pnl_status="pending",
+        )
+        for idx in range(21)
+    ]
+    bot = FakeBot()
+
+    with caplog.at_level(logging.INFO):
+        bot._log_new_fill_events(events)
+
+    fill_lines = [
+        record.message for record in caplog.records if record.message.startswith("[fill]")
+    ]
+    assert fill_lines == [
+        "[fill] 21 fills, pnl=-, pnl_known=0, pnl_pending=21"
+    ]
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
+
+
+def test_log_new_fill_events_emits_batch_summary_without_per_fill_console_text(caplog):
+    import passivbot as pb_mod
+
+    structured = ListEventSink()
+    monitor = ListEventSink()
+    console = ListEventSink()
+    text = ListEventSink()
+
+    class FakeBot:
+        _current_live_event_cycle_id = pb_mod.Passivbot._current_live_event_cycle_id
+        _emit_fill_ingested_event = pb_mod.Passivbot._emit_fill_ingested_event
+        _emit_fills_ingested_summary_event = (
+            pb_mod.Passivbot._emit_fills_ingested_summary_event
+        )
+        _emit_live_event = pb_mod.Passivbot._emit_live_event
+        _live_event_console_available = pb_mod.Passivbot._live_event_console_available
+        _log_fill_event = pb_mod.Passivbot._log_fill_event
+        _log_new_fill_events = pb_mod.Passivbot._log_new_fill_events
+        _monitor_fill_payload = pb_mod.Passivbot._monitor_fill_payload
+        _monitor_record_event = pb_mod.Passivbot._monitor_record_event
+        _monitor_record_fill_history = pb_mod.Passivbot._monitor_record_fill_history
+
+        def __init__(self):
+            self.exchange = "bybit"
+            self.user = "bybit_01"
+            self.bot_id = "bot_1"
+            self._live_event_current_cycle_id = "cy_batch"
+            self.live_event_console_enabled = True
+            self._live_event_pipeline = LiveEventPipeline(
+                structured_sinks=[structured],
+                monitor_sinks=[monitor],
+                console_sink=console,
+                text_sink=text,
+            )
+            self.monitor_publisher = RecorderPublisher()
+            self._health_fills = 0
+            self._health_pnl = 0.0
+
+    events = [
+        SimpleNamespace(
+            id=f"fill-{idx}",
+            timestamp=1_704_067_200_000 + idx,
+            symbol="ETH/USDT:USDT",
+            side="sell",
+            position_side="long",
+            qty=0.1,
+            price=2_500.0,
+            pnl=1.0,
+            fee=-0.1,
+            fee_paid=-0.1,
+            pb_order_type="close_grid_normal_long",
+            client_order_id=f"pbot-{idx}",
+            source_ids=[f"source-{idx}"],
+            pnl_status="pending" if idx in {3, 17} else "complete",
+        )
+        for idx in range(21)
+    ]
+    bot = FakeBot()
+
+    with caplog.at_level(logging.INFO):
+        bot._log_new_fill_events(events)
+
+    assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    assert [event.event_type for event in structured.events] == [
+        *([EventTypes.FILL_INGESTED] * 21),
+        EventTypes.FILLS_INGESTED_SUMMARY,
+    ]
+    assert [event.event_type for event in monitor.events] == [
+        *([EventTypes.FILL_INGESTED] * 21),
+        EventTypes.FILLS_INGESTED_SUMMARY,
+    ]
+    assert [event.event_type for event in console.events] == [
+        EventTypes.FILLS_INGESTED_SUMMARY
+    ]
+    assert [event.event_type for event in text.events] == [
+        EventTypes.FILLS_INGESTED_SUMMARY
+    ]
+    assert all(event.data["operator_visible"] is False for event in structured.events[:-1])
+    assert structured.events[-1].data == {
+        "count": 21,
+        "known_net_realized_pnl": pytest.approx(17.1),
+        "known_pnl_count": 19,
+        "pending_pnl_count": 2,
+    }
+    assert len(bot.monitor_publisher.fills) == 21
+    assert len(bot.monitor_publisher.events) == 21
+    assert bot._health_fills == 21
+    assert bot._health_pnl == pytest.approx(17.1)
+    assert not any(record.message.startswith("[fill]") for record in caplog.records)
     assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 
@@ -4582,6 +4875,7 @@ def test_log_new_fill_events_records_fill_history():
 
     class FakeBot:
         _log_new_fill_events = pb_mod.Passivbot._log_new_fill_events
+        _live_event_console_available = pb_mod.Passivbot._live_event_console_available
         _monitor_record_event = pb_mod.Passivbot._monitor_record_event
         _monitor_fill_payload = pb_mod.Passivbot._monitor_fill_payload
         _monitor_record_fill_history = pb_mod.Passivbot._monitor_record_fill_history

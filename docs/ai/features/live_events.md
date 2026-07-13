@@ -12,6 +12,20 @@ eligibility, replay order, or runtime decisions.
 
 The generated value reference is `../generated/live_event_registry.md`.
 
+## Fill Console Projection
+
+`fill.ingested` is the canonical normal-fill event. Every new fill remains present in structured
+and monitor sinks even when its human projection is suppressed. `operator_visible=false` affects
+only console and durable text sinks; it must not change fill accounting, fill history, health
+counters, PnL enrichment, or trading behavior.
+
+Batches of 20 fills or fewer project one bounded human line per fill. Larger batches suppress only
+those per-fill console/text lines and emit one `fills.ingested_summary` line with the batch count,
+the net realized PnL over fills whose PnL is known, the number of known-PnL fills, and the pending-PnL
+count. An all-pending batch must not present its known PnL as zero. The legacy direct logger is a
+fallback only when the structured live-event console is disabled or its pipeline is absent. Runtime
+sink degradation remains isolated by the event pipeline and must not activate dual writing.
+
 ## Fresh-Entry Eligibility
 
 Completed normal live plans emit `entry.initial_eligibility` to structured and monitor sinks. The

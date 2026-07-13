@@ -22,58 +22,69 @@ Estimated completion:
 
 ## Active Review Slice
 
-- Branch: `codex/v8-monitor-retention-cpu-attribution`
-- Base: `157fe0db6e2ec1348d47ff62155ae7a6f2d2b4df`, PR #1213
-- Triggering evidence: four post-PR #1213 health windows contained 54 natural
-  retention runs. Retention total/max was `60803.819/11066.952ms`; inventory
-  total/max was `59485.603/11039.628ms`; and age-filter total/max was only
-  `528.574/44.451ms`. The preceding six-run sample instead contained one
-  `8460ms` age-filter outlier with only `0.107ms` age-unlink work. The long tail
-  therefore moves between phases while VPS5 is CPU-saturated rather than
-  identifying a stable phase algorithm to optimize. The 54-run sample visited
-  90,972 entries, found 90,404 candidates, deleted 10 files by age and none by
-  cap, and retained zero drops, sink errors, degraded counts, final queue depth,
-  or unfinished work.
-- Scope: add paired whole-retention thread-CPU and directly computed non-CPU
-  total/max timing. Each due run captures wall and thread CPU clocks at the same
-  boundaries and computes `max(0, wall - thread_cpu)` for that run before
-  aggregation. Project both fields through transactional event-pipeline health
-  windows, smoke reports, and performance reports. Do not infer non-CPU time by
-  subtracting independently aggregated maxima.
-- Behavior boundary: additive diagnostics only. Preserve retention cadence,
-  `last_retention_ms`, lock scope, traversal, accounting, candidate order and
-  deletion domain, age/cap policy, error handling, configuration, and every
-  order/risk/trading behavior. Do not add caching, staggering, workers,
-  thresholds, verdicts, or phase optimizations.
-- Validation: paired deterministic clock behavior, due/not-due boundaries,
-  failure/finally retention, event-pipeline aggregation/reset/restore,
-  historical absence behavior, smoke/performance projections, integrated
-  monitor regressions, Python compilation, `git diff --check`, silent-handling
-  audit, and independent preflight.
+- Branch: `codex/v8-fill-console-migration`
+- PR: #1215
+- Base: `91e40b911fd5378547b77ffbd7be1924846fa3e3`, merged PR #1214
+- Triggering evidence: `fill.ingested` is routed to console/text while
+  `_log_new_fill_events()` also writes the legacy per-fill or bulk line. Normal
+  fills therefore appear twice, and batches over 20 defeat the legacy one-line
+  summary by projecting every durable per-fill event. The event formatter also
+  lacks the legacy line's fill timestamp, pending-PnL state, and bounded fill
+  trace identifier.
+- Scope: make structured fill events own the normal human projection. Add the
+  non-sensitive fields required for timestamp, pending/known PnL, and bounded
+  hashed trace parity; add one distinct structured bulk-summary event; suppress
+  only per-fill console/text projection for batches over 20; and retain the
+  stdlib fill line only when the structured event console is disabled or its
+  pipeline is absent.
+- Behavior boundary: observability migration only. Preserve fill ingestion,
+  ordering, deduplication, cache/history writes, monitor fill records, health
+  counters, realized-PnL accounting, structured per-fill durability, and every
+  order/risk/trading behavior. Do not change enrichment, fee resolution,
+  exchange fetches, or fill/PnL readiness policy.
+- Validation: formatter parity for historical timestamps, signed quantity,
+  pending and known-zero close PnL, bounded identifiers, and bulk summaries;
+  console/text visibility versus durable structured/monitor delivery; stdlib
+  fallback behavior; integrated fill ingestion tests; offline fake-live fill
+  evidence; generated registry/docs checks; Python compilation;
+  `git diff --check`; silent-handling audit; and independent preflight.
 - Publication state, exact head, mergeability, CI, and current-head reviewer
   verdicts: query live GitHub metadata; do not embed self-invalidating values.
-- Expected VPS action: exact five-bot graceful restart, immediate and settled
-  smoke, then at least 30 naturally emitted due runs comparing paired retention
-  wall, thread-CPU, and directly computed non-CPU evidence. Select no retention
-  phase optimization unless the paired evidence supports it.
+- Expected VPS action: exact five-bot graceful restart plus immediate and
+  settled smoke. Validate a naturally occurring fill if one appears; do not
+  create, cancel, or alter an order merely to produce console evidence.
 
 Next action:
 
-1. Hold PR #1214's exact current head until Hermes, Grok 4.5, and CI are green.
+1. Hold PR #1215 at its exact current head for Hermes, Grok 4.5, and CI.
 2. Resolve findings narrowly and require fresh exact-head verdicts after every
    push.
 3. Merge only when the complete gate is green, then perform the exact five-bot
-   graceful VPS5 restart, immediate and settled smoke, and at least 30 natural
-   due runs comparing paired wall, thread-CPU, and non-CPU evidence.
+   graceful VPS5 restart and immediate/settled smoke without fabricating a fill.
 
 ## Deployed Baseline
 
-- Remote `v8`: `157fe0db6e2ec1348d47ff62155ae7a6f2d2b4df`, PR #1213
-- VPS5 repository: `157fe0db6e2ec1348d47ff62155ae7a6f2d2b4df`, PR #1213; tracked
+- Remote `v8`: `91e40b911fd5378547b77ffbd7be1924846fa3e3`, PR #1214
+- VPS5 repository: `91e40b911fd5378547b77ffbd7be1924846fa3e3`, PR #1214; tracked
   status clean; expected untracked artifacts were preserved
-- VPS5 expected bots: five; running with PR #1213 restart PIDs
-  `899640/899643/899647/899648/899650`;
+- VPS5 expected bots: five; running with PR #1214 restart PIDs
+  `901310/901313/901316/901319/901321`;
   unrelated `misc:0.0` remains PID `434835`
+- PR #1214 merged after exact-head Hermes and Grok 4.5 approval plus green CI.
+  VPS5 fast-forwarded cleanly and gracefully restarted only the five exact bot
+  panes; every old bot exited naturally without force kill. Pane PIDs and
+  unrelated `misc:0.0` PID `434835` were preserved. A real KuCoin timeout made
+  the first settled window red and remained visible; after it aged out, the
+  final two-minute smoke was hard-green with `251/251` remote and `38/38`
+  account-critical calls, all five expected processes, zero hard/log/monitor
+  failures, no active HSL replay, and a clean tracked repository.
+- Seven distinct post-deploy health windows contained 52 natural retention
+  runs. Paired wall/thread-CPU/non-CPU totals were
+  `54076.226/7448.346/46627.879ms`: thread CPU was `13.774%` and direct non-CPU
+  time was `86.226%`, with the accounting identity matching within `0.001ms`.
+  Drops, sink errors, degraded counts, final queue depth, and unfinished work
+  remained zero. The residual wall-time tail is host descheduling/contention
+  evidence and does not justify another retention CPU or phase optimization.
 - PR #1213 merged after exact-head Hermes and Grok 4.5 approval plus green CI.
   VPS5 fast-forwarded cleanly and gracefully restarted only the five exact bot
   panes; every old bot exited naturally, including KuCoin after about 132
@@ -442,15 +453,16 @@ retention inventory are also merged and deployed with their behavior boundaries
 preserved. PR #1210's balance console transition is merged, deployed, and
 validated from natural balance changes on all five bots. PR #1211's retention
 phase attribution, PR #1212's direct `os.scandir` inventory, and PR #1213's
-whole-loop age/cap attribution are merged and deployed. The long retention
-wall-time tail moves between phases under VPS5 contention and does not justify
-another phase optimization.
+whole-loop age/cap attribution are merged and deployed. PR #1214's paired
+thread-CPU/non-CPU attribution is also merged and deployed; 52 natural runs
+showed only `13.774%` thread CPU and `86.226%` direct non-CPU time. The long
+retention wall-time tail is host descheduling/contention evidence and does not
+justify another retention optimization.
 
-The active slice adds paired whole-retention thread-CPU and directly computed
-non-CPU timing for every due run while preserving all retention behavior. Keep
-fill formatting separate: its legacy and event-routed lines currently overlap
-and require an explicit migration contract for timestamps, pending PnL, and
-bulk summaries.
+The active slice migrates normal fill console/text output to the structured
+event projection. Preserve durable per-fill events, historical timestamps,
+pending versus known PnL, bounded traceability, and one-line bulk summaries;
+keep the stdlib line only as fallback when the event console is unavailable.
 
 Do not create progress-only PRs or resume unrelated logging work from stale
 worktrees.

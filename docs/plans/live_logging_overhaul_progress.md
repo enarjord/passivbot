@@ -69,6 +69,46 @@ Retuned goal boundary:
 
 VPS5 deployment status:
 
+- PR #1214 merged to `v8` as
+  `91e40b911fd5378547b77ffbd7be1924846fa3e3` after exact-head Hermes and
+  Grok 4.5 approval plus green CI. It added paired whole-retention thread-CPU
+  and directly computed non-CPU timing without changing retention behavior.
+  VPS5 fast-forwarded cleanly and gracefully restarted only the five exact bot
+  panes; every old bot exited naturally without force kill, and pane PIDs plus
+  unrelated `misc:0.0` PID `434835` were preserved. After one real KuCoin
+  timeout aged out, the final two-minute smoke was hard-green with `251/251`
+  remote and `38/38` account-critical calls successful, all five processes
+  present, zero hard/log/monitor failures, and a clean tracked repository.
+  Seven distinct health windows contained 52 natural retention runs:
+  wall/thread-CPU/non-CPU totals were `54076.226/7448.346/46627.879ms`, or
+  `13.774%` CPU and `86.226%` direct non-CPU time, with zero pipeline drops,
+  sink errors, degraded counts, or final queue residue. This closes retention
+  CPU/phase optimization as the next action; the residual tail is host
+  descheduling/contention evidence.
+- PR #1213 merged to `v8` as
+  `157fe0db6e2ec1348d47ff62155ae7a6f2d2b4df` after exact-head Hermes and
+  Grok 4.5 approval plus green CI. It timed the whole age-filter and cap-prune
+  loops while preserving their exact selection, ordering, deletion, and failure
+  behavior. VPS5 restarted only the five exact bot panes and preserved pane
+  PIDs plus unrelated `misc:0.0` PID `434835`. After one real KuCoin timeout
+  aged out, the final smoke was hard-green with `403/403` remote and `67/67`
+  account-critical calls successful. Four health windows contained 54 natural
+  runs: retention total/max was `60803.819/11066.952ms`, inventory was
+  `59485.603/11039.628ms`, and age filtering was `528.574/44.451ms`; combined
+  with an earlier isolated age-filter outlier, the long tail moved between
+  phases rather than identifying stable algorithmic work to optimize.
+- PR #1212 merged to `v8` as
+  `f68f10c4a3754c5603cfd7d97e5bc3e5a861f8cc` after exact-head Hermes and
+  Grok 4.5 approval plus green CI. It replaced the retention inventory's
+  duplicate `Path.rglob` traversal/stat work with one recursive `os.scandir`
+  pass and bounded scan-error isolation while preserving retention policy.
+  VPS5 restarted only the five exact bot panes and preserved pane PIDs plus
+  unrelated `misc:0.0` PID `434835`. The final smoke was hard-green with
+  `396/396` remote and `72/72` account-critical calls successful. Across 59
+  natural runs, inventory maximum improved about 78% while drops, sink errors,
+  degraded counts, and final queue depth remained zero; the residual wall-time
+  tail remained diagnostic evidence rather than support for another behavior
+  optimization.
 - PR #1211 merged to `v8` as
   `3a17fdb9768de80212d2dcd3c097350508d69caa` after exact-head Hermes and
   Grok 4.5 approval plus green CI. It added fixed inventory, age-unlink, and
