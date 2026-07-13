@@ -4,6 +4,12 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Execution-loop error bursts now use the structured `health.summary` console
+  projection as the sole normal console/text line when a live-event console sink
+  is available. The legacy warning remains the fallback when that projection or
+  its emitter is unavailable; error thresholds, redaction, restart/backoff, and
+  trading behavior are unchanged.
+
 - Periodic health console/text output now projects the structured
   `health.summary` event as one compact line when the live event console is
   available, while retaining the same legacy fallback when it is disabled or

@@ -5233,12 +5233,22 @@ class Passivbot:
         state["last_log_ms"] = now
         top = ",".join(f"{name}:{n}" for name, n in endpoints.most_common(5))
         window_s = max(1, int((now - int(state["first_ms"])) / 1000))
-        self._emit_execution_loop_error_burst_event(
-            count=count,
-            window_s=window_s,
-            endpoints=endpoints,
-            latest_fields=fields,
+        emit_error_burst = getattr(self, "_emit_execution_loop_error_burst_event", None)
+        pipeline = getattr(self, "_live_event_pipeline", None)
+        structured_console_available = bool(
+            callable(emit_error_burst)
+            and Passivbot._live_event_console_available(self)
+            and getattr(pipeline, "console_sink", None) is not None
         )
+        if callable(emit_error_burst):
+            emit_error_burst(
+                count=count,
+                window_s=window_s,
+                endpoints=endpoints,
+                latest_fields=fields,
+            )
+        if structured_console_available:
+            return
         logging.warning(
             "[health] execution loop error burst | count=%d window=%ds top=%s latest_type=%s status=%s code=%s action=restart_backoff_continues",
             count,

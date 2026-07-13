@@ -516,9 +516,14 @@ Related detailed plans:
     truthiness-gap note was incorrect. PR #1210 renders frequent balance changes
     as exact raw/snapped transitions. PR #1215 removed the fill legacy/event
     duplicate after the structured projection gained timestamp, pending-PnL,
-    bounded traceability, and bulk-summary semantics. The active follow-up
-    removes the frequent periodic-health duplicate and replaces its incorrect
-    legacy Linux RSS rendering with the structured payload's byte count.
+    bounded traceability, and bulk-summary semantics. PR #1216 merged and
+    deployed at `13e6e484cf20b1265f2b4874b14ff7ab32d10bfd`: four natural
+    periodic health lines proved compact single ownership and sane RSS, with
+    `ok=true` settled smoke (`414/414` remote, `70/70` account-critical,
+    five process/config checks, `12/12` fill refreshes, and zero tracked
+    repository changes).
+    The natural KuCoin error burst exposed the remaining separate
+    structured/legacy duplicate, now the next focused console-ownership slice.
 
     Work log:
     - 2026-06-30: Added value-safe `live-smoke-report` HSL status projections

@@ -22,52 +22,41 @@ Estimated completion:
 
 ## Active Review Slice
 
-- Branch: `codex/v8-health-console-migration`
-- PR: #1216
-- Base: `6af983c539d00acd802aabad66044868afd45aa4`, merged PR #1215
-- Triggering evidence: every periodic health interval writes both a legacy
-  `[health]` line and a structured `health.summary` console projection. The
-  duplicate is frequent on every bot, the structured projection is needlessly
-  machine-like, and the legacy Linux `ru_maxrss` conversion visibly reports
-  `rss=0MB` while the structured event carries the correct byte count.
-- Scope: make the periodic structured `health.summary` event own the normal
-  human projection. Render one compact line with human uptime, loop time,
-  positions, raw/snapped balance and quote currency, orders, fills/PnL, error
-  budget, correct RSS, and only nonzero health/pipeline anomalies. Retain the
-  stdlib health line only when the structured event console is disabled or its
-  pipeline is absent. Preserve the separate error-burst health projection.
-- Behavior boundary: observability migration only. Preserve health counters,
-  scheduler cadence, event-pipeline timing snapshot transactions, candle-health
-  logging, and every order/risk/trading behavior. Do not change exchange calls,
-  health thresholds, restart policy, or smoke verdict policy.
-- Validation: compact periodic formatter coverage including zero values,
-  raw/snapped balance, quote currency, fills/PnL, errors, RSS, and anomaly-only
-  fields; single-line structured ownership versus stdlib fallback; timing
-  snapshot confirm/restore behavior; preserved error-burst formatting;
-  integrated monitor tests; generated registry/docs checks; Python compilation;
-  `git diff --check`; silent-handling audit; and independent preflight.
+- Branch: `codex/v8-error-burst-console-migration`.
+- Base: `13e6e484cf20b1265f2b4874b14ff7ab32d10bfd`, merged PR #1216.
+- Slice: execution-loop error-burst console ownership.
+- Triggering evidence: after PR #1216, a natural KuCoin error burst wrote two
+  adjacent console lines: structured `health.summary`
+  `reason=execution_loop_error_burst` and legacy `[health] execution loop error
+  burst`.
+- Scope: make the existing structured degraded health event the sole normal
+  console/text owner when its enabled pipeline has a console sink. Preserve the
+  legacy warning only when the pipeline, console sink, or callable emitter seam
+  is unavailable. Do not turn pipeline enqueue, flush, or sink degradation into
+  dual writing.
+- Behavior boundary: preserve burst thresholds, event payload/redaction,
+  individual error logs, restart/backoff, and trading behavior.
 - Publication state, exact head, mergeability, CI, and current-head reviewer
   verdicts: query live GitHub metadata; do not embed self-invalidating values.
-- Expected VPS action: exact five-bot graceful restart plus immediate and
-  settled smoke. Periodic health output occurs naturally, so validate exactly
-  one compact line per interval without creating or altering trading state.
-
-Next action:
-
-1. Hold PR #1216 at its exact current head for Hermes, Grok 4.5, and CI.
-2. Resolve findings narrowly and require fresh exact-head verdicts after every
-   push.
-3. Merge only when the complete gate is green, then perform the exact five-bot
-   graceful VPS5 restart and immediate/settled smoke.
+- Expected VPS action: restart and observe only after this follow-up merges;
+  this isolated implementation work does not contact VPS5 or exchanges.
 
 ## Deployed Baseline
 
-- Remote `v8`: `6af983c539d00acd802aabad66044868afd45aa4`, PR #1215
-- VPS5 repository: `6af983c539d00acd802aabad66044868afd45aa4`, PR #1215; tracked
-  status clean; expected untracked artifacts were preserved
-- VPS5 expected bots: five; running with PR #1215 restart PIDs
-  `903757/903759/903761/903763/903765`;
-  unrelated `misc:0.0` remains PID `434835`
+- Remote `v8`: `13e6e484cf20b1265f2b4874b14ff7ab32d10bfd`, PR #1216
+- VPS5 repository: `13e6e484cf20b1265f2b4874b14ff7ab32d10bfd`, PR #1216; exact
+  tracked status clean and expected untracked artifacts preserved
+- VPS5 expected bots: five; running with PR #1216 restart PIDs
+  `905310/905312/905314/905315/905316`; pane PIDs unchanged; unrelated
+  `misc:0.0` remains PID `434835`
+- PR #1216 merged and deployed at
+  `13e6e484cf20b1265f2b4874b14ff7ab32d10bfd`. The settled smoke returned
+  `ok=true`, `414/414` remote calls, `70/70` account-critical calls, five
+  green process/config checks, `12/12` fill refreshes, and exact repository
+  head with zero tracked changes. Four natural periodic health lines proved
+  compact single ownership and sane RSS. A natural KuCoin error burst
+  separately exposed the remaining adjacent legacy/structured error-burst
+  duplicate, which is the active follow-up above.
 - PR #1215 merged after exact-head Hermes and Grok 4.5 approval plus green CI.
   It made structured fill events own normal console/text output, added one
   bounded bulk summary while preserving every durable per-fill event, and kept
@@ -469,11 +458,11 @@ showed only `13.774%` thread CPU and `86.226%` direct non-CPU time. The long
 retention wall-time tail is host descheduling/contention evidence and does not
 justify another retention optimization.
 
-PR #1215's fill console/text migration is merged and deployed. The active slice
-is PR #1216's periodic health console migration: preserve durable health events,
-timing snapshot transactions, scheduler cadence, and error-burst formatting;
-render one compact normal health line and keep the stdlib line only as fallback
-when the structured console sink is unavailable.
+PR #1215's fill console/text migration and PR #1216's periodic health console
+migration are merged and deployed. PR #1216 proved compact single ownership and
+sane RSS across four natural periodic health lines; the only newly exposed
+duplicate is the separate execution-loop error-burst warning, tracked by the
+active follow-up above.
 
 Do not create progress-only PRs or resume unrelated logging work from stale
 worktrees.
