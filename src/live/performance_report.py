@@ -129,6 +129,10 @@ _RESOURCE_PRESSURE_FIELDS = (
     "event_monitor_publisher_retention_ms_max",
     "event_monitor_publisher_retention_inventory_ms_total",
     "event_monitor_publisher_retention_inventory_ms_max",
+    "event_monitor_publisher_retention_age_filter_ms_total",
+    "event_monitor_publisher_retention_age_filter_ms_max",
+    "event_monitor_publisher_retention_cap_prune_ms_total",
+    "event_monitor_publisher_retention_cap_prune_ms_max",
     "event_monitor_publisher_retention_age_unlink_ms_total",
     "event_monitor_publisher_retention_age_unlink_ms_max",
     "event_monitor_publisher_retention_cap_unlink_ms_total",
@@ -4096,6 +4100,18 @@ class _ResourcePressureAccumulator:
             ),
             "latest_event_monitor_publisher_retention_inventory_ms_max": latest_field_max(
                 "event_monitor_publisher_retention_inventory_ms_max"
+            ),
+            "latest_event_monitor_publisher_retention_age_filter_ms_total_sum": latest_field_sum(
+                "event_monitor_publisher_retention_age_filter_ms_total"
+            ),
+            "latest_event_monitor_publisher_retention_age_filter_ms_max": latest_field_max(
+                "event_monitor_publisher_retention_age_filter_ms_max"
+            ),
+            "latest_event_monitor_publisher_retention_cap_prune_ms_total_sum": latest_field_sum(
+                "event_monitor_publisher_retention_cap_prune_ms_total"
+            ),
+            "latest_event_monitor_publisher_retention_cap_prune_ms_max": latest_field_max(
+                "event_monitor_publisher_retention_cap_prune_ms_max"
             ),
             "latest_event_monitor_publisher_retention_age_unlink_ms_total_sum": latest_field_sum(
                 "event_monitor_publisher_retention_age_unlink_ms_total"
