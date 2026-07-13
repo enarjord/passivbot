@@ -16325,6 +16325,15 @@ class Passivbot:
             "price": float(order.get("price", 0.0) or 0.0),
         }
 
+    def _initial_entry_gate_structured_console_available(self) -> bool:
+        emit_gate_event = getattr(self, "_emit_initial_entry_distance_gate_event", None)
+        pipeline = getattr(self, "_live_event_pipeline", None)
+        return bool(
+            callable(emit_gate_event)
+            and Passivbot._live_event_console_available(self)
+            and getattr(pipeline, "console_sink", None) is not None
+        )
+
     def _log_initial_entry_distance_gate_block(
         self,
         order: dict,
@@ -16365,30 +16374,33 @@ class Passivbot:
                 self._resolve_pb_order_type(order),
             )
             return
-        logging.info(
-            "[entry] initial entry staged but not placed | symbol=%s pside=%s qty=%.10g price=%.10g market=%.10g dist=%.4f%% threshold=%.4f%% tolerance=%.4f%% type=%s reason=initial_entry_distance_gate",
-            Passivbot._log_symbol(probe["symbol"]),
-            probe["position_side"],
-            probe["qty"],
-            probe["price"],
-            market_price,
-            signed_dist * 100.0,
-            threshold * 100.0,
-            tolerance * 100.0,
-            self._resolve_pb_order_type(order),
-        )
+        if not self._initial_entry_gate_structured_console_available():
+            logging.info(
+                "[entry] initial entry staged but not placed | symbol=%s pside=%s qty=%.10g price=%.10g market=%.10g dist=%.4f%% threshold=%.4f%% tolerance=%.4f%% type=%s reason=initial_entry_distance_gate",
+                Passivbot._log_symbol(probe["symbol"]),
+                probe["position_side"],
+                probe["qty"],
+                probe["price"],
+                market_price,
+                signed_dist * 100.0,
+                threshold * 100.0,
+                tolerance * 100.0,
+                self._resolve_pb_order_type(order),
+            )
         event_order = dict(order)
         event_order["pb_order_type"] = self._resolve_pb_order_type(order)
-        self._emit_initial_entry_distance_gate_event(
-            event_type=EventTypes.ENTRY_INITIAL_DISTANCE_GATE_BLOCKED,
-            status="skipped",
-            action="skip_create",
-            order=event_order,
-            market_price=market_price,
-            signed_dist=signed_dist,
-            threshold=threshold,
-            tolerance=tolerance,
-        )
+        emit_gate_event = getattr(self, "_emit_initial_entry_distance_gate_event", None)
+        if callable(emit_gate_event):
+            emit_gate_event(
+                event_type=EventTypes.ENTRY_INITIAL_DISTANCE_GATE_BLOCKED,
+                status="skipped",
+                action="skip_create",
+                order=event_order,
+                market_price=market_price,
+                signed_dist=signed_dist,
+                threshold=threshold,
+                tolerance=tolerance,
+            )
 
     def _log_initial_entry_distance_gate_cleared(
         self,
@@ -16405,28 +16417,31 @@ class Passivbot:
         if key not in state:
             return
         state.pop(key, None)
-        logging.info(
-            "[entry] initial entry distance gate cleared | symbol=%s pside=%s qty=%.10g price=%.10g market=%.10g dist=%.4f%% threshold=%.4f%% type=%s",
-            Passivbot._log_symbol(order.get("symbol")),
-            str(order.get("position_side") or ""),
-            float(order.get("qty", 0.0) or 0.0),
-            float(order.get("price", 0.0) or 0.0),
-            market_price,
-            signed_dist * 100.0,
-            threshold * 100.0,
-            self._resolve_pb_order_type(order),
-        )
+        if not self._initial_entry_gate_structured_console_available():
+            logging.info(
+                "[entry] initial entry distance gate cleared | symbol=%s pside=%s qty=%.10g price=%.10g market=%.10g dist=%.4f%% threshold=%.4f%% type=%s",
+                Passivbot._log_symbol(order.get("symbol")),
+                str(order.get("position_side") or ""),
+                float(order.get("qty", 0.0) or 0.0),
+                float(order.get("price", 0.0) or 0.0),
+                market_price,
+                signed_dist * 100.0,
+                threshold * 100.0,
+                self._resolve_pb_order_type(order),
+            )
         event_order = dict(order)
         event_order["pb_order_type"] = self._resolve_pb_order_type(order)
-        self._emit_initial_entry_distance_gate_event(
-            event_type=EventTypes.ENTRY_INITIAL_DISTANCE_GATE_CLEARED,
-            status="recovered",
-            action="allow_create",
-            order=event_order,
-            market_price=market_price,
-            signed_dist=signed_dist,
-            threshold=threshold,
-        )
+        emit_gate_event = getattr(self, "_emit_initial_entry_distance_gate_event", None)
+        if callable(emit_gate_event):
+            emit_gate_event(
+                event_type=EventTypes.ENTRY_INITIAL_DISTANCE_GATE_CLEARED,
+                status="recovered",
+                action="allow_create",
+                order=event_order,
+                market_price=market_price,
+                signed_dist=signed_dist,
+                threshold=threshold,
+            )
 
     def _apply_mode_filters(
         self,

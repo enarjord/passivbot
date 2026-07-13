@@ -22,22 +22,23 @@ Estimated completion:
 
 ## Active Review Slice
 
-- Branch: `codex/v8-ambiguous-cancel-console-migration`.
-- Base: `6599fba08cadffac99ce6a1ce2bfd3f58ca3fa15`, merged PR #1217.
-- Slice: ambiguous-cancel terminal-state console ownership.
-- Triggering evidence: retained OKX logs showed an
-  `execution.cancel_ambiguous_terminal` warning immediately followed by the
-  legacy `[order] ambiguous cancel terminal state; forcing full account
-  confirmation before next cycle` line for the same symbol.
-- Scope: make the existing structured warning the sole normal console/text
-  owner, ensure its compact projection communicates the required full
-  authoritative account confirmation, and preserve the legacy summary only
-  when structured console infrastructure is unavailable. Enqueue or sink
-  degradation must remain single-owner and surface through pipeline health,
-  not trigger dynamic dual writing.
-- Behavior boundary: preserve cancellation results, state-change detection,
-  authoritative confirmation surfaces and epochs, order-wave scheduling,
-  exchange calls, event emission, and all trading behavior.
+- Branch: `codex/v8-entry-distance-console-migration`.
+- Base: `4bf7706d79f2e2404f785195973d13ea49c31efb`, merged PR #1218.
+- Slice: initial-entry distance-gate console ownership.
+- Triggering evidence: fresh post-PR #1218 Binance, GateIO, and OKX logs showed
+  the throttled legacy `[entry] initial entry staged but not placed` line
+  immediately followed by structured `entry.initial_distance_gate_blocked`
+  output for the same symbol and decision.
+- Scope: make the existing structured blocked/cleared events the sole normal
+  console/text owners when an enabled live-event pipeline has an actual console
+  sink. Preserve the legacy INFO summaries when the emitter, pipeline, or
+  console sink is unavailable. Enqueue or sink degradation must remain
+  single-owner and surface through pipeline health rather than trigger dynamic
+  dual writing.
+- Behavior boundary: preserve the one-hour blocked-event/INFO throttle,
+  repeated DEBUG diagnostics, gate state transitions, order filtering,
+  configuration validation, payloads, routes, exchange calls, and all trading
+  behavior.
 - Publication state, exact head, mergeability, CI, and current-head reviewer
   verdicts: query live GitHub metadata; do not embed self-invalidating values.
 - Expected VPS action: restart and observe only after this slice merges;
@@ -45,12 +46,24 @@ Estimated completion:
 
 ## Deployed Baseline
 
-- Remote `v8`: `6599fba08cadffac99ce6a1ce2bfd3f58ca3fa15`, PR #1217
-- VPS5 repository: `6599fba08cadffac99ce6a1ce2bfd3f58ca3fa15`, PR #1217; exact
+- Remote `v8`: `4bf7706d79f2e2404f785195973d13ea49c31efb`, PR #1218
+- VPS5 repository: `4bf7706d79f2e2404f785195973d13ea49c31efb`, PR #1218; exact
   tracked status clean and expected untracked artifacts preserved
-- VPS5 expected bots: five; running with PR #1217 restart PIDs
-  `906664/906666/906668/906670/906672`; pane PIDs unchanged; unrelated
+- VPS5 expected bots: five; running with PR #1218 restart PIDs
+  `908144/908203/908262/908320/908382`; pane PIDs unchanged; unrelated
   `misc:0.0` remains PID `434835`
+- PR #1218 merged and deployed at
+  `4bf7706d79f2e2404f785195973d13ea49c31efb`. It made the structured
+  ambiguous-cancel terminal warning the sole normal console/text owner and
+  added the compact full-account-confirmation cue while preserving cancellation
+  and authoritative-confirmation behavior. All five old bot processes exited
+  naturally after one signal round; pane PIDs and unrelated `misc:0.0` PID
+  `434835` remained unchanged. The settled two-minute smoke returned `ok=true`,
+  `472/472` remote calls, `25/25` account-critical calls, `7/7` fill refreshes,
+  five matching processes/configs, zero hard/log/monitor/pipeline failures, four
+  complete active HSL replays, and an exact clean repository. A transient `D`
+  state cleared within 20 seconds. No natural ambiguous cancel occurred after
+  restart, so runtime format evidence remains absent rather than manufactured.
 - PR #1217 merged and deployed at
   `6599fba08cadffac99ce6a1ce2bfd3f58ca3fa15`. It made the structured
   execution-loop error-burst health event the sole normal console/text owner
@@ -473,10 +486,11 @@ retention wall-time tail is host descheduling/contention evidence and does not
 justify another retention optimization.
 
 PR #1215's fill console/text migration, PR #1216's periodic health console
-migration, and PR #1217's execution-loop error-burst console migration are
-merged and deployed. PR #1216 proved compact periodic-health ownership and sane
-RSS across four natural lines. The retained OKX ambiguous-cancel sequence is
-the next concrete duplicate and is tracked by the active follow-up above.
+migration, PR #1217's execution-loop error-burst console migration, and PR
+#1218's ambiguous-cancel console migration are merged and deployed. PR #1216
+proved compact periodic-health ownership and sane RSS across four natural
+lines. Fresh Binance, GateIO, and OKX entry-distance-gate sequences exposed the
+next adjacent legacy/structured duplicate, tracked by the active slice above.
 
 Do not create progress-only PRs or resume unrelated logging work from stale
 worktrees.
