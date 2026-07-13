@@ -611,6 +611,10 @@ def test_pipeline_aggregates_and_resets_monitor_publisher_phase_timing(monkeypat
                         "retention_ns_max": 4_000_000,
                         "retention_inventory_ns_total": 3_000_000,
                         "retention_inventory_ns_max": 3_000_000,
+                        "retention_age_filter_ns_total": 1_800_000,
+                        "retention_age_filter_ns_max": 1_800_000,
+                        "retention_cap_prune_ns_total": 1_000_000,
+                        "retention_cap_prune_ns_max": 1_000_000,
                         "retention_age_unlink_ns_total": 700_000,
                         "retention_age_unlink_ns_max": 700_000,
                         "retention_cap_unlink_ns_total": 300_000,
@@ -633,6 +637,10 @@ def test_pipeline_aggregates_and_resets_monitor_publisher_phase_timing(monkeypat
                         "retention_ns_max": 0,
                         "retention_inventory_ns_total": 0,
                         "retention_inventory_ns_max": 0,
+                        "retention_age_filter_ns_total": 0,
+                        "retention_age_filter_ns_max": 0,
+                        "retention_cap_prune_ns_total": 0,
+                        "retention_cap_prune_ns_max": 0,
                         "retention_age_unlink_ns_total": 0,
                         "retention_age_unlink_ns_max": 0,
                         "retention_cap_unlink_ns_total": 0,
@@ -681,6 +689,10 @@ def test_pipeline_aggregates_and_resets_monitor_publisher_phase_timing(monkeypat
         "event_monitor_publisher_retention_ms_max": 4.0,
         "event_monitor_publisher_retention_inventory_ms_total": 3.0,
         "event_monitor_publisher_retention_inventory_ms_max": 3.0,
+        "event_monitor_publisher_retention_age_filter_ms_total": 1.8,
+        "event_monitor_publisher_retention_age_filter_ms_max": 1.8,
+        "event_monitor_publisher_retention_cap_prune_ms_total": 1.0,
+        "event_monitor_publisher_retention_cap_prune_ms_max": 1.0,
         "event_monitor_publisher_retention_age_unlink_ms_total": 0.7,
         "event_monitor_publisher_retention_age_unlink_ms_max": 0.7,
         "event_monitor_publisher_retention_cap_unlink_ms_total": 0.3,
@@ -719,6 +731,10 @@ def test_pipeline_monitor_phase_timing_restores_overlapping_window(monkeypatch):
     pipeline._timing_monitor_publisher_retention_ns_max = 9_000_000
     pipeline._timing_monitor_publisher_retention_inventory_ns_total = 11_000_000
     pipeline._timing_monitor_publisher_retention_inventory_ns_max = 6_000_000
+    pipeline._timing_monitor_publisher_retention_age_filter_ns_total = 8_000_000
+    pipeline._timing_monitor_publisher_retention_age_filter_ns_max = 5_000_000
+    pipeline._timing_monitor_publisher_retention_cap_prune_ns_total = 6_000_000
+    pipeline._timing_monitor_publisher_retention_cap_prune_ns_max = 4_000_000
     pipeline._timing_monitor_publisher_retention_age_unlink_ns_total = 4_000_000
     pipeline._timing_monitor_publisher_retention_age_unlink_ns_max = 3_000_000
     pipeline._timing_monitor_publisher_retention_cap_unlink_ns_total = 2_000_000
@@ -741,6 +757,10 @@ def test_pipeline_monitor_phase_timing_restores_overlapping_window(monkeypatch):
     pipeline._timing_monitor_publisher_retention_ns_max = 14_000_000
     pipeline._timing_monitor_publisher_retention_inventory_ns_total = 17_000_000
     pipeline._timing_monitor_publisher_retention_inventory_ns_max = 10_000_000
+    pipeline._timing_monitor_publisher_retention_age_filter_ns_total = 13_000_000
+    pipeline._timing_monitor_publisher_retention_age_filter_ns_max = 9_000_000
+    pipeline._timing_monitor_publisher_retention_cap_prune_ns_total = 11_000_000
+    pipeline._timing_monitor_publisher_retention_cap_prune_ns_max = 8_000_000
     pipeline._timing_monitor_publisher_retention_age_unlink_ns_total = 5_000_000
     pipeline._timing_monitor_publisher_retention_age_unlink_ns_max = 4_000_000
     pipeline._timing_monitor_publisher_retention_cap_unlink_ns_total = 3_000_000
@@ -770,6 +790,10 @@ def test_pipeline_monitor_phase_timing_restores_overlapping_window(monkeypatch):
     assert restored["event_monitor_publisher_retention_ms_max"] == 14.0
     assert restored["event_monitor_publisher_retention_inventory_ms_total"] == 17.0
     assert restored["event_monitor_publisher_retention_inventory_ms_max"] == 10.0
+    assert restored["event_monitor_publisher_retention_age_filter_ms_total"] == 13.0
+    assert restored["event_monitor_publisher_retention_age_filter_ms_max"] == 9.0
+    assert restored["event_monitor_publisher_retention_cap_prune_ms_total"] == 11.0
+    assert restored["event_monitor_publisher_retention_cap_prune_ms_max"] == 8.0
     assert restored["event_monitor_publisher_retention_age_unlink_ms_total"] == 5.0
     assert restored["event_monitor_publisher_retention_age_unlink_ms_max"] == 4.0
     assert restored["event_monitor_publisher_retention_cap_unlink_ms_total"] == 3.0
@@ -817,6 +841,10 @@ def test_pipeline_custom_monitor_sink_reports_zero_internal_phase_timing():
         "event_monitor_publisher_retention_ms_max": 0.0,
         "event_monitor_publisher_retention_inventory_ms_total": 0.0,
         "event_monitor_publisher_retention_inventory_ms_max": 0.0,
+        "event_monitor_publisher_retention_age_filter_ms_total": 0.0,
+        "event_monitor_publisher_retention_age_filter_ms_max": 0.0,
+        "event_monitor_publisher_retention_cap_prune_ms_total": 0.0,
+        "event_monitor_publisher_retention_cap_prune_ms_max": 0.0,
         "event_monitor_publisher_retention_age_unlink_ms_total": 0.0,
         "event_monitor_publisher_retention_age_unlink_ms_max": 0.0,
         "event_monitor_publisher_retention_cap_unlink_ms_total": 0.0,

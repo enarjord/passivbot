@@ -685,6 +685,10 @@ def test_monitor_publisher_event_phase_timing_uses_fixed_boundaries(tmp_path, mo
         "retention_ns_max": 11_000_000,
         "retention_inventory_ns_total": 0,
         "retention_inventory_ns_max": 0,
+        "retention_age_filter_ns_total": 0,
+        "retention_age_filter_ns_max": 0,
+        "retention_cap_prune_ns_total": 0,
+        "retention_cap_prune_ns_max": 0,
         "retention_age_unlink_ns_total": 0,
         "retention_age_unlink_ns_max": 0,
         "retention_cap_unlink_ns_total": 0,
@@ -732,6 +736,10 @@ def test_monitor_publisher_event_failure_retains_reached_phase_timing(tmp_path, 
         "retention_ns_max": 0,
         "retention_inventory_ns_total": 0,
         "retention_inventory_ns_max": 0,
+        "retention_age_filter_ns_total": 0,
+        "retention_age_filter_ns_max": 0,
+        "retention_cap_prune_ns_total": 0,
+        "retention_cap_prune_ns_max": 0,
         "retention_age_unlink_ns_total": 0,
         "retention_age_unlink_ns_max": 0,
         "retention_cap_unlink_ns_total": 0,
@@ -837,6 +845,10 @@ def test_monitor_publisher_event_timing_records_retention_phases_for_due_run(
     expected_inventory_ns = len(inventory_scans) * 1_000
     assert timing["retention_inventory_ns_total"] == expected_inventory_ns
     assert timing["retention_inventory_ns_max"] == expected_inventory_ns
+    assert timing["retention_age_filter_ns_total"] == 2_000
+    assert timing["retention_age_filter_ns_max"] == 2_000
+    assert timing["retention_cap_prune_ns_total"] == 3_000
+    assert timing["retention_cap_prune_ns_max"] == 3_000
     assert timing["retention_age_unlink_ns_total"] == 2_000
     assert timing["retention_age_unlink_ns_max"] == 2_000
     assert timing["retention_cap_unlink_ns_total"] == 3_000
@@ -860,6 +872,10 @@ def test_monitor_publisher_event_timing_zeroes_retention_phases_when_not_due(tmp
     for key in (
         "retention_inventory_ns_total",
         "retention_inventory_ns_max",
+        "retention_age_filter_ns_total",
+        "retention_age_filter_ns_max",
+        "retention_cap_prune_ns_total",
+        "retention_cap_prune_ns_max",
         "retention_age_unlink_ns_total",
         "retention_age_unlink_ns_max",
         "retention_cap_unlink_ns_total",
@@ -897,6 +913,7 @@ def test_monitor_publisher_event_timing_excludes_tolerated_age_disappearance(
     assert timing["retention_age_deleted"] == 0
     assert timing["retention_cap_deleted"] == 0
     assert timing["retention_age_unlink_ns_total"] >= 0
+    assert timing["retention_age_filter_ns_total"] >= timing["retention_age_unlink_ns_total"]
 
 
 def test_monitor_publisher_event_timing_keeps_completed_phases_after_cap_unlink_error(
@@ -932,9 +949,81 @@ def test_monitor_publisher_event_timing_keeps_completed_phases_after_cap_unlink_
     assert timing["retention_inventory_entries_visited"] > 0
     assert timing["retention_inventory_candidates"] == 1
     assert timing["retention_inventory_ns_total"] > 0
+    assert timing["retention_age_filter_ns_total"] == 0
+    assert timing["retention_cap_prune_ns_total"] == 4_000
+    assert timing["retention_cap_prune_ns_max"] == 4_000
     assert timing["retention_cap_unlink_ns_total"] == 4_000
     assert timing["retention_cap_unlink_ns_max"] == 4_000
     assert timing["retention_cap_deleted"] == 0
+
+
+def test_monitor_publisher_event_timing_keeps_age_filter_after_age_unlink_error(
+    tmp_path, monkeypatch, caplog
+):
+    publisher = _make_publisher(
+        tmp_path, retain_days=0.0, max_total_bytes=1_000_000
+    )
+    candidate = publisher.events_dir / "candidate.ndjson"
+    _write_retention_file(candidate, size=10, mtime_ms=1)
+    clock = {"ns": 0}
+    original_scandir = monitor_publisher_module.os.scandir
+
+    def timed_scandir(path):
+        clock["ns"] += 1_000
+        return original_scandir(path)
+
+    def fail_candidate_unlink(path, *args, **_kwargs):
+        if path == candidate:
+            clock["ns"] += 4_000
+            raise OSError("age candidate unavailable")
+        raise AssertionError(f"unexpected unlink: {path}")
+
+    monkeypatch.setattr(monitor_publisher_module.time, "monotonic_ns", lambda: clock["ns"])
+    monkeypatch.setattr(monitor_publisher_module.os, "scandir", timed_scandir)
+    monkeypatch.setattr(Path, "unlink", fail_candidate_unlink)
+
+    event, timing = publisher._record_event_timed(
+        "test.event", ("test",), {"value": 1}, ts=100_000
+    )
+
+    assert event is not None
+    assert candidate.exists()
+    assert "retention pruning failed: age candidate unavailable" in caplog.text
+    assert timing["retention_inventory_candidates"] == 1
+    assert timing["retention_age_filter_ns_total"] == 4_000
+    assert timing["retention_age_filter_ns_max"] == 4_000
+    assert timing["retention_age_unlink_ns_total"] == 4_000
+    assert timing["retention_age_unlink_ns_max"] == 4_000
+    assert timing["retention_age_deleted"] == 0
+    assert timing["retention_cap_prune_ns_total"] == 0
+    assert timing["retention_cap_prune_ns_max"] == 0
+    assert timing["retention_cap_unlink_ns_total"] == 0
+    assert timing["retention_cap_unlink_ns_max"] == 0
+    assert timing["retention_cap_deleted"] == 0
+
+
+def test_monitor_publisher_event_timing_records_cap_prune_on_under_cap_return(
+    tmp_path, monkeypatch
+):
+    publisher = _make_publisher(
+        tmp_path, retain_days=-1.0, max_total_bytes=1_000_000
+    )
+    candidate = publisher.events_dir / "candidate.ndjson"
+    _write_retention_file(candidate, size=10, mtime_ms=1)
+    phases = []
+
+    publisher._prune_retention(
+        now_ms=100_000,
+        on_phase=lambda phase, duration_ns: phases.append((phase, duration_ns)),
+    )
+
+    assert candidate.exists()
+    assert [phase for phase, _duration_ns in phases] == [
+        "inventory",
+        "age_filter",
+        "cap_prune",
+    ]
+    assert phases[-1][1] >= 0
 
 
 def _write_retention_file(path, *, size, mtime_ms):

@@ -29,6 +29,10 @@ _MONITOR_EVENT_PHASE_TIMING_KEYS = (
     "retention_ns_max",
     "retention_inventory_ns_total",
     "retention_inventory_ns_max",
+    "retention_age_filter_ns_total",
+    "retention_age_filter_ns_max",
+    "retention_cap_prune_ns_total",
+    "retention_cap_prune_ns_max",
     "retention_age_unlink_ns_total",
     "retention_age_unlink_ns_max",
     "retention_cap_unlink_ns_total",
@@ -566,51 +570,72 @@ class MonitorPublisher:
                             "inventory",
                             max(0, time.monotonic_ns() - inventory_started_ns),
                         )
-                if self.retain_days >= 0.0:
-                    survivors = []
-                    for path, size, mtime in candidates:
-                        if int(mtime * 1000.0) < cutoff_ms:
-                            age_unlink_started_ns = (
-                                time.monotonic_ns() if on_phase is not None else None
-                            )
-                            try:
-                                path.unlink()
-                            except FileNotFoundError:
+                age_filter_started_ns = (
+                    time.monotonic_ns() if on_phase is not None else None
+                )
+                try:
+                    if self.retain_days >= 0.0:
+                        survivors = []
+                        for path, size, mtime in candidates:
+                            if int(mtime * 1000.0) < cutoff_ms:
+                                age_unlink_started_ns = (
+                                    time.monotonic_ns() if on_phase is not None else None
+                                )
+                                try:
+                                    path.unlink()
+                                except FileNotFoundError:
+                                    total_bytes -= size
+                                    continue
+                                finally:
+                                    if age_unlink_started_ns is not None:
+                                        on_phase(
+                                            "age_unlink",
+                                            max(0, time.monotonic_ns() - age_unlink_started_ns),
+                                        )
                                 total_bytes -= size
-                                continue
-                            finally:
-                                if age_unlink_started_ns is not None:
-                                    on_phase(
-                                        "age_unlink",
-                                        max(0, time.monotonic_ns() - age_unlink_started_ns),
-                                    )
-                            total_bytes -= size
-                            if on_counter is not None:
-                                on_counter("age_deleted")
-                        else:
-                            survivors.append((path, size, mtime))
-                else:
-                    survivors = candidates
-                if total_bytes <= self.max_total_bytes:
-                    return
+                                if on_counter is not None:
+                                    on_counter("age_deleted")
+                            else:
+                                survivors.append((path, size, mtime))
+                    else:
+                        survivors = candidates
+                finally:
+                    if age_filter_started_ns is not None:
+                        on_phase(
+                            "age_filter",
+                            max(0, time.monotonic_ns() - age_filter_started_ns),
+                        )
 
-                for path, size, _mtime in survivors:
+                cap_prune_started_ns = (
+                    time.monotonic_ns() if on_phase is not None else None
+                )
+                try:
                     if total_bytes <= self.max_total_bytes:
-                        break
-                    cap_unlink_started_ns = (
-                        time.monotonic_ns() if on_phase is not None else None
-                    )
-                    try:
-                        path.unlink()
-                    finally:
-                        if cap_unlink_started_ns is not None:
-                            on_phase(
-                                "cap_unlink",
-                                max(0, time.monotonic_ns() - cap_unlink_started_ns),
-                            )
-                    total_bytes -= size
-                    if on_counter is not None:
-                        on_counter("cap_deleted")
+                        return
+
+                    for path, size, _mtime in survivors:
+                        if total_bytes <= self.max_total_bytes:
+                            break
+                        cap_unlink_started_ns = (
+                            time.monotonic_ns() if on_phase is not None else None
+                        )
+                        try:
+                            path.unlink()
+                        finally:
+                            if cap_unlink_started_ns is not None:
+                                on_phase(
+                                    "cap_unlink",
+                                    max(0, time.monotonic_ns() - cap_unlink_started_ns),
+                                )
+                        total_bytes -= size
+                        if on_counter is not None:
+                            on_counter("cap_deleted")
+                finally:
+                    if cap_prune_started_ns is not None:
+                        on_phase(
+                            "cap_prune",
+                            max(0, time.monotonic_ns() - cap_prune_started_ns),
+                        )
             except Exception as exc:
                 logging.error("[monitor] retention pruning failed: %s", exc)
 

@@ -22,56 +22,64 @@ Estimated completion:
 
 ## Active Review Slice
 
-- Branch: `codex/v8-monitor-retention-scandir`
-- Base: `3a17fdb9768de80212d2dcd3c097350508d69caa`, PR #1211
-- Triggering evidence: the first four post-PR #1211 health windows attributed
-  `15369.148ms` of `15591.553ms` retention time to inventory. The
-  `10253.648ms` retention maximum contained a `10241.787ms` inventory maximum;
-  20,158 entries yielded 20,032 candidates with zero age or cap deletions.
-  A read-only two-order VPS5 benchmark preserved entry/file counts while direct
-  `os.scandir` took `43-112ms` per active root versus `94-587ms` for the
-  current `Path.rglob` plus `Path.stat` path.
-- Scope: replace only the full retention inventory walker with one direct
-  healthy-path `os.scandir` traversal and one explicit `DirEntry.stat` per
-  visited entry. Preserve full recursive accounting and direct-candidate
-  collection; retry one transient directory-scan failure before isolating a
-  persistently unavailable subtree.
-- Behavior boundary: performance implementation only. Preserve the 60-second
-  cadence, `last_retention_ms`, lock scope, directory-symlink non-traversal,
-  file-symlink accounting, protected paths, candidate ordering, age and cap
-  policy, persistent scan-error isolation, timing schema, configuration, and every
-  order/risk/trading behavior. Do not add caching, staggering, workers, paths,
-  labels, samples, or events.
-- Validation: static inventory parity, one healthy traversal and explicit stat
-  per entry, transient/persistent scan errors, directory and entry disappearance,
-  file and directory symlinks, nested unknown files,
-  protected paths, age and cap ordering, timing counters, integrated monitor
-  regressions, Python compilation, `git diff --check`, silent-handling audit,
-  and independent preflight.
+- Branch: `codex/v8-monitor-retention-loop-timing`
+- Base: `f68f10c4a3754c5603cfd7d97e5bc3e5a861f8cc`, PR #1212
+- Triggering evidence: 59 post-PR #1212 due runs visited 99,393 entries.
+  Inventory normalized per-window per-run p50/p95/max was
+  `766.188/1763.343/2254.624ms`, and inventory maximum fell about 78% from the
+  PR #1211 baseline's `10241.787ms`. The overall retention maximum nevertheless
+  remained `9772.147ms`; its window exposed only `1309.122ms` inventory maximum
+  and millisecond-scale unlink maxima. Existing independently aggregated maxima
+  cannot identify which unmeasured loop contained that run's remaining wall time.
+- Scope: add fixed whole-loop `age_filter` and `cap_prune` total/max timing.
+  `age_filter` contains classification, survivor construction, and nested age
+  unlinks. `cap_prune` contains the cap decision, survivor traversal, and nested
+  cap unlinks, including the under-cap return. Preserve the existing nested
+  unlink timings and project all fields through transactional event-pipeline
+  health windows, smoke reports, and performance reports.
+- Behavior boundary: additive diagnostics only. Preserve retention cadence,
+  `last_retention_ms`, lock scope, traversal, accounting, candidate order and
+  deletion domain, age/cap policy, error handling, configuration, and every
+  order/risk/trading behavior. Do not add caching, staggering, workers,
+  thresholds, verdicts, or derived maximum arithmetic.
+- Validation: due/not-due and under-cap phase boundaries, nested unlink
+  containment, failure/finally retention, event-pipeline aggregation/reset/
+  restore, historical absence behavior, smoke/performance projections,
+  integrated monitor regressions, Python compilation, `git diff --check`,
+  silent-handling audit, and independent preflight.
 - Publication state, exact head, mergeability, CI, and current-head reviewer
   verdicts: query live GitHub metadata; do not embed self-invalidating values.
 - Expected VPS action: exact five-bot graceful restart, immediate and settled
-  smoke, then at least 30 naturally emitted due runs comparing normalized
-  inventory p50/p95/max and process I/O-wait evidence.
+  smoke, then at least 30 naturally emitted due runs comparing whole-loop
+  age/cap attribution with retention and process I/O-wait evidence.
 
 Next action:
 
-1. Hold the active benchmark-supported `scandir` inventory PR's exact current
-   head until Hermes, Grok 4.5, and CI are green.
+1. Hold PR #1213's exact current head until Hermes, Grok 4.5, and CI are green.
 2. Resolve findings narrowly and require fresh exact-head verdicts after every
    push.
 3. Merge, perform the exact five-bot graceful VPS restart, run immediate and
-   settled smoke, then collect enough due runs to test the production p95/max
-   claim before selecting any further persistence change.
+   settled smoke, then collect at least 30 natural due runs. Select no further
+   persistence change unless correlated phase and process evidence justifies it.
 
 ## Deployed Baseline
 
-- Remote `v8`: `3a17fdb9768de80212d2dcd3c097350508d69caa`, PR #1211
-- VPS5 repository: `3a17fdb9768de80212d2dcd3c097350508d69caa`, PR #1211; tracked
+- Remote `v8`: `f68f10c4a3754c5603cfd7d97e5bc3e5a861f8cc`, PR #1212
+- VPS5 repository: `f68f10c4a3754c5603cfd7d97e5bc3e5a861f8cc`, PR #1212; tracked
   status clean; expected untracked artifacts were preserved
-- VPS5 expected bots: five; running with PR #1211 restart PIDs
-  `892535/892537/892539/892541/892543`;
+- VPS5 expected bots: five; running with PR #1212 restart PIDs
+  `894485/894487/894489/894491/894493`;
   unrelated `misc:0.0` remains PID `434835`
+- PR #1212 merged after exact-head Hermes and Grok 4.5 approval plus green CI.
+  VPS5 fast-forwarded cleanly and gracefully restarted only the five exact bot
+  panes; every old bot exited naturally, and pane PIDs plus unrelated
+  `misc:0.0` PID `434835` were preserved. The final two-minute smoke was
+  hard-green with `396/396` remote and `72/72` account-critical calls, all five
+  expected processes, zero hard/log/monitor failures, no active HSL replay, and
+  a clean tracked repository. Across 59 due runs, inventory maximum improved
+  about 78% while drops, sink errors, degraded counts, and final queue depth
+  remained zero. The residual overall retention maximum is diagnostic evidence,
+  not justification for another behavior optimization.
 - PR #1211 merged after exact-head Hermes and Grok 4.5 approval plus green CI.
   VPS5 fast-forwarded cleanly through PR #1209 and #1211 and gracefully
   restarted only the five exact bot panes; all old bots exited naturally, pane
@@ -413,13 +421,14 @@ PR #1207's position console projection and PR #1208's one-pass monitor
 retention inventory are also merged and deployed with their behavior boundaries
 preserved. PR #1210's balance console transition is merged, deployed, and
 validated from natural balance changes on all five bots. PR #1211's retention
-phase attribution is merged and deployed; fresh evidence isolates inventory as
-98.574% of retention service time in the first four health windows.
+phase attribution and PR #1212's direct `os.scandir` inventory are merged and
+deployed. PR #1212 reduced inventory maximum about 78%, while a remaining
+overall retention maximum lacked whole-loop age/cap attribution.
 
-The active slice replaces only the full inventory walker with benchmarked
-direct `os.scandir` traversal. Keep fill formatting separate: its legacy and
-event-routed lines currently overlap and require an explicit migration contract
-for timestamps, pending PnL, and bulk summaries.
+The active slice adds only whole-loop `age_filter` and `cap_prune` timing while
+preserving nested unlink timing and all retention behavior. Keep fill formatting
+separate: its legacy and event-routed lines currently overlap and require an
+explicit migration contract for timestamps, pending PnL, and bulk summaries.
 
 Do not create progress-only PRs or resume unrelated logging work from stale
 worktrees.
