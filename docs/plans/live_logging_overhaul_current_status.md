@@ -23,7 +23,8 @@ Estimated completion:
 ## Active Review Slice
 
 - Branch: `codex/v8-fill-console-migration`
-- Base: `91e40b911fd5378547b77ffbd7be1924846fa3e3`, PR #1214
+- PR: #1215
+- Base: `91e40b911fd5378547b77ffbd7be1924846fa3e3`, merged PR #1214
 - Triggering evidence: `fill.ingested` is routed to console/text while
   `_log_new_fill_events()` also writes the legacy per-fill or bulk line. Normal
   fills therefore appear twice, and batches over 20 defeat the legacy one-line
@@ -55,9 +56,9 @@ Estimated completion:
 
 Next action:
 
-1. Complete the bounded fill-console migration and independent preflight.
-2. Publish one review-worthy PR and require Hermes, Grok 4.5, and CI green on
-   its exact current head; resolve findings narrowly and re-review every push.
+1. Hold PR #1215 at its exact current head for Hermes, Grok 4.5, and CI.
+2. Resolve findings narrowly and require fresh exact-head verdicts after every
+   push.
 3. Merge only when the complete gate is green, then perform the exact five-bot
    graceful VPS5 restart and immediate/settled smoke without fabricating a fill.
 
