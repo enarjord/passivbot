@@ -1903,12 +1903,14 @@ def test_console_format_summarizes_periodic_health():
             "positions_long": 2,
             "positions_short": 1,
             "balance_raw": 1_005.25,
-            "equity": 1_010.75,
+            "balance_snapped": 1_004.75,
+            "quote": "USDT",
             "orders_placed": 3,
             "orders_cancelled": 1,
             "fills": 2,
             "pnl": -1.5,
             "errors_last_hour": 1,
+            "error_budget_max": 10,
             "ws_reconnects": 2,
             "rate_limits": 3,
             "rss_bytes": 157_286_400,
@@ -1921,11 +1923,46 @@ def test_console_format_summarizes_periodic_health():
     )
 
     assert format_console_event(event) == (
-        "[health] succeeded cycle=cy_health uptime=123s loop=1.2s "
-        "positions=2L/1S balance=1005.25 equity=1010.75 orders=+3/-1 "
-        "fills=2:pnl=-1.5 errors=1/h ws=2 rate_limits=3 rss=150.0MiB "
-        "event_q=4/1000 event_dropped=2 sink_errors=1 "
-        "reason=periodic_health_summary"
+        "[health] uptime=2m3s | loop=1.2s | positions=2L/1S | "
+        "balance=1005.25 USDT (snap 1004.75) | orders=+3/-1 | "
+        "fills=2 (pnl=-1.50 USDT) | errors=1/10 | ws=2 | rate_limits=3 | "
+        "rss=150.0MiB | event_q=4/1000 | event_dropped=2 | sink_errors=1"
+    )
+
+
+def test_console_format_periodic_health_keeps_zero_balance_and_known_zero_pnl():
+    event = LiveEvent(
+        EventTypes.HEALTH_SUMMARY,
+        reason_code=ReasonCodes.PERIODIC_HEALTH_SUMMARY,
+        data={
+            "uptime_ms": 1_173_000,
+            "last_loop_duration_ms": 39_500,
+            "positions_long": 0,
+            "positions_short": 0,
+            "balance_raw": 0.0,
+            "balance_snapped": 0.0,
+            "quote": "USDT",
+            "orders_placed": 0,
+            "orders_cancelled": 0,
+            "fills": 1,
+            "pnl": 0.0,
+            "errors_last_hour": 0,
+            "error_budget_max": 10,
+            "rss_bytes": 87_658_496,
+            "ws_reconnects": 0,
+            "rate_limits": 0,
+            "health_summary_lag_ms": 0,
+            "event_queue_depth": 0,
+            "event_dropped_total": 0,
+            "event_sink_error_total": 0,
+            "event_pipeline_worker_alive": True,
+        },
+    )
+
+    assert format_console_event(event) == (
+        "[health] uptime=19m33s | loop=39.5s | positions=0L/0S | "
+        "balance=0.00 USDT | orders=+0/-0 | fills=1 (pnl=+0.00 USDT) | "
+        "errors=0/10 | rss=83.6MiB"
     )
 
 

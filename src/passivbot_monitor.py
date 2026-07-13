@@ -469,15 +469,34 @@ def _build_health_summary_payload(
         "positions_short": n_short,
         "balance_raw": balance_raw,
         "balance_snapped": balance_snapped,
+        "quote": str(getattr(self, "quote", "") or ""),
         "equity": float(getattr(self, "_monitor_last_equity", balance_raw) or balance_raw),
         "orders_placed": int(self._health_orders_placed),
         "orders_cancelled": int(self._health_orders_cancelled),
         "fills": int(self._health_fills),
         "pnl": float(self._health_pnl),
         "errors_last_hour": recent_errors,
+        "error_budget_max": 10,
         "ws_reconnects": int(self._health_ws_reconnects),
         "rate_limits": int(self._health_rate_limits),
     }
+    loop_ms = payload["last_loop_duration_ms"]
+    loop_timings = getattr(self, "_last_loop_timing_ms", {}) or {}
+    if loop_ms >= 60_000 and isinstance(loop_timings, dict):
+        slow_phases = []
+        for phase, duration_ms in loop_timings.items():
+            try:
+                duration_ms = int(duration_ms)
+            except (TypeError, ValueError):
+                continue
+            if duration_ms > 0:
+                slow_phases.append((str(phase)[:64], duration_ms))
+        slow_phases.sort(key=lambda item: item[1], reverse=True)
+        if slow_phases:
+            payload["slow_phases"] = [
+                {"phase": phase, "duration_ms": duration_ms}
+                for phase, duration_ms in slow_phases[:3]
+            ]
     summary_lag_ms = getattr(self, "_health_summary_lag_ms", None)
     if summary_lag_ms is not None:
         payload["health_summary_lag_ms"] = max(0, int(summary_lag_ms))

@@ -514,9 +514,11 @@ Related detailed plans:
     values in fill, balance, and entry-gate summaries are already retained
     because their numeric helper returns formatted strings; the prior
     truthiness-gap note was incorrect. PR #1210 renders frequent balance changes
-    as exact raw/snapped transitions. The active fill follow-up removes the
-    legacy/event duplicate only after the structured projection owns timestamp,
-    pending-PnL, bounded traceability, and bulk-summary semantics.
+    as exact raw/snapped transitions. PR #1215 removed the fill legacy/event
+    duplicate after the structured projection gained timestamp, pending-PnL,
+    bounded traceability, and bulk-summary semantics. The active follow-up
+    removes the frequent periodic-health duplicate and replaces its incorrect
+    legacy Linux RSS rendering with the structured payload's byte count.
 
     Work log:
     - 2026-06-30: Added value-safe `live-smoke-report` HSL status projections

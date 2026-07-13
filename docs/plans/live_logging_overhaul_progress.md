@@ -69,6 +69,21 @@ Retuned goal boundary:
 
 VPS5 deployment status:
 
+- PR #1215 merged to `v8` as
+  `6af983c539d00acd802aabad66044868afd45aa4` after exact-head Hermes and
+  Grok 4.5 approval plus green CI. Structured `fill.ingested` events now own
+  normal console/text output, batches over 20 use one bounded summary while
+  preserving every durable per-fill event, and configurations without the
+  structured console retain the stdlib fallback. VPS5 gracefully restarted
+  only the five exact bot panes and preserved pane PIDs plus unrelated
+  `misc:0.0` PID `434835`. Initial windows retained real KuCoin timeouts; the
+  final two-minute smoke was hard-green with `384/384` remote and `71/71`
+  account-critical calls successful, all five processes present, zero
+  hard/log/monitor failures, and a clean tracked repository. No natural fill
+  occurred after restart, so no runtime fill-format claim is made. Real logs
+  instead exposed duplicate periodic health lines and an incorrect legacy
+  `rss=0MB`; the next slice migrates that periodic projection to one compact
+  structured-event-owned human line.
 - PR #1214 merged to `v8` as
   `91e40b911fd5378547b77ffbd7be1924846fa3e3` after exact-head Hermes and
   Grok 4.5 approval plus green CI. It added paired whole-retention thread-CPU

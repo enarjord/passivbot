@@ -4,6 +4,12 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Periodic health console/text output now projects the structured
+  `health.summary` event as one compact line when the live event console is
+  available, while retaining the same legacy fallback when it is disabled or
+  absent. Health payloads now include quote, error-budget, bounded slow-phase,
+  and correct RSS fields without changing trading behavior.
+
 - Live fill console/text output now projects structured `fill.ingested` events,
   avoiding duplicate legacy lines when the structured console is available.
   Large fill batches emit one `fills.ingested_summary` console/text event while
