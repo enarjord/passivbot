@@ -26,6 +26,16 @@ _MONITOR_EVENT_PHASE_TIMING_KEYS = (
     "retention_run_count",
     "retention_ns_total",
     "retention_ns_max",
+    "retention_inventory_ns_total",
+    "retention_inventory_ns_max",
+    "retention_age_unlink_ns_total",
+    "retention_age_unlink_ns_max",
+    "retention_cap_unlink_ns_total",
+    "retention_cap_unlink_ns_max",
+    "retention_inventory_entries_visited",
+    "retention_inventory_candidates",
+    "retention_age_deleted",
+    "retention_cap_deleted",
 )
 _CURRENT_EVENTS_REVERSE_READ_BYTES = 64 * 1024
 _EVENT_RECOVERY_CHECKSUM_BYTES = 16
@@ -460,7 +470,12 @@ class MonitorPublisher:
         path.unlink()
         return gz_path
 
-    def _retention_inventory(self) -> tuple[int, list[tuple[Path, int, float]]]:
+    def _retention_inventory(
+        self,
+        *,
+        on_entry: Optional[Callable[[], None]] = None,
+        on_candidate: Optional[Callable[[], None]] = None,
+    ) -> tuple[int, list[tuple[Path, int, float]]]:
         """Return total retained bytes and direct rotated-file deletion candidates."""
 
         protected = {
@@ -473,6 +488,8 @@ class MonitorPublisher:
         total_bytes = 0
         candidates: list[tuple[Path, int, float]] = []
         for path in self.root.rglob("*"):
+            if on_entry is not None:
+                on_entry()
             try:
                 file_stat = path.stat()
             except FileNotFoundError:
@@ -482,6 +499,8 @@ class MonitorPublisher:
             total_bytes += file_stat.st_size
             if path.parent in candidate_dirs and path not in protected:
                 candidates.append((path, file_stat.st_size, file_stat.st_mtime))
+                if on_candidate is not None:
+                    on_candidate()
         return total_bytes, sorted(candidates, key=lambda candidate: candidate[2])
 
     def _retention_due(self, now_ms: int) -> bool:
@@ -494,6 +513,8 @@ class MonitorPublisher:
         now_ms: Optional[int] = None,
         *,
         on_run: Optional[Callable[[], None]] = None,
+        on_phase: Optional[Callable[[str, int], None]] = None,
+        on_counter: Optional[Callable[[str], None]] = None,
     ) -> None:
         with self._lock:
             now_ms = self._now_ms() if now_ms is None else int(now_ms)
@@ -503,18 +524,47 @@ class MonitorPublisher:
             if on_run is not None:
                 on_run()
             try:
-                cutoff_ms = now_ms - int(self.retain_days * 24.0 * 60.0 * 60.0 * 1000.0)
-                total_bytes, candidates = self._retention_inventory()
+                cutoff_ms = now_ms - int(
+                    self.retain_days * 24.0 * 60.0 * 60.0 * 1000.0
+                )
+                inventory_started_ns = (
+                    time.monotonic_ns() if on_phase is not None else None
+                )
+                try:
+                    if on_counter is None:
+                        total_bytes, candidates = self._retention_inventory()
+                    else:
+                        total_bytes, candidates = self._retention_inventory(
+                            on_entry=lambda: on_counter("inventory_entries_visited"),
+                            on_candidate=lambda: on_counter("inventory_candidates"),
+                        )
+                finally:
+                    if inventory_started_ns is not None:
+                        on_phase(
+                            "inventory",
+                            max(0, time.monotonic_ns() - inventory_started_ns),
+                        )
                 if self.retain_days >= 0.0:
                     survivors = []
                     for path, size, mtime in candidates:
                         if int(mtime * 1000.0) < cutoff_ms:
+                            age_unlink_started_ns = (
+                                time.monotonic_ns() if on_phase is not None else None
+                            )
                             try:
                                 path.unlink()
                             except FileNotFoundError:
                                 total_bytes -= size
                                 continue
+                            finally:
+                                if age_unlink_started_ns is not None:
+                                    on_phase(
+                                        "age_unlink",
+                                        max(0, time.monotonic_ns() - age_unlink_started_ns),
+                                    )
                             total_bytes -= size
+                            if on_counter is not None:
+                                on_counter("age_deleted")
                         else:
                             survivors.append((path, size, mtime))
                 else:
@@ -525,8 +575,20 @@ class MonitorPublisher:
                 for path, size, _mtime in survivors:
                     if total_bytes <= self.max_total_bytes:
                         break
-                    path.unlink()
+                    cap_unlink_started_ns = (
+                        time.monotonic_ns() if on_phase is not None else None
+                    )
+                    try:
+                        path.unlink()
+                    finally:
+                        if cap_unlink_started_ns is not None:
+                            on_phase(
+                                "cap_unlink",
+                                max(0, time.monotonic_ns() - cap_unlink_started_ns),
+                            )
                     total_bytes -= size
+                    if on_counter is not None:
+                        on_counter("cap_deleted")
             except Exception as exc:
                 logging.error("[monitor] retention pruning failed: %s", exc)
 
@@ -858,8 +920,23 @@ class MonitorPublisher:
                         retention_started_ns = time.monotonic_ns()
                         timing["retention_run_count"] += 1
 
+                    def on_retention_phase(phase: str, duration_ns: int) -> None:
+                        total_key = f"retention_{phase}_ns_total"
+                        max_key = f"retention_{phase}_ns_max"
+                        duration_ns = max(0, int(duration_ns))
+                        timing[total_key] += duration_ns
+                        timing[max_key] = max(timing[max_key], duration_ns)
+
+                    def on_retention_counter(counter: str) -> None:
+                        timing[f"retention_{counter}"] += 1
+
                     try:
-                        self._prune_retention(now_ms=now_ms, on_run=on_retention_run)
+                        self._prune_retention(
+                            now_ms=now_ms,
+                            on_run=on_retention_run,
+                            on_phase=on_retention_phase,
+                            on_counter=on_retention_counter,
+                        )
                     finally:
                         if retention_started_ns is not None:
                             retention_ns = max(0, time.monotonic_ns() - retention_started_ns)

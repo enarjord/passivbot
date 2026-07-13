@@ -2702,6 +2702,25 @@ def test_live_smoke_report_projects_multi_bot_event_pipeline_timing(tmp_path):
                 event_type="health.summary",
                 exchange="okx",
                 user="okx_01",
+                seq=0,
+                ts=1000,
+                data={
+                    "event_monitor_publisher_retention_inventory_ms_total": 99.0,
+                    "event_monitor_publisher_retention_inventory_ms_max": 98.0,
+                    "event_monitor_publisher_retention_age_unlink_ms_total": 97.0,
+                    "event_monitor_publisher_retention_age_unlink_ms_max": 96.0,
+                    "event_monitor_publisher_retention_cap_unlink_ms_total": 95.0,
+                    "event_monitor_publisher_retention_cap_unlink_ms_max": 94.0,
+                    "event_monitor_publisher_retention_inventory_entries_visited": 93,
+                    "event_monitor_publisher_retention_inventory_candidates": 92,
+                    "event_monitor_publisher_retention_age_deleted": 91,
+                    "event_monitor_publisher_retention_cap_deleted": 90,
+                },
+            ),
+            _monitor_row(
+                event_type="health.summary",
+                exchange="okx",
+                user="okx_01",
                 seq=1,
                 ts=2000,
                 data={
@@ -2733,6 +2752,16 @@ def test_live_smoke_report_projects_multi_bot_event_pipeline_timing(tmp_path):
                     "event_monitor_publisher_retention_run_count": 3,
                     "event_monitor_publisher_retention_ms_total": 1.0,
                     "event_monitor_publisher_retention_ms_max": 0.6,
+                    "event_monitor_publisher_retention_inventory_ms_total": 1.7,
+                    "event_monitor_publisher_retention_inventory_ms_max": 1.1,
+                    "event_monitor_publisher_retention_age_unlink_ms_total": 0.8,
+                    "event_monitor_publisher_retention_age_unlink_ms_max": 0.5,
+                    "event_monitor_publisher_retention_cap_unlink_ms_total": 0.9,
+                    "event_monitor_publisher_retention_cap_unlink_ms_max": 0.6,
+                    "event_monitor_publisher_retention_inventory_entries_visited": 21,
+                    "event_monitor_publisher_retention_inventory_candidates": 8,
+                    "event_monitor_publisher_retention_age_deleted": 3,
+                    "event_monitor_publisher_retention_cap_deleted": 2,
                 },
             )
         ],
@@ -2775,6 +2804,16 @@ def test_live_smoke_report_projects_multi_bot_event_pipeline_timing(tmp_path):
                     "event_monitor_publisher_retention_run_count": 1,
                     "event_monitor_publisher_retention_ms_total": 0.2,
                     "event_monitor_publisher_retention_ms_max": 0.2,
+                    "event_monitor_publisher_retention_inventory_ms_total": 0.4,
+                    "event_monitor_publisher_retention_inventory_ms_max": 0.25,
+                    "event_monitor_publisher_retention_age_unlink_ms_total": 0.3,
+                    "event_monitor_publisher_retention_age_unlink_ms_max": 0.2,
+                    "event_monitor_publisher_retention_cap_unlink_ms_total": 0.5,
+                    "event_monitor_publisher_retention_cap_unlink_ms_max": 0.35,
+                    "event_monitor_publisher_retention_inventory_entries_visited": 9,
+                    "event_monitor_publisher_retention_inventory_candidates": 4,
+                    "event_monitor_publisher_retention_age_deleted": 1,
+                    "event_monitor_publisher_retention_cap_deleted": 0,
                 },
             )
         ],
@@ -2794,6 +2833,46 @@ def test_live_smoke_report_projects_multi_bot_event_pipeline_timing(tmp_path):
     assert groups["okx/okx_01"].get("latest_monitor_publisher_persist_ms_max") == 2
     assert groups["okx/okx_01"].get("latest_monitor_publisher_manifest_checkpoint_count") == 2
     assert groups["gateio/gateio_01"].get("latest_monitor_publisher_retention_run_count") == 1
+    retention_group_fields = (
+        "latest_monitor_publisher_retention_inventory_ms_total",
+        "latest_monitor_publisher_retention_inventory_ms_max",
+        "latest_monitor_publisher_retention_age_unlink_ms_total",
+        "latest_monitor_publisher_retention_age_unlink_ms_max",
+        "latest_monitor_publisher_retention_cap_unlink_ms_total",
+        "latest_monitor_publisher_retention_cap_unlink_ms_max",
+        "latest_monitor_publisher_retention_inventory_entries_visited",
+        "latest_monitor_publisher_retention_inventory_candidates",
+        "latest_monitor_publisher_retention_age_deleted",
+        "latest_monitor_publisher_retention_cap_deleted",
+    )
+    assert {
+        key: groups["okx/okx_01"][key] for key in retention_group_fields
+    } == {
+        "latest_monitor_publisher_retention_inventory_ms_total": 1.7,
+        "latest_monitor_publisher_retention_inventory_ms_max": 1.1,
+        "latest_monitor_publisher_retention_age_unlink_ms_total": 0.8,
+        "latest_monitor_publisher_retention_age_unlink_ms_max": 0.5,
+        "latest_monitor_publisher_retention_cap_unlink_ms_total": 0.9,
+        "latest_monitor_publisher_retention_cap_unlink_ms_max": 0.6,
+        "latest_monitor_publisher_retention_inventory_entries_visited": 21,
+        "latest_monitor_publisher_retention_inventory_candidates": 8,
+        "latest_monitor_publisher_retention_age_deleted": 3,
+        "latest_monitor_publisher_retention_cap_deleted": 2,
+    }
+    assert {
+        key: groups["gateio/gateio_01"][key] for key in retention_group_fields
+    } == {
+        "latest_monitor_publisher_retention_inventory_ms_total": 0.4,
+        "latest_monitor_publisher_retention_inventory_ms_max": 0.25,
+        "latest_monitor_publisher_retention_age_unlink_ms_total": 0.3,
+        "latest_monitor_publisher_retention_age_unlink_ms_max": 0.2,
+        "latest_monitor_publisher_retention_cap_unlink_ms_total": 0.5,
+        "latest_monitor_publisher_retention_cap_unlink_ms_max": 0.35,
+        "latest_monitor_publisher_retention_inventory_entries_visited": 9,
+        "latest_monitor_publisher_retention_inventory_candidates": 4,
+        "latest_monitor_publisher_retention_age_deleted": 1,
+        "latest_monitor_publisher_retention_cap_deleted": 0,
+    }
     expected = {
         "latest_processed_total": 11,
         "latest_timing_window_ms_max": 1250,
@@ -2823,6 +2902,16 @@ def test_live_smoke_report_projects_multi_bot_event_pipeline_timing(tmp_path):
         "latest_monitor_publisher_retention_run_count_sum": 4,
         "latest_monitor_publisher_retention_ms_total_sum": 1.2,
         "latest_monitor_publisher_retention_ms_max": 0.6,
+        "latest_monitor_publisher_retention_inventory_ms_total_sum": 2.1,
+        "latest_monitor_publisher_retention_inventory_ms_max": 1.1,
+        "latest_monitor_publisher_retention_age_unlink_ms_total_sum": 1.1,
+        "latest_monitor_publisher_retention_age_unlink_ms_max": 0.5,
+        "latest_monitor_publisher_retention_cap_unlink_ms_total_sum": 1.4,
+        "latest_monitor_publisher_retention_cap_unlink_ms_max": 0.6,
+        "latest_monitor_publisher_retention_inventory_entries_visited_sum": 30,
+        "latest_monitor_publisher_retention_inventory_candidates_sum": 12,
+        "latest_monitor_publisher_retention_age_deleted_sum": 4,
+        "latest_monitor_publisher_retention_cap_deleted_sum": 2,
     }
     assert {key: health[key] for key in expected} == expected
     assert {key: summary["event_pipeline_health"][key] for key in expected} == expected
@@ -2836,6 +2925,25 @@ def test_live_smoke_report_omits_missing_monitor_maintenance_attribution(tmp_pat
     _write_ndjson(
         events_dir / "current.ndjson",
         [
+            _monitor_row(
+                event_type="health.summary",
+                exchange="okx",
+                user="okx_01",
+                seq=0,
+                ts=1000,
+                data={
+                    "event_monitor_publisher_retention_inventory_ms_total": 9.0,
+                    "event_monitor_publisher_retention_inventory_ms_max": 8.0,
+                    "event_monitor_publisher_retention_age_unlink_ms_total": 7.0,
+                    "event_monitor_publisher_retention_age_unlink_ms_max": 6.0,
+                    "event_monitor_publisher_retention_cap_unlink_ms_total": 5.0,
+                    "event_monitor_publisher_retention_cap_unlink_ms_max": 4.0,
+                    "event_monitor_publisher_retention_inventory_entries_visited": 3,
+                    "event_monitor_publisher_retention_inventory_candidates": 2,
+                    "event_monitor_publisher_retention_age_deleted": 1,
+                    "event_monitor_publisher_retention_cap_deleted": 1,
+                },
+            ),
             _monitor_row(
                 event_type="health.summary",
                 exchange="okx",

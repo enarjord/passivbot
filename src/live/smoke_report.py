@@ -2828,6 +2828,16 @@ def _event_pipeline_health_group(
         "event_monitor_publisher_retention_run_count",
         "event_monitor_publisher_retention_ms_total",
         "event_monitor_publisher_retention_ms_max",
+        "event_monitor_publisher_retention_inventory_ms_total",
+        "event_monitor_publisher_retention_inventory_ms_max",
+        "event_monitor_publisher_retention_age_unlink_ms_total",
+        "event_monitor_publisher_retention_age_unlink_ms_max",
+        "event_monitor_publisher_retention_cap_unlink_ms_total",
+        "event_monitor_publisher_retention_cap_unlink_ms_max",
+        "event_monitor_publisher_retention_inventory_entries_visited",
+        "event_monitor_publisher_retention_inventory_candidates",
+        "event_monitor_publisher_retention_age_deleted",
+        "event_monitor_publisher_retention_cap_deleted",
     }
     if not any(key in payload for key in observed_keys):
         return None
@@ -2937,6 +2947,36 @@ def _event_pipeline_health_group(
         "latest_monitor_publisher_retention_ms_max": _non_negative_number(
             payload.get("event_monitor_publisher_retention_ms_max")
         ),
+        "latest_monitor_publisher_retention_inventory_ms_total": _non_negative_number(
+            payload.get("event_monitor_publisher_retention_inventory_ms_total")
+        ),
+        "latest_monitor_publisher_retention_inventory_ms_max": _non_negative_number(
+            payload.get("event_monitor_publisher_retention_inventory_ms_max")
+        ),
+        "latest_monitor_publisher_retention_age_unlink_ms_total": _non_negative_number(
+            payload.get("event_monitor_publisher_retention_age_unlink_ms_total")
+        ),
+        "latest_monitor_publisher_retention_age_unlink_ms_max": _non_negative_number(
+            payload.get("event_monitor_publisher_retention_age_unlink_ms_max")
+        ),
+        "latest_monitor_publisher_retention_cap_unlink_ms_total": _non_negative_number(
+            payload.get("event_monitor_publisher_retention_cap_unlink_ms_total")
+        ),
+        "latest_monitor_publisher_retention_cap_unlink_ms_max": _non_negative_number(
+            payload.get("event_monitor_publisher_retention_cap_unlink_ms_max")
+        ),
+        "latest_monitor_publisher_retention_inventory_entries_visited": _non_negative_int(
+            payload.get("event_monitor_publisher_retention_inventory_entries_visited")
+        ),
+        "latest_monitor_publisher_retention_inventory_candidates": _non_negative_int(
+            payload.get("event_monitor_publisher_retention_inventory_candidates")
+        ),
+        "latest_monitor_publisher_retention_age_deleted": _non_negative_int(
+            payload.get("event_monitor_publisher_retention_age_deleted")
+        ),
+        "latest_monitor_publisher_retention_cap_deleted": _non_negative_int(
+            payload.get("event_monitor_publisher_retention_cap_deleted")
+        ),
         "latest_pipeline_stopping": (
             bool(payload.get("event_pipeline_stopping"))
             if "event_pipeline_stopping" in payload
@@ -3019,6 +3059,16 @@ def _merge_event_pipeline_health_group(
             "latest_monitor_publisher_retention_run_count",
             "latest_monitor_publisher_retention_ms_total",
             "latest_monitor_publisher_retention_ms_max",
+            "latest_monitor_publisher_retention_inventory_ms_total",
+            "latest_monitor_publisher_retention_inventory_ms_max",
+            "latest_monitor_publisher_retention_age_unlink_ms_total",
+            "latest_monitor_publisher_retention_age_unlink_ms_max",
+            "latest_monitor_publisher_retention_cap_unlink_ms_total",
+            "latest_monitor_publisher_retention_cap_unlink_ms_max",
+            "latest_monitor_publisher_retention_inventory_entries_visited",
+            "latest_monitor_publisher_retention_inventory_candidates",
+            "latest_monitor_publisher_retention_age_deleted",
+            "latest_monitor_publisher_retention_cap_deleted",
             "latest_pipeline_stopping",
             "latest_worker_alive",
             "latest_ids",
@@ -3184,6 +3234,46 @@ def _summarize_event_pipeline_health(
         ),
         "latest_monitor_publisher_retention_ms_max": _max_optional_numbers(
             group.get("latest_monitor_publisher_retention_ms_max")
+            for group in groups.values()
+        ),
+        "latest_monitor_publisher_retention_inventory_ms_total_sum": _sum_optional_numbers(
+            group.get("latest_monitor_publisher_retention_inventory_ms_total")
+            for group in groups.values()
+        ),
+        "latest_monitor_publisher_retention_inventory_ms_max": _max_optional_numbers(
+            group.get("latest_monitor_publisher_retention_inventory_ms_max")
+            for group in groups.values()
+        ),
+        "latest_monitor_publisher_retention_age_unlink_ms_total_sum": _sum_optional_numbers(
+            group.get("latest_monitor_publisher_retention_age_unlink_ms_total")
+            for group in groups.values()
+        ),
+        "latest_monitor_publisher_retention_age_unlink_ms_max": _max_optional_numbers(
+            group.get("latest_monitor_publisher_retention_age_unlink_ms_max")
+            for group in groups.values()
+        ),
+        "latest_monitor_publisher_retention_cap_unlink_ms_total_sum": _sum_optional_numbers(
+            group.get("latest_monitor_publisher_retention_cap_unlink_ms_total")
+            for group in groups.values()
+        ),
+        "latest_monitor_publisher_retention_cap_unlink_ms_max": _max_optional_numbers(
+            group.get("latest_monitor_publisher_retention_cap_unlink_ms_max")
+            for group in groups.values()
+        ),
+        "latest_monitor_publisher_retention_inventory_entries_visited_sum": _sum_optional_numbers(
+            group.get("latest_monitor_publisher_retention_inventory_entries_visited")
+            for group in groups.values()
+        ),
+        "latest_monitor_publisher_retention_inventory_candidates_sum": _sum_optional_numbers(
+            group.get("latest_monitor_publisher_retention_inventory_candidates")
+            for group in groups.values()
+        ),
+        "latest_monitor_publisher_retention_age_deleted_sum": _sum_optional_numbers(
+            group.get("latest_monitor_publisher_retention_age_deleted")
+            for group in groups.values()
+        ),
+        "latest_monitor_publisher_retention_cap_deleted_sum": _sum_optional_numbers(
+            group.get("latest_monitor_publisher_retention_cap_deleted")
             for group in groups.values()
         ),
     }
@@ -7221,6 +7311,36 @@ def _summary_limited_groups(
             "latest_monitor_publisher_retention_ms_max": summary.get(
                 "latest_monitor_publisher_retention_ms_max"
             ),
+            "latest_monitor_publisher_retention_inventory_ms_total_sum": summary.get(
+                "latest_monitor_publisher_retention_inventory_ms_total_sum"
+            ),
+            "latest_monitor_publisher_retention_inventory_ms_max": summary.get(
+                "latest_monitor_publisher_retention_inventory_ms_max"
+            ),
+            "latest_monitor_publisher_retention_age_unlink_ms_total_sum": summary.get(
+                "latest_monitor_publisher_retention_age_unlink_ms_total_sum"
+            ),
+            "latest_monitor_publisher_retention_age_unlink_ms_max": summary.get(
+                "latest_monitor_publisher_retention_age_unlink_ms_max"
+            ),
+            "latest_monitor_publisher_retention_cap_unlink_ms_total_sum": summary.get(
+                "latest_monitor_publisher_retention_cap_unlink_ms_total_sum"
+            ),
+            "latest_monitor_publisher_retention_cap_unlink_ms_max": summary.get(
+                "latest_monitor_publisher_retention_cap_unlink_ms_max"
+            ),
+            "latest_monitor_publisher_retention_inventory_entries_visited_sum": summary.get(
+                "latest_monitor_publisher_retention_inventory_entries_visited_sum"
+            ),
+            "latest_monitor_publisher_retention_inventory_candidates_sum": summary.get(
+                "latest_monitor_publisher_retention_inventory_candidates_sum"
+            ),
+            "latest_monitor_publisher_retention_age_deleted_sum": summary.get(
+                "latest_monitor_publisher_retention_age_deleted_sum"
+            ),
+            "latest_monitor_publisher_retention_cap_deleted_sum": summary.get(
+                "latest_monitor_publisher_retention_cap_deleted_sum"
+            ),
             "latest_worker_not_alive_count": summary.get(
                 "latest_worker_not_alive_count"
             ),
@@ -8710,6 +8830,36 @@ def summarize_live_smoke_report_brief(report: dict[str, Any]) -> dict[str, Any]:
                 ),
                 "latest_monitor_publisher_retention_ms_max": event_pipeline_health.get(
                     "latest_monitor_publisher_retention_ms_max"
+                ),
+                "latest_monitor_publisher_retention_inventory_ms_total_sum": event_pipeline_health.get(
+                    "latest_monitor_publisher_retention_inventory_ms_total_sum"
+                ),
+                "latest_monitor_publisher_retention_inventory_ms_max": event_pipeline_health.get(
+                    "latest_monitor_publisher_retention_inventory_ms_max"
+                ),
+                "latest_monitor_publisher_retention_age_unlink_ms_total_sum": event_pipeline_health.get(
+                    "latest_monitor_publisher_retention_age_unlink_ms_total_sum"
+                ),
+                "latest_monitor_publisher_retention_age_unlink_ms_max": event_pipeline_health.get(
+                    "latest_monitor_publisher_retention_age_unlink_ms_max"
+                ),
+                "latest_monitor_publisher_retention_cap_unlink_ms_total_sum": event_pipeline_health.get(
+                    "latest_monitor_publisher_retention_cap_unlink_ms_total_sum"
+                ),
+                "latest_monitor_publisher_retention_cap_unlink_ms_max": event_pipeline_health.get(
+                    "latest_monitor_publisher_retention_cap_unlink_ms_max"
+                ),
+                "latest_monitor_publisher_retention_inventory_entries_visited_sum": event_pipeline_health.get(
+                    "latest_monitor_publisher_retention_inventory_entries_visited_sum"
+                ),
+                "latest_monitor_publisher_retention_inventory_candidates_sum": event_pipeline_health.get(
+                    "latest_monitor_publisher_retention_inventory_candidates_sum"
+                ),
+                "latest_monitor_publisher_retention_age_deleted_sum": event_pipeline_health.get(
+                    "latest_monitor_publisher_retention_age_deleted_sum"
+                ),
+                "latest_monitor_publisher_retention_cap_deleted_sum": event_pipeline_health.get(
+                    "latest_monitor_publisher_retention_cap_deleted_sum"
                 ),
                 "latest_worker_not_alive_count": _count_value(
                     event_pipeline_health.get("latest_worker_not_alive_count")

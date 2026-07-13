@@ -67,6 +67,16 @@ _MONITOR_PUBLISHER_PHASE_TIMING_KEYS = (
     "retention_run_count",
     "retention_ns_total",
     "retention_ns_max",
+    "retention_inventory_ns_total",
+    "retention_inventory_ns_max",
+    "retention_age_unlink_ns_total",
+    "retention_age_unlink_ns_max",
+    "retention_cap_unlink_ns_total",
+    "retention_cap_unlink_ns_max",
+    "retention_inventory_entries_visited",
+    "retention_inventory_candidates",
+    "retention_age_deleted",
+    "retention_cap_deleted",
 )
 _MONITOR_PHASE_TIMING_KEYS = ("prepare_ns", *_MONITOR_PUBLISHER_PHASE_TIMING_KEYS)
 _ANSI_ESCAPE_RE = re.compile(r"\x1b(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
@@ -1931,6 +1941,16 @@ class _EventPipelineTimingWindow:
     monitor_publisher_retention_run_count: int
     monitor_publisher_retention_ns_total: int
     monitor_publisher_retention_ns_max: int
+    monitor_publisher_retention_inventory_ns_total: int
+    monitor_publisher_retention_inventory_ns_max: int
+    monitor_publisher_retention_age_unlink_ns_total: int
+    monitor_publisher_retention_age_unlink_ns_max: int
+    monitor_publisher_retention_cap_unlink_ns_total: int
+    monitor_publisher_retention_cap_unlink_ns_max: int
+    monitor_publisher_retention_inventory_entries_visited: int
+    monitor_publisher_retention_inventory_candidates: int
+    monitor_publisher_retention_age_deleted: int
+    monitor_publisher_retention_cap_deleted: int
 
 
 @dataclass
@@ -1957,6 +1977,16 @@ class _EventPipelineSinkWriteTiming:
     monitor_publisher_retention_run_count: int = 0
     monitor_publisher_retention_ns_total: int = 0
     monitor_publisher_retention_ns_max: int = 0
+    monitor_publisher_retention_inventory_ns_total: int = 0
+    monitor_publisher_retention_inventory_ns_max: int = 0
+    monitor_publisher_retention_age_unlink_ns_total: int = 0
+    monitor_publisher_retention_age_unlink_ns_max: int = 0
+    monitor_publisher_retention_cap_unlink_ns_total: int = 0
+    monitor_publisher_retention_cap_unlink_ns_max: int = 0
+    monitor_publisher_retention_inventory_entries_visited: int = 0
+    monitor_publisher_retention_inventory_candidates: int = 0
+    monitor_publisher_retention_age_deleted: int = 0
+    monitor_publisher_retention_cap_deleted: int = 0
 
     def record(self, sink_name: str, service_ns: int) -> None:
         service_ns = max(0, int(service_ns))
@@ -1989,15 +2019,29 @@ class _EventPipelineSinkWriteTiming:
         for source_key, field_name in (
             ("manifest_checkpoint_count", "monitor_publisher_manifest_checkpoint_count"),
             ("retention_run_count", "monitor_publisher_retention_run_count"),
+            (
+                "retention_inventory_entries_visited",
+                "monitor_publisher_retention_inventory_entries_visited",
+            ),
+            (
+                "retention_inventory_candidates",
+                "monitor_publisher_retention_inventory_candidates",
+            ),
+            ("retention_age_deleted", "monitor_publisher_retention_age_deleted"),
+            ("retention_cap_deleted", "monitor_publisher_retention_cap_deleted"),
         ):
             setattr(
                 self,
                 field_name,
-                int(getattr(self, field_name)) + max(0, int(timing.get(source_key, 0))),
+                int(getattr(self, field_name))
+                + max(0, int(timing.get(source_key, 0))),
             )
         for source_key, field_prefix in (
             ("manifest_checkpoint_ns", "monitor_publisher_manifest_checkpoint_ns"),
             ("retention_ns", "monitor_publisher_retention_ns"),
+            ("retention_inventory_ns", "monitor_publisher_retention_inventory_ns"),
+            ("retention_age_unlink_ns", "monitor_publisher_retention_age_unlink_ns"),
+            ("retention_cap_unlink_ns", "monitor_publisher_retention_cap_unlink_ns"),
         ):
             total_field = f"{field_prefix}_total"
             max_field = f"{field_prefix}_max"
@@ -2068,6 +2112,16 @@ class LiveEventPipeline:
         self._timing_monitor_publisher_retention_run_count = 0
         self._timing_monitor_publisher_retention_ns_total = 0
         self._timing_monitor_publisher_retention_ns_max = 0
+        self._timing_monitor_publisher_retention_inventory_ns_total = 0
+        self._timing_monitor_publisher_retention_inventory_ns_max = 0
+        self._timing_monitor_publisher_retention_age_unlink_ns_total = 0
+        self._timing_monitor_publisher_retention_age_unlink_ns_max = 0
+        self._timing_monitor_publisher_retention_cap_unlink_ns_total = 0
+        self._timing_monitor_publisher_retention_cap_unlink_ns_max = 0
+        self._timing_monitor_publisher_retention_inventory_entries_visited = 0
+        self._timing_monitor_publisher_retention_inventory_candidates = 0
+        self._timing_monitor_publisher_retention_age_deleted = 0
+        self._timing_monitor_publisher_retention_cap_deleted = 0
         self._pending_timing_windows: dict[int, _EventPipelineTimingWindow] = {}
         self._next_timing_snapshot_token = 1
         self._worker: threading.Thread | None = None
@@ -2193,6 +2247,36 @@ class LiveEventPipeline:
                 monitor_publisher_retention_ns_max=int(
                     self._timing_monitor_publisher_retention_ns_max
                 ),
+                monitor_publisher_retention_inventory_ns_total=int(
+                    self._timing_monitor_publisher_retention_inventory_ns_total
+                ),
+                monitor_publisher_retention_inventory_ns_max=int(
+                    self._timing_monitor_publisher_retention_inventory_ns_max
+                ),
+                monitor_publisher_retention_age_unlink_ns_total=int(
+                    self._timing_monitor_publisher_retention_age_unlink_ns_total
+                ),
+                monitor_publisher_retention_age_unlink_ns_max=int(
+                    self._timing_monitor_publisher_retention_age_unlink_ns_max
+                ),
+                monitor_publisher_retention_cap_unlink_ns_total=int(
+                    self._timing_monitor_publisher_retention_cap_unlink_ns_total
+                ),
+                monitor_publisher_retention_cap_unlink_ns_max=int(
+                    self._timing_monitor_publisher_retention_cap_unlink_ns_max
+                ),
+                monitor_publisher_retention_inventory_entries_visited=int(
+                    self._timing_monitor_publisher_retention_inventory_entries_visited
+                ),
+                monitor_publisher_retention_inventory_candidates=int(
+                    self._timing_monitor_publisher_retention_inventory_candidates
+                ),
+                monitor_publisher_retention_age_deleted=int(
+                    self._timing_monitor_publisher_retention_age_deleted
+                ),
+                monitor_publisher_retention_cap_deleted=int(
+                    self._timing_monitor_publisher_retention_cap_deleted
+                ),
             )
             timing_snapshot_token = None
             if consume_timing:
@@ -2227,6 +2311,16 @@ class LiveEventPipeline:
                 self._timing_monitor_publisher_retention_run_count = 0
                 self._timing_monitor_publisher_retention_ns_total = 0
                 self._timing_monitor_publisher_retention_ns_max = 0
+                self._timing_monitor_publisher_retention_inventory_ns_total = 0
+                self._timing_monitor_publisher_retention_inventory_ns_max = 0
+                self._timing_monitor_publisher_retention_age_unlink_ns_total = 0
+                self._timing_monitor_publisher_retention_age_unlink_ns_max = 0
+                self._timing_monitor_publisher_retention_cap_unlink_ns_total = 0
+                self._timing_monitor_publisher_retention_cap_unlink_ns_max = 0
+                self._timing_monitor_publisher_retention_inventory_entries_visited = 0
+                self._timing_monitor_publisher_retention_inventory_candidates = 0
+                self._timing_monitor_publisher_retention_age_deleted = 0
+                self._timing_monitor_publisher_retention_cap_deleted = 0
         snapshot: dict[str, Any] = {
             "event_queue_depth": queue_depth,
             "event_queue_maxsize": queue_maxsize,
@@ -2316,6 +2410,36 @@ class LiveEventPipeline:
             "event_monitor_publisher_retention_ms_max": self._timing_ms(
                 timing_window.monitor_publisher_retention_ns_max
             ),
+            "event_monitor_publisher_retention_inventory_ms_total": self._timing_ms(
+                timing_window.monitor_publisher_retention_inventory_ns_total
+            ),
+            "event_monitor_publisher_retention_inventory_ms_max": self._timing_ms(
+                timing_window.monitor_publisher_retention_inventory_ns_max
+            ),
+            "event_monitor_publisher_retention_age_unlink_ms_total": self._timing_ms(
+                timing_window.monitor_publisher_retention_age_unlink_ns_total
+            ),
+            "event_monitor_publisher_retention_age_unlink_ms_max": self._timing_ms(
+                timing_window.monitor_publisher_retention_age_unlink_ns_max
+            ),
+            "event_monitor_publisher_retention_cap_unlink_ms_total": self._timing_ms(
+                timing_window.monitor_publisher_retention_cap_unlink_ns_total
+            ),
+            "event_monitor_publisher_retention_cap_unlink_ms_max": self._timing_ms(
+                timing_window.monitor_publisher_retention_cap_unlink_ns_max
+            ),
+            "event_monitor_publisher_retention_inventory_entries_visited": (
+                timing_window.monitor_publisher_retention_inventory_entries_visited
+            ),
+            "event_monitor_publisher_retention_inventory_candidates": (
+                timing_window.monitor_publisher_retention_inventory_candidates
+            ),
+            "event_monitor_publisher_retention_age_deleted": (
+                timing_window.monitor_publisher_retention_age_deleted
+            ),
+            "event_monitor_publisher_retention_cap_deleted": (
+                timing_window.monitor_publisher_retention_cap_deleted
+            ),
         }
         return (
             {key: value for key, value in snapshot.items() if value is not None},
@@ -2375,11 +2499,19 @@ class LiveEventPipeline:
             "monitor_publisher_manifest_checkpoint_ns_total",
             "monitor_publisher_retention_run_count",
             "monitor_publisher_retention_ns_total",
+            "monitor_publisher_retention_inventory_ns_total",
+            "monitor_publisher_retention_age_unlink_ns_total",
+            "monitor_publisher_retention_cap_unlink_ns_total",
+            "monitor_publisher_retention_inventory_entries_visited",
+            "monitor_publisher_retention_inventory_candidates",
+            "monitor_publisher_retention_age_deleted",
+            "monitor_publisher_retention_cap_deleted",
         ):
             setattr(
                 self,
                 f"_timing_{field_name}",
-                int(getattr(self, f"_timing_{field_name}")) + int(getattr(pending, field_name)),
+                int(getattr(self, f"_timing_{field_name}"))
+                + int(getattr(pending, field_name)),
             )
         for field_name in (
             "monitor_prepare_ns_max",
@@ -2389,11 +2521,17 @@ class LiveEventPipeline:
             "monitor_publisher_maintenance_ns_max",
             "monitor_publisher_manifest_checkpoint_ns_max",
             "monitor_publisher_retention_ns_max",
+            "monitor_publisher_retention_inventory_ns_max",
+            "monitor_publisher_retention_age_unlink_ns_max",
+            "monitor_publisher_retention_cap_unlink_ns_max",
         ):
             setattr(
                 self,
                 f"_timing_{field_name}",
-                max(int(getattr(self, f"_timing_{field_name}")), int(getattr(pending, field_name))),
+                max(
+                    int(getattr(self, f"_timing_{field_name}")),
+                    int(getattr(pending, field_name)),
+                ),
             )
 
     def emit(
@@ -2624,6 +2762,36 @@ class LiveEventPipeline:
                             self._timing_monitor_publisher_retention_ns_max,
                             sink_write_timing.monitor_publisher_retention_ns_max,
                         )
+                        for field_name in (
+                            "monitor_publisher_retention_inventory_ns_total",
+                            "monitor_publisher_retention_age_unlink_ns_total",
+                            "monitor_publisher_retention_cap_unlink_ns_total",
+                            "monitor_publisher_retention_inventory_entries_visited",
+                            "monitor_publisher_retention_inventory_candidates",
+                            "monitor_publisher_retention_age_deleted",
+                            "monitor_publisher_retention_cap_deleted",
+                        ):
+                            timing_field = f"_timing_{field_name}"
+                            setattr(
+                                self,
+                                timing_field,
+                                int(getattr(self, timing_field))
+                                + int(getattr(sink_write_timing, field_name)),
+                            )
+                        for field_name in (
+                            "monitor_publisher_retention_inventory_ns_max",
+                            "monitor_publisher_retention_age_unlink_ns_max",
+                            "monitor_publisher_retention_cap_unlink_ns_max",
+                        ):
+                            timing_field = f"_timing_{field_name}"
+                            setattr(
+                                self,
+                                timing_field,
+                                max(
+                                    int(getattr(self, timing_field)),
+                                    int(getattr(sink_write_timing, field_name)),
+                                ),
+                            )
                 self._queue.task_done()
 
     def _write_sink(self, name: str, sink: LiveEventSink, event: LiveEvent) -> Any:

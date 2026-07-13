@@ -682,6 +682,16 @@ def test_monitor_publisher_event_phase_timing_uses_fixed_boundaries(tmp_path, mo
         "retention_run_count": 1,
         "retention_ns_total": 11_000_000,
         "retention_ns_max": 11_000_000,
+        "retention_inventory_ns_total": 0,
+        "retention_inventory_ns_max": 0,
+        "retention_age_unlink_ns_total": 0,
+        "retention_age_unlink_ns_max": 0,
+        "retention_cap_unlink_ns_total": 0,
+        "retention_cap_unlink_ns_max": 0,
+        "retention_inventory_entries_visited": 0,
+        "retention_inventory_candidates": 0,
+        "retention_age_deleted": 0,
+        "retention_cap_deleted": 0,
     }
 
 
@@ -719,6 +729,16 @@ def test_monitor_publisher_event_failure_retains_reached_phase_timing(tmp_path, 
         "retention_run_count": 0,
         "retention_ns_total": 0,
         "retention_ns_max": 0,
+        "retention_inventory_ns_total": 0,
+        "retention_inventory_ns_max": 0,
+        "retention_age_unlink_ns_total": 0,
+        "retention_age_unlink_ns_max": 0,
+        "retention_cap_unlink_ns_total": 0,
+        "retention_cap_unlink_ns_max": 0,
+        "retention_inventory_entries_visited": 0,
+        "retention_inventory_candidates": 0,
+        "retention_age_deleted": 0,
+        "retention_cap_deleted": 0,
     }
 
 
@@ -751,7 +771,7 @@ def test_monitor_publisher_event_timing_counts_failed_due_attempts(tmp_path, mon
     def fail_atomic_write(*_args, **_kwargs):
         raise OSError("manifest unavailable")
 
-    def fail_retention_inventory():
+    def fail_retention_inventory(**_kwargs):
         inventory_attempts.append(None)
         raise OSError("retention unavailable")
 
@@ -775,6 +795,144 @@ def test_monitor_publisher_event_timing_counts_failed_due_attempts(tmp_path, mon
     assert len(inventory_attempts) == 1
     publisher._prune_retention(now_ms=160_000)
     assert len(inventory_attempts) == 2
+
+
+def test_monitor_publisher_event_timing_records_retention_phases_for_due_run(
+    tmp_path, monkeypatch
+):
+    publisher = _make_publisher(tmp_path, retain_days=0.0, max_total_bytes=0)
+    old_candidate = publisher.events_dir / "old.ndjson"
+    cap_candidate = publisher.history_dir / "current.ndjson"
+    _write_retention_file(old_candidate, size=10, mtime_ms=1)
+    _write_retention_file(cap_candidate, size=10, mtime_ms=100_000)
+    expected_entries_visited = len(list(publisher.root.rglob("*")))
+    clock = {"ns": 0}
+    original_rglob = Path.rglob
+    original_unlink = Path.unlink
+
+    def timed_rglob(path, pattern):
+        for entry in original_rglob(path, pattern):
+            yield entry
+            clock["ns"] += 1_000
+
+    def timed_unlink(path, *args, **kwargs):
+        if path == old_candidate:
+            clock["ns"] += 2_000
+        elif path == cap_candidate:
+            clock["ns"] += 3_000
+        return original_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(monitor_publisher_module.time, "monotonic_ns", lambda: clock["ns"])
+    monkeypatch.setattr(Path, "rglob", timed_rglob)
+    monkeypatch.setattr(Path, "unlink", timed_unlink)
+
+    event, timing = publisher._record_event_timed(
+        "test.event", ("test",), {"value": 1}, ts=100_000
+    )
+
+    assert event is not None
+    assert timing["retention_run_count"] == 1
+    assert timing["retention_inventory_ns_total"] == expected_entries_visited * 1_000
+    assert timing["retention_inventory_ns_max"] == expected_entries_visited * 1_000
+    assert timing["retention_age_unlink_ns_total"] == 2_000
+    assert timing["retention_age_unlink_ns_max"] == 2_000
+    assert timing["retention_cap_unlink_ns_total"] == 3_000
+    assert timing["retention_cap_unlink_ns_max"] == 3_000
+    assert timing["retention_inventory_entries_visited"] == expected_entries_visited
+    assert timing["retention_inventory_candidates"] == 2
+    assert timing["retention_age_deleted"] == 1
+    assert timing["retention_cap_deleted"] == 1
+
+
+def test_monitor_publisher_event_timing_zeroes_retention_phases_when_not_due(tmp_path):
+    publisher = _make_publisher(tmp_path)
+    publisher.last_retention_ms = 100_000
+
+    event, timing = publisher._record_event_timed(
+        "test.event", ("test",), {"value": 1}, ts=100_001
+    )
+
+    assert event is not None
+    assert timing["retention_run_count"] == 0
+    for key in (
+        "retention_inventory_ns_total",
+        "retention_inventory_ns_max",
+        "retention_age_unlink_ns_total",
+        "retention_age_unlink_ns_max",
+        "retention_cap_unlink_ns_total",
+        "retention_cap_unlink_ns_max",
+        "retention_inventory_entries_visited",
+        "retention_inventory_candidates",
+        "retention_age_deleted",
+        "retention_cap_deleted",
+    ):
+        assert timing[key] == 0
+
+
+def test_monitor_publisher_event_timing_excludes_tolerated_age_disappearance(
+    tmp_path, monkeypatch
+):
+    publisher = _make_publisher(tmp_path, retain_days=0.0)
+    disappeared = publisher.events_dir / "disappeared.ndjson"
+    _write_retention_file(disappeared, size=10, mtime_ms=1)
+    original_unlink = Path.unlink
+
+    def disappear_then_unlink(path, *args, **kwargs):
+        if path == disappeared:
+            original_unlink(path, *args, **kwargs)
+            raise FileNotFoundError(path)
+        return original_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", disappear_then_unlink)
+    event, timing = publisher._record_event_timed(
+        "test.event", ("test",), {"value": 1}, ts=100_000
+    )
+
+    assert event is not None
+    assert not disappeared.exists()
+    assert timing["retention_inventory_candidates"] == 1
+    assert timing["retention_age_deleted"] == 0
+    assert timing["retention_cap_deleted"] == 0
+    assert timing["retention_age_unlink_ns_total"] >= 0
+
+
+def test_monitor_publisher_event_timing_keeps_completed_phases_after_cap_unlink_error(
+    tmp_path, monkeypatch, caplog
+):
+    publisher = _make_publisher(tmp_path, retain_days=-1.0, max_total_bytes=0)
+    candidate = publisher.events_dir / "candidate.ndjson"
+    _write_retention_file(candidate, size=10, mtime_ms=1)
+    clock = {"ns": 0}
+    original_rglob = Path.rglob
+
+    def timed_rglob(path, pattern):
+        for entry in original_rglob(path, pattern):
+            yield entry
+            clock["ns"] += 1_000
+
+    def fail_candidate_unlink(path, *args, **_kwargs):
+        if path == candidate:
+            clock["ns"] += 4_000
+            raise OSError("candidate unavailable")
+        raise AssertionError(f"unexpected unlink: {path}")
+
+    monkeypatch.setattr(monitor_publisher_module.time, "monotonic_ns", lambda: clock["ns"])
+    monkeypatch.setattr(Path, "rglob", timed_rglob)
+    monkeypatch.setattr(Path, "unlink", fail_candidate_unlink)
+
+    event, timing = publisher._record_event_timed(
+        "test.event", ("test",), {"value": 1}, ts=100_000
+    )
+
+    assert event is not None
+    assert candidate.exists()
+    assert "retention pruning failed: candidate unavailable" in caplog.text
+    assert timing["retention_inventory_entries_visited"] > 0
+    assert timing["retention_inventory_candidates"] == 1
+    assert timing["retention_inventory_ns_total"] > 0
+    assert timing["retention_cap_unlink_ns_total"] == 4_000
+    assert timing["retention_cap_unlink_ns_max"] == 4_000
+    assert timing["retention_cap_deleted"] == 0
 
 
 def _write_retention_file(path, *, size, mtime_ms):

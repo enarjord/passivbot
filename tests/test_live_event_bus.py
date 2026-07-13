@@ -609,6 +609,16 @@ def test_pipeline_aggregates_and_resets_monitor_publisher_phase_timing(monkeypat
                         "retention_run_count": 1,
                         "retention_ns_total": 4_000_000,
                         "retention_ns_max": 4_000_000,
+                        "retention_inventory_ns_total": 3_000_000,
+                        "retention_inventory_ns_max": 3_000_000,
+                        "retention_age_unlink_ns_total": 700_000,
+                        "retention_age_unlink_ns_max": 700_000,
+                        "retention_cap_unlink_ns_total": 300_000,
+                        "retention_cap_unlink_ns_max": 300_000,
+                        "retention_inventory_entries_visited": 11,
+                        "retention_inventory_candidates": 7,
+                        "retention_age_deleted": 2,
+                        "retention_cap_deleted": 1,
                     },
                     {
                         "lock_wait_ns": 11_000_000,
@@ -621,6 +631,16 @@ def test_pipeline_aggregates_and_resets_monitor_publisher_phase_timing(monkeypat
                         "retention_run_count": 0,
                         "retention_ns_total": 0,
                         "retention_ns_max": 0,
+                        "retention_inventory_ns_total": 0,
+                        "retention_inventory_ns_max": 0,
+                        "retention_age_unlink_ns_total": 0,
+                        "retention_age_unlink_ns_max": 0,
+                        "retention_cap_unlink_ns_total": 0,
+                        "retention_cap_unlink_ns_max": 0,
+                        "retention_inventory_entries_visited": 0,
+                        "retention_inventory_candidates": 0,
+                        "retention_age_deleted": 0,
+                        "retention_cap_deleted": 0,
                     },
                 )
             )
@@ -659,6 +679,16 @@ def test_pipeline_aggregates_and_resets_monitor_publisher_phase_timing(monkeypat
         "event_monitor_publisher_retention_run_count": 1,
         "event_monitor_publisher_retention_ms_total": 4.0,
         "event_monitor_publisher_retention_ms_max": 4.0,
+        "event_monitor_publisher_retention_inventory_ms_total": 3.0,
+        "event_monitor_publisher_retention_inventory_ms_max": 3.0,
+        "event_monitor_publisher_retention_age_unlink_ms_total": 0.7,
+        "event_monitor_publisher_retention_age_unlink_ms_max": 0.7,
+        "event_monitor_publisher_retention_cap_unlink_ms_total": 0.3,
+        "event_monitor_publisher_retention_cap_unlink_ms_max": 0.3,
+        "event_monitor_publisher_retention_inventory_entries_visited": 11,
+        "event_monitor_publisher_retention_inventory_candidates": 7,
+        "event_monitor_publisher_retention_age_deleted": 2,
+        "event_monitor_publisher_retention_cap_deleted": 1,
     }
     snapshot = pipeline.health_snapshot()
     assert {key: snapshot[key] for key in expected} == expected
@@ -687,6 +717,16 @@ def test_pipeline_monitor_phase_timing_restores_overlapping_window(monkeypatch):
     pipeline._timing_monitor_publisher_retention_run_count = 3
     pipeline._timing_monitor_publisher_retention_ns_total = 17_000_000
     pipeline._timing_monitor_publisher_retention_ns_max = 9_000_000
+    pipeline._timing_monitor_publisher_retention_inventory_ns_total = 11_000_000
+    pipeline._timing_monitor_publisher_retention_inventory_ns_max = 6_000_000
+    pipeline._timing_monitor_publisher_retention_age_unlink_ns_total = 4_000_000
+    pipeline._timing_monitor_publisher_retention_age_unlink_ns_max = 3_000_000
+    pipeline._timing_monitor_publisher_retention_cap_unlink_ns_total = 2_000_000
+    pipeline._timing_monitor_publisher_retention_cap_unlink_ns_max = 1_000_000
+    pipeline._timing_monitor_publisher_retention_inventory_entries_visited = 31
+    pipeline._timing_monitor_publisher_retention_inventory_candidates = 13
+    pipeline._timing_monitor_publisher_retention_age_deleted = 4
+    pipeline._timing_monitor_publisher_retention_cap_deleted = 2
 
     first, first_token = pipeline.consume_timing_snapshot()
     pipeline._timing_monitor_prepare_ns_total = 5_000_000
@@ -699,6 +739,16 @@ def test_pipeline_monitor_phase_timing_restores_overlapping_window(monkeypatch):
     pipeline._timing_monitor_publisher_retention_run_count = 7
     pipeline._timing_monitor_publisher_retention_ns_total = 23_000_000
     pipeline._timing_monitor_publisher_retention_ns_max = 14_000_000
+    pipeline._timing_monitor_publisher_retention_inventory_ns_total = 17_000_000
+    pipeline._timing_monitor_publisher_retention_inventory_ns_max = 10_000_000
+    pipeline._timing_monitor_publisher_retention_age_unlink_ns_total = 5_000_000
+    pipeline._timing_monitor_publisher_retention_age_unlink_ns_max = 4_000_000
+    pipeline._timing_monitor_publisher_retention_cap_unlink_ns_total = 3_000_000
+    pipeline._timing_monitor_publisher_retention_cap_unlink_ns_max = 2_000_000
+    pipeline._timing_monitor_publisher_retention_inventory_entries_visited = 47
+    pipeline._timing_monitor_publisher_retention_inventory_candidates = 19
+    pipeline._timing_monitor_publisher_retention_age_deleted = 6
+    pipeline._timing_monitor_publisher_retention_cap_deleted = 3
     _second, second_token = pipeline.consume_timing_snapshot()
     pipeline.confirm_timing_snapshot(first_token)
     pipeline.restore_timing_snapshot(second_token)
@@ -718,6 +768,16 @@ def test_pipeline_monitor_phase_timing_restores_overlapping_window(monkeypatch):
     assert restored["event_monitor_publisher_retention_run_count"] == 7
     assert restored["event_monitor_publisher_retention_ms_total"] == 23.0
     assert restored["event_monitor_publisher_retention_ms_max"] == 14.0
+    assert restored["event_monitor_publisher_retention_inventory_ms_total"] == 17.0
+    assert restored["event_monitor_publisher_retention_inventory_ms_max"] == 10.0
+    assert restored["event_monitor_publisher_retention_age_unlink_ms_total"] == 5.0
+    assert restored["event_monitor_publisher_retention_age_unlink_ms_max"] == 4.0
+    assert restored["event_monitor_publisher_retention_cap_unlink_ms_total"] == 3.0
+    assert restored["event_monitor_publisher_retention_cap_unlink_ms_max"] == 2.0
+    assert restored["event_monitor_publisher_retention_inventory_entries_visited"] == 47
+    assert restored["event_monitor_publisher_retention_inventory_candidates"] == 19
+    assert restored["event_monitor_publisher_retention_age_deleted"] == 6
+    assert restored["event_monitor_publisher_retention_cap_deleted"] == 3
 
 
 def test_pipeline_custom_monitor_sink_reports_zero_internal_phase_timing():
@@ -755,6 +815,16 @@ def test_pipeline_custom_monitor_sink_reports_zero_internal_phase_timing():
         "event_monitor_publisher_retention_run_count": 0,
         "event_monitor_publisher_retention_ms_total": 0.0,
         "event_monitor_publisher_retention_ms_max": 0.0,
+        "event_monitor_publisher_retention_inventory_ms_total": 0.0,
+        "event_monitor_publisher_retention_inventory_ms_max": 0.0,
+        "event_monitor_publisher_retention_age_unlink_ms_total": 0.0,
+        "event_monitor_publisher_retention_age_unlink_ms_max": 0.0,
+        "event_monitor_publisher_retention_cap_unlink_ms_total": 0.0,
+        "event_monitor_publisher_retention_cap_unlink_ms_max": 0.0,
+        "event_monitor_publisher_retention_inventory_entries_visited": 0,
+        "event_monitor_publisher_retention_inventory_candidates": 0,
+        "event_monitor_publisher_retention_age_deleted": 0,
+        "event_monitor_publisher_retention_cap_deleted": 0,
     }
     assert pipeline.close(timeout=2.0) is True
 

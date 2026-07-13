@@ -127,6 +127,16 @@ _RESOURCE_PRESSURE_FIELDS = (
     "event_monitor_publisher_retention_run_count",
     "event_monitor_publisher_retention_ms_total",
     "event_monitor_publisher_retention_ms_max",
+    "event_monitor_publisher_retention_inventory_ms_total",
+    "event_monitor_publisher_retention_inventory_ms_max",
+    "event_monitor_publisher_retention_age_unlink_ms_total",
+    "event_monitor_publisher_retention_age_unlink_ms_max",
+    "event_monitor_publisher_retention_cap_unlink_ms_total",
+    "event_monitor_publisher_retention_cap_unlink_ms_max",
+    "event_monitor_publisher_retention_inventory_entries_visited",
+    "event_monitor_publisher_retention_inventory_candidates",
+    "event_monitor_publisher_retention_age_deleted",
+    "event_monitor_publisher_retention_cap_deleted",
 )
 _RESOURCE_PRESSURE_COUNTER_FIELDS = (
     "event_drop_counts",
@@ -4080,6 +4090,36 @@ class _ResourcePressureAccumulator:
             ),
             "latest_event_monitor_publisher_retention_ms_max": latest_field_max(
                 "event_monitor_publisher_retention_ms_max"
+            ),
+            "latest_event_monitor_publisher_retention_inventory_ms_total_sum": latest_field_sum(
+                "event_monitor_publisher_retention_inventory_ms_total"
+            ),
+            "latest_event_monitor_publisher_retention_inventory_ms_max": latest_field_max(
+                "event_monitor_publisher_retention_inventory_ms_max"
+            ),
+            "latest_event_monitor_publisher_retention_age_unlink_ms_total_sum": latest_field_sum(
+                "event_monitor_publisher_retention_age_unlink_ms_total"
+            ),
+            "latest_event_monitor_publisher_retention_age_unlink_ms_max": latest_field_max(
+                "event_monitor_publisher_retention_age_unlink_ms_max"
+            ),
+            "latest_event_monitor_publisher_retention_cap_unlink_ms_total_sum": latest_field_sum(
+                "event_monitor_publisher_retention_cap_unlink_ms_total"
+            ),
+            "latest_event_monitor_publisher_retention_cap_unlink_ms_max": latest_field_max(
+                "event_monitor_publisher_retention_cap_unlink_ms_max"
+            ),
+            "latest_event_monitor_publisher_retention_inventory_entries_visited_sum": latest_field_sum(
+                "event_monitor_publisher_retention_inventory_entries_visited"
+            ),
+            "latest_event_monitor_publisher_retention_inventory_candidates_sum": latest_field_sum(
+                "event_monitor_publisher_retention_inventory_candidates"
+            ),
+            "latest_event_monitor_publisher_retention_age_deleted_sum": latest_field_sum(
+                "event_monitor_publisher_retention_age_deleted"
+            ),
+            "latest_event_monitor_publisher_retention_cap_deleted_sum": latest_field_sum(
+                "event_monitor_publisher_retention_cap_deleted"
             ),
             "event_pipeline_unhealthy_bots": unhealthy_bots,
             "groups_truncated": len(groups) > limit,
