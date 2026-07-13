@@ -396,9 +396,14 @@ classification when enough source events exist.
     windows measured the same 12 retention runs at `5612.290ms` total and
     `690.434ms` maximum. A later 10-run window recorded `14255.296ms` total and
     an `8654.591ms` maximum, so the ordinary cost improved but the long tail
-    remained. The active attribution slice separates inventory, age-unlink,
-    and cap-unlink timing plus bounded work counts before another persistence
-    optimization is selected.
+    remained. PR #1211 then separated inventory, age-unlink, and cap-unlink
+    timing plus bounded work counts. Its first
+    four deployed health windows assigned `15369.148ms` of `15591.553ms`
+    retention time to inventory, including `10241.787ms` of the
+    `10253.648ms` maximum, across 20,158 visited entries and 20,032 candidates
+    with no deletions. A read-only production-filesystem benchmark then showed
+    direct `os.scandir` preserving topology in `43-112ms` versus `94-587ms`
+    for the current walker; that narrow substitution is the active slice.
 - [ ] Exchange writes: create/cancel/close/panic write latency, exchange
   response latency, ambiguous write rate, confirmation latency.
   - Status: partial. The report now derives order-wave total duration,

@@ -22,54 +22,70 @@ Estimated completion:
 
 ## Active Review Slice
 
-- Branch: `codex/v8-monitor-retention-phase-timing`
-- Base: `e604ac7ea7d3e2cdea05d37f3cbd0fce5aee99b1`, PR #1209
-- Triggering evidence: after PR #1208 reduced matched 12-run retention timing
-  from `16210.383ms` total / `8953.523ms` max to `5612.290ms` / `690.434ms`,
-  a later 10-run VPS5 window still recorded `14255.296ms` total and an
-  `8654.591ms` maximum. Whole-run timing cannot distinguish inventory/stat
-  latency from age or byte-cap unlink work.
-- Scope: add fixed inventory, age-unlink, and cap-unlink timing totals/maxima,
-  plus inventory visited/candidate and successful deletion counts, to the
-  existing event-path monitor timing window and its smoke/performance report
-  projections.
-- Behavior boundary: additive low-cardinality telemetry only. Preserve
-  retention cadence, `last_retention_ms`, lock scope, traversal and candidate
-  order, age and cap policy, failure handling, monitor delivery, report
-  verdicts, configuration, and every order/risk/trading behavior. Do not emit
-  paths, samples, labels, or additional events.
-- Validation: due/skip, disappearing files, age and cap deletion, unlink
-  failure, timing aggregation/reset/restore, generic monitor-sink zeroes,
-  per-bot and aggregate report projection, historical omission, unchanged
-  verdicts, integrated monitor regressions, Python compilation,
-  `git diff --check`, silent-handling audit, and independent preflight.
+- Branch: `codex/v8-monitor-retention-scandir`
+- Base: `3a17fdb9768de80212d2dcd3c097350508d69caa`, PR #1211
+- Triggering evidence: the first four post-PR #1211 health windows attributed
+  `15369.148ms` of `15591.553ms` retention time to inventory. The
+  `10253.648ms` retention maximum contained a `10241.787ms` inventory maximum;
+  20,158 entries yielded 20,032 candidates with zero age or cap deletions.
+  A read-only two-order VPS5 benchmark preserved entry/file counts while direct
+  `os.scandir` took `43-112ms` per active root versus `94-587ms` for the
+  current `Path.rglob` plus `Path.stat` path.
+- Scope: replace only the full retention inventory walker with one direct
+  healthy-path `os.scandir` traversal and one explicit `DirEntry.stat` per
+  visited entry. Preserve full recursive accounting and direct-candidate
+  collection; retry one transient directory-scan failure before isolating a
+  persistently unavailable subtree.
+- Behavior boundary: performance implementation only. Preserve the 60-second
+  cadence, `last_retention_ms`, lock scope, directory-symlink non-traversal,
+  file-symlink accounting, protected paths, candidate ordering, age and cap
+  policy, persistent scan-error isolation, timing schema, configuration, and every
+  order/risk/trading behavior. Do not add caching, staggering, workers, paths,
+  labels, samples, or events.
+- Validation: static inventory parity, one healthy traversal and explicit stat
+  per entry, transient/persistent scan errors, directory and entry disappearance,
+  file and directory symlinks, nested unknown files,
+  protected paths, age and cap ordering, timing counters, integrated monitor
+  regressions, Python compilation, `git diff --check`, silent-handling audit,
+  and independent preflight.
 - Publication state, exact head, mergeability, CI, and current-head reviewer
   verdicts: query live GitHub metadata; do not embed self-invalidating values.
 - Expected VPS action: exact five-bot graceful restart, immediate and settled
-  smoke, then collection of naturally emitted phase-attributed retention
-  windows.
+  smoke, then at least 30 naturally emitted due runs comparing normalized
+  inventory p50/p95/max and process I/O-wait evidence.
 
 Next action:
 
-1. Hold the active retention-phase attribution PR's exact current head until
-   Hermes, Grok 4.5, and CI are green.
+1. Hold the active benchmark-supported `scandir` inventory PR's exact current
+   head until Hermes, Grok 4.5, and CI are green.
 2. Resolve findings narrowly and require fresh exact-head verdicts after every
    push.
 3. Merge, perform the exact five-bot graceful VPS restart, run immediate and
-   settled smoke, then collect fresh phase-attributed retention windows before
-   selecting any further persistence optimization.
+   settled smoke, then collect enough due runs to test the production p95/max
+   claim before selecting any further persistence change.
 
 ## Deployed Baseline
 
-- Remote `v8`: `e604ac7ea7d3e2cdea05d37f3cbd0fce5aee99b1`, PR #1209
-- VPS5 repository: `d509dde70caff9eea6a9d445f3571b6ac70d5184`, PR #1210; tracked
+- Remote `v8`: `3a17fdb9768de80212d2dcd3c097350508d69caa`, PR #1211
+- VPS5 repository: `3a17fdb9768de80212d2dcd3c097350508d69caa`, PR #1211; tracked
   status clean; expected untracked artifacts were preserved
-- VPS5 expected bots: five; running with PR #1210 restart PIDs
-  `883768/883922/883918/883930/883980`;
+- VPS5 expected bots: five; running with PR #1211 restart PIDs
+  `892535/892537/892539/892541/892543`;
   unrelated `misc:0.0` remains PID `434835`
-- PR #1209 advanced remote `v8` with documentation-only review and monitor
-  persistence contracts. No VPS5 pull or restart is claimed for that docs-only
-  merge; the last verified deployed code remains PR #1210.
+- PR #1211 merged after exact-head Hermes and Grok 4.5 approval plus green CI.
+  VPS5 fast-forwarded cleanly through PR #1209 and #1211 and gracefully
+  restarted only the five exact bot panes; all old bots exited naturally, pane
+  PIDs and unrelated `misc:0.0` PID `434835` were preserved. Immediate smoke
+  was hard-green with `130/130` remote and `42/42` account-critical calls.
+  Settled smoke was hard-green with `385/385` remote and `45/45`
+  account-critical calls, no active HSL replay, zero hard/log/monitor failures,
+  all five expected processes, and a clean tracked repository. Three processes
+  were sampled briefly in `D` during inventory I/O and all returned to `R`.
+- Four fresh health windows covered 2,238 monitor writes. Twelve retention runs
+  consumed `15591.553ms` total with a `10253.648ms` maximum; inventory explained
+  `15369.148ms` total and a `10241.787ms` maximum. The runs visited 20,158
+  entries and found 20,032 direct candidates, with zero age/cap deletions,
+  proving inventory traversal/stat is the active long-tail source.
 - PR #1210 merged after exact-head Hermes and Grok 4.5 approval plus green CI.
   VPS5 fast-forwarded cleanly and gracefully restarted only the five exact bot
   panes; every old bot exited naturally and pane PIDs remained unchanged.
@@ -396,13 +412,14 @@ PR #1206's monitor-maintenance phase attribution are also merged and deployed.
 PR #1207's position console projection and PR #1208's one-pass monitor
 retention inventory are also merged and deployed with their behavior boundaries
 preserved. PR #1210's balance console transition is merged, deployed, and
-validated from natural balance changes on all five bots.
+validated from natural balance changes on all five bots. PR #1211's retention
+phase attribution is merged and deployed; fresh evidence isolates inventory as
+98.574% of retention service time in the first four health windows.
 
-The active slice attributes the recurring retention long tail to inventory,
-age-unlink, or byte-cap-unlink work before another persistence optimization is
-selected. Keep fill formatting separate: its legacy and event-routed lines
-currently overlap and require an explicit migration contract for timestamps,
-pending PnL, and bulk summaries.
+The active slice replaces only the full inventory walker with benchmarked
+direct `os.scandir` traversal. Keep fill formatting separate: its legacy and
+event-routed lines currently overlap and require an explicit migration contract
+for timestamps, pending PnL, and bulk summaries.
 
 Do not create progress-only PRs or resume unrelated logging work from stale
 worktrees.

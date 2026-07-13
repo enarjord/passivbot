@@ -10,6 +10,7 @@ import stat
 import threading
 import time
 import uuid
+from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterable, Optional
@@ -487,20 +488,41 @@ class MonitorPublisher:
         candidate_dirs = {self.events_dir, self.history_dir, self.checkpoints_dir}
         total_bytes = 0
         candidates: list[tuple[Path, int, float]] = []
-        for path in self.root.rglob("*"):
-            if on_entry is not None:
-                on_entry()
-            try:
-                file_stat = path.stat()
-            except FileNotFoundError:
+        pending_dirs = deque([self.root])
+        while pending_dirs:
+            directory = pending_dirs.popleft()
+            entries = None
+            for _attempt in range(2):
+                try:
+                    entries = os.scandir(directory)
+                    break
+                except OSError:
+                    continue
+            if entries is None:
                 continue
-            if not stat.S_ISREG(file_stat.st_mode):
-                continue
-            total_bytes += file_stat.st_size
-            if path.parent in candidate_dirs and path not in protected:
-                candidates.append((path, file_stat.st_size, file_stat.st_mtime))
-                if on_candidate is not None:
-                    on_candidate()
+            child_dirs: list[Path] = []
+            with entries:
+                for entry in entries:
+                    path = Path(entry.path)
+                    if on_entry is not None:
+                        on_entry()
+                    try:
+                        if entry.is_dir(follow_symlinks=False):
+                            child_dirs.append(path)
+                    except OSError:
+                        pass
+                    try:
+                        file_stat = entry.stat()
+                    except FileNotFoundError:
+                        continue
+                    if not stat.S_ISREG(file_stat.st_mode):
+                        continue
+                    total_bytes += file_stat.st_size
+                    if path.parent in candidate_dirs and path not in protected:
+                        candidates.append((path, file_stat.st_size, file_stat.st_mtime))
+                        if on_candidate is not None:
+                            on_candidate()
+            pending_dirs.extend(child_dirs)
         return total_bytes, sorted(candidates, key=lambda candidate: candidate[2])
 
     def _retention_due(self, now_ms: int) -> bool:

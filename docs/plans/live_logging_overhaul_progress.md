@@ -69,6 +69,23 @@ Retuned goal boundary:
 
 VPS5 deployment status:
 
+- PR #1211 merged to `v8` as
+  `3a17fdb9768de80212d2dcd3c097350508d69caa` after exact-head Hermes and
+  Grok 4.5 approval plus green CI. It added fixed inventory, age-unlink, and
+  cap-unlink timings and bounded work counts without changing retention
+  behavior. VPS5 fast-forwarded cleanly through PR #1209 and #1211 and
+  gracefully restarted only the five exact bot panes; pane PIDs and unrelated
+  `misc:0.0` PID `434835` were preserved. Immediate and settled smoke were
+  hard-green; settled evidence had `385/385` remote and `45/45`
+  account-critical calls successful, no active HSL replay, zero hard/log/monitor
+  failures, all five processes present, and a clean tracked repository. Three
+  processes briefly sampled `D` during inventory I/O and all returned to `R`.
+  Four health windows covered 2,238 monitor writes and 12 retention runs:
+  inventory consumed `15369.148ms` of `15591.553ms` total and explained
+  `10241.787ms` of the `10253.648ms` maximum. The runs visited 20,158 entries,
+  found 20,032 candidates, and performed zero age/cap deletions. A subsequent
+  read-only two-order VPS5 benchmark preserved topology while direct
+  `os.scandir` took `43-112ms` versus `94-587ms` for the current walker.
 - PR #1210 merged to `v8` as
   `d509dde70caff9eea6a9d445f3571b6ac70d5184` after exact-head Hermes and
   Grok 4.5 approval plus green CI. It changed only the console/text projection
