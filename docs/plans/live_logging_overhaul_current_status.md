@@ -22,48 +22,58 @@ Estimated completion:
 
 ## Active Review Slice
 
-- Branch: `codex/v8-monitor-retention-inventory`
-- Base: `de6022432dae9f4513f7a56287535ba21120a39f`, PR #1207
-- Triggering evidence: PR #1206 attributed `16210.383ms` of fresh maintenance
-  time and an `8953.523ms` maximum to 12 retention runs. The current retention
-  path repeatedly scans candidate directories, recursively inventories bytes,
-  and rescans candidates when over cap.
-- Scope: build one bounded per-run recursive file inventory, stat each visited
-  path once, count every regular file toward the byte cap, classify only direct
-  non-current files in the three managed directories as deletion candidates,
-  and reuse their inventoried size/mtime for age and cap pruning.
-- Behavior boundary: preserve the 60-second due rule, callback and lock timing,
-  recursive byte accounting, direct-only deletion domain, protected current
-  files, strict age cutoff, oldest-first order, compression compatibility,
-  logging, and existing retry/error semantics. No cache, schema, configuration,
-  cadence, event, report, verdict, order, risk, or trading behavior change.
-- Validation: exact cutoff/order/protection, nested unknown files, candidate
-  exhaustion, byte-cap order, one traversal/stat per file, age/cap races,
-  file/directory symlinks, timing callbacks, concurrent publisher coverage,
-  monitor-publisher and integrated event/report regressions, Python compilation,
-  `git diff --check`, added-line silent-handling audit, and independent preflight.
+- Branch: `codex/v8-balance-console-transition`
+- Base: `2a13202f7aec07874ed318dcf6472e445187a98e`, PR #1208
+- Triggering evidence: fresh VPS5 logs show frequent dense balance lines that
+  repeat generic status/cycle/reason fields while omitting the exact previous
+  raw and snapped balances already present in the structured event.
+- Scope: render only `balance.changed` console/text output as one compact raw
+  and snapped before/after transition with signed deltas, equity, and source.
+  Keep zero and negative zero explicit, missing/non-finite values visible, long
+  finite values untruncated, and source labels free of ANSI/control characters.
+- Behavior boundary: console/text formatting only. Preserve the complete
+  structured event, producer payload, route and cadence, monitor persistence,
+  smoke verdicts, configuration, and every order/risk/trading behavior. Do not
+  add multiline output or terminal colors that could pollute text logs.
+- Validation: raw-only and snapped transitions; positive, negative, and zero
+  deltas; zero/negative-zero, missing, NaN, infinity, long values, source
+  sanitization, structured-event immutability, event-bus and integrated monitor
+  regressions, Python compilation, `git diff --check`, added-line
+  silent-handling audit, and independent preflight.
 - Publication state, exact head, mergeability, CI, and current-head reviewer
   verdicts: query live GitHub metadata; do not embed self-invalidating values.
 - Expected VPS action: exact five-bot graceful restart, immediate and settled
-  smoke, and fresh maintenance/retention timing comparison.
+  smoke, and inspection of naturally emitted balance transitions.
 
 Next action:
 
-1. Hold the active retention PR's exact current head until Hermes, Grok 4.5,
-   and CI are green.
-2. Resolve findings narrowly and require fresh exact-head verdicts after every
-   push.
-3. Merge and validate the exact five-bot VPS restart, then compare fresh
-   retention totals/maxima against PR #1206's deployed evidence.
+1. Complete integrated validation and publish one review-worthy balance-console
+   PR.
+2. Hold its exact current head until Hermes, Grok 4.5, and CI are green; resolve
+   findings narrowly and require fresh exact-head verdicts after every push.
+3. Merge and validate the exact five-bot VPS restart using naturally emitted
+   balance changes only.
 
 ## Deployed Baseline
 
-- Remote `v8`: `de6022432dae9f4513f7a56287535ba21120a39f`, PR #1207
-- VPS5 repository: `de6022432dae9f4513f7a56287535ba21120a39f`, PR #1207; tracked
+- Remote `v8`: `2a13202f7aec07874ed318dcf6472e445187a98e`, PR #1208
+- VPS5 repository: `2a13202f7aec07874ed318dcf6472e445187a98e`, PR #1208; tracked
   status clean; expected untracked artifacts were preserved
-- VPS5 expected bots: five; running with PR #1207 restart PIDs
-  `874984/875044/875152/875026/875150`;
+- VPS5 expected bots: five; running with PR #1208 restart PIDs
+  `876970/876966/877074/876968/877076`;
   unrelated `misc:0.0` remains PID `434835`
+- PR #1208 merged after exact-head Hermes and Grok 4.5 approval plus green CI.
+  VPS5 fast-forwarded cleanly and gracefully restarted only the five exact bot
+  panes; every old bot exited naturally and pane PIDs remained unchanged.
+- The immediate smoke was hard-green. One settled window correctly retained a
+  real KuCoin timeout; after it aged out, the final two-minute smoke was
+  hard-green with `315/315` remote and `62/62` account-critical calls
+  successful, all five processes `R`, zero hard/log/monitor failures, and a
+  clean tracked repository.
+- Four fresh health windows covered 2,345 monitor writes. Twelve retention runs
+  consumed `5612.290ms` with a `690.434ms` maximum, down from PR #1206's matched
+  12-run `16210.383ms` total and `8953.523ms` maximum. Drops, sink errors,
+  degraded counts, unhealthy pipelines, and final queue depth were zero.
 - PR #1207 merged after exact-head Hermes and Grok 4.5 approval plus green CI.
   VPS5 fast-forwarded cleanly and gracefully restarted only the five exact bot
   panes; every old bot exited naturally and pane PIDs remained unchanged.
@@ -363,12 +373,14 @@ local connector-call boundary evidence, and PR #1199's startup fill-cache proof
 correlation, PR #1200's event-pipeline service timing, and PR #1203's fixed
 sink-class attribution, PR #1205's coalesced monitor manifest checkpoints, and
 PR #1206's monitor-maintenance phase attribution are also merged and deployed.
-PR #1207's human console projection of `position.changed` is also merged and
-deployed, with the structured event payload preserved.
+PR #1207's position console projection and PR #1208's one-pass monitor
+retention inventory are also merged and deployed with their behavior boundaries
+preserved.
 
-The active slice now uses PR #1206's production evidence to optimize the
-recurring retention path with one per-run inventory. Keep its persistence
-behavior and validation surface separate from further console readability work.
+The active slice now renders the frequent `balance.changed` console projection
+as an exact human transition. Keep fill formatting separate: its legacy and
+event-routed lines currently overlap and require an explicit migration contract
+for timestamps, pending PnL, and bulk summaries.
 
 Do not create progress-only PRs or resume unrelated logging work from stale
 worktrees.
