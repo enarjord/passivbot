@@ -1097,6 +1097,8 @@ def _console_order_wave_summary(event: LiveEvent) -> list[str]:
 def _console_order_summary(event: LiveEvent) -> list[str]:
     data = event.data if isinstance(event.data, Mapping) else {}
     parts: list[str] = []
+    if event.event_type == EventTypes.EXECUTION_CANCEL_AMBIGUOUS_TERMINAL:
+        parts.append("confirmation=full_account_required")
     if event.order_wave_id:
         parts.append(f"wave={event.order_wave_id}")
     if event.side:

@@ -69,6 +69,22 @@ Retuned goal boundary:
 
 VPS5 deployment status:
 
+- PR #1217 merged to `v8` as
+  `6599fba08cadffac99ce6a1ce2bfd3f58ca3fa15` after exact-head Hermes and
+  Grok 4.5 green reviews plus green CI. The structured execution-loop
+  error-burst event now owns normal console/text output while configurations
+  without a usable structured console retain the legacy warning. VPS5
+  gracefully restarted only the five exact bot panes; old processes exited
+  naturally, pane PIDs and unrelated `misc:0.0` PID `434835` were unchanged,
+  and new bot PIDs were `906664/906666/906668/906670/906672`. A real KuCoin
+  timeout made the first settled window red. After recovery, the final
+  two-minute smoke returned `ok=true`, `284/284` remote calls, `62/62`
+  account-critical calls, five running bots, `8/8` fill refreshes, zero event
+  pipeline failures, no active HSL replay, and an exact clean repository. No
+  natural error burst occurred after restart, so runtime format evidence
+  remains absent rather than manufactured. Retained OKX logs instead exposed
+  the next adjacent structured/legacy duplicate for ambiguous cancel terminal
+  states.
 - PR #1216 merged to `v8` as
   `13e6e484cf20b1265f2b4874b14ff7ab32d10bfd` and was deployed after the exact
   review gate. The five new bot PIDs were

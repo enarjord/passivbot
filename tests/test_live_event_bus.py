@@ -1530,6 +1530,26 @@ def test_console_format_summarizes_order_write_without_raw_payload():
     )
 
 
+def test_console_format_marks_ambiguous_cancel_as_requiring_full_account_confirmation():
+    event = LiveEvent(
+        EventTypes.EXECUTION_CANCEL_AMBIGUOUS_TERMINAL,
+        status="degraded",
+        cycle_id="cy_3",
+        order_wave_id="ow_2",
+        symbol="AAVE/USDT:USDT",
+        pside="long",
+        side="buy",
+        reason_code="requires_full_authoritative_confirmation",
+        data={"order_type": "limit"},
+    )
+
+    assert format_console_event(event) == (
+        "[order] degraded cycle=cy_3 confirmation=full_account_required "
+        "wave=ow_2 side=buy type=limit symbol=AAVE/USDT:USDT pside=long "
+        "reason=requires_full_authoritative_confirmation"
+    )
+
+
 def test_console_format_summarizes_create_filter_payload():
     event = LiveEvent(
         EventTypes.EXECUTION_CREATE_SKIPPED,
