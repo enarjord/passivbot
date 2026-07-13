@@ -59,12 +59,12 @@ Estimated completion:
 
 Next action:
 
-1. Complete the paired thread-CPU/non-CPU implementation and targeted tests.
-2. Pass independent preflight, publish a review-worthy PR, and hold its exact
-   current head until Hermes, Grok 4.5, and CI are green.
-3. Resolve findings narrowly and require fresh exact-head verdicts after every
-   push. Merge only when the complete gate is green, then repeat the exact
-   five-bot VPS restart and bounded runtime-evidence sequence.
+1. Hold PR #1214's exact current head until Hermes, Grok 4.5, and CI are green.
+2. Resolve findings narrowly and require fresh exact-head verdicts after every
+   push.
+3. Merge only when the complete gate is green, then perform the exact five-bot
+   graceful VPS5 restart, immediate and settled smoke, and at least 30 natural
+   due runs comparing paired wall, thread-CPU, and non-CPU evidence.
 
 ## Deployed Baseline
 
