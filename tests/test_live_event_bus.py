@@ -2072,27 +2072,215 @@ def test_console_format_position_changed_strips_ansi_and_control_characters():
     assert not any(ord(char) < 32 or 127 <= ord(char) <= 159 for char in rendered)
 
 
-def test_console_format_summarizes_balance_changed():
+def test_console_format_balance_changed_renders_exact_transition_and_preserves_projections():
     event = LiveEvent(
         EventTypes.BALANCE_CHANGED,
         status="succeeded",
         cycle_id="cy_balance",
         reason_code="balance_changed",
         data={
+            "previous_balance_raw": 1_000.0,
             "balance_raw": 1_005.25,
             "balance_raw_delta": 5.25,
+            "previous_balance_snapped": 1_000.0,
             "balance_snapped": 1_004.0,
             "balance_snapped_delta": 4.0,
             "equity": 1_010.75,
             "source": "REST",
         },
     )
+    before = event.to_dict()
+    monitor_before = event.to_monitor_event()
 
     assert format_console_event(event) == (
-        "[balance] succeeded cycle=cy_balance balance=1005.25 delta=5.25 "
-        "snapped=1004 snapped_delta=4 equity=1010.75 source=REST "
-        "reason=balance_changed"
+        "[balance] raw  1000 -> 1005.25 (+5.25) | snap 1000 -> 1004 (+4) | "
+        "equity=1010.75 source=REST"
     )
+    assert event.to_dict() == before
+    assert event.to_monitor_event() == monitor_before
+
+
+@pytest.mark.parametrize(
+    ("data", "expected"),
+    [
+        (
+            {
+                "previous_balance_raw": 1_000.0,
+                "balance_raw": 995.0,
+                "balance_raw_delta": -5.0,
+                "previous_balance_snapped": 1_000.0,
+                "balance_snapped": 1_000.0,
+                "balance_snapped_delta": 0.0,
+                "equity": 995.0,
+                "source": "REST",
+            },
+            "[balance] raw  1000 -> 995 (-5) | snap 1000 -> 1000 (0) | "
+            "equity=995 source=REST",
+        ),
+        (
+            {
+                "previous_balance_raw": 1_000.0,
+                "balance_raw": 1_000.0,
+                "balance_raw_delta": -0.0,
+                "previous_balance_snapped": 1_000.0,
+                "balance_snapped": 999.0,
+                "balance_snapped_delta": -1.0,
+                "equity": 1_000.0,
+                "source": "REST",
+            },
+            "[balance] raw  1000 -> 1000 (0) | snap 1000 -> 999 (-1) | "
+            "equity=1000 source=REST",
+        ),
+    ],
+)
+def test_console_format_balance_changed_renders_raw_only_and_snapped_only_transitions(
+    data, expected
+):
+    assert format_console_event(LiveEvent(EventTypes.BALANCE_CHANGED, data=data)) == expected
+
+
+def test_console_format_balance_changed_renders_zero_and_negative_zero():
+    event = LiveEvent(
+        EventTypes.BALANCE_CHANGED,
+        data={
+            "previous_balance_raw": -0.0,
+            "balance_raw": 0.0,
+            "balance_raw_delta": -0.0,
+            "previous_balance_snapped": 0.0,
+            "balance_snapped": -0.0,
+            "balance_snapped_delta": 0.0,
+            "equity": -0.0,
+            "source": "REST",
+        },
+    )
+
+    assert format_console_event(event) == (
+        "[balance] raw  0 -> 0 (0) | snap 0 -> 0 (0) | equity=0 source=REST"
+    )
+
+
+def test_console_format_balance_changed_handles_missing_and_nonfinite_values():
+    event = LiveEvent(
+        EventTypes.BALANCE_CHANGED,
+        data={
+            "previous_balance_raw": float("nan"),
+            "balance_raw": float("inf"),
+            "balance_raw_delta": float("-inf"),
+            "previous_balance_snapped": None,
+            "balance_snapped": float("nan"),
+            "balance_snapped_delta": float("inf"),
+            "equity": float("-inf"),
+        },
+    )
+
+    rendered = format_console_event(event)
+
+    assert rendered == (
+        "[balance] raw  unavailable | snap unavailable | equity=- source=-"
+    )
+    assert "nan" not in rendered.lower()
+    assert "inf" not in rendered.lower()
+
+
+@pytest.mark.parametrize(
+    ("previous_raw", "raw"),
+    [(None, 100.0), (100.0, None), (float("nan"), 100.0), (100.0, float("inf"))],
+)
+def test_console_format_balance_changed_does_not_infer_partial_raw_transition(
+    previous_raw, raw
+):
+    event = LiveEvent(
+        EventTypes.BALANCE_CHANGED,
+        data={
+            "previous_balance_raw": previous_raw,
+            "balance_raw": raw,
+            "balance_raw_delta": 5.0,
+            "previous_balance_snapped": 90.0,
+            "balance_snapped": 91.0,
+            "balance_snapped_delta": 1.0,
+            "equity": 100.0,
+            "source": "REST",
+        },
+    )
+
+    assert format_console_event(event) == (
+        "[balance] raw  unavailable | snap 90 -> 91 (+1) | "
+        "equity=100 source=REST"
+    )
+
+
+@pytest.mark.parametrize(
+    "delta",
+    [None, float("nan"), float("inf"), float("-inf")],
+)
+def test_console_format_balance_changed_keeps_known_transition_when_delta_unavailable(delta):
+    event = LiveEvent(
+        EventTypes.BALANCE_CHANGED,
+        data={
+            "previous_balance_raw": 100.0,
+            "balance_raw": 105.0,
+            "balance_raw_delta": delta,
+            "previous_balance_snapped": 200.0,
+            "balance_snapped": 205.0,
+            "balance_snapped_delta": delta,
+            "equity": 105.0,
+            "source": "REST",
+        },
+    )
+
+    rendered = format_console_event(event)
+
+    assert rendered == (
+        "[balance] raw  100 -> 105 (-) | snap 200 -> 205 (-) | "
+        "equity=105 source=REST"
+    )
+    assert "nan" not in rendered.lower()
+    assert "inf" not in rendered.lower()
+
+
+def test_console_format_balance_changed_does_not_truncate_long_values():
+    event = LiveEvent(
+        EventTypes.BALANCE_CHANGED,
+        data={
+            "previous_balance_raw": 12_345_678_901.2345,
+            "balance_raw": 12_345_678_902.2345,
+            "balance_raw_delta": 1.0,
+            "previous_balance_snapped": 98_765_432_109.8765,
+            "balance_snapped": 98_765_432_110.8765,
+            "balance_snapped_delta": 1.0,
+            "equity": 123_456_789_012.3456,
+            "source": "VERY_LONG_FINITE_BALANCE_SOURCE",
+        },
+    )
+
+    rendered = format_console_event(event)
+
+    assert "1.23456789e+10 -> 1.23456789e+10 (+1)" in rendered
+    assert "9.876543211e+10 -> 9.876543211e+10 (+1)" in rendered
+    assert "equity=1.23456789e+11" in rendered
+    assert "VERY_LONG_FINITE_BALANCE_SOURCE" in rendered
+
+
+def test_console_format_balance_changed_sanitizes_source_to_one_colorless_line():
+    event = LiveEvent(
+        EventTypes.BALANCE_CHANGED,
+        data={
+            "previous_balance_raw": 1.0,
+            "balance_raw": 2.0,
+            "balance_raw_delta": 1.0,
+            "previous_balance_snapped": 1.0,
+            "balance_snapped": 2.0,
+            "balance_snapped_delta": 1.0,
+            "equity": 2.0,
+            "source": "\x1b[31mREST\x1b[0m\nprimary\tfeed\r",
+        },
+    )
+
+    rendered = format_console_event(event)
+
+    assert rendered.endswith("equity=2 source=REST primary feed")
+    assert "\x1b" not in rendered
+    assert not any(ord(char) < 32 or 127 <= ord(char) <= 159 for char in rendered)
 
 
 def test_console_format_summarizes_risk_mode_changed():

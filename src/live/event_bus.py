@@ -1275,12 +1275,35 @@ def _console_fill_ingested_summary(event: LiveEvent) -> list[str]:
     return parts
 
 
-def _format_position_console_number(value: float | None) -> str:
+def _format_console_number(value: float | None) -> str:
     if value is None or not math.isfinite(value):
         return "-"
     if value == 0.0:
         return "0"
     return f"{value:.10g}"
+
+
+def _format_balance_console_delta(value: float | None) -> str:
+    rendered = _format_console_number(value)
+    if value is not None and math.isfinite(value) and value > 0.0:
+        return f"+{rendered}"
+    return rendered
+
+
+def _format_balance_console_transition(
+    previous: float | None, current: float | None, delta: float | None
+) -> str:
+    if (
+        previous is None
+        or current is None
+        or not math.isfinite(previous)
+        or not math.isfinite(current)
+    ):
+        return "unavailable"
+    return (
+        f"{_format_console_number(previous)} -> {_format_console_number(current)} "
+        f"({_format_balance_console_delta(delta)})"
+    )
 
 
 def _format_position_console_percentage(value: float | None) -> str:
@@ -1294,7 +1317,7 @@ def _format_position_console_percentage(value: float | None) -> str:
     return f"{percentage:.4f}%"
 
 
-def _format_position_console_label(value: object) -> str:
+def _format_console_label(value: object) -> str:
     text = _ANSI_ESCAPE_RE.sub("", str(value or ""))
     text = _CONTROL_CHARACTER_RE.sub(" ", text)
     return " ".join(text.split()) or "-"
@@ -1310,21 +1333,21 @@ def _format_position_console_coin(symbol: object) -> str:
         coin = coin[:start] + coin[end:]
     if coin.startswith("k") and coin[1:].isupper():
         coin = coin[1:]
-    return _format_position_console_label(coin)
+    return _format_console_label(coin)
 
 
 def _format_console_position_changed(event: LiveEvent) -> str:
     data = event.data if isinstance(event.data, Mapping) else {}
-    action = _format_position_console_label(_data_str(data, "action"))
+    action = _format_console_label(_data_str(data, "action"))
     coin = _format_position_console_coin(event.symbol)
-    pside = _format_position_console_label(event.pside)
+    pside = _format_console_label(event.pside)
     old_leg = (
-        f"{_format_position_console_number(_data_number(data, 'old_size'))} @ "
-        f"{_format_position_console_number(_data_number(data, 'old_price'))}"
+        f"{_format_console_number(_data_number(data, 'old_size'))} @ "
+        f"{_format_console_number(_data_number(data, 'old_price'))}"
     )
     new_leg = (
-        f"{_format_position_console_number(_data_number(data, 'new_size'))} @ "
-        f"{_format_position_console_number(_data_number(data, 'new_price'))}"
+        f"{_format_console_number(_data_number(data, 'new_size'))} @ "
+        f"{_format_console_number(_data_number(data, 'new_price'))}"
     )
     metrics = " ".join(
         (
@@ -1337,7 +1360,7 @@ def _format_console_position_changed(event: LiveEvent) -> str:
             "TWEL="
             f"{_format_position_console_percentage(_data_number(data, 'twel_ratio'))}",
             "uPnL="
-            f"{_format_position_console_number(_data_number(data, 'upnl'))}",
+            f"{_format_console_number(_data_number(data, 'upnl'))}",
         )
     )
     return (
@@ -1346,28 +1369,25 @@ def _format_console_position_changed(event: LiveEvent) -> str:
     )
 
 
-def _console_balance_changed_summary(event: LiveEvent) -> list[str]:
+def _format_console_balance_changed(event: LiveEvent) -> str:
     data = event.data if isinstance(event.data, Mapping) else {}
-    parts: list[str] = []
-    balance = _data_float(data, "balance_raw")
-    if balance:
-        parts.append(f"balance={balance}")
-    delta = _data_float(data, "balance_raw_delta")
-    if delta:
-        parts.append(f"delta={delta}")
-    snapped = _data_float(data, "balance_snapped")
-    if snapped:
-        parts.append(f"snapped={snapped}")
-    snapped_delta = _data_float(data, "balance_snapped_delta")
-    if snapped_delta:
-        parts.append(f"snapped_delta={snapped_delta}")
-    equity = _data_float(data, "equity")
-    if equity:
-        parts.append(f"equity={equity}")
-    source = _data_str(data, "source")
-    if source:
-        parts.append(f"source={source}")
-    return parts
+    raw_transition = _format_balance_console_transition(
+        _data_number(data, "previous_balance_raw"),
+        _data_number(data, "balance_raw"),
+        _data_number(data, "balance_raw_delta"),
+    )
+    snapped_transition = _format_balance_console_transition(
+        _data_number(data, "previous_balance_snapped"),
+        _data_number(data, "balance_snapped"),
+        _data_number(data, "balance_snapped_delta"),
+    )
+    equity = _format_console_number(_data_number(data, "equity"))
+    source = _format_console_label(_data_str(data, "source"))
+    return (
+        f"[balance] {'raw':<5}{raw_transition} | "
+        f"{'snap':<5}{snapped_transition} | "
+        f"equity={equity} source={source}"
+    )
 
 
 def _console_risk_mode_changed_summary(event: LiveEvent) -> list[str]:
@@ -1792,8 +1812,6 @@ def _console_data_summary(event: LiveEvent) -> list[str]:
         return _console_health_summary(event)
     if event.event_type == EventTypes.FILL_INGESTED:
         return _console_fill_ingested_summary(event)
-    if event.event_type == EventTypes.BALANCE_CHANGED:
-        return _console_balance_changed_summary(event)
     if event.event_type == EventTypes.RISK_MODE_CHANGED:
         return _console_risk_mode_changed_summary(event)
     if event.event_type == EventTypes.HSL_TRANSITION:
@@ -1831,6 +1849,8 @@ def _operator_sink_event_visible(event: LiveEvent) -> bool:
 def format_console_event(event: LiveEvent) -> str:
     if event.event_type == EventTypes.POSITION_CHANGED:
         return _format_console_position_changed(event)
+    if event.event_type == EventTypes.BALANCE_CHANGED:
+        return _format_console_balance_changed(event)
     base = f"[{_console_tag(event)}]"
     if event.status:
         base += f" {event.status}"

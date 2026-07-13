@@ -4,6 +4,10 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Balance-change console and text lines now show exact raw and snapped
+  before/after transitions with signed deltas, equity, and source in one compact
+  human-readable line. The complete structured event remains unchanged.
+
 - Monitor retention pruning now inventories retained files once per due run and
   reuses the same size/mtime snapshot for age and byte-cap deletion. Retention
   cadence, protected files, recursive byte accounting, direct-only deletion,

@@ -69,6 +69,17 @@ Retuned goal boundary:
 
 VPS5 deployment status:
 
+- PR #1208 merged to `v8` as
+  `2a13202f7aec07874ed318dcf6472e445187a98e` after exact-head Hermes and
+  Grok 4.5 approval plus green CI. VPS5 fast-forwarded cleanly and gracefully
+  restarted only the five exact bot panes; all old bots exited naturally, pane
+  PIDs remained unchanged, and unrelated `misc:0.0` PID `434835` was preserved.
+  After one real KuCoin timeout aged out, the final two-minute smoke was
+  hard-green with `315/315` remote and `62/62` account-critical calls
+  successful, all five bots `R`, zero hard/log/monitor failures, and a clean
+  tracked repository. Four fresh health windows measured 12 retention runs at
+  `5612.290ms` total and `690.434ms` maximum, down from PR #1206's matched-run
+  `16210.383ms` total and `8953.523ms` maximum.
 - PR #1207 merged to `v8` as
   `de6022432dae9f4513f7a56287535ba21120a39f` after exact-head Hermes and
   Grok 4.5 approval plus green CI. VPS5 fast-forwarded cleanly and gracefully
