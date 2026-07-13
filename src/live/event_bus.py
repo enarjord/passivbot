@@ -1675,6 +1675,105 @@ def _console_health_summary(event: LiveEvent) -> list[str]:
     return parts
 
 
+def _format_console_duration_ms(duration_ms: int) -> str:
+    total_seconds = max(0, duration_ms // 1000)
+    days, remainder = divmod(total_seconds, 86_400)
+    hours, remainder = divmod(remainder, 3_600)
+    minutes, seconds = divmod(remainder, 60)
+    if days:
+        return f"{days}d{hours}h{minutes}m"
+    if hours:
+        return f"{hours}h{minutes}m{seconds}s"
+    if minutes:
+        return f"{minutes}m{seconds}s"
+    return f"{seconds}s"
+
+
+def format_periodic_health_summary(data: Mapping[str, Any]) -> str:
+    """Render the bounded operator projection for a periodic health summary."""
+    uptime_ms = _data_int(data, "uptime_ms")
+    loop_ms = _data_int(data, "last_loop_duration_ms")
+    long_count = _data_int(data, "positions_long")
+    short_count = _data_int(data, "positions_short")
+    parts = [
+        f"uptime={_format_console_duration_ms(uptime_ms or 0)}",
+        f"loop={loop_ms / 1000.0:.1f}s" if loop_ms and loop_ms > 0 else "loop=n/a",
+        f"positions={long_count or 0}L/{short_count or 0}S",
+    ]
+
+    balance = _data_number(data, "balance_raw")
+    quote = _data_str(data, "quote")
+    if balance is not None:
+        suffix = f" {quote}" if quote else ""
+        balance_part = f"balance={balance:.2f}{suffix}"
+        snapped = _data_number(data, "balance_snapped")
+        if snapped is not None and abs(balance - snapped) > 1e-9:
+            balance_part += f" (snap {snapped:.2f})"
+        parts.append(balance_part)
+
+    placed = _data_int(data, "orders_placed")
+    cancelled = _data_int(data, "orders_cancelled")
+    parts.append(f"orders=+{placed or 0}/-{cancelled or 0}")
+
+    fills = _data_int(data, "fills")
+    fills = fills if fills is not None else 0
+    fills_part = f"fills={fills}"
+    if fills > 0:
+        pnl = _data_number(data, "pnl")
+        if pnl is not None:
+            pnl_suffix = f" {quote}" if quote else ""
+            fills_part += f" (pnl={pnl:+.2f}{pnl_suffix})"
+    parts.append(fills_part)
+
+    errors = _data_int(data, "errors_last_hour")
+    error_budget_max = _data_int(data, "error_budget_max")
+    parts.append(f"errors={errors or 0}/{error_budget_max or 10}")
+
+    ws = _data_int(data, "ws_reconnects")
+    if ws:
+        parts.append(f"ws={ws}")
+    rate_limits = _data_int(data, "rate_limits")
+    if rate_limits:
+        parts.append(f"rate_limits={rate_limits}")
+    rss_bytes = _data_int(data, "rss_bytes")
+    if rss_bytes is not None:
+        parts.append(f"rss={rss_bytes / 1024.0 / 1024.0:.1f}MiB")
+    summary_lag_ms = _data_int(data, "health_summary_lag_ms")
+    if summary_lag_ms:
+        parts.append(f"health_lag={summary_lag_ms / 1000.0:.1f}s")
+
+    slow_phases = data.get("slow_phases")
+    if isinstance(slow_phases, list):
+        shown = []
+        for item in slow_phases[:3]:
+            if not isinstance(item, Mapping):
+                continue
+            phase = _data_str(item, "phase")
+            duration_ms = _data_int(item, "duration_ms")
+            if phase and duration_ms and duration_ms > 0:
+                shown.append(f"{phase}:{duration_ms / 1000.0:.1f}s")
+        if shown:
+            parts.append("slow=" + ",".join(shown))
+
+    queue_depth = _data_int(data, "event_queue_depth")
+    if queue_depth:
+        queue_max = _data_int(data, "event_queue_maxsize")
+        parts.append(
+            f"event_q={queue_depth}/{queue_max}"
+            if queue_max
+            else f"event_q={queue_depth}"
+        )
+    dropped = _data_int(data, "event_dropped_total")
+    if dropped:
+        parts.append(f"event_dropped={dropped}")
+    sink_errors = _data_int(data, "event_sink_error_total")
+    if sink_errors:
+        parts.append(f"sink_errors={sink_errors}")
+    if data.get("event_pipeline_worker_alive") is False:
+        parts.append("event_worker=dead")
+    return "[health] " + " | ".join(parts)
+
+
 def _format_console_ratio(value: Any) -> str | None:
     if value is None:
         return None
@@ -1927,6 +2026,11 @@ def _operator_sink_event_visible(event: LiveEvent) -> bool:
 
 
 def format_console_event(event: LiveEvent) -> str:
+    if (
+        event.event_type == EventTypes.HEALTH_SUMMARY
+        and event.reason_code == ReasonCodes.PERIODIC_HEALTH_SUMMARY
+    ):
+        return format_periodic_health_summary(event.data)
     if event.event_type == EventTypes.FILL_INGESTED:
         return _format_console_fill_ingested(event)
     if event.event_type == EventTypes.FILLS_INGESTED_SUMMARY:

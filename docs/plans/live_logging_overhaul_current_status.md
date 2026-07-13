@@ -22,54 +22,64 @@ Estimated completion:
 
 ## Active Review Slice
 
-- Branch: `codex/v8-fill-console-migration`
-- PR: #1215
-- Base: `91e40b911fd5378547b77ffbd7be1924846fa3e3`, merged PR #1214
-- Triggering evidence: `fill.ingested` is routed to console/text while
-  `_log_new_fill_events()` also writes the legacy per-fill or bulk line. Normal
-  fills therefore appear twice, and batches over 20 defeat the legacy one-line
-  summary by projecting every durable per-fill event. The event formatter also
-  lacks the legacy line's fill timestamp, pending-PnL state, and bounded fill
-  trace identifier.
-- Scope: make structured fill events own the normal human projection. Add the
-  non-sensitive fields required for timestamp, pending/known PnL, and bounded
-  hashed trace parity; add one distinct structured bulk-summary event; suppress
-  only per-fill console/text projection for batches over 20; and retain the
-  stdlib fill line only when the structured event console is disabled or its
-  pipeline is absent.
-- Behavior boundary: observability migration only. Preserve fill ingestion,
-  ordering, deduplication, cache/history writes, monitor fill records, health
-  counters, realized-PnL accounting, structured per-fill durability, and every
-  order/risk/trading behavior. Do not change enrichment, fee resolution,
-  exchange fetches, or fill/PnL readiness policy.
-- Validation: formatter parity for historical timestamps, signed quantity,
-  pending and known-zero close PnL, bounded identifiers, and bulk summaries;
-  console/text visibility versus durable structured/monitor delivery; stdlib
-  fallback behavior; integrated fill ingestion tests; offline fake-live fill
-  evidence; generated registry/docs checks; Python compilation;
+- Branch: `codex/v8-health-console-migration`
+- PR: #1216
+- Base: `6af983c539d00acd802aabad66044868afd45aa4`, merged PR #1215
+- Triggering evidence: every periodic health interval writes both a legacy
+  `[health]` line and a structured `health.summary` console projection. The
+  duplicate is frequent on every bot, the structured projection is needlessly
+  machine-like, and the legacy Linux `ru_maxrss` conversion visibly reports
+  `rss=0MB` while the structured event carries the correct byte count.
+- Scope: make the periodic structured `health.summary` event own the normal
+  human projection. Render one compact line with human uptime, loop time,
+  positions, raw/snapped balance and quote currency, orders, fills/PnL, error
+  budget, correct RSS, and only nonzero health/pipeline anomalies. Retain the
+  stdlib health line only when the structured event console is disabled or its
+  pipeline is absent. Preserve the separate error-burst health projection.
+- Behavior boundary: observability migration only. Preserve health counters,
+  scheduler cadence, event-pipeline timing snapshot transactions, candle-health
+  logging, and every order/risk/trading behavior. Do not change exchange calls,
+  health thresholds, restart policy, or smoke verdict policy.
+- Validation: compact periodic formatter coverage including zero values,
+  raw/snapped balance, quote currency, fills/PnL, errors, RSS, and anomaly-only
+  fields; single-line structured ownership versus stdlib fallback; timing
+  snapshot confirm/restore behavior; preserved error-burst formatting;
+  integrated monitor tests; generated registry/docs checks; Python compilation;
   `git diff --check`; silent-handling audit; and independent preflight.
 - Publication state, exact head, mergeability, CI, and current-head reviewer
   verdicts: query live GitHub metadata; do not embed self-invalidating values.
 - Expected VPS action: exact five-bot graceful restart plus immediate and
-  settled smoke. Validate a naturally occurring fill if one appears; do not
-  create, cancel, or alter an order merely to produce console evidence.
+  settled smoke. Periodic health output occurs naturally, so validate exactly
+  one compact line per interval without creating or altering trading state.
 
 Next action:
 
-1. Hold PR #1215 at its exact current head for Hermes, Grok 4.5, and CI.
+1. Hold PR #1216 at its exact current head for Hermes, Grok 4.5, and CI.
 2. Resolve findings narrowly and require fresh exact-head verdicts after every
    push.
 3. Merge only when the complete gate is green, then perform the exact five-bot
-   graceful VPS5 restart and immediate/settled smoke without fabricating a fill.
+   graceful VPS5 restart and immediate/settled smoke.
 
 ## Deployed Baseline
 
-- Remote `v8`: `91e40b911fd5378547b77ffbd7be1924846fa3e3`, PR #1214
-- VPS5 repository: `91e40b911fd5378547b77ffbd7be1924846fa3e3`, PR #1214; tracked
+- Remote `v8`: `6af983c539d00acd802aabad66044868afd45aa4`, PR #1215
+- VPS5 repository: `6af983c539d00acd802aabad66044868afd45aa4`, PR #1215; tracked
   status clean; expected untracked artifacts were preserved
-- VPS5 expected bots: five; running with PR #1214 restart PIDs
-  `901310/901313/901316/901319/901321`;
+- VPS5 expected bots: five; running with PR #1215 restart PIDs
+  `903757/903759/903761/903763/903765`;
   unrelated `misc:0.0` remains PID `434835`
+- PR #1215 merged after exact-head Hermes and Grok 4.5 approval plus green CI.
+  It made structured fill events own normal console/text output, added one
+  bounded bulk summary while preserving every durable per-fill event, and kept
+  the stdlib fallback for configurations without a structured console. VPS5
+  fast-forwarded cleanly and gracefully restarted only the five exact bot
+  panes; every old bot exited naturally without force kill. Pane PIDs and the
+  unrelated `misc:0.0` PID `434835` were preserved. Initial windows honestly
+  reported real KuCoin timeouts; after recovery, the final two-minute smoke was
+  hard-green with `384/384` remote and `71/71` account-critical calls, all five
+  expected processes, zero hard/log/monitor failures, no active HSL replay, and
+  a clean tracked repository. No natural post-restart fill occurred, so runtime
+  fill-format evidence remains absent rather than manufactured.
 - PR #1214 merged after exact-head Hermes and Grok 4.5 approval plus green CI.
   VPS5 fast-forwarded cleanly and gracefully restarted only the five exact bot
   panes; every old bot exited naturally without force kill. Pane PIDs and
@@ -459,10 +469,11 @@ showed only `13.774%` thread CPU and `86.226%` direct non-CPU time. The long
 retention wall-time tail is host descheduling/contention evidence and does not
 justify another retention optimization.
 
-The active slice migrates normal fill console/text output to the structured
-event projection. Preserve durable per-fill events, historical timestamps,
-pending versus known PnL, bounded traceability, and one-line bulk summaries;
-keep the stdlib line only as fallback when the event console is unavailable.
+PR #1215's fill console/text migration is merged and deployed. The active slice
+is PR #1216's periodic health console migration: preserve durable health events,
+timing snapshot transactions, scheduler cadence, and error-burst formatting;
+render one compact normal health line and keep the stdlib line only as fallback
+when the structured console sink is unavailable.
 
 Do not create progress-only PRs or resume unrelated logging work from stale
 worktrees.

@@ -61,6 +61,7 @@ from live.events import DiagnosticEvent, emit_diagnostic_event, run_diagnostic_s
 from live.event_bus import (
     ConsoleSummarySink,
     EventTypes,
+    format_periodic_health_summary,
     LIVE_EVENT_CONSOLE_ENV,
     LIVE_EVENT_DEBUG_PROFILE_ENV,
     LiveEventContext,
@@ -2293,117 +2294,40 @@ class Passivbot:
     def _log_health_summary(self) -> None:
         """Log a health summary with uptime and counters."""
         now_ms = utc_ms()
-        uptime_ms = now_ms - self._health_start_ms
-        uptime_str = self._format_duration(uptime_ms)
-
-        # Count current positions
-        n_long = 0
-        n_short = 0
-        for symbol, pos_data in self.positions.items():
-            if pos_data.get("long", {}).get("size", 0.0) != 0.0:
-                n_long += 1
-            if pos_data.get("short", {}).get("size", 0.0) != 0.0:
-                n_short += 1
-
-        balance_raw = self.get_raw_balance()
-        balance_snapped = self.get_hysteresis_snapped_balance()
-        balance_str = f"{balance_raw:.2f} {self.quote}"
-        if abs(balance_raw - balance_snapped) > 1e-9:
-            balance_str += f" (snap {balance_snapped:.2f})"
-
-        # Build fills string with PnL if fills > 0
-        if self._health_fills > 0:
-            pnl_sign = "+" if self._health_pnl >= 0 else ""
-            fills_str = (
-                f"fills={self._health_fills} (pnl={pnl_sign}{self._health_pnl:.2f})"
-            )
-        else:
-            fills_str = "fills=0"
-
-        # Loop timing
-        loop_ms = getattr(self, "_last_loop_duration_ms", 0)
-        loop_str = f"{loop_ms / 1000:.1f}s" if loop_ms > 0 else "n/a"
-        slow_phase_str = ""
-        try:
-            loop_timing = getattr(self, "_last_loop_timing_ms", {}) or {}
-            if loop_ms >= 60_000 and isinstance(loop_timing, dict) and loop_timing:
-                ranked = sorted(
-                    (
-                        (str(phase), int(duration_ms))
-                        for phase, duration_ms in loop_timing.items()
-                    ),
-                    key=lambda item: item[1],
-                    reverse=True,
-                )
-                slow_phase_str = " | slow_phases=" + ",".join(
-                    f"{phase}:{duration_ms / 1000:.1f}s"
-                    for phase, duration_ms in ranked[:3]
-                    if duration_ms > 0
-                )
-        except Exception:
-            slow_phase_str = ""
-
-        # Error budget: count of errors in last hour vs max
-        error_counts = getattr(self, "error_counts", [])
-        now = utc_ms()
-        recent_errors = len([x for x in error_counts if x > now - 1000 * 60 * 60])
-        max_errors = 10
-        error_budget_str = f"{recent_errors}/{max_errors}"
-
-        # Memory usage
-        try:
-            import resource
-
-            rss_mb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024 / 1024
-            mem_str = f"rss={rss_mb:.0f}MB"
-        except Exception:
-            mem_str = ""
-
-        logging.info(
-            "[health] uptime=%s | loop=%s | positions=%d long, %d short | balance=%s | "
-            "orders=+%d/-%d | %s | errors=%s | ws_reconnects=%d | rate_limits=%d%s",
-            uptime_str,
-            loop_str,
-            n_long,
-            n_short,
-            balance_str,
-            self._health_orders_placed,
-            self._health_orders_cancelled,
-            fills_str,
-            error_budget_str,
-            self._health_ws_reconnects,
-            self._health_rate_limits,
-            f"{slow_phase_str}{f' | {mem_str}' if mem_str else ''}",
-        )
         emit_health_summary = getattr(self, "_emit_health_summary_event", None)
-        if callable(emit_health_summary):
-            pipeline = getattr(self, "_live_event_pipeline", None)
-            confirm_timing = getattr(pipeline, "confirm_timing_snapshot", None)
-            restore_timing = getattr(pipeline, "restore_timing_snapshot", None)
-            timing_snapshot_token = None
-            try:
-                payload_result = self._build_health_summary_payload(
-                    now_ms=now_ms,
-                    reset_event_pipeline_timing=True,
-                )
-                if isinstance(payload_result, tuple):
-                    health_payload, timing_snapshot_token = payload_result
-                else:
-                    health_payload = payload_result
-                    timing_snapshot_token = None
+        can_emit = callable(emit_health_summary)
+        pipeline = getattr(self, "_live_event_pipeline", None)
+        confirm_timing = getattr(pipeline, "confirm_timing_snapshot", None)
+        restore_timing = getattr(pipeline, "restore_timing_snapshot", None)
+        timing_snapshot_token = None
+        try:
+            payload_result = self._build_health_summary_payload(
+                now_ms=now_ms,
+                reset_event_pipeline_timing=can_emit,
+            )
+            if isinstance(payload_result, tuple):
+                health_payload, timing_snapshot_token = payload_result
+            else:
+                health_payload = payload_result
+                timing_snapshot_token = None
+            health_console_available = bool(
+                can_emit
+                and Passivbot._live_event_console_available(self)
+                and getattr(pipeline, "console_sink", None) is not None
+            )
+            if not health_console_available:
+                logging.info(format_periodic_health_summary(health_payload))
+            if can_emit:
                 emitted = emit_health_summary(health_payload)
                 if emitted is None:
                     if callable(restore_timing) and timing_snapshot_token is not None:
                         restore_timing(timing_snapshot_token)
                 elif callable(confirm_timing) and timing_snapshot_token is not None:
                     confirm_timing(timing_snapshot_token)
-            except Exception as exc:
-                if (
-                    callable(restore_timing)
-                    and timing_snapshot_token is not None
-                ):
-                    restore_timing(timing_snapshot_token)
-                logging.debug("[event] failed preparing health summary event: %s", exc)
+        except Exception as exc:
+            if callable(restore_timing) and timing_snapshot_token is not None:
+                restore_timing(timing_snapshot_token)
+            logging.debug("[event] failed preparing health summary event: %s", exc)
         self._maybe_log_candle_health_summary()
 
     def _unstuck_loss_allowance_pct_overrides_for_logging(self, pside: str) -> dict[str, float]:

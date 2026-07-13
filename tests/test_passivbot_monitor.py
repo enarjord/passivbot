@@ -11,6 +11,7 @@ import pytest
 
 import live.event_emitters as live_event_emitters
 from live.event_bus import (
+    ConsoleSummarySink,
     EventTypes,
     ListEventSink,
     LiveEvent,
@@ -1397,6 +1398,7 @@ def test_build_health_summary_payload_includes_resource_pressure(monkeypatch):
             }
             self._health_start_ms = 100_000
             self._last_loop_duration_ms = 1234
+            self._last_loop_timing_ms = {}
             self._health_summary_lag_ms = 2345
             self._monitor_last_equity = 1001.0
             self._health_orders_placed = 5
@@ -1405,6 +1407,7 @@ def test_build_health_summary_payload_includes_resource_pressure(monkeypatch):
             self._health_pnl = 8.5
             self._health_ws_reconnects = 1
             self._health_rate_limits = 2
+            self.quote = "USDT"
             self.error_counts = [159_000, 10_000]
             self._live_event_pipeline = FakePipeline()
 
@@ -1448,6 +1451,9 @@ def test_build_health_summary_payload_includes_resource_pressure(monkeypatch):
     assert payload["health_summary_lag_ms"] == 2345
     assert payload["positions_long"] == 1
     assert payload["positions_short"] == 1
+    assert payload["quote"] == "USDT"
+    assert payload["error_budget_max"] == 10
+    assert "slow_phases" not in payload
     assert payload["rss_bytes"] == 123456
     assert payload["memory_percent"] == 12.5
     assert payload["cpu_percent"] == 34.25
@@ -1518,6 +1524,20 @@ def test_build_health_summary_payload_includes_resource_pressure(monkeypatch):
     assert timing_token == 41
     assert bot._live_event_pipeline.consume_timing_calls == [False, True]
 
+    bot._last_loop_duration_ms = 60_000
+    bot._last_loop_timing_ms = {
+        "market": 1_000,
+        "maintenance": 5_000,
+        "account": 3_000,
+        "ignored": 500,
+    }
+    slow_payload = bot._build_health_summary_payload(now_ms=160_000)
+    assert slow_payload["slow_phases"] == [
+        {"phase": "maintenance", "duration_ms": 5_000},
+        {"phase": "account", "duration_ms": 3_000},
+        {"phase": "market", "duration_ms": 1_000},
+    ]
+
 
 def test_process_cpu_percent_reuses_psutil_process(monkeypatch):
     import passivbot as pb_mod
@@ -1559,7 +1579,7 @@ def test_process_cpu_percent_reuses_psutil_process(monkeypatch):
     ]
 
 
-def test_log_health_summary_emits_structured_event(caplog, monkeypatch):
+def test_log_health_summary_structured_console_owns_periodic_line(caplog, monkeypatch):
     import passivbot as pb_mod
 
     sink = ListEventSink()
@@ -1591,6 +1611,7 @@ def test_log_health_summary_emits_structured_event(caplog, monkeypatch):
             self._health_pnl = 1.25
             self._health_ws_reconnects = 4
             self._health_rate_limits = 5
+            self.live_event_console_enabled = True
             self.error_counts = [190000]
             self.candle_health_called = False
             self.payload_now_ms = None
@@ -1599,6 +1620,9 @@ def test_log_health_summary_emits_structured_event(caplog, monkeypatch):
             self._live_event_pipeline = LiveEventPipeline(
                 structured_sinks=[sink],
                 monitor_sinks=[],
+                console_sink=ConsoleSummarySink(
+                    logging.getLogger("passivbot.live_event_console")
+                ),
             )
 
         def get_raw_balance(self):
@@ -1622,11 +1646,13 @@ def test_log_health_summary_emits_structured_event(caplog, monkeypatch):
                 "positions_short": 0,
                 "balance_raw": 1000.0,
                 "balance_snapped": 999.5,
+                "quote": "USDT",
                 "orders_placed": 2,
                 "orders_cancelled": 1,
                 "fills": 3,
                 "pnl": 1.25,
                 "errors_last_hour": 1,
+                "error_budget_max": 10,
                 "ws_reconnects": 4,
                 "rate_limits": 5,
                 "rss_bytes": 987654,
@@ -1655,14 +1681,19 @@ def test_log_health_summary_emits_structured_event(caplog, monkeypatch):
 
     with caplog.at_level(logging.INFO):
         bot._log_health_summary()
+        assert bot._live_event_pipeline.flush(timeout=2.0) is True
 
-    assert "[health] uptime=1m0s" in caplog.text
-    assert "positions=1 long, 0 short" in caplog.text
-    assert "orders=+2/-1" in caplog.text
+    health_records = [record for record in caplog.records if "[health]" in record.message]
+    assert [record.name for record in health_records] == ["passivbot.live_event_console"]
+    assert health_records[0].message == (
+        "[health] uptime=1m0s | loop=2.5s | positions=1L/0S | "
+        "balance=1000.00 USDT (snap 999.50) | orders=+2/-1 | "
+        "fills=3 (pnl=+1.25 USDT) | errors=1/10 | ws=4 | rate_limits=5 | "
+        "rss=0.9MiB"
+    )
     assert bot.candle_health_called is True
     assert bot.payload_now_ms == 200000
     assert bot.payload_reset_event_pipeline_timing is True
-    assert bot._live_event_pipeline.flush(timeout=2.0) is True
     event = sink.events[0]
     assert event.event_type == EventTypes.HEALTH_SUMMARY
     assert event.cycle_id == "cy_health"
@@ -1675,6 +1706,128 @@ def test_log_health_summary_emits_structured_event(caplog, monkeypatch):
     bot._log_health_summary()
     assert confirmed == [17]
     assert restored == [17]
+    assert [record for record in caplog.records if "[health]" in record.message] == health_records
+
+    def raise_on_emit(_payload):
+        raise RuntimeError("synthetic enqueue failure")
+
+    bot._emit_health_summary_event = raise_on_emit
+    bot._log_health_summary()
+    assert confirmed == [17]
+    assert restored == [17, 17]
+    assert [record for record in caplog.records if "[health]" in record.message] == health_records
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
+
+
+@pytest.mark.parametrize("console_enabled", [False, True])
+def test_log_health_summary_uses_legacy_fallback_without_console_sink(
+    caplog, monkeypatch, console_enabled
+):
+    import passivbot as pb_mod
+
+    sink = ListEventSink()
+
+    class FakeBot:
+        _current_live_event_cycle_id = pb_mod.Passivbot._current_live_event_cycle_id
+        _emit_live_event = pb_mod.Passivbot._emit_live_event
+        _emit_health_summary_event = pb_mod.Passivbot._emit_health_summary_event
+        _log_health_summary = pb_mod.Passivbot._log_health_summary
+
+        def __init__(self):
+            self.exchange = "okx"
+            self.user = "okx_01"
+            self.bot_id = "bot_1"
+            self.live_event_console_enabled = console_enabled
+            self._live_event_current_cycle_id = "cy_health"
+            self._live_event_pipeline = LiveEventPipeline(
+                structured_sinks=[sink], monitor_sinks=[]
+            )
+
+        def _build_health_summary_payload(self, **_kwargs):
+            return {
+                "uptime_ms": 1_173_000,
+                "last_loop_duration_ms": 39_500,
+                "positions_long": 0,
+                "positions_short": 0,
+                "balance_raw": 2946.66,
+                "balance_snapped": 2951.82,
+                "quote": "USDT",
+                "orders_placed": 0,
+                "orders_cancelled": 0,
+                "fills": 0,
+                "pnl": 0.0,
+                "errors_last_hour": 0,
+                "error_budget_max": 10,
+                "rss_bytes": 87_658_496,
+            }
+
+        def _maybe_log_candle_health_summary(self):
+            return None
+
+    monkeypatch.setattr(pb_mod, "utc_ms", lambda: 200_000)
+    bot = FakeBot()
+
+    with caplog.at_level(logging.INFO):
+        bot._log_health_summary()
+        assert bot._live_event_pipeline.flush(timeout=2.0) is True
+
+    health_records = [record for record in caplog.records if "[health]" in record.message]
+    assert len(health_records) == 1
+    assert health_records[0].message == (
+        "[health] uptime=19m33s | loop=39.5s | positions=0L/0S | "
+        "balance=2946.66 USDT (snap 2951.82) | orders=+0/-0 | fills=0 | "
+        "errors=0/10 | rss=83.6MiB"
+    )
+    assert sink.events[0].event_type == EventTypes.HEALTH_SUMMARY
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
+
+
+def test_log_health_summary_uses_fallback_when_emitter_missing(caplog, monkeypatch):
+    import passivbot as pb_mod
+
+    class FakeBot:
+        _emit_health_summary_event = None
+        _log_health_summary = pb_mod.Passivbot._log_health_summary
+
+        def __init__(self):
+            self.live_event_console_enabled = True
+            self._live_event_pipeline = LiveEventPipeline(
+                console_sink=ConsoleSummarySink(
+                    logging.getLogger("passivbot.live_event_console")
+                )
+            )
+            self.payload_reset_event_pipeline_timing = None
+
+        def _build_health_summary_payload(
+            self, *, now_ms=None, reset_event_pipeline_timing=False
+        ):
+            self.payload_reset_event_pipeline_timing = reset_event_pipeline_timing
+            return {
+                "uptime_ms": 1_000,
+                "last_loop_duration_ms": 0,
+                "positions_long": 0,
+                "positions_short": 0,
+                "orders_placed": 0,
+                "orders_cancelled": 0,
+                "fills": 0,
+                "errors_last_hour": 0,
+                "error_budget_max": 10,
+            }
+
+        def _maybe_log_candle_health_summary(self):
+            return None
+
+    monkeypatch.setattr(pb_mod, "utc_ms", lambda: 200_000)
+    bot = FakeBot()
+
+    with caplog.at_level(logging.INFO):
+        bot._log_health_summary()
+
+    assert bot.payload_reset_event_pipeline_timing is False
+    assert [record.message for record in caplog.records if "[health]" in record.message] == [
+        "[health] uptime=1s | loop=n/a | positions=0L/0S | orders=+0/-0 | "
+        "fills=0 | errors=0/10"
+    ]
     assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 
