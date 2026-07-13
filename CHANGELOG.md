@@ -4,6 +4,12 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Ambiguous-cancel terminal states now use the structured execution warning as
+  the sole normal console/text line when a live-event console sink is
+  available, with an explicit full-account-confirmation cue in its compact
+  projection. The legacy summary remains the fallback; cancellation and
+  authoritative-confirmation behavior are unchanged.
+
 - Execution-loop error bursts now use the structured `health.summary` console
   projection as the sole normal console/text line when a live-event console sink
   is available. The legacy warning remains the fallback when that projection or

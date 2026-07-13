@@ -522,8 +522,16 @@ Related detailed plans:
     `ok=true` settled smoke (`414/414` remote, `70/70` account-critical,
     five process/config checks, `12/12` fill refreshes, and zero tracked
     repository changes).
-    The natural KuCoin error burst exposed the remaining separate
-    structured/legacy duplicate, now the next focused console-ownership slice.
+    PR #1217 then removed the natural KuCoin execution-loop error-burst
+    structured/legacy duplicate while preserving the legacy fallback when no
+    structured console sink exists. It merged and deployed at
+    `6599fba08cadffac99ce6a1ce2bfd3f58ca3fa15`; after a real transient KuCoin
+    timeout aged out, the final two-minute smoke was green with `284/284`
+    remote and `62/62` account-critical calls, all five bots running, zero
+    pipeline failures, and a clean tracked repository. Retained OKX logs then
+    exposed the next adjacent duplicate: structured
+    `execution.cancel_ambiguous_terminal` followed by the legacy full-account
+    confirmation summary for the same symbol.
 
     Work log:
     - 2026-06-30: Added value-safe `live-smoke-report` HSL status projections

@@ -8713,6 +8713,155 @@ async def test_ambiguous_cancel_forces_full_authoritative_confirmation():
     assert bot.state_change_detected_by_symbol == {"BTC/USDT:USDT"}
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("console_sink_fails", [False, True])
+async def test_ambiguous_cancel_structured_console_owns_confirmation_message(
+    caplog, console_sink_fails
+):
+    class FailingConsoleSink:
+        def write(self, _event):
+            raise OSError("console unavailable")
+
+    bot = Passivbot.__new__(Passivbot)
+    bot.debug_mode = False
+    bot.execution_scheduled = False
+    bot.state_change_detected_by_symbol = set()
+    bot._health_orders_cancelled = 0
+    bot.live_event_console_enabled = True
+    bot._live_event_current_cycle_id = "cy_ambiguous_cancel"
+    structured_sink = ListEventSink()
+    console_sink = FailingConsoleSink() if console_sink_fails else ListEventSink()
+    bot._live_event_pipeline = LiveEventPipeline(
+        structured_sinks=[structured_sink],
+        monitor_sinks=[],
+        console_sink=console_sink,
+    )
+    confirmations = []
+    order = {
+        "id": "abc123",
+        "symbol": "BTC/USDT:USDT",
+        "side": "buy",
+        "position_side": "long",
+        "qty": 0.001,
+        "price": 100_000.0,
+        "reduce_only": False,
+    }
+
+    async def fake_execute_cancellations(orders):
+        assert orders == [order]
+        return [
+            {
+                "status": "success",
+                "_passivbot_cancel_requires_full_authoritative_confirmation": True,
+            }
+        ]
+
+    bot.live_value = lambda key: 10 if key == "max_n_cancellations_per_batch" else None
+    bot.add_to_recent_order_cancellations = lambda _order: None
+    bot.log_order_action = lambda *args, **kwargs: None
+    bot._log_order_action_summary = lambda *args, **kwargs: None
+    bot.execute_cancellations = fake_execute_cancellations
+    bot.did_cancel_order = lambda executed, _order: executed.get("status") == "success"
+    bot.remove_order = lambda *args, **kwargs: None
+    bot._monitor_order_payload = lambda *args, **kwargs: {}
+    bot._monitor_record_event = lambda *args, **kwargs: None
+    bot._request_authoritative_confirmation = lambda surfaces: confirmations.append(
+        set(surfaces)
+    )
+
+    with caplog.at_level(logging.INFO):
+        res = await Passivbot.execute_cancellations_parent(bot, [order])
+
+    assert len(res) == 1
+    assert confirmations == [{"balance", "positions", "open_orders", "fills"}]
+    assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    terminal_events = [
+        event
+        for event in structured_sink.events
+        if event.event_type == EventTypes.EXECUTION_CANCEL_AMBIGUOUS_TERMINAL
+    ]
+    assert len(terminal_events) == 1
+    assert not [
+        record
+        for record in caplog.records
+        if "ambiguous cancel terminal state; forcing full account confirmation" in record.message
+    ]
+    if console_sink_fails:
+        assert bot._live_event_pipeline.sink_error_counters["console"] >= 1
+    else:
+        assert console_sink.events == terminal_events
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
+
+
+@pytest.mark.asyncio
+async def test_ambiguous_cancel_uses_legacy_confirmation_message_without_structured_console(
+    caplog,
+):
+    bot = Passivbot.__new__(Passivbot)
+    bot.debug_mode = False
+    bot.execution_scheduled = False
+    bot.state_change_detected_by_symbol = set()
+    bot._health_orders_cancelled = 0
+    bot.live_event_console_enabled = True
+    bot._live_event_current_cycle_id = "cy_ambiguous_cancel"
+    sink = ListEventSink()
+    bot._live_event_pipeline = LiveEventPipeline(
+        structured_sinks=[sink],
+        monitor_sinks=[],
+        console_sink=None,
+    )
+    order = {
+        "id": "abc123",
+        "symbol": "BTC/USDT:USDT",
+        "side": "buy",
+        "position_side": "long",
+        "qty": 0.001,
+        "price": 100_000.0,
+        "reduce_only": False,
+    }
+
+    async def fake_execute_cancellations(orders):
+        assert orders == [order]
+        return [
+            {
+                "status": "success",
+                "_passivbot_cancel_requires_full_authoritative_confirmation": True,
+            }
+        ]
+
+    bot.live_value = lambda key: 10 if key == "max_n_cancellations_per_batch" else None
+    bot.add_to_recent_order_cancellations = lambda _order: None
+    bot.log_order_action = lambda *args, **kwargs: None
+    bot._log_order_action_summary = lambda *args, **kwargs: None
+    bot.execute_cancellations = fake_execute_cancellations
+    bot.did_cancel_order = lambda executed, _order: executed.get("status") == "success"
+    bot.remove_order = lambda *args, **kwargs: None
+    bot._monitor_order_payload = lambda *args, **kwargs: {}
+    bot._monitor_record_event = lambda *args, **kwargs: None
+    bot._request_authoritative_confirmation = lambda _surfaces: None
+
+    with caplog.at_level(logging.INFO):
+        res = await Passivbot.execute_cancellations_parent(bot, [order])
+
+    assert len(res) == 1
+    assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    assert [
+        event.event_type
+        for event in sink.events
+        if event.event_type == EventTypes.EXECUTION_CANCEL_AMBIGUOUS_TERMINAL
+    ] == [EventTypes.EXECUTION_CANCEL_AMBIGUOUS_TERMINAL]
+    legacy_messages = [
+        record.message
+        for record in caplog.records
+        if "ambiguous cancel terminal state; forcing full account confirmation" in record.message
+    ]
+    assert legacy_messages == [
+        "[order] ambiguous cancel terminal state; forcing full account confirmation "
+        "before next cycle | symbols=BTC"
+    ]
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
+
+
 def test_positions_signature_ignores_margin_used_and_margin_mode_noise():
     bot = Passivbot.__new__(Passivbot)
     positions_a = [

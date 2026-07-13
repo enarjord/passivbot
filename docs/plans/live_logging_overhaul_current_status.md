@@ -22,33 +22,47 @@ Estimated completion:
 
 ## Active Review Slice
 
-- Branch: `codex/v8-error-burst-console-migration`.
-- Base: `13e6e484cf20b1265f2b4874b14ff7ab32d10bfd`, merged PR #1216.
-- Slice: execution-loop error-burst console ownership.
-- Triggering evidence: after PR #1216, a natural KuCoin error burst wrote two
-  adjacent console lines: structured `health.summary`
-  `reason=execution_loop_error_burst` and legacy `[health] execution loop error
-  burst`.
-- Scope: make the existing structured degraded health event the sole normal
-  console/text owner when its enabled pipeline has a console sink. Preserve the
-  legacy warning only when the pipeline, console sink, or callable emitter seam
-  is unavailable. Do not turn pipeline enqueue, flush, or sink degradation into
-  dual writing.
-- Behavior boundary: preserve burst thresholds, event payload/redaction,
-  individual error logs, restart/backoff, and trading behavior.
+- Branch: `codex/v8-ambiguous-cancel-console-migration`.
+- Base: `6599fba08cadffac99ce6a1ce2bfd3f58ca3fa15`, merged PR #1217.
+- Slice: ambiguous-cancel terminal-state console ownership.
+- Triggering evidence: retained OKX logs showed an
+  `execution.cancel_ambiguous_terminal` warning immediately followed by the
+  legacy `[order] ambiguous cancel terminal state; forcing full account
+  confirmation before next cycle` line for the same symbol.
+- Scope: make the existing structured warning the sole normal console/text
+  owner, ensure its compact projection communicates the required full
+  authoritative account confirmation, and preserve the legacy summary only
+  when structured console infrastructure is unavailable. Enqueue or sink
+  degradation must remain single-owner and surface through pipeline health,
+  not trigger dynamic dual writing.
+- Behavior boundary: preserve cancellation results, state-change detection,
+  authoritative confirmation surfaces and epochs, order-wave scheduling,
+  exchange calls, event emission, and all trading behavior.
 - Publication state, exact head, mergeability, CI, and current-head reviewer
   verdicts: query live GitHub metadata; do not embed self-invalidating values.
-- Expected VPS action: restart and observe only after this follow-up merges;
+- Expected VPS action: restart and observe only after this slice merges;
   this isolated implementation work does not contact VPS5 or exchanges.
 
 ## Deployed Baseline
 
-- Remote `v8`: `13e6e484cf20b1265f2b4874b14ff7ab32d10bfd`, PR #1216
-- VPS5 repository: `13e6e484cf20b1265f2b4874b14ff7ab32d10bfd`, PR #1216; exact
+- Remote `v8`: `6599fba08cadffac99ce6a1ce2bfd3f58ca3fa15`, PR #1217
+- VPS5 repository: `6599fba08cadffac99ce6a1ce2bfd3f58ca3fa15`, PR #1217; exact
   tracked status clean and expected untracked artifacts preserved
-- VPS5 expected bots: five; running with PR #1216 restart PIDs
-  `905310/905312/905314/905315/905316`; pane PIDs unchanged; unrelated
+- VPS5 expected bots: five; running with PR #1217 restart PIDs
+  `906664/906666/906668/906670/906672`; pane PIDs unchanged; unrelated
   `misc:0.0` remains PID `434835`
+- PR #1217 merged and deployed at
+  `6599fba08cadffac99ce6a1ce2bfd3f58ca3fa15`. It made the structured
+  execution-loop error-burst health event the sole normal console/text owner
+  while preserving legacy fallback and every threshold, payload, restart, and
+  trading boundary. All five old bot processes exited naturally after one
+  signal round; exact pane PIDs and unrelated `misc:0.0` PID `434835` remained
+  unchanged. A real KuCoin timeout made the first settled window red. After
+  recovery, the final two-minute smoke returned `ok=true`, `284/284` remote
+  calls, `62/62` account-critical calls, five running processes, `8/8` fill
+  refreshes, zero pipeline failures, no active HSL replay, and an exact clean
+  repository. No natural post-restart error burst occurred, so runtime format
+  evidence remains absent rather than manufactured.
 - PR #1216 merged and deployed at
   `13e6e484cf20b1265f2b4874b14ff7ab32d10bfd`. The settled smoke returned
   `ok=true`, `414/414` remote calls, `70/70` account-critical calls, five
@@ -458,11 +472,11 @@ showed only `13.774%` thread CPU and `86.226%` direct non-CPU time. The long
 retention wall-time tail is host descheduling/contention evidence and does not
 justify another retention optimization.
 
-PR #1215's fill console/text migration and PR #1216's periodic health console
-migration are merged and deployed. PR #1216 proved compact single ownership and
-sane RSS across four natural periodic health lines; the only newly exposed
-duplicate is the separate execution-loop error-burst warning, tracked by the
-active follow-up above.
+PR #1215's fill console/text migration, PR #1216's periodic health console
+migration, and PR #1217's execution-loop error-burst console migration are
+merged and deployed. PR #1216 proved compact periodic-health ownership and sane
+RSS across four natural lines. The retained OKX ambiguous-cancel sequence is
+the next concrete duplicate and is tracked by the active follow-up above.
 
 Do not create progress-only PRs or resume unrelated logging work from stale
 worktrees.

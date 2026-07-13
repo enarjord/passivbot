@@ -982,11 +982,16 @@ async def execute_cancellations_parent(bot, orders: list[dict]) -> list[dict]:
         )
         if ambiguous_symbols:
             confirmation_surfaces = bot._authoritative_full_confirmation_surfaces()
-            logging.info(
-                "[order] ambiguous cancel terminal state; forcing full account confirmation "
-                "before next cycle | symbols=%s",
-                passivbot_cls._log_symbols(ambiguous_symbols, limit=12),
-            )
+            if not (
+                _live_event_console_available(bot, passivbot_cls)
+                and getattr(getattr(bot, "_live_event_pipeline", None), "console_sink", None)
+                is not None
+            ):
+                logging.info(
+                    "[order] ambiguous cancel terminal state; forcing full account confirmation "
+                    "before next cycle | symbols=%s",
+                    passivbot_cls._log_symbols(ambiguous_symbols, limit=12),
+                )
         if hasattr(bot, "_request_authoritative_confirmation"):
             bot._request_authoritative_confirmation(confirmation_surfaces)
         else:
