@@ -2828,6 +2828,10 @@ def _event_pipeline_health_group(
         "event_monitor_publisher_retention_run_count",
         "event_monitor_publisher_retention_ms_total",
         "event_monitor_publisher_retention_ms_max",
+        "event_monitor_publisher_retention_thread_cpu_ms_total",
+        "event_monitor_publisher_retention_thread_cpu_ms_max",
+        "event_monitor_publisher_retention_non_cpu_ms_total",
+        "event_monitor_publisher_retention_non_cpu_ms_max",
         "event_monitor_publisher_retention_inventory_ms_total",
         "event_monitor_publisher_retention_inventory_ms_max",
         "event_monitor_publisher_retention_age_filter_ms_total",
@@ -2950,6 +2954,18 @@ def _event_pipeline_health_group(
         ),
         "latest_monitor_publisher_retention_ms_max": _non_negative_number(
             payload.get("event_monitor_publisher_retention_ms_max")
+        ),
+        "latest_monitor_publisher_retention_thread_cpu_ms_total": _non_negative_number(
+            payload.get("event_monitor_publisher_retention_thread_cpu_ms_total")
+        ),
+        "latest_monitor_publisher_retention_thread_cpu_ms_max": _non_negative_number(
+            payload.get("event_monitor_publisher_retention_thread_cpu_ms_max")
+        ),
+        "latest_monitor_publisher_retention_non_cpu_ms_total": _non_negative_number(
+            payload.get("event_monitor_publisher_retention_non_cpu_ms_total")
+        ),
+        "latest_monitor_publisher_retention_non_cpu_ms_max": _non_negative_number(
+            payload.get("event_monitor_publisher_retention_non_cpu_ms_max")
         ),
         "latest_monitor_publisher_retention_inventory_ms_total": _non_negative_number(
             payload.get("event_monitor_publisher_retention_inventory_ms_total")
@@ -3075,6 +3091,10 @@ def _merge_event_pipeline_health_group(
             "latest_monitor_publisher_retention_run_count",
             "latest_monitor_publisher_retention_ms_total",
             "latest_monitor_publisher_retention_ms_max",
+            "latest_monitor_publisher_retention_thread_cpu_ms_total",
+            "latest_monitor_publisher_retention_thread_cpu_ms_max",
+            "latest_monitor_publisher_retention_non_cpu_ms_total",
+            "latest_monitor_publisher_retention_non_cpu_ms_max",
             "latest_monitor_publisher_retention_inventory_ms_total",
             "latest_monitor_publisher_retention_inventory_ms_max",
             "latest_monitor_publisher_retention_age_filter_ms_total",
@@ -3254,6 +3274,22 @@ def _summarize_event_pipeline_health(
         ),
         "latest_monitor_publisher_retention_ms_max": _max_optional_numbers(
             group.get("latest_monitor_publisher_retention_ms_max")
+            for group in groups.values()
+        ),
+        "latest_monitor_publisher_retention_thread_cpu_ms_total_sum": _sum_optional_numbers(
+            group.get("latest_monitor_publisher_retention_thread_cpu_ms_total")
+            for group in groups.values()
+        ),
+        "latest_monitor_publisher_retention_thread_cpu_ms_max": _max_optional_numbers(
+            group.get("latest_monitor_publisher_retention_thread_cpu_ms_max")
+            for group in groups.values()
+        ),
+        "latest_monitor_publisher_retention_non_cpu_ms_total_sum": _sum_optional_numbers(
+            group.get("latest_monitor_publisher_retention_non_cpu_ms_total")
+            for group in groups.values()
+        ),
+        "latest_monitor_publisher_retention_non_cpu_ms_max": _max_optional_numbers(
+            group.get("latest_monitor_publisher_retention_non_cpu_ms_max")
             for group in groups.values()
         ),
         "latest_monitor_publisher_retention_inventory_ms_total_sum": _sum_optional_numbers(
@@ -7347,6 +7383,18 @@ def _summary_limited_groups(
             "latest_monitor_publisher_retention_ms_max": summary.get(
                 "latest_monitor_publisher_retention_ms_max"
             ),
+            "latest_monitor_publisher_retention_thread_cpu_ms_total_sum": summary.get(
+                "latest_monitor_publisher_retention_thread_cpu_ms_total_sum"
+            ),
+            "latest_monitor_publisher_retention_thread_cpu_ms_max": summary.get(
+                "latest_monitor_publisher_retention_thread_cpu_ms_max"
+            ),
+            "latest_monitor_publisher_retention_non_cpu_ms_total_sum": summary.get(
+                "latest_monitor_publisher_retention_non_cpu_ms_total_sum"
+            ),
+            "latest_monitor_publisher_retention_non_cpu_ms_max": summary.get(
+                "latest_monitor_publisher_retention_non_cpu_ms_max"
+            ),
             "latest_monitor_publisher_retention_inventory_ms_total_sum": summary.get(
                 "latest_monitor_publisher_retention_inventory_ms_total_sum"
             ),
@@ -8878,6 +8926,18 @@ def summarize_live_smoke_report_brief(report: dict[str, Any]) -> dict[str, Any]:
                 ),
                 "latest_monitor_publisher_retention_ms_max": event_pipeline_health.get(
                     "latest_monitor_publisher_retention_ms_max"
+                ),
+                "latest_monitor_publisher_retention_thread_cpu_ms_total_sum": event_pipeline_health.get(
+                    "latest_monitor_publisher_retention_thread_cpu_ms_total_sum"
+                ),
+                "latest_monitor_publisher_retention_thread_cpu_ms_max": event_pipeline_health.get(
+                    "latest_monitor_publisher_retention_thread_cpu_ms_max"
+                ),
+                "latest_monitor_publisher_retention_non_cpu_ms_total_sum": event_pipeline_health.get(
+                    "latest_monitor_publisher_retention_non_cpu_ms_total_sum"
+                ),
+                "latest_monitor_publisher_retention_non_cpu_ms_max": event_pipeline_health.get(
+                    "latest_monitor_publisher_retention_non_cpu_ms_max"
                 ),
                 "latest_monitor_publisher_retention_inventory_ms_total_sum": event_pipeline_health.get(
                     "latest_monitor_publisher_retention_inventory_ms_total_sum"

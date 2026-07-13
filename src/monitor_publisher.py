@@ -27,6 +27,10 @@ _MONITOR_EVENT_PHASE_TIMING_KEYS = (
     "retention_run_count",
     "retention_ns_total",
     "retention_ns_max",
+    "retention_thread_cpu_ns_total",
+    "retention_thread_cpu_ns_max",
+    "retention_non_cpu_ns_total",
+    "retention_non_cpu_ns_max",
     "retention_inventory_ns_total",
     "retention_inventory_ns_max",
     "retention_age_filter_ns_total",
@@ -42,6 +46,9 @@ _MONITOR_EVENT_PHASE_TIMING_KEYS = (
     "retention_age_deleted",
     "retention_cap_deleted",
 )
+_RETENTION_TIMING_KEYS = tuple(
+    key for key in _MONITOR_EVENT_PHASE_TIMING_KEYS if key.startswith("retention_")
+)
 _CURRENT_EVENTS_REVERSE_READ_BYTES = 64 * 1024
 _EVENT_RECOVERY_CHECKSUM_BYTES = 16
 _EVENT_RECOVERY_MARKER = b',"_recovery":{"checksum":"'
@@ -51,6 +58,15 @@ _EVENT_RECOVERY_TRAILER_MAX_BYTES = 160
 
 def _empty_monitor_event_phase_timing() -> dict[str, int]:
     return {key: 0 for key in _MONITOR_EVENT_PHASE_TIMING_KEYS}
+
+
+def _merge_retention_timing(target: dict[str, int], source: dict[str, int]) -> None:
+    for key in _RETENTION_TIMING_KEYS:
+        value = max(0, int(source.get(key, 0)))
+        if key.endswith("_max"):
+            target[key] = max(int(target.get(key, 0)), value)
+        else:
+            target[key] = int(target.get(key, 0)) + value
 
 
 def _json_default(value: Any) -> Any:
@@ -160,6 +176,10 @@ class MonitorPublisher:
         self._disk_full_last_log_ms = 0
         self._disk_full_suppressed = 0
         self._lock = threading.RLock()
+        self._pending_retention_timing = {
+            key: 0 for key in _RETENTION_TIMING_KEYS
+        }
+        self._thread_cpu_clock_warning_logged = False
         self.seq = 0
         self._manifest_dirty = False
         self._manifest_retry_needed = False
@@ -534,6 +554,94 @@ class MonitorPublisher:
             self.last_retention_ms and now_ms - self.last_retention_ms < 60_000
         )
 
+    def _thread_cpu_time_ns(self) -> int | None:
+        try:
+            return time.thread_time_ns()
+        except Exception as exc:
+            # CPU attribution is diagnostic-only and must not block persistence.
+            if not self._thread_cpu_clock_warning_logged:
+                logging.warning(
+                    "[monitor] thread CPU clock unavailable; retention CPU attribution disabled: %s",
+                    exc,
+                )
+                self._thread_cpu_clock_warning_logged = True
+            return None
+
+    def _record_pending_retention_timing(self, now_ms: Optional[int]) -> None:
+        timing = {key: 0 for key in _RETENTION_TIMING_KEYS}
+        retention_started_ns: int | None = None
+        retention_thread_cpu_started_ns: int | None = None
+
+        def on_run() -> None:
+            nonlocal retention_started_ns, retention_thread_cpu_started_ns
+            retention_started_ns = time.monotonic_ns()
+            retention_thread_cpu_started_ns = self._thread_cpu_time_ns()
+            timing["retention_run_count"] += 1
+
+        def on_phase(phase: str, duration_ns: int) -> None:
+            total_key = f"retention_{phase}_ns_total"
+            max_key = f"retention_{phase}_ns_max"
+            duration_ns = max(0, int(duration_ns))
+            timing[total_key] += duration_ns
+            timing[max_key] = max(timing[max_key], duration_ns)
+
+        def on_counter(counter: str) -> None:
+            timing[f"retention_{counter}"] += 1
+
+        try:
+            self._prune_retention(
+                now_ms=now_ms,
+                on_run=on_run,
+                on_phase=on_phase,
+                on_counter=on_counter,
+            )
+        finally:
+            if retention_started_ns is not None:
+                retention_thread_cpu_finished_ns = (
+                    self._thread_cpu_time_ns()
+                    if retention_thread_cpu_started_ns is not None
+                    else None
+                )
+                retention_ns = max(
+                    0, time.monotonic_ns() - retention_started_ns
+                )
+                timing["retention_ns_total"] += retention_ns
+                timing["retention_ns_max"] = max(
+                    timing["retention_ns_max"], retention_ns
+                )
+                if retention_thread_cpu_finished_ns is not None:
+                    retention_thread_cpu_ns = max(
+                        0,
+                        retention_thread_cpu_finished_ns
+                        - int(retention_thread_cpu_started_ns),
+                    )
+                    retention_non_cpu_ns = max(
+                        0, retention_ns - retention_thread_cpu_ns
+                    )
+                    timing["retention_thread_cpu_ns_total"] += (
+                        retention_thread_cpu_ns
+                    )
+                    timing["retention_thread_cpu_ns_max"] = max(
+                        timing["retention_thread_cpu_ns_max"],
+                        retention_thread_cpu_ns,
+                    )
+                    timing["retention_non_cpu_ns_total"] += retention_non_cpu_ns
+                    timing["retention_non_cpu_ns_max"] = max(
+                        timing["retention_non_cpu_ns_max"],
+                        retention_non_cpu_ns,
+                    )
+                with self._lock:
+                    _merge_retention_timing(self._pending_retention_timing, timing)
+
+    def _consume_pending_retention_timing(
+        self, timing: dict[str, int]
+    ) -> None:
+        with self._lock:
+            _merge_retention_timing(timing, self._pending_retention_timing)
+            self._pending_retention_timing = {
+                key: 0 for key in _RETENTION_TIMING_KEYS
+            }
+
     def _prune_retention(
         self,
         now_ms: Optional[int] = None,
@@ -542,6 +650,9 @@ class MonitorPublisher:
         on_phase: Optional[Callable[[str, int], None]] = None,
         on_counter: Optional[Callable[[str], None]] = None,
     ) -> None:
+        if on_run is None and on_phase is None and on_counter is None:
+            self._record_pending_retention_timing(now_ms)
+            return
         with self._lock:
             now_ms = self._now_ms() if now_ms is None else int(now_ms)
             if not self._retention_due(now_ms):
@@ -888,6 +999,7 @@ class MonitorPublisher:
             ts=ts,
             symbol=symbol,
             pside=pside,
+            consume_pending_retention_timing=False,
         )
         return result
 
@@ -900,6 +1012,7 @@ class MonitorPublisher:
         ts: Optional[int] = None,
         symbol: Optional[str] = None,
         pside: Optional[str] = None,
+        consume_pending_retention_timing: bool = True,
     ) -> tuple[Optional[dict], dict[str, int]]:
         timing = _empty_monitor_event_phase_timing()
         lock_wait_started_ns = time.monotonic_ns()
@@ -961,10 +1074,12 @@ class MonitorPublisher:
                                 timing["manifest_checkpoint_ns_max"], manifest_checkpoint_ns
                             )
                     retention_started_ns: int | None = None
+                    retention_thread_cpu_started_ns: int | None = None
 
                     def on_retention_run() -> None:
-                        nonlocal retention_started_ns
+                        nonlocal retention_started_ns, retention_thread_cpu_started_ns
                         retention_started_ns = time.monotonic_ns()
+                        retention_thread_cpu_started_ns = self._thread_cpu_time_ns()
                         timing["retention_run_count"] += 1
 
                     def on_retention_phase(phase: str, duration_ns: int) -> None:
@@ -977,20 +1092,52 @@ class MonitorPublisher:
                     def on_retention_counter(counter: str) -> None:
                         timing[f"retention_{counter}"] += 1
 
-                    try:
+                    if consume_pending_retention_timing:
                         self._prune_retention(
                             now_ms=now_ms,
                             on_run=on_retention_run,
                             on_phase=on_retention_phase,
                             on_counter=on_retention_counter,
                         )
-                    finally:
+                    else:
+                        self._prune_retention(now_ms=now_ms)
+                    if consume_pending_retention_timing:
                         if retention_started_ns is not None:
-                            retention_ns = max(0, time.monotonic_ns() - retention_started_ns)
+                            retention_thread_cpu_finished_ns = (
+                                self._thread_cpu_time_ns()
+                                if retention_thread_cpu_started_ns is not None
+                                else None
+                            )
+                            retention_ns = max(
+                                0, time.monotonic_ns() - retention_started_ns
+                            )
                             timing["retention_ns_total"] += retention_ns
                             timing["retention_ns_max"] = max(
                                 timing["retention_ns_max"], retention_ns
                             )
+                            if retention_thread_cpu_finished_ns is not None:
+                                retention_thread_cpu_ns = max(
+                                    0,
+                                    retention_thread_cpu_finished_ns
+                                    - int(retention_thread_cpu_started_ns),
+                                )
+                                retention_non_cpu_ns = max(
+                                    0, retention_ns - retention_thread_cpu_ns
+                                )
+                                timing["retention_thread_cpu_ns_total"] += (
+                                    retention_thread_cpu_ns
+                                )
+                                timing["retention_thread_cpu_ns_max"] = max(
+                                    timing["retention_thread_cpu_ns_max"],
+                                    retention_thread_cpu_ns,
+                                )
+                                timing["retention_non_cpu_ns_total"] += (
+                                    retention_non_cpu_ns
+                                )
+                                timing["retention_non_cpu_ns_max"] = max(
+                                    timing["retention_non_cpu_ns_max"],
+                                    retention_non_cpu_ns,
+                                )
                 finally:
                     timing["maintenance_ns"] = max(
                         0, time.monotonic_ns() - maintenance_started_ns
@@ -999,6 +1146,9 @@ class MonitorPublisher:
             except Exception as exc:
                 self._log_write_failure(f"recording event {kind}", exc)
                 return None, timing
+            finally:
+                if consume_pending_retention_timing:
+                    self._consume_pending_retention_timing(timing)
 
     def record_error(
         self,

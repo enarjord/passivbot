@@ -4838,6 +4838,10 @@ def test_live_performance_report_resource_pressure_projects_event_pipeline_timin
                     "event_monitor_sink_service_ms_max": 0.5,
                     "event_monitor_publisher_retention_inventory_ms_total": 99.0,
                     "event_monitor_publisher_retention_inventory_ms_max": 98.0,
+                    "event_monitor_publisher_retention_thread_cpu_ms_total": 97.0,
+                    "event_monitor_publisher_retention_thread_cpu_ms_max": 96.0,
+                    "event_monitor_publisher_retention_non_cpu_ms_total": 95.0,
+                    "event_monitor_publisher_retention_non_cpu_ms_max": 94.0,
                     "event_monitor_publisher_retention_age_unlink_ms_total": 97.0,
                     "event_monitor_publisher_retention_age_unlink_ms_max": 96.0,
                     "event_monitor_publisher_retention_cap_unlink_ms_total": 95.0,
@@ -4881,6 +4885,10 @@ def test_live_performance_report_resource_pressure_projects_event_pipeline_timin
                     "event_monitor_publisher_retention_run_count": 3,
                     "event_monitor_publisher_retention_ms_total": 0.2,
                     "event_monitor_publisher_retention_ms_max": 0.15,
+                    "event_monitor_publisher_retention_thread_cpu_ms_total": 0.05,
+                    "event_monitor_publisher_retention_thread_cpu_ms_max": 0.03,
+                    "event_monitor_publisher_retention_non_cpu_ms_total": 0.15,
+                    "event_monitor_publisher_retention_non_cpu_ms_max": 0.12,
                     "event_monitor_publisher_retention_inventory_ms_total": 0.35,
                     "event_monitor_publisher_retention_inventory_ms_max": 0.22,
                     "event_monitor_publisher_retention_age_filter_ms_total": 0.28,
@@ -4937,6 +4945,10 @@ def test_live_performance_report_resource_pressure_projects_event_pipeline_timin
                     "event_monitor_publisher_retention_run_count": 1,
                     "event_monitor_publisher_retention_ms_total": 0.1,
                     "event_monitor_publisher_retention_ms_max": 0.1,
+                    "event_monitor_publisher_retention_thread_cpu_ms_total": 0.04,
+                    "event_monitor_publisher_retention_thread_cpu_ms_max": 0.03,
+                    "event_monitor_publisher_retention_non_cpu_ms_total": 0.06,
+                    "event_monitor_publisher_retention_non_cpu_ms_max": 0.05,
                     "event_monitor_publisher_retention_inventory_ms_total": 0.2,
                     "event_monitor_publisher_retention_inventory_ms_max": 0.14,
                     "event_monitor_publisher_retention_age_filter_ms_total": 0.17,
@@ -5014,6 +5026,10 @@ def test_live_performance_report_resource_pressure_projects_event_pipeline_timin
         "count"
     ] == 1
     retention_fields = (
+        "event_monitor_publisher_retention_thread_cpu_ms_total",
+        "event_monitor_publisher_retention_thread_cpu_ms_max",
+        "event_monitor_publisher_retention_non_cpu_ms_total",
+        "event_monitor_publisher_retention_non_cpu_ms_max",
         "event_monitor_publisher_retention_inventory_ms_total",
         "event_monitor_publisher_retention_inventory_ms_max",
         "event_monitor_publisher_retention_age_filter_ms_total",
@@ -5032,6 +5048,10 @@ def test_live_performance_report_resource_pressure_projects_event_pipeline_timin
     assert {
         key: binance_fields[key]["latest"] for key in retention_fields
     } == {
+        "event_monitor_publisher_retention_thread_cpu_ms_total": 0.05,
+        "event_monitor_publisher_retention_thread_cpu_ms_max": 0.03,
+        "event_monitor_publisher_retention_non_cpu_ms_total": 0.15,
+        "event_monitor_publisher_retention_non_cpu_ms_max": 0.12,
         "event_monitor_publisher_retention_inventory_ms_total": 0.35,
         "event_monitor_publisher_retention_inventory_ms_max": 0.22,
         "event_monitor_publisher_retention_age_filter_ms_total": 0.28,
@@ -5050,6 +5070,10 @@ def test_live_performance_report_resource_pressure_projects_event_pipeline_timin
     assert {
         key: okx_fields[key]["latest"] for key in retention_fields
     } == {
+        "event_monitor_publisher_retention_thread_cpu_ms_total": 0.04,
+        "event_monitor_publisher_retention_thread_cpu_ms_max": 0.03,
+        "event_monitor_publisher_retention_non_cpu_ms_total": 0.06,
+        "event_monitor_publisher_retention_non_cpu_ms_max": 0.05,
         "event_monitor_publisher_retention_inventory_ms_total": 0.2,
         "event_monitor_publisher_retention_inventory_ms_max": 0.14,
         "event_monitor_publisher_retention_age_filter_ms_total": 0.17,
@@ -5096,6 +5120,10 @@ def test_live_performance_report_resource_pressure_projects_event_pipeline_timin
             "latest_event_monitor_publisher_retention_run_count_sum",
             "latest_event_monitor_publisher_retention_ms_total_sum",
             "latest_event_monitor_publisher_retention_ms_max",
+            "latest_event_monitor_publisher_retention_thread_cpu_ms_total_sum",
+            "latest_event_monitor_publisher_retention_thread_cpu_ms_max",
+            "latest_event_monitor_publisher_retention_non_cpu_ms_total_sum",
+            "latest_event_monitor_publisher_retention_non_cpu_ms_max",
             "latest_event_monitor_publisher_retention_inventory_ms_total_sum",
             "latest_event_monitor_publisher_retention_inventory_ms_max",
             "latest_event_monitor_publisher_retention_age_filter_ms_total_sum",
@@ -5140,6 +5168,10 @@ def test_live_performance_report_resource_pressure_projects_event_pipeline_timin
         "latest_event_monitor_publisher_retention_run_count_sum": 4,
         "latest_event_monitor_publisher_retention_ms_total_sum": 0.3,
         "latest_event_monitor_publisher_retention_ms_max": 0.15,
+        "latest_event_monitor_publisher_retention_thread_cpu_ms_total_sum": 0.09,
+        "latest_event_monitor_publisher_retention_thread_cpu_ms_max": 0.03,
+        "latest_event_monitor_publisher_retention_non_cpu_ms_total_sum": 0.21,
+        "latest_event_monitor_publisher_retention_non_cpu_ms_max": 0.12,
         "latest_event_monitor_publisher_retention_inventory_ms_total_sum": 0.55,
         "latest_event_monitor_publisher_retention_inventory_ms_max": 0.22,
         "latest_event_monitor_publisher_retention_age_filter_ms_total_sum": 0.45,

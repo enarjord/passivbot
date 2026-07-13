@@ -605,10 +605,16 @@ def test_monitor_history_rotation_snapshot_and_close_force_manifest_checkpoints(
 def test_monitor_publisher_event_phase_timing_uses_fixed_boundaries(tmp_path, monkeypatch):
     publisher = _make_publisher(tmp_path)
     clock = {"ns": 1_000_000_000}
+    thread_cpu_clock = {"ns": 500_000_000}
     monkeypatch.setattr(
         monitor_publisher_module.time,
         "monotonic_ns",
         lambda: clock["ns"],
+    )
+    monkeypatch.setattr(
+        monitor_publisher_module.time,
+        "thread_time_ns",
+        lambda: thread_cpu_clock["ns"],
     )
 
     class TimedLock:
@@ -662,6 +668,7 @@ def test_monitor_publisher_event_phase_timing_uses_fixed_boundaries(tmp_path, mo
         "_prune_retention",
         lambda **kwargs: (
             kwargs["on_run"](),
+            thread_cpu_clock.__setitem__("ns", thread_cpu_clock["ns"] + 4_000_000),
             clock.__setitem__("ns", clock["ns"] + 11_000_000),
         ),
     )
@@ -683,6 +690,10 @@ def test_monitor_publisher_event_phase_timing_uses_fixed_boundaries(tmp_path, mo
         "retention_run_count": 1,
         "retention_ns_total": 11_000_000,
         "retention_ns_max": 11_000_000,
+        "retention_thread_cpu_ns_total": 4_000_000,
+        "retention_thread_cpu_ns_max": 4_000_000,
+        "retention_non_cpu_ns_total": 7_000_000,
+        "retention_non_cpu_ns_max": 7_000_000,
         "retention_inventory_ns_total": 0,
         "retention_inventory_ns_max": 0,
         "retention_age_filter_ns_total": 0,
@@ -734,6 +745,10 @@ def test_monitor_publisher_event_failure_retains_reached_phase_timing(tmp_path, 
         "retention_run_count": 0,
         "retention_ns_total": 0,
         "retention_ns_max": 0,
+        "retention_thread_cpu_ns_total": 0,
+        "retention_thread_cpu_ns_max": 0,
+        "retention_non_cpu_ns_total": 0,
+        "retention_non_cpu_ns_max": 0,
         "retention_inventory_ns_total": 0,
         "retention_inventory_ns_max": 0,
         "retention_age_filter_ns_total": 0,
@@ -870,6 +885,10 @@ def test_monitor_publisher_event_timing_zeroes_retention_phases_when_not_due(tmp
     assert event is not None
     assert timing["retention_run_count"] == 0
     for key in (
+        "retention_thread_cpu_ns_total",
+        "retention_thread_cpu_ns_max",
+        "retention_non_cpu_ns_total",
+        "retention_non_cpu_ns_max",
         "retention_inventory_ns_total",
         "retention_inventory_ns_max",
         "retention_age_filter_ns_total",
@@ -886,6 +905,209 @@ def test_monitor_publisher_event_timing_zeroes_retention_phases_when_not_due(tmp
         "retention_cap_deleted",
     ):
         assert timing[key] == 0
+
+
+def test_monitor_publisher_event_timing_records_retention_cpu_attribution_for_due_run(
+    tmp_path, monkeypatch
+):
+    publisher = _make_publisher(tmp_path)
+    clocks = {"wall_ns": 10_000, "thread_cpu_ns": 1_000}
+
+    monkeypatch.setattr(
+        monitor_publisher_module.time, "monotonic_ns", lambda: clocks["wall_ns"]
+    )
+    monkeypatch.setattr(
+        monitor_publisher_module.time,
+        "thread_time_ns",
+        lambda: clocks["thread_cpu_ns"],
+    )
+
+    def run_retention(**kwargs):
+        kwargs["on_run"]()
+        clocks["wall_ns"] += 80
+        clocks["thread_cpu_ns"] += 100
+
+    monkeypatch.setattr(publisher, "_prune_retention", run_retention)
+
+    event, timing = publisher._record_event_timed(
+        "test.event", ("test",), {"value": 1}, ts=100_000
+    )
+
+    assert event is not None
+    assert timing["retention_run_count"] == 1
+    assert timing["retention_ns_total"] == 80
+    assert timing["retention_thread_cpu_ns_total"] == 100
+    assert timing["retention_thread_cpu_ns_max"] == 100
+    assert timing["retention_non_cpu_ns_total"] == 0
+    assert timing["retention_non_cpu_ns_max"] == 0
+
+
+def test_monitor_publisher_event_timing_omits_cpu_clock_when_retention_not_due(
+    tmp_path, monkeypatch
+):
+    publisher = _make_publisher(tmp_path)
+    publisher.last_retention_ms = 100_000
+    thread_cpu_calls = []
+
+    monkeypatch.setattr(monitor_publisher_module.time, "monotonic_ns", lambda: 10_000)
+    monkeypatch.setattr(
+        monitor_publisher_module.time,
+        "thread_time_ns",
+        lambda: thread_cpu_calls.append(None),
+    )
+
+    event, timing = publisher._record_event_timed(
+        "test.event", ("test",), {"value": 1}, ts=100_001
+    )
+
+    assert event is not None
+    assert thread_cpu_calls == []
+    assert timing["retention_run_count"] == 0
+    assert timing["retention_thread_cpu_ns_total"] == 0
+    assert timing["retention_thread_cpu_ns_max"] == 0
+    assert timing["retention_non_cpu_ns_total"] == 0
+    assert timing["retention_non_cpu_ns_max"] == 0
+
+
+def test_monitor_publisher_event_timing_retains_cpu_attribution_after_retention_error(
+    tmp_path, monkeypatch, caplog
+):
+    publisher = _make_publisher(tmp_path)
+    clocks = {"wall_ns": 10_000, "thread_cpu_ns": 1_000}
+
+    monkeypatch.setattr(
+        monitor_publisher_module.time, "monotonic_ns", lambda: clocks["wall_ns"]
+    )
+    monkeypatch.setattr(
+        monitor_publisher_module.time,
+        "thread_time_ns",
+        lambda: clocks["thread_cpu_ns"],
+    )
+
+    def fail_retention_inventory(**_kwargs):
+        clocks["wall_ns"] += 80
+        clocks["thread_cpu_ns"] += 30
+        raise OSError("retention unavailable")
+
+    monkeypatch.setattr(publisher, "_retention_inventory", fail_retention_inventory)
+
+    event, timing = publisher._record_event_timed(
+        "test.event", ("test",), {"value": 1}, ts=100_000
+    )
+
+    assert event is not None
+    assert "retention pruning failed: retention unavailable" in caplog.text
+    assert timing["retention_run_count"] == 1
+    assert timing["retention_ns_total"] == 80
+    assert timing["retention_thread_cpu_ns_total"] == 30
+    assert timing["retention_thread_cpu_ns_max"] == 30
+    assert timing["retention_non_cpu_ns_total"] == 50
+    assert timing["retention_non_cpu_ns_max"] == 50
+
+
+def test_monitor_publisher_event_timing_includes_due_rotation_retention(
+    tmp_path, monkeypatch
+):
+    publisher = _make_publisher(tmp_path, event_rotation_mb=0.000001)
+    publisher.current_events_path.write_text("rotated event\n")
+    clocks = {"wall_ns": 10_000, "thread_cpu_ns": 1_000}
+
+    monkeypatch.setattr(
+        monitor_publisher_module.time, "monotonic_ns", lambda: clocks["wall_ns"]
+    )
+    monkeypatch.setattr(
+        monitor_publisher_module.time,
+        "thread_time_ns",
+        lambda: clocks["thread_cpu_ns"],
+    )
+
+    def timed_inventory(**_kwargs):
+        clocks["wall_ns"] += 80
+        clocks["thread_cpu_ns"] += 30
+        return 0, []
+
+    monkeypatch.setattr(publisher, "_retention_inventory", timed_inventory)
+
+    event, timing = publisher._record_event_timed(
+        "test.event", ("test",), {"value": 1}, ts=100_000
+    )
+
+    assert event is not None
+    assert timing["retention_run_count"] == 1
+    assert timing["retention_ns_total"] == 80
+    assert timing["retention_thread_cpu_ns_total"] == 30
+    assert timing["retention_non_cpu_ns_total"] == 50
+
+
+def test_monitor_publisher_event_timing_drains_external_retention(
+    tmp_path, monkeypatch
+):
+    publisher = _make_publisher(tmp_path)
+    clocks = {"wall_ns": 10_000, "thread_cpu_ns": 1_000}
+
+    monkeypatch.setattr(
+        monitor_publisher_module.time, "monotonic_ns", lambda: clocks["wall_ns"]
+    )
+    monkeypatch.setattr(
+        monitor_publisher_module.time,
+        "thread_time_ns",
+        lambda: clocks["thread_cpu_ns"],
+    )
+
+    def timed_inventory(**_kwargs):
+        clocks["wall_ns"] += 70
+        clocks["thread_cpu_ns"] += 20
+        return 0, []
+
+    monkeypatch.setattr(publisher, "_retention_inventory", timed_inventory)
+
+    assert publisher.write_snapshot({"account": {}}, ts=100_000, force=True)
+    event, timing = publisher._record_event_timed(
+        "test.event", ("test",), {"value": 1}, ts=100_001
+    )
+
+    assert event is not None
+    assert timing["retention_run_count"] == 1
+    assert timing["retention_ns_total"] == 70
+    assert timing["retention_thread_cpu_ns_total"] == 20
+    assert timing["retention_non_cpu_ns_total"] == 50
+
+
+def test_monitor_publisher_thread_cpu_clock_failure_does_not_block_retention(
+    tmp_path, monkeypatch, caplog
+):
+    publisher = _make_publisher(tmp_path)
+    clock = {"wall_ns": 10_000}
+    inventory_attempts = []
+
+    monkeypatch.setattr(
+        monitor_publisher_module.time, "monotonic_ns", lambda: clock["wall_ns"]
+    )
+
+    def fail_thread_cpu_clock():
+        raise RuntimeError("thread clock unavailable")
+
+    def timed_inventory(**_kwargs):
+        inventory_attempts.append(None)
+        clock["wall_ns"] += 80
+        return 0, []
+
+    monkeypatch.setattr(
+        monitor_publisher_module.time, "thread_time_ns", fail_thread_cpu_clock
+    )
+    monkeypatch.setattr(publisher, "_retention_inventory", timed_inventory)
+
+    event, timing = publisher._record_event_timed(
+        "test.event", ("test",), {"value": 1}, ts=100_000
+    )
+
+    assert event is not None
+    assert inventory_attempts == [None]
+    assert timing["retention_run_count"] == 1
+    assert timing["retention_ns_total"] == 80
+    assert timing["retention_thread_cpu_ns_total"] == 0
+    assert timing["retention_non_cpu_ns_total"] == 0
+    assert caplog.text.count("thread CPU clock unavailable") == 1
 
 
 def test_monitor_publisher_event_timing_excludes_tolerated_age_disappearance(
@@ -1221,9 +1443,9 @@ def test_monitor_retention_logs_cap_unlink_failure_and_keeps_due_interval(
     original_inventory = publisher._retention_inventory
     original_unlink = Path.unlink
 
-    def count_inventory():
+    def count_inventory(**kwargs):
         inventory_attempts.append(None)
-        return original_inventory()
+        return original_inventory(**kwargs)
 
     def fail_candidate_unlink(path, *args, **kwargs):
         if path == candidate:

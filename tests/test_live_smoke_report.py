@@ -2707,6 +2707,10 @@ def test_live_smoke_report_projects_multi_bot_event_pipeline_timing(tmp_path):
                 data={
                     "event_monitor_publisher_retention_inventory_ms_total": 99.0,
                     "event_monitor_publisher_retention_inventory_ms_max": 98.0,
+                    "event_monitor_publisher_retention_thread_cpu_ms_total": 97.0,
+                    "event_monitor_publisher_retention_thread_cpu_ms_max": 96.0,
+                    "event_monitor_publisher_retention_non_cpu_ms_total": 95.0,
+                    "event_monitor_publisher_retention_non_cpu_ms_max": 94.0,
                     "event_monitor_publisher_retention_age_filter_ms_total": 97.5,
                     "event_monitor_publisher_retention_age_filter_ms_max": 96.5,
                     "event_monitor_publisher_retention_cap_prune_ms_total": 95.5,
@@ -2756,6 +2760,10 @@ def test_live_smoke_report_projects_multi_bot_event_pipeline_timing(tmp_path):
                     "event_monitor_publisher_retention_run_count": 3,
                     "event_monitor_publisher_retention_ms_total": 1.0,
                     "event_monitor_publisher_retention_ms_max": 0.6,
+                    "event_monitor_publisher_retention_thread_cpu_ms_total": 0.4,
+                    "event_monitor_publisher_retention_thread_cpu_ms_max": 0.25,
+                    "event_monitor_publisher_retention_non_cpu_ms_total": 0.6,
+                    "event_monitor_publisher_retention_non_cpu_ms_max": 0.35,
                     "event_monitor_publisher_retention_inventory_ms_total": 1.7,
                     "event_monitor_publisher_retention_inventory_ms_max": 1.1,
                     "event_monitor_publisher_retention_age_filter_ms_total": 1.2,
@@ -2812,6 +2820,10 @@ def test_live_smoke_report_projects_multi_bot_event_pipeline_timing(tmp_path):
                     "event_monitor_publisher_retention_run_count": 1,
                     "event_monitor_publisher_retention_ms_total": 0.2,
                     "event_monitor_publisher_retention_ms_max": 0.2,
+                    "event_monitor_publisher_retention_thread_cpu_ms_total": 0.05,
+                    "event_monitor_publisher_retention_thread_cpu_ms_max": 0.04,
+                    "event_monitor_publisher_retention_non_cpu_ms_total": 0.15,
+                    "event_monitor_publisher_retention_non_cpu_ms_max": 0.16,
                     "event_monitor_publisher_retention_inventory_ms_total": 0.4,
                     "event_monitor_publisher_retention_inventory_ms_max": 0.25,
                     "event_monitor_publisher_retention_age_filter_ms_total": 0.35,
@@ -2846,6 +2858,10 @@ def test_live_smoke_report_projects_multi_bot_event_pipeline_timing(tmp_path):
     assert groups["okx/okx_01"].get("latest_monitor_publisher_manifest_checkpoint_count") == 2
     assert groups["gateio/gateio_01"].get("latest_monitor_publisher_retention_run_count") == 1
     retention_group_fields = (
+        "latest_monitor_publisher_retention_thread_cpu_ms_total",
+        "latest_monitor_publisher_retention_thread_cpu_ms_max",
+        "latest_monitor_publisher_retention_non_cpu_ms_total",
+        "latest_monitor_publisher_retention_non_cpu_ms_max",
         "latest_monitor_publisher_retention_inventory_ms_total",
         "latest_monitor_publisher_retention_inventory_ms_max",
         "latest_monitor_publisher_retention_age_filter_ms_total",
@@ -2864,6 +2880,10 @@ def test_live_smoke_report_projects_multi_bot_event_pipeline_timing(tmp_path):
     assert {
         key: groups["okx/okx_01"][key] for key in retention_group_fields
     } == {
+        "latest_monitor_publisher_retention_thread_cpu_ms_total": 0.4,
+        "latest_monitor_publisher_retention_thread_cpu_ms_max": 0.25,
+        "latest_monitor_publisher_retention_non_cpu_ms_total": 0.6,
+        "latest_monitor_publisher_retention_non_cpu_ms_max": 0.35,
         "latest_monitor_publisher_retention_inventory_ms_total": 1.7,
         "latest_monitor_publisher_retention_inventory_ms_max": 1.1,
         "latest_monitor_publisher_retention_age_filter_ms_total": 1.2,
@@ -2882,6 +2902,10 @@ def test_live_smoke_report_projects_multi_bot_event_pipeline_timing(tmp_path):
     assert {
         key: groups["gateio/gateio_01"][key] for key in retention_group_fields
     } == {
+        "latest_monitor_publisher_retention_thread_cpu_ms_total": 0.05,
+        "latest_monitor_publisher_retention_thread_cpu_ms_max": 0.04,
+        "latest_monitor_publisher_retention_non_cpu_ms_total": 0.15,
+        "latest_monitor_publisher_retention_non_cpu_ms_max": 0.16,
         "latest_monitor_publisher_retention_inventory_ms_total": 0.4,
         "latest_monitor_publisher_retention_inventory_ms_max": 0.25,
         "latest_monitor_publisher_retention_age_filter_ms_total": 0.35,
@@ -2926,6 +2950,10 @@ def test_live_smoke_report_projects_multi_bot_event_pipeline_timing(tmp_path):
         "latest_monitor_publisher_retention_run_count_sum": 4,
         "latest_monitor_publisher_retention_ms_total_sum": 1.2,
         "latest_monitor_publisher_retention_ms_max": 0.6,
+        "latest_monitor_publisher_retention_thread_cpu_ms_total_sum": 0.45,
+        "latest_monitor_publisher_retention_thread_cpu_ms_max": 0.25,
+        "latest_monitor_publisher_retention_non_cpu_ms_total_sum": 0.75,
+        "latest_monitor_publisher_retention_non_cpu_ms_max": 0.35,
         "latest_monitor_publisher_retention_inventory_ms_total_sum": 2.1,
         "latest_monitor_publisher_retention_inventory_ms_max": 1.1,
         "latest_monitor_publisher_retention_age_filter_ms_total_sum": 1.55,
