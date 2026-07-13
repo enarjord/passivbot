@@ -23,7 +23,7 @@ Estimated completion:
 ## Active Review Slice
 
 - Branch: `codex/v8-health-console-migration`
-- PR: not yet published
+- PR: #1216
 - Base: `6af983c539d00acd802aabad66044868afd45aa4`, merged PR #1215
 - Triggering evidence: every periodic health interval writes both a legacy
   `[health]` line and a structured `health.summary` console projection. The
