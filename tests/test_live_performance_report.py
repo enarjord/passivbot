@@ -4836,6 +4836,16 @@ def test_live_performance_report_resource_pressure_projects_event_pipeline_timin
                     "event_monitor_sink_write_count": 2,
                     "event_monitor_sink_service_ms_total": 0.8,
                     "event_monitor_sink_service_ms_max": 0.5,
+                    "event_monitor_publisher_retention_inventory_ms_total": 99.0,
+                    "event_monitor_publisher_retention_inventory_ms_max": 98.0,
+                    "event_monitor_publisher_retention_age_unlink_ms_total": 97.0,
+                    "event_monitor_publisher_retention_age_unlink_ms_max": 96.0,
+                    "event_monitor_publisher_retention_cap_unlink_ms_total": 95.0,
+                    "event_monitor_publisher_retention_cap_unlink_ms_max": 94.0,
+                    "event_monitor_publisher_retention_inventory_entries_visited": 93,
+                    "event_monitor_publisher_retention_inventory_candidates": 92,
+                    "event_monitor_publisher_retention_age_deleted": 91,
+                    "event_monitor_publisher_retention_cap_deleted": 90,
                 },
             ),
             _monitor_row(
@@ -4871,6 +4881,16 @@ def test_live_performance_report_resource_pressure_projects_event_pipeline_timin
                     "event_monitor_publisher_retention_run_count": 3,
                     "event_monitor_publisher_retention_ms_total": 0.2,
                     "event_monitor_publisher_retention_ms_max": 0.15,
+                    "event_monitor_publisher_retention_inventory_ms_total": 0.35,
+                    "event_monitor_publisher_retention_inventory_ms_max": 0.22,
+                    "event_monitor_publisher_retention_age_unlink_ms_total": 0.18,
+                    "event_monitor_publisher_retention_age_unlink_ms_max": 0.11,
+                    "event_monitor_publisher_retention_cap_unlink_ms_total": 0.27,
+                    "event_monitor_publisher_retention_cap_unlink_ms_max": 0.16,
+                    "event_monitor_publisher_retention_inventory_entries_visited": 14,
+                    "event_monitor_publisher_retention_inventory_candidates": 5,
+                    "event_monitor_publisher_retention_age_deleted": 2,
+                    "event_monitor_publisher_retention_cap_deleted": 1,
                 },
             ),
         ],
@@ -4913,14 +4933,27 @@ def test_live_performance_report_resource_pressure_projects_event_pipeline_timin
                     "event_monitor_publisher_retention_run_count": 1,
                     "event_monitor_publisher_retention_ms_total": 0.1,
                     "event_monitor_publisher_retention_ms_max": 0.1,
+                    "event_monitor_publisher_retention_inventory_ms_total": 0.2,
+                    "event_monitor_publisher_retention_inventory_ms_max": 0.14,
+                    "event_monitor_publisher_retention_age_unlink_ms_total": 0.15,
+                    "event_monitor_publisher_retention_age_unlink_ms_max": 0.1,
+                    "event_monitor_publisher_retention_cap_unlink_ms_total": 0.11,
+                    "event_monitor_publisher_retention_cap_unlink_ms_max": 0.08,
+                    "event_monitor_publisher_retention_inventory_entries_visited": 7,
+                    "event_monitor_publisher_retention_inventory_candidates": 3,
+                    "event_monitor_publisher_retention_age_deleted": 1,
+                    "event_monitor_publisher_retention_cap_deleted": 0,
                 },
             )
         ],
     )
 
-    pressure = build_live_performance_report(tmp_path / "monitor")["resource_pressure"]
+    report = build_live_performance_report(tmp_path / "monitor")
+    assert report["ok"] is True
+    pressure = report["resource_pressure"]
     groups = {group["bot"]: group for group in pressure["groups"]}
     binance_fields = groups["binance/binance_01"]["fields"]
+    okx_fields = groups["okx/okx_01"]["fields"]
     assert binance_fields["event_pipeline_processed_count"] == {
         "latest": 5,
         "count": 2,
@@ -4960,6 +4993,46 @@ def test_live_performance_report_resource_pressure_projects_event_pipeline_timin
         "median": 2,
         "p95": 2,
     }
+    retention_fields = (
+        "event_monitor_publisher_retention_inventory_ms_total",
+        "event_monitor_publisher_retention_inventory_ms_max",
+        "event_monitor_publisher_retention_age_unlink_ms_total",
+        "event_monitor_publisher_retention_age_unlink_ms_max",
+        "event_monitor_publisher_retention_cap_unlink_ms_total",
+        "event_monitor_publisher_retention_cap_unlink_ms_max",
+        "event_monitor_publisher_retention_inventory_entries_visited",
+        "event_monitor_publisher_retention_inventory_candidates",
+        "event_monitor_publisher_retention_age_deleted",
+        "event_monitor_publisher_retention_cap_deleted",
+    )
+    assert {
+        key: binance_fields[key]["latest"] for key in retention_fields
+    } == {
+        "event_monitor_publisher_retention_inventory_ms_total": 0.35,
+        "event_monitor_publisher_retention_inventory_ms_max": 0.22,
+        "event_monitor_publisher_retention_age_unlink_ms_total": 0.18,
+        "event_monitor_publisher_retention_age_unlink_ms_max": 0.11,
+        "event_monitor_publisher_retention_cap_unlink_ms_total": 0.27,
+        "event_monitor_publisher_retention_cap_unlink_ms_max": 0.16,
+        "event_monitor_publisher_retention_inventory_entries_visited": 14,
+        "event_monitor_publisher_retention_inventory_candidates": 5,
+        "event_monitor_publisher_retention_age_deleted": 2,
+        "event_monitor_publisher_retention_cap_deleted": 1,
+    }
+    assert {
+        key: okx_fields[key]["latest"] for key in retention_fields
+    } == {
+        "event_monitor_publisher_retention_inventory_ms_total": 0.2,
+        "event_monitor_publisher_retention_inventory_ms_max": 0.14,
+        "event_monitor_publisher_retention_age_unlink_ms_total": 0.15,
+        "event_monitor_publisher_retention_age_unlink_ms_max": 0.1,
+        "event_monitor_publisher_retention_cap_unlink_ms_total": 0.11,
+        "event_monitor_publisher_retention_cap_unlink_ms_max": 0.08,
+        "event_monitor_publisher_retention_inventory_entries_visited": 7,
+        "event_monitor_publisher_retention_inventory_candidates": 3,
+        "event_monitor_publisher_retention_age_deleted": 1,
+        "event_monitor_publisher_retention_cap_deleted": 0,
+    }
     assert {
         key: pressure[key]
         for key in (
@@ -4991,6 +5064,16 @@ def test_live_performance_report_resource_pressure_projects_event_pipeline_timin
             "latest_event_monitor_publisher_retention_run_count_sum",
             "latest_event_monitor_publisher_retention_ms_total_sum",
             "latest_event_monitor_publisher_retention_ms_max",
+            "latest_event_monitor_publisher_retention_inventory_ms_total_sum",
+            "latest_event_monitor_publisher_retention_inventory_ms_max",
+            "latest_event_monitor_publisher_retention_age_unlink_ms_total_sum",
+            "latest_event_monitor_publisher_retention_age_unlink_ms_max",
+            "latest_event_monitor_publisher_retention_cap_unlink_ms_total_sum",
+            "latest_event_monitor_publisher_retention_cap_unlink_ms_max",
+            "latest_event_monitor_publisher_retention_inventory_entries_visited_sum",
+            "latest_event_monitor_publisher_retention_inventory_candidates_sum",
+            "latest_event_monitor_publisher_retention_age_deleted_sum",
+            "latest_event_monitor_publisher_retention_cap_deleted_sum",
         )
     } == {
         "latest_event_pipeline_processed_total": 8,
@@ -5021,6 +5104,16 @@ def test_live_performance_report_resource_pressure_projects_event_pipeline_timin
         "latest_event_monitor_publisher_retention_run_count_sum": 4,
         "latest_event_monitor_publisher_retention_ms_total_sum": 0.3,
         "latest_event_monitor_publisher_retention_ms_max": 0.15,
+        "latest_event_monitor_publisher_retention_inventory_ms_total_sum": 0.55,
+        "latest_event_monitor_publisher_retention_inventory_ms_max": 0.22,
+        "latest_event_monitor_publisher_retention_age_unlink_ms_total_sum": 0.33,
+        "latest_event_monitor_publisher_retention_age_unlink_ms_max": 0.11,
+        "latest_event_monitor_publisher_retention_cap_unlink_ms_total_sum": 0.38,
+        "latest_event_monitor_publisher_retention_cap_unlink_ms_max": 0.16,
+        "latest_event_monitor_publisher_retention_inventory_entries_visited_sum": 21,
+        "latest_event_monitor_publisher_retention_inventory_candidates_sum": 8,
+        "latest_event_monitor_publisher_retention_age_deleted_sum": 3,
+        "latest_event_monitor_publisher_retention_cap_deleted_sum": 1,
     }
 
 
@@ -5031,12 +5124,30 @@ def test_live_performance_report_resource_pressure_whitelists_health_fields(tmp_
         [
             _monitor_row(
                 event_type="health.summary",
-                seq=1,
+                seq=0,
                 ts=1000,
                 component="monitor.health",
                 data={
-                    "rss_bytes": 1000,
-                    "system_memory_percent": 70.0,
+                    "event_monitor_publisher_retention_inventory_ms_total": 9.0,
+                    "event_monitor_publisher_retention_inventory_ms_max": 8.0,
+                    "event_monitor_publisher_retention_age_unlink_ms_total": 7.0,
+                    "event_monitor_publisher_retention_age_unlink_ms_max": 6.0,
+                    "event_monitor_publisher_retention_cap_unlink_ms_total": 5.0,
+                    "event_monitor_publisher_retention_cap_unlink_ms_max": 4.0,
+                    "event_monitor_publisher_retention_inventory_entries_visited": 3,
+                    "event_monitor_publisher_retention_inventory_candidates": 2,
+                    "event_monitor_publisher_retention_age_deleted": 1,
+                    "event_monitor_publisher_retention_cap_deleted": 1,
+                },
+            ),
+            _monitor_row(
+                event_type="health.summary",
+                seq=1,
+                ts=2000,
+                component="monitor.health",
+                data={
+                    "rss_bytes": 1200,
+                    "system_memory_percent": 60.0,
                     "balance_raw": {"leak_marker": "raw-balance"},
                     "balance_snapped": {"leak_marker": "snapped-balance"},
                     "equity": "leak-equity",
@@ -5051,12 +5162,13 @@ def test_live_performance_report_resource_pressure_whitelists_health_fields(tmp_
     report = build_live_performance_report(tmp_path / "monitor")
     rendered = json.dumps(report["resource_pressure"], sort_keys=True)
 
-    assert report["resource_pressure"]["groups"][0]["fields"]["rss_bytes"]["latest"] == 1000
+    assert report["ok"] is True
+    assert report["resource_pressure"]["groups"][0]["fields"]["rss_bytes"]["latest"] == 1200
     assert (
         report["resource_pressure"]["groups"][0]["fields"]["system_memory_percent"][
             "latest"
         ]
-        == 70
+        == 60
     )
     assert not any(
         key.startswith("event_monitor_publisher_manifest_checkpoint")

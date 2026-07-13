@@ -69,6 +69,17 @@ Retuned goal boundary:
 
 VPS5 deployment status:
 
+- PR #1210 merged to `v8` as
+  `d509dde70caff9eea6a9d445f3571b6ac70d5184` after exact-head Hermes and
+  Grok 4.5 approval plus green CI. It changed only the console/text projection
+  of `balance.changed` to show exact raw and snapped before/after transitions,
+  signed deltas, equity, and source. VPS5 fast-forwarded cleanly and gracefully
+  restarted only the five exact bot panes; pane PIDs and unrelated `misc:0.0`
+  PID `434835` were preserved. Natural balance changes on all five bots matched
+  the new contract. After two real KuCoin timeout windows aged out, the final
+  settled smoke was hard-green with `428/428` remote and `76/76`
+  account-critical calls successful, all five processes present, zero hard,
+  log, or monitor failures, and a clean tracked repository.
 - PR #1208 merged to `v8` as
   `2a13202f7aec07874ed318dcf6472e445187a98e` after exact-head Hermes and
   Grok 4.5 approval plus green CI. VPS5 fast-forwarded cleanly and gracefully
@@ -79,7 +90,11 @@ VPS5 deployment status:
   successful, all five bots `R`, zero hard/log/monitor failures, and a clean
   tracked repository. Four fresh health windows measured 12 retention runs at
   `5612.290ms` total and `690.434ms` maximum, down from PR #1206's matched-run
-  `16210.383ms` total and `8953.523ms` maximum.
+  `16210.383ms` total and `8953.523ms` maximum. A later 10-run window after the
+  PR #1210 restart recorded `14255.296ms` total and an `8654.591ms` maximum,
+  proving that the one-pass inventory improved ordinary/cumulative work but did
+  not eliminate the long tail. The active follow-up adds inventory, age-unlink,
+  and cap-unlink attribution before selecting another persistence change.
 - PR #1207 merged to `v8` as
   `de6022432dae9f4513f7a56287535ba21120a39f` after exact-head Hermes and
   Grok 4.5 approval plus green CI. VPS5 fast-forwarded cleanly and gracefully

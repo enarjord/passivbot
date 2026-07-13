@@ -394,7 +394,11 @@ classification when enough source events exist.
     PR #1208 replaced repeated candidate/full-tree scans with one per-run
     inventory while preserving cadence and deletion policy. Four fresh VPS5
     windows measured the same 12 retention runs at `5612.290ms` total and
-    `690.434ms` maximum, materially reducing both cumulative cost and long tail.
+    `690.434ms` maximum. A later 10-run window recorded `14255.296ms` total and
+    an `8654.591ms` maximum, so the ordinary cost improved but the long tail
+    remained. The active attribution slice separates inventory, age-unlink,
+    and cap-unlink timing plus bounded work counts before another persistence
+    optimization is selected.
 - [ ] Exchange writes: create/cancel/close/panic write latency, exchange
   response latency, ambiguous write rate, confirmation latency.
   - Status: partial. The report now derives order-wave total duration,

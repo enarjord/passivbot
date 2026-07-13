@@ -4,6 +4,12 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Periodic structured health summaries now split monitor retention work into
+  fixed inventory, age-unlink, and byte-cap-unlink timings plus bounded work
+  counts. Live smoke and performance reports project the same fields without
+  changing retention cadence, policy, failure handling, report verdicts, or
+  trading behavior.
+
 - Balance-change console and text lines now show exact raw and snapped
   before/after transitions with signed deltas, equity, and source in one compact
   human-readable line. The complete structured event remains unchanged.
