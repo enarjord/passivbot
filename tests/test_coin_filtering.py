@@ -1,7 +1,54 @@
+import logging
+
 import pytest
 
 from passivbot import Passivbot
 from live.event_bus import EventTypes, ListEventSink, LiveEventPipeline
+
+
+class _FailingConsoleSink:
+    def write(self, _event):
+        raise OSError("console unavailable")
+
+
+def _make_min_effective_cost_event_bot(*, console_sink=None):
+    bot = Passivbot.__new__(Passivbot)
+    bot._min_effective_cost_last_log_ms = {}
+    bot._min_effective_cost_log_interval_ms = 900_000
+    bot._min_effective_cost_summary_last_log_ms = 0
+    bot._min_effective_cost_summary_log_interval_ms = 900_000
+    bot.is_pside_enabled = lambda pside: pside == "long"
+    bot.bot_id = "bot_min_cost"
+    bot.exchange = "binance"
+    bot.user = "binance_01"
+    bot.live_event_console_enabled = True
+    bot._live_event_current_cycle_id = "cy_min_cost"
+    sink = ListEventSink()
+    bot._live_event_pipeline = LiveEventPipeline(
+        structured_sinks=[sink],
+        monitor_sinks=[],
+        console_sink=console_sink,
+    )
+    return bot, sink
+
+
+def _min_effective_cost_out(count=1):
+    return {
+        "diagnostics": {
+            "min_effective_cost_blocks": [
+                {
+                    "symbol_idx": idx,
+                    "pside": "long",
+                    "balance": 51.154957,
+                    "effective_limit": 1.5,
+                    "entry_initial_qty_pct": 0.0192,
+                    "projected_initial_cost": 1.4732627616,
+                    "effective_min_cost": 10.1,
+                }
+                for idx in range(count)
+            ]
+        }
+    }
 
 
 class CoinFilterHarness(Passivbot):
@@ -430,6 +477,151 @@ def test_log_min_effective_cost_blocks_emits_structured_event(monkeypatch):
     assert event.data["effective_limit"] == pytest.approx(1.5)
     assert event.data["entry_initial_qty_pct"] == pytest.approx(0.0192)
     assert event.data["action"] == "skip_create"
+
+
+@pytest.mark.parametrize("console_sink_fails", [False, True])
+def test_min_effective_cost_structured_console_owns_detail_line(
+    caplog, console_sink_fails
+):
+    console_sink = _FailingConsoleSink() if console_sink_fails else ListEventSink()
+    bot, sink = _make_min_effective_cost_event_bot(console_sink=console_sink)
+
+    try:
+        with caplog.at_level(logging.DEBUG):
+            bot._log_min_effective_cost_blocks(
+                _min_effective_cost_out(), {0: "BTC/USDC:USDC"}
+            )
+            bot._log_min_effective_cost_blocks(
+                _min_effective_cost_out(), {0: "BTC/USDC:USDC"}
+            )
+        assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    finally:
+        assert bot._live_event_pipeline.close(timeout=2.0) is True
+
+    assert not [
+        record
+        for record in caplog.records
+        if record.levelno == logging.INFO
+        and "initial entry blocked by min effective cost |" in record.message
+    ]
+    assert sum(
+        "initial entry min effective cost detail" in record.message
+        for record in caplog.records
+    ) == 1
+    events = [
+        event
+        for event in sink.events
+        if event.event_type == EventTypes.ENTRY_MIN_EFFECTIVE_COST_BLOCKED
+    ]
+    assert len(events) == 1
+    if console_sink_fails:
+        assert bot._live_event_pipeline.sink_error_counters["console"] >= 1
+    else:
+        assert console_sink.events == events
+
+
+def test_min_effective_cost_uses_legacy_detail_without_pipeline(caplog):
+    bot = Passivbot.__new__(Passivbot)
+    bot._min_effective_cost_last_log_ms = {}
+    bot._min_effective_cost_log_interval_ms = 900_000
+    bot._min_effective_cost_summary_last_log_ms = 0
+    bot._min_effective_cost_summary_log_interval_ms = 900_000
+    bot.is_pside_enabled = lambda pside: pside == "long"
+    bot.live_event_console_enabled = True
+    emitted = []
+    bot._emit_entry_min_effective_cost_blocked_event = lambda **kwargs: emitted.append(
+        kwargs
+    )
+
+    with caplog.at_level(logging.INFO):
+        bot._log_min_effective_cost_blocks(
+            _min_effective_cost_out(), {0: "BTC/USDC:USDC"}
+        )
+
+    assert sum(
+        "initial entry blocked by min effective cost | BTC long" in record.message
+        for record in caplog.records
+    ) == 1
+    assert len(emitted) == 1
+
+
+def test_min_effective_cost_uses_legacy_detail_without_console_sink(caplog):
+    bot, sink = _make_min_effective_cost_event_bot(console_sink=None)
+
+    try:
+        with caplog.at_level(logging.INFO):
+            bot._log_min_effective_cost_blocks(
+                _min_effective_cost_out(), {0: "BTC/USDC:USDC"}
+            )
+        assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    finally:
+        assert bot._live_event_pipeline.close(timeout=2.0) is True
+
+    assert sum(
+        "initial entry blocked by min effective cost | BTC long" in record.message
+        for record in caplog.records
+    ) == 1
+    assert [
+        event.event_type
+        for event in sink.events
+        if event.event_type == EventTypes.ENTRY_MIN_EFFECTIVE_COST_BLOCKED
+    ] == [EventTypes.ENTRY_MIN_EFFECTIVE_COST_BLOCKED]
+
+
+def test_min_effective_cost_uses_legacy_detail_when_emitter_unavailable(caplog):
+    console_sink = ListEventSink()
+    bot, sink = _make_min_effective_cost_event_bot(console_sink=console_sink)
+    bot._emit_entry_min_effective_cost_blocked_event = None
+
+    try:
+        with caplog.at_level(logging.INFO):
+            bot._log_min_effective_cost_blocks(
+                _min_effective_cost_out(), {0: "BTC/USDC:USDC"}
+            )
+    finally:
+        assert bot._live_event_pipeline.close(timeout=2.0) is True
+
+    assert sum(
+        "initial entry blocked by min effective cost | BTC long" in record.message
+        for record in caplog.records
+    ) == 1
+    assert sink.events == []
+    assert console_sink.events == []
+
+
+def test_min_effective_cost_structured_console_keeps_aggregate_summary(caplog):
+    console_sink = ListEventSink()
+    bot, sink = _make_min_effective_cost_event_bot(console_sink=console_sink)
+    idx_to_symbol = {idx: f"SYM{idx}/USDT:USDT" for idx in range(5)}
+
+    try:
+        with caplog.at_level(logging.INFO):
+            bot._log_min_effective_cost_blocks(
+                _min_effective_cost_out(count=5), idx_to_symbol
+            )
+        assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    finally:
+        assert bot._live_event_pipeline.close(timeout=2.0) is True
+
+    info_messages = [
+        record.message for record in caplog.records if record.levelno == logging.INFO
+    ]
+    assert not [
+        message
+        for message in info_messages
+        if "initial entry blocked by min effective cost | SYM" in message
+    ]
+    assert sum(
+        "initial entries blocked by min effective cost summary" in message
+        for message in info_messages
+    ) == 1
+    events = [
+        event
+        for event in sink.events
+        if event.event_type == EventTypes.ENTRY_MIN_EFFECTIVE_COST_BLOCKED
+    ]
+    assert len(events) == 3
+    assert console_sink.events == events
 
 
 def test_log_min_effective_cost_blocks_is_throttled(monkeypatch):

@@ -4,6 +4,11 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Detailed min-effective-cost entry blocks now use their structured events as
+  the sole normal console/text lines when a live-event console sink is
+  available. Legacy detail lines remain the fallback, while the distinct
+  throttled aggregate summary and all gate behavior are unchanged.
+
 - Initial-entry distance-gate blocked and cleared transitions now use their
   structured events as the sole normal console/text lines when a live-event
   console sink is available. The throttled legacy summaries remain the
