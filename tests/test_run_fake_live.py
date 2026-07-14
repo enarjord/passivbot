@@ -262,9 +262,10 @@ def test_prime_fake_fill_cache_writes_fake_fill_events(tmp_path):
     client = FakeCCXTClient(scenario, quote="USDT")
     bot = type("Bot", (), {"exchange": "fake", "user": "runner_test"})()
     cache_path = _prime_fake_fill_cache(bot, client, cache_root=tmp_path)
-    payload = next(cache_path.glob("*.json")).read_text(encoding="utf-8")
-    assert "boot_entry" in payload
     cache = FillEventCache(cache_path)
+    cached_events = cache.load()
+    assert len(cached_events) == 1
+    assert cached_events[0].client_order_id == "boot_entry"
     assert cache.get_covered_start_ms() == client.get_fill_events(None, None)[0]["timestamp"]
     assert cache.get_history_scope() == "window"
 
