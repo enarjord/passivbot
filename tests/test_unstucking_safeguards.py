@@ -94,9 +94,10 @@ def _make_mock_pbr():
         )
         cooldown_until_ms = None
         if not no_restart and cooldown_minutes_after_red > 0.0:
-            cooldown_ms_f64 = math.floor(cooldown_minutes_after_red * 60_000.0 + 0.5)
+            cooldown_ms_f64 = cooldown_minutes_after_red * 60_000.0
             if not math.isfinite(cooldown_ms_f64) or cooldown_ms_f64 > float(u64_max):
                 raise ValueError("cooldown_minutes_after_red is too large")
+            cooldown_ms_f64 = math.floor(cooldown_ms_f64 + 0.5)
             # Rust's positive float-to-u64 cast saturates, as does the timestamp add.
             cooldown_ms = max(1, min(u64_max, int(cooldown_ms_f64)))
             cooldown_until_ms = min(u64_max, stop_timestamp_ms + cooldown_ms)
@@ -541,11 +542,12 @@ def test_mock_hsl_red_episode_finalization_rejects_negative_drawdown_ema():
         fn(**_red_episode_finalization_kwargs(drawdown_ema=-0.01))
 
 
-def test_mock_hsl_red_episode_finalization_rejects_oversized_cooldown():
+@pytest.mark.parametrize("cooldown_minutes", [1.0e20, 1.0e308])
+def test_mock_hsl_red_episode_finalization_rejects_oversized_cooldown(cooldown_minutes):
     fn = _make_mock_pbr().hsl_red_episode_finalization
 
     with pytest.raises(ValueError, match="cooldown_minutes_after_red is too large"):
-        fn(**_red_episode_finalization_kwargs(cooldown_minutes_after_red=1.0e20))
+        fn(**_red_episode_finalization_kwargs(cooldown_minutes_after_red=cooldown_minutes))
 
 
 def test_mock_hsl_red_episode_finalization_saturates_cooldown_deadline():
