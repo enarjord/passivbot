@@ -90,7 +90,7 @@
       long.halted: false
       long.no_restart_latched: false
       long.last_stop_event.auto_restart_eligible: true
-      long.last_stop_event.drawdown_raw: {min: 0.07, max: 0.08}
+      long.last_stop_event.drawdown_raw: {min: 0.001, max: 0.002}
     }
     summary_paths: {
       step_count: 4
