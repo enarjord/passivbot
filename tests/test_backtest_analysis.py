@@ -15,7 +15,10 @@ from backtest import (
     parse_disabled_plot_groups,
     process_forager_fills,
 )
-from plotting import create_forager_hard_stop_drawdown_figure
+from plotting import (
+    create_forager_balance_figures,
+    create_forager_hard_stop_drawdown_figure,
+)
 
 
 def _make_analysis_entry(value):
@@ -637,6 +640,29 @@ def test_process_forager_fills_includes_strategy_equity_column():
     assert "strategy_equity" in bal_eq.columns
     assert np.isclose(bal_eq["strategy_equity"].iloc[0], 1000.0)
     assert np.isclose(bal_eq["strategy_equity"].iloc[-1], 995.0)
+
+
+def test_create_forager_balance_figures_adds_strategy_equity_drawdown():
+    idx = pd.date_range("2025-01-01", periods=4, freq="1h")
+    bal_eq = pd.DataFrame(
+        {
+            "usd_total_equity": [100.0, 90.0, 120.0, 96.0],
+            "strategy_equity": [100.0, 90.0, 120.0, 96.0],
+            "btc_total_equity": [1.0, 0.9, 1.2, 0.96],
+        },
+        index=idx,
+    )
+
+    figures = create_forager_balance_figures(
+        bal_eq,
+        autoplot=False,
+        return_figures=True,
+    )
+
+    assert "drawdown" in figures
+    plotted_drawdown = figures["drawdown"].axes[0].lines[0].get_ydata()
+    np.testing.assert_allclose(plotted_drawdown, [0.0, 0.1, 0.0, 0.2])
+    plotting.plt.close("all")
 
 
 def test_post_process_disable_plotting_skips_all_figure_generation(tmp_path, monkeypatch):

@@ -4,6 +4,9 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Backtests now write `drawdown.png` alongside the existing summary plots,
+  showing drawdown from the running peak of collateral-agnostic strategy equity.
+
 ## v8.0.0 - 2026-07-14
 
 - Restored the documented offline HSL restart smoke by pinning its fixture to
