@@ -12,6 +12,11 @@
 2. Builder registration is required before API trading on supported builders.
 3. Stock perps have a practical $10 minimum order constraint.
 4. Historical data may blend exchange/tradfi sources depending on age and availability.
+5. With Hyperliquid `ohlcv_source_dir`, closed-market minutes for `xyz:` coins are synthetic flat
+   candles (`h=l=c=previous close`, `v=0`) and intentionally tradable. Strict fill inequalities
+   prevent fills exactly at the flat price. Do not cap or unmark these candles without changing the
+   documented modeling contract and its tests. See `docs/stock_perps.md` for modeling caveats and
+   `../case_studies/backtest_data_integrity.md` for the decision history.
 
 ## High-Impact Operational Gotchas
 
@@ -19,7 +24,7 @@
 2. Small balances can hit minimum order constraints quickly due to the $10 floor.
 3. Symbol routing must remain Hyperliquid-only for stock perps.
 
-## Test Focus
+## Validation
 
 1. Symbol normalization and routing.
 2. Margin mode assignment by symbol type.

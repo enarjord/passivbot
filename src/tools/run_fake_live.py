@@ -16,6 +16,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from candlestick_manager import CANDLE_DTYPE
 from config import load_prepared_config
+from config.pnl_lookback import parse_pnls_max_lookback_days
 from exchanges.fake import FakeCCXTClient, load_fake_scenario
 from fill_events_manager import FillEvent, FillEventCache
 from logging_setup import configure_logging
@@ -333,7 +334,40 @@ def _prime_fake_fill_cache(bot, fake_client: FakeCCXTClient, cache_root: Path | 
     cache = FillEventCache(cache_path)
     events = [FillEvent.from_dict(event) for event in fake_client.get_fill_events(None, None)]
     cache.save(events)
+    if events:
+        cache.update_metadata_from_events(events)
+    coverage_start_ms, history_scope = _fake_fill_cache_coverage(bot, fake_client, events)
+    if coverage_start_ms is not None:
+        cache.mark_covered_start(coverage_start_ms)
+    if history_scope is not None:
+        cache.set_history_scope(history_scope)
+    elif coverage_start_ms is not None:
+        cache.set_history_scope("window")
     return cache_path
+
+
+def _fake_fill_cache_coverage(
+    bot, fake_client: FakeCCXTClient, events: list[FillEvent]
+) -> tuple[int | None, str | None]:
+    """Return the earliest fake-history start covered by the staged cache."""
+    config = getattr(bot, "config", None)
+    live = config.get("live") if isinstance(config, dict) else None
+    if isinstance(live, dict) and "pnls_max_lookback_days" in live:
+        lookback = parse_pnls_max_lookback_days(
+            live["pnls_max_lookback_days"],
+            field_name="live.pnls_max_lookback_days",
+        )
+        if lookback.is_all:
+            return None, "all"
+        now_ms = int(fake_client.now_ms)
+        starts = [lookback.event_history_start_ms(now_ms)]
+        hsl_window_ms = lookback.hsl_window_ms()
+        if hsl_window_ms is not None:
+            starts.append(now_ms - int(hsl_window_ms))
+        return min(int(start) for start in starts if start is not None), "window"
+    if events:
+        return min(int(event.timestamp) for event in events), "window"
+    return None, None
 
 
 def _prime_fake_candles(bot, fake_client: FakeCCXTClient) -> None:
@@ -376,6 +410,19 @@ def _fake_active_red_psides(bot) -> List[str]:
         and bot._equity_hard_stop_runtime_red_latched(pside)
         and not bot._hsl_state(pside)["halted"]
     ]
+
+
+def _fake_all_hsl_psides_terminal_latched(bot) -> bool:
+    enabled_psides = [
+        pside for pside in bot._hsl_psides() if bot._equity_hard_stop_enabled(pside)
+    ]
+    if not enabled_psides:
+        return False
+    return all(
+        bool(bot._hsl_state(pside).get("halted", False))
+        and bool(bot._hsl_state(pside).get("no_restart_latched", False))
+        for pside in enabled_psides
+    )
 
 
 async def _run_fake_red_supervisor_step(bot) -> dict:
@@ -564,25 +611,39 @@ async def _run_fake_cycle(bot):
     if not await bot.update_pos_oos_pnls_ohlcvs():
         return {"updated": False}
     if bot._equity_hard_stop_enabled():
-        if any(
-            bot._equity_hard_stop_runtime_red_latched(pside) and not bot._hsl_state(pside)["halted"]
-            for pside in bot._hsl_psides()
-            if bot._equity_hard_stop_enabled(pside)
-        ):
-            if getattr(bot, "exchange", "").lower() == "fake":
-                return await _run_fake_red_supervisor_step(bot)
-            await bot._equity_hard_stop_run_red_supervisor()
-            return {"red_supervisor": True}
-        await bot._equity_hard_stop_check()
-        if any(
-            bot._equity_hard_stop_runtime_red_latched(pside) and not bot._hsl_state(pside)["halted"]
-            for pside in bot._hsl_psides()
-            if bot._equity_hard_stop_enabled(pside)
-        ):
-            if getattr(bot, "exchange", "").lower() == "fake":
-                return await _run_fake_red_supervisor_step(bot)
-            await bot._equity_hard_stop_run_red_supervisor()
-            return {"red_supervisor": True}
+        if bot._equity_hard_stop_signal_mode() == "coin":
+            await bot._equity_hard_stop_check()
+            if bot._equity_hard_stop_coin_red_active():
+                # Exercise the production coin RED supervisor instead of the legacy
+                # pside stepping shim. The production path uses protective planning
+                # and its own authoritative refresh contract, which prevents normal
+                # staged planning from running while post-write confirmation is due.
+                await bot._equity_hard_stop_run_coin_red_supervisor()
+                return {"red_supervisor": True, "mode": "coin"}
+        else:
+            if any(
+                bot._equity_hard_stop_runtime_red_latched(pside)
+                and not bot._hsl_state(pside)["halted"]
+                for pside in bot._hsl_psides()
+                if bot._equity_hard_stop_enabled(pside)
+            ):
+                if getattr(bot, "exchange", "").lower() == "fake":
+                    return await _run_fake_red_supervisor_step(bot)
+                await bot._equity_hard_stop_run_red_supervisor()
+                return {"red_supervisor": True}
+            await bot._equity_hard_stop_check()
+            if any(
+                bot._equity_hard_stop_runtime_red_latched(pside)
+                and not bot._hsl_state(pside)["halted"]
+                for pside in bot._hsl_psides()
+                if bot._equity_hard_stop_enabled(pside)
+            ):
+                if getattr(bot, "exchange", "").lower() == "fake":
+                    return await _run_fake_red_supervisor_step(bot)
+                await bot._equity_hard_stop_run_red_supervisor()
+                return {"red_supervisor": True}
+            if _fake_all_hsl_psides_terminal_latched(bot):
+                return {"terminal_hsl": True}
     refresh_authoritative = getattr(bot, "refresh_authoritative_state", None)
     if callable(refresh_authoritative) and not await refresh_authoritative():
         return {"updated": False}

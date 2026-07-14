@@ -1,69 +1,29 @@
-import json
-import logging
-import math
 import msgpack
 from typing import Any
 import passivbot_rust as pbr
 
-
-def dominates(p0, p1):
-    better_in_one = False
-    for a, b in zip(p0, p1):
-        if a < b:
-            better_in_one = True
-        elif a > b:
-            return False
-    return better_in_one
+_DIFF_DELETE_KEY = "__passivbot_diff_delete__"
+_DIFF_DELETE_MARKER = {_DIFF_DELETE_KEY: True}
 
 
-def dominates_d(x, y, higher_is_better):
-    better_in_one = False
-    for xi, yi, hib in zip(x, y, higher_is_better):
-        if hib:
-            if xi > yi:
-                better_in_one = True
-            elif xi < yi:
-                return False
-        else:
-            if xi < yi:
-                better_in_one = True
-            elif xi > yi:
-                return False
-    return better_in_one
+def _is_diff_delete_marker(value: Any) -> bool:
+    return isinstance(value, dict) and value == _DIFF_DELETE_MARKER
 
 
-def update_pareto_front(new_index, new_obj, current_front, objectives_dict, higher_is_better):
-    for idx in current_front:
-        if dominates_d(objectives_dict[idx], new_obj, higher_is_better):
-            return current_front
-    new_front = [
-        idx
-        for idx in current_front
-        if not dominates_d(new_obj, objectives_dict[idx], higher_is_better)
-    ]
-    new_front.append(new_index)
-    return new_front
-
-
-def calc_dist(p0, p1):
-    return math.sqrt(sum((a - b) ** 2 for a, b in zip(p0, p1)))
-
-
-def calc_normalized_dist(point, ideal, w0_min, w0_max, w1_min, w1_max):
-    norm_point = [
-        (p - min_v) / (max_v - min_v) if max_v > min_v else p
-        for p, min_v, max_v in zip(point, mins, maxs)
-    ]
-    norm_ideal = [
-        (i - min_v) / (max_v - min_v) if max_v > min_v else i
-        for i, min_v, max_v in zip(ideal, mins, maxs)
-    ]
-    return math.sqrt(sum((p - i) ** 2 for p, i in zip(norm_point, norm_ideal)))
-
-
-def format_distance(dist: float) -> str:
-    """Format distance to fixed-width string for lexicographical sorting."""
-    return f"{dist:08.4f}"
+def _dict_diff(d1: dict, d2: dict) -> dict:
+    diff = {}
+    for k in d1.keys() - d2.keys():
+        diff[k] = _DIFF_DELETE_MARKER.copy()
+    for k in d2:
+        if k not in d1:
+            diff[k] = d2[k]
+        elif isinstance(d2[k], dict) and isinstance(d1.get(k), dict):
+            nested = _dict_diff(d1[k], d2[k])
+            if nested:
+                diff[k] = nested
+        elif d1[k] != d2[k]:
+            diff[k] = d2[k]
+    return diff
 
 
 def make_json_serializable(obj):
@@ -77,32 +37,14 @@ def make_json_serializable(obj):
         return obj
 
 
-def gprint(verbose):
-    return print if verbose else (lambda *args, **kwargs: None)
-
-
 def generate_diffs(dictlist):
     """Yield diffs between consecutive dicts in dictlist, supporting nested dicts."""
-
-    def dict_diff(d1, d2):
-        diff = {}
-        for k in d2:
-            if k not in d1:
-                diff[k] = d2[k]
-            elif isinstance(d2[k], dict) and isinstance(d1.get(k), dict):
-                nested = dict_diff(d1[k], d2[k])
-                if nested:
-                    diff[k] = nested
-            elif d1[k] != d2[k]:
-                diff[k] = d2[k]
-        return diff
-
     prev = {}
     for d in dictlist:
         if not prev:
             yield d
         else:
-            yield dict_diff(prev, d)
+            yield _dict_diff(prev, d)
         prev = d
 
 
@@ -112,6 +54,8 @@ def deep_updated(base, diff):
     for k in keys:
         if k in diff:
             v2 = diff[k]
+            if _is_diff_delete_marker(v2):
+                continue
             if isinstance(v2, dict) and isinstance(base.get(k), dict):
                 out[k] = deep_updated(base[k], v2)
             else:
@@ -123,21 +67,7 @@ def deep_updated(base, diff):
 
 def generate_incremental_diff(prev, current):
     """Return the diff between two dicts."""
-
-    def dict_diff(d1, d2):
-        diff = {}
-        for k in d2:
-            if k not in d1:
-                diff[k] = d2[k]
-            elif isinstance(d2[k], dict) and isinstance(d1.get(k), dict):
-                nested = dict_diff(d1[k], d2[k])
-                if nested:
-                    diff[k] = nested
-            elif d1[k] != d2[k]:
-                diff[k] = d2[k]
-        return diff
-
-    return dict_diff(prev or {}, current)
+    return _dict_diff(prev or {}, current)
 
 
 def apply_diffs(difflist, base=None):
@@ -210,21 +140,3 @@ def quantize_floats(obj: Any, sig_digits: int = None, step: float = None) -> Any
         return round_floats_sig_digits(obj, sig_digits)
     else:
         return round_floats_step(obj, step)
-
-
-def enforce_bounds_v2(obj: Any, bounds: Any = None, sig_digits: int = None):
-    """
-    apply floor/ceil capping and rounding to each element in obj
-    obj may be a bot config:
-        - take bounds from config.optimize.bounds
-        - apply to config.bot
-    obj may be a list of floats:
-        - assert len(obj) == len(bounds)
-        - obj is on form [float]
-        - bounds is on form [[float]]
-        - each element of bounds must be len==2 or len==3
-        - bound[0] is lower bound; bound[1] is upper bound
-        - if len bound element == 3, consider bound[2] as step
-        - if len bound element == 2, use sig_digits (raise if missing)
-    """
-    pass

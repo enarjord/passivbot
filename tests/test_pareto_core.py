@@ -1,4 +1,5 @@
 import numpy as np
+import pytest
 
 from config.scoring import ObjectiveSpec
 from pareto_core import (
@@ -28,6 +29,13 @@ def test_extract_objectives_respects_scoring_order():
     assert keys == ["m0", "m1", "m2"]
 
 
+def test_extract_objectives_resolves_canonical_metric_alias_keys():
+    entry = {"metrics": {"objectives": {"adg": 0.1}}}
+    obj, keys = extract_objectives(entry, scoring_keys=["adg"])
+    assert obj == (0.1,)
+    assert keys == ["adg_usd"]
+
+
 def test_prune_preserves_extremes_and_uses_crowding():
     front = ["a", "b", "c", "d", "e"]
     objectives = {
@@ -48,6 +56,19 @@ def test_prune_preserves_extremes_and_uses_crowding():
     arr = np.array([objectives[k] for k in front])
     cds = crowding_distances(arr)
     assert cds.shape[0] == len(front)
+
+
+def test_prune_rejects_nonfinite_objectives_before_selecting_extremes():
+    front = ["nan", "a", "b"]
+    objectives = {
+        "nan": (np.nan, 0.5),
+        "a": (0.1, 0.4),
+        "b": (0.2, 0.3),
+    }
+    violations = {k: 0.0 for k in front}
+
+    with pytest.raises(ValueError, match="non-finite value"):
+        prune_front_with_extremes(front, objectives, violations, max_size=2)
 
 
 def test_compute_ideal_weighted_respects_mixed_objective_goals():

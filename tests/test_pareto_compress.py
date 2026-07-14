@@ -10,6 +10,10 @@ from pareto_compress import build_parser, compress_candidates, compress_from_arg
 from pareto_explorer import load_candidates
 
 
+def _metric_stats(value: float) -> dict:
+    return {"mean": value, "min": value, "max": value, "std": 0.0, "median": value}
+
+
 def _write_candidate(
     pareto_dir: Path,
     name: str,
@@ -33,8 +37,8 @@ def _write_candidate(
                 "drawdown_worst_strategy_eq": drawdown,
             },
             "stats": {
-                "adg_strategy_eq": {"mean": adg},
-                "drawdown_worst_strategy_eq": {"mean": drawdown},
+                "adg_strategy_eq": _metric_stats(adg),
+                "drawdown_worst_strategy_eq": _metric_stats(drawdown),
             },
         },
     }

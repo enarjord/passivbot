@@ -8,6 +8,7 @@ from collections import Counter
 from typing import Iterable
 
 from config.access import get_optional_live_value
+from live.event_bus import EventTypes, ReasonCodes
 from live.market_snapshot import MarketSnapshot
 from utils import utc_ms
 
@@ -25,6 +26,80 @@ def _passivbot_module():
     if module is None:
         import passivbot as module  # type: ignore
     return module
+
+
+def _bounded_pre_create_skip_details(details: list[dict] | None) -> list[dict]:
+    bounded: list[dict] = []
+    for item in list(details or [])[:8]:
+        if not isinstance(item, dict):
+            continue
+        compact = {}
+        for key in (
+            "surface",
+            "reason",
+            "symbol",
+            "age_ms",
+            "max_age_ms",
+            "epoch",
+            "min_epoch",
+        ):
+            value = item.get(key)
+            if value is not None:
+                compact[key] = value
+        if compact:
+            bounded.append(compact)
+    return bounded
+
+
+def _emit_pre_create_skip_event(
+    bot,
+    *,
+    reason_code: str,
+    orders: list[dict],
+    symbols: list[str],
+    stage: str,
+    message: str,
+    details: list[dict] | None = None,
+    error_type: str | None = None,
+) -> None:
+    emit_filter_event = getattr(bot, "_emit_execution_create_filter_event", None)
+    if not callable(emit_filter_event):
+        return
+    details_count = len(details or [])
+    emit_filter_event(
+        event_type=EventTypes.EXECUTION_CREATE_SKIPPED,
+        status="skipped",
+        reason_code=reason_code,
+        order_count=len(orders),
+        symbols=symbols,
+        level="warning",
+        message=message,
+        data={
+            "stage": stage,
+            "details": _bounded_pre_create_skip_details(details),
+            "details_count": details_count,
+            "details_truncated": details_count > 8,
+            "error_type": error_type,
+        },
+    )
+
+
+def _record_fresh_entry_blocks(bot, orders: list[dict], reason: str) -> None:
+    """Observe an existing pre-create filter without affecting its decision."""
+    trace = getattr(bot, "_fresh_entry_eligibility_trace", None)
+    recorder = getattr(trace, "record_blocked_orders", None)
+    if not callable(recorder):
+        return
+    try:
+        recorder(orders, reason)
+    except Exception as exc:
+        bot._fresh_entry_eligibility_trace = None
+        logging.debug(
+            "[entry] fresh-entry eligibility trace disabled during market filter | "
+            "reason=%s error_type=%s",
+            reason,
+            type(exc).__name__,
+        )
 
 
 def market_snapshot_ticker_strategy(bot) -> str:
@@ -79,6 +154,18 @@ async def filter_fresh_market_snapshot_creations(
                 bot._log_symbols(symbols, limit=12),
                 bot._log_compact_symbol_payload(planning_snapshot_invalid[:8]),
             )
+            _emit_pre_create_skip_event(
+                bot,
+                reason_code=ReasonCodes.PRE_CREATE_PLANNING_SNAPSHOT_INVALID,
+                orders=orders,
+                symbols=symbols,
+                stage="planning_snapshot",
+                message="create orders skipped because planning snapshot is invalid before create",
+                details=planning_snapshot_invalid,
+            )
+            _record_fresh_entry_blocks(
+                bot, orders, "pre_create_planning_snapshot_invalid"
+            )
             return []
         logging.info(
             "[market] refreshing stale planning market snapshot before create | symbols=%s stale=%s",
@@ -101,12 +188,36 @@ async def filter_fresh_market_snapshot_creations(
             type(exc).__name__,
             exc,
         )
+        _emit_pre_create_skip_event(
+            bot,
+            reason_code=ReasonCodes.PRE_CREATE_MARKET_SNAPSHOT_UNAVAILABLE,
+            orders=orders,
+            symbols=symbols,
+            stage="market_snapshot_refresh",
+            message="create orders skipped because pre-create market snapshot refresh failed",
+            error_type=type(exc).__name__,
+        )
+        _record_fresh_entry_blocks(
+            bot, orders, "pre_create_market_snapshot_unavailable"
+        )
         return []
     if invalid:
         logging.warning(
             "[market] skipping order creation; stale pre-create market snapshots | symbols=%s details=%s",
             bot._log_symbols(symbols, limit=12),
             bot._log_compact_symbol_payload(invalid[:8]),
+        )
+        _emit_pre_create_skip_event(
+            bot,
+            reason_code=ReasonCodes.PRE_CREATE_MARKET_SNAPSHOT_UNAVAILABLE,
+            orders=orders,
+            symbols=symbols,
+            stage="market_snapshot_validation",
+            message="create orders skipped because pre-create market snapshots are stale",
+            details=invalid,
+        )
+        _record_fresh_entry_blocks(
+            bot, orders, "pre_create_market_snapshot_unavailable"
         )
         return []
     orders = _filter_limit_order_creations_by_market_distance(bot, orders, snapshots)
@@ -168,6 +279,11 @@ def _filter_limit_order_creations_by_market_distance(
             continue
         kept.append(order)
     if skipped:
+        _record_fresh_entry_blocks(
+            bot,
+            [item["order"] for item in skipped],
+            "limit_order_create_market_distance",
+        )
         _log_limit_order_distance_skips(
             bot,
             skipped,
@@ -226,6 +342,49 @@ def _log_limit_order_distance_skips(
         for (symbol, pside, side, pb_type), count in grouped.items()
     )
     log_fn = logging.info if should_info else logging.debug
+    emit_filter_event = getattr(bot, "_emit_execution_create_filter_event", None)
+    if callable(emit_filter_event):
+        grouped_sample = [
+            {
+                "symbol": symbol,
+                "pside": pside or None,
+                "side": side or None,
+                "pb_order_type": pb_type or "unknown",
+                "count": int(count),
+            }
+            for (symbol, pside, side, pb_type), count in grouped.most_common(12)
+        ]
+        order_sample = []
+        for item in skipped[:8]:
+            order = item["order"]
+            order_sample.append(
+                {
+                    "symbol": str(order.get("symbol") or ""),
+                    "pside": str(order.get("position_side") or "") or None,
+                    "side": str(order.get("side") or "") or None,
+                    "pb_order_type": str(order.get("pb_order_type") or "unknown"),
+                    "price": float(order.get("price")),
+                    "market_price": float(item["market_price"]),
+                    "distance": float(item["dist"]),
+                }
+            )
+        emit_filter_event(
+            event_type=EventTypes.EXECUTION_CREATE_SKIPPED,
+            status="skipped",
+            reason_code=ReasonCodes.LIMIT_ORDER_CREATE_MARKET_DISTANCE,
+            order_count=len(skipped),
+            symbols=skipped_symbols,
+            level="info" if should_info else "debug",
+            message="limit order creates skipped because prices are too far from live market",
+            data={
+                "threshold": float(threshold),
+                "min_multiplier": float(min_mult),
+                "max_multiplier": float(max_mult),
+                "groups": grouped_sample,
+                "sample": order_sample,
+                "suppressed_text_log": not should_info,
+            },
+        )
     log_fn(
         "[order] skipped far-from-market limit order creates | "
         "skipped=%d symbols=%s threshold=%.4f min_multiplier=%.4f "

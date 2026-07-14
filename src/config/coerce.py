@@ -13,7 +13,8 @@ HSL_COOLDOWN_POSITION_POLICIES = (
     "graceful_stop",
     "manual",
 )
-HSL_SIGNAL_MODES = ("pside", "unified")
+HSL_RESTART_AFTER_RED_POLICIES = ("always", "threshold", "never")
+HSL_SIGNAL_MODES = ("coin", "pside", "unified")
 MONITOR_BOOL_KEYS = (
     "enabled",
     "retain_price_ticks",
@@ -47,6 +48,16 @@ def normalize_hsl_signal_mode(value, path: str = "live.hsl_signal_mode") -> str:
         allowed = ", ".join(HSL_SIGNAL_MODES)
         raise ValueError(f"{path} must be one of {{{allowed}}}, got {mode!r}")
     return mode
+
+
+def normalize_hsl_restart_after_red_policy(
+    value, path: str = "bot.<pside>.hsl.restart_after_red_policy"
+) -> str:
+    policy = "threshold" if value is None else str(value)
+    if policy not in HSL_RESTART_AFTER_RED_POLICIES:
+        allowed = ", ".join(HSL_RESTART_AFTER_RED_POLICIES)
+        raise ValueError(f"{path} must be one of {{{allowed}}}, got {policy!r}")
+    return policy
 
 
 def normalize_monitor_config(config: dict) -> None:

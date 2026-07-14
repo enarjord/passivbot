@@ -82,6 +82,41 @@ async def test_fake_ccxt_client_limit_and_market_fills():
 
 
 @pytest.mark.asyncio
+async def test_fake_ccxt_client_rejects_reduce_only_opening_order():
+    client = FakeCCXTClient(_scenario(), quote="USDT")
+
+    with pytest.raises(ValueError, match="reduce-only order would increase long position"):
+        await client.create_order(
+            "BTC/USDT:USDT",
+            "market",
+            "buy",
+            1.0,
+            params={"positionSide": "LONG", "reduceOnly": True, "clientOrderId": "bad_close"},
+        )
+
+
+@pytest.mark.asyncio
+async def test_fake_ccxt_client_rejects_oversized_reduce_only_close():
+    client = FakeCCXTClient(_scenario(), quote="USDT")
+    await client.create_order(
+        "BTC/USDT:USDT",
+        "market",
+        "buy",
+        1.0,
+        params={"positionSide": "LONG", "clientOrderId": "entry_long"},
+    )
+
+    with pytest.raises(ValueError, match="reduce-only order amount 2.0 exceeds long position size"):
+        await client.create_order(
+            "BTC/USDT:USDT",
+            "market",
+            "sell",
+            2.0,
+            params={"positionSide": "LONG", "reduceOnly": True, "clientOrderId": "oversized_close"},
+        )
+
+
+@pytest.mark.asyncio
 async def test_fake_fetcher_reads_fill_ledger():
     client = FakeCCXTClient(_scenario(), quote="USDT")
     await client.create_order(
@@ -109,6 +144,19 @@ def test_build_fetcher_fake():
     bot.coin_to_symbol = lambda value, verbose=False: value
     fetcher = _build_fetcher_for_bot(bot, symbols=["BTC"])
     assert isinstance(fetcher, FakeFetcher)
+
+
+@pytest.mark.parametrize("exchange", ["defx", "paradex"])
+def test_build_fetcher_unsupported_exchange_reports_live_fill_events(exchange):
+    bot = SimpleNamespace()
+    bot.exchange = exchange
+    bot.cca = "dummy"
+    bot.user = f"{exchange}_user"
+    bot.markets_dict = {}
+    bot.coin_to_symbol = lambda value, verbose=False: value
+
+    with pytest.raises(ValueError, match=f"Unsupported exchange '{exchange}' for live fill events"):
+        _build_fetcher_for_bot(bot, symbols=["BTC"])
 
 
 def test_setup_bot_fake_uses_fake_bot():
@@ -243,6 +291,14 @@ async def test_fake_ccxt_client_supports_boot_fill_history_and_1h_aggregation():
 @pytest.mark.asyncio
 async def test_fake_ccxt_client_applies_manual_fill_and_cancel_actions():
     scenario = _scenario()
+    scenario["account"]["positions"] = [
+        {
+            "symbol": "BTC/USDT:USDT",
+            "position_side": "long",
+            "qty": 1.0,
+            "price": 100.0,
+        }
+    ]
     scenario["timeline"][1]["actions"] = [
         {
             "type": "manual_fill",
@@ -276,7 +332,7 @@ async def test_fake_ccxt_client_applies_manual_fill_and_cancel_actions():
 
     assert client.advance_time() is True
     positions = await client.fetch_positions()
-    assert positions[0]["contracts"] == pytest.approx(1.0)
+    assert positions[0]["contracts"] == pytest.approx(2.0)
     assert client.fills[-1]["clientOrderId"] == "manual_entry"
 
     assert client.advance_time() is True

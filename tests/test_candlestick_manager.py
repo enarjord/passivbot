@@ -20,6 +20,107 @@ from candlestick_manager import (
 )
 
 
+def test_normalize_ccxt_ohlcv_filters_nonfinite_and_nonpositive_rows(tmp_path):
+    class _Ex:
+        id = "binance"
+
+    cm = CandlestickManager(exchange=_Ex(), exchange_name="binance", cache_dir=str(tmp_path / "caches"))
+    base = _floor_minute(int(time.time() * 1000)) - 10 * ONE_MIN_MS
+    rows = [
+        [base, 100.0, 101.0, 99.0, 100.5, 7.0],
+        [base + ONE_MIN_MS, 100.0, float("nan"), 99.0, 100.5, 7.0],
+        [base + 2 * ONE_MIN_MS, 100.0, 101.0, 0.0, 100.5, 7.0],
+        [base + 3 * ONE_MIN_MS, 100.0, 101.0, 99.0, 100.5, -1.0],
+    ]
+
+    arr = cm._normalize_ccxt_ohlcv(rows)
+
+    assert arr.size == 1
+    assert int(arr[0]["ts"]) == base
+    assert float(arr[0]["c"]) == pytest.approx(100.5)
+
+
+def test_ema_series_skips_leading_nonfinite_without_poisoning_window(tmp_path):
+    class _Ex:
+        id = "binance"
+
+    cm = CandlestickManager(exchange=_Ex(), exchange_name="binance", cache_dir=str(tmp_path / "caches"))
+    values = np.asarray([float("nan"), 1.0, 3.0], dtype=np.float64)
+
+    out = cm._ema_series(values, span=3.0)
+
+    assert math.isnan(float(out[0]))
+    assert float(out[-1]) == pytest.approx(2.0)
+    assert math.isnan(float(cm._ema_series(np.asarray([float("nan")]), span=3.0)[-1]))
+
+
+@pytest.mark.asyncio
+async def test_latest_ema_log_range_ignores_leading_nonfinite_sample(tmp_path):
+    class _Ex:
+        id = "binance"
+
+    cm = CandlestickManager(exchange=_Ex(), exchange_name="binance", cache_dir=str(tmp_path / "caches"))
+    base = _floor_minute(int(time.time() * 1000)) - 10 * ONE_MIN_MS
+    arr = np.array(
+        [
+            (base, 100.0, float("nan"), 99.0, 100.0, 1.0),
+            (base + ONE_MIN_MS, 100.0, 102.0, 100.0, 101.0, 1.0),
+            (base + 2 * ONE_MIN_MS, 101.0, 104.0, 101.0, 103.0, 1.0),
+        ],
+        dtype=CANDLE_DTYPE,
+    )
+
+    async def latest_range(_span, *, period_ms=ONE_MIN_MS):
+        return base, base + 2 * ONE_MIN_MS
+
+    async def get_candles(*_args, **_kwargs):
+        return arr
+
+    cm._latest_finalized_range = latest_range
+    cm.get_candles = get_candles
+
+    val = await cm.get_latest_ema_log_range("BAD/USDT:USDT", span=3.0)
+
+    assert math.isfinite(val)
+    assert val > 0.0
+
+
+@pytest.mark.asyncio
+async def test_latest_cached_ema_metrics_carries_values_without_tail_zeroing(tmp_path):
+    cm = CandlestickManager(exchange=None, exchange_name="ex", cache_dir=str(tmp_path / "caches"))
+    symbol = "STALE/USDT:USDT"
+    now_ms = 10 * ONE_MIN_MS
+    latest_expected = 9 * ONE_MIN_MS
+    last_cached = 7 * ONE_MIN_MS
+    cm._now_ms = lambda: now_ms
+    candles = np.array(
+        [
+            (5 * ONE_MIN_MS, 100.0, 102.0, 99.0, 101.0, 2.0),
+            (6 * ONE_MIN_MS, 101.0, 103.0, 100.0, 102.0, 3.0),
+            (last_cached, 102.0, 105.0, 101.0, 104.0, 4.0),
+        ],
+        dtype=CANDLE_DTYPE,
+    )
+    cm._persist_batch(symbol, candles, timeframe="1m", merge_cache=True, last_refresh_ms=now_ms)
+
+    out = await cm.get_latest_cached_ema_metrics(
+        symbol,
+        {"qv": 2.0, "log_range": 2.0},
+        max_staleness_ms=latest_expected - last_cached,
+        window_candles=3,
+    )
+
+    assert out["qv"] > 0.0
+    assert out["log_range"] > 0.0
+    too_stale = await cm.get_latest_cached_ema_metrics(
+        symbol,
+        {"qv": 2.0, "log_range": 2.0},
+        max_staleness_ms=ONE_MIN_MS,
+        window_candles=3,
+    )
+    assert too_stale == {}
+
+
 @pytest.mark.parametrize("debug", [False])
 def test_standardize_gaps_inserts_zero_candles(tmp_path, debug):
     class _Ex:
@@ -79,6 +180,36 @@ def test_standardize_gaps_does_not_fill_open_tail_when_disabled(tmp_path):
 
     assert list(res["ts"]) == [t0, t1, t2]
     assert t1 in cm._synthetic_timestamps.get("TAIL", set())
+
+
+def test_archive_day_conversion_does_not_fill_edge_gaps(tmp_path):
+    import pandas as pd
+
+    class _Ex:
+        id = "binance"
+
+    cm = CandlestickManager(exchange=_Ex(), exchange_name="binance", cache_dir=str(tmp_path / "caches"))
+    day_key = "2026-04-01"
+    start_ts, _end_ts = cm._date_range_of_key(day_key)
+    first_real_ts = start_ts + 2 * ONE_MIN_MS
+
+    out = cm._ohlcv_df_to_day_arr(
+        pd.DataFrame(
+            {
+                "timestamp": [first_real_ts],
+                "open": [101.0],
+                "high": [103.0],
+                "low": [99.0],
+                "close": [102.0],
+                "volume": [7.0],
+            }
+        ),
+        day_key,
+    )
+
+    assert out.size == 1
+    assert int(out[0]["ts"]) == first_real_ts
+    assert float(out[0]["c"]) == pytest.approx(102.0)
 
 
 def test_kucoin_synthetic_batch_summary_is_info_not_warning(tmp_path, caplog):
@@ -164,6 +295,25 @@ async def test_get_candles_aborts_when_stop_requested(tmp_path):
 
     with pytest.raises(asyncio.CancelledError):
         await cm.get_candles("FOO/USDT")
+
+
+def test_remote_fetch_callback_exception_is_isolated(tmp_path):
+    calls = []
+
+    def callback(payload):
+        calls.append(payload)
+        raise RuntimeError("callback failed")
+
+    cm = CandlestickManager(
+        exchange=None,
+        exchange_name="ex",
+        cache_dir=str(tmp_path / "caches"),
+        remote_fetch_callback=callback,
+    )
+
+    cm._emit_remote_fetch({"kind": "ccxt_fetch_ohlcv", "stage": "start"})
+
+    assert calls == [{"kind": "ccxt_fetch_ohlcv", "stage": "start"}]
 
 
 @pytest.mark.asyncio
@@ -252,6 +402,88 @@ async def test_get_latest_ema_close_correctness(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_latest_ema_helpers_reject_short_tail_without_caching(tmp_path, monkeypatch):
+    cm = CandlestickManager(exchange=None, exchange_name="ex", cache_dir=str(tmp_path / "caches"))
+    fixed_now_ms = 1725590400000
+    monkeypatch.setattr("time.time", lambda: fixed_now_ms / 1000.0)
+    symbol = "SHORTTAIL/USDT"
+    span = 3.0
+    end_ts = fixed_now_ms - ONE_MIN_MS
+    start_ts = end_ts - 2 * ONE_MIN_MS
+    stale = np.array(
+        [
+            (start_ts, 10.0, 11.0, 9.0, 10.0, 1.0),
+            (start_ts + ONE_MIN_MS, 11.0, 12.0, 10.0, 11.0, 1.0),
+        ],
+        dtype=CANDLE_DTYPE,
+    )
+
+    async def fake_get_candles(*_args, **_kwargs):
+        return stale
+
+    monkeypatch.setattr(cm, "get_candles", fake_get_candles)
+
+    close = await cm.get_latest_ema_close(symbol, span, max_age_ms=60_000)
+    quote_volume = await cm.get_latest_ema_quote_volume(symbol, span, max_age_ms=60_000)
+    log_range = await cm.get_latest_ema_log_range(symbol, span, max_age_ms=60_000)
+    metrics = await cm.get_latest_ema_metrics(
+        symbol,
+        {"close": span, "qv": span, "log_range": span},
+        max_age_ms=60_000,
+    )
+
+    assert math.isnan(close)
+    assert math.isnan(quote_volume)
+    assert math.isnan(log_range)
+    assert all(math.isnan(metrics[key]) for key in ("close", "qv", "log_range"))
+    assert cm._ema_cache.get(symbol, {}) == {}
+
+
+@pytest.mark.asyncio
+async def test_stock_perp_latest_emas_fill_no_trade_tail(tmp_path, monkeypatch):
+    fixed_now_ms = 1725811200000  # Sunday-style off-hours timestamp.
+    monkeypatch.setattr("time.time", lambda: fixed_now_ms / 1000.0)
+
+    cm = CandlestickManager(exchange=None, exchange_name="hyperliquid", cache_dir=str(tmp_path / "caches"))
+    symbol = "xyz:DELL/USDC:USDC"
+    last_final = _floor_minute(fixed_now_ms) - ONE_MIN_MS
+    seed_ts = last_final - 60 * ONE_MIN_MS
+    seed_close = 123.45
+    cm._cache[symbol] = np.array(
+        [(seed_ts, seed_close, seed_close, seed_close, seed_close, 10.0)],
+        dtype=CANDLE_DTYPE,
+    )
+
+    close = await cm.get_latest_ema_close(symbol, 5.0, allow_remote_fetch=False)
+    log_range = await cm.get_latest_ema_log_range(symbol, 5.0, allow_remote_fetch=False)
+
+    assert close == pytest.approx(seed_close)
+    assert log_range == pytest.approx(0.0)
+    assert last_final in cm._synthetic_timestamps.get(symbol, set())
+
+
+@pytest.mark.asyncio
+async def test_crypto_latest_emas_do_not_fill_open_tail_by_default(tmp_path, monkeypatch):
+    fixed_now_ms = 1725811200000
+    monkeypatch.setattr("time.time", lambda: fixed_now_ms / 1000.0)
+
+    cm = CandlestickManager(exchange=None, exchange_name="binance", cache_dir=str(tmp_path / "caches"))
+    symbol = "BTC/USDT:USDT"
+    last_final = _floor_minute(fixed_now_ms) - ONE_MIN_MS
+    seed_ts = last_final - 60 * ONE_MIN_MS
+    seed_close = 123.45
+    cm._cache[symbol] = np.array(
+        [(seed_ts, seed_close, seed_close, seed_close, seed_close, 10.0)],
+        dtype=CANDLE_DTYPE,
+    )
+
+    close = await cm.get_latest_ema_close(symbol, 5.0, allow_remote_fetch=False)
+
+    assert math.isnan(close)
+    assert not cm._synthetic_timestamps.get(symbol)
+
+
+@pytest.mark.asyncio
 async def test_get_candles_negative_max_age_raises(tmp_path):
     cm = CandlestickManager(exchange=None, exchange_name="ex", cache_dir=str(tmp_path / "caches"))
     symbol = "Z/USDT"
@@ -316,6 +548,51 @@ def test_persist_batch_observer_receives_saved_batch(tmp_path):
     assert observed_symbol == symbol
     assert timeframe == "1m"
     assert np.array_equal(batch, arr)
+
+
+def test_disk_load_observer_receives_summary_and_is_best_effort(tmp_path):
+    cm = CandlestickManager(exchange=None, exchange_name="ex", cache_dir=str(tmp_path / "caches"))
+    symbol = "LOAD/USDT"
+    ts0 = _floor_minute(int(time.time() * 1000)) - 5 * ONE_MIN_MS
+    ts1 = ts0 + ONE_MIN_MS
+    arr = np.array(
+        [
+            (ts0, 1.0, 2.0, 0.5, 1.5, 0.3),
+            (ts1, 1.5, 2.5, 1.0, 2.0, 0.4),
+        ],
+        dtype=CANDLE_DTYPE,
+    )
+    observed = []
+
+    def observer(payload):
+        observed.append(dict(payload))
+
+    cm._persist_batch(symbol, arr, timeframe="1m")
+    cm.set_disk_load_observer(observer)
+    loaded = cm._load_from_disk(symbol, ts0, ts1, timeframe="1m")
+
+    assert loaded is not None
+    assert loaded.shape[0] == 2
+    assert len(observed) == 1
+    payload = observed[0]
+    assert payload["symbol"] == symbol
+    assert payload["timeframe"] == "1m"
+    assert payload["start_ts"] == ts0
+    assert payload["end_ts"] == ts1
+    assert payload["loaded_rows"] == 2
+    assert payload["loaded_start_ts"] == ts0
+    assert payload["loaded_end_ts"] == ts1
+    assert payload["days"] == 1
+    assert payload["source_days"] == {"primary": 1, "legacy": 0, "merged": 0}
+    assert payload["elapsed_ms"] >= 0
+
+    def failing_observer(_payload):
+        raise RuntimeError("observer failed")
+
+    cm.set_disk_load_observer(failing_observer)
+    loaded_again = cm._load_from_disk(symbol, ts0, ts1, timeframe="1m")
+    assert loaded_again is not None
+    assert loaded_again.shape[0] == 2
 
 
 def test_rebuild_index_for_range_updates_and_prunes(tmp_path):
@@ -476,6 +753,7 @@ async def test_get_latest_ema_metrics_calls_get_candles_once_and_caches(monkeypa
         timeframe=None,
         tf=None,
         fill_leading_gaps=False,
+        fill_trailing_gaps=None,
         max_lookback_candles=None,
         allow_remote_fetch=True,
         ):
@@ -534,6 +812,7 @@ async def test_get_latest_ema_close_1h_excludes_current_hour_at_boundary(monkeyp
         timeframe=None,
         tf=None,
         fill_leading_gaps=False,
+        fill_trailing_gaps=None,
         max_lookback_candles=None,
         allow_remote_fetch=True,
         ):
@@ -1526,3 +1805,53 @@ async def test_force_refetch_gaps_clears_gaps(tmp_path):
 
     # Gap should be cleared
     assert len(cm._get_known_gaps(symbol)) == 0
+
+
+def test_kucoin_between_page_holes_recorded_as_expiring_auto_gaps(tmp_path):
+    """Intra-payload holes are exchange-verified no-trade minutes (the exchange
+    returned the surrounding candles in one response) and stay permanent.
+    Between-page holes are indistinguishable from a pagination stall or outage,
+    so they must be recorded with the expiring auto_detected classification and
+    remain retryable instead of being permanently masked as no_trades."""
+
+    class _Ex:
+        id = "kucoinfutures"
+
+    cm = CandlestickManager(
+        exchange=_Ex(), exchange_name="kucoin", cache_dir=str(tmp_path / "caches")
+    )
+    assert cm._record_payload_gaps_as_known
+
+    base = _floor_minute(int(time.time() * 1000)) - 100 * ONE_MIN_MS
+
+    def t(i):
+        return base + i * ONE_MIN_MS
+
+    def row(i):
+        return [t(i), 100.0, 101.0, 99.0, 100.5, 5.0]
+
+    pages = [
+        [row(0), row(1), row(3)],  # intra-payload hole at minute 2
+        [row(6), row(7)],  # between-page hole covering minutes 4-5
+    ]
+
+    async def fake_once(symbol, since_ms, limit, end_exclusive_ms=None, timeframe=None, *, tf=None):
+        return pages.pop(0) if pages else []
+
+    cm._ccxt_fetch_ohlcv_once = fake_once
+    arr = asyncio.run(cm._fetch_ohlcv_paginated("ETH/USDT:USDT", t(0), t(8)))
+    assert arr.shape[0] == 5
+
+    gaps = cm._get_known_gaps_enhanced("ETH/USDT:USDT")
+    by_range = {(int(g["start_ts"]), int(g["end_ts"])): g for g in gaps}
+    assert set(by_range) == {(t(2), t(2)), (t(4), t(5))}
+
+    intra = by_range[(t(2), t(2))]
+    assert intra["reason"] == "no_trades"
+    assert int(intra["retry_count"]) >= _GAP_MAX_RETRIES
+    assert not cm._should_retry_gap(intra)
+
+    between = by_range[(t(4), t(5))]
+    assert between["reason"] == "auto_detected"
+    assert int(between["retry_count"]) < _GAP_MAX_RETRIES
+    assert cm._should_retry_gap(between)

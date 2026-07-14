@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from cli_utils import help_requested
+from passivbot_version import __version__
 
 
 @dataclass(frozen=True)
@@ -44,6 +45,16 @@ TOOL_COMMANDS: dict[str, CommandSpec] = {
     "candle-doctor": CommandSpec(
         "tools.candle_doctor",
         "audit candle caches (requires full install)",
+        requires_full=True,
+    ),
+    "cache-integrity-doctor": CommandSpec(
+        "tools.cache_integrity_doctor",
+        "read-only local cache integrity smoke report (requires full install)",
+        requires_full=True,
+    ),
+    "crash-finder": CommandSpec(
+        "tools.crash_finder",
+        "scan local OHLCV cache for crash-window suite scenarios (requires full install)",
         requires_full=True,
     ),
     "fetch-balance": CommandSpec("tools.fetch_balance", "fetch exchange balances"),
@@ -88,6 +99,38 @@ TOOL_COMMANDS: dict[str, CommandSpec] = {
         "plot iterative history files (requires full install)",
         requires_full=True,
     ),
+    "live-event-query": CommandSpec(
+        "tools.live_event_query",
+        "query structured live event NDJSON",
+    ),
+    "live-incident-bundle": CommandSpec(
+        "tools.live_incident_bundle",
+        "collect local live incident evidence into a tarball",
+    ),
+    "live-performance-report": CommandSpec(
+        "tools.live_performance_report",
+        "summarize local live performance timing events",
+    ),
+    "live-config-preflight": CommandSpec(
+        "tools.live_config_preflight",
+        "read-only offline live config preflight report",
+    ),
+    "hsl-startup-preview": CommandSpec(
+        "tools.hsl_startup_preview",
+        "read-only offline HSL startup preview",
+    ),
+    "hsl-replay-benchmark": CommandSpec(
+        "tools.hsl_replay_benchmark",
+        "benchmark the offline coin-HSL replay hot path",
+    ),
+    "live-smoke-report": CommandSpec(
+        "tools.live_smoke_report",
+        "summarize local live monitor events and text logs",
+    ),
+    "live-restart-smoke-plan": CommandSpec(
+        "tools.live_restart_smoke_plan",
+        "build a read-only dry-run live restart smoke plan",
+    ),
     "inspect-ohlcvs": CommandSpec(
         "tools.inspect_ohlcvs",
         "inspect v2 OHLCV cache metadata and gaps (requires full install)",
@@ -102,6 +145,10 @@ TOOL_COMMANDS: dict[str, CommandSpec] = {
         "tools.migrate_historical_data",
         "migrate historical data layout (requires full install)",
         requires_full=True,
+    ),
+    "migrate-config-v7": CommandSpec(
+        "tools.migrate_config_v7",
+        "migrate a v7 trailing-grid config to v8 trailing_grid_v7",
     ),
     "merge-paretos": CommandSpec(
         "tools.merge_paretos",
@@ -204,6 +251,7 @@ FULL_INSTALL_MODULE_HINTS = {
 FULL_INSTALL_MARKER_MODULES = tuple(sorted(FULL_INSTALL_MODULE_HINTS | {"websockets"}))
 ENV_MISMATCH_IGNORE_ENV = "PASSIVBOT_IGNORE_ENV_MISMATCH"
 ENV_REEXEC_GUARD_ENV = "PASSIVBOT_ENV_REEXEC"
+VERSION_FLAGS = {"-V", "--version"}
 
 
 def _build_root_parser() -> argparse.ArgumentParser:
@@ -445,6 +493,11 @@ def main(argv: list[str] | None = None) -> int:
     parser = _build_root_parser()
     if not argv or argv[0] in {"-h", "--help"}:
         parser.print_help()
+        return 0
+    if argv[0] in VERSION_FLAGS:
+        if len(argv) > 1:
+            parser.exit(2, f"passivbot: {argv[0]} does not accept arguments\n")
+        print(f"passivbot {__version__}")
         return 0
 
     if argv[0] == "help":

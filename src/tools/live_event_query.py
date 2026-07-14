@@ -1,0 +1,364 @@
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+import time
+from pathlib import Path
+
+SRC_ROOT = Path(__file__).resolve().parents[1]
+if str(SRC_ROOT) not in sys.path:
+    sys.path.insert(0, str(SRC_ROOT))
+
+from live.event_query import build_event_report  # noqa: E402
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description=(
+            "Validate monitor event NDJSON and query structured live events by "
+            "cycle_id, event type, and operator scopes."
+        )
+    )
+    parser.add_argument(
+        "path",
+        nargs="?",
+        default="monitor",
+        help="Monitor root, bot root, events directory, or NDJSON segment.",
+    )
+    parser.add_argument("--cycle-id", help="Return compact records for one cycle_id.")
+    parser.add_argument(
+        "--event-type",
+        "--kind",
+        dest="event_types",
+        action="append",
+        help=(
+            "Return compact records matching one event type. May be repeated or "
+            "comma-separated; --kind is accepted as an alias for monitor terminology."
+        ),
+    )
+    parser.add_argument(
+        "--level",
+        action="append",
+        help=(
+            "Return compact records matching one live-event level, for example "
+            "warning,error,critical. May be repeated or comma-separated."
+        ),
+    )
+    parser.add_argument(
+        "--bot-id",
+        action="append",
+        help=(
+            "Return compact records matching one bot_id. May be repeated "
+            "or comma-separated."
+        ),
+    )
+    parser.add_argument(
+        "--exchange",
+        action="append",
+        help=(
+            "Return compact records for one exchange and prune unrelated monitor "
+            "paths before scanning. May be repeated or comma-separated."
+        ),
+    )
+    parser.add_argument(
+        "--user",
+        action="append",
+        help=(
+            "Return compact records for one user/account and prune unrelated "
+            "monitor paths before scanning. May be repeated or comma-separated."
+        ),
+    )
+    parser.add_argument(
+        "--snapshot-id",
+        action="append",
+        help=(
+            "Return compact records matching one snapshot_id. May be repeated "
+            "or comma-separated."
+        ),
+    )
+    parser.add_argument(
+        "--plan-id",
+        action="append",
+        help=(
+            "Return compact records matching one plan_id. May be repeated "
+            "or comma-separated."
+        ),
+    )
+    parser.add_argument(
+        "--action-id",
+        action="append",
+        help=(
+            "Return compact records matching one action_id. May be repeated "
+            "or comma-separated."
+        ),
+    )
+    parser.add_argument(
+        "--order-wave-id",
+        action="append",
+        help=(
+            "Return compact records matching one order_wave_id. May be repeated "
+            "or comma-separated."
+        ),
+    )
+    parser.add_argument(
+        "--remote-call-id",
+        action="append",
+        help=(
+            "Return compact records matching one remote_call_id. May be repeated "
+            "or comma-separated."
+        ),
+    )
+    parser.add_argument(
+        "--remote-call-group-id",
+        action="append",
+        help=(
+            "Return compact records matching one remote_call_group_id. May be "
+            "repeated or comma-separated."
+        ),
+    )
+    parser.add_argument(
+        "--symbol",
+        action="append",
+        help="Return compact records matching one symbol. May be repeated or comma-separated.",
+    )
+    parser.add_argument(
+        "--pside",
+        action="append",
+        help="Return compact records matching one position side. May be repeated or comma-separated.",
+    )
+    parser.add_argument(
+        "--side",
+        action="append",
+        help="Return compact records matching one order side. May be repeated or comma-separated.",
+    )
+    parser.add_argument(
+        "--reason-code",
+        action="append",
+        help=(
+            "Return compact records matching one reason_code. May be repeated "
+            "or comma-separated."
+        ),
+    )
+    parser.add_argument(
+        "--status",
+        action="append",
+        help=(
+            "Return compact records matching one event status. May be repeated "
+            "or comma-separated."
+        ),
+    )
+    parser.add_argument(
+        "--source",
+        action="append",
+        help=(
+            "Return compact records matching one event source. May be repeated "
+            "or comma-separated."
+        ),
+    )
+    parser.add_argument(
+        "--component",
+        action="append",
+        help=(
+            "Return compact records matching one event component. May be repeated "
+            "or comma-separated."
+        ),
+    )
+    parser.add_argument(
+        "--tag",
+        action="append",
+        help=(
+            "Return compact records matching one structured event tag. May be repeated "
+            "or comma-separated."
+        ),
+    )
+    parser.add_argument(
+        "--debug-profile",
+        action="append",
+        help=(
+            "Return compact records whose event data has debug_profile=VALUE. "
+            "May be repeated or comma-separated."
+        ),
+    )
+    parser.add_argument(
+        "--data-eq",
+        action="append",
+        help=(
+            "Return compact records whose top-level event data field exactly "
+            "matches key=value. May be repeated; filters are ANDed."
+        ),
+    )
+    problem_group = parser.add_mutually_exclusive_group()
+    problem_group.add_argument(
+        "--problem-events",
+        action="store_true",
+        help=(
+            "Return compact records matching the same non-hard/hard structured "
+            "problem-event predicate used by live-smoke-report attention."
+        ),
+    )
+    problem_group.add_argument(
+        "--hard-problem-events",
+        action="store_true",
+        help=(
+            "Return compact records matching the hard structured problem-event "
+            "predicate used by live-smoke-report hard failures."
+        ),
+    )
+    parser.add_argument(
+        "--since-ms",
+        type=int,
+        help="Only include live events with monitor ts at or after this epoch-ms value.",
+    )
+    parser.add_argument(
+        "--until-ms",
+        type=int,
+        help="Only include live events with monitor ts at or before this epoch-ms value.",
+    )
+    parser.add_argument(
+        "--recent-minutes",
+        type=float,
+        help="Only include live events from the last N minutes.",
+    )
+    parser.add_argument(
+        "--event-tail-lines",
+        type=int,
+        default=0,
+        help=(
+            "Opt-in bound for monitor event segments: inspect only the last N "
+            "rows from each event file. Plain NDJSON segments seek from file "
+            "end; compressed segments may still scan sequentially. Default 0 "
+            "keeps full event validation."
+        ),
+    )
+    parser.add_argument(
+        "--max-event-files-per-bot",
+        type=int,
+        default=0,
+        help=(
+            "Opt-in fair bound for monitor event file scans. When set, scan at "
+            "most N discovered event segments per events directory, preferring "
+            "current.ndjson first and then the newest rotated files by mtime."
+        ),
+    )
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=200,
+        help="Maximum matched records or timeline rows to include in output.",
+    )
+    parser.add_argument(
+        "--include-data",
+        action="store_true",
+        help="Include each matched event's bounded data payload.",
+    )
+    parser.add_argument(
+        "--include-rotated",
+        action="store_true",
+        help=(
+            "Also scan rotated/compressed history segments. By default directory "
+            "scans read current.ndjson files only."
+        ),
+    )
+    parser.add_argument(
+        "--compact",
+        action="store_true",
+        help="Emit compact single-line JSON.",
+    )
+    parser.add_argument(
+        "--timeline",
+        action="store_true",
+        help="Include terse timeline strings for matched records.",
+    )
+    parser.add_argument(
+        "--trace-summary",
+        action="store_true",
+        help=(
+            "Include aggregate counts for matched events, ids, symbols, statuses, "
+            "reason codes, and order waves. Counts cover all matches, not only "
+            "the limited event sample."
+        ),
+    )
+    parser.add_argument(
+        "--order-trace",
+        action="store_true",
+        help=(
+            "Include an order lifecycle reconstruction view grouped by order "
+            "wave and action ids. Event samples are bounded by --limit."
+        ),
+    )
+    parser.add_argument(
+        "--cycle-trace",
+        action="store_true",
+        help=(
+            "Include a cycle reconstruction view grouped by cycle_id, with "
+            "bounded timeline samples, aggregate summaries, and nested order "
+            "trace details. Event samples are bounded by --limit."
+        ),
+    )
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    if args.since_ms is not None and args.recent_minutes is not None:
+        parser.error("--since-ms and --recent-minutes are mutually exclusive")
+    since_ms = args.since_ms
+    if args.recent_minutes is not None:
+        if args.recent_minutes <= 0:
+            parser.error("--recent-minutes must be greater than 0")
+        since_ms = int(time.time() * 1000) - int(args.recent_minutes * 60_000)
+    if since_ms is not None and args.until_ms is not None and since_ms > args.until_ms:
+        parser.error("--since-ms/--recent-minutes must be <= --until-ms")
+    if int(args.event_tail_lines) < 0:
+        parser.error("--event-tail-lines must be non-negative")
+    if int(args.max_event_files_per_bot) < 0:
+        parser.error("--max-event-files-per-bot must be non-negative")
+    try:
+        report = build_event_report(
+            args.path,
+            cycle_id=args.cycle_id,
+            event_type=args.event_types,
+            level=args.level,
+            exchange=args.exchange,
+            user=args.user,
+            bot_id=args.bot_id,
+            snapshot_id=args.snapshot_id,
+            plan_id=args.plan_id,
+            action_id=args.action_id,
+            order_wave_id=args.order_wave_id,
+            remote_call_id=args.remote_call_id,
+            remote_call_group_id=args.remote_call_group_id,
+            symbol=args.symbol,
+            pside=args.pside,
+            side=args.side,
+            reason_code=args.reason_code,
+            status=args.status,
+            source=args.source,
+            component=args.component,
+            tag=args.tag,
+            debug_profile=args.debug_profile,
+            data_eq=args.data_eq,
+            problem_events=bool(args.problem_events),
+            hard_problem_events=bool(args.hard_problem_events),
+            since_ms=since_ms,
+            until_ms=args.until_ms,
+            event_tail_lines=int(args.event_tail_lines),
+            max_event_files_per_bot=int(args.max_event_files_per_bot),
+            limit=args.limit,
+            include_data=bool(args.include_data),
+            include_rotated=bool(args.include_rotated),
+            timeline=bool(args.timeline),
+            trace_summary=bool(args.trace_summary),
+            order_trace=bool(args.order_trace),
+            cycle_trace=bool(args.cycle_trace),
+        )
+    except ValueError as exc:
+        parser.error(str(exc))
+    print(json.dumps(report, indent=None if args.compact else 2, sort_keys=True))
+    return 0 if report.get("ok") else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

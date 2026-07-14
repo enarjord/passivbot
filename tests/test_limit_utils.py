@@ -1,3 +1,5 @@
+import pytest
+
 from limit_utils import expand_limit_checks, compute_limit_violation
 from config.metrics import resolve_metric_value
 
@@ -76,6 +78,30 @@ def test_disabled_limit_entry_is_skipped():
     }
     checks = expand_limit_checks([entry], {}, penalty_weight=1000.0)
     assert checks == []
+
+
+def test_unknown_limit_metric_raises_with_suggestion():
+    entry = {
+        "metric": "drawdown_worst_mean_strategy_eq",
+        "penalize_if": "greater_than_or_equal",
+        "value": 0.5,
+    }
+
+    with pytest.raises(ValueError) as exc_info:
+        expand_limit_checks([entry], {}, penalty_weight=1000.0)
+
+    message = str(exc_info.value)
+    assert "unknown optimizer limit metric 'drawdown_worst_mean_strategy_eq'" in message
+    assert "Did you mean:" in message
+    assert "drawdown_worst_mean_1pct_strategy_eq" in message
+
+
+def test_deprecated_limit_metric_alias_is_validated_after_canonicalization():
+    entry = {"metric": "drawdown_worst_hsl", "penalize_if": "greater_than", "value": 0.8}
+    checks = expand_limit_checks([entry], {}, penalty_weight=1000.0)
+
+    assert checks[0]["metric"] == "drawdown_worst_strategy_eq"
+    assert checks[0]["metric_key"] == "drawdown_worst_strategy_eq_mean"
 
 
 def test_omitted_stat_uses_aggregate_default_instead_of_operator_direction():

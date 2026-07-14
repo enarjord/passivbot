@@ -29,7 +29,9 @@ from suite_runner import (
     build_scenarios,
     collect_suite_coin_sources,
     filter_coins_by_exchange_assignment,
+    load_suite_override_config,
     prepare_master_datasets,
+    validate_suite_side_coin_lists,
     _prepare_dataset_subset,
     _compute_slice_indices,
     _normalize_date_to_ts,
@@ -68,9 +70,24 @@ async def prepare_suite_contexts(
     """Prepare datasets and configs for every optimizer suite scenario."""
 
     base_exchanges = require_config_value(config, "backtest.exchanges")
-    for exchange in base_exchanges:
+    scenarios, aggregate_cfg = build_scenarios(suite_cfg, base_exchanges=base_exchanges)
+
+    # Determine which individual exchange datasets are needed for single-exchange scenarios
+    needed_individual = _determine_needed_individual_exchanges(scenarios, base_exchanges)
+    exchanges_list = sorted(set(base_exchanges) | needed_individual)
+    added_exchanges = needed_individual - set(base_exchanges)
+    if added_exchanges:
+        logging.info(
+            "Expanded optimizer suite exchanges from %s to %s (added %s from scenario requirements)",
+            base_exchanges,
+            exchanges_list,
+            sorted(added_exchanges),
+        )
+
+    for exchange in exchanges_list:
         await load_markets(exchange, verbose=False)
-    await format_approved_ignored_coins(config, base_exchanges, verbose=False)
+    await format_approved_ignored_coins(config, exchanges_list, verbose=False)
+    validate_suite_side_coin_lists(config)
 
     base_start = require_config_value(config, "backtest.start_date")
     base_end = require_config_value(config, "backtest.end_date")
@@ -92,32 +109,17 @@ async def prepare_suite_contexts(
     else:
         base_ignored_list = []
 
-    scenarios, aggregate_cfg = build_scenarios(suite_cfg, base_exchanges=base_exchanges)
-
-    # Determine which individual exchange datasets are needed for single-exchange scenarios
-    needed_individual = _determine_needed_individual_exchanges(scenarios, base_exchanges)
-
     suite_coin_sources = collect_suite_coin_sources(config, scenarios)
 
-    # Collect all coins from scenarios (or use base if no scenario-specific coins)
-    master_coins = set()
-    master_ignored = set()
+    # Match suite_runner: scenario-specific coins extend the base universe, they do not replace it.
+    master_coins = set(base_coins_list)
+    master_ignored = set(base_ignored_list)
     for scenario in scenarios:
         if scenario.coins:
             master_coins.update(scenario.coins)
         if scenario.ignored_coins:
             master_ignored.update(scenario.ignored_coins)
     master_coins.update(suite_coin_sources.keys())
-
-    # If no scenarios define explicit coins, fall back to base_coins_list
-    if not master_coins and base_coins_list:
-        logging.info(
-            "No scenario-specific coins found; using base approved_coins: %s",
-            base_coins_list,
-        )
-        master_coins = set(base_coins_list)
-    if not master_ignored and base_ignored_list:
-        master_ignored = set(base_ignored_list)
 
     master_coins_list = sorted(master_coins)
     master_ignored_list = sorted(master_ignored)
@@ -139,7 +141,7 @@ async def prepare_suite_contexts(
     candle_interval = int(base_config.get("backtest", {}).get("candle_interval_minutes", 1) or 1)
     datasets = await prepare_master_datasets(
         base_config,
-        base_exchanges,
+        exchanges_list,
         shared_array_manager=shared_array_manager,
         needed_individual_exchanges=needed_individual,
         candle_interval_minutes=candle_interval,
@@ -241,8 +243,7 @@ async def prepare_suite_contexts(
                 base_ignored=base_ignored_list,
             )
         except ValueError as exc:
-            logging.warning("Skipping scenario %s: %s", scenario.label, exc)
-            continue
+            raise ValueError(f"Suite scenario {scenario.label} could not be prepared: {exc}") from exc
         scenario_config = format_config(scenario_config_raw, verbose=False)
         scenario_config = parse_overrides(scenario_config, verbose=False)
         scenario_config.setdefault("backtest", {})
@@ -267,16 +268,11 @@ async def prepare_suite_contexts(
         if raw_scenario_exchanges:
             unavailable = raw_scenario_exchanges - all_exchanges_set
             if unavailable:
-                logging.debug(
-                    "Scenario %s: exchanges %s not available in dataset, using %s",
-                    scenario.label,
-                    sorted(unavailable),
-                    sorted(raw_scenario_exchanges & all_exchanges_set) or "all available",
+                raise ValueError(
+                    f"Suite scenario {scenario.label} requests unavailable exchange(s) "
+                    f"{sorted(unavailable)}; prepared exchanges are {sorted(all_exchanges_set)}"
                 )
             scenario_exchanges = raw_scenario_exchanges & all_exchanges_set
-            if not scenario_exchanges:
-                # If no overlap, fall back to all available exchanges
-                scenario_exchanges = all_exchanges_set
         else:
             scenario_exchanges = all_exchanges_set
 
@@ -303,11 +299,9 @@ async def prepare_suite_contexts(
                     ",".join(skipped_coins[:10]),
                 )
             if not selected_coins:
-                logging.warning(
-                    "Skipping scenario %s: no coins remain after exchange filtering.",
-                    scenario.label,
+                raise ValueError(
+                    f"Suite scenario {scenario.label} has no coins after applying exchange filters."
                 )
-                continue
             scenario_config["backtest"]["coins"][dataset.exchange] = list(selected_coins)
             if dataset.hlcvs_spec is not None:
                 start_idx, end_idx, coin_indices = _compute_slice_indices(
@@ -466,8 +460,7 @@ async def prepare_suite_contexts(
                 timestamps_map[exchange_key] = ts_window
 
         if not exchanges_for_scenario:
-            logging.warning("Skipping scenario %s: no exchanges after filtering.", scenario.label)
-            continue
+            raise ValueError(f"Suite scenario {scenario.label} had no exchanges after filtering.")
 
         # When using lazy slicing, populate master specs and coin indices per exchange.
         master_hlcvs_specs = {}
@@ -524,19 +517,7 @@ def ensure_suite_config(config_path: Path, suite_path: Optional[Path]) -> Dict[s
     config = parse_overrides(config, verbose=False)
     suite_override = None
     if suite_path:
-        override_config = load_prepared_config(str(suite_path), verbose=False)
-        override_backtest = override_config.get("backtest", {})
-        # Support both new (scenarios at top level) and legacy (suite wrapper) formats
-        if "suite" in override_backtest:
-            # Legacy format - prefer explicit suite wrapper over template/default scenarios.
-            suite_override = override_backtest["suite"]
-        elif "scenarios" in override_backtest:
-            suite_override = {
-                "scenarios": override_backtest.get("scenarios", []),
-                "aggregate": override_backtest.get("aggregate", {"default": "mean"}),
-            }
-        else:
-            raise ValueError(f"Suite config {suite_path} must provide backtest.scenarios definition.")
+        suite_override = load_suite_override_config(suite_path)
     return extract_suite_config(config, suite_override)
 
 

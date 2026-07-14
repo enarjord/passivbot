@@ -754,6 +754,22 @@ class FakeCCXTClient:
             or ""
         )
         reduce_only = bool(params.get("reduceOnly") or params.get("reduce_only"))
+        amount_abs = abs(float(amount))
+        if reduce_only:
+            position = self.positions[(symbol, position_side)]
+            position_size = float(position["size"])
+            opens_position = (position_side == "long" and order_side == "buy") or (
+                position_side == "short" and order_side == "sell"
+            )
+            if opens_position:
+                raise ValueError(
+                    f"Fake reduce-only order would increase {position_side} position: {side} {symbol}"
+                )
+            if amount_abs > position_size + 1e-12:
+                raise ValueError(
+                    f"Fake reduce-only order amount {amount_abs} exceeds "
+                    f"{position_side} position size {position_size} for {symbol}"
+                )
         order_id = str(self._next_order_id)
         self._next_order_id += 1
         order_price = float(price) if price is not None else None
@@ -765,14 +781,14 @@ class FakeCCXTClient:
             "symbol": symbol,
             "type": order_type,
             "side": order_side,
-            "amount": abs(float(amount)),
+            "amount": amount_abs,
             "price": float(last_price if order_type == "market" else order_price),
             "timestamp": self.now_ms,
             "datetime": ts_to_date(self.now_ms),
             "clientOrderId": client_order_id,
             "status": "open",
             "filled": 0.0,
-            "remaining": abs(float(amount)),
+            "remaining": amount_abs,
             "reduceOnly": reduce_only,
             "info": {
                 "positionSide": position_side.upper(),
@@ -784,7 +800,7 @@ class FakeCCXTClient:
             symbol=symbol,
             order_type=order_type,
             side=order_side,
-            amount=abs(float(amount)),
+            amount=amount_abs,
             price=float(order["price"]),
             position_side=position_side,
             reduce_only=reduce_only,

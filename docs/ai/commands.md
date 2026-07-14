@@ -1,65 +1,10 @@
-# Development Commands
+# Development Commands Compatibility Route
 
-Use from repo root unless noted.
+This path is temporarily retained for active external automations that still load the former
+commands document.
 
-## Setup
+The canonical setup, test, backtest, optimizer, Rust-build, and execution-safety commands live in
+`runbooks/commands.md`. Read and follow that document in full.
 
-```bash
-python3 -m venv venv
-source venv/bin/activate
-python3 -m pip install -e .              # live-only
-# or: python3 -m pip install -e ".[full]"
-# or: python3 -m pip install -e ".[dev]"
-```
-
-## Tests
-
-```bash
-pytest
-pytest tests/test_specific.py
-pytest tests/test_specific.py::test_name
-```
-
-## Live Bot
-
-```bash
-passivbot live -u {account_name}
-passivbot live path/to/config.json --log-level {warning|info|debug|trace|0-3}
-```
-
-## Backtest
-
-```bash
-passivbot backtest path/to/config.json
-passivbot backtest --suite
-```
-
-## Optimize
-
-```bash
-passivbot optimize path/to/config.json
-passivbot optimize --suite
-```
-
-## Rust
-
-```bash
-cd passivbot-rust && maturin develop --release && cd ..
-cd passivbot-rust && cargo test && cd ..
-cd passivbot-rust && cargo check --tests && cd ..
-```
-
-## Useful Tools
-
-```bash
-passivbot tool pareto optimize_results/.../pareto
-passivbot tool pareto-compress optimize_results/.../pareto 8 --output-dir selected_pareto_8
-passivbot tool pareto-dash --data-root optimize_results
-passivbot tool verify-hlcvs-data
-passivbot tool ohlcvs-doctor --repair-catalog
-passivbot tool streamline-json configs/examples/default_trailing_grid_long_npos7.json
-```
-
-## High-Signal Gotcha
-
-If Rust changes seem ignored by tests/runtime, rebuild extension again before debugging behavior.
+Remove this compatibility route only after every scheduled consumer has migrated and a changed-head
+wake has successfully loaded the canonical runbook.

@@ -5,13 +5,14 @@ This is the recommended way to work with Passivbot configs on the current config
 ## Source Of Truth
 
 - The canonical hardcoded defaults live in `src/config/schema.py`.
-- The example config `configs/examples/default_trailing_grid_long_npos7.json` mirrors those defaults exactly.
-- New schema-authored configs should keep the top-level `config_version` field. Older configs without it are treated as legacy and migrated during load.
+- The example config `configs/examples/default_trailing_martingale_long.json` mirrors those defaults exactly.
+- New V8 configs must keep the top-level `config_version: "v8.0.0"` field. V8 is a breaking schema; older or pre-v8 configs are not automatically converted to V8.
+- V7 trailing-grid configs can be converted explicitly with `passivbot tool migrate-config-v7 input_v7.json output_v8_trailing_grid_v7.json`. Clean migrations write deprecated compatibility strategy kind `trailing_grid_v7`; if the report contains manual-review or dropped unsupported fields, the command returns nonzero and does not write output unless `--allow-manual-review-output` is passed. New optimization work should use the canonical `trailing_martingale` strategy unless you intentionally need v7 behavior.
 - If you run `passivbot live`, `passivbot backtest`, or `passivbot optimize` without a config path, Passivbot starts from the in-code defaults in `src/config/schema.py`.
 
 ## Recommended Workflow
 
-1. Copy `configs/examples/default_trailing_grid_long_npos7.json` to a new file.
+1. Copy `configs/examples/default_trailing_martingale_long.json` to a new file.
 2. Edit that new file for your account, market universe, and strategy changes.
 3. Use `passivbot backtest` first.
 4. Use `passivbot optimize` if you want to tune parameters or compare alternatives.
@@ -21,7 +22,7 @@ This is the recommended way to work with Passivbot configs on the current config
 Example:
 
 ```bash
-cp configs/examples/default_trailing_grid_long_npos7.json configs/live/my_config.json
+cp configs/examples/default_trailing_martingale_long.json configs/live/my_config.json
 passivbot backtest configs/live/my_config.json -s BTC -sd 2025 --suite n
 passivbot optimize configs/live/my_config.json -s BTC -sd 2025 -c 4 --suite n
 passivbot live configs/live/my_config.json
@@ -35,19 +36,21 @@ passivbot live configs/live/my_config.json
 - Keep shared execution/risk settings in `live`. Backtests inherit `market_orders_allowed`, `market_order_near_touch_threshold`, `pnls_max_lookback_days`, `fee_pct_fallback`, and `fee_pct_sanity_abs_max` directly from `live`; these fields are not accepted under `backtest`.
 - `live.pnls_max_lookback_days` uses one shared contract across live and backtest: `0` = minimal lookback at that path's native sampling resolution, positive numbers = that many rolling days, and `"all"` = full available history.
 - Keep new configs on the canonical schema. Do not author new configs using deprecated field names.
+- Do not paste old flat v7 trailing-grid fields into a v8 config. Run the migration helper so the fields land under `bot.<side>.strategy.trailing_grid_v7`.
 - Use `coin_overrides` for per-coin exceptions instead of cloning whole configs for minor differences.
 - Leave `logging.persist_to_file = true` for normal live operations so each bot run has a durable logfile under `logs/` and monitor tooling can follow the stable `logs/{user}.log` alias.
 
 ## What The Default Profile Is
 
-The default profile mirrored by `configs/examples/default_trailing_grid_long_npos7.json` is:
+The default profile mirrored by `configs/examples/default_trailing_martingale_long.json` is:
 
-- trailing-grid style configuration
-- long enabled by default with `bot.long.n_positions = 7`
-- short parameters are present, but shorts are disabled by default with `bot.short.total_wallet_exposure_limit = 0.0`
-- `bot.long.total_wallet_exposure_limit = 1.5`
-- HSL present in config but disabled with `hsl_enabled = false`
-- approved-coin universe seeded to the current default large-cap list
+- trailing martingale style configuration
+- long enabled with `bot.long.risk.n_positions = 5`
+- short disabled with `bot.short.risk.total_wallet_exposure_limit = 0`
+- `bot.long.risk.total_wallet_exposure_limit = 1.5`
+- HSL present in config but disabled with `bot.{long,short}.hsl.enabled = false`
+- HSL signal mode set to per-coin slots with `live.hsl_signal_mode = "coin"`
+- approved-coin universe seeded to the current 41-coin default list
 - optimizer backend defaulting to `pymoo`
 
 ## When To Omit A Config Path

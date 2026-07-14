@@ -3,12 +3,17 @@ name = "passivbot_rust"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+default = ["extension-module", "abi3-py312"]
+extension-module = ["pyo3/extension-module"]
+abi3-py312 = ["pyo3/abi3-py312"]
+
 [lib]
 name = "passivbot_rust"
 crate-type = ["cdylib"]
 
 [dependencies]
-pyo3 = { version = "0.21.2", features = ["extension-module"] }
+pyo3 = { version = "0.21.2" }
 ndarray = "0.15.6"
 numpy = "0.21.0"
 memmap = "0.7.0"

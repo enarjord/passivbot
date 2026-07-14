@@ -28,25 +28,30 @@ pub struct ForagerHysteresisState {
 }
 
 mod core {
-    use crate::closes::{
-        calc_closes_long, calc_closes_short, calc_next_close_long, calc_next_close_short,
-    };
     use crate::coin_selection::{
         select_forager_candidates_with_diagnostics, ForagerCandidate, ForagerPositionSide,
         ForagerSelectionConfig, ForagerSelectionError, ForagerSelectionResult,
     };
     use crate::constants::{LONG, SHORT};
     use crate::entries::{
-        calc_entries_long, calc_entries_short, calc_min_entry_qty, calc_next_entry_long,
-        calc_next_entry_short,
+        calc_initial_entry_qty, calc_min_entry_qty, effective_we_excess_allowance_pct,
+        wallet_exposure_limit_with_allowance_from_base,
     };
     use crate::risk::{
-        calc_twel_enforcer_actions, calc_unstucking_action, GateEntriesPosition,
-        TwelEnforcerInputPosition, UnstuckPositionInput,
+        calc_twel_enforcer_actions, calc_unstucking_action_with_position_allowances,
+        GateEntriesPosition, TwelEnforcerInputPosition, UnstuckPositionInput,
+    };
+    use crate::strategies::{
+        generate_orders as generate_strategy_orders, parse_strategy_params, strategy_ema_spans,
+        strategy_entry_retracement_enabled, strategy_entry_volatility_span_hours,
+        strategy_initial_entry_offset, strategy_initial_qty_pct, strategy_needs_log_range_1h,
+        strategy_needs_log_range_1m, strategy_offset_volatility_span_minutes, EmaGateMode,
+        NextStepHint, PeekBehavior, StrategyKind, StrategyParams, StrategyRequest, StrategySide,
     };
     use crate::types::{
         BotParams, BotParamsPair, EMABands, ExchangeParams, OrderBook, OrderType, Position,
-        StateParams, TrailingPriceBundle,
+        RuntimeBudgetState, RuntimeOrderContext, StateParams, TrailingPriceBundle,
+        TwelEnforcerPolicy,
     };
     use crate::utils::{
         calc_new_psize_pprice, calc_order_price_diff_ask, calc_order_price_diff_bid, calc_pnl_long,
@@ -54,6 +59,8 @@ mod core {
         round_dn, round_up,
     };
     use serde::{Deserialize, Serialize};
+    use serde_json::Value;
+    use std::collections::HashSet;
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
     #[serde(rename_all = "snake_case")]
@@ -111,7 +118,7 @@ mod core {
         pub execution_type: ExecutionType,
     }
 
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+    #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
     #[serde(rename_all = "snake_case", deny_unknown_fields)]
     pub enum OrchestratorWarning {
         DisabledPsideHasPosition {
@@ -121,6 +128,15 @@ mod core {
         NonTradableHasPosition {
             symbol_idx: usize,
             pside: PositionSide,
+        },
+        TwelRepairBlockedByLossGate {
+            pside: PositionSide,
+            current_twe: f64,
+            twel_repair_target: f64,
+            policy: TwelEnforcerPolicy,
+            candidate_count: usize,
+            blocked_order_count: usize,
+            projected_twe_after_allowed_reductions: f64,
         },
     }
 
@@ -203,6 +219,14 @@ mod core {
             field: &'static str,
             symbol_idx: Option<usize>,
         },
+        InvalidExchangeParams {
+            symbol_idx: usize,
+            details: String,
+        },
+        InvalidStrategyParams {
+            symbol_idx: usize,
+            details: String,
+        },
         MissingEma {
             symbol_idx: usize,
         },
@@ -274,15 +298,25 @@ mod core {
         pub market_orders_allowed: bool,
         #[serde(default = "default_market_order_near_touch_threshold")]
         pub market_order_near_touch_threshold: f64,
+        /// Synthetic backtest-only market fill slippage used for projected close PnL.
+        /// Live callers intentionally omit this field and use the serde default of 0.0;
+        /// live execution uses current bid/ask plus exchange-side market order behavior.
         #[serde(default)]
         pub market_order_slippage_pct: f64,
         #[serde(default)]
         pub panic_close_market: bool,
+        #[serde(default)]
+        pub auto_unstuck_allowed: Option<bool>,
+        /// Legacy/diagnostic only: the unstuck decision derives its allowance
+        /// internally from realized_pnl_cumsum_max/last (risk.rs). These values
+        /// are consumed solely as the fallback for `auto_unstuck_allowed` when
+        /// that flag is absent; explicit-flag callers may omit them.
+        #[serde(default)]
         pub unstuck_allowance_long: f64,
+        #[serde(default)]
         pub unstuck_allowance_short: f64,
         /// Fraction of peak balance that may be realized as drawdown before lossy closes are blocked.
         /// <=0 blocks all lossy closes; >=1 disables gating.
-        #[serde(default = "default_max_realized_loss_pct")]
         pub max_realized_loss_pct: f64,
         /// Net realized pnl cumsum peak from fill history (statelessly reconstructed).
         #[serde(default)]
@@ -299,14 +333,12 @@ mod core {
         /// When no position exists on either side, the side closer to its EMA entry band wins.
         #[serde(default = "default_hedge_mode")]
         pub hedge_mode: bool,
+        #[serde(default)]
+        pub strategy_kind: StrategyKind,
     }
 
     fn default_hedge_mode() -> bool {
         true
-    }
-
-    fn default_max_realized_loss_pct() -> f64 {
-        1.0
     }
 
     fn default_market_order_near_touch_threshold() -> f64 {
@@ -321,8 +353,16 @@ mod core {
         pub mode: Option<TradingMode>,
         pub position: Position,
         pub trailing: TrailingPriceBundle,
+        #[serde(default)]
+        pub last_increase_fill_timestamp_ms: Option<u64>,
         /// Per-symbol/per-pside params after applying coin_overrides.
         pub bot_params: BotParams,
+        #[serde(default)]
+        pub strategy_params: Option<Value>,
+        #[serde(skip)]
+        pub parsed_strategy_params: Option<crate::strategies::StrategyParams>,
+        #[serde(default)]
+        pub runtime_budget: Option<RuntimeBudgetState>,
     }
 
     #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -352,6 +392,8 @@ mod core {
     #[derive(Debug, Clone, Serialize, Deserialize)]
     #[serde(deny_unknown_fields)]
     pub struct OrchestratorInput {
+        #[serde(default)]
+        pub timestamp_ms: u64,
         /// Hysteresis-snapped balance used for sizing/order-shaping logic.
         pub balance: f64,
         /// True/raw balance used for risk/accounting gates.
@@ -379,6 +421,138 @@ mod core {
         }
     }
 
+    fn validate_account_risk_inputs(input: &OrchestratorInput) -> Result<(), OrchestratorError> {
+        if !(input.balance.is_finite() && input.balance > 0.0) {
+            return Err(OrchestratorError::NonFiniteInput {
+                field: "balance",
+                symbol_idx: None,
+            });
+        }
+        let balance_raw = input_balance_raw(input);
+        if !(balance_raw.is_finite() && balance_raw > 0.0) {
+            return Err(OrchestratorError::NonFiniteInput {
+                field: "balance_raw",
+                symbol_idx: None,
+            });
+        }
+        if !(input.global.max_realized_loss_pct.is_finite()
+            && input.global.max_realized_loss_pct >= 0.0)
+        {
+            return Err(OrchestratorError::NonFiniteInput {
+                field: "global.max_realized_loss_pct",
+                symbol_idx: None,
+            });
+        }
+        if !input.global.realized_pnl_cumsum_max.is_finite() {
+            return Err(OrchestratorError::NonFiniteInput {
+                field: "global.realized_pnl_cumsum_max",
+                symbol_idx: None,
+            });
+        }
+        if !input.global.realized_pnl_cumsum_last.is_finite() {
+            return Err(OrchestratorError::NonFiniteInput {
+                field: "global.realized_pnl_cumsum_last",
+                symbol_idx: None,
+            });
+        }
+        if input.global.realized_pnl_cumsum_max < input.global.realized_pnl_cumsum_last {
+            return Err(OrchestratorError::NonFiniteInput {
+                field: "global.realized_pnl_cumsum_max_lt_last",
+                symbol_idx: None,
+            });
+        }
+        if !(input.global.unstuck_allowance_long.is_finite()
+            && input.global.unstuck_allowance_long >= 0.0)
+        {
+            return Err(OrchestratorError::NonFiniteInput {
+                field: "global.unstuck_allowance_long",
+                symbol_idx: None,
+            });
+        }
+        if !(input.global.unstuck_allowance_short.is_finite()
+            && input.global.unstuck_allowance_short >= 0.0)
+        {
+            return Err(OrchestratorError::NonFiniteInput {
+                field: "global.unstuck_allowance_short",
+                symbol_idx: None,
+            });
+        }
+        Ok(())
+    }
+
+    fn cooldown_delay_ms(cooldown_minutes: f64) -> u64 {
+        if !cooldown_minutes.is_finite() || cooldown_minutes <= 0.0 {
+            0
+        } else {
+            (cooldown_minutes * 60_000.0).ceil() as u64
+        }
+    }
+
+    fn order_increases_position(pside: PositionSide, qty: f64) -> bool {
+        match pside {
+            PositionSide::Long => qty > 0.0,
+            PositionSide::Short => qty < 0.0,
+        }
+    }
+
+    fn add_order_cooldown_active(
+        now_timestamp_ms: u64,
+        last_increase_fill_timestamp_ms: Option<u64>,
+        cooldown_minutes: f64,
+    ) -> bool {
+        if !cooldown_minutes.is_finite() || cooldown_minutes <= 0.0 {
+            return false;
+        }
+        let Some(last_fill_ts) = last_increase_fill_timestamp_ms else {
+            return false;
+        };
+        let until_ms = last_fill_ts.saturating_add(cooldown_delay_ms(cooldown_minutes));
+        now_timestamp_ms < until_ms
+    }
+
+    fn allow_full_entry_ladder_simultaneously(
+        cooldown_minutes: f64,
+        entry_retracement_enabled: bool,
+    ) -> bool {
+        !entry_retracement_enabled && cooldown_minutes.is_finite() && cooldown_minutes == 0.0
+    }
+
+    fn keep_only_first_add_order(orders: &mut Vec<IdealOrder>, pside: PositionSide) {
+        let mut seen_add_order = false;
+        orders.retain(|order| {
+            if !order_increases_position(pside, order.qty) {
+                return true;
+            }
+            if seen_add_order {
+                false
+            } else {
+                seen_add_order = true;
+                true
+            }
+        });
+    }
+
+    fn apply_add_order_gates(
+        orders: &mut Vec<IdealOrder>,
+        pside: PositionSide,
+        now_timestamp_ms: u64,
+        last_increase_fill_timestamp_ms: Option<u64>,
+        cooldown_minutes: f64,
+        entry_retracement_enabled: bool,
+    ) {
+        if add_order_cooldown_active(
+            now_timestamp_ms,
+            last_increase_fill_timestamp_ms,
+            cooldown_minutes,
+        ) {
+            orders.retain(|order| !order_increases_position(pside, order.qty));
+            return;
+        }
+        if !allow_full_entry_ladder_simultaneously(cooldown_minutes, entry_retracement_enabled) {
+            keep_only_first_add_order(orders, pside);
+        }
+    }
+
     pub fn is_close_order_type(order_type: OrderType) -> bool {
         use OrderType::*;
         matches!(
@@ -389,12 +563,14 @@ mod core {
                 | CloseAutoReduceTwelLong
                 | ClosePanicLong
                 | CloseAutoReduceWelLong
+                | CloseEmaAnchorLong
                 | CloseGridShort
                 | CloseTrailingShort
                 | CloseUnstuckShort
                 | CloseAutoReduceTwelShort
                 | ClosePanicShort
                 | CloseAutoReduceWelShort
+                | CloseEmaAnchorShort
         )
     }
 
@@ -403,6 +579,77 @@ mod core {
             order_type,
             OrderType::ClosePanicLong | OrderType::ClosePanicShort
         )
+    }
+
+    fn is_higher_priority_reducer_than_unstuck(order_type: OrderType, pside: PositionSide) -> bool {
+        matches!(
+            (pside, order_type),
+            (PositionSide::Long, OrderType::ClosePanicLong)
+                | (PositionSide::Long, OrderType::CloseAutoReduceTwelLong)
+                | (PositionSide::Long, OrderType::CloseAutoReduceWelLong)
+                | (PositionSide::Short, OrderType::ClosePanicShort)
+                | (PositionSide::Short, OrderType::CloseAutoReduceTwelShort)
+                | (PositionSide::Short, OrderType::CloseAutoReduceWelShort)
+        )
+    }
+
+    fn is_twel_close_order_type(order_type: OrderType, pside: PositionSide) -> bool {
+        matches!(
+            (pside, order_type),
+            (PositionSide::Long, OrderType::CloseAutoReduceTwelLong)
+                | (PositionSide::Short, OrderType::CloseAutoReduceTwelShort)
+        )
+    }
+
+    fn close_reducer_priority(order_type: OrderType, pside: PositionSide) -> Option<u8> {
+        match (pside, order_type) {
+            (PositionSide::Long, OrderType::ClosePanicLong)
+            | (PositionSide::Short, OrderType::ClosePanicShort) => Some(0),
+            (PositionSide::Long, OrderType::CloseAutoReduceTwelLong)
+            | (PositionSide::Long, OrderType::CloseAutoReduceWelLong)
+            | (PositionSide::Short, OrderType::CloseAutoReduceTwelShort)
+            | (PositionSide::Short, OrderType::CloseAutoReduceWelShort) => Some(1),
+            (PositionSide::Long, OrderType::CloseUnstuckLong)
+            | (PositionSide::Short, OrderType::CloseUnstuckShort) => Some(2),
+            _ if is_close_order_type(order_type) => Some(3),
+            _ => None,
+        }
+    }
+
+    fn prune_lower_priority_closes(
+        orders: &mut Vec<IdealOrder>,
+        pside: PositionSide,
+        ob: &OrderBook,
+    ) {
+        let highest = orders
+            .iter()
+            .filter_map(|order| close_reducer_priority(order.order_type, pside))
+            .min();
+        if let Some(priority) = highest {
+            if priority < 3 {
+                orders.retain(|order| {
+                    close_reducer_priority(order.order_type, pside).unwrap_or(3) == priority
+                });
+                orders.sort_by(|a, b| {
+                    let da = order_price_diff_strict(a, ob);
+                    let db = order_price_diff_strict(b, ob);
+                    da.partial_cmp(&db)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                        .then_with(|| a.order_type.id().cmp(&b.order_type.id()))
+                        .then_with(|| {
+                            a.price
+                                .partial_cmp(&b.price)
+                                .unwrap_or(std::cmp::Ordering::Equal)
+                        })
+                        .then_with(|| {
+                            a.qty
+                                .partial_cmp(&b.qty)
+                                .unwrap_or(std::cmp::Ordering::Equal)
+                        })
+                });
+                orders.truncate(1);
+            }
+        }
     }
 
     fn current_market_price(order_book: &OrderBook) -> f64 {
@@ -512,13 +759,14 @@ mod core {
     fn derive_ema_bands(
         symbol_idx: usize,
         emas: &EmaBundle,
-        bot: &BotParams,
+        strategy_params: &crate::strategies::StrategyParams,
     ) -> Result<EMABands, OrchestratorError> {
-        let ema0 = ema_lookup(&emas.m1.close, bot.ema_span_0)
+        let (ema_span_0, ema_span_1) = strategy_ema_spans(strategy_params);
+        let ema0 = ema_lookup(&emas.m1.close, ema_span_0)
             .ok_or(OrchestratorError::MissingEma { symbol_idx })?;
-        let ema1 = ema_lookup(&emas.m1.close, bot.ema_span_1)
+        let ema1 = ema_lookup(&emas.m1.close, ema_span_1)
             .ok_or(OrchestratorError::MissingEma { symbol_idx })?;
-        let ema2_span = (bot.ema_span_0 * bot.ema_span_1).sqrt();
+        let ema2_span = (ema_span_0 * ema_span_1).sqrt();
         let ema2 = ema_lookup(&emas.m1.close, ema2_span)
             .ok_or(OrchestratorError::MissingEma { symbol_idx })?;
         let lower = ema0.min(ema1).min(ema2);
@@ -532,12 +780,17 @@ mod core {
         Ok(EMABands { upper, lower })
     }
 
-    fn derive_entry_volatility_logrange_ema_1h(
+    fn derive_volatility_ema_1h(
         symbol_idx: usize,
         emas: &EmaBundle,
-        bot: &BotParams,
+        strategy_params: &crate::strategies::StrategyParams,
     ) -> Result<f64, OrchestratorError> {
-        let span = bot.entry_volatility_ema_span_hours;
+        if !strategy_needs_log_range_1h(strategy_params) {
+            return Ok(0.0);
+        }
+        let Some(span) = strategy_entry_volatility_span_hours(strategy_params) else {
+            return Ok(0.0);
+        };
         if span <= 0.0 {
             return Ok(0.0);
         }
@@ -545,7 +798,32 @@ mod core {
             .ok_or(OrchestratorError::MissingEma { symbol_idx })?;
         if !(v.is_finite() && v >= 0.0) {
             return Err(OrchestratorError::NonFiniteInput {
-                field: "entry_volatility_logrange_ema_1h",
+                field: "volatility_ema_1h",
+                symbol_idx: Some(symbol_idx),
+            });
+        }
+        Ok(v)
+    }
+
+    fn derive_volatility_ema_1m(
+        symbol_idx: usize,
+        emas: &EmaBundle,
+        strategy_params: &crate::strategies::StrategyParams,
+    ) -> Result<f64, OrchestratorError> {
+        if !strategy_needs_log_range_1m(strategy_params) {
+            return Ok(0.0);
+        }
+        let Some(span) = strategy_offset_volatility_span_minutes(strategy_params) else {
+            return Ok(0.0);
+        };
+        if span <= 0.0 {
+            return Ok(0.0);
+        }
+        let v = ema_lookup(&emas.m1.log_range, span)
+            .ok_or(OrchestratorError::MissingEma { symbol_idx })?;
+        if !(v.is_finite() && v >= 0.0) {
+            return Err(OrchestratorError::NonFiniteInput {
+                field: "volatility_ema_1m",
                 symbol_idx: Some(symbol_idx),
             });
         }
@@ -635,18 +913,139 @@ mod core {
         Ok(value)
     }
 
+    fn fallback_configured_wallet_exposure_limit(bot: &BotParams) -> f64 {
+        if bot.wallet_exposure_limit > 0.0 {
+            bot.wallet_exposure_limit
+        } else if bot.n_positions > 0 {
+            bot.total_wallet_exposure_limit / bot.n_positions as f64
+        } else {
+            0.0
+        }
+    }
+
+    fn resolve_runtime_budget(
+        side: &SymbolSideInput,
+        effective_n_positions: usize,
+    ) -> RuntimeBudgetState {
+        if let Some(runtime_budget) = side.runtime_budget {
+            return runtime_budget;
+        }
+        let configured_wallet_exposure_limit =
+            fallback_configured_wallet_exposure_limit(&side.bot_params);
+        RuntimeBudgetState {
+            configured_wallet_exposure_limit,
+            effective_wallet_exposure_limit: configured_wallet_exposure_limit,
+            configured_n_positions: side.bot_params.n_positions,
+            effective_n_positions,
+        }
+    }
+
+    fn populate_runtime_budget_cache(
+        symbols: &[SymbolInput],
+        effective_n_positions: usize,
+        pside: PositionSide,
+        out: &mut Vec<RuntimeBudgetState>,
+    ) {
+        out.clear();
+        out.reserve(symbols.len());
+        for symbol in symbols {
+            let side = match pside {
+                PositionSide::Long => &symbol.long,
+                PositionSide::Short => &symbol.short,
+            };
+            out.push(resolve_runtime_budget(side, effective_n_positions));
+        }
+    }
+
+    fn cached_strategy_params_for_symbol_side(
+        cache: &mut [CachedSideDerived],
+        symbol_idx: usize,
+        strategy_kind: StrategyKind,
+        strategy_side: StrategySide,
+        side: &SymbolSideInput,
+    ) -> Result<crate::strategies::StrategyParams, OrchestratorError> {
+        if let Some(params) = cache[symbol_idx].strategy_params {
+            return Ok(params);
+        }
+        if let Some(params) = side.parsed_strategy_params {
+            cache[symbol_idx].strategy_params = Some(params);
+            return Ok(params);
+        }
+        let params = parse_strategy_params(
+            strategy_kind,
+            strategy_side,
+            side.strategy_params.as_ref(),
+            &side.bot_params,
+        )
+        .map_err(|details| OrchestratorError::InvalidStrategyParams {
+            symbol_idx,
+            details,
+        })?;
+        cache[symbol_idx].strategy_params = Some(params);
+        Ok(params)
+    }
+
+    fn cached_ema_bands(
+        cache: &mut [CachedSideDerived],
+        symbol_idx: usize,
+        emas: &EmaBundle,
+        strategy_params: &crate::strategies::StrategyParams,
+    ) -> Result<EMABands, OrchestratorError> {
+        if let Some(ema_bands) = cache[symbol_idx].ema_bands {
+            return Ok(ema_bands);
+        }
+        let ema_bands = derive_ema_bands(symbol_idx, emas, strategy_params)?;
+        cache[symbol_idx].ema_bands = Some(ema_bands);
+        Ok(ema_bands)
+    }
+
+    fn cached_volatility_ema_1h(
+        cache: &mut [CachedSideDerived],
+        symbol_idx: usize,
+        emas: &EmaBundle,
+        strategy_params: &crate::strategies::StrategyParams,
+    ) -> Result<f64, OrchestratorError> {
+        if let Some(v) = cache[symbol_idx].volatility_ema_1h {
+            return Ok(v);
+        }
+        let v = derive_volatility_ema_1h(symbol_idx, emas, strategy_params)?;
+        cache[symbol_idx].volatility_ema_1h = Some(v);
+        Ok(v)
+    }
+
+    fn cached_volatility_ema_1m(
+        cache: &mut [CachedSideDerived],
+        symbol_idx: usize,
+        emas: &EmaBundle,
+        strategy_params: &crate::strategies::StrategyParams,
+    ) -> Result<f64, OrchestratorError> {
+        if let Some(v) = cache[symbol_idx].volatility_ema_1m {
+            return Ok(v);
+        }
+        let v = derive_volatility_ema_1m(symbol_idx, emas, strategy_params)?;
+        cache[symbol_idx].volatility_ema_1m = Some(v);
+        Ok(v)
+    }
+
     fn effective_min_cost_is_low_enough(
         balance: f64,
         filter_enabled: bool,
         effective_min_cost: f64,
         bot: &BotParams,
+        runtime_budget: &RuntimeBudgetState,
+        entry_initial_qty_pct: f64,
     ) -> bool {
         if !filter_enabled {
             return true;
         }
-        if let Some((_effective_limit, req)) =
-            min_effective_cost_projection(balance, filter_enabled, effective_min_cost, bot)
-        {
+        if let Some((_effective_limit, req)) = min_effective_cost_projection(
+            balance,
+            filter_enabled,
+            effective_min_cost,
+            bot,
+            runtime_budget,
+            entry_initial_qty_pct,
+        ) {
             req >= effective_min_cost
         } else {
             false
@@ -658,6 +1057,8 @@ mod core {
         filter_enabled: bool,
         effective_min_cost: f64,
         bot: &BotParams,
+        runtime_budget: &RuntimeBudgetState,
+        entry_initial_qty_pct: f64,
     ) -> Option<(f64, f64)> {
         if !filter_enabled {
             return None;
@@ -669,14 +1070,12 @@ mod core {
         {
             return None;
         }
-        let base_limit = bot.wallet_exposure_limit;
-        let allowance_pct = bot.risk_we_excess_allowance_pct;
-        let allowance_multiplier = 1.0 + allowance_pct.max(0.0);
-        let effective_limit = base_limit * allowance_multiplier;
+        let base_limit = runtime_budget.effective_wallet_exposure_limit;
+        let effective_limit = wallet_exposure_limit_with_allowance_from_base(bot, base_limit);
         if !(effective_limit.is_finite() && effective_limit > 0.0) {
             return None;
         }
-        let req = balance * effective_limit * bot.entry_initial_qty_pct;
+        let req = balance * effective_limit * entry_initial_qty_pct;
         if !(req.is_finite() && req > 0.0) {
             return None;
         }
@@ -691,10 +1090,17 @@ mod core {
         effective_min_cost: f64,
         filter_enabled: bool,
         bot: &BotParams,
+        runtime_budget: &RuntimeBudgetState,
+        entry_initial_qty_pct: f64,
     ) {
-        if let Some((effective_limit, projected_initial_cost)) =
-            min_effective_cost_projection(balance, filter_enabled, effective_min_cost, bot)
-        {
+        if let Some((effective_limit, projected_initial_cost)) = min_effective_cost_projection(
+            balance,
+            filter_enabled,
+            effective_min_cost,
+            bot,
+            runtime_budget,
+            entry_initial_qty_pct,
+        ) {
             if projected_initial_cost + 1e-12 < effective_min_cost {
                 diagnostics
                     .min_effective_cost_blocks
@@ -703,7 +1109,7 @@ mod core {
                         pside,
                         balance,
                         effective_limit,
-                        entry_initial_qty_pct: bot.entry_initial_qty_pct,
+                        entry_initial_qty_pct,
                         projected_initial_cost,
                         effective_min_cost,
                     });
@@ -725,17 +1131,6 @@ mod core {
             calc_order_price_diff_bid(order.price, market_price)
         } else {
             calc_order_price_diff_ask(order.price, market_price)
-        }
-    }
-
-    #[inline]
-    fn would_fill_next_candle(next_low: f64, next_high: f64, qty: f64, price: f64) -> bool {
-        if qty > 0.0 {
-            next_low < price
-        } else if qty < 0.0 {
-            next_high > price
-        } else {
-            false
         }
     }
 
@@ -1211,6 +1606,134 @@ mod core {
         }
     }
 
+    fn twel_repair_target(bot: &BotParams) -> Option<f64> {
+        let raw_twel = bot.total_wallet_exposure_limit;
+        let threshold = bot.risk_twel_enforcer_threshold;
+        let target = raw_twel * threshold;
+        if raw_twel > 0.0 && threshold > 0.0 && target.is_finite() {
+            Some(target)
+        } else {
+            None
+        }
+    }
+
+    fn side_twe_after_remaining_twel_closes(
+        input: &OrchestratorInput,
+        per_side: &[Option<PerSymbolOrders>],
+        pside: PositionSide,
+        balance: f64,
+        apply_remaining_twel_closes: bool,
+    ) -> f64 {
+        if !balance.is_finite() || balance <= 0.0 {
+            return 0.0;
+        }
+        let mut twe = 0.0;
+        for s in per_side.iter().filter_map(|v| v.as_ref()) {
+            if s.pos.size == 0.0 {
+                continue;
+            }
+            let Some(sym) = input.symbols.get(s.symbol_idx) else {
+                continue;
+            };
+            let mut abs_size = s.pos.size.abs();
+            if apply_remaining_twel_closes {
+                let close_qty: f64 = s
+                    .closes
+                    .iter()
+                    .filter(|o| is_twel_close_order_type(o.order_type, pside))
+                    .map(|o| o.qty.abs())
+                    .sum();
+                abs_size = (abs_size - close_qty).max(0.0);
+            }
+            let exposure =
+                calc_wallet_exposure(sym.exchange.c_mult, balance, abs_size, s.pos.price);
+            if exposure.is_finite() {
+                twe += exposure;
+            }
+        }
+        twe
+    }
+
+    fn push_twel_loss_gate_warning_for_side(
+        input: &OrchestratorInput,
+        per_side: &[Option<PerSymbolOrders>],
+        pside: PositionSide,
+        candidate_count: usize,
+        diagnostics: &mut OrchestratorDiagnostics,
+    ) {
+        if candidate_count == 0 {
+            return;
+        }
+        let blocked_order_count = diagnostics
+            .loss_gate_blocks
+            .iter()
+            .filter(|b| is_twel_close_order_type(b.order_type, pside))
+            .count();
+        if blocked_order_count == 0 {
+            return;
+        }
+        let bot = match pside {
+            PositionSide::Long => &input.global.global_bot_params.long,
+            PositionSide::Short => &input.global.global_bot_params.short,
+        };
+        let Some(target) = twel_repair_target(bot) else {
+            return;
+        };
+        let balance_raw = input_balance_raw(input);
+        let current_twe =
+            side_twe_after_remaining_twel_closes(input, per_side, pside, balance_raw, false);
+        let projected_twe_after_allowed_reductions =
+            side_twe_after_remaining_twel_closes(input, per_side, pside, balance_raw, true);
+        if current_twe <= target + 1e-9 || projected_twe_after_allowed_reductions <= target + 1e-9 {
+            return;
+        }
+        log::warn!(
+            "TWEL repair blocked by realized-loss gate: pside={:?} current_twe={:.6} target={:.6} policy={:?} candidates={} blocked={} projected_twe={:.6}",
+            pside,
+            current_twe,
+            target,
+            bot.risk_twel_enforcer_policy,
+            candidate_count,
+            blocked_order_count,
+            projected_twe_after_allowed_reductions,
+        );
+        diagnostics
+            .warnings
+            .push(OrchestratorWarning::TwelRepairBlockedByLossGate {
+                pside,
+                current_twe,
+                twel_repair_target: target,
+                policy: bot.risk_twel_enforcer_policy,
+                candidate_count,
+                blocked_order_count,
+                projected_twe_after_allowed_reductions,
+            });
+    }
+
+    fn push_twel_loss_gate_warnings(
+        input: &OrchestratorInput,
+        per_long: &[Option<PerSymbolOrders>],
+        per_short: &[Option<PerSymbolOrders>],
+        twel_candidate_count_long: usize,
+        twel_candidate_count_short: usize,
+        diagnostics: &mut OrchestratorDiagnostics,
+    ) {
+        push_twel_loss_gate_warning_for_side(
+            input,
+            per_long,
+            PositionSide::Long,
+            twel_candidate_count_long,
+            diagnostics,
+        );
+        push_twel_loss_gate_warning_for_side(
+            input,
+            per_short,
+            PositionSide::Short,
+            twel_candidate_count_short,
+            diagnostics,
+        );
+    }
+
     fn compute_effective_n_positions(
         n_positions_cfg: usize,
         eligible_len: usize,
@@ -1218,6 +1741,17 @@ mod core {
     ) -> usize {
         let base = n_positions_cfg.min(eligible_len);
         base.max(forced_normals_len)
+    }
+
+    fn twel_repair_effective_n_positions(
+        effective_n_positions: usize,
+        open_position_count: usize,
+    ) -> usize {
+        if effective_n_positions > 0 {
+            effective_n_positions
+        } else {
+            open_position_count
+        }
     }
 
     fn fill_forced_normal_indices(
@@ -1254,11 +1788,14 @@ mod core {
     fn build_forager_candidates_into(
         symbols: &[SymbolInput],
         pside: PositionSide,
+        strategy_kind: StrategyKind,
         hedge_mode: bool,
         filter_enabled: bool,
         balance: f64,
+        runtime_budgets: &[RuntimeBudgetState],
         active_flags: Option<&[bool]>,
         cfg: &ForagerSelectionConfig,
+        derived_cache: &mut [CachedSideDerived],
         out: &mut Vec<ForagerCandidate>,
         diagnostics: &mut OrchestratorDiagnostics,
     ) -> Result<(), OrchestratorError> {
@@ -1275,7 +1812,20 @@ mod core {
         out.clear();
         out.reserve(symbols.len());
         for s in symbols {
-            let side = symbol_side_input(s, pside);
+            let side = match pside {
+                PositionSide::Long => &s.long,
+                PositionSide::Short => &s.short,
+            };
+            let strategy_params = cached_strategy_params_for_symbol_side(
+                derived_cache,
+                s.symbol_idx,
+                strategy_kind,
+                match pside {
+                    PositionSide::Long => StrategySide::Long,
+                    PositionSide::Short => StrategySide::Short,
+                },
+                side,
+            )?;
             // For selection of coins to occupy available slots for initial entries:
             // - We rank across all coins (including those with positions), matching legacy.
             // - We exclude modes which categorically block initial entries when `psize == 0.0`.
@@ -1290,6 +1840,8 @@ mod core {
                 filter_enabled,
                 s.effective_min_cost,
                 &side.bot_params,
+                &runtime_budgets[s.symbol_idx],
+                strategy_initial_qty_pct(&strategy_params),
             );
             let enabled = symbol_side_eligible(s, pside)
                 && !already_active
@@ -1311,6 +1863,8 @@ mod core {
                         s.effective_min_cost,
                         filter_enabled,
                         &side.bot_params,
+                        &runtime_budgets[s.symbol_idx],
+                        strategy_initial_qty_pct(&strategy_params),
                     );
                 }
                 out.push(ForagerCandidate {
@@ -1330,11 +1884,10 @@ mod core {
                 require_forager_input(
                     s.symbol_idx,
                     "forager_volume_score",
-                    ema_lookup(&s.emas.m1.volume, side.bot_params.filter_volume_ema_span).ok_or(
-                        OrchestratorError::MissingEma {
+                    ema_lookup(&s.emas.m1.volume, side.bot_params.filter_volume_ema_span_1m)
+                        .ok_or(OrchestratorError::MissingEma {
                             symbol_idx: s.symbol_idx,
-                        },
-                    )?,
+                        })?,
                 )?
             } else {
                 0.0
@@ -1345,7 +1898,7 @@ mod core {
                     "forager_volatility_score",
                     ema_lookup(
                         &s.emas.m1.log_range,
-                        side.bot_params.filter_volatility_ema_span,
+                        side.bot_params.filter_volatility_ema_span_1m,
                     )
                     .ok_or(OrchestratorError::MissingEma {
                         symbol_idx: s.symbol_idx,
@@ -1356,7 +1909,12 @@ mod core {
             };
             let (bid, ask, ema_lower, ema_upper, entry_initial_ema_dist) = if ema_readiness_required
             {
-                let ema_bands = match derive_ema_bands(s.symbol_idx, &s.emas, &side.bot_params) {
+                let ema_bands = match cached_ema_bands(
+                    derived_cache,
+                    s.symbol_idx,
+                    &s.emas,
+                    &strategy_params,
+                ) {
                     Ok(v) => v,
                     Err(OrchestratorError::MissingEma { .. })
                     | Err(OrchestratorError::NonFiniteInput {
@@ -1377,10 +1935,11 @@ mod core {
                     }
                     Err(err) => return Err(err),
                 };
+                let entry_initial_ema_dist = strategy_initial_entry_offset(&strategy_params);
                 let entry_initial_ema_dist = match require_forager_input(
                     s.symbol_idx,
                     "entry_initial_ema_dist",
-                    side.bot_params.entry_initial_ema_dist,
+                    entry_initial_ema_dist,
                 ) {
                     Ok(v) => v,
                     Err(_) => {
@@ -1476,11 +2035,88 @@ mod core {
         }
     }
 
+    fn strategy_order_generation_needs_ema_for_symbol_side(
+        params: &StrategyParams,
+        pside: PositionSide,
+        wants_entries: bool,
+        wants_closes: bool,
+        position: &Position,
+        exchange: &ExchangeParams,
+        order_book: &OrderBook,
+        bot_params: &BotParams,
+        runtime_budget: RuntimeBudgetState,
+        balance: f64,
+    ) -> bool {
+        match params {
+            StrategyParams::TrailingMartingale(params) => {
+                if !wants_entries {
+                    return false;
+                }
+                match params.entry.ema_gate_mode {
+                    EmaGateMode::Disabled => false,
+                    EmaGateMode::All => true,
+                    EmaGateMode::Initial => true,
+                    EmaGateMode::Reentry => {
+                        if position.size == 0.0 {
+                            return false;
+                        }
+                        let initial_price = match pside {
+                            PositionSide::Long => order_book.bid,
+                            PositionSide::Short => order_book.ask,
+                        };
+                        if !initial_price.is_finite() || initial_price <= exchange.price_step {
+                            return false;
+                        }
+                        let runtime_context = RuntimeOrderContext {
+                            effective_wallet_exposure_limit: runtime_budget
+                                .effective_wallet_exposure_limit,
+                        };
+                        let initial_qty = calc_initial_entry_qty(
+                            exchange,
+                            bot_params,
+                            &runtime_context,
+                            &params.entry,
+                            balance,
+                            initial_price,
+                        )
+                        .abs();
+                        !initial_qty.is_finite()
+                            || initial_qty <= 0.0
+                            || position.size.abs() >= initial_qty * 0.8
+                    }
+                }
+            }
+            StrategyParams::EmaAnchor(_) => wants_entries || wants_closes,
+            StrategyParams::TrailingGridV7(_) => wants_entries || wants_closes,
+        }
+    }
+
     fn effective_mode(mode: Option<TradingMode>, has_pos: bool) -> TradingMode {
         match mode {
             Some(TradingMode::GracefulStop) if has_pos => TradingMode::Normal,
             Some(m) => m,
             None => TradingMode::Normal,
+        }
+    }
+
+    fn strategy_kind_for_symbol_side(global: &OrchestratorGlobal) -> StrategyKind {
+        global.strategy_kind
+    }
+
+    fn append_strategy_orders_as_ideal(
+        target: &mut Vec<IdealOrder>,
+        orders: Vec<crate::types::Order>,
+        symbol_idx: usize,
+        pside: PositionSide,
+    ) {
+        for order in orders {
+            target.push(IdealOrder {
+                symbol_idx,
+                pside,
+                qty: order.qty,
+                price: order.price,
+                order_type: order.order_type,
+            });
         }
     }
 
@@ -1491,6 +2127,14 @@ mod core {
         closes: Vec<IdealOrder>,
         pos: Position,
         mode: TradingMode,
+    }
+
+    #[derive(Default, Clone)]
+    struct CachedSideDerived {
+        strategy_params: Option<crate::strategies::StrategyParams>,
+        ema_bands: Option<EMABands>,
+        volatility_ema_1h: Option<f64>,
+        volatility_ema_1m: Option<f64>,
     }
 
     /// Reusable buffers for performance-critical backtest loops.
@@ -1519,6 +2163,10 @@ mod core {
         /// One-way mode: per-symbol flags to block initial entries
         one_way_block_initial_long: Vec<bool>,
         one_way_block_initial_short: Vec<bool>,
+        runtime_budget_long: Vec<RuntimeBudgetState>,
+        runtime_budget_short: Vec<RuntimeBudgetState>,
+        derived_long: Vec<CachedSideDerived>,
+        derived_short: Vec<CachedSideDerived>,
     }
 
     fn gate_entries_by_twel_deterministic(
@@ -1806,18 +2454,7 @@ mod core {
         input: &OrchestratorInput,
         workspace: &mut OrchestratorWorkspace,
     ) -> Result<OrchestratorOutput, OrchestratorError> {
-        if !input.balance.is_finite() {
-            return Err(OrchestratorError::NonFiniteInput {
-                field: "balance",
-                symbol_idx: None,
-            });
-        }
-        if input.balance_raw.is_infinite() {
-            return Err(OrchestratorError::NonFiniteInput {
-                field: "balance_raw",
-                symbol_idx: None,
-            });
-        }
+        validate_account_risk_inputs(input)?;
         let mut diagnostics = OrchestratorDiagnostics::default();
 
         // Validate invariants:
@@ -1838,6 +2475,12 @@ mod core {
                 return Err(OrchestratorError::NonContiguousSymbolIdx {
                     pos,
                     symbol_idx: s.symbol_idx,
+                });
+            }
+            if let Err(details) = s.exchange.validate_required() {
+                return Err(OrchestratorError::InvalidExchangeParams {
+                    symbol_idx: s.symbol_idx,
+                    details,
                 });
             }
         }
@@ -1879,8 +2522,35 @@ mod core {
             workspace.forced_short.len(),
         );
 
+        populate_runtime_budget_cache(
+            &input.symbols,
+            enp_long,
+            PositionSide::Long,
+            &mut workspace.runtime_budget_long,
+        );
+        populate_runtime_budget_cache(
+            &input.symbols,
+            enp_short,
+            PositionSide::Short,
+            &mut workspace.runtime_budget_short,
+        );
+        workspace
+            .derived_long
+            .resize_with(n_symbols, CachedSideDerived::default);
+        workspace
+            .derived_short
+            .resize_with(n_symbols, CachedSideDerived::default);
+        for derived in workspace.derived_long.iter_mut() {
+            *derived = CachedSideDerived::default();
+        }
+        for derived in workspace.derived_short.iter_mut() {
+            *derived = CachedSideDerived::default();
+        }
+
         // Active sets per pside:
-        // - Always include all current positions (even if > n_positions), so we keep managing them.
+        // - Always include all bot-managed current positions (even if > n_positions), so we keep
+        //   managing them.
+        // - Manual positions are outside bot scope and must not consume active slots.
         // - Only when there are open slots (`positions < effective_n_positions`), add forced normals
         //   then preferred coins until reaching the cap.
         workspace.actives_long.resize(n_symbols, false);
@@ -1894,7 +2564,10 @@ mod core {
 
         let actives_long = &mut workspace.actives_long;
         let mut actives_long_count: usize = 0;
-        for s in input.symbols.iter().filter(|s| s.long.position.size != 0.0) {
+        for s in input.symbols.iter().filter(|s| {
+            s.long.position.size != 0.0
+                && !matches!(effective_mode(s.long.mode, true), TradingMode::Manual)
+        }) {
             if !actives_long[s.symbol_idx] {
                 actives_long[s.symbol_idx] = true;
                 actives_long_count += 1;
@@ -1943,11 +2616,14 @@ mod core {
                 build_forager_candidates_into(
                     &input.symbols,
                     PositionSide::Long,
+                    input.global.strategy_kind,
                     input.global.hedge_mode,
                     input.global.filter_by_min_effective_cost,
                     input.balance,
+                    &workspace.runtime_budget_long,
                     Some(actives_long),
                     &cfg,
+                    &mut workspace.derived_long,
                     &mut workspace.features,
                     &mut diagnostics,
                 )?;
@@ -1974,11 +2650,10 @@ mod core {
 
         let actives_short = &mut workspace.actives_short;
         let mut actives_short_count: usize = 0;
-        for s in input
-            .symbols
-            .iter()
-            .filter(|s| s.short.position.size != 0.0)
-        {
+        for s in input.symbols.iter().filter(|s| {
+            s.short.position.size != 0.0
+                && !matches!(effective_mode(s.short.mode, true), TradingMode::Manual)
+        }) {
             if !actives_short[s.symbol_idx] {
                 actives_short[s.symbol_idx] = true;
                 actives_short_count += 1;
@@ -2027,11 +2702,14 @@ mod core {
                 build_forager_candidates_into(
                     &input.symbols,
                     PositionSide::Short,
+                    input.global.strategy_kind,
                     input.global.hedge_mode,
                     input.global.filter_by_min_effective_cost,
                     input.balance,
+                    &workspace.runtime_budget_short,
                     Some(actives_short),
                     &cfg,
+                    &mut workspace.derived_short,
                     &mut workspace.features,
                     &mut diagnostics,
                 )?;
@@ -2113,27 +2791,46 @@ mod core {
                     }
 
                     // Both sides are eligible - choose based on EMA band distance.
-                    let ema_bands_long = derive_ema_bands(idx, &s.emas, &s.long.bot_params);
-                    let ema_bands_short = derive_ema_bands(idx, &s.emas, &s.short.bot_params);
+                    let strategy_params_long = cached_strategy_params_for_symbol_side(
+                        &mut workspace.derived_long,
+                        idx,
+                        input.global.strategy_kind,
+                        StrategySide::Long,
+                        &s.long,
+                    );
+                    let strategy_params_short = cached_strategy_params_for_symbol_side(
+                        &mut workspace.derived_short,
+                        idx,
+                        input.global.strategy_kind,
+                        StrategySide::Short,
+                        &s.short,
+                    );
+                    let params_long = strategy_params_long?;
+                    let params_short = strategy_params_short?;
+                    let bands_long =
+                        cached_ema_bands(&mut workspace.derived_long, idx, &s.emas, &params_long)?;
+                    let bands_short = cached_ema_bands(
+                        &mut workspace.derived_short,
+                        idx,
+                        &s.emas,
+                        &params_short,
+                    )?;
 
-                    if let (Ok(bands_long), Ok(bands_short)) = (ema_bands_long, ema_bands_short) {
-                        let entry_threshold_long =
-                            bands_long.lower * (1.0 - s.long.bot_params.entry_initial_ema_dist);
-                        let entry_threshold_short =
-                            bands_short.upper * (1.0 + s.short.bot_params.entry_initial_ema_dist);
+                    let entry_threshold_long =
+                        bands_long.lower * (1.0 - strategy_initial_entry_offset(&params_long));
+                    let entry_threshold_short =
+                        bands_short.upper * (1.0 + strategy_initial_entry_offset(&params_short));
 
-                        let dist_long = entry_threshold_long / s.order_book.bid - 1.0;
-                        let dist_short = 1.0 - entry_threshold_short / s.order_book.ask;
+                    let dist_long = entry_threshold_long / s.order_book.bid - 1.0;
+                    let dist_short = 1.0 - entry_threshold_short / s.order_book.ask;
 
-                        // Block the side that's farther from triggering (smaller distance).
-                        // Tie-break: favor long.
-                        if dist_long >= dist_short {
-                            workspace.one_way_block_initial_short[idx] = true;
-                        } else {
-                            workspace.one_way_block_initial_long[idx] = true;
-                        }
+                    // Block the side that's farther from triggering (smaller distance).
+                    // Tie-break: favor long.
+                    if dist_long >= dist_short {
+                        workspace.one_way_block_initial_short[idx] = true;
+                    } else {
+                        workspace.one_way_block_initial_long[idx] = true;
                     }
-                    // If EMA bands can't be derived, allow both (no blocking)
                 }
             }
         }
@@ -2176,6 +2873,13 @@ mod core {
                 } else {
                     mode
                 };
+                let strategy_params_for_min_cost = cached_strategy_params_for_symbol_side(
+                    &mut workspace.derived_long,
+                    s.symbol_idx,
+                    input.global.strategy_kind,
+                    StrategySide::Long,
+                    &s.long,
+                )?;
 
                 let allow_initial = symbol_side_eligible(s, PositionSide::Long)
                     && actives_long[s.symbol_idx]
@@ -2185,6 +2889,8 @@ mod core {
                         input.global.filter_by_min_effective_cost,
                         s.effective_min_cost,
                         &s.long.bot_params,
+                        &workspace.runtime_budget_long[s.symbol_idx],
+                        strategy_initial_qty_pct(&strategy_params_for_min_cost),
                     );
 
                 let mut entries: Vec<IdealOrder> = Vec::new();
@@ -2204,214 +2910,98 @@ mod core {
                     let wants_entries = should_generate_entries(mode, has_pos, allow_initial);
                     let wants_closes = should_generate_closes(mode, has_pos);
                     if wants_entries || wants_closes {
-                        let ema_bands =
-                            derive_ema_bands(s.symbol_idx, &s.emas, &s.long.bot_params)?;
-                        let entry_volatility_logrange_ema_1h =
-                            derive_entry_volatility_logrange_ema_1h(
+                        let strategy_params = cached_strategy_params_for_symbol_side(
+                            &mut workspace.derived_long,
+                            s.symbol_idx,
+                            input.global.strategy_kind,
+                            StrategySide::Long,
+                            &s.long,
+                        )?;
+                        let runtime_budget = workspace.runtime_budget_long[s.symbol_idx];
+                        let ema_bands = if strategy_order_generation_needs_ema_for_symbol_side(
+                            &strategy_params,
+                            PositionSide::Long,
+                            wants_entries,
+                            wants_closes,
+                            &s.long.position,
+                            &s.exchange,
+                            &s.order_book,
+                            &s.long.bot_params,
+                            runtime_budget,
+                            input.balance,
+                        ) {
+                            cached_ema_bands(
+                                &mut workspace.derived_long,
                                 s.symbol_idx,
                                 &s.emas,
-                                &s.long.bot_params,
-                            )?;
+                                &strategy_params,
+                            )?
+                        } else {
+                            EMABands::default()
+                        };
+                        let volatility_ema_1h = cached_volatility_ema_1h(
+                            &mut workspace.derived_long,
+                            s.symbol_idx,
+                            &s.emas,
+                            &strategy_params,
+                        )?;
+                        let volatility_ema_1m = cached_volatility_ema_1m(
+                            &mut workspace.derived_long,
+                            s.symbol_idx,
+                            &s.emas,
+                            &strategy_params,
+                        )?;
                         let state = StateParams {
                             balance: input.balance,
-                            order_book: s.order_book.clone(),
+                            order_book: s.order_book,
                             ema_bands,
-                            entry_volatility_logrange_ema_1h,
+                            volatility_ema_1m,
+                            volatility_ema_1h,
                         };
-
-                        if wants_entries {
-                            if let Some(hints) = input.peek_hints.as_ref() {
-                                let expand_entries = hints.expand_grid_long.contains(&s.symbol_idx);
-                                if expand_entries {
-                                    for e in calc_entries_long(
-                                        &s.exchange,
-                                        &state,
-                                        &s.long.bot_params,
-                                        &s.long.position,
-                                        &s.long.trailing,
-                                    ) {
-                                        if e.qty != 0.0 {
-                                            entries.push(IdealOrder {
-                                                symbol_idx: s.symbol_idx,
-                                                pside: PositionSide::Long,
-                                                qty: e.qty,
-                                                price: e.price,
-                                                order_type: e.order_type,
-                                            });
-                                        }
-                                    }
-                                } else {
-                                    let e = calc_next_entry_long(
-                                        &s.exchange,
-                                        &state,
-                                        &s.long.bot_params,
-                                        &s.long.position,
-                                        &s.long.trailing,
-                                    );
-                                    if e.qty != 0.0 {
-                                        entries.push(IdealOrder {
-                                            symbol_idx: s.symbol_idx,
-                                            pside: PositionSide::Long,
-                                            qty: e.qty,
-                                            price: e.price,
-                                            order_type: e.order_type,
-                                        });
-                                    }
-                                }
-                            } else if let Some(nc) = s.next_candle.as_ref() {
-                                let e = calc_next_entry_long(
-                                    &s.exchange,
-                                    &state,
-                                    &s.long.bot_params,
-                                    &s.long.position,
-                                    &s.long.trailing,
-                                );
-                                let expand_entries = nc.tradable
-                                    && would_fill_next_candle(nc.low, nc.high, e.qty, e.price);
-                                if expand_entries {
-                                    for e in calc_entries_long(
-                                        &s.exchange,
-                                        &state,
-                                        &s.long.bot_params,
-                                        &s.long.position,
-                                        &s.long.trailing,
-                                    ) {
-                                        if e.qty != 0.0 {
-                                            entries.push(IdealOrder {
-                                                symbol_idx: s.symbol_idx,
-                                                pside: PositionSide::Long,
-                                                qty: e.qty,
-                                                price: e.price,
-                                                order_type: e.order_type,
-                                            });
-                                        }
-                                    }
-                                } else if e.qty != 0.0 {
-                                    entries.push(IdealOrder {
-                                        symbol_idx: s.symbol_idx,
-                                        pside: PositionSide::Long,
-                                        qty: e.qty,
-                                        price: e.price,
-                                        order_type: e.order_type,
-                                    });
-                                }
-                            } else {
-                                for e in calc_entries_long(
-                                    &s.exchange,
-                                    &state,
-                                    &s.long.bot_params,
-                                    &s.long.position,
-                                    &s.long.trailing,
-                                ) {
-                                    if e.qty != 0.0 {
-                                        entries.push(IdealOrder {
-                                            symbol_idx: s.symbol_idx,
-                                            pside: PositionSide::Long,
-                                            qty: e.qty,
-                                            price: e.price,
-                                            order_type: e.order_type,
-                                        });
-                                    }
-                                }
-                            }
-                        }
-
-                        if wants_closes {
-                            if let Some(hints) = input.peek_hints.as_ref() {
-                                let expand_closes = hints.expand_close_long.contains(&s.symbol_idx);
-                                if expand_closes {
-                                    for c in calc_closes_long(
-                                        &s.exchange,
-                                        &state,
-                                        &s.long.bot_params,
-                                        &s.long.position,
-                                        &s.long.trailing,
-                                    ) {
-                                        if c.qty != 0.0 {
-                                            closes.push(IdealOrder {
-                                                symbol_idx: s.symbol_idx,
-                                                pside: PositionSide::Long,
-                                                qty: c.qty,
-                                                price: c.price,
-                                                order_type: c.order_type,
-                                            });
-                                        }
-                                    }
-                                } else {
-                                    let c = calc_next_close_long(
-                                        &s.exchange,
-                                        &state,
-                                        &s.long.bot_params,
-                                        &s.long.position,
-                                        &s.long.trailing,
-                                    );
-                                    if c.qty != 0.0 {
-                                        closes.push(IdealOrder {
-                                            symbol_idx: s.symbol_idx,
-                                            pside: PositionSide::Long,
-                                            qty: c.qty,
-                                            price: c.price,
-                                            order_type: c.order_type,
-                                        });
-                                    }
-                                }
-                            } else if let Some(nc) = s.next_candle.as_ref() {
-                                let c = calc_next_close_long(
-                                    &s.exchange,
-                                    &state,
-                                    &s.long.bot_params,
-                                    &s.long.position,
-                                    &s.long.trailing,
-                                );
-                                let expand_closes = nc.tradable
-                                    && would_fill_next_candle(nc.low, nc.high, c.qty, c.price);
-                                if expand_closes {
-                                    for c in calc_closes_long(
-                                        &s.exchange,
-                                        &state,
-                                        &s.long.bot_params,
-                                        &s.long.position,
-                                        &s.long.trailing,
-                                    ) {
-                                        if c.qty != 0.0 {
-                                            closes.push(IdealOrder {
-                                                symbol_idx: s.symbol_idx,
-                                                pside: PositionSide::Long,
-                                                qty: c.qty,
-                                                price: c.price,
-                                                order_type: c.order_type,
-                                            });
-                                        }
-                                    }
-                                } else if c.qty != 0.0 {
-                                    closes.push(IdealOrder {
-                                        symbol_idx: s.symbol_idx,
-                                        pside: PositionSide::Long,
-                                        qty: c.qty,
-                                        price: c.price,
-                                        order_type: c.order_type,
-                                    });
-                                }
-                            } else {
-                                for c in calc_closes_long(
-                                    &s.exchange,
-                                    &state,
-                                    &s.long.bot_params,
-                                    &s.long.position,
-                                    &s.long.trailing,
-                                ) {
-                                    if c.qty != 0.0 {
-                                        closes.push(IdealOrder {
-                                            symbol_idx: s.symbol_idx,
-                                            pside: PositionSide::Long,
-                                            qty: c.qty,
-                                            price: c.price,
-                                            order_type: c.order_type,
-                                        });
-                                    }
-                                }
-                            }
-                        }
+                        let generated = generate_strategy_orders(
+                            strategy_kind_for_symbol_side(&input.global),
+                            StrategySide::Long,
+                            StrategyRequest {
+                                wants_entries,
+                                wants_closes,
+                                exchange: &s.exchange,
+                                state: &state,
+                                bot_params: &s.long.bot_params,
+                                strategy_params: &strategy_params,
+                                runtime_budget,
+                                position: &s.long.position,
+                                trailing: &s.long.trailing,
+                                next_candle: s.next_candle.as_ref().map(|nc| NextStepHint {
+                                    low: nc.low,
+                                    high: nc.high,
+                                    tradable: nc.tradable,
+                                }),
+                                peek: input.peek_hints.as_ref().map(|hints| PeekBehavior {
+                                    expand_entries: hints.expand_grid_long.contains(&s.symbol_idx),
+                                    expand_closes: hints.expand_close_long.contains(&s.symbol_idx),
+                                }),
+                            },
+                        );
+                        append_strategy_orders_as_ideal(
+                            &mut entries,
+                            generated.entries,
+                            s.symbol_idx,
+                            PositionSide::Long,
+                        );
+                        apply_add_order_gates(
+                            &mut entries,
+                            PositionSide::Long,
+                            input.timestamp_ms,
+                            s.long.last_increase_fill_timestamp_ms,
+                            s.long.bot_params.risk_entry_cooldown_minutes,
+                            strategy_entry_retracement_enabled(&strategy_params),
+                        );
+                        append_strategy_orders_as_ideal(
+                            &mut closes,
+                            generated.closes,
+                            s.symbol_idx,
+                            PositionSide::Long,
+                        );
                     }
                 }
 
@@ -2449,6 +3039,13 @@ mod core {
                 } else {
                     mode
                 };
+                let strategy_params_for_min_cost = cached_strategy_params_for_symbol_side(
+                    &mut workspace.derived_short,
+                    s.symbol_idx,
+                    input.global.strategy_kind,
+                    StrategySide::Short,
+                    &s.short,
+                )?;
 
                 let allow_initial = symbol_side_eligible(s, PositionSide::Short)
                     && actives_short[s.symbol_idx]
@@ -2458,6 +3055,8 @@ mod core {
                         input.global.filter_by_min_effective_cost,
                         s.effective_min_cost,
                         &s.short.bot_params,
+                        &workspace.runtime_budget_short[s.symbol_idx],
+                        strategy_initial_qty_pct(&strategy_params_for_min_cost),
                     );
 
                 let mut entries: Vec<IdealOrder> = Vec::new();
@@ -2477,216 +3076,98 @@ mod core {
                     let wants_entries = should_generate_entries(mode, has_pos, allow_initial);
                     let wants_closes = should_generate_closes(mode, has_pos);
                     if wants_entries || wants_closes {
-                        let ema_bands =
-                            derive_ema_bands(s.symbol_idx, &s.emas, &s.short.bot_params)?;
-                        let entry_volatility_logrange_ema_1h =
-                            derive_entry_volatility_logrange_ema_1h(
+                        let strategy_params = cached_strategy_params_for_symbol_side(
+                            &mut workspace.derived_short,
+                            s.symbol_idx,
+                            input.global.strategy_kind,
+                            StrategySide::Short,
+                            &s.short,
+                        )?;
+                        let runtime_budget = workspace.runtime_budget_short[s.symbol_idx];
+                        let ema_bands = if strategy_order_generation_needs_ema_for_symbol_side(
+                            &strategy_params,
+                            PositionSide::Short,
+                            wants_entries,
+                            wants_closes,
+                            &s.short.position,
+                            &s.exchange,
+                            &s.order_book,
+                            &s.short.bot_params,
+                            runtime_budget,
+                            input.balance,
+                        ) {
+                            cached_ema_bands(
+                                &mut workspace.derived_short,
                                 s.symbol_idx,
                                 &s.emas,
-                                &s.short.bot_params,
-                            )?;
+                                &strategy_params,
+                            )?
+                        } else {
+                            EMABands::default()
+                        };
+                        let volatility_ema_1h = cached_volatility_ema_1h(
+                            &mut workspace.derived_short,
+                            s.symbol_idx,
+                            &s.emas,
+                            &strategy_params,
+                        )?;
+                        let volatility_ema_1m = cached_volatility_ema_1m(
+                            &mut workspace.derived_short,
+                            s.symbol_idx,
+                            &s.emas,
+                            &strategy_params,
+                        )?;
                         let state = StateParams {
                             balance: input.balance,
-                            order_book: s.order_book.clone(),
+                            order_book: s.order_book,
                             ema_bands,
-                            entry_volatility_logrange_ema_1h,
+                            volatility_ema_1m,
+                            volatility_ema_1h,
                         };
-
-                        if wants_entries {
-                            if let Some(hints) = input.peek_hints.as_ref() {
-                                let expand_entries =
-                                    hints.expand_grid_short.contains(&s.symbol_idx);
-                                if expand_entries {
-                                    for e in calc_entries_short(
-                                        &s.exchange,
-                                        &state,
-                                        &s.short.bot_params,
-                                        &s.short.position,
-                                        &s.short.trailing,
-                                    ) {
-                                        if e.qty != 0.0 {
-                                            entries.push(IdealOrder {
-                                                symbol_idx: s.symbol_idx,
-                                                pside: PositionSide::Short,
-                                                qty: e.qty,
-                                                price: e.price,
-                                                order_type: e.order_type,
-                                            });
-                                        }
-                                    }
-                                } else {
-                                    let e = calc_next_entry_short(
-                                        &s.exchange,
-                                        &state,
-                                        &s.short.bot_params,
-                                        &s.short.position,
-                                        &s.short.trailing,
-                                    );
-                                    if e.qty != 0.0 {
-                                        entries.push(IdealOrder {
-                                            symbol_idx: s.symbol_idx,
-                                            pside: PositionSide::Short,
-                                            qty: e.qty,
-                                            price: e.price,
-                                            order_type: e.order_type,
-                                        });
-                                    }
-                                }
-                            } else if let Some(nc) = s.next_candle.as_ref() {
-                                let e = calc_next_entry_short(
-                                    &s.exchange,
-                                    &state,
-                                    &s.short.bot_params,
-                                    &s.short.position,
-                                    &s.short.trailing,
-                                );
-                                let expand_entries = nc.tradable
-                                    && would_fill_next_candle(nc.low, nc.high, e.qty, e.price);
-                                if expand_entries {
-                                    for e in calc_entries_short(
-                                        &s.exchange,
-                                        &state,
-                                        &s.short.bot_params,
-                                        &s.short.position,
-                                        &s.short.trailing,
-                                    ) {
-                                        if e.qty != 0.0 {
-                                            entries.push(IdealOrder {
-                                                symbol_idx: s.symbol_idx,
-                                                pside: PositionSide::Short,
-                                                qty: e.qty,
-                                                price: e.price,
-                                                order_type: e.order_type,
-                                            });
-                                        }
-                                    }
-                                } else if e.qty != 0.0 {
-                                    entries.push(IdealOrder {
-                                        symbol_idx: s.symbol_idx,
-                                        pside: PositionSide::Short,
-                                        qty: e.qty,
-                                        price: e.price,
-                                        order_type: e.order_type,
-                                    });
-                                }
-                            } else {
-                                for e in calc_entries_short(
-                                    &s.exchange,
-                                    &state,
-                                    &s.short.bot_params,
-                                    &s.short.position,
-                                    &s.short.trailing,
-                                ) {
-                                    if e.qty != 0.0 {
-                                        entries.push(IdealOrder {
-                                            symbol_idx: s.symbol_idx,
-                                            pside: PositionSide::Short,
-                                            qty: e.qty,
-                                            price: e.price,
-                                            order_type: e.order_type,
-                                        });
-                                    }
-                                }
-                            }
-                        }
-
-                        if wants_closes {
-                            if let Some(hints) = input.peek_hints.as_ref() {
-                                let expand_closes =
-                                    hints.expand_close_short.contains(&s.symbol_idx);
-                                if expand_closes {
-                                    for c in calc_closes_short(
-                                        &s.exchange,
-                                        &state,
-                                        &s.short.bot_params,
-                                        &s.short.position,
-                                        &s.short.trailing,
-                                    ) {
-                                        if c.qty != 0.0 {
-                                            closes.push(IdealOrder {
-                                                symbol_idx: s.symbol_idx,
-                                                pside: PositionSide::Short,
-                                                qty: c.qty,
-                                                price: c.price,
-                                                order_type: c.order_type,
-                                            });
-                                        }
-                                    }
-                                } else {
-                                    let c = calc_next_close_short(
-                                        &s.exchange,
-                                        &state,
-                                        &s.short.bot_params,
-                                        &s.short.position,
-                                        &s.short.trailing,
-                                    );
-                                    if c.qty != 0.0 {
-                                        closes.push(IdealOrder {
-                                            symbol_idx: s.symbol_idx,
-                                            pside: PositionSide::Short,
-                                            qty: c.qty,
-                                            price: c.price,
-                                            order_type: c.order_type,
-                                        });
-                                    }
-                                }
-                            } else if let Some(nc) = s.next_candle.as_ref() {
-                                let c = calc_next_close_short(
-                                    &s.exchange,
-                                    &state,
-                                    &s.short.bot_params,
-                                    &s.short.position,
-                                    &s.short.trailing,
-                                );
-                                let expand_closes = nc.tradable
-                                    && would_fill_next_candle(nc.low, nc.high, c.qty, c.price);
-                                if expand_closes {
-                                    for c in calc_closes_short(
-                                        &s.exchange,
-                                        &state,
-                                        &s.short.bot_params,
-                                        &s.short.position,
-                                        &s.short.trailing,
-                                    ) {
-                                        if c.qty != 0.0 {
-                                            closes.push(IdealOrder {
-                                                symbol_idx: s.symbol_idx,
-                                                pside: PositionSide::Short,
-                                                qty: c.qty,
-                                                price: c.price,
-                                                order_type: c.order_type,
-                                            });
-                                        }
-                                    }
-                                } else if c.qty != 0.0 {
-                                    closes.push(IdealOrder {
-                                        symbol_idx: s.symbol_idx,
-                                        pside: PositionSide::Short,
-                                        qty: c.qty,
-                                        price: c.price,
-                                        order_type: c.order_type,
-                                    });
-                                }
-                            } else {
-                                for c in calc_closes_short(
-                                    &s.exchange,
-                                    &state,
-                                    &s.short.bot_params,
-                                    &s.short.position,
-                                    &s.short.trailing,
-                                ) {
-                                    if c.qty != 0.0 {
-                                        closes.push(IdealOrder {
-                                            symbol_idx: s.symbol_idx,
-                                            pside: PositionSide::Short,
-                                            qty: c.qty,
-                                            price: c.price,
-                                            order_type: c.order_type,
-                                        });
-                                    }
-                                }
-                            }
-                        }
+                        let generated = generate_strategy_orders(
+                            strategy_kind_for_symbol_side(&input.global),
+                            StrategySide::Short,
+                            StrategyRequest {
+                                wants_entries,
+                                wants_closes,
+                                exchange: &s.exchange,
+                                state: &state,
+                                bot_params: &s.short.bot_params,
+                                strategy_params: &strategy_params,
+                                runtime_budget,
+                                position: &s.short.position,
+                                trailing: &s.short.trailing,
+                                next_candle: s.next_candle.as_ref().map(|nc| NextStepHint {
+                                    low: nc.low,
+                                    high: nc.high,
+                                    tradable: nc.tradable,
+                                }),
+                                peek: input.peek_hints.as_ref().map(|hints| PeekBehavior {
+                                    expand_entries: hints.expand_grid_short.contains(&s.symbol_idx),
+                                    expand_closes: hints.expand_close_short.contains(&s.symbol_idx),
+                                }),
+                            },
+                        );
+                        append_strategy_orders_as_ideal(
+                            &mut entries,
+                            generated.entries,
+                            s.symbol_idx,
+                            PositionSide::Short,
+                        );
+                        apply_add_order_gates(
+                            &mut entries,
+                            PositionSide::Short,
+                            input.timestamp_ms,
+                            s.short.last_increase_fill_timestamp_ms,
+                            s.short.bot_params.risk_entry_cooldown_minutes,
+                            strategy_entry_retracement_enabled(&strategy_params),
+                        );
+                        append_strategy_orders_as_ideal(
+                            &mut closes,
+                            generated.closes,
+                            s.symbol_idx,
+                            PositionSide::Short,
+                        );
                     }
                 }
 
@@ -2708,23 +3189,47 @@ mod core {
             }
             let sym = &input.symbols[s.symbol_idx];
             let bot = &sym.long.bot_params;
-            let enabled = bot.unstuck_loss_allowance_pct > 0.0
+            let runtime_budget = workspace.runtime_budget_long[s.symbol_idx];
+            let enabled = bot.unstuck_enabled
+                && bot.unstuck_loss_allowance_pct > 0.0
                 && bot.unstuck_close_pct > 0.0
                 && bot.unstuck_threshold > 0.0;
             if !enabled {
                 continue;
             }
-            let ema_bands = derive_ema_bands(s.symbol_idx, &sym.emas, bot)?;
+            let ema_bands = if bot.unstuck_ema_gating_enabled {
+                let strategy_params = cached_strategy_params_for_symbol_side(
+                    &mut workspace.derived_long,
+                    s.symbol_idx,
+                    input.global.strategy_kind,
+                    StrategySide::Long,
+                    &sym.long,
+                )?;
+                cached_ema_bands(
+                    &mut workspace.derived_long,
+                    s.symbol_idx,
+                    &sym.emas,
+                    &strategy_params,
+                )?
+            } else {
+                EMABands::default()
+            };
             workspace.unstuck_inputs.push(UnstuckPositionInput {
                 idx: s.symbol_idx,
                 side: LONG,
                 position_size: s.pos.size,
                 position_price: s.pos.price,
-                wallet_exposure_limit: bot.wallet_exposure_limit,
-                risk_we_excess_allowance_pct: bot.risk_we_excess_allowance_pct,
+                wallet_exposure_limit: runtime_budget.effective_wallet_exposure_limit,
+                effective_we_excess_allowance_pct: effective_we_excess_allowance_pct(
+                    bot,
+                    runtime_budget.effective_wallet_exposure_limit,
+                ),
                 unstuck_threshold: bot.unstuck_threshold,
                 unstuck_close_pct: bot.unstuck_close_pct,
+                unstuck_ema_gating_enabled: bot.unstuck_ema_gating_enabled,
                 unstuck_ema_dist: bot.unstuck_ema_dist,
+                unstuck_loss_allowance_pct: bot.unstuck_loss_allowance_pct,
+                total_wallet_exposure_limit: bot.total_wallet_exposure_limit,
                 ema_band_upper: ema_bands.upper,
                 ema_band_lower: ema_bands.lower,
                 current_price: sym.order_book.ask,
@@ -2741,23 +3246,47 @@ mod core {
             }
             let sym = &input.symbols[s.symbol_idx];
             let bot = &sym.short.bot_params;
-            let enabled = bot.unstuck_loss_allowance_pct > 0.0
+            let runtime_budget = workspace.runtime_budget_short[s.symbol_idx];
+            let enabled = bot.unstuck_enabled
+                && bot.unstuck_loss_allowance_pct > 0.0
                 && bot.unstuck_close_pct > 0.0
                 && bot.unstuck_threshold > 0.0;
             if !enabled {
                 continue;
             }
-            let ema_bands = derive_ema_bands(s.symbol_idx, &sym.emas, bot)?;
+            let ema_bands = if bot.unstuck_ema_gating_enabled {
+                let strategy_params = cached_strategy_params_for_symbol_side(
+                    &mut workspace.derived_short,
+                    s.symbol_idx,
+                    input.global.strategy_kind,
+                    StrategySide::Short,
+                    &sym.short,
+                )?;
+                cached_ema_bands(
+                    &mut workspace.derived_short,
+                    s.symbol_idx,
+                    &sym.emas,
+                    &strategy_params,
+                )?
+            } else {
+                EMABands::default()
+            };
             workspace.unstuck_inputs.push(UnstuckPositionInput {
                 idx: s.symbol_idx,
                 side: SHORT,
                 position_size: s.pos.size,
                 position_price: s.pos.price,
-                wallet_exposure_limit: bot.wallet_exposure_limit,
-                risk_we_excess_allowance_pct: bot.risk_we_excess_allowance_pct,
+                wallet_exposure_limit: runtime_budget.effective_wallet_exposure_limit,
+                effective_we_excess_allowance_pct: effective_we_excess_allowance_pct(
+                    bot,
+                    runtime_budget.effective_wallet_exposure_limit,
+                ),
                 unstuck_threshold: bot.unstuck_threshold,
                 unstuck_close_pct: bot.unstuck_close_pct,
+                unstuck_ema_gating_enabled: bot.unstuck_ema_gating_enabled,
                 unstuck_ema_dist: bot.unstuck_ema_dist,
+                unstuck_loss_allowance_pct: bot.unstuck_loss_allowance_pct,
+                total_wallet_exposure_limit: bot.total_wallet_exposure_limit,
                 ema_band_upper: ema_bands.upper,
                 ema_band_lower: ema_bands.lower,
                 current_price: sym.order_book.bid,
@@ -2768,59 +3297,81 @@ mod core {
                 c_mult: sym.exchange.c_mult,
             });
         }
-        if let Some((idx, side, order)) = calc_unstucking_action(
-            input_balance_raw(input),
-            input.global.unstuck_allowance_long,
-            input.global.unstuck_allowance_short,
-            &workspace.unstuck_inputs,
-        ) {
-            let ideal = IdealOrder {
-                symbol_idx: idx,
-                pside: if side == LONG {
-                    PositionSide::Long
-                } else {
-                    PositionSide::Short
-                },
-                qty: order.qty,
-                price: order.price,
-                order_type: order.order_type,
-            };
-            match ideal.pside {
-                PositionSide::Long => {
-                    if let Some(s) = per_long.get_mut(idx).and_then(|v| v.as_mut()) {
-                        s.closes.push(ideal);
+        let auto_unstuck_allowed = input.global.auto_unstuck_allowed.unwrap_or(
+            input.global.unstuck_allowance_long > 0.0 || input.global.unstuck_allowance_short > 0.0,
+        );
+        if auto_unstuck_allowed {
+            if let Some((idx, side, order)) = calc_unstucking_action_with_position_allowances(
+                input_balance_raw(input),
+                input.global.realized_pnl_cumsum_max,
+                input.global.realized_pnl_cumsum_last,
+                &workspace.unstuck_inputs,
+            ) {
+                let ideal = IdealOrder {
+                    symbol_idx: idx,
+                    pside: if side == LONG {
+                        PositionSide::Long
+                    } else {
+                        PositionSide::Short
+                    },
+                    qty: order.qty,
+                    price: order.price,
+                    order_type: order.order_type,
+                };
+                match ideal.pside {
+                    PositionSide::Long => {
+                        if let Some(s) = per_long.get_mut(idx).and_then(|v| v.as_mut()) {
+                            if !s.closes.iter().any(|o| {
+                                is_higher_priority_reducer_than_unstuck(
+                                    o.order_type,
+                                    PositionSide::Long,
+                                )
+                            }) {
+                                s.closes.push(ideal);
+                            }
+                        }
                     }
-                }
-                PositionSide::Short => {
-                    if let Some(s) = per_short.get_mut(idx).and_then(|v| v.as_mut()) {
-                        s.closes.push(ideal);
+                    PositionSide::Short => {
+                        if let Some(s) = per_short.get_mut(idx).and_then(|v| v.as_mut()) {
+                            if !s.closes.iter().any(|o| {
+                                is_higher_priority_reducer_than_unstuck(
+                                    o.order_type,
+                                    PositionSide::Short,
+                                )
+                            }) {
+                                s.closes.push(ideal);
+                            }
+                        }
                     }
                 }
             }
         }
 
         // TWEL enforcer: add auto-reduce closes in addition to normal closes.
-        if enabled_long {
+        let mut twel_selected_long: HashSet<usize> = HashSet::new();
+        let mut twel_selected_short: HashSet<usize> = HashSet::new();
+        if enabled_long
+            && input
+                .global
+                .global_bot_params
+                .long
+                .risk_twel_enforcer_enabled
+        {
             workspace.twel_positions.clear();
             for s in per_long.iter().filter_map(|v| v.as_ref()) {
-                if matches!(s.mode, TradingMode::Manual | TradingMode::Panic) || s.pos.size == 0.0 {
-                    continue;
-                }
-                // Skip TWEL enforcer for positions already running WEL auto-reduce.
-                if s.closes
-                    .iter()
-                    .any(|o| o.order_type == OrderType::CloseAutoReduceWelLong)
-                {
+                if s.pos.size == 0.0 {
                     continue;
                 }
                 let sym = &input.symbols[s.symbol_idx];
-                let bot = &sym.long.bot_params;
                 workspace.twel_positions.push(TwelEnforcerInputPosition {
                     idx: s.symbol_idx,
                     position_size: s.pos.size,
                     position_price: s.pos.price,
                     market_price: sym.order_book.bid,
-                    base_wallet_exposure_limit: bot.wallet_exposure_limit,
+                    is_managed_candidate: !matches!(
+                        s.mode,
+                        TradingMode::Manual | TradingMode::Panic
+                    ),
                     c_mult: sym.exchange.c_mult,
                     qty_step: sym.exchange.qty_step,
                     price_step: sym.exchange.price_step,
@@ -2828,6 +3379,8 @@ mod core {
                     min_cost: sym.exchange.min_cost,
                 });
             }
+            let twel_effective_n_positions =
+                twel_repair_effective_n_positions(enp_long, workspace.twel_positions.len());
             let actions = calc_twel_enforcer_actions(
                 LONG,
                 input
@@ -2840,13 +3393,24 @@ mod core {
                     .global_bot_params
                     .long
                     .total_wallet_exposure_limit,
-                enp_long,
+                twel_effective_n_positions,
                 input_balance_raw(input),
                 &workspace.twel_positions,
+                input
+                    .global
+                    .global_bot_params
+                    .long
+                    .risk_twel_enforcer_policy,
                 None,
             );
             for (idx, order) in actions {
                 if let Some(s) = per_long.get_mut(idx).and_then(|v| v.as_mut()) {
+                    s.closes.retain(|o| {
+                        !matches!(
+                            o.order_type,
+                            OrderType::CloseAutoReduceWelLong | OrderType::CloseUnstuckLong
+                        )
+                    });
                     s.closes.push(IdealOrder {
                         symbol_idx: idx,
                         pside: PositionSide::Long,
@@ -2854,29 +3418,32 @@ mod core {
                         price: order.price,
                         order_type: order.order_type,
                     });
+                    twel_selected_long.insert(idx);
                 }
             }
         }
-        if enabled_short {
+        if enabled_short
+            && input
+                .global
+                .global_bot_params
+                .short
+                .risk_twel_enforcer_enabled
+        {
             workspace.twel_positions.clear();
             for s in per_short.iter().filter_map(|v| v.as_ref()) {
-                if matches!(s.mode, TradingMode::Manual | TradingMode::Panic) || s.pos.size == 0.0 {
-                    continue;
-                }
-                if s.closes
-                    .iter()
-                    .any(|o| o.order_type == OrderType::CloseAutoReduceWelShort)
-                {
+                if s.pos.size == 0.0 {
                     continue;
                 }
                 let sym = &input.symbols[s.symbol_idx];
-                let bot = &sym.short.bot_params;
                 workspace.twel_positions.push(TwelEnforcerInputPosition {
                     idx: s.symbol_idx,
                     position_size: s.pos.size,
                     position_price: s.pos.price,
                     market_price: sym.order_book.ask,
-                    base_wallet_exposure_limit: bot.wallet_exposure_limit,
+                    is_managed_candidate: !matches!(
+                        s.mode,
+                        TradingMode::Manual | TradingMode::Panic
+                    ),
                     c_mult: sym.exchange.c_mult,
                     qty_step: sym.exchange.qty_step,
                     price_step: sym.exchange.price_step,
@@ -2884,6 +3451,8 @@ mod core {
                     min_cost: sym.exchange.min_cost,
                 });
             }
+            let twel_effective_n_positions =
+                twel_repair_effective_n_positions(enp_short, workspace.twel_positions.len());
             let actions = calc_twel_enforcer_actions(
                 SHORT,
                 input
@@ -2896,13 +3465,24 @@ mod core {
                     .global_bot_params
                     .short
                     .total_wallet_exposure_limit,
-                enp_short,
+                twel_effective_n_positions,
                 input_balance_raw(input),
                 &workspace.twel_positions,
+                input
+                    .global
+                    .global_bot_params
+                    .short
+                    .risk_twel_enforcer_policy,
                 None,
             );
             for (idx, order) in actions {
                 if let Some(s) = per_short.get_mut(idx).and_then(|v| v.as_mut()) {
+                    s.closes.retain(|o| {
+                        !matches!(
+                            o.order_type,
+                            OrderType::CloseAutoReduceWelShort | OrderType::CloseUnstuckShort
+                        )
+                    });
                     s.closes.push(IdealOrder {
                         symbol_idx: idx,
                         pside: PositionSide::Short,
@@ -2910,13 +3490,18 @@ mod core {
                         price: order.price,
                         order_type: order.order_type,
                     });
+                    twel_selected_short.insert(idx);
                 }
             }
         }
 
+        let twel_candidate_count_long = twel_selected_long.len();
+        let twel_candidate_count_short = twel_selected_short.len();
+
         // Trim closes per symbol to position size (furthest-first).
         for s in per_long.iter_mut().filter_map(|v| v.as_mut()) {
             let sym = &input.symbols[s.symbol_idx];
+            prune_lower_priority_closes(&mut s.closes, PositionSide::Long, &sym.order_book);
             trim_closes_to_position(
                 PositionSide::Long,
                 &mut s.closes,
@@ -2927,6 +3512,7 @@ mod core {
         }
         for s in per_short.iter_mut().filter_map(|v| v.as_mut()) {
             let sym = &input.symbols[s.symbol_idx];
+            prune_lower_priority_closes(&mut s.closes, PositionSide::Short, &sym.order_book);
             trim_closes_to_position(
                 PositionSide::Short,
                 &mut s.closes,
@@ -2938,43 +3524,72 @@ mod core {
 
         // Global realized-loss gate for close orders (all close types except panic).
         gate_lossy_closes_by_peak_balance(input, per_long, per_short, &mut diagnostics);
+        push_twel_loss_gate_warnings(
+            input,
+            per_long,
+            per_short,
+            twel_candidate_count_long,
+            twel_candidate_count_short,
+            &mut diagnostics,
+        );
 
         // Portfolio TWEL gating of entries per pside (reuse workspace buffers).
         workspace.gate_positions_long.clear();
         workspace.gate_positions_short.clear();
-        for s in input.symbols.iter() {
-            if s.long.position.size != 0.0 {
+        for s in per_long.iter().filter_map(|v| v.as_ref()) {
+            if s.pos.size != 0.0 {
+                let sym = &input.symbols[s.symbol_idx];
                 workspace.gate_positions_long.push(GateEntriesPosition {
                     idx: s.symbol_idx,
-                    position_size: s.long.position.size,
-                    position_price: s.long.position.price,
-                    c_mult: s.exchange.c_mult,
+                    position_size: s.pos.size,
+                    position_price: s.pos.price,
+                    c_mult: sym.exchange.c_mult,
                 });
             }
-            if s.short.position.size != 0.0 {
+        }
+        for s in per_short.iter().filter_map(|v| v.as_ref()) {
+            if s.pos.size != 0.0 {
+                let sym = &input.symbols[s.symbol_idx];
                 workspace.gate_positions_short.push(GateEntriesPosition {
                     idx: s.symbol_idx,
-                    position_size: s.short.position.size,
-                    position_price: s.short.position.price,
-                    c_mult: s.exchange.c_mult,
+                    position_size: s.pos.size,
+                    position_price: s.pos.price,
+                    c_mult: sym.exchange.c_mult,
                 });
             }
         }
 
-        if enabled_long {
+        if enabled_long
+            && input
+                .global
+                .global_bot_params
+                .long
+                .risk_twel_entry_gate_enabled
+        {
             workspace.all_entries.clear();
             for s in per_long.iter_mut().filter_map(|v| v.as_mut()) {
                 workspace.all_entries.append(&mut s.entries);
             }
+            let raw_twel = input
+                .global
+                .global_bot_params
+                .long
+                .total_wallet_exposure_limit
+                .max(0.0);
+            let threshold = input
+                .global
+                .global_bot_params
+                .long
+                .risk_twel_enforcer_threshold;
+            let twel_entry_cap = if threshold.is_finite() && threshold > 0.0 {
+                raw_twel.min(raw_twel * threshold)
+            } else {
+                raw_twel
+            };
             gate_entries_by_twel_deterministic(
                 PositionSide::Long,
                 input.balance,
-                input
-                    .global
-                    .global_bot_params
-                    .long
-                    .total_wallet_exposure_limit
-                    .max(0.0),
+                twel_entry_cap,
                 &workspace.gate_positions_long,
                 &mut workspace.all_entries,
                 &input.symbols,
@@ -2989,26 +3604,43 @@ mod core {
                     s.entries.push(e);
                 }
             }
-        } else {
+        } else if !enabled_long {
             for s in per_long.iter_mut().filter_map(|v| v.as_mut()) {
                 s.entries.clear();
             }
         }
 
-        if enabled_short {
+        if enabled_short
+            && input
+                .global
+                .global_bot_params
+                .short
+                .risk_twel_entry_gate_enabled
+        {
             workspace.all_entries.clear();
             for s in per_short.iter_mut().filter_map(|v| v.as_mut()) {
                 workspace.all_entries.append(&mut s.entries);
             }
+            let raw_twel = input
+                .global
+                .global_bot_params
+                .short
+                .total_wallet_exposure_limit
+                .max(0.0);
+            let threshold = input
+                .global
+                .global_bot_params
+                .short
+                .risk_twel_enforcer_threshold;
+            let twel_entry_cap = if threshold.is_finite() && threshold > 0.0 {
+                raw_twel.min(raw_twel * threshold)
+            } else {
+                raw_twel
+            };
             gate_entries_by_twel_deterministic(
                 PositionSide::Short,
                 input.balance,
-                input
-                    .global
-                    .global_bot_params
-                    .short
-                    .total_wallet_exposure_limit
-                    .max(0.0),
+                twel_entry_cap,
                 &workspace.gate_positions_short,
                 &mut workspace.all_entries,
                 &input.symbols,
@@ -3023,7 +3655,7 @@ mod core {
                     s.entries.push(e);
                 }
             }
-        } else {
+        } else if !enabled_short {
             for s in per_short.iter_mut().filter_map(|v| v.as_mut()) {
                 s.entries.clear();
             }
@@ -3139,6 +3771,11 @@ mod core {
                         input.global.filter_by_min_effective_cost,
                         s.effective_min_cost,
                         &s.long.bot_params,
+                        &workspace.runtime_budget_long[s.symbol_idx],
+                        workspace.derived_long[s.symbol_idx]
+                            .strategy_params
+                            .map(|params| strategy_initial_qty_pct(&params))
+                            .unwrap_or(s.long.bot_params.entry_initial_qty_pct),
                     );
                 if symbol_side_eligible(s, PositionSide::Long)
                     && workspace.actives_long[s.symbol_idx]
@@ -3154,6 +3791,11 @@ mod core {
                         s.effective_min_cost,
                         input.global.filter_by_min_effective_cost,
                         &s.long.bot_params,
+                        &workspace.runtime_budget_long[s.symbol_idx],
+                        workspace.derived_long[s.symbol_idx]
+                            .strategy_params
+                            .map(|params| strategy_initial_qty_pct(&params))
+                            .unwrap_or(s.long.bot_params.entry_initial_qty_pct),
                     );
                 }
                 let short_allow_initial = symbol_side_eligible(s, PositionSide::Short)
@@ -3164,6 +3806,11 @@ mod core {
                         input.global.filter_by_min_effective_cost,
                         s.effective_min_cost,
                         &s.short.bot_params,
+                        &workspace.runtime_budget_short[s.symbol_idx],
+                        workspace.derived_short[s.symbol_idx]
+                            .strategy_params
+                            .map(|params| strategy_initial_qty_pct(&params))
+                            .unwrap_or(s.short.bot_params.entry_initial_qty_pct),
                     );
                 if symbol_side_eligible(s, PositionSide::Short)
                     && workspace.actives_short[s.symbol_idx]
@@ -3179,6 +3826,11 @@ mod core {
                         s.effective_min_cost,
                         input.global.filter_by_min_effective_cost,
                         &s.short.bot_params,
+                        &workspace.runtime_budget_short[s.symbol_idx],
+                        workspace.derived_short[s.symbol_idx]
+                            .strategy_params
+                            .map(|params| strategy_initial_qty_pct(&params))
+                            .unwrap_or(s.short.bot_params.entry_initial_qty_pct),
                     );
                 }
                 SymbolStateDiagnostic {
@@ -3213,6 +3865,41 @@ mod core {
         use crate::orchestrator::EntryPeekHints;
         use std::collections::HashSet;
 
+        fn tm_params_for_test(
+            bot_params: &BotParams,
+        ) -> crate::strategies::TrailingMartingaleParams {
+            crate::strategies::TrailingMartingaleParams {
+                ema_span_0: bot_params.ema_span_0,
+                ema_span_1: bot_params.ema_span_1,
+                volatility_ema_span_1h: bot_params.entry_volatility_ema_span_1h,
+                volatility_ema_span_1m: bot_params.entry_volatility_ema_span_1m,
+                entry: crate::strategies::TrailingMartingaleEntryParams {
+                    double_down_factor: bot_params.entry_grid_double_down_factor,
+                    ema_gate_mode: crate::strategies::EmaGateMode::Initial,
+                    initial_ema_dist: bot_params.entry_initial_ema_dist,
+                    initial_qty_pct: bot_params.entry_initial_qty_pct,
+                    threshold_base_pct: bot_params.entry_grid_spacing_pct,
+                    threshold_we_weight: bot_params.entry_we_weight,
+                    threshold_volatility_1h_weight: bot_params.entry_weight_volatility_1h,
+                    threshold_volatility_1m_weight: bot_params.entry_weight_volatility_1m,
+                    retracement_base_pct: bot_params.entry_trailing_retracement_pct,
+                    retracement_we_weight: bot_params.entry_we_weight,
+                    retracement_volatility_1h_weight: bot_params.entry_weight_volatility_1h,
+                    retracement_volatility_1m_weight: bot_params.entry_weight_volatility_1m,
+                },
+                close: crate::strategies::TrailingMartingaleCloseParams {
+                    qty_pct: bot_params.close_grid_qty_pct,
+                    threshold_base_pct: bot_params.close_trailing_threshold_pct,
+                    threshold_volatility_1h_weight: bot_params.close_weight_volatility_1h,
+                    threshold_volatility_1m_weight: bot_params.close_weight_volatility_1m,
+                    retracement_base_pct: bot_params.close_trailing_retracement_pct,
+                    retracement_volatility_1h_weight: bot_params.close_weight_volatility_1h,
+                    retracement_volatility_1m_weight: bot_params.close_weight_volatility_1m,
+                    ..Default::default()
+                },
+            }
+        }
+
         fn make_basic_symbol(idx: usize) -> SymbolInput {
             let mut emas = EmaBundle::default();
             emas.m1.close.push((10.0_f64, 100.0));
@@ -3227,9 +3914,9 @@ mod core {
             let mut bp = BotParams::default();
             bp.ema_span_0 = 10.0;
             bp.ema_span_1 = 20.0;
-            bp.entry_volatility_ema_span_hours = 1.0;
-            bp.filter_volume_ema_span = 10.0;
-            bp.filter_volatility_ema_span = 10.0;
+            bp.entry_volatility_ema_span_1h = 1.0;
+            bp.filter_volume_ema_span_1m = 10.0;
+            bp.filter_volatility_ema_span_1m = 10.0;
             bp.total_wallet_exposure_limit = 1.0;
             bp.n_positions = 1;
             bp.wallet_exposure_limit = 1.0;
@@ -3258,14 +3945,170 @@ mod core {
                     position: Position::default(),
                     trailing: TrailingPriceBundle::default(),
                     bot_params: bp.clone(),
+                    strategy_params: None,
+                    parsed_strategy_params: None,
+                    last_increase_fill_timestamp_ms: None,
+                    runtime_budget: None,
                 },
                 short: SymbolSideInput {
                     mode: None,
                     position: Position::default(),
                     trailing: TrailingPriceBundle::default(),
                     bot_params: bp,
+                    strategy_params: None,
+                    parsed_strategy_params: None,
+                    last_increase_fill_timestamp_ms: None,
+                    runtime_budget: None,
                 },
             }
+        }
+
+        fn sync_trailing_martingale_strategy_params(symbol: &mut SymbolInput) {
+            let long_params = tm_params_for_test(&symbol.long.bot_params);
+            symbol.long.strategy_params = Some(long_params.to_value());
+            symbol.long.parsed_strategy_params = Some(
+                crate::strategies::StrategyParams::TrailingMartingale(long_params),
+            );
+
+            let short_params = tm_params_for_test(&symbol.short.bot_params);
+            symbol.short.strategy_params = Some(short_params.to_value());
+            symbol.short.parsed_strategy_params = Some(
+                crate::strategies::StrategyParams::TrailingMartingale(short_params),
+            );
+        }
+
+        fn compute_ideal_orders_for_test(
+            input: &OrchestratorInput,
+        ) -> Result<OrchestratorOutput, OrchestratorError> {
+            let mut synced = input.clone();
+            for symbol in &mut synced.symbols {
+                sync_trailing_martingale_strategy_params(symbol);
+            }
+            super::compute_ideal_orders(&synced)
+        }
+
+        fn normalize_twel_gate_orders(orders: &[IdealOrder]) -> Vec<(usize, i64, i64, u16)> {
+            orders
+                .iter()
+                .map(|o| {
+                    (
+                        o.symbol_idx,
+                        (o.qty * 1_000_000.0).round() as i64,
+                        (o.price * 1_000_000.0).round() as i64,
+                        o.order_type.id(),
+                    )
+                })
+                .collect()
+        }
+
+        fn production_twel_gate_for_test(
+            pside: PositionSide,
+            balance: f64,
+            total_wallet_exposure_limit: f64,
+            positions: &[GateEntriesPosition],
+            entries: &[IdealOrder],
+            symbols: &[SymbolInput],
+        ) -> Vec<(usize, i64, i64, u16)> {
+            let mut entries = entries.to_vec();
+            let mut current_positions: Vec<Option<(f64, f64, f64)>> = Vec::new();
+            let mut scratch: Vec<Option<(f64, f64, f64, f64)>> = Vec::new();
+            let mut keep: Vec<u8> = Vec::new();
+            let mut qty_by_order_idx: Vec<f64> = Vec::new();
+            let mut out: Vec<IdealOrder> = Vec::new();
+            gate_entries_by_twel_deterministic(
+                pside,
+                balance,
+                total_wallet_exposure_limit,
+                positions,
+                &mut entries,
+                symbols,
+                &mut current_positions,
+                &mut scratch,
+                &mut keep,
+                &mut qty_by_order_idx,
+                &mut out,
+            );
+            normalize_twel_gate_orders(&entries)
+        }
+
+        fn reference_twel_gate_for_test(
+            pside: PositionSide,
+            balance: f64,
+            total_wallet_exposure_limit: f64,
+            positions: &[GateEntriesPosition],
+            entries: &[IdealOrder],
+            symbols: &[SymbolInput],
+        ) -> Vec<(usize, i64, i64, u16)> {
+            let candidates: Vec<crate::risk::GateEntriesCandidate> = entries
+                .iter()
+                .map(|entry| {
+                    let symbol = &symbols[entry.symbol_idx];
+                    crate::risk::GateEntriesCandidate {
+                        idx: entry.symbol_idx,
+                        qty: entry.qty.abs(),
+                        price: entry.price,
+                        qty_step: symbol.exchange.qty_step,
+                        min_qty: symbol.exchange.min_qty,
+                        min_cost: symbol.exchange.min_cost,
+                        c_mult: symbol.exchange.c_mult,
+                        market_price: match pside {
+                            PositionSide::Long => symbol.order_book.bid,
+                            PositionSide::Short => symbol.order_book.ask,
+                        },
+                        order_type: entry.order_type,
+                    }
+                })
+                .collect();
+            let signed_orders: Vec<IdealOrder> = crate::risk::gate_entries_by_twel(
+                pside.to_pside_int(),
+                balance,
+                total_wallet_exposure_limit,
+                positions,
+                &candidates,
+            )
+            .into_iter()
+            .map(|decision| IdealOrder {
+                symbol_idx: decision.idx,
+                pside,
+                qty: match pside {
+                    PositionSide::Long => decision.qty.abs(),
+                    PositionSide::Short => -decision.qty.abs(),
+                },
+                price: decision.price,
+                order_type: decision.order_type,
+            })
+            .collect();
+            normalize_twel_gate_orders(&signed_orders)
+        }
+
+        fn assert_twel_gate_matches_reference(
+            pside: PositionSide,
+            balance: f64,
+            total_wallet_exposure_limit: f64,
+            positions: &[GateEntriesPosition],
+            entries: &[IdealOrder],
+            symbols: &[SymbolInput],
+        ) {
+            let production = production_twel_gate_for_test(
+                pside,
+                balance,
+                total_wallet_exposure_limit,
+                positions,
+                entries,
+                symbols,
+            );
+            let reference = reference_twel_gate_for_test(
+                pside,
+                balance,
+                total_wallet_exposure_limit,
+                positions,
+                entries,
+                symbols,
+            );
+            assert_eq!(
+                production, reference,
+                "production TWEL gate drifted from the exposed reference helper"
+            );
         }
 
         fn make_basic_global() -> OrchestratorGlobal {
@@ -3275,6 +4118,7 @@ mod core {
                 market_order_near_touch_threshold: 0.001,
                 market_order_slippage_pct: 0.0,
                 panic_close_market: false,
+                auto_unstuck_allowed: Some(true),
                 unstuck_allowance_long: 0.0,
                 unstuck_allowance_short: 0.0,
                 max_realized_loss_pct: 1.0,
@@ -3283,6 +4127,7 @@ mod core {
                 sort_global: true,
                 global_bot_params: BotParamsPair::default(),
                 hedge_mode: true,
+                strategy_kind: StrategyKind::TrailingMartingale,
             }
         }
 
@@ -3315,6 +4160,7 @@ mod core {
             sym.long.bot_params.entry_initial_qty_pct = 0.0192;
 
             let input = OrchestratorInput {
+                timestamp_ms: 0,
                 balance: 51.154957,
                 balance_raw: 51.154957,
                 global: OrchestratorGlobal {
@@ -3323,6 +4169,7 @@ mod core {
                     market_order_near_touch_threshold: 0.001,
                     market_order_slippage_pct: 0.0,
                     panic_close_market: false,
+                    auto_unstuck_allowed: Some(true),
                     unstuck_allowance_long: 0.0,
                     unstuck_allowance_short: 0.0,
                     max_realized_loss_pct: 1.0,
@@ -3336,13 +4183,14 @@ mod core {
                         pair
                     },
                     hedge_mode: true,
+                    strategy_kind: StrategyKind::TrailingMartingale,
                 },
                 symbols: vec![sym],
                 peek_hints: None,
                 forager_hysteresis: None,
             };
 
-            let out = compute_ideal_orders(&input).unwrap();
+            let out = compute_ideal_orders_for_test(&input).unwrap();
             assert_eq!(out.orders.len(), 0);
             assert_eq!(out.diagnostics.min_effective_cost_blocks.len(), 1);
             let block = &out.diagnostics.min_effective_cost_blocks[0];
@@ -3410,26 +4258,166 @@ mod core {
         }
 
         #[test]
-        fn panic_close_respects_panic_close_market_flag() {
+        fn close_pruning_keeps_single_closest_same_priority_reducer() {
+            let order_book = OrderBook {
+                bid: 100.0,
+                ask: 101.0,
+            };
+            let mut closes = vec![
+                IdealOrder {
+                    symbol_idx: 0,
+                    pside: PositionSide::Long,
+                    qty: -0.3,
+                    price: 102.0,
+                    order_type: OrderType::CloseAutoReduceWelLong,
+                },
+                IdealOrder {
+                    symbol_idx: 0,
+                    pside: PositionSide::Long,
+                    qty: -0.3,
+                    price: 101.1,
+                    order_type: OrderType::CloseAutoReduceTwelLong,
+                },
+            ];
+
+            prune_lower_priority_closes(&mut closes, PositionSide::Long, &order_book);
+
+            assert_eq!(closes.len(), 1);
+            assert_eq!(closes[0].order_type, OrderType::CloseAutoReduceTwelLong);
+            assert!((closes[0].price - 101.1).abs() < 1e-12);
+        }
+
+        #[test]
+        fn close_pruning_prefers_reachable_long_reducer_with_same_priority() {
+            let order_book = OrderBook {
+                bid: 100.0,
+                ask: 101.0,
+            };
+            let mut closes = vec![
+                IdealOrder {
+                    symbol_idx: 0,
+                    pside: PositionSide::Long,
+                    qty: -0.3,
+                    price: 101.1,
+                    order_type: OrderType::CloseAutoReduceTwelLong,
+                },
+                IdealOrder {
+                    symbol_idx: 0,
+                    pside: PositionSide::Long,
+                    qty: -0.3,
+                    price: 100.9,
+                    order_type: OrderType::CloseAutoReduceWelLong,
+                },
+            ];
+
+            prune_lower_priority_closes(&mut closes, PositionSide::Long, &order_book);
+
+            assert_eq!(closes.len(), 1);
+            assert_eq!(closes[0].order_type, OrderType::CloseAutoReduceWelLong);
+            assert!((closes[0].price - 100.9).abs() < 1e-12);
+        }
+
+        #[test]
+        fn close_pruning_prefers_reachable_short_reducer_with_same_priority() {
+            let order_book = OrderBook {
+                bid: 100.0,
+                ask: 101.0,
+            };
+            let mut closes = vec![
+                IdealOrder {
+                    symbol_idx: 0,
+                    pside: PositionSide::Short,
+                    qty: 0.3,
+                    price: 99.9,
+                    order_type: OrderType::CloseAutoReduceTwelShort,
+                },
+                IdealOrder {
+                    symbol_idx: 0,
+                    pside: PositionSide::Short,
+                    qty: 0.3,
+                    price: 100.1,
+                    order_type: OrderType::CloseAutoReduceWelShort,
+                },
+            ];
+
+            prune_lower_priority_closes(&mut closes, PositionSide::Short, &order_book);
+
+            assert_eq!(closes.len(), 1);
+            assert_eq!(closes[0].order_type, OrderType::CloseAutoReduceWelShort);
+            assert!((closes[0].price - 100.1).abs() < 1e-12);
+        }
+
+        #[test]
+        fn close_pruning_preserves_ordinary_close_ladder() {
+            let order_book = OrderBook {
+                bid: 100.0,
+                ask: 101.0,
+            };
+            let mut closes = vec![
+                IdealOrder {
+                    symbol_idx: 0,
+                    pside: PositionSide::Long,
+                    qty: -0.3,
+                    price: 102.0,
+                    order_type: OrderType::CloseGridLong,
+                },
+                IdealOrder {
+                    symbol_idx: 0,
+                    pside: PositionSide::Long,
+                    qty: -0.3,
+                    price: 101.1,
+                    order_type: OrderType::CloseGridLong,
+                },
+                IdealOrder {
+                    symbol_idx: 0,
+                    pside: PositionSide::Long,
+                    qty: -0.3,
+                    price: 101.5,
+                    order_type: OrderType::CloseGridLong,
+                },
+            ];
+
+            prune_lower_priority_closes(&mut closes, PositionSide::Long, &order_book);
+
+            assert_eq!(closes.len(), 3);
+        }
+
+        #[test]
+        fn panic_close_respects_side_local_hsl_order_type() {
             let mut global = make_basic_global();
+            global.global_bot_params.long.hsl_enabled = true;
+            global.global_bot_params.long.hsl_panic_close_order_type = "market".to_string();
+            global.global_bot_params.short.hsl_enabled = true;
+            global.global_bot_params.short.hsl_panic_close_order_type = "limit".to_string();
             let order_book = OrderBook {
                 bid: 100.0,
                 ask: 100.0,
             };
-            let order = IdealOrder {
+            let long_order = IdealOrder {
                 symbol_idx: 0,
                 pside: PositionSide::Long,
                 qty: -1.0,
                 price: 50.0,
                 order_type: OrderType::ClosePanicLong,
             };
+            let short_order = IdealOrder {
+                symbol_idx: 0,
+                pside: PositionSide::Short,
+                qty: 1.0,
+                price: 150.0,
+                order_type: OrderType::ClosePanicShort,
+            };
             assert_eq!(
-                to_executable_order(order.clone(), &global, &order_book).execution_type,
+                to_executable_order(long_order.clone(), &global, &order_book).execution_type,
+                ExecutionType::Market
+            );
+            assert_eq!(
+                to_executable_order(short_order.clone(), &global, &order_book).execution_type,
                 ExecutionType::Limit
             );
             global.panic_close_market = true;
             assert_eq!(
-                to_executable_order(order, &global, &order_book).execution_type,
+                to_executable_order(short_order, &global, &order_book).execution_type,
                 ExecutionType::Market
             );
         }
@@ -3454,12 +4442,14 @@ mod core {
             let input = OrchestratorInput {
                 balance: 1000.0,
                 balance_raw: 1000.0,
+                timestamp_ms: 0,
                 global: OrchestratorGlobal {
                     filter_by_min_effective_cost: false,
                     market_orders_allowed: false,
                     market_order_near_touch_threshold: 0.001,
                     market_order_slippage_pct: 0.0,
                     panic_close_market: false,
+                    auto_unstuck_allowed: Some(true),
                     unstuck_allowance_long: 0.0,
                     unstuck_allowance_short: 0.0,
                     max_realized_loss_pct: 1.0,
@@ -3473,13 +4463,14 @@ mod core {
                         pair
                     },
                     hedge_mode: true,
+                    strategy_kind: StrategyKind::TrailingMartingale,
                 },
                 symbols: vec![sym.clone()],
                 peek_hints: None,
                 forager_hysteresis: None,
             };
 
-            let out = compute_ideal_orders(&input).unwrap();
+            let out = compute_ideal_orders_for_test(&input).unwrap();
             let n_entries_no_fill = out
                 .orders
                 .iter()
@@ -3497,13 +4488,149 @@ mod core {
                 symbols: vec![sym_fill],
                 ..input
             };
-            let out_fill = compute_ideal_orders(&input_fill).unwrap();
+            let out_fill = compute_ideal_orders_for_test(&input_fill).unwrap();
             let n_entries_fill = out_fill
                 .orders
                 .iter()
                 .filter(|o| o.pside == PositionSide::Long && !is_close_order_type(o.order_type))
                 .count();
             assert!(n_entries_fill > 1);
+        }
+
+        #[test]
+        fn adaptive_grid_long_entry_output_regression() {
+            let mut sym = make_basic_symbol(0);
+            sym.long.bot_params.entry_initial_ema_dist = -0.01;
+            sym.long.bot_params.entry_initial_qty_pct = 0.1;
+            sym.long.bot_params.entry_grid_spacing_pct = 0.02;
+            sym.long.bot_params.entry_grid_double_down_factor = 1.0;
+            sym.short.bot_params.total_wallet_exposure_limit = 0.0;
+            sym.short.bot_params.n_positions = 0;
+
+            let mut global = make_basic_global();
+            global.global_bot_params.long.total_wallet_exposure_limit = 1.0;
+            global.global_bot_params.long.n_positions = 1;
+            global.global_bot_params.short.total_wallet_exposure_limit = 0.0;
+            global.global_bot_params.short.n_positions = 0;
+
+            let input = OrchestratorInput {
+                timestamp_ms: 0,
+                balance: 1000.0,
+                balance_raw: 1000.0,
+                global,
+                symbols: vec![sym],
+                peek_hints: None,
+                forager_hysteresis: None,
+            };
+
+            let out = compute_ideal_orders_for_test(&input).unwrap();
+            let actual: Vec<(PositionSide, f64, f64, OrderType)> = out
+                .orders
+                .iter()
+                .map(|o| (o.pside, o.qty, o.price, o.order_type))
+                .collect();
+            let expected = vec![
+                (
+                    PositionSide::Long,
+                    1.0,
+                    100.0,
+                    OrderType::EntryInitialNormalLong,
+                ),
+                (
+                    PositionSide::Long,
+                    1.0,
+                    98.0,
+                    OrderType::EntryGridNormalLong,
+                ),
+                (
+                    PositionSide::Long,
+                    2.0,
+                    97.0,
+                    OrderType::EntryGridNormalLong,
+                ),
+                (
+                    PositionSide::Long,
+                    4.0,
+                    96.0,
+                    OrderType::EntryGridNormalLong,
+                ),
+                (
+                    PositionSide::Long,
+                    2.3,
+                    95.0,
+                    OrderType::EntryGridCroppedLong,
+                ),
+            ];
+            assert_eq!(actual, expected);
+        }
+
+        #[test]
+        fn adaptive_grid_short_entry_output_regression() {
+            let mut sym = make_basic_symbol(0);
+            sym.long.bot_params.total_wallet_exposure_limit = 0.0;
+            sym.long.bot_params.n_positions = 0;
+            sym.short.bot_params.total_wallet_exposure_limit = 1.0;
+            sym.short.bot_params.n_positions = 1;
+            sym.short.bot_params.entry_initial_ema_dist = 0.01;
+            sym.short.bot_params.entry_initial_qty_pct = 0.1;
+            sym.short.bot_params.entry_grid_spacing_pct = 0.02;
+            sym.short.bot_params.entry_grid_double_down_factor = 1.0;
+
+            let mut global = make_basic_global();
+            global.global_bot_params.long.total_wallet_exposure_limit = 0.0;
+            global.global_bot_params.long.n_positions = 0;
+            global.global_bot_params.short.total_wallet_exposure_limit = 1.0;
+            global.global_bot_params.short.n_positions = 1;
+
+            let input = OrchestratorInput {
+                timestamp_ms: 0,
+                balance: 1000.0,
+                balance_raw: 1000.0,
+                global,
+                symbols: vec![sym],
+                peek_hints: None,
+                forager_hysteresis: None,
+            };
+
+            let out = compute_ideal_orders_for_test(&input).unwrap();
+            let actual: Vec<(PositionSide, f64, f64, OrderType)> = out
+                .orders
+                .iter()
+                .map(|o| (o.pside, o.qty, o.price, o.order_type))
+                .collect();
+            let expected = vec![
+                (
+                    PositionSide::Short,
+                    -1.0,
+                    101.0,
+                    OrderType::EntryInitialNormalShort,
+                ),
+                (
+                    PositionSide::Short,
+                    -1.0,
+                    103.1,
+                    OrderType::EntryGridNormalShort,
+                ),
+                (
+                    PositionSide::Short,
+                    -2.0,
+                    104.1,
+                    OrderType::EntryGridNormalShort,
+                ),
+                (
+                    PositionSide::Short,
+                    -4.0,
+                    105.2,
+                    OrderType::EntryGridNormalShort,
+                ),
+                (
+                    PositionSide::Short,
+                    -1.5,
+                    106.3,
+                    OrderType::EntryGridCroppedShort,
+                ),
+            ];
+            assert_eq!(actual, expected);
         }
 
         #[test]
@@ -3525,8 +4652,9 @@ mod core {
                 symbols: vec![sym.clone()],
                 peek_hints: Some(EntryPeekHints::default()),
                 forager_hysteresis: None,
+                timestamp_ms: 0,
             };
-            let out_flat = compute_ideal_orders(&input_flat).unwrap();
+            let out_flat = compute_ideal_orders_for_test(&input_flat).unwrap();
             let n_entries_flat = out_flat
                 .orders
                 .iter()
@@ -3547,7 +4675,7 @@ mod core {
                 }),
                 ..input_flat
             };
-            let out_positioned = compute_ideal_orders(&input_positioned).unwrap();
+            let out_positioned = compute_ideal_orders_for_test(&input_positioned).unwrap();
             let n_entries_positioned = out_positioned
                 .orders
                 .iter()
@@ -3579,9 +4707,10 @@ mod core {
                 symbols: vec![sym],
                 peek_hints: None,
                 forager_hysteresis: None,
+                timestamp_ms: 0,
             };
 
-            let out = compute_ideal_orders(&input).unwrap();
+            let out = compute_ideal_orders_for_test(&input).unwrap();
             assert!(out.orders.is_empty());
             assert_eq!(out.diagnostics.symbol_states.len(), 1);
             assert!(!out.diagnostics.symbol_states[0].long.active);
@@ -3630,12 +4759,14 @@ mod core {
             let input = OrchestratorInput {
                 balance: 1000.0,
                 balance_raw: 1000.0,
+                timestamp_ms: 0,
                 global: OrchestratorGlobal {
                     filter_by_min_effective_cost: false,
                     market_orders_allowed: false,
                     market_order_near_touch_threshold: 0.001,
                     market_order_slippage_pct: 0.0,
                     panic_close_market: false,
+                    auto_unstuck_allowed: Some(true),
                     unstuck_allowance_long: 0.0,
                     unstuck_allowance_short: 0.0,
                     max_realized_loss_pct: 1.0,
@@ -3644,12 +4775,13 @@ mod core {
                     sort_global: true,
                     global_bot_params: global_bp,
                     hedge_mode: true,
+                    strategy_kind: StrategyKind::TrailingMartingale,
                 },
                 symbols: vec![sym],
                 peek_hints: None,
                 forager_hysteresis: None,
             };
-            let out = compute_ideal_orders(&input).unwrap();
+            let out = compute_ideal_orders_for_test(&input).unwrap();
             // With no position and GracefulStop, we should not emit any entries.
             assert!(out.orders.iter().all(|o| is_close_order_type(o.order_type)));
         }
@@ -3667,12 +4799,14 @@ mod core {
             let input = OrchestratorInput {
                 balance: 1000.0,
                 balance_raw: 1000.0,
+                timestamp_ms: 0,
                 global: OrchestratorGlobal {
                     filter_by_min_effective_cost: false,
                     market_orders_allowed: false,
                     market_order_near_touch_threshold: 0.001,
                     market_order_slippage_pct: 0.0,
                     panic_close_market: false,
+                    auto_unstuck_allowed: Some(true),
                     unstuck_allowance_long: 0.0,
                     unstuck_allowance_short: 0.0,
                     max_realized_loss_pct: 1.0,
@@ -3681,13 +4815,14 @@ mod core {
                     sort_global: true,
                     global_bot_params: global_bp,
                     hedge_mode: false,
+                    strategy_kind: StrategyKind::TrailingMartingale,
                 },
                 symbols: vec![sym],
                 peek_hints: None,
                 forager_hysteresis: None,
             };
 
-            let out = compute_ideal_orders(&input).unwrap();
+            let out = compute_ideal_orders_for_test(&input).unwrap();
             let has_long_entries = out
                 .orders
                 .iter()
@@ -3713,12 +4848,14 @@ mod core {
             let input = OrchestratorInput {
                 balance: 1000.0,
                 balance_raw: 1000.0,
+                timestamp_ms: 0,
                 global: OrchestratorGlobal {
                     filter_by_min_effective_cost: false,
                     market_orders_allowed: false,
                     market_order_near_touch_threshold: 0.001,
                     market_order_slippage_pct: 0.0,
                     panic_close_market: false,
+                    auto_unstuck_allowed: Some(true),
                     unstuck_allowance_long: 0.0,
                     unstuck_allowance_short: 0.0,
                     max_realized_loss_pct: 1.0,
@@ -3727,13 +4864,14 @@ mod core {
                     sort_global: true,
                     global_bot_params: global_bp,
                     hedge_mode: false,
+                    strategy_kind: StrategyKind::TrailingMartingale,
                 },
                 symbols: vec![sym],
                 peek_hints: None,
                 forager_hysteresis: None,
             };
 
-            let out = compute_ideal_orders(&input).unwrap();
+            let out = compute_ideal_orders_for_test(&input).unwrap();
             let has_long_entries = out
                 .orders
                 .iter()
@@ -3771,12 +4909,14 @@ mod core {
             let input = OrchestratorInput {
                 balance: 1000.0,
                 balance_raw: 1000.0,
+                timestamp_ms: 0,
                 global: OrchestratorGlobal {
                     filter_by_min_effective_cost: false,
                     market_orders_allowed: false,
                     market_order_near_touch_threshold: 0.001,
                     market_order_slippage_pct: 0.0,
                     panic_close_market: false,
+                    auto_unstuck_allowed: Some(true),
                     unstuck_allowance_long: 0.0,
                     unstuck_allowance_short: 0.0,
                     max_realized_loss_pct: 1.0,
@@ -3785,13 +4925,14 @@ mod core {
                     sort_global: true,
                     global_bot_params: global_bp,
                     hedge_mode: false,
+                    strategy_kind: StrategyKind::TrailingMartingale,
                 },
                 symbols: vec![sym0, sym1],
                 peek_hints: None,
                 forager_hysteresis: None,
             };
 
-            let out = compute_ideal_orders(&input).unwrap();
+            let out = compute_ideal_orders_for_test(&input).unwrap();
             let short_entry_symbol_idxs: Vec<usize> = out
                 .orders
                 .iter()
@@ -3826,12 +4967,14 @@ mod core {
             let input = OrchestratorInput {
                 balance: 1000.0,
                 balance_raw: 1000.0,
+                timestamp_ms: 0,
                 global: OrchestratorGlobal {
                     filter_by_min_effective_cost: false,
                     market_orders_allowed: false,
                     market_order_near_touch_threshold: 0.001,
                     market_order_slippage_pct: 0.0,
                     panic_close_market: false,
+                    auto_unstuck_allowed: Some(true),
                     unstuck_allowance_long: 0.0,
                     unstuck_allowance_short: 0.0,
                     max_realized_loss_pct: 1.0,
@@ -3840,13 +4983,14 @@ mod core {
                     sort_global: true,
                     global_bot_params: global_bp,
                     hedge_mode: false,
+                    strategy_kind: StrategyKind::TrailingMartingale,
                 },
                 symbols: vec![sym0, sym1],
                 peek_hints: None,
                 forager_hysteresis: None,
             };
 
-            let out = compute_ideal_orders(&input).unwrap();
+            let out = compute_ideal_orders_for_test(&input).unwrap();
             let long_entry_symbol_idxs: Vec<usize> = out
                 .orders
                 .iter()
@@ -3880,12 +5024,14 @@ mod core {
             let input = OrchestratorInput {
                 balance: 1000.0,
                 balance_raw: 1000.0,
+                timestamp_ms: 0,
                 global: OrchestratorGlobal {
                     filter_by_min_effective_cost: false,
                     market_orders_allowed: false,
                     market_order_near_touch_threshold: 0.001,
                     market_order_slippage_pct: 0.0,
                     panic_close_market: false,
+                    auto_unstuck_allowed: Some(true),
                     unstuck_allowance_long: 0.0,
                     unstuck_allowance_short: 0.0,
                     max_realized_loss_pct: 1.0,
@@ -3894,13 +5040,14 @@ mod core {
                     sort_global: true,
                     global_bot_params: global_bp,
                     hedge_mode: true,
+                    strategy_kind: StrategyKind::TrailingMartingale,
                 },
                 symbols: vec![sym0, sym1],
                 peek_hints: None,
                 forager_hysteresis: None,
             };
 
-            let out = compute_ideal_orders(&input).unwrap();
+            let out = compute_ideal_orders_for_test(&input).unwrap();
             let long_entry_symbol_idxs: Vec<usize> = out
                 .orders
                 .iter()
@@ -3926,6 +5073,7 @@ mod core {
             global_bp.long.forager_score_weights.volatility = 0.0;
 
             let input = OrchestratorInput {
+                timestamp_ms: 0,
                 balance: 1000.0,
                 balance_raw: 1000.0,
                 global: OrchestratorGlobal {
@@ -3934,6 +5082,7 @@ mod core {
                     market_order_near_touch_threshold: 0.001,
                     market_order_slippage_pct: 0.0,
                     panic_close_market: false,
+                    auto_unstuck_allowed: Some(true),
                     unstuck_allowance_long: 0.0,
                     unstuck_allowance_short: 0.0,
                     max_realized_loss_pct: 1.0,
@@ -3942,13 +5091,14 @@ mod core {
                     sort_global: true,
                     global_bot_params: global_bp,
                     hedge_mode: true,
+                    strategy_kind: StrategyKind::TrailingMartingale,
                 },
                 symbols: vec![sym0, sym1],
                 peek_hints: None,
                 forager_hysteresis: None,
             };
 
-            let out = compute_ideal_orders(&input).unwrap();
+            let out = compute_ideal_orders_for_test(&input).unwrap();
             let long_entry_symbol_idxs: Vec<usize> = out
                 .orders
                 .iter()
@@ -3976,12 +5126,14 @@ mod core {
             let input = OrchestratorInput {
                 balance: 1000.0,
                 balance_raw: 1000.0,
+                timestamp_ms: 0,
                 global: OrchestratorGlobal {
                     filter_by_min_effective_cost: false,
                     market_orders_allowed: false,
                     market_order_near_touch_threshold: 0.001,
                     market_order_slippage_pct: 0.0,
                     panic_close_market: false,
+                    auto_unstuck_allowed: Some(true),
                     unstuck_allowance_long: 0.0,
                     unstuck_allowance_short: 0.0,
                     max_realized_loss_pct: 1.0,
@@ -3990,13 +5142,14 @@ mod core {
                     sort_global: true,
                     global_bot_params: global_bp,
                     hedge_mode: true,
+                    strategy_kind: StrategyKind::TrailingMartingale,
                 },
                 symbols: vec![sym0, sym1],
                 peek_hints: None,
                 forager_hysteresis: None,
             };
 
-            let err = compute_ideal_orders(&input).unwrap_err();
+            let err = compute_ideal_orders_for_test(&input).unwrap_err();
             assert_eq!(
                 err,
                 OrchestratorError::NonContiguousSymbolIdx {
@@ -4080,8 +5233,8 @@ mod core {
             global_bp.long.total_wallet_exposure_limit = 1000.0;
             global_bp.long.n_positions = 4;
             global_bp.long.forager_volume_drop_pct = 0.0;
-            global_bp.long.filter_volume_ema_span = 10.0;
-            global_bp.long.filter_volatility_ema_span = 10.0;
+            global_bp.long.filter_volume_ema_span_1m = 10.0;
+            global_bp.long.filter_volatility_ema_span_1m = 10.0;
             // disable short for this test
             global_bp.short.total_wallet_exposure_limit = 0.0;
             global_bp.short.n_positions = 0;
@@ -4089,12 +5242,14 @@ mod core {
             let input = OrchestratorInput {
                 balance: 1_000_000.0,
                 balance_raw: 1_000_000.0,
+                timestamp_ms: 0,
                 global: OrchestratorGlobal {
                     filter_by_min_effective_cost: false,
                     market_orders_allowed: false,
                     market_order_near_touch_threshold: 0.001,
                     market_order_slippage_pct: 0.0,
                     panic_close_market: false,
+                    auto_unstuck_allowed: Some(true),
                     unstuck_allowance_long: 0.0,
                     unstuck_allowance_short: 0.0,
                     max_realized_loss_pct: 1.0,
@@ -4103,13 +5258,14 @@ mod core {
                     sort_global: true,
                     global_bot_params: global_bp,
                     hedge_mode: true,
+                    strategy_kind: StrategyKind::TrailingMartingale,
                 },
                 symbols: syms,
                 peek_hints: None,
                 forager_hysteresis: None,
             };
 
-            let out = compute_ideal_orders(&input).unwrap();
+            let out = compute_ideal_orders_for_test(&input).unwrap();
             let mut entry_syms: HashSet<usize> = HashSet::new();
             for o in out.orders {
                 if o.pside == PositionSide::Long && o.qty > 0.0 && o.symbol_idx >= 2 {
@@ -4129,14 +5285,15 @@ mod core {
             let mut global_bp = BotParamsPair::default();
             global_bp.long.total_wallet_exposure_limit = 1000.0;
             global_bp.long.n_positions = 4;
-            global_bp.long.filter_volume_ema_span = 10.0;
-            global_bp.long.filter_volatility_ema_span = 10.0;
+            global_bp.long.filter_volume_ema_span_1m = 10.0;
+            global_bp.long.filter_volatility_ema_span_1m = 10.0;
             global_bp.short.total_wallet_exposure_limit = 1000.0;
             global_bp.short.n_positions = 4;
-            global_bp.short.filter_volume_ema_span = 10.0;
-            global_bp.short.filter_volatility_ema_span = 10.0;
+            global_bp.short.filter_volume_ema_span_1m = 10.0;
+            global_bp.short.filter_volatility_ema_span_1m = 10.0;
 
             let input = OrchestratorInput {
+                timestamp_ms: 0,
                 balance: 1_000_000.0,
                 balance_raw: 1_000_000.0,
                 global: OrchestratorGlobal {
@@ -4145,6 +5302,7 @@ mod core {
                     market_order_near_touch_threshold: 0.001,
                     market_order_slippage_pct: 0.0,
                     panic_close_market: false,
+                    auto_unstuck_allowed: Some(true),
                     unstuck_allowance_long: 0.0,
                     unstuck_allowance_short: 0.0,
                     max_realized_loss_pct: 1.0,
@@ -4153,13 +5311,14 @@ mod core {
                     sort_global: true,
                     global_bot_params: global_bp,
                     hedge_mode: true,
+                    strategy_kind: StrategyKind::TrailingMartingale,
                 },
                 symbols: syms,
                 peek_hints: None,
                 forager_hysteresis: None,
             };
 
-            let out = compute_ideal_orders(&input).unwrap();
+            let out = compute_ideal_orders_for_test(&input).unwrap();
             let long_active = out
                 .diagnostics
                 .symbol_states
@@ -4244,6 +5403,109 @@ mod core {
                 (entries[0].qty - 0.7).abs() < 1e-9,
                 "qty {}",
                 entries[0].qty
+            );
+        }
+
+        #[test]
+        fn twel_entry_gate_matches_reference_helper_on_core_scenarios() {
+            let balance = 1000.0;
+
+            let mut sym = make_basic_symbol(0);
+            sym.order_book = OrderBook {
+                bid: 100.0,
+                ask: 100.0,
+            };
+            sym.exchange = ExchangeParams {
+                qty_step: 0.01,
+                price_step: 0.01,
+                min_qty: 0.0,
+                min_cost: 0.0,
+                c_mult: 1.0,
+                ..Default::default()
+            };
+            let symbols = vec![sym.clone()];
+
+            let positions = vec![GateEntriesPosition {
+                idx: 0,
+                position_size: 1.0,
+                position_price: 100.0,
+                c_mult: 1.0,
+            }];
+            let entries = vec![IdealOrder {
+                symbol_idx: 0,
+                pside: PositionSide::Long,
+                qty: 150.0,
+                price: 100.0,
+                order_type: OrderType::EntryGridNormalLong,
+            }];
+            assert_twel_gate_matches_reference(
+                PositionSide::Long,
+                balance,
+                1.0,
+                &positions,
+                &entries,
+                &symbols,
+            );
+
+            let mut far_first_sym = make_basic_symbol(0);
+            far_first_sym.order_book = OrderBook {
+                bid: 20.0,
+                ask: 20.0,
+            };
+            far_first_sym.exchange = ExchangeParams {
+                qty_step: 0.1,
+                price_step: 0.1,
+                min_qty: 0.0,
+                min_cost: 0.0,
+                c_mult: 1.0,
+                ..Default::default()
+            };
+            let far_first_symbols = vec![far_first_sym];
+            let far_first_entries = vec![
+                IdealOrder {
+                    symbol_idx: 0,
+                    pside: PositionSide::Long,
+                    qty: 1.0,
+                    price: 10.0,
+                    order_type: OrderType::EntryGridNormalLong,
+                },
+                IdealOrder {
+                    symbol_idx: 0,
+                    pside: PositionSide::Long,
+                    qty: 1.0,
+                    price: 20.0,
+                    order_type: OrderType::EntryGridNormalLong,
+                },
+            ];
+            assert_twel_gate_matches_reference(
+                PositionSide::Long,
+                balance,
+                0.015,
+                &[],
+                &far_first_entries,
+                &far_first_symbols,
+            );
+
+            let short_positions = vec![GateEntriesPosition {
+                idx: 0,
+                position_size: -1.0,
+                position_price: 100.0,
+                c_mult: 1.0,
+            }];
+            let short_entries = vec![IdealOrder {
+                symbol_idx: 0,
+                pside: PositionSide::Short,
+                qty: -150.0,
+                price: 100.0,
+                order_type: OrderType::EntryGridNormalShort,
+            }];
+            assert_twel_gate_matches_reference(
+                PositionSide::Short,
+                balance,
+                1.0,
+                &short_positions,
+                &short_entries,
+                &symbols,
             );
         }
 
@@ -4365,12 +5627,14 @@ mod core {
             let input_open = OrchestratorInput {
                 balance: 1000.0,
                 balance_raw: 1000.0,
+                timestamp_ms: 0,
                 global: OrchestratorGlobal {
                     filter_by_min_effective_cost: false,
                     market_orders_allowed: false,
                     market_order_near_touch_threshold: 0.001,
                     market_order_slippage_pct: 0.0,
                     panic_close_market: false,
+                    auto_unstuck_allowed: Some(true),
                     unstuck_allowance_long: 0.0,
                     unstuck_allowance_short: 0.0,
                     max_realized_loss_pct: 1.0,
@@ -4379,12 +5643,13 @@ mod core {
                     sort_global: true,
                     global_bot_params: global_bp.clone(),
                     hedge_mode: true,
+                    strategy_kind: StrategyKind::TrailingMartingale,
                 },
                 symbols: vec![sym.clone()],
                 peek_hints: None,
                 forager_hysteresis: None,
             };
-            let out_open = compute_ideal_orders(&input_open).unwrap();
+            let out_open = compute_ideal_orders_for_test(&input_open).unwrap();
             assert!(
                 out_open
                     .orders
@@ -4395,7 +5660,7 @@ mod core {
 
             let mut input_blocked = input_open.clone();
             input_blocked.global.max_realized_loss_pct = 0.01;
-            let out_blocked = compute_ideal_orders(&input_blocked).unwrap();
+            let out_blocked = compute_ideal_orders_for_test(&input_blocked).unwrap();
             assert!(
                 out_blocked
                     .orders
@@ -4436,6 +5701,7 @@ mod core {
             global_bp.long.n_positions = 1;
 
             let input = OrchestratorInput {
+                timestamp_ms: 0,
                 balance: 1000.0,
                 balance_raw: 1000.0,
                 global: OrchestratorGlobal {
@@ -4444,6 +5710,7 @@ mod core {
                     market_order_near_touch_threshold: 0.001,
                     market_order_slippage_pct: 0.0,
                     panic_close_market: false,
+                    auto_unstuck_allowed: Some(true),
                     unstuck_allowance_long: 0.0,
                     unstuck_allowance_short: 0.0,
                     max_realized_loss_pct: 0.0,
@@ -4452,24 +5719,28 @@ mod core {
                     sort_global: true,
                     global_bot_params: global_bp,
                     hedge_mode: true,
+                    strategy_kind: StrategyKind::TrailingMartingale,
                 },
                 symbols: vec![sym],
                 peek_hints: None,
                 forager_hysteresis: None,
             };
 
-            let out = compute_ideal_orders(&input).unwrap();
+            let out = compute_ideal_orders_for_test(&input).unwrap();
             assert!(
                 out.orders
                     .iter()
-                    .all(|o| o.order_type != OrderType::CloseAutoReduceWelLong),
+                    .all(|o| !is_close_order_type(o.order_type)),
                 "break-even gross close should be blocked when maker fee makes net PnL negative"
             );
             let block = out
                 .diagnostics
                 .loss_gate_blocks
                 .iter()
-                .find(|b| b.order_type == OrderType::CloseAutoReduceWelLong)
+                .find(|b| {
+                    b.order_type == OrderType::CloseGridLong
+                        || b.order_type == OrderType::CloseAutoReduceWelLong
+                })
                 .expect("expected loss-gate diagnostic for fee-inclusive close");
             assert!(block.projected_pnl < 0.0);
             assert!(block.projected_balance_after < block.balance_floor);
@@ -4494,6 +5765,7 @@ mod core {
             sym1.long.position = sym0.long.position;
 
             let input = OrchestratorInput {
+                timestamp_ms: 0,
                 balance: 1000.0,
                 balance_raw: 1000.0,
                 global: OrchestratorGlobal {
@@ -4502,6 +5774,7 @@ mod core {
                     market_order_near_touch_threshold: 0.001,
                     market_order_slippage_pct: 0.0,
                     panic_close_market: false,
+                    auto_unstuck_allowed: Some(true),
                     unstuck_allowance_long: 0.0,
                     unstuck_allowance_short: 0.0,
                     max_realized_loss_pct: 0.1,
@@ -4510,6 +5783,7 @@ mod core {
                     sort_global: true,
                     global_bot_params: BotParamsPair::default(),
                     hedge_mode: true,
+                    strategy_kind: StrategyKind::TrailingMartingale,
                 },
                 symbols: vec![sym0.clone(), sym1.clone()],
                 peek_hints: None,
@@ -4626,12 +5900,14 @@ mod core {
                 balance: 1000.0,
                 // Missing from JSON deserialization path defaults to NaN.
                 balance_raw: f64::NAN,
+                timestamp_ms: 0,
                 global: OrchestratorGlobal {
                     filter_by_min_effective_cost: false,
                     market_orders_allowed: false,
                     market_order_near_touch_threshold: 0.001,
                     market_order_slippage_pct: 0.0,
                     panic_close_market: false,
+                    auto_unstuck_allowed: Some(true),
                     unstuck_allowance_long: 0.0,
                     unstuck_allowance_short: 0.0,
                     max_realized_loss_pct: 0.01,
@@ -4640,12 +5916,13 @@ mod core {
                     sort_global: true,
                     global_bot_params: global_bp,
                     hedge_mode: true,
+                    strategy_kind: StrategyKind::TrailingMartingale,
                 },
                 symbols: vec![sym],
                 peek_hints: None,
                 forager_hysteresis: None,
             };
-            let out = compute_ideal_orders(&input).unwrap();
+            let out = compute_ideal_orders_for_test(&input).unwrap();
             assert!(
                 out.orders
                     .iter()
@@ -4663,7 +5940,7 @@ mod core {
         }
 
         #[test]
-        fn realized_loss_gate_non_positive_balance_raw_returns_early() {
+        fn account_risk_validation_rejects_non_positive_balance_raw() {
             for raw_balance in [0.0, -1.0] {
                 let mut sym = make_basic_symbol(0);
                 sym.long.position = Position {
@@ -4686,12 +5963,14 @@ mod core {
                 let input = OrchestratorInput {
                     balance: 1000.0,
                     balance_raw: raw_balance,
+                    timestamp_ms: 0,
                     global: OrchestratorGlobal {
                         filter_by_min_effective_cost: false,
                         market_orders_allowed: false,
                         market_order_near_touch_threshold: 0.001,
                         market_order_slippage_pct: 0.0,
                         panic_close_market: false,
+                        auto_unstuck_allowed: Some(true),
                         unstuck_allowance_long: 0.0,
                         unstuck_allowance_short: 0.0,
                         max_realized_loss_pct: 0.01,
@@ -4700,25 +5979,43 @@ mod core {
                         sort_global: true,
                         global_bot_params: global_bp,
                         hedge_mode: true,
+                        strategy_kind: StrategyKind::TrailingMartingale,
                     },
                     symbols: vec![sym],
                     peek_hints: None,
                     forager_hysteresis: None,
                 };
-                let out = compute_ideal_orders(&input).unwrap();
-                assert!(
-                    out.orders
-                        .iter()
-                        .any(|o| o.order_type == OrderType::CloseAutoReduceWelLong),
-                    "expected non-positive balance_raw={} to early-return and keep close order",
-                    raw_balance
-                );
-                assert!(
-                    out.diagnostics.loss_gate_blocks.is_empty(),
-                    "expected non-positive balance_raw={} to skip loss-gate diagnostics",
-                    raw_balance
+                assert_eq!(
+                    compute_ideal_orders_for_test(&input).unwrap_err(),
+                    OrchestratorError::NonFiniteInput {
+                        field: "balance_raw",
+                        symbol_idx: None,
+                    }
                 );
             }
+        }
+
+        #[test]
+        fn account_risk_validation_rejects_pnl_peak_below_current() {
+            let mut input = OrchestratorInput {
+                balance: 1000.0,
+                balance_raw: 1000.0,
+                timestamp_ms: 0,
+                global: make_basic_global(),
+                symbols: vec![make_basic_symbol(0)],
+                peek_hints: None,
+                forager_hysteresis: None,
+            };
+            input.global.realized_pnl_cumsum_max = 5.0;
+            input.global.realized_pnl_cumsum_last = 10.0;
+
+            assert_eq!(
+                compute_ideal_orders_for_test(&input).unwrap_err(),
+                OrchestratorError::NonFiniteInput {
+                    field: "global.realized_pnl_cumsum_max_lt_last",
+                    symbol_idx: None,
+                }
+            );
         }
 
         #[test]
@@ -4750,12 +6047,14 @@ mod core {
             let input = OrchestratorInput {
                 balance: 1000.0,    // snapped: WE = 500/1000 = 0.5 (under limit)
                 balance_raw: 800.0, // raw: WE = 500/800 = 0.625 (over limit)
+                timestamp_ms: 0,
                 global: OrchestratorGlobal {
                     filter_by_min_effective_cost: false,
                     market_orders_allowed: false,
                     market_order_near_touch_threshold: 0.001,
                     market_order_slippage_pct: 0.0,
                     panic_close_market: false,
+                    auto_unstuck_allowed: Some(true),
                     unstuck_allowance_long: 0.0,
                     unstuck_allowance_short: 0.0,
                     max_realized_loss_pct: 1.0,
@@ -4764,12 +6063,13 @@ mod core {
                     sort_global: true,
                     global_bot_params: global_bp,
                     hedge_mode: true,
+                    strategy_kind: StrategyKind::TrailingMartingale,
                 },
                 symbols: vec![sym],
                 peek_hints: None,
                 forager_hysteresis: None,
             };
-            let out = compute_ideal_orders(&input).unwrap();
+            let out = compute_ideal_orders_for_test(&input).unwrap();
             assert!(
                 out.orders
                     .iter()
@@ -4777,6 +6077,158 @@ mod core {
                 "TWEL enforcer should trigger using raw balance (WE=0.625 > 0.6), \
                  not snapped balance (WE=0.5 < 0.6). Orders: {:?}",
                 out.orders.iter().map(|o| &o.order_type).collect::<Vec<_>>()
+            );
+        }
+
+        #[test]
+        fn twel_reduce_overweight_uses_effective_tradable_slots() {
+            // Configured n_positions=4 but only two symbols are currently eligible.
+            // TWEL target is 0.50, so the dynamic overweight floor is 0.25.
+            // idx0 is exactly at the dynamic floor and less adverse; using the old
+            // configured floor 0.125 would wrongly select idx0 first.
+            let mut sym0 = make_basic_symbol(0);
+            sym0.long.position = Position {
+                size: 2.5,
+                price: 100.0,
+            };
+            sym0.order_book = OrderBook {
+                bid: 100.0,
+                ask: 100.0,
+            };
+            sym0.long.bot_params.wallet_exposure_limit = 0.4;
+            sym0.long.bot_params.risk_wel_enforcer_threshold = 2.0;
+
+            let mut sym1 = make_basic_symbol(1);
+            sym1.long.position = Position {
+                size: 2.6,
+                price: 100.0,
+            };
+            sym1.order_book = OrderBook {
+                bid: 95.0,
+                ask: 95.0,
+            };
+            sym1.long.bot_params.wallet_exposure_limit = 0.4;
+            sym1.long.bot_params.risk_wel_enforcer_threshold = 2.0;
+
+            let mut global_bp = BotParamsPair::default();
+            global_bp.long.total_wallet_exposure_limit = 0.5;
+            global_bp.long.risk_twel_enforcer_threshold = 1.0;
+            global_bp.long.risk_twel_enforcer_policy = TwelEnforcerPolicy::ReduceOverweight;
+            global_bp.long.n_positions = 4;
+
+            let input = OrchestratorInput {
+                balance: 1000.0,
+                balance_raw: 1000.0,
+                timestamp_ms: 0,
+                global: OrchestratorGlobal {
+                    filter_by_min_effective_cost: false,
+                    market_orders_allowed: false,
+                    market_order_near_touch_threshold: 0.001,
+                    market_order_slippage_pct: 0.0,
+                    panic_close_market: false,
+                    auto_unstuck_allowed: Some(true),
+                    unstuck_allowance_long: 0.0,
+                    unstuck_allowance_short: 0.0,
+                    max_realized_loss_pct: 1.0,
+                    realized_pnl_cumsum_max: 0.0,
+                    realized_pnl_cumsum_last: 0.0,
+                    sort_global: true,
+                    global_bot_params: global_bp,
+                    hedge_mode: true,
+                    strategy_kind: StrategyKind::TrailingMartingale,
+                },
+                symbols: vec![sym0, sym1],
+                peek_hints: None,
+                forager_hysteresis: None,
+            };
+            let out = compute_ideal_orders_for_test(&input).unwrap();
+            let twel_closes = out
+                .orders
+                .iter()
+                .filter(|o| o.order_type == OrderType::CloseAutoReduceTwelLong)
+                .collect::<Vec<_>>();
+            assert!(
+                !twel_closes.is_empty(),
+                "TWEL reduce-overweight should still repair total exposure"
+            );
+            assert!(
+                twel_closes.iter().all(|o| o.symbol_idx == 1),
+                "dynamic floor should leave idx0 at WE=0.25 untouched; orders: {:?}",
+                twel_closes
+            );
+        }
+
+        #[test]
+        fn twel_reduce_overweight_repairs_when_no_symbols_eligible() {
+            // No symbols are eligible for new entries, but held positions still need
+            // protective TWEL repair. The enforcer should fall back to the current
+            // open-position count instead of no-oping on effective_n_positions=0.
+            let mut sym0 = make_basic_symbol(0);
+            sym0.tradable = false;
+            sym0.long.position = Position {
+                size: 2.6,
+                price: 100.0,
+            };
+            sym0.order_book = OrderBook {
+                bid: 100.0,
+                ask: 100.0,
+            };
+            sym0.long.bot_params.wallet_exposure_limit = 0.4;
+            sym0.long.bot_params.risk_wel_enforcer_threshold = 2.0;
+
+            let mut sym1 = make_basic_symbol(1);
+            sym1.tradable = false;
+            sym1.long.position = Position {
+                size: 2.6,
+                price: 100.0,
+            };
+            sym1.order_book = OrderBook {
+                bid: 95.0,
+                ask: 95.0,
+            };
+            sym1.long.bot_params.wallet_exposure_limit = 0.4;
+            sym1.long.bot_params.risk_wel_enforcer_threshold = 2.0;
+
+            let mut global_bp = BotParamsPair::default();
+            global_bp.long.total_wallet_exposure_limit = 0.5;
+            global_bp.long.risk_twel_enforcer_threshold = 1.0;
+            global_bp.long.risk_twel_enforcer_policy = TwelEnforcerPolicy::ReduceOverweight;
+            global_bp.long.n_positions = 4;
+
+            let input = OrchestratorInput {
+                balance: 1000.0,
+                balance_raw: 1000.0,
+                timestamp_ms: 0,
+                global: OrchestratorGlobal {
+                    filter_by_min_effective_cost: false,
+                    market_orders_allowed: false,
+                    market_order_near_touch_threshold: 0.001,
+                    market_order_slippage_pct: 0.0,
+                    panic_close_market: false,
+                    auto_unstuck_allowed: Some(true),
+                    unstuck_allowance_long: 0.0,
+                    unstuck_allowance_short: 0.0,
+                    max_realized_loss_pct: 1.0,
+                    realized_pnl_cumsum_max: 0.0,
+                    realized_pnl_cumsum_last: 0.0,
+                    sort_global: true,
+                    global_bot_params: global_bp,
+                    hedge_mode: true,
+                    strategy_kind: StrategyKind::TrailingMartingale,
+                },
+                symbols: vec![sym0, sym1],
+                peek_hints: None,
+                forager_hysteresis: None,
+            };
+            let out = compute_ideal_orders_for_test(&input).unwrap();
+            let twel_closes = out
+                .orders
+                .iter()
+                .filter(|o| o.order_type == OrderType::CloseAutoReduceTwelLong)
+                .collect::<Vec<_>>();
+            assert!(
+                !twel_closes.is_empty(),
+                "TWEL reduce-overweight should still repair held positions when eligibility is zero"
             );
         }
 
@@ -4807,12 +6259,14 @@ mod core {
             let input = OrchestratorInput {
                 balance: 1000.0,
                 balance_raw: 500.0,
+                timestamp_ms: 0,
                 global: OrchestratorGlobal {
                     filter_by_min_effective_cost: false,
                     market_orders_allowed: false,
                     market_order_near_touch_threshold: 0.001,
                     market_order_slippage_pct: 0.0,
                     panic_close_market: false,
+                    auto_unstuck_allowed: Some(true),
                     unstuck_allowance_long: 0.0,
                     unstuck_allowance_short: 0.0,
                     max_realized_loss_pct: 1.0,
@@ -4821,12 +6275,13 @@ mod core {
                     sort_global: true,
                     global_bot_params: global_bp,
                     hedge_mode: true,
+                    strategy_kind: StrategyKind::TrailingMartingale,
                 },
                 symbols: vec![sym],
                 peek_hints: None,
                 forager_hysteresis: None,
             };
-            let out = compute_ideal_orders(&input).unwrap();
+            let out = compute_ideal_orders_for_test(&input).unwrap();
             let entry_orders: Vec<_> = out
                 .orders
                 .iter()
@@ -4876,12 +6331,14 @@ mod core {
             let input = OrchestratorInput {
                 balance: 1000.0,
                 balance_raw: 1000.0,
+                timestamp_ms: 0,
                 global: OrchestratorGlobal {
                     filter_by_min_effective_cost: false,
                     market_orders_allowed: false,
                     market_order_near_touch_threshold: 0.001,
                     market_order_slippage_pct: 0.0,
                     panic_close_market: false,
+                    auto_unstuck_allowed: Some(true),
                     unstuck_allowance_long: 0.0,
                     unstuck_allowance_short: 0.0,
                     max_realized_loss_pct: 0.0,
@@ -4890,12 +6347,13 @@ mod core {
                     sort_global: true,
                     global_bot_params: global_bp,
                     hedge_mode: true,
+                    strategy_kind: StrategyKind::TrailingMartingale,
                 },
                 symbols: vec![sym],
                 peek_hints: None,
                 forager_hysteresis: None,
             };
-            let out = compute_ideal_orders(&input).unwrap();
+            let out = compute_ideal_orders_for_test(&input).unwrap();
             assert_eq!(out.orders.len(), 1);
             assert_eq!(out.orders[0].order_type, OrderType::ClosePanicLong);
             assert!(
@@ -4924,12 +6382,14 @@ mod core {
             let input = OrchestratorInput {
                 balance: 1000.0,
                 balance_raw: 1000.0,
+                timestamp_ms: 0,
                 global: OrchestratorGlobal {
                     filter_by_min_effective_cost: false,
                     market_orders_allowed: false,
                     market_order_near_touch_threshold: 0.001,
                     market_order_slippage_pct: 0.0,
                     panic_close_market: false,
+                    auto_unstuck_allowed: Some(true),
                     unstuck_allowance_long: 1000.0,
                     unstuck_allowance_short: 1000.0,
                     max_realized_loss_pct: 1.0,
@@ -4938,12 +6398,13 @@ mod core {
                     sort_global: true,
                     global_bot_params: global_bp,
                     hedge_mode: true,
+                    strategy_kind: StrategyKind::TrailingMartingale,
                 },
                 symbols: vec![sym],
                 peek_hints: None,
                 forager_hysteresis: None,
             };
-            let out = compute_ideal_orders(&input).unwrap();
+            let out = compute_ideal_orders_for_test(&input).unwrap();
             assert_eq!(out.orders.len(), 1);
             assert_eq!(out.orders[0].order_type, OrderType::ClosePanicLong);
         }

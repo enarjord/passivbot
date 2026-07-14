@@ -1,14 +1,17 @@
 """Regression tests for optimizer warmup stamping.
 
 Covers the bug where prepare_hlcvs_mss stamped mss[coin]["warmup_minutes"]
-from the template bot's decorative values (e.g. entry_volatility_ema_span_hours)
+from the template bot's decorative values (e.g. volatility_ema_span_1h)
 instead of the worst case the optimizer's search space can actually produce.
 """
 
 from pathlib import Path
 
+import pytest
+
 from config_utils import get_template_config
 from optimization.warmup import (
+    _apply_config_overrides,
     compute_optimizer_backtest_warmup_minutes,
     compute_optimizer_per_coin_warmup_minutes,
     stamp_warmup_metadata,
@@ -19,7 +22,7 @@ from warmup_utils import compute_per_coin_warmup_minutes
 def _make_optimizer_config() -> dict:
     """Build a config where template bot and bounds disagree on warmup.
 
-    Template bot has entry_volatility_ema_span_hours = 1690, which would
+    Template bot has volatility_ema_span_1h = 1690, which would
     produce warmup = 1690 * 60 * 0.3 = 30420 min under
     compute_per_coin_warmup_minutes.
 
@@ -34,30 +37,34 @@ def _make_optimizer_config() -> dict:
     config["backtest"]["coins"] = {"combined": ["HYPE"]}
 
     long_bot = config["bot"]["long"]
-    long_bot["ema_span_0"] = 770.0
-    long_bot["ema_span_1"] = 210.0
-    long_bot["forager_volume_ema_span"] = 520.0
-    long_bot["forager_volatility_ema_span"] = 225.0
-    long_bot["entry_volatility_ema_span_hours"] = 1690.0
+    long_bot["strategy"]["trailing_martingale"]["ema_span_0"] = 770.0
+    long_bot["strategy"]["trailing_martingale"]["ema_span_1"] = 210.0
+    long_bot["forager"]["volume_ema_span_1m"] = 520.0
+    long_bot["forager"]["volatility_ema_span_1m"] = 225.0
+    long_bot["strategy"]["trailing_martingale"]["volatility_ema_span_1h"] = 1690.0
+    long_bot["strategy"]["trailing_martingale"]["volatility_ema_span_1m"] = 60.0
 
     short_bot = config["bot"]["short"]
-    short_bot["ema_span_0"] = 1.0
-    short_bot["ema_span_1"] = 1.0
-    short_bot["forager_volume_ema_span"] = 0.0
-    short_bot["forager_volatility_ema_span"] = 0.0
-    short_bot["entry_volatility_ema_span_hours"] = 0.0
+    short_bot["strategy"]["trailing_martingale"]["ema_span_0"] = 1.0
+    short_bot["strategy"]["trailing_martingale"]["ema_span_1"] = 1.0
+    short_bot["forager"]["volume_ema_span_1m"] = 0.0
+    short_bot["forager"]["volatility_ema_span_1m"] = 0.0
+    short_bot["strategy"]["trailing_martingale"]["volatility_ema_span_1h"] = 0.0
+    short_bot["strategy"]["trailing_martingale"]["volatility_ema_span_1m"] = 0.0
 
     bounds = config["optimize"]["bounds"]
     bounds["long_ema_span_0"] = [1, 100, 1]
     bounds["long_ema_span_1"] = [1, 100, 1]
-    bounds["long_forager_volatility_ema_span"] = [0, 0]
-    bounds["long_forager_volume_ema_span"] = [0, 0]
-    bounds["long_entry_volatility_ema_span_hours"] = [0, 0]
+    bounds["long_forager_volatility_ema_span_1m"] = [0, 0]
+    bounds["long_forager_volume_ema_span_1m"] = [0, 0]
+    bounds["long_volatility_ema_span_1h"] = [0, 0]
+    bounds["long_volatility_ema_span_1m"] = [0, 0]
     bounds["short_ema_span_0"] = [1, 100, 1]
     bounds["short_ema_span_1"] = [1, 100, 1]
-    bounds["short_forager_volatility_ema_span"] = [0, 0]
-    bounds["short_forager_volume_ema_span"] = [0, 0]
-    bounds["short_entry_volatility_ema_span_hours"] = [0, 0]
+    bounds["short_forager_volatility_ema_span_1m"] = [0, 0]
+    bounds["short_forager_volume_ema_span_1m"] = [0, 0]
+    bounds["short_volatility_ema_span_1h"] = [0, 0]
+    bounds["short_volatility_ema_span_1m"] = [0, 0]
     return config
 
 
@@ -94,6 +101,15 @@ def test_shared_optimizer_warmup_helper_uses_bounds_when_template_bot_exceeds_th
     assert warmup_map["__default__"] == 30
     assert "HYPE" not in warmup_map
     assert compute_optimizer_backtest_warmup_minutes(config) == 30
+
+
+def test_optimizer_warmup_fixed_runtime_override_rejects_unknown_path():
+    config = get_template_config()
+
+    with pytest.raises(KeyError, match="n_positons"):
+        _apply_config_overrides(config, {"bot.long.risk.n_positons": 7})
+
+    assert "n_positons" not in config["bot"]["long"]["risk"]
 
 
 def test_stamp_optimizer_warmup_respects_last_valid_index_cap():

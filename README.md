@@ -4,6 +4,14 @@
 
 :warning: **Used at one's own risk** :warning:
 
+Current stable major version: **v8.0.0**.
+
+> **Upgrading from v7:** v8 is a breaking config and strategy release. Do not
+> start v8 live with an unreviewed v7 config. Read the
+> [v8.0.0 upgrade notes](docs/release_notes_v8.0.0.md) and use the explicit
+> `passivbot tool migrate-config-v7` helper when preserving v7 trailing-grid
+> behavior.
+
 
 ## Overview
 
@@ -35,6 +43,27 @@ Passivbot manages underperforming, or "stuck", positions by realizing small loss
 To install Passivbot and its dependencies, follow the steps below.
 
 Passivbot requires **Python 3.12**. Earlier versions are not supported.
+
+### Upgrading a v7 config
+
+V8 does not silently reinterpret v7 strategy fields. To preserve v7
+trailing-grid behavior while moving the config into canonical v8 shape, run:
+
+```sh
+passivbot tool migrate-config-v7 \
+  path/to/config_v7.json \
+  path/to/config_v8_trailing_grid_v7.json \
+  --report path/to/v7_migration_report.json
+```
+
+The helper writes the deprecated compatibility strategy `trailing_grid_v7`;
+it does not translate the config into the new `trailing_martingale` strategy.
+If unsupported or ambiguous fields require manual review, the command returns
+nonzero and does not write the output config unless
+`--allow-manual-review-output` is explicitly supplied. Review the report and
+backtest the result before considering a live run. New configs and new
+optimization work should start from
+`configs/examples/default_trailing_martingale_long.json`.
 
 ### Step 1: Clone the Repository
 
@@ -134,7 +163,7 @@ To start the bot with the default settings, run:
 passivbot live -u {account_name_from_api-keys.json}
 ```
 
-or make a new configuration file, using `configs/examples/default_trailing_grid_long_npos7.json` as a starting point, and start the bot with:
+or make a new configuration file, using `configs/examples/default_trailing_martingale_long.json` as a starting point, and start the bot with:
 
 
 ```sh
@@ -145,7 +174,7 @@ Legacy direct-script entrypoints such as `python3 src/main.py ...`, `python3 src
 and `python3 src/optimize.py ...` still work unchanged for backwards compatibility.
 
 The canonical hardcoded defaults live in `src/config/schema.py`. The example config
-`configs/examples/default_trailing_grid_long_npos7.json` mirrors that default profile exactly, so
+`configs/examples/default_trailing_martingale_long.json` mirrors that default profile exactly, so
 copying it is the recommended starting point for new configs.
 
 ### Logging

@@ -137,3 +137,72 @@ def test_compute_per_coin_warmup_minutes_handles_overrides():
     result = compute_per_coin_warmup_minutes(config)
     assert result["__default__"] == 5
     assert result["ALTC"] == 20
+
+
+def test_warn_hlcv_valid_range_coverage_reports_interior_loss(caplog):
+    """When interior gaps split a coin's history and the shorter real segment
+    is excluded from the tradable window, the loss must be surfaced."""
+    config = {"backtest": {"start_date": "2024-01-01", "end_date": "2024-01-02"}}
+    timestamps = np.array([1704067200000 + i * 60_000 for i in range(1441)], dtype=np.int64)
+    mss = {
+        "SPLIT": {
+            # Longest contiguous run: 1000 minutes; 340 real minutes excluded.
+            "first_valid_index": 0,
+            "last_valid_index": 999,
+            "coverage_valid_rows": 1340,
+            "coverage_internal_gap_count": 1,
+            "coverage_internal_gap_minutes": 100,
+        }
+    }
+
+    caplog.set_level(logging.WARNING)
+    warn_hlcv_valid_range_coverage(config, ["SPLIT"], mss, timestamps)
+
+    assert "SPLIT: 340 minutes of real data are excluded" in caplog.text
+    assert "interior gaps split the history (1 gap(s), 100 missing minutes)" in caplog.text
+
+
+def test_warn_hlcv_valid_range_coverage_interior_loss_below_threshold_silent(caplog):
+    config = {"backtest": {"start_date": "2024-01-01", "end_date": "2024-01-02"}}
+    timestamps = np.array([1704067200000 + i * 60_000 for i in range(1441)], dtype=np.int64)
+    mss = {
+        "TINY": {
+            "first_valid_index": 0,
+            "last_valid_index": 1440,
+            "coverage_valid_rows": 1441 + 0,  # nothing excluded
+        },
+        "SMALL": {
+            "first_valid_index": 0,
+            "last_valid_index": 1430,
+            "coverage_valid_rows": 1440,  # 9 excluded, below 60-minute threshold
+        },
+    }
+
+    caplog.set_level(logging.WARNING)
+    warn_hlcv_valid_range_coverage(config, ["TINY", "SMALL"], mss, timestamps)
+
+    assert "excluded from the backtest" not in caplog.text
+
+
+def test_warn_hlcv_valid_range_coverage_reports_synthetic_share(caplog):
+    """xyz stock-perps coins get an INFO note with the synthetic-candle share
+    instead of the interior-loss warning (synthetic gaps are tradable there
+    by design; see docs/stock_perps.md)."""
+    config = {"backtest": {"start_date": "2024-01-01", "end_date": "2024-01-02"}}
+    timestamps = np.array([1704067200000 + i * 60_000 for i in range(1441)], dtype=np.int64)
+    mss = {
+        "xyz:TSLA": {
+            "first_valid_index": 0,
+            "last_valid_index": 1440,
+            "coverage_valid_rows": 400,
+            "synthetic_gap_fill_count": 1041,
+            "synthetic_gap_fill_tradable": True,
+        }
+    }
+
+    caplog.set_level(logging.INFO)
+    warn_hlcv_valid_range_coverage(config, ["xyz:TSLA"], mss, timestamps)
+
+    assert "xyz:TSLA: 1041 of 1441 tradable minutes" in caplog.text
+    assert "synthetic flat" in caplog.text
+    assert "excluded from the backtest" not in caplog.text

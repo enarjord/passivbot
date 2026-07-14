@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+import rust_utils
 from rust_utils import (
     _installed_extension_candidates,
     acquire_lock,
@@ -49,6 +50,80 @@ def test_latest_mtime_helpers(tmp_path: Path):
     assert comp_mtime is not None
     assert isinstance(src_mtime, float)
     assert isinstance(comp_mtime, float)
+
+
+def test_extension_suffixes_include_abi3_and_generic_suffixes(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(
+        rust_utils.sysconfig,
+        "get_config_var",
+        lambda name: ".cpython-314-x86_64-linux-gnu.so" if name == "EXT_SUFFIX" else None,
+    )
+    monkeypatch.setattr(
+        rust_utils.importlib.machinery,
+        "EXTENSION_SUFFIXES",
+        [".cpython-314-x86_64-linux-gnu.so", ".abi3.so", ".so"],
+    )
+
+    suffixes = rust_utils._extension_suffixes()
+
+    assert suffixes[0] == "cpython-314-x86_64-linux-gnu.so"
+    assert "abi3.so" in suffixes
+    assert "so" in suffixes
+
+
+def test_import_target_compiled_path_accepts_abi3_origin(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    abi3 = tmp_path / "passivbot_rust.abi3.so"
+    abi3.write_text("binary")
+    spec = SimpleNamespace(origin=str(abi3), submodule_search_locations=None)
+    monkeypatch.setattr(
+        rust_utils.sysconfig,
+        "get_config_var",
+        lambda name: ".cpython-314-x86_64-linux-gnu.so" if name == "EXT_SUFFIX" else None,
+    )
+    monkeypatch.setattr(
+        rust_utils.importlib.machinery,
+        "EXTENSION_SUFFIXES",
+        [".cpython-314-x86_64-linux-gnu.so", ".abi3.so", ".so"],
+    )
+    monkeypatch.setattr(
+        rust_utils.importlib.util,
+        "find_spec",
+        lambda name: spec if name == "passivbot_rust" else None,
+    )
+
+    assert rust_utils._import_target_compiled_path() == abi3
+
+
+def test_installed_extension_candidates_include_abi3_artifacts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    site_packages = tmp_path / "site-packages"
+    site_packages.mkdir()
+    abi3 = site_packages / "passivbot_rust.abi3.so"
+    abi3.write_text("binary")
+    monkeypatch.setattr(
+        rust_utils.sysconfig,
+        "get_config_var",
+        lambda name: ".cpython-314-x86_64-linux-gnu.so" if name == "EXT_SUFFIX" else None,
+    )
+    monkeypatch.setattr(
+        rust_utils.importlib.machinery,
+        "EXTENSION_SUFFIXES",
+        [".cpython-314-x86_64-linux-gnu.so", ".abi3.so", ".so"],
+    )
+    monkeypatch.setattr(
+        rust_utils.sysconfig,
+        "get_paths",
+        lambda: {"platlib": str(site_packages), "purelib": str(site_packages)},
+    )
+
+    assert abi3 in _installed_extension_candidates()
 
 
 def test_check_and_maybe_compile_errors_on_import(monkeypatch):

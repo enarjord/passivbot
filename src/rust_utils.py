@@ -7,6 +7,7 @@ itself; it only inspects filesystem state.
 
 from __future__ import annotations
 
+import importlib.machinery
 import importlib.util
 import os
 import subprocess
@@ -28,11 +29,15 @@ _LOCK_HANDLE = None
 
 def _extension_suffixes() -> list[str]:
     # Prefer the exact interpreter suffix when available (e.g. `.cpython-312-darwin.so`),
-    # but keep broad fallbacks for non-standard environments.
+    # but also include abi3/generic suffixes that importlib accepts. Abi3 wheels install as
+    # `passivbot_rust.abi3.so`, which does not match the interpreter-specific EXT_SUFFIX.
+    suffixes: list[str] = []
     suffix = sysconfig.get_config_var("EXT_SUFFIX")
     if suffix:
-        return [suffix.lstrip(".")]
-    return ["so", "pyd", "dll", "dylib", "bundle", "sl"]
+        suffixes.append(suffix)
+    suffixes.extend(getattr(importlib.machinery, "EXTENSION_SUFFIXES", ()))
+    suffixes.extend((".so", ".pyd", ".dll", ".dylib", ".bundle", ".sl"))
+    return list(dict.fromkeys(suffix.lstrip(".") for suffix in suffixes if suffix))
 
 
 def _local_extension_candidates() -> list[Path]:

@@ -1,12 +1,20 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from difflib import get_close_matches
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from config.limits import resolve_limit_stat
-from config.metrics import canonical_metric_name
+from config.metrics import ANALYSIS_SHARED_KEYS, CURRENCY_METRICS, METRIC_ALIASES, canonical_metric_name
 
 _BOUNDARY_VIOLATION_EPSILON = 1e-12
+_KNOWN_LIMIT_METRICS = (
+    set(ANALYSIS_SHARED_KEYS)
+    | set(CURRENCY_METRICS)
+    | {f"{metric}_usd" for metric in CURRENCY_METRICS}
+    | {f"{metric}_btc" for metric in CURRENCY_METRICS}
+    | set(METRIC_ALIASES)
+)
 
 
 def expand_limit_checks(
@@ -32,6 +40,7 @@ def expand_limit_checks(
         if not metric:
             continue
         metric = canonical_metric_name(str(metric))
+        _validate_limit_metric(metric, raw_entry)
         mode = entry.get("penalize_if") or "greater_than"
         if mode == "auto":
             weight = weights.get(metric)
@@ -81,6 +90,28 @@ def expand_limit_checks(
         else:
             raise ValueError(f"Unsupported penalize_if '{mode}' for limit on {metric}.")
     return checks
+
+
+def _validate_limit_metric(metric: str, raw_entry: Dict[str, Any]) -> None:
+    if metric in _KNOWN_LIMIT_METRICS:
+        return
+
+    suggestions = []
+    mean_1pct_variant = metric.replace("_mean_", "_mean_1pct_")
+    if mean_1pct_variant in _KNOWN_LIMIT_METRICS:
+        suggestions.append(mean_1pct_variant)
+    suggestions.extend(
+        candidate
+        for candidate in get_close_matches(metric, sorted(_KNOWN_LIMIT_METRICS), n=5, cutoff=0.55)
+        if candidate not in suggestions
+    )
+    hint = ""
+    if suggestions:
+        hint = f" Did you mean: {', '.join(suggestions[:3])}?"
+    source = ""
+    if isinstance(raw_entry, dict) and raw_entry.get("metric") != metric:
+        source = f" (from {raw_entry.get('metric')!r})"
+    raise ValueError(f"unknown optimizer limit metric {metric!r}{source}.{hint}")
 
 
 def compute_limit_violation(check: Dict[str, Any], value: Optional[float]) -> float:

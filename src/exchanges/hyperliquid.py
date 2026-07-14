@@ -456,6 +456,10 @@ class HyperliquidBot(CCXTBot):
         if self.HIP3_ISOLATED_SUPPORTED or self._hl_supports_hip3_live_trading():
             return
         unsupported = []
+        position_symbols = set()
+        open_order_symbols = set()
+        isolated_only_symbols = set()
+        live_isolated_symbols = set()
         approved = set()
         for syms in getattr(self, "approved_coins_minus_ignored_coins", {}).values():
             approved.update(syms)
@@ -479,8 +483,16 @@ class HyperliquidBot(CCXTBot):
             has_orders = bool(getattr(self, "open_orders", {}).get(symbol))
             if not (has_pos or has_orders):
                 continue
+            if has_pos:
+                position_symbols.add(symbol)
+            if has_orders:
+                open_order_symbols.add(symbol)
             isolated_live_mode = getattr(self, "_hl_live_margin_modes", {}).get(symbol) == "isolated"
             isolated_only = self._requires_isolated_margin(symbol)
+            if isolated_only:
+                isolated_only_symbols.add(symbol)
+            if isolated_live_mode:
+                live_isolated_symbols.add(symbol)
             reasons = []
             if isolated_only:
                 reasons.append("isolated-only market")
@@ -498,6 +510,15 @@ class HyperliquidBot(CCXTBot):
                 f"({'/'.join(state_bits)}; {', '.join(reasons)})"
             )
         if unsupported:
+            self._emit_hip3_account_mode_unsupported_event(
+                account_abstraction=getattr(self, "_hl_user_abstraction", "unknown"),
+                action="fatal_live_state_rejected",
+                approved_symbols=approved_hip3,
+                position_symbols=position_symbols,
+                open_order_symbols=open_order_symbols,
+                isolated_only_symbols=isolated_only_symbols,
+                live_isolated_symbols=live_isolated_symbols,
+            )
             raise FatalBotException(
                 "Hyperliquid HIP-3/non-standard perps require unifiedAccount or portfolioMargin "
                 "mode in Passivbot. "
@@ -1140,6 +1161,11 @@ class HyperliquidBot(CCXTBot):
             return False
 
         try:
+            self._emit_execution_connector_call_started_event(
+                order=order,
+                action="cancel",
+                connector_route="hyperliquid",
+            )
             res = await self.cca.cancel_order(order["id"], symbol=order["symbol"], params=params)
             # Sometimes hyperliquid returns an "ok" wrapper with an embedded error; treat as non-fatal.
             if _is_already_gone(res):
@@ -1295,10 +1321,19 @@ class HyperliquidBot(CCXTBot):
                         to_print = f"margin=ok (unchanged, {margin_mode})"
                     else:
                         log_symbol = symbol_to_coin(symbol, verbose=False) or symbol
-                        logging.error(f"{log_symbol} error setting {margin_mode} mode {e}")
+                        logging.error(
+                            "[config] %s %s-margin update failed | %s",
+                            log_symbol,
+                            margin_mode,
+                            self._format_exchange_config_error(e),
+                        )
             except Exception as e:
                 log_symbol = symbol_to_coin(symbol, verbose=False) or symbol
-                logging.error(f"{log_symbol}: error setting margin mode and leverage {e}")
+                logging.error(
+                    "[config] %s margin/leverage preparation failed | %s",
+                    log_symbol,
+                    self._format_exchange_config_error(e),
+                )
             if to_print:
                 log_symbol = symbol_to_coin(symbol, verbose=False) or symbol
                 logging.debug(f"{log_symbol}: {to_print}")

@@ -5,26 +5,19 @@ import json
 import os
 import re
 from copy import deepcopy
-from typing import Callable, Dict, List, Tuple
+from typing import Dict, List, Tuple
+from bitget_normalization import (
+    bitget_payload_context as _bitget_payload_context,
+    deduce_side_pside,
+    normalize_uta_fill_payload,
+)
 from utils import symbol_to_coin, utc_ms, ts_to_date
 from config.access import require_live_value
-from pure_funcs import calc_hash
 import passivbot_rust as pbr
 
 calc_order_price_diff = pbr.calc_order_price_diff
 
 _CLASSIC_ACCOUNT_MODE_CODES = {"40084", "25245"}
-
-
-def _bitget_payload_context(payload: object) -> str:
-    if isinstance(payload, dict):
-        keys = sorted(str(key) for key in payload.keys())
-        data = payload.get("data")
-        data_keys = sorted(str(key) for key in data.keys()) if isinstance(data, dict) else []
-        code = payload.get("code")
-        msg = payload.get("msg")
-        return f"code={code!r} msg={msg!r} keys={keys!r} data_keys={data_keys!r}"
-    return f"type={type(payload).__name__}"
 
 
 def _bitget_error_code_from_exception(exc: Exception) -> str:
@@ -47,250 +40,6 @@ def _bitget_error_code_from_exception(exc: Exception) -> str:
         return match.group(1)
     match = re.search(r"\b(40084|25245)\b", msg)
     return match.group(1) if match else ""
-
-
-def _require_uta_field(fill: dict, field: str) -> object:
-    if field not in fill or fill[field] in (None, ""):
-        raise ValueError(
-            f"bitget UTA fill missing required field {field!r}; "
-            f"context={_bitget_payload_context(fill)}"
-        )
-    return fill[field]
-
-
-def _require_uta_float(fill: dict, field: str, *, positive: bool = False) -> float:
-    raw = _require_uta_field(fill, field)
-    try:
-        value = float(raw)
-    except (TypeError, ValueError) as exc:
-        raise ValueError(
-            f"bitget UTA fill field {field!r} is not numeric; "
-            f"value={raw!r} context={_bitget_payload_context(fill)}"
-        ) from exc
-    if positive and value <= 0.0:
-        raise ValueError(
-            f"bitget UTA fill field {field!r} must be positive; "
-            f"value={raw!r} context={_bitget_payload_context(fill)}"
-        )
-    return value
-
-
-def _require_uta_timestamp(fill: dict) -> int:
-    raw = _require_uta_field(fill, "createdTime")
-    try:
-        timestamp = int(raw)
-    except (TypeError, ValueError) as exc:
-        raise ValueError(
-            f"bitget UTA fill createdTime is not an integer millisecond timestamp; "
-            f"value={raw!r} context={_bitget_payload_context(fill)}"
-        ) from exc
-    if timestamp <= 0:
-        raise ValueError(
-            f"bitget UTA fill createdTime must be positive; "
-            f"value={raw!r} context={_bitget_payload_context(fill)}"
-        )
-    return timestamp
-
-
-def _bitget_fee_paid_from_fee(raw_fee: object) -> float:
-    fee = float(raw_fee)
-    return fee if fee < 0.0 else -abs(fee)
-
-
-def normalize_bitget_fee_detail(fee_detail: object) -> object:
-    """Normalize Bitget feeDetail rows into canonical signed fee entries."""
-    if fee_detail is None:
-        return fee_detail
-    if isinstance(fee_detail, dict):
-        entries = [fee_detail]
-    elif isinstance(fee_detail, str):
-        try:
-            decoded = json.loads(fee_detail)
-        except Exception:
-            return fee_detail
-        if isinstance(decoded, dict):
-            entries = [decoded]
-        elif isinstance(decoded, list):
-            entries = [entry for entry in decoded if isinstance(entry, dict)]
-        else:
-            return fee_detail
-    else:
-        try:
-            entries = [entry for entry in list(fee_detail) if isinstance(entry, dict)]
-        except Exception:
-            return fee_detail
-    if not entries:
-        return fee_detail
-
-    normalized: List[Dict[str, object]] = []
-    for entry in entries:
-        item = dict(entry)
-        currency = (
-            item.get("currency")
-            or item.get("feeCoin")
-            or item.get("coin")
-            or item.get("asset")
-            or item.get("feeCurrency")
-        )
-        if currency:
-            item["currency"] = str(currency).upper()
-        try:
-            if item.get("fee_paid") not in (None, ""):
-                item["fee_paid"] = float(item["fee_paid"])
-            elif item.get("totalFee") not in (None, ""):
-                item["fee_paid"] = float(item["totalFee"])
-            elif item.get("fee") not in (None, ""):
-                item["fee_paid"] = _bitget_fee_paid_from_fee(item["fee"])
-            elif item.get("totalDeductionFee") not in (None, ""):
-                item["fee_paid"] = float(item["totalDeductionFee"])
-        except (TypeError, ValueError):
-            pass
-        normalized.append(item)
-    return normalized
-
-
-def deduce_side_pside(fill: dict) -> tuple[str, str]:
-    """Infer standard ``(side, pside)`` for a Bitget fill payload."""
-
-    trade_side = str(fill.get("tradeSide", "")).lower()
-    raw_side = str(fill.get("side", "")).lower()
-    pos_mode = str(fill.get("posMode", "")).lower()
-
-    def _canonical(side: str, pside: str) -> tuple[str, str]:
-        side = side or ("buy" if pside == "long" else "sell")
-        return side, pside
-
-    # Normalize hedge mode strings first.
-    if pos_mode == "hedge_mode":
-        if "close_long" in trade_side:
-            return _canonical("sell", "long")
-        if "close_short" in trade_side:
-            return _canonical("buy", "short")
-        if trade_side == "open":
-            if raw_side == "sell":
-                return _canonical("sell", "short")
-            return _canonical("buy", "long")
-        if trade_side == "close":
-            if raw_side == "buy":
-                return _canonical("sell", "long")
-            if raw_side == "sell":
-                return _canonical("buy", "long")
-            return _canonical("sell", "long")
-        if "long" in trade_side:
-            return _canonical("buy", "long")
-        if "short" in trade_side:
-            return _canonical("sell", "short")
-
-    # One-way mode ("single") encodes direction explicitly.
-    if "buy_single" in trade_side:
-        return _canonical("buy", "long")
-    if "sell_single" in trade_side:
-        return _canonical("sell", "short")
-    if "reduce_buy_single" in trade_side:
-        return _canonical("buy", "long")
-    if "reduce_sell_single" in trade_side:
-        return _canonical("sell", "short")
-    if "burst_buy_single" in trade_side:
-        return _canonical("buy", "long")
-    if "burst_sell_single" in trade_side:
-        return _canonical("sell", "short")
-    if "delivery_buy_single" in trade_side:
-        return _canonical("buy", "long")
-    if "delivery_sell_single" in trade_side:
-        return _canonical("sell", "short")
-    if "dte_sys_adl_buy_in_single_side_mode" in trade_side:
-        return _canonical("buy", "long")
-    if "dte_sys_adl_sell_in_single_side_mode" in trade_side:
-        return _canonical("sell", "short")
-
-    # Generic fallback: look for keywords.
-    if "close_long" in trade_side:
-        return _canonical("sell", "long")
-    if "close_short" in trade_side:
-        return _canonical("buy", "short")
-    if "buy" in trade_side:
-        return _canonical("buy", "long")
-    if "sell" in trade_side:
-        return _canonical("sell", "short")
-
-    if raw_side == "sell":
-        return _canonical("sell", "long")
-    if raw_side == "buy":
-        return _canonical("buy", "long")
-
-    return _canonical(raw_side or "buy", "long")
-
-
-def deduce_uta_side_pside(fill: dict) -> tuple[str, str]:
-    """Infer standard ``(side, pside)`` for Bitget UTA v3 fill payloads."""
-
-    raw_side = str(fill.get("side", "")).lower()
-    trade_side = str(fill.get("tradeSide", "")).lower()
-    pos_side = str(fill.get("posSide", "")).lower()
-
-    if pos_side not in ("long", "short"):
-        if trade_side == "close":
-            if raw_side == "buy":
-                pos_side = "short"
-            elif raw_side == "sell":
-                pos_side = "long"
-        elif trade_side == "open":
-            if raw_side == "buy":
-                pos_side = "long"
-            elif raw_side == "sell":
-                pos_side = "short"
-
-    if pos_side not in ("long", "short"):
-        raise ValueError(
-            "bitget UTA fill cannot infer position side; "
-            f"context={_bitget_payload_context(fill)}"
-        )
-
-    if raw_side not in ("buy", "sell"):
-        if trade_side == "close":
-            raw_side = "sell" if pos_side == "long" else "buy"
-        elif trade_side == "open":
-            raw_side = "buy" if pos_side == "long" else "sell"
-    if raw_side not in ("buy", "sell"):
-        raise ValueError(
-            "bitget UTA fill cannot infer order side; "
-            f"context={_bitget_payload_context(fill)}"
-        )
-
-    return raw_side, pos_side
-
-
-def normalize_uta_fill_payload(fill: dict, symbol_resolver: Callable[[str], str]) -> dict:
-    """Validate and normalize a Bitget UTA v3 fill payload."""
-
-    exec_id = str(_require_uta_field(fill, "execId"))
-    order_id = str(_require_uta_field(fill, "orderId"))
-    timestamp = _require_uta_timestamp(fill)
-    symbol_external = str(_require_uta_field(fill, "symbol"))
-    side, position_side = deduce_uta_side_pside(fill)
-    symbol = symbol_resolver(symbol_external)
-    if not symbol:
-        raise ValueError(
-            "bitget UTA fill symbol resolver returned an empty symbol; "
-            f"symbol={symbol_external!r} context={_bitget_payload_context(fill)}"
-        )
-    cid = fill.get("clientOid")
-    return {
-        "id": exec_id,
-        "order_id": order_id,
-        "timestamp": timestamp,
-        "datetime": ts_to_date(timestamp),
-        "symbol": symbol,
-        "symbol_external": symbol_external,
-        "side": side,
-        "qty": _require_uta_float(fill, "execQty", positive=True),
-        "price": _require_uta_float(fill, "execPrice", positive=True),
-        "pnl": _require_uta_float(fill, "execPnl"),
-        "fees": normalize_bitget_fee_detail(fill.get("feeDetail")),
-        "pb_order_type": custom_id_to_snake(cid) if cid else "",
-        "position_side": position_side,
-        "client_order_id": cid,
-    }
 
 
 class BitgetBot(CCXTBot):
@@ -481,83 +230,9 @@ class BitgetBot(CCXTBot):
     # ═══════════════════ BITGET-SPECIFIC METHODS ═══════════════════
 
     async def fetch_pnls(self, start_time=None, end_time=None, limit=None):
-        if getattr(self, "is_uta", False):
-            return await self._fetch_pnls_uta(start_time, end_time, limit)
-        params = {"productType": "USDT-FUTURES"}
-        if start_time:
-            start_time = int(start_time)
-        if end_time:
-            params["endTime"] = int(end_time)
-        if limit:
-            params["limit"] = min(100, limit)
-        side_pos_side_map = {"buy": "long", "sell": "short"}
-        data_d = {}
-        while True:
-            fetched = await self.cca.private_mix_get_v2_mix_order_fill_history(params)
-            end_id = fetched["data"]["endId"]
-            data = fetched["data"]["fillList"]
-            if data is None:
-                break
-            if not data:
-                break
-            with_hashes = {calc_hash(x): x for x in data}
-            if all([h in data_d for h in with_hashes]):
-                break
-            for h, x in with_hashes.items():
-                data_d[h] = x
-                data_d[h]["pnl"] = float(x["profit"])
-                data_d[h]["price"] = float(x["price"])
-                data_d[h]["amount"] = float(x["baseVolume"])
-                data_d[h]["id"] = x["tradeId"]
-                data_d[h]["timestamp"] = float(x["cTime"])
-                data_d[h]["datetime"] = ts_to_date(data_d[h]["timestamp"])
-                data_d[h]["position_side"] = side_pos_side_map[x["side"]]
-                data_d[h]["symbol"] = self.get_symbol_id_inv(x["symbol"])
-            if start_time is None:
-                break
-            last_ts = float(data[-1]["cTime"])
-            if last_ts < start_time:
-                break
-            logging.info(f"fetched {len(data)} fills until {ts_to_date(last_ts)[:19]}")
-            params["endTime"] = int(last_ts)
-        return sorted(data_d.values(), key=lambda x: x["timestamp"])
-
-    async def _fetch_pnls_uta(self, start_time=None, end_time=None, limit=None):
-        """UTA/elite variant of fetch_pnls using v3 trade fills (execPnl)."""
-        params = {"category": "USDT-FUTURES"}
-        if start_time:
-            start_time = int(start_time)
-        if end_time:
-            params["endTime"] = int(end_time)
-        params["limit"] = str(min(100, limit) if limit else 100)
-        data_d = {}
-        while True:
-            fetched = await self.cca.private_uta_get_v3_trade_fills(params)
-            data = (fetched.get("data") or {}).get("list") or []
-            if not data:
-                break
-            with_hashes = {calc_hash(x): x for x in data}
-            if all([h in data_d for h in with_hashes]):
-                break
-            for h, x in with_hashes.items():
-                event = normalize_uta_fill_payload(x, self.get_symbol_id_inv)
-                data_d[h] = dict(x)
-                data_d[h]["pnl"] = event["pnl"]
-                data_d[h]["price"] = event["price"]
-                data_d[h]["amount"] = event["qty"]
-                data_d[h]["id"] = event["id"]
-                data_d[h]["timestamp"] = float(event["timestamp"])
-                data_d[h]["datetime"] = event["datetime"]
-                data_d[h]["position_side"] = event["position_side"]
-                data_d[h]["symbol"] = event["symbol"]
-            if start_time is None:
-                break
-            last_ts = float(_require_uta_timestamp(data[-1]))
-            if last_ts <= start_time:
-                break
-            logging.info(f"fetched {len(data)} fills until {ts_to_date(last_ts)[:19]}")
-            params["endTime"] = int(last_ts)
-        return sorted(data_d.values(), key=lambda x: x["timestamp"])
+        raise NotImplementedError(
+            "Bitget fetch_pnls legacy PnL path is unsupported; use fetch_fill_events"
+        )
 
     async def _throttled_order_detail(self, order_id: str, symbol: str):
         """Rate limited wrapper for clientOid lookups."""
@@ -591,35 +266,36 @@ class BitgetBot(CCXTBot):
         )
 
     async def _ensure_client_oid_for_event(self, event: dict) -> None:
-        if not event.get("id"):
+        order_id = event.get("order_id") or event.get("id")
+        if not order_id:
             return
         if not hasattr(self, "_client_oid_cache"):
             self._client_oid_cache = {}
-        cached = self._client_oid_cache.get(event["id"])
+        cached = self._client_oid_cache.get(order_id)
         if cached:
             event["client_order_id"], event["pb_order_type"] = cached
             return
         try:
             order_details = await self._throttled_order_detail(
-                event["id"], self.get_symbol_id(event["symbol"])
+                order_id, self.get_symbol_id(event["symbol"])
             )
             client_oid = order_details.get("data", {}).get("clientOid")
             if client_oid:
                 pb_type = custom_id_to_snake(client_oid)
                 event["client_order_id"] = client_oid
                 event["pb_order_type"] = pb_type
-                self._client_oid_cache[event["id"]] = (client_oid, pb_type)
+                self._client_oid_cache[order_id] = (client_oid, pb_type)
             else:
                 logging.debug(
                     "bitget order detail missing clientOid for id=%s symbol=%s",
-                    event["id"],
+                    order_id,
                     symbol_to_coin(event["symbol"] or "", verbose=False)
                     or event["symbol"],
                 )
         except Exception as exc:
             logging.warning(
                 "failed to fetch bitget order detail for id=%s symbol=%s: %s",
-                event["id"],
+                order_id,
                 symbol_to_coin(event["symbol"] or "", verbose=False)
                 or event["symbol"],
                 exc,
@@ -643,7 +319,7 @@ class BitgetBot(CCXTBot):
             except Exception:
                 pass
         for evt in source_events:
-            evt_id = evt.get("id")
+            evt_id = evt.get("order_id") or evt.get("id")
             cid = evt.get("client_order_id")
             pb = evt.get("pb_order_type")
             if evt_id and cid and evt_id not in self._client_oid_cache:
@@ -656,8 +332,30 @@ class BitgetBot(CCXTBot):
         def _extract_fill(elm: dict) -> dict:
             timestamp = int(elm["cTime"])
             side, position_side = deduce_side_pside(elm)
+            order_id = str(elm.get("orderId") or "")
+            fill_id = (
+                elm.get("tradeId")
+                or elm.get("fillId")
+                or elm.get("execId")
+                or elm.get("id")
+            )
+            if fill_id:
+                event_id = str(fill_id)
+            else:
+                event_id = json.dumps(
+                    [
+                        order_id,
+                        timestamp,
+                        side,
+                        position_side,
+                        elm.get("baseVolume"),
+                        elm.get("price"),
+                    ],
+                    separators=(",", ":"),
+                )
             return {
-                "id": elm.get("orderId"),
+                "id": event_id,
+                "order_id": order_id,
                 "timestamp": timestamp,
                 "datetime": ts_to_date(timestamp),
                 "symbol": self.get_symbol_id_inv(elm["symbol"]),
@@ -718,19 +416,20 @@ class BitgetBot(CCXTBot):
                     continue
                 if event_id in events_map:
                     continue
-                cached = self._client_oid_cache.get(event_id)
+                order_id = event.get("order_id") or event_id
+                cached = self._client_oid_cache.get(order_id)
                 if cached:
                     event["client_order_id"], event["pb_order_type"] = cached
                 if not event.get("client_order_id"):
                     pending.append(
                         (
-                            event_id,
+                            order_id,
                             event,
                             asyncio.create_task(self._ensure_client_oid_for_event(event)),
                         )
                     )
                 else:
-                    self._client_oid_cache[event_id] = (
+                    self._client_oid_cache[order_id] = (
                         event["client_order_id"],
                         event.get("pb_order_type"),
                     )
@@ -786,7 +485,7 @@ class BitgetBot(CCXTBot):
         enrichment is needed. Deduped by execId."""
 
         def _extract(elm: dict) -> dict:
-            event = normalize_uta_fill_payload(elm, self.get_symbol_id_inv)
+            event = normalize_uta_fill_payload(elm, self.get_symbol_id_inv, custom_id_to_snake)
             event["info"] = elm
             return event
 
@@ -1034,13 +733,22 @@ class BitgetBot(CCXTBot):
                         )
                     )
                 except Exception as e:
-                    logging.error(f"{log_symbol}: error setting {margin_mode} mode {e}")
+                    logging.error(
+                        "[config] %s %s-margin task creation failed | %s",
+                        log_symbol,
+                        margin_mode,
+                        self._format_exchange_config_error(e),
+                    )
             try:
                 coros_to_call_lev[symbol] = asyncio.create_task(
                     self.cca.set_leverage(self._calc_leverage_for_symbol(symbol), symbol=symbol)
                 )
             except Exception as e:
-                logging.error(f"{log_symbol}: error setting leverage {e}")
+                logging.error(
+                    "[config] %s leverage task creation failed | %s",
+                    log_symbol,
+                    self._format_exchange_config_error(e),
+                )
         for symbol in symbols:
             log_symbol = symbol_to_coin(symbol, verbose=False) or symbol
             res = None
@@ -1049,7 +757,11 @@ class BitgetBot(CCXTBot):
                 res = await coros_to_call_lev[symbol]
                 to_print += f"leverage={format_exchange_config_response(res)} "
             except Exception as e:
-                logging.error(f"{log_symbol} error setting leverage {e}")
+                logging.error(
+                    "[config] %s leverage update failed | %s",
+                    log_symbol,
+                    self._format_exchange_config_error(e),
+                )
             res = None
             if symbol in coros_to_call_margin_mode:
                 try:
@@ -1057,7 +769,10 @@ class BitgetBot(CCXTBot):
                     to_print += f"margin={format_exchange_config_response(res)}"
                 except Exception as e:
                     logging.error(
-                        f"{log_symbol} error setting {self._get_margin_mode_for_symbol(symbol)} mode {e}"
+                        "[config] %s %s-margin update failed | %s",
+                        log_symbol,
+                        self._get_margin_mode_for_symbol(symbol),
+                        self._format_exchange_config_error(e),
                     )
             if to_print:
                 logging.info(f"{log_symbol}: {to_print}")
@@ -1098,9 +813,15 @@ class BitgetBot(CCXTBot):
         res = None
         try:
             res = await self.cca.set_position_mode(True)
-            logging.debug("[config] set hedge mode response: %s", res)
+            logging.debug(
+                "[config] set hedge mode response: %s", format_exchange_config_response(res)
+            )
         except Exception as e:
-            logging.error("[config] error setting hedge mode: %s %s", e, res)
+            logging.error(
+                "[config] hedge mode update failed | %s",
+                self._format_exchange_config_error(e),
+            )
+            raise
 
     def format_custom_id_single(self, order_type_id: int) -> str:
         formatted = super().format_custom_id_single(order_type_id)

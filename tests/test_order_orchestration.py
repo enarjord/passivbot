@@ -4,6 +4,7 @@ import types
 import pytest
 import passivbot_rust as pbr
 from passivbot import Passivbot
+from exchanges.ccxt_bot import CCXTBot
 
 
 class OrchestrationBot(Passivbot):
@@ -84,6 +85,82 @@ def _make_order(
     }
 
 
+def test_coin_hsl_pending_replay_mode_override_is_pair_scoped():
+    bot = Passivbot.__new__(Passivbot)
+    bot.hsl = {
+        "long": {"orange_tier_mode": "graceful_stop"},
+        "short": {"orange_tier_mode": "graceful_stop"},
+    }
+    bot._runtime_forced_modes = {
+        "long": {"BTC/USDT:USDT": "panic", "ETH/USDT:USDT": "panic"},
+        "short": {},
+    }
+    bot._equity_hard_stop_coin_replay_pending_pairs = {
+        ("long", "BTC/USDT:USDT"),
+        ("long", "MANUAL/USDT:USDT"),
+    }
+    bot._equity_hard_stop_enabled = lambda pside=None: True
+    bot._equity_hard_stop_signal_mode = lambda: "coin"
+    bot._hsl_state = lambda pside: {"halted": False}
+    bot._equity_hard_stop_runtime_red_latched = lambda pside: False
+    bot._equity_hard_stop_runtime_tier = lambda pside: "green"
+    bot.config_get = lambda path, symbol=None: (
+        "manual" if symbol == "MANUAL/USDT:USDT" else None
+    )
+    bot.markets_dict = {
+        "BTC/USDT:USDT": {"active": True},
+        "ETH/USDT:USDT": {"active": True},
+        "MANUAL/USDT:USDT": {"active": True},
+    }
+    bot.ineligible_symbols = {}
+    bot._apply_ignored_coin_mode = lambda pside, symbol, mode=None: mode
+
+    assert (
+        bot._orchestrator_mode_override("long", "BTC/USDT:USDT")
+        == "graceful_stop"
+    )
+    assert bot.get_forced_PB_mode("long", "BTC/USDT:USDT") == "graceful_stop"
+    assert bot._orchestrator_mode_override("short", "BTC/USDT:USDT") is None
+    assert bot._orchestrator_mode_override("long", "ETH/USDT:USDT") == "panic"
+    assert bot.get_forced_PB_mode("long", "ETH/USDT:USDT") == "panic"
+    assert bot._orchestrator_mode_override("long", "MANUAL/USDT:USDT") == "manual"
+    assert bot.get_forced_PB_mode("long", "MANUAL/USDT:USDT") == "manual"
+
+
+@pytest.mark.parametrize(
+    ("order_type", "qty", "position_side", "position_size"),
+    [
+        ("entry_ema_anchor_long", 0.1, "long", 0.0),
+        ("close_ema_anchor_long", -0.1, "long", 1.0),
+        ("entry_ema_anchor_short", -0.1, "short", 0.0),
+        ("close_ema_anchor_short", 0.1, "short", -1.0),
+    ],
+)
+def test_ema_anchor_limit_orders_route_to_ccxt_post_only_params(
+    order_type, qty, position_side, position_size
+):
+    symbol = "TEST/USDT:USDT"
+    bot = OrchestrationBot({symbol: 100.0})
+    bot.register_symbol(symbol)
+    bot.positions[symbol][position_side]["size"] = position_size
+    order_type_id = pbr.order_type_snake_to_id(order_type)
+    ideal_orders = {symbol: [(qty, 100.0, order_type, order_type_id, "limit")]}
+
+    orders_by_symbol, _ = bot._to_executable_orders(ideal_orders, {symbol: 100.0})
+    [order] = orders_by_symbol[symbol]
+
+    assert order["pb_order_type"] == order_type
+    assert order["type"] == "limit"
+    assert order["position_side"] == position_side
+
+    ccxt_bot = CCXTBot.__new__(CCXTBot)
+    ccxt_bot.config = {"live": {"time_in_force": "post_only"}}
+
+    params = ccxt_bot._build_order_params(order)
+
+    assert params["postOnly"] is True
+
+
 def test_startup_banner_warns_when_market_orders_allowed(caplog):
     bot = Passivbot.__new__(Passivbot)
     bot.user = "hyperliquid_pf1"
@@ -156,6 +233,16 @@ def test_market_execution_notice_is_not_suppressed(caplog):
     assert all("pb_type=close_grid_long" in rec.message for rec in records)
 
 
+def test_base_did_create_order_rejects_terminal_statuses():
+    bot = Passivbot.__new__(Passivbot)
+
+    assert bot.did_create_order({"id": "open-1", "status": "open"})
+    assert not bot.did_create_order({"id": "", "status": "open"})
+    assert not bot.did_create_order({"id": "reject-1", "status": "rejected"})
+    assert not bot.did_create_order({"id": "cancel-1", "info": {"status": "canceled"}})
+    assert not bot.did_create_order({"id": "expire-1", "info": {"ordStatus": "EXPIRED"}})
+
+
 @pytest.mark.asyncio
 async def test_calc_orders_to_cancel_and_create_reconciles_orders(monkeypatch):
     symbol = "BTC/USDT"
@@ -216,6 +303,555 @@ async def test_calc_orders_to_cancel_and_create_reconciles_orders(monkeypatch):
     assert [order["custom_id"] for order in to_create] == [
         f"order-0x{pbr.order_type_snake_to_id(new_type):04x}"
     ]
+
+
+@pytest.mark.asyncio
+async def test_calc_orders_preserves_orders_when_trailing_anchor_unavailable():
+    symbol = "BTC/USDT"
+    bot = OrchestrationBot({symbol: 100.0})
+    bot.register_symbol(symbol)
+    bot._orchestrator_trailing_unavailable_symbols = {symbol}
+
+    bot.open_orders[symbol] = [
+        {
+            "symbol": symbol,
+            "side": "sell",
+            "position_side": "long",
+            "qty": 1.0,
+            "price": 101.0,
+            "custom_id": "order-0x0004",
+        }
+    ]
+
+    async def fake_calc_ideal_orders(self):
+        return {
+            symbol: [
+                _make_order(
+                    symbol,
+                    "sell",
+                    "long",
+                    1.0,
+                    103.0,
+                    "close_grid_long",
+                    reduce_only=True,
+                )
+            ]
+        }
+
+    bot.calc_ideal_orders = types.MethodType(fake_calc_ideal_orders, bot)
+
+    to_cancel, to_create = await bot.calc_orders_to_cancel_and_create()
+
+    assert to_cancel == []
+    assert to_create == []
+
+
+@pytest.mark.asyncio
+async def test_calc_orders_allows_panic_close_when_trailing_candles_pending():
+    symbol = "BTC/USDT"
+    bot = OrchestrationBot({symbol: 100.0})
+    bot.register_symbol(symbol)
+    bot._orchestrator_trailing_unavailable_symbols = {symbol}
+    bot._orchestrator_trailing_unavailable_reasons = {
+        symbol: ["missing_trailing_candles"]
+    }
+
+    bot.open_orders[symbol] = [
+        _make_order(
+            symbol,
+            "buy",
+            "long",
+            1.0,
+            99.0,
+            "entry_grid_normal_long",
+        ),
+        _make_order(
+            symbol,
+            "sell",
+            "long",
+            1.0,
+            101.0,
+            "close_grid_long",
+            reduce_only=True,
+        ),
+    ]
+
+    async def fake_calc_ideal_orders(self):
+        return {
+            symbol: [
+                _make_order(
+                    symbol,
+                    "sell",
+                    "long",
+                    1.0,
+                    100.0,
+                    "close_panic_long",
+                    reduce_only=True,
+                    order_kind="market",
+                )
+            ]
+        }
+
+    bot.calc_ideal_orders = types.MethodType(fake_calc_ideal_orders, bot)
+
+    to_cancel, to_create = await bot.calc_orders_to_cancel_and_create()
+
+    assert [(order["side"], order["position_side"], order["price"]) for order in to_cancel] == [
+        ("buy", "long", 99.0),
+        ("sell", "long", 101.0),
+    ]
+    assert [order["pb_order_type"] for order in to_create] == ["close_panic_long"]
+
+
+def test_no_silent_execution_type_defaults_in_rust_order_conversion():
+    # Codex P1 regression on the exec-type fail-loud contract: the Rust JSON
+    # conversion sites must not default a missing execution_type (a silent
+    # default upstream would defeat the reconciler's fail-loud guard and
+    # could downgrade a panic market close to a limit order). Any .get with a
+    # default on the execution_type key in the live modules is an offender;
+    # defaultless .get (classification of exchange-side orders) is allowed.
+    import ast
+    from pathlib import Path
+
+    offenders = []
+    for rel in ("src/passivbot.py", "src/live/reconciler.py"):
+        tree = ast.parse(Path(rel).read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "get"
+                and node.args
+                and isinstance(node.args[0], ast.Constant)
+                and node.args[0].value == "execution_type"
+                and len(node.args) > 1
+            ):
+                offenders.append(f"{rel}:{node.lineno}")
+    assert offenders == [], offenders
+
+
+@pytest.mark.asyncio
+async def test_calc_protective_panic_reconciles_when_active_symbols_stale():
+    symbol = "BTC/USDT"
+    bot = OrchestrationBot({symbol: 100.0})
+    bot.register_symbol(symbol)
+    bot.active_symbols = []
+    bot.positions[symbol]["long"]["size"] = 1.0
+
+    async def fake_protective_ideal(self):
+        self._protective_panic_reconcile_symbols = [symbol]
+        return {
+            symbol: [
+                _make_order(
+                    symbol,
+                    "sell",
+                    "long",
+                    1.0,
+                    100.0,
+                    "close_panic_long",
+                    reduce_only=True,
+                    order_kind="market",
+                )
+            ]
+        }
+
+    bot.calc_protective_panic_ideal_orders_orchestrator = types.MethodType(
+        fake_protective_ideal, bot
+    )
+
+    to_cancel, to_create = await bot.calc_protective_panic_orders_to_cancel_and_create()
+
+    assert to_cancel == []
+    assert [order["pb_order_type"] for order in to_create] == ["close_panic_long"]
+
+
+@pytest.mark.asyncio
+async def test_protective_panic_reconciliation_preserves_healthy_pside_orders():
+    symbol = "BTC/USDT"
+    bot = OrchestrationBot({symbol: 100.0})
+    bot.register_symbol(symbol)
+    bot.active_symbols = []
+    bot.positions[symbol]["long"]["size"] = 1.0
+    bot.positions[symbol]["short"]["size"] = -1.0
+    bot.open_orders[symbol] = [
+        _make_order(
+            symbol,
+            "buy",
+            "long",
+            1.0,
+            99.0,
+            "entry_grid_normal_long",
+        ),
+        _make_order(
+            symbol,
+            "sell",
+            "short",
+            1.0,
+            101.0,
+            "entry_grid_normal_short",
+        ),
+        _make_order(
+            symbol,
+            "buy",
+            "short",
+            1.0,
+            98.0,
+            "close_grid_short",
+            reduce_only=True,
+        ),
+    ]
+
+    async def fake_protective_ideal(self):
+        self._protective_panic_reconcile_symbols = [symbol]
+        self._protective_panic_reconcile_psides_by_symbol = {symbol: {"long"}}
+        return {
+            symbol: [
+                _make_order(
+                    symbol,
+                    "sell",
+                    "long",
+                    1.0,
+                    100.0,
+                    "close_panic_long",
+                    reduce_only=True,
+                    order_kind="market",
+                )
+            ]
+        }
+
+    bot.calc_protective_panic_ideal_orders_orchestrator = types.MethodType(
+        fake_protective_ideal, bot
+    )
+
+    to_cancel, to_create = await bot.calc_protective_panic_orders_to_cancel_and_create()
+
+    assert [(order["position_side"], order["side"], order["price"]) for order in to_cancel] == [
+        ("long", "buy", 99.0)
+    ]
+    assert [order["pb_order_type"] for order in to_create] == ["close_panic_long"]
+
+
+@pytest.mark.asyncio
+async def test_protective_panic_reconciliation_ignores_stale_normal_mode_filter():
+    symbol = "BTC/USDT"
+    bot = OrchestrationBot({symbol: 100.0})
+    bot.register_symbol(symbol)
+    bot.active_symbols = []
+    bot.PB_modes["long"][symbol] = "manual"
+    bot.positions[symbol]["long"]["size"] = 1.0
+    bot.open_orders[symbol] = [
+        _make_order(
+            symbol,
+            "buy",
+            "long",
+            1.0,
+            99.0,
+            "entry_grid_normal_long",
+        )
+    ]
+
+    async def fake_protective_ideal(self):
+        self._protective_panic_reconcile_symbols = [symbol]
+        self._protective_panic_reconcile_psides_by_symbol = {symbol: {"long"}}
+        return {
+            symbol: [
+                _make_order(
+                    symbol,
+                    "sell",
+                    "long",
+                    1.0,
+                    100.0,
+                    "close_panic_long",
+                    reduce_only=True,
+                    order_kind="market",
+                )
+            ]
+        }
+
+    bot.calc_protective_panic_ideal_orders_orchestrator = types.MethodType(
+        fake_protective_ideal, bot
+    )
+
+    to_cancel, to_create = await bot.calc_protective_panic_orders_to_cancel_and_create()
+
+    assert [(order["position_side"], order["side"], order["price"]) for order in to_cancel] == [
+        ("long", "buy", 99.0)
+    ]
+    assert [order["pb_order_type"] for order in to_create] == ["close_panic_long"]
+
+
+@pytest.mark.asyncio
+async def test_protective_panic_ideal_does_not_fetch_ticker_for_cancel_only_symbol():
+    symbol = "DOGE/USDT:USDT"
+    bot = Passivbot.__new__(Passivbot)
+    bot.positions = {
+        symbol: {
+            "long": {"size": 0.0, "price": 0.0},
+            "short": {"size": 0.0, "price": 0.0},
+        }
+    }
+    bot.open_orders = {
+        symbol: [
+            _make_order(
+                symbol,
+                "buy",
+                "long",
+                1.0,
+                0.1,
+                "entry_grid_normal_long",
+            )
+        ]
+    }
+
+    async def fail_market_snapshot_fetch(symbols):
+        raise AssertionError(f"cancel-only symbols must not require market snapshots: {symbols}")
+
+    bot._get_orchestrator_market_snapshots = fail_market_snapshot_fetch
+    bot._orchestrator_mode_override = lambda pside, sym: "panic" if pside == "long" else None
+
+    ideal = await Passivbot.calc_protective_panic_ideal_orders_orchestrator(bot)
+
+    assert ideal == {}
+    assert bot._protective_panic_reconcile_symbols == [symbol]
+
+
+@pytest.mark.asyncio
+async def test_red_supervisor_uses_protective_refresh_and_order_plan():
+    calls = []
+
+    class FakeBot:
+        _equity_hard_stop_supervisor_running = False
+        stop_signal_received = False
+
+        def __init__(self):
+            self.state = {
+                "red_flat_confirmations": 0,
+                "last_red_progress": None,
+                "halted": False,
+            }
+
+        def _hsl_psides(self):
+            return ("long",)
+
+        def _hsl_state(self, pside):
+            assert pside == "long"
+            return self.state
+
+        def _equity_hard_stop_enabled(self, pside=None):
+            return True
+
+        def _equity_hard_stop_runtime_red_latched(self, pside):
+            return True
+
+        async def refresh_protective_authoritative_state(self):
+            calls.append("protective_refresh")
+            return True
+
+        async def update_pos_oos_pnls_ohlcvs(self):
+            raise AssertionError("RED supervisor must not require normal market refresh")
+
+        def _equity_hard_stop_count_open_positions(self, pside):
+            return 1
+
+        def _equity_hard_stop_count_blocking_open_orders(self, pside):
+            return 1, 0
+
+        def _equity_hard_stop_log_red_progress(self, *args):
+            calls.append("log_progress")
+
+        def _equity_hard_stop_set_red_runtime_forced_modes(self, pside):
+            calls.append("force_panic")
+
+        def _equity_hard_stop_refresh_halted_runtime_forced_modes(self):
+            calls.append("refresh_halted")
+
+        async def calc_protective_panic_orders_to_cancel_and_create(self):
+            calls.append("protective_plan")
+            return [{"symbol": "BTC/USDT:USDT"}], [{"symbol": "BTC/USDT:USDT"}]
+
+        async def execute_order_plan_to_exchange(
+            self,
+            to_cancel,
+            to_create,
+            *,
+            configure_creations=True,
+        ):
+            calls.append(
+                (
+                    "execute_plan",
+                    list(to_cancel),
+                    list(to_create),
+                    configure_creations,
+                )
+            )
+            self.stop_signal_received = True
+
+        async def execute_to_exchange(self, *args, **kwargs):
+            raise AssertionError("RED supervisor must not use normal execution cycle")
+
+        def live_value(self, key):
+            assert key == "execution_delay_seconds"
+            return 0.0
+
+    bot = FakeBot()
+    await Passivbot._equity_hard_stop_run_red_supervisor(bot)
+
+    assert calls[:4] == [
+        "protective_refresh",
+        "log_progress",
+        "force_panic",
+        "refresh_halted",
+    ]
+    assert calls[4] == "protective_plan"
+    assert calls[5][0] == "execute_plan"
+    assert calls[5][3] is False
+    assert bot._equity_hard_stop_supervisor_running is False
+
+
+@pytest.mark.asyncio
+async def test_calc_orders_blocks_entry_creates_when_trailing_candles_pending():
+    symbol = "BTC/USDT"
+    bot = OrchestrationBot({symbol: 100.0})
+    bot.register_symbol(symbol)
+    bot._orchestrator_trailing_unavailable_symbols = {symbol}
+    bot._orchestrator_trailing_unavailable_reasons = {
+        symbol: ["missing_trailing_candles"]
+    }
+
+    bot.open_orders[symbol] = [
+        _make_order(
+            symbol,
+            "buy",
+            "long",
+            1.0,
+            99.0,
+            "entry_grid_normal_long",
+        ),
+        _make_order(
+            symbol,
+            "sell",
+            "long",
+            1.0,
+            101.0,
+            "close_grid_long",
+            reduce_only=True,
+        ),
+    ]
+
+    async def fake_calc_ideal_orders(self):
+        return {
+            symbol: [
+                _make_order(
+                    symbol,
+                    "buy",
+                    "long",
+                    1.0,
+                    98.0,
+                    "entry_grid_normal_long",
+                )
+            ]
+        }
+
+    bot.calc_ideal_orders = types.MethodType(fake_calc_ideal_orders, bot)
+
+    to_cancel, to_create = await bot.calc_orders_to_cancel_and_create()
+
+    assert [(order["side"], order["position_side"], order["price"]) for order in to_cancel] == [
+        ("buy", "long", 99.0)
+    ]
+    assert to_create == []
+
+
+@pytest.mark.asyncio
+async def test_calc_orders_preserves_mismatched_reduce_only_cancel_when_trailing_candles_pending():
+    symbol = "BTC/USDT"
+    bot = OrchestrationBot({symbol: 100.0})
+    bot.register_symbol(symbol)
+    bot._orchestrator_trailing_unavailable_symbols = {symbol}
+    bot._orchestrator_trailing_unavailable_reasons = {
+        symbol: ["missing_trailing_candles"]
+    }
+
+    bot.open_orders[symbol] = [
+        _make_order(
+            symbol,
+            "sell",
+            "long",
+            1.0,
+            101.0,
+            "close_trailing_long",
+            reduce_only=True,
+        )
+    ]
+
+    async def fake_calc_ideal_orders(self):
+        return {
+            symbol: [
+                _make_order(
+                    symbol,
+                    "sell",
+                    "long",
+                    1.0,
+                    102.0,
+                    "close_grid_long",
+                    reduce_only=True,
+                )
+            ]
+        }
+
+    bot.calc_ideal_orders = types.MethodType(fake_calc_ideal_orders, bot)
+
+    to_cancel, to_create = await bot.calc_orders_to_cancel_and_create()
+
+    assert to_cancel == []
+    assert [order["pb_order_type"] for order in to_create] == ["close_grid_long"]
+
+
+@pytest.mark.asyncio
+async def test_calc_orders_allows_same_family_reduce_only_replace_when_trailing_candles_pending():
+    symbol = "BTC/USDT"
+    bot = OrchestrationBot({symbol: 100.0})
+    bot.register_symbol(symbol)
+    bot._orchestrator_trailing_unavailable_symbols = {symbol}
+    bot._orchestrator_trailing_unavailable_reasons = {
+        symbol: ["missing_trailing_candles"]
+    }
+
+    bot.open_orders[symbol] = [
+        _make_order(
+            symbol,
+            "sell",
+            "long",
+            1.0,
+            101.0,
+            "close_grid_long",
+            reduce_only=True,
+        )
+    ]
+
+    async def fake_calc_ideal_orders(self):
+        return {
+            symbol: [
+                _make_order(
+                    symbol,
+                    "sell",
+                    "long",
+                    1.0,
+                    102.0,
+                    "close_grid_long",
+                    reduce_only=True,
+                )
+            ]
+        }
+
+    bot.calc_ideal_orders = types.MethodType(fake_calc_ideal_orders, bot)
+
+    to_cancel, to_create = await bot.calc_orders_to_cancel_and_create()
+
+    assert [(order["side"], order["position_side"], order["price"]) for order in to_cancel] == [
+        ("sell", "long", 101.0)
+    ]
+    assert [order["pb_order_type"] for order in to_create] == ["close_grid_long"]
 
 
 def test_to_executable_orders_respects_rust_market_execution_hint():

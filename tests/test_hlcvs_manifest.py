@@ -188,3 +188,67 @@ def test_verify_hlcvs_manifest_rejects_missing_required_file_entry(tmp_path):
 
     with pytest.raises(HlcvsManifestError, match="missing required file entries"):
         verify_hlcvs_manifest(cache_dir)
+
+
+def test_hash_logical_array_matches_tobytes_reference():
+    """Digest format is a compatibility contract with existing on-disk manifests:
+    it must equal the original tobytes(order="C")-based formula exactly."""
+    import hashlib
+
+    def reference_hash(array):
+        arr = np.ascontiguousarray(np.asarray(array))
+        hasher = hashlib.sha256()
+        hasher.update(str(arr.dtype).encode("utf-8"))
+        hasher.update(b"\0")
+        hasher.update(json.dumps(list(arr.shape), separators=(",", ":")).encode("utf-8"))
+        hasher.update(b"\0")
+        hasher.update(arr.tobytes(order="C"))
+        return hasher.hexdigest()
+
+    arrays = [
+        np.arange(24, dtype=np.float64).reshape(2, 3, 4),
+        np.arange(6, dtype=np.float32).reshape(3, 2),
+        np.array([1735689600000, 1735689660000], dtype=np.int64),
+        np.arange(24, dtype=np.float64).reshape(2, 3, 4)[:, :2, :],  # non-contiguous
+        np.asfortranarray(np.arange(6, dtype=np.float64).reshape(2, 3)),  # F-order
+    ]
+    for arr in arrays:
+        assert hash_logical_array(arr) == reference_hash(arr)
+
+
+def test_verify_hlcvs_manifest_returns_verified_arrays(tmp_path):
+    cache_dir = tmp_path / "hlcvs"
+    coins = ["BTC"]
+    hlcvs = np.arange(8, dtype=np.float64).reshape(2, 1, 4)
+    timestamps = np.array([1735689600000, 1735689660000], dtype=np.int64)
+    btc_usd_prices = np.array([100.0, 101.0], dtype=np.float64)
+    mss = {"BTC": {"exchange": "binance"}, "__meta__": {"btc_source_exchange": "binanceusdm"}}
+    _write_cache_files(
+        cache_dir,
+        hlcvs=hlcvs,
+        timestamps=timestamps,
+        btc_usd_prices=btc_usd_prices,
+        coins=coins,
+        mss=mss,
+    )
+    manifest = build_hlcvs_manifest(
+        config=_minimal_config(),
+        exchange="binance",
+        cache_hash="abc123",
+        coins=coins,
+        hlcvs=hlcvs,
+        mss=mss,
+        btc_usd_prices=btc_usd_prices,
+        timestamps=timestamps,
+        warmup_minutes=0,
+        compressed=False,
+    )
+    write_hlcvs_manifest(cache_dir, manifest)
+
+    out_arrays = {}
+    verify_hlcvs_manifest(cache_dir, out_arrays=out_arrays)
+
+    assert set(out_arrays) == {"hlcvs", "btc_usd_prices", "timestamps"}
+    np.testing.assert_array_equal(out_arrays["hlcvs"], hlcvs)
+    np.testing.assert_array_equal(out_arrays["timestamps"], timestamps)
+    np.testing.assert_array_equal(out_arrays["btc_usd_prices"], btc_usd_prices)

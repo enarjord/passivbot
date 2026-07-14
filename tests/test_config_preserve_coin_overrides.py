@@ -17,6 +17,11 @@ from config_utils import format_config, get_template_config
                 "bot": {"long": {"wallet_exposure_limit": 0.25}},
             },
         },
+        {
+            "HYPEUSDT": {
+                "bot": {"long": {"unstuck": {"loss_allowance_pct": 0.005}}},
+            },
+        },
     ],
 )
 def test_coin_overrides_not_pruned(overrides):

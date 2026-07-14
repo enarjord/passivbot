@@ -1,4 +1,7 @@
-use crate::analysis::analyze_backtest_pair;
+use crate::analysis::{
+    analyze_backtest_pair, analyze_backtest_pair_with_profile, analyze_backtest_usd_with_profile,
+    FillActivityMetrics,
+};
 use crate::backtest::Backtest;
 use crate::closes::{
     calc_closes_long, calc_closes_short, calc_next_close_long, calc_next_close_short,
@@ -12,14 +15,22 @@ use crate::risk::{
     calc_twel_enforcer_actions, calc_unstucking_action, gate_entries_by_twel, GateEntriesCandidate,
     GateEntriesDecision, GateEntriesPosition, TwelEnforcerInputPosition, UnstuckPositionInput,
 };
+use crate::strategies::ema_anchor::calc_quote_prices as calc_ema_anchor_quote_prices;
+use crate::strategies::registry::{strategy_kind_from_name, strategy_kind_names, strategy_spec};
+use crate::strategies::trailing_grid_v7::calc_trailing_grid_v7_diagnostics;
+use crate::strategies::{
+    EmaAnchorParams, EmaGateMode, StrategySide, TrailingGridV7Params,
+    TrailingMartingaleCloseParams, TrailingMartingaleEntryParams,
+};
 use crate::trailing::{
     trailing_bundle_to_tuple, tuple_to_trailing_bundle, update_trailing_bundle_sequence,
 };
-use crate::types::OrderType;
+use crate::types::{Analysis, OrderType};
 use crate::types::{
-    BacktestParams, BotParams, BotParamsPair, CoinMeta, EMABands, EquityHardStopLossConfig,
-    EquityHardStopLossTierRatios, ExchangeParams, ForagerScoreWeights, HlcvsBundle, HlcvsMeta,
-    OrderBook, Position, StateParams, TrailingPriceBundle,
+    BacktestParams, BotParams, BotParamsPair, CoinMeta, EMABands, Equities,
+    EquityHardStopLossConfig, EquityHardStopLossTierRatios, ExchangeParams, ForagerScoreWeights,
+    HlcvsBundle, HlcvsMeta, OrderBook, Position, RuntimeOrderContext, StateParams,
+    StrategyParamsPairValue, TrailingPriceBundle, TwelEnforcerPolicy, WeExcessAllowanceMode,
 };
 use ndarray::Array2;
 use numpy::{IntoPyArray, PyArray1, PyArray3, PyArrayMethods, PyReadonlyArray1, PyReadonlyArray3};
@@ -28,10 +39,119 @@ use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyDict, PyList};
 use pyo3::PyObject;
 use serde::Serialize;
-use serde_json;
+use serde_json::{self, Value};
 use std::str::FromStr;
+use std::time::Instant;
 
 type BacktestPyResult = (PyObject, PyObject, Py<PyDict>, Py<PyDict>, PyObject);
+
+const OPTIMIZE_PROFILE_ENV: &str = "PASSIVBOT_OPTIMIZE_PROFILE";
+const RUST_PROFILE_KEY: &str = "_rust_profile";
+
+fn rust_profile_enabled() -> bool {
+    match std::env::var(OPTIMIZE_PROFILE_ENV) {
+        Ok(value) => {
+            let value = value.trim().to_ascii_lowercase();
+            !value.is_empty() && value != "0" && value != "false" && value != "no"
+        }
+        Err(_) => false,
+    }
+}
+
+fn profile_start(enabled: bool) -> Option<Instant> {
+    if enabled {
+        Some(Instant::now())
+    } else {
+        None
+    }
+}
+
+fn profile_add(
+    profile: &mut Vec<(&'static str, f64)>,
+    key: &'static str,
+    started: Option<Instant>,
+) {
+    if let Some(started) = started {
+        profile.push((key, started.elapsed().as_secs_f64() * 1000.0));
+    }
+}
+
+fn profile_to_py_dict(
+    py: Python<'_>,
+    profile: &[(&'static str, f64)],
+    total_started: Option<Instant>,
+) -> PyResult<Py<PyDict>> {
+    let py_profile = PyDict::new_bound(py);
+    for (key, value) in profile {
+        py_profile.set_item(*key, *value)?;
+    }
+    if let Some(started) = total_started {
+        py_profile.set_item("rust_total_ms", started.elapsed().as_secs_f64() * 1000.0)?;
+    }
+    Ok(py_profile.unbind())
+}
+
+fn apply_fill_activity_metrics(analysis: &mut Analysis, metrics: FillActivityMetrics) {
+    analysis.fills_active_days_count = metrics.fills_active_days_count;
+    analysis.fills_active_days_ratio = metrics.fills_active_days_ratio;
+    analysis.fills_active_symbols_count = metrics.fills_active_symbols_count;
+    analysis.fills_analysis_duration_days = metrics.fills_analysis_duration_days;
+    analysis.fills_count = metrics.fills_count;
+    analysis.fills_count_close = metrics.fills_count_close;
+    analysis.fills_count_entry = metrics.fills_count_entry;
+    analysis.fills_count_long = metrics.fills_count_long;
+    analysis.fills_count_short = metrics.fills_count_short;
+    analysis.fills_entry_per_close = metrics.fills_entry_per_close;
+    analysis.fills_gap_longest_days = metrics.fills_gap_longest_days;
+    analysis.fills_gap_mean_hours = metrics.fills_gap_mean_hours;
+    analysis.fills_gap_median_hours = metrics.fills_gap_median_hours;
+    analysis.fills_gap_p95_hours = metrics.fills_gap_p95_hours;
+    analysis.fills_gap_p99_hours = metrics.fills_gap_p99_hours;
+    analysis.fills_per_day = metrics.fills_per_day;
+    analysis.fills_per_day_close = metrics.fills_per_day_close;
+    analysis.fills_per_day_entry = metrics.fills_per_day_entry;
+    analysis.fills_per_day_long = metrics.fills_per_day_long;
+    analysis.fills_per_day_per_position_slot = metrics.fills_per_day_per_position_slot;
+    analysis.fills_per_day_per_position_slot_long = metrics.fills_per_day_per_position_slot_long;
+    analysis.fills_per_day_per_position_slot_short = metrics.fills_per_day_per_position_slot_short;
+    analysis.fills_per_day_short = metrics.fills_per_day_short;
+    analysis.fills_top_symbol_share = metrics.fills_top_symbol_share;
+}
+
+fn calc_backtest_completion_ratio(
+    equities: &Equities,
+    backtest_params: &BacktestParams,
+    n_timesteps: usize,
+) -> f64 {
+    let interval_ms = backtest_params
+        .candle_interval_minutes
+        .max(1)
+        .saturating_mul(60_000);
+    let requested_start_ts = backtest_params.requested_start_timestamp_ms;
+    let requested_end_ts = backtest_params
+        .first_timestamp_ms
+        .saturating_add((n_timesteps as u64).saturating_mul(interval_ms));
+    if requested_end_ts <= requested_start_ts {
+        return 1.0;
+    }
+    let Some(&first_equity_ts) = equities.timestamps_ms.first() else {
+        return 0.0;
+    };
+    let Some(&last_equity_ts) = equities.timestamps_ms.last() else {
+        return 0.0;
+    };
+    if last_equity_ts < first_equity_ts {
+        return 0.0;
+    }
+    let final_covered_ts = last_equity_ts.saturating_add(interval_ms);
+    let covered_end_ts = requested_end_ts.min(final_covered_ts);
+    let covered_span = covered_end_ts.saturating_sub(requested_start_ts);
+    let requested_span = requested_end_ts.saturating_sub(requested_start_ts);
+    if requested_span == 0 {
+        return 1.0;
+    }
+    ((covered_span as f64) / (requested_span as f64)).clamp(0.0, 1.0)
+}
 
 #[pyclass(name = "HlcvsBundle", module = "passivbot_rust", unsendable)]
 pub struct HlcvsBundlePy {
@@ -158,6 +278,10 @@ impl EquityHardStopRuntimePy {
         self.state.red_latched
     }
 
+    pub fn red_seen_in_episode(&self) -> bool {
+        self.state.red_seen_in_episode
+    }
+
     pub fn tier(&self) -> &'static str {
         hard_stop_tier_to_str(self.state.tier)
     }
@@ -182,7 +306,8 @@ impl EquityHardStopRuntimePy {
         red_threshold,
         ema_span_minutes,
         tier_ratio_yellow,
-        tier_ratio_orange
+        tier_ratio_orange,
+        latch_red = true
     ))]
     pub fn apply_sample(
         &mut self,
@@ -194,6 +319,7 @@ impl EquityHardStopRuntimePy {
         ema_span_minutes: f64,
         tier_ratio_yellow: f64,
         tier_ratio_orange: f64,
+        latch_red: bool,
     ) -> PyResult<Py<PyDict>> {
         self.last_rolling_peak = peak_strategy_equity;
         let cfg = ehsl::HardStopConfig {
@@ -204,24 +330,27 @@ impl EquityHardStopRuntimePy {
                 orange: tier_ratio_orange,
             },
         };
-        let step = ehsl::step_with_peak_strategy_equity(
+        let step = ehsl::step_with_peak_strategy_equity_latch(
             &mut self.state,
             cfg,
             equity,
             peak_strategy_equity,
             timestamp_ms,
+            latch_red,
         )
         .map_err(PyValueError::new_err)?;
 
         let out = PyDict::new_bound(py);
         out.set_item("initialized", self.state.initialized)?;
         out.set_item("red_latched", self.state.red_latched)?;
+        out.set_item("red_seen_in_episode", self.state.red_seen_in_episode)?;
         out.set_item("peak_strategy_equity", self.state.peak_strategy_equity)?;
         out.set_item("rolling_peak_strategy_equity", self.last_rolling_peak)?;
         out.set_item("drawdown_ema", self.state.drawdown_ema)?;
         out.set_item("tier", hard_stop_tier_to_str(self.state.tier))?;
         out.set_item("drawdown_raw", step.drawdown_raw)?;
         out.set_item("drawdown_score", step.drawdown_score)?;
+        out.set_item("red_active_now", step.red_active_now)?;
         out.set_item("changed", step.changed)?;
         out.set_item("alpha", step.alpha)?;
         out.set_item("elapsed_minutes", step.elapsed_minutes)?;
@@ -252,6 +381,10 @@ fn hlcvs_meta_from_py(any: &Bound<'_, PyAny>) -> PyResult<HlcvsMeta> {
             .map_err(|_| PyValueError::new_err("coin metadata entries must be dicts"))?;
         coins.push(parse_coin_meta(coin_dict, idx)?);
     }
+    let active_coin_indices = match dict.get_item("active_coin_indices")? {
+        Some(item) if !item.is_none() => Some(item.extract::<Vec<usize>>()?),
+        _ => None,
+    };
 
     Ok(HlcvsMeta {
         requested_start_timestamp_ms: requested,
@@ -259,6 +392,7 @@ fn hlcvs_meta_from_py(any: &Bound<'_, PyAny>) -> PyResult<HlcvsMeta> {
         warmup_minutes_requested: warm_req,
         warmup_minutes_provided: warm_prov,
         coins,
+        active_coin_indices,
     })
 }
 
@@ -379,6 +513,9 @@ fn hlcvs_meta_to_dict<'py>(py: Python<'py>, meta: &HlcvsMeta) -> PyResult<Bound<
         coins.append(coin_meta_to_dict(py, entry)?)?;
     }
     dict.set_item("coins", coins)?;
+    if let Some(active_coin_indices) = &meta.active_coin_indices {
+        dict.set_item("active_coin_indices", active_coin_indices)?;
+    }
     Ok(dict)
 }
 
@@ -386,6 +523,96 @@ fn hlcvs_meta_to_dict<'py>(py: Python<'py>, meta: &HlcvsMeta) -> PyResult<Bound<
 pub fn trailing_bundle_default_py() -> (f64, f64, f64, f64) {
     let bundle = TrailingPriceBundle::default();
     trailing_bundle_to_tuple(&bundle)
+}
+
+#[pyfunction]
+pub fn hsl_no_restart_triggered(
+    restart_after_red_policy: &str,
+    drawdown_raw: f64,
+    drawdown_ema: f64,
+    no_restart_drawdown_threshold: f64,
+) -> PyResult<bool> {
+    ehsl::no_restart_triggered(
+        restart_after_red_policy,
+        drawdown_raw,
+        drawdown_ema,
+        no_restart_drawdown_threshold,
+    )
+    .map_err(pyo3::exceptions::PyValueError::new_err)
+}
+
+#[pyfunction]
+#[pyo3(signature = (*, balance, n_positions, peak_realized, last_realized, current_upnl))]
+pub fn hsl_coin_drawdown_signal(
+    py: Python<'_>,
+    balance: f64,
+    n_positions: usize,
+    peak_realized: f64,
+    last_realized: f64,
+    current_upnl: f64,
+) -> PyResult<Py<PyDict>> {
+    let result = ehsl::coin_drawdown_signal(
+        balance,
+        n_positions,
+        peak_realized,
+        last_realized,
+        current_upnl,
+    )
+    .map_err(PyValueError::new_err)?;
+    let out = PyDict::new_bound(py);
+    out.set_item("slot_budget", result.slot_budget)?;
+    out.set_item("drawdown_usd", result.drawdown_usd)?;
+    out.set_item("drawdown_raw", result.drawdown_raw)?;
+    Ok(out.unbind())
+}
+
+#[pyfunction]
+#[pyo3(signature = (
+    *,
+    restart_after_red_policy,
+    stop_timestamp_ms,
+    stop_equity,
+    stop_peak_strategy_equity,
+    previous_no_restart_peak_strategy_equity,
+    drawdown_ema,
+    red_threshold,
+    no_restart_drawdown_threshold,
+    cooldown_minutes_after_red
+))]
+pub fn hsl_red_episode_finalization(
+    py: Python<'_>,
+    restart_after_red_policy: &str,
+    stop_timestamp_ms: u64,
+    stop_equity: f64,
+    stop_peak_strategy_equity: f64,
+    previous_no_restart_peak_strategy_equity: f64,
+    drawdown_ema: f64,
+    red_threshold: f64,
+    no_restart_drawdown_threshold: f64,
+    cooldown_minutes_after_red: f64,
+) -> PyResult<Py<PyDict>> {
+    let result = ehsl::evaluate_red_episode_finalization(
+        restart_after_red_policy,
+        stop_timestamp_ms,
+        stop_equity,
+        stop_peak_strategy_equity,
+        previous_no_restart_peak_strategy_equity,
+        drawdown_ema,
+        red_threshold,
+        no_restart_drawdown_threshold,
+        cooldown_minutes_after_red,
+    )
+    .map_err(PyValueError::new_err)?;
+    let out = PyDict::new_bound(py);
+    out.set_item(
+        "no_restart_peak_strategy_equity",
+        result.no_restart_peak_strategy_equity,
+    )?;
+    out.set_item("no_restart_drawdown_raw", result.no_restart_drawdown_raw)?;
+    out.set_item("no_restart_latched", result.no_restart_latched)?;
+    out.set_item("cooldown_until_ms", result.cooldown_until_ms)?;
+    out.set_item("disposition", result.disposition.as_str())?;
+    Ok(out.unbind())
 }
 
 #[pyfunction]
@@ -417,6 +644,318 @@ pub fn update_trailing_bundle_py(
     Ok(trailing_bundle_to_tuple(&bundle))
 }
 
+fn parse_strategy_side_str(side: &str) -> PyResult<StrategySide> {
+    match side {
+        "long" => Ok(StrategySide::Long),
+        "short" => Ok(StrategySide::Short),
+        _ => Err(PyValueError::new_err(
+            "side must be either 'long' or 'short'",
+        )),
+    }
+}
+
+#[inline]
+fn clamp_alpha(alpha: f64) -> f64 {
+    if !alpha.is_finite() || alpha < 0.0 {
+        0.0
+    } else if alpha > 1.0 {
+        1.0
+    } else {
+        alpha
+    }
+}
+
+#[inline(always)]
+fn update_adjusted_ema_py(
+    value: f64,
+    alpha: f64,
+    numerator: &mut f64,
+    denominator: &mut f64,
+) -> f64 {
+    if !value.is_finite() {
+        return if *denominator > 0.0 {
+            *numerator / *denominator
+        } else {
+            value
+        };
+    }
+    if alpha <= 0.0 || !alpha.is_finite() {
+        return if *denominator > 0.0 {
+            *numerator / *denominator
+        } else {
+            value
+        };
+    }
+    let one_minus_alpha = 1.0 - alpha;
+    let new_num = alpha * value + one_minus_alpha * *numerator;
+    let new_den = alpha + one_minus_alpha * *denominator;
+    if !new_den.is_finite() || new_den <= f64::MIN_POSITIVE {
+        *numerator = alpha * value;
+        *denominator = alpha;
+        return value;
+    }
+    *numerator = new_num;
+    *denominator = new_den;
+    new_num / new_den
+}
+
+fn validate_ema_anchor_series_inputs(
+    timestamps: &[i64],
+    highs: &[f64],
+    lows: &[f64],
+    closes: &[f64],
+    balances: &[f64],
+    position_sizes: &[f64],
+    price_step: f64,
+) -> PyResult<()> {
+    let len = timestamps.len();
+    if len == 0 {
+        return Err(PyValueError::new_err(
+            "timestamps/highs/lows/closes must not be empty",
+        ));
+    }
+    if highs.len() != len
+        || lows.len() != len
+        || closes.len() != len
+        || balances.len() != len
+        || position_sizes.len() != len
+    {
+        return Err(PyValueError::new_err(
+            "timestamps, highs, lows, closes, balances, and position_sizes must have the same length",
+        ));
+    }
+    if !price_step.is_finite() || price_step <= 0.0 {
+        return Err(PyValueError::new_err("price_step must be > 0"));
+    }
+    for i in 0..len {
+        if i > 0 && timestamps[i] <= timestamps[i - 1] {
+            return Err(PyValueError::new_err(format!(
+                "timestamps must be strictly increasing; index {i} ({}) <= previous ({})",
+                timestamps[i],
+                timestamps[i - 1]
+            )));
+        }
+        if !highs[i].is_finite() || highs[i] <= 0.0 {
+            return Err(PyValueError::new_err(format!(
+                "highs[{i}] must be finite and > 0"
+            )));
+        }
+        if !lows[i].is_finite() || lows[i] <= 0.0 {
+            return Err(PyValueError::new_err(format!(
+                "lows[{i}] must be finite and > 0"
+            )));
+        }
+        if !closes[i].is_finite() || closes[i] <= 0.0 {
+            return Err(PyValueError::new_err(format!(
+                "closes[{i}] must be finite and > 0"
+            )));
+        }
+        if !balances[i].is_finite() || balances[i] < 0.0 {
+            return Err(PyValueError::new_err(format!(
+                "balances[{i}] must be finite and >= 0"
+            )));
+        }
+        if !position_sizes[i].is_finite() {
+            return Err(PyValueError::new_err(format!(
+                "position_sizes[{i}] must be finite"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn calc_ema_anchor_quote_series(
+    side: StrategySide,
+    timestamps: &[i64],
+    highs: &[f64],
+    lows: &[f64],
+    closes: &[f64],
+    balances: &[f64],
+    position_sizes: &[f64],
+    price_step: f64,
+    params: EmaAnchorParams,
+) -> PyResult<(Vec<f64>, Vec<f64>)> {
+    validate_ema_anchor_series_inputs(
+        timestamps,
+        highs,
+        lows,
+        closes,
+        balances,
+        position_sizes,
+        price_step,
+    )?;
+
+    let exchange = ExchangeParams {
+        price_step,
+        ..Default::default()
+    };
+
+    let ema_alpha_0 = clamp_alpha(2.0 / (params.ema_span_0 + 1.0));
+    let ema_alpha_1 = clamp_alpha(2.0 / (params.ema_span_1 + 1.0));
+    let ema_alpha_2 = clamp_alpha(2.0 / ((params.ema_span_0 * params.ema_span_1).sqrt() + 1.0));
+    let vol_1m_alpha = if params.offset_volatility_ema_span_1m > 0.0 {
+        clamp_alpha(2.0 / (params.offset_volatility_ema_span_1m + 1.0))
+    } else {
+        0.0
+    };
+    let vol_1h_alpha = if params.offset_volatility_ema_span_1h > 0.0 {
+        clamp_alpha(2.0 / (params.offset_volatility_ema_span_1h + 1.0))
+    } else {
+        0.0
+    };
+
+    let base_close = closes[0];
+    let mut ema_0_num = base_close;
+    let mut ema_1_num = base_close;
+    let mut ema_2_num = base_close;
+    let mut ema_0_den = 1.0;
+    let mut ema_1_den = 1.0;
+    let mut ema_2_den = 1.0;
+
+    let mut vol_1m_num = 0.0;
+    let mut vol_1m_den = 1.0;
+
+    let mut vol_1h = 0.0;
+    let mut vol_1h_num = 0.0;
+    let mut vol_1h_den = 1.0;
+
+    let first_ts_ms = timestamps[0] as u64;
+    let mut current_hour_boundary = (first_ts_ms / 3_600_000u64) * 3_600_000u64;
+    let mut bucket_high = f64::MIN;
+    let mut bucket_low = f64::MAX;
+    let mut bucket_seen = false;
+
+    let mut bids = Vec::with_capacity(timestamps.len());
+    let mut asks = Vec::with_capacity(timestamps.len());
+
+    for i in 0..timestamps.len() {
+        let current_ts = timestamps[i] as u64;
+        let high = highs[i];
+        let low = lows[i];
+        let close = closes[i];
+        let hour_boundary = (current_ts / 3_600_000u64) * 3_600_000u64;
+        if hour_boundary > current_hour_boundary {
+            if bucket_seen && bucket_high > 0.0 && bucket_low > 0.0 {
+                let hour_log_range = (bucket_high / bucket_low).ln();
+                vol_1h = update_adjusted_ema_py(
+                    hour_log_range,
+                    vol_1h_alpha,
+                    &mut vol_1h_num,
+                    &mut vol_1h_den,
+                );
+            }
+            current_hour_boundary = hour_boundary;
+            bucket_high = f64::MIN;
+            bucket_low = f64::MAX;
+        }
+
+        let ema_0 = update_adjusted_ema_py(close, ema_alpha_0, &mut ema_0_num, &mut ema_0_den);
+        let ema_1 = update_adjusted_ema_py(close, ema_alpha_1, &mut ema_1_num, &mut ema_1_den);
+        let ema_2 = update_adjusted_ema_py(close, ema_alpha_2, &mut ema_2_num, &mut ema_2_den);
+
+        let log_range = (high / low).ln();
+        let vol_1m =
+            update_adjusted_ema_py(log_range, vol_1m_alpha, &mut vol_1m_num, &mut vol_1m_den);
+
+        let lower = ema_0.min(ema_1).min(ema_2);
+        let upper = ema_0.max(ema_1).max(ema_2);
+        let state = StateParams {
+            balance: balances[i],
+            order_book: OrderBook {
+                bid: close,
+                ask: close,
+            },
+            ema_bands: EMABands { upper, lower },
+            volatility_ema_1m: vol_1m,
+            volatility_ema_1h: vol_1h,
+        };
+        let (bid, ask) =
+            calc_ema_anchor_quote_prices(&state, &exchange, &params, position_sizes[i], 1.0);
+        bids.push(bid);
+        asks.push(ask);
+
+        if high > bucket_high {
+            bucket_high = high;
+        }
+        if low < bucket_low {
+            bucket_low = low;
+        }
+        bucket_seen = true;
+    }
+
+    match side {
+        StrategySide::Long | StrategySide::Short => Ok((bids, asks)),
+    }
+}
+
+#[pyfunction(signature = (
+    side,
+    timestamps,
+    highs,
+    lows,
+    closes,
+    balances,
+    position_sizes,
+    *,
+    price_step,
+    ema_span_0,
+    ema_span_1,
+    offset,
+    offset_volatility_ema_span_1m,
+    offset_volatility_1m_weight,
+    offset_volatility_ema_span_1h,
+    offset_volatility_1h_weight,
+    offset_psize_weight
+))]
+pub fn calc_ema_anchor_quote_series_py<'py>(
+    py: Python<'py>,
+    side: &str,
+    timestamps: PyReadonlyArray1<'_, i64>,
+    highs: PyReadonlyArray1<'_, f64>,
+    lows: PyReadonlyArray1<'_, f64>,
+    closes: PyReadonlyArray1<'_, f64>,
+    balances: PyReadonlyArray1<'_, f64>,
+    position_sizes: PyReadonlyArray1<'_, f64>,
+    price_step: f64,
+    ema_span_0: f64,
+    ema_span_1: f64,
+    offset: f64,
+    offset_volatility_ema_span_1m: f64,
+    offset_volatility_1m_weight: f64,
+    offset_volatility_ema_span_1h: f64,
+    offset_volatility_1h_weight: f64,
+    offset_psize_weight: f64,
+) -> PyResult<(Py<PyArray1<f64>>, Py<PyArray1<f64>>)> {
+    let side = parse_strategy_side_str(side)?;
+    let params = EmaAnchorParams {
+        base_qty_pct: 0.0,
+        ema_span_0,
+        ema_span_1,
+        entry_double_down_factor: 0.0,
+        offset,
+        offset_volatility_ema_span_1m,
+        offset_volatility_1m_weight,
+        offset_volatility_ema_span_1h,
+        offset_volatility_1h_weight,
+        offset_psize_weight,
+    };
+    let (bids, asks) = calc_ema_anchor_quote_series(
+        side,
+        timestamps.as_slice()?,
+        highs.as_slice()?,
+        lows.as_slice()?,
+        closes.as_slice()?,
+        balances.as_slice()?,
+        position_sizes.as_slice()?,
+        price_step,
+        params,
+    )?;
+    Ok((
+        bids.into_pyarray_bound(py).unbind(),
+        asks.into_pyarray_bound(py).unbind(),
+    ))
+}
+
 fn hard_stop_tier_from_str(raw: &str) -> Result<ehsl::HardStopTier, String> {
     match raw {
         "green" => Ok(ehsl::HardStopTier::Green),
@@ -444,6 +983,7 @@ fn hard_stop_tier_to_str(tier: ehsl::HardStopTier) -> &'static str {
     *,
     initialized,
     red_latched,
+    red_seen_in_episode = None,
     drawdown_ema,
     tier,
     red_threshold,
@@ -458,6 +998,7 @@ pub fn equity_hard_stop_step_py(
     py: Python<'_>,
     initialized: bool,
     red_latched: bool,
+    red_seen_in_episode: Option<bool>,
     drawdown_ema: f64,
     tier: &str,
     red_threshold: f64,
@@ -473,6 +1014,8 @@ pub fn equity_hard_stop_step_py(
         drawdown_ema,
         tier: hard_stop_tier_from_str(tier).map_err(PyValueError::new_err)?,
         red_latched,
+        // Conservative stateless default: a latched red was necessarily seen.
+        red_seen_in_episode: red_seen_in_episode.unwrap_or(red_latched),
         initialized,
         ..Default::default()
     };
@@ -496,11 +1039,13 @@ pub fn equity_hard_stop_step_py(
     let out = PyDict::new_bound(py);
     out.set_item("initialized", state.initialized)?;
     out.set_item("red_latched", state.red_latched)?;
+    out.set_item("red_seen_in_episode", state.red_seen_in_episode)?;
     out.set_item("peak_strategy_equity", state.peak_strategy_equity)?;
     out.set_item("drawdown_ema", state.drawdown_ema)?;
     out.set_item("tier", hard_stop_tier_to_str(state.tier))?;
     out.set_item("drawdown_raw", step.drawdown_raw)?;
     out.set_item("drawdown_score", step.drawdown_score)?;
+    out.set_item("red_active_now", step.red_active_now)?;
     out.set_item("changed", step.changed)?;
     out.set_item("alpha", step.alpha)?;
     out.set_item("elapsed_minutes", step.elapsed_minutes)?;
@@ -680,12 +1225,16 @@ pub fn calc_unstucking_close_py(
             .get_item("wallet_exposure_limit")?
             .ok_or_else(|| PyValueError::new_err("position missing 'wallet_exposure_limit'"))?
             .extract::<f64>()?;
-        let risk_we_excess_allowance_pct = dict
-            .get_item("risk_we_excess_allowance_pct")?
-            .ok_or_else(|| {
-                PyValueError::new_err("position missing 'risk_we_excess_allowance_pct'")
-            })?
-            .extract::<f64>()?;
+        let effective_we_excess_allowance_pct =
+            if let Some(value) = dict.get_item("effective_we_excess_allowance_pct")? {
+                value.extract::<f64>()?
+            } else {
+                dict.get_item("risk_we_excess_allowance_pct")?
+                    .ok_or_else(|| {
+                        PyValueError::new_err("position missing 'risk_we_excess_allowance_pct'")
+                    })?
+                    .extract::<f64>()?
+            };
         let unstuck_threshold = dict
             .get_item("unstuck_threshold")?
             .ok_or_else(|| PyValueError::new_err("position missing 'unstuck_threshold'"))?
@@ -694,6 +1243,12 @@ pub fn calc_unstucking_close_py(
             .get_item("unstuck_close_pct")?
             .ok_or_else(|| PyValueError::new_err("position missing 'unstuck_close_pct'"))?
             .extract::<f64>()?;
+        let unstuck_ema_gating_enabled =
+            if let Some(value) = dict.get_item("unstuck_ema_gating_enabled")? {
+                value.extract::<bool>()?
+            } else {
+                true
+            };
         let unstuck_ema_dist = dict
             .get_item("unstuck_ema_dist")?
             .ok_or_else(|| PyValueError::new_err("position missing 'unstuck_ema_dist'"))?
@@ -737,10 +1292,13 @@ pub fn calc_unstucking_close_py(
             position_size,
             position_price,
             wallet_exposure_limit,
-            risk_we_excess_allowance_pct,
+            effective_we_excess_allowance_pct,
             unstuck_threshold,
             unstuck_close_pct,
+            unstuck_ema_gating_enabled,
             unstuck_ema_dist,
+            unstuck_loss_allowance_pct: 0.0,
+            total_wallet_exposure_limit: 0.0,
             ema_band_upper,
             ema_band_lower,
             current_price,
@@ -838,6 +1396,7 @@ pub fn run_backtest(
     hlcvs: PyReadonlyArray3<f64>,
     btc_usd: PyReadonlyArray1<f64>,
     bot_params: &Bound<'_, PyAny>,
+    strategy_params: &Bound<'_, PyAny>,
     exchange_params_list: &Bound<'_, PyAny>,
     backtest_params_dict: &Bound<'_, PyDict>,
 ) -> PyResult<BacktestPyResult> {
@@ -845,6 +1404,7 @@ pub fn run_backtest(
         hlcvs,
         btc_usd,
         bot_params,
+        strategy_params,
         exchange_params_list,
         backtest_params_dict,
     )
@@ -854,6 +1414,7 @@ pub fn run_backtest(
 pub fn run_backtest_bundle(
     bundle: &HlcvsBundlePy,
     bot_params: &Bound<'_, PyAny>,
+    strategy_params: &Bound<'_, PyAny>,
     exchange_params_list: &Bound<'_, PyAny>,
     backtest_params_dict: &Bound<'_, PyDict>,
 ) -> PyResult<BacktestPyResult> {
@@ -864,6 +1425,7 @@ pub fn run_backtest_bundle(
         hlcvs,
         btc,
         bot_params,
+        strategy_params,
         exchange_params_list,
         backtest_params_dict,
     )
@@ -873,9 +1435,14 @@ fn run_backtest_core<'py>(
     hlcvs: PyReadonlyArray3<'py, f64>,
     btc_usd: PyReadonlyArray1<'py, f64>,
     bot_params: &Bound<'py, PyAny>,
+    strategy_params: &Bound<'py, PyAny>,
     exchange_params_list: &Bound<'py, PyAny>,
     backtest_params_dict: &Bound<'py, PyDict>,
 ) -> PyResult<BacktestPyResult> {
+    let profile_enabled = rust_profile_enabled();
+    let profile_total_start = profile_start(profile_enabled);
+    let mut rust_profile = Vec::new();
+    let input_parse_start = profile_start(profile_enabled);
     let hlcvs_rust = hlcvs.as_array();
     let btc_usd_rust = btc_usd.as_array();
 
@@ -895,6 +1462,19 @@ fn run_backtest_core<'py>(
         )));
     }
 
+    let strategy_kind_name = backtest_params_dict
+        .get_item("strategy_kind")?
+        .map(|item| item.extract::<String>())
+        .transpose()?
+        .unwrap_or_else(|| "trailing_martingale".to_string());
+    let strategy_kind = strategy_kind_from_name(&strategy_kind_name).ok_or_else(|| {
+        PyValueError::new_err(format!(
+            "unknown strategy_kind for backtest params: {}",
+            strategy_kind_name
+        ))
+    })?;
+    let backtest_params = backtest_params_from_dict(backtest_params_dict.as_gil_ref())?;
+
     let bot_params_py_list_bound = bot_params
         .downcast::<PyList>()
         .map_err(|_| PyValueError::new_err("bot_params must be a list[dict] (one per coin)"))?;
@@ -909,6 +1489,25 @@ fn run_backtest_core<'py>(
         bot_params_vec.push(bot_params_pair_from_dict(dict)?);
     }
 
+    let strategy_params_py_list_bound = strategy_params.downcast::<PyList>().map_err(|_| {
+        PyValueError::new_err("strategy_params must be a list[dict] (one per coin)")
+    })?;
+    let strategy_params_py_list = strategy_params_py_list_bound.as_gil_ref();
+    if strategy_params_py_list.len() != bot_params_len {
+        return Err(PyValueError::new_err(format!(
+            "strategy_params length ({}) does not match bot_params length ({})",
+            strategy_params_py_list.len(),
+            bot_params_len
+        )));
+    }
+    let mut strategy_params_vec = Vec::with_capacity(bot_params_len);
+    for item in strategy_params_py_list.iter() {
+        let dict = item
+            .downcast::<PyDict>()
+            .map_err(|_| PyValueError::new_err("each strategy_params element must be a dict"))?;
+        strategy_params_vec.push(strategy_params_pair_from_dict(dict, &strategy_kind_name)?);
+    }
+
     let exchange_params_list_bound = exchange_params_list
         .downcast::<PyList>()
         .map_err(|_| PyValueError::new_err("Unsupported data type for exchange_params_list"))?;
@@ -921,35 +1520,110 @@ fn run_backtest_core<'py>(
             .map_err(|_| PyValueError::new_err("Unsupported data type in exchange_params_list"))?;
         exchange_params.push(exchange_params_from_dict(dict)?);
     }
+    profile_add(&mut rust_profile, "rust_input_parse_ms", input_parse_start);
 
-    let backtest_params = backtest_params_from_dict(backtest_params_dict.as_gil_ref())?;
     let metrics_only = backtest_params.metrics_only;
-    let mut backtest = Backtest::new(
+    let skip_btc_analysis = metrics_only
+        && backtest_params.skip_btc_analysis
+        && backtest_params.btc_collateral_cap <= 0.0;
+    let init_start = profile_start(profile_enabled);
+    let mut backtest = Backtest::new_with_strategy_params(
         hlcvs_rust,
         btc_usd_rust,
+        strategy_kind,
         bot_params_vec,
+        strategy_params_vec,
         exchange_params,
         &backtest_params,
     );
+    profile_add(&mut rust_profile, "rust_backtest_init_ms", init_start);
 
     // Run the backtest and process results
-    Python::with_gil(|py| {
+    Python::with_gil(move |py| {
+        let simulation_start = profile_start(profile_enabled);
         let (fills, equities) = backtest.run().map_err(PyValueError::new_err)?;
+        profile_add(&mut rust_profile, "rust_simulation_ms", simulation_start);
         let (entry_pct_long, entry_pct_short) = backtest.initial_entry_balance_pct();
-        let (mut analysis_usd, mut analysis_btc) = analyze_backtest_pair(
-            &fills,
-            &equities,
-            backtest.balance.use_btc_collateral,
-            &backtest.total_wallet_exposures,
-            backtest.liquidated(),
-        );
+        let (mut analysis_usd, mut analysis_btc) = if skip_btc_analysis {
+            let (analysis_usd, analysis_profile) = analyze_backtest_usd_with_profile(
+                &fills,
+                &equities,
+                &backtest.total_wallet_exposures,
+                backtest.liquidated(),
+                profile_enabled,
+            );
+            if profile_enabled {
+                rust_profile.push(("rust_analysis_usd_ms", analysis_profile.analysis_usd_ms));
+                rust_profile.push(("rust_analysis_btc_ms", 0.0));
+                rust_profile.push(("rust_btc_fill_prepare_ms", 0.0));
+                rust_profile.push(("rust_analysis_pair_ms", analysis_profile.total_ms));
+                rust_profile.push(("rust_btc_analysis_skipped", 1.0));
+            }
+            (analysis_usd, Analysis::default())
+        } else if profile_enabled {
+            let ((analysis_usd, analysis_btc), analysis_profile) =
+                analyze_backtest_pair_with_profile(
+                    &fills,
+                    &equities,
+                    backtest.balance.use_btc_collateral,
+                    &backtest.total_wallet_exposures,
+                    backtest.liquidated(),
+                );
+            rust_profile.push(("rust_analysis_usd_ms", analysis_profile.analysis_usd_ms));
+            rust_profile.push((
+                "rust_btc_fill_prepare_ms",
+                analysis_profile.btc_fill_prepare_ms,
+            ));
+            rust_profile.push(("rust_analysis_btc_ms", analysis_profile.analysis_btc_ms));
+            rust_profile.push(("rust_analysis_pair_ms", analysis_profile.total_ms));
+            (analysis_usd, analysis_btc)
+        } else {
+            analyze_backtest_pair(
+                &fills,
+                &equities,
+                backtest.balance.use_btc_collateral,
+                &backtest.total_wallet_exposures,
+                backtest.liquidated(),
+            )
+        };
         analysis_usd.entry_initial_balance_pct_long = entry_pct_long;
         analysis_usd.entry_initial_balance_pct_short = entry_pct_short;
         analysis_btc.entry_initial_balance_pct_long = entry_pct_long;
         analysis_btc.entry_initial_balance_pct_short = entry_pct_short;
+        let completion_start = profile_start(profile_enabled);
+        let completion_ratio =
+            calc_backtest_completion_ratio(&equities, &backtest_params, n_timesteps);
+        analysis_usd.backtest_completion_ratio = completion_ratio;
+        analysis_btc.backtest_completion_ratio = completion_ratio;
+        profile_add(
+            &mut rust_profile,
+            "rust_completion_ratio_ms",
+            completion_start,
+        );
+        let fill_activity_start = profile_start(profile_enabled);
+        let fill_activity = backtest.fill_activity_metrics_for_analysis(&fills, &equities);
+        apply_fill_activity_metrics(&mut analysis_usd, fill_activity);
+        apply_fill_activity_metrics(&mut analysis_btc, fill_activity);
+        profile_add(
+            &mut rust_profile,
+            "rust_fill_activity_ms",
+            fill_activity_start,
+        );
 
+        let hard_stop_metrics_start = profile_start(profile_enabled);
         let hs = backtest.hard_stop_metrics();
+        profile_add(
+            &mut rust_profile,
+            "rust_hard_stop_metrics_ms",
+            hard_stop_metrics_start,
+        );
+        let strategy_metrics_start = profile_start(profile_enabled);
         let strategy = backtest.strategy_equity_metrics_for_analysis();
+        profile_add(
+            &mut rust_profile,
+            "rust_strategy_equity_metrics_ms",
+            strategy_metrics_start,
+        );
         analysis_usd.hard_stop_triggers = hs.triggers;
         analysis_usd.hard_stop_triggers_per_year = hs.triggers_per_year;
         analysis_usd.hard_stop_triggers_long = hs.triggers_long;
@@ -969,6 +1643,12 @@ fn run_backtest_core<'py>(
         analysis_usd.hard_stop_trigger_drawdown_mean = hs.trigger_drawdown_mean;
         analysis_usd.hard_stop_panic_close_loss_sum = hs.panic_close_loss_sum;
         analysis_usd.hard_stop_panic_close_loss_max = hs.panic_close_loss_max;
+        analysis_usd.hard_stop_panic_close_loss_drawdown_pct_min =
+            hs.panic_close_loss_drawdown_pct_min;
+        analysis_usd.hard_stop_panic_close_loss_drawdown_pct_mean =
+            hs.panic_close_loss_drawdown_pct_mean;
+        analysis_usd.hard_stop_panic_close_loss_drawdown_pct_max =
+            hs.panic_close_loss_drawdown_pct_max;
         analysis_usd.hard_stop_flatten_time_minutes_mean = hs.flatten_time_minutes_mean;
         analysis_usd.hard_stop_post_restart_retrigger_pct = hs.post_restart_retrigger_pct;
         analysis_usd.drawdown_worst_strategy_eq = strategy.overall.drawdown_worst_strategy_eq;
@@ -996,6 +1676,10 @@ fn run_backtest_core<'py>(
             strategy.long.drawdown_worst_mean_1pct_ema_strategy_eq;
         analysis_usd.drawdown_worst_mean_1pct_ema_strategy_eq_short =
             strategy.short.drawdown_worst_mean_1pct_ema_strategy_eq;
+        analysis_usd.strategy_eq_underwater_pct_mean =
+            strategy.overall.strategy_eq_underwater_pct_mean;
+        analysis_usd.strategy_eq_underwater_pct_median =
+            strategy.overall.strategy_eq_underwater_pct_median;
         analysis_usd.strategy_eq_recovery_days_mean =
             strategy.overall.strategy_eq_recovery_days_mean;
         analysis_usd.strategy_eq_recovery_days_median =
@@ -1055,6 +1739,12 @@ fn run_backtest_core<'py>(
         analysis_btc.hard_stop_trigger_drawdown_mean = hs.trigger_drawdown_mean;
         analysis_btc.hard_stop_panic_close_loss_sum = hs.panic_close_loss_sum;
         analysis_btc.hard_stop_panic_close_loss_max = hs.panic_close_loss_max;
+        analysis_btc.hard_stop_panic_close_loss_drawdown_pct_min =
+            hs.panic_close_loss_drawdown_pct_min;
+        analysis_btc.hard_stop_panic_close_loss_drawdown_pct_mean =
+            hs.panic_close_loss_drawdown_pct_mean;
+        analysis_btc.hard_stop_panic_close_loss_drawdown_pct_max =
+            hs.panic_close_loss_drawdown_pct_max;
         analysis_btc.hard_stop_flatten_time_minutes_mean = hs.flatten_time_minutes_mean;
         analysis_btc.hard_stop_post_restart_retrigger_pct = hs.post_restart_retrigger_pct;
         analysis_btc.drawdown_worst_strategy_eq = strategy.overall.drawdown_worst_strategy_eq;
@@ -1082,6 +1772,10 @@ fn run_backtest_core<'py>(
             strategy.long.drawdown_worst_mean_1pct_ema_strategy_eq;
         analysis_btc.drawdown_worst_mean_1pct_ema_strategy_eq_short =
             strategy.short.drawdown_worst_mean_1pct_ema_strategy_eq;
+        analysis_btc.strategy_eq_underwater_pct_mean =
+            strategy.overall.strategy_eq_underwater_pct_mean;
+        analysis_btc.strategy_eq_underwater_pct_median =
+            strategy.overall.strategy_eq_underwater_pct_median;
         analysis_btc.strategy_eq_recovery_days_mean =
             strategy.overall.strategy_eq_recovery_days_mean;
         analysis_btc.strategy_eq_recovery_days_median =
@@ -1123,10 +1817,27 @@ fn run_backtest_core<'py>(
         analysis_btc.calmar_ratio_strategy_eq_w = strategy.overall.calmar_ratio_strategy_eq_w;
         analysis_btc.sterling_ratio_strategy_eq_w = strategy.overall.sterling_ratio_strategy_eq_w;
 
-        // Create a dictionary to store analysis results using a more concise approach
+        let analysis_dict_start = profile_start(profile_enabled);
         let py_analysis_usd = struct_to_py_dict(py, &analysis_usd)?;
-        let py_analysis_btc = struct_to_py_dict(py, &analysis_btc)?;
+        let py_analysis_btc = if skip_btc_analysis {
+            PyDict::new_bound(py).unbind()
+        } else {
+            struct_to_py_dict(py, &analysis_btc)?
+        };
+        profile_add(
+            &mut rust_profile,
+            "rust_analysis_py_dict_ms",
+            analysis_dict_start,
+        );
         if metrics_only {
+            let py_extra = if profile_enabled {
+                let py_profile = profile_to_py_dict(py, &rust_profile, profile_total_start)?;
+                let py_extra = PyDict::new_bound(py);
+                py_extra.set_item(RUST_PROFILE_KEY, py_profile)?;
+                py_extra.into_py(py)
+            } else {
+                py.None().into_py(py)
+            };
             let equities_timestamps_array =
                 Array2::from_shape_fn((equities.timestamps_ms.len(), 1), |(i, _)| {
                     equities.timestamps_ms[i] as f64
@@ -1138,9 +1849,10 @@ fn run_backtest_core<'py>(
                 equities_timestamps_array.into_py(py),
                 py_analysis_usd,
                 py_analysis_btc,
-                py.None().into_py(py),
+                py_extra,
             ));
         }
+        let artifact_conversion_start = profile_start(profile_enabled);
         let hard_stop_plot_data = backtest.hard_stop_plot_data();
         let py_events_long = PyList::empty_bound(py);
         for event in hard_stop_plot_data.events_long {
@@ -1224,6 +1936,17 @@ fn run_backtest_core<'py>(
             .into_pyarray_bound(py)
             .unbind();
         let fills_array = py_fills.into_pyarray_bound(py).unbind();
+        profile_add(
+            &mut rust_profile,
+            "rust_artifact_conversion_ms",
+            artifact_conversion_start,
+        );
+        if profile_enabled {
+            py_hard_stop_plot.set_item(
+                RUST_PROFILE_KEY,
+                profile_to_py_dict(py, &rust_profile, profile_total_start)?,
+            )?;
+        }
         Ok((
             fills_array.into_py(py),
             equities_array.into_py(py),
@@ -1235,21 +1958,54 @@ fn run_backtest_core<'py>(
 }
 
 fn struct_to_py_dict<T: Serialize + ?Sized>(py: Python<'_>, obj: &T) -> PyResult<Py<PyDict>> {
-    // Convert struct to JSON string
-    let json_str = serde_json::to_string(obj).map_err(|e| {
+    let json_value = serde_json::to_value(obj).map_err(|e| {
         PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("JSON serialization error: {}", e))
     })?;
+    match json_value {
+        Value::Object(map) => {
+            let py_dict = PyDict::new_bound(py);
+            for (key, value) in map.iter() {
+                py_dict.set_item(key, json_value_to_py(py, value)?)?;
+            }
+            Ok(py_dict.unbind())
+        }
+        _ => Err(PyErr::new::<pyo3::exceptions::PyTypeError, _>(
+            "Serialized object did not produce a JSON object",
+        )),
+    }
+}
 
-    // Use Python's json module to convert to a Python dict
-    let json = py.import_bound("json")?;
-    let py_obj_any = json.call_method1("loads", (json_str,))?.unbind();
-    let py_obj_bound = py_obj_any.bind(py);
-
-    // Convert to PyDict
-    let py_dict_bound = py_obj_bound.downcast::<PyDict>().map_err(|_| {
-        PyErr::new::<pyo3::exceptions::PyTypeError, _>("Failed to convert to Python dict")
-    })?;
-    Ok(py_dict_bound.clone().unbind())
+fn json_value_to_py(py: Python<'_>, value: &Value) -> PyResult<PyObject> {
+    Ok(match value {
+        Value::Null => py.None(),
+        Value::Bool(item) => item.into_py(py),
+        Value::Number(item) => {
+            if let Some(value) = item.as_i64() {
+                value.into_py(py)
+            } else if let Some(value) = item.as_u64() {
+                value.into_py(py)
+            } else if let Some(value) = item.as_f64() {
+                value.into_py(py)
+            } else {
+                py.None()
+            }
+        }
+        Value::String(item) => item.into_py(py),
+        Value::Array(items) => {
+            let py_list = PyList::empty_bound(py);
+            for item in items {
+                py_list.append(json_value_to_py(py, item)?)?;
+            }
+            py_list.into_py(py)
+        }
+        Value::Object(items) => {
+            let py_dict = PyDict::new_bound(py);
+            for (key, item) in items {
+                py_dict.set_item(key, json_value_to_py(py, item)?)?;
+            }
+            py_dict.into_py(py)
+        }
+    })
 }
 
 fn backtest_params_from_dict(dict: &PyDict) -> PyResult<BacktestParams> {
@@ -1271,11 +2027,22 @@ fn backtest_params_from_dict(dict: &PyDict) -> PyResult<BacktestParams> {
             .map(|item| item.extract::<String>())
             .transpose()?
             .unwrap_or_else(|| "unified".to_string());
-        if signal_mode != "pside" && signal_mode != "unified" {
+        if signal_mode != "coin" && signal_mode != "pside" && signal_mode != "unified" {
             return Err(PyValueError::new_err(format!(
-                "{key}.signal_mode must be one of {{pside, unified}}, got {:?}",
+                "{key}.signal_mode must be one of {{coin, pside, unified}}, got {:?}",
                 signal_mode
             )));
+        }
+        let restart_after_red_policy =
+            extract_optional_string(cfg, "restart_after_red_policy", "threshold")?;
+        match restart_after_red_policy.as_str() {
+            "always" | "threshold" | "never" => {}
+            raw => {
+                return Err(PyValueError::new_err(format!(
+                    "{key}.restart_after_red_policy must be one of {{always, threshold, never}}, got {:?}",
+                    raw
+                )));
+            }
         }
         Ok(EquityHardStopLossConfig {
             enabled: extract_value(cfg, "enabled")?,
@@ -1284,6 +2051,7 @@ fn backtest_params_from_dict(dict: &PyDict) -> PyResult<BacktestParams> {
             ema_span_minutes: extract_value(cfg, "ema_span_minutes")?,
             cooldown_minutes_after_red: extract_value(cfg, "cooldown_minutes_after_red")?,
             no_restart_drawdown_threshold: extract_value(cfg, "no_restart_drawdown_threshold")?,
+            restart_after_red_policy,
             tier_ratios: EquityHardStopLossTierRatios {
                 yellow: extract_value(ratios, "yellow")?,
                 orange: extract_value(ratios, "orange")?,
@@ -1317,6 +2085,11 @@ fn backtest_params_from_dict(dict: &PyDict) -> PyResult<BacktestParams> {
         },
         metrics_only: dict
             .get_item("metrics_only")?
+            .map(|item| item.extract::<bool>())
+            .transpose()?
+            .unwrap_or(false),
+        skip_btc_analysis: dict
+            .get_item("skip_btc_analysis")?
             .map(|item| item.extract::<bool>())
             .transpose()?
             .unwrap_or(false),
@@ -1372,15 +2145,17 @@ fn backtest_params_from_dict(dict: &PyDict) -> PyResult<BacktestParams> {
 }
 
 fn exchange_params_from_dict(dict: &PyDict) -> PyResult<ExchangeParams> {
-    Ok(ExchangeParams {
-        qty_step: extract_value(dict, "qty_step").unwrap_or_default(),
-        price_step: extract_value(dict, "price_step").unwrap_or_default(),
-        min_qty: extract_value(dict, "min_qty").unwrap_or_default(),
-        min_cost: extract_value(dict, "min_cost").unwrap_or_default(),
-        c_mult: extract_value(dict, "c_mult").unwrap_or_default(),
-        maker_fee: extract_value(dict, "maker_fee").unwrap_or(0.0002),
-        taker_fee: extract_value(dict, "taker_fee").unwrap_or(0.00055),
-    })
+    let params = ExchangeParams {
+        qty_step: extract_value(dict, "qty_step")?,
+        price_step: extract_value(dict, "price_step")?,
+        min_qty: extract_value(dict, "min_qty")?,
+        min_cost: extract_value(dict, "min_cost")?,
+        c_mult: extract_value(dict, "c_mult")?,
+        maker_fee: extract_value(dict, "maker_fee")?,
+        taker_fee: extract_value(dict, "taker_fee")?,
+    };
+    params.validate_required().map_err(PyValueError::new_err)?;
+    Ok(params)
 }
 
 fn bot_params_pair_from_dict(dict: &PyDict) -> PyResult<BotParamsPair> {
@@ -1390,12 +2165,239 @@ fn bot_params_pair_from_dict(dict: &PyDict) -> PyResult<BotParamsPair> {
     })
 }
 
-fn extract_grid_spacing_we_weight(dict: &PyDict) -> PyResult<f64> {
-    if let Some(obj) = dict.get_item("entry_grid_spacing_we_weight")? {
-        obj.extract::<f64>()
-    } else {
-        extract_value(dict, "entry_grid_spacing_we_weight")
+fn trailing_martingale_strategy_params_from_dict(dict: &PyDict) -> PyResult<Value> {
+    let entry = extract_value::<&PyDict>(dict, "entry")?;
+    let close = extract_value::<&PyDict>(dict, "close")?;
+    Ok(serde_json::json!({
+        "ema_span_0": extract_value::<f64>(dict, "ema_span_0")?,
+        "ema_span_1": extract_value::<f64>(dict, "ema_span_1")?,
+        "volatility_ema_span_1h": extract_value::<f64>(dict, "volatility_ema_span_1h")?,
+        "volatility_ema_span_1m": extract_value::<f64>(dict, "volatility_ema_span_1m")?,
+        "entry": {
+            "double_down_factor": extract_value::<f64>(entry, "double_down_factor")?,
+            "ema_gate_mode": extract_optional_string(entry, "ema_gate_mode", "initial")?,
+            "initial_ema_dist": extract_value::<f64>(entry, "initial_ema_dist")?,
+            "initial_qty_pct": extract_value::<f64>(entry, "initial_qty_pct")?,
+            "threshold_base_pct": extract_value::<f64>(entry, "threshold_base_pct")?,
+            "threshold_we_weight": extract_value::<f64>(entry, "threshold_we_weight")?,
+            "threshold_volatility_1h_weight": extract_value::<f64>(entry, "threshold_volatility_1h_weight")?,
+            "threshold_volatility_1m_weight": extract_value::<f64>(entry, "threshold_volatility_1m_weight")?,
+            "retracement_base_pct": extract_value::<f64>(entry, "retracement_base_pct")?,
+            "retracement_we_weight": extract_value::<f64>(entry, "retracement_we_weight")?,
+            "retracement_volatility_1h_weight": extract_value::<f64>(entry, "retracement_volatility_1h_weight")?,
+            "retracement_volatility_1m_weight": extract_value::<f64>(entry, "retracement_volatility_1m_weight")?,
+        },
+        "close": {
+            "qty_pct": extract_value::<f64>(close, "qty_pct")?,
+            "threshold_base_pct": extract_value::<f64>(close, "threshold_base_pct")?,
+            "threshold_we_weight": extract_value::<f64>(close, "threshold_we_weight")?,
+            "threshold_volatility_1h_weight": extract_value::<f64>(close, "threshold_volatility_1h_weight")?,
+            "threshold_volatility_1m_weight": extract_value::<f64>(close, "threshold_volatility_1m_weight")?,
+            "retracement_base_pct": extract_value::<f64>(close, "retracement_base_pct")?,
+            "retracement_volatility_1h_weight": extract_value::<f64>(close, "retracement_volatility_1h_weight")?,
+            "retracement_volatility_1m_weight": extract_value::<f64>(close, "retracement_volatility_1m_weight")?,
+        },
+    }))
+}
+
+fn ema_anchor_strategy_params_from_dict(dict: &PyDict) -> PyResult<Value> {
+    Ok(serde_json::json!({
+        "base_qty_pct": extract_value::<f64>(dict, "base_qty_pct")?,
+        "ema_span_0": extract_value::<f64>(dict, "ema_span_0")?,
+        "ema_span_1": extract_value::<f64>(dict, "ema_span_1")?,
+        "entry_double_down_factor": extract_optional_f64(dict, "entry_double_down_factor")?,
+        "offset": extract_value::<f64>(dict, "offset")?,
+        "offset_volatility_ema_span_1m": extract_optional_f64(dict, "offset_volatility_ema_span_1m")?,
+        "offset_volatility_1m_weight": extract_optional_f64(dict, "offset_volatility_1m_weight")?,
+        "offset_volatility_ema_span_1h": extract_optional_f64(dict, "offset_volatility_ema_span_1h")?,
+        "offset_volatility_1h_weight": extract_optional_f64(dict, "offset_volatility_1h_weight")?,
+        "offset_psize_weight": extract_value::<f64>(dict, "offset_psize_weight")?,
+    }))
+}
+
+fn validate_py_dict_keys(dict: &PyDict, context: &str, allowed: &[&str]) -> PyResult<()> {
+    for (key, _value) in dict.iter() {
+        let key = key
+            .extract::<String>()
+            .map_err(|_| PyValueError::new_err(format!("{} contains a non-string key", context)))?;
+        if !allowed.contains(&key.as_str()) {
+            return Err(PyValueError::new_err(format!(
+                "{} contains unknown key: {}",
+                context, key
+            )));
+        }
     }
+    Ok(())
+}
+
+fn trailing_grid_v7_strategy_params_from_dict(dict: &PyDict) -> PyResult<Value> {
+    validate_py_dict_keys(
+        dict,
+        "trailing_grid_v7 strategy params",
+        &["ema_span_0", "ema_span_1", "entry", "close"],
+    )?;
+    let entry = extract_value::<&PyDict>(dict, "entry")?;
+    let close = extract_value::<&PyDict>(dict, "close")?;
+    validate_py_dict_keys(
+        entry,
+        "trailing_grid_v7 entry params",
+        &[
+            "grid_double_down_factor",
+            "grid_spacing_pct",
+            "grid_spacing_we_weight",
+            "grid_spacing_volatility_weight",
+            "initial_ema_dist",
+            "initial_qty_pct",
+            "trailing_double_down_factor",
+            "trailing_grid_ratio",
+            "trailing_retracement_pct",
+            "trailing_retracement_we_weight",
+            "trailing_retracement_volatility_weight",
+            "trailing_threshold_pct",
+            "trailing_threshold_we_weight",
+            "trailing_threshold_volatility_weight",
+            "volatility_ema_span_hours",
+        ],
+    )?;
+    validate_py_dict_keys(
+        close,
+        "trailing_grid_v7 close params",
+        &[
+            "grid_markup_start",
+            "grid_markup_end",
+            "grid_qty_pct",
+            "trailing_grid_ratio",
+            "trailing_qty_pct",
+            "trailing_retracement_pct",
+            "trailing_threshold_pct",
+        ],
+    )?;
+    Ok(serde_json::json!({
+        "ema_span_0": extract_value::<f64>(dict, "ema_span_0")?,
+        "ema_span_1": extract_value::<f64>(dict, "ema_span_1")?,
+        "entry": {
+            "grid_double_down_factor": extract_value::<f64>(entry, "grid_double_down_factor")?,
+            "grid_spacing_pct": extract_value::<f64>(entry, "grid_spacing_pct")?,
+            "grid_spacing_we_weight": extract_value::<f64>(entry, "grid_spacing_we_weight")?,
+            "grid_spacing_volatility_weight": extract_value::<f64>(entry, "grid_spacing_volatility_weight")?,
+            "initial_ema_dist": extract_value::<f64>(entry, "initial_ema_dist")?,
+            "initial_qty_pct": extract_value::<f64>(entry, "initial_qty_pct")?,
+            "trailing_double_down_factor": extract_value::<f64>(entry, "trailing_double_down_factor")?,
+            "trailing_grid_ratio": extract_value::<f64>(entry, "trailing_grid_ratio")?,
+            "trailing_retracement_pct": extract_value::<f64>(entry, "trailing_retracement_pct")?,
+            "trailing_retracement_we_weight": extract_value::<f64>(entry, "trailing_retracement_we_weight")?,
+            "trailing_retracement_volatility_weight": extract_value::<f64>(entry, "trailing_retracement_volatility_weight")?,
+            "trailing_threshold_pct": extract_value::<f64>(entry, "trailing_threshold_pct")?,
+            "trailing_threshold_we_weight": extract_value::<f64>(entry, "trailing_threshold_we_weight")?,
+            "trailing_threshold_volatility_weight": extract_value::<f64>(entry, "trailing_threshold_volatility_weight")?,
+            "volatility_ema_span_hours": extract_value::<f64>(entry, "volatility_ema_span_hours")?,
+        },
+        "close": {
+            "grid_markup_start": extract_value::<f64>(close, "grid_markup_start")?,
+            "grid_markup_end": extract_value::<f64>(close, "grid_markup_end")?,
+            "grid_qty_pct": extract_value::<f64>(close, "grid_qty_pct")?,
+            "trailing_grid_ratio": extract_value::<f64>(close, "trailing_grid_ratio")?,
+            "trailing_qty_pct": extract_value::<f64>(close, "trailing_qty_pct")?,
+            "trailing_retracement_pct": extract_value::<f64>(close, "trailing_retracement_pct")?,
+            "trailing_threshold_pct": extract_value::<f64>(close, "trailing_threshold_pct")?,
+        },
+    }))
+}
+
+fn strategy_params_pair_from_dict(
+    dict: &PyDict,
+    strategy_kind: &str,
+) -> PyResult<StrategyParamsPairValue> {
+    let long_dict = dict
+        .get_item("long")?
+        .ok_or_else(|| PyValueError::new_err("missing required key: long"))?
+        .downcast::<PyDict>()
+        .map_err(|_| PyValueError::new_err("strategy_params.long must be a dict"))?;
+    let short_dict = dict
+        .get_item("short")?
+        .ok_or_else(|| PyValueError::new_err("missing required key: short"))?
+        .downcast::<PyDict>()
+        .map_err(|_| PyValueError::new_err("strategy_params.short must be a dict"))?;
+    let (long, short) = match strategy_kind {
+        "trailing_martingale" => (
+            trailing_martingale_strategy_params_from_dict(long_dict)?,
+            trailing_martingale_strategy_params_from_dict(short_dict)?,
+        ),
+        "ema_anchor" => (
+            ema_anchor_strategy_params_from_dict(long_dict)?,
+            ema_anchor_strategy_params_from_dict(short_dict)?,
+        ),
+        "trailing_grid_v7" => (
+            trailing_grid_v7_strategy_params_from_dict(long_dict)?,
+            trailing_grid_v7_strategy_params_from_dict(short_dict)?,
+        ),
+        _ => {
+            return Err(PyValueError::new_err(format!(
+                "unknown strategy kind for strategy params: {}",
+                strategy_kind
+            )))
+        }
+    };
+    Ok(StrategyParamsPairValue { long, short })
+}
+
+fn extract_optional_f64(dict: &PyDict, key: &str) -> PyResult<f64> {
+    Ok(match dict.get_item(key)? {
+        Some(item) => item.extract::<f64>()?,
+        None => 0.0,
+    })
+}
+
+fn extract_optional_bool(dict: &PyDict, key: &str, default: bool) -> PyResult<bool> {
+    Ok(match dict.get_item(key)? {
+        Some(item) => item.extract::<bool>()?,
+        None => default,
+    })
+}
+
+fn extract_optional_string(dict: &PyDict, key: &str, default: &str) -> PyResult<String> {
+    Ok(match dict.get_item(key)? {
+        Some(item) => item.extract::<String>()?,
+        None => default.to_string(),
+    })
+}
+
+fn extract_optional_we_excess_allowance_mode(dict: &PyDict) -> PyResult<WeExcessAllowanceMode> {
+    Ok(match dict.get_item("risk_we_excess_allowance_mode")? {
+        Some(item) => {
+            if item.is_none() {
+                WeExcessAllowanceMode::default()
+            } else {
+                let raw = item.extract::<String>()?;
+                WeExcessAllowanceMode::from_str(raw.trim()).map_err(|_| {
+                    PyValueError::new_err(format!(
+                        "risk_we_excess_allowance_mode must be one of: bounded, legacy_raw; got {:?}",
+                        raw
+                    ))
+                })?
+            }
+        }
+        None => WeExcessAllowanceMode::default(),
+    })
+}
+
+fn extract_optional_twel_enforcer_policy(dict: &PyDict) -> PyResult<TwelEnforcerPolicy> {
+    Ok(match dict.get_item("risk_twel_enforcer_policy")? {
+        Some(item) => {
+            if item.is_none() {
+                TwelEnforcerPolicy::default()
+            } else {
+                let raw = item.extract::<String>()?;
+                TwelEnforcerPolicy::from_str(raw.trim()).map_err(|_| {
+                    PyValueError::new_err(format!(
+                        "risk_twel_enforcer_policy must be one of: reduce_overweight, reduce_portfolio; got {:?}",
+                        raw
+                    ))
+                })?
+            }
+        }
+        None => TwelEnforcerPolicy::default(),
+    })
 }
 
 fn bot_params_from_dict(dict: &PyDict) -> PyResult<BotParams> {
@@ -1413,6 +2415,8 @@ fn bot_params_from_dict(dict: &PyDict) -> PyResult<BotParams> {
         extract_value(dict, "hsl_cooldown_minutes_after_red")?;
     let hsl_no_restart_drawdown_threshold: f64 =
         extract_value(dict, "hsl_no_restart_drawdown_threshold")?;
+    let hsl_restart_after_red_policy: String =
+        extract_optional_string(dict, "hsl_restart_after_red_policy", "threshold")?;
     let hsl_tier_ratios = dict
         .get_item("hsl_tier_ratios")?
         .ok_or_else(|| PyValueError::new_err("position missing 'hsl_tier_ratios'"))?
@@ -1427,66 +2431,55 @@ fn bot_params_from_dict(dict: &PyDict) -> PyResult<BotParams> {
     let wallet_exposure_limit = wallet_exposure_limit_raw;
 
     Ok(BotParams {
-        close_grid_markup_end: extract_value(dict, "close_grid_markup_end")?,
-        close_grid_markup_start: extract_value(dict, "close_grid_markup_start")?,
-        close_grid_qty_pct: extract_value(dict, "close_grid_qty_pct")?,
-        close_trailing_retracement_pct: extract_value(dict, "close_trailing_retracement_pct")?,
-        close_trailing_grid_ratio: extract_value(dict, "close_trailing_grid_ratio")?,
-        close_trailing_qty_pct: extract_value(dict, "close_trailing_qty_pct")?,
-        close_trailing_threshold_pct: extract_value(dict, "close_trailing_threshold_pct")?,
-        entry_grid_double_down_factor: extract_value(dict, "entry_grid_double_down_factor")?,
-        entry_grid_spacing_volatility_weight: extract_value(
+        close_grid_qty_pct: extract_optional_f64(dict, "close_grid_qty_pct")?,
+        close_trailing_retracement_pct: extract_optional_f64(
             dict,
-            "entry_grid_spacing_volatility_weight",
+            "close_trailing_retracement_pct",
         )?,
-        entry_grid_spacing_we_weight: extract_grid_spacing_we_weight(dict)?,
-        entry_grid_spacing_pct: extract_value(dict, "entry_grid_spacing_pct")?,
-        entry_volatility_ema_span_hours: extract_value_with_fallback(
-            dict,
-            "entry_volatility_ema_span_hours",
-            "entry_log_range_ema_span_hours",
-        )?,
-        entry_initial_ema_dist: extract_value(dict, "entry_initial_ema_dist")?,
-        entry_initial_qty_pct: extract_value(dict, "entry_initial_qty_pct")?,
-        entry_trailing_double_down_factor: extract_value(
+        close_trailing_qty_pct: extract_optional_f64(dict, "close_trailing_qty_pct")?,
+        close_trailing_threshold_pct: extract_optional_f64(dict, "close_trailing_threshold_pct")?,
+        close_weight_volatility_1h: extract_optional_f64(dict, "close_weight_volatility_1h")?,
+        close_weight_volatility_1m: extract_optional_f64(dict, "close_weight_volatility_1m")?,
+        entry_grid_double_down_factor: extract_optional_f64(dict, "entry_grid_double_down_factor")?,
+        entry_grid_spacing_pct: extract_optional_f64(dict, "entry_grid_spacing_pct")?,
+        entry_volatility_ema_span_1h: match dict.get_item("entry_volatility_ema_span_1h")? {
+            Some(item) => item.extract::<f64>()?,
+            None => match dict.get_item("entry_log_range_ema_span_hours")? {
+                Some(item) => item.extract::<f64>()?,
+                None => 0.0,
+            },
+        },
+        entry_volatility_ema_span_1m: extract_optional_f64(dict, "entry_volatility_ema_span_1m")?,
+        entry_weight_volatility_1h: extract_optional_f64(dict, "entry_weight_volatility_1h")?,
+        entry_weight_volatility_1m: extract_optional_f64(dict, "entry_weight_volatility_1m")?,
+        entry_we_weight: extract_optional_f64(dict, "entry_we_weight")?,
+        entry_initial_ema_dist: extract_optional_f64(dict, "entry_initial_ema_dist")?,
+        entry_initial_qty_pct: extract_optional_f64(dict, "entry_initial_qty_pct")?,
+        entry_trailing_double_down_factor: extract_optional_f64(
             dict,
             "entry_trailing_double_down_factor",
         )?,
-        entry_trailing_retracement_pct: extract_value(dict, "entry_trailing_retracement_pct")?,
-        entry_trailing_retracement_we_weight: extract_value(
+        entry_trailing_retracement_pct: extract_optional_f64(
             dict,
-            "entry_trailing_retracement_we_weight",
+            "entry_trailing_retracement_pct",
         )?,
-        entry_trailing_retracement_volatility_weight: extract_value(
+        entry_trailing_threshold_pct: extract_optional_f64(dict, "entry_trailing_threshold_pct")?,
+        filter_volatility_ema_span_1m: extract_value_with_fallback(
             dict,
-            "entry_trailing_retracement_volatility_weight",
-        )?,
-        entry_trailing_grid_ratio: extract_value(dict, "entry_trailing_grid_ratio")?,
-        entry_trailing_threshold_pct: extract_value(dict, "entry_trailing_threshold_pct")?,
-        entry_trailing_threshold_we_weight: extract_value(
-            dict,
-            "entry_trailing_threshold_we_weight",
-        )?,
-        entry_trailing_threshold_volatility_weight: extract_value(
-            dict,
-            "entry_trailing_threshold_volatility_weight",
-        )?,
-        filter_volatility_ema_span: extract_value_with_fallback(
-            dict,
-            "forager_volatility_ema_span",
-            "filter_volatility_ema_span",
+            "forager_volatility_ema_span_1m",
+            "filter_volatility_ema_span_1m",
         )
         .or_else(|_| {
             extract_value_with_fallback(
                 dict,
-                "filter_volatility_ema_span",
+                "filter_volatility_ema_span_1m",
                 "filter_log_range_ema_span",
             )
         })?,
-        filter_volume_ema_span: extract_value_with_fallback(
+        filter_volume_ema_span_1m: extract_value_with_fallback(
             dict,
-            "forager_volume_ema_span",
-            "filter_volume_ema_span",
+            "forager_volume_ema_span_1m",
+            "filter_volume_ema_span_1m",
         )?,
         _legacy_filter_volatility_drop_pct: 0.0,
         forager_volume_drop_pct: extract_value_with_fallback(
@@ -1501,23 +2494,45 @@ fn bot_params_from_dict(dict: &PyDict) -> PyResult<BotParams> {
             .map(|_| extract_forager_score_weights(dict))
             .transpose()?
             .unwrap_or_default(),
-        ema_span_0: extract_value(dict, "ema_span_0")?,
-        ema_span_1: extract_value(dict, "ema_span_1")?,
+        is_forced_active: extract_optional_bool(dict, "is_forced_active", false)?,
+        ema_span_0: extract_optional_f64(dict, "ema_span_0")?,
+        ema_span_1: extract_optional_f64(dict, "ema_span_1")?,
         hsl_enabled,
         hsl_red_threshold,
         hsl_ema_span_minutes,
         hsl_cooldown_minutes_after_red,
         hsl_no_restart_drawdown_threshold,
+        hsl_restart_after_red_policy,
         hsl_tier_ratio_yellow,
         hsl_tier_ratio_orange,
         hsl_orange_tier_mode,
         hsl_panic_close_order_type,
+        risk_entry_cooldown_minutes: extract_optional_f64(dict, "risk_entry_cooldown_minutes")?,
         n_positions,
         total_wallet_exposure_limit,
         wallet_exposure_limit,
+        risk_wel_enforcer_enabled: extract_optional_bool(dict, "risk_wel_enforcer_enabled", true)?,
         risk_wel_enforcer_threshold,
+        risk_twel_entry_gate_enabled: extract_optional_bool(
+            dict,
+            "risk_twel_entry_gate_enabled",
+            true,
+        )?,
+        risk_twel_enforcer_enabled: extract_optional_bool(
+            dict,
+            "risk_twel_enforcer_enabled",
+            true,
+        )?,
+        risk_twel_enforcer_policy: extract_optional_twel_enforcer_policy(dict)?,
         risk_twel_enforcer_threshold,
         risk_we_excess_allowance_pct,
+        risk_we_excess_allowance_mode: extract_optional_we_excess_allowance_mode(dict)?,
+        unstuck_enabled: extract_optional_bool(dict, "unstuck_enabled", true)?,
+        unstuck_ema_gating_enabled: extract_optional_bool(
+            dict,
+            "unstuck_ema_gating_enabled",
+            true,
+        )?,
         unstuck_close_pct: extract_value(dict, "unstuck_close_pct")?,
         unstuck_ema_dist: extract_value(dict, "unstuck_ema_dist")?,
         unstuck_loss_allowance_pct: extract_value(dict, "unstuck_loss_allowance_pct")?,
@@ -1554,6 +2569,291 @@ fn validate_forager_score_weights_pair(bot_params: &BotParamsPair) -> PyResult<(
     Ok(())
 }
 
+fn validate_hsl_panic_close_order_type_pair(bot_params: &BotParamsPair) -> PyResult<()> {
+    for (pside, params) in [("long", &bot_params.long), ("short", &bot_params.short)] {
+        match params.hsl_panic_close_order_type.as_str() {
+            "market" | "limit" => {}
+            raw => {
+                return Err(PyValueError::new_err(format!(
+                    "bot.{pside}.hsl_panic_close_order_type must be one of: market, limit; got {:?}",
+                    raw
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_hsl_restart_after_red_policy_pair(bot_params: &BotParamsPair) -> PyResult<()> {
+    for (pside, params) in [("long", &bot_params.long), ("short", &bot_params.short)] {
+        match params.hsl_restart_after_red_policy.as_str() {
+            "always" | "threshold" | "never" => {}
+            raw => {
+                return Err(PyValueError::new_err(format!(
+                    "bot.{pside}.hsl_restart_after_red_policy must be one of: always, threshold, never; got {:?}",
+                    raw
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_finite_range(
+    path: &str,
+    value: f64,
+    min_value: f64,
+    max_value: Option<f64>,
+    min_inclusive: bool,
+) -> PyResult<()> {
+    if !value.is_finite() {
+        return Err(PyValueError::new_err(format!("{path} must be finite")));
+    }
+    let min_ok = if min_inclusive {
+        value >= min_value
+    } else {
+        value > min_value
+    };
+    if !min_ok {
+        let op = if min_inclusive { ">=" } else { ">" };
+        return Err(PyValueError::new_err(format!(
+            "{path} must be finite and {op} {min_value}"
+        )));
+    }
+    if let Some(max_value) = max_value {
+        if value > max_value {
+            return Err(PyValueError::new_err(format!(
+                "{path} must be finite and <= {max_value}"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn validate_hsl_risk_unstuck_bot_params(
+    path_prefix: &str,
+    pside: &str,
+    params: &BotParams,
+) -> PyResult<()> {
+    validate_finite_range(
+        &format!("{path_prefix}.hsl_ema_span_minutes"),
+        params.hsl_ema_span_minutes,
+        1.0,
+        None,
+        true,
+    )?;
+    validate_finite_range(
+        &format!("{path_prefix}.hsl_red_threshold"),
+        params.hsl_red_threshold,
+        0.0,
+        Some(1.0),
+        false,
+    )?;
+    validate_finite_range(
+        &format!("{path_prefix}.hsl_no_restart_drawdown_threshold"),
+        params.hsl_no_restart_drawdown_threshold,
+        0.0,
+        Some(1.0),
+        true,
+    )?;
+    if params.hsl_no_restart_drawdown_threshold < params.hsl_red_threshold {
+        return Err(PyValueError::new_err(format!(
+            "{path_prefix}.hsl_no_restart_drawdown_threshold must be >= {path_prefix}.hsl_red_threshold"
+        )));
+    }
+    match params.hsl_restart_after_red_policy.as_str() {
+        "always" | "threshold" | "never" => {}
+        raw => {
+            return Err(PyValueError::new_err(format!(
+                "{path_prefix}.hsl_restart_after_red_policy must be one of: always, threshold, never; got {:?}",
+                raw
+            )));
+        }
+    }
+    validate_finite_range(
+        &format!("{path_prefix}.hsl_cooldown_minutes_after_red"),
+        params.hsl_cooldown_minutes_after_red,
+        0.0,
+        None,
+        true,
+    )?;
+    validate_finite_range(
+        &format!("{path_prefix}.hsl_tier_ratio_yellow"),
+        params.hsl_tier_ratio_yellow,
+        0.0,
+        Some(1.0),
+        true,
+    )?;
+    validate_finite_range(
+        &format!("{path_prefix}.hsl_tier_ratio_orange"),
+        params.hsl_tier_ratio_orange,
+        0.0,
+        Some(1.0),
+        true,
+    )?;
+    if params.hsl_tier_ratio_yellow > params.hsl_tier_ratio_orange {
+        return Err(PyValueError::new_err(format!(
+            "{path_prefix}.hsl_tier_ratio_yellow must be <= {path_prefix}.hsl_tier_ratio_orange"
+        )));
+    }
+    validate_finite_range(
+        &format!("{path_prefix}.risk_entry_cooldown_minutes"),
+        params.risk_entry_cooldown_minutes,
+        0.0,
+        None,
+        true,
+    )?;
+    validate_finite_range(
+        &format!("{path_prefix}.total_wallet_exposure_limit"),
+        params.total_wallet_exposure_limit,
+        0.0,
+        None,
+        true,
+    )?;
+    validate_finite_range(
+        &format!("{path_prefix}.wallet_exposure_limit"),
+        params.wallet_exposure_limit,
+        0.0,
+        None,
+        true,
+    )?;
+    validate_finite_range(
+        &format!("{path_prefix}.risk_wel_enforcer_threshold"),
+        params.risk_wel_enforcer_threshold,
+        0.0,
+        None,
+        true,
+    )?;
+    validate_finite_range(
+        &format!("{path_prefix}.risk_twel_enforcer_threshold"),
+        params.risk_twel_enforcer_threshold,
+        0.0,
+        None,
+        true,
+    )?;
+    validate_finite_range(
+        &format!("{path_prefix}.risk_we_excess_allowance_pct"),
+        params.risk_we_excess_allowance_pct,
+        0.0,
+        None,
+        true,
+    )?;
+    validate_finite_range(
+        &format!("{path_prefix}.unstuck_close_pct"),
+        params.unstuck_close_pct,
+        0.0,
+        Some(1.0),
+        true,
+    )?;
+    validate_finite_range(
+        &format!("{path_prefix}.unstuck_loss_allowance_pct"),
+        params.unstuck_loss_allowance_pct,
+        0.0,
+        None,
+        true,
+    )?;
+    validate_finite_range(
+        &format!("{path_prefix}.unstuck_threshold"),
+        params.unstuck_threshold,
+        0.0,
+        None,
+        true,
+    )?;
+    if !params.unstuck_ema_dist.is_finite() {
+        return Err(PyValueError::new_err(format!(
+            "{path_prefix}.unstuck_ema_dist must be finite"
+        )));
+    }
+    if pside == "long" && params.unstuck_ema_dist <= -1.0 {
+        return Err(PyValueError::new_err(format!(
+            "{path_prefix}.unstuck_ema_dist must be > -1.0"
+        )));
+    }
+    if pside == "short" && params.unstuck_ema_dist >= 1.0 {
+        return Err(PyValueError::new_err(format!(
+            "{path_prefix}.unstuck_ema_dist must be < 1.0"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_hsl_risk_unstuck_orchestrator_input(
+    input: &crate::orchestrator::OrchestratorInput,
+) -> PyResult<()> {
+    validate_hsl_risk_unstuck_bot_params("bot.long", "long", &input.global.global_bot_params.long)?;
+    validate_hsl_risk_unstuck_bot_params(
+        "bot.short",
+        "short",
+        &input.global.global_bot_params.short,
+    )?;
+    for symbol in &input.symbols {
+        validate_hsl_risk_unstuck_bot_params(
+            &format!("symbols[{}].long.bot_params", symbol.symbol_idx),
+            "long",
+            &symbol.long.bot_params,
+        )?;
+        validate_hsl_risk_unstuck_bot_params(
+            &format!("symbols[{}].short.bot_params", symbol.symbol_idx),
+            "short",
+            &symbol.short.bot_params,
+        )?;
+    }
+    Ok(())
+}
+
+fn validate_orchestrator_account_risk_inputs(
+    input: &crate::orchestrator::OrchestratorInput,
+) -> PyResult<()> {
+    validate_finite_range("balance", input.balance, 0.0, None, false)?;
+    let balance_raw = if input.balance_raw.is_finite() {
+        input.balance_raw
+    } else {
+        input.balance
+    };
+    validate_finite_range("balance_raw", balance_raw, 0.0, None, false)?;
+    validate_finite_range(
+        "global.max_realized_loss_pct",
+        input.global.max_realized_loss_pct,
+        0.0,
+        None,
+        true,
+    )?;
+    for (path, value) in [
+        (
+            "global.realized_pnl_cumsum_max",
+            input.global.realized_pnl_cumsum_max,
+        ),
+        (
+            "global.realized_pnl_cumsum_last",
+            input.global.realized_pnl_cumsum_last,
+        ),
+    ] {
+        if !value.is_finite() {
+            return Err(PyValueError::new_err(format!("{path} must be finite")));
+        }
+    }
+    if input.global.realized_pnl_cumsum_max < input.global.realized_pnl_cumsum_last {
+        return Err(PyValueError::new_err(
+            "global.realized_pnl_cumsum_max must be >= global.realized_pnl_cumsum_last",
+        ));
+    }
+    validate_finite_range(
+        "global.unstuck_allowance_long",
+        input.global.unstuck_allowance_long,
+        0.0,
+        None,
+        true,
+    )?;
+    validate_finite_range(
+        "global.unstuck_allowance_short",
+        input.global.unstuck_allowance_short,
+        0.0,
+        None,
+        true,
+    )?;
+    Ok(())
+}
+
 fn extract_value<'a, T: pyo3::FromPyObject<'a>>(dict: &'a PyDict, key: &str) -> PyResult<T> {
     dict.get_item(key)
         .map_err(|_| {
@@ -1585,6 +2885,165 @@ fn extract_value_with_fallback<'a, T: pyo3::FromPyObject<'a>>(
     )))
 }
 
+fn make_trailing_martingale_entry_params(
+    entry_grid_double_down_factor: f64,
+    entry_grid_spacing_pct: f64,
+    entry_initial_ema_dist: f64,
+    entry_initial_qty_pct: f64,
+    entry_trailing_double_down_factor: f64,
+    entry_trailing_retracement_pct: f64,
+    entry_trailing_threshold_pct: f64,
+    entry_weight_volatility_1h: f64,
+    entry_weight_volatility_1m: f64,
+    entry_we_weight: f64,
+) -> TrailingMartingaleEntryParams {
+    let _ = (
+        entry_trailing_double_down_factor,
+        entry_trailing_threshold_pct,
+    );
+    TrailingMartingaleEntryParams {
+        double_down_factor: entry_grid_double_down_factor,
+        ema_gate_mode: EmaGateMode::Initial,
+        initial_ema_dist: entry_initial_ema_dist,
+        initial_qty_pct: entry_initial_qty_pct,
+        threshold_base_pct: entry_grid_spacing_pct,
+        threshold_we_weight: entry_we_weight,
+        threshold_volatility_1h_weight: entry_weight_volatility_1h,
+        threshold_volatility_1m_weight: entry_weight_volatility_1m,
+        retracement_base_pct: entry_trailing_retracement_pct,
+        retracement_we_weight: entry_we_weight,
+        retracement_volatility_1h_weight: entry_weight_volatility_1h,
+        retracement_volatility_1m_weight: entry_weight_volatility_1m,
+    }
+}
+
+fn make_trailing_martingale_close_params(
+    close_grid_qty_pct: f64,
+    close_trailing_retracement_pct: f64,
+    close_trailing_threshold_pct: f64,
+    close_weight_volatility_1h: f64,
+    close_weight_volatility_1m: f64,
+) -> TrailingMartingaleCloseParams {
+    TrailingMartingaleCloseParams {
+        qty_pct: close_grid_qty_pct,
+        threshold_base_pct: close_trailing_threshold_pct,
+        threshold_we_weight: 0.0,
+        threshold_volatility_1h_weight: close_weight_volatility_1h,
+        threshold_volatility_1m_weight: close_weight_volatility_1m,
+        retracement_base_pct: close_trailing_retracement_pct,
+        retracement_volatility_1h_weight: close_weight_volatility_1h,
+        retracement_volatility_1m_weight: close_weight_volatility_1m,
+    }
+}
+
+fn make_runtime_order_context(wallet_exposure_limit: f64) -> RuntimeOrderContext {
+    RuntimeOrderContext {
+        effective_wallet_exposure_limit: wallet_exposure_limit,
+    }
+}
+
+fn json_f64(value: &Value, key: &str, default: f64) -> f64 {
+    value.get(key).and_then(Value::as_f64).unwrap_or(default)
+}
+
+fn json_usize(value: &Value, key: &str, default: usize) -> usize {
+    value
+        .get(key)
+        .and_then(Value::as_u64)
+        .map(|value| value as usize)
+        .unwrap_or(default)
+}
+
+fn bot_params_from_trailing_grid_v7_diagnostic_json(value: &Value) -> PyResult<BotParams> {
+    let mut bot = BotParams::default();
+    bot.wallet_exposure_limit = json_f64(value, "wallet_exposure_limit", 0.0);
+    bot.total_wallet_exposure_limit = json_f64(value, "total_wallet_exposure_limit", 0.0);
+    bot.n_positions = json_usize(value, "n_positions", 1);
+    bot.risk_we_excess_allowance_pct = json_f64(value, "risk_we_excess_allowance_pct", 0.0);
+    bot.risk_wel_enforcer_threshold = json_f64(value, "risk_wel_enforcer_threshold", 0.0);
+    if let Some(raw) = value
+        .get("risk_we_excess_allowance_mode")
+        .and_then(Value::as_str)
+    {
+        bot.risk_we_excess_allowance_mode =
+            WeExcessAllowanceMode::from_str(raw.trim()).map_err(|_| {
+                PyValueError::new_err(format!(
+                    "risk_we_excess_allowance_mode must be one of: bounded, legacy_raw; got {:?}",
+                    raw
+                ))
+            })?;
+    }
+    Ok(bot)
+}
+
+#[pyfunction]
+pub fn calc_trailing_grid_v7_diagnostic_py(input_json: &str) -> PyResult<String> {
+    let input: Value = serde_json::from_str(input_json).map_err(|err| {
+        PyValueError::new_err(format!("invalid trailing_grid_v7 diagnostic json: {err}"))
+    })?;
+    let side = match input.get("pside").and_then(Value::as_str).unwrap_or("long") {
+        "long" => StrategySide::Long,
+        "short" => StrategySide::Short,
+        other => {
+            return Err(PyValueError::new_err(format!(
+                "pside must be long or short; got {other:?}"
+            )))
+        }
+    };
+    let exchange: ExchangeParams = serde_json::from_value(
+        input
+            .get("exchange")
+            .cloned()
+            .ok_or_else(|| PyValueError::new_err("missing exchange"))?,
+    )
+    .map_err(|err| PyValueError::new_err(format!("invalid exchange: {err}")))?;
+    let state: StateParams = serde_json::from_value(
+        input
+            .get("state")
+            .cloned()
+            .ok_or_else(|| PyValueError::new_err("missing state"))?,
+    )
+    .map_err(|err| PyValueError::new_err(format!("invalid state: {err}")))?;
+    let position: Position = serde_json::from_value(
+        input
+            .get("position")
+            .cloned()
+            .ok_or_else(|| PyValueError::new_err("missing position"))?,
+    )
+    .map_err(|err| PyValueError::new_err(format!("invalid position: {err}")))?;
+    let trailing: TrailingPriceBundle = serde_json::from_value(
+        input
+            .get("trailing")
+            .cloned()
+            .ok_or_else(|| PyValueError::new_err("missing trailing"))?,
+    )
+    .map_err(|err| PyValueError::new_err(format!("invalid trailing: {err}")))?;
+    let params: TrailingGridV7Params = serde_json::from_value(
+        input
+            .get("strategy_params")
+            .cloned()
+            .ok_or_else(|| PyValueError::new_err("missing strategy_params"))?,
+    )
+    .map_err(|err| PyValueError::new_err(format!("invalid strategy_params: {err}")))?;
+    let bot = bot_params_from_trailing_grid_v7_diagnostic_json(
+        input
+            .get("bot_params")
+            .ok_or_else(|| PyValueError::new_err("missing bot_params"))?,
+    )?;
+    let runtime = RuntimeOrderContext {
+        effective_wallet_exposure_limit: input
+            .get("runtime")
+            .and_then(|runtime| runtime.get("effective_wallet_exposure_limit"))
+            .and_then(Value::as_f64)
+            .unwrap_or(bot.wallet_exposure_limit),
+    };
+    let out = calc_trailing_grid_v7_diagnostics(
+        side, &exchange, &state, &bot, &runtime, &params, &position, &trailing,
+    );
+    serde_json::to_string(&out)
+        .map_err(|err| PyValueError::new_err(format!("failed to serialize diagnostic: {err}")))
+}
+
 #[pyfunction]
 pub fn calc_next_entry_long_py(
     qty_step: f64,
@@ -1593,19 +3052,15 @@ pub fn calc_next_entry_long_py(
     min_cost: f64,
     c_mult: f64,
     entry_grid_double_down_factor: f64,
-    entry_grid_spacing_volatility_weight: f64,
-    entry_grid_spacing_we_weight: f64,
     entry_grid_spacing_pct: f64,
     entry_initial_ema_dist: f64,
     entry_initial_qty_pct: f64,
     entry_trailing_double_down_factor: f64,
-    entry_trailing_grid_ratio: f64,
     entry_trailing_retracement_pct: f64,
-    entry_trailing_retracement_we_weight: f64,
-    entry_trailing_retracement_volatility_weight: f64,
     entry_trailing_threshold_pct: f64,
-    entry_trailing_threshold_we_weight: f64,
-    entry_trailing_threshold_volatility_weight: f64,
+    entry_weight_volatility_1h: f64,
+    entry_weight_volatility_1m: f64,
+    entry_we_weight: f64,
     wallet_exposure_limit: f64,
     risk_we_excess_allowance_pct: f64,
     balance: f64,
@@ -1616,7 +3071,8 @@ pub fn calc_next_entry_long_py(
     max_since_open: f64,
     min_since_max: f64,
     ema_bands_lower: f64,
-    entry_volatility_logrange_ema_1h: f64,
+    volatility_ema_1h: f64,
+    volatility_ema_1m: f64,
     order_book_bid: f64,
 ) -> (f64, f64, String) {
     let exchange_params = ExchangeParams {
@@ -1637,32 +3093,42 @@ pub fn calc_next_entry_long_py(
             lower: ema_bands_lower,
             ..Default::default()
         },
-        entry_volatility_logrange_ema_1h,
+        volatility_ema_1h,
+        volatility_ema_1m: volatility_ema_1m,
         ..Default::default()
     };
     let bot_params = BotParams {
         entry_grid_double_down_factor,
-        entry_grid_spacing_volatility_weight,
-        entry_grid_spacing_we_weight,
         entry_grid_spacing_pct,
         entry_initial_ema_dist,
         entry_initial_qty_pct,
         entry_trailing_double_down_factor,
-        entry_trailing_grid_ratio,
         entry_trailing_retracement_pct,
-        entry_trailing_retracement_we_weight,
-        entry_trailing_retracement_volatility_weight,
         entry_trailing_threshold_pct,
-        entry_trailing_threshold_we_weight,
-        entry_trailing_threshold_volatility_weight,
+        entry_weight_volatility_1h,
+        entry_weight_volatility_1m,
+        entry_we_weight,
         wallet_exposure_limit,
         risk_we_excess_allowance_pct,
         ..Default::default()
     };
+    let entry_params = make_trailing_martingale_entry_params(
+        entry_grid_double_down_factor,
+        entry_grid_spacing_pct,
+        entry_initial_ema_dist,
+        entry_initial_qty_pct,
+        entry_trailing_double_down_factor,
+        entry_trailing_retracement_pct,
+        entry_trailing_threshold_pct,
+        entry_weight_volatility_1h,
+        entry_weight_volatility_1m,
+        entry_we_weight,
+    );
     let position = Position {
         size: position_size,
         price: position_price,
     };
+    let runtime_context = make_runtime_order_context(wallet_exposure_limit);
     let trailing_price_bundle = TrailingPriceBundle {
         min_since_open: min_since_open,
         max_since_min: max_since_min,
@@ -1673,6 +3139,8 @@ pub fn calc_next_entry_long_py(
         &exchange_params,
         &state_params,
         &bot_params,
+        &runtime_context,
+        &entry_params,
         &position,
         &trailing_price_bundle,
     );
@@ -1684,17 +3152,40 @@ pub fn calc_next_entry_long_py(
     )
 }
 
-#[pyfunction]
+#[pyfunction(signature = (
+    qty_step,
+    price_step,
+    min_qty,
+    min_cost,
+    c_mult,
+    close_grid_qty_pct,
+    close_trailing_qty_pct,
+    close_trailing_retracement_pct,
+    close_trailing_threshold_pct,
+    wallet_exposure_limit,
+    risk_we_excess_allowance_pct,
+    risk_wel_enforcer_threshold,
+    balance,
+    position_size,
+    position_price,
+    min_since_open,
+    max_since_min,
+    max_since_open,
+    min_since_max,
+    order_book_ask,
+    ema_bands_upper = 0.0,
+    volatility_ema_1h = 0.0,
+    volatility_ema_1m = 0.0,
+    close_weight_volatility_1h = 0.0,
+    close_weight_volatility_1m = 0.0
+))]
 pub fn calc_next_close_long_py(
     qty_step: f64,
     price_step: f64,
     min_qty: f64,
     min_cost: f64,
     c_mult: f64,
-    close_grid_markup_end: f64,
-    close_grid_markup_start: f64,
     close_grid_qty_pct: f64,
-    close_trailing_grid_ratio: f64,
     close_trailing_qty_pct: f64,
     close_trailing_retracement_pct: f64,
     close_trailing_threshold_pct: f64,
@@ -1709,7 +3200,12 @@ pub fn calc_next_close_long_py(
     max_since_open: f64,
     min_since_max: f64,
     order_book_ask: f64,
-) -> (f64, f64, String) {
+    ema_bands_upper: f64,
+    volatility_ema_1h: f64,
+    volatility_ema_1m: f64,
+    close_weight_volatility_1h: f64,
+    close_weight_volatility_1m: f64,
+) -> PyResult<(f64, f64, String)> {
     let exchange_params = ExchangeParams {
         qty_step,
         price_step,
@@ -1724,21 +3220,34 @@ pub fn calc_next_close_long_py(
             ask: order_book_ask,
             ..Default::default()
         },
+        ema_bands: EMABands {
+            upper: ema_bands_upper,
+            ..Default::default()
+        },
+        volatility_ema_1h,
+        volatility_ema_1m: volatility_ema_1m,
         ..Default::default()
     };
     let bot_params = BotParams {
-        close_grid_markup_end,
-        close_grid_markup_start,
         close_grid_qty_pct,
-        close_trailing_grid_ratio,
         close_trailing_qty_pct,
         close_trailing_retracement_pct,
         close_trailing_threshold_pct,
+        close_weight_volatility_1h,
+        close_weight_volatility_1m,
         wallet_exposure_limit,
         risk_we_excess_allowance_pct,
         risk_wel_enforcer_threshold,
         ..Default::default()
     };
+    let close_params = make_trailing_martingale_close_params(
+        close_grid_qty_pct,
+        close_trailing_retracement_pct,
+        close_trailing_threshold_pct,
+        close_weight_volatility_1h,
+        close_weight_volatility_1m,
+    );
+    let runtime_context = make_runtime_order_context(wallet_exposure_limit);
     let position = Position {
         size: position_size,
         price: position_price,
@@ -1753,14 +3262,16 @@ pub fn calc_next_close_long_py(
         &exchange_params,
         &state_params,
         &bot_params,
+        &runtime_context,
+        &close_params,
         &position,
         &trailing_price_bundle,
     );
-    (
+    Ok((
         next_entry.qty,
         next_entry.price,
         next_entry.order_type.to_string(),
-    )
+    ))
 }
 
 #[pyfunction]
@@ -1771,19 +3282,15 @@ pub fn calc_next_entry_short_py(
     min_cost: f64,
     c_mult: f64,
     entry_grid_double_down_factor: f64,
-    entry_grid_spacing_volatility_weight: f64,
-    entry_grid_spacing_we_weight: f64,
     entry_grid_spacing_pct: f64,
     entry_initial_ema_dist: f64,
     entry_initial_qty_pct: f64,
     entry_trailing_double_down_factor: f64,
-    entry_trailing_grid_ratio: f64,
     entry_trailing_retracement_pct: f64,
-    entry_trailing_retracement_we_weight: f64,
-    entry_trailing_retracement_volatility_weight: f64,
     entry_trailing_threshold_pct: f64,
-    entry_trailing_threshold_we_weight: f64,
-    entry_trailing_threshold_volatility_weight: f64,
+    entry_weight_volatility_1h: f64,
+    entry_weight_volatility_1m: f64,
+    entry_we_weight: f64,
     wallet_exposure_limit: f64,
     risk_we_excess_allowance_pct: f64,
     balance: f64,
@@ -1794,7 +3301,8 @@ pub fn calc_next_entry_short_py(
     max_since_open: f64,
     min_since_max: f64,
     ema_bands_upper: f64,
-    entry_volatility_logrange_ema_1h: f64,
+    volatility_ema_1h: f64,
+    volatility_ema_1m: f64,
     order_book_ask: f64,
 ) -> (f64, f64, String) {
     let exchange_params = ExchangeParams {
@@ -1815,32 +3323,42 @@ pub fn calc_next_entry_short_py(
             upper: ema_bands_upper,
             ..Default::default()
         },
-        entry_volatility_logrange_ema_1h,
+        volatility_ema_1h,
+        volatility_ema_1m: volatility_ema_1m,
         ..Default::default()
     };
     let bot_params = BotParams {
         entry_grid_double_down_factor,
-        entry_grid_spacing_volatility_weight,
-        entry_grid_spacing_we_weight,
         entry_grid_spacing_pct,
         entry_initial_ema_dist,
         entry_initial_qty_pct,
         entry_trailing_double_down_factor,
-        entry_trailing_grid_ratio,
         entry_trailing_retracement_pct,
-        entry_trailing_retracement_we_weight,
-        entry_trailing_retracement_volatility_weight,
         entry_trailing_threshold_pct,
-        entry_trailing_threshold_we_weight,
-        entry_trailing_threshold_volatility_weight,
+        entry_weight_volatility_1h,
+        entry_weight_volatility_1m,
+        entry_we_weight,
         wallet_exposure_limit,
         risk_we_excess_allowance_pct,
         ..Default::default()
     };
+    let entry_params = make_trailing_martingale_entry_params(
+        entry_grid_double_down_factor,
+        entry_grid_spacing_pct,
+        entry_initial_ema_dist,
+        entry_initial_qty_pct,
+        entry_trailing_double_down_factor,
+        entry_trailing_retracement_pct,
+        entry_trailing_threshold_pct,
+        entry_weight_volatility_1h,
+        entry_weight_volatility_1m,
+        entry_we_weight,
+    );
     let position = Position {
         size: position_size,
         price: position_price,
     };
+    let runtime_context = make_runtime_order_context(wallet_exposure_limit);
     let trailing_price_bundle = TrailingPriceBundle {
         min_since_open: min_since_open,
         max_since_min: max_since_min,
@@ -1851,6 +3369,8 @@ pub fn calc_next_entry_short_py(
         &exchange_params,
         &state_params,
         &bot_params,
+        &runtime_context,
+        &entry_params,
         &position,
         &trailing_price_bundle,
     );
@@ -1862,17 +3382,40 @@ pub fn calc_next_entry_short_py(
     )
 }
 
-#[pyfunction]
+#[pyfunction(signature = (
+    qty_step,
+    price_step,
+    min_qty,
+    min_cost,
+    c_mult,
+    close_grid_qty_pct,
+    close_trailing_qty_pct,
+    close_trailing_retracement_pct,
+    close_trailing_threshold_pct,
+    wallet_exposure_limit,
+    risk_we_excess_allowance_pct,
+    risk_wel_enforcer_threshold,
+    balance,
+    position_size,
+    position_price,
+    min_since_open,
+    max_since_min,
+    max_since_open,
+    min_since_max,
+    order_book_bid,
+    ema_bands_lower = 0.0,
+    volatility_ema_1h = 0.0,
+    volatility_ema_1m = 0.0,
+    close_weight_volatility_1h = 0.0,
+    close_weight_volatility_1m = 0.0
+))]
 pub fn calc_next_close_short_py(
     qty_step: f64,
     price_step: f64,
     min_qty: f64,
     min_cost: f64,
     c_mult: f64,
-    close_grid_markup_end: f64,
-    close_grid_markup_start: f64,
     close_grid_qty_pct: f64,
-    close_trailing_grid_ratio: f64,
     close_trailing_qty_pct: f64,
     close_trailing_retracement_pct: f64,
     close_trailing_threshold_pct: f64,
@@ -1887,7 +3430,12 @@ pub fn calc_next_close_short_py(
     max_since_open: f64,
     min_since_max: f64,
     order_book_bid: f64,
-) -> (f64, f64, String) {
+    ema_bands_lower: f64,
+    volatility_ema_1h: f64,
+    volatility_ema_1m: f64,
+    close_weight_volatility_1h: f64,
+    close_weight_volatility_1m: f64,
+) -> PyResult<(f64, f64, String)> {
     let exchange_params = ExchangeParams {
         qty_step,
         price_step,
@@ -1902,25 +3450,38 @@ pub fn calc_next_close_short_py(
             bid: order_book_bid,
             ..Default::default()
         },
+        ema_bands: EMABands {
+            lower: ema_bands_lower,
+            ..Default::default()
+        },
+        volatility_ema_1h,
+        volatility_ema_1m: volatility_ema_1m,
         ..Default::default()
     };
     let bot_params = BotParams {
-        close_grid_markup_end,
-        close_grid_markup_start,
         close_grid_qty_pct,
-        close_trailing_grid_ratio,
         close_trailing_qty_pct,
         close_trailing_retracement_pct,
         close_trailing_threshold_pct,
+        close_weight_volatility_1h,
+        close_weight_volatility_1m,
         wallet_exposure_limit,
         risk_we_excess_allowance_pct,
         risk_wel_enforcer_threshold,
         ..Default::default()
     };
+    let close_params = make_trailing_martingale_close_params(
+        close_grid_qty_pct,
+        close_trailing_retracement_pct,
+        close_trailing_threshold_pct,
+        close_weight_volatility_1h,
+        close_weight_volatility_1m,
+    );
     let position = Position {
         size: position_size,
         price: position_price,
     };
+    let runtime_context = make_runtime_order_context(wallet_exposure_limit);
     let trailing_price_bundle = TrailingPriceBundle {
         min_since_open: min_since_open,
         max_since_min: max_since_min,
@@ -1931,14 +3492,16 @@ pub fn calc_next_close_short_py(
         &exchange_params,
         &state_params,
         &bot_params,
+        &runtime_context,
+        &close_params,
         &position,
         &trailing_price_bundle,
     );
-    (
+    Ok((
         next_entry.qty,
         next_entry.price,
         next_entry.order_type.to_string(),
-    )
+    ))
 }
 
 #[pyfunction]
@@ -1949,19 +3512,15 @@ pub fn calc_entries_long_py(
     min_cost: f64,
     c_mult: f64,
     entry_grid_double_down_factor: f64,
-    entry_grid_spacing_volatility_weight: f64,
-    entry_grid_spacing_we_weight: f64,
     entry_grid_spacing_pct: f64,
     entry_initial_ema_dist: f64,
     entry_initial_qty_pct: f64,
     entry_trailing_double_down_factor: f64,
-    entry_trailing_grid_ratio: f64,
     entry_trailing_retracement_pct: f64,
-    entry_trailing_retracement_we_weight: f64,
-    entry_trailing_retracement_volatility_weight: f64,
     entry_trailing_threshold_pct: f64,
-    entry_trailing_threshold_we_weight: f64,
-    entry_trailing_threshold_volatility_weight: f64,
+    entry_weight_volatility_1h: f64,
+    entry_weight_volatility_1m: f64,
+    entry_we_weight: f64,
     wallet_exposure_limit: f64,
     risk_we_excess_allowance_pct: f64,
     balance: f64,
@@ -1972,7 +3531,8 @@ pub fn calc_entries_long_py(
     max_since_open: f64,
     min_since_max: f64,
     ema_bands_lower: f64,
-    entry_volatility_logrange_ema_1h: f64,
+    volatility_ema_1h: f64,
+    volatility_ema_1m: f64,
     order_book_bid: f64,
 ) -> Vec<(f64, f64, u16)> {
     let exchange_params = ExchangeParams {
@@ -1994,34 +3554,44 @@ pub fn calc_entries_long_py(
             lower: ema_bands_lower,
             ..Default::default()
         },
-        entry_volatility_logrange_ema_1h,
+        volatility_ema_1h,
+        volatility_ema_1m: volatility_ema_1m,
         ..Default::default()
     };
 
     let bot_params = BotParams {
         entry_grid_double_down_factor,
-        entry_grid_spacing_volatility_weight,
-        entry_grid_spacing_we_weight,
         entry_grid_spacing_pct,
         entry_initial_ema_dist,
         entry_initial_qty_pct,
         entry_trailing_double_down_factor,
-        entry_trailing_grid_ratio,
         entry_trailing_retracement_pct,
-        entry_trailing_retracement_we_weight,
-        entry_trailing_retracement_volatility_weight,
         entry_trailing_threshold_pct,
-        entry_trailing_threshold_we_weight,
-        entry_trailing_threshold_volatility_weight,
+        entry_weight_volatility_1h,
+        entry_weight_volatility_1m,
+        entry_we_weight,
         wallet_exposure_limit,
         risk_we_excess_allowance_pct,
         ..Default::default()
     };
+    let entry_params = make_trailing_martingale_entry_params(
+        entry_grid_double_down_factor,
+        entry_grid_spacing_pct,
+        entry_initial_ema_dist,
+        entry_initial_qty_pct,
+        entry_trailing_double_down_factor,
+        entry_trailing_retracement_pct,
+        entry_trailing_threshold_pct,
+        entry_weight_volatility_1h,
+        entry_weight_volatility_1m,
+        entry_we_weight,
+    );
 
     let position = Position {
         size: position_size,
         price: position_price,
     };
+    let runtime_context = make_runtime_order_context(wallet_exposure_limit);
     let trailing_price_bundle = TrailingPriceBundle {
         min_since_open: min_since_open,
         max_since_min: max_since_min,
@@ -2032,6 +3602,8 @@ pub fn calc_entries_long_py(
         &exchange_params,
         &state_params,
         &bot_params,
+        &runtime_context,
+        &entry_params,
         &position,
         &trailing_price_bundle,
     );
@@ -2051,19 +3623,15 @@ pub fn calc_entries_short_py(
     min_cost: f64,
     c_mult: f64,
     entry_grid_double_down_factor: f64,
-    entry_grid_spacing_volatility_weight: f64,
-    entry_grid_spacing_we_weight: f64,
     entry_grid_spacing_pct: f64,
     entry_initial_ema_dist: f64,
     entry_initial_qty_pct: f64,
     entry_trailing_double_down_factor: f64,
-    entry_trailing_grid_ratio: f64,
     entry_trailing_retracement_pct: f64,
-    entry_trailing_retracement_we_weight: f64,
-    entry_trailing_retracement_volatility_weight: f64,
     entry_trailing_threshold_pct: f64,
-    entry_trailing_threshold_we_weight: f64,
-    entry_trailing_threshold_volatility_weight: f64,
+    entry_weight_volatility_1h: f64,
+    entry_weight_volatility_1m: f64,
+    entry_we_weight: f64,
     wallet_exposure_limit: f64,
     risk_we_excess_allowance_pct: f64,
     balance: f64,
@@ -2074,7 +3642,8 @@ pub fn calc_entries_short_py(
     max_since_open: f64,
     min_since_max: f64,
     ema_bands_upper: f64,
-    entry_volatility_logrange_ema_1h: f64,
+    volatility_ema_1h: f64,
+    volatility_ema_1m: f64,
     order_book_ask: f64,
 ) -> Vec<(f64, f64, u16)> {
     let exchange_params = ExchangeParams {
@@ -2096,34 +3665,44 @@ pub fn calc_entries_short_py(
             upper: ema_bands_upper,
             ..Default::default()
         },
-        entry_volatility_logrange_ema_1h,
+        volatility_ema_1h,
+        volatility_ema_1m: volatility_ema_1m,
         ..Default::default()
     };
 
     let bot_params = BotParams {
         entry_grid_double_down_factor,
-        entry_grid_spacing_volatility_weight,
-        entry_grid_spacing_we_weight,
         entry_grid_spacing_pct,
         entry_initial_ema_dist,
         entry_initial_qty_pct,
         entry_trailing_double_down_factor,
-        entry_trailing_grid_ratio,
         entry_trailing_retracement_pct,
-        entry_trailing_retracement_we_weight,
-        entry_trailing_retracement_volatility_weight,
         entry_trailing_threshold_pct,
-        entry_trailing_threshold_we_weight,
-        entry_trailing_threshold_volatility_weight,
+        entry_weight_volatility_1h,
+        entry_weight_volatility_1m,
+        entry_we_weight,
         wallet_exposure_limit,
         risk_we_excess_allowance_pct,
         ..Default::default()
     };
+    let entry_params = make_trailing_martingale_entry_params(
+        entry_grid_double_down_factor,
+        entry_grid_spacing_pct,
+        entry_initial_ema_dist,
+        entry_initial_qty_pct,
+        entry_trailing_double_down_factor,
+        entry_trailing_retracement_pct,
+        entry_trailing_threshold_pct,
+        entry_weight_volatility_1h,
+        entry_weight_volatility_1m,
+        entry_we_weight,
+    );
 
     let position = Position {
         size: position_size,
         price: position_price,
     };
+    let runtime_context = make_runtime_order_context(wallet_exposure_limit);
     let trailing_price_bundle = TrailingPriceBundle {
         min_since_open: min_since_open,
         max_since_min: max_since_min,
@@ -2134,6 +3713,8 @@ pub fn calc_entries_short_py(
         &exchange_params,
         &state_params,
         &bot_params,
+        &runtime_context,
+        &entry_params,
         &position,
         &trailing_price_bundle,
     );
@@ -2164,17 +3745,40 @@ pub fn calc_min_entry_qty_py(
     crate::entries::calc_min_entry_qty(price, &exchange_params)
 }
 
-#[pyfunction]
+#[pyfunction(signature = (
+    qty_step,
+    price_step,
+    min_qty,
+    min_cost,
+    c_mult,
+    close_grid_qty_pct,
+    close_trailing_qty_pct,
+    close_trailing_retracement_pct,
+    close_trailing_threshold_pct,
+    wallet_exposure_limit,
+    risk_we_excess_allowance_pct,
+    risk_wel_enforcer_threshold,
+    balance,
+    position_size,
+    position_price,
+    min_since_open,
+    max_since_min,
+    max_since_open,
+    min_since_max,
+    order_book_ask,
+    ema_bands_upper = 0.0,
+    volatility_ema_1h = 0.0,
+    volatility_ema_1m = 0.0,
+    close_weight_volatility_1h = 0.0,
+    close_weight_volatility_1m = 0.0
+))]
 pub fn calc_closes_long_py(
     qty_step: f64,
     price_step: f64,
     min_qty: f64,
     min_cost: f64,
     c_mult: f64,
-    close_grid_markup_end: f64,
-    close_grid_markup_start: f64,
     close_grid_qty_pct: f64,
-    close_trailing_grid_ratio: f64,
     close_trailing_qty_pct: f64,
     close_trailing_retracement_pct: f64,
     close_trailing_threshold_pct: f64,
@@ -2189,7 +3793,12 @@ pub fn calc_closes_long_py(
     max_since_open: f64,
     min_since_max: f64,
     order_book_ask: f64,
-) -> Vec<(f64, f64, u16)> {
+    ema_bands_upper: f64,
+    volatility_ema_1h: f64,
+    volatility_ema_1m: f64,
+    close_weight_volatility_1h: f64,
+    close_weight_volatility_1m: f64,
+) -> PyResult<Vec<(f64, f64, u16)>> {
     let exchange_params = ExchangeParams {
         qty_step,
         price_step,
@@ -2205,22 +3814,35 @@ pub fn calc_closes_long_py(
             ask: order_book_ask,
             ..Default::default()
         },
+        ema_bands: EMABands {
+            upper: ema_bands_upper,
+            ..Default::default()
+        },
+        volatility_ema_1h,
+        volatility_ema_1m: volatility_ema_1m,
         ..Default::default()
     };
 
     let bot_params = BotParams {
-        close_grid_markup_end,
-        close_grid_markup_start,
         close_grid_qty_pct,
-        close_trailing_grid_ratio,
         close_trailing_qty_pct,
         close_trailing_retracement_pct,
         close_trailing_threshold_pct,
+        close_weight_volatility_1h,
+        close_weight_volatility_1m,
         wallet_exposure_limit,
         risk_we_excess_allowance_pct,
         risk_wel_enforcer_threshold,
         ..Default::default()
     };
+    let close_params = make_trailing_martingale_close_params(
+        close_grid_qty_pct,
+        close_trailing_retracement_pct,
+        close_trailing_threshold_pct,
+        close_weight_volatility_1h,
+        close_weight_volatility_1m,
+    );
+    let runtime_context = make_runtime_order_context(wallet_exposure_limit);
 
     let position = Position {
         size: position_size,
@@ -2236,28 +3858,53 @@ pub fn calc_closes_long_py(
         &exchange_params,
         &state_params,
         &bot_params,
+        &runtime_context,
+        &close_params,
         &position,
         &trailing_price_bundle,
     );
 
     // Convert closes to Python-compatible format
-    closes
+    Ok(closes
         .into_iter()
         .map(|order| (order.qty, order.price, order.order_type.id()))
-        .collect()
+        .collect())
 }
 
-#[pyfunction]
+#[pyfunction(signature = (
+    qty_step,
+    price_step,
+    min_qty,
+    min_cost,
+    c_mult,
+    close_grid_qty_pct,
+    close_trailing_qty_pct,
+    close_trailing_retracement_pct,
+    close_trailing_threshold_pct,
+    wallet_exposure_limit,
+    risk_we_excess_allowance_pct,
+    risk_wel_enforcer_threshold,
+    balance,
+    position_size,
+    position_price,
+    min_since_open,
+    max_since_min,
+    max_since_open,
+    min_since_max,
+    order_book_bid,
+    ema_bands_lower = 0.0,
+    volatility_ema_1h = 0.0,
+    volatility_ema_1m = 0.0,
+    close_weight_volatility_1h = 0.0,
+    close_weight_volatility_1m = 0.0
+))]
 pub fn calc_closes_short_py(
     qty_step: f64,
     price_step: f64,
     min_qty: f64,
     min_cost: f64,
     c_mult: f64,
-    close_grid_markup_end: f64,
-    close_grid_markup_start: f64,
     close_grid_qty_pct: f64,
-    close_trailing_grid_ratio: f64,
     close_trailing_qty_pct: f64,
     close_trailing_retracement_pct: f64,
     close_trailing_threshold_pct: f64,
@@ -2272,7 +3919,12 @@ pub fn calc_closes_short_py(
     max_since_open: f64,
     min_since_max: f64,
     order_book_bid: f64,
-) -> Vec<(f64, f64, u16)> {
+    ema_bands_lower: f64,
+    volatility_ema_1h: f64,
+    volatility_ema_1m: f64,
+    close_weight_volatility_1h: f64,
+    close_weight_volatility_1m: f64,
+) -> PyResult<Vec<(f64, f64, u16)>> {
     let exchange_params = ExchangeParams {
         qty_step,
         price_step,
@@ -2288,22 +3940,35 @@ pub fn calc_closes_short_py(
             bid: order_book_bid,
             ..Default::default()
         },
+        ema_bands: EMABands {
+            lower: ema_bands_lower,
+            ..Default::default()
+        },
+        volatility_ema_1h,
+        volatility_ema_1m: volatility_ema_1m,
         ..Default::default()
     };
 
     let bot_params = BotParams {
-        close_grid_markup_end,
-        close_grid_markup_start,
         close_grid_qty_pct,
-        close_trailing_grid_ratio,
         close_trailing_qty_pct,
         close_trailing_retracement_pct,
         close_trailing_threshold_pct,
+        close_weight_volatility_1h,
+        close_weight_volatility_1m,
         wallet_exposure_limit,
         risk_we_excess_allowance_pct,
         risk_wel_enforcer_threshold,
         ..Default::default()
     };
+    let close_params = make_trailing_martingale_close_params(
+        close_grid_qty_pct,
+        close_trailing_retracement_pct,
+        close_trailing_threshold_pct,
+        close_weight_volatility_1h,
+        close_weight_volatility_1m,
+    );
+    let runtime_context = make_runtime_order_context(wallet_exposure_limit);
     let position = Position {
         size: position_size,
         price: position_price,
@@ -2318,18 +3983,30 @@ pub fn calc_closes_short_py(
         &exchange_params,
         &state_params,
         &bot_params,
+        &runtime_context,
+        &close_params,
         &position,
         &trailing_price_bundle,
     );
 
     // Convert closes to Python-compatible format
-    closes
+    Ok(closes
         .into_iter()
         .map(|order| (order.qty, order.price, order.order_type.id()))
-        .collect()
+        .collect())
 }
 
 #[pyfunction]
+#[pyo3(signature = (
+    side,
+    red_threshold,
+    total_wallet_exposure_limit,
+    effective_n_positions,
+    balance,
+    positions,
+    skip_idx=None,
+    policy=None
+))]
 pub fn calc_twel_enforcer_orders_py(
     side: &str,
     red_threshold: f64,
@@ -2338,6 +4015,7 @@ pub fn calc_twel_enforcer_orders_py(
     balance: f64,
     positions: &Bound<'_, PyList>,
     skip_idx: Option<usize>,
+    policy: Option<&str>,
 ) -> PyResult<Vec<(usize, f64, f64, u16)>> {
     let positions = positions.as_ref();
     let side_code = match side {
@@ -2348,6 +4026,15 @@ pub fn calc_twel_enforcer_orders_py(
                 "side must be either 'long' or 'short'",
             ))
         }
+    };
+    let policy = match policy {
+        Some(raw) => TwelEnforcerPolicy::from_str(raw.trim()).map_err(|_| {
+            PyValueError::new_err(format!(
+                "policy must be one of: reduce_overweight, reduce_portfolio; got {:?}",
+                raw
+            ))
+        })?,
+        None => TwelEnforcerPolicy::default(),
     };
     let positions_len = positions.len()?;
     let mut parsed_positions: Vec<TwelEnforcerInputPosition> = Vec::with_capacity(positions_len);
@@ -2377,14 +4064,11 @@ pub fn calc_twel_enforcer_orders_py(
                     PyValueError::new_err("twel enforcer position missing 'market_price'")
                 })?
                 .extract::<f64>()?,
-            base_wallet_exposure_limit: dict
-                .get_item("base_wallet_exposure_limit")?
-                .ok_or_else(|| {
-                    PyValueError::new_err(
-                        "twel enforcer position missing 'base_wallet_exposure_limit'",
-                    )
-                })?
-                .extract::<f64>()?,
+            is_managed_candidate: dict
+                .get_item("is_managed_candidate")?
+                .map(|value| value.extract::<bool>())
+                .transpose()?
+                .unwrap_or(true),
             c_mult: dict
                 .get_item("c_mult")?
                 .ok_or_else(|| PyValueError::new_err("twel enforcer position missing 'c_mult'"))?
@@ -2417,6 +4101,7 @@ pub fn calc_twel_enforcer_orders_py(
         effective_n_positions,
         balance,
         &parsed_positions,
+        policy,
         skip_idx,
     );
     Ok(actions
@@ -2466,7 +4151,11 @@ pub fn compute_ideal_orders_json(input_json: &str) -> PyResult<String> {
                 e
             ))
         })?;
+    validate_orchestrator_account_risk_inputs(&input)?;
     validate_forager_score_weights_pair(&input.global.global_bot_params)?;
+    validate_hsl_panic_close_order_type_pair(&input.global.global_bot_params)?;
+    validate_hsl_restart_after_red_policy_pair(&input.global.global_bot_params)?;
+    validate_hsl_risk_unstuck_orchestrator_input(&input)?;
 
     let out = crate::orchestrator::compute_ideal_orders(&input).map_err(|e| {
         pyo3::exceptions::PyValueError::new_err(format!(
@@ -2481,4 +4170,17 @@ pub fn compute_ideal_orders_json(input_json: &str) -> PyResult<String> {
             e
         ))
     })
+}
+
+#[pyfunction]
+pub fn get_strategy_spec(py: Python<'_>, strategy_kind: &str) -> PyResult<Py<PyDict>> {
+    let kind = strategy_kind_from_name(strategy_kind).ok_or_else(|| {
+        pyo3::exceptions::PyValueError::new_err(format!("unknown strategy kind: {}", strategy_kind))
+    })?;
+    struct_to_py_dict(py, &strategy_spec(kind))
+}
+
+#[pyfunction]
+pub fn get_strategy_kinds() -> Vec<&'static str> {
+    strategy_kind_names()
 }

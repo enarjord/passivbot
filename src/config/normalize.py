@@ -4,6 +4,7 @@ from copy import deepcopy
 from .bot import (
     ensure_optimize_bounds_for_bot,
     format_bot_config,
+    normalize_coin_override_risk_config,
     strip_deprecated_coin_override_entry_grid_inflation_flags,
 )
 from .hydrate import (
@@ -21,8 +22,14 @@ from .migrations import (
     build_base_config_from_flavor,
     detect_flavor,
 )
+from .optimize_bounds import prune_inactive_optimize_strategy_bounds
 from .scoring import normalize_scoring_config
 from .schema import get_template_config
+from .strategy import (
+    prune_inactive_strategy_subtrees,
+    reject_legacy_flat_strategy_fields,
+    sync_canonical_strategy_config,
+)
 from .transform_log import ConfigTransformTracker, record_transform
 from .access import require_config_dict
 from .validate import validate_config
@@ -67,6 +74,7 @@ def normalize_config(
             tracker.add([section], result[section])
     for path in ("backtest", "bot", "live", "optimize"):
         require_config_dict(result, path)
+    reject_legacy_flat_strategy_fields(result)
     apply_migrations(result, verbose=verbose, tracker=tracker)
     for key in ("approved_coins", "ignored_coins"):
         if isinstance(result.get("live"), dict) and key in result["live"]:
@@ -74,6 +82,7 @@ def normalize_config(
     seed_missing_compatibility_sections(template, result, tracker=tracker)
     for path in ("bot.long", "bot.short", "optimize.bounds"):
         require_config_dict(result, path)
+    reject_legacy_flat_strategy_fields(result)
     apply_backward_compatibility_renames(result, verbose=verbose, tracker=tracker)
     if isinstance(raw_optimize_snapshot, dict):
         raw_optimize_compat = {
@@ -91,11 +100,13 @@ def normalize_config(
         verbose=verbose,
         tracker=tracker,
     )
+    sync_canonical_strategy_config(result, tracker=tracker)
     strip_deprecated_coin_override_entry_grid_inflation_flags(
         result,
         verbose=verbose,
         tracker=tracker,
     )
+    normalize_coin_override_risk_config(result, tracker=tracker)
     ensure_optimize_bounds_for_bot(result, verbose=verbose, tracker=tracker)
     hydrate_missing_template_fields(template, result, verbose=verbose, tracker=tracker)
     reject_backtest_inherited_live_fields(result)
@@ -106,6 +117,9 @@ def normalize_config(
         verbose=verbose,
         tracker=tracker,
     )
+    sync_canonical_strategy_config(result, tracker=tracker)
+    prune_inactive_strategy_subtrees(result, tracker=tracker)
+    prune_inactive_optimize_strategy_bounds(result, tracker=tracker)
     normalize_validation_fields(result, raw_optimize=raw_optimize_snapshot)
     normalize_scoring_config(result, verbose=verbose, tracker=tracker)
     validate_config(

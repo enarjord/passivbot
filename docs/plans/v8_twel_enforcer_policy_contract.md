@@ -1,12 +1,20 @@
-# v8 TWEL Enforcer Policy Contract
+# v8 Total Exposure Enforcer Policy Contract
 
 ## Status
 
 Draft handoff for a future v8 implementation. This is not a v7 bug-fix spec.
 
 The v7 behavior discussed in GitHub issue #600 can remain unchanged short term unless a separate
-v7 mitigation is explicitly chosen. v8 is already a breaking upgrade, so the TWEL enforcer contract
-can be redesigned there without preserving v7 semantics.
+v7 mitigation is explicitly chosen. v8 is already a breaking upgrade, so the total exposure
+enforcer contract can be redesigned there without preserving v7 semantics.
+
+In this document, TWEL means total wallet exposure limit. The v8 user-facing config names are
+`bot.<pside>.risk.total_wallet_exposure_limit`,
+`bot.<pside>.risk.total_exposure_entry_gate_enabled`,
+`bot.<pside>.risk.total_exposure_enforcer_enabled`,
+`bot.<pside>.risk.total_exposure_enforcer_threshold`, and the future
+`bot.<pside>.risk.total_exposure_enforcer_policy`. Some Rust/PyO3 internals still use historical
+`risk_twel_*` field names at the compiled boundary.
 
 ## Background
 
@@ -42,12 +50,16 @@ capacity created by `risk_we_excess_allowance_pct`.
    - This remains useful when excess allowance is modest and `n_positions` is high.
 
 2. Prevent TWEL-specific entry/reduce oscillation:
-   - TWEL reductions should not be immediately undone by TWEL-blind entries.
+   - When the entry gate is enabled, TWEL reductions should not be immediately undone by
+     TWEL-blind entries.
+   - When the entry gate is disabled, users explicitly accept that entries may refill or exceed
+     TWEL.
    - TWEL should not become an unbounded loss-harvesting loop.
 
 3. Keep WEL and TWEL contracts separate:
    - WEL may deliberately oscillate around effective WEL.
-   - TWEL should gate portfolio exposure and repair over-target states.
+   - TWEL entry gating is the optional portfolio entry cap.
+   - TWEL auto-reduce is the optional portfolio repair path for over-target states.
 
 4. Keep the v8 policy surface small:
    - Avoid five or more policies unless real usage proves they are needed.
@@ -59,19 +71,32 @@ capacity created by `risk_we_excess_allowance_pct`.
 
 ## Core Definitions
 
-Use raw TWEL for per-position sizing and thresholded TWEL for portfolio gating:
+Use raw TWEL for per-position sizing, a capped threshold for entry gating, and thresholded TWEL for
+auto-reduce repair:
 
 ```text
-raw_twel = bot.{side}.total_wallet_exposure_limit
-twel_threshold = bot.{side}.risk_twel_enforcer_threshold
-effective_twel = raw_twel * twel_threshold
-effective_wel = raw_twel / effective_n_positions * (1 + risk_we_excess_allowance_pct)
+raw_twel = bot.{pside}.risk.total_wallet_exposure_limit
+twel_threshold = bot.{pside}.risk.total_exposure_enforcer_threshold
+twel_repair_target = raw_twel * twel_threshold
+twel_entry_cap = min(raw_twel, twel_repair_target)
+configured_wel_base = raw_twel / configured_n_positions
+effective_wel = min(raw_twel, configured_wel_base * (1 + risk_we_excess_allowance_pct))
 ```
 
 Important distinction:
 
-- `effective_wel` remains derived from raw TWEL.
-- `effective_twel` governs portfolio-level entry blocking and TWEL auto-reduce target.
+- Live uses configured `n_positions` for WEL base sizing. It must not change WEL denominators
+  because the current number of open positions differs from configured `n_positions`.
+- Backtest `dynamic_wel_by_tradability` is the explicit exception. It may change runtime WEL
+  denominators to handle early backtest periods with fewer tradable coins than later periods.
+- Standard v8 `risk_we_excess_allowance_mode=bounded` caps `effective_wel <= raw_twel`.
+- `risk_we_excess_allowance_mode=legacy_raw` exists only for improved v7 compatibility through
+  `trailing_grid_v7`; it may make WEL exceed raw TWEL, but it never bypasses TWEL entry gating or
+  TWEL auto-reduce.
+- `twel_entry_cap` governs portfolio-level entry blocking when the entry gate is enabled.
+- `twel_repair_target` governs TWEL auto-reduce when auto-reduce is enabled.
+- Entry-gate TWE is computed from snapped/hysteresis balance.
+- Auto-reduce TWE is computed from raw balance.
 
 Example:
 
@@ -79,52 +104,102 @@ Example:
 raw_twel = 1.0
 n_positions = 10
 risk_we_excess_allowance_pct = 0.25
-twel_threshold = 0.9
+total_exposure_enforcer_threshold = 0.9
 
 effective_wel = 1.0 / 10 * 1.25 = 0.125
-effective_twel = 1.0 * 0.9 = 0.9
+twel_repair_target = 1.0 * 0.9 = 0.9
+twel_entry_cap = min(1.0, 0.9) = 0.9
 ```
 
-With `twel_threshold = 0.9`, the bot may still size individual positions up to `0.125` WE, but
-entries are blocked or cropped once projected same-side TWE would exceed `0.9`. This is not the
-same as reducing raw TWEL to `0.9`, because reducing raw TWEL would also shrink per-position WEL.
+With `total_exposure_enforcer_threshold = 0.9`, the bot may still size individual positions up to
+`0.125` WE, but entries are blocked or cropped once projected same-side TWE would exceed `0.9`
+when the entry gate is enabled.
+This is not the same as reducing raw TWEL to `0.9`, because reducing raw TWEL would also shrink
+per-position WEL.
+
+With `total_exposure_enforcer_threshold = 1.05`, the auto-reduce repair target is `1.05`, but the
+entry cap remains raw TWEL:
+
+```text
+twel_repair_target = 1.0 * 1.05 = 1.05
+twel_entry_cap = min(1.0, 1.05) = 1.0
+```
+
+That creates a deliberate buffer: the bot will not willingly enter above raw TWEL when the entry
+gate is enabled, but it will not auto-reduce until same-side TWE exceeds `raw_twel * threshold`.
 
 ## Global TWEL Entry Gate
 
-If the TWEL enforcer is disabled, do not block entries via TWEL and do not emit TWEL auto-reduce
-orders.
+TWEL entry gating and TWEL auto-reduce are separate controls:
 
-For v8, define TWEL enabled as:
+```text
+bot.long.risk.total_exposure_entry_gate_enabled
+bot.short.risk.total_exposure_entry_gate_enabled
+
+bot.long.risk.total_exposure_enforcer_enabled
+bot.short.risk.total_exposure_enforcer_enabled
+```
+
+The entry gate prevents new bot entries from pushing projected same-side TWE above
+`twel_entry_cap`. Auto-reduce emits repair closes when existing same-side TWE exceeds
+`twel_repair_target`.
+
+If `total_exposure_entry_gate_enabled=false`, do not block entries via TWEL. In that mode,
+positive excess allowance may allow the bot to place entries which, if filled, push same-side TWE
+above raw TWEL. This is an explicit user opt-out from the TWEL entry cap and must be documented as
+such.
+
+If `total_exposure_enforcer_enabled=false`, emit no TWEL auto-reduce orders.
+
+Combinations:
+
+```text
+entry_gate=false, enforcer=false:
+    no TWEL entry cap and no TWEL auto-reduce repair
+
+entry_gate=true, enforcer=false:
+    entries cannot project above twel_entry_cap; no TWEL auto-reduce repair
+
+entry_gate=false, enforcer=true:
+    entries are not TWEL-capped; auto-reduce repairs above twel_repair_target
+
+entry_gate=true, enforcer=true:
+    entries cannot project above twel_entry_cap; auto-reduce repairs above twel_repair_target
+```
+
+For v8, the TWEL side is active for either gate when:
 
 ```text
 raw_twel > 0.0
-effective_n_positions > 0
-risk_twel_enforcer_threshold > 0.0
+configured_n_positions > 0
+total_exposure_enforcer_threshold > 0.0
 ```
 
-When TWEL is enabled, every policy must enforce:
+When the entry gate is enabled, every policy must enforce:
 
 ```text
-Do not allow an entry whose projected fill would make same-side TWE > effective_twel.
+Do not allow an entry whose projected fill would make same-side TWE > twel_entry_cap.
 ```
 
-The gate should crop the last admissible entry when possible so projected TWE lands near
-`effective_twel` without exceeding it. If the cropped quantity violates effective min qty or min
+The gate should crop the last admissible entry when possible so projected snapped-balance TWE lands
+near `twel_entry_cap` without exceeding it. If the cropped quantity violates effective min qty or min
 cost, drop the entry.
 
-This gate is the main normal-path behavior. If the bot operates from a valid state and all entries
-go through this gate, entries should not be able to trigger TWEL auto-reduce by themselves.
+This gate is the main normal-path behavior when enabled. If the bot operates from a valid state and
+all entries go through this gate, entries should not be able to push same-side TWE above raw TWEL by
+themselves. If `twel_threshold < 1.0`, entries also cannot refill the band that TWEL repair is
+trying to reduce.
 
 ## Auto-Reduce Trigger
 
 TWEL auto-reduce becomes a repair path, not the normal path:
 
 ```text
-if current_same_side_TWE > effective_twel:
-    emit TWEL auto-reduce orders according to twel_enforcer_policy
+if total_exposure_enforcer_enabled and current_same_side_TWE > twel_repair_target:
+    emit TWEL auto-reduce orders according to total_exposure_enforcer_policy
 ```
 
-Common reasons current TWE can exceed `effective_twel` even with entry gating:
+Common reasons current TWE can exceed `twel_repair_target` even with entry gating:
 
 - realized losses reduce account balance
 - withdrawals reduce account balance
@@ -134,29 +209,65 @@ Common reasons current TWE can exceed `effective_twel` even with entry gating:
 - restart observes an already over-target account
 - rounding, min qty, min cost, or partial fills leave the account above target
 
-## Config Parameter
+## Mode Semantics
 
-Preferred v8 parameter name:
+TWEL entry gating applies only to bot-generated entry candidates. It does not govern external,
+manual, or already-open exchange orders that are intentionally outside entry generation. Existing
+same-side exchange exposure still counts toward the entry-gate TWE baseline.
+
+Mode interactions:
+
+- `normal`: generate entries and closes normally; TWEL entry gating applies to bot-generated
+  entries when enabled.
+- `graceful_stop`: block initial entries when there is no position. With an existing position,
+  behave like `normal`; continuation entries remain bot-generated and should pass through TWEL entry
+  gating when enabled.
+- `tp_only`: generate no new bot entries, but continue close-side management for existing
+  positions. Existing or operator-created non-reduce-only orders are operator risk and are not
+  governed by the TWEL entry gate.
+- `manual`: generate no bot entries or closes for that position side; TWEL auto-reduce should not
+  override manual mode.
+- `panic`: generate panic close behavior only; TWEL auto-reduce should not compete with panic mode.
+
+TWEL auto-reduce measures current same-side TWE from all open same-side exchange positions,
+including `manual` and `panic`. `reduce_portfolio` and `reduce_overweight` choose repair
+candidates only from managed open positions in `normal`, `graceful_stop`, and `tp_only`; they do
+not emit TWEL auto-reduce orders for `manual` or `panic`.
+
+## Config Parameters
+
+Preferred v8 parameter names:
 
 ```text
-bot.long.twel_enforcer_policy
-bot.short.twel_enforcer_policy
+bot.long.risk.total_exposure_entry_gate_enabled
+bot.short.risk.total_exposure_entry_gate_enabled
+
+bot.long.risk.total_exposure_enforcer_enabled
+bot.short.risk.total_exposure_enforcer_enabled
+
+bot.long.risk.total_exposure_enforcer_threshold
+bot.short.risk.total_exposure_enforcer_threshold
+
+bot.long.risk.total_exposure_enforcer_policy
+bot.short.risk.total_exposure_enforcer_policy
 ```
 
-If v8 uses a nested risk section, the canonical shape may instead be:
+If temporary flat runtime fields are needed at the Python/Rust boundary, keep one canonical
+user-facing field and translate to the internal representation during config compilation.
+
+Do not add user-facing aliases unless a released-version migration requires them.
+
+`total_exposure_enforcer_policy` controls only TWEL auto-reduce candidate selection. It is global
+per side, not per coin. Do not allow coin overrides for TWEL entry-gate enabled, TWEL auto-reduce
+enabled, TWEL threshold, or TWEL policy unless a future portfolio-level override contract is
+explicitly designed.
+
+The TWEL policy enum and TWEL boolean flags are not optimizer-searchable. Optimizer bounds remain
+for numeric parameters only, with integer parameters handled explicitly where supported.
+
+Recommended policy values:
 
 ```text
-bot.long.risk.twel_enforcer_policy
-bot.short.risk.twel_enforcer_policy
-```
-
-If both shapes exist during migration, keep one canonical internal field and treat the other as an
-alias during config normalization.
-
-Recommended allowed values:
-
-```text
-block_entries_only
 reduce_overweight
 reduce_portfolio
 ```
@@ -167,38 +278,23 @@ Recommended default:
 reduce_overweight
 ```
 
-## Policy: `block_entries_only`
-
-Behavior:
-
-1. Enforce the global TWEL entry gate at `effective_twel`.
-2. Emit no TWEL auto-reduce orders.
-
-This is the pure stop-and-wait policy. It is useful for users who want thresholded TWEL as a
-portfolio entry budget, but do not want TWEL to realize losses automatically.
-
-Threshold semantics:
-
-- `risk_twel_enforcer_threshold` still matters.
-- Entries are blocked or cropped above `raw_twel * risk_twel_enforcer_threshold`.
-- Raw TWEL still controls per-position effective WEL.
-
 ## Policy: `reduce_overweight`
 
 Behavior:
 
-1. Enforce the global TWEL entry gate at `effective_twel`.
-2. If current TWE exceeds `effective_twel`, reduce positions whose WE exceeds the thresholded
-   per-slot target:
+1. If the entry gate is enabled, enforce the global TWEL entry gate at `twel_entry_cap`.
+2. If auto-reduce is enabled and current TWE exceeds `twel_repair_target`, reduce positions whose
+   WE exceeds the thresholded per-slot target:
 
 ```text
-overweight_target = effective_twel / effective_n_positions
+overweight_target = twel_repair_target / configured_n_positions
 candidate if WE > overweight_target
 ```
 
-3. Emit auto-reduce orders for all candidates.
-4. Size candidate reductions to approximate equal adverse realized loss while reducing TWE toward
-   `effective_twel`.
+3. Evaluate candidates in deterministic reducer order and emit auto-reduce orders until projected
+   raw-balance TWE is `<= twel_repair_target`.
+4. Size candidate reductions with the initial deterministic reducer described below while reducing
+   TWE toward `twel_repair_target`.
 
 This is the conservative portfolio repair policy. It focuses on positions consuming more than their
 thresholded fair share of the portfolio budget, while avoiding healthy small positions when possible.
@@ -209,7 +305,7 @@ Example:
 positions WE: 0.23, 0.65, 0.41
 raw_twel: 1.29
 twel_threshold: 0.97
-effective_twel: 1.2513
+twel_repair_target: 1.2513
 n_positions: 3
 overweight_target: 0.4171
 ```
@@ -221,15 +317,17 @@ positions are below their thresholded per-slot target.
 
 Behavior:
 
-1. Enforce the global TWEL entry gate at `effective_twel`.
-2. If current TWE exceeds `effective_twel`, all open same-side positions are candidates.
-3. Emit auto-reduce orders for all candidates.
-4. Size reductions to approximate equal adverse realized loss while reducing TWE toward
-   `effective_twel`.
+1. If the entry gate is enabled, enforce the global TWEL entry gate at `twel_entry_cap`.
+2. If auto-reduce is enabled and current TWE exceeds `twel_repair_target`, measure current TWE
+   from all open same-side exchange positions.
+3. Evaluate all managed open same-side positions as candidates, but emit auto-reduce orders only
+   until projected raw-balance TWE is `<= twel_repair_target`.
+4. Size reductions with the initial deterministic reducer described below while reducing TWE toward
+   `twel_repair_target`.
 
 This is the true portfolio-wide deleverager. It is appropriate when the user wants
-`risk_twel_enforcer_threshold < 1.0` to mean "reduce the whole same-side book if the portfolio is
-over target."
+`total_exposure_enforcer_threshold < 1.0` to mean "reduce the whole same-side book if the portfolio
+is over target."
 
 Profitable positions are candidates. Their adverse realized loss is zero:
 
@@ -240,10 +338,27 @@ adverse_loss = max(0.0, -projected_realized_pnl)
 Do not let profitable closes create negative loss credit that permits larger losses elsewhere,
 unless a future explicit policy chooses to do that.
 
-## Equal Adverse Loss Sizing
+## Initial Reducer Sizing
 
-For `reduce_overweight` and `reduce_portfolio`, the sizing objective is not equal exposure
-reduction. It is equal adverse realized loss.
+For the first implementation, do not implement full equal adverse-loss water-filling. Keep the
+initial reducer simpler and deterministic:
+
+1. Build the policy candidate set.
+2. Prefer profitable or breakeven candidates first.
+3. Then prefer shallowest adverse-loss candidates before deeper losers.
+4. Use stable symbol/order tie-breakers for deterministic output.
+5. Reduce candidates until projected raw-balance TWE is `<= twel_repair_target` or no candidate can
+   reduce further.
+6. Emit at most one TWEL auto-reduce order per position in a single orchestrator pass.
+
+This preserves the practical least-loss behavior while avoiding the complexity of full
+equal-adverse-loss allocation in the first contract change.
+
+## Future Equal Adverse Loss Sizing
+
+For a later implementation, `reduce_overweight` and `reduce_portfolio` may move from deterministic
+least-loss sizing to equal adverse realized-loss sizing. That future objective is not equal exposure
+reduction; it is equal adverse realized loss.
 
 Rationale:
 
@@ -253,13 +368,13 @@ Rationale:
   from deep-underwater positions.
 - Profitable or breakeven positions can provide exposure relief without adverse loss.
 
-Implementation can use an iterative water-filling style algorithm:
+That future implementation can use an iterative water-filling style algorithm:
 
 1. Build the policy candidate set.
 2. Compute required TWE reduction:
 
 ```text
-required_reduction = current_TWE - effective_twel
+required_reduction = current_TWE - twel_repair_target
 ```
 
 3. Emit at least one reduce order per candidate.
@@ -270,35 +385,40 @@ required_reduction = current_TWE - effective_twel
    across remaining candidates.
 7. Remove a candidate from the allocation pool when it hits full close, min/step constraints, or
    another hard cap, then redistribute the remaining reduction target.
-8. Stop once projected TWE is `<= effective_twel` or no candidate can reduce further.
+8. Stop once projected TWE is `<= twel_repair_target` or no candidate can reduce further.
 
 Small-wallet rule:
 
 ```text
-If a candidate exists, keep emitting its TWEL auto-reduce order even when min qty/min cost makes the
-order chunkier than the ideal equal-loss target.
+If a candidate has a positive reduction slice, keep emitting its TWEL auto-reduce order even when
+min qty/min cost makes the order chunkier than the ideal equal-loss target.
 ```
 
-This avoids silently concentrating all TWEL repair on only the candidates whose ideal slice happens
-to clear exchange minimums.
+This avoids silently concentrating all TWEL repair on only the candidates whose positive ideal slice
+happens to clear exchange minimums. Do not force a min-size order for later candidates after the
+portfolio has already reached `twel_repair_target`.
 
 ## Realized-Loss Gate Interaction
 
-TWEL auto-reduce orders should still pass through the existing realized-loss gate unless v8
-explicitly chooses to make TWEL an emergency bypass.
-
-Recommended first contract:
+`max_realized_loss_pct` is authoritative for all bot loss taking except panic close orders.
+TWEL auto-reduce orders must pass through the existing realized-loss gate. They are not an
+emergency bypass.
 
 ```text
 max_realized_loss_pct may block lossy TWEL auto-reduce orders.
-If it blocks TWEL repair while current TWE remains above effective_twel, emit a loud risk warning.
+If it blocks TWEL repair while current TWE remains above twel_repair_target, emit a loud risk
+warning.
 ```
+
+The only loss-gate exception is `ClosePanicLong` / `ClosePanicShort`. The exemption is order-type
+based: any panic close order bypasses `max_realized_loss_pct`, whether the panic came from HSL
+panic-close handling or another explicit panic-mode path.
 
 The warning should make clear:
 
 - side
 - current TWE
-- effective TWEL target
+- TWEL repair target
 - policy
 - number of TWEL candidates
 - number of TWEL orders blocked by loss gate
@@ -315,8 +435,26 @@ TWEL repair is allowed to over-reduce when exchange constraints force it:
 - if a position is smaller than effective min qty, closing the whole position remains acceptable
 - all reduce orders must be capped at live position size
 
-This means `reduce_overweight` and `reduce_portfolio` may reduce TWE below `effective_twel` on small
-wallets. That is preferable to skipping candidates and repeatedly trimming only one position.
+This means `reduce_overweight` and `reduce_portfolio` may reduce TWE below `twel_repair_target` on
+small wallets. That is preferable to skipping candidates and repeatedly trimming only one position.
+
+## WEL And TWEL Priority
+
+Emit at most one auto-reduce order per position in a single orchestrator pass.
+
+Recommended first contract:
+
+1. Compute TWEL auto-reduce first.
+2. Compute WEL auto-reduce after TWEL.
+3. If a position already has a TWEL auto-reduce order, skip WEL auto-reduce for that position.
+
+Rationale:
+
+- TWEL is the same-side portfolio governor.
+- WEL remains a per-position trimmer for positions not already selected by portfolio repair.
+- One auto-reduce order per position keeps order intent simple. TWEL/WEL auto-reduce orders are
+  emitted near market price and usually fill quickly; the next loop can reassess from exchange
+  state.
 
 ## Disabled And Invalid Config Semantics
 
@@ -332,35 +470,55 @@ Invalid values should fail loudly in v8 config validation or Rust input validati
 - negative TWEL
 - non-finite threshold
 - negative threshold
-- enabled TWEL with zero effective positions
+- either TWEL entry gate or TWEL auto-reduce enabled with zero configured positions
 
-If `risk_twel_enforcer_threshold <= 0.0`, treat TWEL enforcer as disabled for that side unless v8
-chooses a stricter validation rule.
+If either `total_exposure_entry_gate_enabled=true` or `total_exposure_enforcer_enabled=true`,
+`total_exposure_enforcer_threshold` must be finite and `> 0.0`.
+
+If `total_exposure_entry_gate_enabled=false`, positive excess allowance may allow bot entries to
+push same-side TWE above raw TWEL. If `total_exposure_enforcer_enabled=true`, TWEL auto-reduce may
+later repair that state once raw-balance TWE exceeds `twel_repair_target`. If both are false, TWEL
+does not enforce the side; WEL and other risk systems still operate according to their own
+contracts.
 
 ## Suggested Implementation Areas
 
 Rust remains the source of truth for this behavior:
 
 - `passivbot-rust/src/types.rs`
+  - add `total_exposure_entry_gate_enabled`
   - add the policy enum/string representation
   - expose through PyO3 JSON parsing
 
 - `passivbot-rust/src/python.rs`
-  - parse `twel_enforcer_policy`
+  - parse `total_exposure_entry_gate_enabled`
+  - parse `total_exposure_enforcer_policy`
   - validate unknown policy names loudly
 
 - `passivbot-rust/src/orchestrator.rs`
-  - apply global entry gate using `effective_twel`
-  - call TWEL reducer only when current TWE exceeds `effective_twel`
+  - apply global entry gate using `twel_entry_cap` only when entry gate is enabled
+  - call TWEL reducer only when auto-reduce is enabled and current TWE exceeds
+    `twel_repair_target`
+  - keep TWEL entry gating limited to bot-generated entries
+  - include all same-side open exchange positions in TWEL auto-reduce trigger/current-TWE
+    measurement, but select repair candidates only from `normal`, `graceful_stop`, and `tp_only`;
+    exclude `manual` and `panic` from emitted TWEL auto-reduce orders
+  - keep TWEL auto-reduce subject to `max_realized_loss_pct`; keep `ClosePanic*` exempt
+  - compute TWEL auto-reduce before WEL auto-reduce and skip WEL for positions selected by TWEL
   - pass the selected policy to the reducer
 
 - `passivbot-rust/src/risk.rs`
   - replace or extend `calc_twel_enforcer_actions`
   - keep candidate selection separate from sizing
-  - add equal adverse-loss sizing helpers
+  - implement deterministic profitable/shallow-loss sizing first
+  - leave full equal adverse-loss sizing as a future enhancement
 
 - `src/config/`
-  - add schema/defaults/normalization for v8 config
+  - add schema/defaults/normalization for `total_exposure_entry_gate_enabled`
+  - add schema/defaults/normalization for `total_exposure_enforcer_policy`
+  - do not expose TWEL booleans or policy as optimizer bounds
+  - keep TWEL entry-gate enabled, TWEL auto-reduce enabled, TWEL threshold, and TWEL policy
+    global per side; do not allow coin overrides
   - support any temporary alias shape if needed
 
 - docs
@@ -371,52 +529,73 @@ Rust remains the source of truth for this behavior:
 
 Add focused Rust/Python tests around the JSON orchestrator boundary:
 
-1. Entry gate crops the last entry so projected TWE is `<= effective_twel`.
+1. Entry gate crops the last entry so projected snapped-balance TWE is `<= twel_entry_cap`.
 2. Entry gate drops the last entry when cropped qty is below effective min qty/cost.
-3. `block_entries_only` emits no TWEL auto-reduce orders even when current TWE is above target.
-4. `reduce_overweight` selects only positions with `WE > effective_twel / effective_n_positions`.
-5. `reduce_overweight` emits one reduce order for every overweight candidate.
-6. `reduce_portfolio` emits one reduce order for every open same-side position.
-7. Equal adverse-loss sizing reduces more WE from shallow-underwater positions than from
-   deep-underwater positions for the same adverse loss.
-8. Profitable candidates in `reduce_portfolio` have zero adverse loss and no negative loss credit.
-9. Min qty/min cost clamping still emits orders for all candidates, even when larger than ideal.
-10. Realized-loss gate can block TWEL orders and surfaces diagnostics/warnings.
-11. `raw_twel == 0.0` disables TWEL for that side.
-12. Invalid/non-finite/negative TWEL inputs fail loudly.
+3. `total_exposure_entry_gate_enabled=false` allows entries even when projected TWE exceeds raw
+   TWEL, including excess-allowance cases.
+4. `total_exposure_enforcer_enabled=false` emits no TWEL auto-reduce orders even when current TWE
+   is above target.
+5. `total_exposure_enforcer_threshold > 1.0` keeps entry cap at raw TWEL and auto-reduce target at
+   `raw_twel * threshold`.
+6. `total_exposure_enforcer_threshold < 1.0` caps entries at `raw_twel * threshold`.
+7. `reduce_overweight` selects only positions with `WE > twel_repair_target / configured_n_positions`.
+8. `reduce_overweight` emits reduce orders for overweight candidates until projected TWE reaches
+   target; it does not force min-size orders after the target is reached.
+9. `reduce_portfolio` evaluates every open same-side managed position as a candidate, but emits
+   reduce orders only until projected TWE reaches target.
+10. Initial reducer prefers profitable/breakeven candidates, then shallowest adverse-loss
+    candidates, with deterministic ties.
+11. Min qty/min cost clamping still emits orders for candidates when larger than ideal.
+12. Realized-loss gate can block TWEL orders and surfaces TWEL diagnostics/warnings.
+13. TWEL auto-reduce is computed before WEL; WEL skips positions that already have TWEL auto-reduce.
+14. `raw_twel == 0.0` disables TWEL for that side.
+15. Invalid/non-finite/negative TWEL inputs fail loudly.
+16. `legacy_raw` excess allowance can make WEL exceed raw TWEL, but does not bypass TWEL entry
+    gating or TWEL auto-reduce.
+17. `graceful_stop` blocks initial entries only; with an existing position it behaves like `normal`
+    and continuation entries are TWEL-gated when the entry gate is enabled.
+18. `tp_only` generates no bot entries, preserves operator entry responsibility, and still allows
+    TWEL auto-reduce for managed open positions.
+19. `manual` and `panic` exposure contributes to TWEL auto-reduce trigger/current-TWE
+    measurement, but those positions are excluded from TWEL auto-reduce candidate selection.
+20. `ClosePanic*` orders bypass `max_realized_loss_pct`; TWEL auto-reduce orders do not.
 
-## Open Questions
+## Resolved Decisions
 
-1. Should `risk_twel_enforcer_threshold > 1.0` be allowed in v8?
-   - If allowed, `effective_twel` would exceed raw TWEL, but entries should probably still never
-     exceed raw TWEL.
-   - Simpler v8 rule: clamp entry cap to `min(raw_twel, effective_twel)`.
-
-2. Should `block_entries_only` be allowed with `risk_twel_enforcer_threshold > 1.0`?
-   - If the threshold is above raw TWEL, the policy becomes equivalent to raw TWEL entry gating.
-
-3. Should TWEL repair bypass the realized-loss gate in emergency mode?
-   - First recommendation is no: let the gate block, but warn loudly.
-   - If future users want liquidation-avoidance behavior, add an explicit bypass config rather than
-     hiding it inside `twel_enforcer_policy`.
-
-4. Should `reduce_portfolio` include positions in `tp_only` and `graceful_stop`?
-   - It should include managed open positions unless mode semantics explicitly block all closes.
-   - It should not override `manual` or `panic` without a clear mode contract.
-
-5. Should policies be optimizer-searchable?
-   - If yes, keep the enum small and document that policy changes can radically alter behavior.
+- TWEL repair does not bypass `max_realized_loss_pct`. The realized-loss gate may block lossy TWEL
+  auto-reduce orders, and the bot must warn loudly when this leaves TWE above target.
+- Panic close orders are the only realized-loss-gate exception. The exemption is tied to
+  `ClosePanicLong` / `ClosePanicShort` order types.
+- `reduce_portfolio` and `reduce_overweight` include managed open positions in `tp_only` and
+  `graceful_stop`.
+- `manual` and `panic` exposure is counted for same-side TWEL measurement, but those modes remain
+  outside TWEL auto-reduce management.
+- `tp_only` is manual/operator-risk for entries and managed for closes. TWEL entry gating therefore
+  has no bot-generated entries to gate in `tp_only`.
 
 ## Summary Contract
 
 ```text
 WEL enforcer:
     per-position trim/refill mechanism; may intentionally oscillate around effective WEL.
+    computed after TWEL auto-reduce; skipped for positions already selected by TWEL.
 
-TWEL enforcer:
-    portfolio governor; entries cannot refill above effective TWEL.
-    auto-reduce is a repair path for already-over-target states.
+TWEL entry gate:
+    optional portfolio entry cap.
+    when enabled, entries cannot project above min(raw_twel, raw_twel * threshold).
+    when disabled, excess allowance may allow entries above raw TWEL.
+    applies only to bot-generated entries, not operator/manual exchange orders.
 
-twel_enforcer_policy:
-    controls how TWEL repair distributes reductions once current TWE is already above target.
+TWEL auto-reduce:
+    optional portfolio repair path.
+    when enabled, repairs already-over-target states above raw_twel * threshold.
+    subject to max_realized_loss_pct; measures manual and panic exposure but excludes manual and
+    panic positions from emitted TWEL auto-reduce orders.
+
+Panic close:
+    ClosePanicLong and ClosePanicShort bypass max_realized_loss_pct.
+
+total_exposure_enforcer_policy:
+    controls how TWEL auto-reduce chooses repair candidates.
+    global per side, not coin-overridable, not optimizer-searchable.
 ```

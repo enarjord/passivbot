@@ -3,7 +3,7 @@
 Passivbot configurations can be optimized using a multi-objective evolutionary algorithm to balance performance metrics while meeting constraints.
 
 The canonical defaults live in `src/config/schema.py`. The example config
-`configs/examples/default_trailing_grid_long_npos7.json` mirrors those defaults exactly. For the
+`configs/examples/default_trailing_martingale_long.json` mirrors those defaults exactly. For the
 recommended config workflow, see [Config Workflow](config_workflow.md).
 
 Optimization requires the full install profile:
@@ -28,7 +28,7 @@ single-scenario by default unless you explicitly enable suite mode.
 
 Example:
 ```bash
-passivbot optimize configs/examples/default_trailing_grid_long_npos7.json --start configs/starting_pool/
+passivbot optimize configs/examples/default_trailing_martingale_long.json --start configs/starting_pool/
 ```
 
 Most config parameters can be modified via CLI. `passivbot optimize -h` for more info.
@@ -130,20 +130,28 @@ The main NSGA-III-specific knob is:
   - Controls how fine the reference-direction grid is.
   - Higher values generate more reference directions, which increases diversity resolution but also
     makes each generation heavier.
-  - With the default 8-objective Passivbot scoring set, common reference-direction counts are:
-    - `n_partitions = 3` -> `120`
-    - `n_partitions = 4` -> `330`
-    - `n_partitions = 5` -> `792`
-  - Default is `"auto"`. For the default 8-objective setup, Passivbot currently resolves that to
-    `n_partitions = 4`, which gives `330` reference directions.
+  - With the default 11-objective Passivbot scoring set, common reference-direction counts are:
+    - `n_partitions = 2` -> `66`
+    - `n_partitions = 3` -> `286`
+    - `n_partitions = 4` -> `1001`
+  - Default is `"auto"`. For the default 11-objective setup, Passivbot currently resolves that to
+    `n_partitions = 3`, which gives `286` reference directions.
+  - In auto mode, Passivbot chooses the largest Das-Dennis grid whose reference-direction count
+    fits within the resolved NSGA-III population budget. This preserves the NSGA-III invariant that
+    `population_size >= reference directions`.
 
 - `optimize.population_size`
   - For `pymoo` + `nsga3`, `null` means “auto”.
-  - In that case Passivbot resolves the NSGA-III reference directions first and then uses the
-    number of reference directions as the population size.
-  - For the default 8-objective setup, that means `population_size = 330`.
+  - In that case Passivbot uses the default NSGA-III population budget of `500`, then resolves
+    auto reference directions to the finest Das-Dennis grid that fits inside that budget.
+  - For the default 11-objective setup, that means `population_size = 500` with `286` reference
+    directions.
+  - For a 10-objective setup, auto keeps `population_size = 500` and uses `220` reference
+    directions (`n_partitions = 3`) because the next grid would require `715` reference directions.
   - For `pymoo` + `nsga2`, `null` means “auto” and currently resolves to `250`.
-  - Set an explicit integer when you want to override either auto behavior.
+  - Set an explicit integer when you want to change the per-generation evaluation budget and the
+    maximum auto reference-direction grid size. For example, `population_size = 1000` allows the
+    10-objective auto resolver to use `715` reference directions (`n_partitions = 4`).
   - For `deap`, Passivbot currently falls back to its legacy fixed default when `null` is left in
     place.
 
@@ -194,12 +202,13 @@ Recommended defaults for typical Passivbot runs:
 - Keep `crossover_prob_var: 0.5` unless you have evidence that crossover is either too timid or
   too disruptive for your runs.
 - Leave `population_size: null` and `ref_dirs.n_partitions: "auto"` for default pymoo behavior:
-  NSGA-II resolves null population size to `250`, while NSGA-III derives it from reference
-  directions.
+  NSGA-II resolves null population size to `250`, while NSGA-III uses a default population budget
+  of `500` and chooses the finest compatible reference-direction grid.
 - Keep `pareto_max_size: 1000` unless archived front updates become a measured bottleneck for your
   machine or workflow.
-- If you need more or less exploration pressure, change `n_partitions` or override
-  `population_size` explicitly before you start tuning crossover/mutation hyperparameters.
+- If you need more or less exploration pressure, change `population_size` first. It is the main
+  budget/coarseness knob for NSGA-III auto reference directions. Use explicit `n_partitions` only
+  when you specifically want to force a grid resolution.
 
 Practical interpretation for the default shared block:
 
@@ -232,7 +241,7 @@ Algorithm selection under the default `auto` mode:
 - `1` to `3` objectives -> `nsga2`
 - `4+` objectives -> `nsga3`
 
-That means the default 8-objective Passivbot template uses `nsga3`, while small custom scoring
+That means the default 11-objective Passivbot template uses `nsga3`, while small custom scoring
 lists automatically fall back to `nsga2`.
 
 ### Candle Interval
@@ -258,14 +267,19 @@ Trade-offs:
 ### Fine-Tuning Specific Parameters
 
 When you only want to adjust a handful of parameters and keep everything else fixed, use
-`--fine_tune_params` (short: `-ft`). Provide a comma-separated list of `optimize.bounds`
+`--fine_tune_params` (short: `-ft`). Provide a comma-separated list of dotted config-path
 selectors to keep tunable; all other bounds are locked to their current config values
-before the run starts. A selector matches any bounds key containing that string, so
-`close_grid` matches both `long_close_grid_*` and `short_close_grid_*` bounds.
+before the run starts. Selectors match full path segments by prefix or suffix, not partial
+substrings.
+The leading `bot.` may be omitted for side-local paths, so `long.risk` is equivalent to
+`bot.long.risk`. A `*` segment may be used as a one-segment wildcard, for example
+`*.strategy.close` matches both long and short active-strategy close params. A leaf selector
+such as `we_excess_allowance_pct` matches every bound whose config path ends with that
+parameter name.
 
 ```bash
-passivbot optimize configs/examples/default_trailing_grid_long_npos7.json \
-  --fine_tune_params close_grid,entry_grid_spacing_pct
+passivbot optimize configs/examples/default_trailing_martingale_long.json \
+  --fine_tune_params long.risk,long.forager,long.unstuck
 ```
 
 Behind the scenes the optimizer sets every unlisted bound to `[value, value]`, so the GA
@@ -273,12 +287,68 @@ can mutate only the parameters you specified. Bounds for the listed parameters r
 configured. The optimizer logs each selector expansion on separate sorted lines before
 the run starts.
 
-`optimize.fixed_params` provides the config-file equivalent: list `optimize.bounds`
-selectors that should always be fixed to their current config values. Broad selectors are
-literal substring matches; for example, `trailing` fixes all bounds whose names contain
-`trailing`, while `close` also matches `unstuck_close_pct`. Use narrower selectors when
-needed. Internally, `--fine_tune_params` and `optimize.fixed_params` are merged into one
-effective fixed-parameter set before bounds are collapsed.
+`optimize.fixed_params` provides the config-file equivalent for selectors that should always
+be fixed to their current config values. It uses the same dotted path matching as
+`--fine_tune_params`.
+
+Useful examples:
+
+```json
+"optimize": {
+  "fixed_params": ["long.strategy"]
+}
+```
+
+This fixes every optimizer bound under `bot.long.strategy.<active_strategy>`, such as all
+`trailing_martingale` entry/close thresholds, retracements, EMA spans, and volatility spans.
+It does not fix `bot.long.risk`, `bot.long.forager`, or `bot.long.unstuck`.
+
+```json
+"optimize": {
+  "fixed_params": ["long.strategy.close", "long.hsl"]
+}
+```
+
+This fixes only the active long strategy's close subtree plus long HSL bounds.
+
+Internally, `--fine_tune_params` and `optimize.fixed_params` are merged into one effective
+fixed-parameter set before bounds are collapsed.
+
+### Polishing Around A Selected Config
+
+Use `--polish-pct` to narrow every configured optimizer bound around the current config
+value before the run starts:
+
+```bash
+passivbot optimize path/to/config.json --polish-pct 0.25
+```
+
+By default this keeps the polished bounds inside the original `optimize.bounds` domain and
+leaves fixed bounds fixed. `--polish-bounds-mode` changes that policy:
+
+- `clamp`: default behavior; intersect polished bounds with the original bounds.
+- `override-tunable`: allow tunable bounds to escape the original bounds; fixed bounds stay fixed.
+- `override-all`: allow tunable bounds to escape the original bounds and expand fixed bounds too.
+
+Polish still uses relative bounds: `[value * (1 - pct), value * (1 + pct)]`. A current
+value of `0.0` therefore remains fixed at `[0.0, 0.0]`.
+
+`optimize.fixed_params` is applied after polish. That makes it the right way to polish all
+bounds while pinning selected parameters to the config value:
+
+```bash
+passivbot optimize path/to/config.json \
+  --polish-pct 0.25 \
+  --polish-bounds-mode override-all \
+  --optimize.fixed_params long.risk.n_positions,long.risk.total_wallet_exposure_limit
+```
+
+When `--fine_tune_params` is combined with `--start`, the base optimizer config remains the run
+policy. Anchor configs provide values only for optimizer-bound bot parameters that are fixed by the
+anchor plan; boolean toggles and other non-bound runtime policy fields such as
+`bot.long.hsl.enabled` continue to come from the base config or explicit runtime overrides. Seed and
+anchor values outside `optimize.bounds` are clamped into bounds during seed loading and logged in
+aggregate with counts, source examples, key/path, original value samples, bound, and clamped value.
 
 `optimize.fixed_runtime_overrides` is different: it overrides runtime config values only during
 optimize evaluations, without changing the stored/live config value. This is useful for
@@ -287,8 +357,8 @@ operator-risk settings such as:
 ```json
 "optimize": {
   "fixed_runtime_overrides": {
-    "bot.long.hsl_no_restart_drawdown_threshold": 1.0,
-    "bot.short.hsl_no_restart_drawdown_threshold": 1.0
+    "bot.long.hsl.no_restart_drawdown_threshold": 1.0,
+    "bot.short.hsl.no_restart_drawdown_threshold": 1.0
   }
 }
 ```
@@ -298,8 +368,8 @@ be constrained through `drawdown_worst_strategy_eq`, `drawdown_worst_ema_strateg
 `drawdown_worst_mean_1pct_strategy_eq`, `drawdown_worst_mean_1pct_ema_strategy_eq`, and
 `strategy_eq_recovery_days_max` instead of being prematurely truncated.
 
-When you provide many starting configs, optimizer now also bounds how many seed evaluations may be
-in flight at once:
+When you provide many starting configs, optimizer bounds how many seed evaluations may be in flight
+at once. For the DEAP backend, the same cap also applies to generation offspring evaluations:
 
 ```json
 "optimize": {
@@ -313,9 +383,9 @@ Effective cap:
 - All provided starting configs are still evaluated before the optimizer trims them down to the
   backend's initial population.
 
-This is mainly a memory-control knob for large seed pools, especially in suite mode where each
-candidate returns a larger metrics payload. Lower it first if the VPS spikes RAM during initial
-seed evaluation.
+This is mainly a memory-control knob for large seed pools and DEAP generation batches, especially
+in suite mode where each candidate returns a larger metrics payload. Lower it first if the VPS
+spikes RAM during seed or offspring evaluation.
 
 ### Optimizer Suites
 
@@ -390,10 +460,6 @@ Contents:
 - `pareto/`: JSON files for Pareto-optimal configurations
   - Named `{hash}.json`
   - Files are added/removed over time as the Pareto front updates and is pruned to `optimize.pareto_max_size`
-- `index.json`: List of Pareto member hashes
-
-Each recorded result now also includes runtime provenance so later replay mismatches can be
-diagnosed directly from the artifact.
 
 ## Analyzing Results
 
@@ -477,7 +543,8 @@ objects. Each object describes when to penalize a result:
 - `value`: numeric threshold for `<`/`>` limits.
 - `range`: `[low, high]` for the range-based operators.
 - Optional `stat`: override the statistic to compare against (`min`, `max`, `mean`, `std`).
-  The default is `_max` for `>` checks, `_min` for `<` checks, and `_mean` for range checks.
+  Without `stat`, Passivbot resolves the metric through `backtest.aggregate`: first a
+  metric-specific aggregate rule, then `backtest.aggregate.default`, then `mean`.
 
 Example:
 
@@ -526,9 +593,11 @@ Semantics:
   `<=`, `==`). Explicit JSON/HJSON limit objects still use direct `penalize_if` semantics.
 - `--clear-limits` starts from an empty limit list before any `--limits` or `--limit` entries are applied.
 
-Penalties are added to every objective as a positive modifier; they do not disqualify a config but will push it far from the Pareto front when violated. Metric names may include `_usd` / `_btc` suffixes to lock a denomination; when omitted, USD is assumed.
-
-Pareto logging also includes the top violated constraints and their penalties so you can see which limits are driving a bad candidate.
+Limit violations do not disqualify a config. They produce positive penalty scores in optimizer
+engine space: if a limit metric matches a configured scoring metric, the penalty replaces that
+objective's engine score for the candidate; unmatched/global penalties affect every objective.
+Metric names may include `_usd` / `_btc` suffixes to lock a denomination; when omitted, USD is
+assumed.
 
 ## Performance Metrics
 
@@ -546,8 +615,9 @@ over all exchanges before scoring.
   exchanges in the run. The scoring logic uses the mean (`{metric}_mean`).
 - Internally, Passivbot converts all objectives into optimizer engine space where lower is better,
   so both the `deap` and `pymoo` backends receive consistent minimization-style values.
-- Penalties from `optimize.limits` are added to every objective when a bound is violated,
-  turning constraint breaches into very poor scores.
+- Penalties from `optimize.limits` replace affected engine objective scores when a bound is
+  violated, turning constraint breaches into very poor scores while preserving the raw metrics
+  stored for inspection.
 - Metrics are emitted with both USD and BTC suffixes (for example, `adg_usd` and `adg_btc`).
 - `_btc` metrics use BTC-denominated balance/equity as the numeraire even when
   `backtest.btc_collateral_cap = 0`, so they can be used to compare strategy performance against
@@ -634,17 +704,26 @@ for config in load_results("optimize_results/.../all_results.bin"):
 
 ### Monitoring Optimizer Memory Usage
 
-The script `tools/profile_optimizer_memory.py` (requires `psutil`) can be used to launch
-two optimizer runs with different CPU counts and record both process RSS and system-wide
-memory pressure. This is useful when validating that shared-memory datasets are behaving
-as expected on a given machine.
+The script `src/tools/capture_optimize_memory.py` samples an active optimizer process tree and
+host memory state into a JSON report. This is useful when validating that shared-memory datasets
+are behaving as expected on a given machine.
 
 ```bash
-python tools/profile_optimizer_memory.py \
-  --coins BTC ETH XRP SOL \
-  --iters 20 \
-  --population-size 12 \
-  --cpus 2 6
+PYTHONPATH=src python3 src/tools/capture_optimize_memory.py --wait --output tmp/optimize_memory.json
 ```
 
-The script writes raw samples and a summary to `tmp/optimizer_mem_profiles/`.
+Use `--pid <pid>` to monitor a specific optimizer process instead of waiting for the newest
+matching process.
+
+### Profiling Suite Optimizer Evaluation
+
+Set `PASSIVBOT_OPTIMIZE_PROFILE=1` to log per-candidate suite evaluator timings:
+
+```bash
+PASSIVBOT_OPTIMIZE_PROFILE=1 passivbot optimize path/to/config.json
+```
+
+The profile is opt-in and emits `[opt-profile]` INFO lines for suite evaluation phases such as
+scenario config assembly, runtime compilation, payload construction, Rust backtest execution,
+metric combining, aggregate metric building, and Pareto result recording. When enabled, candidate
+metrics also include a `profile` block so retained Pareto configs can be inspected after the run.

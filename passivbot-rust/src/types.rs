@@ -4,7 +4,8 @@ use numpy::{PyArray1, PyArray3, PyUntypedArrayMethods};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::{Py, PyResult, Python};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use serde_json::Value;
+use std::collections::HashSet;
 use strum_macros::{Display, EnumIter, EnumString};
 
 /// Canonical metadata describing one coin/contract entry inside a unified HLCV tensor.
@@ -60,6 +61,7 @@ pub struct HlcvsMeta {
     pub warmup_minutes_requested: u64,
     pub warmup_minutes_provided: u64,
     pub coins: Vec<CoinMeta>,
+    pub active_coin_indices: Option<Vec<usize>>,
 }
 
 /// Represents a fully-qualified HLCV tensor and its associated metadata.  The NumPy arrays are
@@ -102,11 +104,70 @@ impl HlcvsBundle {
         let n_timesteps = shape[0];
         let n_coins = shape[1];
         if n_coins != self.meta.coins.len() {
-            return Err(PyValueError::new_err(format!(
-                "coin metadata length ({}) does not match hlcvs coin dimension ({})",
-                self.meta.coins.len(),
-                n_coins
-            )));
+            let active_indices = self.meta.active_coin_indices.as_ref().ok_or_else(|| {
+                PyValueError::new_err(format!(
+                    "coin metadata length ({}) does not match hlcvs coin dimension ({})",
+                    self.meta.coins.len(),
+                    n_coins
+                ))
+            })?;
+            if active_indices.len() != self.meta.coins.len() {
+                return Err(PyValueError::new_err(format!(
+                    "active_coin_indices length ({}) does not match coin metadata length ({})",
+                    active_indices.len(),
+                    self.meta.coins.len()
+                )));
+            }
+            let mut seen = HashSet::with_capacity(active_indices.len());
+            for (idx, &col) in active_indices.iter().enumerate() {
+                if col >= n_coins {
+                    return Err(PyValueError::new_err(format!(
+                        "active coin index {} exceeds hlcvs coin dimension {}",
+                        col, n_coins
+                    )));
+                }
+                if !seen.insert(col) {
+                    return Err(PyValueError::new_err(format!(
+                        "active coin index {} appears more than once",
+                        col
+                    )));
+                }
+                if self.meta.coins[idx].index != col {
+                    return Err(PyValueError::new_err(format!(
+                        "coin metadata index ({}) does not match active coin index ({}) at position {}",
+                        self.meta.coins[idx].index, col, idx
+                    )));
+                }
+            }
+        } else if let Some(active_indices) = &self.meta.active_coin_indices {
+            if active_indices.len() != self.meta.coins.len() {
+                return Err(PyValueError::new_err(format!(
+                    "active_coin_indices length ({}) does not match coin metadata length ({})",
+                    active_indices.len(),
+                    self.meta.coins.len()
+                )));
+            }
+            let mut seen = HashSet::with_capacity(active_indices.len());
+            for (idx, &col) in active_indices.iter().enumerate() {
+                if col >= n_coins {
+                    return Err(PyValueError::new_err(format!(
+                        "active coin index {} exceeds hlcvs coin dimension {}",
+                        col, n_coins
+                    )));
+                }
+                if !seen.insert(col) {
+                    return Err(PyValueError::new_err(format!(
+                        "active coin index {} appears more than once",
+                        col
+                    )));
+                }
+                if self.meta.coins[idx].index != col {
+                    return Err(PyValueError::new_err(format!(
+                        "coin metadata index ({}) does not match active coin index ({}) at position {}",
+                        self.meta.coins[idx].index, col, idx
+                    )));
+                }
+            }
         }
 
         let timestamps_ref = self.timestamps.bind(py);
@@ -132,7 +193,7 @@ impl HlcvsBundle {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(deny_unknown_fields)]
 pub struct ExchangeParams {
     pub qty_step: f64,
     pub price_step: f64,
@@ -154,6 +215,41 @@ impl Default for ExchangeParams {
             maker_fee: 0.0002,
             taker_fee: 0.00055,
         }
+    }
+}
+
+impl ExchangeParams {
+    pub fn validate_required(&self) -> Result<(), String> {
+        fn finite_positive(value: f64, field: &str) -> Result<(), String> {
+            if value.is_finite() && value > 0.0 {
+                Ok(())
+            } else {
+                Err(format!("{field} must be finite and > 0"))
+            }
+        }
+        fn finite_non_negative(value: f64, field: &str) -> Result<(), String> {
+            if value.is_finite() && value >= 0.0 {
+                Ok(())
+            } else {
+                Err(format!("{field} must be finite and >= 0"))
+            }
+        }
+        fn finite(value: f64, field: &str) -> Result<(), String> {
+            if value.is_finite() {
+                Ok(())
+            } else {
+                Err(format!("{field} must be finite"))
+            }
+        }
+
+        finite_positive(self.qty_step, "qty_step")?;
+        finite_positive(self.price_step, "price_step")?;
+        finite_non_negative(self.min_qty, "min_qty")?;
+        finite_non_negative(self.min_cost, "min_cost")?;
+        finite_positive(self.c_mult, "c_mult")?;
+        finite(self.maker_fee, "maker_fee")?;
+        finite(self.taker_fee, "taker_fee")?;
+        Ok(())
     }
 }
 
@@ -180,6 +276,7 @@ pub struct EquityHardStopLossConfig {
     pub ema_span_minutes: f64,
     pub cooldown_minutes_after_red: f64,
     pub no_restart_drawdown_threshold: f64,
+    pub restart_after_red_policy: String,
     pub tier_ratios: EquityHardStopLossTierRatios,
     pub orange_tier_mode: String,
     #[allow(dead_code)]
@@ -196,6 +293,7 @@ impl Default for EquityHardStopLossConfig {
             ema_span_minutes: 60.0,
             cooldown_minutes_after_red: 0.0,
             no_restart_drawdown_threshold: 1.0,
+            restart_after_red_policy: "threshold".to_string(),
             tier_ratios: EquityHardStopLossTierRatios::default(),
             orange_tier_mode: "tp_only_with_active_entry_cancellation".to_string(),
             panic_close_order_type: "market".to_string(),
@@ -220,6 +318,7 @@ pub struct BacktestParams {
     pub btc_collateral_cap: f64,
     pub btc_collateral_ltv_cap: Option<f64>,
     pub metrics_only: bool,
+    pub skip_btc_analysis: bool,
     pub filter_by_min_effective_cost: bool,
     pub dynamic_wel_by_tradability: bool,
     pub hedge_mode: bool,
@@ -241,13 +340,7 @@ pub struct Position {
     pub price: f64,
 }
 
-#[derive(Debug, Default, Clone)]
-pub struct Positions {
-    pub long: HashMap<usize, Position>,
-    pub short: HashMap<usize, Position>,
-}
-
-#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Copy, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct EMABands {
     pub upper: f64,
@@ -272,20 +365,21 @@ impl Default for Order {
     }
 }
 
-#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Copy, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct OrderBook {
     pub bid: f64,
     pub ask: f64,
 }
 
-#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Copy, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct StateParams {
     pub balance: f64,
     pub order_book: OrderBook,
     pub ema_bands: EMABands,
-    pub entry_volatility_logrange_ema_1h: f64,
+    pub volatility_ema_1m: f64,
+    pub volatility_ema_1h: f64,
 }
 
 #[derive(Clone, Default, Debug, Serialize, Deserialize)]
@@ -293,6 +387,29 @@ pub struct StateParams {
 pub struct BotParamsPair {
     pub long: BotParams,
     pub short: BotParams,
+}
+
+#[derive(Clone, Copy, Default, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct RuntimeBudgetState {
+    pub configured_wallet_exposure_limit: f64,
+    pub effective_wallet_exposure_limit: f64,
+    pub configured_n_positions: usize,
+    pub effective_n_positions: usize,
+}
+
+#[derive(Clone, Copy, Default, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct RuntimeBudgetStatePair {
+    pub long: RuntimeBudgetState,
+    pub short: RuntimeBudgetState,
+}
+
+#[derive(Clone, Default, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct StrategyParamsPairValue {
+    pub long: Value,
+    pub short: Value,
 }
 
 fn default_hsl_enabled() -> bool {
@@ -315,6 +432,10 @@ fn default_hsl_no_restart_drawdown_threshold() -> f64 {
     1.0
 }
 
+fn default_hsl_restart_after_red_policy() -> String {
+    "threshold".to_string()
+}
+
 fn default_hsl_tier_ratio_yellow() -> f64 {
     0.5
 }
@@ -329,6 +450,32 @@ fn default_hsl_orange_tier_mode() -> String {
 
 fn default_hsl_panic_close_order_type() -> String {
     "market".to_string()
+}
+
+fn default_true() -> bool {
+    true
+}
+
+#[derive(
+    Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, EnumString, Display,
+)]
+#[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
+pub enum WeExcessAllowanceMode {
+    #[default]
+    Bounded,
+    LegacyRaw,
+}
+
+#[derive(
+    Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, EnumString, Display,
+)]
+#[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
+pub enum TwelEnforcerPolicy {
+    #[default]
+    ReduceOverweight,
+    ReducePortfolio,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -374,40 +521,58 @@ impl ForagerScoreWeights {
     }
 }
 
-#[derive(Clone, Default, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct BotParams {
-    pub close_grid_markup_end: f64,
-    pub close_grid_markup_start: f64,
+    #[serde(default)]
     pub close_grid_qty_pct: f64,
+    #[serde(default)]
     pub close_trailing_retracement_pct: f64,
-    pub close_trailing_grid_ratio: f64,
+    #[serde(default)]
     pub close_trailing_qty_pct: f64,
+    #[serde(default)]
     pub close_trailing_threshold_pct: f64,
+    #[serde(default)]
+    pub close_weight_volatility_1h: f64,
+    #[serde(default)]
+    pub close_weight_volatility_1m: f64,
+    #[serde(default)]
     pub entry_grid_double_down_factor: f64,
-    pub entry_grid_spacing_volatility_weight: f64,
-    pub entry_grid_spacing_we_weight: f64,
+    #[serde(default)]
     pub entry_grid_spacing_pct: f64,
-    pub entry_volatility_ema_span_hours: f64,
+    #[serde(default)]
+    pub entry_volatility_ema_span_1h: f64,
+    #[serde(default)]
+    pub entry_volatility_ema_span_1m: f64,
+    #[serde(default)]
+    pub entry_weight_volatility_1h: f64,
+    #[serde(default)]
+    pub entry_weight_volatility_1m: f64,
+    #[serde(default)]
+    pub entry_we_weight: f64,
+    #[serde(default)]
     pub entry_initial_ema_dist: f64,
+    #[serde(default)]
     pub entry_initial_qty_pct: f64,
+    #[serde(default)]
     pub entry_trailing_double_down_factor: f64,
+    #[serde(default)]
     pub entry_trailing_retracement_pct: f64,
-    pub entry_trailing_retracement_we_weight: f64,
-    pub entry_trailing_retracement_volatility_weight: f64,
-    pub entry_trailing_grid_ratio: f64,
+    #[serde(default)]
     pub entry_trailing_threshold_pct: f64,
-    pub entry_trailing_threshold_we_weight: f64,
-    pub entry_trailing_threshold_volatility_weight: f64,
-    pub filter_volatility_ema_span: f64,
-    pub filter_volume_ema_span: f64,
+    pub filter_volatility_ema_span_1m: f64,
+    pub filter_volume_ema_span_1m: f64,
     #[serde(default, skip_serializing, rename = "filter_volatility_drop_pct")]
     pub _legacy_filter_volatility_drop_pct: f64,
     #[serde(default, alias = "filter_volume_drop_pct")]
     pub forager_volume_drop_pct: f64,
     #[serde(default)]
     pub forager_score_weights: ForagerScoreWeights,
+    #[serde(default)]
+    pub is_forced_active: bool,
+    #[serde(default)]
     pub ema_span_0: f64,
+    #[serde(default)]
     pub ema_span_1: f64,
     #[serde(default = "default_hsl_enabled")]
     pub hsl_enabled: bool,
@@ -419,6 +584,8 @@ pub struct BotParams {
     pub hsl_cooldown_minutes_after_red: f64,
     #[serde(default = "default_hsl_no_restart_drawdown_threshold")]
     pub hsl_no_restart_drawdown_threshold: f64,
+    #[serde(default = "default_hsl_restart_after_red_policy")]
+    pub hsl_restart_after_red_policy: String,
     #[serde(default = "default_hsl_tier_ratio_yellow")]
     pub hsl_tier_ratio_yellow: f64,
     #[serde(default = "default_hsl_tier_ratio_orange")]
@@ -427,16 +594,98 @@ pub struct BotParams {
     pub hsl_orange_tier_mode: String,
     #[serde(default = "default_hsl_panic_close_order_type")]
     pub hsl_panic_close_order_type: String,
+    #[serde(default)]
+    pub risk_entry_cooldown_minutes: f64,
     pub n_positions: usize,
     pub total_wallet_exposure_limit: f64,
     pub wallet_exposure_limit: f64, // per-position base limit (without excess allowance)
+    #[serde(default = "default_true")]
+    pub risk_wel_enforcer_enabled: bool,
     pub risk_wel_enforcer_threshold: f64,
+    #[serde(default = "default_true")]
+    pub risk_twel_entry_gate_enabled: bool,
+    #[serde(default = "default_true")]
+    pub risk_twel_enforcer_enabled: bool,
+    #[serde(default)]
+    pub risk_twel_enforcer_policy: TwelEnforcerPolicy,
     pub risk_twel_enforcer_threshold: f64,
     pub risk_we_excess_allowance_pct: f64,
+    #[serde(default)]
+    pub risk_we_excess_allowance_mode: WeExcessAllowanceMode,
+    #[serde(default = "default_true")]
+    pub unstuck_enabled: bool,
+    #[serde(default = "default_true")]
+    pub unstuck_ema_gating_enabled: bool,
     pub unstuck_close_pct: f64,
     pub unstuck_ema_dist: f64,
     pub unstuck_loss_allowance_pct: f64,
     pub unstuck_threshold: f64,
+}
+
+impl Default for BotParams {
+    fn default() -> Self {
+        Self {
+            close_grid_qty_pct: 0.0,
+            close_trailing_retracement_pct: 0.0,
+            close_trailing_qty_pct: 0.0,
+            close_trailing_threshold_pct: 0.0,
+            close_weight_volatility_1h: 0.0,
+            close_weight_volatility_1m: 0.0,
+            entry_grid_double_down_factor: 0.0,
+            entry_grid_spacing_pct: 0.0,
+            entry_volatility_ema_span_1h: 0.0,
+            entry_volatility_ema_span_1m: 0.0,
+            entry_weight_volatility_1h: 0.0,
+            entry_weight_volatility_1m: 0.0,
+            entry_we_weight: 0.0,
+            entry_initial_ema_dist: 0.0,
+            entry_initial_qty_pct: 0.0,
+            entry_trailing_double_down_factor: 0.0,
+            entry_trailing_retracement_pct: 0.0,
+            entry_trailing_threshold_pct: 0.0,
+            filter_volatility_ema_span_1m: 0.0,
+            filter_volume_ema_span_1m: 0.0,
+            _legacy_filter_volatility_drop_pct: 0.0,
+            forager_volume_drop_pct: 0.0,
+            forager_score_weights: ForagerScoreWeights::default(),
+            is_forced_active: false,
+            ema_span_0: 0.0,
+            ema_span_1: 0.0,
+            hsl_enabled: default_hsl_enabled(),
+            hsl_red_threshold: default_hsl_red_threshold(),
+            hsl_ema_span_minutes: default_hsl_ema_span_minutes(),
+            hsl_cooldown_minutes_after_red: default_hsl_cooldown_minutes_after_red(),
+            hsl_no_restart_drawdown_threshold: default_hsl_no_restart_drawdown_threshold(),
+            hsl_restart_after_red_policy: default_hsl_restart_after_red_policy(),
+            hsl_tier_ratio_yellow: default_hsl_tier_ratio_yellow(),
+            hsl_tier_ratio_orange: default_hsl_tier_ratio_orange(),
+            hsl_orange_tier_mode: default_hsl_orange_tier_mode(),
+            hsl_panic_close_order_type: default_hsl_panic_close_order_type(),
+            risk_entry_cooldown_minutes: 0.0,
+            n_positions: 0,
+            total_wallet_exposure_limit: 0.0,
+            wallet_exposure_limit: 0.0,
+            risk_wel_enforcer_enabled: true,
+            risk_wel_enforcer_threshold: 0.0,
+            risk_twel_entry_gate_enabled: true,
+            risk_twel_enforcer_enabled: true,
+            risk_twel_enforcer_policy: TwelEnforcerPolicy::default(),
+            risk_twel_enforcer_threshold: 0.0,
+            risk_we_excess_allowance_pct: 0.0,
+            risk_we_excess_allowance_mode: WeExcessAllowanceMode::default(),
+            unstuck_enabled: true,
+            unstuck_ema_gating_enabled: true,
+            unstuck_close_pct: 0.0,
+            unstuck_ema_dist: 0.0,
+            unstuck_loss_allowance_pct: 0.0,
+            unstuck_threshold: 0.0,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct RuntimeOrderContext {
+    pub effective_wallet_exposure_limit: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -506,6 +755,10 @@ pub enum OrderType {
     ClosePanicShort = 23,
     CloseAutoReduceWelLong = 24,
     CloseAutoReduceWelShort = 25,
+    EntryEmaAnchorLong = 26,
+    CloseEmaAnchorLong = 27,
+    EntryEmaAnchorShort = 28,
+    CloseEmaAnchorShort = 29,
 
     Empty = 65535,
 }
@@ -540,6 +793,54 @@ impl OrderType {
                 | CloseAutoReduceTwelLong
                 | CloseAutoReduceWelLong
                 | ClosePanicLong
+                | EntryEmaAnchorLong
+                | CloseEmaAnchorLong
+        )
+    }
+
+    #[inline]
+    pub const fn is_entry(self) -> bool {
+        use OrderType::*;
+        matches!(
+            self,
+            EntryInitialNormalLong
+                | EntryInitialPartialLong
+                | EntryTrailingNormalLong
+                | EntryTrailingCroppedLong
+                | EntryGridNormalLong
+                | EntryGridCroppedLong
+                | EntryGridInflatedLong
+                | EntryInitialNormalShort
+                | EntryInitialPartialShort
+                | EntryTrailingNormalShort
+                | EntryTrailingCroppedShort
+                | EntryGridNormalShort
+                | EntryGridCroppedShort
+                | EntryGridInflatedShort
+                | EntryEmaAnchorLong
+                | EntryEmaAnchorShort
+        )
+    }
+
+    #[inline]
+    pub const fn is_close(self) -> bool {
+        use OrderType::*;
+        matches!(
+            self,
+            CloseGridLong
+                | CloseTrailingLong
+                | CloseUnstuckLong
+                | CloseAutoReduceTwelLong
+                | CloseGridShort
+                | CloseTrailingShort
+                | CloseUnstuckShort
+                | CloseAutoReduceTwelShort
+                | ClosePanicLong
+                | ClosePanicShort
+                | CloseAutoReduceWelLong
+                | CloseAutoReduceWelShort
+                | CloseEmaAnchorLong
+                | CloseEmaAnchorShort
         )
     }
 }
@@ -592,6 +893,7 @@ pub struct Analysis {
     pub mdg: f64,
     pub gain: f64,
     pub liquidated: bool,
+    pub backtest_completion_ratio: f64,
     pub adg_pnl: f64,
     pub mdg_pnl: f64,
     pub sharpe_ratio_pnl: f64,
@@ -625,6 +927,8 @@ pub struct Analysis {
     pub drawdown_worst_mean_1pct_ema_strategy_eq: f64,
     pub drawdown_worst_mean_1pct_ema_strategy_eq_long: f64,
     pub drawdown_worst_mean_1pct_ema_strategy_eq_short: f64,
+    pub strategy_eq_underwater_pct_mean: f64,
+    pub strategy_eq_underwater_pct_median: f64,
     pub strategy_eq_recovery_days_mean: f64,
     pub strategy_eq_recovery_days_median: f64,
     pub strategy_eq_recovery_days_p95: f64,
@@ -677,6 +981,30 @@ pub struct Analysis {
     pub trade_loss_max: f64,
     pub trade_loss_mean: f64,
     pub trade_loss_median: f64,
+    pub fills_active_days_count: f64,
+    pub fills_active_days_ratio: f64,
+    pub fills_active_symbols_count: f64,
+    pub fills_analysis_duration_days: f64,
+    pub fills_count: f64,
+    pub fills_count_close: f64,
+    pub fills_count_entry: f64,
+    pub fills_count_long: f64,
+    pub fills_count_short: f64,
+    pub fills_entry_per_close: f64,
+    pub fills_gap_longest_days: f64,
+    pub fills_gap_mean_hours: f64,
+    pub fills_gap_median_hours: f64,
+    pub fills_gap_p95_hours: f64,
+    pub fills_gap_p99_hours: f64,
+    pub fills_per_day: f64,
+    pub fills_per_day_close: f64,
+    pub fills_per_day_entry: f64,
+    pub fills_per_day_long: f64,
+    pub fills_per_day_per_position_slot: f64,
+    pub fills_per_day_per_position_slot_long: f64,
+    pub fills_per_day_per_position_slot_short: f64,
+    pub fills_per_day_short: f64,
+    pub fills_top_symbol_share: f64,
 
     pub adg_w: f64,
     pub adg_pnl_w: f64,
@@ -743,6 +1071,9 @@ pub struct Analysis {
     pub hard_stop_trigger_drawdown_mean: f64,
     pub hard_stop_panic_close_loss_sum: f64,
     pub hard_stop_panic_close_loss_max: f64,
+    pub hard_stop_panic_close_loss_drawdown_pct_min: f64,
+    pub hard_stop_panic_close_loss_drawdown_pct_mean: f64,
+    pub hard_stop_panic_close_loss_drawdown_pct_max: f64,
     pub hard_stop_flatten_time_minutes_mean: f64,
     pub hard_stop_post_restart_retrigger_pct: f64,
 }
@@ -754,6 +1085,7 @@ impl Default for Analysis {
             mdg: 0.0,
             gain: 0.0,
             liquidated: false,
+            backtest_completion_ratio: 0.0,
             adg_pnl: 0.0,
             mdg_pnl: 0.0,
             sharpe_ratio_pnl: 0.0,
@@ -787,6 +1119,8 @@ impl Default for Analysis {
             drawdown_worst_mean_1pct_ema_strategy_eq: 0.0,
             drawdown_worst_mean_1pct_ema_strategy_eq_long: 0.0,
             drawdown_worst_mean_1pct_ema_strategy_eq_short: 0.0,
+            strategy_eq_underwater_pct_mean: 0.0,
+            strategy_eq_underwater_pct_median: 0.0,
             strategy_eq_recovery_days_mean: 0.0,
             strategy_eq_recovery_days_median: 0.0,
             strategy_eq_recovery_days_p95: 0.0,
@@ -834,6 +1168,30 @@ impl Default for Analysis {
             trade_loss_max: 0.0,
             trade_loss_mean: 0.0,
             trade_loss_median: 0.0,
+            fills_active_days_count: 0.0,
+            fills_active_days_ratio: 0.0,
+            fills_active_symbols_count: 0.0,
+            fills_analysis_duration_days: 0.0,
+            fills_count: 0.0,
+            fills_count_close: 0.0,
+            fills_count_entry: 0.0,
+            fills_count_long: 0.0,
+            fills_count_short: 0.0,
+            fills_entry_per_close: 0.0,
+            fills_gap_longest_days: 0.0,
+            fills_gap_mean_hours: 0.0,
+            fills_gap_median_hours: 0.0,
+            fills_gap_p95_hours: 0.0,
+            fills_gap_p99_hours: 0.0,
+            fills_per_day: 0.0,
+            fills_per_day_close: 0.0,
+            fills_per_day_entry: 0.0,
+            fills_per_day_long: 0.0,
+            fills_per_day_per_position_slot: 0.0,
+            fills_per_day_per_position_slot_long: 0.0,
+            fills_per_day_per_position_slot_short: 0.0,
+            fills_per_day_short: 0.0,
+            fills_top_symbol_share: 0.0,
             adg_w: 0.0,
             adg_pnl_w: 0.0,
             mdg_pnl_w: 0.0,
@@ -900,6 +1258,9 @@ impl Default for Analysis {
             hard_stop_trigger_drawdown_mean: 0.0,
             hard_stop_panic_close_loss_sum: 0.0,
             hard_stop_panic_close_loss_max: 0.0,
+            hard_stop_panic_close_loss_drawdown_pct_min: 0.0,
+            hard_stop_panic_close_loss_drawdown_pct_mean: 0.0,
+            hard_stop_panic_close_loss_drawdown_pct_max: 0.0,
             hard_stop_flatten_time_minutes_mean: 0.0,
             hard_stop_post_restart_retrigger_pct: 0.0,
         }

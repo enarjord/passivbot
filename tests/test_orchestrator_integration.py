@@ -21,34 +21,135 @@ import pytest
 # ============================================================================
 
 
-def bot_params(**overrides):
-    """Create base bot params with overrides."""
+ADAPTIVE_STRATEGY_KEYS = {
+    "close_grid_qty_pct",
+    "close_trailing_retracement_pct",
+    "close_trailing_qty_pct",
+    "close_trailing_threshold_pct",
+    "close_weight_volatility_1h",
+    "close_weight_volatility_1m",
+    "entry_grid_double_down_factor",
+    "entry_grid_spacing_pct",
+    "entry_volatility_ema_span_1h",
+    "entry_volatility_ema_span_1m",
+    "entry_weight_volatility_1h",
+    "entry_weight_volatility_1m",
+    "entry_we_weight",
+    "entry_initial_ema_dist",
+    "entry_initial_qty_pct",
+    "entry_trailing_double_down_factor",
+    "entry_trailing_retracement_pct",
+    "entry_trailing_threshold_pct",
+    "ema_span_0",
+    "ema_span_1",
+}
+
+
+def _set_nested(mapping, path, value):
+    current = mapping
+    for part in path[:-1]:
+        current = current.setdefault(part, {})
+    current[path[-1]] = value
+
+
+LEGACY_STRATEGY_KEY_MAP = {
+    "close_grid_qty_pct": ("close", "qty_pct"),
+    "close_trailing_retracement_pct": ("close", "retracement_base_pct"),
+    "close_trailing_qty_pct": ("close", "qty_pct"),
+    "close_trailing_threshold_pct": ("close", "threshold_base_pct"),
+    "close_weight_volatility_1h": ("close", "threshold_volatility_1h_weight"),
+    "close_weight_volatility_1m": ("close", "threshold_volatility_1m_weight"),
+    "entry_grid_double_down_factor": ("entry", "double_down_factor"),
+    "entry_grid_spacing_pct": ("entry", "threshold_base_pct"),
+    "entry_volatility_ema_span_1h": ("volatility_ema_span_1h",),
+    "entry_volatility_ema_span_1m": ("volatility_ema_span_1m",),
+    "entry_weight_volatility_1h": ("entry", "threshold_volatility_1h_weight"),
+    "entry_weight_volatility_1m": ("entry", "threshold_volatility_1m_weight"),
+    "entry_we_weight": ("entry", "threshold_we_weight"),
+    "entry_initial_ema_dist": ("entry", "initial_ema_dist"),
+    "entry_initial_qty_pct": ("entry", "initial_qty_pct"),
+    "entry_trailing_double_down_factor": ("entry", "double_down_factor"),
+    "entry_trailing_retracement_pct": ("entry", "retracement_base_pct"),
+    "entry_trailing_threshold_pct": ("entry", "threshold_base_pct"),
+}
+
+
+def adaptive_strategy_params(**overrides):
+    """Create trailing_martingale strategy params for direct JSON orchestrator tests."""
     base = {
-        "close_grid_markup_end": 0.01,
-        "close_grid_markup_start": 0.01,
+        "ema_span_0": 10.0,
+        "ema_span_1": 20.0,
+        "volatility_ema_span_1h": 0.0,
+        "volatility_ema_span_1m": 60.0,
+        "entry": {
+            "double_down_factor": 1.0,
+            "initial_ema_dist": 0.0,
+            "initial_qty_pct": 0.1,
+            "threshold_base_pct": 0.02,
+            "threshold_we_weight": 0.0,
+            "threshold_volatility_1h_weight": 0.0,
+            "threshold_volatility_1m_weight": 0.0,
+            "retracement_base_pct": 0.0,
+            "retracement_we_weight": 0.0,
+            "retracement_volatility_1h_weight": 0.0,
+            "retracement_volatility_1m_weight": 0.0,
+        },
+        "close": {
+            "qty_pct": 1.0,
+            "threshold_base_pct": 0.01,
+            "threshold_we_weight": 0.0,
+            "threshold_volatility_1h_weight": 0.0,
+            "threshold_volatility_1m_weight": 0.0,
+            "retracement_base_pct": 0.0,
+            "retracement_volatility_1h_weight": 0.0,
+            "retracement_volatility_1m_weight": 0.0,
+        },
+    }
+    for key, value in overrides.items():
+        if key in LEGACY_STRATEGY_KEY_MAP:
+            _set_nested(base, LEGACY_STRATEGY_KEY_MAP[key], value)
+        elif "." in key:
+            _set_nested(base, tuple(part for part in key.split(".") if part), value)
+        elif isinstance(value, dict) and isinstance(base.get(key), dict):
+            base[key].update(value)
+        else:
+            base[key] = value
+    return base
+
+
+def _split_bot_and_adaptive_strategy_overrides(overrides):
+    raw = dict(overrides or {})
+    bot_overrides = {k: v for k, v in raw.items() if k not in ADAPTIVE_STRATEGY_KEYS}
+    strategy_overrides = {k: v for k, v in raw.items() if k in ADAPTIVE_STRATEGY_KEYS}
+    return bot_overrides, strategy_overrides
+
+
+def bot_params(**overrides):
+    """Create flat Rust BotParams with overrides.
+
+    Some BotParams field names still reflect the pre-v8 schema; direct strategy behavior in these
+    tests comes from `strategy_params` unless a test explicitly exercises flat BotParams parsing.
+    """
+    base = {
         "close_grid_qty_pct": 1.0,
         "close_trailing_retracement_pct": 0.0,
-        "close_trailing_grid_ratio": 0.0,
         "close_trailing_qty_pct": 0.0,
         "close_trailing_threshold_pct": 0.0,
         "entry_grid_double_down_factor": 1.0,
-        "entry_grid_spacing_volatility_weight": 0.0,
-        "entry_grid_spacing_we_weight": 0.0,
+        "entry_weight_volatility_1h": 0.0,
+        "entry_weight_volatility_1m": 0.0,
+        "entry_we_weight": 0.0,
         "entry_grid_spacing_pct": 0.02,
-        "entry_volatility_ema_span_hours": 0.0,
+        "entry_volatility_ema_span_1h": 0.0,
+        "entry_volatility_ema_span_1m": 60.0,
         "entry_initial_ema_dist": 0.0,
         "entry_initial_qty_pct": 0.1,
         "entry_trailing_double_down_factor": 0.0,
         "entry_trailing_retracement_pct": 0.0,
-        "entry_trailing_retracement_we_weight": 0.0,
-        "entry_trailing_retracement_volatility_weight": 0.0,
-        "entry_trailing_grid_ratio": 0.0,
         "entry_trailing_threshold_pct": 0.0,
-        "entry_trailing_threshold_we_weight": 0.0,
-        "entry_trailing_threshold_volatility_weight": 0.0,
-        "filter_volatility_ema_span": 10.0,
+        "filter_volatility_ema_span_1m": 10.0,
         "filter_volatility_drop_pct": 0.0,
-        "filter_volume_ema_span": 10.0,
+        "filter_volume_ema_span_1m": 10.0,
         "filter_volume_drop_pct": 0.0,
         "ema_span_0": 10.0,
         "ema_span_1": 20.0,
@@ -149,9 +250,17 @@ def make_symbol(
     short_pos_price=0.0,
     long_bp=None,
     short_bp=None,
+    long_strategy=None,
+    short_strategy=None,
     emas=None,
 ):
     """Create a symbol entry for orchestrator input."""
+    long_bot_overrides, long_strategy_overrides = _split_bot_and_adaptive_strategy_overrides(long_bp)
+    short_bot_overrides, short_strategy_overrides = _split_bot_and_adaptive_strategy_overrides(short_bp)
+    if long_strategy is None:
+        long_strategy = adaptive_strategy_params(**long_strategy_overrides)
+    if short_strategy is None:
+        short_strategy = adaptive_strategy_params(**short_strategy_overrides)
     return {
         "symbol_idx": symbol_idx,
         "order_book": {"bid": bid, "ask": ask},
@@ -173,7 +282,8 @@ def make_symbol(
             "mode": long_mode,
             "position": {"size": long_pos_size, "price": long_pos_price},
             "trailing": trailing_bundle(),
-            "bot_params": bot_params(**(long_bp or {})),
+            "bot_params": bot_params(**long_bot_overrides),
+            "strategy_params": long_strategy,
         },
         "short": {
             "mode": short_mode,
@@ -185,9 +295,10 @@ def make_symbol(
                         "n_positions": 0,
                         "total_wallet_exposure_limit": 0.0,
                     }
-                    | (short_bp or {})
+                    | short_bot_overrides
                 )
             ),
+            "strategy_params": short_strategy,
         },
     }
 
@@ -201,8 +312,10 @@ def make_input(*, balance: float, global_bp=None, symbols):
             "filter_by_min_effective_cost": False,
             "unstuck_allowance_long": 0.0,
             "unstuck_allowance_short": 0.0,
+            "max_realized_loss_pct": 0.0,
             "sort_global": True,
             "global_bot_params": global_bp or bot_params_pair(),
+            "strategy_kind": "trailing_martingale",
         },
         "symbols": symbols,
         "peek_hints": None,
@@ -309,11 +422,9 @@ class TestOrchestratorOrderAccuracy:
                     ask=105.0,
                     long_pos_size=1.0,  # Have 1.0 long position
                     long_pos_price=100.0,  # Bought at 100
-                    long_bp={
-                        "close_grid_markup_start": 0.01,  # Start at 1% markup
-                        "close_grid_markup_end": 0.05,  # End at 5% markup
-                        "close_grid_qty_pct": 0.5,  # Close 50% per order
-                    },
+                    long_strategy=adaptive_strategy_params(
+                        close={"threshold_base_pct": 0.01, "qty_pct": 0.5},
+                    ),
                 )
             ],
         )
@@ -359,6 +470,71 @@ class TestOrchestratorOrderAccuracy:
         # At minimum, we should get valid output without errors
         assert isinstance(out["orders"], list)
 
+    def test_auto_unstuck_allowed_flag_is_sole_emission_gate(self):
+        """auto_unstuck_allowed=false suppresses unstuck emission even with
+        positive allowances - the live open-order suppression rides this flag
+        alone, so allowance values stay pure budget facts."""
+        import passivbot_rust as pbr
+
+        def stuck_input():
+            inp = make_input(
+                balance=1_000.0,
+                symbols=[
+                    make_symbol(
+                        0,
+                        bid=80.0,
+                        ask=80.0,
+                        long_pos_size=5.0,
+                        long_pos_price=100.0,
+                        long_bp={
+                            "unstuck_threshold": 0.1,
+                            "unstuck_loss_allowance_pct": 0.05,
+                            "unstuck_close_pct": 0.5,
+                            "unstuck_ema_dist": -0.05,
+                        },
+                    )
+                ],
+            )
+            inp["global"]["unstuck_allowance_long"] = 50.0
+            inp["global"]["max_realized_loss_pct"] = 1.0
+            return inp
+
+        baseline = compute(pbr, stuck_input())
+        baseline_unstuck = [
+            o
+            for o in baseline["orders"]
+            if "unstuck" in o.get("order_type", "").lower()
+        ]
+        assert len(baseline_unstuck) == 1, baseline_unstuck
+
+        suppressed_input = stuck_input()
+        suppressed_input["global"]["auto_unstuck_allowed"] = False
+        suppressed = compute(pbr, suppressed_input)
+        assert [
+            o
+            for o in suppressed["orders"]
+            if "unstuck" in o.get("order_type", "").lower()
+        ] == []
+
+        # The allowance input fields are legacy/diagnostic: omitting them
+        # entirely parses (serde defaults) and emission is governed by the
+        # explicit flag plus the realized-pnl cumsum facts alone.
+        omitted_input = stuck_input()
+        del omitted_input["global"]["unstuck_allowance_long"]
+        del omitted_input["global"]["unstuck_allowance_short"]
+        omitted_input["global"]["auto_unstuck_allowed"] = True
+        omitted = compute(pbr, omitted_input)
+        assert (
+            len(
+                [
+                    o
+                    for o in omitted["orders"]
+                    if "unstuck" in o.get("order_type", "").lower()
+                ]
+            )
+            == 1
+        )
+
     def test_trailing_entry_logic(self):
         """Test trailing entry logic."""
         import passivbot_rust as pbr
@@ -370,12 +546,13 @@ class TestOrchestratorOrderAccuracy:
                     0,
                     bid=100.0,
                     ask=100.0,
-                    long_bp={
-                        "entry_trailing_threshold_pct": 0.02,  # Trail after 2% move
-                        "entry_trailing_retracement_pct": 0.01,  # Enter on 1% retracement
-                        "entry_trailing_grid_ratio": 0.5,  # 50% of grid
-                        "entry_initial_qty_pct": 0.1,
-                    },
+                    long_strategy=adaptive_strategy_params(
+                        entry={
+                            "threshold_base_pct": 0.02,
+                            "retracement_base_pct": 0.01,
+                            "initial_qty_pct": 0.1,
+                        },
+                    ),
                 )
             ],
         )
@@ -556,7 +733,7 @@ class TestOrchestratorMultiSymbol:
                     ),
                     long_bp={
                         "filter_volatility_drop_pct": 0.5,  # Filter if < 50% of avg
-                        "filter_volatility_ema_span": 1.0,
+                        "filter_volatility_ema_span_1m": 1.0,
                     },
                 )
             ],
@@ -585,7 +762,7 @@ class TestOrchestratorMultiSymbol:
                     ),
                     long_bp={
                         "filter_volume_drop_pct": 0.5,  # Filter if < 50% of avg
-                        "filter_volume_ema_span": 10.0,
+                        "filter_volume_ema_span_1m": 10.0,
                     },
                 )
             ],
@@ -670,7 +847,7 @@ class TestOrchestratorErrorHandling:
 
 
 class TestSignedQuantitiesConvention:
-    """Test that signed quantities follow conventions from passivbot_agent_principles.yaml."""
+    """Test that signed quantities follow the canonical AI engineering principles."""
 
     def test_long_entry_qty_positive(self):
         """Test that long entry quantities are positive."""
@@ -743,10 +920,9 @@ class TestSignedQuantitiesConvention:
                     ask=105.0,
                     long_pos_size=1.0,
                     long_pos_price=100.0,
-                    long_bp={
-                        "close_grid_markup_start": 0.01,
-                        "close_grid_qty_pct": 0.5,
-                    },
+                    long_strategy=adaptive_strategy_params(
+                        close={"threshold_base_pct": 0.01, "qty_pct": 0.5},
+                    ),
                 )
             ],
         )

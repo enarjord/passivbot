@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import hjson
 import json
 import shutil
@@ -177,22 +178,45 @@ def test_apply_assertions_supports_remote_call_paths():
 @pytest.mark.asyncio
 @pytest.mark.fake_live
 async def test_fake_client_request_log_counts_order_writes():
+    from exchanges.ccxt_bot import CCXTBot
+
     client = FakeCCXTClient(_scenario(), quote="USDT")
-    order = await client.create_order(
-        "BTC/USDT:USDT",
-        "limit",
-        "buy",
-        0.01,
-        90.0,
-        {"positionSide": "LONG", "clientOrderId": "pb-test"},
+    emitted = []
+    bot = CCXTBot.__new__(CCXTBot)
+    bot.exchange = "fake"
+    bot.user = "fake_01"
+    bot.bot_id = "fake_bot"
+    bot.cca = client
+    bot._build_order_params = lambda _order: {
+        "positionSide": "LONG",
+        "clientOrderId": "pb-test",
+    }
+    bot._emit_live_event = lambda event_type, **kwargs: emitted.append(
+        (event_type, kwargs)
     )
-    await client.cancel_order(order["id"], "BTC/USDT:USDT")
+    requested = {
+        "symbol": "BTC/USDT:USDT",
+        "type": "limit",
+        "side": "buy",
+        "position_side": "long",
+        "qty": 0.01,
+        "price": 90.0,
+        "reduce_only": False,
+        "custom_id": "pb-test",
+    }
+
+    order = await bot.execute_order(requested)
+    await bot.execute_cancellation(order)
 
     summary = _summarize_remote_calls(client.export_request_log())
 
     assert summary["by_method"]["create_order"] == 1
     assert summary["by_method"]["cancel_order"] == 1
     assert summary["by_category"]["order_write"] == 2
+    assert [event_type for event_type, _kwargs in emitted] == [
+        "execution.create_connector_call_started",
+        "execution.cancel_connector_call_started",
+    ]
 
 
 @pytest.mark.fake_live
@@ -238,8 +262,12 @@ def test_prime_fake_fill_cache_writes_fake_fill_events(tmp_path):
     client = FakeCCXTClient(scenario, quote="USDT")
     bot = type("Bot", (), {"exchange": "fake", "user": "runner_test"})()
     cache_path = _prime_fake_fill_cache(bot, client, cache_root=tmp_path)
-    payload = next(cache_path.glob("*.json")).read_text(encoding="utf-8")
-    assert "boot_entry" in payload
+    cache = FillEventCache(cache_path)
+    cached_events = cache.load()
+    assert len(cached_events) == 1
+    assert cached_events[0].client_order_id == "boot_entry"
+    assert cache.get_covered_start_ms() == client.get_fill_events(None, None)[0]["timestamp"]
+    assert cache.get_history_scope() == "window"
 
 
 @pytest.mark.fake_live
@@ -264,6 +292,7 @@ def test_resume_normal_cooldown_does_not_preauthorize_flat_halted_side():
     )
     cfg = load_config(str(REPO_ROOT / "configs" / "fake_live_hsl_btc.hjson"), verbose=False)
     cfg["bot"]["long"]["hsl_cooldown_minutes_after_red"] = 2.0
+    cfg["bot"]["long"].setdefault("hsl", {})["cooldown_minutes_after_red"] = 2.0
     cfg["live"]["hsl_position_during_cooldown_policy"] = "normal"
     cfg["live"]["hsl_signal_mode"] = "unified"
     cfg["bot"]["short"] = json.loads(json.dumps(cfg["bot"]["long"]))
@@ -296,30 +325,26 @@ def test_bot_params_to_rust_dict_includes_hsl_fields():
     class _Stub:
         def __init__(self):
             self.values = {
-                "close_grid_markup_end": 0.01,
-                "close_grid_markup_start": 0.005,
                 "close_grid_qty_pct": 1.0,
                 "close_trailing_retracement_pct": 0.001,
-                "close_trailing_grid_ratio": 0.0,
                 "close_trailing_qty_pct": 0.0,
                 "close_trailing_threshold_pct": 0.001,
+                "close_weight_volatility_1h": 0.0,
+                "close_weight_volatility_1m": 0.0,
                 "entry_grid_double_down_factor": 1.0,
-                "entry_grid_spacing_volatility_weight": 0.0,
-                "entry_grid_spacing_we_weight": 0.0,
+                "entry_weight_volatility_1h": 0.0,
+                "entry_weight_volatility_1m": 0.0,
+                "entry_we_weight": 0.0,
                 "entry_grid_spacing_pct": 0.01,
-                "entry_volatility_ema_span_hours": 0.0,
+                "entry_volatility_ema_span_1h": 0.0,
+                "entry_volatility_ema_span_1m": 60.0,
                 "entry_initial_ema_dist": -0.001,
                 "entry_initial_qty_pct": 0.1,
                 "entry_trailing_double_down_factor": 1.0,
                 "entry_trailing_retracement_pct": 0.001,
-                "entry_trailing_retracement_we_weight": 0.0,
-                "entry_trailing_retracement_volatility_weight": 0.0,
-                "entry_trailing_grid_ratio": 0.0,
                 "entry_trailing_threshold_pct": 0.001,
-                "entry_trailing_threshold_we_weight": 0.0,
-                "entry_trailing_threshold_volatility_weight": 0.0,
-                "filter_volatility_ema_span": 0.0,
-                "filter_volume_ema_span": 1.0,
+                "filter_volatility_ema_span_1m": 0.0,
+                "filter_volume_ema_span_1m": 1.0,
                 "forager_volume_drop_pct": 0.0,
                 "forager_score_weights": {
                     "volume": 1.0,
@@ -333,15 +358,19 @@ def test_bot_params_to_rust_dict_includes_hsl_fields():
                 "hsl_ema_span_minutes": 1.0,
                 "hsl_cooldown_minutes_after_red": 1.0,
                 "hsl_no_restart_drawdown_threshold": 0.9,
+                "hsl_restart_after_red_policy": "threshold",
                 "hsl_tier_ratios": {"yellow": 0.5, "orange": 0.75},
                 "hsl_orange_tier_mode": "tp_only_with_active_entry_cancellation",
                 "hsl_panic_close_order_type": "market",
                 "n_positions": 1.0,
                 "total_wallet_exposure_limit": 5.0,
                 "wallet_exposure_limit": 5.0,
+                "risk_entry_cooldown_minutes": 0.0,
                 "risk_wel_enforcer_threshold": 1.0,
+                "risk_twel_enforcer_policy": "REDUCE_PORTFOLIO",
                 "risk_twel_enforcer_threshold": 1.0,
                 "risk_we_excess_allowance_pct": 0.0,
+                "risk_we_excess_allowance_mode": "LEGACY_RAW",
                 "unstuck_close_pct": 0.01,
                 "unstuck_ema_dist": 0.0,
                 "unstuck_loss_allowance_pct": 0.1,
@@ -363,14 +392,22 @@ def test_bot_params_to_rust_dict_includes_hsl_fields():
     assert out["hsl_red_threshold"] == pytest.approx(0.05)
     assert out["hsl_tier_ratio_yellow"] == pytest.approx(0.5)
     assert out["hsl_tier_ratio_orange"] == pytest.approx(0.75)
+    assert out["hsl_restart_after_red_policy"] == "threshold"
     assert out["hsl_orange_tier_mode"] == "tp_only_with_active_entry_cancellation"
     assert out["hsl_panic_close_order_type"] == "market"
+    assert out["risk_twel_enforcer_policy"] == "reduce_portfolio"
+    assert out["risk_we_excess_allowance_mode"] == "legacy_raw"
     assert "entry_grid_inflation_enabled" not in out
     assert out["forager_score_weights"] == {
         "volume": pytest.approx(1.0),
         "ema_readiness": pytest.approx(0.0),
         "volatility": pytest.approx(0.0),
     }
+
+    stub = _Stub()
+    stub.values["risk_twel_enforcer_policy"] = "invalid_policy"
+    with pytest.raises(ValueError, match="total_exposure_enforcer_policy"):
+        Passivbot._bot_params_to_rust_dict(stub, "long", None)
 
 
 def test_bot_params_to_rust_dict_ignores_removed_entry_grid_inflation_flag():
@@ -381,30 +418,26 @@ def test_bot_params_to_rust_dict_ignores_removed_entry_grid_inflation_flag():
             self.config = {
                 "bot": {
                     "long": {
-                        "close_grid_markup_end": 0.01,
-                        "close_grid_markup_start": 0.005,
                         "close_grid_qty_pct": 1.0,
                         "close_trailing_retracement_pct": 0.001,
-                        "close_trailing_grid_ratio": 0.0,
                         "close_trailing_qty_pct": 0.0,
                         "close_trailing_threshold_pct": 0.001,
+                        "close_weight_volatility_1h": 0.0,
+                        "close_weight_volatility_1m": 0.0,
                         "entry_grid_double_down_factor": 1.0,
-                        "entry_grid_spacing_volatility_weight": 0.0,
-                        "entry_grid_spacing_we_weight": 0.0,
+                        "entry_weight_volatility_1h": 0.0,
+                        "entry_weight_volatility_1m": 0.0,
+                        "entry_we_weight": 0.0,
                         "entry_grid_spacing_pct": 0.01,
-                        "entry_volatility_ema_span_hours": 0.0,
+                        "entry_volatility_ema_span_1h": 0.0,
+                        "entry_volatility_ema_span_1m": 60.0,
                         "entry_initial_ema_dist": -0.001,
                         "entry_initial_qty_pct": 0.1,
                         "entry_trailing_double_down_factor": 1.0,
                         "entry_trailing_retracement_pct": 0.001,
-                        "entry_trailing_retracement_we_weight": 0.0,
-                        "entry_trailing_retracement_volatility_weight": 0.0,
-                        "entry_trailing_grid_ratio": 0.0,
                         "entry_trailing_threshold_pct": 0.001,
-                        "entry_trailing_threshold_we_weight": 0.0,
-                        "entry_trailing_threshold_volatility_weight": 0.0,
-                        "forager_volatility_ema_span": 0.0,
-                        "forager_volume_ema_span": 1.0,
+                        "forager_volatility_ema_span_1m": 0.0,
+                        "forager_volume_ema_span_1m": 1.0,
                         "forager_volume_drop_pct": 0.0,
                         "forager_score_weights": {
                             "volume": 1.0,
@@ -418,17 +451,26 @@ def test_bot_params_to_rust_dict_ignores_removed_entry_grid_inflation_flag():
                         "hsl_ema_span_minutes": 1.0,
                         "hsl_cooldown_minutes_after_red": 1.0,
                         "hsl_no_restart_drawdown_threshold": 0.9,
+                        "hsl_restart_after_red_policy": "threshold",
                         "hsl_tier_ratios": {"yellow": 0.5, "orange": 0.75},
                         "hsl_orange_tier_mode": "tp_only_with_active_entry_cancellation",
                         "hsl_panic_close_order_type": "market",
                         "n_positions": 1.0,
                         "total_wallet_exposure_limit": 5.0,
                         "wallet_exposure_limit": 5.0,
+                        "risk_entry_cooldown_minutes": 0.0,
+                        "risk_wel_enforcer_enabled": True,
                         "risk_wel_enforcer_threshold": 1.0,
+                        "risk_twel_enforcer_enabled": True,
+                        "risk_twel_enforcer_policy": "reduce_overweight",
+                        "risk_twel_entry_gate_enabled": True,
                         "risk_twel_enforcer_threshold": 1.0,
                         "risk_we_excess_allowance_pct": 0.0,
+                        "risk_we_excess_allowance_mode": "bounded",
                         "unstuck_close_pct": 0.01,
                         "unstuck_ema_dist": 0.0,
+                        "unstuck_enabled": True,
+                        "unstuck_ema_gating_enabled": True,
                         "unstuck_loss_allowance_pct": 0.1,
                         "unstuck_threshold": 1.0,
                     },
@@ -436,7 +478,14 @@ def test_bot_params_to_rust_dict_ignores_removed_entry_grid_inflation_flag():
                 }
             }
             self.coin_overrides = {
-                "BTC/USDT:USDT": {"bot": {"long": {"entry_grid_inflation_enabled": False}}}
+                "BTC/USDT:USDT": {
+                    "bot": {
+                        "long": {
+                            "entry_grid_inflation_enabled": False,
+                            "unstuck_loss_allowance_pct": 0.025,
+                        }
+                    }
+                }
             }
 
         def bot_value(self, _pside, key):
@@ -458,6 +507,7 @@ def test_bot_params_to_rust_dict_ignores_removed_entry_grid_inflation_flag():
     out = Passivbot._bot_params_to_rust_dict(_Stub(), "long", "BTC/USDT:USDT")
 
     assert "entry_grid_inflation_enabled" not in out
+    assert out["unstuck_loss_allowance_pct"] == pytest.approx(0.025)
 
 
 def test_install_runtime_overrides_sets_exchange_time_override():
@@ -793,17 +843,22 @@ async def test_hsl_replay_scenarios_run_end_to_end(
     _cleanup_fake_user_state(user)
     base_config_path = REPO_ROOT / "configs" / "fake_live_hsl_btc.hjson"
     cfg = load_config(str(base_config_path), verbose=False)
-    # These scenarios assert pside-level RED cooldown semantics. The live default is unified HSL
-    # signal mode, so pin the legacy scenario contract explicitly.
+    # These scenarios assert pside-level RED cooldown semantics. Keep that fixture contract
+    # explicit even though the shared fake-live config now pins the same mode.
     cfg["live"]["hsl_signal_mode"] = "pside"
     cfg["bot"]["long"]["hsl_red_threshold"] = 0.02
+    cfg["bot"]["long"].setdefault("hsl", {})["red_threshold"] = 0.02
     if cooldown_override is not None:
         cfg["bot"]["long"]["hsl_cooldown_minutes_after_red"] = float(cooldown_override)
+        cfg["bot"]["long"].setdefault("hsl", {})["cooldown_minutes_after_red"] = float(
+            cooldown_override
+        )
     if scenario_rel.endswith("hsl_long_terminal_no_restart.hjson"):
         cfg["bot"]["long"]["hsl_no_restart_drawdown_threshold"] = 0.02
-        cfg["bot"]["long"]["entry_initial_qty_pct"] = 0.0
-        cfg["bot"]["long"]["entry_trailing_grid_ratio"] = 0.0
+        cfg["bot"]["long"].setdefault("hsl", {})["no_restart_drawdown_threshold"] = 0.02
+        cfg["bot"]["long"]["strategy"]["trailing_martingale"]["entry"]["initial_qty_pct"] = 0.0
         cfg["bot"]["long"]["total_wallet_exposure_limit"] = 2.5
+        cfg["bot"]["long"].setdefault("risk", {})["total_wallet_exposure_limit"] = 2.5
     if policy_override is not None:
         cfg["live"]["hsl_position_during_cooldown_policy"] = str(policy_override)
     config_path = tmp_path / "fake_live_hsl_btc_pside.json"
@@ -837,6 +892,295 @@ async def test_hsl_replay_scenarios_run_end_to_end(
         assert len(step_summaries) == expected_steps
         assert (run_dir / "hsl_trace.json").exists()
         assert expected_log_fragment in (run_dir / "fake_live.log").read_text(encoding="utf-8")
+    finally:
+        _cleanup_fake_user_state(user)
+
+
+@pytest.mark.asyncio
+@pytest.mark.fake_live
+async def test_documented_hsl_restart_scenario_runs_unmodified(tmp_path):
+    """Keep the checked-in offline smoke command and its assertions executable as written."""
+    import passivbot_rust as pbr
+
+    if getattr(pbr, "__is_stub__", False):
+        pytest.skip("requires real passivbot_rust extension")
+
+    user = f"fake_hsl_documented_{tmp_path.name}"
+    _cleanup_fake_user_state(user)
+    try:
+        args = argparse.Namespace(
+            config=str(REPO_ROOT / "configs" / "fake_live_hsl_btc.hjson"),
+            scenario=str(
+                REPO_ROOT / "scenarios" / "fake_live" / "hsl_long_red_restart.hjson"
+            ),
+            user=user,
+            max_steps=None,
+            output_dir=str(tmp_path),
+            log_level=1,
+            snapshot_each_step=False,
+        )
+        assert await _async_main(args) == 0
+    finally:
+        _cleanup_fake_user_state(user)
+
+
+@pytest.mark.asyncio
+@pytest.mark.fake_live
+async def test_coin_hsl_restart_scenario_uses_protective_supervisor(tmp_path):
+    """Coin-mode RED must not fall through normal planning with confirmations pending."""
+    import passivbot_rust as pbr
+
+    if getattr(pbr, "__is_stub__", False):
+        pytest.skip("requires real passivbot_rust extension")
+
+    user = f"fake_hsl_coin_supervisor_{tmp_path.name}"
+    _cleanup_fake_user_state(user)
+    cfg = load_config(
+        str(REPO_ROOT / "configs" / "fake_live_hsl_btc.hjson"), verbose=False
+    )
+    cfg["live"]["hsl_signal_mode"] = "coin"
+    config_path = tmp_path / "fake_live_hsl_btc_coin.json"
+    config_path.write_text(json.dumps(cfg), encoding="utf-8")
+    scenario = hjson.loads(
+        (REPO_ROOT / "scenarios" / "fake_live" / "hsl_long_red_restart.hjson").read_text(
+            encoding="utf-8"
+        )
+    )
+    scenario.pop("assertions", None)
+    scenario_path = tmp_path / "hsl_long_red_restart_coin.hjson"
+    scenario_path.write_text(hjson.dumps(scenario), encoding="utf-8")
+
+    try:
+        args = argparse.Namespace(
+            config=str(config_path),
+            scenario=str(scenario_path),
+            user=user,
+            max_steps=None,
+            output_dir=str(tmp_path),
+            log_level=1,
+            snapshot_each_step=False,
+        )
+        assert await _async_main(args) == 0
+
+        run_dirs = sorted(
+            path
+            for path in tmp_path.iterdir()
+            if path.is_dir() and (path / "remote_calls.json").exists()
+        )
+        assert len(run_dirs) == 1
+        artifacts = _load_run_artifacts(run_dirs[0])
+        assert artifacts["positions"] == []
+        assert any(
+            fill.get("symbol") == "BTC/USDT:USDT"
+            and fill.get("position_side") == "long"
+            and fill.get("side") == "sell"
+            and fill.get("reduceOnly") is True
+            for fill in artifacts["fills"]
+        )
+    finally:
+        _cleanup_fake_user_state(user)
+
+
+@pytest.mark.asyncio
+@pytest.mark.fake_live
+async def test_coin_hsl_fake_live_panics_only_drawn_down_coin(tmp_path):
+    import passivbot_rust as pbr
+
+    if getattr(pbr, "__is_stub__", False):
+        pytest.skip("requires real passivbot_rust extension")
+
+    user = f"fake_coin_hsl_selective_panic_{tmp_path.name}"
+    _cleanup_fake_user_state(user)
+    for safe_symbol in ("BTC_USDT_USDT", "XMR_USDT_USDT"):
+        latch_path = (
+            REPO_ROOT
+            / "caches"
+            / "equity_hard_stop"
+            / "fake"
+            / f"{user}_long_{safe_symbol}.json"
+        )
+        try:
+            latch_path.unlink()
+        except FileNotFoundError:
+            pass
+
+    scenario = {
+        "name": "coin_hsl_selective_panic",
+        "exchange": "fake",
+        "start_time": "2026-01-01T00:00:00Z",
+        "tick_interval_seconds": 60,
+        "boot_index": 1,
+        "run_initial_cycle": False,
+        "account": {
+            "balance": 1000.0,
+            "positions": [
+                {
+                    "symbol": "BTC/USDT:USDT",
+                    "position_side": "long",
+                    "qty": 1.0,
+                    "price": 100.0,
+                },
+                {
+                    "symbol": "XMR/USDT:USDT",
+                    "position_side": "long",
+                    "qty": 10.0,
+                    "price": 100.0,
+                },
+            ],
+            "fills": [
+                {
+                    "id": "btc-entry",
+                    "order": "btc-entry",
+                    "timestamp": "2026-01-01T00:00:00Z",
+                    "symbol": "BTC/USDT:USDT",
+                    "position_side": "long",
+                    "side": "buy",
+                    "amount": 1.0,
+                    "price": 100.0,
+                    "pnl": 0.0,
+                    "clientOrderId": "entry_btc_boot",
+                },
+                {
+                    "id": "xmr-entry",
+                    "order": "xmr-entry",
+                    "timestamp": "2026-01-01T00:00:00Z",
+                    "symbol": "XMR/USDT:USDT",
+                    "position_side": "long",
+                    "side": "buy",
+                    "amount": 10.0,
+                    "price": 100.0,
+                    "pnl": 0.0,
+                    "clientOrderId": "entry_xmr_boot",
+                },
+            ],
+        },
+        "symbols": {
+            "BTC/USDT:USDT": {
+                "price_step": 0.1,
+                "qty_step": 0.001,
+                "min_qty": 0.001,
+                "min_cost": 5.0,
+                "maker_fee": 0.0,
+                "taker_fee": 0.0,
+            },
+            "XMR/USDT:USDT": {
+                "price_step": 0.1,
+                "qty_step": 0.001,
+                "min_qty": 0.001,
+                "min_cost": 5.0,
+                "maker_fee": 0.0,
+                "taker_fee": 0.0,
+            },
+        },
+        "timeline": [
+            {"t": 0, "prices": {"BTC/USDT:USDT": 100.0, "XMR/USDT:USDT": 100.0}},
+            {"t": 1, "prices": {"BTC/USDT:USDT": 100.0, "XMR/USDT:USDT": 40.0}},
+            {"t": 2, "prices": {"BTC/USDT:USDT": 100.0, "XMR/USDT:USDT": 40.0}},
+            {"t": 3, "prices": {"BTC/USDT:USDT": 100.0, "XMR/USDT:USDT": 40.0}},
+        ],
+    }
+    scenario_path = tmp_path / "coin_hsl_selective_panic.hjson"
+    scenario_path.write_text(json.dumps(scenario), encoding="utf-8")
+
+    cfg = load_config(str(REPO_ROOT / "configs" / "fake_live_hsl_btc.hjson"), verbose=False)
+    cfg["live"]["hsl_signal_mode"] = "coin"
+    cfg["live"]["hsl_position_during_cooldown_policy"] = "panic"
+    cfg["live"]["pnls_max_lookback_days"] = 0.000001
+    cfg["live"]["approved_coins"]["long"] = ["BTC", "XMR"]
+    cfg["live"]["approved_coins"]["short"] = []
+    cfg["live"]["ignored_coins"]["long"] = []
+    cfg["live"]["ignored_coins"]["short"] = []
+    cfg["live"]["fake_scenario_path"] = str(scenario_path)
+    cfg["bot"]["long"]["hsl_enabled"] = True
+    cfg["bot"]["long"]["hsl_red_threshold"] = 0.05
+    cfg["bot"]["long"]["hsl_ema_span_minutes"] = 1.0
+    cfg["bot"]["long"]["hsl_cooldown_minutes_after_red"] = 30.0
+    cfg["bot"]["long"]["hsl_no_restart_drawdown_threshold"] = 1.0
+    cfg["bot"]["long"]["hsl_panic_close_order_type"] = "market"
+    cfg["bot"]["long"]["n_positions"] = 2.0
+    cfg["bot"]["long"]["total_wallet_exposure_limit"] = 1.0
+    cfg["bot"]["long"].setdefault("hsl", {})["enabled"] = True
+    cfg["bot"]["long"]["hsl"]["red_threshold"] = 0.05
+    cfg["bot"]["long"]["hsl"]["ema_span_minutes"] = 1.0
+    cfg["bot"]["long"]["hsl"]["cooldown_minutes_after_red"] = 30.0
+    cfg["bot"]["long"]["hsl"]["no_restart_drawdown_threshold"] = 1.0
+    cfg["bot"]["long"]["hsl"]["panic_close_order_type"] = "market"
+    cfg["bot"]["long"].setdefault("risk", {})["n_positions"] = 2.0
+    cfg["bot"]["long"]["risk"]["total_wallet_exposure_limit"] = 1.0
+    cfg["bot"]["short"]["hsl_enabled"] = False
+    cfg["bot"]["short"].setdefault("hsl", {})["enabled"] = False
+    cfg["bot"]["short"]["n_positions"] = 0.0
+    cfg["bot"]["short"]["total_wallet_exposure_limit"] = 0.0
+    cfg["bot"]["short"].setdefault("risk", {})["n_positions"] = 0.0
+    cfg["bot"]["short"]["risk"]["total_wallet_exposure_limit"] = 0.0
+    config_path = tmp_path / "coin_hsl_selective_panic.json"
+    config_path.write_text(json.dumps(cfg), encoding="utf-8")
+
+    try:
+        args = argparse.Namespace(
+            config=str(config_path),
+            scenario=str(scenario_path),
+            user=user,
+            max_steps=1,
+            output_dir=str(tmp_path),
+            log_level=1,
+            snapshot_each_step=True,
+        )
+        assert await _async_main(args) == 0
+
+        output_dirs = sorted(
+            path
+            for path in tmp_path.iterdir()
+            if path.is_dir() and (path / "remote_calls.json").exists()
+        )
+        assert len(output_dirs) == 1
+        run_dir = output_dirs[0]
+
+        fills = json.loads((run_dir / "fills.json").read_text(encoding="utf-8"))
+        remote_calls = json.loads((run_dir / "remote_calls.json").read_text(encoding="utf-8"))
+        positions = json.loads((run_dir / "positions.json").read_text(encoding="utf-8"))
+        hsl_trace = json.loads((run_dir / "hsl_trace.json").read_text(encoding="utf-8"))
+
+        panic_fills = [
+            fill
+            for fill in fills
+            if fill["symbol"] == "XMR/USDT:USDT"
+            and fill["position_side"] == "long"
+            and fill["side"] == "sell"
+            and fill.get("reduceOnly") is True
+        ]
+        assert len(panic_fills) == 1
+        assert float(panic_fills[0]["pnl"]) == pytest.approx(-600.0)
+
+        panic_orders = [
+            call
+            for call in remote_calls
+            if call.get("method") == "create_order"
+            and call.get("symbol") == "XMR/USDT:USDT"
+            and call.get("position_side") == "long"
+            and call.get("side") == "sell"
+            and call.get("order_type") == "market"
+            and call.get("reduce_only") is True
+        ]
+        assert len(panic_orders) == 1
+        btc_market_closes = [
+            call
+            for call in remote_calls
+            if call.get("method") == "create_order"
+            and call.get("symbol") == "BTC/USDT:USDT"
+            and call.get("position_side") == "long"
+            and call.get("order_type") == "market"
+            and call.get("reduce_only") is True
+        ]
+        assert btc_market_closes == []
+
+        by_symbol_side = {
+            (position["symbol"], position["position_side"]): float(position["size"])
+            for position in positions
+        }
+        assert by_symbol_side[("BTC/USDT:USDT", "long")] == pytest.approx(1.0)
+        assert by_symbol_side.get(("XMR/USDT:USDT", "long"), 0.0) == pytest.approx(0.0)
+        assert hsl_trace["long"]["halted"] is False
     finally:
         _cleanup_fake_user_state(user)
 
@@ -900,7 +1244,15 @@ async def test_fake_live_all_lookback_backfills_narrow_fill_cache_once(tmp_path,
         log_text = (run_dir / "fake_live.log").read_text(encoding="utf-8")
         assert "[fills] refresh: events=3 (+1)" in log_text
         assert "initial_entry_boot" in log_text
-        assert log_text.count("id=10") == 1
+        fill_ref = hashlib.sha256(b"10").hexdigest()[:12]
+        assert (
+            sum(
+                "[fill]" in line and f" id={fill_ref}" in line
+                for line in log_text.splitlines()
+            )
+            == 1
+        )
+        assert not any("[fill]" in line and " id=10" in line for line in log_text.splitlines())
 
         cache = FillEventCache(cache_dir)
         cached_ids = [str(event.id) for event in cache.load()]
@@ -950,7 +1302,7 @@ async def test_fake_live_min_effective_cost_blocks_zero_min_qty_integer_step_sym
     cfg = load_config(str(REPO_ROOT / "configs" / "fake_live_hsl_btc.hjson"), verbose=False)
     cfg["bot"]["long"]["hsl_enabled"] = False
     cfg["bot"]["short"]["hsl_enabled"] = False
-    cfg["bot"]["long"]["entry_initial_qty_pct"] = 0.0276
+    cfg["bot"]["long"]["strategy"]["trailing_martingale"]["entry"]["initial_qty_pct"] = 0.0276
     cfg["bot"]["long"]["n_positions"] = 5.0
     cfg["bot"]["long"]["total_wallet_exposure_limit"] = 1.8
     cfg["bot"]["long"]["risk_we_excess_allowance_pct"] = 0.37

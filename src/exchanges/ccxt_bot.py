@@ -45,46 +45,55 @@ from config.access import get_optional_live_value, require_live_value
 assert_correct_ccxt_version(ccxt=ccxt_async)
 
 
-def format_exchange_config_response(res: dict) -> str:
-    """Format exchange config API response (leverage, margin mode) concisely.
-
-    Instead of logging full JSON like:
-        {'symbol': 'ADAUSDT', 'leverage': '10', 'maxNotionalValue': '10000000'}
-    Returns:
-        'ok' or 'leverage=10x' or error message
-    """
+def format_exchange_config_response(res: object) -> str:
+    """Return a bounded, value-safe summary of an exchange config response."""
     if not isinstance(res, dict):
-        return str(res)[:50]
+        return f"result_type={type(res).__name__[:40]}"
 
-    # Check for success indicators
-    code = res.get("code") or res.get("retCode")
-    msg = res.get("msg") or res.get("retMsg") or res.get("message", "")
-    status = res.get("status", "")
+    code = res.get("code")
+    if code is None:
+        code = res.get("retCode")
+    status = res.get("status")
 
-    # Success cases
-    if code in (0, "0", "200000", 200000):
-        return "ok"
-    if status == "ok":
+    if code in (0, "0", "200000", 200000) or status == "ok":
         return "ok"
 
-    # "No need to change" is success
-    if "no need" in str(msg).lower():
+    msg = res.get("msg")
+    if msg is None:
+        msg = res.get("retMsg")
+    if msg is None:
+        msg = res.get("message")
+    if isinstance(msg, str) and "no need" in msg.lower():
         return "ok (unchanged)"
 
-    # Extract useful info
-    leverage = res.get("leverage") or res.get("lever")
-    if leverage:
-        return f"leverage={leverage}x"
+    leverage = res.get("leverage")
+    if leverage is None:
+        leverage = res.get("lever")
+    if isinstance(leverage, (int, float, str)) and not isinstance(leverage, bool):
+        try:
+            leverage_value = float(leverage)
+        except (TypeError, ValueError, OverflowError):
+            leverage_value = None
+        if leverage_value is not None and math.isfinite(leverage_value):
+            return f"leverage={leverage_value:g}x"
 
-    # Error cases - show code and message
-    if code and msg:
-        return f"code={code}: {msg[:40]}"
-    if msg:
-        return msg[:50]
-
-    # Fallback: truncated string
-    s = str(res)
-    return s[:60] + "..." if len(s) > 60 else s
+    if (
+        isinstance(code, int)
+        and not isinstance(code, bool)
+        and -999_999_999_999 <= code <= 999_999_999_999
+    ):
+        return f"code={code}"
+    if (
+        isinstance(code, str)
+        and len(code) <= 12
+        and code.removeprefix("-").isdigit()
+    ):
+        return f"code={code}"
+    if code is not None:
+        return "code_present"
+    if msg is not None:
+        return "message_present"
+    return "response=dict"
 
 
 class CCXTBot(Passivbot):
@@ -98,6 +107,7 @@ class CCXTBot(Passivbot):
         self.quote = self.user_info.get("quote", "USDT")
         self._live_margin_modes = {}
         self._blocked_margin_symbols_warned = set()
+        self._blocked_margin_symbols_evented = set()
 
     # ═══════════════════ ORDER WATCHING HOOKS ═══════════════════
 
@@ -508,7 +518,9 @@ class CCXTBot(Passivbot):
         res = await self.cca.set_position_mode(True)
         elapsed_ms = (time.time() - t0) * 1000
         logging.debug("[config] %s: set_position_mode completed in %.1fms", self.exchange, elapsed_ms)
-        logging.debug("[config] set hedge mode response: %s", res)
+        logging.debug(
+            "[config] set hedge mode response: %s", format_exchange_config_response(res)
+        )
 
     def _should_set_margin_mode(self, symbol: str) -> bool:
         """Hook: Should we call set_margin_mode for this symbol?
@@ -802,12 +814,19 @@ class CCXTBot(Passivbot):
     def _filter_approved_symbols(self, pside: str, symbols: set[str]) -> set[str]:
         symbols = super()._filter_approved_symbols(pside, symbols)
         kept = set()
+        newly_unevented_blocked_symbols = set()
         for symbol in symbols:
             policy = self._resolve_margin_policy_for_symbol(symbol)
             if not policy["blocked"]:
                 kept.add(symbol)
                 continue
             warn_key = (pside, symbol, policy["capability"])
+            event_key = (pside, symbol, policy["capability"])
+            if (
+                policy["capability"] == "isolated_only"
+                and event_key not in self._blocked_margin_symbols_evented
+            ):
+                newly_unevented_blocked_symbols.add(symbol)
             if warn_key in self._blocked_margin_symbols_warned:
                 continue
             self._blocked_margin_symbols_warned.add(warn_key)
@@ -821,6 +840,23 @@ class CCXTBot(Passivbot):
                 blocked_reason,
                 getattr(self, "exchange", "this exchange"),
             )
+        if newly_unevented_blocked_symbols:
+            try:
+                emitted = self._emit_isolated_only_market_blocked_event(
+                    pside=pside,
+                    blocked_symbols=newly_unevented_blocked_symbols,
+                )
+            except Exception as exc:
+                logging.debug(
+                    "[event] failed to emit isolated-only market compatibility event: %s",
+                    type(exc).__name__,
+                )
+                emitted = False
+            if emitted:
+                self._blocked_margin_symbols_evented.update(
+                    (pside, symbol, "isolated_only")
+                    for symbol in newly_unevented_blocked_symbols
+                )
         return kept
 
     async def update_exchange_config_by_symbols(self, symbols: list):
@@ -1129,12 +1165,12 @@ class CCXTBot(Passivbot):
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
         # Check for exceptions and trigger error handling if needed
-        any_exceptions = any(isinstance(r, Exception) for r in results)
-        if any_exceptions:
-            for i, result in enumerate(results):
-                if isinstance(result, Exception):
-                    logging.error(f"error executing order {orders[i]}: {result}")
-            await self.restart_bot_on_too_many_errors()
+        failures = [
+            ("create", orders[i], result)
+            for i, result in enumerate(results)
+            if isinstance(result, Exception)
+        ]
+        await self._handle_order_write_failures(failures)
 
         return results
 
@@ -1146,11 +1182,11 @@ class CCXTBot(Passivbot):
         tasks = [self.execute_cancellation(order) for order in orders]
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
-        any_exceptions = any(isinstance(r, Exception) for r in results)
-        if any_exceptions:
-            for i, result in enumerate(results):
-                if isinstance(result, Exception):
-                    logging.error(f"error cancelling order {orders[i]}: {result}")
-            await self.restart_bot_on_too_many_errors()
+        failures = [
+            ("cancel", orders[i], result)
+            for i, result in enumerate(results)
+            if isinstance(result, Exception)
+        ]
+        await self._handle_order_write_failures(failures)
 
         return results

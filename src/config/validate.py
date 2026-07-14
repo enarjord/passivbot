@@ -1,8 +1,19 @@
 import math
 
 from .access import require_config_dict
-from .bot import validate_bot_config, validate_forager_config
+from .bot import (
+    normalize_twel_enforcer_policy,
+    validate_bot_config,
+    validate_forager_config,
+)
 from .coerce import normalize_hsl_cooldown_position_policy, normalize_hsl_signal_mode
+from .shared_bot import get_grouped_bot_value
+from .strategy import (
+    BOT_POSITION_SIDES,
+    get_active_strategy_side,
+    normalize_strategy_kind,
+)
+from risk_limits import normalize_we_excess_allowance_mode
 
 
 def validate_config(
@@ -12,14 +23,65 @@ def validate_config(
     from optimization.config_adapter import validate_optimize_bounds_against_bot_config
 
     require_config_dict(config, "monitor")
+    strategy_kind = normalize_strategy_kind(config["live"].get("strategy_kind"))
     optimize_bounds = (
         raw_optimize.get("bounds")
         if isinstance(raw_optimize, dict)
         and isinstance(raw_optimize.get("bounds"), dict)
         else config.get("optimize", {}).get("bounds", {})
     )
+    validate_optimize_bounds_against_bot_config(config, optimize_bounds)
     validate_bot_config(config)
-    validate_optimize_bounds_against_bot_config(config["bot"], optimize_bounds)
+    for pside in BOT_POSITION_SIDES:
+        bot_side = require_config_dict(config, f"bot.{pside}")
+        require_config_dict(bot_side, "strategy")
+        entry_cooldown_minutes = float(
+            get_grouped_bot_value(bot_side, "risk_entry_cooldown_minutes", 0.0) or 0.0
+        )
+        if entry_cooldown_minutes < 0.0:
+            raise ValueError(f"bot.{pside}.risk.entry_cooldown_minutes must be >= 0.0")
+        normalize_we_excess_allowance_mode(
+            get_grouped_bot_value(bot_side, "risk_we_excess_allowance_mode"),
+            path=f"bot.{pside}.risk.we_excess_allowance_mode",
+        )
+        normalize_twel_enforcer_policy(
+            get_grouped_bot_value(bot_side, "risk_twel_enforcer_policy"),
+            path=f"bot.{pside}.risk.total_exposure_enforcer_policy",
+        )
+        active_strategy = get_active_strategy_side(bot_side, strategy_kind=strategy_kind, pside=pside)
+        if not isinstance(active_strategy, dict) or not active_strategy:
+            raise ValueError(
+                f"bot.{pside}.strategy.{strategy_kind} must be a non-empty dict for active strategy_kind"
+            )
+    coin_overrides = config.get("coin_overrides")
+    if isinstance(coin_overrides, dict):
+        for coin, override in coin_overrides.items():
+            if not isinstance(override, dict):
+                continue
+            override_bot = override.get("bot")
+            if not isinstance(override_bot, dict):
+                continue
+            for pside in BOT_POSITION_SIDES:
+                override_side = override_bot.get(pside)
+                if not isinstance(override_side, dict):
+                    continue
+                if "risk_we_excess_allowance_mode" in override_side:
+                    normalize_we_excess_allowance_mode(
+                        override_side.get("risk_we_excess_allowance_mode"),
+                        path=(
+                            f"coin_overrides.{coin}.bot.{pside}."
+                            "risk_we_excess_allowance_mode"
+                        ),
+                    )
+                risk_cfg = override_side.get("risk")
+                if isinstance(risk_cfg, dict) and "we_excess_allowance_mode" in risk_cfg:
+                    normalize_we_excess_allowance_mode(
+                        risk_cfg.get("we_excess_allowance_mode"),
+                        path=(
+                            f"coin_overrides.{coin}.bot.{pside}.risk."
+                            "we_excess_allowance_mode"
+                        ),
+                    )
     normalize_hsl_signal_mode(config["live"]["hsl_signal_mode"])
     normalize_hsl_cooldown_position_policy(
         config["live"]["hsl_position_during_cooldown_policy"]

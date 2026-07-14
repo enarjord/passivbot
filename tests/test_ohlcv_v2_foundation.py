@@ -39,6 +39,24 @@ def test_store_writes_and_reads_partial_month_range(tmp_path):
     np.testing.assert_allclose(out.values, vals)
 
 
+def test_store_rejects_unaligned_vectorized_timestamps(tmp_path):
+    catalog = OhlcvCatalog(tmp_path / "caches" / "ohlcvs" / "catalog.sqlite")
+    store = OhlcvStore(tmp_path / "caches" / "ohlcvs", catalog)
+
+    base = month_start_ts(2026, 4)
+    ts = np.array([base, base + 30_000], dtype=np.int64)
+    vals = np.array(
+        [
+            [101.0, 99.0, 100.0, 10.0],
+            [102.0, 100.0, 101.0, 11.0],
+        ],
+        dtype=np.float32,
+    )
+
+    with pytest.raises(ValueError, match="align"):
+        store.write_rows("binance", "1m", "BTC/USDT", ts, vals)
+
+
 def test_due_persistent_gap_remains_visible_to_planner(tmp_path):
     catalog = OhlcvCatalog(tmp_path / "caches" / "ohlcvs" / "catalog.sqlite")
     start = month_start_ts(2026, 4)
@@ -502,6 +520,36 @@ def test_materialize_frames_does_not_make_internal_synthetic_gap_tradable(tmp_pa
     assert handle.mss["ETH"]["synthetic_gap_fill_count"] == 9
 
 
+def test_materialize_frames_can_mark_synthetic_gaps_tradable_for_stock_source(tmp_path):
+    start = month_start_ts(2026, 4)
+    timestamps = np.array([start + idx * 60_000 for idx in range(11)], dtype=np.int64)
+    aligned = np.full((11, 4), np.nan, dtype=np.float64)
+    aligned[0] = np.array([101.0, 99.0, 100.0, 10.0])
+    aligned[10] = np.array([111.0, 109.0, 110.0, 20.0])
+
+    handle = materialize_frames(
+        output_root=tmp_path / "materialized",
+        exchange="hyperliquid",
+        coins=["xyz:AAPL"],
+        timestamps=timestamps,
+        aligned_values_by_coin={"xyz:AAPL": aligned},
+        btc_usd_prices=np.linspace(30_000.0, 30_100.0, len(timestamps)),
+        mss={"xyz:AAPL": {}},
+        run_id="frame_stock_internal_gap",
+        synthetic_gaps_tradable=True,
+    )
+
+    hlcvs = handle.open_hlcvs()
+    np.testing.assert_allclose(hlcvs[1:10, 0, :3], np.full((9, 3), 100.0))
+    np.testing.assert_allclose(hlcvs[1:10, 0, 3], np.zeros(9))
+    assert handle.mss["xyz:AAPL"]["first_valid_index"] == 0
+    assert handle.mss["xyz:AAPL"]["last_valid_index"] == 10
+    assert handle.mss["xyz:AAPL"]["source_first_valid_index"] == 0
+    assert handle.mss["xyz:AAPL"]["source_last_valid_index"] == 10
+    assert handle.mss["xyz:AAPL"]["synthetic_gap_fill_count"] == 9
+    assert handle.mss["xyz:AAPL"]["synthetic_gap_fill_tradable"] is True
+
+
 def test_materializer_can_fill_accepted_edge_sparse_gaps(tmp_path):
     catalog = OhlcvCatalog(tmp_path / "caches" / "ohlcvs" / "catalog.sqlite")
     store = OhlcvStore(tmp_path / "caches" / "ohlcvs", catalog)
@@ -537,6 +585,43 @@ def test_materializer_can_fill_accepted_edge_sparse_gaps(tmp_path):
     assert handle.mss["ETH/USDT"]["coverage_leading_missing_minutes"] == 1
     assert handle.mss["ETH/USDT"]["synthetic_gap_fill_count"] == 1
     assert handle.mss["ETH/USDT"]["synthetic_gap_fill_source"] == "previous_or_edge_close"
+
+
+def test_materializer_can_mark_synthetic_edge_gaps_tradable_for_stock_source(tmp_path):
+    catalog = OhlcvCatalog(tmp_path / "caches" / "ohlcvs" / "catalog.sqlite")
+    store = OhlcvStore(tmp_path / "caches" / "ohlcvs", catalog)
+
+    start = month_start_ts(2026, 4)
+    end = start + 2 * 60_000
+    ts = np.array([start + 60_000], dtype=np.int64)
+    vals = np.array([[101.0, 99.0, 100.0, 10.0]], dtype=np.float32)
+    store.write_rows("hyperliquid", "1m", "xyz:AAPL", ts, vals)
+
+    handle = BacktestDatasetMaterializer(
+        store, tmp_path / "caches" / "ohlcvs" / "materialized"
+    ).materialize(
+        exchange="hyperliquid",
+        coins=["xyz:AAPL"],
+        start_ts=int(start),
+        end_ts=int(end),
+        btc_usd_prices=np.array([30_000.0, 30_100.0, 30_200.0]),
+        mss={"xyz:AAPL": {}},
+        run_id="stock_edge_sparse_fill",
+        fill_edge_gaps=True,
+        synthetic_gaps_tradable=True,
+    )
+
+    hlcvs = handle.open_hlcvs()
+    np.testing.assert_allclose(hlcvs[0, 0, :3], np.array([100.0, 100.0, 100.0]))
+    np.testing.assert_allclose(hlcvs[1, 0, :3], vals[0, :3].astype(np.float64))
+    np.testing.assert_allclose(hlcvs[2, 0, :3], np.array([100.0, 100.0, 100.0]))
+    np.testing.assert_allclose(hlcvs[:, 0, 3], np.array([0.0, 10.0, 0.0]))
+    assert handle.mss["xyz:AAPL"]["first_valid_index"] == 0
+    assert handle.mss["xyz:AAPL"]["last_valid_index"] == 2
+    assert handle.mss["xyz:AAPL"]["source_first_valid_index"] == 1
+    assert handle.mss["xyz:AAPL"]["source_last_valid_index"] == 1
+    assert handle.mss["xyz:AAPL"]["synthetic_gap_fill_count"] == 2
+    assert handle.mss["xyz:AAPL"]["synthetic_gap_fill_tradable"] is True
 
 
 def test_materializer_records_trailing_unavailable_coverage(tmp_path):
@@ -706,3 +791,38 @@ def test_materialize_frames_fills_internal_sparse_gaps(tmp_path):
     assert handle.mss["ETH"]["source_first_valid_index"] == 0
     assert handle.mss["ETH"]["source_last_valid_index"] == 2
     assert handle.mss["ETH"]["synthetic_gap_fill_count"] == 1
+
+
+def test_chunk_checksum_matches_tobytes_reference(tmp_path):
+    """Checksum format is a compatibility contract with checksums already
+    registered in existing catalogs: it must equal the original
+    tobytes(order="C")-based formula exactly."""
+    import hashlib
+
+    catalog = OhlcvCatalog(tmp_path / "caches" / "ohlcvs" / "catalog.sqlite")
+    store = OhlcvStore(tmp_path / "caches" / "ohlcvs", catalog)
+
+    start = month_start_ts(2026, 4)
+    ts = np.array([start, start + 60_000, start + 120_000], dtype=np.int64)
+    vals = np.array(
+        [
+            [101.0, 99.0, 100.0, 10.0],
+            [102.0, 100.0, 101.0, 11.0],
+            [103.0, 101.0, 102.0, 12.0],
+        ],
+        dtype=np.float32,
+    )
+    store.write_rows("binance", "1m", "BTC/USDT", ts, vals)
+    chunk = catalog.list_chunks("binance", "1m", "BTC/USDT", int(ts[0]), int(ts[-1]))[0]
+
+    hasher = hashlib.sha256()
+    body = np.ascontiguousarray(np.load(chunk.body_path))
+    valid = np.ascontiguousarray(np.load(chunk.valid_path))
+    hasher.update(str(body.dtype).encode("utf-8"))
+    hasher.update(str(body.shape).encode("utf-8"))
+    hasher.update(body.tobytes(order="C"))
+    hasher.update(str(valid.dtype).encode("utf-8"))
+    hasher.update(str(valid.shape).encode("utf-8"))
+    hasher.update(valid.tobytes(order="C"))
+
+    assert chunk.checksum == hasher.hexdigest()

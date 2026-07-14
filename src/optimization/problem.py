@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import logging
+import os
+import time
 from typing import Any, Sequence
 
 import numpy as np
@@ -8,12 +11,42 @@ from pymoo.core.problem import ElementwiseProblem
 from optimization.backend_shared import drain_async_results
 from optimization.bounds import Bound
 from optimization.callback import build_pymoo_record_entry
+from optimization.evaluation_payload import unpack_evaluation_payload
+from optimization.random_seed import seed_worker_rngs
 
 
 _PYMOO_WORKER_EVALUATOR = None
 _PYMOO_WORKER_OVERRIDES_LIST: list[str] = []
 _PYMOO_WORKER_N_OBJ = 0
 _PYMOO_WORKER_HAS_CONSTRAINTS = False
+OPTIMIZE_PROFILE_ENV = "PASSIVBOT_OPTIMIZE_PROFILE"
+
+
+def _optimize_profile_enabled() -> bool:
+    return os.environ.get(OPTIMIZE_PROFILE_ENV, "").strip().lower() in {
+        "1",
+        "true",
+        "t",
+        "yes",
+        "y",
+    }
+
+
+def _set_pymoo_worker_globals(
+    evaluator,
+    overrides_list: Sequence[str] | None,
+    n_obj: int,
+    has_constraints: bool,
+) -> None:
+    global _PYMOO_WORKER_EVALUATOR
+    global _PYMOO_WORKER_OVERRIDES_LIST
+    global _PYMOO_WORKER_N_OBJ
+    global _PYMOO_WORKER_HAS_CONSTRAINTS
+
+    _PYMOO_WORKER_EVALUATOR = evaluator
+    _PYMOO_WORKER_OVERRIDES_LIST = list(overrides_list or [])
+    _PYMOO_WORKER_N_OBJ = int(n_obj)
+    _PYMOO_WORKER_HAS_CONSTRAINTS = bool(has_constraints)
 
 
 def initialize_pymoo_worker(
@@ -21,19 +54,13 @@ def initialize_pymoo_worker(
     overrides_list: Sequence[str] | None,
     n_obj: int,
     has_constraints: bool,
+    rng_seed: int | None = None,
     ignore_sigint_in_worker=None,
 ) -> None:
-    global _PYMOO_WORKER_EVALUATOR
-    global _PYMOO_WORKER_OVERRIDES_LIST
-    global _PYMOO_WORKER_N_OBJ
-    global _PYMOO_WORKER_HAS_CONSTRAINTS
-
+    seed_worker_rngs(rng_seed, context="pymoo optimizer")
     if ignore_sigint_in_worker is not None:
         ignore_sigint_in_worker()
-    _PYMOO_WORKER_EVALUATOR = evaluator
-    _PYMOO_WORKER_OVERRIDES_LIST = list(overrides_list or [])
-    _PYMOO_WORKER_N_OBJ = int(n_obj)
-    _PYMOO_WORKER_HAS_CONSTRAINTS = bool(has_constraints)
+    _set_pymoo_worker_globals(evaluator, overrides_list, n_obj, has_constraints)
 
 
 def _evaluate_pymoo_worker(
@@ -44,10 +71,14 @@ def _evaluate_pymoo_worker(
     has_constraints: bool,
 ) -> dict[str, Any]:
     evaluated_vector = list(float(v) for v in vector)
-    objectives, constraint_violation, metrics = evaluator.evaluate(
-        evaluated_vector,
-        list(overrides_list or []),
+    objectives, constraint_violation, metrics, payload_vector = unpack_evaluation_payload(
+        evaluator.evaluate(
+            evaluated_vector,
+            list(overrides_list or []),
+        )
     )
+    if payload_vector is not None:
+        evaluated_vector = list(float(v) for v in payload_vector)
     objectives_arr = np.asarray(objectives, dtype=np.float64)
     if len(objectives_arr) != int(n_obj):
         raise ValueError(
@@ -90,10 +121,14 @@ class PymooEvaluatorAdapter:
 
     def evaluate(self, vector: Sequence[float]) -> dict[str, Any]:
         evaluated_vector = list(float(v) for v in vector)
-        objectives, constraint_violation, metrics = self.evaluator.evaluate(
-            evaluated_vector,
-            self.overrides_list,
+        objectives, constraint_violation, metrics, payload_vector = unpack_evaluation_payload(
+            self.evaluator.evaluate(
+                evaluated_vector,
+                self.overrides_list,
+            )
         )
+        if payload_vector is not None:
+            evaluated_vector = list(float(v) for v in payload_vector)
         return {
             "objectives": list(objectives),
             "constraint_violation": float(constraint_violation),
@@ -129,6 +164,8 @@ class PymooAsyncRecordingRunner:
         self.poll_interval_seconds = max(0.0, float(poll_interval_seconds))
 
     def _record_result(self, vector, metrics) -> None:
+        profile_enabled = _optimize_profile_enabled()
+        started = time.perf_counter() if profile_enabled else 0.0
         entry = build_pymoo_record_entry(
             vector=vector,
             metrics=metrics,
@@ -138,10 +175,16 @@ class PymooAsyncRecordingRunner:
             overrides_list=self.overrides_list,
         )
         self.recorder.record(entry)
+        if profile_enabled:
+            logging.info(
+                "[opt-profile] record_result_ms=%.3f metrics_keys=%d",
+                (time.perf_counter() - started) * 1000.0,
+                len(metrics) if isinstance(metrics, dict) else 0,
+            )
 
     def __call__(self, _f, X):
         xs = list(X)
-        initialize_pymoo_worker(
+        _set_pymoo_worker_globals(
             self.evaluator,
             self.overrides_list,
             self.n_obj,

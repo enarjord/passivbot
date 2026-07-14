@@ -39,8 +39,8 @@ def test_close_orders_are_not_filtered_by_deprecated_price_distance_gate():
     close_type_id = pbr.order_type_snake_to_id("close_grid_long")
     ideal_orders = {
         symbol: [
-            (0.5, 101.0, "close_grid_long", close_type_id),
-            (0.5, 104.0, "close_grid_long", close_type_id),
+            (0.5, 101.0, "close_grid_long", close_type_id, "limit"),
+            (0.5, 104.0, "close_grid_long", close_type_id, "limit"),
         ]
     }
 

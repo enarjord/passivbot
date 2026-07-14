@@ -12,8 +12,9 @@ these tests need to run in a tight loop when the refactor lands.
 from copy import deepcopy
 
 import numpy as np
+import pytest
 
-from backtest import build_backtest_payload
+from backtest import _validate_hlcvs_valid_windows, build_backtest_payload
 from config_utils import get_template_config
 
 
@@ -115,6 +116,196 @@ def test_build_backtest_payload_keeps_per_side_approved_coin_universe():
     assert payload.bot_params_list[coin4_idx]["short"]["wallet_exposure_limit"] != 0.0
 
 
+def test_build_backtest_payload_marks_normal_forced_coin_active():
+    start_ts = 1609459200000
+    n_minutes = 60
+    config = _base_config(candle_interval_minutes=1)
+    config["backtest"]["coins"] = {"binance": ["BTC", "OM"]}
+    config["live"]["approved_coins"] = {"long": ["BTC", "OM"], "short": []}
+    config["live"]["ignored_coins"] = {"long": [], "short": []}
+    config["bot"]["long"]["total_wallet_exposure_limit"] = 1.0
+    config["bot"]["long"]["n_positions"] = 2
+    config["coin_overrides"] = {"OM": {"live": {"forced_mode_long": "normal"}}}
+    mss = {
+        coin: {
+            "qty_step": 0.001,
+            "price_step": 0.1,
+            "min_qty": 0.0,
+            "min_cost": 0.0,
+            "c_mult": 1.0,
+            "maker": 0.0002,
+            "taker": 0.0005,
+            "exchange": "binance",
+        }
+        for coin in ["BTC", "OM"]
+    }
+    mss["__meta__"] = {
+        "requested_start_ts": int(start_ts),
+        "requested_start_date": "2021-01-01",
+        "warmup_minutes_requested": 0,
+    }
+    timestamps = np.arange(
+        start_ts, start_ts + n_minutes * 60_000, 60_000, dtype=np.int64
+    )
+    hlcvs = np.ones((n_minutes, 2, 4), dtype=np.float64)
+    btc_usd_prices = np.full(n_minutes, 20_000.0, dtype=np.float64)
+
+    payload = build_backtest_payload(hlcvs, mss, config, "binance", btc_usd_prices, timestamps)
+    om_idx = payload.backtest_params["coins"].index("OM")
+
+    assert payload.bot_params_list[om_idx]["long"]["is_forced_active"] is True
+    assert payload.bot_params_list[om_idx]["short"]["is_forced_active"] is False
+
+
+def test_build_backtest_payload_applies_market_settings_override():
+    start_ts = 1609459200000
+    n_minutes = 60
+    config = _base_config(candle_interval_minutes=1)
+    config["backtest"]["coins"] = {"binance": ["TON"]}
+    config["live"]["approved_coins"] = {"long": ["TON"], "short": []}
+    config["live"]["ignored_coins"] = {"long": [], "short": []}
+    config["backtest"]["market_settings"] = {"overrides": {"TON": {"c_mult": 1.0}}}
+    mss = {
+        "TON": {
+            "qty_step": 0.01,
+            "price_step": 0.001,
+            "min_qty": 0.01,
+            "min_cost": 5.0,
+            "c_mult": None,
+            "maker": 0.0002,
+            "taker": 0.0005,
+            "exchange": "binance",
+        },
+        "__meta__": {
+            "requested_start_ts": int(start_ts),
+            "requested_start_date": "2021-01-01",
+            "warmup_minutes_requested": 0,
+        },
+    }
+    hlcvs, btc_usd_prices, timestamps = _synthetic_1m_hlcvs(n_minutes, start_ts)
+
+    payload = build_backtest_payload(hlcvs, mss, config, "binance", btc_usd_prices, timestamps)
+
+    assert payload.exchange_params[0]["c_mult"] == 1.0
+    assert payload.bundle.meta["coins"][0]["c_mult"] == 1.0
+    assert mss["TON"]["c_mult"] is None
+
+
+def test_build_backtest_payload_prefers_exchange_market_settings_override():
+    start_ts = 1609459200000
+    n_minutes = 60
+    config = _base_config(candle_interval_minutes=1)
+    config["backtest"]["coins"] = {"combined": ["TON"]}
+    config["live"]["approved_coins"] = {"long": ["TON"], "short": []}
+    config["live"]["ignored_coins"] = {"long": [], "short": []}
+    config["backtest"]["market_settings"] = {
+        "overrides": {"TON": {"c_mult": 1.0}},
+        "overrides_by_exchange": {"bybit": {"TON": {"c_mult": 0.1}}},
+    }
+    mss = {
+        "TON": {
+            "qty_step": 0.01,
+            "price_step": 0.001,
+            "min_qty": 0.01,
+            "min_cost": 5.0,
+            "c_mult": None,
+            "maker": 0.0002,
+            "taker": 0.0005,
+            "exchange": "bybit",
+        },
+        "__meta__": {
+            "requested_start_ts": int(start_ts),
+            "requested_start_date": "2021-01-01",
+            "warmup_minutes_requested": 0,
+        },
+    }
+    hlcvs, btc_usd_prices, timestamps = _synthetic_1m_hlcvs(n_minutes, start_ts)
+
+    payload = build_backtest_payload(hlcvs, mss, config, "combined", btc_usd_prices, timestamps)
+
+    assert payload.exchange_params[0]["c_mult"] == 0.1
+    assert payload.bundle.meta["coins"][0]["c_mult"] == 0.1
+
+
+def test_build_backtest_payload_defaults_missing_c_mult_with_warning(caplog):
+    start_ts = 1609459200000
+    n_minutes = 60
+    config = _base_config(candle_interval_minutes=1)
+    config["backtest"]["coins"] = {"binance": ["TON"]}
+    config["live"]["approved_coins"] = {"long": ["TON"], "short": []}
+    config["live"]["ignored_coins"] = {"long": [], "short": []}
+    mss = {
+        "TON": {
+            "qty_step": 0.01,
+            "price_step": 0.001,
+            "min_qty": 0.01,
+            "min_cost": 5.0,
+            "c_mult": None,
+            "maker": 0.0002,
+            "taker": 0.0005,
+            "exchange": "binance",
+        },
+        "__meta__": {
+            "requested_start_ts": int(start_ts),
+            "requested_start_date": "2021-01-01",
+            "warmup_minutes_requested": 0,
+        },
+    }
+    hlcvs, btc_usd_prices, timestamps = _synthetic_1m_hlcvs(n_minutes, start_ts)
+
+    caplog.set_level("WARNING")
+
+    payload = build_backtest_payload(hlcvs, mss, config, "binance", btc_usd_prices, timestamps)
+
+    assert payload.exchange_params[0]["c_mult"] == 1.0
+    assert payload.bundle.meta["coins"][0]["c_mult"] == 1.0
+    assert "market settings TON.c_mult missing" in caplog.text
+    assert "defaulting to c_mult=1.0 for this backtest only" in caplog.text
+    assert "forager volume selection" in caplog.text
+    assert "backtest.market_settings.overrides_by_exchange.binance.TON.c_mult" in caplog.text
+
+    caplog.clear()
+    payload = build_backtest_payload(hlcvs, mss, config, "binance", btc_usd_prices, timestamps)
+
+    assert payload.exchange_params[0]["c_mult"] == 1.0
+    assert "market settings TON.c_mult missing" in caplog.text
+    assert "defaulting to c_mult=1.0 for this backtest only" in caplog.text
+
+
+@pytest.mark.parametrize("bad_c_mult", ["bad", float("nan"), float("inf")])
+def test_build_backtest_payload_rejects_invalid_explicit_c_mult(bad_c_mult):
+    start_ts = 1609459200000
+    n_minutes = 60
+    config = _base_config(candle_interval_minutes=1)
+    config["backtest"]["coins"] = {"binance": ["TON"]}
+    config["live"]["approved_coins"] = {"long": ["TON"], "short": []}
+    config["live"]["ignored_coins"] = {"long": [], "short": []}
+    config["backtest"]["market_settings"] = {
+        "overrides": {"TON": {"c_mult": bad_c_mult}}
+    }
+    mss = {
+        "TON": {
+            "qty_step": 0.01,
+            "price_step": 0.001,
+            "min_qty": 0.01,
+            "min_cost": 5.0,
+            "c_mult": None,
+            "maker": 0.0002,
+            "taker": 0.0005,
+            "exchange": "binance",
+        },
+        "__meta__": {
+            "requested_start_ts": int(start_ts),
+            "requested_start_date": "2021-01-01",
+            "warmup_minutes_requested": 0,
+        },
+    }
+    hlcvs, btc_usd_prices, timestamps = _synthetic_1m_hlcvs(n_minutes, start_ts)
+
+    with pytest.raises((TypeError, ValueError), match=r"market settings TON\.c_mult"):
+        build_backtest_payload(hlcvs, mss, config, "binance", btc_usd_prices, timestamps)
+
+
 def test_build_backtest_payload_does_not_mutate_mss():
     """Pin the function as a pure consumer of `mss`. Covers the root cause
     of the re-entrance bug: callers that reuse `mss` across calls must see
@@ -185,6 +376,44 @@ def test_build_backtest_payload_honors_explicit_warmup_provided_override():
     assert payload.bundle.meta["warmup_minutes_provided"] == 99
 
 
+def test_build_backtest_payload_clamps_trade_start_to_requested_start():
+    requested_start_ts = 1609459200000
+    effective_start_ts = requested_start_ts - 100 * 60_000
+    n_minutes = 180
+    config = _base_config(candle_interval_minutes=1)
+    mss = _base_mss(requested_start_ts)
+    mss["BTC"]["first_valid_index"] = 0
+    mss["BTC"]["last_valid_index"] = n_minutes - 1
+    mss["BTC"]["warmup_minutes"] = 30
+    hlcvs, btc, timestamps = _synthetic_1m_hlcvs(n_minutes, effective_start_ts)
+
+    payload = build_backtest_payload(hlcvs, mss, config, "binance", btc, timestamps)
+
+    assert payload.backtest_params["warmup_minutes"] == [30]
+    assert payload.backtest_params["trade_start_indices"] == [100]
+
+
+def test_build_backtest_payload_uses_global_warmup_floor(monkeypatch):
+    start_ts = 1609459200000
+    n_minutes = 180
+    config = _base_config(candle_interval_minutes=1)
+    mss = _base_mss(start_ts)
+    mss["BTC"]["first_valid_index"] = 0
+    mss["BTC"]["last_valid_index"] = n_minutes - 1
+    mss["BTC"]["warmup_minutes"] = 30
+    hlcvs, btc, timestamps = _synthetic_1m_hlcvs(n_minutes, start_ts)
+    monkeypatch.setattr(
+        "backtest.compute_per_coin_warmup_minutes",
+        lambda _config: {"__default__": 30, "BTC": 30},
+    )
+    monkeypatch.setattr("backtest.compute_backtest_warmup_minutes", lambda _config: 100)
+
+    payload = build_backtest_payload(hlcvs, mss, config, "binance", btc, timestamps)
+
+    assert payload.backtest_params["warmup_minutes"] == [100]
+    assert payload.backtest_params["trade_start_indices"] == [100]
+
+
 def test_build_backtest_payload_propagates_metrics_only_flag():
     start_ts = 1609459200000
     n_minutes = 60
@@ -203,6 +432,233 @@ def test_build_backtest_payload_propagates_metrics_only_flag():
     )
 
     assert payload.backtest_params["metrics_only"] is True
+
+
+def test_build_backtest_payload_propagates_skip_btc_analysis_hint():
+    start_ts = 1609459200000
+    n_minutes = 60
+    config = _base_config(candle_interval_minutes=1)
+    mss = _base_mss(start_ts)
+    hlcvs, btc, timestamps = _synthetic_1m_hlcvs(n_minutes, start_ts)
+
+    payload = build_backtest_payload(
+        hlcvs,
+        mss,
+        config,
+        "binance",
+        btc,
+        timestamps,
+        metrics_only=True,
+        skip_btc_analysis=True,
+    )
+
+    assert payload.backtest_params["metrics_only"] is True
+    assert payload.backtest_params["skip_btc_analysis"] is True
+
+
+def test_hlcvs_valid_window_rejects_nonfinite_price_inside_valid_window():
+    start_ts = 1609459200000
+    n_minutes = 10
+    mss = _base_mss(start_ts)
+    mss["BTC"]["first_valid_index"] = 0
+    mss["BTC"]["last_valid_index"] = n_minutes - 1
+    hlcvs, _btc, timestamps = _synthetic_1m_hlcvs(n_minutes, start_ts)
+    hlcvs[4, 0, 2] = np.nan
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            r"non-finite HLCV value inside valid backtest window: "
+            r"coin=BTC .* k=4 .* field=close"
+        ),
+    ):
+        _validate_hlcvs_valid_windows(
+            hlcvs,
+            timestamps,
+            ["BTC"],
+            [mss["BTC"]["first_valid_index"]],
+            [mss["BTC"]["last_valid_index"]],
+        )
+
+
+def test_hlcvs_valid_window_rejects_nonfinite_volume_inside_valid_window():
+    start_ts = 1609459200000
+    n_minutes = 10
+    mss = _base_mss(start_ts)
+    mss["BTC"]["first_valid_index"] = 0
+    mss["BTC"]["last_valid_index"] = n_minutes - 1
+    hlcvs, _btc, timestamps = _synthetic_1m_hlcvs(n_minutes, start_ts)
+    hlcvs[4, 0, 3] = np.nan
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            r"non-finite HLCV value inside valid backtest window: "
+            r"coin=BTC .* k=4 .* field=volume"
+        ),
+    ):
+        _validate_hlcvs_valid_windows(
+            hlcvs,
+            timestamps,
+            ["BTC"],
+            [mss["BTC"]["first_valid_index"]],
+            [mss["BTC"]["last_valid_index"]],
+        )
+
+
+def test_build_backtest_payload_allows_sparse_nan_outside_valid_window():
+    start_ts = 1609459200000
+    n_minutes = 10
+    config = _base_config(candle_interval_minutes=1)
+    mss = _base_mss(start_ts)
+    mss["BTC"]["first_valid_index"] = 2
+    mss["BTC"]["last_valid_index"] = 7
+    hlcvs, btc, timestamps = _synthetic_1m_hlcvs(n_minutes, start_ts)
+    hlcvs[0:2, 0, :] = np.nan
+    hlcvs[8:, 0, :] = np.nan
+
+    payload = build_backtest_payload(hlcvs, mss, config, "binance", btc, timestamps)
+
+    assert payload.backtest_params["first_valid_indices"] == [2]
+    assert payload.backtest_params["last_valid_indices"] == [7]
+
+
+def test_hlcvs_valid_window_rejects_nonfinite_close_inside_valid_window():
+    start_ts = 1609459200000
+    n_minutes = 10
+    mss = _base_mss(start_ts)
+    mss["BTC"]["first_valid_index"] = 0
+    mss["BTC"]["last_valid_index"] = n_minutes - 1
+    hlcvs, _btc, timestamps = _synthetic_1m_hlcvs(n_minutes, start_ts)
+    hlcvs[3, 0, 2] = np.nan
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            r"non-finite HLCV value inside valid backtest window: "
+            r"coin=BTC .* k=3 .* field=close"
+        ),
+    ):
+        _validate_hlcvs_valid_windows(
+            hlcvs,
+            timestamps,
+            ["BTC"],
+            [mss["BTC"]["first_valid_index"]],
+            [mss["BTC"]["last_valid_index"]],
+        )
+
+
+def test_build_backtest_payload_excludes_trailing_partial_aggregated_valid_window():
+    start_ts = 1609459200000
+    n_minutes = 10
+    config = _base_config(candle_interval_minutes=2)
+    mss = _base_mss(start_ts)
+    mss["BTC"]["first_valid_index"] = 0
+    mss["BTC"]["last_valid_index"] = 8
+    hlcvs, btc, timestamps = _synthetic_1m_hlcvs(n_minutes, start_ts)
+    hlcvs[9, 0, :] = np.nan
+
+    payload = build_backtest_payload(hlcvs, mss, config, "binance", btc, timestamps)
+
+    assert payload.backtest_params["first_valid_indices"] == [0]
+    assert payload.backtest_params["last_valid_indices"] == [3]
+    assert np.isnan(payload.bundle.hlcvs[4, 0, 0])
+
+
+def test_build_backtest_payload_marks_no_complete_aggregated_group_inactive():
+    start_ts = 1609459200000
+    n_minutes = 2
+    config = _base_config(candle_interval_minutes=2)
+    mss = _base_mss(start_ts)
+    mss["BTC"]["first_valid_index"] = 0
+    mss["BTC"]["last_valid_index"] = 0
+    hlcvs, btc, timestamps = _synthetic_1m_hlcvs(n_minutes, start_ts)
+    hlcvs[1, 0, :] = np.nan
+
+    payload = build_backtest_payload(hlcvs, mss, config, "binance", btc, timestamps)
+
+    assert payload.backtest_params["first_valid_indices"] == [1]
+    assert payload.backtest_params["last_valid_indices"] == [0]
+    assert payload.backtest_params["trade_start_indices"] == [1]
+
+
+def test_build_backtest_payload_allows_empty_multicoin_valid_window():
+    start_ts = 1609459200000
+    n_minutes = 10
+    coins = ["BTC", "EMPTY"]
+    config = _base_config(candle_interval_minutes=1)
+    config["backtest"]["coins"] = {"binance": coins}
+    config["live"]["approved_coins"] = {"long": coins, "short": []}
+    config["live"]["ignored_coins"] = {"long": [], "short": []}
+    config["bot"]["long"]["total_wallet_exposure_limit"] = 1.0
+    config["bot"]["long"]["n_positions"] = 2
+    mss = {
+        coin: {
+            "qty_step": 0.001,
+            "price_step": 0.1,
+            "min_qty": 0.0,
+            "min_cost": 0.0,
+            "c_mult": 1.0,
+            "maker": 0.0002,
+            "taker": 0.0005,
+            "exchange": "binance",
+        }
+        for coin in coins
+    }
+    mss["BTC"]["first_valid_index"] = 0
+    mss["BTC"]["last_valid_index"] = n_minutes - 1
+    mss["EMPTY"]["first_valid_index"] = n_minutes
+    mss["EMPTY"]["last_valid_index"] = n_minutes
+    mss["__meta__"] = {
+        "requested_start_ts": int(start_ts),
+        "requested_start_date": "2021-01-01",
+        "warmup_minutes_requested": 0,
+    }
+    timestamps = np.arange(
+        start_ts, start_ts + n_minutes * 60_000, 60_000, dtype=np.int64
+    )
+    hlcvs = np.ones((n_minutes, len(coins), 4), dtype=np.float64)
+    hlcvs[:, 1, :] = np.nan
+    btc = np.full(n_minutes, 20_000.0, dtype=np.float64)
+
+    payload = build_backtest_payload(hlcvs, mss, config, "binance", btc, timestamps)
+
+    assert payload.backtest_params["first_valid_indices"] == [0, n_minutes]
+    assert payload.backtest_params["last_valid_indices"] == [n_minutes - 1, n_minutes - 1]
+    assert payload.backtest_params["trade_start_indices"] == [0, n_minutes]
+
+
+def test_build_backtest_payload_reports_active_source_column_for_nonfinite_price():
+    start_ts = 1609459200000
+    n_minutes = 10
+    mss = _base_mss(start_ts)
+    mss["BTC"]["first_valid_index"] = 0
+    mss["BTC"]["last_valid_index"] = n_minutes - 1
+    hlcvs = np.ones((n_minutes, 3, 4), dtype=np.float64)
+    timestamps = np.arange(
+        start_ts, start_ts + n_minutes * 60_000, 60_000, dtype=np.int64
+    )
+    hlcvs[:, :, 0] = 101.0
+    hlcvs[:, :, 1] = 99.0
+    hlcvs[:, :, 2] = 100.0
+    hlcvs[:, :, 3] = 1.0
+    hlcvs[5, 2, 0] = np.inf
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            r"non-finite HLCV value inside valid backtest window: "
+            r"coin=BTC payload_index=0 source_column=2 k=5 .* field=high"
+        ),
+    ):
+        _validate_hlcvs_valid_windows(
+            hlcvs,
+            timestamps,
+            ["BTC"],
+            [mss["BTC"]["first_valid_index"]],
+            [mss["BTC"]["last_valid_index"]],
+            coin_indices=[2],
+        )
 
 
 def test_build_backtest_payload_aggregation_recomputes_effective_start_ts_over_stale_mss():

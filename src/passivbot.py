@@ -39,6 +39,9 @@ from candlestick_manager import (
 from fill_events_manager import (
     FillEventCacheContractError,
     FillEventsManager,
+    GAP_CONFIDENCE_CONFIRMED,
+    GAP_REASON_CONFIRMED,
+    PNL_SOURCE_SYNTHETIC_DEGRADED,
     _build_fetcher_for_bot,
     _extract_symbol_pool,
     compute_psize_pprice,
@@ -48,9 +51,31 @@ from fill_events_manager import (
     signed_fee_paid_from_payload,
 )
 from live import executor, market_data, planning_gates, reconciler, state_refresh
+from live.data_packets import (
+    ACCOUNT_PACKET_KINDS,
+    DataPacketMetadata,
+    build_data_packet_metadata,
+)
 from live.freshness import ACCOUNT_SURFACES, LIVE_STATE_SURFACES, FreshnessLedger
+from live.events import DiagnosticEvent, emit_diagnostic_event, run_diagnostic_step
+from live.event_bus import (
+    ConsoleSummarySink,
+    EventTypes,
+    format_periodic_health_summary,
+    LIVE_EVENT_CONSOLE_ENV,
+    LIVE_EVENT_DEBUG_PROFILE_ENV,
+    LiveEventContext,
+    LiveEventPipeline,
+    MonitorEventSink,
+    ReasonCodes,
+    normalize_live_event_debug_profiles,
+    payload_hash_raw,
+    resolve_live_event_console_enabled,
+)
+import live.event_emitters as live_event_emitters
 from monitor_publisher import MonitorPublisher
 from live.market_snapshot import MarketSnapshot, MarketSnapshotProvider
+from live.planning_availability import PlanningAvailability
 from live.planning_snapshot import PlanningSnapshot
 from passivbot_exceptions import RestartBotException, FatalBotException
 import passivbot_hsl as pb_hsl
@@ -65,10 +90,22 @@ from config.access import (
 )
 from config.coerce import (
     normalize_hsl_cooldown_position_policy,
+    normalize_hsl_restart_after_red_policy,
     normalize_hsl_signal_mode,
 )
+from config.bot import normalize_twel_enforcer_policy
+from config.strategy import (
+    build_runtime_strategy_side,
+    get_active_strategy_side,
+    normalize_strategy_kind,
+)
+from config.shared_bot import get_grouped_bot_value
 from config.pnl_lookback import parse_pnls_max_lookback_days
 from config.overrides import parse_overrides
+from risk_limits import (
+    effective_we_excess_allowance_pct,
+    normalize_we_excess_allowance_mode,
+)
 from logging_setup import (
     configure_logging,
     get_last_log_activity_monotonic,
@@ -96,6 +133,11 @@ from dataclasses import dataclass
 from collections import defaultdict, Counter
 from sortedcontainers import SortedDict
 
+
+class FillHistoryCoverageUnavailable(RuntimeError):
+    """Raised when live risk gates need fill history whose lookback is unproven."""
+
+
 try:
     import psutil  # type: ignore
 except Exception:
@@ -119,6 +161,13 @@ from procedures import (
 )
 from utils import get_file_mod_ms
 from warmup_utils import compute_per_coin_warmup_minutes
+from strategy_warmup import (
+    STRATEGY_WARMUP_1M_PROBE_KEYS,
+    STRATEGY_WARMUP_H1_PROBE_KEYS,
+    strategy_abs_max_weight,
+    strategy_warmup_requirements,
+    strategy_warmup_value,
+)
 import re
 
 NetworkError = ccxt_errors.NetworkError
@@ -424,6 +473,8 @@ def compute_live_warmup_windows(
     bp_lookup: Callable[[str, str, str], float],
     *,
     forager_enabled: Optional[Dict[str, bool]] = None,
+    strategy_lookup: Optional[Callable[[str, str, str], float]] = None,
+    forager_lookup: Optional[Callable[[str, str, str], float]] = None,
     window_candles: Optional[int] = None,
     warmup_ratio: float = 0.0,
     max_warmup_minutes: Optional[int] = None,
@@ -469,15 +520,37 @@ def compute_live_warmup_windows(
 
     def _to_float(val) -> float:
         try:
-            return float(val)
-        except Exception:
-            return 0.0
+            out = float(val)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"invalid live warmup span value: {val!r}") from exc
+        if not math.isfinite(out):
+            raise ValueError(f"invalid live warmup span value: {val!r}")
+        return out
 
     def _get_bp(pside: str, key: str, sym: str) -> float:
         try:
             return _to_float(bp_lookup(pside, key, sym))
-        except Exception:
+        except KeyError:
             return 0.0
+
+    def _get_strategy(pside: str, key: str, sym: str) -> float:
+        if strategy_lookup is not None:
+            return _to_float(strategy_lookup(pside, key, sym))
+        if key == "entry_volatility_ema_span_1h":
+            legacy_hours = _get_bp(pside, "entry_volatility_ema_span_hours", sym)
+            if legacy_hours > 0.0:
+                return legacy_hours
+        return _get_bp(pside, key, sym)
+
+    def _get_forager(pside: str, key: str, sym: str) -> float:
+        if forager_lookup is not None:
+            return _to_float(forager_lookup(pside, key, sym))
+        if key.endswith("_1m"):
+            legacy_key = key[:-3]
+            legacy_value = _get_bp(pside, legacy_key, sym)
+            if legacy_value > 0.0:
+                return legacy_value
+        return _get_bp(pside, key, sym)
 
     if window_candles is not None:
         win = max(1, int(window_candles))
@@ -499,22 +572,18 @@ def compute_live_warmup_windows(
         for pside in ("long", "short"):
             if sym not in symbols_by_side.get(pside, set()):
                 continue
-            max_1m_span = max(
-                max_1m_span,
-                _get_bp(pside, "ema_span_0", sym),
-                _get_bp(pside, "ema_span_1", sym),
-            )
+            for key in STRATEGY_WARMUP_1M_PROBE_KEYS:
+                max_1m_span = max(max_1m_span, _get_strategy(pside, key, sym))
             if (pside == "long" and is_forager_long) or (
                 pside == "short" and is_forager_short
             ):
                 max_1m_span = max(
                     max_1m_span,
-                    _get_bp(pside, "forager_volume_ema_span", sym),
-                    _get_bp(pside, "forager_volatility_ema_span", sym),
+                    _get_forager(pside, "forager_volume_ema_span_1m", sym),
+                    _get_forager(pside, "forager_volatility_ema_span_1m", sym),
                 )
-            max_h1_span = max(
-                max_h1_span, _get_bp(pside, "entry_volatility_ema_span_hours", sym)
-            )
+            for key in STRATEGY_WARMUP_H1_PROBE_KEYS:
+                max_h1_span = max(max_h1_span, _get_strategy(pside, key, sym))
 
         if max_1m_span > 0.0:
             win = int(math.ceil(max_1m_span * span_buffer))
@@ -538,6 +607,140 @@ def compute_live_warmup_windows(
 
 
 class Passivbot:
+    _begin_live_event_cycle = live_event_emitters.begin_live_event_cycle
+    _current_live_event_cycle_id = live_event_emitters.current_live_event_cycle_id
+    _emit_live_cycle_completed = live_event_emitters.emit_live_cycle_completed
+    _emit_live_cycle_degraded = live_event_emitters.emit_live_cycle_degraded
+    _emit_live_event = live_event_emitters.emit_live_event
+    _emit_startup_timing_event = live_event_emitters.emit_startup_timing_event
+    _emit_exchange_config_refresh_event = (
+        live_event_emitters.emit_exchange_config_refresh_event
+    )
+    _emit_websocket_reconnect_event = (
+        live_event_emitters.emit_websocket_reconnect_event
+    )
+    _emit_execution_confirmation_requested_event = (
+        live_event_emitters.emit_execution_confirmation_requested_event
+    )
+    _emit_execution_confirmation_satisfied_event = (
+        live_event_emitters.emit_execution_confirmation_satisfied_event
+    )
+    _emit_execution_confirmation_timeout_event = (
+        live_event_emitters.emit_execution_confirmation_timeout_event
+    )
+    _emit_execution_order_event = live_event_emitters.emit_execution_order_event
+    _emit_execution_create_filter_event = (
+        live_event_emitters.emit_execution_create_filter_event
+    )
+    _emit_initial_entry_eligibility_event = (
+        live_event_emitters.emit_initial_entry_eligibility_event
+    )
+    _emit_initial_entry_distance_gate_event = (
+        live_event_emitters.emit_initial_entry_distance_gate_event
+    )
+    _emit_action_planned_event = live_event_emitters.emit_action_planned_event
+    _emit_rust_orchestrator_called_event = (
+        live_event_emitters.emit_rust_orchestrator_called_event
+    )
+    _emit_rust_orchestrator_returned_event = (
+        live_event_emitters.emit_rust_orchestrator_returned_event
+    )
+    _emit_balance_changed_event = live_event_emitters.emit_balance_changed_event
+    _emit_fills_refresh_summary_event = (
+        live_event_emitters.emit_fills_refresh_summary_event
+    )
+    _emit_fill_ingested_event = live_event_emitters.emit_fill_ingested_event
+    _emit_fills_ingested_summary_event = (
+        live_event_emitters.emit_fills_ingested_summary_event
+    )
+    _emit_risk_mode_changed_event = live_event_emitters.emit_risk_mode_changed_event
+    _emit_realized_loss_gate_blocked_event = (
+        live_event_emitters.emit_realized_loss_gate_blocked_event
+    )
+    _emit_entry_cooldown_delta_anchored_event = (
+        live_event_emitters.emit_entry_cooldown_delta_anchored_event
+    )
+    _emit_entry_min_effective_cost_blocked_event = (
+        live_event_emitters.emit_entry_min_effective_cost_blocked_event
+    )
+    _emit_trailing_status_event = live_event_emitters.emit_trailing_status_event
+    _emit_unstuck_status_event = live_event_emitters.emit_unstuck_status_event
+    _emit_unstuck_selection_event = live_event_emitters.emit_unstuck_selection_event
+    _emit_forager_feature_unavailable_event = (
+        live_event_emitters.emit_forager_feature_unavailable_event
+    )
+    _emit_forager_eligibility_changed_event = (
+        live_event_emitters.emit_forager_eligibility_changed_event
+    )
+    _emit_config_market_compatibility_event = (
+        live_event_emitters.emit_config_market_compatibility_event
+    )
+    _emit_isolated_only_market_blocked_event = (
+        live_event_emitters.emit_isolated_only_market_blocked_event
+    )
+    _emit_hip3_account_mode_unsupported_event = (
+        live_event_emitters.emit_hip3_account_mode_unsupported_event
+    )
+    _emit_forager_selection_event = live_event_emitters.emit_forager_selection_event
+    _emit_ema_bundle_started_event = live_event_emitters.emit_ema_bundle_started_event
+    _emit_ema_bundle_completed_event = live_event_emitters.emit_ema_bundle_completed_event
+    _emit_ema_fallback_used_event = live_event_emitters.emit_ema_fallback_used_event
+    _emit_ema_unavailable_event = live_event_emitters.emit_ema_unavailable_event
+    _emit_candle_tail_projected_event = (
+        live_event_emitters.emit_candle_tail_projected_event
+    )
+    _emit_candle_coverage_checked_event = (
+        live_event_emitters.emit_candle_coverage_checked_event
+    )
+    _emit_cache_warmup_decision_event = (
+        live_event_emitters.emit_cache_warmup_decision_event
+    )
+    _emit_cache_load_completed_event = (
+        live_event_emitters.emit_cache_load_completed_event
+    )
+    _emit_cache_flush_completed_event = (
+        live_event_emitters.emit_cache_flush_completed_event
+    )
+    _emit_order_wave_started_event = live_event_emitters.emit_order_wave_started_event
+    _emit_order_wave_completed_event = live_event_emitters.emit_order_wave_completed_event
+    _emit_execution_connector_call_started_event = (
+        live_event_emitters.emit_execution_connector_call_started_event
+    )
+    _emit_planning_defer_summary_event = (
+        live_event_emitters.emit_planning_defer_summary_event
+    )
+    _emit_planning_symbol_state_event = (
+        live_event_emitters.emit_planning_symbol_state_event
+    )
+    _emit_position_changed_event = live_event_emitters.emit_position_changed_event
+    _emit_health_summary_event = live_event_emitters.emit_health_summary_event
+    _emit_market_snapshot_diagnostic_skipped_event = (
+        live_event_emitters.emit_market_snapshot_diagnostic_skipped_event
+    )
+    _emit_execution_loop_error_burst_event = (
+        live_event_emitters.emit_execution_loop_error_burst_event
+    )
+    _emit_exchange_time_sync_event = live_event_emitters.emit_exchange_time_sync_event
+    _emit_state_refresh_timing_event = (
+        live_event_emitters.emit_state_refresh_timing_event
+    )
+    _emit_state_refresh_timing_summary_event = (
+        live_event_emitters.emit_state_refresh_timing_summary_event
+    )
+    _emit_state_refresh_progress_event = (
+        live_event_emitters.emit_state_refresh_progress_event
+    )
+    _handle_candle_remote_fetch_event = live_event_emitters.emit_candle_remote_fetch_event
+    _next_live_event_remote_call_id = live_event_emitters.next_live_event_remote_call_id
+    _set_live_event_context_ids = live_event_emitters.set_live_event_context_ids
+
+    def _live_event_console_available(self) -> bool:
+        """Return True when structured live events already feed the console."""
+        return bool(
+            getattr(self, "live_event_console_enabled", False)
+            and getattr(self, "_live_event_pipeline", None) is not None
+        )
+
     @staticmethod
     def _log_symbol(symbol: Any) -> str:
         """Return a compact operator-facing symbol label for logs only."""
@@ -545,6 +748,61 @@ class Passivbot:
             return "unknown"
         sym = str(symbol)
         return symbol_to_coin(sym, verbose=False) or sym
+
+    @staticmethod
+    def _log_order_type(order: Any) -> str:
+        """Return a bounded order-type label without decoding raw client ids."""
+        if not isinstance(order, dict):
+            return "unknown"
+        value = str(order.get("pb_order_type") or "unknown")
+        return value if len(value) <= 64 else f"{value[:64]}..."
+
+    def _log_order_write_failure(
+        self,
+        *,
+        action: str,
+        order: Any,
+        error: BaseException,
+        force: bool = False,
+    ) -> None:
+        """Emit a bounded fallback when structured execution console is unavailable."""
+        if not force and Passivbot._live_event_console_available(self):
+            return
+        symbol = Passivbot._log_symbol(
+            order.get("symbol") if isinstance(order, dict) else None
+        )
+        if len(symbol) > 80:
+            symbol = f"{symbol[:80]}..."
+        logging.error(
+            "[order] write failed | action=%s symbol=%s type=%s error_type=%s",
+            action,
+            symbol,
+            Passivbot._log_order_type(order),
+            type(error).__name__,
+        )
+
+    async def _handle_order_write_failures(
+        self, failures: list[tuple[str, Any, BaseException]]
+    ) -> None:
+        """Log bounded fallbacks and preserve restart-budget handling."""
+        if not failures:
+            return
+        for action, order, error in failures:
+            self._log_order_write_failure(
+                action=action, order=order, error=error
+            )
+        try:
+            await self.restart_bot_on_too_many_errors()
+        except BaseException:
+            if Passivbot._live_event_console_available(self):
+                for action, order, error in failures:
+                    self._log_order_write_failure(
+                        action=action,
+                        order=order,
+                        error=error,
+                        force=True,
+                    )
+            raise
 
     @staticmethod
     def _log_symbols(symbols: Iterable[Any], limit: int | None = None) -> str:
@@ -687,6 +945,21 @@ class Passivbot:
         self.ccp = None
         self.create_ccxt_sessions()
         self.debug_mode = False
+        self.live_event_debug_profiles = normalize_live_event_debug_profiles(
+            os.environ.get(
+                LIVE_EVENT_DEBUG_PROFILE_ENV,
+                get_optional_config_value(
+                    config, "logging.live_event_debug_profiles", ()
+                ),
+            )
+        )
+        self.live_event_console_enabled = resolve_live_event_console_enabled(
+            env_value=os.environ.get(LIVE_EVENT_CONSOLE_ENV),
+            config_value=get_optional_config_value(
+                config, "logging.live_event_console", None
+            ),
+            default=True,
+        )
         self.balance_threshold = (
             1.0  # don't create orders if balance is less than threshold
         )
@@ -704,6 +977,9 @@ class Passivbot:
         self._authoritative_barrier_last_log_key = None
         self._authoritative_barrier_last_log_ms = 0
         self.freshness_ledger = FreshnessLedger(now_ms=utc_ms())
+        self._live_data_packets = {}
+        self._live_data_packet_revisions = {}
+        self._pending_live_data_packet_metadata = {}
         self._disabled_psides_logged = set()
         self._last_coin_symbol_warning_counts = {
             "symbol_to_coin_fallbacks": 0,
@@ -713,6 +989,9 @@ class Passivbot:
         self._last_action_summary: dict[tuple[str, str], str] = {}
         self._order_wave_seq = 0
         self._order_wave_last_summary_key = None
+        self._live_event_cycle_seq = 0
+        self._live_event_remote_call_seq = 0
+        self._live_event_remote_call_ids = {}
         self._active_candle_incomplete_last_log_ms = {}
         self.start_time_ms = utc_ms()
         self.bot_start_exchange_ts = int(self.get_exchange_time())
@@ -723,6 +1002,7 @@ class Passivbot:
         self._monitor_last_equity = float(self.balance_raw)
         self._monitor_stop_emitted = False
         self.monitor_publisher: Optional[MonitorPublisher] = None
+        self._live_event_pipeline: Optional[LiveEventPipeline] = None
         self.monitor_enabled = bool(
             get_optional_config_value(config, "monitor.enabled", False)
         )
@@ -738,6 +1018,16 @@ class Passivbot:
                     "[monitor] failed to initialize monitor publisher: %s", exc
                 )
                 self.monitor_publisher = None
+                self._live_event_pipeline = None
+        if self.monitor_publisher is not None or self.live_event_console_enabled:
+            try:
+                self._install_live_event_pipeline()
+            except Exception as exc:
+                if self.monitor_publisher is not None and not self.live_event_console_enabled:
+                    logging.warning("[monitor] live event pipeline disabled: %s", exc)
+                else:
+                    logging.warning("[event] live event pipeline disabled: %s", exc)
+                self._live_event_pipeline = None
         # CandlestickManager settings from config.live
         # Use denormalized exchange name for cache paths (e.g., "binance" not "binanceusdm")
         cm_kwargs = {
@@ -745,6 +1035,8 @@ class Passivbot:
             "exchange_name": self.exchange,
             "debug": self.logging_level,
         }
+        if self._live_event_pipeline_records_candle_remote_fetch():
+            cm_kwargs["remote_fetch_callback"] = self._handle_candle_remote_fetch_event
         mem_cap_raw = require_live_value(config, "max_memory_candles_per_symbol")
         mem_cap_effective = DEFAULT_MAX_MEMORY_CANDLES_PER_SYMBOL
         try:
@@ -829,8 +1121,10 @@ class Passivbot:
             fetch_tickers_for_symbols=getattr(self, "fetch_tickers_for_symbols", None),
             ticker_strategy=self._market_snapshot_ticker_strategy(),
         )
-        if self.monitor_publisher is not None:
-            self.cm.set_persist_batch_observer(self._monitor_handle_candlestick_persist)
+        if self.monitor_publisher is not None or self._live_event_pipeline is not None:
+            self.cm.set_persist_batch_observer(self._handle_candle_persist_event)
+        if self._live_event_pipeline is not None:
+            self.cm.set_disk_load_observer(self._handle_candle_disk_load_event)
         # TTL (minutes) for EMA candles on non-traded symbols
         ttl_min = require_live_value(config, "inactive_coin_candle_ttl_minutes")
         self.inactive_coin_candle_ttl_ms = int(float(ttl_min) * 60_000)
@@ -926,6 +1220,11 @@ class Passivbot:
         # FillEventsManager for PnL tracking (replaces legacy self.pnls list)
         self._pnls_manager: Optional[FillEventsManager] = None
         self._pnls_initialized = False
+        # Live-only cooldown backstop; fill events remain the restart-reconstructable source.
+        self._entry_cooldown_prev_pos_sizes: dict[str, dict[str, float]] = {}
+        self._entry_cooldown_pos_increase_detected_ts: dict[str, dict[str, int]] = {}
+        self._entry_cooldown_delta_guard_last_log_ms: dict[tuple[str, str], int] = {}
+        self._entry_cooldown_delta_guard_log_interval_ms = 60_000
 
         # Health tracking for periodic summary
         self._health_start_ms = utc_ms()
@@ -937,6 +1236,7 @@ class Passivbot:
         self._health_ws_reconnects = 0
         self._health_rate_limits = 0
         self._health_last_summary_ms = 0
+        self._health_summary_lag_ms = None
         self._health_summary_interval_ms = 15 * 60 * 1000  # 15 minutes
         self._last_loop_duration_ms = 0
 
@@ -973,6 +1273,11 @@ class Passivbot:
         self._unstuck_last_selection_info_ms = 0
         self._unstuck_allowance_log_hyst_snap_pct = 0.002
         self._unstuck_allowance_log_snap_by_pside = {}
+        self._trailing_last_status_check_ms = 0
+        self._trailing_status_check_interval_ms = 5 * 60 * 1000
+        self._trailing_unchanged_info_log_interval_ms = 60 * 60 * 1000
+        self._trailing_last_status_signature = None
+        self._trailing_last_status_info_ms = 0
 
         # Realized-loss gate logging throttle
         self._loss_gate_last_log_ms = {}
@@ -990,27 +1295,16 @@ class Passivbot:
         self._equity_hard_stop_status_log_interval_ms = 15 * 60 * 1000
         self._equity_hard_stop_cooldown_log_interval_ms = 60 * 1000
         self._equity_hard_stop = {
-            pside: {
-                "runtime": pbr.EquityHardStopRuntime(),
-                "strategy_pnl_peak": pbr.EquityHardStopRollingPeak(),
-                "halted": False,
-                "no_restart_latched": False,
-                "last_metrics": None,
-                "last_red_progress": None,
-                "red_flat_confirmations": 0,
-                "pending_red_since_ms": None,
-                "cooldown_until_ms": None,
-                "pending_stop_event": None,
-                "last_stop_event": None,
-                "last_status_log_ms": 0,
-                "last_cooldown_log_ms": 0,
-                "cooldown_intervention_active": False,
-                "cooldown_repanic_reset_pending": False,
-                "last_cooldown_intervention_log_ms": 0,
-                "cooldown_unresolved_residue": False,
-            }
-            for pside in ("long", "short")
+            pside: self._equity_hard_stop_make_state() for pside in ("long", "short")
         }
+        self._equity_hard_stop_coin = {"long": {}, "short": {}}
+        self._equity_hard_stop_coin_initialized = False
+        self._equity_hard_stop_coin_protective_ready = False
+        self._equity_hard_stop_coin_replay_ready_pairs = set()
+        self._equity_hard_stop_coin_replay_pending_pairs = set()
+        self._equity_hard_stop_coin_replay_failure = None
+        self._equity_hard_stop_coin_replay_ready_event = None
+        self._equity_hard_stop_coin_replay_task = None
 
     _monitor_record_event = pb_monitor._monitor_record_event
     _monitor_record_error = pb_monitor._monitor_record_error
@@ -1043,7 +1337,21 @@ class Passivbot:
     def live_value(self, key: str):
         return require_live_value(self.config, key)
 
+    def _live_max_realized_loss_pct(self) -> float:
+        value = self.live_value("max_realized_loss_pct")
+        return 1.0 if value is None else float(value)
+
     def bot_value(self, pside: str, key: str):
+        bot_side = self.config.get("bot", {}).get(pside, {})
+        sentinel = object()
+        if "." in key:
+            root_key, rest = key.split(".", 1)
+            root_value = get_grouped_bot_value(bot_side, root_key, default=sentinel)
+            if root_value is not sentinel:
+                return require_config_value({root_key: root_value}, f"{root_key}.{rest}")
+        value = get_grouped_bot_value(bot_side, key, default=sentinel)
+        if value is not sentinel:
+            return value
         return require_config_value(self.config, f"bot.{pside}.{key}")
 
     def _set_log_silence_watchdog_context(
@@ -1119,114 +1427,6 @@ class Passivbot:
         except asyncio.CancelledError:
             pass
 
-    def _equity_hard_stop_enabled(self) -> bool:
-        return bool(self.equity_hard_stop_loss["enabled"])
-
-    def _equity_hard_stop_latch_path(self) -> str:
-        return make_get_filepath(
-            f"caches/equity_hard_stop/{self.exchange}/{self.user}.json"
-        )
-
-    def _equity_hard_stop_write_latch(self, metrics: dict) -> str:
-        path = self._equity_hard_stop_latch_path()
-        payload = dict(metrics)
-        tmp_path = path + ".tmp"
-        with open(tmp_path, "w", encoding="utf-8") as f:
-            json.dump(payload, f, indent=2, sort_keys=True)
-        os.replace(tmp_path, path)
-        return path
-
-    def _equity_hard_stop_remove_latch_file(self) -> None:
-        path = self._equity_hard_stop_latch_path()
-        if os.path.isfile(path):
-            os.remove(path)
-
-    def _equity_hard_stop_reset_state(self) -> None:
-        self._equity_hard_stop_runtime.reset()
-        self._equity_hard_stop_strategy_pnl_peak.reset()
-        self._equity_hard_stop_last_metrics = None
-        self._equity_hard_stop_last_red_progress = None
-        self._equity_hard_stop_red_flat_confirmations = 0
-        self._equity_hard_stop_pending_red_since_ms = None
-        self._equity_hard_stop_halted = False
-        self._equity_hard_stop_no_restart_latched = False
-        self._equity_hard_stop_halted_until_ms = None
-        self._equity_hard_stop_cooldown_intervention_active = False
-        self._equity_hard_stop_cooldown_repanic_reset_pending = False
-        self._equity_hard_stop_last_cooldown_intervention_log_ms = 0
-        self._equity_hard_stop_pending_stop_event = None
-        self._equity_hard_stop_last_stop_event = None
-        self._runtime_forced_modes = {"long": {}, "short": {}}
-
-    def _equity_hard_stop_runtime_initialized(self) -> bool:
-        return bool(self._equity_hard_stop_runtime.initialized())
-
-    def _equity_hard_stop_runtime_red_latched(self) -> bool:
-        return bool(self._equity_hard_stop_runtime.red_latched())
-
-    def _equity_hard_stop_runtime_tier(self) -> str:
-        return str(self._equity_hard_stop_runtime.tier())
-
-    def _equity_hard_stop_cooldown_position_policy(self) -> str:
-        return normalize_hsl_cooldown_position_policy(
-            get_optional_live_value(
-                self.config, "hsl_position_during_cooldown_policy", "panic"
-            )
-        )
-
-    async def _calc_upnl_sum_strict(self) -> float:
-        if not self.fetched_positions:
-            return 0.0
-        symbols = {x["symbol"] for x in self.fetched_positions}
-        last_prices = await self._get_live_last_prices(
-            symbols, max_age_ms=60_000, context="hard_stop_upnl"
-        )
-        upnl_sum = 0.0
-        for elm in self.fetched_positions:
-            symbol = elm["symbol"]
-            if symbol not in last_prices:
-                raise RuntimeError(
-                    f"missing last price for {symbol} while evaluating hard stop"
-                )
-            upnl = calc_pnl(
-                elm["position_side"],
-                elm["price"],
-                last_prices[symbol],
-                elm["size"],
-                self.inverse,
-                self.c_mults[symbol],
-            )
-            if not math.isfinite(upnl):
-                raise RuntimeError(
-                    f"non-finite upnl for {symbol} {elm['position_side']} while evaluating hard stop"
-                )
-            upnl_sum += upnl
-        return upnl_sum
-
-    @staticmethod
-    def _equity_hard_stop_fee_cost(fill: Any) -> float:
-        if fill is None:
-            return 0.0
-        if isinstance(fill, dict):
-            return signed_fee_paid_from_payload(fill)
-        fee_paid = getattr(fill, "fee_paid", None)
-        if fee_paid is not None:
-            return float(fee_paid or 0.0)
-        return signed_fee_paid_from_payload({"fees": getattr(fill, "fees", None)})
-
-    def _equity_hard_stop_realized_pnl_now(self) -> float:
-        if self._pnls_manager is None:
-            return 0.0
-        realized = 0.0
-        events = self._pnls_manager.get_events()
-        self._assert_no_pending_pnl_events(
-            events, context="equity hard stop realized PnL"
-        )
-        for event in events:
-            realized += float(getattr(event, "pnl", 0.0) or 0.0)
-            realized += self._equity_hard_stop_fee_cost(event)
-        return realized
-
     def _pnls_lookback_start_ms(self) -> Optional[int]:
         config = getattr(self, "config", None)
         if config is None:
@@ -1236,6 +1436,216 @@ class Passivbot:
             field_name="live.pnls_max_lookback_days",
         )
         return lookback.event_history_start_ms(self.get_exchange_time())
+
+    def _pnl_history_coverage_status(
+        self,
+        *,
+        start_ms: Optional[int],
+        end_ms: Optional[int] = None,
+        lookback=None,
+    ) -> dict[str, object]:
+        manager = getattr(self, "_pnls_manager", None)
+        if manager is None:
+            return {
+                "ready": False,
+                "reason": "missing_pnl_manager",
+                "history_scope": "unknown",
+                "covered_start_ms": 0,
+                "oldest_event_ts": 0,
+            }
+        cache = getattr(manager, "cache", None)
+        if cache is None:
+            get_history_scope = getattr(manager, "get_history_scope", None)
+            history_scope = (
+                str(get_history_scope() or "unknown").lower()
+                if callable(get_history_scope)
+                else "unknown"
+            )
+            if history_scope == "all":
+                return {
+                    "ready": True,
+                    "reason": "full_history",
+                    "history_scope": history_scope,
+                    "covered_start_ms": 0,
+                    "oldest_event_ts": 0,
+                }
+            return {
+                "ready": False,
+                "reason": "missing_cache",
+                "history_scope": "unknown",
+                "covered_start_ms": 0,
+                "oldest_event_ts": 0,
+            }
+
+        metadata = {}
+        load_metadata = getattr(cache, "load_metadata", None)
+        if callable(load_metadata):
+            metadata = load_metadata() or {}
+
+        get_history_scope = getattr(manager, "get_history_scope", None)
+        if not callable(get_history_scope):
+            get_history_scope = getattr(cache, "get_history_scope", None)
+        raw_history_scope = (
+            get_history_scope()
+            if callable(get_history_scope)
+            else metadata.get("history_scope", "unknown")
+        )
+        history_scope = str(raw_history_scope or "unknown").lower()
+        if history_scope not in {"unknown", "window", "all"}:
+            history_scope = "unknown"
+
+        get_covered_start_ms = getattr(cache, "get_covered_start_ms", None)
+        if callable(get_covered_start_ms):
+            covered_start_ms = int(get_covered_start_ms() or 0)
+        else:
+            covered_start_ms = int(metadata.get("covered_start_ms", 0) or 0)
+        oldest_event_ts = int(metadata.get("oldest_event_ts", 0) or 0)
+
+        if end_ms is None:
+            try:
+                end_ms = int(self.get_exchange_time())
+            except (AttributeError, TypeError, ValueError):
+                end_ms = None
+        blocking_gaps = self._pnl_blocking_known_gaps(
+            cache,
+            metadata=metadata,
+            start_ms=start_ms,
+            end_ms=end_ms,
+        )
+        if blocking_gaps:
+            gap = blocking_gaps[0]
+            return {
+                "ready": False,
+                "reason": "known_gap_overlaps_lookback",
+                "history_scope": history_scope,
+                "covered_start_ms": covered_start_ms,
+                "oldest_event_ts": oldest_event_ts,
+                "gap_start_ts": int(gap.get("start_ts", 0) or 0),
+                "gap_end_ts": int(gap.get("end_ts", 0) or 0),
+                "gap_reason": str(gap.get("reason", "unknown")),
+            }
+
+        if history_scope == "all":
+            return {
+                "ready": True,
+                "reason": "full_history",
+                "history_scope": history_scope,
+                "covered_start_ms": covered_start_ms,
+                "oldest_event_ts": oldest_event_ts,
+            }
+
+        if start_ms is None or (lookback is not None and getattr(lookback, "is_all", False)):
+            return {
+                "ready": False,
+                "reason": "full_history_scope_not_proven",
+                "history_scope": history_scope,
+                "covered_start_ms": covered_start_ms,
+                "oldest_event_ts": oldest_event_ts,
+            }
+
+        if covered_start_ms > 0 and covered_start_ms <= int(start_ms):
+            return {
+                "ready": True,
+                "reason": "window_covered",
+                "history_scope": history_scope,
+                "covered_start_ms": covered_start_ms,
+                "oldest_event_ts": oldest_event_ts,
+            }
+
+        return {
+            "ready": False,
+            "reason": "window_coverage_not_proven",
+            "history_scope": history_scope,
+            "covered_start_ms": covered_start_ms,
+            "oldest_event_ts": oldest_event_ts,
+        }
+
+    def _pnl_history_coverage_ready_for_risk(self) -> bool:
+        try:
+            lookback = parse_pnls_max_lookback_days(
+                self.live_value("pnls_max_lookback_days"),
+                field_name="live.pnls_max_lookback_days",
+            )
+            now_ms = self.get_exchange_time()
+            start_ms = lookback.fill_cache_age_limit_ms(now_ms)
+        except (AttributeError, KeyError, TypeError, ValueError):
+            return False
+        status = self._pnl_history_coverage_status(
+            start_ms=start_ms,
+            end_ms=now_ms,
+            lookback=lookback,
+        )
+        return bool(status.get("ready", False))
+
+    def _fill_coverage_retry_delay_seconds(self, retry_count: int) -> float:
+        try:
+            base_delay = float(
+                get_optional_live_value(
+                    self.config,
+                    "fills_coverage_retry_delay_seconds",
+                    30.0,
+                )
+            )
+        except Exception:
+            base_delay = 30.0
+        try:
+            max_delay = float(
+                get_optional_live_value(
+                    self.config,
+                    "fills_coverage_retry_max_delay_seconds",
+                    300.0,
+                )
+            )
+        except Exception:
+            max_delay = 300.0
+        base_delay = max(0.0, base_delay)
+        max_delay = max(base_delay, max_delay)
+        retry_count = max(1, int(retry_count or 1))
+        return min(max_delay, base_delay * (2 ** min(retry_count - 1, 6)))
+
+    @staticmethod
+    def _fill_coverage_retry_key(status: dict[str, object]) -> tuple:
+        return (
+            str(status.get("reason", "unknown")),
+            str(status.get("history_scope", "unknown")),
+            int(status.get("covered_start_ms", 0) or 0),
+            int(status.get("oldest_event_ts", 0) or 0),
+            int(status.get("gap_start_ts", 0) or 0),
+            int(status.get("gap_end_ts", 0) or 0),
+            str(status.get("gap_reason", "")),
+        )
+
+    def _fill_coverage_retry_deferred(self, status: dict[str, object], now_ms: int) -> bool:
+        state = getattr(self, "_fill_coverage_retry_state", None)
+        if not isinstance(state, dict):
+            return False
+        if state.get("key") != self._fill_coverage_retry_key(status):
+            return False
+        next_retry_ms = int(state.get("next_retry_ms", 0) or 0)
+        return next_retry_ms > int(now_ms)
+
+    def _record_fill_coverage_retry_defer(
+        self, status: dict[str, object], *, now_ms: Optional[int] = None
+    ) -> None:
+        now = utc_ms() if now_ms is None else int(now_ms)
+        key = self._fill_coverage_retry_key(status)
+        state = getattr(self, "_fill_coverage_retry_state", None)
+        previous_count = (
+            int(state.get("retry_count", 0) or 0)
+            if isinstance(state, dict) and state.get("key") == key
+            else 0
+        )
+        retry_count = previous_count + 1
+        delay_s = self._fill_coverage_retry_delay_seconds(retry_count)
+        self._fill_coverage_retry_state = {
+            "key": key,
+            "retry_count": retry_count,
+            "next_retry_ms": now + int(delay_s * 1000.0),
+        }
+
+    def _clear_fill_coverage_retry_defer(self) -> None:
+        if hasattr(self, "_fill_coverage_retry_state"):
+            self._fill_coverage_retry_state = {}
 
     def _get_effective_pnl_events(self) -> list:
         if self._pnls_manager is None:
@@ -1248,878 +1658,191 @@ class Passivbot:
     def _assert_no_pending_pnl_events(self, events: list, *, context: str) -> None:
         FillEventsManager.assert_no_pending_pnl(events, context=context)
 
-    def _equity_hard_stop_lookback_ms(self) -> Optional[int]:
-        lookback = parse_pnls_max_lookback_days(
-            require_live_value(self.config, "pnls_max_lookback_days"),
-            field_name="live.pnls_max_lookback_days",
-        )
-        return lookback.hsl_window_ms()
+    @staticmethod
+    def _pnl_gap_is_confirmed_legitimate(gap: dict) -> bool:
+        reason = str(gap.get("reason") or "").lower()
+        try:
+            confidence = float(gap.get("confidence", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            confidence = 0.0
+        return reason == GAP_REASON_CONFIRMED or confidence >= GAP_CONFIDENCE_CONFIRMED
 
-    def _equity_hard_stop_apply_sample(
+    @staticmethod
+    def _pnl_gap_overlaps(gap: dict, start_ms: Optional[int], end_ms: Optional[int]) -> bool:
+        try:
+            gap_start = int(gap.get("start_ts", 0) or 0)
+            gap_end = int(gap.get("end_ts", 0) or 0)
+        except (TypeError, ValueError):
+            return True
+        if gap_end <= gap_start:
+            return False
+        start = 0 if start_ms is None else int(start_ms)
+        end = (2**63 - 1) if end_ms is None else int(end_ms)
+        return gap_start < end and gap_end > start
+
+    def _pnl_blocking_known_gaps(
         self,
-        timestamp_ms: int,
-        balance: float,
-        realized_pnl: float,
-        unrealized_pnl: float,
-    ) -> dict:
-        if not math.isfinite(balance) or balance <= 0.0:
-            raise ValueError(f"balance must be finite and > 0, got {balance}")
-        if not math.isfinite(realized_pnl):
-            raise ValueError(f"realized_pnl must be finite, got {realized_pnl}")
-        if not math.isfinite(unrealized_pnl):
-            raise ValueError(f"unrealized_pnl must be finite, got {unrealized_pnl}")
-        last_metrics = self._equity_hard_stop_last_metrics
-        current_minute = int(timestamp_ms) // 60_000
-        if (
-            last_metrics is not None
-            and int(last_metrics["timestamp_ms"]) // 60_000 == current_minute
-        ):
-            cached = dict(last_metrics)
-            cached["changed"] = False
-            cached["elapsed_minutes"] = 0
-            self._equity_hard_stop_last_metrics = cached
-            return cached
-        lookback_ms = self._equity_hard_stop_lookback_ms()
-        prev_tier = self._equity_hard_stop_runtime_tier()
-        red_threshold = float(self.equity_hard_stop_loss["red_threshold"])
-        ratio_yellow = float(self.equity_hard_stop_loss["tier_ratios"]["yellow"])
-        ratio_orange = float(self.equity_hard_stop_loss["tier_ratios"]["orange"])
-        ema_span_minutes = float(self.equity_hard_stop_loss["ema_span_minutes"])
-        strategy_pnl = realized_pnl + unrealized_pnl
-        peak_strategy_pnl = float(
-            self._equity_hard_stop_strategy_pnl_peak.update(
-                int(timestamp_ms),
-                float(strategy_pnl),
-                int(lookback_ms) if lookback_ms is not None else (2**64 - 1),
+        cache,
+        *,
+        metadata: Optional[dict] = None,
+        start_ms: Optional[int],
+        end_ms: Optional[int],
+    ) -> list[dict]:
+        get_known_gaps = getattr(cache, "get_known_gaps", None)
+        known_gaps = (
+            list(get_known_gaps() or [])
+            if callable(get_known_gaps)
+            else list((metadata or {}).get("known_gaps", []) or [])
+        )
+        return [
+            gap
+            for gap in known_gaps
+            if not self._pnl_gap_is_confirmed_legitimate(gap)
+            and self._pnl_gap_overlaps(gap, start_ms, end_ms)
+        ]
+
+    @staticmethod
+    def _pnl_event_preview(events: Iterable[Any]) -> str:
+        preview = ",".join(
+            f"{str(getattr(ev, 'id', ''))[:12]}:{getattr(ev, 'symbol', '')}:"
+            f"{getattr(ev, 'position_side', '')}:{getattr(ev, 'pb_order_type', '')}"
+            for ev in list(events)[:5]
+        )
+        return preview
+
+    def _assert_pnl_history_safe_for_risk(
+        self,
+        events: list,
+        *,
+        context: str,
+        start_ms: Optional[int],
+        end_ms: Optional[int] = None,
+        require_coverage: bool = True,
+        allow_incomplete: bool = False,
+    ) -> None:
+        """Fail before risk gates consume incomplete realized-PnL history.
+
+        `allow_incomplete=True` (B2.1 incomplete-history policy: the `always`
+        restart policy with a proven current episode, or the explicit per-run
+        operator override) converts coverage-category failures into a loud
+        critical log and proceeds. Pending or degraded PnL data still raises:
+        corrupt evidence is never acceptable, only provably-incomplete
+        evidence can be waived.
+        """
+        self._assert_no_pending_pnl_events(events, context=context)
+        degraded = [
+            event
+            for event in events
+            if str(getattr(event, "pnl_source", "") or "").lower()
+            == PNL_SOURCE_SYNTHETIC_DEGRADED
+        ]
+        if degraded:
+            preview = self._pnl_event_preview(degraded)
+            suffix = f", +{len(degraded) - 5} more" if len(degraded) > 5 else ""
+            raise RuntimeError(
+                f"{context}: degraded realized PnL for {len(degraded)} close fill(s): "
+                f"{preview}{suffix}"
             )
-        )
-        baseline_balance = balance - realized_pnl
-        equity = balance + unrealized_pnl
-        peak_strategy_equity = max(
-            float(equity), float(baseline_balance + peak_strategy_pnl)
-        )
-        step = self._equity_hard_stop_runtime.apply_sample(
-            timestamp_ms=int(timestamp_ms),
-            equity=float(equity),
-            peak_strategy_equity=float(peak_strategy_equity),
-            red_threshold=red_threshold,
-            ema_span_minutes=ema_span_minutes,
-            tier_ratio_yellow=ratio_yellow,
-            tier_ratio_orange=ratio_orange,
-        )
-        if not isinstance(step, dict):
-            raise TypeError(
-                "passivbot_rust.EquityHardStopRuntime.apply_sample() must return a dict, "
-                f"got {type(step).__name__}"
+        if not require_coverage or self._pnls_manager is None:
+            return
+        try:
+            self._assert_pnl_history_coverage_for_risk(
+                context=context, start_ms=start_ms, end_ms=end_ms
+            )
+        except (RuntimeError, FillHistoryCoverageUnavailable) as exc:
+            if not allow_incomplete:
+                raise
+            logging.critical(
+                "[risk] %s: proceeding on INCOMPLETE fill history by explicit "
+                "policy/override; panic/cooldown/no-restart may be wrong | %s",
+                context,
+                exc,
             )
 
-        metrics = {
-            "timestamp_ms": int(timestamp_ms),
-            "balance": float(balance),
-            "realized_pnl": float(realized_pnl),
-            "unrealized_pnl": float(unrealized_pnl),
-            "strategy_pnl": float(strategy_pnl),
-            "peak_strategy_pnl": float(peak_strategy_pnl),
-            "baseline_balance": float(baseline_balance),
-            "equity": float(equity),
-            "peak_strategy_equity": float(step["peak_strategy_equity"]),
-            "rolling_peak_strategy_equity": float(step["rolling_peak_strategy_equity"]),
-            "drawdown_raw": float(step["drawdown_raw"]),
-            "drawdown_ema": float(step["drawdown_ema"]),
-            "drawdown_score": float(step["drawdown_score"]),
-            "red_threshold": red_threshold,
-            "tier": str(step["tier"]),
-            "changed": bool(step["changed"]) or str(step["tier"]) != prev_tier,
-            "alpha": float(step["alpha"]),
-            "elapsed_minutes": int(step["elapsed_minutes"]),
-        }
-        self._equity_hard_stop_last_metrics = metrics
-        return metrics
-
-    def _equity_hard_stop_log_transition(self, metrics: dict, prev_tier: str) -> None:
-        logging.info(
-            "[risk] equity hard stop tier transition %s -> %s | balance=%.6f equity=%.6f "
-            "peak_strategy_equity=%.6f drawdown_raw=%.6f drawdown_ema=%.6f drawdown_score=%.6f "
-            "strategy_pnl=%.6f peak_strategy_pnl=%.6f "
-            "red_threshold=%.6f yellow=%.3f orange=%.3f",
-            prev_tier,
-            metrics["tier"],
-            metrics["balance"],
-            metrics["equity"],
-            metrics["peak_strategy_equity"],
-            metrics["drawdown_raw"],
-            metrics["drawdown_ema"],
-            metrics["drawdown_score"],
-            metrics["strategy_pnl"],
-            metrics["peak_strategy_pnl"],
-            metrics["red_threshold"],
-            float(self.equity_hard_stop_loss["tier_ratios"]["yellow"]),
-            float(self.equity_hard_stop_loss["tier_ratios"]["orange"]),
-        )
-
-    def _equity_hard_stop_build_latch_payload(
+    def _assert_pnl_history_coverage_for_risk(
         self,
         *,
-        stop_event_timestamp_ms: int,
-        balance: Optional[float] = None,
-        realized_pnl: Optional[float] = None,
-        unrealized_pnl: Optional[float] = None,
-        strategy_pnl: Optional[float] = None,
-        peak_strategy_pnl: Optional[float] = None,
-        equity: float,
-        peak_strategy_equity: float,
-        trigger_peak_strategy_equity: float,
-        drawdown_raw: float,
-        drawdown_ema: float,
-        drawdown_score: float,
-        no_restart_latched: bool,
-        cooldown_until_ms: Optional[int],
-    ) -> dict:
-        return {
-            "triggered_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-            "exchange": str(self.exchange),
-            "user": str(self.user),
-            "tier": "red",
-            "red_threshold": float(self.equity_hard_stop_loss["red_threshold"]),
-            "ema_span_minutes": float(self.equity_hard_stop_loss["ema_span_minutes"]),
-            "cooldown_minutes_after_red": float(
-                self.equity_hard_stop_loss["cooldown_minutes_after_red"]
-            ),
-            "no_restart_drawdown_threshold": float(
-                self.equity_hard_stop_loss["no_restart_drawdown_threshold"]
-            ),
-            "tier_ratios": {
-                "yellow": float(self.equity_hard_stop_loss["tier_ratios"]["yellow"]),
-                "orange": float(self.equity_hard_stop_loss["tier_ratios"]["orange"]),
-            },
-            "orange_tier_mode": str(self.equity_hard_stop_loss["orange_tier_mode"]),
-            "panic_close_order_type": str(
-                self.equity_hard_stop_loss["panic_close_order_type"]
-            ),
-            "stop_event_timestamp_ms": int(stop_event_timestamp_ms),
-            "balance": None if balance is None else float(balance),
-            "realized_pnl": None if realized_pnl is None else float(realized_pnl),
-            "unrealized_pnl": None if unrealized_pnl is None else float(unrealized_pnl),
-            "strategy_pnl": None if strategy_pnl is None else float(strategy_pnl),
-            "peak_strategy_pnl": (
-                None if peak_strategy_pnl is None else float(peak_strategy_pnl)
-            ),
-            "equity": float(equity),
-            "peak_strategy_equity": float(peak_strategy_equity),
-            "trigger_peak_strategy_equity": float(trigger_peak_strategy_equity),
-            "drawdown_raw": float(drawdown_raw),
-            "drawdown_ema": float(drawdown_ema),
-            "drawdown_score": float(drawdown_score),
-            "no_restart_latched": bool(no_restart_latched),
-            "auto_restart_eligible": bool(
-                (not no_restart_latched)
-                and float(self.equity_hard_stop_loss["cooldown_minutes_after_red"])
-                > 0.0
-            ),
-            "cooldown_until_ms": (
-                None if cooldown_until_ms is None else int(cooldown_until_ms)
-            ),
-        }
-
-    async def _equity_hard_stop_compute_stop_event(self, stop_event_ts_ms: int) -> dict:
-        balance = float(self.get_raw_balance())
-        unrealized_pnl = float(await self._calc_upnl_sum_strict())
-        realized_pnl = float(self._equity_hard_stop_realized_pnl_now())
-        strategy_pnl = realized_pnl + unrealized_pnl
-        peak_strategy_pnl = float(
-            max(
-                strategy_pnl,
-                (self._equity_hard_stop_last_metrics or {}).get(
-                    "peak_strategy_pnl", strategy_pnl
-                ),
-            )
-        )
-        equity = float(balance + unrealized_pnl)
-        trigger_peak_strategy_equity = float(
-            self._equity_hard_stop_runtime.peak_strategy_equity()
-        )
-        peak_strategy_equity = float(
-            max(equity, (balance - realized_pnl) + peak_strategy_pnl)
-        )
-        if (
-            not math.isfinite(trigger_peak_strategy_equity)
-            or trigger_peak_strategy_equity <= 0.0
-        ):
+        context: str,
+        start_ms: Optional[int],
+        end_ms: Optional[int] = None,
+    ) -> None:
+        cache = getattr(self._pnls_manager, "cache", None)
+        if cache is None:
             raise RuntimeError(
-                f"invalid hard-stop trigger_peak_strategy_equity at stop finalization: {trigger_peak_strategy_equity}"
+                f"{context}: fill history coverage unavailable; missing FillEventsManager cache"
             )
-        if not math.isfinite(peak_strategy_equity) or peak_strategy_equity <= 0.0:
+
+        if end_ms is None:
+            try:
+                end_ms = int(self.get_exchange_time())
+            except (AttributeError, TypeError, ValueError):
+                end_ms = None
+
+        blocking_gaps = self._pnl_blocking_known_gaps(
+            cache,
+            start_ms=start_ms,
+            end_ms=end_ms,
+        )
+        if blocking_gaps:
+            gap = blocking_gaps[0]
             raise RuntimeError(
-                f"invalid hard-stop rolling peak_strategy_equity at stop finalization: {peak_strategy_equity}"
-            )
-        drawdown_ema = float(self._equity_hard_stop_runtime.drawdown_ema())
-        drawdown_raw = max(0.0, 1.0 - equity / max(peak_strategy_equity, 1e-12))
-        return {
-            "stop_event_timestamp_ms": int(stop_event_ts_ms),
-            "balance": balance,
-            "realized_pnl": realized_pnl,
-            "unrealized_pnl": unrealized_pnl,
-            "strategy_pnl": strategy_pnl,
-            "peak_strategy_pnl": peak_strategy_pnl,
-            "equity": equity,
-            "peak_strategy_equity": peak_strategy_equity,
-            "trigger_peak_strategy_equity": trigger_peak_strategy_equity,
-            "drawdown_raw": drawdown_raw,
-            "drawdown_ema": drawdown_ema,
-            "drawdown_score": min(drawdown_raw, drawdown_ema),
-        }
-
-    async def _equity_hard_stop_wait_for_cooldown(self, cooldown_until_ms: int) -> None:
-        self._equity_hard_stop_halted_until_ms = int(cooldown_until_ms)
-        while not self.stop_signal_received:
-            now_ms = int(self.get_exchange_time())
-            if now_ms >= cooldown_until_ms:
-                return
-            remaining_seconds = max(0.0, (cooldown_until_ms - now_ms) / 1000.0)
-            logging.info(
-                "[risk] RED cooldown active | remaining_seconds=%.1f", remaining_seconds
-            )
-            await asyncio.sleep(
-                min(float(self.live_value("execution_delay_seconds")), 5.0)
+                f"{context}: fill history gap overlaps risk lookback "
+                f"start={start_ms if start_ms is not None else 'all'} "
+                f"end={end_ms if end_ms is not None else 'latest'} "
+                f"gap={int(gap.get('start_ts', 0) or 0)}-{int(gap.get('end_ts', 0) or 0)} "
+                f"reason={gap.get('reason', 'unknown')}"
             )
 
-    def _equity_hard_stop_reset_after_restart(self) -> None:
-        self._equity_hard_stop_runtime.reset()
-        self._equity_hard_stop_strategy_pnl_peak.reset()
-        self._equity_hard_stop_clear_runtime_forced_modes()
-        self._equity_hard_stop_red_flat_confirmations = 0
-        self._equity_hard_stop_last_red_progress = None
-        self._equity_hard_stop_pending_red_since_ms = None
-        self._equity_hard_stop_halted = False
-        self._equity_hard_stop_no_restart_latched = False
-        self._equity_hard_stop_halted_until_ms = None
-        self._equity_hard_stop_cooldown_intervention_active = False
-        self._equity_hard_stop_cooldown_repanic_reset_pending = False
-        self._equity_hard_stop_last_cooldown_intervention_log_ms = 0
-        self._equity_hard_stop_pending_stop_event = None
-
-    def _equity_hard_stop_position_symbols(self) -> list[str]:
-        symbols = []
-        for symbol, position in self.positions.items():
-            if any(
-                float(position.get(pside, {}).get("size", 0.0) or 0.0) != 0.0
-                for pside in ("long", "short")
-            ):
-                symbols.append(symbol)
-        return sorted(symbols)
-
-    def _equity_hard_stop_halted_mode(self, pside: str, symbol: str | None) -> str:
-        policy = self._equity_hard_stop_cooldown_position_policy()
-        size = 0.0
-        if symbol is not None:
-            size = float(
-                self.positions.get(symbol, {}).get(pside, {}).get("size", 0.0) or 0.0
-            )
-        if size == 0.0:
-            return "graceful_stop"
-        if policy == "panic":
-            return "panic"
-        if policy == "manual":
-            return "manual"
-        if policy == "tp_only":
-            return "tp_only"
-        return "graceful_stop"
-
-    def _equity_hard_stop_refresh_halted_runtime_forced_modes(self) -> None:
-        if not self._equity_hard_stop_halted:
-            self._equity_hard_stop_clear_runtime_forced_modes()
+        status = self._pnl_history_coverage_status(start_ms=start_ms, end_ms=end_ms)
+        if bool(status.get("ready", False)):
             return
-        forced = {"long": {}, "short": {}}
-        symbols = (
-            set(self.positions.keys())
-            | set(self.open_orders.keys())
-            | set(self.active_symbols)
-        )
-        for symbol in symbols:
-            for pside in ("long", "short"):
-                forced[pside][symbol] = self._equity_hard_stop_halted_mode(
-                    pside, symbol
-                )
-        self._runtime_forced_modes = forced
-
-    async def _equity_hard_stop_refresh_cooldown_after_repanic(
-        self, now_ms: int
-    ) -> None:
-        cooldown_minutes = float(
-            self.equity_hard_stop_loss["cooldown_minutes_after_red"]
-        )
-        cooldown_ms = (
-            int(round(cooldown_minutes * 60_000.0)) if cooldown_minutes > 0.0 else 0
-        )
-        cooldown_until_ms = now_ms + cooldown_ms if cooldown_ms > 0 else None
-        stop_event = await self._equity_hard_stop_compute_stop_event(now_ms)
-        payload = self._equity_hard_stop_build_latch_payload(
-            stop_event_timestamp_ms=now_ms,
-            balance=stop_event.get("balance"),
-            realized_pnl=stop_event.get("realized_pnl"),
-            unrealized_pnl=stop_event.get("unrealized_pnl"),
-            strategy_pnl=stop_event.get("strategy_pnl"),
-            peak_strategy_pnl=stop_event.get("peak_strategy_pnl"),
-            equity=float(stop_event["equity"]),
-            peak_strategy_equity=float(stop_event["peak_strategy_equity"]),
-            trigger_peak_strategy_equity=float(
-                stop_event["trigger_peak_strategy_equity"]
-            ),
-            drawdown_raw=float(stop_event["drawdown_raw"]),
-            drawdown_ema=float(stop_event["drawdown_ema"]),
-            drawdown_score=float(stop_event["drawdown_score"]),
-            no_restart_latched=False,
-            cooldown_until_ms=cooldown_until_ms,
-        )
-        self._equity_hard_stop_last_stop_event = payload
-        self._equity_hard_stop_halted_until_ms = cooldown_until_ms
-        self._equity_hard_stop_cooldown_intervention_active = False
-        self._equity_hard_stop_cooldown_repanic_reset_pending = False
-        self._equity_hard_stop_last_cooldown_intervention_log_ms = 0
-        latch_path = self._equity_hard_stop_write_latch(payload)
-        self._equity_hard_stop_refresh_halted_runtime_forced_modes()
-        logging.critical(
-            "[risk] cooldown violation repanic flattened; cooldown reset from flat_ts=%s to cooldown_until_ms=%s latch=%s",
-            now_ms,
-            cooldown_until_ms if cooldown_until_ms is not None else "none",
-            latch_path,
-        )
-
-    async def _equity_hard_stop_handle_position_during_cooldown(
-        self, now_ms: int
-    ) -> bool:
-        if (
-            not self._equity_hard_stop_halted
-            or self._equity_hard_stop_no_restart_latched
-        ):
-            return False
-        cooldown_until_ms = self._equity_hard_stop_halted_until_ms
-        if cooldown_until_ms is None or now_ms >= cooldown_until_ms:
-            return False
-
-        symbols = self._equity_hard_stop_position_symbols()
-        policy = self._equity_hard_stop_cooldown_position_policy()
-        if not symbols:
-            if self._equity_hard_stop_cooldown_repanic_reset_pending:
-                await self._equity_hard_stop_refresh_cooldown_after_repanic(now_ms)
-                return True
-            if self._equity_hard_stop_cooldown_intervention_active:
-                logging.info(
-                    "[risk] cooldown intervention ended flat; policy=%s original_cooldown_until_ms=%s",
-                    policy,
-                    cooldown_until_ms,
-                )
-            self._equity_hard_stop_cooldown_intervention_active = False
-            self._equity_hard_stop_cooldown_repanic_reset_pending = False
-            self._equity_hard_stop_last_cooldown_intervention_log_ms = 0
-            self._equity_hard_stop_refresh_halted_runtime_forced_modes()
-            return False
-
-        should_log = (
-            not self._equity_hard_stop_cooldown_intervention_active
-            or self._equity_hard_stop_last_cooldown_intervention_log_ms == 0
-            or now_ms - self._equity_hard_stop_last_cooldown_intervention_log_ms
-            >= self._equity_hard_stop_cooldown_log_interval_ms
-        )
-        if should_log:
-            logging.critical(
-                "[risk] detected non-flat position during RED cooldown | policy=%s symbols=%s cooldown_until_ms=%s",
-                policy,
-                Passivbot._log_symbols(symbols, limit=12),
-                cooldown_until_ms,
+        history_scope = str(status.get("history_scope", "unknown"))
+        if start_ms is None:
+            raise FillHistoryCoverageUnavailable(
+                f"{context}: fill history coverage unknown for full-history risk lookback "
+                f"(history_scope={history_scope})"
             )
-            self._equity_hard_stop_last_cooldown_intervention_log_ms = now_ms
-        self._equity_hard_stop_cooldown_intervention_active = True
-
-        if policy == "normal":
-            self._equity_hard_stop_reset_after_restart()
-            self._equity_hard_stop_remove_latch_file()
-            logging.critical(
-                "[risk] operator override during RED cooldown: resumed normal operation and reset drawdown tracker"
-            )
-            return True
-
-        self._equity_hard_stop_cooldown_repanic_reset_pending = policy == "panic"
-        self._equity_hard_stop_refresh_halted_runtime_forced_modes()
-        return False
-
-    async def _equity_hard_stop_initialize_from_history(self) -> None:
-        if not self._equity_hard_stop_enabled():
-            return
-        self._equity_hard_stop_reset_state()
-        history = await self.get_balance_equity_history(
-            current_balance=self.get_raw_balance()
-        )
-        if "timeline" not in history:
-            raise ValueError(
-                "get_balance_equity_history() missing required key: timeline"
-            )
-        timeline = history["timeline"]
-        if not isinstance(timeline, list):
-            raise TypeError(
-                f"get_balance_equity_history()['timeline'] must be a list, got {type(timeline).__name__}"
-            )
-
-        cooldown_minutes = float(
-            self.equity_hard_stop_loss["cooldown_minutes_after_red"]
-        )
-        no_restart_drawdown_threshold = float(
-            self.equity_hard_stop_loss["no_restart_drawdown_threshold"]
-        )
-        cooldown_ms = (
-            int(round(cooldown_minutes * 60_000.0)) if cooldown_minutes > 0.0 else 0
-        )
-        cooldown_until_ms = None
-        pending_red = False
-        n_rows = 0
-        latest_terminal_stop = None
-        for row in timeline:
-            if not isinstance(row, dict):
-                continue
-            required = ("timestamp", "balance", "realized_pnl", "unrealized_pnl")
-            if any(key not in row for key in required):
-                continue
-            ts = int(row["timestamp"])
-            balance = float(row["balance"])
-            realized_pnl = float(row["realized_pnl"])
-            unrealized_pnl = float(row["unrealized_pnl"])
-
-            if cooldown_until_ms is not None:
-                if ts < cooldown_until_ms:
-                    continue
-                self._equity_hard_stop_reset_after_restart()
-                cooldown_until_ms = None
-                pending_red = False
-
-            current_metrics = self._equity_hard_stop_apply_sample(
-                int(ts), balance, realized_pnl, unrealized_pnl
-            )
-            n_rows += 1
-
-            if self._equity_hard_stop_runtime_tier() == "red":
-                pending_red = True
-                self._equity_hard_stop_pending_red_since_ms = int(ts)
-
-            is_flat = bool(row["is_flat"]) if "is_flat" in row else False
-            if pending_red and is_flat:
-                peak_strategy_equity = float(current_metrics["peak_strategy_equity"])
-                trigger_peak_strategy_equity = float(
-                    self._equity_hard_stop_runtime.peak_strategy_equity()
-                )
-                if (
-                    not math.isfinite(peak_strategy_equity)
-                    or peak_strategy_equity <= 0.0
-                ):
-                    raise RuntimeError(
-                        "invalid peak_strategy_equity during hard-stop replay at "
-                        f"ts={ts}: {peak_strategy_equity}"
-                    )
-                if (
-                    not math.isfinite(trigger_peak_strategy_equity)
-                    or trigger_peak_strategy_equity <= 0.0
-                ):
-                    raise RuntimeError(
-                        "invalid trigger_peak_strategy_equity during hard-stop replay at "
-                        f"ts={ts}: {trigger_peak_strategy_equity}"
-                    )
-                stop_drawdown_raw = float(current_metrics["drawdown_raw"])
-                if (
-                    stop_drawdown_raw >= no_restart_drawdown_threshold
-                    or cooldown_ms <= 0
-                ):
-                    payload = self._equity_hard_stop_build_latch_payload(
-                        stop_event_timestamp_ms=ts,
-                        balance=balance,
-                        realized_pnl=realized_pnl,
-                        unrealized_pnl=unrealized_pnl,
-                        strategy_pnl=float(current_metrics["strategy_pnl"]),
-                        peak_strategy_pnl=float(current_metrics["peak_strategy_pnl"]),
-                        equity=float(current_metrics["equity"]),
-                        peak_strategy_equity=peak_strategy_equity,
-                        trigger_peak_strategy_equity=trigger_peak_strategy_equity,
-                        drawdown_raw=float(current_metrics["drawdown_raw"]),
-                        drawdown_ema=float(current_metrics["drawdown_ema"]),
-                        drawdown_score=float(current_metrics["drawdown_score"]),
-                        no_restart_latched=bool(
-                            stop_drawdown_raw >= no_restart_drawdown_threshold
-                        ),
-                        cooldown_until_ms=None,
-                    )
-                    self._equity_hard_stop_last_stop_event = payload
-                    latest_terminal_stop = payload
-                    latch_path = self._equity_hard_stop_write_latch(payload)
-                    logging.critical(
-                        "[risk] hard-stop replay found terminal RED stop event in exchange-derived "
-                        "history | stop_ts=%s drawdown_raw=%.6f "
-                        "no_restart_drawdown_threshold=%.6f diagnostic=%s",
-                        ts,
-                        stop_drawdown_raw,
-                        no_restart_drawdown_threshold,
-                        latch_path,
-                    )
-                    break
-                cooldown_until_ms = ts + cooldown_ms
-                pending_red = False
-                self._equity_hard_stop_pending_red_since_ms = None
-
-        if latest_terminal_stop is not None:
-            self.stop_signal_received = True
-            return
-
-        now_ms = int(self.get_exchange_time())
-        if cooldown_until_ms is not None:
-            if now_ms >= cooldown_until_ms:
-                self._equity_hard_stop_reset_after_restart()
-                cooldown_until_ms = None
-                pending_red = False
-            else:
-                self._equity_hard_stop_halted = True
-                self._equity_hard_stop_no_restart_latched = False
-                self._equity_hard_stop_halted_until_ms = cooldown_until_ms
-                self._equity_hard_stop_cooldown_intervention_active = False
-                self._equity_hard_stop_cooldown_repanic_reset_pending = False
-                self._equity_hard_stop_last_cooldown_intervention_log_ms = 0
-                self._equity_hard_stop_refresh_halted_runtime_forced_modes()
-                logging.critical(
-                    "[risk] reconstructed active RED cooldown from exchange-derived history | remaining_seconds=%.1f policy=%s",
-                    (cooldown_until_ms - now_ms) / 1000.0,
-                    self._equity_hard_stop_cooldown_position_policy(),
-                )
-                return
-
-        current_balance = self.get_raw_balance()
-        current_realized = self._equity_hard_stop_realized_pnl_now()
-        current_upnl = await self._calc_upnl_sum_strict()
-        current_metrics = self._equity_hard_stop_apply_sample(
-            now_ms,
-            float(current_balance),
-            float(current_realized),
-            float(current_upnl),
-        )
-        logging.info(
-            "[risk] hard-stop initialized from equity history | rows=%d tier=%s equity=%.6f "
-            "peak_strategy_equity=%.6f rolling_peak_strategy_equity=%.6f "
-            "drawdown_raw=%.6f drawdown_ema=%.6f drawdown_score=%.6f",
-            n_rows,
-            current_metrics["tier"],
-            current_metrics["equity"],
-            current_metrics["peak_strategy_equity"],
-            current_metrics["rolling_peak_strategy_equity"],
-            current_metrics["drawdown_raw"],
-            current_metrics["drawdown_ema"],
-            current_metrics["drawdown_score"],
-        )
-        if current_metrics["tier"] == "red":
-            self._equity_hard_stop_pending_red_since_ms = int(
-                current_metrics["timestamp_ms"]
-            )
-
-    async def _equity_hard_stop_check(self) -> Optional[dict]:
-        if not self._equity_hard_stop_enabled():
-            return None
-        if not self._equity_hard_stop_runtime_initialized():
-            await self._equity_hard_stop_initialize_from_history()
-        now_ms = int(self.get_exchange_time())
-        if self._equity_hard_stop_halted:
-            if await self._equity_hard_stop_handle_position_during_cooldown(now_ms):
-                if not self._equity_hard_stop_halted:
-                    return None
-            if self._equity_hard_stop_halted:
-                cooldown_until_ms = self._equity_hard_stop_halted_until_ms
-                if (
-                    not self._equity_hard_stop_no_restart_latched
-                    and cooldown_until_ms is not None
-                    and now_ms >= cooldown_until_ms
-                ):
-                    self._equity_hard_stop_reset_after_restart()
-                    self._equity_hard_stop_remove_latch_file()
-                    logging.info("[risk] RED cooldown elapsed; trading resumed")
-                else:
-                    self._equity_hard_stop_refresh_halted_runtime_forced_modes()
-                    return {
-                        "halted": True,
-                        "cooldown_until_ms": cooldown_until_ms,
-                    }
-
-        prev_latched = self._equity_hard_stop_runtime_red_latched()
-        prev_tier = self._equity_hard_stop_runtime_tier()
-        balance = self.get_raw_balance()
-        realized_pnl = self._equity_hard_stop_realized_pnl_now()
-        unrealized_pnl = await self._calc_upnl_sum_strict()
-        metrics = self._equity_hard_stop_apply_sample(
-            now_ms,
-            float(balance),
-            float(realized_pnl),
-            float(unrealized_pnl),
-        )
-        if metrics["changed"]:
-            self._equity_hard_stop_log_transition(metrics, prev_tier)
-        if metrics["tier"] == "red" and not prev_latched:
-            self._equity_hard_stop_pending_red_since_ms = int(metrics["timestamp_ms"])
-            logging.critical(
-                "[risk] equity hard stop RED triggered | equity=%.6f "
-                "peak_strategy_equity=%.6f rolling_peak_strategy_equity=%.6f "
-                "drawdown_score=%.6f "
-                "red_threshold=%.6f",
-                metrics["equity"],
-                metrics["peak_strategy_equity"],
-                metrics["rolling_peak_strategy_equity"],
-                metrics["drawdown_score"],
-                metrics["red_threshold"],
-            )
-        elif metrics["tier"] != "red":
-            self._equity_hard_stop_pending_red_since_ms = None
-        return metrics
-
-    def _equity_hard_stop_set_red_runtime_forced_modes(self) -> None:
-        forced = {"long": {}, "short": {}}
-        symbols = (
-            set(self.positions.keys())
-            | set(self.open_orders.keys())
-            | set(self.active_symbols)
-        )
-        for symbol in symbols:
-            for pside in ("long", "short"):
-                forced[pside][symbol] = "panic"
-        self._runtime_forced_modes = forced
-
-    def _equity_hard_stop_clear_runtime_forced_modes(self) -> None:
-        self._runtime_forced_modes = {"long": {}, "short": {}}
-
-    def _equity_hard_stop_count_open_positions(self) -> int:
-        n_positions = 0
-        for pos in self.positions.values():
-            for pside in ("long", "short"):
-                if float(pos.get(pside, {}).get("size", 0.0) or 0.0) != 0.0:
-                    n_positions += 1
-        return n_positions
-
-    def _equity_hard_stop_count_blocking_open_orders(self) -> tuple[int, int]:
-        entry_orders = 0
-        nonpanic_close_orders = 0
-        for orders in self.open_orders.values():
-            for order in orders:
-                reduce_only = bool(order.get("reduce_only") or order.get("reduceOnly"))
-                if not reduce_only:
-                    entry_orders += 1
-                    continue
-                pb_type = self._resolve_pb_order_type(order).lower()
-                if "panic" not in pb_type:
-                    nonpanic_close_orders += 1
-        return entry_orders, nonpanic_close_orders
-
-    def _equity_hard_stop_log_red_progress(
-        self,
-        n_positions: int,
-        entry_orders: int,
-        nonpanic_close_orders: int,
-        flat_confirmations: int,
-    ) -> None:
-        progress = (
-            n_positions,
-            entry_orders,
-            nonpanic_close_orders,
-            flat_confirmations,
-        )
-        if progress == self._equity_hard_stop_last_red_progress:
-            return
-        self._equity_hard_stop_last_red_progress = progress
-        logging.info(
-            "[risk] RED supervisor progress | positions=%d entry_orders=%d "
-            "nonpanic_close_orders=%d flat_confirmations=%d/2",
-            n_positions,
-            entry_orders,
-            nonpanic_close_orders,
-            flat_confirmations,
+        covered_start_ms = int(status.get("covered_start_ms", 0) or 0)
+        metadata_oldest = int(status.get("oldest_event_ts", 0) or 0)
+        raise FillHistoryCoverageUnavailable(
+            f"{context}: fill history coverage unknown for risk lookback "
+            f"start={int(start_ms)} covered_start={covered_start_ms} "
+            f"oldest_event={metadata_oldest} history_scope={history_scope}"
         )
 
-    async def _equity_hard_stop_finalize_red_stop(
-        self, stop_event: Optional[dict] = None
-    ) -> None:
-        stop_ts_ms = int(self.get_exchange_time())
-        if stop_event is None:
-            stop_event = await self._equity_hard_stop_compute_stop_event(stop_ts_ms)
-        else:
-            stop_ts_ms = int(stop_event["stop_event_timestamp_ms"])
-        cooldown_minutes = float(
-            self.equity_hard_stop_loss["cooldown_minutes_after_red"]
-        )
-        no_restart_drawdown_threshold = float(
-            self.equity_hard_stop_loss["no_restart_drawdown_threshold"]
-        )
-        no_restart_latched = bool(
-            stop_event["drawdown_raw"] >= no_restart_drawdown_threshold
-        )
-        cooldown_ms = (
-            int(round(cooldown_minutes * 60_000.0)) if cooldown_minutes > 0.0 else 0
-        )
-        cooldown_until_ms = (
-            None
-            if no_restart_latched or cooldown_ms <= 0
-            else int(stop_ts_ms + cooldown_ms)
-        )
-        payload = self._equity_hard_stop_build_latch_payload(
-            stop_event_timestamp_ms=stop_ts_ms,
-            balance=stop_event.get("balance"),
-            realized_pnl=stop_event.get("realized_pnl"),
-            unrealized_pnl=stop_event.get("unrealized_pnl"),
-            strategy_pnl=stop_event.get("strategy_pnl"),
-            peak_strategy_pnl=stop_event.get("peak_strategy_pnl"),
-            equity=float(stop_event["equity"]),
-            peak_strategy_equity=float(stop_event["peak_strategy_equity"]),
-            trigger_peak_strategy_equity=float(
-                stop_event["trigger_peak_strategy_equity"]
-            ),
-            drawdown_raw=float(stop_event["drawdown_raw"]),
-            drawdown_ema=float(stop_event["drawdown_ema"]),
-            drawdown_score=float(stop_event["drawdown_score"]),
-            no_restart_latched=no_restart_latched,
-            cooldown_until_ms=cooldown_until_ms,
-        )
-        self._equity_hard_stop_last_stop_event = payload
-        latch_path = self._equity_hard_stop_write_latch(payload)
 
-        if no_restart_latched or cooldown_until_ms is None:
-            logging.critical(
-                "[risk] RED stop finalized (terminal) | stop_ts=%s equity=%.6f "
-                "peak_strategy_equity=%.6f drawdown_raw=%.6f "
-                "no_restart_drawdown_threshold=%.6f latch=%s",
-                stop_ts_ms,
-                stop_event["equity"],
-                stop_event["peak_strategy_equity"],
-                stop_event["drawdown_raw"],
-                no_restart_drawdown_threshold,
-                latch_path,
-            )
-            self._equity_hard_stop_clear_runtime_forced_modes()
-            self._equity_hard_stop_pending_stop_event = None
-            self.stop_signal_received = True
-            return
 
-        self._equity_hard_stop_halted = True
-        self._equity_hard_stop_no_restart_latched = False
-        self._equity_hard_stop_halted_until_ms = cooldown_until_ms
-        self._equity_hard_stop_cooldown_intervention_active = False
-        self._equity_hard_stop_cooldown_repanic_reset_pending = False
-        self._equity_hard_stop_last_cooldown_intervention_log_ms = 0
-        self._equity_hard_stop_pending_stop_event = None
-        self._equity_hard_stop_refresh_halted_runtime_forced_modes()
-        logging.critical(
-            "[risk] RED stop finalized (cooldown active) | stop_ts=%s "
-            "drawdown_raw=%.6f cooldown_until_ms=%s policy=%s latch=%s",
-            stop_ts_ms,
-            stop_event["drawdown_raw"],
-            cooldown_until_ms,
-            self._equity_hard_stop_cooldown_position_policy(),
-            latch_path,
-        )
-        return
 
-    async def _equity_hard_stop_run_red_supervisor(self) -> None:
-        if self._equity_hard_stop_supervisor_running:
-            return
-        self._equity_hard_stop_supervisor_running = True
-        self._equity_hard_stop_red_flat_confirmations = 0
-        self._equity_hard_stop_last_red_progress = None
-        self._equity_hard_stop_pending_stop_event = None
-        try:
-            logging.critical(
-                "[risk] entering RED supervisor loop (panic-close until confirmed flat)"
-            )
-            while not self.stop_signal_received:
-                if not await self.update_pos_oos_pnls_ohlcvs():
-                    await asyncio.sleep(0.5)
-                    continue
 
-                n_positions = self._equity_hard_stop_count_open_positions()
-                entry_orders, nonpanic_close_orders = (
-                    self._equity_hard_stop_count_blocking_open_orders()
-                )
-                if (
-                    n_positions == 0
-                    and entry_orders == 0
-                    and nonpanic_close_orders == 0
-                ):
-                    if self._equity_hard_stop_red_flat_confirmations == 0:
-                        self._equity_hard_stop_pending_stop_event = (
-                            await self._equity_hard_stop_compute_stop_event(
-                                int(self.get_exchange_time())
-                            )
-                        )
-                    self._equity_hard_stop_red_flat_confirmations += 1
-                else:
-                    self._equity_hard_stop_red_flat_confirmations = 0
-                    self._equity_hard_stop_pending_stop_event = None
-                self._equity_hard_stop_log_red_progress(
-                    n_positions,
-                    entry_orders,
-                    nonpanic_close_orders,
-                    self._equity_hard_stop_red_flat_confirmations,
-                )
-                if self._equity_hard_stop_red_flat_confirmations >= 2:
-                    await self._equity_hard_stop_finalize_red_stop(
-                        self._equity_hard_stop_pending_stop_event
-                    )
-                    return
 
-                self._equity_hard_stop_set_red_runtime_forced_modes()
-                try:
-                    await self.execute_to_exchange()
-                except RestartBotException as e:
-                    logging.error(
-                        "[risk] RED supervisor ignored restart request: %s", e
-                    )
-                except FatalBotException:
-                    raise
-                except Exception as e:
-                    logging.error(
-                        "[risk] RED supervisor execute_to_exchange failed: %s", e
-                    )
-                    traceback.print_exc()
-                await asyncio.sleep(float(self.live_value("execution_delay_seconds")))
-        finally:
-            self._equity_hard_stop_supervisor_running = False
 
-    def _apply_equity_hard_stop_orange_overlay(self) -> None:
-        if not self._equity_hard_stop_enabled():
-            return
-        if (
-            self._equity_hard_stop_runtime_red_latched()
-            or self._equity_hard_stop_runtime_tier() != "orange"
-        ):
-            return
-        orange_mode = str(self.equity_hard_stop_loss["orange_tier_mode"])
-        symbols = (
-            set(self.PB_modes["long"].keys())
-            | set(self.PB_modes["short"].keys())
-            | set(self.positions.keys())
-            | set(self.open_orders.keys())
-        )
-        for symbol in symbols:
-            for pside in ("long", "short"):
-                if symbol not in self.PB_modes[pside]:
-                    continue
-                current_mode = self.PB_modes[pside][symbol]
-                if orange_mode == "graceful_stop":
-                    if current_mode == "normal":
-                        self.PB_modes[pside][symbol] = "graceful_stop"
-                else:
-                    size = float(
-                        self.positions.get(symbol, {}).get(pside, {}).get("size", 0.0)
-                        or 0.0
-                    )
-                    if size == 0.0:
-                        continue
-                    if current_mode in ("normal", "graceful_stop"):
-                        self.PB_modes[pside][
-                            symbol
-                        ] = "tp_only_with_active_entry_cancellation"
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
     _hsl_psides = pb_hsl._hsl_psides
     _hsl_state = pb_hsl._hsl_state
     _parse_hsl_config = pb_hsl._parse_hsl_config
     _equity_hard_stop_enabled = pb_hsl._equity_hard_stop_enabled
     _equity_hard_stop_signal_mode = pb_hsl._equity_hard_stop_signal_mode
+    _equity_hard_stop_balance_override_active = (
+        pb_hsl._equity_hard_stop_balance_override_active
+    )
+    _equity_hard_stop_validate_balance_source_for_history_replay = (
+        pb_hsl._equity_hard_stop_validate_balance_source_for_history_replay
+    )
     _equity_hard_stop_cooldown_position_policy = (
         pb_hsl._equity_hard_stop_cooldown_position_policy
     )
@@ -2135,22 +1858,87 @@ class Passivbot:
     _equity_hard_stop_runtime_initialized = pb_hsl._equity_hard_stop_runtime_initialized
     _equity_hard_stop_runtime_red_latched = pb_hsl._equity_hard_stop_runtime_red_latched
     _equity_hard_stop_runtime_tier = pb_hsl._equity_hard_stop_runtime_tier
+    _equity_hard_stop_make_state = pb_hsl._equity_hard_stop_make_state
+    _hsl_coin_state = pb_hsl._hsl_coin_state
     _equity_hard_stop_fill_pside = staticmethod(pb_hsl._equity_hard_stop_fill_pside)
     _calc_upnl_sum_strict = pb_hsl._calc_upnl_sum_strict
     _equity_hard_stop_fee_cost = staticmethod(pb_hsl._equity_hard_stop_fee_cost)
+    _equity_hard_stop_fill_symbol = staticmethod(pb_hsl._equity_hard_stop_fill_symbol)
+    _equity_hard_stop_fill_timestamp_ms = staticmethod(
+        pb_hsl._equity_hard_stop_fill_timestamp_ms
+    )
+    _equity_hard_stop_event_value = staticmethod(pb_hsl._equity_hard_stop_event_value)
+    _equity_hard_stop_latest_panic_fill_timestamp_ms = (
+        pb_hsl._equity_hard_stop_latest_panic_fill_timestamp_ms
+    )
+    _equity_hard_stop_latest_panic_fill_timestamp_optional_ms = (
+        pb_hsl._equity_hard_stop_latest_panic_fill_timestamp_optional_ms
+    )
+    _equity_hard_stop_latest_flatten_fill_timestamp_ms = (
+        pb_hsl._equity_hard_stop_latest_flatten_fill_timestamp_ms
+    )
+    _equity_hard_stop_latest_flatten_fill_timestamp_optional_ms = (
+        pb_hsl._equity_hard_stop_latest_flatten_fill_timestamp_optional_ms
+    )
     _get_exchange_fee_rates = pb_hsl._get_exchange_fee_rates
     _orchestrator_exchange_params = pb_hsl._orchestrator_exchange_params
     _equity_hard_stop_realized_pnl_now = pb_hsl._equity_hard_stop_realized_pnl_now
+    _equity_hard_stop_coverage_allow_incomplete = (
+        pb_hsl._equity_hard_stop_coverage_allow_incomplete
+    )
+    _equity_hard_stop_coin_episode_start_covered = (
+        pb_hsl._equity_hard_stop_coin_episode_start_covered
+    )
+    _equity_hard_stop_coin_realized_pnl_peak_last = (
+        pb_hsl._equity_hard_stop_coin_realized_pnl_peak_last
+    )
     _equity_hard_stop_lookback_ms = pb_hsl._equity_hard_stop_lookback_ms
     _equity_hard_stop_apply_sample = pb_hsl._equity_hard_stop_apply_sample
+    _equity_hard_stop_apply_coin_sample = pb_hsl._equity_hard_stop_apply_coin_sample
     _equity_hard_stop_log_transition = pb_hsl._equity_hard_stop_log_transition
+    _hsl_replay_cache_config_digest = pb_hsl._hsl_replay_cache_config_digest
+    _hsl_replay_cache_expected_metadata = pb_hsl._hsl_replay_cache_expected_metadata
+    _hsl_replay_cache_dir = pb_hsl._hsl_replay_cache_dir
+    _hsl_replay_cache_account_config_digest = (
+        pb_hsl._hsl_replay_cache_account_config_digest
+    )
+    _hsl_replay_cache_account_series_dir = pb_hsl._hsl_replay_cache_account_series_dir
+    _hsl_replay_cache_account_expected_metadata = (
+        pb_hsl._hsl_replay_cache_account_expected_metadata
+    )
+    _equity_hard_stop_persist_replay_matrices = (
+        pb_hsl._equity_hard_stop_persist_replay_matrices
+    )
+    _try_load_hsl_replay_matrix_cache = pb_hsl._try_load_hsl_replay_matrix_cache
+    _hsl_replay_load_extend_and_reconcile_cache = (
+        pb_hsl._hsl_replay_load_extend_and_reconcile_cache
+    )
+    _hsl_reuse_assemble_history = pb_hsl._hsl_reuse_assemble_history
+    _equity_hard_stop_try_reuse_pside_replay_cache = (
+        pb_hsl._equity_hard_stop_try_reuse_pside_replay_cache
+    )
+    _equity_hard_stop_try_reuse_replay_cache = (
+        pb_hsl._equity_hard_stop_try_reuse_replay_cache
+    )
+    _equity_hard_stop_maybe_emit_raw_red_pending = (
+        pb_hsl._equity_hard_stop_maybe_emit_raw_red_pending
+    )
     _equity_hard_stop_format_remaining_time = staticmethod(
         pb_hsl._equity_hard_stop_format_remaining_time
     )
     _equity_hard_stop_build_latch_payload = pb_hsl._equity_hard_stop_build_latch_payload
+    _equity_hard_stop_red_episode_finalization = (
+        pb_hsl._equity_hard_stop_red_episode_finalization
+    )
     _equity_hard_stop_compute_stop_event = pb_hsl._equity_hard_stop_compute_stop_event
+    _equity_hard_stop_compute_coin_stop_event = (
+        pb_hsl._equity_hard_stop_compute_coin_stop_event
+    )
     _equity_hard_stop_infer_replay_contract = (
         pb_hsl._equity_hard_stop_infer_replay_contract
+    )
+    _equity_hard_stop_infer_coin_replay_contract = (
+        pb_hsl._equity_hard_stop_infer_coin_replay_contract
     )
     _equity_hard_stop_log_cooldown_status = pb_hsl._equity_hard_stop_log_cooldown_status
     _equity_hard_stop_position_symbols = pb_hsl._equity_hard_stop_position_symbols
@@ -2170,10 +1958,52 @@ class Passivbot:
     _equity_hard_stop_initialize_from_history = (
         pb_hsl._equity_hard_stop_initialize_from_history
     )
+    _equity_hard_stop_initialize_coin_from_history = (
+        pb_hsl._equity_hard_stop_initialize_coin_from_history
+    )
+    _equity_hard_stop_start_coin_history_replay = (
+        pb_hsl._equity_hard_stop_start_coin_history_replay
+    )
     _equity_hard_stop_log_status = pb_hsl._equity_hard_stop_log_status
     _equity_hard_stop_check = pb_hsl._equity_hard_stop_check
+    _equity_hard_stop_coin_active_pside = pb_hsl._equity_hard_stop_coin_active_pside
+    _equity_hard_stop_coin_symbols = pb_hsl._equity_hard_stop_coin_symbols
+    _equity_hard_stop_symbol_supported_for_coin_replay = (
+        pb_hsl._equity_hard_stop_symbol_supported_for_coin_replay
+    )
+    _equity_hard_stop_reset_coin_after_restart = pb_hsl._equity_hard_stop_reset_coin_after_restart
+    _equity_hard_stop_check_coin = pb_hsl._equity_hard_stop_check_coin
+    _equity_hard_stop_apply_coin_metrics_sample = (
+        pb_hsl._equity_hard_stop_apply_coin_metrics_sample
+    )
+    _equity_hard_stop_coin_needs_panic_supervision = (
+        pb_hsl._equity_hard_stop_coin_needs_panic_supervision
+    )
+    _equity_hard_stop_coin_red_active = pb_hsl._equity_hard_stop_coin_red_active
+    _equity_hard_stop_handle_coin_position_during_cooldown = (
+        pb_hsl._equity_hard_stop_handle_coin_position_during_cooldown
+    )
+    _equity_hard_stop_log_coin_cooldown_status = (
+        pb_hsl._equity_hard_stop_log_coin_cooldown_status
+    )
+    _equity_hard_stop_emit_coin_status = pb_hsl._equity_hard_stop_emit_coin_status
+    _equity_hard_stop_prime_coin_runtime_for_replay = (
+        pb_hsl._equity_hard_stop_prime_coin_runtime_for_replay
+    )
+    _equity_hard_stop_activate_coin_red_from_metrics = (
+        pb_hsl._equity_hard_stop_activate_coin_red_from_metrics
+    )
     _equity_hard_stop_set_red_runtime_forced_modes = (
         pb_hsl._equity_hard_stop_set_red_runtime_forced_modes
+    )
+    _equity_hard_stop_set_red_paused_runtime_forced_modes = (
+        pb_hsl._equity_hard_stop_set_red_paused_runtime_forced_modes
+    )
+    _equity_hard_stop_set_coin_runtime_forced_mode = (
+        pb_hsl._equity_hard_stop_set_coin_runtime_forced_mode
+    )
+    _equity_hard_stop_clear_coin_runtime_forced_mode = (
+        pb_hsl._equity_hard_stop_clear_coin_runtime_forced_mode
     )
     _equity_hard_stop_clear_runtime_forced_modes = (
         pb_hsl._equity_hard_stop_clear_runtime_forced_modes
@@ -2184,9 +2014,15 @@ class Passivbot:
     _equity_hard_stop_count_blocking_open_orders = (
         pb_hsl._equity_hard_stop_count_blocking_open_orders
     )
+    _equity_hard_stop_has_open_position_symbol = pb_hsl._equity_hard_stop_has_open_position_symbol
+    _equity_hard_stop_count_blocking_open_orders_symbol = (
+        pb_hsl._equity_hard_stop_count_blocking_open_orders_symbol
+    )
     _equity_hard_stop_log_red_progress = pb_hsl._equity_hard_stop_log_red_progress
     _equity_hard_stop_finalize_red_stop = pb_hsl._equity_hard_stop_finalize_red_stop
+    _equity_hard_stop_finalize_coin_red_stop = pb_hsl._equity_hard_stop_finalize_coin_red_stop
     _equity_hard_stop_run_red_supervisor = pb_hsl._equity_hard_stop_run_red_supervisor
+    _equity_hard_stop_run_coin_red_supervisor = pb_hsl._equity_hard_stop_run_coin_red_supervisor
     _apply_equity_hard_stop_orange_overlay = (
         pb_hsl._apply_equity_hard_stop_orange_overlay
     )
@@ -2331,6 +2167,13 @@ class Passivbot:
                 type(exc).__name__,
                 str(exc),
             )
+            self._emit_exchange_time_sync_event(
+                source=source,
+                error=exc,
+                synced_clients=synced_clients,
+                failed_clients=failed_clients,
+                hook_available=False,
+            )
             return False
         now_ms = utc_ms()
         last_ms = int(getattr(self, "_exchange_time_sync_last_log_ms", 0) or 0)
@@ -2344,6 +2187,13 @@ class Passivbot:
             ",".join(failed_clients) if failed_clients else "-",
             type(exc).__name__,
             str(exc),
+        )
+        self._emit_exchange_time_sync_event(
+            source=source,
+            error=exc,
+            synced_clients=synced_clients,
+            failed_clients=failed_clients,
+            hook_available=True,
         )
         return bool(synced_clients)
 
@@ -2430,97 +2280,74 @@ class Passivbot:
     def _maybe_log_health_summary(self) -> None:
         """Log periodic health summary if interval has elapsed."""
         now_ms = utc_ms()
-        if (now_ms - self._health_last_summary_ms) < self._health_summary_interval_ms:
+        previous_ms = int(getattr(self, "_health_last_summary_ms", 0) or 0)
+        interval_ms = max(0, int(getattr(self, "_health_summary_interval_ms", 0) or 0))
+        if (now_ms - previous_ms) < interval_ms:
             return
+        if previous_ms > 0:
+            self._health_summary_lag_ms = max(0, int(now_ms - previous_ms - interval_ms))
+        else:
+            self._health_summary_lag_ms = None
         self._health_last_summary_ms = now_ms
         self._log_health_summary()
 
     def _log_health_summary(self) -> None:
         """Log a health summary with uptime and counters."""
         now_ms = utc_ms()
-        uptime_ms = now_ms - self._health_start_ms
-        uptime_str = self._format_duration(uptime_ms)
-
-        # Count current positions
-        n_long = 0
-        n_short = 0
-        for symbol, pos_data in self.positions.items():
-            if pos_data.get("long", {}).get("size", 0.0) != 0.0:
-                n_long += 1
-            if pos_data.get("short", {}).get("size", 0.0) != 0.0:
-                n_short += 1
-
-        balance_raw = self.get_raw_balance()
-        balance_snapped = self.get_hysteresis_snapped_balance()
-        balance_str = f"{balance_raw:.2f} {self.quote}"
-        if abs(balance_raw - balance_snapped) > 1e-9:
-            balance_str += f" (snap {balance_snapped:.2f})"
-
-        # Build fills string with PnL if fills > 0
-        if self._health_fills > 0:
-            pnl_sign = "+" if self._health_pnl >= 0 else ""
-            fills_str = (
-                f"fills={self._health_fills} (pnl={pnl_sign}{self._health_pnl:.2f})"
+        emit_health_summary = getattr(self, "_emit_health_summary_event", None)
+        can_emit = callable(emit_health_summary)
+        pipeline = getattr(self, "_live_event_pipeline", None)
+        confirm_timing = getattr(pipeline, "confirm_timing_snapshot", None)
+        restore_timing = getattr(pipeline, "restore_timing_snapshot", None)
+        timing_snapshot_token = None
+        try:
+            payload_result = self._build_health_summary_payload(
+                now_ms=now_ms,
+                reset_event_pipeline_timing=can_emit,
             )
-        else:
-            fills_str = "fills=0"
-
-        # Loop timing
-        loop_ms = getattr(self, "_last_loop_duration_ms", 0)
-        loop_str = f"{loop_ms / 1000:.1f}s" if loop_ms > 0 else "n/a"
-        slow_phase_str = ""
-        try:
-            loop_timing = getattr(self, "_last_loop_timing_ms", {}) or {}
-            if loop_ms >= 60_000 and isinstance(loop_timing, dict) and loop_timing:
-                ranked = sorted(
-                    (
-                        (str(phase), int(duration_ms))
-                        for phase, duration_ms in loop_timing.items()
-                    ),
-                    key=lambda item: item[1],
-                    reverse=True,
-                )
-                slow_phase_str = " | slow_phases=" + ",".join(
-                    f"{phase}:{duration_ms / 1000:.1f}s"
-                    for phase, duration_ms in ranked[:3]
-                    if duration_ms > 0
-                )
-        except Exception:
-            slow_phase_str = ""
-
-        # Error budget: count of errors in last hour vs max
-        error_counts = getattr(self, "error_counts", [])
-        now = utc_ms()
-        recent_errors = len([x for x in error_counts if x > now - 1000 * 60 * 60])
-        max_errors = 10
-        error_budget_str = f"{recent_errors}/{max_errors}"
-
-        # Memory usage
-        try:
-            import resource
-
-            rss_mb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024 / 1024
-            mem_str = f"rss={rss_mb:.0f}MB"
-        except Exception:
-            mem_str = ""
-
-        logging.info(
-            "[health] uptime=%s | loop=%s | positions=%d long, %d short | balance=%s | "
-            "orders=+%d/-%d | %s | errors=%s | ws_reconnects=%d | rate_limits=%d%s",
-            uptime_str,
-            loop_str,
-            n_long,
-            n_short,
-            balance_str,
-            self._health_orders_placed,
-            self._health_orders_cancelled,
-            fills_str,
-            error_budget_str,
-            self._health_ws_reconnects,
-            self._health_rate_limits,
-            f"{slow_phase_str}{f' | {mem_str}' if mem_str else ''}",
-        )
+            if isinstance(payload_result, tuple):
+                health_payload, timing_snapshot_token = payload_result
+            else:
+                health_payload = payload_result
+                timing_snapshot_token = None
+            health_console_available = bool(
+                can_emit
+                and Passivbot._live_event_console_available(self)
+                and getattr(pipeline, "console_sink", None) is not None
+            )
+            if not health_console_available:
+                logging.info(format_periodic_health_summary(health_payload))
+            if can_emit:
+                emitted = emit_health_summary(health_payload)
+                if emitted is None:
+                    if callable(restore_timing) and timing_snapshot_token is not None:
+                        restore_timing(timing_snapshot_token)
+                elif callable(confirm_timing) and timing_snapshot_token is not None:
+                    confirm_timing(timing_snapshot_token)
+        except Exception as exc:
+            if callable(restore_timing) and timing_snapshot_token is not None:
+                restore_timing(timing_snapshot_token)
+            logging.debug("[event] failed preparing health summary event: %s", exc)
         self._maybe_log_candle_health_summary()
+
+    def _unstuck_loss_allowance_pct_overrides_for_logging(self, pside: str) -> dict[str, float]:
+        base_pct = float(self.bot_value(pside, "unstuck_loss_allowance_pct") or 0.0)
+        out: dict[str, float] = {}
+        for symbol in sorted((getattr(self, "coin_overrides", {}) or {}).keys()):
+            pct = float(self.bp(pside, "unstuck_loss_allowance_pct", symbol) or 0.0)
+            if abs(pct - base_pct) > 1e-15:
+                out[symbol] = pct
+        return out
+
+    @staticmethod
+    def _format_unstuck_override_pcts_for_logging(overrides: dict[str, float]) -> str:
+        if not overrides:
+            return ""
+        items = list(overrides.items())
+        shown = ", ".join(f"{symbol}={pct:.4f}" for symbol, pct in items[:4])
+        if len(items) > 4:
+            shown = f"{shown}, +{len(items) - 4} more"
+        return shown
 
     def _calc_unstuck_allowance_for_logging(self, pside: str) -> dict:
         """Calculate raw unstuck allowance values for logging (including negative)."""
@@ -2529,7 +2356,8 @@ class Passivbot:
             return {"status": "disabled"}
 
         pct = float(self.bot_value(pside, "unstuck_loss_allowance_pct") or 0.0)
-        if pct <= 0.0:
+        override_pcts = self._unstuck_loss_allowance_pct_overrides_for_logging(pside)
+        if pct <= 0.0 and not any(override_pct > 0.0 for override_pct in override_pcts.values()):
             return {"status": "unstuck_disabled"}
 
         if self._pnls_manager is None:
@@ -2552,20 +2380,44 @@ class Passivbot:
         pct_from_peak = (balance_raw / balance_peak - 1.0) * 100.0
         # Raw allowance WITHOUT .max(0.0) - can be negative
         allowance_raw = balance_peak * (pct * twel + pct_from_peak / 100.0)
+        override_allowances = {
+            symbol: balance_peak * (override_pct * twel + pct_from_peak / 100.0)
+            for symbol, override_pct in override_pcts.items()
+        }
 
         return {
             "status": "ok",
             "allowance": allowance_raw,
             "peak": balance_peak,
             "pct_from_peak": pct_from_peak,
+            "loss_allowance_pct": pct,
+            "override_loss_allowance_pcts": override_pcts,
+            "override_allowances": override_allowances,
         }
 
-    def _get_unstuck_status_parts_and_signature(self) -> tuple[list[str], tuple]:
-        """Build the current unstuck status log line and a comparable signature."""
+    def _get_unstuck_status_snapshot_parts_and_signature(
+        self,
+    ) -> tuple[dict[str, dict], list[str], tuple]:
+        """Build the current unstuck status snapshot, log line, and signature."""
+        side_infos = {}
         parts = []
         signature_parts = []
         for pside in ["long", "short"]:
             info = self._calc_unstuck_allowance_for_logging(pside)
+            runtime_hints = getattr(self, "_monitor_runtime_unstuck_hints", {})
+            if isinstance(runtime_hints, dict):
+                hint = runtime_hints.get(pside)
+                if isinstance(hint, dict):
+                    info = dict(info or {})
+                    for key in (
+                        "next_symbol",
+                        "next_target_price",
+                        "next_target_distance_ratio",
+                        "next_unstuck_trigger_distance_ratio",
+                    ):
+                        if hint.get(key) is not None:
+                            info[key] = hint[key]
+            side_infos[pside] = dict(info or {})
             status = info.get("status")
             if status == "disabled":
                 parts.append(f"{pside}: disabled")
@@ -2581,24 +2433,55 @@ class Passivbot:
                 snapped_allowance = self._get_hysteresis_snapped_unstuck_allowance(
                     pside, allowance
                 )
+                overrides_str = self._format_unstuck_override_pcts_for_logging(
+                    info.get("override_loss_allowance_pcts", {})
+                )
+                overrides_suffix = f" | overrides={overrides_str}" if overrides_str else ""
                 if allowance < 0:
                     parts.append(
-                        "%s: allowance=%.2f (over budget) | peak=%.2f | pct_from_peak=%.1f%%"
-                        % (pside, allowance, info["peak"], info["pct_from_peak"])
+                        "%s: allowance=%.2f (over budget) | peak=%.2f | pct_from_peak=%.1f%%%s"
+                        % (pside, allowance, info["peak"], info["pct_from_peak"], overrides_suffix)
                     )
                 else:
                     parts.append(
-                        "%s: allowance=%.2f | peak=%.2f | pct_from_peak=%.1f%%"
-                        % (pside, allowance, info["peak"], info["pct_from_peak"])
+                        "%s: allowance=%.2f | peak=%.2f | pct_from_peak=%.1f%%%s"
+                        % (pside, allowance, info["peak"], info["pct_from_peak"], overrides_suffix)
                     )
                 signature_parts.append(
                     (
                         pside,
                         "over_budget" if allowance < 0 else "ok",
                         round(float(snapped_allowance), 2),
+                        tuple(sorted(info.get("override_loss_allowance_pcts", {}).items())),
+                        str(info.get("next_symbol") or ""),
+                        round(
+                            self._trailing_status_float(info.get("next_target_price")),
+                            8,
+                        ),
+                        round(
+                            self._trailing_status_float(
+                                info.get("next_target_distance_ratio")
+                            ),
+                            8,
+                        ),
+                        round(
+                            self._trailing_status_float(
+                                info.get("next_unstuck_trigger_distance_ratio")
+                            ),
+                            8,
+                        ),
                     )
                 )
-        return parts, tuple(signature_parts)
+        return side_infos, parts, tuple(signature_parts)
+
+    def _get_unstuck_status_parts_and_signature(self) -> tuple[list[str], tuple]:
+        """Build the current unstuck status log line and a comparable signature."""
+        (
+            _side_infos,
+            parts,
+            signature,
+        ) = self._get_unstuck_status_snapshot_parts_and_signature()
+        return parts, signature
 
     def _get_hysteresis_snapped_unstuck_allowance(
         self, pside: str, allowance_raw: float
@@ -2626,7 +2509,11 @@ class Passivbot:
         if (now_ms - self._unstuck_last_log_ms) < self._unstuck_log_interval_ms:
             return
         self._unstuck_last_log_ms = now_ms
-        parts, signature = self._get_unstuck_status_parts_and_signature()
+        (
+            side_infos,
+            parts,
+            signature,
+        ) = self._get_unstuck_status_snapshot_parts_and_signature()
         status_changed = signature != getattr(
             self, "_unstuck_last_status_signature", None
         )
@@ -2635,7 +2522,12 @@ class Passivbot:
             status_changed
             or (now_ms - last_info_ms) >= self._unstuck_unchanged_info_log_interval_ms
         ):
-            logging.info("[unstuck] %s", " | ".join(parts))
+            if not Passivbot._live_event_console_available(self):
+                logging.info("[unstuck] %s", " | ".join(parts))
+            self._emit_unstuck_status_event(
+                side_statuses=side_infos,
+                changed=status_changed,
+            )
             self._unstuck_last_status_info_ms = now_ms
             self._unstuck_last_status_signature = signature
 
@@ -2652,6 +2544,7 @@ class Passivbot:
         now_ms = utc_ms()
         signature = (symbol, pside, round(float(allowance), 2))
         last_signature = getattr(self, "_unstuck_last_selection_signature", None)
+        changed = signature != last_signature
         last_info_ms = int(getattr(self, "_unstuck_last_selection_info_ms", 0) or 0)
         if (
             signature == last_signature
@@ -2665,18 +2558,299 @@ class Passivbot:
             price_diff_pct = 0.0
             sign = ""
         coin = symbol.split("/")[0] if "/" in symbol else symbol
-        logging.info(
-            "[unstuck] selecting %s %s | entry=%.2f now=%.2f (%s%.1f%%) | allowance=%.2f",
-            coin,
-            pside,
-            entry_price,
-            current_price,
-            sign,
-            price_diff_pct,
-            allowance,
+        if not Passivbot._live_event_console_available(self):
+            logging.info(
+                "[unstuck] selecting %s %s | entry=%.2f now=%.2f (%s%.1f%%) | allowance=%.2f",
+                coin,
+                pside,
+                entry_price,
+                current_price,
+                sign,
+                price_diff_pct,
+                allowance,
+            )
+        self._emit_unstuck_selection_event(
+            symbol=symbol,
+            pside=pside,
+            entry_price=entry_price,
+            current_price=current_price,
+            allowance=allowance,
+            changed=changed,
         )
         self._unstuck_last_selection_signature = signature
         self._unstuck_last_selection_info_ms = now_ms
+
+    def _active_trailing_position_sides(self) -> list[tuple[str, str, dict]]:
+        out: list[tuple[str, str, dict]] = []
+        positions = getattr(self, "positions", {}) or {}
+        if not isinstance(positions, dict):
+            return out
+        for symbol, pos_entry in sorted(positions.items()):
+            if not isinstance(pos_entry, dict):
+                continue
+            for pside in ("long", "short"):
+                pos = pos_entry.get(pside, {})
+                if not isinstance(pos, dict):
+                    continue
+                try:
+                    size = float(pos.get("size", 0.0) or 0.0)
+                except (TypeError, ValueError):
+                    continue
+                if size == 0.0:
+                    continue
+                try:
+                    trailing_active = bool(self.is_trailing(symbol, pside))
+                except Exception:
+                    trailing_active = False
+                if trailing_active:
+                    out.append((str(symbol), pside, dict(pos)))
+        return out
+
+    @staticmethod
+    def _trailing_status_float(value, default: float = 0.0) -> float:
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            return float(default)
+        return number if math.isfinite(number) else float(default)
+
+    @staticmethod
+    def _trailing_status_signature(items: list[dict]) -> tuple:
+        signature = []
+        for item in items:
+            payload = item.get("payload", {}) if isinstance(item, dict) else {}
+            if not isinstance(payload, dict):
+                payload = {}
+            signature.append(
+                (
+                    item.get("symbol"),
+                    item.get("pside"),
+                    item.get("kind"),
+                    bool(payload.get("diagnostics_supported", True)),
+                    str(
+                        payload.get("status")
+                        or payload.get("trailing_status")
+                        or "unknown"
+                    ),
+                    bool(payload.get("threshold_met"))
+                    if "threshold_met" in payload
+                    else None,
+                    bool(payload.get("retracement_met"))
+                    if "retracement_met" in payload
+                    else None,
+                    round(
+                        Passivbot._trailing_status_float(payload.get("threshold_pct")),
+                        8,
+                    ),
+                    round(
+                        Passivbot._trailing_status_float(
+                            payload.get("retracement_pct")
+                        ),
+                        8,
+                    ),
+                    round(
+                        Passivbot._trailing_status_float(payload.get("threshold_price")),
+                        8,
+                    ),
+                    round(
+                        Passivbot._trailing_status_float(
+                            payload.get("retracement_price")
+                        ),
+                        8,
+                    ),
+                    str(payload.get("unsupported_reason") or ""),
+                )
+            )
+        return tuple(sorted(signature))
+
+    def _unsupported_trailing_status_item(
+        self,
+        *,
+        symbol: str,
+        pside: str,
+        pos: dict,
+        strategy_kind: str,
+        reason: str,
+    ) -> dict:
+        return {
+            "symbol": symbol,
+            "pside": pside,
+            "kind": "position",
+            "payload": {
+                "kind": "position",
+                "diagnostics_supported": False,
+                "strategy_kind": strategy_kind,
+                "unsupported_reason": reason,
+                "status": "active_unsupported",
+                "position_size": self._trailing_status_float(pos.get("size")),
+                "position_price": self._trailing_status_float(pos.get("price")),
+            },
+        }
+
+    def _build_trailing_status_items(self) -> list[dict]:
+        active_sides = self._active_trailing_position_sides()
+        if not active_sides:
+            return []
+        strategy_kind = normalize_strategy_kind(
+            self.config.get("live", {}).get("strategy_kind")
+            if isinstance(getattr(self, "config", None), dict)
+            else None
+        )
+        try:
+            market = self._build_monitor_market_section()
+        except Exception as exc:
+            return [
+                self._unsupported_trailing_status_item(
+                    symbol=symbol,
+                    pside=pside,
+                    pos=pos,
+                    strategy_kind=strategy_kind,
+                    reason=f"market_snapshot_unavailable:{type(exc).__name__}",
+                )
+                for symbol, pside, pos in active_sides
+            ]
+        try:
+            balance_raw = float(self.get_raw_balance())
+        except Exception:
+            balance_raw = float(getattr(self, "balance_raw", 0.0) or 0.0)
+        try:
+            trailing_section = self._build_monitor_trailing_section(
+                balance_raw=balance_raw,
+                market=market,
+            )
+        except Exception as exc:
+            return [
+                self._unsupported_trailing_status_item(
+                    symbol=symbol,
+                    pside=pside,
+                    pos=pos,
+                    strategy_kind=strategy_kind,
+                    reason=f"diagnostic_build_failed:{type(exc).__name__}",
+                )
+                for symbol, pside, pos in active_sides
+            ]
+        meta = (
+            trailing_section.get("_meta", {})
+            if isinstance(trailing_section, dict)
+            else {}
+        )
+        if isinstance(meta, dict) and meta.get("diagnostics_supported") is False:
+            reason = str(meta.get("reason") or "diagnostics_unsupported")
+            return [
+                self._unsupported_trailing_status_item(
+                    symbol=symbol,
+                    pside=pside,
+                    pos=pos,
+                    strategy_kind=str(meta.get("strategy_kind") or strategy_kind),
+                    reason=reason,
+                )
+                for symbol, pside, pos in active_sides
+            ]
+        out: list[dict] = []
+        for symbol, pside, pos in active_sides:
+            symbol_section = (
+                trailing_section.get(symbol, {})
+                if isinstance(trailing_section, dict)
+                else {}
+            )
+            side_section = (
+                symbol_section.get(pside, {})
+                if isinstance(symbol_section, dict)
+                else {}
+            )
+            if not isinstance(side_section, dict):
+                out.append(
+                    self._unsupported_trailing_status_item(
+                        symbol=symbol,
+                        pside=pside,
+                        pos=pos,
+                        strategy_kind=strategy_kind,
+                        reason="diagnostic_unavailable",
+                    )
+                )
+                continue
+            emitted = False
+            for kind in ("entry", "close"):
+                payload = side_section.get(kind)
+                if not isinstance(payload, dict):
+                    continue
+                item_payload = dict(payload)
+                item_payload["strategy_kind"] = strategy_kind
+                item_payload["position_size"] = self._trailing_status_float(
+                    pos.get("size")
+                )
+                item_payload["position_price"] = self._trailing_status_float(
+                    pos.get("price")
+                )
+                item_payload["diagnostics_supported"] = True
+                out.append(
+                    {
+                        "symbol": symbol,
+                        "pside": pside,
+                        "kind": kind,
+                        "payload": item_payload,
+                    }
+                )
+                emitted = True
+            if not emitted:
+                out.append(
+                    self._unsupported_trailing_status_item(
+                        symbol=symbol,
+                        pside=pside,
+                        pos=pos,
+                        strategy_kind=strategy_kind,
+                        reason="no_trailing_diagnostic",
+                    )
+                )
+        return out
+
+    def _maybe_log_trailing_status(self) -> None:
+        now_ms = utc_ms()
+        last_check = int(getattr(self, "_trailing_last_status_check_ms", 0) or 0)
+        check_interval = int(
+            getattr(self, "_trailing_status_check_interval_ms", 5 * 60 * 1000)
+            or 0
+        )
+        if check_interval > 0 and (now_ms - last_check) < check_interval:
+            return
+        self._trailing_last_status_check_ms = now_ms
+        try:
+            items = self._build_trailing_status_items()
+        except Exception as exc:
+            logging.debug("[trailing] failed building status event items: %s", exc)
+            return
+        if not items:
+            return
+        signature = self._trailing_status_signature(items)
+        status_changed = signature != getattr(
+            self, "_trailing_last_status_signature", None
+        )
+        last_info_ms = int(getattr(self, "_trailing_last_status_info_ms", 0) or 0)
+        unchanged_interval = int(
+            getattr(
+                self,
+                "_trailing_unchanged_info_log_interval_ms",
+                60 * 60 * 1000,
+            )
+            or 0
+        )
+        if (
+            not status_changed
+            and unchanged_interval > 0
+            and (now_ms - last_info_ms) < unchanged_interval
+        ):
+            return
+        for item in items:
+            payload = dict(item.get("payload", {}) or {})
+            self._emit_trailing_status_event(
+                symbol=str(item.get("symbol") or ""),
+                pside=str(item.get("pside") or ""),
+                kind=str(item.get("kind") or "position"),
+                payload=payload,
+                changed=status_changed,
+            )
+        self._trailing_last_status_signature = signature
+        self._trailing_last_status_info_ms = now_ms
 
     async def start_bot(self):
         """Initialise state, warm cached data, and launch background loops."""
@@ -2687,6 +2861,16 @@ class Passivbot:
         logging.info("[boot] starting bot %s...", self.exchange)
         boot_stage = "start"
         try:
+            live_event_debug_profiles = list(
+                getattr(self, "live_event_debug_profiles", ()) or ()
+            )
+            bot_started_data = {
+                "pid": os.getpid(),
+                "quote": self.quote,
+                "start_time_ms": int(self.start_time_ms),
+            }
+            if live_event_debug_profiles:
+                bot_started_data["live_event_debug_profiles"] = live_event_debug_profiles
             self._monitor_record_event(
                 "bot.start",
                 ("bot", "lifecycle", "start"),
@@ -2696,8 +2880,21 @@ class Passivbot:
                     "pid": os.getpid(),
                     "quote": self.quote,
                     "start_time_ms": int(self.start_time_ms),
+                    **(
+                        {"live_event_debug_profiles": live_event_debug_profiles}
+                        if live_event_debug_profiles
+                        else {}
+                    ),
                 },
                 ts=int(self.start_time_ms),
+            )
+            self._emit_live_event(
+                EventTypes.BOT_STARTED,
+                level="info",
+                component="lifecycle",
+                tags=("bot", "lifecycle", "start"),
+                status="started",
+                data=bot_started_data,
             )
 
             # Random boot stagger to spread API load when multiple bots start simultaneously.
@@ -2770,7 +2967,13 @@ class Passivbot:
                 return
             if self._equity_hard_stop_enabled():
                 boot_stage = "equity_hard_stop_initialize_from_history"
-                await self._equity_hard_stop_initialize_from_history()
+                hsl_mode = self._equity_hard_stop_signal_mode()
+                if hsl_mode == "coin":
+                    boot_stage = "equity_hard_stop_initialize_coin_from_history"
+                    await self._equity_hard_stop_start_coin_history_replay()
+                else:
+                    await self._equity_hard_stop_initialize_from_history()
+                Passivbot._startup_timing_mark(self, "hsl", details=f"mode={hsl_mode}")
                 if self.stop_signal_received:
                     self._monitor_emit_stop(
                         "startup_aborted",
@@ -2807,11 +3010,22 @@ class Passivbot:
             Passivbot._startup_timing_mark(self, "startup")
             self._bot_ready = True
             ready_ts = utc_ms()
+            ready_data = {"debug_mode": bool(self.debug_mode)}
+            if live_event_debug_profiles:
+                ready_data["live_event_debug_profiles"] = live_event_debug_profiles
             self._monitor_record_event(
                 "bot.ready",
                 ("bot", "lifecycle", "ready"),
-                {"debug_mode": bool(self.debug_mode)},
+                ready_data,
                 ts=ready_ts,
+            )
+            self._emit_live_event(
+                EventTypes.BOT_READY,
+                level="info",
+                component="lifecycle",
+                tags=("bot", "lifecycle", "ready"),
+                status="succeeded",
+                data=ready_data,
             )
             await self._monitor_flush_snapshot(force=True, ts=ready_ts)
             if not self.debug_mode:
@@ -2848,7 +3062,30 @@ class Passivbot:
                 ts=error_ts,
                 payload={"stage": boot_stage, "error_type": type(exc).__name__},
             )
+            if self._startup_exception_is_terminal(exc, boot_stage):
+                logging.critical(
+                    "[boot] terminal startup validation failure | stage=%s error_type=%s error=%s",
+                    boot_stage,
+                    type(exc).__name__,
+                    exc,
+                )
+                raise FatalBotException(
+                    f"terminal startup validation failure during {boot_stage}: {exc}"
+                ) from exc
             raise
+
+    @staticmethod
+    def _startup_exception_is_terminal(exc: BaseException, stage: str) -> bool:
+        """Return True for deterministic startup validation failures.
+
+        Exchange/network failures may clear after a restart. Type/value contract
+        failures in local reconstructed safety state do not, so restart loops only
+        add CPU/load while preserving the same error.
+        """
+        stage = str(stage or "")
+        if not stage.startswith("equity_hard_stop_initialize"):
+            return False
+        return isinstance(exc, (TypeError, ValueError))
 
     def _startup_timing_begin(self) -> None:
         """Initialize one-shot startup readiness timing diagnostics."""
@@ -2877,14 +3114,158 @@ class Passivbot:
         since_previous_s = max(0.0, (now_ms - previous_ms) / 1000.0)
         marks[label] = now_ms
         self._startup_timing_last_mark_ms = now_ms
-        suffix = f" | {details}" if details else ""
-        logging.info(
-            "[boot] startup timing | %s-ready=%.2fs | since_previous=%.2fs%s",
-            label,
-            elapsed_s,
-            since_previous_s,
-            suffix,
+        if not Passivbot._live_event_console_available(self):
+            suffix = f" | {details}" if details else ""
+            logging.info(
+                "[boot] startup timing | %s-ready=%.2fs | since_previous=%.2fs%s",
+                label,
+                elapsed_s,
+                since_previous_s,
+                suffix,
+            )
+        Passivbot._emit_startup_timing_event(
+            self,
+            phase=label,
+            elapsed_ms=max(0, int(now_ms - started_ms)),
+            since_previous_ms=max(0, int(now_ms - previous_ms)),
+            details=str(details or ""),
         )
+
+    def _force_cold_startup(self) -> bool:
+        """Return True when startup should bypass warm-cache short cuts."""
+        raw = get_optional_live_value(
+            getattr(self, "config", {}), "force_cold_startup", False
+        )
+        if isinstance(raw, bool):
+            return bool(raw)
+        if raw is None:
+            return False
+        if isinstance(raw, (int, float)):
+            return bool(raw)
+        return str(raw).strip().lower() in {"1", "true", "yes", "on"}
+
+    def _warmup_candle_cache_decision(
+        self,
+        symbol: str,
+        *,
+        timeframe: str = "1m",
+        required_candles: int,
+        ttl_ms: Optional[int],
+        now_ms: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """Decide whether startup warmup can reuse completed local candles."""
+        tf_norm = str(timeframe or "1m").strip().lower()
+        try:
+            required = max(1, int(required_candles))
+        except Exception:
+            required = 1
+        now = utc_ms() if now_ms is None else int(now_ms)
+        decision: Dict[str, Any] = {
+            "accepted": False,
+            "reason_code": "unknown",
+            "timeframe": tf_norm,
+            "required_candles": int(required),
+            "latest_required_ms": None,
+            "covered_end_ms": None,
+            "last_refresh_ms": 0,
+            "refresh_age_ms": None,
+            "missing_candles": None,
+            "source_fingerprint": (
+                f"{getattr(self, 'exchange', '')}:"
+                f"{getattr(self, 'user', '')}:{symbol}:{tf_norm}:{required}"
+            ),
+            "cold_path_required": True,
+        }
+        if self._force_cold_startup():
+            decision["reason_code"] = "force_cold_startup"
+            return decision
+        cm = getattr(self, "cm", None)
+        if cm is None or not hasattr(cm, "get_completed_candle_health"):
+            decision["reason_code"] = "no_candlestick_manager"
+            return decision
+        try:
+            health = cm.get_completed_candle_health(
+                symbol,
+                {tf_norm: {"candles": required, "required": True}},
+                now_ms=now,
+            )
+        except Exception as exc:
+            decision["reason_code"] = "cache_probe_failed"
+            decision["error_type"] = type(exc).__name__
+            return decision
+        if not isinstance(health, dict):
+            decision["reason_code"] = "invalid_health_report"
+            return decision
+        report = (health.get("timeframes", {}) or {}).get(tf_norm)
+        if not isinstance(report, dict):
+            decision["reason_code"] = "missing_timeframe_report"
+            return decision
+
+        latest_required = report.get("latest_expected_ts")
+        covered_end = report.get("last_cached_ts")
+        try:
+            last_refresh = int(report.get("last_refresh_ms") or 0)
+        except Exception:
+            last_refresh = 0
+        refresh_age = report.get("refresh_age_ms")
+        try:
+            missing_candles = int(report.get("missing_candles") or 0)
+        except Exception:
+            missing_candles = 0
+        decision.update(
+            {
+                "latest_required_ms": latest_required,
+                "covered_end_ms": covered_end,
+                "last_refresh_ms": last_refresh,
+                "refresh_age_ms": refresh_age,
+                "missing_candles": missing_candles,
+            }
+        )
+
+        if not bool(report.get("coverage_ok")):
+            decision["reason_code"] = "missing_coverage"
+            return decision
+        if latest_required is not None and covered_end is None:
+            decision["reason_code"] = "missing_cached_end"
+            return decision
+        if latest_required is not None and covered_end is not None:
+            try:
+                if int(covered_end) < int(latest_required):
+                    decision["reason_code"] = "covered_tail_before_required"
+                    return decision
+            except Exception:
+                decision["reason_code"] = "invalid_coverage_metadata"
+                return decision
+
+        # A live 1m manager refreshes latest-tail data based on last_refresh_ms.
+        # Reuse the warm cache only when that same TTL proof is already fresh.
+        if tf_norm == "1m" and getattr(cm, "exchange", None) is not None:
+            try:
+                ttl = int(ttl_ms) if ttl_ms is not None else None
+            except Exception:
+                ttl = None
+            if ttl is not None and ttl <= 0:
+                decision["reason_code"] = "ttl_forces_refresh"
+                return decision
+            if ttl is not None and ttl > 0:
+                if last_refresh <= 0:
+                    decision["reason_code"] = "missing_refresh_metadata"
+                    return decision
+                if refresh_age is None:
+                    refresh_age = max(0, now - int(last_refresh))
+                    decision["refresh_age_ms"] = int(refresh_age)
+                try:
+                    if int(refresh_age) > ttl:
+                        decision["reason_code"] = "stale_refresh"
+                        return decision
+                except Exception:
+                    decision["reason_code"] = "invalid_refresh_metadata"
+                    return decision
+
+        decision["accepted"] = True
+        decision["reason_code"] = "warm_cache_accepted"
+        decision["cold_path_required"] = False
+        return decision
 
     async def init_markets(self, verbose=True):
         """Load exchange market metadata and refresh approval lists."""
@@ -3225,8 +3606,9 @@ class Passivbot:
                 if order.get("symbol")
             }
         )
-        return {
+        wave = {
             "id": int(self._order_wave_seq),
+            "event_id": f"ow_{int(self._order_wave_seq)}",
             "started_ms": int(utc_ms()),
             "planned_cancel": len(to_cancel or []),
             "planned_create": len(to_create or []),
@@ -3235,10 +3617,15 @@ class Passivbot:
             "create_posted": 0,
             "cancel_ms": None,
             "create_ms": None,
+            "skipped_cancel": 0,
             "deferred_create": 0,
             "skipped_create": 0,
             "requested_confirmations": {},
         }
+        emit_started = getattr(self, "_emit_order_wave_started_event", None)
+        if callable(emit_started):
+            emit_started(wave)
+        return wave
 
     def _log_order_wave_summary(self, wave: dict | None) -> None:
         """Emit one compact lifecycle summary for plan-to-exchange timing."""
@@ -3250,6 +3637,7 @@ class Passivbot:
         planned_create = int(wave.get("planned_create", 0) or 0)
         cancel_posted = int(wave.get("cancel_posted", 0) or 0)
         create_posted = int(wave.get("create_posted", 0) or 0)
+        skipped_cancel = int(wave.get("skipped_cancel", 0) or 0)
         deferred_create = int(wave.get("deferred_create", 0) or 0)
         skipped_create = int(wave.get("skipped_create", 0) or 0)
         symbols = list(wave.get("symbols") or [])
@@ -3258,6 +3646,7 @@ class Passivbot:
             planned_create,
             cancel_posted,
             create_posted,
+            skipped_cancel,
             deferred_create,
             skipped_create,
             tuple(symbols[:12]),
@@ -3267,6 +3656,15 @@ class Passivbot:
             if elapsed_ms >= 1_000 or cancel_posted or create_posted
             else logging.DEBUG
         )
+        emit_completed = getattr(self, "_emit_order_wave_completed_event", None)
+        if callable(emit_completed):
+            emit_completed(
+                wave,
+                elapsed_ms=elapsed_ms,
+                level=logging.getLevelName(log_level).lower(),
+            )
+        if Passivbot._live_event_console_available(self):
+            return
         if log_level == logging.DEBUG and summary_key == getattr(
             self, "_order_wave_last_summary_key", None
         ):
@@ -3277,6 +3675,8 @@ class Passivbot:
             timings.append(f"cancel_ms={int(wave['cancel_ms'])}")
         if wave.get("create_ms") is not None:
             timings.append(f"create_ms={int(wave['create_ms'])}")
+        if skipped_cancel:
+            timings.append(f"skipped_cancel={skipped_cancel}")
         if deferred_create:
             timings.append(f"deferred_create={deferred_create}")
         if skipped_create:
@@ -3329,6 +3729,7 @@ class Passivbot:
                 "confirmations": {
                     str(surface): int(epoch) for surface, epoch in confirmations.items()
                 },
+                "timeout_emitted": False,
             }
         )
         self._pending_order_waves = pending[-8:]
@@ -3345,6 +3746,13 @@ class Passivbot:
         if not pending:
             return
         now_ms = int(utc_ms())
+        try:
+            timeout_ms = max(
+                0,
+                int(getattr(self, "_order_wave_confirmation_timeout_ms", 60_000) or 0),
+            )
+        except Exception:
+            timeout_ms = 60_000
         remaining = []
         for wave in pending:
             confirmations = dict(wave.get("confirmations") or {})
@@ -3353,6 +3761,29 @@ class Passivbot:
                 for surface, epoch in confirmations.items()
             )
             if not settled:
+                confirm_ms = max(
+                    0, now_ms - int(wave.get("posted_ms", now_ms) or now_ms)
+                )
+                if timeout_ms and confirm_ms >= timeout_ms and not wave.get(
+                    "timeout_emitted"
+                ):
+                    elapsed_ms = max(
+                        0, now_ms - int(wave.get("started_ms", now_ms) or now_ms)
+                    )
+                    emit_confirmation_timeout = getattr(
+                        self, "_emit_execution_confirmation_timeout_event", None
+                    )
+                    if callable(emit_confirmation_timeout):
+                        emit_confirmation_timeout(
+                            wave=wave,
+                            confirmations=confirmations,
+                            current_epoch=current_epoch,
+                            fresh_surfaces=fresh_surfaces,
+                            elapsed_ms=elapsed_ms,
+                            confirm_ms=confirm_ms,
+                            timeout_ms=timeout_ms,
+                        )
+                    wave["timeout_emitted"] = True
                 remaining.append(wave)
                 continue
             elapsed_ms = max(0, now_ms - int(wave.get("started_ms", now_ms) or now_ms))
@@ -3364,6 +3795,22 @@ class Passivbot:
             log_level = (
                 logging.INFO if confirm_ms >= 10_000 or significant_changed else logging.DEBUG
             )
+            emit_confirmation_satisfied = getattr(
+                self, "_emit_execution_confirmation_satisfied_event", None
+            )
+            if callable(emit_confirmation_satisfied):
+                emit_confirmation_satisfied(
+                    wave=wave,
+                    confirmations=confirmations,
+                    current_epoch=current_epoch,
+                    fresh_surfaces=fresh_surfaces,
+                    changed_surfaces=changed_surfaces,
+                    elapsed_ms=elapsed_ms,
+                    confirm_ms=confirm_ms,
+                    level=logging.getLevelName(log_level).lower(),
+                )
+            if Passivbot._live_event_console_available(self):
+                continue
             logging.log(
                 log_level,
                 "[order] wave settled | id=%s | elapsed_ms=%d | confirm_ms=%d | "
@@ -3439,11 +3886,85 @@ class Passivbot:
         """
         return self.config_get(["bot", pside, key], symbol)
 
+    def _live_strategy_warmup_value(self, pside: str, key: str, symbol: str) -> float:
+        """Return strategy-scoped indicator spans for live candle warmup."""
+        strategy_getter = getattr(self, "_strategy_params_to_rust_dict", None)
+        if not callable(strategy_getter):
+            try:
+                if key == "entry_volatility_ema_span_1h":
+                    raw = self.bp(pside, "entry_volatility_ema_span_hours", symbol)
+                else:
+                    raw = self.bp(pside, key, symbol)
+            except KeyError:
+                return 0.0
+            return Passivbot._positive_finite_warmup_value(
+                raw,
+                context=f"strategy {pside}.{key}",
+                symbol=symbol,
+            )
+
+        strategy_cfg = strategy_getter(pside, symbol)
+        if not isinstance(strategy_cfg, dict):
+            raise TypeError(
+                f"live strategy warmup expected dict for {pside}.{key} "
+                f"{symbol or ''}; got {type(strategy_cfg).__name__}"
+            )
+
+        return strategy_warmup_value(
+            strategy_cfg,
+            key,
+            pside=pside,
+            symbol=symbol,
+            error_label="live warmup",
+        )
+
+    def _live_forager_warmup_value(self, pside: str, key: str, symbol: str) -> float:
+        """Return grouped forager indicator spans for live candle warmup."""
+        bot_value = getattr(self, "bot_value", None)
+        if not callable(bot_value):
+            try:
+                raw = self.bp(pside, key, symbol)
+                if key.endswith("_1m"):
+                    try:
+                        legacy_raw = self.bp(pside, key[:-3], symbol)
+                    except KeyError:
+                        legacy_raw = 0.0
+                    if float(raw or 0.0) <= 0.0 and float(legacy_raw or 0.0) > 0.0:
+                        raw = legacy_raw
+            except KeyError:
+                return 0.0
+            return Passivbot._positive_finite_warmup_value(
+                raw,
+                context=f"forager {pside}.{key}",
+                symbol=symbol,
+            )
+        return Passivbot._positive_finite_warmup_value(
+            bot_value(pside, key),
+            context=f"forager {pside}.{key}",
+            symbol=symbol,
+        )
+
+    @staticmethod
+    def _positive_finite_warmup_value(value, *, context: str, symbol: str | None) -> float:
+        try:
+            val = float(value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                f"invalid live warmup value for {context} "
+                f"symbol={Passivbot._log_symbol(symbol)}: {value!r}"
+            ) from exc
+        if not math.isfinite(val):
+            raise ValueError(
+                f"invalid live warmup value for {context} "
+                f"symbol={Passivbot._log_symbol(symbol)}: {value!r}"
+            )
+        return val if val > 0.0 else 0.0
+
     def maybe_log_ema_debug(
         self,
         ema_bounds_long: Dict[str, Tuple[float, float]],
         ema_bounds_short: Dict[str, Tuple[float, float]],
-        entry_volatility_logrange_ema_1h: Dict[str, Dict[str, float]],
+        volatility_ema_1h: Dict[str, Dict[str, float]],
     ) -> None:
 
         ema_debug_logging_enabled = False
@@ -3476,9 +3997,7 @@ class Passivbot:
             for symbol, (lower, upper) in sorted(bounds.items()):
                 span0 = _safe_span(pside, "ema_span_0", symbol)
                 span1 = _safe_span(pside, "ema_span_1", symbol)
-                grid_lr = (
-                    (entry_volatility_logrange_ema_1h or {}).get(pside, {}).get(symbol)
-                )
+                grid_lr = (volatility_ema_1h or {}).get(pside, {}).get(symbol)
                 parts = [Passivbot._log_symbol(symbol)]
                 if span0 is not None or span1 is not None:
                     parts.append(
@@ -3488,7 +4007,7 @@ class Passivbot:
                 parts.append(f"lower={lower:.6g}")
                 parts.append(f"upper={upper:.6g}")
                 if grid_lr is not None:
-                    parts.append(f"log_range_ema={grid_lr:.6g}")
+                    parts.append(f"volatility_ema={grid_lr:.6g}")
                 side_entries.append(" ".join(parts))
             if side_entries:
                 logs.append(f"{pside} -> " + "; ".join(side_entries))
@@ -3633,6 +4152,12 @@ class Passivbot:
                 symbols_by_side,
                 lambda pside, key, sym: self.bp(pside, key, sym),
                 forager_enabled=forager_needed,
+                strategy_lookup=lambda pside, key, sym: Passivbot._live_strategy_warmup_value(
+                    self, pside, key, sym
+                ),
+                forager_lookup=lambda pside, key, sym: Passivbot._live_forager_warmup_value(
+                    self, pside, key, sym
+                ),
                 window_candles=window_candles,
                 warmup_ratio=warmup_ratio,
                 max_warmup_minutes=max_warmup_minutes,
@@ -3730,13 +4255,37 @@ class Passivbot:
             # Pace it even on exchanges whose per-request delay normally defaults to zero.
             fetch_delay_s = max(fetch_delay_s, 0.5)
 
+        cache_reused_1m = 0
+        cache_cold_1m = 0
+        cache_reason_counts: Dict[str, int] = {}
+
+        def bump_cache_reason(reason: str) -> None:
+            key = str(reason or "unknown")
+            cache_reason_counts[key] = int(cache_reason_counts.get(key, 0)) + 1
+
         async def one(sym: str):
-            nonlocal completed, last_log_ms
+            nonlocal cache_cold_1m, cache_reused_1m, completed, last_log_ms
+            did_fetch = False
             async with sem:
                 try:
                     win = int(per_symbol_win.get(sym, default_win))
                     skip_hist = bool(per_symbol_skip_historical.get(sym, True))
                     start_ts = int(end_final - ONE_MIN_MS * max(1, win))
+                    decision = Passivbot._warmup_candle_cache_decision(
+                        self,
+                        sym,
+                        timeframe="1m",
+                        required_candles=win,
+                        ttl_ms=ttl_ms,
+                        now_ms=now,
+                    )
+                    if bool(decision.get("accepted")):
+                        cache_reused_1m += 1
+                        bump_cache_reason(decision.get("reason_code", "accepted"))
+                        return
+                    cache_cold_1m += 1
+                    bump_cache_reason(decision.get("reason_code", "cold_path"))
+                    did_fetch = True
                     await self.cm.get_candles(
                         sym,
                         start_ts=start_ts,
@@ -3749,7 +4298,7 @@ class Passivbot:
                 except Exception:
                     pass
                 finally:
-                    if fetch_delay_s > 0:
+                    if did_fetch and fetch_delay_s > 0:
                         await self._sleep_unless_shutdown(
                             fetch_delay_s, stage="warmup_candles"
                         )
@@ -3773,6 +4322,36 @@ class Passivbot:
                             last_log_ms = now_ms
 
         await asyncio.gather(*(one(s) for s in symbols))
+
+        reasons = (
+            ",".join(
+                f"{reason}:{count}"
+                for reason, count in sorted(cache_reason_counts.items())
+            )
+            or "none"
+        )
+        logging.info(
+            "[warmup] cache decision | context=%s timeframe=1m reused=%d cold=%d reasons=%s elapsed=%.2fs",
+            context,
+            cache_reused_1m,
+            cache_cold_1m,
+            reasons,
+            max(0.0, (utc_ms() - started_ms) / 1000.0),
+        )
+        Passivbot._emit_cache_warmup_decision_event(
+            self,
+            context=str(context),
+            timeframe="1m",
+            symbol_count=n,
+            reused_count=cache_reused_1m,
+            cold_count=cache_cold_1m,
+            reason_counts=cache_reason_counts,
+            elapsed_ms=max(0, int(utc_ms() - started_ms)),
+            concurrency=concurrency,
+            ttl_ms=ttl_ms,
+            window_min_candles=wmin,
+            window_max_candles=wmax,
+        )
 
         # Warm 1h candles for grid log-range EMAs
         hour_sem = asyncio.Semaphore(max(1, int(concurrency)))
@@ -4105,6 +4684,12 @@ class Passivbot:
             symbols_by_side,
             lambda pside, key, sym: self.bp(pside, key, sym),
             forager_enabled=forager_enabled,
+            strategy_lookup=lambda pside, key, sym: Passivbot._live_strategy_warmup_value(
+                self, pside, key, sym
+            ),
+            forager_lookup=lambda pside, key, sym: Passivbot._live_forager_warmup_value(
+                self, pside, key, sym
+            ),
             warmup_ratio=warmup_ratio,
             max_warmup_minutes=max_warmup_minutes,
         )
@@ -4126,23 +4711,41 @@ class Passivbot:
             if win > 0 and end_final > 0:
                 start_ts = max(0, int(end_final - win * ONE_MIN_MS))
                 log_level = "debug"
-                self.cm.check_disk_coverage(
+                report = self.cm.check_disk_coverage(
                     sym,
                     start_ts,
                     int(end_final),
                     timeframe="1m",
                     log_level=log_level,
                 )
+                self._emit_candle_coverage_checked_event(
+                    symbol=sym,
+                    timeframe="1m",
+                    start_ts=start_ts,
+                    end_ts=int(end_final),
+                    report=report,
+                    context="required_disk_audit",
+                    required=True,
+                )
             warm_hours = int(per_symbol_h1_hours.get(sym, 0) or 0)
             if warm_hours > 0 and end_final_hour > 0:
                 start_ts = max(0, int(end_final_hour - warm_hours * 60 * ONE_MIN_MS))
                 log_level = "debug"
-                self.cm.check_disk_coverage(
+                report = self.cm.check_disk_coverage(
                     sym,
                     start_ts,
                     int(end_final_hour),
                     timeframe="1h",
                     log_level=log_level,
+                )
+                self._emit_candle_coverage_checked_event(
+                    symbol=sym,
+                    timeframe="1h",
+                    start_ts=start_ts,
+                    end_ts=int(end_final_hour),
+                    report=report,
+                    context="required_disk_audit",
+                    required=True,
                 )
 
     def _required_candle_windows_by_symbol(
@@ -4245,6 +4848,12 @@ class Passivbot:
             symbols_by_side,
             lambda pside, key, sym: self.bp(pside, key, sym),
             forager_enabled=forager_enabled,
+            strategy_lookup=lambda pside, key, sym: Passivbot._live_strategy_warmup_value(
+                self, pside, key, sym
+            ),
+            forager_lookup=lambda pside, key, sym: Passivbot._live_forager_warmup_value(
+                self, pside, key, sym
+            ),
             warmup_ratio=warmup_ratio,
             max_warmup_minutes=max_warmup_minutes,
         )
@@ -4624,6 +5233,22 @@ class Passivbot:
         state["last_log_ms"] = now
         top = ",".join(f"{name}:{n}" for name, n in endpoints.most_common(5))
         window_s = max(1, int((now - int(state["first_ms"])) / 1000))
+        emit_error_burst = getattr(self, "_emit_execution_loop_error_burst_event", None)
+        pipeline = getattr(self, "_live_event_pipeline", None)
+        structured_console_available = bool(
+            callable(emit_error_burst)
+            and Passivbot._live_event_console_available(self)
+            and getattr(pipeline, "console_sink", None) is not None
+        )
+        if callable(emit_error_burst):
+            emit_error_burst(
+                count=count,
+                window_s=window_s,
+                endpoints=endpoints,
+                latest_fields=fields,
+            )
+        if structured_console_available:
+            return
         logging.warning(
             "[health] execution loop error burst | count=%d window=%ds top=%s latest_type=%s status=%s code=%s action=restart_backoff_continues",
             count,
@@ -4688,16 +5313,25 @@ class Passivbot:
         failed_update_pos_oos_pnls_ohlcvs_count = 0
         pending_pnl_authoritative_retry_count = 0
         max_n_fails = 10
-        if self._equity_hard_stop_enabled() and not all(
-            self._equity_hard_stop_runtime_initialized(pside)
-            or not self._equity_hard_stop_enabled(pside)
-            for pside in self._hsl_psides()
-        ):
-            await self._equity_hard_stop_initialize_from_history()
+        if self._equity_hard_stop_enabled():
+            if self._equity_hard_stop_signal_mode() == "coin":
+                if not (
+                    getattr(self, "_equity_hard_stop_coin_initialized", False)
+                    or getattr(self, "_equity_hard_stop_coin_protective_ready", False)
+                ):
+                    await self._equity_hard_stop_initialize_coin_from_history()
+            elif not all(
+                self._equity_hard_stop_runtime_initialized(pside)
+                or not self._equity_hard_stop_enabled(pside)
+                for pside in self._hsl_psides()
+            ):
+                await self._equity_hard_stop_initialize_from_history()
         while not self.stop_signal_received:
+            loop_start_ms = utc_ms()
+            loop_timings_ms: dict[str, int] = {}
+            cycle_id = None
             try:
-                loop_start_ms = utc_ms()
-                loop_timings_ms: dict[str, int] = {}
+                cycle_id = self._begin_live_event_cycle(loop_start_ms=loop_start_ms)
 
                 def mark_phase(phase: str, started_ms: int) -> None:
                     try:
@@ -4715,6 +5349,11 @@ class Passivbot:
                     authoritative_ok = await self.refresh_authoritative_state()
                 except asyncio.CancelledError:
                     if self._shutdown_requested():
+                        self._emit_live_cycle_degraded(
+                            cycle_id=cycle_id,
+                            reason_code="shutdown_authoritative_refresh_cancelled",
+                            data={"timings_ms": dict(loop_timings_ms)},
+                        )
                         logging.debug(
                             "[shutdown] authoritative refresh cancelled during shutdown"
                         )
@@ -4723,6 +5362,11 @@ class Passivbot:
                 mark_phase("authoritative", phase_start_ms)
                 if not authoritative_ok:
                     if self._shutdown_requested():
+                        self._emit_live_cycle_degraded(
+                            cycle_id=cycle_id,
+                            reason_code="shutdown_requested",
+                            data={"timings_ms": dict(loop_timings_ms)},
+                        )
                         break
                     if (
                         getattr(self, "_last_authoritative_block_reason", None)
@@ -4738,34 +5382,88 @@ class Passivbot:
                         self._maybe_log_pending_pnl_authoritative_block(
                             retry_delay_seconds=retry_delay_seconds
                         )
-                        await asyncio.sleep(retry_delay_seconds)
+                        self._emit_live_cycle_degraded(
+                            cycle_id=cycle_id,
+                            reason_code="pending_pnl_authoritative_refresh",
+                            data={
+                                "retry_count": pending_pnl_authoritative_retry_count,
+                                "retry_delay_seconds": retry_delay_seconds,
+                                "timings_ms": dict(loop_timings_ms),
+                            },
+                        )
+                        await self._sleep_unless_shutdown(
+                            retry_delay_seconds,
+                            stage="pending_pnl_authoritative_retry",
+                        )
                     else:
                         pending_pnl_authoritative_retry_count = 0
                         failed_update_pos_oos_pnls_ohlcvs_count += 1
-                        await asyncio.sleep(0.5)
+                        self._emit_live_cycle_degraded(
+                            cycle_id=cycle_id,
+                            reason_code="authoritative_refresh_unavailable",
+                            data={
+                                "failed_count": failed_update_pos_oos_pnls_ohlcvs_count,
+                                "last_block_reason": getattr(
+                                    self, "_last_authoritative_block_reason", None
+                                ),
+                                "timings_ms": dict(loop_timings_ms),
+                            },
+                        )
+                        await self._sleep_unless_shutdown(
+                            0.5, stage="authoritative_refresh_retry"
+                        )
                         if failed_update_pos_oos_pnls_ohlcvs_count > max_n_fails:
                             await self.restart_bot_on_too_many_errors()
                     continue
                 pending_pnl_authoritative_retry_count = 0
                 failed_update_pos_oos_pnls_ohlcvs_count = 0
                 if self.stop_signal_received:
+                    self._emit_live_cycle_degraded(
+                        cycle_id=cycle_id,
+                        reason_code="shutdown_requested",
+                        data={"timings_ms": dict(loop_timings_ms)},
+                    )
                     break
                 if self._equity_hard_stop_enabled():
                     await self._equity_hard_stop_check()
-                    if any(
-                        self._equity_hard_stop_runtime_red_latched(pside)
-                        and not self._hsl_state(pside)["halted"]
-                        for pside in self._hsl_psides()
-                        if self._equity_hard_stop_enabled(pside)
-                    ):
-                        await self._equity_hard_stop_run_red_supervisor()
-                        continue
+                    if self._equity_hard_stop_signal_mode() == "coin":
+                        if self._equity_hard_stop_coin_red_active():
+                            self._emit_live_cycle_degraded(
+                                cycle_id=cycle_id,
+                                reason_code="coin_hsl_red_supervisor",
+                                data={"timings_ms": dict(loop_timings_ms)},
+                            )
+                            await self._equity_hard_stop_run_coin_red_supervisor()
+                            continue
+                    else:
+                        if any(
+                            self._equity_hard_stop_runtime_red_latched(pside)
+                            and not self._hsl_state(pside)["halted"]
+                            for pside in self._hsl_psides()
+                            if self._equity_hard_stop_enabled(pside)
+                        ):
+                            self._emit_live_cycle_degraded(
+                                cycle_id=cycle_id,
+                                reason_code="hsl_red_supervisor",
+                                data={"timings_ms": dict(loop_timings_ms)},
+                            )
+                            await self._equity_hard_stop_run_red_supervisor()
+                            continue
                 blocked, barrier_details = self._authoritative_execution_barrier_state()
                 if blocked:
                     self._log_authoritative_execution_barrier(barrier_details)
+                    self._emit_live_cycle_degraded(
+                        cycle_id=cycle_id,
+                        reason_code="execution_barrier",
+                        data={
+                            "barrier": dict(barrier_details or {}),
+                            "timings_ms": dict(loop_timings_ms),
+                        },
+                    )
                     self._last_loop_duration_ms = utc_ms() - loop_start_ms
                     self._last_loop_timing_ms = dict(loop_timings_ms)
                     self._maybe_log_health_summary()
+                    self._maybe_log_trailing_status()
                     self._maybe_log_unstuck_status()
                     self._set_log_silence_watchdog_context(
                         phase="runtime", stage="flush_snapshot"
@@ -4774,13 +5472,19 @@ class Passivbot:
                     self._set_log_silence_watchdog_context(
                         phase="runtime", stage="confirmation_delay"
                     )
-                    await asyncio.sleep(
+                    await self._sleep_unless_shutdown(
                         self._authoritative_confirmation_retry_delay_seconds(
                             details=barrier_details
-                        )
+                        ),
+                        stage="authoritative_confirmation_delay",
                     )
                     continue
                 if self.stop_signal_received:
+                    self._emit_live_cycle_degraded(
+                        cycle_id=cycle_id,
+                        reason_code="shutdown_requested",
+                        data={"timings_ms": dict(loop_timings_ms)},
+                    )
                     break
                 self._set_log_silence_watchdog_context(
                     phase="runtime", stage="prepare_planning_universe"
@@ -4789,6 +5493,11 @@ class Passivbot:
                 await self.prepare_planning_universe()
                 mark_phase("planning_universe", phase_start_ms)
                 if self.stop_signal_received:
+                    self._emit_live_cycle_degraded(
+                        cycle_id=cycle_id,
+                        reason_code="shutdown_requested",
+                        data={"timings_ms": dict(loop_timings_ms)},
+                    )
                     break
                 self._set_log_silence_watchdog_context(
                     phase="runtime", stage="refresh_market_state_if_needed"
@@ -4798,6 +5507,11 @@ class Passivbot:
                     market_ok = await self.refresh_market_state_if_needed()
                 except asyncio.CancelledError:
                     if self._shutdown_requested():
+                        self._emit_live_cycle_degraded(
+                            cycle_id=cycle_id,
+                            reason_code="shutdown_market_refresh_cancelled",
+                            data={"timings_ms": dict(loop_timings_ms)},
+                        )
                         logging.debug(
                             "[shutdown] market refresh cancelled during shutdown"
                         )
@@ -4805,16 +5519,36 @@ class Passivbot:
                     raise
                 mark_phase("market_state", phase_start_ms)
                 if not market_ok:
-                    await asyncio.sleep(0.5)
+                    self._emit_live_cycle_degraded(
+                        cycle_id=cycle_id,
+                        reason_code="market_state_unavailable",
+                        data={"timings_ms": dict(loop_timings_ms)},
+                    )
+                    await self._sleep_unless_shutdown(
+                        0.5, stage="market_state_retry"
+                    )
                     continue
                 Passivbot._startup_timing_mark(self, "market")
                 if self.stop_signal_received:
+                    self._emit_live_cycle_degraded(
+                        cycle_id=cycle_id,
+                        reason_code="shutdown_requested",
+                        data={"timings_ms": dict(loop_timings_ms)},
+                    )
                     break
                 staged_ready, staged_details = self._staged_execution_ready_state(
                     include_market_snapshot=False, context="market snapshot refresh"
                 )
                 if not staged_ready:
                     self._last_loop_timing_ms = dict(loop_timings_ms)
+                    self._emit_live_cycle_degraded(
+                        cycle_id=cycle_id,
+                        reason_code="staged_execution_not_ready",
+                        data={
+                            "details": dict(staged_details or {}),
+                            "timings_ms": dict(loop_timings_ms),
+                        },
+                    )
                     await self._defer_staged_execution_cycle(
                         staged_details, loop_start_ms
                     )
@@ -4827,6 +5561,11 @@ class Passivbot:
                     res = await self.execute_to_exchange(prepare_cycle=False)
                 except asyncio.CancelledError:
                     if self._shutdown_requested():
+                        self._emit_live_cycle_degraded(
+                            cycle_id=cycle_id,
+                            reason_code="shutdown_execution_cancelled",
+                            data={"timings_ms": dict(loop_timings_ms)},
+                        )
                         logging.debug("[shutdown] execution cancelled during shutdown")
                         break
                     raise
@@ -4836,11 +5575,24 @@ class Passivbot:
                     )
                     if handled:
                         self._last_loop_timing_ms = dict(loop_timings_ms)
+                        self._emit_live_cycle_degraded(
+                            cycle_id=cycle_id,
+                            reason_code="staged_execution_precondition",
+                            data={
+                                "details": dict(details or {}),
+                                "timings_ms": dict(loop_timings_ms),
+                            },
+                        )
                         await self._defer_staged_execution_cycle(details, loop_start_ms)
                         continue
                     raise
                 mark_phase("execute", phase_start_ms)
                 if self.debug_mode:
+                    self._emit_live_cycle_completed(
+                        cycle_id=cycle_id,
+                        loop_start_ms=loop_start_ms,
+                        timings_ms=loop_timings_ms,
+                    )
                     if getattr(self, "_execution_loop_task", None) is current_task:
                         self._execution_loop_task = None
                     if (
@@ -4850,12 +5602,18 @@ class Passivbot:
                         execution_loop_stopped.set()
                     return res
                 if self.stop_signal_received:
+                    self._emit_live_cycle_degraded(
+                        cycle_id=cycle_id,
+                        reason_code="shutdown_requested",
+                        data={"timings_ms": dict(loop_timings_ms)},
+                    )
                     break
                 # Track loop duration for health reporting
                 self._last_loop_duration_ms = utc_ms() - loop_start_ms
                 self._last_loop_timing_ms = dict(loop_timings_ms)
                 # Periodic health summary
                 self._maybe_log_health_summary()
+                self._maybe_log_trailing_status()
                 self._maybe_log_unstuck_status()
                 self._set_log_silence_watchdog_context(
                     phase="runtime", stage="flush_snapshot"
@@ -4863,11 +5621,19 @@ class Passivbot:
                 phase_start_ms = utc_ms()
                 await self._monitor_flush_snapshot()
                 mark_phase("monitor_flush", phase_start_ms)
+                self._emit_live_cycle_completed(
+                    cycle_id=cycle_id,
+                    loop_start_ms=loop_start_ms,
+                    timings_ms=loop_timings_ms,
+                )
                 self._set_log_silence_watchdog_context(
                     phase="runtime", stage="execution_delay"
                 )
                 phase_start_ms = utc_ms()
-                await asyncio.sleep(float(self.live_value("execution_delay_seconds")))
+                await self._sleep_unless_shutdown(
+                    float(self.live_value("execution_delay_seconds")),
+                    stage="execution_delay",
+                )
                 mark_phase("execution_delay", phase_start_ms)
                 sleep_duration = 30
                 self._set_log_silence_watchdog_context(
@@ -4879,10 +5645,21 @@ class Passivbot:
                         break
                     await asyncio.sleep(0.1)
                 mark_phase("scheduled_wait", phase_start_ms)
-            except (RestartBotException, FatalBotException):
+            except (RestartBotException, FatalBotException) as e:
+                self._emit_live_cycle_degraded(
+                    cycle_id=cycle_id,
+                    reason_code=type(e).__name__,
+                    data={"timings_ms": dict(loop_timings_ms)},
+                    level="warning",
+                )
                 raise  # Propagate restart without incrementing error count
             except RateLimitExceeded as e:
                 if self._shutdown_requested():
+                    self._emit_live_cycle_degraded(
+                        cycle_id=cycle_id,
+                        reason_code="shutdown_rate_limit_handling",
+                        data={"timings_ms": dict(loop_timings_ms)},
+                    )
                     logging.debug(
                         "[shutdown] execution loop stopped during rate-limit handling: %s",
                         e,
@@ -4899,14 +5676,72 @@ class Passivbot:
                 logging.warning(
                     "[rate] execution loop hit rate limit; backing off 5s..."
                 )
+                self._emit_live_cycle_degraded(
+                    cycle_id=cycle_id,
+                    reason_code="rate_limit",
+                    data={
+                        "error_type": type(e).__name__,
+                        "timings_ms": dict(loop_timings_ms),
+                    },
+                    level="warning",
+                )
                 await self.restart_bot_on_too_many_errors()
-                await asyncio.sleep(5.0)
+                await self._sleep_unless_shutdown(
+                    5.0, stage="rate_limit_backoff"
+                )
             except asyncio.CancelledError as e:
                 if not await self._handle_execution_loop_failure(
                     e, allow_time_sync_recovery=False
                 ):
+                    if getattr(self, "_live_event_current_cycle_id", None) == cycle_id:
+                        self._emit_live_cycle_degraded(
+                            cycle_id=cycle_id,
+                            reason_code="execution_loop_cancelled",
+                            data={"timings_ms": dict(loop_timings_ms)},
+                        )
                     break
+            except FillHistoryCoverageUnavailable as e:
+                if self._shutdown_requested():
+                    self._emit_live_cycle_degraded(
+                        cycle_id=cycle_id,
+                        reason_code="shutdown_fill_history_coverage_retry",
+                        data={"timings_ms": dict(loop_timings_ms)},
+                    )
+                    logging.debug(
+                        "[shutdown] execution loop stopped during fill-history coverage retry: %s",
+                        e,
+                    )
+                    break
+                self._request_authoritative_confirmation({"fills"})
+                logging.warning(
+                    "[fills] live planning deferred pending fill-history coverage | "
+                    "action=refresh_lookback_before_retry error=%s",
+                    e,
+                )
+                self._emit_live_cycle_degraded(
+                    cycle_id=cycle_id,
+                    reason_code="fill_history_coverage_unavailable",
+                    data={
+                        "error_type": type(e).__name__,
+                        "error": str(e)[:500],
+                        "timings_ms": dict(loop_timings_ms),
+                    },
+                    level="warning",
+                )
+                await self._sleep_unless_shutdown(
+                    1.0, stage="fill_history_coverage_retry"
+                )
             except Exception as e:
+                self._emit_live_cycle_degraded(
+                    cycle_id=cycle_id,
+                    reason_code=type(e).__name__,
+                    data={
+                        "error_type": type(e).__name__,
+                        "error": str(e)[:500],
+                        "timings_ms": dict(loop_timings_ms),
+                    },
+                    level="error",
+                )
                 if not await self._handle_execution_loop_failure(
                     e, allow_time_sync_recovery=True
                 ):
@@ -4936,9 +5771,11 @@ class Passivbot:
             return 1
         if exchange_lower == "hyperliquid":
             return 1
-        if exchange_lower == "kucoin" and str(context).lower() in {"history_replay"}:
+        if exchange_lower in {"gateio", "kucoin"} and str(context).lower() in {
+            "history_replay"
+        }:
             return 1
-        if context == "history_replay":
+        if str(context).lower() == "history_replay":
             return 2
         return max(1, int(getattr(self, "max_n_concurrent_ohlcvs_1m_updates", 4) or 4))
 
@@ -4994,8 +5831,10 @@ class Passivbot:
         message = str(context.get("message") or "") if isinstance(context, dict) else ""
         exc_text = f"{type(exc).__name__}: {exc}" if exc is not None else ""
         combined = f"{message} {exc_text}".lower()
+        future_unretrieved = "future exception was never retrieved" in combined
         callback_like = (
             "exception in callback" in combined
+            or future_unretrieved
             or "client.receive_loop" in combined
             or "websocket" in combined
             or " ws " in f" {combined} "
@@ -5024,6 +5863,7 @@ class Passivbot:
             and "websocket" not in combined
             and "ws" not in combined
             and "client.receive_loop" not in combined
+            and not future_unretrieved
         ):
             return False
         now_ms = utc_ms()
@@ -5094,11 +5934,10 @@ class Passivbot:
         reconnect_no = int(reconnect_no or 0)
         retry_delay_s = max(0.0, float(retry_delay_s or 0.0))
         reason = str(reason or "connection_lost")
-        level = (
-            logging.WARNING
-            if Passivbot._should_log_ws_reconnect_warning(self, reconnect_no)
-            else logging.DEBUG
+        warning_visible = Passivbot._should_log_ws_reconnect_warning(
+            self, reconnect_no
         )
+        level = logging.WARNING if warning_visible else logging.DEBUG
         if rate_limited:
             logging.log(
                 level,
@@ -5117,6 +5956,7 @@ class Passivbot:
                 retry_delay_s,
                 exc_name,
             )
+        traceback_emitted = False
         if exc is not None:
             logging.debug(
                 "[ws] %s: reconnect reason=%s exception=%s", exchange, reason, exc
@@ -5126,6 +5966,7 @@ class Passivbot:
                 getattr(self, "_ws_reconnect_traceback_last_ms", 0) or 0
             )
             if reconnect_no <= 1 or now_ms - last_traceback_ms >= 15 * 60 * 1000:
+                traceback_emitted = True
                 self._ws_reconnect_traceback_last_ms = now_ms
                 logging.debug(
                     "[ws] %s: reconnect traceback follows (throttled)", exchange
@@ -5135,16 +5976,271 @@ class Passivbot:
                         traceback.format_exception(type(exc), exc, exc.__traceback__)
                     )
                 )
+        self._emit_websocket_reconnect_event(
+            reconnect_no=reconnect_no,
+            retry_delay_s=retry_delay_s,
+            reason=reason,
+            warning_visible=warning_visible,
+            traceback_emitted=traceback_emitted,
+            exc=exc,
+            rate_limited=rate_limited,
+        )
+
+    def _handle_candle_disk_load_event(self, payload: dict[str, Any]) -> None:
+        """Emit summarized candle disk-load events without flooding monitor storage."""
+        try:
+            data = dict(payload or {})
+            symbol = str(data.get("symbol") or "")
+            timeframe = str(data.get("timeframe") or data.get("tf") or "1m")
+            key = (symbol, timeframe)
+            now = time.monotonic()
+            try:
+                interval_s = float(
+                    getattr(self, "_cache_load_event_throttle_seconds", 60.0)
+                )
+            except Exception:
+                interval_s = 60.0
+            interval_s = max(0.0, interval_s)
+            last_by_key = getattr(self, "_cache_load_event_last_emit", None)
+            if not isinstance(last_by_key, dict):
+                last_by_key = {}
+                self._cache_load_event_last_emit = last_by_key
+            suppressed_by_key = getattr(self, "_cache_load_event_suppressed", None)
+            if not isinstance(suppressed_by_key, dict):
+                suppressed_by_key = {}
+                self._cache_load_event_suppressed = suppressed_by_key
+            last_emit = last_by_key.get(key)
+            if last_emit is not None and now - float(last_emit) < interval_s:
+                suppressed_by_key[key] = int(suppressed_by_key.get(key, 0) or 0) + 1
+                return
+            suppressed_count = int(suppressed_by_key.pop(key, 0) or 0)
+            if suppressed_count > 0:
+                data["suppressed_count"] = suppressed_count
+            last_by_key[key] = now
+            self._emit_cache_load_completed_event(data)
+        except Exception as exc:
+            logging.debug("[event] failed handling cache load event: %s", exc)
+
+    def _handle_candle_persist_event(
+        self,
+        symbol: str,
+        timeframe: str,
+        batch: np.ndarray,
+    ) -> None:
+        try:
+            self._monitor_handle_candlestick_persist(symbol, timeframe, batch)
+        except Exception as exc:
+            logging.debug("[monitor] failed handling candlestick persist: %s", exc)
+        try:
+            self._handle_candle_cache_flush_event(symbol, timeframe, batch)
+        except Exception as exc:
+            logging.debug("[event] failed handling cache flush event: %s", exc)
+
+    def _handle_candle_cache_flush_event(
+        self,
+        symbol: str,
+        timeframe: str,
+        batch: np.ndarray,
+    ) -> None:
+        """Emit summarized candle disk-flush events without flooding monitor storage."""
+        try:
+            if not isinstance(batch, np.ndarray) or batch.size == 0:
+                return
+            tf_norm = str(timeframe or "1m")
+            sym = str(symbol or "")
+            rows = int(batch.shape[0])
+            start_ts = None
+            end_ts = None
+            try:
+                start_ts = int(batch["ts"][0])
+                end_ts = int(batch["ts"][-1])
+            except Exception:
+                start_ts = None
+                end_ts = None
+            key = (sym, tf_norm)
+            now = time.monotonic()
+            try:
+                interval_s = float(
+                    getattr(self, "_cache_flush_event_throttle_seconds", 60.0)
+                )
+            except Exception:
+                interval_s = 60.0
+            interval_s = max(0.0, interval_s)
+            last_by_key = getattr(self, "_cache_flush_event_last_emit", None)
+            if not isinstance(last_by_key, dict):
+                last_by_key = {}
+                self._cache_flush_event_last_emit = last_by_key
+            suppressed_by_key = getattr(self, "_cache_flush_event_suppressed", None)
+            if not isinstance(suppressed_by_key, dict):
+                suppressed_by_key = {}
+                self._cache_flush_event_suppressed = suppressed_by_key
+            last_emit = last_by_key.get(key)
+            if last_emit is not None and now - float(last_emit) < interval_s:
+                state = suppressed_by_key.setdefault(
+                    key, {"count": 0, "rows": 0}
+                )
+                try:
+                    state["count"] = int(state.get("count", 0) or 0) + 1
+                    state["rows"] = int(state.get("rows", 0) or 0) + rows
+                except Exception:
+                    suppressed_by_key[key] = {"count": 1, "rows": rows}
+                return
+            data: dict[str, Any] = {
+                "symbol": sym,
+                "timeframe": tf_norm,
+                "persisted_rows": rows,
+            }
+            if start_ts is not None:
+                data["persisted_start_ts"] = start_ts
+            if end_ts is not None:
+                data["persisted_end_ts"] = end_ts
+            suppressed = suppressed_by_key.pop(key, None)
+            if isinstance(suppressed, dict):
+                suppressed_count = int(suppressed.get("count", 0) or 0)
+                suppressed_rows = int(suppressed.get("rows", 0) or 0)
+                if suppressed_count > 0:
+                    data["suppressed_count"] = suppressed_count
+                if suppressed_rows > 0:
+                    data["suppressed_rows"] = suppressed_rows
+            last_by_key[key] = now
+            self._emit_cache_flush_completed_event(data)
+        except Exception as exc:
+            logging.debug("[event] failed handling cache flush event: %s", exc)
+
+    def _install_live_event_pipeline(self) -> Optional[LiveEventPipeline]:
+        publisher = getattr(self, "monitor_publisher", None)
+        console_sink = (
+            ConsoleSummarySink(logging.getLogger("passivbot.live_event_console"))
+            if bool(getattr(self, "live_event_console_enabled", False))
+            else None
+        )
+        if publisher is None and console_sink is None:
+            return None
+        existing = getattr(self, "_live_event_pipeline", None)
+        if existing is not None:
+            return existing
+        pipeline = LiveEventPipeline(
+            context=LiveEventContext(
+                exchange=getattr(self, "exchange", None),
+                user=getattr(self, "user", None),
+                bot_id=getattr(self, "bot_id", None),
+            ),
+            monitor_sinks=[
+                MonitorEventSink(
+                    publisher,
+                    publisher_phase_timing=isinstance(publisher, MonitorPublisher),
+                )
+            ]
+            if publisher is not None
+            else [],
+            console_sink=console_sink,
+            debug_profiles=getattr(self, "live_event_debug_profiles", ()),
+        )
+        self._live_event_pipeline = pipeline
+        return pipeline
+
+    def _live_event_pipeline_records_candle_remote_fetch(self) -> bool:
+        return (
+            getattr(self, "_live_event_pipeline", None) is not None
+            and getattr(self, "monitor_publisher", None) is not None
+        )
+
+    def _close_live_event_pipeline(self, *, timeout: float = 2.0) -> bool:
+        pipeline = getattr(self, "_live_event_pipeline", None)
+        if pipeline is None:
+            return True
+        try:
+            closed = bool(pipeline.close(timeout=float(timeout)))
+            if not closed:
+                logging.warning("[monitor] live event pipeline close timed out")
+            return closed
+        except Exception as exc:
+            logging.warning("[monitor] live event pipeline close failed: %s", exc)
+            return False
+        finally:
+            self._live_event_pipeline = None
+
+    def _shutdown_elapsed_seconds(self) -> float:
+        started = getattr(self, "_shutdown_started_monotonic", None)
+        if started is None:
+            return 0.0
+        try:
+            return max(0.0, time.monotonic() - float(started))
+        except Exception:
+            return 0.0
+
+    def _emit_shutdown_stage(
+        self,
+        stage: str,
+        *,
+        status: str = "succeeded",
+        level: str = "info",
+        message: str | None = None,
+        data: dict[str, Any] | None = None,
+    ) -> None:
+        elapsed_s = self._shutdown_elapsed_seconds()
+        payload = dict(data or {})
+        payload["stage"] = stage
+        payload["elapsed_s"] = round(elapsed_s, 3)
+        detail_parts = []
+        for key in (
+            "task_count",
+            "timeout_s",
+            "cancel_timeout_s",
+            "threshold_s",
+            "closed",
+        ):
+            if key in payload:
+                detail_parts.append(f"{key}={payload[key]}")
+        detail = f" {' '.join(detail_parts)}" if detail_parts else ""
+        text = f"{message or stage.replace('_', ' ')}{detail} elapsed={elapsed_s:.2f}s"
+        emitted = None
+        try:
+            emitted = self._emit_live_event(
+                EventTypes.BOT_SHUTDOWN_STAGE,
+                level=level,
+                component="shutdown",
+                tags=("bot", "lifecycle", "shutdown"),
+                status=status,
+                reason_code=stage,
+                message=text,
+                data=payload,
+            )
+        except Exception as exc:
+            logging.debug("[shutdown] failed emitting shutdown stage %s: %s", stage, exc)
+        if emitted is None:
+            log_level = logging.INFO
+            if level == "warning":
+                log_level = logging.WARNING
+            elif level == "error":
+                log_level = logging.ERROR
+            elif level == "critical":
+                log_level = logging.CRITICAL
+            elif level == "debug":
+                log_level = logging.DEBUG
+            logging.log(log_level, "[shutdown] %s | status=%s", text, status)
 
     async def shutdown_gracefully(self):
         if getattr(self, "_shutdown_in_progress", False):
             return
         self._shutdown_in_progress = True
         self.stop_signal_received = True
+        self._shutdown_started_monotonic = time.monotonic()
         stop_ts = utc_ms()
+        self._emit_live_event(
+            EventTypes.BOT_STOPPING,
+            level="info",
+            component="lifecycle",
+            tags=("bot", "lifecycle", "stop"),
+            status="started",
+            reason_code="shutdown_gracefully",
+            data={"reason": "shutdown_gracefully"},
+        )
         self._monitor_emit_stop("shutdown_gracefully", ts=stop_ts)
-        logging.info(
-            "[shutdown] shutdown requested; closing background tasks and sessions"
+        self._emit_shutdown_stage(
+            "requested",
+            status="started",
+            message="shutdown requested; closing background tasks and sessions",
         )
         maintainer_tasks = []
         try:
@@ -5158,6 +6254,13 @@ class Passivbot:
                         maintainer_tasks.append(task)
         except Exception as e:
             logging.error("[shutdown] error stopping maintainers: %s", e)
+            self._emit_shutdown_stage(
+                "maintainers_stop_failed",
+                status="failed",
+                level="error",
+                message="error stopping maintainer tasks",
+                data={"error": str(e)},
+            )
         if maintainer_tasks:
             try:
                 try:
@@ -5170,14 +6273,38 @@ class Passivbot:
                 maintainer_gather = asyncio.gather(
                     *maintainer_tasks, return_exceptions=True
                 )
+                self._emit_shutdown_stage(
+                    "maintainers_stopping",
+                    status="started",
+                    message="waiting for maintainer tasks to stop",
+                    data={
+                        "task_count": len(maintainer_tasks),
+                        "timeout_s": maintainer_grace,
+                    },
+                )
                 await asyncio.wait_for(
                     asyncio.shield(maintainer_gather),
                     timeout=maintainer_grace,
+                )
+                self._emit_shutdown_stage(
+                    "maintainers_stopped",
+                    message="maintainer tasks stopped",
+                    data={"task_count": len(maintainer_tasks)},
                 )
             except asyncio.TimeoutError:
                 logging.warning(
                     "[shutdown] timed out after %.1fs waiting for maintainers; closing sessions",
                     maintainer_grace,
+                )
+                self._emit_shutdown_stage(
+                    "maintainers_timeout",
+                    status="degraded",
+                    level="warning",
+                    message="maintainer tasks still running; cancelling",
+                    data={
+                        "task_count": len(maintainer_tasks),
+                        "timeout_s": maintainer_grace,
+                    },
                 )
                 for task in maintainer_tasks:
                     if task is not None and not task.done():
@@ -5185,10 +6312,27 @@ class Passivbot:
                 try:
                     await asyncio.wait_for(maintainer_gather, timeout=1.0)
                 except (asyncio.CancelledError, asyncio.TimeoutError):
+                    self._emit_shutdown_stage(
+                        "maintainers_cancel_timeout",
+                        status="degraded",
+                        level="warning",
+                        message="maintainer tasks did not finish after cancellation",
+                        data={
+                            "task_count": len(maintainer_tasks),
+                            "cancel_timeout_s": 1.0,
+                        },
+                    )
                     pass
             except Exception as e:
                 logging.error(
                     "[shutdown] error awaiting maintainer cancellation: %s", e
+                )
+                self._emit_shutdown_stage(
+                    "maintainers_await_failed",
+                    status="failed",
+                    level="error",
+                    message="error awaiting maintainer tasks",
+                    data={"task_count": len(maintainer_tasks), "error": str(e)},
                 )
         execution_loop_stopped = getattr(self, "_execution_loop_stopped", None)
         execution_loop_task = getattr(self, "_execution_loop_task", None)
@@ -5201,6 +6345,12 @@ class Passivbot:
                 grace_seconds = 5.0
             grace_seconds = max(0.0, grace_seconds)
             try:
+                self._emit_shutdown_stage(
+                    "execution_loop_waiting",
+                    status="started",
+                    message="waiting for execution loop to stop",
+                    data={"timeout_s": grace_seconds},
+                )
                 if execution_loop_stopped is not None:
                     await asyncio.wait_for(
                         execution_loop_stopped.wait(), timeout=grace_seconds
@@ -5209,28 +6359,79 @@ class Passivbot:
                     await asyncio.wait_for(
                         asyncio.shield(execution_loop_task), timeout=grace_seconds
                     )
+                self._emit_shutdown_stage(
+                    "execution_loop_stopped",
+                    message="execution loop stopped",
+                )
             except asyncio.TimeoutError:
                 logging.debug(
                     "[shutdown] execution loop still active after %.1fs",
                     grace_seconds,
                 )
-                if not bool(getattr(self, "_execution_loop_task_is_inline", False)):
+                inline_execution_loop = bool(
+                    getattr(self, "_execution_loop_task_is_inline", False)
+                )
+                self._emit_shutdown_stage(
+                    "execution_loop_timeout",
+                    status="degraded",
+                    level="warning",
+                    message=(
+                        "execution loop still active; continuing without cancellation"
+                        if inline_execution_loop
+                        else "execution loop still active; cancelling background task"
+                    ),
+                    data={"timeout_s": grace_seconds, "inline": inline_execution_loop},
+                )
+                if not inline_execution_loop:
                     logging.debug(
                         "[shutdown] cancelling background execution loop task"
                     )
                     execution_loop_task.cancel()
                     try:
-                        await asyncio.wait_for(execution_loop_task, timeout=5.0)
+                        try:
+                            cancel_grace = float(
+                                getattr(
+                                    self,
+                                    "_shutdown_execution_cancel_grace_seconds",
+                                    1.0,
+                                )
+                            )
+                        except Exception:
+                            cancel_grace = 1.0
+                        cancel_grace = max(0.0, cancel_grace)
+                        await asyncio.wait_for(
+                            execution_loop_task, timeout=cancel_grace
+                        )
                     except asyncio.CancelledError:
                         pass
                     except asyncio.TimeoutError:
                         logging.debug(
                             "[shutdown] timed out waiting for cancelled execution loop before closing sessions"
                         )
+                        self._emit_shutdown_stage(
+                            "execution_loop_cancel_timeout",
+                            status="degraded",
+                            level="warning",
+                            message="execution loop did not finish after cancellation",
+                            data={"cancel_timeout_s": cancel_grace},
+                        )
             except asyncio.CancelledError:
                 logging.debug("[shutdown] execution loop cancelled during shutdown")
+                self._emit_shutdown_stage(
+                    "execution_loop_cancelled",
+                    status="degraded",
+                    level="warning",
+                    message="execution loop cancelled during shutdown",
+                )
             except Exception as e:
                 logging.debug("[shutdown] error waiting for execution loop: %s", e)
+                self._emit_shutdown_stage(
+                    "execution_loop_wait_failed",
+                    status="failed",
+                    level="error",
+                    message="error waiting for execution loop",
+                    data={"error": str(e)},
+                )
             finally:
                 try:
                     execution_loop_stopped.set()
@@ -5241,18 +6442,89 @@ class Passivbot:
             if getattr(self, "ccp", None) is not None:
                 await self.ccp.close()
                 self.ccp = None
+                self._emit_shutdown_stage(
+                    "private_session_closed",
+                    message="private ccxt session closed",
+                )
         except Exception as e:
             logging.error("[shutdown] error closing private ccxt session: %s", e)
+            self._emit_shutdown_stage(
+                "private_session_close_failed",
+                status="failed",
+                level="error",
+                message="error closing private ccxt session",
+                data={"error": str(e)},
+            )
         try:
             if getattr(self, "cca", None) is not None:
                 await self.cca.close()
                 self.cca = None
+                self._emit_shutdown_stage(
+                    "public_session_closed",
+                    message="public ccxt session closed",
+                )
         except Exception as e:
             logging.error("[shutdown] error closing public ccxt session: %s", e)
+            self._emit_shutdown_stage(
+                "public_session_close_failed",
+                status="failed",
+                level="error",
+                message="error closing public ccxt session",
+                data={"error": str(e)},
+            )
         await self._monitor_flush_snapshot(force=True, ts=utc_ms())
+        self._emit_shutdown_stage(
+            "monitor_snapshot_flushed",
+            message="monitor snapshot flushed",
+        )
+        try:
+            degraded_after = float(
+                getattr(self, "_shutdown_degraded_after_seconds", 15.0)
+            )
+        except Exception:
+            degraded_after = 15.0
+        if degraded_after >= 0.0 and self._shutdown_elapsed_seconds() >= degraded_after:
+            self._emit_shutdown_stage(
+                "shutdown_slow",
+                status="degraded",
+                level="warning",
+                message="shutdown exceeded degraded threshold",
+                data={"threshold_s": degraded_after},
+            )
+        if not getattr(self, "_live_event_bot_stopped_emitted", False):
+            self._emit_live_event(
+                EventTypes.BOT_STOPPED,
+                level="info",
+                component="lifecycle",
+                tags=("bot", "lifecycle", "stop"),
+                status="succeeded",
+                reason_code="shutdown_gracefully",
+                data={"reason": "shutdown_gracefully"},
+            )
+            self._live_event_bot_stopped_emitted = True
+        self._emit_shutdown_stage(
+            "event_pipeline_closing",
+            status="started",
+            message="closing live event pipeline",
+            data={"timeout_s": 2.0},
+        )
+        pipeline_closed = self._close_live_event_pipeline(timeout=2.0)
+        if not pipeline_closed:
+            logging.warning(
+                "[shutdown] live event pipeline did not close cleanly | elapsed=%.2fs",
+                self._shutdown_elapsed_seconds(),
+            )
         publisher = getattr(self, "monitor_publisher", None)
         if publisher is not None:
             publisher.close()
+            logging.info(
+                "[shutdown] monitor publisher closed | elapsed=%.2fs",
+                self._shutdown_elapsed_seconds(),
+            )
+        logging.info(
+            "[shutdown] shutdown complete | elapsed=%.2fs",
+            self._shutdown_elapsed_seconds(),
+        )
 
     async def update_pos_oos_pnls_ohlcvs(self) -> bool:
         """Refresh positions, open orders, realised PnL, and 1m candles."""
@@ -5283,6 +6555,10 @@ class Passivbot:
     async def refresh_authoritative_state(self) -> bool:
         """Refresh authoritative account state before planning/execution."""
         return await state_refresh.refresh_authoritative_state(self)
+
+    async def refresh_protective_authoritative_state(self) -> bool:
+        """Refresh only account surfaces needed for protective order execution."""
+        return await state_refresh.refresh_protective_authoritative_state(self)
 
     async def _refresh_authoritative_state_staged(self) -> bool:
         """Refresh live account state through the staged authoritative cohort."""
@@ -5516,6 +6792,21 @@ class Passivbot:
     async def execute_to_exchange(self, *, prepare_cycle: bool = True):
         """Run one execution cycle including config sync and order placement/cancellation."""
         return await executor.execute_to_exchange(self, prepare_cycle=prepare_cycle)
+
+    async def execute_order_plan_to_exchange(
+        self,
+        to_cancel: list[dict],
+        to_create: list[dict],
+        *,
+        configure_creations: bool = True,
+    ):
+        """Execute a precomputed cancel/create plan against the exchange."""
+        return await executor.execute_order_plan(
+            self,
+            to_cancel,
+            to_create,
+            configure_creations=configure_creations,
+        )
 
     async def _filter_fresh_market_snapshot_creations(
         self, orders: list[dict]
@@ -5805,10 +7096,24 @@ class Passivbot:
 
     def did_create_order(self, executed) -> bool:
         """Return True if the exchange acknowledged order creation."""
-        try:
-            return "id" in executed and executed["id"] is not None
-        except:
+        if not isinstance(executed, dict):
             return False
+        order_id = executed.get("id")
+        if order_id is None or not str(order_id).strip():
+            return False
+        status = str(executed.get("status") or "").strip().lower()
+        info = executed.get("info")
+        if not status and isinstance(info, dict):
+            status = str(
+                info.get("status")
+                or info.get("state")
+                or info.get("ordStatus")
+                or info.get("orderStatus")
+                or ""
+            ).strip().lower()
+        if status in {"rejected", "canceled", "cancelled", "expired", "failed"}:
+            return False
+        return True
         # further tests defined in child class
 
     def did_cancel_order(self, executed, order=None) -> bool:
@@ -5879,7 +7184,9 @@ class Passivbot:
         for s in syms:
             if per_sym_ttl.get(s) == CACHE_ONLY_TTL:
                 try:
-                    if self.cm.get_last_refresh_ms(s) == 0:
+                    last_refresh = int(self.cm.get_last_refresh_ms(s) or 0)
+                    last_final = int(self.cm.get_last_final_ts(s) or 0)
+                    if last_refresh == 0 and last_final == 0:
                         cache_only_never_fetched.add(s)
                 except Exception:
                     cache_only_never_fetched.add(s)
@@ -5979,31 +7286,88 @@ class Passivbot:
         """Return True when trailing logic is active for the given symbol and side."""
         if pside is None:
             return self.is_trailing(symbol, "long") or self.is_trailing(symbol, "short")
-        return (
-            self.bp(pside, "entry_trailing_grid_ratio", symbol) != 0.0
-            or self.bp(pside, "close_trailing_grid_ratio", symbol) != 0.0
+        strategy_kind = normalize_strategy_kind(
+            self.config.get("live", {}).get("strategy_kind")
+            if isinstance(getattr(self, "config", None), dict)
+            else None
         )
+        strategy_cfg = self._strategy_params_to_rust_dict(pside, symbol)
+        if strategy_kind == "trailing_grid_v7":
+            return (
+                float(strategy_cfg.get("entry", {}).get("trailing_grid_ratio", 0.0) or 0.0) != 0.0
+                or float(strategy_cfg.get("close", {}).get("trailing_grid_ratio", 0.0) or 0.0) != 0.0
+            )
+        return (
+            float(strategy_cfg.get("entry", {}).get("retracement_base_pct", 0.0) or 0.0) > 0.0
+            or float(strategy_cfg.get("close", {}).get("retracement_base_pct", 0.0) or 0.0) > 0.0
+        )
+
+    @staticmethod
+    def _parse_position_anchor_timestamp_ms(candidate) -> int | None:
+        if candidate is None or candidate == "" or isinstance(candidate, bool):
+            return None
+        try:
+            anchor_ts = int(float(candidate))
+        except (TypeError, ValueError, OverflowError):
+            return None
+        return anchor_ts if anchor_ts > 0 else None
+
+    def _position_anchor_timestamp_ms(self, symbol: str, pside: str) -> int | None:
+        position = self.positions.get(symbol, {}).get(pside, {})
+        candidates = [
+            position.get("open_time"),
+            position.get("openTime"),
+            position.get("createdTime"),
+        ]
+        info = position.get("info")
+        if isinstance(info, dict):
+            candidates.extend(
+                [
+                    info.get("open_time"),
+                    info.get("openTime"),
+                    info.get("createdTime"),
+                ]
+            )
+        candidates.extend(
+            [
+                position.get("timestamp"),
+                position.get("timestamp_ms"),
+            ]
+        )
+        if isinstance(info, dict):
+            candidates.extend(
+                [
+                    info.get("timestamp"),
+                    info.get("timestamp_ms"),
+                ]
+            )
+        candidates.append(position.get("updatedTime"))
+        if isinstance(info, dict):
+            candidates.append(info.get("updatedTime"))
+        for candidate in candidates:
+            anchor_ts = self._parse_position_anchor_timestamp_ms(candidate)
+            if anchor_ts is not None:
+                return anchor_ts
+        return None
 
     def get_last_position_changes(self, symbol=None):
         """Return the most recent fill timestamp per symbol/side for trailing logic."""
         last_position_changes = defaultdict(dict)
-        if self._pnls_manager is None:
-            return last_position_changes
-
-        events = self._pnls_manager.get_events()
-        for symbol in self.positions:
+        events = [] if self._pnls_manager is None else self._pnls_manager.get_events()
+        symbols = [symbol] if symbol is not None else list(self.positions)
+        for symbol in symbols:
+            if symbol not in self.positions:
+                continue
             for pside in ["long", "short"]:
                 if self.has_position(pside, symbol) and self.is_trailing(symbol, pside):
-                    last_position_changes[symbol][pside] = (
-                        utc_ms() - 1000 * 60 * 60 * 24 * 7
-                    )
                     for ev in reversed(events):
-                        try:
-                            if ev.symbol == symbol and ev.position_side == pside:
-                                last_position_changes[symbol][pside] = ev.timestamp
-                                break
-                        except Exception as e:
-                            logging.error(f"Error in get_last_position_changes: {e}")
+                        if ev.symbol == symbol and ev.position_side == pside:
+                            last_position_changes[symbol][pside] = int(ev.timestamp)
+                            break
+                    if pside not in last_position_changes.get(symbol, {}):
+                        anchor_ts = self._position_anchor_timestamp_ms(symbol, pside)
+                        if anchor_ts is not None:
+                            last_position_changes[symbol][pside] = anchor_ts
         return last_position_changes
 
     # Legacy: wait_for_ohlcvs_1m_to_update removed (CandlestickManager handles freshness)
@@ -6027,6 +7391,9 @@ class Passivbot:
         """
         if not hasattr(self, "trailing_prices"):
             self.trailing_prices = {}
+        unavailable_reasons: dict[str, set[str]] = defaultdict(set)
+        self._orchestrator_trailing_unavailable_symbols = set()
+        self._orchestrator_trailing_unavailable_reasons = {}
         last_position_changes = self.get_last_position_changes()
         symbols = (
             set(self.trailing_prices)
@@ -6034,22 +7401,42 @@ class Passivbot:
             | set(self.active_symbols)
         )
 
-        # Initialize containers for all symbols first
+        # Initialize missing containers without erasing the last known trailing bundle.
         for symbol in symbols:
-            self.trailing_prices[symbol] = {
-                "long": _trailing_bundle_default_dict(),
-                "short": _trailing_bundle_default_dict(),
-            }
+            self.trailing_prices.setdefault(symbol, {})
+            self.trailing_prices[symbol].setdefault(
+                "long", _trailing_bundle_default_dict()
+            )
+            self.trailing_prices[symbol].setdefault(
+                "short", _trailing_bundle_default_dict()
+            )
+
+        required_trailing: dict[str, set[str]] = defaultdict(set)
+        for symbol in symbols:
+            for pside in ("long", "short"):
+                if self.has_position(pside, symbol) and self.is_trailing(symbol, pside):
+                    required_trailing[symbol].add(pside)
+
+        for symbol, psides in required_trailing.items():
+            pside_changes = (
+                last_position_changes[symbol]
+                if symbol in last_position_changes
+                else {}
+            )
+            for pside in psides:
+                if pside not in pside_changes:
+                    unavailable_reasons["missing_position_change_anchor"].add(symbol)
 
         # Build concurrent fetches per symbol that has position changes
         fetch_plan = {}
-        for symbol in symbols:
-            if symbol not in last_position_changes:
+        for symbol, pside_changes in last_position_changes.items():
+            if symbol not in required_trailing:
                 continue
             # Determine earliest start among sides to avoid duplicate fetches
             starts = [
-                last_position_changes[symbol][ps]
-                for ps in last_position_changes[symbol]
+                pside_changes[pside]
+                for pside in pside_changes
+                if pside in required_trailing[symbol]
             ]
             if not starts:
                 continue
@@ -6068,19 +7455,26 @@ class Passivbot:
             try:
                 results[sym] = await task
             except Exception as e:
+                unavailable_reasons["candle_fetch_failed"].add(sym)
                 logging.debug("failed to fetch candles for trailing %s: %s", sym, e)
                 results[sym] = None
 
         # Compute trailing metrics per symbol/side
         for symbol, arr in results.items():
-            if arr is None or arr.size == 0:
+            if arr is None:
+                continue
+            if arr.size == 0:
+                unavailable_reasons["missing_trailing_candles"].add(symbol)
                 continue
             if symbol not in last_position_changes:
                 continue
             arr = np.sort(arr, order="ts")
             for pside, changed_ts in last_position_changes[symbol].items():
+                if pside not in required_trailing.get(symbol, set()):
+                    continue
                 mask = arr["ts"] > int(changed_ts)
                 if not np.any(mask):
+                    unavailable_reasons["missing_trailing_candles"].add(symbol)
                     continue
                 subset = arr[mask]
                 try:
@@ -6089,12 +7483,33 @@ class Passivbot:
                     )
                     self.trailing_prices[symbol][pside] = bundle
                 except Exception as e:
+                    unavailable_reasons["bundle_compute_failed"].add(symbol)
                     logging.debug(
                         "failed to compute trailing bundle for %s %s: %s",
                         symbol,
                         pside,
                         e,
                     )
+
+        unavailable_symbols = set()
+        unavailable_by_symbol: dict[str, list[str]] = defaultdict(list)
+        for reason, reason_symbols in sorted(unavailable_reasons.items()):
+            if not reason_symbols:
+                continue
+            unavailable_symbols.update(reason_symbols)
+            for symbol in sorted(reason_symbols):
+                unavailable_by_symbol[symbol].append(reason)
+            logging.warning(
+                "[trailing] trailing state unavailable reason=%s symbols=%s "
+                "action=mark_nontradable_until_fresh",
+                reason,
+                Passivbot._log_symbols(sorted(reason_symbols), limit=12),
+            )
+        self._orchestrator_trailing_unavailable_symbols = unavailable_symbols
+        self._orchestrator_trailing_unavailable_reasons = {
+            symbol: sorted(reasons)
+            for symbol, reasons in sorted(unavailable_by_symbol.items())
+        }
 
     def symbol_is_eligible(self, symbol):
         """Return True when the symbol passes exchange-specific eligibility rules."""
@@ -6198,6 +7613,19 @@ class Passivbot:
             return False
         return True
 
+    @staticmethod
+    def _format_exchange_config_error(exc: BaseException) -> str:
+        """Return a bounded error-type label without rendering exception values."""
+        error_type = type(exc).__name__
+        if (
+            not error_type
+            or len(error_type) > 40
+            or not error_type.isascii()
+            or not error_type.replace("_", "").isalnum()
+        ):
+            error_type = "Exception"
+        return f"error_type={error_type}"
+
     async def update_exchange_configs(self, symbols=None):
         """Ensure exchange-specific settings are initialised for all active symbols."""
         if not hasattr(self, "already_updated_exchange_config_symbols"):
@@ -6252,10 +7680,10 @@ class Passivbot:
                         )
                         break
                     logging.warning(
-                        "[config] exchange config update failed for %s; retrying in %.1fs: %s",
+                        "[config] exchange config update failed | symbol=%s retry_in=%.1fs %s",
                         symbol,
                         backoff_s,
-                        e,
+                        Passivbot._format_exchange_config_error(e),
                     )
                 else:
                     if self._shutdown_requested():
@@ -6501,6 +7929,9 @@ class Passivbot:
         except Exception:
             slots_open = False
         if self.is_forager_mode(pside):
+            forager_candidate_count = len(candidates)
+            feature_unavailable_count = 0
+            volatility_dropped_count = 0
             # filter coins by relative volume and log range
             clip_pct = self.bot_value(pside, "forager_volume_drop_pct")
             if not clip_pct:
@@ -6561,25 +7992,91 @@ class Passivbot:
                     max_age_ms=max_age_ms,
                     max_network_fetches=fetch_budget,
                 )
+            feature_unavailable = [
+                symbol
+                for symbol in candidates
+                if symbol not in volumes or symbol not in log_ranges
+            ]
+            if feature_unavailable:
+                feature_unavailable_count = len(feature_unavailable)
+                Passivbot._emit_forager_feature_unavailable_event(
+                    self,
+                    pside=pside,
+                    symbols=feature_unavailable,
+                    candidate_count=forager_candidate_count,
+                    volume_count=len(volumes),
+                    log_range_count=len(log_ranges),
+                    max_age_ms=max_age_ms,
+                    fetch_budget=fetch_budget,
+                )
+                logging.debug(
+                    "[forager] %s unavailable ranking features | unavailable=%d candidates=%d symbols=%s",
+                    pside,
+                    len(feature_unavailable),
+                    len(candidates),
+                    Passivbot._log_symbols(feature_unavailable, limit=12),
+                )
+                candidates = [
+                    symbol
+                    for symbol in candidates
+                    if symbol in volumes and symbol in log_ranges
+                ]
+                if not candidates:
+                    Passivbot._emit_forager_selection_event(
+                        self,
+                        pside=pside,
+                        candidate_count=forager_candidate_count,
+                        eligible_count=0,
+                        selected_symbols=[],
+                        slots_open=slots_open,
+                        max_n_positions=max_n_positions,
+                        clip_pct=clip_pct,
+                        volatility_drop_pct=volatility_drop,
+                        max_age_ms=max_age_ms,
+                        fetch_budget=fetch_budget,
+                        feature_unavailable_count=feature_unavailable_count,
+                        volatility_dropped_count=0,
+                        status="skipped",
+                        reason_code="all_features_unavailable",
+                    )
+                    return []
             if volatility_drop > 0.0:
                 ranked = sorted(
                     candidates,
-                    key=lambda symbol: float(log_ranges.get(symbol, 0.0)),
+                    key=lambda symbol: float(log_ranges[symbol]),
                     reverse=True,
                 )
                 keep_from = min(
                     len(ranked),
                     max(0, int(round(len(ranked) * float(volatility_drop)))),
                 )
+                volatility_dropped_count = keep_from
                 candidates = ranked[keep_from:]
                 if not candidates:
+                    Passivbot._emit_forager_selection_event(
+                        self,
+                        pside=pside,
+                        candidate_count=forager_candidate_count,
+                        eligible_count=0,
+                        selected_symbols=[],
+                        slots_open=slots_open,
+                        max_n_positions=max_n_positions,
+                        clip_pct=clip_pct,
+                        volatility_drop_pct=volatility_drop,
+                        max_age_ms=max_age_ms,
+                        fetch_budget=fetch_budget,
+                        feature_unavailable_count=feature_unavailable_count,
+                        volatility_dropped_count=volatility_dropped_count,
+                        status="skipped",
+                        reason_code="all_candidates_dropped_by_volatility",
+                    )
                     return []
             features = [
                 {
                     "index": idx,
                     "enabled": min_cost_flags.get(symbol, True),
-                    "volume_score": volumes.get(symbol, 0.0),
-                    "volatility_score": log_ranges.get(symbol, 0.0),
+                    "volume_score": float(volumes[symbol]),
+                    "volatility_score": float(log_ranges[symbol]),
                     "ema_readiness_score": 0.0,
                 }
                 for idx, symbol in enumerate(candidates)
@@ -6592,6 +8089,23 @@ class Passivbot:
                 True,
             )
             ideal_coins = [candidates[i] for i in selected]
+            Passivbot._emit_forager_selection_event(
+                self,
+                pside=pside,
+                candidate_count=forager_candidate_count,
+                eligible_count=len(candidates),
+                selected_symbols=ideal_coins,
+                slots_open=slots_open,
+                max_n_positions=max_n_positions,
+                clip_pct=clip_pct,
+                volatility_drop_pct=volatility_drop,
+                max_age_ms=max_age_ms,
+                fetch_budget=fetch_budget,
+                feature_unavailable_count=feature_unavailable_count,
+                volatility_dropped_count=volatility_dropped_count,
+                status="succeeded" if ideal_coins else "skipped",
+                reason_code="selected" if ideal_coins else "none_selected",
+            )
             if not ideal_coins and self.live_value("filter_by_min_effective_cost"):
                 if any(not flag for flag in min_cost_flags.values()):
                     self.warn_on_high_effective_min_cost(pside)
@@ -6620,12 +8134,11 @@ class Passivbot:
 
         If *max_network_fetches* is set, at most that many symbols will be allowed to
         trigger a network fetch.  The remaining symbols receive a very large TTL so they
-        return cached data (or 0.0 if nothing is cached) without hitting the API.
+        return cached data without hitting the API. Symbols with no usable current or
+        bounded cached value are omitted from the returned maps.
         """
-        span_volume = int(round(self.bot_value(pside, "forager_volume_ema_span")))
-        span_volatility = int(
-            round(self.bot_value(pside, "forager_volatility_ema_span"))
-        )
+        span_volume = int(round(self.bot_value(pside, "forager_volume_ema_span_1m")))
+        span_volatility = int(round(self.bot_value(pside, "forager_volatility_ema_span_1m")))
         try:
             warmup_ratio = float(
                 get_optional_live_value(self.config, "warmup_ratio", 0.0)
@@ -6655,27 +8168,27 @@ class Passivbot:
         )
 
         async def one(symbol: str):
+            if symbol in cache_only_never_fetched:
+                return None
+            ttl = per_sym_ttl.get(symbol)
+            if ttl is None or ttl == 0:
+                if max_age_ms is not None:
+                    ttl = int(max_age_ms)
+                else:
+                    has_pos = self.has_position(symbol)
+                    has_oo = (
+                        bool(self.open_orders.get(symbol))
+                        if hasattr(self, "open_orders")
+                        else False
+                    )
+                    ttl = (
+                        60_000
+                        if (has_pos or has_oo)
+                        else int(getattr(self, "inactive_coin_candle_ttl_ms", 600_000))
+                    )
+            vol = float("nan")
+            lr = float("nan")
             try:
-                if symbol in cache_only_never_fetched:
-                    return (0.0, 0.0)
-                ttl = per_sym_ttl.get(symbol)
-                if ttl is None or ttl == 0:
-                    if max_age_ms is not None:
-                        ttl = int(max_age_ms)
-                    else:
-                        has_pos = self.has_position(symbol)
-                        has_oo = (
-                            bool(self.open_orders.get(symbol))
-                            if hasattr(self, "open_orders")
-                            else False
-                        )
-                        ttl = (
-                            60_000
-                            if (has_pos or has_oo)
-                            else int(
-                                getattr(self, "inactive_coin_candle_ttl_ms", 600_000)
-                            )
-                        )
                 res = await self.cm.get_latest_ema_metrics(
                     symbol,
                     {"qv": span_volume, "log_range": span_volatility},
@@ -6685,12 +8198,28 @@ class Passivbot:
                 )
                 vol = float(res.get("qv", float("nan")))
                 lr = float(res.get("log_range", float("nan")))
-                return (
-                    0.0 if not np.isfinite(vol) else vol,
-                    0.0 if not np.isfinite(lr) else lr,
-                )
             except Exception:
-                return (0.0, 0.0)
+                pass
+            missing_metrics: dict[str, float] = {}
+            if not np.isfinite(vol):
+                missing_metrics["qv"] = float(span_volume)
+            if not np.isfinite(lr):
+                missing_metrics["log_range"] = float(span_volatility)
+            if missing_metrics:
+                cached = await Passivbot._get_forager_cached_ema_metrics(
+                    self,
+                    symbol,
+                    missing_metrics,
+                    max_staleness_ms=max_age_ms,
+                    window_candles=window_candles,
+                )
+                if "qv" in cached:
+                    vol = float(cached["qv"])
+                if "log_range" in cached:
+                    lr = float(cached["log_range"])
+            if not (np.isfinite(vol) and np.isfinite(lr)):
+                return None
+            return (float(vol), float(lr))
 
         tasks = {s: asyncio.create_task(one(s)) for s in syms}
         volumes: Dict[str, float] = {}
@@ -6698,9 +8227,12 @@ class Passivbot:
         started_ms = utc_ms()
         for sym, task in tasks.items():
             try:
-                vol, lr = await task
+                res = await task
             except Exception:
-                vol, lr = 0.0, 0.0
+                res = None
+            if res is None:
+                continue
+            vol, lr = res
             volumes[sym] = float(vol)
             log_ranges[sym] = float(lr)
 
@@ -6807,6 +8339,22 @@ class Passivbot:
                     return "graceful_stop"
                 return self._equity_hard_stop_halted_mode(pside, symbol)
         if symbol is not None:
+            if (
+                self._equity_hard_stop_enabled(pside)
+                and self._equity_hard_stop_signal_mode() == "coin"
+                and (pside, symbol)
+                in getattr(
+                    self, "_equity_hard_stop_coin_replay_pending_pairs", set()
+                )
+            ):
+                configured_mode = self.config_get(
+                    ["live", f"forced_mode_{pside}"], symbol
+                )
+                if configured_mode:
+                    expanded_mode = expand_PB_mode(configured_mode)
+                    if expanded_mode != "normal":
+                        return expanded_mode
+                return "graceful_stop"
             runtime_forced = (
                 getattr(self, "_runtime_forced_modes", {}).get(pside, {}).get(symbol)
             )
@@ -6858,17 +8406,53 @@ class Passivbot:
             and self.bot_value(pside, "n_positions") > 0.0
         )
 
+    def _strategy_initial_sizing_fraction(self, pside: str, symbol: str | None = None) -> float:
+        """Return the active strategy's initial sizing fraction."""
+        config = getattr(self, "config", None)
+        if not isinstance(config, dict):
+            return float(self.bp(pside, "entry_initial_qty_pct", symbol))
+        bot_cfg = config.get("bot")
+        if not isinstance(bot_cfg, dict) or not isinstance(bot_cfg.get(pside), dict):
+            return float(self.bp(pside, "entry_initial_qty_pct", symbol))
+        live_cfg = config.get("live")
+        strategy_kind = normalize_strategy_kind(
+            live_cfg.get("strategy_kind") if isinstance(live_cfg, dict) else None
+        )
+        strategy_cfg = self._strategy_params_to_rust_dict(pside, symbol)
+        if strategy_kind == "ema_anchor":
+            return float(strategy_cfg["base_qty_pct"])
+        if strategy_kind in {"trailing_martingale", "trailing_grid_v7"}:
+            entry_cfg = strategy_cfg.get("entry")
+            if not isinstance(entry_cfg, dict) or "initial_qty_pct" not in entry_cfg:
+                raise KeyError(f"missing required strategy key {pside}.entry.initial_qty_pct")
+            return float(entry_cfg["initial_qty_pct"])
+        raise ValueError(f"unsupported strategy kind {strategy_kind!r}")
+
     def effective_min_cost_is_low_enough(self, pside, symbol):
         """Check whether the symbol meets the effective minimum cost requirement."""
         if not self.live_value("filter_by_min_effective_cost"):
             return True
         base_limit = self.get_wallet_exposure_limit(pside, symbol)
         allowance_pct = float(self.bp(pside, "risk_we_excess_allowance_pct", symbol))
-        allowance_multiplier = 1.0 + max(0.0, allowance_pct)
+        allowance_mode = normalize_we_excess_allowance_mode(
+            self.bp(pside, "risk_we_excess_allowance_mode", symbol) or None
+        )
+        twel = float(self.bot_value(pside, "total_wallet_exposure_limit") or 0.0)
+        effective_allowance_pct = effective_we_excess_allowance_pct(
+            wallet_exposure_limit=base_limit,
+            risk_we_excess_allowance_pct=allowance_pct,
+            total_wallet_exposure_limit=twel,
+            risk_we_excess_allowance_mode=allowance_mode,
+        )
+        allowance_multiplier = 1.0 + effective_allowance_pct
         effective_limit = base_limit * allowance_multiplier
-        return self.get_hysteresis_snapped_balance() * effective_limit * self.bp(
-            pside, "entry_initial_qty_pct", symbol
-        ) >= self.effective_min_cost.get(symbol, float("inf"))
+        initial_sizing_fraction = self._strategy_initial_sizing_fraction(pside, symbol)
+        return (
+            self.get_hysteresis_snapped_balance()
+            * effective_limit
+            * initial_sizing_fraction
+            >= self.effective_min_cost.get(symbol, float("inf"))
+        )
 
     def get_hysteresis_snapped_balance(self) -> float:
         """Return hysteresis-snapped balance used for sizing."""
@@ -6920,6 +8504,8 @@ class Passivbot:
                 int(self._authoritative_surface_generations.get(surface, 0) or 0) + 1
             )
             self._authoritative_refresh_epoch_changed.add(surface)
+        if surface in ACCOUNT_PACKET_KINDS:
+            self._finalize_live_data_packet_metadata(surface, signature=signature)
         return changed
 
     def _positions_signature(self, positions: list[dict]) -> tuple:
@@ -7002,6 +8588,223 @@ class Passivbot:
             self.freshness_ledger = ledger
         return ledger
 
+    def _ensure_live_data_packet_state(self) -> None:
+        if not isinstance(getattr(self, "_live_data_packets", None), dict):
+            self._live_data_packets = {}
+        if not isinstance(getattr(self, "_live_data_packet_revisions", None), dict):
+            self._live_data_packet_revisions = {}
+        if not isinstance(
+            getattr(self, "_pending_live_data_packet_metadata", None), dict
+        ):
+            self._pending_live_data_packet_metadata = {}
+
+    def _stage_live_data_packet_metadata(self, packet: DataPacketMetadata) -> None:
+        if packet.kind not in ACCOUNT_PACKET_KINDS:
+            return
+        self._ensure_live_data_packet_state()
+        self._pending_live_data_packet_metadata[packet.kind] = packet
+
+    def _capture_live_data_packet_fetch_metadata(
+        self,
+        surface: str,
+        result,
+        *,
+        call_started_ts_ms: int,
+        response_received_ts_ms: int,
+    ) -> None:
+        """Stage fetch metadata for account-critical packets without mutating trading state."""
+        cycle_hint = int(getattr(self, "_authoritative_refresh_epoch", 0) or 0)
+        source = f"{getattr(self, 'exchange', '') or 'exchange'}.staged_refresh"
+
+        def stage(kind: str, value, raw_payload=None) -> None:
+            self._stage_live_data_packet_metadata(
+                build_data_packet_metadata(
+                    kind=kind,
+                    value=value,
+                    raw_payload=raw_payload,
+                    cycle_hint=cycle_hint,
+                    call_started_ts_ms=call_started_ts_ms,
+                    response_received_ts_ms=response_received_ts_ms,
+                    source=source,
+                )
+            )
+
+        if surface == "positions_balance":
+            raw_snapshot, positions, balance = result
+            raw_balance = (
+                raw_snapshot.get("balance")
+                if isinstance(raw_snapshot, dict) and "balance" in raw_snapshot
+                else raw_snapshot
+            )
+            raw_positions = (
+                raw_snapshot.get("positions")
+                if isinstance(raw_snapshot, dict) and "positions" in raw_snapshot
+                else raw_snapshot
+            )
+            stage("positions", positions, raw_positions)
+            stage("balance", balance, raw_balance)
+        elif surface == "balance":
+            raw_balance, balance = result
+            stage("balance", balance, raw_balance)
+        elif surface == "positions":
+            raw_positions, positions = result
+            stage("positions", positions, raw_positions)
+        elif surface == "open_orders":
+            stage("open_orders", result, None)
+
+    def _finalize_live_data_packet_metadata(self, surface: str, *, signature) -> None:
+        def finalize() -> None:
+            self._finalize_live_data_packet_metadata_inner(surface, signature=signature)
+
+        run_diagnostic_step(
+            f"finalize {surface} data packet metadata",
+            finalize,
+        )
+
+    def _finalize_live_data_packet_metadata_inner(
+        self, surface: str, *, signature
+    ) -> None:
+        if surface not in ACCOUNT_PACKET_KINDS:
+            return
+        self._ensure_live_data_packet_state()
+        current_revision = int(self._live_data_packet_revisions.get(surface, 0) or 0)
+        revision = current_revision + 1
+        self._live_data_packet_revisions[surface] = revision
+        pending = self._pending_live_data_packet_metadata.pop(surface, None)
+        if pending is None:
+            pending = build_data_packet_metadata(
+                kind=surface,
+                value=signature,
+                raw_payload=None,
+                cycle_hint=int(getattr(self, "_authoritative_refresh_epoch", 0) or 0),
+                response_received_ts_ms=utc_ms(),
+                source="authoritative_surface",
+                quality="ok",
+                freshness_status="fresh",
+            )
+        packet = pending.with_revision(
+            revision,
+            cycle_hint=int(getattr(self, "_authoritative_refresh_epoch", 0) or 0),
+        )
+        self._live_data_packets[surface] = packet
+        emit_diagnostic_event(
+            self,
+            DiagnosticEvent.build(
+                "data_packet.updated",
+                ("diagnostic", "data_packet", surface),
+                packet.to_dict(),
+                ts_ms=packet.response_received_ts_ms or utc_ms(),
+            ),
+        )
+
+    def _planning_data_packets(
+        self, required: set[str] | frozenset[str] | tuple[str, ...]
+    ) -> dict[str, DataPacketMetadata]:
+        self._ensure_live_data_packet_state()
+        return {
+            surface: packet
+            for surface, packet in self._live_data_packets.items()
+            if surface in set(required)
+        }
+
+    def _emit_snapshot_built_diagnostic(
+        self, snapshot: PlanningSnapshot, *, context: str
+    ) -> None:
+        availability = PlanningAvailability.from_snapshot(snapshot, now_ms=utc_ms())
+        surface_ages = []
+        for surface in snapshot.surfaces:
+            try:
+                age_ms = max(0, int(snapshot.ts_ms) - int(surface.updated_ms))
+            except (TypeError, ValueError):
+                continue
+            surface_ages.append(
+                {
+                    "name": str(surface.name),
+                    "age_ms": int(age_ms),
+                    "epoch": int(surface.epoch),
+                    "min_epoch": int(surface.min_epoch),
+                }
+            )
+        market_snapshot_ages = []
+        market_snapshot_sources = set()
+        for row in snapshot.market_snapshots:
+            try:
+                age_ms = max(0, int(snapshot.ts_ms) - int(row.fetched_ms))
+            except (TypeError, ValueError):
+                continue
+            market_snapshot_ages.append(int(age_ms))
+            market_snapshot_sources.add(str(row.source))
+        market_snapshot_summary = {
+            "count": len(snapshot.market_snapshots),
+            "symbol_count": len(snapshot.symbols),
+            "missing_count": max(0, len(snapshot.symbols) - len(snapshot.market_snapshots)),
+            "max_age_ms": max(market_snapshot_ages) if market_snapshot_ages else None,
+            "min_age_ms": min(market_snapshot_ages) if market_snapshot_ages else None,
+            "mean_age_ms": (
+                int(round(sum(market_snapshot_ages) / len(market_snapshot_ages)))
+                if market_snapshot_ages
+                else None
+            ),
+            "configured_max_age_ms": int(snapshot.market_snapshot_max_age_ms),
+            "sources": sorted(market_snapshot_sources)[:8],
+            "sources_count": len(market_snapshot_sources),
+        }
+        emit_diagnostic_event(
+            self,
+            DiagnosticEvent.build(
+                "snapshot.built",
+                ("diagnostic", "snapshot", "planning"),
+                {
+                    "snapshot_id": snapshot.snapshot_id,
+                    "cycle_id": int(snapshot.epoch),
+                    "context": str(context),
+                    "symbols": list(snapshot.symbols),
+                    "required_surfaces": list(snapshot.required_surfaces),
+                    "surface_ages": surface_ages,
+                    "market_snapshot_summary": {
+                        key: value
+                        for key, value in market_snapshot_summary.items()
+                        if value is not None
+                    },
+                    "data_packets": [
+                        {
+                            "kind": packet.kind,
+                            "revision": int(packet.revision),
+                            "freshness": packet.freshness.to_dict(),
+                            "quality": packet.quality,
+                            "raw_ref": packet.raw_ref,
+                            "raw_hash": packet.raw_hash,
+                        }
+                        for packet in snapshot.data_packets
+                    ],
+                    "planning_availability": availability.summary(),
+                },
+                ts_ms=snapshot.ts_ms,
+                cycle_id=self._current_live_event_cycle_id(),
+                snapshot_id=snapshot.snapshot_id,
+            ),
+        )
+        self._emit_planning_symbol_state_event(availability, context=context)
+
+    def _emit_planning_unavailable_diagnostic(self, details: dict) -> None:
+        emit_diagnostic_event(
+            self,
+            DiagnosticEvent.build(
+                "planning_unavailable",
+                ("diagnostic", "planning", "unavailable"),
+                {
+                    "cycle_id": int(details.get("epoch", 0) or 0),
+                    "context": str(details.get("context") or "planning"),
+                    "missing": list(details.get("missing") or []),
+                    "required": list(details.get("required") or []),
+                    "min_epochs": dict(details.get("min_epochs") or {}),
+                    "invalid": details.get("invalid") or {},
+                    "defer_reason": details.get("defer_reason"),
+                },
+                ts_ms=utc_ms(),
+            ),
+        )
+
     def _cancel_result_requires_full_authoritative_confirmation(self, executed) -> bool:
         if isinstance(executed, list):
             return any(
@@ -7014,6 +8817,16 @@ class Passivbot:
                 "_passivbot_cancel_requires_full_authoritative_confirmation"
             )
         )
+
+    def _ambiguous_cancel_success_result(self, order: dict) -> dict:
+        result = {
+            "status": "success",
+            "_passivbot_cancel_requires_full_authoritative_confirmation": True,
+        }
+        for key in ("id", "symbol", "side", "position_side", "qty", "price", "reduce_only"):
+            if key in order:
+                result[key] = order[key]
+        return result
 
     def _request_authoritative_confirmation(
         self,
@@ -7038,6 +8851,16 @@ class Passivbot:
         current_wave = getattr(self, "_order_wave_in_progress", None)
         if isinstance(current_wave, dict):
             wave_confirmations = current_wave.setdefault("requested_confirmations", {})
+        emit_confirmation_requested = getattr(
+            self, "_emit_execution_confirmation_requested_event", None
+        )
+        if callable(emit_confirmation_requested):
+            emit_confirmation_requested(
+                surfaces=requested,
+                target_epoch=target_epoch,
+                wave=current_wave,
+                min_epoch=min_epoch,
+            )
         for surface in requested:
             prev = int(self._authoritative_pending_confirmations.get(surface, 0) or 0)
             self._authoritative_pending_confirmations[surface] = max(prev, target_epoch)
@@ -7570,6 +9393,41 @@ class Passivbot:
             }
         ]
 
+    def _completed_candle_signatures_equivalent(
+        self,
+        expected_signature,
+        stamped_signature,
+    ) -> bool:
+        """Return true when both signatures cover the same completed targets.
+
+        A stamped target may include bounded ``tail_gap_fallback`` metadata while
+        a later cache check at the same stamp time sees normal coverage after a
+        background cache improvement. That metadata shape change must not defer
+        planning when the required symbol and completed-candle timestamp are
+        unchanged.
+        """
+
+        def _targets_by_symbol(signature) -> dict[str, tuple[str, int]]:
+            out: dict[str, tuple[str, int]] = {}
+            if not isinstance(signature, (list, tuple)):
+                return out
+            for item in signature:
+                if not isinstance(item, (list, tuple)) or len(item) < 2:
+                    continue
+                symbol = str(item[0] or "")
+                if not symbol:
+                    continue
+                try:
+                    target_ts = int(item[1])
+                except (TypeError, ValueError):
+                    continue
+                out[symbol] = (symbol, target_ts)
+            return out
+
+        return _targets_by_symbol(expected_signature) == _targets_by_symbol(
+            stamped_signature
+        )
+
     def _staged_planner_precondition_state(
         self,
         *,
@@ -7834,7 +9692,7 @@ class Passivbot:
             try:
                 equity = balance_raw + (await self.calc_upnl_sum())
                 self._monitor_last_equity = float(equity)
-                if should_log:
+                if should_log and not Passivbot._live_event_console_available(self):
                     logging.info(
                         "[balance] raw %.6f -> %.6f | snap %.6f -> %.6f | equity: %.4f source: %s",
                         self._previous_balance_raw,
@@ -7844,8 +9702,8 @@ class Passivbot:
                         equity,
                         source,
                     )
-                    if raw_only:
-                        self._last_raw_only_log_time = now
+                if should_log and raw_only:
+                    self._last_raw_only_log_time = now
                 self._monitor_record_event(
                     "account.balance",
                     ("account", "balance"),
@@ -7860,6 +9718,18 @@ class Passivbot:
                         "source": str(source),
                     },
                 )
+                emit_balance_changed = getattr(
+                    self, "_emit_balance_changed_event", None
+                )
+                if callable(emit_balance_changed):
+                    emit_balance_changed(
+                        previous_balance_raw=float(self._previous_balance_raw),
+                        balance_raw=float(balance_raw),
+                        previous_balance_snapped=float(self._previous_balance_snapped),
+                        balance_snapped=float(balance_snapped),
+                        equity=float(equity),
+                        source=str(source),
+                    )
             except Exception as e:
                 if self._log_noncritical_market_snapshot_error(
                     "balance equity diagnostics", e
@@ -7887,6 +9757,11 @@ class Passivbot:
     ) -> bool:
         if not self._is_market_snapshot_error(exc):
             return False
+        emit_market_snapshot_event = getattr(
+            self, "_emit_market_snapshot_diagnostic_skipped_event", None
+        )
+        if callable(emit_market_snapshot_event):
+            emit_market_snapshot_event(context=context, error=exc)
         logging.warning("[market] skipped %s | error=%s", context, exc)
         return True
 
@@ -7921,6 +9796,7 @@ class Passivbot:
         if self._pnls_initialized:
             return
 
+        init_started_ms = utc_ms()
         try:
             logging.debug("[fills] initializing FillEventsManager")
 
@@ -7952,6 +9828,46 @@ class Passivbot:
                 "disabled",
             )
 
+            def emit_fill_cache_doctor_event(
+                *,
+                reason_code: str,
+                refresh_mode: str,
+                report: dict | None = None,
+                status: str = "succeeded",
+                level: str = "debug",
+                doctor_action: str | None = None,
+                doctor_mode_value: str | None = None,
+                auto_repair: bool | None = None,
+                start_ms: int | None = None,
+                end_ms: int | None = None,
+                history_scope: str | None = None,
+                quarantine_created: bool | None = None,
+                quarantine_reason: str | None = None,
+            ) -> None:
+                report_data = report or {}
+                self._emit_fills_refresh_summary_event(
+                    source="startup",
+                    refresh_mode=refresh_mode,
+                    status=status,
+                    reason_code=reason_code,
+                    elapsed_ms=int(max(0, utc_ms() - init_started_ms)),
+                    history_scope=history_scope,
+                    start_ms=start_ms,
+                    end_ms=end_ms,
+                    doctor_mode=doctor_mode_value,
+                    doctor_action=doctor_action,
+                    auto_repair=auto_repair,
+                    anomaly_events=report_data.get("anomaly_events"),
+                    repaired=report_data.get("repaired"),
+                    degraded_events_after=report_data.get("degraded_events_after"),
+                    legacy_files_quarantined=report_data.get(
+                        "legacy_files_quarantined"
+                    ),
+                    quarantine_created=quarantine_created,
+                    quarantine_reason=quarantine_reason,
+                    level=level,
+                )
+
             async def rebuild_fill_cache_from_lookback() -> None:
                 lookback = parse_pnls_max_lookback_days(
                     self.live_value("pnls_max_lookback_days"),
@@ -7959,13 +9875,25 @@ class Passivbot:
                 )
                 age_limit = lookback.fill_cache_age_limit_ms(self.get_exchange_time())
                 start_ms = None if age_limit is None else int(age_limit)
+                history_scope = "all" if lookback.is_all else "window"
                 logging.warning(
                     "[fills] rebuilding fill-event cache after legacy contract quarantine | start=%s scope=%s",
                     ts_to_date(start_ms)[:19] if start_ms is not None else "all",
-                    "all" if lookback.is_all else "window",
+                    history_scope,
+                )
+                emit_fill_cache_doctor_event(
+                    reason_code=ReasonCodes.FILL_CACHE_REBUILD_STARTED,
+                    refresh_mode="cache_rebuild",
+                    start_ms=start_ms,
+                    end_ms=None,
+                    history_scope=history_scope,
                 )
                 await self._pnls_manager.refresh(start_ms=start_ms, end_ms=None)
-                self._pnls_manager.set_history_scope("all" if lookback.is_all else "window")
+                cache = getattr(self._pnls_manager, "cache", None)
+                mark_covered_start = getattr(cache, "mark_covered_start", None)
+                if start_ms is not None and callable(mark_covered_start):
+                    mark_covered_start(int(start_ms))
+                self._pnls_manager.set_history_scope(history_scope)
 
             # Load cached events
             try:
@@ -7988,8 +9916,27 @@ class Passivbot:
                     doctor_action,
                     doctor_mode or "auto",
                 )
+                emit_fill_cache_doctor_event(
+                    reason_code=ReasonCodes.FILL_CACHE_DOCTOR_REPORT,
+                    refresh_mode="doctor",
+                    report=report,
+                    doctor_action=doctor_action,
+                    doctor_mode_value=doctor_mode or "auto",
+                    auto_repair=True,
+                )
                 if report.get("repaired", False):
                     if doctor_action == "quarantine_legacy_files":
+                        emit_fill_cache_doctor_event(
+                            reason_code=ReasonCodes.FILL_CACHE_QUARANTINED,
+                            refresh_mode="cache_quarantine",
+                            report=report,
+                            status="succeeded",
+                            level="warning",
+                            quarantine_created=bool(
+                                report.get("legacy_files_quarantined", 0) or 0
+                            ),
+                            quarantine_reason="legacy_pnl_contract",
+                        )
                         await rebuild_fill_cache_from_lookback()
                 elif self.exchange == "kucoin" and "degraded_events_after" in report:
                     logging.warning(
@@ -8006,6 +9953,14 @@ class Passivbot:
                         self.user,
                         quarantine_path or "none",
                     )
+                    emit_fill_cache_doctor_event(
+                        reason_code=ReasonCodes.FILL_CACHE_QUARANTINED,
+                        refresh_mode="cache_quarantine",
+                        status="succeeded",
+                        level="warning",
+                        quarantine_created=quarantine_path is not None,
+                        quarantine_reason="legacy_pnl_contract",
+                    )
                     await rebuild_fill_cache_from_lookback()
 
             # Bybit cache doctor runs by default on startup to self-heal known duplicate-fill issues.
@@ -8018,6 +9973,14 @@ class Passivbot:
                         report.get("anomaly_events", 0),
                         report.get("repaired", False),
                         doctor_mode or ("repair" if auto_repair else "check"),
+                    )
+                    emit_fill_cache_doctor_event(
+                        reason_code=ReasonCodes.FILL_CACHE_DOCTOR_REPORT,
+                        refresh_mode="doctor",
+                        report=report,
+                        doctor_mode_value=doctor_mode
+                        or ("repair" if auto_repair else "check"),
+                        auto_repair=auto_repair,
                     )
             elif doctor_mode:
                 auto_repair = doctor_mode in (
@@ -8035,9 +9998,33 @@ class Passivbot:
                     report.get("repaired", False),
                     doctor_mode,
                 )
+                emit_fill_cache_doctor_event(
+                    reason_code=ReasonCodes.FILL_CACHE_DOCTOR_REPORT,
+                    refresh_mode="doctor",
+                    report=report,
+                    doctor_mode_value=doctor_mode,
+                    auto_repair=auto_repair,
+                )
 
             cached_count = len(self._pnls_manager._events)
             logging.info("[fills] cache ready: %d cached events loaded", cached_count)
+            history_scope = None
+            try:
+                get_history_scope = getattr(self._pnls_manager, "get_history_scope", None)
+                if callable(get_history_scope):
+                    history_scope = get_history_scope()
+            except Exception as exc:
+                logging.debug("[event] failed to read fill-cache history scope: %s", exc)
+            self._emit_fills_refresh_summary_event(
+                source="startup",
+                refresh_mode="cache_load",
+                status="succeeded",
+                reason_code=ReasonCodes.FILL_CACHE_READY,
+                elapsed_ms=int(max(0, utc_ms() - init_started_ms)),
+                history_scope=history_scope,
+                event_count_after=cached_count,
+                level="debug",
+            )
 
             self._pnls_initialized = True
 
@@ -8064,6 +10051,10 @@ class Passivbot:
         refresh_started_ms = utc_ms()
         refresh_mode = "unknown"
         overlap_minutes: Optional[float] = None
+        before_events_count = 0
+        coverage_status: dict[str, Any] = {}
+        post_refresh_coverage_status: dict[str, Any] = {}
+        lookback_config_value = None
         await self.init_pnls()  # will do nothing if already initiated
 
         if self._pnls_manager is None:
@@ -8071,8 +10062,9 @@ class Passivbot:
 
         try:
             # Use the same lookback window
+            lookback_config_value = self.live_value("pnls_max_lookback_days")
             lookback = parse_pnls_max_lookback_days(
-                self.live_value("pnls_max_lookback_days"),
+                lookback_config_value,
                 field_name="live.pnls_max_lookback_days",
             )
             age_limit = lookback.fill_cache_age_limit_ms(self.get_exchange_time())
@@ -8095,13 +10087,49 @@ class Passivbot:
                     existing_source_ids.add(ev.id)
                     existing_by_source_id[str(ev.id)] = ev
 
-            # Check if we need a full refresh (cache empty or too old)
+            # Check whether the cache proves the configured fill-history
+            # lookback before risk gates consume realized PnL.
             events = self._pnls_manager.get_events()
             before_events_count = len(events)
-            needs_full_refresh = not events
-            history_scope = self._pnls_manager.get_history_scope()
-            if lookback.is_all and events and history_scope != "all":
-                needs_full_refresh = True
+            coverage_status = self._pnl_history_coverage_status(
+                start_ms=age_limit,
+                end_ms=self.get_exchange_time(),
+                lookback=lookback,
+            )
+            coverage_ready = bool(coverage_status.get("ready", False))
+            needs_full_refresh = lookback.is_all and not coverage_ready
+            needs_lookback_refresh = (not lookback.is_all) and not coverage_ready
+            history_scope = str(coverage_status.get("history_scope", "unknown"))
+            if not coverage_ready:
+                now_ms = utc_ms()
+                if self._fill_coverage_retry_deferred(coverage_status, now_ms):
+                    state = getattr(self, "_fill_coverage_retry_state", {}) or {}
+                    next_retry_ms = int(state.get("next_retry_ms", 0) or 0)
+                    refresh_mode = "coverage_retry_backoff"
+                    next_retry_in_ms = max(0, next_retry_ms - now_ms)
+                    logging.debug(
+                        "[fills] fill-history lookback proof deferred by retry backoff | "
+                        "reason=%s scope=%s next_retry_in_ms=%d",
+                        str(coverage_status.get("reason", "unknown")),
+                        history_scope,
+                        next_retry_in_ms,
+                    )
+                    self._emit_fills_refresh_summary_event(
+                        source=source,
+                        refresh_mode=refresh_mode,
+                        status="deferred",
+                        reason_code="fill_history_coverage_retry_backoff",
+                        elapsed_ms=int(max(0, utc_ms() - refresh_started_ms)),
+                        lookback=lookback_config_value,
+                        history_scope=history_scope,
+                        event_count_before=before_events_count,
+                        coverage_before=coverage_status,
+                        next_retry_in_ms=next_retry_in_ms,
+                        retry_count=int(state.get("retry_count", 0) or 0),
+                        level="debug",
+                    )
+                    return False
+            if needs_full_refresh:
                 cache_key = "_fills_full_refresh_logged"
                 if not getattr(self, cache_key, False):
                     setattr(self, cache_key, True)
@@ -8109,21 +10137,6 @@ class Passivbot:
                         "[fills] Cache history scope %s is narrower than requested full history; doing full refresh",
                         history_scope,
                     )
-            elif events and age_limit is not None:
-                oldest_event_ts = events[0].timestamp
-                if (
-                    oldest_event_ts > age_limit + 1000 * 60 * 60 * 24
-                ):  # > 1 day newer than limit
-                    needs_full_refresh = True
-                    # Log once per session to avoid spam
-                    cache_key = "_fills_full_refresh_logged"
-                    if not getattr(self, cache_key, False):
-                        setattr(self, cache_key, True)
-                        logging.debug(
-                            "[fills] Cache oldest event (%s) is newer than lookback (%s), doing full refresh",
-                            ts_to_date(oldest_event_ts)[:19],
-                            ts_to_date(age_limit)[:19],
-                        )
 
             if needs_full_refresh:
                 # Full refresh with proper lookback window
@@ -8142,9 +10155,38 @@ class Passivbot:
                     start_ms=None if age_limit is None else int(age_limit),
                     end_ms=None,
                 )
+                cache = getattr(self._pnls_manager, "cache", None)
+                mark_covered_start = getattr(cache, "mark_covered_start", None)
+                if age_limit is not None and callable(mark_covered_start):
+                    mark_covered_start(int(age_limit))
                 self._pnls_manager.set_history_scope(
                     "all" if lookback.is_all else "window"
                 )
+            elif needs_lookback_refresh:
+                refresh_mode = "lookback_bootstrap"
+                logging.info(
+                    "[fills] proving fill-history lookback before risk planning | "
+                    "start=%s scope=%s covered_start=%s reason=%s",
+                    ts_to_date(age_limit)[:19] if age_limit is not None else "all",
+                    history_scope,
+                    int(coverage_status.get("covered_start_ms", 0) or 0),
+                    str(coverage_status.get("reason", "unknown")),
+                )
+                refresh_for_lookback = getattr(
+                    self._pnls_manager, "refresh_for_lookback", None
+                )
+                if age_limit is not None and callable(refresh_for_lookback):
+                    await refresh_for_lookback(start_ms=int(age_limit))
+                else:
+                    await self._pnls_manager.refresh(
+                        start_ms=None if age_limit is None else int(age_limit),
+                        end_ms=None,
+                    )
+                    cache = getattr(self._pnls_manager, "cache", None)
+                    mark_covered_start = getattr(cache, "mark_covered_start", None)
+                    if age_limit is not None and callable(mark_covered_start):
+                        mark_covered_start(int(age_limit))
+                self._pnls_manager.set_history_scope("window")
             else:
                 # Incremental refresh
                 pending = dict(
@@ -8214,13 +10256,32 @@ class Passivbot:
             pending_pnl_events = FillEventsManager.pending_pnl_events(all_events)
             self._last_fill_refresh_pending_pnl_count = len(pending_pnl_events)
             pnls_complete = not pending_pnl_events
-            if pnls_complete:
+            post_refresh_coverage_status = self._pnl_history_coverage_status(
+                start_ms=age_limit,
+                end_ms=self.get_exchange_time(),
+                lookback=lookback,
+            )
+            coverage_ready_after = bool(post_refresh_coverage_status.get("ready", False))
+            if pnls_complete and coverage_ready_after:
+                self._clear_fill_coverage_retry_defer()
                 self._record_authoritative_surface(
                     "fills", self._fill_events_signature(all_events)
                 )
+            elif pnls_complete and not coverage_ready_after:
+                self._record_fill_coverage_retry_defer(post_refresh_coverage_status)
+                state = getattr(self, "_fill_coverage_retry_state", {}) or {}
+                next_retry_ms = int(state.get("next_retry_ms", 0) or 0)
+                logging.warning(
+                    "[fills] fill-history lookback still unproven after refresh; "
+                    "deferring authoritative fills | reason=%s scope=%s covered_start=%s next_retry_in_ms=%d",
+                    str(post_refresh_coverage_status.get("reason", "unknown")),
+                    str(post_refresh_coverage_status.get("history_scope", "unknown")),
+                    int(post_refresh_coverage_status.get("covered_start_ms", 0) or 0),
+                    max(0, next_retry_ms - utc_ms()),
+                )
             elapsed_ms = int(max(0, utc_ms() - refresh_started_ms))
             blocking_or_confirmation_refresh = (
-                refresh_mode in {"full", "incremental_confirm"}
+                refresh_mode in {"full", "lookback_bootstrap", "incremental_confirm"}
                 or "confirm" in str(source)
                 or "staged" in str(source)
             )
@@ -8231,22 +10292,50 @@ class Passivbot:
             )
             logging.log(
                 log_level,
-                "[fills] refresh timing | source=%s mode=%s | elapsed=%dms | before=%d after=%d new=%d | lookback=%s scope=%s overlap_minutes=%s pending_pnl=%d",
+                "[fills] refresh timing | source=%s mode=%s | elapsed=%dms | before=%d after=%d new=%d | lookback=%s scope=%s coverage_ready=%s coverage_reason=%s overlap_minutes=%s pending_pnl=%d",
                 source,
                 refresh_mode,
                 elapsed_ms,
                 before_events_count,
                 len(all_events),
                 len(new_events),
-                str(self.live_value("pnls_max_lookback_days")),
+                str(lookback_config_value),
                 self._pnls_manager.get_history_scope(),
+                coverage_ready_after,
+                str(post_refresh_coverage_status.get("reason", "unknown")),
                 (f"{overlap_minutes:.3f}" if overlap_minutes is not None else "-"),
                 len(pending_pnl_events),
             )
+            self._emit_fills_refresh_summary_event(
+                source=source,
+                refresh_mode=refresh_mode,
+                status="succeeded" if pnls_complete and coverage_ready_after else "deferred",
+                reason_code=(
+                    "fills_refresh_succeeded"
+                    if pnls_complete and coverage_ready_after
+                    else (
+                        "pending_pnl_enrichment"
+                        if not pnls_complete
+                        else "fill_history_coverage_unavailable"
+                    )
+                ),
+                elapsed_ms=elapsed_ms,
+                lookback=lookback_config_value,
+                history_scope=self._pnls_manager.get_history_scope(),
+                event_count_before=before_events_count,
+                event_count_after=len(all_events),
+                new_count=len(new_events),
+                enriched_count=len(enriched_events),
+                pending_pnl_count=len(pending_pnl_events),
+                coverage_before=coverage_status,
+                coverage_after=post_refresh_coverage_status,
+                overlap_minutes=overlap_minutes,
+                level=logging.getLevelName(log_level).lower(),
+            )
 
-            return pnls_complete
+            return pnls_complete and coverage_ready_after
 
-        except RateLimitExceeded:
+        except RateLimitExceeded as e:
             if self._shutdown_requested():
                 logging.debug(
                     "[shutdown] fill refresh stopped during rate-limit handling"
@@ -8261,6 +10350,18 @@ class Passivbot:
             logging.warning(
                 "[rate] hit rate limit while fetching fill events; retrying next cycle"
             )
+            self._emit_fills_refresh_summary_event(
+                source=source,
+                refresh_mode=refresh_mode,
+                status="deferred",
+                reason_code="rate_limit",
+                elapsed_ms=int(max(0, utc_ms() - refresh_started_ms)),
+                lookback=lookback_config_value,
+                event_count_before=before_events_count,
+                coverage_before=coverage_status,
+                error=e,
+                level="warning",
+            )
             return False
         except Exception as e:
             if self._shutdown_requested():
@@ -8269,6 +10370,19 @@ class Passivbot:
                 )
                 return False
             if await self._maybe_recover_exchange_time_sync(e, source="update_pnls"):
+                self._emit_fills_refresh_summary_event(
+                    source=source,
+                    refresh_mode=refresh_mode,
+                    status="deferred",
+                    reason_code="exchange_time_resync",
+                    elapsed_ms=int(max(0, utc_ms() - refresh_started_ms)),
+                    lookback=lookback_config_value,
+                    event_count_before=before_events_count,
+                    coverage_before=coverage_status,
+                    coverage_after=post_refresh_coverage_status,
+                    error=e,
+                    level="warning",
+                )
                 return False
             self._monitor_record_error(
                 "error.exchange",
@@ -8282,6 +10396,19 @@ class Passivbot:
                 getattr(e, "status", "-"),
                 getattr(e, "code", "-"),
                 e,
+            )
+            self._emit_fills_refresh_summary_event(
+                source=source,
+                refresh_mode=refresh_mode,
+                status="failed",
+                reason_code="fill_refresh_failed",
+                elapsed_ms=int(max(0, utc_ms() - refresh_started_ms)),
+                lookback=lookback_config_value,
+                event_count_before=before_events_count,
+                coverage_before=coverage_status,
+                coverage_after=post_refresh_coverage_status,
+                error=e,
+                level="error",
             )
             if self.logging_level >= 2:
                 traceback.print_exc()
@@ -8352,35 +10479,64 @@ class Passivbot:
             fill_event_net_pnl(ev) for ev in new_events if not fill_event_pnl_pending(ev)
         )
 
-        if len(new_events) > 20:
+        batch_summary = len(new_events) > 20
+        pending_count = 0
+        known_pnl_count = 0
+        total_pnl = 0.0
+        if batch_summary:
             # Truncate to summary
             pending_count = sum(1 for ev in new_events if fill_event_pnl_pending(ev))
+            known_pnl_count = len(new_events) - pending_count
             total_pnl = sum(
                 fill_event_net_pnl(ev) for ev in new_events if not fill_event_pnl_pending(ev)
             )
-            pnl_sign = "+" if total_pnl >= 0 else ""
-            pending_suffix = f", pnl_pending={pending_count}" if pending_count else ""
-            logging.info(
-                "[fill] %d fills, pnl=%s%s USDT%s",
-                len(new_events),
-                pnl_sign,
-                round_dynamic(total_pnl, 3),
-                pending_suffix,
-            )
-        else:
-            # Log each event
-            for event in sorted(new_events, key=lambda e: e.timestamp):
-                logging.info(self._log_fill_event(event))
+        if not self._live_event_console_available():
+            if batch_summary:
+                if known_pnl_count:
+                    pnl_sign = "+" if total_pnl >= 0 else ""
+                    pnl_label = f"{pnl_sign}{round_dynamic(total_pnl, 3)} USDT"
+                else:
+                    pnl_label = "-"
+                pending_suffix = f", pnl_pending={pending_count}" if pending_count else ""
+                logging.info(
+                    "[fill] %d fills, pnl=%s, pnl_known=%d%s",
+                    len(new_events),
+                    pnl_label,
+                    known_pnl_count,
+                    pending_suffix,
+                )
+            else:
+                # Log each event
+                for event in sorted(new_events, key=lambda e: e.timestamp):
+                    logging.info(self._log_fill_event(event))
+
         for event in sorted(new_events, key=lambda e: e.timestamp):
             self._monitor_record_fill_history(event)
+            fill_payload = self._monitor_fill_payload(event)
             self._monitor_record_event(
                 "order.filled",
                 ("order", "fill"),
-                self._monitor_fill_payload(event),
+                fill_payload,
                 symbol=getattr(event, "symbol", None),
                 pside=str(getattr(event, "position_side", "") or "").lower() or None,
                 ts=int(getattr(event, "timestamp", 0) or 0) or None,
             )
+            emit_fill_ingested = getattr(self, "_emit_fill_ingested_event", None)
+            if callable(emit_fill_ingested):
+                emit_fill_ingested(
+                    event,
+                    payload=fill_payload,
+                    operator_visible=not batch_summary,
+                )
+        if batch_summary:
+            emit_summary = getattr(self, "_emit_fills_ingested_summary_event", None)
+            if callable(emit_summary):
+                emit_summary(
+                    count=len(new_events),
+                    known_net_realized_pnl=total_pnl,
+                    known_pnl_count=known_pnl_count,
+                    pending_pnl_count=pending_count,
+                )
 
     def _log_enriched_fill_events(self, events: list) -> None:
         """Log realized-PnL enrichment for already seen close fills."""
@@ -8395,17 +10551,26 @@ class Passivbot:
                 self._log_fill_event(event),
             )
 
-    def _calc_unstuck_allowances(self, allow_new_unstuck: bool) -> dict[str, float]:
-        """Calculate unstuck allowances using FillEventsManager data."""
-        if not allow_new_unstuck or self._pnls_manager is None:
+    def _calc_unstuck_allowances(self) -> dict[str, float]:
+        """Calculate unstuck allowances using FillEventsManager data.
+
+        Pure budget math from fill history; whether an unstuck order may be
+        emitted this cycle is a separate decision carried by the
+        auto_unstuck_allowed flag, which the Rust orchestrator consumes as
+        the sole emission gate.
+        """
+        if self._pnls_manager is None:
             return {"long": 0.0, "short": 0.0}
 
+        start_ms = self._pnls_lookback_start_ms()
         events = self._get_effective_pnl_events()
+        self._assert_pnl_history_safe_for_risk(
+            events,
+            context="unstuck allowance realized PnL",
+            start_ms=start_ms,
+        )
         if not events:
             return {"long": 0.0, "short": 0.0}
-        self._assert_no_pending_pnl_events(
-            events, context="unstuck allowance realized PnL"
-        )
 
         pnls_cumsum = np.array([fill_event_net_pnl(ev) for ev in events], dtype=float).cumsum()
         pnls_cumsum_max, pnls_cumsum_last = max(0.0, float(pnls_cumsum.max())), pnls_cumsum[-1]
@@ -8433,18 +10598,241 @@ class Passivbot:
         """Return net realized pnl cumsum peak/current from FillEventsManager history."""
         if self._pnls_manager is None:
             return {"max": 0.0, "last": 0.0}
+        start_ms = self._pnls_lookback_start_ms()
         events = self._get_effective_pnl_events()
+        self._assert_pnl_history_safe_for_risk(
+            events,
+            context="realized loss gate PnL cumsum",
+            start_ms=start_ms,
+        )
         if not events:
             return {"max": 0.0, "last": 0.0}
-        self._assert_no_pending_pnl_events(
-            events, context="realized loss gate PnL cumsum"
-        )
         pnls_cumsum = np.array([fill_event_net_pnl(ev) for ev in events], dtype=float).cumsum()
         return {"max": max(0.0, float(pnls_cumsum.max())), "last": float(pnls_cumsum[-1])}
 
-    def _log_realized_loss_gate_blocks(
-        self, out: dict, idx_to_symbol: dict[int, str]
+    @staticmethod
+    def _fill_event_increases_position(pside: str, side: str, qty: float) -> bool:
+        if qty != 0.0:
+            if pside == "long":
+                return qty > 0.0
+            if pside == "short":
+                return qty < 0.0
+        side = str(side or "").lower()
+        if pside == "long":
+            return side == "buy"
+        if pside == "short":
+            return side == "sell"
+        return False
+
+    def _get_last_increase_fill_timestamps(
+        self, symbols: Iterable[str], *, now_ms: Optional[int] = None
+    ) -> dict[str, dict[str, Optional[int]]]:
+        out = {symbol: {"long": None, "short": None} for symbol in symbols}
+        if self._pnls_manager is None:
+            return out
+
+        relevant_pairs: set[tuple[str, str]] = set()
+        max_cooldown_minutes = 0.0
+        for symbol in out:
+            for pside in ("long", "short"):
+                cooldown_minutes = float(self.bp(pside, "risk_entry_cooldown_minutes", symbol) or 0.0)
+                if cooldown_minutes > 0.0:
+                    relevant_pairs.add((symbol, pside))
+                    max_cooldown_minutes = max(max_cooldown_minutes, cooldown_minutes)
+        if not relevant_pairs:
+            return out
+
+        if now_ms is None:
+            now_ms = int(self.get_exchange_time())
+        lookback_minutes = (
+            1 if max_cooldown_minutes < 1.0 else int(math.ceil(max_cooldown_minutes)) + 1
+        )
+        start_ms = max(0, int(now_ms) - lookback_minutes * 60_000)
+        events = self._pnls_manager.get_events(start_ms=start_ms)
+        unresolved = set(relevant_pairs)
+        for event in reversed(events):
+            symbol = str(getattr(event, "symbol", "") or "")
+            pside = str(getattr(event, "position_side", "") or "").lower()
+            key = (symbol, pside)
+            if key not in unresolved:
+                continue
+            qty = float(getattr(event, "qty", 0.0) or 0.0)
+            side = str(getattr(event, "side", "") or "").lower()
+            if not self._fill_event_increases_position(pside, side, qty):
+                continue
+            out[symbol][pside] = int(getattr(event, "timestamp", 0) or 0)
+            unresolved.remove(key)
+            if not unresolved:
+                break
+        return out
+
+    def _ensure_entry_cooldown_delta_guard_state(self) -> None:
+        if not hasattr(self, "_entry_cooldown_prev_pos_sizes"):
+            self._entry_cooldown_prev_pos_sizes = {}
+        if not hasattr(self, "_entry_cooldown_pos_increase_detected_ts"):
+            self._entry_cooldown_pos_increase_detected_ts = {}
+        if not hasattr(self, "_entry_cooldown_delta_guard_last_log_ms"):
+            self._entry_cooldown_delta_guard_last_log_ms = {}
+        if not hasattr(self, "_entry_cooldown_delta_guard_log_interval_ms"):
+            self._entry_cooldown_delta_guard_log_interval_ms = 60_000
+
+    def _entry_cooldown_enabled_pairs(
+        self, symbols: Iterable[str]
+    ) -> set[tuple[str, str]]:
+        pairs: set[tuple[str, str]] = set()
+        for symbol in symbols:
+            for pside in ("long", "short"):
+                cooldown_minutes = float(
+                    self.bp(pside, "risk_entry_cooldown_minutes", symbol)
+                )
+                if cooldown_minutes > 0.0:
+                    pairs.add((symbol, pside))
+        return pairs
+
+    def _entry_cooldown_current_abs_position_size(
+        self, symbol: str, pside: str
+    ) -> float:
+        positions = getattr(self, "positions", None)
+        if not isinstance(positions, dict):
+            return 0.0
+        symbol_positions = positions.get(symbol)
+        if not isinstance(symbol_positions, dict):
+            return 0.0
+        pos = symbol_positions.get(pside)
+        if not isinstance(pos, dict):
+            return 0.0
+        raw_size = pos.get("size")
+        size = 0.0 if raw_size is None else float(raw_size)
+        if not math.isfinite(size):
+            raise ValueError(
+                f"non-finite position size for entry cooldown guard: {symbol} {pside} {size}"
+            )
+        return abs(size)
+
+    def _log_entry_cooldown_delta_guard(
+        self,
+        *,
+        symbol: str,
+        pside: str,
+        previous_abs_size: float,
+        current_abs_size: float,
+        qty_step: float,
+        epsilon: float,
+        now_ms: int,
     ) -> None:
+        self._ensure_entry_cooldown_delta_guard_state()
+        key = (symbol, pside)
+        raw_last_log_ms = self._entry_cooldown_delta_guard_last_log_ms.get(key)
+        last_log_ms = 0 if raw_last_log_ms is None else int(raw_last_log_ms)
+        text_log_emitted = not (
+            last_log_ms > 0
+            and now_ms - last_log_ms
+            < int(self._entry_cooldown_delta_guard_log_interval_ms)
+        )
+        self._emit_entry_cooldown_delta_anchored_event(
+            symbol=symbol,
+            pside=pside,
+            previous_abs_size=previous_abs_size,
+            current_abs_size=current_abs_size,
+            qty_step=qty_step,
+            epsilon=epsilon,
+            anchor_ts_ms=int(now_ms),
+            text_log_emitted=text_log_emitted,
+        )
+        if not text_log_emitted:
+            return
+        self._entry_cooldown_delta_guard_last_log_ms[key] = int(now_ms)
+        logging.warning(
+            "[risk] entry cooldown position-delta guard anchored add cooldown | "
+            "symbol=%s pside=%s previous_abs_size=%.12g current_abs_size=%.12g "
+            "qty_step=%.12g epsilon=%.12g anchor_ts_ms=%d reason=position_size_increase "
+            "fallback_source=exchange_position_delta",
+            Passivbot._log_symbol(symbol),
+            pside,
+            previous_abs_size,
+            current_abs_size,
+            qty_step,
+            epsilon,
+            int(now_ms),
+        )
+
+    def _update_entry_cooldown_position_delta_guard(
+        self, symbols: Iterable[str], *, now_ms: int
+    ) -> dict[str, dict[str, Optional[int]]]:
+        symbols = list(symbols)
+        out = {symbol: {"long": None, "short": None} for symbol in symbols}
+        enabled_pairs = self._entry_cooldown_enabled_pairs(symbols)
+        if not enabled_pairs:
+            return out
+
+        self._ensure_entry_cooldown_delta_guard_state()
+        for symbol, pside in sorted(enabled_pairs):
+            current_abs = self._entry_cooldown_current_abs_position_size(symbol, pside)
+            prev_by_side = self._entry_cooldown_prev_pos_sizes.setdefault(symbol, {})
+            detected_by_side = self._entry_cooldown_pos_increase_detected_ts.setdefault(
+                symbol, {}
+            )
+            previous_abs_raw = prev_by_side.get(pside)
+            if previous_abs_raw is None:
+                prev_by_side[pside] = current_abs
+                continue
+            previous_abs = float(previous_abs_raw)
+            if not math.isfinite(previous_abs):
+                raise ValueError(
+                    f"non-finite previous position size for entry cooldown guard: "
+                    f"{symbol} {pside} {previous_abs}"
+                )
+            qty_steps = getattr(self, "qty_steps", None)
+            raw_qty_step = qty_steps.get(symbol) if isinstance(qty_steps, dict) else None
+            qty_step = 0.0 if raw_qty_step is None else float(raw_qty_step)
+            if not math.isfinite(qty_step) or qty_step < 0.0:
+                qty_step = 0.0
+            epsilon = max(1e-12, qty_step * 0.5)
+            if current_abs > previous_abs + epsilon:
+                detected_by_side[pside] = int(now_ms)
+                self._log_entry_cooldown_delta_guard(
+                    symbol=symbol,
+                    pside=pside,
+                    previous_abs_size=previous_abs,
+                    current_abs_size=current_abs,
+                    qty_step=qty_step,
+                    epsilon=epsilon,
+                    now_ms=int(now_ms),
+                )
+            existing_ts = detected_by_side.get(pside)
+            if existing_ts is not None:
+                out[symbol][pside] = int(existing_ts)
+            prev_by_side[pside] = current_abs
+        return out
+
+    @staticmethod
+    def _merge_entry_cooldown_anchors(
+        fill_ts: dict[str, dict[str, Optional[int]]],
+        delta_ts: dict[str, dict[str, Optional[int]]],
+    ) -> dict[str, dict[str, Optional[int]]]:
+        symbols = sorted(set(fill_ts) | set(delta_ts))
+        out: dict[str, dict[str, Optional[int]]] = {}
+        for symbol in symbols:
+            out[symbol] = {"long": None, "short": None}
+            fill_by_side = fill_ts.get(symbol)
+            delta_by_side = delta_ts.get(symbol)
+            for pside in ("long", "short"):
+                candidates = []
+                fill_value = (
+                    fill_by_side.get(pside) if isinstance(fill_by_side, dict) else None
+                )
+                delta_value = (
+                    delta_by_side.get(pside) if isinstance(delta_by_side, dict) else None
+                )
+                if fill_value is not None:
+                    candidates.append(int(fill_value))
+                if delta_value is not None:
+                    candidates.append(int(delta_value))
+                if candidates:
+                    out[symbol][pside] = max(candidates)
+        return out
+
+    def _log_realized_loss_gate_blocks(self, out: dict, idx_to_symbol: dict[int, str]) -> None:
         """Emit visible warnings for close orders blocked by realized-loss gate."""
         diagnostics = out.get("diagnostics", {}) if isinstance(out, dict) else {}
         blocks = diagnostics.get("loss_gate_blocks", [])
@@ -8481,6 +10869,17 @@ class Passivbot:
                 projected_balance,
                 balance_floor,
                 max_loss_pct,
+            )
+            self._emit_realized_loss_gate_blocked_event(
+                symbol=symbol,
+                pside=pside,
+                order_type=order_type,
+                qty=qty,
+                price=price,
+                projected_pnl=projected_pnl,
+                projected_balance=projected_balance,
+                balance_floor=balance_floor,
+                max_realized_loss_pct=max_loss_pct,
             )
 
     def _log_min_effective_cost_blocks(
@@ -8563,6 +10962,15 @@ class Passivbot:
         if not visible_blocks:
             return
         detail_limit = 3
+        emit_blocked_event = getattr(
+            self, "_emit_entry_min_effective_cost_blocked_event", None
+        )
+        pipeline = getattr(self, "_live_event_pipeline", None)
+        structured_console_available = bool(
+            callable(emit_blocked_event)
+            and Passivbot._live_event_console_available(self)
+            and getattr(pipeline, "console_sink", None) is not None
+        )
         for symbol, pside, block in visible_blocks[:detail_limit]:
             balance = float(block.get("balance", 0.0) or 0.0)
             effective_limit = float(block.get("effective_limit", 0.0) or 0.0)
@@ -8573,13 +10981,14 @@ class Passivbot:
                 block.get("projected_initial_cost", 0.0) or 0.0
             )
             effective_min_cost = float(block.get("effective_min_cost", 0.0) or 0.0)
-            logging.info(
-                "[entry] initial entry blocked by min effective cost | %s %s notional wanted/required=%.6f/%.6f action=skip_create docs=docs/configuration.md#filter_by_min_effective_cost",
-                Passivbot._log_symbol(symbol),
-                pside,
-                projected_initial_cost,
-                effective_min_cost,
-            )
+            if not structured_console_available:
+                logging.info(
+                    "[entry] initial entry blocked by min effective cost | %s %s notional wanted/required=%.6f/%.6f action=skip_create docs=docs/configuration.md#filter_by_min_effective_cost",
+                    Passivbot._log_symbol(symbol),
+                    pside,
+                    projected_initial_cost,
+                    effective_min_cost,
+                )
             logging.debug(
                 "[entry] initial entry min effective cost detail | symbol=%s pside=%s projected_initial_cost=%.6f required_effective_min_cost=%.6f balance=%.6f effective_limit=%.6f entry_initial_qty_pct=%.6f next_steps=increase_balance_or_reduce_bot.%s.n_positions_or_increase_per_slot_sizing override=live.filter_by_min_effective_cost=false caution=override_may_create_exchange-min-sized_entries",
                 Passivbot._log_symbol(symbol),
@@ -8591,6 +11000,16 @@ class Passivbot:
                 entry_initial_qty_pct,
                 pside,
             )
+            if callable(emit_blocked_event):
+                emit_blocked_event(
+                    symbol=symbol,
+                    pside=pside,
+                    projected_initial_cost=projected_initial_cost,
+                    effective_min_cost=effective_min_cost,
+                    balance=balance,
+                    effective_limit=effective_limit,
+                    entry_initial_qty_pct=entry_initial_qty_pct,
+                )
         if len(eligible_blocks) > detail_limit:
             examples = ",".join(
                 f"{Passivbot._log_symbol(symbol)}:{pside}"
@@ -8644,6 +11063,16 @@ class Passivbot:
             if symbol is None:
                 return f"idx:{idx_int}"
             return symbol_to_coin(symbol, verbose=False) or symbol
+
+        def _event_symbol(idx) -> str:
+            try:
+                idx_int = int(idx)
+            except (TypeError, ValueError):
+                return "idx:unknown"
+            symbol = idx_to_symbol.get(idx_int)
+            if symbol is None:
+                return f"idx:{idx_int}"
+            return str(symbol)
 
         def _fmt_top(items: list[dict], limit: int, *, with_components: bool) -> str:
             parts = []
@@ -8731,6 +11160,58 @@ class Passivbot:
             )
             selected_set_key = tuple(sorted(selected_symbols))
             slots_to_fill = int(selection.get("slots_to_fill", 0) or 0)
+            top_score_payload = []
+            for item in top_scores[:8]:
+                top_score_payload.append(
+                    {
+                        "symbol": _event_symbol(item.get("symbol_idx")),
+                        "rank": int(
+                            item.get("rank", len(top_score_payload) + 1)
+                            or len(top_score_payload) + 1
+                        ),
+                        "score": float(item.get("score") or 0.0),
+                        "volume_component": float(
+                            item.get("volume_component") or 0.0
+                        ),
+                        "ema_readiness_component": float(
+                            item.get("ema_readiness_component") or 0.0
+                        ),
+                        "volatility_component": float(
+                            item.get("volatility_component") or 0.0
+                        ),
+                        "selected": bool(item.get("selected")),
+                        "incumbent": bool(item.get("incumbent")),
+                    }
+                )
+            Passivbot._emit_forager_selection_event(
+                self,
+                pside=pside,
+                candidate_count=len(top_scores),
+                eligible_count=len(top_scores),
+                selected_symbols=tuple(
+                    _event_symbol(idx)
+                    for idx in (selection.get("selected_symbol_indices") or [])
+                ),
+                incumbent_symbols=tuple(
+                    _event_symbol(idx)
+                    for idx in (selection.get("incumbent_symbol_indices") or [])
+                ),
+                slots_open=slots_to_fill > 0,
+                max_n_positions=None,
+                slots_to_fill=slots_to_fill,
+                clip_pct=None,
+                volatility_drop_pct=None,
+                score_hysteresis_pct=float(
+                    selection.get("score_hysteresis_pct") or 0.0
+                ),
+                max_age_ms=None,
+                fetch_budget=None,
+                top_scores=top_score_payload,
+                hysteresis_event_count=len(events),
+                source="rust_orchestrator",
+                status="succeeded" if selected_symbols else "skipped",
+                reason_code="rust_orchestrator_selection",
+            )
             info_key = (selected_set_key, slots_to_fill)
             debug_key = (info_key, score_key)
             state = self._forager_selection_log_state.setdefault(pside, {})
@@ -8813,35 +11294,191 @@ class Passivbot:
 
     # Legacy init_fill_events, update_fill_events, etc. removed - using FillEventsManager
 
+    @staticmethod
+    def _hsl_fill_safe_float(val: Any, default: float = 0.0) -> float:
+        try:
+            if val is None:
+                return default
+            return float(val)
+        except Exception:
+            return default
+
+    def _hsl_normalize_fill_symbol(self, symbol: Any) -> str:
+        sym = str(symbol) if symbol else ""
+        if not sym:
+            return ""
+        if sym in self.c_mults:
+            return sym
+        try:
+            converted = self.get_symbol_id_inv(sym)
+            if converted:
+                return converted
+        except Exception:
+            pass
+        return sym
+
+    @staticmethod
+    def _hsl_fill_action(
+        pside: str, side: str, qty_signed: Optional[float], explicit: Optional[str]
+    ):
+        if explicit in ("increase", "decrease"):
+            return explicit
+        if qty_signed is not None and qty_signed != 0.0:
+            return "increase" if qty_signed > 0 else "decrease"
+        side = side.lower()
+        if pside == "long":
+            return "increase" if side == "buy" else "decrease"
+        return "increase" if side == "sell" else "decrease"
+
+    def _hsl_extract_fill_events(self, source: List[dict]) -> List[dict]:
+        """Normalize raw fill payloads into canonical HSL replay events.
+
+        Shared by the balance/equity replay and (future) cache-extension
+        paths so both consume the same trust-critical normalization.
+        """
+        safe_float = Passivbot._hsl_fill_safe_float
+        out = []
+        for fill in source:
+            ts_raw = fill.get("timestamp")
+            if ts_raw is None:
+                continue
+            try:
+                ts = int(ensure_millis(ts_raw))
+            except Exception:
+                continue
+            symbol = self._hsl_normalize_fill_symbol(fill.get("symbol"))
+            if not symbol:
+                continue
+            pside = str(
+                fill.get("position_side", fill.get("pside", "long"))
+            ).lower()
+            if pside not in ("long", "short"):
+                pside = "long"
+            qty_signed = fill.get("qty_signed")
+            qty_fallback_keys = ("qty", "amount", "size", "contracts")
+            qty_val = safe_float(
+                (
+                    qty_signed
+                    if qty_signed is not None
+                    else next(
+                        (
+                            fill.get(k)
+                            for k in qty_fallback_keys
+                            if fill.get(k) is not None
+                        ),
+                        0.0,
+                    )
+                ),
+                0.0,
+            )
+            qty = abs(qty_val)
+            if qty <= 0.0:
+                continue
+            price_keys = ("price", "avgPrice", "average", "avg_price", "execPrice")
+            price = next(
+                (fill.get(k) for k in price_keys if fill.get(k) is not None), None
+            )
+            if price is None:
+                info = fill.get("info", {})
+                price = (
+                    info.get("avgPrice")
+                    or info.get("execPrice")
+                    or info.get("avg_exec_price")
+                )
+            price = safe_float(price, 0.0)
+            if price <= 0.0:
+                continue
+            pnl_val = safe_float(fill.get("pnl", 0.0), 0.0)
+            fee_paid = signed_fee_paid_from_payload(fill)
+            side = str(fill.get("side", "")).lower()
+            action = Passivbot._hsl_fill_action(
+                pside, side, qty_signed, fill.get("action")
+            )
+            out.append(
+                {
+                    "timestamp": ts,
+                    "symbol": symbol,
+                    "pside": pside,
+                    "qty": qty,
+                    "price": price,
+                    "action": action,
+                    "pnl": pnl_val,
+                    "fee": fee_paid,
+                    "fee_paid": fee_paid,
+                    "pb_order_type": str(fill.get("pb_order_type") or "").lower(),
+                    "c_mult": float(self.c_mults.get(symbol, 1.0)),
+                }
+            )
+        return sorted(out, key=lambda x: x["timestamp"])
+
     async def get_balance_equity_history(
         self,
         fill_events: Optional[List[dict]] = None,
         current_balance: Optional[float] = None,
+        hsl_replay_signal_mode: Optional[str] = None,
+        hsl_coin_compact_replay: bool = False,
     ) -> Dict[str, Any]:
-        """Replay canonical fill events to produce historical balance/equity curves."""
+        """Replay canonical fills into public curves or private compact coin-HSL input.
+
+        `hsl_coin_compact_replay` is internal to cold coin-HSL startup. In that
+        mode the result omits the rich `timeline`, `balances`, and `equities`
+        projections and exposes `hsl_coin_compact_replay` instead.
+        """
+        if hsl_coin_compact_replay and str(hsl_replay_signal_mode or "").lower() != "coin":
+            raise ValueError(
+                "hsl_coin_compact_replay requires hsl_replay_signal_mode='coin'"
+            )
+        history_started_s = time.monotonic()
+        external_fill_events = fill_events is not None
         await self.init_pnls()
 
-        def _safe_float(val: Any, default: float = 0.0) -> float:
+        def _emit_hsl_history_progress(
+            stage: str,
+            data: Optional[Dict[str, Any]] = None,
+            *,
+            symbol: Optional[str] = None,
+            pside: Optional[str] = None,
+            status: str = "started",
+            reason_code: Optional[str] = None,
+        ) -> None:
+            if not hsl_replay_signal_mode:
+                return
             try:
-                if val is None:
-                    return default
-                return float(val)
-            except Exception:
-                return default
+                payload = {
+                    "signal_mode": str(hsl_replay_signal_mode),
+                    "stage": str(stage),
+                    "history_build_elapsed_s": round(
+                        max(0.0, time.monotonic() - history_started_s), 3
+                    ),
+                }
+                if data:
+                    payload.update(data)
+                pb_hsl._emit_hsl_replay_event(
+                    self,
+                    EventTypes.HSL_REPLAY_PROGRESS,
+                    payload,
+                    symbol=symbol,
+                    pside=pside,
+                    status=status,
+                    reason_code=reason_code or str(stage),
+                )
+            except Exception as exc:
+                logging.debug(
+                    "[event] failed to emit HSL history progress stage=%s: %s",
+                    stage,
+                    exc,
+                )
 
-        def _normalize_symbol(symbol: Any) -> str:
-            sym = str(symbol) if symbol else ""
-            if not sym:
-                return ""
-            if sym in self.c_mults:
-                return sym
-            try:
-                converted = self.get_symbol_id_inv(sym)
-                if converted:
-                    return converted
-            except Exception:
-                pass
-            return sym
+        _safe_float = Passivbot._hsl_fill_safe_float
+        _normalize_symbol = self._hsl_normalize_fill_symbol
+
+        def _flat_epsilon(symbol: str) -> float:
+            return pb_hsl._hsl_flat_epsilon(
+                (getattr(self, "qty_steps", None) or {}).get(str(symbol), 0.0)
+            )
+
+        def _is_flat_size(symbol: str, size: float) -> bool:
+            return abs(float(size)) <= _flat_epsilon(symbol)
 
         def _ensure_slot(
             container: Dict[str, Dict[str, Dict[str, float]]], symbol: str
@@ -8853,90 +11490,6 @@ class Passivbot:
                 }
             return container[symbol]
 
-        def _determine_action(
-            pside: str, side: str, qty_signed: Optional[float], explicit: Optional[str]
-        ):
-            if explicit in ("increase", "decrease"):
-                return explicit
-            if qty_signed is not None and qty_signed != 0.0:
-                return "increase" if qty_signed > 0 else "decrease"
-            side = side.lower()
-            if pside == "long":
-                return "increase" if side == "buy" else "decrease"
-            return "increase" if side == "sell" else "decrease"
-
-        def _extract_events(source: List[dict]) -> List[dict]:
-            out = []
-            for fill in source:
-                ts_raw = fill.get("timestamp")
-                if ts_raw is None:
-                    continue
-                try:
-                    ts = int(ensure_millis(ts_raw))
-                except Exception:
-                    continue
-                symbol = _normalize_symbol(fill.get("symbol"))
-                if not symbol:
-                    continue
-                pside = str(
-                    fill.get("position_side", fill.get("pside", "long"))
-                ).lower()
-                if pside not in ("long", "short"):
-                    pside = "long"
-                qty_signed = fill.get("qty_signed")
-                qty_fallback_keys = ("qty", "amount", "size", "contracts")
-                qty_val = _safe_float(
-                    (
-                        qty_signed
-                        if qty_signed is not None
-                        else next(
-                            (
-                                fill.get(k)
-                                for k in qty_fallback_keys
-                                if fill.get(k) is not None
-                            ),
-                            0.0,
-                        )
-                    ),
-                    0.0,
-                )
-                qty = abs(qty_val)
-                if qty <= 0.0:
-                    continue
-                price_keys = ("price", "avgPrice", "average", "avg_price", "execPrice")
-                price = next(
-                    (fill.get(k) for k in price_keys if fill.get(k) is not None), None
-                )
-                if price is None:
-                    info = fill.get("info", {})
-                    price = (
-                        info.get("avgPrice")
-                        or info.get("execPrice")
-                        or info.get("avg_exec_price")
-                    )
-                price = _safe_float(price, 0.0)
-                if price <= 0.0:
-                    continue
-                pnl_val = _safe_float(fill.get("pnl", 0.0), 0.0)
-                fee_paid = signed_fee_paid_from_payload(fill)
-                side = str(fill.get("side", "")).lower()
-                action = _determine_action(pside, side, qty_signed, fill.get("action"))
-                out.append(
-                    {
-                        "timestamp": ts,
-                        "symbol": symbol,
-                        "pside": pside,
-                        "qty": qty,
-                        "price": price,
-                        "action": action,
-                        "pnl": pnl_val,
-                        "fee": fee_paid,
-                        "fee_paid": fee_paid,
-                        "pb_order_type": str(fill.get("pb_order_type") or "").lower(),
-                        "c_mult": float(self.c_mults.get(symbol, 1.0)),
-                    }
-                )
-            return sorted(out, key=lambda x: x["timestamp"])
 
         def _current_position_state() -> Dict[Tuple[str, str], Tuple[float, float]]:
             out: Dict[Tuple[str, str], Tuple[float, float]] = {}
@@ -8949,7 +11502,11 @@ class Passivbot:
                     if not isinstance(pos, dict):
                         continue
                     size = abs(_safe_float(pos.get("size"), 0.0))
-                    price = _safe_float(pos.get("price"), 0.0) if size > 1e-12 else 0.0
+                    price = (
+                        _safe_float(pos.get("price"), 0.0)
+                        if not _is_flat_size(norm_symbol, size)
+                        else 0.0
+                    )
                     out[(norm_symbol, pside)] = (size, price)
             return out
 
@@ -8959,8 +11516,21 @@ class Passivbot:
             else:
                 fill_events = []
 
-        events = _extract_events(fill_events)
+        events = self._hsl_extract_fill_events(fill_events)
         current_position_state = _current_position_state()
+        _emit_hsl_history_progress(
+            "history_inputs_loaded",
+            {
+                "fill_events": len(fill_events),
+                "events": len(events),
+                "current_position_pairs": sum(
+                    1
+                    for (sym, _pside), (size, _price) in current_position_state.items()
+                    if not _is_flat_size(sym, size)
+                ),
+            },
+            reason_code=ReasonCodes.HSL_HISTORY_INPUTS_LOADED,
+        )
         if events:
             try:
                 compute_psize_pprice(
@@ -8993,6 +11563,41 @@ class Passivbot:
                 "is_flat_short": True,
                 "panic_fill_count": 0,
             }
+            _emit_hsl_history_progress(
+                "history_empty",
+                {
+                    "timeline_rows": 1,
+                    "fill_events": 0,
+                    "events": 0,
+                    "price_replay_symbols": 0,
+                },
+                status="succeeded",
+                reason_code=ReasonCodes.HSL_HISTORY_EMPTY,
+            )
+            if hsl_coin_compact_replay:
+                return {
+                    "hsl_coin_compact_replay": {
+                        "timestamps": np.asarray([int(ts_now)], dtype=np.int64),
+                        "balances": np.asarray([balance_now], dtype=np.float64),
+                        "realized_pnl": np.asarray([0.0], dtype=np.float64),
+                        "pair_values": {},
+                    },
+                    "panic_flatten_events": [],
+                    "fill_events": [],
+                    "metadata": {
+                        "lookback_days": parse_pnls_max_lookback_days(
+                            self.live_value("pnls_max_lookback_days"),
+                            field_name="live.pnls_max_lookback_days",
+                        ).display_value,
+                        "resolution_ms": ONE_MIN_MS,
+                        "events_used": 0,
+                        "symbols_covered": [],
+                        "missing_price_symbols": [],
+                        "history_format": "compact",
+                    },
+                    "hsl_replay_matrices": {},
+                    "hsl_replay_account_series": [],
+                }
             return {
                 "timeline": [point],
                 "panic_flatten_events": [],
@@ -9014,6 +11619,7 @@ class Passivbot:
                     "events_used": 0,
                     "symbols_covered": [],
                     "missing_price_symbols": [],
+                    "history_format": "timeline",
                 },
             }
 
@@ -9039,9 +11645,11 @@ class Passivbot:
 
         if lookback_start is None:
             start_ts = ensure_millis(events[0]["timestamp"])
+            record_start_ts = int(math.floor(start_ts / ONE_MIN_MS) * ONE_MIN_MS)
             record_start_minute = int(math.floor(start_ts / ONE_MIN_MS) * ONE_MIN_MS)
         else:
-            start_ts = min(ensure_millis(events[0]["timestamp"]), lookback_start)
+            start_ts = lookback_start
+            record_start_ts = int(lookback_start)
             record_start_minute = int(
                 math.floor(lookback_start / ONE_MIN_MS) * ONE_MIN_MS
             )
@@ -9050,18 +11658,97 @@ class Passivbot:
         if end_minute < record_start_minute:
             end_minute = record_start_minute
 
-        symbols = {evt["symbol"] for evt in events if evt["symbol"]}
+        current_position_symbols = {
+            symbol
+            for (symbol, _pside), (size, _price) in current_position_state.items()
+            if not _is_flat_size(symbol, size)
+        }
+        symbols = {
+            evt["symbol"]
+            for evt in events
+            if evt["symbol"]
+            and (
+                lookback_start is None
+                or int(evt["timestamp"]) >= int(record_start_ts)
+                or evt["symbol"] in current_position_symbols
+            )
+        }
+        symbols.update(current_position_symbols)
+        panic_event_symbols = {
+            evt["symbol"]
+            for evt in events
+            if evt["symbol"]
+            and "panic" in str(evt.get("pb_order_type") or "").lower()
+        }
+        price_replay_symbols = set(symbols)
+        if str(hsl_replay_signal_mode or "").lower() == "coin":
+            coin_required_price_symbols = current_position_symbols | panic_event_symbols
+            price_replay_symbols.intersection_update(coin_required_price_symbols)
+        known_market_symbols = (
+            set(self.c_mults) if isinstance(getattr(self, "c_mults", None), dict) else set()
+        )
+        if known_market_symbols:
+            skipped_price_symbols = {
+                symbol
+                for symbol in symbols
+                if symbol not in known_market_symbols
+                and symbol not in current_position_symbols
+            }
+            if skipped_price_symbols:
+                price_replay_symbols.difference_update(skipped_price_symbols)
+                logging.warning(
+                    "[risk] balance-equity replay skipping candles for unsupported "
+                    "historical symbols with no current position | symbols=%s",
+                    ",".join(
+                        Passivbot._log_symbol(sym) for sym in sorted(skipped_price_symbols)
+                    ),
+                )
         price_lookup: Dict[str, Dict[int, float]] = {}
         approximate_price_sources: Dict[str, Dict[str, int]] = {}
-        if symbols and getattr(self, "cm", None) is not None:
+        if price_replay_symbols and getattr(self, "cm", None) is not None:
             replay_concurrency = self._candle_fetch_concurrency(
                 context="history_replay"
             )
             replay_sem = asyncio.Semaphore(max(1, int(replay_concurrency)))
             replay_fetch_delay_s = self._get_fetch_delay_seconds()
+            candle_fetch_started_s = time.monotonic()
+            history_minutes = int(max(0, (end_minute - start_minute) // ONE_MIN_MS)) + 1
+            _emit_hsl_history_progress(
+                "price_history_fetch_started",
+                {
+                    "events": len(events),
+                    "symbols": len(symbols),
+                    "price_replay_symbols": len(price_replay_symbols),
+                    "skipped_price_symbols": len(symbols - price_replay_symbols),
+                    "current_position_symbols": len(current_position_symbols),
+                    "panic_event_symbols": len(panic_event_symbols),
+                    "history_minutes": history_minutes,
+                    "replay_concurrency": int(replay_concurrency),
+                    "lookback_days": lookback.display_value,
+                    "start_ts": int(start_minute),
+                    "end_ts": int(end_minute),
+                },
+                reason_code=ReasonCodes.HSL_PRICE_HISTORY_FETCH_STARTED,
+            )
 
             async def fetch_replay_candles(sym: str, *, timeframe: str = "1m"):
                 async with replay_sem:
+                    symbol_fetch_started_s = time.monotonic()
+                    symbol_payload = {
+                        "events": len(events),
+                        "symbols": len(symbols),
+                        "price_replay_symbols": len(price_replay_symbols),
+                        "history_minutes": history_minutes,
+                        "timeframe": str(timeframe),
+                        "start_ts": int(start_minute),
+                        "end_ts": int(end_minute),
+                    }
+                    _emit_hsl_history_progress(
+                        "price_history_symbol_fetch_started",
+                        symbol_payload,
+                        symbol=sym,
+                        reason_code=ReasonCodes.HSL_PRICE_HISTORY_SYMBOL_FETCH_STARTED,
+                    )
                     try:
                         arr = await self.cm.get_candles(
                             sym,
@@ -9070,8 +11757,44 @@ class Passivbot:
                             strict=False,
                             timeframe=timeframe,
                         )
+                        rows = int(getattr(arr, "size", 0) or 0)
+                        _emit_hsl_history_progress(
+                            "price_history_symbol_fetch_completed",
+                            {
+                                **symbol_payload,
+                                "rows": rows,
+                                "elapsed_s": round(
+                                    max(
+                                        0.0,
+                                        time.monotonic() - symbol_fetch_started_s,
+                                    ),
+                                    3,
+                                ),
+                            },
+                            symbol=sym,
+                            status="succeeded",
+                            reason_code=ReasonCodes.HSL_PRICE_HISTORY_SYMBOL_FETCH_COMPLETED,
+                        )
                         return sym, arr, None
                     except Exception as exc:
+                        _emit_hsl_history_progress(
+                            "price_history_symbol_fetch_completed",
+                            {
+                                **symbol_payload,
+                                "rows": 0,
+                                "elapsed_s": round(
+                                    max(
+                                        0.0,
+                                        time.monotonic() - symbol_fetch_started_s,
+                                    ),
+                                    3,
+                                ),
+                                "error_type": type(exc).__name__,
+                            },
+                            symbol=sym,
+                            status="failed",
+                            reason_code=ReasonCodes.HSL_PRICE_HISTORY_SYMBOL_FETCH_COMPLETED,
+                        )
                         return sym, None, exc
                     finally:
                         if replay_fetch_delay_s > 0.0:
@@ -9080,7 +11803,7 @@ class Passivbot:
                             )
 
             for sym, arr, exc in await asyncio.gather(
-                *(fetch_replay_candles(sym) for sym in sorted(symbols))
+                *(fetch_replay_candles(sym) for sym in sorted(price_replay_symbols))
             ):
                 if exc is not None:
                     logging.error(f"error fetching candles for {sym} {exc}")
@@ -9106,7 +11829,7 @@ class Passivbot:
                     for sym, arr, exc in await asyncio.gather(
                         *(
                             fetch_replay_candles(sym, timeframe=timeframe)
-                            for sym in sorted(symbols)
+                            for sym in sorted(price_replay_symbols)
                         )
                     ):
                         if exc is not None:
@@ -9137,8 +11860,31 @@ class Passivbot:
                             approximate_price_sources.setdefault(sym, {})[
                                 timeframe
                             ] = added
+            candle_fetch_elapsed_s = max(0.0, time.monotonic() - candle_fetch_started_s)
+            _emit_hsl_history_progress(
+                "price_history_fetch_completed",
+                {
+                    "events": len(events),
+                    "symbols": len(symbols),
+                    "price_replay_symbols": len(price_replay_symbols),
+                    "priced_symbols": sum(
+                        1 for prices in price_lookup.values() if prices
+                    ),
+                    "empty_price_symbols": sum(
+                        1 for prices in price_lookup.values() if not prices
+                    ),
+                    "approximate_price_symbols": len(approximate_price_sources),
+                    "current_position_symbols": len(current_position_symbols),
+                    "panic_event_symbols": len(panic_event_symbols),
+                    "history_minutes": history_minutes,
+                    "replay_concurrency": int(replay_concurrency),
+                    "price_history_fetch_elapsed_s": round(candle_fetch_elapsed_s, 3),
+                },
+                status="succeeded",
+                reason_code=ReasonCodes.HSL_PRICE_HISTORY_FETCH_COMPLETED,
+            )
         else:
-            price_lookup = {sym: {} for sym in symbols}
+            price_lookup = {sym: {} for sym in price_replay_symbols}
 
         positions: Dict[str, Dict[str, Dict[str, float]]] = {}
         active_symbols: set[str] = set()
@@ -9146,27 +11892,36 @@ class Passivbot:
         panic_flatten_events: List[Dict[str, Any]] = []
         missing_price_symbols: set[str] = set()
         realized_pnl_pside_running = {"long": 0.0, "short": 0.0}
-        actual_pside_flat = {
-            pside: not any(
-                size > 1e-12
-                for (sym, ps), (size, _price) in current_position_state.items()
-                if ps == pside
-            )
-            for pside in ("long", "short")
+        realized_pnl_coin_pside_running: Dict[str, Dict[str, float]] = {}
+        record_start_balance: Optional[float] = None
+        record_start_realized_pnl_pside = {"long": 0.0, "short": 0.0}
+        record_start_realized_pnl_coin_pside: Dict[str, Dict[str, float]] = {}
+        actual_symbol_pside_flat = {
+            (sym, ps): _is_flat_size(sym, size)
+            for (sym, ps), (size, _price) in current_position_state.items()
         }
-        last_event_ts_by_pside = {
-            pside: max(
-                (evt["timestamp"] for evt in events if evt["pside"] == pside),
+        last_event_ts_by_symbol_pside = {
+            (evt["symbol"], evt["pside"]): max(
+                (
+                    candidate["timestamp"]
+                    for candidate in events
+                    if candidate["symbol"] == evt["symbol"] and candidate["pside"] == evt["pside"]
+                ),
                 default=None,
             )
-            for pside in ("long", "short")
+            for evt in events
         }
 
-        def _pside_is_flat(pside: str) -> bool:
-            return not any(
-                positions.get(sym, {}).get(pside, {}).get("size", 0.0) > 1e-12
-                for sym in positions
-            )
+        def _symbol_pside_is_flat(symbol: str, pside: str) -> bool:
+            symbol_positions = positions.get(symbol)
+            if not isinstance(symbol_positions, dict):
+                return True
+            pside_position = symbol_positions.get(pside)
+            if not isinstance(pside_position, dict):
+                return True
+            if "size" not in pside_position:
+                return True
+            return _is_flat_size(symbol, float(pside_position["size"]))
 
         def _apply_event(evt: dict):
             slot = _ensure_slot(positions, evt["symbol"])[evt["pside"]]
@@ -9189,17 +11944,293 @@ class Passivbot:
                 slot["size"] = max(slot["size"] - qty, 0.0)
                 if slot["size"] <= 0.0:
                     slot["price"] = 0.0
-            has_pos = slot["size"] > 1e-12
+            has_pos = not _is_flat_size(evt["symbol"], slot["size"])
             if has_pos:
                 active_symbols.add(evt["symbol"])
             elif not any(
-                positions[evt["symbol"]][ps]["size"] > 1e-12 for ps in ("long", "short")
+                not _is_flat_size(evt["symbol"], positions[evt["symbol"]][ps]["size"])
+                for ps in ("long", "short")
             ):
                 active_symbols.discard(evt["symbol"])
 
         balance = baseline_balance
         event_idx = 0
         last_price: Dict[str, float] = {}
+        pre_window_events_applied = 0
+
+        # Non-authoritative raw replay matrices (ts, price, psize, pprice, pnl, upnl)
+        # for currently held coin+psides. Written to the replay cache after a
+        # successful HSL replay in any signal mode; never read back for trading
+        # decisions here. The cache config digest includes the signal mode, so
+        # matrices persisted by one mode can never be reused by another.
+        replay_matrix_pairs: set[Tuple[str, str]] = set()
+        if (
+            str(hsl_replay_signal_mode or "").lower() in ("coin", "pside", "unified")
+            and not self.inverse
+        ):
+            replay_matrix_pairs = {
+                (pside, sym)
+                for (sym, pside), (size, _price) in current_position_state.items()
+                if not _is_flat_size(sym, size) and sym in price_replay_symbols
+            }
+        replay_matrix_rows: Dict[Tuple[str, str], List[dict]] = {
+            pair: [] for pair in replay_matrix_pairs
+        }
+        replay_matrix_prev_realized: Dict[Tuple[str, str], float] = {}
+        replay_matrix_last_price: Dict[str, float] = {}
+        # Account-level realized-pnl series: pair matrices are only reusable
+        # together with per-minute account balance (slot budgets), which is not
+        # derivable from held-pair rows alone.
+        replay_account_enabled = bool(replay_matrix_pairs)
+        replay_account_rows: List[dict] = []
+        replay_account_prev_balance: Optional[float] = None
+        replay_account_prev_realized_pside: Optional[Dict[str, float]] = None
+
+        def _collect_account_series_row(minute_ts: int, *, record: bool) -> None:
+            nonlocal replay_account_enabled, replay_account_prev_balance
+            nonlocal replay_account_prev_realized_pside
+            if not replay_account_enabled:
+                return
+            try:
+                balance_now = float(balance)
+                realized_pside_now = {
+                    "long": float(realized_pnl_pside_running["long"]),
+                    "short": float(realized_pnl_pside_running["short"]),
+                }
+                prev = (
+                    balance_now
+                    if replay_account_prev_balance is None
+                    else replay_account_prev_balance
+                )
+                prev_pside = (
+                    realized_pside_now
+                    if replay_account_prev_realized_pside is None
+                    else replay_account_prev_realized_pside
+                )
+                replay_account_prev_balance = balance_now
+                replay_account_prev_realized_pside = realized_pside_now
+                if not record:
+                    return
+                replay_account_rows.append(
+                    pb_hsl._hsl_replay_account_series_row(
+                        ts=int(minute_ts),
+                        pnl=balance_now - prev,
+                        pnl_long=realized_pside_now["long"] - prev_pside["long"],
+                        pnl_short=realized_pside_now["short"] - prev_pside["short"],
+                    )
+                )
+            except Exception as exc:
+                replay_account_enabled = False
+                replay_account_rows.clear()
+                logging.warning(
+                    "[risk] HSL account series row build failed; "
+                    "skipping account series cache | ts=%s error=%s: %s",
+                    minute_ts,
+                    type(exc).__name__,
+                    exc,
+                )
+
+        def _collect_replay_matrix_rows(minute_ts: int, *, record: bool) -> None:
+            # Matrix collection is a passive observer of the replay; any
+            # per-pair failure drops that pair's cache and must never
+            # propagate into the replay itself.
+            for pair in list(replay_matrix_rows):
+                pside, sym = pair
+                try:
+                    running = float(
+                        realized_pnl_coin_pside_running.get(
+                            sym, {"long": 0.0, "short": 0.0}
+                        ).get(pside, 0.0)
+                    )
+                    # Track the running realized value every minute so the first
+                    # persisted row's pnl covers only its own minute.
+                    minute_pnl = running - replay_matrix_prev_realized.get(pair, running)
+                    replay_matrix_prev_realized[pair] = running
+                    mprice = price_lookup.get(sym, {}).get(minute_ts)
+                    if mprice is not None and mprice > 0.0:
+                        replay_matrix_last_price[sym] = float(mprice)
+                    else:
+                        mprice = replay_matrix_last_price.get(sym)
+                    if not record:
+                        continue
+                    if mprice is None or mprice <= 0.0:
+                        if replay_matrix_rows[pair]:
+                            # A gap after rows started would break 1m continuity;
+                            # drop the pair rather than persist an unprovable series.
+                            del replay_matrix_rows[pair]
+                        continue
+                    slot = positions.get(sym, {}).get(pside, {})
+                    size = float(slot.get("size", 0.0) or 0.0)
+                    if not _is_flat_size(sym, size):
+                        psize = size if pside == "long" else -size
+                        pprice = float(slot.get("price", 0.0) or 0.0)
+                    else:
+                        psize = 0.0
+                        pprice = 0.0
+                    replay_matrix_rows[pair].append(
+                        pb_hsl._hsl_replay_matrix_row(
+                            pside=pside,
+                            ts=int(minute_ts),
+                            price=float(mprice),
+                            psize=psize,
+                            pprice=pprice,
+                            pnl=minute_pnl,
+                            c_mult=float(self.c_mults.get(sym, 1.0)),
+                        )
+                    )
+                except Exception as exc:
+                    replay_matrix_rows.pop(pair, None)
+                    logging.warning(
+                        "[risk] HSL[%s:%s] replay matrix row build failed; "
+                        "skipping cache for this pair | ts=%s error=%s: %s",
+                        pside,
+                        Passivbot._log_symbol(sym),
+                        minute_ts,
+                        type(exc).__name__,
+                        exc,
+                    )
+
+        history_minutes = int(max(0, (end_minute - start_minute) // ONE_MIN_MS)) + 1
+        compact_coin_replay = bool(hsl_coin_compact_replay)
+        compact_record_minutes = (
+            int(max(0, (end_minute - record_start_minute) // ONE_MIN_MS)) + 1
+        )
+        compact_timestamps = (
+            np.empty(compact_record_minutes, dtype=np.int64)
+            if compact_coin_replay
+            else None
+        )
+        compact_balances = (
+            np.empty(compact_record_minutes, dtype=np.float64)
+            if compact_coin_replay
+            else None
+        )
+        compact_realized_pnl = (
+            np.empty(compact_record_minutes, dtype=np.float64)
+            if compact_coin_replay
+            else None
+        )
+        compact_pair_values: Dict[Tuple[str, str], Dict[str, np.ndarray]] = (
+            {
+                (pside, sym): {
+                    "realized_pnl": np.full(
+                        compact_record_minutes, np.nan, dtype=np.float64
+                    ),
+                    "unrealized_pnl": np.full(
+                        compact_record_minutes, np.nan, dtype=np.float64
+                    ),
+                }
+                for sym in sorted(symbols)
+                for pside in ("long", "short")
+            }
+            if compact_coin_replay
+            else {}
+        )
+        compact_row_idx = 0
+        _emit_hsl_history_progress(
+            "timeline_replay_started",
+            {
+                "events": len(events),
+                "symbols": len(symbols),
+                "price_replay_symbols": len(price_replay_symbols),
+                "history_format": "compact" if compact_coin_replay else "timeline",
+                "history_minutes": history_minutes,
+                "record_start_ts": int(record_start_ts),
+                "start_ts": int(start_minute),
+                "end_ts": int(end_minute),
+            },
+            reason_code=ReasonCodes.HSL_TIMELINE_REPLAY_STARTED,
+        )
+        timeline_replay_started_s = time.monotonic()
+
+        def apply_event_and_account(
+            evt: dict,
+            *,
+            minute_for_panic: Optional[int],
+        ) -> int:
+            nonlocal balance
+            _apply_event(evt)
+            realized_delta = evt["pnl"] + evt.get("fee", 0.0)
+            balance += realized_delta
+            realized_pnl_pside_running[evt["pside"]] += realized_delta
+            symbol_realized = realized_pnl_coin_pside_running.setdefault(
+                evt["symbol"], {"long": 0.0, "short": 0.0}
+            )
+            symbol_realized[evt["pside"]] += realized_delta
+            if minute_for_panic is None:
+                return 0
+            if "panic" not in str(evt.get("pb_order_type") or ""):
+                return 0
+            after_psize = _safe_float(evt.get("psize"), math.nan)
+            symbol_pside_key = (evt["symbol"], evt["pside"])
+            authoritative_symbol_flat_override = (
+                symbol_pside_key in actual_symbol_pside_flat
+                and actual_symbol_pside_flat[symbol_pside_key]
+                and last_event_ts_by_symbol_pside.get(symbol_pside_key)
+                == evt["timestamp"]
+            )
+            if authoritative_symbol_flat_override and (
+                not math.isfinite(after_psize)
+                or not _is_flat_size(evt["symbol"], after_psize)
+            ):
+                logging.warning(
+                    "[risk] balance-equity replay trusting current flat %s symbol state over residual panic replay size | timestamp=%s replay_after_psize=%s symbol=%s",
+                    evt["pside"],
+                    evt["timestamp"],
+                    (
+                        f"{after_psize:.12f}"
+                        if math.isfinite(after_psize)
+                        else "nan"
+                    ),
+                    Passivbot._log_symbol(evt["symbol"]),
+                )
+            if (
+                (math.isfinite(after_psize) and _is_flat_size(evt["symbol"], after_psize))
+                or authoritative_symbol_flat_override
+                or _symbol_pside_is_flat(evt["symbol"], evt["pside"])
+            ):
+                panic_flatten_events.append(
+                    {
+                        "timestamp": int(evt["timestamp"]),
+                        "minute_timestamp": int(minute_for_panic),
+                        "pside": str(evt["pside"]),
+                        "symbol": str(evt["symbol"]),
+                    }
+                )
+                return 1
+            return 0
+
+        while (
+            event_idx < len(events)
+            and int(events[event_idx]["timestamp"]) < int(record_start_ts)
+        ):
+            apply_event_and_account(events[event_idx], minute_for_panic=None)
+            event_idx += 1
+            pre_window_events_applied += 1
+        record_start_balance = float(balance)
+        for pair in replay_matrix_rows:
+            replay_matrix_prev_realized[pair] = float(
+                realized_pnl_coin_pside_running.get(
+                    pair[1], {"long": 0.0, "short": 0.0}
+                ).get(pair[0], 0.0)
+            )
+        if replay_account_enabled:
+            replay_account_prev_balance = float(balance)
+            replay_account_prev_realized_pside = {
+                "long": float(realized_pnl_pside_running["long"]),
+                "short": float(realized_pnl_pside_running["short"]),
+            }
+        record_start_realized_pnl_pside = {
+            "long": float(realized_pnl_pside_running["long"]),
+            "short": float(realized_pnl_pside_running["short"]),
+        }
+        record_start_realized_pnl_coin_pside = {
+            sym: {
+                "long": float(values["long"]),
+                "short": float(values["short"]),
+            }
+            for sym, values in realized_pnl_coin_pside_running.items()
+        }
 
         minute = start_minute
         while minute <= end_minute:
@@ -9207,48 +12238,16 @@ class Passivbot:
             panic_fill_count = 0
             while event_idx < len(events) and events[event_idx]["timestamp"] < boundary:
                 evt = events[event_idx]
-                _apply_event(evt)
-                realized_delta = evt["pnl"] + evt.get("fee", 0.0)
-                balance += realized_delta
-                realized_pnl_pside_running[evt["pside"]] += realized_delta
-                if "panic" in str(evt.get("pb_order_type") or ""):
-                    panic_fill_count += 1
-                    after_psize = _safe_float(evt.get("psize"), math.nan)
-                    authoritative_flat_override = (
-                        actual_pside_flat.get(evt["pside"], False)
-                        and last_event_ts_by_pside.get(evt["pside"]) == evt["timestamp"]
-                    )
-                    if authoritative_flat_override and (
-                        not math.isfinite(after_psize) or after_psize > 1e-12
-                    ):
-                        logging.warning(
-                            "[risk] balance-equity replay trusting current flat %s state over residual panic replay size | timestamp=%s replay_after_psize=%s symbol=%s",
-                            evt["pside"],
-                            evt["timestamp"],
-                            (
-                                f"{after_psize:.12f}"
-                                if math.isfinite(after_psize)
-                                else "nan"
-                            ),
-                            Passivbot._log_symbol(evt["symbol"]),
-                        )
-                    if (
-                        (math.isfinite(after_psize) and after_psize <= 1e-12)
-                        or authoritative_flat_override
-                        or _pside_is_flat(evt["pside"])
-                    ):
-                        panic_flatten_events.append(
-                            {
-                                "timestamp": int(evt["timestamp"]),
-                                "minute_timestamp": int(minute),
-                                "pside": str(evt["pside"]),
-                                "symbol": str(evt["symbol"]),
-                            }
-                        )
+                panic_fill_count += apply_event_and_account(
+                    evt, minute_for_panic=int(minute)
+                )
                 event_idx += 1
             upnl = 0.0
             upnl_by_pside = {"long": 0.0, "short": 0.0}
+            upnl_by_coin_pside: Dict[str, Dict[str, float]] = {}
             for symbol in list(active_symbols):
+                if symbol not in price_replay_symbols:
+                    continue
                 price = price_lookup.get(symbol, {}).get(minute)
                 if price is None:
                     price = last_price.get(symbol)
@@ -9273,35 +12272,141 @@ class Passivbot:
                     )
                     upnl += pside_upnl
                     upnl_by_pside[pside] += pside_upnl
+                    symbol_upnl = upnl_by_coin_pside.setdefault(
+                        symbol, {"long": 0.0, "short": 0.0}
+                    )
+                    symbol_upnl[pside] += pside_upnl
             if minute >= record_start_minute:
-                timeline.append(
-                    {
-                        "timestamp": minute,
-                        "balance": balance,
-                        "equity": balance + upnl,
-                        "unrealized_pnl": upnl,
-                        "realized_pnl": balance - baseline_balance,
-                        "unrealized_pnl_long": upnl_by_pside["long"],
-                        "unrealized_pnl_short": upnl_by_pside["short"],
-                        "realized_pnl_long": realized_pnl_pside_running["long"],
-                        "realized_pnl_short": realized_pnl_pside_running["short"],
-                        "is_flat": len(active_symbols) == 0,
-                        "is_flat_long": not any(
-                            positions.get(sym, {}).get("long", {}).get("size", 0.0)
-                            > 1e-12
-                            for sym in positions
-                        ),
-                        "is_flat_short": not any(
-                            positions.get(sym, {}).get("short", {}).get("size", 0.0)
-                            > 1e-12
-                            for sym in positions
-                        ),
-                        "panic_fill_count": int(panic_fill_count),
+                if record_start_balance is None:
+                    record_start_balance = float(balance)
+                    record_start_realized_pnl_pside = {
+                        "long": float(realized_pnl_pside_running["long"]),
+                        "short": float(realized_pnl_pside_running["short"]),
                     }
-                )
+                    record_start_realized_pnl_coin_pside = {
+                        sym: {
+                            "long": float(values["long"]),
+                            "short": float(values["short"]),
+                        }
+                        for sym, values in realized_pnl_coin_pside_running.items()
+                    }
+                realized_pnl_window = float(balance - record_start_balance)
+                realized_pnl_pside_window = {
+                    "long": float(
+                        realized_pnl_pside_running["long"]
+                        - record_start_realized_pnl_pside.get("long", 0.0)
+                    ),
+                    "short": float(
+                        realized_pnl_pside_running["short"]
+                        - record_start_realized_pnl_pside.get("short", 0.0)
+                    ),
+                }
+                if compact_coin_replay:
+                    if compact_row_idx >= compact_record_minutes:
+                        raise RuntimeError(
+                            "compact coin HSL replay row count exceeded allocated minute grid"
+                        )
+                    compact_timestamps[compact_row_idx] = int(minute)
+                    compact_balances[compact_row_idx] = float(balance)
+                    compact_realized_pnl[compact_row_idx] = float(realized_pnl_window)
+                    for sym, values in realized_pnl_coin_pside_running.items():
+                        anchor = record_start_realized_pnl_coin_pside.get(
+                            sym, {"long": 0.0, "short": 0.0}
+                        )
+                        for pside in ("long", "short"):
+                            pair_values = compact_pair_values.get((pside, sym))
+                            if pair_values is None:
+                                continue
+                            pair_values["realized_pnl"][compact_row_idx] = float(
+                                values[pside] - anchor.get(pside, 0.0)
+                            )
+                            if sym not in active_symbols:
+                                pair_values["unrealized_pnl"][compact_row_idx] = 0.0
+                    for sym, values in upnl_by_coin_pside.items():
+                        for pside, value in values.items():
+                            pair_values = compact_pair_values.get((pside, sym))
+                            if pair_values is not None:
+                                pair_values["unrealized_pnl"][compact_row_idx] = float(
+                                    value
+                                )
+                    compact_row_idx += 1
+                else:
+                    realized_pnl_coin_pside_window: Dict[str, Dict[str, float]] = {}
+                    for sym in sorted(
+                        set(realized_pnl_coin_pside_running)
+                        | set(record_start_realized_pnl_coin_pside)
+                    ):
+                        values = realized_pnl_coin_pside_running.get(
+                            sym, {"long": 0.0, "short": 0.0}
+                        )
+                        anchor = record_start_realized_pnl_coin_pside.get(
+                            sym, {"long": 0.0, "short": 0.0}
+                        )
+                        realized_pnl_coin_pside_window[sym] = {
+                            "long": float(values["long"] - anchor.get("long", 0.0)),
+                            "short": float(values["short"] - anchor.get("short", 0.0)),
+                        }
+                    timeline_upnl_by_coin_pside = {
+                        sym: {
+                            "long": float(values["long"]),
+                            "short": float(values["short"]),
+                        }
+                        for sym, values in sorted(upnl_by_coin_pside.items())
+                    }
+                    for sym in sorted(realized_pnl_coin_pside_running):
+                        if sym not in active_symbols:
+                            timeline_upnl_by_coin_pside.setdefault(
+                                sym, {"long": 0.0, "short": 0.0}
+                            )
+                    timeline.append(
+                        {
+                            "timestamp": minute,
+                            "balance": balance,
+                            "equity": balance + upnl,
+                            "unrealized_pnl": upnl,
+                            "realized_pnl": realized_pnl_window,
+                            "unrealized_pnl_long": upnl_by_pside["long"],
+                            "unrealized_pnl_short": upnl_by_pside["short"],
+                            "realized_pnl_long": realized_pnl_pside_window["long"],
+                            "realized_pnl_short": realized_pnl_pside_window["short"],
+                            "unrealized_pnl_by_coin_pside": timeline_upnl_by_coin_pside,
+                            "realized_pnl_by_coin_pside": realized_pnl_coin_pside_window,
+                            "is_flat": len(active_symbols) == 0,
+                            "is_flat_long": not any(
+                                not _is_flat_size(
+                                    sym,
+                                    positions.get(sym, {})
+                                    .get("long", {})
+                                    .get("size", 0.0),
+                                )
+                                for sym in positions
+                            ),
+                            "is_flat_short": not any(
+                                not _is_flat_size(
+                                    sym,
+                                    positions.get(sym, {})
+                                    .get("short", {})
+                                    .get("size", 0.0),
+                                )
+                                for sym in positions
+                            ),
+                            "panic_fill_count": int(panic_fill_count),
+                        }
+                    )
+            _collect_replay_matrix_rows(
+                int(minute), record=minute >= record_start_minute
+            )
+            _collect_account_series_row(
+                int(minute), record=minute >= record_start_minute
+            )
             minute += ONE_MIN_MS
 
-        if not timeline:
+        if compact_coin_replay and compact_row_idx != compact_record_minutes:
+            raise RuntimeError(
+                "compact coin HSL replay row count does not match allocated minute grid: "
+                f"expected={compact_record_minutes} actual={compact_row_idx}"
+            )
+        if not compact_coin_replay and not timeline:
             point = {
                 "timestamp": ts_now,
                 "balance": balance_now,
@@ -9334,18 +12439,84 @@ class Passivbot:
             "lookback_days": lookback.display_value,
             "resolution_ms": ONE_MIN_MS,
             "events_used": len(events),
-            "symbols_covered": sorted(symbols),
+            "pre_window_events_applied": int(pre_window_events_applied),
+            "symbols_covered": sorted(price_replay_symbols),
             "missing_price_symbols": sorted(missing_price_symbols),
             "approximate_price_sources": approximate_price_sources,
+            "history_format": "compact" if compact_coin_replay else "timeline",
         }
-        return {
-            "timeline": timeline,
+        _emit_hsl_history_progress(
+            "timeline_replay_completed",
+            {
+                "events": len(events),
+                "symbols": len(symbols),
+                "price_replay_symbols": len(price_replay_symbols),
+                "history_format": "compact" if compact_coin_replay else "timeline",
+                "timeline_rows": (
+                    compact_record_minutes if compact_coin_replay else len(timeline)
+                ),
+                "panic_events": len(panic_flatten_events),
+                "missing_price_symbols": len(missing_price_symbols),
+                "history_minutes": history_minutes,
+                "pre_window_events_applied": int(pre_window_events_applied),
+                "timeline_replay_elapsed_s": round(
+                    max(0.0, time.monotonic() - timeline_replay_started_s), 3
+                ),
+            },
+            status="succeeded",
+            reason_code=ReasonCodes.HSL_TIMELINE_REPLAY_COMPLETED,
+        )
+        hsl_replay_matrices: Dict[str, Dict[str, List[dict]]] = {}
+        for (pside, sym), rows in replay_matrix_rows.items():
+            if rows:
+                hsl_replay_matrices.setdefault(pside, {})[sym] = rows
+        if external_fill_events:
+            # Caller-provided fills carry no pnls-manager coverage proof.
+            fill_coverage_status: Dict[str, object] = {
+                "ready": False,
+                "reason": "external_fill_events",
+                "history_scope": "unknown",
+            }
+        else:
+            fill_coverage_status = self._pnl_history_coverage_status(
+                start_ms=None if lookback_start is None else int(record_start_ts),
+                end_ms=int(ts_now),
+                lookback=lookback,
+            )
+        result = {
             "panic_flatten_events": panic_flatten_events,
             "fill_events": events,
-            "balances": balances,
-            "equities": equities,
             "metadata": metadata,
+            "hsl_replay_matrices": hsl_replay_matrices,
+            "hsl_replay_account_series": (
+                replay_account_rows if hsl_replay_matrices else []
+            ),
+            "hsl_replay_matrix_coverage": {
+                "fill_covered_start_ms": int(record_start_ts),
+                "fill_covered_end_ms": int(ts_now),
+                "fill_history_scope": str(
+                    fill_coverage_status.get("history_scope", "unknown") or "unknown"
+                ),
+                "fill_coverage_proven": bool(fill_coverage_status.get("ready", False)),
+                "fill_coverage_reason": str(
+                    fill_coverage_status.get("reason", "unknown") or "unknown"
+                ),
+                "candle_covered_start_ms": int(start_minute),
+                "candle_covered_end_ms": int(end_minute),
+            },
         }
+        if compact_coin_replay:
+            result["hsl_coin_compact_replay"] = {
+                "timestamps": compact_timestamps,
+                "balances": compact_balances,
+                "realized_pnl": compact_realized_pnl,
+                "pair_values": compact_pair_values,
+            }
+        else:
+            result["timeline"] = timeline
+            result["balances"] = balances
+            result["equities"] = equities
+        return result
 
     async def update_open_orders(self):
         """Refresh open orders from the exchange and reconcile the local cache."""
@@ -9459,7 +12630,17 @@ class Passivbot:
             allowance_pct = float(
                 self.bp(pside, "risk_we_excess_allowance_pct", symbol)
             )
-            effective_wel = wel * (1.0 + max(0.0, allowance_pct))
+            allowance_mode = normalize_we_excess_allowance_mode(
+                self.bp(pside, "risk_we_excess_allowance_mode", symbol) or None
+            )
+            twel = float(self.bot_value(pside, "total_wallet_exposure_limit") or 0.0)
+            effective_allowance_pct = effective_we_excess_allowance_pct(
+                wallet_exposure_limit=wel,
+                risk_we_excess_allowance_pct=allowance_pct,
+                total_wallet_exposure_limit=twel,
+                risk_we_excess_allowance_mode=allowance_mode,
+            )
+            effective_wel = wel * (1.0 + effective_allowance_pct)
             # WEL% = ratio against base WEL, WELe% = ratio against effective WEL (with excess allowance)
             WEL_ratio = wallet_exposure / wel if wel > 0.0 else 0.0
             WELe_ratio = wallet_exposure / effective_wel if effective_wel > 0.0 else 0.0
@@ -9492,6 +12673,23 @@ class Passivbot:
             except:
                 upnl = 0.0
 
+            emit_position_changed = getattr(self, "_emit_position_changed_event", None)
+            if callable(emit_position_changed):
+                emit_position_changed(
+                    symbol=symbol,
+                    pside=pside,
+                    action=action.strip(),
+                    old=old,
+                    new=new,
+                    wallet_exposure=wallet_exposure,
+                    wel_ratio=WEL_ratio,
+                    wele_ratio=WELe_ratio,
+                    twel_ratio=total_we_by_pside[pside] / twel if twel > 0.0 else 0.0,
+                    price_action_distance=pprice_diff,
+                    upnl=upnl,
+                    last_price=last_price,
+                )
+
             coin = symbol_to_coin(symbol, verbose=False) or symbol
             # Format WEL percentages with padding for alignment
             wel_pct = round(WEL_ratio * 100)
@@ -9522,6 +12720,9 @@ class Passivbot:
                     pbr.round_dynamic(upnl, 3),
                 ]
             )
+
+        if Passivbot._live_event_console_available(self):
+            return
 
         # Print aligned table with [pos] prefix
         for line in table.get_string().splitlines():
@@ -9584,7 +12785,9 @@ class Passivbot:
 
         exchange_balance_raw = None
         exchange_balance_error = "none" if balance_raw is None else None
-        if balance_raw is not None:
+        if isinstance(balance_raw, bool):
+            exchange_balance_error = "non-numeric"
+        elif balance_raw is not None:
             try:
                 exchange_balance_raw = float(balance_raw)
             except (TypeError, ValueError):
@@ -9596,6 +12799,8 @@ class Passivbot:
 
         if self.balance_override is not None:
             try:
+                if isinstance(self.balance_override, bool):
+                    raise ValueError("boolean balance override")
                 balance_raw = float(self.balance_override)
             except (TypeError, ValueError):
                 logging.warning(
@@ -9618,19 +12823,13 @@ class Passivbot:
             }
         else:
             if exchange_balance_raw is None:
-                if exchange_balance_error == "none":
-                    logging.warning(
-                        "balance fetch returned None; keeping previous balance"
-                    )
-                elif exchange_balance_error == "non-numeric":
-                    logging.warning(
-                        "non-numeric balance fetch result; keeping previous balance"
-                    )
-                else:
-                    logging.warning(
-                        "non-finite balance fetch result; keeping previous balance"
-                    )
-                return None
+                exchange = getattr(self, "exchange", "unknown")
+                user = getattr(self, "user", "unknown")
+                quote = getattr(self, "quote", "unknown")
+                raise RuntimeError(
+                    "invalid exchange balance fetch result "
+                    f"({exchange_balance_error}) for {exchange}/{user}/{quote}: {balance_raw!r}"
+                )
             balance_raw = exchange_balance_raw
             if self.previous_hysteresis_balance is None:
                 previous_hysteresis_balance = balance_raw
@@ -9808,10 +13007,7 @@ class Passivbot:
         """
         balance_override = getattr(self, "balance_override", None)
         if balance_override is not None:
-            balance_raw = float(balance_override)
-            if not self._balance_override_logged:
-                logging.info("Using balance override: %.6f", balance_raw)
-                self._balance_override_logged = True
+            balance_raw = self.get_raw_balance()
         else:
             if not hasattr(self, "fetch_balance"):
                 logging.debug("update_balance: no fetch_balance implemented")
@@ -9920,60 +13116,351 @@ class Passivbot:
         """Compute desired entry and exit orders for every active symbol."""
         return await self.calc_ideal_orders_orchestrator()
 
+    def _protective_panic_target_psides_by_symbol(self) -> dict[str, set[str]]:
+        """Return symbols/psides whose current live mode explicitly requires panic supervision."""
+        candidate_symbols: set[str] = set()
+
+        def position_size(pos_by_pside: dict, pside: str) -> Optional[float]:
+            side_pos = pos_by_pside.get(pside)
+            if not isinstance(side_pos, dict) or "size" not in side_pos:
+                return None
+            size_raw = side_pos["size"]
+            if size_raw is None:
+                return None
+            return float(size_raw)
+
+        for symbol, pos in (getattr(self, "positions", {}) or {}).items():
+            if not isinstance(pos, dict):
+                continue
+            for pside in ("long", "short"):
+                size = position_size(pos, pside)
+                if size is not None and size != 0.0:
+                    candidate_symbols.add(str(symbol))
+                    break
+        for symbol, orders in (getattr(self, "open_orders", {}) or {}).items():
+            if orders:
+                candidate_symbols.add(str(symbol))
+
+        mode_getter = getattr(self, "_orchestrator_mode_override", None)
+        forced_getter = getattr(self, "get_forced_PB_mode", None)
+        runtime_forced = getattr(self, "_runtime_forced_modes", {}) or {}
+        targets: dict[str, set[str]] = {}
+        for symbol in sorted(candidate_symbols):
+            for pside in ("long", "short"):
+                mode = None
+                if callable(mode_getter):
+                    mode = mode_getter(pside, symbol)
+                elif callable(forced_getter):
+                    mode = forced_getter(pside, symbol)
+                else:
+                    forced_by_pside = runtime_forced.get(pside)
+                    if isinstance(forced_by_pside, dict):
+                        mode = forced_by_pside.get(symbol)
+                if str(mode or "").strip().lower() == "panic":
+                    targets.setdefault(symbol, set()).add(pside)
+        return targets
+
+    async def calc_protective_panic_ideal_orders_orchestrator(self):
+        """Compute panic-close ideal orders without normal EMA/candle/fill prerequisites."""
+        self._current_planning_snapshot = None
+        target_psides_by_symbol = Passivbot._protective_panic_target_psides_by_symbol(
+            self
+        )
+        self._protective_panic_reconcile_psides_by_symbol = {
+            symbol: set(psides) for symbol, psides in target_psides_by_symbol.items()
+        }
+        position_symbols = set()
+        for symbol, pos in (getattr(self, "positions", {}) or {}).items():
+            for pside in ("long", "short"):
+                target_psides = target_psides_by_symbol.get(symbol)
+                if target_psides is None or pside not in target_psides:
+                    continue
+                side_pos = pos.get(pside)
+                if not isinstance(side_pos, dict) or "size" not in side_pos:
+                    continue
+                size_raw = side_pos["size"]
+                if size_raw is None:
+                    continue
+                size = float(size_raw)
+                if size != 0.0:
+                    position_symbols.add(symbol)
+        reconcile_symbols = sorted(target_psides_by_symbol)
+        self._protective_panic_reconcile_symbols = reconcile_symbols
+        symbols = sorted(position_symbols)
+        if not symbols:
+            return {}
+
+        market_snapshots = await self._get_orchestrator_market_snapshots(symbols)
+        planning_snapshot = planning_gates.build_protective_planning_snapshot(
+            self, symbols, market_snapshots
+        )
+        self._current_planning_snapshot = planning_snapshot
+        last_prices = planning_snapshot.last_prices()
+        Passivbot._monitor_record_price_ticks(
+            self,
+            last_prices,
+            ts=utc_ms(),
+            source="protective_panic_market_snapshot_staged",
+        )
+
+        now_ms = int(self.get_exchange_time())
+        global_bp = {
+            "long": self._bot_params_to_rust_dict("long", None),
+            "short": self._bot_params_to_rust_dict("short", None),
+        }
+        effective_hedge_mode = self._config_hedge_mode and self.hedge_mode
+        config = getattr(self, "config", {})
+        strategy_kind = normalize_strategy_kind(config.get("live", {}).get("strategy_kind"))
+        input_dict = {
+            "timestamp_ms": now_ms,
+            "balance": self.get_hysteresis_snapped_balance(),
+            "balance_raw": self.get_raw_balance(),
+            "global": {
+                "filter_by_min_effective_cost": bool(
+                    self.live_value("filter_by_min_effective_cost")
+                ),
+                "market_orders_allowed": bool(self.live_value("market_orders_allowed")),
+                "market_order_near_touch_threshold": float(
+                    self.live_value("market_order_near_touch_threshold")
+                ),
+                "panic_close_market": False,
+                "auto_unstuck_allowed": False,
+                "max_realized_loss_pct": float(Passivbot._live_max_realized_loss_pct(self)),
+                "realized_pnl_cumsum_max": 0.0,
+                "realized_pnl_cumsum_last": 0.0,
+                "sort_global": True,
+                "global_bot_params": global_bp,
+                "hedge_mode": effective_hedge_mode,
+                "strategy_kind": strategy_kind,
+            },
+            "symbols": [],
+        }
+        symbol_to_idx: dict[str, int] = {s: i for i, s in enumerate(symbols)}
+        idx_to_symbol: dict[int, str] = {i: s for s, i in symbol_to_idx.items()}
+        input_dict.update(
+            Passivbot._build_orchestrator_runtime_hints(self, symbol_to_idx)
+        )
+
+        if not hasattr(self, "effective_min_cost") or self.effective_min_cost is None:
+            self.effective_min_cost = {}
+        for symbol in symbols:
+            idx = symbol_to_idx[symbol]
+            snap = market_snapshots.get(symbol)
+            mprice = float(last_prices.get(symbol, 0.0))
+            if not math.isfinite(mprice) or mprice <= 0.0:
+                raise RuntimeError(f"invalid market price for {symbol}: {mprice}")
+            bid = float(snap.bid) if snap is not None and snap.is_valid() else mprice
+            ask = float(snap.ask) if snap is not None and snap.is_valid() else mprice
+            active = bool(
+                (getattr(self, "markets_dict", {}) or {}).get(symbol, {}).get(
+                    "active", True
+                )
+            )
+            effective_min_cost = float(self.effective_min_cost.get(symbol, 0.0) or 0.0)
+            if effective_min_cost <= 0.0:
+                effective_min_cost = self._calc_effective_min_cost_at_price(
+                    symbol, mprice
+                )
+
+            def side_input(pside: str) -> dict:
+                pos = self.positions.get(symbol, {}).get(
+                    pside, {"size": 0.0, "price": 0.0}
+                )
+                trailing = _trailing_bundle_default_dict()
+                return {
+                    "mode": (
+                        "panic"
+                        if pside in target_psides_by_symbol.get(symbol, set())
+                        else "manual"
+                    ),
+                    "position": {
+                        "size": float(pos["size"]),
+                        "price": float(pos["price"]),
+                    },
+                    "trailing": {
+                        "min_since_open": float(trailing.get("min_since_open", 0.0)),
+                        "max_since_min": float(trailing.get("max_since_min", 0.0)),
+                        "max_since_open": float(trailing.get("max_since_open", 0.0)),
+                        "min_since_max": float(trailing.get("min_since_max", 0.0)),
+                    },
+                    "last_increase_fill_timestamp_ms": None,
+                    "bot_params": self._bot_params_to_rust_dict(pside, symbol),
+                    "strategy_params": self._strategy_params_to_rust_dict(pside, symbol),
+                }
+
+            input_dict["symbols"].append(
+                {
+                    "symbol_idx": int(idx),
+                    "order_book": {"bid": bid, "ask": ask},
+                    "exchange": Passivbot._orchestrator_exchange_params(self, symbol),
+                    "tradable": active,
+                    "next_candle": None,
+                    "effective_min_cost": float(effective_min_cost),
+                    "emas": {
+                        "m1": {"close": [], "log_range": [], "volume": []},
+                        "h1": {"close": [], "log_range": [], "volume": []},
+                    },
+                    "long": side_input("long"),
+                    "short": side_input("short"),
+                }
+            )
+
+        out = json.loads(pbr.compute_ideal_orders_json(json.dumps(input_dict)))
+        orders = out.get("orders", [])
+        ideal_orders: dict[str, list] = {}
+        for order in orders:
+            symbol = idx_to_symbol.get(int(order["symbol_idx"]))
+            if symbol is None:
+                continue
+            order_type = str(order["order_type"])
+            order_type_id = int(pbr.order_type_snake_to_id(order_type))
+            if "execution_type" not in order:
+                raise ValueError(
+                    f"Rust orchestrator order missing execution_type: {order!r}"
+                )
+            execution_type = str(order["execution_type"])
+            ideal_orders.setdefault(symbol, []).append(
+                (
+                    float(order["qty"]),
+                    float(order["price"]),
+                    order_type,
+                    order_type_id,
+                    execution_type,
+                )
+            )
+        ideal_orders_f, _wel_blocked = self._to_executable_orders(
+            ideal_orders, last_prices
+        )
+        return self._finalize_reduce_only_orders(ideal_orders_f, last_prices)
+
+    def _strategy_params_to_rust_dict(self, pside: str, symbol: str | None) -> dict:
+        config = getattr(self, "config", {})
+        strategy_kind = normalize_strategy_kind(config.get("live", {}).get("strategy_kind"))
+        strategy_cfg = get_active_strategy_side(
+            config.get("bot", {}).get(pside, {}),
+            strategy_kind=strategy_kind,
+            pside=pside,
+        )
+        symbol_override = (
+            getattr(self, "coin_overrides", {}).get(symbol, {}).get("bot", {}).get(pside, {})
+            if symbol is not None
+            else {}
+        )
+        return build_runtime_strategy_side(
+            strategy_cfg,
+            strategy_kind=strategy_kind,
+            pside=pside,
+            override_side=symbol_override,
+        )
+
+    def _strategy_value(self, pside: str, key: str, symbol: str | None = None) -> Any:
+        strategy_cfg = self._strategy_params_to_rust_dict(pside, symbol)
+        current = strategy_cfg
+        for part in key.split("."):
+            if not isinstance(current, dict) or part not in current:
+                raise KeyError(f"missing required strategy key {pside}.{key}")
+            current = current[part]
+        return current
+
     def _bot_params_to_rust_dict(self, pside: str, symbol: str | None) -> dict:
         """Build a dict matching Rust `BotParams` for JSON orchestrator input."""
         # Values which are configured globally (not per symbol) live under bot_value.
         global_keys = {
             "n_positions",
             "total_wallet_exposure_limit",
+            "risk_twel_enforcer_enabled",
+            "risk_twel_enforcer_policy",
             "risk_twel_enforcer_threshold",
-            "unstuck_loss_allowance_pct",
         }
-        # Maintain 1:1 field coverage with `passivbot-rust/src/types.rs BotParams`.
-        fields = [
-            "close_grid_markup_end",
-            "close_grid_markup_start",
+        bool_keys = {
+            "risk_wel_enforcer_enabled",
+            "risk_twel_enforcer_enabled",
+            "risk_twel_entry_gate_enabled",
+            "unstuck_enabled",
+            "unstuck_ema_gating_enabled",
+        }
+        string_keys = {
+            "risk_twel_enforcer_policy",
+            "risk_we_excess_allowance_mode",
+        }
+        strategy_keys = {
             "close_grid_qty_pct",
             "close_trailing_retracement_pct",
-            "close_trailing_grid_ratio",
             "close_trailing_qty_pct",
             "close_trailing_threshold_pct",
+            "close_weight_volatility_1h",
+            "close_weight_volatility_1m",
             "entry_grid_double_down_factor",
-            "entry_grid_spacing_volatility_weight",
-            "entry_grid_spacing_we_weight",
             "entry_grid_spacing_pct",
-            "entry_volatility_ema_span_hours",
+            "entry_volatility_ema_span_1h",
+            "entry_volatility_ema_span_1m",
+            "entry_weight_volatility_1h",
+            "entry_weight_volatility_1m",
+            "entry_we_weight",
             "entry_initial_ema_dist",
             "entry_initial_qty_pct",
             "entry_trailing_double_down_factor",
             "entry_trailing_retracement_pct",
-            "entry_trailing_retracement_we_weight",
-            "entry_trailing_retracement_volatility_weight",
-            "entry_trailing_grid_ratio",
             "entry_trailing_threshold_pct",
-            "entry_trailing_threshold_we_weight",
-            "entry_trailing_threshold_volatility_weight",
-            "forager_volatility_ema_span",
-            "forager_volume_ema_span",
-            "forager_volume_drop_pct",
-            "forager_score_weights",
             "ema_span_0",
             "ema_span_1",
+        }
+        # Maintain 1:1 field coverage with `passivbot-rust/src/types.rs BotParams`.
+        fields = [
+            "close_grid_qty_pct",
+            "close_trailing_retracement_pct",
+            "close_trailing_qty_pct",
+            "close_trailing_threshold_pct",
+            "close_weight_volatility_1h",
+            "close_weight_volatility_1m",
+            "entry_grid_double_down_factor",
+            "entry_grid_spacing_pct",
+            "entry_volatility_ema_span_1h",
+            "entry_volatility_ema_span_1m",
+            "entry_weight_volatility_1h",
+            "entry_weight_volatility_1m",
+            "entry_we_weight",
+            "entry_initial_ema_dist",
+            "entry_initial_qty_pct",
+            "entry_trailing_double_down_factor",
+            "entry_trailing_retracement_pct",
+            "entry_trailing_threshold_pct",
+            "forager_volatility_ema_span_1m",
+            "forager_volume_ema_span_1m",
+            "forager_volume_drop_pct",
+            "forager_score_weights",
+            "risk_entry_cooldown_minutes",
             "n_positions",
             "total_wallet_exposure_limit",
             "wallet_exposure_limit",
+            "risk_wel_enforcer_enabled",
             "risk_wel_enforcer_threshold",
+            "risk_twel_enforcer_enabled",
+            "risk_twel_enforcer_policy",
+            "risk_twel_entry_gate_enabled",
             "risk_twel_enforcer_threshold",
             "risk_we_excess_allowance_pct",
+            "risk_we_excess_allowance_mode",
+            "unstuck_enabled",
             "unstuck_close_pct",
+            "unstuck_ema_gating_enabled",
             "unstuck_ema_dist",
             "unstuck_loss_allowance_pct",
             "unstuck_threshold",
         ]
         out: dict[str, object] = {}
+        strategy_getter = getattr(self, "_strategy_params_to_rust_dict", None)
+        strategy_cfg = strategy_getter(pside, symbol) if callable(strategy_getter) else {}
         for key in fields:
             if key in global_keys:
                 val = self.bot_value(pside, key)
+            elif key in strategy_keys:
+                if key in strategy_cfg:
+                    val = strategy_cfg[key]
+                elif callable(strategy_getter):
+                    val = 0.0
+                else:
+                    val = self.bp(pside, key, symbol) if symbol is not None else self.bp(pside, key)
             else:
                 val = (
                     self.bp(pside, key, symbol)
@@ -9981,10 +13468,10 @@ class Passivbot:
                     else self.bp(pside, key)
                 )
             out_key = key
-            if key == "forager_volatility_ema_span":
-                out_key = "filter_volatility_ema_span"
-            elif key == "forager_volume_ema_span":
-                out_key = "filter_volume_ema_span"
+            if key == "forager_volatility_ema_span_1m":
+                out_key = "filter_volatility_ema_span_1m"
+            elif key == "forager_volume_ema_span_1m":
+                out_key = "filter_volume_ema_span_1m"
             if key == "forager_score_weights":
                 if not isinstance(val, dict):
                     raise TypeError(
@@ -9997,6 +13484,19 @@ class Passivbot:
                 }
             elif key == "n_positions":
                 out[out_key] = int(round(val or 0.0))
+            elif key in bool_keys:
+                out[out_key] = bool(val)
+            elif key in string_keys:
+                if key == "risk_twel_enforcer_policy":
+                    out[out_key] = normalize_twel_enforcer_policy(
+                        val,
+                        path=f"bot.{pside}.risk.total_exposure_enforcer_policy",
+                    )
+                else:
+                    out[out_key] = normalize_we_excess_allowance_mode(
+                        val,
+                        path=f"bot.{pside}.risk.we_excess_allowance_mode",
+                    )
             else:
                 out[out_key] = float(val or 0.0)
         out.update(
@@ -10011,6 +13511,10 @@ class Passivbot:
                 ),
                 "hsl_no_restart_drawdown_threshold": float(
                     self.bot_value(pside, "hsl_no_restart_drawdown_threshold")
+                ),
+                "hsl_restart_after_red_policy": normalize_hsl_restart_after_red_policy(
+                    self.bot_value(pside, "hsl_restart_after_red_policy"),
+                    path=f"bot.{pside}.hsl_restart_after_red_policy",
                 ),
                 "hsl_tier_ratio_yellow": float(
                     self.bot_value(pside, "hsl_tier_ratios.yellow")
@@ -10130,12 +13634,95 @@ class Passivbot:
                     else:
                         pb_modes[pside][symbol] = self.PB_mode_stop[pside]
 
+        forager_side_enabled: dict[str, bool] = {}
+        for pside in ("long", "short"):
+            try:
+                forager_side_enabled[pside] = bool(self.is_forager_mode(pside))
+            except Exception:
+                forager_side_enabled[pside] = False
+
+        newly_normal_forager_symbols: set[str] = set()
+        if previous_PB_modes is not None or any(forager_side_enabled.values()):
+            for pside in ("long", "short"):
+                if not forager_side_enabled.get(pside, False):
+                    continue
+                prev_modes = (
+                    previous_PB_modes.get(pside, {})
+                    if isinstance(previous_PB_modes, dict)
+                    else {}
+                )
+                for symbol, mode in pb_modes[pside].items():
+                    if self._pb_mode_to_orchestrator_mode(mode) != "normal":
+                        continue
+                    prev_mode = (
+                        prev_modes.get(symbol)
+                        if isinstance(prev_modes, dict)
+                        else None
+                    )
+                    if self._pb_mode_to_orchestrator_mode(prev_mode) != "normal":
+                        newly_normal_forager_symbols.add(symbol)
+        if newly_normal_forager_symbols:
+            pending = set(
+                getattr(self, "_forager_new_normal_warmup_symbols", set()) or set()
+            )
+            pending.update(newly_normal_forager_symbols)
+            self._forager_new_normal_warmup_symbols = pending
+
         self.PB_modes = pb_modes
         self.active_symbols = sorted(
             set(pb_modes["long"]) | set(pb_modes["short"]) | set(self.open_orders)
         )
         res = log_dict_changes(previous_PB_modes, self.PB_modes)
         self._log_mode_changes(res, previous_PB_modes)
+
+    async def _warmup_new_forager_normal_symbols(
+        self, symbols: Iterable[str]
+    ) -> set[str]:
+        """Synchronously warm newly selected forager symbols before normal planning."""
+        try:
+            forager_enabled = any(
+                self.is_forager_mode(pside) for pside in ("long", "short")
+            )
+        except Exception:
+            forager_enabled = False
+        if not forager_enabled:
+            return set()
+        pending_all = set(
+            getattr(self, "_forager_new_normal_warmup_symbols", set()) or set()
+        )
+        if not pending_all:
+            return set()
+        symbol_set = {str(symbol) for symbol in symbols if symbol}
+        pending = sorted(pending_all & symbol_set)
+        if not pending:
+            return set()
+        attempts = getattr(self, "_forager_normal_warmup_attempt_ms", None)
+        if not isinstance(attempts, dict):
+            attempts = {}
+        now_ms = utc_ms()
+        retry_ms = 5 * 60 * 1000
+        due = [
+            symbol
+            for symbol in pending
+            if now_ms - int(attempts.get(symbol, 0) or 0) >= retry_ms
+        ]
+        if not due:
+            return set()
+        for symbol in due:
+            attempts[symbol] = now_ms
+        self._forager_normal_warmup_attempt_ms = attempts
+        logging.info(
+            "[warmup] forager-selected normal warmup: %d symbols=%s",
+            len(due),
+            Passivbot._log_symbols(due, limit=8),
+        )
+        await self.warmup_candles_staggered(
+            symbols_override=due,
+            ttl_ms=0,
+            skip_jitter=True,
+            context="forager-selected warmup",
+        )
+        return set(due)
 
     def _orchestrator_mode_override(self, pside: str, symbol: str) -> Optional[str]:
         if self._equity_hard_stop_enabled(pside):
@@ -10152,12 +13739,28 @@ class Passivbot:
                 if orange_mode == "graceful_stop":
                     return "graceful_stop"
                 if orange_mode == "tp_only_with_active_entry_cancellation":
-                    size = float(
-                        self.positions.get(symbol, {}).get(pside, {}).get("size", 0.0)
-                        or 0.0
-                    )
-                    if size != 0.0:
-                        return "tp_only_with_active_entry_cancellation"
+                    return "tp_only_with_active_entry_cancellation"
+
+        if (
+            self._equity_hard_stop_enabled(pside)
+            and self._equity_hard_stop_signal_mode() == "coin"
+        ):
+            replay_pending = getattr(
+                self, "_equity_hard_stop_coin_replay_pending_pairs", set()
+            )
+            if (pside, symbol) in replay_pending:
+                configured_mode = self.config_get(
+                    ["live", f"forced_mode_{pside}"], symbol
+                )
+                if configured_mode:
+                    expanded_mode = expand_PB_mode(configured_mode)
+                    if expanded_mode != "normal":
+                        return self._apply_ignored_coin_mode(
+                            pside, symbol, expanded_mode
+                        )
+                return self._apply_ignored_coin_mode(
+                    pside, symbol, "graceful_stop"
+                )
 
         runtime_forced = (
             getattr(self, "_runtime_forced_modes", {}).get(pside, {}).get(symbol)
@@ -10219,15 +13822,42 @@ class Passivbot:
             return mode
         return "graceful_stop"
 
-    def _calc_unstuck_allowances_live(
-        self, allow_new_unstuck: bool
-    ) -> dict[str, float]:
+    def _calc_unstuck_allowances_live(self) -> dict[str, float]:
         """Calculate unstuck allowances using FillEventsManager."""
-        return self._calc_unstuck_allowances(allow_new_unstuck)
+        return self._calc_unstuck_allowances()
+
+    def _auto_unstuck_allowed_live(self) -> bool:
+        if self._pnls_manager is None:
+            return False
+        start_ms = self._pnls_lookback_start_ms()
+        events = self._get_effective_pnl_events()
+        self._assert_pnl_history_safe_for_risk(
+            events,
+            context="auto unstuck realized PnL",
+            start_ms=start_ms,
+        )
+        return True
+
+    def _calc_orchestrator_unstuck_allowance_for_symbol(
+        self, pside: str, symbol: str, realized_pnl_cumsum: dict
+    ) -> float:
+        pct = float(self.bp(pside, "unstuck_loss_allowance_pct", symbol) or 0.0)
+        twel = float(self.bot_value(pside, "total_wallet_exposure_limit") or 0.0)
+        if pct <= 0.0 or twel <= 0.0:
+            return 0.0
+        return float(
+            pbr.calc_auto_unstuck_allowance(
+                self.get_raw_balance(),
+                pct * twel,
+                float(realized_pnl_cumsum.get("max", 0.0) or 0.0),
+                float(realized_pnl_cumsum.get("last", 0.0) or 0.0),
+            )
+        )
 
     async def calc_ideal_orders_orchestrator_from_snapshot(
         self, snapshot: dict, *, return_snapshot: bool
     ):
+        timestamp_ms = int(snapshot.get("ts_ms", utc_ms()))
         symbols = snapshot["symbols"]
         last_prices = snapshot["last_prices"]
         Passivbot._monitor_record_price_ticks(
@@ -10237,14 +13867,23 @@ class Passivbot:
         m1_volume_emas = snapshot["m1_volume_emas"]
         m1_log_range_emas = snapshot["m1_log_range_emas"]
         h1_log_range_emas = snapshot["h1_log_range_emas"]
+        trailing_unavailable_symbols = set(
+            getattr(self, "_orchestrator_trailing_unavailable_symbols", set())
+        )
 
-        unstuck_allowances = snapshot.get(
-            "unstuck_allowances", {"long": 0.0, "short": 0.0}
+        unstuck_allowances = snapshot.get("unstuck_allowances", {"long": 0.0, "short": 0.0})
+        auto_unstuck_allowed = bool(
+            snapshot.get(
+                "auto_unstuck_allowed",
+                any(
+                    float(unstuck_allowances.get(pside, 0.0) or 0.0) > 0.0
+                    for pside in ("long", "short")
+                ),
+            )
         )
-        realized_pnl_cumsum = snapshot.get(
-            "realized_pnl_cumsum", {"max": 0.0, "last": 0.0}
-        )
-        max_realized_loss_pct = float(self.live_value("max_realized_loss_pct") or 1.0)
+        realized_pnl_cumsum = snapshot.get("realized_pnl_cumsum", {"max": 0.0, "last": 0.0})
+        last_increase_fill_timestamps = snapshot.get("last_increase_fill_timestamps", {})
+        max_realized_loss_pct = float(Passivbot._live_max_realized_loss_pct(self))
         if hasattr(self, "_build_orchestrator_mode_overrides"):
             mode_overrides = self._build_orchestrator_mode_overrides(symbols)
         else:
@@ -10259,9 +13898,15 @@ class Passivbot:
         # Effective hedge_mode = config setting AND exchange capability.
         # If either is False, we block same-coin hedging in the orchestrator.
         effective_hedge_mode = self._config_hedge_mode and self.hedge_mode
+        config = getattr(self, "config", {})
+        strategy_kind = normalize_strategy_kind(config.get("live", {}).get("strategy_kind"))
         input_dict = {
+            "timestamp_ms": timestamp_ms,
             "balance": self.get_hysteresis_snapped_balance(),
             "balance_raw": self.get_raw_balance(),
+            # Deliberately omit backtest.market_order_slippage_pct in live.
+            # Rust defaults it to 0.0 for live loss projections; the backtest
+            # value is a simulation knob, not a live slippage cap.
             "global": {
                 "filter_by_min_effective_cost": bool(
                     self.live_value("filter_by_min_effective_cost")
@@ -10270,16 +13915,8 @@ class Passivbot:
                 "market_order_near_touch_threshold": float(
                     self.live_value("market_order_near_touch_threshold")
                 ),
-                "panic_close_market": bool(
-                    any(
-                        Passivbot._equity_hard_stop_panic_close_order_type(self, pside)
-                        == "market"
-                        for pside in ("long", "short")
-                        if Passivbot._equity_hard_stop_enabled(self, pside)
-                    )
-                ),
-                "unstuck_allowance_long": float(unstuck_allowances.get("long", 0.0)),
-                "unstuck_allowance_short": float(unstuck_allowances.get("short", 0.0)),
+                "panic_close_market": False,
+                "auto_unstuck_allowed": auto_unstuck_allowed,
                 "max_realized_loss_pct": max_realized_loss_pct,
                 "realized_pnl_cumsum_max": float(
                     realized_pnl_cumsum.get("max", 0.0) or 0.0
@@ -10290,6 +13927,7 @@ class Passivbot:
                 "sort_global": True,
                 "global_bot_params": global_bp,
                 "hedge_mode": effective_hedge_mode,
+                "strategy_kind": strategy_kind,
             },
             "symbols": [],
         }
@@ -10339,7 +13977,9 @@ class Passivbot:
                         "max_since_open": float(trailing.get("max_since_open", 0.0)),
                         "min_since_max": float(trailing.get("min_since_max", 0.0)),
                     },
+                    "last_increase_fill_timestamp_ms": last_increase_fill_timestamps.get(symbol, {}).get(pside),
                     "bot_params": self._bot_params_to_rust_dict(pside, symbol),
+                    "strategy_params": self._strategy_params_to_rust_dict(pside, symbol),
                 }
 
             m1_close_pairs = [
@@ -10361,20 +14001,10 @@ class Passivbot:
                 {
                     "symbol_idx": int(idx),
                     "order_book": {"bid": mprice, "ask": mprice},
-                    "exchange": {
-                        "qty_step": float(self.qty_steps[symbol]),
-                        "price_step": float(self.price_steps[symbol]),
-                        "min_qty": float(self.min_qtys[symbol]),
-                        "min_cost": float(self.min_costs[symbol]),
-                        "c_mult": float(self.c_mults[symbol]),
-                        "maker_fee": float(
-                            self.markets_dict.get(symbol, {}).get("maker", 0.0) or 0.0
-                        ),
-                        "taker_fee": float(
-                            self.markets_dict.get(symbol, {}).get("taker", 0.0) or 0.0
-                        ),
-                    },
-                    "tradable": bool(active),
+                    "exchange": Passivbot._orchestrator_exchange_params(self, symbol),
+                    "tradable": bool(
+                        active and symbol not in trailing_unavailable_symbols
+                    ),
                     "next_candle": None,
                     "effective_min_cost": float(effective_min_cost),
                     "emas": {
@@ -10407,6 +14037,7 @@ class Passivbot:
                         )
             raise
         out = json.loads(out_json)
+        orders = out.get("orders", [])
         self._log_realized_loss_gate_blocks(out, idx_to_symbol)
         if hasattr(self, "_log_min_effective_cost_blocks"):
             self._log_min_effective_cost_blocks(out, idx_to_symbol)
@@ -10422,7 +14053,6 @@ class Passivbot:
                 idx_to_symbol,
                 mode_overrides,
             )
-        orders = out.get("orders", [])
 
         ideal_orders: dict[str, list] = {}
         for o in orders:
@@ -10431,7 +14061,11 @@ class Passivbot:
                 continue
             order_type = str(o["order_type"])
             order_type_id = int(pbr.order_type_snake_to_id(order_type))
-            execution_type = str(o.get("execution_type", "limit"))
+            if "execution_type" not in o:
+                raise ValueError(
+                    f"Rust orchestrator order missing execution_type: {o!r}"
+                )
+            execution_type = str(o["execution_type"])
             tup = (
                 float(o["qty"]),
                 float(o["price"]),
@@ -10451,7 +14085,9 @@ class Passivbot:
                     pos = self.positions.get(symbol, {}).get(pside, {})
                     entry_price = pos.get("price", 0.0)
                     current_price = last_prices.get(symbol, 0.0)
-                    allowance = unstuck_allowances.get(pside, 0.0)
+                    allowance = self._calc_orchestrator_unstuck_allowance_for_symbol(
+                        pside, symbol, realized_pnl_cumsum
+                    )
                     self._maybe_log_unstuck_selection(
                         symbol=symbol,
                         pside=pside,
@@ -10502,37 +14138,186 @@ class Passivbot:
         """
         # Gather full EMA context for the live symbol universe.
         # Python should provide the market-state bundle; Rust decides which branches use it.
+        Passivbot._emit_ema_bundle_started_event(self, symbols=symbols, modes=modes)
         need_close_spans: dict[str, set[float]] = {s: set() for s in symbols}
+        need_m1_lr_spans: dict[str, set[float]] = {s: set() for s in symbols}
         need_h1_lr_spans: dict[str, set[float]] = {s: set() for s in symbols}
+
+        strategy_kind = normalize_strategy_kind(self.config.get("live", {}).get("strategy_kind"))
+
+        def _legacy_bp_warmup_value(pside: str, key: str, symbol: str) -> float:
+            try:
+                raw = self.bp(pside, key, symbol)
+            except KeyError:
+                return 0.0
+            return Passivbot._positive_finite_warmup_value(
+                raw,
+                context=f"legacy strategy {pside}.{key}",
+                symbol=symbol,
+            )
 
         for pside in ["long", "short"]:
             for symbol in symbols:
-                span0 = float(self.bp(pside, "ema_span_0", symbol))
-                span1 = float(self.bp(pside, "ema_span_1", symbol))
-                span2 = (
-                    float((span0 * span1) ** 0.5)
-                    if span0 > 0.0 and span1 > 0.0
-                    else 0.0
-                )
+                strategy_getter = getattr(self, "_strategy_params_to_rust_dict", None)
+                if callable(strategy_getter):
+                    strategy_params = strategy_getter(pside, symbol)
+                    span0 = Passivbot._positive_finite_warmup_value(
+                        strategy_params["ema_span_0"],
+                        context=f"strategy {pside}.ema_span_0",
+                        symbol=symbol,
+                    )
+                    span1 = Passivbot._positive_finite_warmup_value(
+                        strategy_params["ema_span_1"],
+                        context=f"strategy {pside}.ema_span_1",
+                        symbol=symbol,
+                    )
+                else:
+                    span0 = _legacy_bp_warmup_value(pside, "ema_span_0", symbol)
+                    span1 = _legacy_bp_warmup_value(pside, "ema_span_1", symbol)
+                    m1_span = _legacy_bp_warmup_value(
+                        pside, "entry_volatility_ema_span_1m", symbol
+                    )
+                    h1_span_legacy = _legacy_bp_warmup_value(
+                        pside, "entry_volatility_ema_span_1h", symbol
+                    )
+                    if h1_span_legacy <= 0.0:
+                        h1_span_legacy = _legacy_bp_warmup_value(
+                            pside, "entry_volatility_ema_span_hours", symbol
+                        )
+                    m1_weight = _legacy_bp_warmup_value(
+                        pside, "entry_weight_volatility_1m", symbol
+                    )
+                    h1_weight = _legacy_bp_warmup_value(
+                        pside, "entry_weight_volatility_1h", symbol
+                    )
+                    close_m1_weight = _legacy_bp_warmup_value(
+                        pside, "close_weight_volatility_1m", symbol
+                    )
+                    close_h1_weight = _legacy_bp_warmup_value(
+                        pside, "close_weight_volatility_1h", symbol
+                    )
+                    strategy_params = {
+                        "ema_span_0": span0,
+                        "ema_span_1": span1,
+                        "volatility_ema_span_1m": m1_span,
+                        "volatility_ema_span_1h": h1_span_legacy,
+                        "entry": {
+                            "threshold_volatility_1m_weight": m1_weight,
+                            "threshold_volatility_1h_weight": h1_weight,
+                        },
+                        "close": {
+                            "threshold_volatility_1m_weight": close_m1_weight,
+                            "threshold_volatility_1h_weight": close_h1_weight,
+                        },
+                    }
+                span2 = float((span0 * span1) ** 0.5) if span0 > 0.0 and span1 > 0.0 else 0.0
                 for sp in (span0, span1, span2):
                     if sp > 0.0 and math.isfinite(sp):
                         need_close_spans[symbol].add(sp)
-                h1_span = float(
-                    self.bp(pside, "entry_volatility_ema_span_hours", symbol) or 0.0
+                requirements = strategy_warmup_requirements(
+                    strategy_params,
+                    pside=pside,
+                    symbol=symbol,
+                    error_label="live warmup",
                 )
-                if h1_span > 0.0 and math.isfinite(h1_span):
+                m1_lr_span = requirements.max_m1_log_range_span_minutes
+                m1_lr_weight = 0.0
+                if m1_lr_span > 0.0:
+                    m1_lr_weight = max(
+                        strategy_abs_max_weight(
+                            strategy_params,
+                            context=f"strategy {pside}.entry_volatility_1m_weight",
+                            symbol=symbol,
+                            pside=pside,
+                            error_label="live warmup",
+                            optional=False,
+                            paths=(
+                                ("entry", "threshold_volatility_1m_weight"),
+                                ("entry", "retracement_volatility_1m_weight"),
+                                ("entry_weight_volatility_1m",),
+                                ("offset_volatility_1m_weight",),
+                            ),
+                        ),
+                        strategy_abs_max_weight(
+                            strategy_params,
+                            context=f"strategy {pside}.close_volatility_1m_weight",
+                            symbol=symbol,
+                            pside=pside,
+                            error_label="live warmup",
+                            optional=False,
+                            paths=(
+                                ("close", "threshold_volatility_1m_weight"),
+                                ("close", "retracement_volatility_1m_weight"),
+                                ("close_weight_volatility_1m",),
+                                ("offset_volatility_1m_weight",),
+                            ),
+                        ),
+                    )
+                if m1_lr_weight > 0.0 and m1_lr_span > 0.0 and math.isfinite(m1_lr_span):
+                    need_m1_lr_spans[symbol].add(m1_lr_span)
+                h1_span = requirements.max_h1_span_hours
+                h1_lr_weight = 0.0
+                if h1_span > 0.0:
+                    h1_lr_weight = max(
+                        strategy_abs_max_weight(
+                            strategy_params,
+                            context=f"strategy {pside}.entry_volatility_1h_weight",
+                            symbol=symbol,
+                            pside=pside,
+                            error_label="live warmup",
+                            optional=False,
+                            paths=(
+                                ("entry", "threshold_volatility_1h_weight"),
+                                ("entry", "retracement_volatility_1h_weight"),
+                                ("entry", "grid_spacing_volatility_weight"),
+                                ("entry", "trailing_threshold_volatility_weight"),
+                                ("entry", "trailing_retracement_volatility_weight"),
+                                ("entry_weight_volatility_1h",),
+                                ("offset_volatility_1h_weight",),
+                            ),
+                        ),
+                        strategy_abs_max_weight(
+                            strategy_params,
+                            context=f"strategy {pside}.close_volatility_1h_weight",
+                            symbol=symbol,
+                            pside=pside,
+                            error_label="live warmup",
+                            optional=strategy_kind == "trailing_grid_v7",
+                            paths=(
+                                ("close", "threshold_volatility_1h_weight"),
+                                ("close", "retracement_volatility_1h_weight"),
+                                ("close_weight_volatility_1h",),
+                                ("offset_volatility_1h_weight",),
+                            ),
+                        ),
+                    )
+                if h1_lr_weight > 0.0 and h1_span > 0.0 and math.isfinite(h1_span):
                     need_h1_lr_spans[symbol].add(h1_span)
 
         # Forager metrics use global spans (per side); include them for all symbols.
-        vol_span_long = float(self.bot_value("long", "forager_volume_ema_span") or 0.0)
+        vol_span_long = float(
+            Passivbot._live_forager_warmup_value(
+                self, "long", "forager_volume_ema_span_1m", ""
+            )
+            or 0.0
+        )
         lr_span_long = float(
-            self.bot_value("long", "forager_volatility_ema_span") or 0.0
+            Passivbot._live_forager_warmup_value(
+                self, "long", "forager_volatility_ema_span_1m", ""
+            )
+            or 0.0
         )
         vol_span_short = float(
-            self.bot_value("short", "forager_volume_ema_span") or 0.0
+            Passivbot._live_forager_warmup_value(
+                self, "short", "forager_volume_ema_span_1m", ""
+            )
+            or 0.0
         )
         lr_span_short = float(
-            self.bot_value("short", "forager_volatility_ema_span") or 0.0
+            Passivbot._live_forager_warmup_value(
+                self, "short", "forager_volatility_ema_span_1m", ""
+            )
+            or 0.0
         )
         m1_volume_spans = sorted(
             {s for s in (vol_span_long, vol_span_short) if s > 0.0 and math.isfinite(s)}
@@ -10540,6 +14325,50 @@ class Passivbot:
         m1_lr_spans = sorted(
             {s for s in (lr_span_long, lr_span_short) if s > 0.0 and math.isfinite(s)}
         )
+        is_forager_mode = getattr(
+            self, "is_forager_mode", lambda *args, **kwargs: False
+        )
+
+        def _forager_score_weight(pside: str, key: str) -> float:
+            weights = self.bot_value(pside, "forager_score_weights")
+            if not isinstance(weights, dict):
+                raise TypeError(
+                    f"bot.{pside}.forager_score_weights must be a dict; "
+                    f"got {type(weights).__name__}"
+                )
+            if key not in weights:
+                raise KeyError(f"missing bot.{pside}.forager_score_weights.{key}")
+            return Passivbot._positive_finite_warmup_value(
+                weights[key],
+                context=f"forager {pside}.score_weights.{key}",
+                symbol="",
+            )
+
+        def _forager_volume_drop_pct(pside: str) -> float:
+            return Passivbot._positive_finite_warmup_value(
+                self.bot_value(pside, "forager_volume_drop_pct"),
+                context=f"forager {pside}.volume_drop_pct",
+                symbol="",
+            )
+
+        required_forager_volume_spans: set[float] = set()
+        required_forager_m1_lr_spans: set[float] = set()
+        if bool(is_forager_mode("long")):
+            if vol_span_long > 0.0 and (
+                _forager_volume_drop_pct("long") > 0.0
+                or _forager_score_weight("long", "volume") != 0.0
+            ):
+                required_forager_volume_spans.add(vol_span_long)
+            if lr_span_long > 0.0 and _forager_score_weight("long", "volatility") != 0.0:
+                required_forager_m1_lr_spans.add(lr_span_long)
+        if bool(is_forager_mode("short")):
+            if vol_span_short > 0.0 and (
+                _forager_volume_drop_pct("short") > 0.0
+                or _forager_score_weight("short", "volume") != 0.0
+            ):
+                required_forager_volume_spans.add(vol_span_short)
+            if lr_span_short > 0.0 and _forager_score_weight("short", "volatility") != 0.0:
+                required_forager_m1_lr_spans.add(lr_span_short)
         if not hasattr(self, "_orchestrator_prev_close_ema"):
             self._orchestrator_prev_close_ema = {}
         if not hasattr(self, "_orchestrator_close_ema_fallback_counts"):
@@ -10551,7 +14380,10 @@ class Passivbot:
         cache_only_symbols: set[str] = set()
         ema_unavailable_symbols: set[str] = set()
         ema_unavailable_reasons: dict[str, list[str]] = {}
+        candidate_ema_unavailable_details: dict[str, list[tuple[str, str, str]]] = {}
         optional_ema_drops: dict[tuple[str, str], list[tuple[str, float]]] = {}
+        close_ema_recoveries: dict[str, list[tuple[float, int]]] = {}
+        close_ema_fallbacks: dict[str, list[tuple[float, int, int, str]]] = {}
 
         def log_ema_issue(
             key: tuple,
@@ -10577,6 +14409,44 @@ class Passivbot:
         def mark_ema_unavailable(symbol: str, reason: str) -> None:
             ema_unavailable_symbols.add(symbol)
             ema_unavailable_reasons.setdefault(str(reason), []).append(symbol)
+
+        def has_position_or_open_order(symbol: str) -> bool:
+            try:
+                if self.has_position(symbol=symbol):
+                    return True
+            except Exception:
+                return True
+            try:
+                if bool(getattr(self, "open_orders", {}).get(symbol)):
+                    return True
+            except Exception:
+                return True
+            return False
+
+        def candidate_only_forager_symbol(symbol: str) -> bool:
+            if not bool(is_forager_mode()):
+                return False
+            if has_normal_planning_mode(symbol):
+                return False
+            if has_position_or_open_order(symbol):
+                return False
+            return True
+
+        def required_ema_can_mark_nontradable(symbol: str) -> bool:
+            if flat_forager_default_normal_symbol(symbol):
+                return True
+            if has_normal_planning_mode(symbol):
+                return False
+            if symbol in cache_only_symbols or candidate_only_forager_symbol(symbol):
+                return True
+            return False
+
+        def required_ema_log_level(symbol: str) -> int:
+            return (
+                logging.DEBUG
+                if candidate_only_forager_symbol(symbol)
+                else logging.WARNING
+            )
 
         def ema_candle_health_context(symbol: str) -> str:
             try:
@@ -10606,6 +14476,91 @@ class Passivbot:
                 )
             except Exception as exc:
                 parts.append(f"health_error={type(exc).__name__}")
+            return " ".join(parts)
+
+        def ema_window_health_context(
+            symbol: str, ema_type: str, spans: Iterable[float]
+        ) -> str:
+            span_values = []
+            for raw_span in spans:
+                try:
+                    span = float(raw_span)
+                except Exception:
+                    continue
+                if math.isfinite(span) and span > 0.0:
+                    span_values.append(span)
+            if not span_values:
+                return ema_candle_health_context(symbol)
+            max_span = max(span_values)
+            if ema_type == "h1_log_range":
+                timeframe = "1h"
+                window = max(1, int(math.ceil(max_span)))
+            else:
+                timeframe = "1m"
+                window = max(1, int(math.ceil(max_span)))
+            parts = [
+                f"ema_type={ema_type}",
+                f"timeframe={timeframe}",
+                f"window={window}",
+            ]
+            try:
+                health = self.cm.get_completed_candle_health(
+                    symbol, {timeframe: window}, now_ms=utc_ms()
+                )
+                tf = (health.get("timeframes", {}) or {}).get(timeframe, {})
+                parts.extend(
+                    [
+                        f"latest_expected={tf.get('latest_expected_ts')}",
+                        f"last_cached={tf.get('last_cached_ts')}",
+                        f"last_disk={tf.get('last_disk_ts')}",
+                        f"last_runtime={tf.get('last_runtime_ts')}",
+                        f"missing={tf.get('missing_candles')}",
+                        f"tail={tf.get('open_tail_gap')}",
+                        f"tail_candles={tf.get('tail_gap_candles')}",
+                        f"tail_age_ms={tf.get('tail_gap_age_ms')}",
+                    ]
+                )
+                spans_report = tf.get("missing_spans_preview") or []
+                if not spans_report:
+                    spans_report = tf.get("missing_spans") or []
+                if spans_report:
+                    first = spans_report[0]
+                    if isinstance(first, dict):
+                        first_start = first.get("start_ts")
+                        first_end = first.get("end_ts")
+                        first_candles = first.get("candles")
+                    else:
+                        try:
+                            first_start = int(first[0])
+                            first_end = int(first[1])
+                            period_ms = int(tf.get("period_ms") or ONE_MIN_MS)
+                            first_candles = int((first_end - first_start) // period_ms + 1)
+                        except Exception:
+                            first_start = first_end = first_candles = None
+                    parts.extend(
+                        [
+                            f"first_missing_start={first_start}",
+                            f"first_missing_end={first_end}",
+                            f"first_missing_candles={first_candles}",
+                        ]
+                    )
+            except Exception as exc:
+                parts.append(f"health_error={type(exc).__name__}")
+            try:
+                projection_ctx = projection_contexts.get(symbol)
+            except Exception:
+                projection_ctx = None
+            if projection_ctx is not None:
+                parts.extend(
+                    [
+                        "projection_ctx=yes",
+                        f"projection_last_cached={projection_ctx.get('last_cached_ts')}",
+                        f"projection_latest_expected={projection_ctx.get('latest_expected_ts')}",
+                        f"projection_tail_age_ms={projection_ctx.get('tail_gap_age_ms')}",
+                    ]
+                )
+            else:
+                parts.append("projection_ctx=no")
             return " ".join(parts)
 
         def has_normal_planning_mode(symbol: str) -> bool:
@@ -10646,9 +14601,48 @@ class Passivbot:
                     return True
             return False
 
-        is_forager_mode = getattr(
-            self, "is_forager_mode", lambda *args, **kwargs: False
-        )
+        def has_explicit_normal_planning_mode(symbol: str) -> bool:
+            """Return True when config/runtime state explicitly selected normal."""
+            for pside in ("long", "short"):
+                explicit_mode = (modes.get(pside, {}) or {}).get(symbol)
+                if explicit_mode is not None:
+                    if (
+                        Passivbot._mode_override_to_orchestrator_mode(
+                            self, explicit_mode
+                        )
+                        == "normal"
+                    ):
+                        return True
+                    continue
+            if bool(is_forager_mode()):
+                return False
+            pb_modes = getattr(self, "PB_modes", {})
+            for pside in ("long", "short"):
+                pside_modes = (
+                    pb_modes.get(pside, {}) if isinstance(pb_modes, dict) else {}
+                )
+                if not isinstance(pside_modes, dict) or symbol not in pside_modes:
+                    continue
+                if (
+                    Passivbot._pb_mode_to_orchestrator_mode(
+                        self, pside_modes.get(symbol)
+                    )
+                    == "normal"
+                ):
+                    return True
+            return False
+
+        def flat_forager_default_normal_symbol(symbol: str) -> bool:
+            if not bool(is_forager_mode()):
+                return False
+            if has_position_or_open_order(symbol):
+                return False
+            if has_explicit_normal_planning_mode(symbol):
+                return False
+            return symbol in set(getattr(self, "active_symbols", []) or [])
+
+        forager_cached_metric_max_age_by_symbol: dict[str, int] = {}
+        forager_projection_max_age_by_symbol: dict[str, int] = {}
         if is_forager_mode():
             priority_symbols = []
             secondary_symbols = []
@@ -10664,14 +14658,23 @@ class Passivbot:
                 else:
                     secondary_symbols.append(sym)
             cache_only_ttl = 365 * 24 * 3600 * 1000
-            if secondary_symbols:
-                max_calls = get_optional_live_value(
-                    self.config, "max_ohlcv_fetches_per_minute", 0
+            max_calls = get_optional_live_value(
+                self.config, "max_ohlcv_fetches_per_minute", 0
+            )
+            try:
+                max_calls_i = int(max_calls) if max_calls is not None else 0
+            except Exception:
+                max_calls_i = 0
+            priority_max_age_ms = int(
+                Passivbot._forager_target_staleness_ms(
+                    self,
+                    max(1, len(priority_symbols) + len(secondary_symbols)),
+                    max_calls_i,
                 )
-                try:
-                    max_calls_i = int(max_calls) if max_calls is not None else 0
-                except Exception:
-                    max_calls_i = 0
+            )
+            for sym in priority_symbols:
+                forager_cached_metric_max_age_by_symbol[sym] = priority_max_age_ms
+            if secondary_symbols:
                 secondary_max_age_ms = int(
                     Passivbot._forager_target_staleness_ms(
                         self, len(secondary_symbols), max_calls_i
@@ -10682,10 +14685,17 @@ class Passivbot:
                 stale_unavailable = set()
                 for sym in secondary_symbols:
                     cache_only_symbols.add(sym)
+                    forager_cached_metric_max_age_by_symbol[sym] = int(
+                        secondary_max_age_ms
+                    )
+                    forager_projection_max_age_by_symbol[sym] = int(secondary_max_age_ms)
                     m1_max_age_by_symbol[sym] = cache_only_ttl
                     h1_max_age_by_symbol[sym] = cache_only_ttl
                     try:
-                        never_fetched = int(self.cm.get_last_refresh_ms(sym) or 0) <= 0
+                        never_fetched = (
+                            int(self.cm.get_last_refresh_ms(sym) or 0) <= 0
+                            and int(self.cm.get_last_final_ts(sym) or 0) <= 0
+                        )
                     except Exception:
                         never_fetched = True
                     if never_fetched:
@@ -10722,21 +14732,107 @@ class Passivbot:
                     exc,
                 )
                 ctx = None
+            if ctx is None and sym in forager_projection_max_age_by_symbol:
+                try:
+                    now_ms = utc_ms()
+                    latest_expected = (now_ms // ONE_MIN_MS) * ONE_MIN_MS - ONE_MIN_MS
+                    last_cached = int(self.cm.get_last_final_ts(sym) or 0)
+                    max_tail_gap_ms = int(forager_projection_max_age_by_symbol[sym])
+                    tail_gap_age_ms = max(0, int(latest_expected) - int(last_cached))
+                    if last_cached > 0 and tail_gap_age_ms <= max_tail_gap_ms:
+                        ctx = {
+                            "symbol": str(sym),
+                            "latest_expected_ts": int(latest_expected),
+                            "last_cached_ts": int(last_cached),
+                            "tail_gap_age_ms": int(tail_gap_age_ms),
+                            "tail_gap_candles": int(tail_gap_age_ms // ONE_MIN_MS),
+                            "max_tail_gap_ms": int(max_tail_gap_ms),
+                            "reason": "forager_stale_tail_projection",
+                        }
+                except Exception as exc:
+                    logging.debug(
+                        "[candle] forager tail projection context failed %s | error_type=%s error=%s",
+                        Passivbot._log_symbol(sym),
+                        type(exc).__name__,
+                        exc,
+                    )
             if ctx is not None:
                 projection_contexts[sym] = ctx
+        if projection_contexts:
+            examples = []
+            for sym, ctx in sorted(projection_contexts.items())[:8]:
+                try:
+                    tail_age_ms = int(ctx.get("tail_gap_age_ms") or 0)
+                    tail_candles = int(ctx.get("tail_gap_candles") or 0)
+                    latest_expected = ctx.get("latest_expected_ts")
+                    last_cached = ctx.get("last_cached_ts")
+                    reason = ctx.get("reason") or "open_tail_gap_projection"
+                    examples.append(
+                        f"{Passivbot._log_symbol(sym)} tail={tail_candles}"
+                        f" age_ms={tail_age_ms} last_cached={last_cached}"
+                        f" latest_expected={latest_expected} reason={reason}"
+                    )
+                except Exception:
+                    examples.append(Passivbot._log_symbol(sym))
+            log_ema_issue(
+                ("open_tail_projection_context_summary",),
+                logging.INFO,
+                "[candle] open-tail EMA projection contexts | symbols=%d | %s",
+                len(projection_contexts),
+                "; ".join(examples),
+                interval_ms=15 * 60 * 1000,
+            )
         self._orchestrator_ema_projection_symbols = set()
         self._orchestrator_ema_projection_details = {}
+        forager_cached_ema_fallbacks: dict[str, list[tuple[str, float, int]]] = {}
+
+        async def fetch_cached_forager_metric(
+            symbol: str, span: float, metric_key: str
+        ) -> Optional[float]:
+            max_staleness_ms = forager_cached_metric_max_age_by_symbol.get(symbol)
+            if max_staleness_ms is None:
+                return None
+            cached = await Passivbot._get_forager_cached_ema_metrics(
+                self,
+                symbol,
+                {metric_key: float(span)},
+                max_staleness_ms=int(max_staleness_ms),
+                window_candles=max(1, int(math.ceil(float(span)))),
+            )
+            if metric_key not in cached:
+                return None
+            val = float(cached[metric_key])
+            if not math.isfinite(val):
+                return None
+            try:
+                age_ms = int(Passivbot._candle_staleness_ms(self, symbol))
+            except Exception:
+                age_ms = -1
+            forager_cached_ema_fallbacks.setdefault(symbol, []).append(
+                (metric_key, float(span), int(age_ms))
+            )
+            return val
 
         async def fetch_map(symbol: str, spans: list[float], fn, ema_type: str):
             out: dict[float, float] = {}
             if not spans:
                 return out
+            metric_key = {"m1_volume": "qv", "m1_log_range": "log_range"}.get(
+                ema_type
+            )
             for sp in spans:
                 Passivbot._raise_if_shutdown_requested(self, f"ema_{ema_type}")
                 span = float(sp)
                 try:
                     val = float(await fn(symbol, span))
                 except Exception as e:
+                    if metric_key is not None:
+                        fallback = await fetch_cached_forager_metric(
+                            symbol, span, metric_key
+                        )
+                        if fallback is not None:
+                            out[span] = fallback
+                            continue
                     record_optional_ema_drop(
                         ema_type, symbol, span, f"{type(e).__name__}: {e}"
                     )
@@ -10744,18 +14840,33 @@ class Passivbot:
                 if math.isfinite(val):
                     out[span] = val
                 else:
+                    if metric_key is not None:
+                        fallback = await fetch_cached_forager_metric(
+                            symbol, span, metric_key
+                        )
+                        if fallback is not None:
+                            out[span] = fallback
+                            continue
                     record_optional_ema_drop(
                         ema_type, symbol, span, f"non-finite value {val}"
                     )
             return out
 
         async def fetch_required_map(
-            symbol: str, spans: list[float], fn, ema_type: str
+            symbol: str,
+            spans: list[float],
+            fn,
+            ema_type: str,
+            *,
+            log_on_missing: bool = True,
         ):
             out: dict[float, float] = {}
             if not spans:
                 return out
             missing: list[tuple[float, str]] = []
+            metric_key = {"m1_volume": "qv", "m1_log_range": "log_range"}.get(
+                ema_type
+            )
             for sp in spans:
                 Passivbot._raise_if_shutdown_requested(self, f"required_ema_{ema_type}")
                 span = float(sp)
@@ -10768,26 +14879,80 @@ class Passivbot:
                         out[span] = val
                         continue
                     reason = f"non-finite {ema_type} value {val}"
+                if metric_key is not None:
+                    fallback = await fetch_cached_forager_metric(symbol, span, metric_key)
+                    if fallback is not None:
+                        out[span] = fallback
+                        continue
                 missing.append((span, reason))
             if missing:
                 detail = "; ".join(
                     [f"span={sp:.8g} reason={why}" for sp, why in missing]
                 )
-                log_ema_issue(
-                    ("required_missing", symbol, ema_type),
-                    logging.WARNING,
-                    "[ema] missing required %s EMA %s spans=%s",
-                    ema_type,
-                    Passivbot._log_symbol(symbol),
-                    ",".join(f"{sp:.8g}" for sp, _why in missing),
-                )
+                if log_on_missing:
+                    log_ema_issue(
+                        ("required_missing", symbol, ema_type),
+                        required_ema_log_level(symbol),
+                        "[ema] missing required %s EMA %s spans=%s | %s",
+                        ema_type,
+                        Passivbot._log_symbol(symbol),
+                        ",".join(f"{sp:.8g}" for sp, _why in missing),
+                        ema_window_health_context(
+                            symbol, ema_type, [sp for sp, _why in missing]
+                        ),
+                    )
                 raise RuntimeError(
                     f"[ema] missing required {ema_type} EMA for {symbol}: {detail}"
                 )
             return out
 
+        class MissingCloseEma(RuntimeError):
+            def __init__(
+                self,
+                symbol: str,
+                missing: list[tuple[float, str]],
+                detail: str,
+            ):
+                super().__init__(
+                    f"[ema] missing required close EMA for {symbol}; "
+                    f"no previous EMA fallback available: {detail}"
+                )
+                self.symbol = symbol
+                self.missing = list(missing)
+                self.detail = detail
+
+        def log_missing_close_ema(symbol: str, missing: list[tuple[float, str]]) -> None:
+            max_fallback_age_ms = int(Passivbot._close_ema_fallback_max_age_ms(self))
+            stale = [
+                (sp, why)
+                for sp, why in missing
+                if "previous close EMA stale" in str(why)
+            ]
+            if stale:
+                log_ema_issue(
+                    ("close_fallback_stale", symbol),
+                    required_ema_log_level(symbol),
+                    "[ema] close EMA fallback stale %s spans=%s max_age_ms=%d action=block_until_fresh reason=%s | %s",
+                    Passivbot._log_symbol(symbol),
+                    ",".join(f"{sp:.8g}" for sp, _why in stale[:8]),
+                    max_fallback_age_ms,
+                    stale[0][1],
+                    ema_candle_health_context(symbol),
+                    interval_ms=60 * 60 * 1000,
+                )
+            else:
+                log_ema_issue(
+                    ("close_missing", symbol),
+                    required_ema_log_level(symbol),
+                    "[ema] missing required close EMA %s spans=%s action=block_until_fresh | %s",
+                    Passivbot._log_symbol(symbol),
+                    ",".join(f"{sp:.8g}" for sp, _why in missing[:8]),
+                    ema_candle_health_context(symbol),
+                    interval_ms=60 * 60 * 1000,
+                )
+
         async def fetch_close_map(
-            symbol: str, spans: list[float]
+            symbol: str, spans: list[float], *, log_on_missing: bool = True
         ) -> dict[float, float]:
             out: dict[float, float] = {}
             if not spans:
@@ -10813,7 +14978,10 @@ class Passivbot:
                             self._orchestrator_close_ema_fallback_counts.get(key, 0)
                         )
                         if prev_fallback_count > 0:
-                            logging.info(
+                            close_ema_recoveries.setdefault(symbol, []).append(
+                                (span, prev_fallback_count)
+                            )
+                            logging.debug(
                                 "[ema] close EMA recovered %s span=%.8g after %d fallback(s)",
                                 Passivbot._log_symbol(symbol),
                                 span,
@@ -10846,9 +15014,12 @@ class Passivbot:
                             + 1
                         )
                         self._orchestrator_close_ema_fallback_counts[key] = n_fallbacks
+                        close_ema_fallbacks.setdefault(symbol, []).append(
+                            (span, age_ms, n_fallbacks, reason)
+                        )
                         log_ema_issue(
                             ("close_fallback", symbol, span),
-                            logging.WARNING,
+                            logging.DEBUG,
                             "[ema] close EMA fallback %s span=%.8g ema=%.12g age_ms=%d"
                             " n_fallbacks=%d reason=%s",
                             Passivbot._log_symbol(symbol),
@@ -10864,36 +15035,9 @@ class Passivbot:
                 detail = "; ".join(
                     [f"span={sp:.8g} reason={why}" for sp, why in missing]
                 )
-                stale = [
-                    (sp, why)
-                    for sp, why in missing
-                    if "previous close EMA stale" in str(why)
-                ]
-                if stale:
-                    log_ema_issue(
-                        ("close_fallback_stale", symbol),
-                        logging.WARNING,
-                        "[ema] close EMA fallback stale %s spans=%s max_age_ms=%d action=block_until_fresh reason=%s | %s",
-                        Passivbot._log_symbol(symbol),
-                        ",".join(f"{sp:.8g}" for sp, _why in stale[:8]),
-                        max_fallback_age_ms,
-                        stale[0][1],
-                        ema_candle_health_context(symbol),
-                        interval_ms=60 * 60 * 1000,
-                    )
-                else:
-                    log_ema_issue(
-                        ("close_missing", symbol),
-                        logging.WARNING,
-                        "[ema] missing required close EMA %s spans=%s action=block_until_fresh | %s",
-                        Passivbot._log_symbol(symbol),
-                        ",".join(f"{sp:.8g}" for sp, _why in missing[:8]),
-                        ema_candle_health_context(symbol),
-                        interval_ms=60 * 60 * 1000,
-                    )
-                raise RuntimeError(
-                    f"[ema] missing required close EMA for {symbol}; no previous EMA fallback available: {detail}"
-                )
+                if log_on_missing:
+                    log_missing_close_ema(symbol, missing)
+                raise MissingCloseEma(symbol, missing, detail)
             return out
 
         def projected_optional_map(
@@ -10969,63 +15113,153 @@ class Passivbot:
                 )
             )
 
+        async def load_projected_open_tail_bundle(
+            sym: str,
+            projection_ctx: dict,
+            required_m1_lr_for_symbol: list[float],
+            requested_m1_lr_spans: list[float],
+        ) -> tuple[
+            dict[float, float],
+            dict[float, float] | None,
+            dict[float, float] | None,
+        ]:
+            try:
+                projected = await self.cm.get_projected_open_tail_ema_metrics(
+                    sym,
+                    {
+                        "close": sorted(need_close_spans[sym]),
+                        "qv": m1_volume_spans,
+                        "log_range": requested_m1_lr_spans,
+                    },
+                    latest_expected_ts=int(projection_ctx["latest_expected_ts"]),
+                    last_cached_ts=int(projection_ctx["last_cached_ts"]),
+                    max_tail_gap_ms=int(projection_ctx["max_tail_gap_ms"]),
+                )
+            except Exception as exc:
+                log_ema_issue(
+                    ("open_tail_projection_failed", sym),
+                    logging.WARNING,
+                    "[candle] open-tail EMA projection failed %s tail_gap_age_ms=%s latest_expected_ts=%s last_cached_ts=%s error_type=%s error=%s",
+                    Passivbot._log_symbol(sym),
+                    projection_ctx.get("tail_gap_age_ms"),
+                    projection_ctx.get("latest_expected_ts"),
+                    projection_ctx.get("last_cached_ts"),
+                    type(exc).__name__,
+                    exc,
+                    interval_ms=15 * 60 * 1000,
+                )
+                raise
+            close = dict(projected.get("close", {}))
+            vol = projected_optional_map(
+                sym, projected, "qv", m1_volume_spans, "m1_volume"
+            )
+            lr1m = projected_optional_map(
+                sym,
+                projected,
+                "log_range",
+                requested_m1_lr_spans,
+                "m1_log_range",
+            )
+            missing_close = [
+                span
+                for span in sorted(need_close_spans[sym])
+                if span not in close or not math.isfinite(float(close[span]))
+            ]
+            if missing_close:
+                raise RuntimeError(
+                    "[ema] projected open-tail close EMA incomplete for "
+                    f"{sym}: spans={','.join(f'{span:.8g}' for span in missing_close)}"
+                )
+            if is_forager_mode():
+                # In forager mode, open-tail projection is valid for close EMA
+                # readiness only. Quote-volume and log-range ranking inputs must
+                # use current or cached real-candle EMA values.
+                vol = None
+                lr1m = None
+            else:
+                missing_required_lr1m = [
+                    span
+                    for span in required_m1_lr_for_symbol
+                    if span not in lr1m or not math.isfinite(float(lr1m[span]))
+                ]
+                if missing_required_lr1m:
+                    raise RuntimeError(
+                        "[ema] projected open-tail m1 log-range EMA incomplete for "
+                        f"{sym}: spans={','.join(f'{span:.8g}' for span in missing_required_lr1m)}"
+                    )
+            self._orchestrator_ema_projection_symbols.add(sym)
+            self._orchestrator_ema_projection_details[sym] = dict(projection_ctx)
+            return close, vol, lr1m
+
+        def refresh_open_tail_projection_context(sym: str) -> dict | None:
+            try:
+                ctx = Passivbot._active_tail_gap_projection_context(self, sym)
+            except Exception as exc:
+                logging.debug(
+                    "[candle] late open-tail EMA projection context failed %s | error_type=%s error=%s",
+                    Passivbot._log_symbol(sym),
+                    type(exc).__name__,
+                    exc,
+                )
+                return None
+            if ctx is not None:
+                projection_contexts[sym] = ctx
+                Passivbot._emit_candle_tail_projected_event(
+                    self,
+                    symbol=sym,
+                    context=ctx,
+                    reason_code="late_open_tail_projection",
+                )
+                log_ema_issue(
+                    ("late_open_tail_projection", sym),
+                    logging.DEBUG,
+                    "[candle] late open-tail EMA projection context %s tail_gap_age_ms=%s latest_expected_ts=%s last_cached_ts=%s reason=%s",
+                    Passivbot._log_symbol(sym),
+                    ctx.get("tail_gap_age_ms"),
+                    ctx.get("latest_expected_ts"),
+                    ctx.get("last_cached_ts"),
+                    ctx.get("reason"),
+                    interval_ms=5 * 60 * 1000,
+                )
+            return ctx
+
         async def load_symbol_bundle(sym: str):
             Passivbot._raise_if_shutdown_requested(self, "orchestrator_ema_bundle")
             if sym in cache_only_never_fetched:
                 mark_ema_unavailable(sym, "never_fetched_cache_only")
                 return {}, {}, {}, {}
+            required_m1_lr_for_symbol = sorted(need_m1_lr_spans[sym])
+            requested_m1_lr_spans = sorted(
+                set(m1_lr_spans) | set(required_m1_lr_for_symbol)
+            )
             try:
                 projection_ctx = projection_contexts.get(sym)
                 if projection_ctx is not None:
-                    try:
-                        projected = await self.cm.get_projected_open_tail_ema_metrics(
-                            sym,
-                            {
-                                "close": sorted(need_close_spans[sym]),
-                                "qv": m1_volume_spans,
-                                "log_range": m1_lr_spans,
-                            },
-                            latest_expected_ts=int(projection_ctx["latest_expected_ts"]),
-                            last_cached_ts=int(projection_ctx["last_cached_ts"]),
-                            max_tail_gap_ms=int(projection_ctx["max_tail_gap_ms"]),
-                        )
-                    except Exception as exc:
-                        log_ema_issue(
-                            ("open_tail_projection_failed", sym),
-                            logging.WARNING,
-                            "[candle] open-tail EMA projection failed %s tail_gap_age_ms=%s latest_expected_ts=%s last_cached_ts=%s error_type=%s error=%s",
-                            Passivbot._log_symbol(sym),
-                            projection_ctx.get("tail_gap_age_ms"),
-                            projection_ctx.get("latest_expected_ts"),
-                            projection_ctx.get("last_cached_ts"),
-                            type(exc).__name__,
-                            exc,
-                            interval_ms=15 * 60 * 1000,
-                        )
-                        raise
-                    close = dict(projected.get("close", {}))
-                    vol = projected_optional_map(
-                        sym, projected, "qv", m1_volume_spans, "m1_volume"
+                    close, vol, lr1m = await load_projected_open_tail_bundle(
+                        sym,
+                        projection_ctx,
+                        required_m1_lr_for_symbol,
+                        requested_m1_lr_spans,
                     )
-                    lr1m = projected_optional_map(
-                        sym, projected, "log_range", m1_lr_spans, "m1_log_range"
-                    )
-                    missing_close = [
-                        span
-                        for span in sorted(need_close_spans[sym])
-                        if span not in close or not math.isfinite(float(close[span]))
-                    ]
-                    if missing_close:
-                        raise RuntimeError(
-                            "[ema] projected open-tail close EMA incomplete for "
-                            f"{sym}: spans={','.join(f'{span:.8g}' for span in missing_close)}"
-                        )
-                    self._orchestrator_ema_projection_symbols.add(sym)
-                    self._orchestrator_ema_projection_details[sym] = dict(projection_ctx)
                 else:
-                    close = await fetch_close_map(sym, sorted(need_close_spans[sym]))
-                    vol = None
-                    lr1m = None
+                    try:
+                        close = await fetch_close_map(
+                            sym, sorted(need_close_spans[sym]), log_on_missing=False
+                        )
+                    except MissingCloseEma as exc:
+                        late_projection_ctx = refresh_open_tail_projection_context(sym)
+                        if late_projection_ctx is None:
+                            log_missing_close_ema(sym, exc.missing)
+                            raise
+                        close, vol, lr1m = await load_projected_open_tail_bundle(
+                            sym,
+                            late_projection_ctx,
+                            required_m1_lr_for_symbol,
+                            requested_m1_lr_spans,
+                        )
+                    else:
+                        vol = None
+                        lr1m = None
                 Passivbot._raise_if_shutdown_requested(self, "orchestrator_ema_bundle")
                 h1 = await fetch_required_map(
                     sym, sorted(need_h1_lr_spans[sym]), ema_lr_1h, "h1_log_range"
@@ -11035,15 +15269,129 @@ class Passivbot:
                     vol = await fetch_map(sym, m1_volume_spans, ema_qv, "m1_volume")
                 Passivbot._raise_if_shutdown_requested(self, "orchestrator_ema_bundle")
                 if lr1m is None:
-                    lr1m = await fetch_map(sym, m1_lr_spans, ema_lr_1m, "m1_log_range")
-            except Exception:
-                if sym not in cache_only_symbols:
+                    try:
+                        required_lr1m = await fetch_required_map(
+                            sym,
+                            required_m1_lr_for_symbol,
+                            ema_lr_1m,
+                            "m1_log_range",
+                            log_on_missing=False,
+                        )
+                    except Exception:
+                        late_projection_ctx = refresh_open_tail_projection_context(sym)
+                        if late_projection_ctx is None:
+                            log_ema_issue(
+                                ("required_missing", sym, "m1_log_range"),
+                                required_ema_log_level(sym),
+                                "[ema] missing required %s EMA %s spans=%s | %s",
+                                "m1_log_range",
+                                Passivbot._log_symbol(sym),
+                                ",".join(
+                                    f"{sp:.8g}" for sp in required_m1_lr_for_symbol
+                                ),
+                                ema_window_health_context(
+                                    sym, "m1_log_range", required_m1_lr_for_symbol
+                                ),
+                            )
+                            raise
+                        projected_close, projected_vol, projected_lr1m = (
+                            await load_projected_open_tail_bundle(
+                                sym,
+                                late_projection_ctx,
+                                required_m1_lr_for_symbol,
+                                requested_m1_lr_spans,
+                            )
+                        )
+                        close = projected_close
+                        if projected_vol is not None:
+                            vol = projected_vol
+                        if projected_lr1m is not None:
+                            lr1m = projected_lr1m
+                        else:
+                            lr1m = {}
+                    else:
+                        optional_lr1m = await fetch_map(
+                            sym,
+                            [
+                                span
+                                for span in m1_lr_spans
+                                if span not in required_lr1m
+                            ],
+                            ema_lr_1m,
+                            "m1_log_range",
+                        )
+                        lr1m = {**optional_lr1m, **required_lr1m}
+            except Exception as exc:
+                if not required_ema_can_mark_nontradable(sym):
                     raise
-                mark_ema_unavailable(sym, "cache_only_fetch_failed")
+                if sym in cache_only_symbols:
+                    reason = "cache_only_fetch_failed"
+                elif candidate_only_forager_symbol(sym):
+                    reason = "candidate_required_ema_unavailable"
+                else:
+                    reason = "flat_active_required_ema_unavailable"
+                mark_ema_unavailable(sym, reason)
+                candidate_ema_unavailable_details.setdefault(reason, []).append(
+                    (sym, type(exc).__name__, str(exc))
+                )
+                log_ema_issue(
+                    ("required_ema_unavailable", sym),
+                    required_ema_log_level(sym),
+                    "[ema] required EMA unavailable %s action=mark_nontradable_until_fresh reason=%s error_type=%s error=%s | %s",
+                    Passivbot._log_symbol(sym),
+                    reason,
+                    type(exc).__name__,
+                    exc,
+                    ema_candle_health_context(sym),
+                    interval_ms=15 * 60 * 1000,
+                )
                 return {}, {}, {}, {}
+            missing_required_volume = [
+                span for span in sorted(required_forager_volume_spans) if span not in vol
+            ]
+            missing_required_forager_lr1m = [
+                span
+                for span in sorted(required_forager_m1_lr_spans)
+                if span not in lr1m
+            ]
+            if missing_required_volume or missing_required_forager_lr1m:
+                reasons = []
+                if missing_required_volume:
+                    reasons.append("missing_required_forager_volume")
+                if missing_required_forager_lr1m:
+                    reasons.append("missing_required_forager_log_range")
+                reason = "+".join(reasons)
+                detail = (
+                    f"volume_spans={','.join(f'{span:.8g}' for span in missing_required_volume)} "
+                    f"log_range_spans={','.join(f'{span:.8g}' for span in missing_required_forager_lr1m)}"
+                )
+                if not required_ema_can_mark_nontradable(sym):
+                    log_ema_issue(
+                        ("required_forager_missing_active", sym),
+                        logging.WARNING,
+                        "[ema] missing required forager EMA %s %s action=raise | %s",
+                        Passivbot._log_symbol(sym),
+                        detail,
+                        ema_candle_health_context(sym),
+                        interval_ms=15 * 60 * 1000,
+                    )
+                    raise RuntimeError(
+                        f"[ema] missing required forager EMA for active/normal symbol {sym}: {detail}"
+                    )
+                mark_ema_unavailable(sym, reason)
+                log_ema_issue(
+                    ("required_forager_missing", sym),
+                    logging.DEBUG,
+                    "[ema] missing required forager EMA %s volume_spans=%s log_range_spans=%s action=mark_nontradable_until_fresh | %s",
+                    Passivbot._log_symbol(sym),
+                    ",".join(f"{span:.8g}" for span in missing_required_volume),
+                    ",".join(f"{span:.8g}" for span in missing_required_forager_lr1m),
+                    ema_candle_health_context(sym),
+                    interval_ms=15 * 60 * 1000,
+                )
             if sym in cache_only_symbols:
                 missing_volume = [span for span in m1_volume_spans if span not in vol]
-                missing_lr1m = [span for span in m1_lr_spans if span not in lr1m]
+                missing_lr1m = [span for span in requested_m1_lr_spans if span not in lr1m]
                 if missing_volume or missing_lr1m:
                     missing_bits = []
                     if missing_volume:
@@ -11051,7 +15399,8 @@ class Passivbot:
                     if missing_lr1m:
                         missing_bits.append("missing_log_range")
                     mark_ema_unavailable(sym, "+".join(missing_bits) or "incomplete")
-                    return {}, {}, {}, {}
+                    if not (missing_required_volume or missing_required_forager_lr1m):
+                        return {}, {}, {}, {}
             return close, vol, lr1m, h1
 
         # Ordering: symbols with open positions first (they need EMA data
@@ -11126,6 +15475,115 @@ class Passivbot:
                 len(optional_ema_drops),
                 "; ".join(parts[:4]),
             )
+        if close_ema_recoveries:
+            recovered_count = sum(len(items) for items in close_ema_recoveries.values())
+            max_fallbacks = max(
+                count for items in close_ema_recoveries.values() for _span, count in items
+            )
+            examples = []
+            for symbol, items in sorted(close_ema_recoveries.items())[:8]:
+                spans = ",".join(f"{span:.8g}" for span, _count in sorted(items)[:6])
+                symbol_max_fallbacks = max(count for _span, count in items)
+                examples.append(
+                    f"{Passivbot._log_symbol(symbol)} spans={spans} "
+                    f"max_fallbacks={symbol_max_fallbacks}"
+                )
+            logging.debug(
+                "[ema] close EMA recoveries | recovered=%d symbols=%d max_fallbacks=%d | %s",
+                recovered_count,
+                len(close_ema_recoveries),
+                max_fallbacks,
+                "; ".join(examples),
+            )
+        if close_ema_fallbacks:
+            fallback_count = sum(len(items) for items in close_ema_fallbacks.values())
+            max_fallbacks = max(
+                count
+                for items in close_ema_fallbacks.values()
+                for _span, _age_ms, count, _reason in items
+            )
+            max_age_ms = max(
+                age_ms
+                for items in close_ema_fallbacks.values()
+                for _span, age_ms, _count, _reason in items
+            )
+            examples = []
+            for symbol, items in sorted(close_ema_fallbacks.items())[:8]:
+                spans = ",".join(
+                    f"{span:.8g}" for span, _age, _count, _reason in sorted(items)[:6]
+                )
+                symbol_max_age_ms = max(age for _span, age, _count, _reason in items)
+                symbol_max_fallbacks = max(count for _span, _age, count, _reason in items)
+                reason = next((why for _span, _age, _count, why in items if why), "")
+                examples.append(
+                    f"{Passivbot._log_symbol(symbol)} spans={spans} "
+                    f"max_age_ms={symbol_max_age_ms} max_fallbacks={symbol_max_fallbacks} "
+                    f"reason={str(reason)[:80]}"
+                )
+            log_ema_issue(
+                ("close_ema_fallback_summary",),
+                logging.WARNING,
+                "[ema] close EMA fallback summary | fallbacks=%d symbols=%d max_age_ms=%d max_fallbacks=%d | %s",
+                fallback_count,
+                len(close_ema_fallbacks),
+                max_age_ms,
+                max_fallbacks,
+                "; ".join(examples),
+                interval_ms=15 * 60 * 1000,
+            )
+        if forager_cached_ema_fallbacks:
+            total = sum(len(items) for items in forager_cached_ema_fallbacks.values())
+            examples = []
+            for symbol, items in sorted(forager_cached_ema_fallbacks.items())[:8]:
+                max_age_ms = max(age for _metric, _span, age in items)
+                bits = ",".join(
+                    f"{metric}:{span:.8g}" for metric, span, _age in sorted(items)[:6]
+                )
+                examples.append(
+                    f"{Passivbot._log_symbol(symbol)}={bits} max_age_ms={max_age_ms}"
+                )
+            log_ema_issue(
+                ("forager_cached_ema_fallback_summary",),
+                logging.DEBUG,
+                "[ema] forager cached EMA carry-forward summary | fallbacks=%d symbols=%d | %s",
+                total,
+                len(forager_cached_ema_fallbacks),
+                "; ".join(examples),
+                interval_ms=15 * 60 * 1000,
+            )
+        if candidate_ema_unavailable_details:
+            parts = []
+            all_symbols: set[str] = set()
+            for reason, items in sorted(candidate_ema_unavailable_details.items()):
+                unique_symbols = sorted({symbol for symbol, _error_type, _error in items})
+                all_symbols.update(unique_symbols)
+                error_types = sorted({error_type for _symbol, error_type, _error in items})
+                example_error = next((error for _symbol, _error_type, error in items if error), "")
+                parts.append(
+                    "%s:n=%d symbols=%s error_types=%s example=%s"
+                    % (
+                        reason,
+                        len(unique_symbols),
+                        Passivbot._log_symbols(unique_symbols, limit=10),
+                        ",".join(error_types[:4]),
+                        str(example_error)[:160],
+                    )
+                )
+            log_ema_issue(
+                ("required_ema_unavailable_summary",),
+                logging.WARNING,
+                "[ema] required EMA unavailable summary | unavailable=%d groups=%d action=mark_nontradable_until_fresh | %s",
+                len(all_symbols),
+                len(candidate_ema_unavailable_details),
+                "; ".join(parts[:4]),
+                interval_ms=15 * 60 * 1000,
+            )
+        Passivbot._emit_ema_fallback_used_event(
+            self,
+            close_ema_recoveries=close_ema_recoveries,
+            close_ema_fallbacks=close_ema_fallbacks,
+            forager_cached_ema_fallbacks=forager_cached_ema_fallbacks,
+        )
         if errors:
             fatal = next(
                 (err for _sym, err in errors if not isinstance(err, Exception)), None
@@ -11155,13 +15613,35 @@ class Passivbot:
                 len(ema_unavailable_reasons),
                 "; ".join(parts[:4]),
             )
+        Passivbot._emit_ema_unavailable_event(
+            self,
+            optional_ema_drops=optional_ema_drops,
+            candidate_ema_unavailable_details=candidate_ema_unavailable_details,
+            ema_unavailable_reasons=ema_unavailable_reasons,
+        )
 
         # Convenience: compute the single-span values used by legacy forager logging.
-        volumes_long = {s: m1_volume_emas[s].get(vol_span_long, 0.0) for s in symbols}
+        volumes_long = {
+            s: m1_volume_emas[s][vol_span_long]
+            for s in symbols
+            if vol_span_long in m1_volume_emas[s]
+        }
         log_ranges_long = {
-            s: m1_log_range_emas[s].get(lr_span_long, 0.0) for s in symbols
+            s: m1_log_range_emas[s][lr_span_long]
+            for s in symbols
+            if lr_span_long in m1_log_range_emas[s]
         }
         self._orchestrator_ema_unavailable_symbols = set(ema_unavailable_symbols)
+        Passivbot._emit_ema_bundle_completed_event(
+            self,
+            symbols=symbols,
+            m1_close_emas=m1_close_emas,
+            m1_volume_emas=m1_volume_emas,
+            m1_log_range_emas=m1_log_range_emas,
+            h1_log_range_emas=h1_log_range_emas,
+            cache_only_symbols=cache_only_symbols,
+            projection_contexts=projection_contexts,
+        )
 
         return (
             m1_close_emas,
@@ -11195,6 +15675,9 @@ class Passivbot:
         # the create-side safety guard instead of aging it during EMA loading.
         if not hasattr(self, "effective_min_cost") or not self.effective_min_cost:
             await self.update_effective_min_cost()
+        warmed_forager_normal_symbols = await self._warmup_new_forager_normal_symbols(
+            symbols
+        )
 
         (
             m1_close_emas,
@@ -11204,8 +15687,17 @@ class Passivbot:
             _volumes_long,
             _log_ranges_long,
         ) = await self._load_orchestrator_ema_bundle(symbols, mode_overrides)
+        if warmed_forager_normal_symbols:
+            pending = set(
+                getattr(self, "_forager_new_normal_warmup_symbols", set()) or set()
+            )
+            pending.difference_update(warmed_forager_normal_symbols)
+            self._forager_new_normal_warmup_symbols = pending
         ema_unavailable_symbols = set(
             getattr(self, "_orchestrator_ema_unavailable_symbols", set())
+        )
+        trailing_unavailable_symbols = set(
+            getattr(self, "_orchestrator_trailing_unavailable_symbols", set())
         )
 
         market_snapshots = await self._get_orchestrator_market_snapshots(symbols)
@@ -11224,11 +15716,22 @@ class Passivbot:
             self, last_prices, ts=utc_ms(), source=monitor_source
         )
 
-        unstuck_allowances = self._calc_unstuck_allowances_live(
-            allow_new_unstuck=not self.has_open_unstuck_order()
-        )
+        # Python only proves the realized-PnL inputs are safe to expose; Rust
+        # owns unstuck emission from the cumsum facts below, and duplicate
+        # order risk rides normal live reconciliation like any other order.
+        auto_unstuck_allowed = self._auto_unstuck_allowed_live()
         realized_pnl_cumsum = self._get_realized_pnl_cumsum_stats()
-        max_realized_loss_pct = float(self.live_value("max_realized_loss_pct") or 1.0)
+        now_ms = int(self.get_exchange_time())
+        fill_increase_timestamps = self._get_last_increase_fill_timestamps(
+            symbols, now_ms=now_ms
+        )
+        delta_increase_timestamps = self._update_entry_cooldown_position_delta_guard(
+            symbols, now_ms=now_ms
+        )
+        last_increase_fill_timestamps = self._merge_entry_cooldown_anchors(
+            fill_increase_timestamps, delta_increase_timestamps
+        )
+        max_realized_loss_pct = float(Passivbot._live_max_realized_loss_pct(self))
 
         global_bp = {
             "long": self._bot_params_to_rust_dict("long", None),
@@ -11237,9 +15740,15 @@ class Passivbot:
         # Effective hedge_mode = config setting AND exchange capability.
         # If either is False, we block same-coin hedging in the orchestrator.
         effective_hedge_mode = self._config_hedge_mode and self.hedge_mode
+        config = getattr(self, "config", {})
+        strategy_kind = normalize_strategy_kind(config.get("live", {}).get("strategy_kind"))
         input_dict = {
+            "timestamp_ms": now_ms,
             "balance": self.get_hysteresis_snapped_balance(),
             "balance_raw": self.get_raw_balance(),
+            # Deliberately omit backtest.market_order_slippage_pct in live.
+            # Rust defaults it to 0.0 for live loss projections; the backtest
+            # value is a simulation knob, not a live slippage cap.
             "global": {
                 "filter_by_min_effective_cost": bool(
                     self.live_value("filter_by_min_effective_cost")
@@ -11248,16 +15757,8 @@ class Passivbot:
                 "market_order_near_touch_threshold": float(
                     self.live_value("market_order_near_touch_threshold")
                 ),
-                "panic_close_market": bool(
-                    any(
-                        Passivbot._equity_hard_stop_panic_close_order_type(self, pside)
-                        == "market"
-                        for pside in ("long", "short")
-                        if Passivbot._equity_hard_stop_enabled(self, pside)
-                    )
-                ),
-                "unstuck_allowance_long": float(unstuck_allowances.get("long", 0.0)),
-                "unstuck_allowance_short": float(unstuck_allowances.get("short", 0.0)),
+                "panic_close_market": False,
+                "auto_unstuck_allowed": auto_unstuck_allowed,
                 "max_realized_loss_pct": max_realized_loss_pct,
                 "realized_pnl_cumsum_max": float(
                     realized_pnl_cumsum.get("max", 0.0) or 0.0
@@ -11268,6 +15769,7 @@ class Passivbot:
                 "sort_global": True,
                 "global_bot_params": global_bp,
                 "hedge_mode": effective_hedge_mode,
+                "strategy_kind": strategy_kind,
             },
             "symbols": [],
         }
@@ -11288,7 +15790,11 @@ class Passivbot:
             ask = float(snap.ask) if snap is not None and snap.is_valid() else mprice
 
             active = bool(self.markets_dict.get(symbol, {}).get("active", True))
-            tradable = bool(active and symbol not in ema_unavailable_symbols)
+            tradable = bool(
+                active
+                and symbol not in ema_unavailable_symbols
+                and symbol not in trailing_unavailable_symbols
+            )
             effective_min_cost = float(self.effective_min_cost.get(symbol, 0.0) or 0.0)
             if effective_min_cost <= 0.0:
                 effective_min_cost = self._calc_effective_min_cost_at_price(
@@ -11319,7 +15825,9 @@ class Passivbot:
                         "max_since_open": float(trailing.get("max_since_open", 0.0)),
                         "min_since_max": float(trailing.get("min_since_max", 0.0)),
                     },
+                    "last_increase_fill_timestamp_ms": last_increase_fill_timestamps.get(symbol, {}).get(pside),
                     "bot_params": self._bot_params_to_rust_dict(pside, symbol),
+                    "strategy_params": self._strategy_params_to_rust_dict(pside, symbol),
                 }
 
             # Build EMA bundle for this symbol.
@@ -11342,19 +15850,7 @@ class Passivbot:
                 {
                     "symbol_idx": int(idx),
                     "order_book": {"bid": bid, "ask": ask},
-                    "exchange": {
-                        "qty_step": float(self.qty_steps[symbol]),
-                        "price_step": float(self.price_steps[symbol]),
-                        "min_qty": float(self.min_qtys[symbol]),
-                        "min_cost": float(self.min_costs[symbol]),
-                        "c_mult": float(self.c_mults[symbol]),
-                        "maker_fee": float(
-                            self.markets_dict.get(symbol, {}).get("maker", 0.0) or 0.0
-                        ),
-                        "taker_fee": float(
-                            self.markets_dict.get(symbol, {}).get("taker", 0.0) or 0.0
-                        ),
-                    },
+                    "exchange": Passivbot._orchestrator_exchange_params(self, symbol),
                     "tradable": tradable,
                     "next_candle": None,
                     "effective_min_cost": float(effective_min_cost),
@@ -11371,9 +15867,29 @@ class Passivbot:
                 }
             )
 
+        input_json = json.dumps(input_dict)
+        rust_call_id = self._next_live_event_remote_call_id("rust")
+        orchestrator_started_ms = int(utc_ms())
+        input_hash = payload_hash_raw(input_json)
+        tradable_count = sum(
+            1 for item in input_dict["symbols"] if bool(item.get("tradable", False))
+        )
+        self._emit_rust_orchestrator_called_event(
+            rust_call_id=rust_call_id,
+            input_hash=input_hash,
+            symbol_count=len(input_dict["symbols"]),
+            tradable_count=int(tradable_count),
+            ema_unavailable_count=len(ema_unavailable_symbols),
+            trailing_unavailable_count=len(trailing_unavailable_symbols),
+            hedge_mode=bool(effective_hedge_mode),
+            strategy_kind=strategy_kind,
+            input_symbols=input_dict.get("symbols"),
+            idx_to_symbol=idx_to_symbol,
+        )
         try:
-            out_json = pbr.compute_ideal_orders_json(json.dumps(input_dict))
+            out_json = pbr.compute_ideal_orders_json(input_json)
         except Exception as e:
+            elapsed_ms = max(0, int(utc_ms()) - orchestrator_started_ms)
             msg = str(e)
             if "MissingEma" in msg:
                 match = re.search(r"symbol_idx\s*:\s*(\d+)", msg)
@@ -11386,8 +15902,37 @@ class Passivbot:
                             Passivbot._log_symbol(symbol),
                             idx,
                         )
+            self._emit_rust_orchestrator_returned_event(
+                rust_call_id=rust_call_id,
+                status="failed",
+                input_hash=input_hash,
+                elapsed_ms=int(elapsed_ms),
+                error=e,
+            )
             raise
         out = json.loads(out_json)
+        elapsed_ms = max(0, int(utc_ms()) - orchestrator_started_ms)
+        output_hash = payload_hash_raw(out_json)
+        orders = out.get("orders", [])
+        diagnostics = out.get("diagnostics", {})
+        self._emit_rust_orchestrator_returned_event(
+            rust_call_id=rust_call_id,
+            status="succeeded",
+            input_hash=input_hash,
+            output_hash=output_hash,
+            elapsed_ms=int(elapsed_ms),
+            order_count=len(orders),
+            diagnostics=diagnostics,
+            orders=orders,
+            idx_to_symbol=idx_to_symbol,
+        )
+        Passivbot._emit_action_planned_event(
+            self,
+            orders=orders,
+            idx_to_symbol=idx_to_symbol,
+            output_hash=output_hash,
+            remote_call_id=rust_call_id,
+        )
         self._log_realized_loss_gate_blocks(out, idx_to_symbol)
         if hasattr(self, "_log_min_effective_cost_blocks"):
             self._log_min_effective_cost_blocks(out, idx_to_symbol)
@@ -11403,12 +15948,12 @@ class Passivbot:
                 idx_to_symbol,
                 mode_overrides,
             )
-        orders = out.get("orders", [])
         if hasattr(self, "_update_monitor_runtime_hints"):
             self._update_monitor_runtime_hints(
                 symbols=symbols,
                 last_prices=last_prices,
                 m1_close_emas=m1_close_emas,
+                m1_log_range_emas=m1_log_range_emas,
                 h1_log_range_emas=h1_log_range_emas,
                 idx_to_symbol=idx_to_symbol,
                 orders=orders,
@@ -11421,7 +15966,11 @@ class Passivbot:
                 continue
             order_type = str(o["order_type"])
             order_type_id = int(pbr.order_type_snake_to_id(order_type))
-            execution_type = str(o.get("execution_type", "limit"))
+            if "execution_type" not in o:
+                raise ValueError(
+                    f"Rust orchestrator order missing execution_type: {o!r}"
+                )
+            execution_type = str(o["execution_type"])
             tup = (
                 float(o["qty"]),
                 float(o["price"]),
@@ -11441,7 +15990,9 @@ class Passivbot:
                     pos = self.positions.get(symbol, {}).get(pside, {})
                     entry_price = pos.get("price", 0.0)
                     current_price = last_prices.get(symbol, 0.0)
-                    allowance = unstuck_allowances.get(pside, 0.0)
+                    allowance = self._calc_orchestrator_unstuck_allowance_for_symbol(
+                        pside, symbol, realized_pnl_cumsum
+                    )
                     self._maybe_log_unstuck_selection(
                         symbol=symbol,
                         pside=pside,
@@ -11461,11 +16012,13 @@ class Passivbot:
 
         if return_snapshot:
             snapshot = {
-                "ts_ms": int(utc_ms()),
+                "ts_ms": now_ms,
                 "exchange": str(getattr(self, "exchange", "")),
                 "user": str(self.config_get(["live", "user"]) or ""),
                 "active_symbols": list(symbols),
+                "auto_unstuck_allowed": auto_unstuck_allowed,
                 "realized_pnl_cumsum": realized_pnl_cumsum,
+                "last_increase_fill_timestamps": last_increase_fill_timestamps,
                 "planning_snapshot": (
                     planning_snapshot.to_dict()
                     if planning_snapshot is not None
@@ -11552,6 +16105,47 @@ class Passivbot:
             minutes = 10.0
         return max(60_000, int(minutes * 60_000))
 
+    async def _get_forager_cached_ema_metrics(
+        self,
+        symbol: str,
+        spans_by_metric: dict[str, float],
+        *,
+        max_staleness_ms: Optional[int],
+        window_candles: Optional[int] = None,
+    ) -> dict[str, float]:
+        """Read bounded cache-derived qv/log-range EMAs for stale forager ranking."""
+        fn = getattr(self.cm, "get_latest_cached_ema_metrics", None)
+        if not callable(fn):
+            return {}
+        try:
+            out = await fn(
+                symbol,
+                spans_by_metric,
+                max_staleness_ms=max_staleness_ms,
+                window_candles=window_candles,
+                timeframe="1m",
+            )
+        except Exception as exc:
+            logging.debug(
+                "[ema] forager cached EMA unavailable %s metrics=%s error_type=%s error=%s",
+                Passivbot._log_symbol(symbol),
+                ",".join(sorted(str(k) for k in spans_by_metric)),
+                type(exc).__name__,
+                exc,
+            )
+            return {}
+        if not isinstance(out, dict):
+            return {}
+        clean: dict[str, float] = {}
+        for key, val in out.items():
+            try:
+                fval = float(val)
+            except (TypeError, ValueError):
+                continue
+            if math.isfinite(fval):
+                clean[str(key)] = fval
+        return clean
+
     def _market_snapshot_signature(
         self, symbols: Iterable[str], snapshots: dict[str, MarketSnapshot]
     ) -> tuple:
@@ -11583,9 +16177,37 @@ class Passivbot:
         """Determine which existing orders to cancel and which new ones to place."""
         return await reconciler.calc_orders_to_cancel_and_create(self)
 
-    def _snapshot_actual_orders(self) -> dict[str, list[dict]]:
+    async def calc_protective_panic_orders_to_cancel_and_create(self):
+        """Determine protective cancels/reduce-only creates for RED panic supervision."""
+        ideal_orders = await self.calc_protective_panic_ideal_orders_orchestrator()
+        actual_symbols = sorted(
+            set(getattr(self, "_protective_panic_reconcile_symbols", []) or [])
+            | set(ideal_orders)
+        )
+        actual_psides_by_symbol = getattr(
+            self, "_protective_panic_reconcile_psides_by_symbol", None
+        )
+        return await reconciler.calc_orders_to_cancel_and_create_from_ideal(
+            self,
+            ideal_orders,
+            actual_symbols=actual_symbols,
+            actual_psides_by_symbol=actual_psides_by_symbol,
+            apply_initial_entry_gate=False,
+            apply_creation_guardrails=False,
+            apply_mode_filters=False,
+            collect_fresh_entry_eligibility=False,
+        )
+
+    def _snapshot_actual_orders(
+        self,
+        symbols: Optional[Iterable[str]] = None,
+        *,
+        psides_by_symbol: Optional[dict[str, Iterable[str]]] = None,
+    ) -> dict[str, list[dict]]:
         """Return a normalized snapshot of currently open orders keyed by symbol."""
-        return reconciler.snapshot_actual_orders(self)
+        return reconciler.snapshot_actual_orders(
+            self, symbols, psides_by_symbol=psides_by_symbol
+        )
 
     def _reconcile_symbol_orders(
         self,
@@ -11593,10 +16215,19 @@ class Passivbot:
         actual_orders: list[dict],
         ideal_orders: list,
         keys: tuple[str, ...],
-    ) -> tuple[list[dict], list[dict]]:
+        *,
+        apply_mode_filters: bool = True,
+        return_unfiltered_create: bool = False,
+    ) -> tuple[list[dict], list[dict]] | tuple[list[dict], list[dict], list[dict]]:
         """Return cancel/create lists for a single symbol after mode filtering."""
         return reconciler.reconcile_symbol_orders(
-            self, symbol, actual_orders, ideal_orders, keys
+            self,
+            symbol,
+            actual_orders,
+            ideal_orders,
+            keys,
+            apply_mode_filters=apply_mode_filters,
+            return_unfiltered_create=return_unfiltered_create,
         )
 
     def _annotate_order_deltas(
@@ -11705,6 +16336,15 @@ class Passivbot:
             "price": float(order.get("price", 0.0) or 0.0),
         }
 
+    def _initial_entry_gate_structured_console_available(self) -> bool:
+        emit_gate_event = getattr(self, "_emit_initial_entry_distance_gate_event", None)
+        pipeline = getattr(self, "_live_event_pipeline", None)
+        return bool(
+            callable(emit_gate_event)
+            and Passivbot._live_event_console_available(self)
+            and getattr(pipeline, "console_sink", None) is not None
+        )
+
     def _log_initial_entry_distance_gate_block(
         self,
         order: dict,
@@ -11745,18 +16385,33 @@ class Passivbot:
                 self._resolve_pb_order_type(order),
             )
             return
-        logging.info(
-            "[entry] initial entry staged but not placed | symbol=%s pside=%s qty=%.10g price=%.10g market=%.10g dist=%.4f%% threshold=%.4f%% tolerance=%.4f%% type=%s reason=initial_entry_distance_gate",
-            Passivbot._log_symbol(probe["symbol"]),
-            probe["position_side"],
-            probe["qty"],
-            probe["price"],
-            market_price,
-            signed_dist * 100.0,
-            threshold * 100.0,
-            tolerance * 100.0,
-            self._resolve_pb_order_type(order),
-        )
+        if not self._initial_entry_gate_structured_console_available():
+            logging.info(
+                "[entry] initial entry staged but not placed | symbol=%s pside=%s qty=%.10g price=%.10g market=%.10g dist=%.4f%% threshold=%.4f%% tolerance=%.4f%% type=%s reason=initial_entry_distance_gate",
+                Passivbot._log_symbol(probe["symbol"]),
+                probe["position_side"],
+                probe["qty"],
+                probe["price"],
+                market_price,
+                signed_dist * 100.0,
+                threshold * 100.0,
+                tolerance * 100.0,
+                self._resolve_pb_order_type(order),
+            )
+        event_order = dict(order)
+        event_order["pb_order_type"] = self._resolve_pb_order_type(order)
+        emit_gate_event = getattr(self, "_emit_initial_entry_distance_gate_event", None)
+        if callable(emit_gate_event):
+            emit_gate_event(
+                event_type=EventTypes.ENTRY_INITIAL_DISTANCE_GATE_BLOCKED,
+                status="skipped",
+                action="skip_create",
+                order=event_order,
+                market_price=market_price,
+                signed_dist=signed_dist,
+                threshold=threshold,
+                tolerance=tolerance,
+            )
 
     def _log_initial_entry_distance_gate_cleared(
         self,
@@ -11773,17 +16428,31 @@ class Passivbot:
         if key not in state:
             return
         state.pop(key, None)
-        logging.info(
-            "[entry] initial entry distance gate cleared | symbol=%s pside=%s qty=%.10g price=%.10g market=%.10g dist=%.4f%% threshold=%.4f%% type=%s",
-            Passivbot._log_symbol(order.get("symbol")),
-            str(order.get("position_side") or ""),
-            float(order.get("qty", 0.0) or 0.0),
-            float(order.get("price", 0.0) or 0.0),
-            market_price,
-            signed_dist * 100.0,
-            threshold * 100.0,
-            self._resolve_pb_order_type(order),
-        )
+        if not self._initial_entry_gate_structured_console_available():
+            logging.info(
+                "[entry] initial entry distance gate cleared | symbol=%s pside=%s qty=%.10g price=%.10g market=%.10g dist=%.4f%% threshold=%.4f%% type=%s",
+                Passivbot._log_symbol(order.get("symbol")),
+                str(order.get("position_side") or ""),
+                float(order.get("qty", 0.0) or 0.0),
+                float(order.get("price", 0.0) or 0.0),
+                market_price,
+                signed_dist * 100.0,
+                threshold * 100.0,
+                self._resolve_pb_order_type(order),
+            )
+        event_order = dict(order)
+        event_order["pb_order_type"] = self._resolve_pb_order_type(order)
+        emit_gate_event = getattr(self, "_emit_initial_entry_distance_gate_event", None)
+        if callable(emit_gate_event):
+            emit_gate_event(
+                event_type=EventTypes.ENTRY_INITIAL_DISTANCE_GATE_CLEARED,
+                status="recovered",
+                action="allow_create",
+                order=event_order,
+                market_price=market_price,
+                signed_dist=signed_dist,
+                threshold=threshold,
+            )
 
     def _apply_mode_filters(
         self,
@@ -12366,20 +17035,29 @@ class Passivbot:
                 for pside, syms in candidates_by_side.items():
                     if sym not in syms:
                         continue
-                    try:
-                        span_v = self.bp(pside, "forager_volume_ema_span", sym)
-                    except Exception:
-                        span_v = None
-                    try:
-                        span_lr = self.bp(pside, "forager_volatility_ema_span", sym)
-                    except Exception:
-                        span_lr = None
-                    for span in (span_v, span_lr):
-                        if span is not None:
-                            try:
-                                max_span = max(max_span, float(span))
-                            except Exception:
-                                pass
+                    for key in (
+                        "ema_span_0",
+                        "ema_span_1",
+                        "volatility_ema_span_1m",
+                        "offset_volatility_ema_span_1m",
+                        "entry_volatility_ema_span_1m",
+                    ):
+                        max_span = max(
+                            max_span,
+                            Passivbot._live_strategy_warmup_value(
+                                self, pside, key, sym
+                            ),
+                        )
+                    for key in (
+                        "forager_volume_ema_span_1m",
+                        "forager_volatility_ema_span_1m",
+                    ):
+                        max_span = max(
+                            max_span,
+                            Passivbot._live_forager_warmup_value(
+                                self, pside, key, sym
+                            ),
+                        )
                 win = (
                     max(default_win, int(math.ceil(max_span * span_buffer)))
                     if max_span > 0.0
@@ -12651,7 +17329,7 @@ class Passivbot:
                     self.init_markets_last_update_ms = 0
                 if now - int(last_markets_update_ms) > hourly_interval_ms:
                     try:
-                        await self.init_markets(verbose=False)
+                        await self._refresh_markets_for_maintenance()
                     except RateLimitExceeded:
                         self._health_rate_limits += 1
                         logging.warning(
@@ -12664,9 +17342,44 @@ class Passivbot:
                 await self.restart_bot_on_too_many_errors()
                 await asyncio.sleep(5)
 
+    def _emit_maintenance_exchange_config_refresh_event(self, **kwargs):
+        try:
+            self._emit_exchange_config_refresh_event(**kwargs)
+        except Exception as exc:
+            logging.debug(
+                "[event] failed to emit maintenance exchange config-refresh event: %s",
+                exc,
+            )
+
+    async def _refresh_markets_for_maintenance(self):
+        started_ms = utc_ms()
+        try:
+            result = await self.init_markets(verbose=False)
+        except Exception as exc:
+            self._emit_maintenance_exchange_config_refresh_event(
+                context="maintain_hourly_cycle",
+                operation="init_markets",
+                status="failed",
+                started_ms=started_ms,
+                elapsed_ms=max(0, utc_ms() - started_ms),
+                error=exc,
+            )
+            raise
+        self._emit_maintenance_exchange_config_refresh_event(
+            context="maintain_hourly_cycle",
+            operation="init_markets",
+            status="succeeded",
+            started_ms=started_ms,
+            elapsed_ms=max(0, utc_ms() - started_ms),
+        )
+        return result
+
     async def start_data_maintainers(self):
         """Spawn background tasks responsible for market metadata and order watching."""
+        hsl_replay_task = getattr(self, "_equity_hard_stop_coin_replay_task", None)
         if hasattr(self, "maintainers"):
+            if self.maintainers.get("hsl_coin_replay") is hsl_replay_task:
+                self.maintainers.pop("hsl_coin_replay")
             self.stop_data_maintainers()
         maintainer_names = ["maintain_hourly_cycle"]
         if self.ws_enabled:
@@ -12679,6 +17392,8 @@ class Passivbot:
             name: asyncio.create_task(getattr(self, name)())
             for name in maintainer_names
         }
+        if hsl_replay_task is not None and not hsl_replay_task.done():
+            self.maintainers["hsl_coin_replay"] = hsl_replay_task
 
     # Legacy websocket 1m ohlcv watchers removed; CandlestickManager is authoritative
 
@@ -12692,14 +17407,15 @@ class Passivbot:
     ) -> Dict[str, float]:
         """Compute 1m EMA of log range per symbol: EMA(ln(high/low)).
 
-        Returns mapping symbol -> ema_log_range; non-finite/failed computations yield 0.0.
+        Returns mapping symbol -> ema_log_range. Symbols without a usable current or
+        bounded cached value are omitted.
 
         If *max_network_fetches* is set, at most that many symbols will be allowed to
         trigger a network fetch; the rest use cached data only.
         """
         if eligible_symbols is None:
             eligible_symbols = self.eligible_symbols
-        span = int(round(self.bot_value(pside, "forager_volatility_ema_span")))
+        span = int(round(self.bot_value(pside, "forager_volatility_ema_span_1m")))
         try:
             warmup_ratio = float(
                 get_optional_live_value(self.config, "warmup_ratio", 0.0)
@@ -12725,29 +17441,28 @@ class Passivbot:
 
         # Compute EMA of log range on 1m candles: ln(high/low)
         async def one(symbol: str):
+            if symbol in cache_only_never_fetched:
+                return None
+            ttl = per_sym_ttl.get(symbol)
+            if ttl is None or ttl == 0:
+                # If caller passes a TTL, use it; otherwise select per-symbol TTL
+                if max_age_ms is not None:
+                    ttl = int(max_age_ms)
+                else:
+                    # More generous TTL for non-traded symbols
+                    has_pos = self.has_position(symbol)
+                    has_oo = (
+                        bool(self.open_orders.get(symbol))
+                        if hasattr(self, "open_orders")
+                        else False
+                    )
+                    ttl = (
+                        60_000
+                        if (has_pos or has_oo)
+                        else int(getattr(self, "inactive_coin_candle_ttl_ms", 600_000))
+                    )
+            val = float("nan")
             try:
-                if symbol in cache_only_never_fetched:
-                    return 0.0
-                ttl = per_sym_ttl.get(symbol)
-                if ttl is None or ttl == 0:
-                    # If caller passes a TTL, use it; otherwise select per-symbol TTL
-                    if max_age_ms is not None:
-                        ttl = int(max_age_ms)
-                    else:
-                        # More generous TTL for non-traded symbols
-                        has_pos = self.has_position(symbol)
-                        has_oo = (
-                            bool(self.open_orders.get(symbol))
-                            if hasattr(self, "open_orders")
-                            else False
-                        )
-                        ttl = (
-                            60_000
-                            if (has_pos or has_oo)
-                            else int(
-                                getattr(self, "inactive_coin_candle_ttl_ms", 600_000)
-                            )
-                        )
                 res = await self.cm.get_latest_ema_metrics(
                     symbol,
                     {"log_range": span},
@@ -12756,9 +17471,18 @@ class Passivbot:
                     timeframe=None,
                 )
                 val = float(res.get("log_range", float("nan")))
-                return float(val) if np.isfinite(val) else 0.0
             except Exception:
-                return 0.0
+                pass
+            if not np.isfinite(val):
+                cached = await Passivbot._get_forager_cached_ema_metrics(
+                    self,
+                    symbol,
+                    {"log_range": float(span)},
+                    max_staleness_ms=max_age_ms,
+                    window_candles=window_candles,
+                )
+                val = float(cached.get("log_range", float("nan")))
+            return float(val) if np.isfinite(val) else None
 
         tasks = {s: asyncio.create_task(one(s)) for s in syms}
         out = {}
@@ -12766,9 +17490,11 @@ class Passivbot:
         started_ms = utc_ms()
         for sym, task in tasks.items():
             try:
-                out[sym] = await task
+                val = await task
             except Exception:
-                out[sym] = 0.0
+                val = None
+            if val is not None:
+                out[sym] = float(val)
         elapsed_s = max(0.001, (utc_ms() - started_ms) / 1000.0)
         now_ms = utc_ms()
         ema_log_throttle_ms = 300_000  # 5 minutes between logs per metric
@@ -12802,12 +17528,14 @@ class Passivbot:
         symbols: Optional[Iterable[str]] = None,
         *,
         max_age_ms: Optional[int] = 60_000,
+        max_network_fetches: Optional[int] = None,
     ) -> Dict[str, float]:
         """Compute 1m EMA of quote volume per symbol.
 
-        Returns mapping symbol -> ema_quote_volume; non-finite/failed computations yield 0.0.
+        Returns mapping symbol -> ema_quote_volume. Symbols without a usable current or
+        bounded cached value are omitted.
         """
-        span = int(round(self.bot_value(pside, "forager_volume_ema_span")))
+        span = int(round(self.bot_value(pside, "forager_volume_ema_span_1m")))
         try:
             warmup_ratio = float(
                 get_optional_live_value(self.config, "warmup_ratio", 0.0)
@@ -12826,10 +17554,17 @@ class Passivbot:
             window_candles = min(int(window_candles), int(max_warmup_minutes))
         if symbols is None:
             symbols = self.get_symbols_approved_or_has_pos(pside)
+        syms = list(symbols)
+        per_sym_ttl, cache_only_never_fetched = self._compute_fetch_budget_ttls(
+            syms, max_age_ms, max_network_fetches
+        )
 
         # Compute EMA of quote volume on 1m candles
         async def one(symbol: str):
-            try:
+            if symbol in cache_only_never_fetched:
+                return None
+            ttl = per_sym_ttl.get(symbol)
+            if ttl is None or ttl == 0:
                 if max_age_ms is not None:
                     ttl = int(max_age_ms)
                 else:
@@ -12844,6 +17579,8 @@ class Passivbot:
                         if (has_pos or has_oo)
                         else int(getattr(self, "inactive_coin_candle_ttl_ms", 600_000))
                     )
+            val = float("nan")
+            try:
                 res = await self.cm.get_latest_ema_metrics(
                     symbol,
                     {"qv": span},
@@ -12852,20 +17589,30 @@ class Passivbot:
                     timeframe=None,
                 )
                 val = float(res.get("qv", float("nan")))
-                return float(val) if np.isfinite(val) else 0.0
             except Exception:
-                return 0.0
+                pass
+            if not np.isfinite(val):
+                cached = await Passivbot._get_forager_cached_ema_metrics(
+                    self,
+                    symbol,
+                    {"qv": float(span)},
+                    max_staleness_ms=max_age_ms,
+                    window_candles=window_candles,
+                )
+                val = float(cached.get("qv", float("nan")))
+            return float(val) if np.isfinite(val) else None
 
-        syms = list(symbols)
         tasks = {s: asyncio.create_task(one(s)) for s in syms}
         out = {}
         n = len(syms)
         started_ms = utc_ms()
         for sym, task in tasks.items():
             try:
-                out[sym] = await task
+                val = await task
             except Exception:
-                out[sym] = 0.0
+                val = None
+            if val is not None:
+                out[sym] = float(val)
         elapsed_s = max(0.001, (utc_ms() - started_ms) / 1000.0)
         now_ms = utc_ms()
         ema_log_throttle_ms = 300_000  # 5 minutes between logs per metric
@@ -12897,18 +17644,15 @@ class Passivbot:
         if not orders:
             return []
         executions = []
-        any_exceptions = False
+        failures: list[tuple[str, Any, BaseException]] = []
+        action = "cancel" if "cancel" in type_ else "create"
         for order in orders:  # sorted by PA dist
-            task = None
             try:
                 task = asyncio.create_task(getattr(self, type_)(order))
                 executions.append((order, task))
             except Exception as e:
-                logging.error(f"error executing {type_} {order} {e}")
-                print_async_exception(task)
-                traceback.print_exc()
+                failures.append((action, order, e))
                 executions.append((order, e))
-                any_exceptions = True
         results = []
         for order, execution in executions:
             if isinstance(execution, Exception):
@@ -12920,13 +17664,9 @@ class Passivbot:
                 result = await execution
                 results.append(result)
             except Exception as e:
-                logging.error(f"error executing {type_} {execution} {e}")
-                print_async_exception(result)
+                failures.append((action, order, e))
                 results.append(e)
-                traceback.print_exc()
-                any_exceptions = True
-        if any_exceptions:
-            await self.restart_bot_on_too_many_errors()
+        await self._handle_order_write_failures(failures)
         return results
 
     # Legacy maintain_ohlcvs_1m_REST removed; CandlestickManager handles caching and TTL
@@ -12945,6 +17685,7 @@ class Passivbot:
         await self.cca.close()
         if self.ccp is not None:
             await self.ccp.close()
+        self._close_live_event_pipeline(timeout=2.0)
 
     def add_to_coins_lists(self, content, k_coins, log_psides=None):
         """Update approved/ignored coin sets from configuration content."""
@@ -13007,6 +17748,31 @@ class Passivbot:
                                     symbol_list,
                                 )
                                 warned.add(warn_key)
+                            event_keys = getattr(
+                                self,
+                                "_market_compatibility_event_keys",
+                                None,
+                            )
+                            if event_keys is None:
+                                event_keys = set()
+                                setattr(
+                                    self,
+                                    "_market_compatibility_event_keys",
+                                    event_keys,
+                                )
+                            affected_psides = (
+                                ("long", "short") if psides_equal else (pside,)
+                            )
+                            for affected_pside in affected_psides:
+                                event_key = (*warn_key, affected_pside)
+                                if event_key not in event_keys:
+                                    emitted = self._emit_config_market_compatibility_event(
+                                        list_kind=k_coins,
+                                        pside=affected_pside,
+                                        skipped_symbols=set(skipped),
+                                    )
+                                    if emitted:
+                                        event_keys.add(event_key)
                             symbols = symbols - set(skipped)
             symbols_already = getattr(self, k_coins)[pside]
             if symbols_already != symbols:
@@ -13024,14 +17790,17 @@ class Passivbot:
         try:
             added_summary = {}
             removed_summary = {}
+            source_by_list_kind = {}
             for k in ("approved_coins", "ignored_coins"):
                 if not hasattr(self, k):
                     setattr(self, k, {"long": set(), "short": set()})
                 config_sources = self.config.get("_coins_sources", {})
                 if k in config_sources:
                     raw_source = config_sources[k]
+                    source_by_list_kind[k] = "config_sources"
                 else:
                     raw_source = self.live_value(k)
+                    source_by_list_kind[k] = "live_value"
                 parsed = normalize_coins_source(
                     raw_source, allow_all=(k == "approved_coins")
                 )
@@ -13115,6 +17884,18 @@ class Passivbot:
                         logging.info(
                             "removed from ignored_coins | %s", " | ".join(parts)
                         )
+            for list_kind in ("approved_coins", "ignored_coins"):
+                for operation, summary in (
+                    ("added", added_summary.get(list_kind, {})),
+                    ("removed", removed_summary.get(list_kind, {})),
+                ):
+                    if summary:
+                        self._emit_forager_eligibility_changed_event(
+                            source=source_by_list_kind[list_kind],
+                            list_kind=list_kind,
+                            operation=operation,
+                            changes=summary,
+                        )
             try:
                 if not getattr(self, "_stock_perps_warning_logged", False):
                     stock_syms = set()
@@ -13188,6 +17969,11 @@ class Passivbot:
             "price": order["price"],
             "params": self._build_order_params(order),
         }
+        self._emit_execution_connector_call_started_event(
+            order=order,
+            action="create",
+            connector_route="base",
+        )
         executed = await self.cca.create_order(**params)
         return executed
 
@@ -13199,6 +17985,11 @@ class Passivbot:
         """Cancel a single order via the exchange client."""
         executed = None
         try:
+            self._emit_execution_connector_call_started_event(
+                order=order,
+                action="cancel",
+                connector_route="base",
+            )
             executed = await self.cca.cancel_order(order["id"], symbol=order["symbol"])
             return executed
         except Exception as e:
@@ -13224,11 +18015,8 @@ class Passivbot:
                     Passivbot._log_symbol(order.get("symbol", "?")),
                     order.get("id", "?")[:12],
                 )
-            else:
-                logging.error(f"error cancelling order {order} {e}")
-                print_async_exception(executed)
-                traceback.print_exc()
-            return {}
+                return self._ambiguous_cancel_success_result(order)
+            raise
 
     async def execute_cancellations(self, orders: [dict]) -> [dict]:
         """Execute a batch of cancellations using the helper pipeline."""

@@ -1,5 +1,6 @@
 import asyncio
 import json
+import os
 import subprocess
 import sys
 
@@ -436,3 +437,21 @@ def test_monitor_relay_keeps_stale_bots_visible_before_pruning(tmp_path, monkeyp
     monkeypatch.setattr(monitor_relay.time, "time", lambda: 7.5)
 
     assert relay.visible_keys() == []
+
+
+def test_monitor_relay_uses_current_event_activity_when_manifest_is_stale(tmp_path, monkeypatch):
+    monitor_root = _make_monitor_root(tmp_path, snapshot_ts_ms=1000)
+    bot_root = monitor_root / "bybit" / "user01"
+    manifest_path = bot_root / "manifest.json"
+    snapshot_path = bot_root / "state.latest.json"
+    events_path = bot_root / "events" / "current.ndjson"
+
+    os.utime(manifest_path, (1.0, 1.0))
+    os.utime(snapshot_path, (1.0, 1.0))
+    os.utime(events_path, (199.0, 199.0))
+    monkeypatch.setattr(monitor_relay.time, "time", lambda: 200.0)
+
+    relay = monitor_relay.MonitorRelay(monitor_root=str(monitor_root), poll_interval_ms=10)
+
+    assert relay.active_keys() == [("bybit", "user01")]
+    assert relay.build_health_payload()["bots"][0]["status"] == "active"

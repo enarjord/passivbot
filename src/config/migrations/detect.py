@@ -10,11 +10,11 @@ PB_MULTI_FIELD_MAP = {
     "markup_range": "close_grid_markup_range",
     "min_markup": "close_grid_min_markup",
     "rentry_pprice_dist": "entry_grid_spacing_pct",
-    "rentry_pprice_dist_wallet_exposure_weighting": "entry_grid_spacing_we_weight",
+    "rentry_pprice_dist_wallet_exposure_weighting": "entry_we_weight",
     "ema_span_0": "ema_span_0",
     "ema_span_1": "ema_span_1",
-    "filter_noisiness_rolling_window": "forager_volatility_ema_span",
-    "filter_volume_rolling_window": "forager_volume_ema_span",
+    "filter_noisiness_rolling_window": "forager_volatility_ema_span_1m",
+    "filter_volume_rolling_window": "forager_volume_ema_span_1m",
 }
 PB_MULTI_FIELD_MAP_INV = {v: k for k, v in PB_MULTI_FIELD_MAP.items()}
 
@@ -69,16 +69,13 @@ def build_base_config_from_flavor(config: dict, template: dict, flavor: str, ver
             except (TypeError, ValueError, ZeroDivisionError):
                 pass
             for key in (
-                "close_trailing_grid_ratio",
                 "close_trailing_retracement_pct",
                 "close_trailing_threshold_pct",
-                "entry_trailing_grid_ratio",
                 "entry_trailing_retracement_pct",
-                "entry_trailing_retracement_we_weight",
-                "entry_trailing_retracement_volatility_weight",
                 "entry_trailing_threshold_pct",
-                "entry_trailing_threshold_we_weight",
-                "entry_trailing_threshold_volatility_weight",
+                "entry_weight_volatility_1h",
+                "entry_weight_volatility_1m",
+                "entry_we_weight",
                 "unstuck_ema_dist",
             ):
                 result["bot"][pside][key] = 0.0

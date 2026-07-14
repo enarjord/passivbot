@@ -132,6 +132,10 @@ def _ignore_sigint():
     return None
 
 
+def _noop_overrides(_overrides_list, config, _pside):
+    return config
+
+
 def _nsga3_config(*, population_size: int = 16, n_obj: int = 4):
     return {
         "optimize": {
@@ -311,7 +315,7 @@ def test_resolve_population_plan_uses_auto_nsga3_population_when_null():
     )
 
     assert plan["requested_population_size"] is None
-    assert plan["actual_population_size"] == 330
+    assert plan["actual_population_size"] == pymoo_backend.DEFAULT_NSGA3_POPULATION_SIZE
     assert plan["n_partitions"] == 4
     assert len(plan["ref_dirs"]) == 330
 
@@ -339,9 +343,77 @@ def test_resolve_population_plan_uses_next_auto_nsga3_resolution_for_nine_object
     )
 
     assert plan["requested_population_size"] is None
-    assert plan["actual_population_size"] == 495
+    assert plan["actual_population_size"] == pymoo_backend.DEFAULT_NSGA3_POPULATION_SIZE
     assert plan["n_partitions"] == 4
     assert len(plan["ref_dirs"]) == 495
+
+
+def test_resolve_population_plan_keeps_auto_nsga3_population_for_ten_objectives():
+    plan = pymoo_backend._resolve_pymoo_population_plan(
+        config={
+            "optimize": {
+                "backend": "pymoo",
+                "population_size": None,
+                "pymoo": {
+                    "algorithm": "auto",
+                    "algorithms": {
+                        "nsga3": {
+                            "ref_dirs": {
+                                "method": "das_dennis",
+                                "n_partitions": "auto",
+                            }
+                        }
+                    },
+                },
+            }
+        },
+        n_obj=10,
+    )
+
+    assert plan["requested_population_size"] is None
+    assert plan["actual_population_size"] == pymoo_backend.DEFAULT_NSGA3_POPULATION_SIZE
+    assert plan["n_partitions"] == 3
+    assert len(plan["ref_dirs"]) == 220
+
+
+def test_build_algorithm_uses_auto_nsga3_population_budget_when_null():
+    bounds = [Bound(0.0, 1.0, 0.1) for _ in range(6)]
+    config = {
+        "optimize": {
+            "backend": "pymoo",
+            "population_size": None,
+            "pymoo": {
+                "algorithm": "nsga3",
+                "shared": {
+                    "crossover_eta": 20.0,
+                    "crossover_prob_var": 0.5,
+                    "mutation_eta": 20.0,
+                    "mutation_prob_var": "auto",
+                    "eliminate_duplicates": True,
+                },
+                "algorithms": {
+                    "nsga3": {
+                        "ref_dirs": {
+                            "method": "das_dennis",
+                            "n_partitions": "auto",
+                        }
+                    }
+                },
+            },
+        }
+    }
+    population_plan = pymoo_backend._resolve_pymoo_population_plan(config, n_obj=10)
+    algorithm = pymoo_backend._build_algorithm(
+        config=config,
+        sampling=np.zeros((population_plan["actual_population_size"], len(bounds)), dtype=np.float64),
+        bounds=bounds,
+        sig_digits=4,
+        population_plan=population_plan,
+    )
+
+    assert algorithm.__class__.__name__ == "NSGA3"
+    assert algorithm.pop_size == pymoo_backend.DEFAULT_NSGA3_POPULATION_SIZE
+    assert len(algorithm.ref_dirs) == 220
 
 
 def test_build_algorithm_falls_back_to_nsga2_for_single_objective():
@@ -406,7 +478,7 @@ def test_run_backend_records_entries(monkeypatch):
         record_individual_result=None,
         run_evolution=None,
         build_config_fn=_build_config,
-        overrides_fn=object(),
+        overrides_fn=_noop_overrides,
     )
 
     assert result["pool_terminated"] is False
@@ -456,7 +528,7 @@ def test_run_backend_supports_single_objective(monkeypatch):
         record_individual_result=None,
         run_evolution=None,
         build_config_fn=_build_config,
-        overrides_fn=object(),
+        overrides_fn=_noop_overrides,
     )
 
     assert result["pool_terminated"] is False
@@ -469,8 +541,14 @@ def test_run_backend_evaluates_all_starting_configs_before_trim(monkeypatch):
     captured = {}
 
     def _fake_minimize(problem, algorithm, termination, seed, verbose, **kwargs):
-        del problem, termination, seed, verbose
-        captured["sampling"] = np.asarray(algorithm.initialization.sampling, dtype=np.float64)
+        del problem, termination, verbose
+        captured["seed"] = seed
+        sampling = algorithm.initialization.sampling
+        # Starting seeds arrive as an already-evaluated Population (so pymoo
+        # reuses their evaluations); random-only sampling stays an ndarray.
+        if isinstance(sampling, pymoo_backend.Population):
+            sampling = sampling.get("X")
+        captured["sampling"] = np.asarray(sampling, dtype=np.float64)
         return None
 
     monkeypatch.setattr(pymoo_backend, "pymoo_minimize", _fake_minimize)
@@ -484,6 +562,7 @@ def test_run_backend_evaluates_all_starting_configs_before_trim(monkeypatch):
                 "population_size": 4,
                 "iters": 8,
                 "n_cpus": 1,
+                "seed": 123,
                 "max_pending_starting_evals_per_cpu": 1,
                 "round_to_n_significant_digits": 4,
                 "scoring": ["adg", "drawdown_worst"],
@@ -512,12 +591,98 @@ def test_run_backend_evaluates_all_starting_configs_before_trim(monkeypatch):
         record_individual_result=None,
         run_evolution=None,
         build_config_fn=_build_config,
-        overrides_fn=object(),
+        overrides_fn=_noop_overrides,
     )
 
     assert result["pool_terminated"] is False
     assert len(recorder.entries) == 6
+    assert captured["seed"] == 123
     assert captured["sampling"].shape == (4, 2)
+
+
+def test_run_backend_refreshes_pymoo_resume_runtime_state(monkeypatch, tmp_path):
+    monkeypatch.setattr(pymoo_backend.multiprocessing, "Pool", FakePool)
+    checkpoint_path = tmp_path / "checkpoint.pkl"
+    stale_algorithm = _build_nsga3_algorithm(population_size=4, n_obj=2)
+    stale_algorithm.setup(
+        TinyManyObjectiveProblem(n_obj=2),
+        termination=pymoo_backend.get_termination("n_gen", 1),
+        seed=7,
+        verbose=True,
+        callback=pymoo_backend.Callback(),
+    )
+    saved_random_state = copy.deepcopy(stale_algorithm.random_state.bit_generator.state)
+    with open(checkpoint_path, "wb") as f:
+        pickle.dump(stale_algorithm, f, protocol=pickle.HIGHEST_PROTOCOL)
+
+    captured = {}
+
+    def _fake_minimize(problem, algorithm, termination, seed, verbose, **kwargs):
+        captured["problem"] = problem
+        captured["algorithm"] = algorithm
+        captured["termination"] = termination
+        captured["seed"] = seed
+        captured["verbose"] = verbose
+        captured["kwargs"] = kwargs
+        return None
+
+    monkeypatch.setattr(pymoo_backend, "pymoo_minimize", _fake_minimize)
+    evaluator = FakeEvaluator(["adg", "drawdown_worst"])
+
+    result = pymoo_backend.run_backend(
+        config={
+            "optimize": {
+                "backend": "pymoo",
+                "population_size": 4,
+                "iters": 20,
+                "seed": 99,
+                "n_cpus": 1,
+                "round_to_n_significant_digits": 4,
+                "scoring": ["adg", "drawdown_worst"],
+                "pymoo": {
+                    "algorithm": "nsga3",
+                    "shared": {
+                        "crossover_prob_var": 0.5,
+                        "crossover_eta": 20.0,
+                        "mutation_eta": 20.0,
+                        "mutation_prob_var": 0.5,
+                        "eliminate_duplicates": True,
+                    },
+                },
+            }
+        },
+        evaluator=evaluator,
+        evaluator_for_pool=evaluator,
+        recorder=FakeRecorder(),
+        overrides_list=[],
+        duplicate_counter={},
+        starting_configs_path=None,
+        constraint_fitness_cls=None,
+        ignore_sigint_in_worker=_ignore_sigint,
+        get_starting_configs=_get_starting_configs,
+        configs_to_individuals=_configs_to_individuals,
+        record_individual_result=None,
+        run_evolution=None,
+        build_config_fn=_build_config,
+        overrides_fn=_noop_overrides,
+        checkpoint_path=str(checkpoint_path),
+        resume=True,
+    )
+
+    resumed_algorithm = captured["algorithm"]
+    assert captured["problem"] is resumed_algorithm.problem
+    assert resumed_algorithm.problem.elementwise_runner.recorder.__class__ is FakeRecorder
+    assert resumed_algorithm.termination.n_max_gen == 5
+    assert captured["termination"].n_max_gen == 5
+    assert isinstance(resumed_algorithm.callback, pymoo_backend.PymooCheckpointCallback)
+    assert isinstance(captured["kwargs"]["callback"], pymoo_backend.PymooCheckpointCallback)
+    assert resumed_algorithm.seed == 99
+    assert captured["seed"] == 99
+    assert captured["verbose"] is False
+    assert resumed_algorithm.has_terminated is False
+    assert resumed_algorithm.random_state.bit_generator.state == saved_random_state
+    result["pool"].close()
+    result["pool"].join()
 
 
 def test_starting_payloads_are_slimmed_after_recording(monkeypatch):
@@ -532,7 +697,7 @@ def test_starting_payloads_are_slimmed_after_recording(monkeypatch):
         recorder=recorder,
         template=evaluator.config,
         build_config_fn=_build_config,
-        overrides_fn=object(),
+        overrides_fn=_noop_overrides,
         overrides_list=[],
     )
 
@@ -605,7 +770,7 @@ def test_run_backend_writes_readable_result_artifacts(monkeypatch, tmp_path):
         record_individual_result=None,
         run_evolution=None,
         build_config_fn=_build_config,
-        overrides_fn=object(),
+        overrides_fn=_noop_overrides,
     )
     recorder.flush()
     recorder.close()
@@ -668,7 +833,7 @@ def test_run_backend_passes_optimization_shape_to_starting_seed_loader(monkeypat
         record_individual_result=None,
         run_evolution=None,
         build_config_fn=_build_config,
-        overrides_fn=object(),
+        overrides_fn=_noop_overrides,
     )
     result["pool"].close()
     result["pool"].join()

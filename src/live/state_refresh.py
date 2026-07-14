@@ -5,6 +5,7 @@ import logging
 import sys
 
 from config.access import get_optional_config_value
+from live import event_emitters
 from utils import ts_to_date, utc_ms
 
 
@@ -24,6 +25,51 @@ async def refresh_authoritative_state(bot) -> bool:
     return await bot._refresh_authoritative_state_staged()
 
 
+async def refresh_protective_authoritative_state(bot) -> bool:
+    """Refresh only account state required for protective cancels/reduce-only closes."""
+    if bot.stop_signal_received:
+        return False
+    bot._begin_authoritative_refresh_epoch()
+    bot._last_authoritative_block_reason = None
+    bot._last_authoritative_pending_pnl_count = 0
+    plan = {"balance", "positions", "open_orders"}
+    bot._authoritative_refresh_plan_surfaces = set(plan)
+    snapshot = await bot._fetch_authoritative_state_staged_snapshot(plan)
+    fetched_balance = snapshot.get("balance")
+    fetched_positions = snapshot.get("positions")
+    fetched_open_orders = snapshot.get("open_orders")
+
+    prepared_balance_snapshot = bot._prepare_balance_snapshot(fetched_balance)
+    if prepared_balance_snapshot is None:
+        return False
+    if fetched_positions in [None, False]:
+        return False
+    if fetched_open_orders in [None, False]:
+        return False
+
+    open_orders_ok = await bot._apply_open_orders_snapshot(
+        fetched_open_orders,
+        allow_followup_positions_refresh=False,
+        reconcile_balance=False,
+    )
+    if not open_orders_ok:
+        return False
+    _old_positions, fetched_positions_new = bot._apply_positions_snapshot(fetched_positions)
+    bot._commit_balance_snapshot(prepared_balance_snapshot)
+    bot._record_authoritative_surface(
+        "balance", round(float(bot.get_hysteresis_snapped_balance()), 12)
+    )
+    bot._record_authoritative_surface(
+        "positions",
+        bot._positions_signature(fetched_positions_new),
+    )
+    bot._update_entry_cooldown_position_delta_guard(
+        sorted(bot.positions), now_ms=int(bot.get_exchange_time())
+    )
+    bot._finalize_authoritative_refresh_consistency(plan)
+    return True
+
+
 async def refresh_authoritative_state_staged(bot) -> bool:
     """Refresh live account state through the staged authoritative cohort."""
     bot._last_authoritative_block_reason = None
@@ -36,8 +82,6 @@ async def refresh_authoritative_state_staged(bot) -> bool:
     pnls_ok = snapshot.get("pnls_ok", True)
 
     if "positions" in plan and fetched_positions in [None, False]:
-        return False
-    if "balance" in plan and fetched_balance in [None, False]:
         return False
     if "open_orders" in plan and fetched_open_orders in [None, False]:
         return False
@@ -73,6 +117,9 @@ async def refresh_authoritative_state_staged(bot) -> bool:
         bot._record_authoritative_surface(
             "positions",
             bot._positions_signature(fetched_positions_new),
+        )
+        bot._update_entry_cooldown_position_delta_guard(
+            sorted(bot.positions), now_ms=int(bot.get_exchange_time())
         )
     if "balance" in plan:
         if "open_orders" in plan:
@@ -121,7 +168,15 @@ def authoritative_staged_refresh_plan(bot) -> set[str]:
         return plan
     plan = {"balance", "positions", "open_orders", "fills"}
     if "fills" not in pending:
-        if not bot._staged_fills_refresh_due():
+        coverage_ready = True
+        coverage_ready_fn = getattr(bot, "_pnl_history_coverage_ready_for_risk", None)
+        if callable(coverage_ready_fn):
+            coverage_ready = bool(coverage_ready_fn())
+        if not coverage_ready:
+            logging.debug(
+                "[state] staged fills refresh required: risk lookback coverage unproven"
+            )
+        elif not bot._staged_fills_refresh_due():
             plan.discard("fills")
             logging.debug("[state] staged fills refresh deferred until next minute boundary")
         elif bot._staged_fills_can_prefetch_routine() and (
@@ -206,10 +261,52 @@ async def routine_fill_refresh_prefetch_task(bot, *, reason: str) -> None:
 
 async def timed_authoritative_fetch(bot, surface: str, coro, timings_ms: dict[str, int]):
     """Measure one staged authoritative fetch while preserving exceptions."""
-    del bot
     started = _utc_ms()
+    remote_call_id = event_emitters.emit_authoritative_remote_call_event(
+        bot,
+        surface=surface,
+        stage="start",
+        started_ms=started,
+    )
     try:
-        return await coro
+        result = await coro
+        elapsed_ms = int(max(0, _utc_ms() - started))
+        event_emitters.emit_authoritative_remote_call_event(
+            bot,
+            surface=surface,
+            stage="ok",
+            started_ms=started,
+            elapsed_ms=elapsed_ms,
+            remote_call_id=remote_call_id,
+            result=result,
+        )
+        recorder = getattr(bot, "_capture_live_data_packet_fetch_metadata", None)
+        if callable(recorder):
+            try:
+                recorder(
+                    surface,
+                    result,
+                    call_started_ts_ms=started,
+                    response_received_ts_ms=started + elapsed_ms,
+                )
+            except Exception as exc:
+                logging.debug(
+                    "[diagnostic] failed to capture %s data packet metadata: %s",
+                    surface,
+                    exc,
+                )
+        return result
+    except Exception as exc:
+        event_emitters.emit_authoritative_remote_call_event(
+            bot,
+            surface=surface,
+            stage="error",
+            started_ms=started,
+            elapsed_ms=int(max(0, _utc_ms() - started)),
+            remote_call_id=remote_call_id,
+            error=exc,
+        )
+        raise
     finally:
         timings_ms[surface] = int(max(0, _utc_ms() - started))
 
@@ -270,6 +367,21 @@ def log_staged_refresh_timings(
             sum_ms,
             max_surface_ms,
             residual_ms,
+        )
+    if log_level >= logging.INFO:
+        event_emitters.emit_state_refresh_timing_event(
+            bot,
+            plan=plan,
+            timings_ms=timings_ms,
+            wall_ms=wall_ms,
+            sum_ms=sum_ms,
+            max_surface_ms=max_surface_ms,
+            residual_ms=residual_ms,
+            pending_confirmations=pending_confirmations,
+            meaningful_change=meaningful_change,
+            unusual_plan=unusual_plan,
+            epoch_changed=epoch_changed,
+            level="info",
         )
     logging.log(
         log_level,
@@ -343,6 +455,17 @@ def record_staged_refresh_timing_summary(
     surface_parts = [
         f"{surface}={format_stats(stats)}" for surface, stats in sorted(surfaces.items())
     ]
+    event_emitters.emit_state_refresh_timing_summary_event(
+        bot,
+        plan=plan,
+        count=count,
+        since_ms=first_ms,
+        wall=summary["wall"],
+        surface_sum=summary["surface_sum"],
+        surface_max=summary["surface_max"],
+        residual=summary["residual"],
+        surfaces=surfaces,
+    )
     logging.info(
         "[state] staged refresh timing summary | plan=%s | count=%d since=%s | wall=%s | surface_sum=%s | surface_max=%s | residual=%s | %s",
         plan_key,
@@ -395,7 +518,22 @@ async def log_staged_refresh_progress_until(
             )
             key = pending
             level = logging.INFO if key not in logged_pending else logging.DEBUG
+            repeated = key in logged_pending
             logged_pending.add(key)
+            event_emitters.emit_state_refresh_progress_event(
+                bot,
+                plan=plan,
+                pending=pending,
+                elapsed_ms=elapsed_ms,
+                completed_timings_ms={
+                    surface: timings_ms[surface]
+                    for surface in sorted(timings_ms)
+                    if surface not in pending
+                },
+                threshold_s=threshold_s,
+                repeated=repeated,
+                level="info" if level >= logging.INFO else "debug",
+            )
             logging.log(
                 level,
                 "[state] staged refresh still waiting | plan=%s | pending=%s | elapsed=%dms%s",

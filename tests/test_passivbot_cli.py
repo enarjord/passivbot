@@ -9,6 +9,7 @@ import pytest
 from passivbot_cli import main as cli_main
 from cli_utils import expand_help_all_argv, help_requested
 import ohlcv_download
+from passivbot_version import __version__
 
 
 def test_root_help_lists_primary_commands(capsys):
@@ -21,6 +22,15 @@ def test_root_help_lists_primary_commands(capsys):
     assert "download" in out
     assert "tool" in out
     assert 'python3 -m pip install -e ".[full]"' in out
+
+
+@pytest.mark.parametrize("flag", ["-V", "--version"])
+def test_root_version_flags_print_package_version(flag, capsys):
+    assert cli_main.main([flag]) == 0
+
+    captured = capsys.readouterr()
+    assert captured.out == f"passivbot {__version__}\n"
+    assert captured.err == ""
 
 
 def test_dispatch_core_command_forwards_module_and_prog(monkeypatch):
@@ -58,12 +68,12 @@ def test_download_dispatch_forwards_new_module_and_prog(monkeypatch):
     monkeypatch.setattr(cli_main, "_invoke_module_main", fake_invoke_module_main)
     monkeypatch.setattr(cli_main, "_missing_full_install_markers", lambda: [])
 
-    assert cli_main.main(["download", "configs/examples/default_trailing_grid_long_npos7.json"]) == 0
+    assert cli_main.main(["download", "configs/examples/default_trailing_martingale_long.json"]) == 0
 
     assert captured["module_name"] == "ohlcv_download"
     assert captured["argv"] == [
         "passivbot download",
-        "configs/examples/default_trailing_grid_long_npos7.json",
+        "configs/examples/default_trailing_martingale_long.json",
     ]
     assert captured["prog_env"] == "passivbot download"
     assert sys.argv == original_argv
@@ -129,11 +139,13 @@ def test_tool_help_lists_supported_tools(capsys):
     assert cli_main.main(["tool", "-h"]) == 0
 
     out = capsys.readouterr().out
+    assert "crash-finder" in out
     assert "hyperliquid-abstraction-probe" in out
     assert "hyperliquid-balance-probe" in out
     assert "hyperliquid-order-margin-probe" in out
     assert "hyperliquid-position-probe" in out
     assert "inspect-ohlcvs" in out
+    assert "live-event-query" in out
     assert "merge-paretos" in out
     assert "monitor-dev" in out
     assert "monitor-relay" in out
@@ -265,6 +277,82 @@ def test_tool_dispatch_forwards_module_and_prog(monkeypatch):
         "optimize_results",
     ]
     assert captured["prog_env"] == "passivbot tool pareto-dash"
+
+
+def test_live_event_query_tool_dispatch_forwards_module_and_prog(monkeypatch):
+    captured = {}
+
+    def fake_invoke_module_main(module_name):
+        captured["module_name"] = module_name
+        captured["argv"] = sys.argv[:]
+        captured["prog_env"] = os.environ.get("PASSIVBOT_CLI_PROG")
+        return True, 0
+
+    monkeypatch.setattr(cli_main, "_invoke_module_main", fake_invoke_module_main)
+    monkeypatch.setattr(cli_main, "_missing_full_install_markers", lambda: [])
+
+    assert cli_main.main(["tool", "live-event-query", "monitor", "--cycle-id", "cy_1"]) == 0
+
+    assert captured["module_name"] == "tools.live_event_query"
+    assert captured["argv"] == [
+        "passivbot tool live-event-query",
+        "monitor",
+        "--cycle-id",
+        "cy_1",
+    ]
+    assert captured["prog_env"] == "passivbot tool live-event-query"
+
+
+def test_live_smoke_report_tool_dispatch_forwards_module_and_prog(monkeypatch):
+    captured = {}
+
+    def fake_invoke_module_main(module_name):
+        captured["module_name"] = module_name
+        captured["argv"] = sys.argv[:]
+        captured["prog_env"] = os.environ.get("PASSIVBOT_CLI_PROG")
+        return True, 0
+
+    monkeypatch.setattr(cli_main, "_invoke_module_main", fake_invoke_module_main)
+    monkeypatch.setattr(cli_main, "_missing_full_install_markers", lambda: [])
+
+    assert cli_main.main(["tool", "live-smoke-report", "monitor", "--compact"]) == 0
+
+    assert captured["module_name"] == "tools.live_smoke_report"
+    assert captured["argv"] == [
+        "passivbot tool live-smoke-report",
+        "monitor",
+        "--compact",
+    ]
+    assert captured["prog_env"] == "passivbot tool live-smoke-report"
+
+
+def test_live_incident_bundle_tool_dispatch_forwards_module_and_prog(monkeypatch):
+    captured = {}
+
+    def fake_invoke_module_main(module_name):
+        captured["module_name"] = module_name
+        captured["argv"] = sys.argv[:]
+        captured["prog_env"] = os.environ.get("PASSIVBOT_CLI_PROG")
+        return True, 0
+
+    monkeypatch.setattr(cli_main, "_invoke_module_main", fake_invoke_module_main)
+    monkeypatch.setattr(cli_main, "_missing_full_install_markers", lambda: [])
+
+    assert (
+        cli_main.main(
+            ["tool", "live-incident-bundle", "monitor", "--cycle-id", "cy_1"]
+        )
+        == 0
+    )
+
+    assert captured["module_name"] == "tools.live_incident_bundle"
+    assert captured["argv"] == [
+        "passivbot tool live-incident-bundle",
+        "monitor",
+        "--cycle-id",
+        "cy_1",
+    ]
+    assert captured["prog_env"] == "passivbot tool live-incident-bundle"
 
 
 def test_pareto_tool_dispatch_forwards_module_and_prog(monkeypatch):

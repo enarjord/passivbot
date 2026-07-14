@@ -159,6 +159,7 @@ def build_contract_bot(exchange: str, quote: str = "USDT"):
     bot._live_margin_modes = {}
     bot._hl_live_margin_modes = {}
     bot._blocked_margin_symbols_warned = set()
+    bot._blocked_margin_symbols_evented = set()
     bot._margin_mode_preference_warned = False
     bot.positions = {}
     bot.open_orders = {}

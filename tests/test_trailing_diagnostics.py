@@ -8,6 +8,7 @@ import pytest
 from trailing_diagnostics import (
     build_trailing_diagnostic,
     build_trailing_inputs_from_snapshot,
+    selected_mode_from_order_type,
 )
 from trailing_diagnostics_tool import (
     TrailingDiagnosticsState,
@@ -20,24 +21,17 @@ from trailing_diagnostics_tool import (
 def _sample_config():
     params = {
         "entry_grid_double_down_factor": 1.0,
-        "entry_grid_spacing_volatility_weight": 0.0,
-        "entry_grid_spacing_we_weight": 0.0,
+        "entry_weight_volatility_1h": 0.0,
+        "entry_weight_volatility_1m": 0.0,
+        "entry_we_weight": 0.0,
         "entry_grid_spacing_pct": 0.01,
         "entry_initial_ema_dist": 0.01,
         "entry_initial_qty_pct": 0.1,
         "entry_trailing_double_down_factor": 1.0,
-        "entry_trailing_grid_ratio": 1.0,
         "entry_trailing_retracement_pct": 0.01,
-        "entry_trailing_retracement_we_weight": 0.0,
-        "entry_trailing_retracement_volatility_weight": 0.0,
         "entry_trailing_threshold_pct": 0.01,
-        "entry_trailing_threshold_we_weight": 0.0,
-        "entry_trailing_threshold_volatility_weight": 0.0,
         "risk_we_excess_allowance_pct": 0.0,
-        "close_grid_markup_end": 0.01,
-        "close_grid_markup_start": 0.01,
         "close_grid_qty_pct": 1.0,
-        "close_trailing_grid_ratio": 1.0,
         "close_trailing_qty_pct": 1.0,
         "close_trailing_retracement_pct": 0.01,
         "close_trailing_threshold_pct": 0.01,
@@ -112,9 +106,62 @@ def test_build_trailing_inputs_from_snapshot_extracts_required_fields():
     assert inputs["current_price"] == pytest.approx(100500.0)
     assert inputs["c_mult"] == pytest.approx(1.0)
     assert inputs["wallet_exposure_limit"] == pytest.approx(0.2)
+    assert inputs["total_wallet_exposure_limit"] == pytest.approx(2.0)
     assert inputs["h1_log_range_ema"] == pytest.approx(0.0)
     assert inputs["ema_lower"] == pytest.approx(100200.0)
     assert inputs["min_since_open"] == pytest.approx(99500.0)
+
+
+def test_snapshot_trailing_diagnostic_caps_excess_by_total_wallet_exposure_limit():
+    config = _sample_config()
+    side_cfg = config["bot"]["long"]
+    side_cfg.pop("total_wallet_exposure_limit")
+    side_cfg.pop("n_positions")
+    side_cfg.pop("risk_we_excess_allowance_pct")
+    side_cfg["risk"] = {
+        "total_wallet_exposure_limit": 0.2,
+        "n_positions": 1,
+        "we_excess_allowance_pct": 0.5,
+    }
+    inputs = build_trailing_inputs_from_snapshot(
+        config,
+        _sample_snapshot(),
+        symbol="BTC/USDT:USDT",
+        pside="long",
+    )
+
+    diagnostic = build_trailing_diagnostic(inputs)
+
+    assert inputs["wallet_exposure_limit"] == pytest.approx(0.2)
+    assert inputs["total_wallet_exposure_limit"] == pytest.approx(0.2)
+    assert diagnostic["allowed_wallet_exposure_limit"] == pytest.approx(0.2)
+    assert diagnostic["entry"]["limit_cap"] == pytest.approx(0.2)
+
+
+def test_snapshot_trailing_diagnostic_legacy_raw_excess_mode_is_unbounded():
+    config = _sample_config()
+    side_cfg = config["bot"]["long"]
+    side_cfg.pop("total_wallet_exposure_limit")
+    side_cfg.pop("n_positions")
+    side_cfg.pop("risk_we_excess_allowance_pct")
+    side_cfg["risk"] = {
+        "total_wallet_exposure_limit": 0.2,
+        "n_positions": 1,
+        "we_excess_allowance_pct": 0.5,
+        "we_excess_allowance_mode": "legacy_raw",
+    }
+    inputs = build_trailing_inputs_from_snapshot(
+        config,
+        _sample_snapshot(),
+        symbol="BTC/USDT:USDT",
+        pside="long",
+    )
+
+    diagnostic = build_trailing_diagnostic(inputs)
+
+    assert inputs["risk_we_excess_allowance_mode"] == "legacy_raw"
+    assert diagnostic["allowed_wallet_exposure_limit"] == pytest.approx(0.3)
+    assert diagnostic["entry"]["limit_cap"] == pytest.approx(0.3)
 
 
 def test_build_trailing_diagnostic_matches_monitor_slice():
@@ -131,7 +178,47 @@ def test_build_trailing_diagnostic_matches_monitor_slice():
     assert diagnostic["entry"]["threshold_met"] is False
     assert diagnostic["entry"]["retracement_met"] is True
     assert diagnostic["close"]["order_type"] == "close_trailing_long"
+    assert diagnostic["close"]["selected_mode"] == "trailing"
     assert diagnostic["close"]["threshold_met"] is False
+
+
+def test_trailing_diagnostic_keeps_threshold_state_when_next_close_is_grid():
+    config = _sample_config()
+    config["bot"]["long"]["close_trailing_retracement_pct"] = 0.0
+    inputs = build_trailing_inputs_from_snapshot(
+        config,
+        _sample_snapshot(),
+        symbol="BTC/USDT:USDT",
+        pside="long",
+    )
+
+    diagnostic = build_trailing_diagnostic(inputs)
+
+    assert diagnostic["close"] is not None
+    assert diagnostic["close"]["order_type"] == "close_grid_long"
+    assert diagnostic["close"]["selected_mode"] == "grid"
+    assert diagnostic["close"]["triggered"] is False
+    assert diagnostic["close"]["status"] == "waiting_threshold"
+    assert diagnostic["close"]["threshold_met"] is False
+    assert diagnostic["close"]["threshold_price"] == pytest.approx(101000.0)
+    assert diagnostic["close"]["retracement_pct"] == pytest.approx(0.0)
+
+
+@pytest.mark.parametrize(
+    ("order_type", "has_order", "expected"),
+    [
+        ("close_trailing_long", True, "trailing"),
+        ("close_auto_reduce_wel_long", True, "auto_reduce"),
+        ("close_unstuck_long", True, "unstuck"),
+        ("close_grid_long", True, "grid"),
+        ("empty", False, "none"),
+        ("unknown_custom_order", True, "other"),
+    ],
+)
+def test_selected_mode_from_order_type_uses_specific_non_trailing_labels(
+    order_type, has_order, expected
+):
+    assert selected_mode_from_order_type(order_type, has_order=has_order) == expected
 
 
 def test_trailing_diagnostics_tool_commands_render_and_set_values(tmp_path, monkeypatch):
@@ -153,6 +240,7 @@ def test_trailing_diagnostics_tool_commands_render_and_set_values(tmp_path, monk
     assert "Entry" in rendered
     assert "Close" in rendered
     assert "Config Inputs" in rendered
+    assert "total_wallet_exposure_limit=2" in rendered
     assert "set <key> <value>" in rendered
 
     assert execute_command(state, "set current_price 99999") is False

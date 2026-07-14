@@ -20,8 +20,22 @@ def _make_candidate(w_values, violation=0.0):
     }
 
 
+def _make_adg_candidate(value, *, include_scoring=True):
+    candidate = {
+        "metrics": {
+            "objectives": {"adg_strategy_eq": value},
+            "constraint_violation": 0.0,
+        },
+    }
+    if include_scoring:
+        candidate["optimize"] = {
+            "scoring": [{"metric": "adg_strategy_eq", "goal": "max"}],
+        }
+    return candidate
+
+
 @pytest.mark.parametrize("sig_digits", [6])
-def test_pareto_front_retains_per_metric_extremes(sig_digits):
+def test_pareto_front_retains_per_metric_extremes(sig_digits, tmp_path):
     random.seed(42)
 
     # Build a synthetic candidate set with 3 objectives and some violating entries.
@@ -49,7 +63,7 @@ def test_pareto_front_retains_per_metric_extremes(sig_digits):
 
     # Build Pareto front with pruning (max_size << total candidates).
     store = ParetoStore(
-        directory="/tmp",
+        directory=str(tmp_path),
         sig_digits=sig_digits,
         flush_interval=10_000,
         max_size=50,  # force pruning to check extreme preservation
@@ -77,7 +91,7 @@ def test_pareto_store_persists_candidate_without_extra_rounding(tmp_path):
     entry = {
         "bot": {
             "long": {
-                "entry_trailing_threshold_we_weight": 1.384,
+                "entry_we_weight": 1.384,
             },
             "short": {},
         },
@@ -103,4 +117,96 @@ def test_pareto_store_persists_candidate_without_extra_rounding(tmp_path):
     assert len(saved_files) == 1
     saved = json.loads(saved_files[0].read_text())
 
-    assert saved["bot"]["long"]["entry_trailing_threshold_we_weight"] == 1.384
+    assert saved["bot"]["long"]["entry_we_weight"] == 1.384
+
+
+def test_pareto_store_single_pass_drops_and_removes_dominated_entries(tmp_path):
+    store = ParetoStore(directory=str(tmp_path), sig_digits=6, flush_interval=10_000, max_size=50)
+
+    assert store.add_entry(_make_candidate({"metric1": 1.0}))
+    assert not store.add_entry(_make_candidate({"metric1": 2.0}))
+    assert store.add_entry(_make_candidate({"metric1": 0.5}))
+
+    front = store.get_front()
+    assert len(front) == 1
+    assert front[0]["metrics"]["objectives"]["metric1"] == 0.5
+
+
+def test_pareto_store_bootstrap_failure_raises_and_preserves_files(tmp_path):
+    pareto_dir = tmp_path / "pareto"
+    pareto_dir.mkdir()
+    corrupt = pareto_dir / "corrupt.json"
+    corrupt.write_text("{not json", encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="failed to load 1 existing Pareto file"):
+        ParetoStore(directory=str(tmp_path), sig_digits=6, flush_interval=10_000, max_size=50)
+
+    assert corrupt.exists()
+
+
+def test_pareto_store_flush_does_not_delete_files_that_were_never_loaded(tmp_path):
+    store = ParetoStore(directory=str(tmp_path), sig_digits=6, flush_interval=10_000, max_size=50)
+    unknown = tmp_path / "pareto" / "unknown.json"
+    unknown.write_text(json.dumps(_make_candidate({"metric1": 1.0})), encoding="utf-8")
+
+    store.flush_now()
+
+    assert unknown.exists()
+
+
+def test_pareto_store_bootstrap_uses_nonempty_scoring_from_later_file(tmp_path):
+    pareto_dir = tmp_path / "pareto"
+    pareto_dir.mkdir()
+    first_without_scoring = pareto_dir / "000_without_scoring.json"
+    later_with_scoring = pareto_dir / "001_with_scoring.json"
+    first_without_scoring.write_text(
+        json.dumps(_make_adg_candidate(1.0, include_scoring=False)),
+        encoding="utf-8",
+    )
+    later_with_scoring.write_text(
+        json.dumps(_make_adg_candidate(2.0, include_scoring=True)),
+        encoding="utf-8",
+    )
+
+    store = ParetoStore(directory=str(tmp_path), sig_digits=6, flush_interval=10_000, max_size=50)
+
+    front = store.get_front()
+    assert store.scoring_keys == ["adg_strategy_eq"]
+    assert len(front) == 1
+    assert front[0]["metrics"]["objectives"]["adg_strategy_eq"] == 2.0
+
+
+def test_pareto_store_rejects_scored_entry_after_unscored_front(tmp_path):
+    store = ParetoStore(directory=str(tmp_path), sig_digits=6, flush_interval=10_000, max_size=50)
+    assert store.add_entry(_make_adg_candidate(1.0, include_scoring=False))
+
+    with pytest.raises(ValueError, match="after unscored entries"):
+        store.add_entry(_make_adg_candidate(2.0, include_scoring=True))
+
+
+def test_pareto_store_rejects_missing_objective_values(tmp_path):
+    entry = {
+        "metrics": {
+            "objectives": {"metric1": None},
+            "constraint_violation": 0.0,
+        },
+        "optimize": {"scoring": ["metric1"]},
+    }
+    store = ParetoStore(directory=str(tmp_path), sig_digits=6, flush_interval=10_000, max_size=50)
+
+    with pytest.raises(ValueError, match="missing or non-numeric"):
+        store.add_entry(entry)
+
+
+def test_pareto_store_rejects_nan_objective_values(tmp_path):
+    entry = {
+        "metrics": {
+            "objectives": {"metric1": math.nan},
+            "constraint_violation": 0.0,
+        },
+        "optimize": {"scoring": ["metric1"]},
+    }
+    store = ParetoStore(directory=str(tmp_path), sig_digits=6, flush_interval=10_000, max_size=50)
+
+    with pytest.raises(ValueError, match="non-finite"):
+        store.add_entry(entry)

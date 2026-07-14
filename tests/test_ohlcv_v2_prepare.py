@@ -1,4 +1,5 @@
 import importlib
+import asyncio
 import json
 import sys
 from types import SimpleNamespace
@@ -7,11 +8,14 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from candlestick_manager import CANDLE_DTYPE, OhlcvFetchError, OhlcvTerminalEmptyPage
 from hlcv_preparation import (
+    HLCVManager,
     _dense_hlcv_frame_from_sparse_v2_range,
     _fetch_coin_range_into_v2_store,
     _resolve_v2_store_range,
     prepare_hlcvs,
+    prepare_hlcvs_internal,
     try_prepare_hlcvs_v2_local,
 )
 from ohlcv_catalog import OhlcvCatalog
@@ -274,7 +278,7 @@ async def test_fetch_coin_range_into_v2_store_accepts_edge_sparse_within_toleran
 
 
 @pytest.mark.asyncio
-async def test_fetch_coin_range_into_v2_store_accepts_trailing_unavailable_tail(tmp_path):
+async def test_fetch_coin_range_short_tail_requires_corroboration(tmp_path):
     catalog = OhlcvCatalog(tmp_path / "caches" / "ohlcvs" / "catalog.sqlite")
     store = OhlcvStore(tmp_path / "caches" / "ohlcvs", catalog)
     start_ts = month_start_ts(2026, 4)
@@ -300,7 +304,7 @@ async def test_fetch_coin_range_into_v2_store_accepts_trailing_unavailable_tail(
             )
 
     manager = FakeOhlcvManager()
-    result = await _fetch_coin_range_into_v2_store(
+    first = await _fetch_coin_range_into_v2_store(
         om=manager,
         catalog=catalog,
         store=store,
@@ -311,14 +315,34 @@ async def test_fetch_coin_range_into_v2_store_accepts_trailing_unavailable_tail(
         end_ts=end_ts,
     )
 
-    assert result.ok
-    assert result.reason == "trailing_unavailable"
+    assert not first.ok
+    assert first.reason == "trailing_unavailable_unconfirmed"
+    attempts = catalog.list_fetch_attempts("bybit", "1m", "ETH/USDT:USDT", start_ts, end_ts)
+    assert attempts[-1].outcome == "trailing_unavailable_unconfirmed"
+    assert "short_tail_return" in (attempts[-1].note or "")
+    assert catalog.get_gaps("bybit", "1m", "ETH/USDT:USDT", start_ts, end_ts) == []
+
+    second = await _fetch_coin_range_into_v2_store(
+        om=manager,
+        catalog=catalog,
+        store=store,
+        exchange="bybit",
+        coin="ETH",
+        symbol="ETH/USDT:USDT",
+        start_ts=start_ts,
+        end_ts=end_ts,
+    )
+
+    assert second.ok
+    assert second.reason == "trailing_unavailable"
     attempts = catalog.list_fetch_attempts("bybit", "1m", "ETH/USDT:USDT", start_ts, end_ts)
     assert attempts[-1].outcome == "trailing_unavailable"
+    assert "confirmed_short_tail_return" in (attempts[-1].note or "")
     gaps = catalog.get_gaps("bybit", "1m", "ETH/USDT:USDT", start_ts, end_ts)
     assert [(gap.start_ts, gap.end_ts, gap.reason) for gap in gaps] == [
         (start_ts + 2 * 60_000, end_ts, "trailing_unavailable")
     ]
+    assert "short_tail_return" in (gaps[-1].note or "")
 
     resolved = await _resolve_v2_store_range(
         om=manager,
@@ -339,6 +363,359 @@ async def test_fetch_coin_range_into_v2_store_accepts_trailing_unavailable_tail(
         resolved.valid,
         np.array([True, True, False, False, False, False]),
     )
+
+
+@pytest.mark.asyncio
+async def test_fetch_coin_range_mixed_sparse_tail_requires_trailing_corroboration(tmp_path):
+    catalog = OhlcvCatalog(tmp_path / "caches" / "ohlcvs" / "catalog.sqlite")
+    store = OhlcvStore(tmp_path / "caches" / "ohlcvs", catalog)
+    start_ts = month_start_ts(2026, 4)
+    end_ts = start_ts + 8 * 60_000
+
+    class FakeOhlcvManager:
+        gap_tolerance_ohlcvs_minutes = 0.0
+        cm = None
+
+        def update_timestamp_range(self, new_start_ts, new_end_ts):
+            self.start_ts = int(new_start_ts)
+            self.end_ts = int(new_end_ts)
+
+        async def fetch_ohlcvs_for_v2_store(self, coin, *, start_ts, end_ts):
+            ts = np.array(
+                [start_ts + 60_000, start_ts + 3 * 60_000, start_ts + 4 * 60_000],
+                dtype=np.int64,
+            )
+            return pd.DataFrame(
+                {
+                    "timestamp": ts,
+                    "high": np.array([101.0, 103.0, 104.0], dtype=np.float32),
+                    "low": np.array([99.0, 101.0, 102.0], dtype=np.float32),
+                    "close": np.array([100.0, 102.0, 103.0], dtype=np.float32),
+                    "volume": np.array([10.0, 12.0, 13.0], dtype=np.float32),
+                }
+            )
+
+    manager = FakeOhlcvManager()
+    first = await _fetch_coin_range_into_v2_store(
+        om=manager,
+        catalog=catalog,
+        store=store,
+        exchange="bybit",
+        coin="ETH",
+        symbol="ETH/USDT:USDT",
+        start_ts=start_ts,
+        end_ts=end_ts,
+    )
+
+    assert first.ok
+    assert first.reason == "leading_unavailable"
+    attempts = catalog.list_fetch_attempts("bybit", "1m", "ETH/USDT:USDT", start_ts, end_ts)
+    assert attempts[-1].outcome == "leading_unavailable"
+    assert "unconfirmed_short_tail_return" in (attempts[-1].note or "")
+    gaps = catalog.get_gaps("bybit", "1m", "ETH/USDT:USDT", start_ts, end_ts)
+    assert [gap.reason for gap in gaps] == ["leading_unavailable", "internal_gap"]
+
+    second = await _fetch_coin_range_into_v2_store(
+        om=manager,
+        catalog=catalog,
+        store=store,
+        exchange="bybit",
+        coin="ETH",
+        symbol="ETH/USDT:USDT",
+        start_ts=start_ts,
+        end_ts=end_ts,
+    )
+
+    assert second.ok
+    attempts = catalog.list_fetch_attempts("bybit", "1m", "ETH/USDT:USDT", start_ts, end_ts)
+    assert "confirmed_short_tail_return" in (attempts[-1].note or "")
+    gaps = catalog.get_gaps("bybit", "1m", "ETH/USDT:USDT", start_ts, end_ts)
+    assert [(gap.start_ts, gap.end_ts, gap.reason) for gap in gaps] == [
+        (start_ts, start_ts, "leading_unavailable"),
+        (start_ts + 2 * 60_000, start_ts + 2 * 60_000, "internal_gap"),
+        (start_ts + 5 * 60_000, end_ts, "trailing_unavailable"),
+    ]
+    assert "short_tail_return" in (gaps[-1].note or "")
+
+
+@pytest.mark.asyncio
+async def test_resolve_v2_store_range_retries_mixed_sparse_tail_before_partial(tmp_path):
+    catalog = OhlcvCatalog(tmp_path / "caches" / "ohlcvs" / "catalog.sqlite")
+    store = OhlcvStore(tmp_path / "caches" / "ohlcvs", catalog)
+    start_ts = month_start_ts(2026, 4)
+    end_ts = start_ts + 8 * 60_000
+
+    class FakeOhlcvManager:
+        gap_tolerance_ohlcvs_minutes = 0.0
+        cm = None
+        fetch_calls = 0
+
+        def update_timestamp_range(self, new_start_ts, new_end_ts):
+            self.start_ts = int(new_start_ts)
+            self.end_ts = int(new_end_ts)
+
+        async def fetch_ohlcvs_for_v2_store(self, coin, *, start_ts, end_ts):
+            self.fetch_calls += 1
+            ts = np.array(
+                [start_ts + 60_000, start_ts + 3 * 60_000, start_ts + 4 * 60_000],
+                dtype=np.int64,
+            )
+            return pd.DataFrame(
+                {
+                    "timestamp": ts,
+                    "high": np.array([101.0, 103.0, 104.0], dtype=np.float32),
+                    "low": np.array([99.0, 101.0, 102.0], dtype=np.float32),
+                    "close": np.array([100.0, 102.0, 103.0], dtype=np.float32),
+                    "volume": np.array([10.0, 12.0, 13.0], dtype=np.float32),
+                }
+            )
+
+    manager = FakeOhlcvManager()
+    rng = await _resolve_v2_store_range(
+        om=manager,
+        catalog=catalog,
+        store=store,
+        legacy_root=None,
+        exchange="bybit",
+        coin="ETH",
+        symbol="ETH/USDT:USDT",
+        start_ts=start_ts,
+        end_ts=end_ts,
+        allow_remote_fetch=True,
+        local_hit_log_label="test local hit",
+        remote_fetch_log_label="test remote fetch",
+    )
+
+    assert manager.fetch_calls == 2
+    assert rng is not None
+    np.testing.assert_array_equal(
+        rng.timestamps,
+        np.array([start_ts + 3 * 60_000, start_ts + 4 * 60_000], dtype=np.int64),
+    )
+    assert rng.valid.all()
+    attempts = catalog.list_fetch_attempts("bybit", "1m", "ETH/USDT:USDT", start_ts, end_ts)
+    assert "unconfirmed_short_tail_return" in (attempts[-2].note or "")
+    assert "confirmed_short_tail_return" in (attempts[-1].note or "")
+    gaps = catalog.get_gaps("bybit", "1m", "ETH/USDT:USDT", start_ts, end_ts)
+    assert [(gap.start_ts, gap.end_ts, gap.reason) for gap in gaps] == [
+        (start_ts, start_ts, "leading_unavailable"),
+        (start_ts + 2 * 60_000, start_ts + 2 * 60_000, "internal_gap"),
+        (start_ts + 5 * 60_000, end_ts, "trailing_unavailable"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_resolve_v2_store_range_retries_pure_tail_before_partial(tmp_path):
+    catalog = OhlcvCatalog(tmp_path / "caches" / "ohlcvs" / "catalog.sqlite")
+    store = OhlcvStore(tmp_path / "caches" / "ohlcvs", catalog)
+    start_ts = month_start_ts(2026, 4)
+    end_ts = start_ts + 8 * 60_000
+    symbol = "ETH/USDT:USDT"
+    store.write_rows(
+        "bybit",
+        "1m",
+        symbol,
+        np.array([start_ts, start_ts + 60_000], dtype=np.int64),
+        np.array(
+            [
+                [101.0, 99.0, 100.0, 10.0],
+                [102.0, 100.0, 101.0, 11.0],
+            ],
+            dtype=np.float32,
+        ),
+    )
+
+    class FakeOhlcvManager:
+        gap_tolerance_ohlcvs_minutes = 0.0
+        cm = None
+        fetch_calls = 0
+
+        def update_timestamp_range(self, new_start_ts, new_end_ts):
+            self.start_ts = int(new_start_ts)
+            self.end_ts = int(new_end_ts)
+
+        async def fetch_ohlcvs_for_v2_store(self, coin, *, start_ts, end_ts):
+            self.fetch_calls += 1
+            ts = np.array([start_ts, start_ts + 60_000], dtype=np.int64)
+            return pd.DataFrame(
+                {
+                    "timestamp": ts,
+                    "high": np.array([103.0, 104.0], dtype=np.float32),
+                    "low": np.array([101.0, 102.0], dtype=np.float32),
+                    "close": np.array([102.0, 103.0], dtype=np.float32),
+                    "volume": np.array([12.0, 13.0], dtype=np.float32),
+                }
+            )
+
+    manager = FakeOhlcvManager()
+    rng = await _resolve_v2_store_range(
+        om=manager,
+        catalog=catalog,
+        store=store,
+        legacy_root=None,
+        exchange="bybit",
+        coin="ETH",
+        symbol=symbol,
+        start_ts=start_ts,
+        end_ts=end_ts,
+        allow_remote_fetch=True,
+        local_hit_log_label="test local hit",
+        remote_fetch_log_label="test remote fetch",
+    )
+
+    assert manager.fetch_calls == 2
+    assert rng is not None
+    np.testing.assert_array_equal(
+        rng.timestamps,
+        np.array(
+            [start_ts + i * 60_000 for i in range(9)],
+            dtype=np.int64,
+        ),
+    )
+    np.testing.assert_array_equal(
+        rng.valid,
+        np.array([True, True, True, False, False, False, False, False, False]),
+    )
+    attempts = catalog.list_fetch_attempts("bybit", "1m", symbol, start_ts, end_ts)
+    assert attempts[-2].outcome == "trailing_unavailable_unconfirmed"
+    assert "short_tail_return" in (attempts[-2].note or "")
+    assert attempts[-1].outcome == "trailing_unavailable"
+    assert "confirmed_short_tail_return" in (attempts[-1].note or "")
+    gaps = catalog.get_gaps("bybit", "1m", symbol, start_ts, end_ts)
+    assert [(gap.start_ts, gap.end_ts, gap.reason) for gap in gaps] == [
+        (start_ts + 3 * 60_000, end_ts, "trailing_unavailable"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_fetch_coin_range_terminal_empty_tail_requires_corroboration(tmp_path):
+    catalog = OhlcvCatalog(tmp_path / "caches" / "ohlcvs" / "catalog.sqlite")
+    store = OhlcvStore(tmp_path / "caches" / "ohlcvs", catalog)
+    start_ts = month_start_ts(2026, 4)
+    end_ts = start_ts + 5 * 60_000
+    terminal_start_ts = start_ts + 2 * 60_000
+    partial_rows = np.array(
+        [
+            (start_ts, 100.0, 101.0, 99.0, 100.0, 10.0),
+            (start_ts + 60_000, 101.0, 102.0, 100.0, 101.0, 11.0),
+        ],
+        dtype=CANDLE_DTYPE,
+    )
+
+    class TerminalEmptyOhlcvManager:
+        gap_tolerance_ohlcvs_minutes = 0.0
+        cm = None
+
+        def update_timestamp_range(self, new_start_ts, new_end_ts):
+            self.start_ts = int(new_start_ts)
+            self.end_ts = int(new_end_ts)
+
+        async def fetch_ohlcvs_for_v2_store(self, coin, *, start_ts, end_ts):
+            raise OhlcvTerminalEmptyPage(
+                "ccxt OHLCV pagination returned an empty page before reaching the requested end",
+                partial_rows=partial_rows,
+                terminal_start_ts=terminal_start_ts,
+                requested_end_ts=end_ts + 60_000,
+                pages=1,
+            )
+
+    manager = TerminalEmptyOhlcvManager()
+
+    first = await _fetch_coin_range_into_v2_store(
+        om=manager,
+        catalog=catalog,
+        store=store,
+        exchange="bybit",
+        coin="ETH",
+        symbol="ETH/USDT:USDT",
+        start_ts=start_ts,
+        end_ts=end_ts,
+    )
+
+    assert not first.ok
+    assert first.reason == "terminal_empty_unconfirmed"
+    attempts = catalog.list_fetch_attempts("bybit", "1m", "ETH/USDT:USDT", start_ts, end_ts)
+    assert attempts[-1].outcome == "terminal_empty_page"
+    assert "boundary=" in (attempts[-1].note or "")
+    assert catalog.get_gaps("bybit", "1m", "ETH/USDT:USDT", start_ts, end_ts) == []
+
+    second = await _fetch_coin_range_into_v2_store(
+        om=manager,
+        catalog=catalog,
+        store=store,
+        exchange="bybit",
+        coin="ETH",
+        symbol="ETH/USDT:USDT",
+        start_ts=start_ts,
+        end_ts=end_ts,
+    )
+
+    assert second.ok
+    assert second.reason == "trailing_unavailable"
+    attempts = catalog.list_fetch_attempts("bybit", "1m", "ETH/USDT:USDT", start_ts, end_ts)
+    assert attempts[-1].outcome == "trailing_unavailable"
+    assert "confirmed_terminal_empty_page" in (attempts[-1].note or "")
+    gaps = catalog.get_gaps("bybit", "1m", "ETH/USDT:USDT", start_ts, end_ts)
+    assert [(gap.start_ts, gap.end_ts, gap.reason) for gap in gaps] == [
+        (terminal_start_ts, end_ts, "trailing_unavailable")
+    ]
+    assert "terminal_empty_page" in (gaps[-1].note or "")
+
+    resolved = await _resolve_v2_store_range(
+        om=manager,
+        catalog=catalog,
+        store=store,
+        legacy_root=None,
+        exchange="bybit",
+        coin="ETH",
+        symbol="ETH/USDT:USDT",
+        start_ts=start_ts,
+        end_ts=end_ts,
+        allow_remote_fetch=False,
+        local_hit_log_label="test local hit",
+        remote_fetch_log_label="test remote fetch",
+    )
+    assert resolved is not None
+    np.testing.assert_array_equal(
+        resolved.valid,
+        np.array([True, True, False, False, False, False]),
+    )
+
+
+@pytest.mark.asyncio
+async def test_fetch_coin_range_into_v2_store_does_not_persist_gaps_on_fetch_failure(tmp_path):
+    catalog = OhlcvCatalog(tmp_path / "caches" / "ohlcvs" / "catalog.sqlite")
+    store = OhlcvStore(tmp_path / "caches" / "ohlcvs", catalog)
+    start_ts = month_start_ts(2026, 4)
+    end_ts = start_ts + 5 * 60_000
+
+    class FailingOhlcvManager:
+        gap_tolerance_ohlcvs_minutes = 0.0
+        cm = None
+
+        def update_timestamp_range(self, new_start_ts, new_end_ts):
+            self.start_ts = int(new_start_ts)
+            self.end_ts = int(new_end_ts)
+
+        async def fetch_ohlcvs_for_v2_store(self, coin, *, start_ts, end_ts):
+            raise OhlcvFetchError("ccxt OHLCV fetch exhausted retries")
+
+    with pytest.raises(OhlcvFetchError):
+        await _fetch_coin_range_into_v2_store(
+            om=FailingOhlcvManager(),
+            catalog=catalog,
+            store=store,
+            exchange="bybit",
+            coin="ETH",
+            symbol="ETH/USDT:USDT",
+            start_ts=start_ts,
+            end_ts=end_ts,
+        )
+
+    attempts = catalog.list_fetch_attempts("bybit", "1m", "ETH/USDT:USDT", start_ts, end_ts)
+    assert attempts[-1].outcome == "exception"
+    assert "OhlcvFetchError" in attempts[-1].note
+    assert catalog.get_gaps("bybit", "1m", "ETH/USDT:USDT", start_ts, end_ts) == []
 
 
 @pytest.mark.asyncio
@@ -1280,6 +1657,123 @@ async def test_resolve_v2_store_range_accepts_discovered_pre_inception_boundary(
 
 
 @pytest.mark.asyncio
+async def test_discovered_pre_inception_boundary_replaces_overlapping_stale_gap(
+    monkeypatch, tmp_path
+):
+    monkeypatch.chdir(tmp_path)
+    catalog = OhlcvCatalog(tmp_path / "caches" / "ohlcvs" / "catalog.sqlite")
+    store = OhlcvStore(tmp_path / "caches" / "ohlcvs", catalog)
+    symbol = "HYPE/USDT:USDT"
+    requested_start = month_start_ts(2026, 4)
+    stale_gap_start = requested_start - 30 * 24 * 60 * 60_000
+    first = requested_start + 630 * 60_000
+    end = first + 9 * 60_000
+    timestamps = np.array([first + i * 60_000 for i in range(10)], dtype=np.int64)
+    values = np.column_stack(
+        [
+            np.arange(101.0, 111.0, dtype=np.float32),
+            np.arange(99.0, 109.0, dtype=np.float32),
+            np.arange(100.0, 110.0, dtype=np.float32),
+            np.arange(10.0, 20.0, dtype=np.float32),
+        ]
+    )
+    catalog.mark_gap(
+        exchange="binance",
+        timeframe="1m",
+        symbol=symbol,
+        start_ts=int(stale_gap_start),
+        end_ts=int(first - 60_000),
+        reason="pre_inception",
+        persistent=True,
+        retry_count=3,
+        last_attempt_at=0,
+        next_retry_at=0,
+        note="mirrored_from_candlestick_manager",
+    )
+
+    async def fake_first_timestamps_unified(coins, exchange=None):
+        return {coin: int(requested_start) for coin in coins}
+
+    monkeypatch.setattr("hlcv_preparation.get_first_timestamps_unified", fake_first_timestamps_unified)
+
+    calls = []
+
+    class FakeManager:
+        gap_tolerance_ohlcvs_minutes = 120.0
+        cm = None
+
+        def load_first_timestamp(self, coin):
+            return int(requested_start)
+
+        def update_timestamp_range(self, new_start_ts, new_end_ts):
+            self.start_ts = int(new_start_ts)
+            self.end_ts = int(new_end_ts)
+
+        async def fetch_ohlcvs_for_v2_store(self, coin, *, start_ts, end_ts):
+            calls.append((int(start_ts), int(end_ts)))
+            idx = (timestamps >= int(start_ts)) & (timestamps <= int(end_ts))
+            return pd.DataFrame(
+                {
+                    "timestamp": timestamps[idx],
+                    "high": values[idx, 0],
+                    "low": values[idx, 1],
+                    "close": values[idx, 2],
+                    "volume": values[idx, 3],
+                }
+            )
+
+    first_rng = await _resolve_v2_store_range(
+        om=FakeManager(),
+        catalog=catalog,
+        store=store,
+        legacy_root=None,
+        exchange="binance",
+        coin="HYPE",
+        symbol=symbol,
+        start_ts=int(requested_start),
+        end_ts=int(end),
+        allow_remote_fetch=True,
+        local_hit_log_label="v2 local hit",
+        remote_fetch_log_label="v2 fetching missing range",
+    )
+
+    assert first_rng is not None
+    np.testing.assert_array_equal(first_rng.timestamps, timestamps)
+    assert len(calls) == 1
+    prefix_gaps = catalog.get_persistent_gaps(
+        "binance", "1m", symbol, int(requested_start), int(first - 60_000)
+    )
+    assert len(prefix_gaps) == 1
+    assert prefix_gaps[0].start_ts == int(requested_start)
+    assert prefix_gaps[0].end_ts == int(first - 60_000)
+    assert prefix_gaps[0].note == "discovered_first_candle_during_stale_repair"
+    prior_gaps = catalog.get_persistent_gaps(
+        "binance", "1m", symbol, int(stale_gap_start), int(requested_start - 60_000)
+    )
+    assert len(prior_gaps) == 1
+    assert prior_gaps[0].note == "mirrored_from_candlestick_manager"
+
+    second_rng = await _resolve_v2_store_range(
+        om=FakeManager(),
+        catalog=catalog,
+        store=store,
+        legacy_root=None,
+        exchange="binance",
+        coin="HYPE",
+        symbol=symbol,
+        start_ts=int(requested_start),
+        end_ts=int(end),
+        allow_remote_fetch=True,
+        local_hit_log_label="v2 local hit",
+        remote_fetch_log_label="v2 fetching missing range",
+    )
+
+    assert second_rng is not None
+    np.testing.assert_array_equal(second_rng.timestamps, timestamps)
+    assert len(calls) == 1
+
+
+@pytest.mark.asyncio
 async def test_resolve_v2_store_range_accepts_authoritative_leading_boundary_with_partial_gap(
     monkeypatch, tmp_path, caplog
 ):
@@ -1783,6 +2277,64 @@ async def test_prepare_hlcvs_mss_prefers_local_v2_before_full_prepare(monkeypatc
     np.testing.assert_array_equal(timestamps, prepared[1])
     assert mss["ETH"]["first_valid_index"] == 0
     assert mss["ETH"]["last_valid_index"] == 0
+
+
+@pytest.mark.asyncio
+async def test_prepare_hlcvs_mss_releases_payload_when_cache_save_interrupted(
+    monkeypatch, tmp_path
+):
+    import rust_utils
+
+    hlcvs = np.array([[[101.0, 99.0, 100.0, 10.0]]], dtype=np.float64)
+    prepared = (
+        {
+            "ETH": {"first_valid_index": 0, "last_valid_index": 0},
+            "__meta__": {"btc_source_exchange": "binance"},
+        },
+        np.array([month_start_ts(2026, 4)], dtype=np.int64),
+        hlcvs,
+        np.array([50_000.0], dtype=np.float64),
+    )
+    config = {
+        "backtest": {
+            "base_dir": str(tmp_path / "results"),
+            "start_date": "2026-04-01",
+            "end_date": "2026-04-01",
+            "gap_tolerance_ohlcvs_minutes": 120.0,
+        },
+        "live": {
+            "approved_coins": {"long": ["ETH"], "short": []},
+            "warmup_ratio": 0.0,
+            "max_warmup_minutes": 0.0,
+        },
+        "bot": _minimal_bot_config(),
+    }
+
+    monkeypatch.setattr(rust_utils, "check_and_maybe_compile", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        rust_utils,
+        "verify_loaded_runtime_extension",
+        lambda *args, **kwargs: {"skipped": "test"},
+    )
+    sys.modules.pop("backtest", None)
+    backtest = importlib.import_module("backtest")
+    monkeypatch.setattr(backtest, "load_coins_hlcvs_from_cache", lambda *args, **kwargs: None)
+
+    async def fake_try_prepare(*args, **kwargs):
+        return prepared
+
+    def interrupting_save(*args, **kwargs):
+        raise asyncio.CancelledError("test interrupt")
+
+    released = []
+    monkeypatch.setattr(backtest, "try_prepare_hlcvs_v2_local", fake_try_prepare)
+    monkeypatch.setattr(backtest, "save_coins_hlcvs_to_cache", interrupting_save)
+    monkeypatch.setattr(backtest, "release_materialized_payload", released.append)
+
+    with pytest.raises(asyncio.CancelledError):
+        await backtest.prepare_hlcvs_mss(config, "binance")
+
+    assert released == [hlcvs]
 
 
 @pytest.mark.asyncio
@@ -2335,6 +2887,129 @@ async def test_prepare_hlcvs_mss_stock_perp_source_dir_loads_real_values(
 
 
 @pytest.mark.asyncio
+async def test_hlcv_manager_source_dir_marks_open_tail_fill_invalid(monkeypatch, tmp_path):
+    import hlcv_preparation as hp
+    from ohlcv_utils import dump_ohlcv_data
+    from utils import ts_to_date
+
+    source_dir = tmp_path / "ohlcv_source"
+    start_ts = month_start_ts(2026, 4)
+    end_ts = start_ts + 2 * 60_000
+    eth_dir = source_dir / "binance" / "1m" / "ETH"
+    eth_dir.mkdir(parents=True, exist_ok=True)
+    dump_ohlcv_data(
+        np.array([[start_ts, 101.0, 103.0, 99.0, 102.0, 7.0]], dtype=np.float64),
+        str(eth_dir / "2026-04-01.npy"),
+    )
+
+    async def fake_load_markets(self):
+        self.markets = {
+            "ETH/USDT:USDT": {
+                "symbol": "ETH/USDT:USDT",
+                "base": "ETH",
+                "quote": "USDT",
+            }
+        }
+
+    class FakeExchange:
+        async def close(self):
+            return None
+
+    def fake_load_cc(self):
+        self.cc = FakeExchange()
+        self.cm = hp.CandlestickManager(
+            exchange=None,
+            exchange_name="binance",
+            cache_dir=str(tmp_path / "cm_cache"),
+        )
+
+    monkeypatch.setattr(hp.HLCVManager, "load_markets", fake_load_markets)
+    monkeypatch.setattr(hp.HLCVManager, "load_cc", fake_load_cc)
+
+    om = HLCVManager(
+        "binance",
+        ts_to_date(start_ts),
+        ts_to_date(end_ts),
+        gap_tolerance_ohlcvs_minutes=120.0,
+        ohlcv_source_dir=str(source_dir),
+    )
+    try:
+        om.update_timestamp_range(start_ts, end_ts)
+        df = await om.get_ohlcvs("ETH")
+    finally:
+        await om.aclose()
+
+    assert df["timestamp"].tolist() == [start_ts, start_ts + 60_000, end_ts]
+    assert df["valid"].tolist() == [True, False, False]
+    assert df["volume"].tolist() == [7.0, 0.0, 0.0]
+
+
+@pytest.mark.asyncio
+async def test_prepare_hlcvs_internal_masks_invalid_direct_fetch_rows(monkeypatch):
+    import hlcv_preparation as hp
+
+    start_ts = month_start_ts(2026, 4)
+    end_ts = start_ts + 2 * 60_000
+
+    async def fake_first_timestamps(coins):
+        return {"ETH": start_ts}
+
+    monkeypatch.setattr(hp, "get_first_timestamps_unified", fake_first_timestamps)
+
+    class FakeOm:
+        async def load_markets(self):
+            return None
+
+        def has_coin(self, coin):
+            return coin == "ETH"
+
+        def update_date_range(self, new_start_date=None, new_end_date=None):
+            self.start_ts = int(new_start_date)
+            self.end_ts = int(new_end_date) if new_end_date is not None else end_ts
+
+        async def get_ohlcvs(self, coin):
+            return pd.DataFrame(
+                {
+                    "timestamp": np.array([start_ts, start_ts + 60_000, end_ts], dtype=np.int64),
+                    "high": np.array([103.0, 102.0, 102.0]),
+                    "low": np.array([99.0, 102.0, 102.0]),
+                    "close": np.array([102.0, 102.0, 102.0]),
+                    "volume": np.array([7.0, 0.0, 0.0]),
+                    "valid": np.array([True, False, False]),
+                }
+            )
+
+        def get_market_specific_settings(self, coin):
+            return {}
+
+    config = {
+        "live": {
+            "approved_coins": {"long": ["ETH"], "short": []},
+            "minimum_coin_age_days": 0.0,
+            "warmup_ratio": 0.0,
+            "max_warmup_minutes": 0.0,
+        },
+        "bot": _minimal_bot_config(),
+    }
+
+    mss, timestamps, aligned = await prepare_hlcvs_internal(
+        config,
+        ["ETH"],
+        "binance",
+        start_ts,
+        start_ts,
+        end_ts,
+        FakeOm(),
+    )
+
+    np.testing.assert_array_equal(timestamps, np.array([start_ts, start_ts + 60_000, end_ts]))
+    np.testing.assert_allclose(aligned["ETH"][0], np.array([103.0, 99.0, 102.0, 7.0]))
+    assert np.isnan(aligned["ETH"][1:]).all()
+    assert mss["ETH"]["first_valid_index"] == 0
+    assert mss["ETH"]["last_valid_index"] == 0
+
+
+@pytest.mark.asyncio
 async def test_prepare_hlcvs_prefers_local_v2_before_legacy_prepare(monkeypatch):
     prepared = (
         {
@@ -2764,3 +3439,256 @@ async def test_corrupt_chunk_repair_rebuilds_full_chunk_not_only_requested_slice
     )
     np.testing.assert_array_equal(preserved.valid, np.array([True]))
     np.testing.assert_allclose(preserved.values, repair[1:])
+
+
+@pytest.mark.asyncio
+async def test_corrupt_chunk_repair_clears_unreturned_rows_in_refetch_window(tmp_path):
+    catalog = OhlcvCatalog(tmp_path / "caches" / "ohlcvs" / "catalog.sqlite")
+    store = OhlcvStore(tmp_path / "caches" / "ohlcvs", catalog)
+    start = month_start_ts(2026, 4)
+    month_end = month_end_ts(2026, 4, "1m")
+    requested_ts = np.array([start], dtype=np.int64)
+    stale_ts = np.array([start + 60_000], dtype=np.int64)
+    seed_ts = np.array([requested_ts[0], stale_ts[0]], dtype=np.int64)
+    initial = np.array([[101.0, 99.0, 100.0, 10.0], [102.0, 100.0, 101.0, 11.0]], dtype=np.float32)
+    repair = np.array([[3.0, 3.0, 3.0, 3.0]], dtype=np.float32)
+    store.write_rows("binance", "1m", "ETH/USDT:USDT", seed_ts, initial)
+    chunk = catalog.list_chunks("binance", "1m", "ETH/USDT:USDT", int(start), int(start))[0]
+    body = np.load(chunk.body_path, mmap_mode="r+")
+    body[0, 0] = 999.0
+    body.flush()
+    del body
+
+    class FakeManager:
+        gap_tolerance_ohlcvs_minutes = 120.0
+        cm = None
+
+        def update_timestamp_range(self, start_ts, end_ts):
+            self.start_ts = int(start_ts)
+            self.end_ts = int(end_ts)
+
+        async def fetch_ohlcvs_for_v2_store(self, coin, *, start_ts, end_ts):
+            assert int(start_ts) == int(start)
+            assert int(end_ts) == int(month_end)
+            return pd.DataFrame(
+                {
+                    "timestamp": requested_ts,
+                    "open": repair[:, 2],
+                    "high": repair[:, 0],
+                    "low": repair[:, 1],
+                    "close": repair[:, 2],
+                    "volume": repair[:, 3],
+                }
+            )
+
+    rng = await _resolve_v2_store_range(
+        om=FakeManager(),
+        catalog=catalog,
+        store=store,
+        legacy_root=None,
+        exchange="binance",
+        coin="ETH",
+        symbol="ETH/USDT:USDT",
+        start_ts=int(requested_ts[0]),
+        end_ts=int(requested_ts[0]),
+        allow_remote_fetch=True,
+        local_hit_log_label="test local hit",
+        remote_fetch_log_label="test remote fetch",
+    )
+
+    assert rng is not None
+    np.testing.assert_array_equal(rng.valid, np.array([True]))
+    np.testing.assert_allclose(rng.values, repair)
+    stale = store.read_range(
+        "binance", "1m", "ETH/USDT:USDT", int(stale_ts[0]), int(stale_ts[0])
+    )
+    np.testing.assert_array_equal(stale.valid, np.array([False]))
+
+
+@pytest.mark.asyncio
+async def test_corrupt_chunk_failed_repair_preserves_existing_rows(tmp_path):
+    catalog = OhlcvCatalog(tmp_path / "caches" / "ohlcvs" / "catalog.sqlite")
+    store = OhlcvStore(tmp_path / "caches" / "ohlcvs", catalog)
+    start = month_start_ts(2026, 4)
+    month_end = month_end_ts(2026, 4, "1m")
+    ts = np.array([start, start + 60_000], dtype=np.int64)
+    initial = np.array([[101.0, 99.0, 100.0, 10.0], [102.0, 100.0, 101.0, 11.0]], dtype=np.float32)
+    corrupt = initial.copy()
+    corrupt[0, 0] = 999.0
+    store.write_rows("binance", "1m", "ETH/USDT:USDT", ts, initial)
+    chunk = catalog.list_chunks("binance", "1m", "ETH/USDT:USDT", int(start), int(start))[0]
+    body = np.load(chunk.body_path, mmap_mode="r+")
+    body[0, 0] = corrupt[0, 0]
+    body.flush()
+    del body
+
+    empty_fetch = pd.DataFrame(
+        {
+            "timestamp": np.array([], dtype=np.int64),
+            "high": np.array([], dtype=np.float32),
+            "low": np.array([], dtype=np.float32),
+            "close": np.array([], dtype=np.float32),
+            "volume": np.array([], dtype=np.float32),
+        }
+    )
+    repair_calls = []
+
+    class FakeManager:
+        gap_tolerance_ohlcvs_minutes = 120.0
+        cm = None
+
+        def update_timestamp_range(self, start_ts, end_ts):
+            self.start_ts = int(start_ts)
+            self.end_ts = int(end_ts)
+
+        async def fetch_ohlcvs_for_v2_store(self, coin, *, start_ts, end_ts):
+            repair_calls.append((int(start_ts), int(end_ts)))
+            return empty_fetch
+
+    rng = await _resolve_v2_store_range(
+        om=FakeManager(),
+        catalog=catalog,
+        store=store,
+        legacy_root=None,
+        exchange="binance",
+        coin="ETH",
+        symbol="ETH/USDT:USDT",
+        start_ts=int(ts[0]),
+        end_ts=int(ts[-1]),
+        allow_remote_fetch=True,
+        local_hit_log_label="test local hit",
+        remote_fetch_log_label="test remote fetch",
+    )
+
+    assert rng is None
+    assert repair_calls == [(int(start), int(month_end))]
+    body = np.load(chunk.body_path, mmap_mode="r")
+    valid = np.load(chunk.valid_path, mmap_mode="r")
+    try:
+        np.testing.assert_allclose(body[:2], corrupt)
+        np.testing.assert_array_equal(valid[:2], np.array([True, True]))
+    finally:
+        del body
+        del valid
+
+
+def test_mark_sparse_fetch_gaps_graduated_retry_windows(tmp_path):
+    """A gap's first observation gets a short re-verification window; only a
+    re-observation separated in time earns the full KNOWN_GAP_RETRY_MS window.
+    Guards against a transient outage or publishing delay masking data for
+    the full retry period on a single sighting."""
+    from hlcv_preparation import (
+        GAP_CORROBORATION_MIN_SEPARATION_MS,
+        GAP_FIRST_OBSERVATION_RETRY_MS,
+        KNOWN_GAP_RETRY_MS,
+        _mark_sparse_fetch_gaps,
+    )
+    from utils import utc_ms
+
+    catalog = OhlcvCatalog(tmp_path / "caches" / "ohlcvs" / "catalog.sqlite")
+    start_ts = month_start_ts(2026, 4)
+    request_end_ts = start_ts + 9 * 60_000
+    # Rows with an internal hole (minute 2 missing) and a missing tail.
+    ts = np.array(
+        [start_ts, start_ts + 60_000, start_ts + 3 * 60_000, start_ts + 4 * 60_000],
+        dtype=np.int64,
+    )
+
+    def mark():
+        _mark_sparse_fetch_gaps(
+            catalog=catalog,
+            exchange="kucoin",
+            timeframe="1m",
+            symbol="ETH/USDT:USDT",
+            request_start_ts=start_ts,
+            request_end_ts=request_end_ts,
+            ts=ts,
+            attempt=1,
+            leading_reason="leading_unavailable",
+            trailing_note="short_tail_return test",
+        )
+
+    mark()
+    now_ms = int(utc_ms())
+    gaps = catalog.get_gaps("kucoin", "1m", "ETH/USDT:USDT", start_ts, request_end_ts)
+    assert {gap.reason for gap in gaps} == {"internal_gap", "trailing_unavailable"}
+    for gap in gaps:
+        assert gap.persistent
+        # First observation: short window, far below the corroborated one.
+        assert gap.next_retry_at <= now_ms + GAP_FIRST_OBSERVATION_RETRY_MS + 5_000
+        assert gap.next_retry_at < now_ms + KNOWN_GAP_RETRY_MS // 2
+
+    # Re-marking immediately (same run / seconds apart) must NOT extend the window.
+    mark()
+    gaps = catalog.get_gaps("kucoin", "1m", "ETH/USDT:USDT", start_ts, request_end_ts)
+    for gap in gaps:
+        assert gap.next_retry_at < now_ms + KNOWN_GAP_RETRY_MS // 2
+
+    # Backdate the recorded observations beyond the corroboration separation,
+    # then re-mark: the identical gaps are now corroborated -> full window.
+    import sqlite3
+
+    with sqlite3.connect(catalog.db_path) as conn:
+        conn.execute(
+            "UPDATE gaps SET last_attempt_at = last_attempt_at - ?",
+            (GAP_CORROBORATION_MIN_SEPARATION_MS + 60_000,),
+        )
+    mark()
+    now_ms = int(utc_ms())
+    gaps = catalog.get_gaps("kucoin", "1m", "ETH/USDT:USDT", start_ts, request_end_ts)
+    for gap in gaps:
+        assert gap.next_retry_at > now_ms + KNOWN_GAP_RETRY_MS - 60_000
+
+
+@pytest.mark.asyncio
+async def test_confirmed_short_tail_gap_gets_short_first_retry_window(tmp_path):
+    """The in-run short-tail confirmation writes a truncated dataset; its
+    trailing gap must carry the short first-observation retry window so a
+    false confirm (exchange publishing delay) self-heals quickly instead of
+    clipping recent-end backtests for the full KNOWN_GAP_RETRY_MS."""
+    from hlcv_preparation import GAP_FIRST_OBSERVATION_RETRY_MS, KNOWN_GAP_RETRY_MS
+    from utils import utc_ms
+
+    catalog = OhlcvCatalog(tmp_path / "caches" / "ohlcvs" / "catalog.sqlite")
+    store = OhlcvStore(tmp_path / "caches" / "ohlcvs", catalog)
+    start_ts = month_start_ts(2026, 4)
+    end_ts = start_ts + 5 * 60_000
+
+    class FakeOhlcvManager:
+        gap_tolerance_ohlcvs_minutes = 0.0
+        cm = None
+
+        def update_timestamp_range(self, new_start_ts, new_end_ts):
+            self.start_ts = int(new_start_ts)
+            self.end_ts = int(new_end_ts)
+
+        async def fetch_ohlcvs_for_v2_store(self, coin, *, start_ts, end_ts):
+            return pd.DataFrame(
+                {
+                    "timestamp": np.array([start_ts, start_ts + 60_000], dtype=np.int64),
+                    "high": np.array([101.0, 102.0], dtype=np.float32),
+                    "low": np.array([99.0, 100.0], dtype=np.float32),
+                    "close": np.array([100.0, 101.0], dtype=np.float32),
+                    "volume": np.array([10.0, 11.0], dtype=np.float32),
+                }
+            )
+
+    manager = FakeOhlcvManager()
+    for _ in range(2):
+        result = await _fetch_coin_range_into_v2_store(
+            om=manager,
+            catalog=catalog,
+            store=store,
+            exchange="bybit",
+            coin="ETH",
+            symbol="ETH/USDT:USDT",
+            start_ts=start_ts,
+            end_ts=end_ts,
+        )
+
+    assert result.ok
+    now_ms = int(utc_ms())
+    gaps = catalog.get_gaps("bybit", "1m", "ETH/USDT:USDT", start_ts, end_ts)
+    assert [gap.reason for gap in gaps] == ["trailing_unavailable"]
+    assert gaps[0].next_retry_at <= now_ms + GAP_FIRST_OBSERVATION_RETRY_MS + 5_000
+    assert gaps[0].next_retry_at < now_ms + KNOWN_GAP_RETRY_MS // 2

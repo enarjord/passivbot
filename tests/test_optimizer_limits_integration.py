@@ -2,7 +2,9 @@ from copy import deepcopy
 
 import pytest
 
+from backtest import expand_analysis
 from config_utils import get_template_config
+from metrics_schema import build_scenario_metrics, flatten_metric_stats
 from optimize import Evaluator
 
 
@@ -101,6 +103,27 @@ def test_limit_penalty_remains_global_for_non_scoring_metric():
     assert pytest.approx(penalty) == expected_penalty
 
 
+def test_loss_profit_ratio_scoring_survives_finite_zero_profit_analysis():
+    cfg = _make_config([], scoring=[{"goal": "min", "metric": "loss_profit_ratio"}])
+    analysis = expand_analysis(
+        {
+            "loss_profit_ratio": 1000.0,
+            "loss_profit_ratio_long": 1000.0,
+            "loss_profit_ratio_short": 1.0,
+        },
+        {},
+        None,
+        [],
+        cfg,
+    )
+    flat_stats = flatten_metric_stats(build_scenario_metrics({"combined": analysis})["stats"])
+
+    assert flat_stats["loss_profit_ratio_mean"] == 1000.0
+    scores, penalty = Evaluator({}, {}, {}, cfg).calc_fitness(flat_stats)
+    assert scores == (1000.0,)
+    assert penalty == 0.0
+
+
 def test_missing_limit_metric_raises_instead_of_passing():
     limits = [
         {"metric": "fills_gap_p99_hours", "penalize_if": "greater_than", "value": 72.0},
@@ -168,3 +191,30 @@ def test_fill_gap_limit_honors_explicit_max_stat():
 
     assert pytest.approx(scores[0]) == (73.0 - 72.0) * 1e6
     assert pytest.approx(penalty) == (73.0 - 72.0) * 1e6
+
+
+def test_limit_can_use_median_stat_emitted_by_metric_schema():
+    limits = [
+        {
+            "metric": "fills_gap_p99_hours",
+            "penalize_if": "greater_than",
+            "value": 4.0,
+            "stat": "median",
+        },
+    ]
+    cfg = _make_config(limits, scoring=["adg"])
+    flat_stats = flatten_metric_stats(
+        build_scenario_metrics(
+            {
+                "binance": {"adg": 0.001, "fills_gap_p99_hours": 1.0},
+                "bybit": {"adg": 0.001, "fills_gap_p99_hours": 5.0},
+                "kucoin": {"adg": 0.001, "fills_gap_p99_hours": 100.0},
+            }
+        )["stats"]
+    )
+
+    assert flat_stats["fills_gap_p99_hours_median"] == 5.0
+    scores, penalty = Evaluator({}, {}, {}, cfg).calc_fitness(flat_stats)
+
+    assert pytest.approx(scores[0]) == (5.0 - 4.0) * 1e6
+    assert pytest.approx(penalty) == (5.0 - 4.0) * 1e6

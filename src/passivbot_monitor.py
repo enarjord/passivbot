@@ -10,10 +10,16 @@ from typing import Any, Iterable, Optional
 import numpy as np
 import passivbot_rust as pbr
 
+from live.event_bus import EventTypes
 from trailing_diagnostics import (
+    build_trailing_grid_v7_diagnostic,
     build_trailing_close_diagnostic,
     build_trailing_entry_diagnostic,
     normalize_trailing_extrema,
+)
+from risk_limits import (
+    effective_we_excess_allowance_pct,
+    normalize_we_excess_allowance_mode,
 )
 from utils import utc_ms
 
@@ -26,6 +32,22 @@ try:
     import resource  # type: ignore
 except Exception:
     resource = None
+
+_PROCESS_CPU_PERCENT_PROBE: Any = None
+
+
+def _psutil_probe_errors() -> tuple[type[BaseException], ...]:
+    error_types: tuple[type[BaseException], ...] = (
+        OSError,
+        RuntimeError,
+        ValueError,
+        AttributeError,
+    )
+    if psutil is not None:
+        psutil_error = getattr(psutil, "Error", None)
+        if isinstance(psutil_error, type):
+            error_types = error_types + (psutil_error,)
+    return error_types
 
 
 def _get_process_rss_bytes() -> Optional[int]:
@@ -46,6 +68,130 @@ def _get_process_rss_bytes() -> Optional[int]:
         except Exception:
             pass
     return None
+
+
+def _get_process_memory_percent() -> Optional[float]:
+    """Return current process memory percentage when psutil is available."""
+    try:
+        if psutil is not None:
+            return float(psutil.Process(os.getpid()).memory_percent())
+    except Exception as exc:
+        logging.debug("[monitor] memory percent probe unavailable: %s", exc)
+    return None
+
+
+def _finite_non_negative_float(value: Any) -> Optional[float]:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(number) or number < 0.0:
+        return None
+    return number
+
+
+def _finite_non_negative_int(value: Any) -> Optional[int]:
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return None
+    if number < 0:
+        return None
+    return number
+
+
+def _get_system_memory_payload() -> dict[str, Any]:
+    """Return optional system memory/swap pressure when psutil is available."""
+    payload: dict[str, Any] = {}
+    if psutil is None:
+        return payload
+    try:
+        memory = psutil.virtual_memory()
+        fields = {
+            "system_memory_total_bytes": _finite_non_negative_int(
+                getattr(memory, "total", None)
+            ),
+            "system_memory_available_bytes": _finite_non_negative_int(
+                getattr(memory, "available", None)
+            ),
+            "system_memory_percent": _finite_non_negative_float(
+                getattr(memory, "percent", None)
+            ),
+        }
+        payload.update(
+            {key: value for key, value in fields.items() if value is not None}
+        )
+    except _psutil_probe_errors() as exc:
+        logging.debug("[monitor] system memory probe unavailable: %s", exc)
+    try:
+        swap = psutil.swap_memory()
+        fields = {
+            "swap_total_bytes": _finite_non_negative_int(getattr(swap, "total", None)),
+            "swap_used_bytes": _finite_non_negative_int(getattr(swap, "used", None)),
+            "swap_percent": _finite_non_negative_float(getattr(swap, "percent", None)),
+        }
+        payload.update(
+            {key: value for key, value in fields.items() if value is not None}
+        )
+    except _psutil_probe_errors() as exc:
+        logging.debug("[monitor] swap memory probe unavailable: %s", exc)
+    return payload
+
+
+def _get_process_cpu_percent() -> Optional[float]:
+    """Return non-blocking process CPU percentage when psutil is available."""
+    if psutil is None:
+        return None
+    global _PROCESS_CPU_PERCENT_PROBE
+    try:
+        if _PROCESS_CPU_PERCENT_PROBE is None:
+            _PROCESS_CPU_PERCENT_PROBE = psutil.Process(os.getpid())
+            _PROCESS_CPU_PERCENT_PROBE.cpu_percent(interval=None)
+            return None
+        return float(_PROCESS_CPU_PERCENT_PROBE.cpu_percent(interval=None))
+    except _psutil_probe_errors() as exc:
+        _PROCESS_CPU_PERCENT_PROBE = None
+        logging.debug("[monitor] cpu percent probe unavailable: %s", exc)
+    return None
+
+
+def _get_open_fd_count() -> Optional[int]:
+    """Return current open file descriptor count when the platform exposes it."""
+    try:
+        if psutil is not None:
+            process = psutil.Process(os.getpid())
+            num_fds = getattr(process, "num_fds", None)
+            if callable(num_fds):
+                return int(num_fds())
+    except Exception as exc:
+        logging.debug("[monitor] psutil fd-count probe unavailable: %s", exc)
+    proc_fd = "/proc/self/fd"
+    try:
+        if os.path.isdir(proc_fd):
+            return int(len(os.listdir(proc_fd)))
+    except Exception as exc:
+        logging.debug("[monitor] proc fd-count probe unavailable: %s", exc)
+    return None
+
+
+def _get_loadavg_payload() -> dict[str, Any]:
+    """Return system load averages and CPU count when available."""
+    payload: dict[str, Any] = {}
+    try:
+        one, five, fifteen = os.getloadavg()
+        payload.update(
+            {
+                "loadavg_1m": float(one),
+                "loadavg_5m": float(five),
+                "loadavg_15m": float(fifteen),
+            }
+        )
+    except (AttributeError, OSError):
+        pass
+    cpu_count = os.cpu_count()
+    if cpu_count is not None:
+        payload["cpu_count"] = int(cpu_count)
+    return payload
 
 
 def _calc_monitor_pnl(position_side, entry_price, close_price, qty, c_mult):
@@ -142,12 +288,35 @@ def _monitor_emit_stop(
     stop_payload = {"reason": str(reason)}
     if payload:
         stop_payload.update(payload)
-    return self._monitor_record_event(
+    event = self._monitor_record_event(
         "bot.stop",
         ("bot", "lifecycle", "stop"),
         stop_payload,
         ts=ts,
     )
+    if (
+        str(reason) != "shutdown_gracefully"
+        and not getattr(self, "_live_event_bot_stopped_emitted", False)
+    ):
+        emit_live_event = getattr(self, "_emit_live_event", None)
+        if callable(emit_live_event):
+            try:
+                status = "failed" if str(reason) == "startup_error" else "skipped"
+                emit_live_event(
+                    EventTypes.BOT_STOPPED,
+                    level="info",
+                    component="lifecycle",
+                    tags=("bot", "lifecycle", "stop"),
+                    status=status,
+                    reason_code=str(reason),
+                    data=stop_payload,
+                )
+                self._live_event_bot_stopped_emitted = True
+            except Exception as exc:
+                logging.debug(
+                    "[monitor] failed to emit structured terminal stop: %s", exc
+                )
+    return event
 
 
 def _monitor_hsl_payload(self, pside: str) -> dict:
@@ -275,7 +444,12 @@ def _monitor_handle_candlestick_persist(
     publisher.record_completed_candles(symbol, timeframe, candles)
 
 
-def _build_health_summary_payload(self, *, now_ms: Optional[int] = None) -> dict:
+def _build_health_summary_payload(
+    self,
+    *,
+    now_ms: Optional[int] = None,
+    reset_event_pipeline_timing: bool = False,
+) -> dict | tuple[dict, int | None]:
     now_ms = utc_ms() if now_ms is None else int(now_ms)
     n_long = 0
     n_short = 0
@@ -295,18 +469,75 @@ def _build_health_summary_payload(self, *, now_ms: Optional[int] = None) -> dict
         "positions_short": n_short,
         "balance_raw": balance_raw,
         "balance_snapped": balance_snapped,
+        "quote": str(getattr(self, "quote", "") or ""),
         "equity": float(getattr(self, "_monitor_last_equity", balance_raw) or balance_raw),
         "orders_placed": int(self._health_orders_placed),
         "orders_cancelled": int(self._health_orders_cancelled),
         "fills": int(self._health_fills),
         "pnl": float(self._health_pnl),
         "errors_last_hour": recent_errors,
+        "error_budget_max": 10,
         "ws_reconnects": int(self._health_ws_reconnects),
         "rate_limits": int(self._health_rate_limits),
     }
+    loop_ms = payload["last_loop_duration_ms"]
+    loop_timings = getattr(self, "_last_loop_timing_ms", {}) or {}
+    if loop_ms >= 60_000 and isinstance(loop_timings, dict):
+        slow_phases = []
+        for phase, duration_ms in loop_timings.items():
+            try:
+                duration_ms = int(duration_ms)
+            except (TypeError, ValueError):
+                continue
+            if duration_ms > 0:
+                slow_phases.append((str(phase)[:64], duration_ms))
+        slow_phases.sort(key=lambda item: item[1], reverse=True)
+        if slow_phases:
+            payload["slow_phases"] = [
+                {"phase": phase, "duration_ms": duration_ms}
+                for phase, duration_ms in slow_phases[:3]
+            ]
+    summary_lag_ms = getattr(self, "_health_summary_lag_ms", None)
+    if summary_lag_ms is not None:
+        payload["health_summary_lag_ms"] = max(0, int(summary_lag_ms))
     rss = _get_process_rss_bytes()
     if rss is not None:
         payload["rss_bytes"] = int(rss)
+    mem_pct = _get_process_memory_percent()
+    if mem_pct is not None and math.isfinite(mem_pct):
+        payload["memory_percent"] = float(mem_pct)
+    cpu_pct = _get_process_cpu_percent()
+    if cpu_pct is not None and math.isfinite(cpu_pct):
+        payload["cpu_percent"] = max(0.0, float(cpu_pct))
+    open_fds = _get_open_fd_count()
+    if open_fds is not None:
+        payload["open_fds"] = int(open_fds)
+    payload.update(_get_loadavg_payload())
+    payload.update(_get_system_memory_payload())
+    pipeline = getattr(self, "_live_event_pipeline", None)
+    health_snapshot = getattr(pipeline, "health_snapshot", None)
+    timing_snapshot_token = None
+    if callable(health_snapshot):
+        try:
+            if reset_event_pipeline_timing:
+                consume_timing_snapshot = getattr(
+                    pipeline, "consume_timing_snapshot", None
+                )
+                if callable(consume_timing_snapshot):
+                    pipeline_payload, timing_snapshot_token = (
+                        consume_timing_snapshot()
+                    )
+                else:
+                    pipeline_payload = health_snapshot()
+            else:
+                pipeline_payload = health_snapshot()
+        except Exception as exc:
+            logging.debug("[monitor] event pipeline health snapshot unavailable: %s", exc)
+            pipeline_payload = {}
+        if isinstance(pipeline_payload, dict):
+            payload.update(pipeline_payload)
+    if reset_event_pipeline_timing:
+        return payload, timing_snapshot_token
     return payload
 
 
@@ -622,7 +853,9 @@ async def _build_monitor_forager_section(self) -> dict[str, dict]:
 
 def _build_monitor_unstuck_section(self) -> dict[str, Any]:
     has_open = bool(self.has_open_unstuck_order())
-    allowances_live = self._calc_unstuck_allowances_live(allow_new_unstuck=not has_open)
+    # Allowances are pure budget facts and stay real while an unstuck order
+    # is open; has_open is reported alongside so the monitor shows both.
+    allowances_live = self._calc_unstuck_allowances_live()
     out: dict[str, Any] = {
         "has_open_order": has_open,
         "open_orders": [],
@@ -656,6 +889,19 @@ def _build_monitor_unstuck_section(self) -> dict[str, Any]:
         for key in ("allowance", "peak", "pct_from_peak"):
             if key in info:
                 side_payload[key] = float(info[key])
+        if "loss_allowance_pct" in info:
+            side_payload["configured_loss_allowance_pct"] = float(info["loss_allowance_pct"])
+        override_pcts = info.get("override_loss_allowance_pcts")
+        if isinstance(override_pcts, dict) and override_pcts:
+            side_payload["override_loss_allowance_pcts"] = {
+                str(symbol): float(pct) for symbol, pct in override_pcts.items()
+            }
+        override_allowances = info.get("override_allowances")
+        if isinstance(override_allowances, dict) and override_allowances:
+            side_payload["override_allowances"] = {
+                str(symbol): float(allowance)
+                for symbol, allowance in override_allowances.items()
+            }
         hint = runtime_hints.get(pside, {})
         if isinstance(hint, dict):
             for key in (
@@ -772,12 +1018,14 @@ def _update_monitor_runtime_hints(
     symbols: Iterable[str],
     last_prices: dict[str, float],
     m1_close_emas: dict[str, dict[float, float]],
+    m1_log_range_emas: dict[str, dict[float, float]],
     h1_log_range_emas: dict[str, dict[float, float]],
     idx_to_symbol: dict[int, str],
     orders: list[dict[str, Any]],
 ) -> None:
     market_hints = self._build_monitor_runtime_market_hints(symbols, last_prices, m1_close_emas)
     self._monitor_runtime_market_hints = market_hints
+    self._monitor_runtime_m1_log_range_emas = deepcopy(m1_log_range_emas)
     self._monitor_runtime_h1_log_range_emas = deepcopy(h1_log_range_emas)
     self._monitor_runtime_unstuck_hints = self._build_monitor_runtime_unstuck_hints(
         idx_to_symbol,
@@ -801,7 +1049,54 @@ def _build_monitor_recent_section(self) -> dict[str, Any]:
 def _monitor_wallet_exposure_limit_with_allowance(self, pside: str, symbol: str) -> float:
     wel = float(self.bp(pside, "wallet_exposure_limit", symbol))
     allowance_pct = float(self.bp(pside, "risk_we_excess_allowance_pct", symbol))
-    return wel * (1.0 + max(0.0, allowance_pct))
+    allowance_mode = normalize_we_excess_allowance_mode(
+        self.bp(pside, "risk_we_excess_allowance_mode", symbol) or None
+    )
+    twel = float(self.bot_value(pside, "total_wallet_exposure_limit") or 0.0)
+    effective_allowance_pct = effective_we_excess_allowance_pct(
+        wallet_exposure_limit=wel,
+        risk_we_excess_allowance_pct=allowance_pct,
+        total_wallet_exposure_limit=twel,
+        risk_we_excess_allowance_mode=allowance_mode,
+    )
+    return wel * (1.0 + effective_allowance_pct)
+
+
+def _monitor_strategy_value(self, pside: str, key: str, symbol: str) -> float:
+    legacy_map = {
+        "entry_grid_double_down_factor": "entry.double_down_factor",
+        "entry_trailing_double_down_factor": "entry.double_down_factor",
+        "entry_grid_spacing_pct": "entry.threshold_base_pct",
+        "entry_trailing_threshold_pct": "entry.threshold_base_pct",
+        "entry_trailing_retracement_pct": "entry.retracement_base_pct",
+        "entry_initial_ema_dist": "entry.initial_ema_dist",
+        "entry_initial_qty_pct": "entry.initial_qty_pct",
+        "entry_weight_volatility_1h": "entry.threshold_volatility_1h_weight",
+        "entry_weight_volatility_1m": "entry.threshold_volatility_1m_weight",
+        "entry_we_weight": "entry.threshold_we_weight",
+        "entry_volatility_ema_span_1h": "volatility_ema_span_1h",
+        "entry_volatility_ema_span_1m": "volatility_ema_span_1m",
+        "close_grid_qty_pct": "close.qty_pct",
+        "close_trailing_qty_pct": "close.qty_pct",
+        "close_trailing_threshold_pct": "close.threshold_base_pct",
+        "close_trailing_retracement_pct": "close.retracement_base_pct",
+        "close_weight_volatility_1h": "close.threshold_volatility_1h_weight",
+        "close_weight_volatility_1m": "close.threshold_volatility_1m_weight",
+    }
+    strategy_getter = getattr(self, "_strategy_params_to_rust_dict", None)
+    if callable(strategy_getter):
+        strategy_cfg = strategy_getter(pside, symbol)
+        if key in strategy_cfg:
+            return float(strategy_cfg[key])
+        mapped_key = legacy_map.get(key, key)
+        current = strategy_cfg
+        try:
+            for part in mapped_key.split("."):
+                current = current[part]
+            return float(current)
+        except (KeyError, TypeError, ValueError):
+            pass
+    return float(self.bp(pside, key, symbol))
 
 
 def _monitor_entry_trailing_limit_cap(
@@ -813,24 +1108,13 @@ def _monitor_entry_trailing_limit_cap(
     allowed_limit = _monitor_wallet_exposure_limit_with_allowance(self, pside, symbol)
     if allowed_limit <= 0.0:
         return None, None
-    trailing_ratio = float(self.bp(pside, "entry_trailing_grid_ratio", symbol))
-    if trailing_ratio >= 1.0 or trailing_ratio <= -1.0:
+    retracement = _monitor_strategy_value(self, pside, "entry.retracement_base_pct", symbol)
+    if retracement > 0.0:
         return allowed_limit, "trailing_only"
-    if trailing_ratio == 0.0:
-        return None, "grid_only"
-    wallet_exposure_ratio = wallet_exposure / allowed_limit if allowed_limit > 0.0 else 0.0
-    if trailing_ratio > 0.0:
-        if wallet_exposure_ratio < trailing_ratio:
-            if wallet_exposure == 0.0:
-                return allowed_limit, "trailing_first"
-            return min(allowed_limit * trailing_ratio * 1.01, allowed_limit), "trailing_first"
-        return None, "grid_first"
-    if wallet_exposure_ratio < 1.0 + trailing_ratio:
-        return None, "grid_first"
-    return allowed_limit, "trailing_after_grid"
+    return None, "grid_only"
 
 
-def _monitor_h1_entry_logrange(self, pside: str, symbol: str) -> float:
+def _monitor_h1_logrange_for_span(self, symbol: str, span: float) -> float:
     h1_log_range_emas = getattr(self, "_monitor_runtime_h1_log_range_emas", {})
     if not isinstance(h1_log_range_emas, dict):
         return 0.0
@@ -838,7 +1122,31 @@ def _monitor_h1_entry_logrange(self, pside: str, symbol: str) -> float:
     if not isinstance(symbol_entry, dict):
         return 0.0
     try:
-        span = float(self.bp(pside, "entry_volatility_ema_span_hours", symbol))
+        return float(symbol_entry.get(float(span), 0.0) or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _monitor_h1_entry_logrange(self, pside: str, symbol: str) -> float:
+    try:
+        span = _monitor_strategy_value(self, pside, "offset_volatility_ema_span_1h", symbol)
+    except Exception:
+        try:
+            span = _monitor_strategy_value(self, pside, "entry_volatility_ema_span_1h", symbol)
+        except Exception:
+            return 0.0
+    return _monitor_h1_logrange_for_span(self, symbol, span)
+
+
+def _monitor_m1_entry_logrange(self, pside: str, symbol: str) -> float:
+    m1_log_range_emas = getattr(self, "_monitor_runtime_m1_log_range_emas", {})
+    if not isinstance(m1_log_range_emas, dict):
+        return 0.0
+    symbol_entry = m1_log_range_emas.get(symbol, {})
+    if not isinstance(symbol_entry, dict):
+        return 0.0
+    try:
+        span = _monitor_strategy_value(self, pside, "entry_volatility_ema_span_1m", symbol)
     except Exception:
         return 0.0
     try:
@@ -902,27 +1210,33 @@ def _build_monitor_trailing_entry_payload(
         "ema_lower": float(side_ema_bands.get("lower", 0.0) or 0.0),
         "ema_upper": float(side_ema_bands.get("upper", 0.0) or 0.0),
         "h1_log_range_ema": float(_monitor_h1_entry_logrange(self, pside, symbol)),
+        "m1_log_range_ema": float(_monitor_m1_entry_logrange(self, pside, symbol)),
         **dict(trailing_bundle),
     }
     for key in (
         "entry_grid_double_down_factor",
-        "entry_grid_spacing_volatility_weight",
-        "entry_grid_spacing_we_weight",
         "entry_grid_spacing_pct",
         "entry_initial_ema_dist",
         "entry_initial_qty_pct",
         "entry_trailing_double_down_factor",
-        "entry_trailing_grid_ratio",
         "entry_trailing_retracement_pct",
-        "entry_trailing_retracement_we_weight",
-        "entry_trailing_retracement_volatility_weight",
         "entry_trailing_threshold_pct",
-        "entry_trailing_threshold_we_weight",
-        "entry_trailing_threshold_volatility_weight",
+        "entry_weight_volatility_1h",
+        "entry_weight_volatility_1m",
+        "entry_we_weight",
+    ):
+        inputs[key] = _monitor_strategy_value(self, pside, key, symbol)
+    for key in (
         "wallet_exposure_limit",
         "risk_we_excess_allowance_pct",
     ):
         inputs[key] = float(self.bp(pside, key, symbol))
+    inputs["total_wallet_exposure_limit"] = float(
+        self.bot_value(pside, "total_wallet_exposure_limit") or 0.0
+    )
+    inputs["risk_we_excess_allowance_mode"] = self.bp(
+        pside, "risk_we_excess_allowance_mode", symbol
+    ) or None
     payload = build_trailing_entry_diagnostic(inputs)
     if payload is None:
         return None
@@ -957,25 +1271,109 @@ def _build_monitor_trailing_close_payload(
             )
         ),
         "c_mult": float(self.c_mults[symbol]),
+        "h1_log_range_ema": float(_monitor_h1_entry_logrange(self, pside, symbol)),
+        "m1_log_range_ema": float(_monitor_m1_entry_logrange(self, pside, symbol)),
         **dict(trailing_bundle),
     }
     for key in (
-        "close_grid_markup_end",
-        "close_grid_markup_start",
         "close_grid_qty_pct",
-        "close_trailing_grid_ratio",
         "close_trailing_qty_pct",
         "close_trailing_retracement_pct",
         "close_trailing_threshold_pct",
+        "close_weight_volatility_1h",
+        "close_weight_volatility_1m",
+    ):
+        inputs[key] = _monitor_strategy_value(self, pside, key, symbol)
+    for key in (
         "wallet_exposure_limit",
         "risk_we_excess_allowance_pct",
         "risk_wel_enforcer_threshold",
     ):
         inputs[key] = float(self.bp(pside, key, symbol))
+    inputs["total_wallet_exposure_limit"] = float(
+        self.bot_value(pside, "total_wallet_exposure_limit") or 0.0
+    )
+    inputs["risk_we_excess_allowance_mode"] = self.bp(
+        pside, "risk_we_excess_allowance_mode", symbol
+    ) or None
     payload = build_trailing_close_diagnostic(inputs)
     if payload is None:
         return None
     return payload
+
+
+def _build_monitor_trailing_grid_v7_payload(
+    self,
+    symbol: str,
+    pside: str,
+    *,
+    balance_raw: float,
+    current_price: float,
+    position_size: float,
+    position_price: float,
+    trailing_bundle: dict[str, float],
+    market_entry: dict[str, Any],
+) -> Optional[dict[str, Any]]:
+    strategy_getter = getattr(self, "_strategy_params_to_rust_dict", None)
+    if not callable(strategy_getter):
+        return None
+    strategy_params = strategy_getter(pside, symbol)
+    if not isinstance(strategy_params, dict):
+        return None
+    entry_params = strategy_params.get("entry", {})
+    if not isinstance(entry_params, dict):
+        return None
+    ema_bands = market_entry.get("ema_bands", {}) if isinstance(market_entry, dict) else {}
+    side_ema_bands = ema_bands.get(pside, {}) if isinstance(ema_bands, dict) else {}
+    if not isinstance(side_ema_bands, dict):
+        return None
+    try:
+        h1_span = float(entry_params.get("volatility_ema_span_hours", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        h1_span = 0.0
+    try:
+        n_positions = int(round(float(self.bp(pside, "n_positions", symbol) or 0.0)))
+    except (AttributeError, KeyError, TypeError, ValueError):
+        n_positions = int(self.get_max_n_positions(pside) or 1)
+    inputs = {
+        "symbol": symbol,
+        "pside": pside,
+        "balance_raw": float(balance_raw),
+        "current_price": float(current_price),
+        "position_size": float(position_size),
+        "position_price": float(position_price),
+        "qty_step": float(self.qty_steps[symbol]),
+        "price_step": float(self.price_steps[symbol]),
+        "min_qty": float(self.min_qtys[symbol]),
+        "min_cost": float(
+            max(
+                getattr(self, "effective_min_cost", {}).get(symbol, 0.0) or 0.0,
+                getattr(self, "min_costs", {}).get(symbol, 0.0) or 0.0,
+            )
+        ),
+        "c_mult": float(self.c_mults[symbol]),
+        "ema_lower": float(side_ema_bands.get("lower", 0.0) or 0.0),
+        "ema_upper": float(side_ema_bands.get("upper", 0.0) or 0.0),
+        "h1_log_range_ema": float(_monitor_h1_logrange_for_span(self, symbol, h1_span)),
+        "strategy_params": strategy_params,
+        "n_positions": n_positions,
+        "wallet_exposure_limit": float(self.bp(pside, "wallet_exposure_limit", symbol)),
+        "total_wallet_exposure_limit": float(
+            self.bot_value(pside, "total_wallet_exposure_limit") or 0.0
+        ),
+        "risk_we_excess_allowance_pct": float(
+            self.bp(pside, "risk_we_excess_allowance_pct", symbol)
+        ),
+        "risk_we_excess_allowance_mode": self.bp(
+            pside, "risk_we_excess_allowance_mode", symbol
+        )
+        or None,
+        "risk_wel_enforcer_threshold": float(
+            self.bp(pside, "risk_wel_enforcer_threshold", symbol)
+        ),
+        **dict(trailing_bundle),
+    }
+    return build_trailing_grid_v7_diagnostic(inputs)
 
 
 def _build_monitor_trailing_section(
@@ -984,6 +1382,9 @@ def _build_monitor_trailing_section(
     balance_raw: float,
     market: dict[str, dict[str, Any]],
 ) -> dict[str, dict[str, Any]]:
+    config = getattr(self, "config", {})
+    live_cfg = config.get("live", {}) if isinstance(config, dict) else {}
+    strategy_kind = str(live_cfg.get("strategy_kind") or "").strip().lower()
     out: dict[str, dict[str, Any]] = {}
     for symbol, market_entry in sorted(market.items()):
         if not isinstance(market_entry, dict):
@@ -1005,31 +1406,46 @@ def _build_monitor_trailing_section(
             position_size = float(pos.get("size", 0.0) or 0.0)
             position_price = float(pos.get("price", 0.0) or 0.0)
             side_payload: dict[str, Any] = {"extrema": dict(trailing_bundle)}
-            entry_payload = _build_monitor_trailing_entry_payload(
-                self,
-                symbol,
-                pside,
-                balance_raw=balance_raw,
-                current_price=current_price,
-                position_size=position_size,
-                position_price=position_price,
-                trailing_bundle=trailing_bundle,
-                market_entry=market_entry,
-            )
-            if entry_payload is not None:
-                side_payload["entry"] = entry_payload
-            close_payload = _build_monitor_trailing_close_payload(
-                self,
-                symbol,
-                pside,
-                balance_raw=balance_raw,
-                current_price=current_price,
-                position_size=position_size,
-                position_price=position_price,
-                trailing_bundle=trailing_bundle,
-            )
-            if close_payload is not None:
-                side_payload["close"] = close_payload
+            if strategy_kind == "trailing_grid_v7":
+                v7_payload = _build_monitor_trailing_grid_v7_payload(
+                    self,
+                    symbol,
+                    pside,
+                    balance_raw=balance_raw,
+                    current_price=current_price,
+                    position_size=position_size,
+                    position_price=position_price,
+                    trailing_bundle=trailing_bundle,
+                    market_entry=market_entry,
+                )
+                if v7_payload is not None:
+                    side_payload.update(v7_payload)
+            else:
+                entry_payload = _build_monitor_trailing_entry_payload(
+                    self,
+                    symbol,
+                    pside,
+                    balance_raw=balance_raw,
+                    current_price=current_price,
+                    position_size=position_size,
+                    position_price=position_price,
+                    trailing_bundle=trailing_bundle,
+                    market_entry=market_entry,
+                )
+                if entry_payload is not None:
+                    side_payload["entry"] = entry_payload
+                close_payload = _build_monitor_trailing_close_payload(
+                    self,
+                    symbol,
+                    pside,
+                    balance_raw=balance_raw,
+                    current_price=current_price,
+                    position_size=position_size,
+                    position_price=position_price,
+                    trailing_bundle=trailing_bundle,
+                )
+                if close_payload is not None:
+                    side_payload["close"] = close_payload
             if "entry" in side_payload or "close" in side_payload:
                 symbol_payload[pside] = side_payload
         if symbol_payload:
@@ -1054,8 +1470,17 @@ def _build_monitor_position_side_payload(
         wallet_exposure = float(pbr.qty_to_cost(size, price, self.c_mults[symbol]) / balance_raw)
     wel = float(self.bp(pside, "wallet_exposure_limit", symbol))
     allowance_pct = float(self.bp(pside, "risk_we_excess_allowance_pct", symbol))
-    effective_wel = wel * (1.0 + max(0.0, allowance_pct))
+    allowance_mode = normalize_we_excess_allowance_mode(
+        self.bp(pside, "risk_we_excess_allowance_mode", symbol) or None
+    )
     twel = float(self.bot_value(pside, "total_wallet_exposure_limit") or 0.0)
+    effective_allowance_pct = effective_we_excess_allowance_pct(
+        wallet_exposure_limit=wel,
+        risk_we_excess_allowance_pct=allowance_pct,
+        total_wallet_exposure_limit=twel,
+        risk_we_excess_allowance_mode=allowance_mode,
+    )
+    effective_wel = wel * (1.0 + effective_allowance_pct)
 
     payload: dict[str, Any] = {
         "size": size,

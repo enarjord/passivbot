@@ -25,7 +25,7 @@ class DummyCCA:
 
     async def set_position_mode(self, hedged):
         self.position_mode_calls.append(hedged)
-        return {"code": "200000", "hedged": hedged}
+        return {"code": "200000", "hedged": hedged, "apiKey": "SECRET"}
 
     async def set_margin_mode(self, **params):
         self.margin_calls.append(params)
@@ -41,6 +41,12 @@ def make_bot():
     bot.cca = DummyCCA()
     bot.hedge_mode = True
     bot.max_leverage = {}
+    bot.positions = {
+        "BTC/USDT:USDT": {
+            "long": {"size": 0.0},
+            "short": {"size": 0.0},
+        }
+    }
     return bot
 
 
@@ -171,7 +177,8 @@ async def test_update_exchange_config_sets_position_mode_when_supported(caplog):
     bot = make_bot()
     await bot.update_exchange_config()
     assert bot.cca.position_mode_calls == [True]
-    assert "set_position_mode hedged=True" in caplog.text
+    assert "set_position_mode hedged=True result=ok" in caplog.text
+    assert "SECRET" not in caplog.text
 
 
 @pytest.mark.asyncio
@@ -179,8 +186,46 @@ async def test_update_exchange_config_handles_missing_position_mode(caplog):
     caplog.set_level(logging.INFO)
     bot = make_bot()
     bot.cca = types.SimpleNamespace()
-    await bot.update_exchange_config()
-    assert "set_position_mode not supported" in caplog.text
+    with pytest.raises(NotImplementedError, match="set_position_mode not supported"):
+        await bot.update_exchange_config()
+    assert "set_position_mode hedged=True not applied" in caplog.text
+
+
+def test_determine_pos_side_prefers_explicit_payload_over_existing_long_position():
+    bot = make_bot()
+    bot.positions["BTC/USDT:USDT"]["long"]["size"] = 1.0
+
+    order = {
+        "symbol": "BTC/USDT:USDT",
+        "side": "buy",
+        "position_side": "short",
+        "info": {},
+    }
+
+    assert bot.determine_pos_side(order) == "short"
+
+
+def test_determine_pos_side_prefers_info_position_side_when_both_psides_open():
+    bot = make_bot()
+    bot.positions["BTC/USDT:USDT"]["long"]["size"] = 1.0
+    bot.positions["BTC/USDT:USDT"]["short"]["size"] = -1.0
+
+    order = {
+        "symbol": "BTC/USDT:USDT",
+        "side": "buy",
+        "info": {"positionSide": "SHORT"},
+    }
+
+    assert bot.determine_pos_side(order) == "short"
+
+
+def test_determine_pos_side_rejects_ambiguous_hedge_order_without_payload():
+    bot = make_bot()
+    bot.positions["BTC/USDT:USDT"]["long"]["size"] = 1.0
+    bot.positions["BTC/USDT:USDT"]["short"]["size"] = -1.0
+
+    with pytest.raises(Exception, match="ambiguous KuCoin position side"):
+        bot.determine_pos_side({"symbol": "BTC/USDT:USDT", "side": "buy", "info": {}})
 
 
 @pytest.mark.asyncio
@@ -231,6 +276,28 @@ async def test_update_exchange_config_by_symbols_treats_missing_max_leverage_as_
 
     assert bot.cca.leverage_calls[0]["symbol"] == "BTC/USDT:USDT"
     assert bot.cca.leverage_calls[0]["leverage"] == 5
+
+
+@pytest.mark.asyncio
+async def test_update_exchange_config_by_symbols_bounds_failure_logs(caplog):
+    class FailingCCA:
+        async def set_margin_mode(self, **_params):
+            raise RuntimeError("SECRET_MARGIN")
+
+        async def set_leverage(self, **_params):
+            raise ValueError("SECRET_LEVERAGE")
+
+    bot = make_bot()
+    bot.cca = FailingCCA()
+    bot.max_leverage = {"BTC/USDT:USDT": 10}
+    bot.config_get = lambda path, *, symbol=None: 5
+
+    with caplog.at_level(logging.WARNING):
+        await bot.update_exchange_config_by_symbols(["BTC/USDT:USDT"])
+
+    assert "error_type=RuntimeError" in caplog.text
+    assert "error_type=ValueError" in caplog.text
+    assert "SECRET" not in caplog.text
 
 
 @pytest.mark.asyncio

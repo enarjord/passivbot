@@ -18,6 +18,7 @@ from suite_runner import (
     filter_coins_by_exchange_assignment,
     prepare_master_datasets,
     resolve_coin_sources,
+    _collect_union,
     _prepare_dataset_subset,
     _run_combined_dataset,
     summarize_scenario_metrics,
@@ -103,6 +104,54 @@ def test_build_scenarios_inherits_exchanges_from_defaults():
     assert scenarios[0].exchanges == ["kucoin"]
 
 
+def test_build_scenarios_accepts_documented_scenario_keys():
+    suite_cfg = {
+        "scenarios": [
+            {
+                "label": "full",
+                "start_date": "2021-01-01",
+                "end_date": "2021-01-31",
+                "coins": ["BTC"],
+                "ignored_coins": ["ETH"],
+                "exchanges": "binance",
+                "coin_sources": {"BTC": "binance"},
+                "overrides": {"bot.long.risk.n_positions": 1},
+            }
+        ]
+    }
+
+    scenarios, _ = build_scenarios(suite_cfg)
+
+    assert scenarios[0].label == "full"
+    assert scenarios[0].exchanges == ["binance"]
+    assert scenarios[0].coins == ["BTC"]
+    assert scenarios[0].ignored_coins == ["ETH"]
+    assert scenarios[0].coin_sources == {"BTC": "binance"}
+    assert scenarios[0].overrides == {"bot.long.risk.n_positions": 1}
+
+
+def test_build_scenarios_rejects_unknown_scenario_keys():
+    suite_cfg = {
+        "scenarios": [
+            {
+                "label": "typo",
+                "coin": ["BTC"],
+            }
+        ]
+    }
+
+    with pytest.raises(
+        ValueError,
+        match=r"config\.backtest\.scenarios\[0\] contains unknown key\(s\): coin",
+    ):
+        build_scenarios(suite_cfg)
+
+
+def test_build_scenarios_rejects_non_mapping_scenarios():
+    with pytest.raises(ValueError, match=r"config\.backtest\.scenarios\[0\] must be a mapping"):
+        build_scenarios({"scenarios": ["not-a-mapping"]})
+
+
 def test_apply_scenario_filters_unavailable_coins():
     base_config = {
         "backtest": {
@@ -136,6 +185,15 @@ def test_apply_scenario_filters_unavailable_coins():
     assert coins == ["BTC"]
     assert cfg["live"]["approved_coins"]["long"] == ["BTC"]
     assert cfg["backtest"]["coin_sources"] == {"BTC": "binance"}
+
+
+def test_collect_union_keeps_base_approved_with_explicit_scenario_subsets():
+    master = _collect_union(
+        (["BTC", "ETH"], None, ["SOL"]),
+        fallback=["BTC", "OM"],
+    )
+
+    assert master == ["BTC", "ETH", "OM", "SOL"]
 
 
 def test_summarize_scenario_metrics_prefers_mean():
@@ -188,6 +246,39 @@ def test_apply_scenario_records_transform_log():
     assert any(change["path"] == "backtest.start_date" for change in entry["details"]["changes"])
 
 
+def test_apply_scenario_rejects_asymmetric_side_coin_lists():
+    base_config = {
+        "backtest": {
+            "start_date": "2021-01-01",
+            "end_date": "2021-01-31",
+            "coins": {},
+            "cache_dir": {},
+            "exchanges": ["binance"],
+        },
+        "live": {
+            "approved_coins": {"long": ["BTC"], "short": ["ETH"]},
+            "ignored_coins": {"long": [], "short": []},
+        },
+    }
+    scenario = SuiteScenario(
+        label="scenario_a",
+        start_date=None,
+        end_date=None,
+        coins=["BTC", "ETH"],
+        ignored_coins=[],
+    )
+
+    with pytest.raises(ValueError, match="asymmetric live.approved_coins"):
+        apply_scenario(
+            base_config,
+            scenario,
+            master_coins=["BTC", "ETH"],
+            master_ignored=[],
+            available_exchanges=["binance"],
+            available_coins={"BTC", "ETH"},
+        )
+
+
 def test_apply_scenario_overrides_update_config():
     base_config = {
         "backtest": {
@@ -220,10 +311,103 @@ def test_apply_scenario_overrides_update_config():
         available_coins={"BTC"},
         base_coin_sources={"BTC": "binance"},
     )
-    assert cfg["bot"]["long"]["n_positions"] == 3
+    assert cfg["bot"]["long"]["risk"]["n_positions"] == 3
+    assert "n_positions" not in cfg["bot"]["long"]
     entry = cfg["_transform_log"][-1]
-    paths = [change["path"] for change in entry["details"]["changes"]]
-    assert "bot.long.n_positions" in paths
+    paths = [change["path"] for change in entry["details"]["changes"] if "path" in change]
+    assert "bot.long.risk.n_positions" in paths
+
+
+def test_apply_scenario_rejects_unknown_override_path():
+    base_config = {
+        "backtest": {
+            "start_date": "2021-01-01",
+            "end_date": "2021-01-31",
+            "coins": {},
+            "cache_dir": {},
+            "exchanges": ["binance"],
+        },
+        "live": {
+            "approved_coins": {"long": [], "short": []},
+            "ignored_coins": {"long": [], "short": []},
+        },
+        "bot": {
+            "long": {"risk": {"n_positions": 8}},
+            "short": {"risk": {"n_positions": 8}},
+        },
+    }
+    scenario = SuiteScenario(
+        label="override",
+        start_date=None,
+        end_date=None,
+        coins=["BTC"],
+        ignored_coins=[],
+        overrides={"bot.long.risk.n_positons": 3},
+    )
+
+    with pytest.raises(KeyError, match="n_positons"):
+        apply_scenario(
+            base_config,
+            scenario,
+            master_coins=["BTC"],
+            master_ignored=[],
+            available_exchanges=["binance"],
+            available_coins={"BTC"},
+            base_coin_sources={"BTC": "binance"},
+        )
+
+    assert "n_positons" not in base_config["bot"]["long"]["risk"]
+
+
+def test_apply_scenario_overrides_use_shared_canonical_path_resolver():
+    base_config = {
+        "backtest": {
+            "start_date": "2021-01-01",
+            "end_date": "2021-01-31",
+            "coins": {},
+            "cache_dir": {},
+            "exchanges": ["binance"],
+        },
+        "live": {
+            "approved_coins": {"long": [], "short": []},
+            "ignored_coins": {"long": [], "short": []},
+        },
+        "bot": {
+            "long": {
+                "hsl": {"no_restart_drawdown_threshold": 0.3},
+                "hsl_no_restart_drawdown_threshold": 0.1,
+                "risk": {"entry_cooldown_minutes": 0.0},
+                "risk_entry_cooldown_minutes": 9.0,
+            },
+            "short": {},
+        },
+    }
+    scenario = SuiteScenario(
+        label="override",
+        start_date=None,
+        end_date=None,
+        coins=["BTC"],
+        ignored_coins=[],
+        overrides={
+            "bot.long.hsl_no_restart_drawdown_threshold": 1.0,
+            "bot.long.risk.entry_cooldown_minutes": 2.5,
+        },
+    )
+
+    cfg, _ = apply_scenario(
+        base_config,
+        scenario,
+        master_coins=["BTC"],
+        master_ignored=[],
+        available_exchanges=["binance"],
+        available_coins={"BTC"},
+        base_coin_sources={"BTC": "binance"},
+    )
+
+    assert cfg["bot"]["long"]["hsl"]["no_restart_drawdown_threshold"] == pytest.approx(1.0)
+    assert cfg["bot"]["long"]["risk"]["entry_cooldown_minutes"] == pytest.approx(2.5)
+    assert "hsl_no_restart_drawdown_threshold" not in cfg["bot"]["long"]
+    assert "risk_entry_cooldown_minutes" not in cfg["bot"]["long"]
 
 
 def test_resolve_coin_sources_merges_overrides():
@@ -375,6 +559,7 @@ def test_aggregate_metrics_computes_stats():
     summary = aggregate_metrics(scenario_results, {"default": "mean"})
     assert summary["aggregated"]["metric"] == pytest.approx(2.0)
     assert summary["stats"]["metric"]["max"] == pytest.approx(3.0)
+    assert summary["stats"]["metric"]["median"] == pytest.approx(2.0)
 
 
 def test_prepare_dataset_subset_clips_dates(monkeypatch):

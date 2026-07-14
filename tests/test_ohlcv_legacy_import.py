@@ -93,6 +93,55 @@ def test_import_legacy_range_into_store_imports_requested_days_only(tmp_path):
     )
 
 
+def test_import_legacy_range_into_store_batches_same_month_days(tmp_path):
+    legacy_root = tmp_path / "legacy"
+    store_root = tmp_path / "new"
+    catalog = OhlcvCatalog(store_root / "catalog.sqlite")
+    store = OhlcvStore(store_root, catalog)
+
+    day1 = month_start_ts(2026, 4)
+    day2 = day1 + 24 * 60 * 60_000
+    _write_legacy_day(
+        legacy_root,
+        "binance",
+        "1m",
+        "ETH/USDT:USDT",
+        "2026-04-01",
+        [(day1, 0.0, 101.0, 99.0, 100.0, 10.0)],
+    )
+    _write_legacy_day(
+        legacy_root,
+        "binance",
+        "1m",
+        "ETH/USDT:USDT",
+        "2026-04-02",
+        [(day2, 0.0, 201.0, 199.0, 200.0, 20.0)],
+    )
+
+    calls = []
+    original_write_rows = store.write_rows
+
+    def spy_write_rows(exchange, timeframe, symbol, timestamps_ms, values, **kwargs):
+        calls.append(np.asarray(timestamps_ms).copy())
+        return original_write_rows(exchange, timeframe, symbol, timestamps_ms, values, **kwargs)
+
+    store.write_rows = spy_write_rows
+
+    imported = import_legacy_range_into_store(
+        store=store,
+        legacy_root=legacy_root,
+        exchange="binance",
+        timeframe="1m",
+        symbol="ETH/USDT:USDT",
+        start_ts=day1,
+        end_ts=day2,
+    )
+
+    assert imported == 2
+    assert len(calls) == 1
+    np.testing.assert_array_equal(calls[0], np.array([day1, day2], dtype=np.int64))
+
+
 def test_import_legacy_range_into_store_returns_zero_when_symbol_missing(tmp_path):
     store_root = tmp_path / "new"
     catalog = OhlcvCatalog(store_root / "catalog.sqlite")

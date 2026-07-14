@@ -79,7 +79,7 @@ def test_backtest_with_candle_interval():
 
     root = Path(__file__).resolve().parents[1]
     config = load_config(
-        str(root / "configs" / "examples" / "default_trailing_grid_long_npos7.json"), verbose=False
+        str(root / "configs" / "examples" / "default_trailing_martingale_long.json"), verbose=False
     )
     config["backtest"]["exchanges"] = ["binance"]
     config["backtest"]["coins"] = {"binance": ["BTC"]}
@@ -156,6 +156,12 @@ def test_backtest_with_candle_interval():
         "position_unchanged_days_max",
         "high_exposure_days_max_long",
         "peak_recovery_days_strategy_eq",
+        "strategy_eq_underwater_pct_mean",
+        "strategy_eq_underwater_pct_median",
+        "fills_count",
+        "fills_per_day",
+        "fills_gap_longest_days",
+        "fills_per_day_per_position_slot",
     ]:
         assert key in analysis
         assert np.isfinite(analysis[key])
@@ -167,7 +173,7 @@ def test_backtest_allows_hsl_ema_span_below_candle_interval():
 
     root = Path(__file__).resolve().parents[1]
     config = load_config(
-        str(root / "configs" / "examples" / "default_trailing_grid_long_npos7.json"), verbose=False
+        str(root / "configs" / "examples" / "default_trailing_martingale_long.json"), verbose=False
     )
     config["backtest"]["exchanges"] = ["binance"]
     config["backtest"]["coins"] = {"binance": ["BTC"]}
@@ -178,10 +184,10 @@ def test_backtest_allows_hsl_ema_span_below_candle_interval():
     config["live"]["warmup_ratio"] = 0.0
     config["live"]["max_warmup_minutes"] = 0
     config["live"]["hedge_mode"] = False
-    config["bot"]["long"]["hsl_enabled"] = True
-    config["bot"]["long"]["hsl_ema_span_minutes"] = 1.0
-    config["bot"]["short"]["hsl_enabled"] = True
-    config["bot"]["short"]["hsl_ema_span_minutes"] = 1.0
+    config["bot"]["long"]["hsl"]["enabled"] = True
+    config["bot"]["long"]["hsl"]["ema_span_minutes"] = 1.0
+    config["bot"]["short"]["hsl"]["enabled"] = True
+    config["bot"]["short"]["hsl"]["ema_span_minutes"] = 1.0
 
     n_minutes = 60
     start_ts = 1609459200000
@@ -326,7 +332,7 @@ def test_backtest_rejects_invalid_liquidation_threshold():
 
     root = Path(__file__).resolve().parents[1]
     config = load_config(
-        str(root / "configs" / "examples" / "default_trailing_grid_long_npos7.json"), verbose=False
+        str(root / "configs" / "examples" / "default_trailing_martingale_long.json"), verbose=False
     )
     config["backtest"]["exchanges"] = ["binance"]
     config["backtest"]["coins"] = {"binance": ["BTC"]}

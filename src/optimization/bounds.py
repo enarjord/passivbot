@@ -7,6 +7,7 @@ to discrete steps and enforcing bounds on configuration dictionaries.
 
 import logging
 from dataclasses import dataclass
+from decimal import Decimal
 import math
 from typing import List, Optional, Sequence, Tuple
 
@@ -14,6 +15,13 @@ import numpy as np
 
 # Epsilon for floating-point comparisons in step calculations
 STEP_EPSILON = 1e-9
+
+
+def _decimal_places(value: float) -> int:
+    if not isinstance(value, (int, float)) or not math.isfinite(float(value)):
+        return 0
+    exponent = Decimal(str(float(value))).normalize().as_tuple().exponent
+    return max(0, -int(exponent))
 
 
 def round_to_sig_digits(value: float, sig_digits: int) -> float:
@@ -51,6 +59,13 @@ class Bound:
     low: float
     high: float
     step: Optional[float] = None
+
+    def _grid_value(self, index: int) -> float:
+        value = self.low + int(index) * self.step
+        decimal_places = max(_decimal_places(self.low), _decimal_places(self.step))
+        if decimal_places:
+            value = round(value, decimal_places)
+        return value
 
     @property
     def is_stepped(self) -> bool:
@@ -94,13 +109,7 @@ class Bound:
         # Clamp index to valid range
         clamped_index = max(0, min(self.max_index, n_steps_from_low))
 
-        quantized = self.low + clamped_index * self.step
-
-        # Clean up floating-point artifacts by rounding to step precision
-        # e.g., step=0.0002 -> 4 decimal places, step=0.01 -> 2 decimal places
-        if self.step < 1:
-            decimal_places = -int(math.floor(math.log10(self.step)))
-            quantized = round(quantized, decimal_places)
+        quantized = self._grid_value(clamped_index)
 
         # Final safety clamp
         return max(self.low, min(self.high, quantized))
@@ -118,7 +127,7 @@ class Bound:
         if not self.is_stepped:
             return np.random.uniform(self.low, self.high)
         random_idx = np.random.randint(0, self.max_index + 1)
-        return self.low + random_idx * self.step
+        return self._grid_value(random_idx)
 
     def value_to_index(self, value: float) -> float:
         """
@@ -155,7 +164,7 @@ class Bound:
         # Round to nearest integer index and convert
         rounded_index = int(index + 0.5)
         clamped_index = max(0, min(self.max_index, rounded_index))
-        return self.low + clamped_index * self.step
+        return self._grid_value(clamped_index)
 
     def get_index_bounds(self) -> Tuple[float, float]:
         """

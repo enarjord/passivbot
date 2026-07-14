@@ -1,5 +1,7 @@
 import operator
 
+import pytest
+
 from pareto_store import LimitSpec, _evaluate_limits
 
 
@@ -57,3 +59,15 @@ def test_metric_name_ending_with_suffix_is_not_misparsed():
         "position_unchanged_hours_max_mean": 650.0,
     }
     assert _evaluate_limits(specs, stats_flat, aggregated, {}, {})
+
+
+def test_missing_limit_metric_raises_instead_of_passing():
+    specs = [LimitSpec(metric="missing_metric", field="auto", op=operator.lt, value=800)]
+    with pytest.raises(ValueError, match="Limit metric 'missing_metric' could not be resolved"):
+        _evaluate_limits(
+            specs,
+            {"peak_recovery_hours_pnl_mean": 750.0},
+            {},
+            {},
+            {},
+        )

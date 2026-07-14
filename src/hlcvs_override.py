@@ -54,7 +54,7 @@ def _hlcvs_cache_artifact_path(
     return None
 
 
-def _load_hlcvs_cache_arrays(cache_dir: Path, manifest):
+def _load_hlcvs_cache_arrays(cache_dir: Path, manifest, preloaded_arrays=None):
     coins_path = _hlcvs_cache_artifact_path(cache_dir, manifest, "coins", ("coins.json",))
     mss_path = _hlcvs_cache_artifact_path(
         cache_dir, manifest, "market_specific_settings", ("market_specific_settings.json",)
@@ -63,6 +63,16 @@ def _load_hlcvs_cache_arrays(cache_dir: Path, manifest):
         raise FileNotFoundError(f"HLCV dataset missing coins or market settings in {cache_dir}")
     coins = json.load(open(coins_path))
     mss = json.load(open(mss_path))
+    preloaded_arrays = preloaded_arrays or {}
+    if {"hlcvs", "btc_usd_prices", "timestamps"} <= preloaded_arrays.keys():
+        # Reuse arrays already decompressed by manifest verification.
+        return (
+            coins,
+            preloaded_arrays["hlcvs"],
+            mss,
+            preloaded_arrays["btc_usd_prices"],
+            preloaded_arrays["timestamps"],
+        )
     hlcvs_path = _hlcvs_cache_artifact_path(
         cache_dir, manifest, "hlcvs", ("hlcvs.npy.gz", "hlcvs.npy")
     )
@@ -120,6 +130,54 @@ def _side_membership_for_override(config: dict, dataset_coins: list[str], manife
     }
 
 
+def _slice_index_span(
+    meta: dict,
+    *,
+    first_key: str,
+    last_key: str,
+    row_start: int,
+    row_end: int,
+    n_rows: int,
+) -> None:
+    if first_key not in meta or last_key not in meta:
+        return
+    try:
+        first_idx = int(meta[first_key])
+        last_idx = int(meta[last_key])
+    except (TypeError, ValueError):
+        meta.pop(first_key, None)
+        meta.pop(last_key, None)
+        return
+    selected_last = int(row_end) - 1
+    if first_idx > last_idx or last_idx < row_start or first_idx > selected_last:
+        meta[first_key] = int(n_rows)
+        meta[last_key] = int(n_rows)
+        return
+    meta[first_key] = int(max(first_idx, row_start) - row_start)
+    meta[last_key] = int(min(last_idx, selected_last) - row_start)
+
+
+def _slice_valid_window_metadata(meta: dict, *, row_start: int, row_end: int) -> None:
+    n_rows = int(row_end) - int(row_start)
+    _slice_index_span(
+        meta,
+        first_key="first_valid_index",
+        last_key="last_valid_index",
+        row_start=int(row_start),
+        row_end=int(row_end),
+        n_rows=n_rows,
+    )
+    _slice_index_span(
+        meta,
+        first_key="source_first_valid_index",
+        last_key="source_last_valid_index",
+        row_start=int(row_start),
+        row_end=int(row_end),
+        n_rows=n_rows,
+    )
+    meta.pop("trade_start_index", None)
+
+
 def load_hlcvs_data_override(config, exchange):
     override_dir = get_optional_config_value(config, "backtest.hlcvs_data_dir")
     if not override_dir:
@@ -134,15 +192,16 @@ def load_hlcvs_data_override(config, exchange):
     if not cache_dir.is_dir():
         raise FileNotFoundError(f"HLCV dataset override directory does not exist: {cache_dir}")
     manifest = load_hlcvs_manifest(cache_dir)
+    verified_arrays: dict = {}
     if manifest is None:
         raise HlcvsManifestError(f"HLCV dataset override {cache_dir} is missing manifest.json")
     elif manifest_has_required_schema(manifest):
-        verify_hlcvs_manifest(cache_dir, manifest)
+        verify_hlcvs_manifest(cache_dir, manifest, out_arrays=verified_arrays)
     else:
         raise HlcvsManifestError(f"HLCV dataset override {cache_dir} has unsupported manifest schema")
 
     dataset_coins, hlcvs, mss, btc_usd_prices, timestamps = _load_hlcvs_cache_arrays(
-        cache_dir, manifest
+        cache_dir, manifest, preloaded_arrays=verified_arrays
     )
     dataset_coins = [normalize_backtest_coin(coin) for coin in dataset_coins]
     requested_coins = effective_backtest_data_coins(config)
@@ -193,10 +252,11 @@ def load_hlcvs_data_override(config, exchange):
     btc_usd_prices = np.ascontiguousarray(btc_usd_prices[row_start:row_end])
     timestamps = np.ascontiguousarray(timestamps[row_start:row_end])
 
-    selected_mss = {coin: deepcopy(mss.get(coin, {})) for coin in selected_coins}
-    for meta in selected_mss.values():
-        for key in ("first_valid_index", "last_valid_index", "trade_start_index"):
-            meta.pop(key, None)
+    selected_mss = {}
+    for coin in selected_coins:
+        meta = deepcopy(mss.get(coin, {}))
+        _slice_valid_window_metadata(meta, row_start=row_start, row_end=row_end)
+        selected_mss[coin] = meta
     side_membership = _side_membership_for_override(config, selected_coins, manifest, mode)
     side_membership = {
         pside: sorted([coin for coin in side_membership.get(pside, []) if coin in selected_coins])

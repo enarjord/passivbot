@@ -8,6 +8,26 @@ from .runtime_compile import compile_runtime_config
 from .schema import get_template_config
 
 
+def strip_persisted_hsl_incomplete_history_override(source: dict, config_path: str) -> None:
+    """live.hsl_accept_incomplete_history waives the HSL fail-closed coverage
+    contract and must only ever be granted by the CLI flag of the current
+    invocation; a value persisted in a config file is stripped here, before
+    CLI overrides are applied, so it can never survive a restart."""
+    containers = [source]
+    live = source.get("live")
+    if isinstance(live, dict):
+        containers.append(live)
+    for container in containers:
+        if container.get("hsl_accept_incomplete_history"):
+            logging.critical(
+                "[risk] ignoring hsl_accept_incomplete_history=true persisted in %s: "
+                "this override is per-run CLI-only (--hsl-accept-incomplete-history) "
+                "and persisted values are stripped to keep HSL coverage fail-closed",
+                config_path or "<config>",
+            )
+            container.pop("hsl_accept_incomplete_history", None)
+
+
 def load_input_config(
     config_path: str | None, *, log_info: bool = True
 ) -> tuple[dict, str, dict]:
@@ -15,6 +35,7 @@ def load_input_config(
         if log_info:
             logging.info("loading config %s", config_path)
         source = load_raw_config(config_path)
+        strip_persisted_hsl_incomplete_history_override(source, config_path)
         return source, config_path, deepcopy(source)
     if log_info:
         logging.info("loading schema defaults from src/config/schema.py")

@@ -1,40 +1,43 @@
 from __future__ import annotations
 
+import json
 from copy import deepcopy
 from typing import Any, Mapping, Optional
 
 import passivbot_rust as pbr
+from config.shared_bot import flatten_shared_bot_side
+from risk_limits import (
+    effective_we_excess_allowance_pct as _effective_we_excess_allowance_pct,
+    wallet_exposure_limit_with_allowance as _wallet_exposure_limit_with_allowance,
+)
 
 
 ENTRY_CONFIG_KEYS = [
     "entry_grid_double_down_factor",
-    "entry_grid_spacing_volatility_weight",
-    "entry_grid_spacing_we_weight",
     "entry_grid_spacing_pct",
     "entry_initial_ema_dist",
     "entry_initial_qty_pct",
     "entry_trailing_double_down_factor",
-    "entry_trailing_grid_ratio",
     "entry_trailing_retracement_pct",
-    "entry_trailing_retracement_we_weight",
-    "entry_trailing_retracement_volatility_weight",
     "entry_trailing_threshold_pct",
-    "entry_trailing_threshold_we_weight",
-    "entry_trailing_threshold_volatility_weight",
+    "entry_weight_volatility_1h",
+    "entry_weight_volatility_1m",
+    "entry_we_weight",
     "wallet_exposure_limit",
+    "total_wallet_exposure_limit",
     "risk_we_excess_allowance_pct",
 ]
 
 
 CLOSE_CONFIG_KEYS = [
-    "close_grid_markup_end",
-    "close_grid_markup_start",
     "close_grid_qty_pct",
-    "close_trailing_grid_ratio",
     "close_trailing_qty_pct",
     "close_trailing_retracement_pct",
     "close_trailing_threshold_pct",
+    "close_weight_volatility_1h",
+    "close_weight_volatility_1m",
     "wallet_exposure_limit",
+    "total_wallet_exposure_limit",
     "risk_we_excess_allowance_pct",
     "risk_wel_enforcer_threshold",
 ]
@@ -61,6 +64,7 @@ NUMERIC_INPUT_KEYS = [
     "ema_lower",
     "ema_upper",
     "h1_log_range_ema",
+    "m1_log_range_ema",
     *TRAILING_EXTREMA_KEYS,
     *sorted(set(ENTRY_CONFIG_KEYS + CLOSE_CONFIG_KEYS)),
 ]
@@ -81,7 +85,7 @@ def _effective_wallet_exposure_limit(
     bot_cfg = config.get("bot", {})
     if not isinstance(bot_cfg, Mapping):
         return 0.0
-    side_cfg = bot_cfg.get(pside, {})
+    side_cfg = flatten_shared_bot_side(bot_cfg.get(pside, {}))
     if not isinstance(side_cfg, Mapping):
         return 0.0
     direct = side_cfg.get("wallet_exposure_limit")
@@ -120,6 +124,21 @@ def trailing_status(
     return "armed"
 
 
+def selected_mode_from_order_type(order_type: str, *, has_order: bool) -> str:
+    normalized = str(order_type or "").lower()
+    if "trailing" in normalized:
+        return "trailing"
+    if "auto_reduce" in normalized:
+        return "auto_reduce"
+    if "unstuck" in normalized:
+        return "unstuck"
+    if "grid" in normalized:
+        return "grid"
+    if has_order:
+        return "other"
+    return "none"
+
+
 def calculate_wallet_exposure(
     *,
     balance_raw: float,
@@ -136,38 +155,52 @@ def wallet_exposure_limit_with_allowance(
     *,
     wallet_exposure_limit: float,
     risk_we_excess_allowance_pct: float,
+    total_wallet_exposure_limit: float = 0.0,
+    risk_we_excess_allowance_mode: str | None = None,
 ) -> float:
-    return float(wallet_exposure_limit) * (1.0 + max(0.0, float(risk_we_excess_allowance_pct)))
+    return _wallet_exposure_limit_with_allowance(
+        wallet_exposure_limit=wallet_exposure_limit,
+        risk_we_excess_allowance_pct=risk_we_excess_allowance_pct,
+        total_wallet_exposure_limit=total_wallet_exposure_limit,
+        risk_we_excess_allowance_mode=risk_we_excess_allowance_mode or "bounded",
+    )
+
+
+def effective_we_excess_allowance_pct(
+    *,
+    wallet_exposure_limit: float,
+    risk_we_excess_allowance_pct: float,
+    total_wallet_exposure_limit: float = 0.0,
+    risk_we_excess_allowance_mode: str | None = None,
+) -> float:
+    return _effective_we_excess_allowance_pct(
+        wallet_exposure_limit=wallet_exposure_limit,
+        risk_we_excess_allowance_pct=risk_we_excess_allowance_pct,
+        total_wallet_exposure_limit=total_wallet_exposure_limit,
+        risk_we_excess_allowance_mode=risk_we_excess_allowance_mode or "bounded",
+    )
 
 
 def entry_trailing_limit_cap(
     *,
     wallet_exposure_limit: float,
     risk_we_excess_allowance_pct: float,
-    entry_trailing_grid_ratio: float,
+    total_wallet_exposure_limit: float = 0.0,
+    risk_we_excess_allowance_mode: str | None = None,
+    entry_trailing_retracement_pct: float,
     wallet_exposure: float,
 ) -> tuple[Optional[float], Optional[str]]:
     allowed_limit = wallet_exposure_limit_with_allowance(
         wallet_exposure_limit=wallet_exposure_limit,
         risk_we_excess_allowance_pct=risk_we_excess_allowance_pct,
+        total_wallet_exposure_limit=total_wallet_exposure_limit,
+        risk_we_excess_allowance_mode=risk_we_excess_allowance_mode,
     )
     if allowed_limit <= 0.0:
         return None, None
-    trailing_ratio = float(entry_trailing_grid_ratio)
-    if trailing_ratio >= 1.0 or trailing_ratio <= -1.0:
+    if float(entry_trailing_retracement_pct) > 0.0:
         return allowed_limit, "trailing_only"
-    if trailing_ratio == 0.0:
-        return None, "grid_only"
-    wallet_exposure_ratio = wallet_exposure / allowed_limit if allowed_limit > 0.0 else 0.0
-    if trailing_ratio > 0.0:
-        if wallet_exposure_ratio < trailing_ratio:
-            if wallet_exposure == 0.0:
-                return allowed_limit, "trailing_first"
-            return min(allowed_limit * trailing_ratio * 1.01, allowed_limit), "trailing_first"
-        return None, "grid_first"
-    if wallet_exposure_ratio < 1.0 + trailing_ratio:
-        return None, "grid_first"
-    return allowed_limit, "trailing_after_grid"
+    return None, "grid_only"
 
 
 def _entry_ema_reference(inputs: Mapping[str, Any]) -> float:
@@ -192,7 +225,9 @@ def build_trailing_entry_diagnostic(inputs: Mapping[str, Any]) -> Optional[dict[
     limit_cap, mode = entry_trailing_limit_cap(
         wallet_exposure_limit=_float(inputs.get("wallet_exposure_limit")),
         risk_we_excess_allowance_pct=_float(inputs.get("risk_we_excess_allowance_pct")),
-        entry_trailing_grid_ratio=_float(inputs.get("entry_trailing_grid_ratio")),
+        total_wallet_exposure_limit=_float(inputs.get("total_wallet_exposure_limit")),
+        risk_we_excess_allowance_mode=inputs.get("risk_we_excess_allowance_mode") or None,
+        entry_trailing_retracement_pct=_float(inputs.get("entry_trailing_retracement_pct")),
         wallet_exposure=wallet_exposure,
     )
     if limit_cap is None:
@@ -201,7 +236,14 @@ def build_trailing_entry_diagnostic(inputs: Mapping[str, Any]) -> Optional[dict[
     if ema_reference <= 0.0 or current_price <= 0.0:
         return None
     trailing_bundle = normalize_trailing_extrema(inputs)
-    entry_volatility_lr = _float(inputs.get("h1_log_range_ema"))
+    entry_volatility_1h = _float(inputs.get("h1_log_range_ema"))
+    entry_volatility_1m = _float(inputs.get("m1_log_range_ema"))
+    effective_allowance_pct = effective_we_excess_allowance_pct(
+        wallet_exposure_limit=_float(inputs.get("wallet_exposure_limit")),
+        risk_we_excess_allowance_pct=_float(inputs.get("risk_we_excess_allowance_pct")),
+        total_wallet_exposure_limit=_float(inputs.get("total_wallet_exposure_limit")),
+        risk_we_excess_allowance_mode=inputs.get("risk_we_excess_allowance_mode") or None,
+    )
     common_args = [
         _float(inputs.get("qty_step")),
         _float(inputs.get("price_step")),
@@ -209,21 +251,17 @@ def build_trailing_entry_diagnostic(inputs: Mapping[str, Any]) -> Optional[dict[
         _float(inputs.get("min_cost")),
         c_mult,
         _float(inputs.get("entry_grid_double_down_factor")),
-        _float(inputs.get("entry_grid_spacing_volatility_weight")),
-        _float(inputs.get("entry_grid_spacing_we_weight")),
         _float(inputs.get("entry_grid_spacing_pct")),
         _float(inputs.get("entry_initial_ema_dist")),
         _float(inputs.get("entry_initial_qty_pct")),
         _float(inputs.get("entry_trailing_double_down_factor")),
-        _float(inputs.get("entry_trailing_grid_ratio")),
         _float(inputs.get("entry_trailing_retracement_pct")),
-        _float(inputs.get("entry_trailing_retracement_we_weight")),
-        _float(inputs.get("entry_trailing_retracement_volatility_weight")),
         _float(inputs.get("entry_trailing_threshold_pct")),
-        _float(inputs.get("entry_trailing_threshold_we_weight")),
-        _float(inputs.get("entry_trailing_threshold_volatility_weight")),
+        _float(inputs.get("entry_weight_volatility_1h")),
+        _float(inputs.get("entry_weight_volatility_1m")),
+        _float(inputs.get("entry_we_weight")),
         _float(inputs.get("wallet_exposure_limit")),
-        _float(inputs.get("risk_we_excess_allowance_pct")),
+        effective_allowance_pct,
         balance_raw,
         position_size,
         position_price,
@@ -232,7 +270,8 @@ def build_trailing_entry_diagnostic(inputs: Mapping[str, Any]) -> Optional[dict[
         trailing_bundle["max_since_open"],
         trailing_bundle["min_since_max"],
         ema_reference,
-        entry_volatility_lr,
+        entry_volatility_1h,
+        entry_volatility_1m,
         current_price,
     ]
     if pside == "long":
@@ -240,32 +279,22 @@ def build_trailing_entry_diagnostic(inputs: Mapping[str, Any]) -> Optional[dict[
     else:
         qty, price, order_type = pbr.calc_next_entry_short_py(*common_args)
     order_type = str(order_type)
-    if "trailing" not in order_type:
-        return None
+    has_order = bool(abs(_float(qty)) > 0.0 and _float(price) > 0.0)
+    is_trailing_order = "trailing" in order_type.lower()
 
-    threshold_multiplier = (
-        (wallet_exposure / limit_cap) * _float(inputs.get("entry_trailing_threshold_we_weight"))
-        if limit_cap > 0.0
-        else 0.0
+    entry_multiplier = max(
+        1.0,
+        1.0
+        + entry_volatility_1h * _float(inputs.get("entry_weight_volatility_1h"))
+        + entry_volatility_1m * _float(inputs.get("entry_weight_volatility_1m"))
+        + (
+            (wallet_exposure / limit_cap) * _float(inputs.get("entry_we_weight"))
+            if limit_cap > 0.0
+            else 0.0
+        ),
     )
-    threshold_log_multiplier = entry_volatility_lr * _float(
-        inputs.get("entry_trailing_threshold_volatility_weight")
-    )
-    threshold_pct = _float(inputs.get("entry_trailing_threshold_pct")) * max(
-        0.0, 1.0 + threshold_multiplier + threshold_log_multiplier
-    )
-
-    retracement_multiplier = (
-        (wallet_exposure / limit_cap) * _float(inputs.get("entry_trailing_retracement_we_weight"))
-        if limit_cap > 0.0
-        else 0.0
-    )
-    retracement_log_multiplier = entry_volatility_lr * _float(
-        inputs.get("entry_trailing_retracement_volatility_weight")
-    )
-    retracement_pct = _float(inputs.get("entry_trailing_retracement_pct")) * max(
-        0.0, 1.0 + retracement_multiplier + retracement_log_multiplier
-    )
+    threshold_pct = _float(inputs.get("entry_trailing_threshold_pct")) * entry_multiplier
+    retracement_pct = _float(inputs.get("entry_trailing_retracement_pct")) * entry_multiplier
 
     if pside == "long":
         threshold_price = position_price * (1.0 - threshold_pct) if threshold_pct > 0.0 else None
@@ -293,12 +322,13 @@ def build_trailing_entry_diagnostic(inputs: Mapping[str, Any]) -> Optional[dict[
             if retracement_pct <= 0.0
             else trailing_bundle["min_since_max"] < float(retracement_price)
         )
-    triggered = bool(abs(_float(qty)) > 0.0 and _float(price) > 0.0)
+    triggered = bool(is_trailing_order and has_order)
     return {
         "kind": "entry",
         "symbol": symbol,
         "pside": pside,
         "mode": mode,
+        "selected_mode": selected_mode_from_order_type(order_type, has_order=has_order),
         "order_type": order_type,
         "wallet_exposure": wallet_exposure,
         "limit_cap": float(limit_cap),
@@ -341,21 +371,26 @@ def build_trailing_close_diagnostic(inputs: Mapping[str, Any]) -> Optional[dict[
     if position_size == 0.0 or position_price <= 0.0 or current_price <= 0.0:
         return None
     trailing_bundle = normalize_trailing_extrema(inputs)
+    close_volatility_1h = _float(inputs.get("h1_log_range_ema"))
+    close_volatility_1m = _float(inputs.get("m1_log_range_ema"))
+    effective_allowance_pct = effective_we_excess_allowance_pct(
+        wallet_exposure_limit=_float(inputs.get("wallet_exposure_limit")),
+        risk_we_excess_allowance_pct=_float(inputs.get("risk_we_excess_allowance_pct")),
+        total_wallet_exposure_limit=_float(inputs.get("total_wallet_exposure_limit")),
+        risk_we_excess_allowance_mode=inputs.get("risk_we_excess_allowance_mode") or None,
+    )
     common_args = [
         _float(inputs.get("qty_step")),
         _float(inputs.get("price_step")),
         _float(inputs.get("min_qty")),
         _float(inputs.get("min_cost")),
         _float(inputs.get("c_mult")),
-        _float(inputs.get("close_grid_markup_end")),
-        _float(inputs.get("close_grid_markup_start")),
         _float(inputs.get("close_grid_qty_pct")),
-        _float(inputs.get("close_trailing_grid_ratio")),
         _float(inputs.get("close_trailing_qty_pct")),
         _float(inputs.get("close_trailing_retracement_pct")),
         _float(inputs.get("close_trailing_threshold_pct")),
         _float(inputs.get("wallet_exposure_limit")),
-        _float(inputs.get("risk_we_excess_allowance_pct")),
+        effective_allowance_pct,
         _float(inputs.get("risk_wel_enforcer_threshold")),
         balance_raw,
         position_size,
@@ -365,17 +400,28 @@ def build_trailing_close_diagnostic(inputs: Mapping[str, Any]) -> Optional[dict[
         trailing_bundle["max_since_open"],
         trailing_bundle["min_since_max"],
         current_price,
+        0.0,
+        close_volatility_1h,
+        close_volatility_1m,
+        _float(inputs.get("close_weight_volatility_1h")),
+        _float(inputs.get("close_weight_volatility_1m")),
     ]
     if pside == "long":
         qty, price, order_type = pbr.calc_next_close_long_py(*common_args)
     else:
         qty, price, order_type = pbr.calc_next_close_short_py(*common_args)
     order_type = str(order_type)
-    if "trailing" not in order_type:
-        return None
+    has_order = bool(abs(_float(qty)) > 0.0 and _float(price) > 0.0)
+    is_trailing_order = "trailing" in order_type.lower()
 
-    threshold_pct = _float(inputs.get("close_trailing_threshold_pct"))
-    retracement_pct = _float(inputs.get("close_trailing_retracement_pct"))
+    close_multiplier = max(
+        1.0,
+        1.0
+        + close_volatility_1h * _float(inputs.get("close_weight_volatility_1h"))
+        + close_volatility_1m * _float(inputs.get("close_weight_volatility_1m")),
+    )
+    threshold_pct = _float(inputs.get("close_trailing_threshold_pct")) * close_multiplier
+    retracement_pct = _float(inputs.get("close_trailing_retracement_pct")) * close_multiplier
     if pside == "long":
         threshold_price = position_price * (1.0 + threshold_pct) if threshold_pct > 0.0 else None
         threshold_met = True if threshold_pct <= 0.0 else trailing_bundle["max_since_open"] > threshold_price
@@ -402,11 +448,12 @@ def build_trailing_close_diagnostic(inputs: Mapping[str, Any]) -> Optional[dict[
             if retracement_pct <= 0.0
             else trailing_bundle["max_since_min"] > float(retracement_price)
         )
-    triggered = bool(abs(_float(qty)) > 0.0 and _float(price) > 0.0)
+    triggered = bool(is_trailing_order and has_order)
     return {
         "kind": "close",
         "symbol": symbol,
         "pside": pside,
+        "selected_mode": selected_mode_from_order_type(order_type, has_order=has_order),
         "order_type": order_type,
         "triggered": triggered,
         "status": trailing_status(
@@ -437,6 +484,71 @@ def build_trailing_close_diagnostic(inputs: Mapping[str, Any]) -> Optional[dict[
     }
 
 
+def build_trailing_grid_v7_diagnostic(inputs: Mapping[str, Any]) -> Optional[dict[str, Any]]:
+    strategy_params = inputs.get("strategy_params")
+    if not isinstance(strategy_params, Mapping):
+        return None
+    pside = str(inputs.get("pside", "long"))
+    if pside not in {"long", "short"}:
+        return None
+    position_size = _float(inputs.get("position_size"))
+    if pside == "long":
+        position_size = abs(position_size)
+    else:
+        position_size = -abs(position_size)
+    position_price = _float(inputs.get("position_price"))
+    current_price = _float(inputs.get("current_price"))
+    if position_size == 0.0 or position_price <= 0.0 or current_price <= 0.0:
+        return None
+    trailing_bundle = normalize_trailing_extrema(inputs)
+    payload = {
+        "pside": pside,
+        "exchange": {
+            "qty_step": _float(inputs.get("qty_step")),
+            "price_step": _float(inputs.get("price_step")),
+            "min_qty": _float(inputs.get("min_qty")),
+            "min_cost": _float(inputs.get("min_cost")),
+            "c_mult": _float(inputs.get("c_mult")),
+            "maker_fee": _float(inputs.get("maker_fee"), default=0.0002),
+            "taker_fee": _float(inputs.get("taker_fee"), default=0.00055),
+        },
+        "state": {
+            "balance": _float(inputs.get("balance_raw")),
+            "order_book": {"bid": current_price, "ask": current_price},
+            "ema_bands": {
+                "lower": _float(inputs.get("ema_lower")),
+                "upper": _float(inputs.get("ema_upper")),
+            },
+            "volatility_ema_1m": 0.0,
+            "volatility_ema_1h": _float(inputs.get("h1_log_range_ema")),
+        },
+        "bot_params": {
+            "n_positions": int(round(_float(inputs.get("n_positions"), default=1.0))) or 1,
+            "wallet_exposure_limit": _float(inputs.get("wallet_exposure_limit")),
+            "total_wallet_exposure_limit": _float(inputs.get("total_wallet_exposure_limit")),
+            "risk_we_excess_allowance_pct": _float(inputs.get("risk_we_excess_allowance_pct")),
+            "risk_we_excess_allowance_mode": inputs.get("risk_we_excess_allowance_mode") or "bounded",
+            "risk_wel_enforcer_threshold": _float(inputs.get("risk_wel_enforcer_threshold")),
+        },
+        "runtime": {
+            "effective_wallet_exposure_limit": _float(
+                inputs.get("effective_wallet_exposure_limit"),
+                default=_float(inputs.get("wallet_exposure_limit")),
+            )
+        },
+        "strategy_params": deepcopy(dict(strategy_params)),
+        "position": {"size": position_size, "price": position_price},
+        "trailing": trailing_bundle,
+    }
+    raw = pbr.calc_trailing_grid_v7_diagnostic_py(json.dumps(payload, separators=(",", ":")))
+    diagnostic = json.loads(raw)
+    if not isinstance(diagnostic, dict):
+        return None
+    diagnostic["symbol"] = str(inputs.get("symbol", ""))
+    diagnostic["pside"] = pside
+    return diagnostic
+
+
 def build_trailing_diagnostic(inputs: Mapping[str, Any]) -> dict[str, Any]:
     normalized_inputs = {key: inputs.get(key) for key in inputs}
     trailing_bundle = normalize_trailing_extrema(inputs)
@@ -449,11 +561,15 @@ def build_trailing_diagnostic(inputs: Mapping[str, Any]) -> dict[str, Any]:
     allowed_limit = wallet_exposure_limit_with_allowance(
         wallet_exposure_limit=_float(inputs.get("wallet_exposure_limit")),
         risk_we_excess_allowance_pct=_float(inputs.get("risk_we_excess_allowance_pct")),
+        total_wallet_exposure_limit=_float(inputs.get("total_wallet_exposure_limit")),
+        risk_we_excess_allowance_mode=inputs.get("risk_we_excess_allowance_mode") or None,
     )
     entry_cap, entry_mode = entry_trailing_limit_cap(
         wallet_exposure_limit=_float(inputs.get("wallet_exposure_limit")),
         risk_we_excess_allowance_pct=_float(inputs.get("risk_we_excess_allowance_pct")),
-        entry_trailing_grid_ratio=_float(inputs.get("entry_trailing_grid_ratio")),
+        total_wallet_exposure_limit=_float(inputs.get("total_wallet_exposure_limit")),
+        risk_we_excess_allowance_mode=inputs.get("risk_we_excess_allowance_mode") or None,
+        entry_trailing_retracement_pct=_float(inputs.get("entry_trailing_retracement_pct")),
         wallet_exposure=wallet_exposure,
     )
     return {
@@ -535,7 +651,7 @@ def build_trailing_inputs_from_snapshot(
     bot_cfg = config.get("bot", {})
     if not isinstance(bot_cfg, Mapping) or not isinstance(bot_cfg.get(pside), Mapping):
         raise KeyError(f"config missing bot.{pside} section")
-    side_cfg = bot_cfg[pside]
+    side_cfg = flatten_shared_bot_side(bot_cfg[pside])
     out: dict[str, Any] = {
         "symbol": symbol,
         "pside": pside,
@@ -561,4 +677,5 @@ def build_trailing_inputs_from_snapshot(
             out[key] = _effective_wallet_exposure_limit(config, pside=pside)
         else:
             out[key] = _float(side_cfg.get(key))
+    out["risk_we_excess_allowance_mode"] = side_cfg.get("risk_we_excess_allowance_mode")
     return out

@@ -22,13 +22,25 @@ def test_override_path_resolves_relative_to_base_config(tmp_path):
         "XRP": {
             "override_config_path": "overrides/xrp.json",
             # inline override should merge with file-loaded overrides
-            "bot": {"short": {"entry_grid_spacing_pct": 0.77}},
+            "bot": {
+                "short": {
+                    "strategy": {
+                        "trailing_martingale": {
+                            "entry": {
+                                "threshold_base_pct": 0.77,
+                            },
+                        },
+                    },
+                },
+            },
         }
     }
 
     override_cfg = config_utils.get_template_config()
     override_cfg["live"]["user"] = "tester"
-    override_cfg["bot"]["long"]["entry_grid_spacing_pct"] = 0.99
+    override_cfg["bot"]["long"]["strategy"]["trailing_martingale"]["entry"][
+        "threshold_base_pct"
+    ] = 0.99
     override_cfg["disallowed_root"] = "drop_me"
     overrides_dir = tmp_path / "overrides"
     overrides_dir.mkdir()
@@ -43,9 +55,13 @@ def test_override_path_resolves_relative_to_base_config(tmp_path):
     assert "XRP" in parsed["coin_overrides"]
     xrp_ov = parsed["coin_overrides"]["XRP"]
     # allowed field from file
-    assert xrp_ov["bot"]["long"]["entry_grid_spacing_pct"] == pytest.approx(0.99)
+    assert xrp_ov["bot"]["long"]["strategy"]["trailing_martingale"]["entry"][
+        "threshold_base_pct"
+    ] == pytest.approx(0.99)
     # inline override merged on top
-    assert xrp_ov["bot"]["short"]["entry_grid_spacing_pct"] == pytest.approx(0.77)
+    assert xrp_ov["bot"]["short"]["strategy"]["trailing_martingale"]["entry"][
+        "threshold_base_pct"
+    ] == pytest.approx(0.77)
     # disallowed root key should be stripped
     assert "disallowed_root" not in xrp_ov
 

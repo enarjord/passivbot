@@ -18,6 +18,7 @@ import time
 import zlib
 
 import numpy as np
+import portalocker
 import pytest
 
 from candlestick_manager import (
@@ -28,6 +29,7 @@ from candlestick_manager import (
     _GAP_MAX_RETRIES,
     GAP_REASON_FETCH_FAILED,
     GAP_REASON_AUTO,
+    GAP_REASON_NO_TRADES,
 )
 
 
@@ -166,6 +168,89 @@ class TestGapHandlingEdgeCases:
         assert len(gaps) == 1
         assert gaps[0]["retry_count"] >= _GAP_MAX_RETRIES
         assert not cm._should_retry_gap(gaps[0])
+
+    def test_persistent_fetch_failed_gap_retries_after_expiry(self, tmp_cache_dir, monkeypatch):
+        """Expired fetch failures are eligible for a bounded retry cycle."""
+        base_ms = 1_700_000_000_000
+        monkeypatch.setattr(time, "time", lambda: base_ms / 1000.0)
+        cm = CandlestickManager(exchange=None, exchange_name="test", cache_dir=tmp_cache_dir)
+        symbol = "BTC/USDT:USDT"
+
+        cm._add_known_gap(
+            symbol,
+            1_000_000,
+            2_000_000,
+            reason=GAP_REASON_FETCH_FAILED,
+            increment_retry=False,
+            retry_count=_GAP_MAX_RETRIES,
+        )
+        gap = cm._get_known_gaps_enhanced(symbol)[0]
+        assert not cm._should_retry_gap(gap)
+
+        expired_ms = base_ms + 8 * 24 * 60 * 60 * 1000
+        monkeypatch.setattr(time, "time", lambda: expired_ms / 1000.0)
+        assert cm._should_retry_gap(gap)
+        summary = cm.get_gap_summary(symbol)
+        assert summary["persistent_gaps"] == 0
+        assert summary["retryable_gaps"] == 1
+
+    def test_expired_persistent_gap_readd_resets_retry_cycle(self, tmp_cache_dir, monkeypatch):
+        """Retrying an expired persistent gap starts a fresh retry count."""
+        base_ms = 1_700_000_000_000
+        monkeypatch.setattr(time, "time", lambda: base_ms / 1000.0)
+        cm = CandlestickManager(exchange=None, exchange_name="test", cache_dir=tmp_cache_dir)
+        symbol = "BTC/USDT:USDT"
+
+        cm._add_known_gap(
+            symbol,
+            1_000_000,
+            2_000_000,
+            reason=GAP_REASON_FETCH_FAILED,
+            increment_retry=False,
+            retry_count=_GAP_MAX_RETRIES,
+        )
+        expired_ms = base_ms + 8 * 24 * 60 * 60 * 1000
+        monkeypatch.setattr(time, "time", lambda: expired_ms / 1000.0)
+
+        cm._add_known_gap(
+            symbol,
+            1_000_000,
+            2_000_000,
+            reason=GAP_REASON_FETCH_FAILED,
+            increment_retry=True,
+        )
+
+        gap = cm._get_known_gaps_enhanced(symbol)[0]
+        assert gap["retry_count"] == 1
+        assert abs(int(gap["added_at"]) - expired_ms) <= 1
+        assert not cm._persistent_gap_retry_due(gap, now_ms=expired_ms)
+
+    @pytest.mark.parametrize("reason", ["pre_inception", GAP_REASON_NO_TRADES])
+    def test_verified_persistent_gap_reasons_do_not_expire(
+        self, tmp_cache_dir, monkeypatch, reason
+    ):
+        """Verified no-data gaps remain terminal even after the retry horizon."""
+        base_ms = 1_700_000_000_000
+        monkeypatch.setattr(time, "time", lambda: base_ms / 1000.0)
+        cm = CandlestickManager(exchange=None, exchange_name="test", cache_dir=tmp_cache_dir)
+        symbol = "BTC/USDT:USDT"
+
+        cm._add_known_gap(
+            symbol,
+            1_000_000,
+            2_000_000,
+            reason=reason,
+            increment_retry=False,
+            retry_count=_GAP_MAX_RETRIES,
+        )
+        expired_ms = base_ms + 8 * 24 * 60 * 60 * 1000
+        monkeypatch.setattr(time, "time", lambda: expired_ms / 1000.0)
+
+        gap = cm._get_known_gaps_enhanced(symbol)[0]
+        assert not cm._should_retry_gap(gap)
+        summary = cm.get_gap_summary(symbol)
+        assert summary["persistent_gaps"] == 1
+        assert summary["retryable_gaps"] == 0
 
     def test_gap_merge_overlapping(self, tmp_cache_dir):
         """Overlapping gaps should be merged."""
@@ -660,6 +745,47 @@ class TestConcurrentAccess:
         # Both symbols should have been fetched
         assert "BTC/USDT:USDT" in fetch_calls
         assert "ETH/USDT:USDT" in fetch_calls
+
+    def test_stale_lock_cleanup_skips_locks_it_cannot_acquire(self, tmp_cache_dir, monkeypatch):
+        """Cleanup must not unlink an active stale-looking lock file."""
+        cm = CandlestickManager(exchange=None, exchange_name="test", cache_dir=tmp_cache_dir)
+        lock_path = cm._fetch_lock_path("BTC/USDT:USDT", "1m")
+        with open(lock_path, "w", encoding="utf-8") as handle:
+            handle.write("held")
+        stale_mtime = time.time() - cm._lock_stale_seconds - 10.0
+        os.utime(lock_path, (stale_mtime, stale_mtime))
+
+        class BusyLock:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def acquire(self):
+                raise portalocker.exceptions.LockException("busy")
+
+            def release(self):
+                raise AssertionError("release should not be called when acquire failed")
+
+        monkeypatch.setattr(portalocker, "Lock", BusyLock)
+        cm._cleanup_stale_locks()
+        assert os.path.exists(lock_path)
+
+        events = []
+
+        class AvailableLock:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def acquire(self):
+                events.append("acquire")
+
+            def release(self):
+                events.append("release")
+
+        monkeypatch.setattr(portalocker, "Lock", AvailableLock)
+        cm._cleanup_stale_locks()
+
+        assert not os.path.exists(lock_path)
+        assert events == ["acquire", "release"]
 
 
 # ==============================================================================

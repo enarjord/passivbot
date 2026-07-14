@@ -11,19 +11,45 @@ See also:
 
 ## Current Scope
 
-1. Runtime HSL behavior is side-specific by `pside`.
+1. Runtime HSL behavior is side-specific by `pside`, with optional `coin` mode creating per-`coin+pside` controllers.
 2. Config lives under:
-   - `bot.long.hsl_*`
-   - `bot.short.hsl_*`
+   - `bot.long.hsl.*`
+   - `bot.short.hsl.*`
 3. `live.hsl_signal_mode` selects whether those `pside` runtimes use:
-   - one shared `unified` signal (default)
+   - one shared `unified` signal
    - side-local `pside` signals
-4. Live and backtest use the same reconstructed strategy-drawdown concept for each `pside`.
+   - coin-local `coin` signals (default)
+4. Live and backtest use the same reconstructed strategy-drawdown concept for each `pside`; `coin` mode instead uses realized PnL cumsum drawdown plus current UPnL divided by the configured slot budget.
 5. RED can halt permanently or restart after cooldown, per `pside`.
 6. Live startup behavior is reconstructed from exchange-derived history rather than depending on a local latch file.
 7. Backtests export:
    - global account-level strategy-equity metrics under `*_strategy_eq`
    - side-specific strategy-equity metrics under `*_strategy_eq_long` / `*_strategy_eq_short`
+
+## Startup And Config-Change Contract
+
+HSL is stateless trading behavior. Live startup may use local caches or
+checkpoints to speed reconstruction, but the authoritative inputs are exchange
+state, fill history, candle history, config, and current time. Cache contents
+must never be required to decide whether HSL is RED, in cooldown, or terminal.
+
+Important consequences:
+
+1. Enabling HSL on an account with existing positions can trigger immediate
+   panic closes if reconstructed current-episode drawdown is RED.
+2. `live.pnls_max_lookback_days` is shared by HSL, realized-loss gating,
+   auto-unstuck allowance, plotting, and backtests. It is a memory horizon, not
+   a process-local lifetime.
+3. Changing HSL thresholds, signal mode, `n_positions`, TWEL, excess allowance,
+   or lookback length can retroactively change reconstructed RED/cooldown/
+   no-restart outcomes. Treat those edits as risk-policy migrations.
+4. Live `coin` mode uses configured `n_positions` for slot-budget sensitivity.
+   It must not silently switch to dynamic live coin eligibility; backtests may
+   use dynamic historical effective n-positions only behind an explicit option.
+5. Missing fill or candle coverage must be visible and fail/defer rather than
+   creating neutral drawdown values.
+6. Performance caches are allowed only when they can be invalidated safely and
+   extended from exchange-derived history without changing trading decisions.
 
 ## Restart / Statelessness Edge Cases
 
@@ -55,7 +81,7 @@ These are the main parity surfaces that should be reviewed together:
    - `tp_only_with_active_entry_cancellation`
 3. RED behavior
    - panic close order type
-   - confirmation that all positions on the triggered `pside` are fully closed
+   - confirmation that all positions on the triggered `pside`, or the triggered `coin+pside` in `coin` mode, are fully closed
    - cooldown restart
    - terminal latch
 4. Order execution intent
@@ -122,8 +148,8 @@ Recommended HSL-focused optimizer study:
 
 1. Treat `hsl_no_restart_drawdown_threshold` as an operator/runtime control, not a default optimization variable.
 2. Use fixed optimize-time overrides:
-   - `optimize.fixed_runtime_overrides["bot.long.hsl_no_restart_drawdown_threshold"] = 1.0`
-   - `optimize.fixed_runtime_overrides["bot.short.hsl_no_restart_drawdown_threshold"] = 1.0`
+   - `optimize.fixed_runtime_overrides["bot.long.hsl.no_restart_drawdown_threshold"] = 1.0`
+   - `optimize.fixed_runtime_overrides["bot.short.hsl.no_restart_drawdown_threshold"] = 1.0`
 3. Tune:
    - `long_hsl_red_threshold`
    - `long_hsl_ema_span_minutes`

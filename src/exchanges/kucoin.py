@@ -170,16 +170,32 @@ class KucoinBot(CCXTBot):
         return self.determine_pos_side(order)
 
     def determine_pos_side(self, order):
-        # non hedge mode
-        if self.has_position("long", order["symbol"]):
+        explicit = order.get("position_side")
+        if explicit is None:
+            info = order.get("info", {}) or {}
+            explicit = info.get("positionSide") or info.get("posSide")
+        if explicit is not None:
+            explicit = str(explicit).lower()
+            if explicit in ("long", "short"):
+                return explicit
+            raise Exception(f"unknown position_side {explicit} for order {order}")
+
+        symbol = order["symbol"]
+        has_long = self.has_position("long", symbol)
+        has_short = self.has_position("short", symbol)
+        if has_long and not has_short:
             return "long"
-        elif self.has_position("short", order["symbol"]):
+        if has_short and not has_long:
             return "short"
-        elif order["side"] == "buy":
+
+        side = str(order.get("side", "")).lower()
+        if has_long and has_short:
+            raise Exception(f"ambiguous KuCoin position side for hedge-mode order {order}")
+        if side == "buy":
             return "long"
-        elif order["side"] == "sell":
+        if side == "sell":
             return "short"
-        raise Exception(f"unknown side {order['side']}")
+        raise Exception(f"unknown side {order.get('side')}")
 
     async def _do_fetch_open_orders(self, symbol: str = None) -> list:
         """KuCoin: Fetch open orders with pagination.
@@ -518,11 +534,18 @@ class KucoinBot(CCXTBot):
             # Hedge mode enabled so both long/short can coexist.
             if hasattr(self.cca, "set_position_mode"):
                 res = await self.cca.set_position_mode(True)
-                logging.info(f"set_position_mode hedged=True {res}")
+                logging.info(
+                    "[config] set_position_mode hedged=True result=%s",
+                    format_exchange_config_response(res),
+                )
             else:
-                logging.info("set_position_mode not supported by current KuCoin client; continuing")
+                raise NotImplementedError("set_position_mode not supported by current KuCoin client")
         except Exception as e:
-            logging.warning(f"set_position_mode hedged=True not applied: {e}")
+            logging.error(
+                "[config] set_position_mode hedged=True not applied | %s",
+                self._format_exchange_config_error(e),
+            )
+            raise
 
     async def update_exchange_config_by_symbols(self, symbols):
         coros_to_call = []
@@ -542,7 +565,11 @@ class KucoinBot(CCXTBot):
                     )
                 )
             except Exception as e:
-                logging.warning(f"{log_symbol}: error set_margin_mode {e}")
+                logging.warning(
+                    "[config] %s set_margin_mode task creation failed | %s",
+                    log_symbol,
+                    self._format_exchange_config_error(e),
+                )
         for symbol, task_name, task in coros_to_call:
             log_symbol = symbol_to_coin(symbol, verbose=False) or symbol
             res = None
@@ -551,7 +578,12 @@ class KucoinBot(CCXTBot):
                 res = await task
                 to_print += f"{task_name}={format_exchange_config_response(res)}"
             except Exception as e:
-                logging.warning(f"{log_symbol} error {task_name} {e}")
+                logging.warning(
+                    "[config] %s %s failed | %s",
+                    log_symbol,
+                    task_name,
+                    self._format_exchange_config_error(e),
+                )
             if to_print:
                 logging.info(f"{log_symbol}: {to_print}")
 
@@ -572,7 +604,11 @@ class KucoinBot(CCXTBot):
             except ValueError:
                 raise
             except Exception as e:
-                logging.warning(f"{log_symbol}: error preparing set_leverage {e}")
+                logging.warning(
+                    "[config] %s set_leverage task creation failed | %s",
+                    log_symbol,
+                    self._format_exchange_config_error(e),
+                )
         for symbol, task_name, task in coros_to_call:
             log_symbol = symbol_to_coin(symbol, verbose=False) or symbol
             res = None
@@ -581,6 +617,11 @@ class KucoinBot(CCXTBot):
                 res = await task
                 to_print += f"{task_name}={format_exchange_config_response(res)}"
             except Exception as e:
-                logging.warning(f"{log_symbol} error {task_name} {e}")
+                logging.warning(
+                    "[config] %s %s failed | %s",
+                    log_symbol,
+                    task_name,
+                    self._format_exchange_config_error(e),
+                )
             if to_print:
                 logging.info(f"{log_symbol}: {to_print}")

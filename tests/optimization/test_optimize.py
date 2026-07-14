@@ -5,6 +5,7 @@ These tests capture the current behavior of optimize.py functions and classes
 to enable safe refactoring. They document how the code actually works today.
 """
 
+import logging
 import math
 import os
 import argparse
@@ -12,6 +13,7 @@ import json
 import logging
 from multiprocessing.reduction import ForkingPickler
 import tempfile
+from collections import defaultdict
 from copy import deepcopy
 from pathlib import Path
 from unittest.mock import Mock, MagicMock, patch
@@ -23,37 +25,130 @@ import optimize
 from optimize import (
     _apply_config_overrides,
     _analysis_indicates_liquidation,
+    _canonicalize_optimizer_individual,
     _clear_candidate_metrics,
+    _close_evaluator_for_pool,
     _looks_like_bool_token,
     _normalize_optional_bool_flag,
+    _optimizer_exit_code,
+    _record_individual_result,
+    _register_exchange_data,
     _resolve_cli_limits_override,
     _set_candidate_metrics,
+    _terminate_optimizer_pool,
+    _suite_config_implies_suite_mode,
     _format_objectives,
+    ea_mu_plus_lambda_stream,
     individual_to_config,
     config_to_individual,
     validate_array,
+    apply_polish_bounds,
     apply_fine_tune_bounds,
     extract_configs,
     get_starting_configs,
     iter_starting_configs,
+    iter_anchored_fine_tune_seed_configs,
     configs_to_individuals,
     configs_to_individuals_streaming,
     ConstraintAwareFitness,
     ResultRecorder,
+    install_anchored_fine_tune_plan,
 )
 from multiprocessing_utils import ignore_sigint_in_worker
 from optimization.bounds import Bound
 from optimization.callback import build_pymoo_record_entry
-from optimization.config_adapter import get_optimization_key_paths
 from optimization.config_adapter import extract_bounds_tuple_list_from_config
+from optimization.config_adapter import get_optimization_key_paths
+from optimization.evaluation_payload import (
+    apply_evaluation_payload,
+    build_evaluation_payload,
+    unpack_evaluation_payload,
+)
+from optimization.fine_tune_anchors import ANCHOR_GENE_KEY, ANCHOR_PLAN_KEY
 from optimization.shape import build_optimization_shape
+from optimization.warmup import build_optimizer_max_config
 from optimize_suite import ScenarioEvalContext
-from config import load_prepared_config
+from config import load_prepared_config, prepare_config
+from config.parse import load_raw_config
 from config.schema import get_template_config
+
+
+def _toy_optimize_bounds(*keys):
+    return {"bounds": {key: [0.0, 1000.0] for key in keys}}
 
 
 def test_worker_initializer_is_pickleable_for_spawn():
     ForkingPickler.dumps(ignore_sigint_in_worker)
+
+
+def test_optimizer_exit_code_reports_fatal_failure():
+    assert _optimizer_exit_code(interrupted=False, failed=False) == 0
+    assert _optimizer_exit_code(interrupted=False, failed=True) == 1
+    assert _optimizer_exit_code(interrupted=True, failed=False) == 130
+    assert _optimizer_exit_code(interrupted=True, failed=True) == 130
+
+
+def test_terminate_optimizer_pool_handles_missing_pool():
+    assert _terminate_optimizer_pool(None, False) is False
+
+
+def test_terminate_optimizer_pool_skips_already_terminated_pool():
+    pool = MagicMock()
+
+    assert _terminate_optimizer_pool(pool, True) is True
+    pool.terminate.assert_not_called()
+
+
+def test_terminate_optimizer_pool_terminates_active_pool():
+    pool = MagicMock()
+
+    assert _terminate_optimizer_pool(pool, False) is True
+    pool.terminate.assert_called_once_with()
+
+
+def test_close_evaluator_for_pool_calls_close_when_available():
+    evaluator = MagicMock()
+
+    assert _close_evaluator_for_pool(evaluator) is True
+    evaluator.close.assert_called_once_with()
+
+
+def test_close_evaluator_for_pool_skips_plain_evaluator():
+    evaluator = object()
+
+    assert _close_evaluator_for_pool(evaluator) is False
+
+
+def test_suite_config_implies_suite_mode_when_suite_flag_omitted():
+    args = argparse.Namespace(suite_config="suite.json", suite=None)
+
+    assert _suite_config_implies_suite_mode(args) is True
+
+
+@pytest.mark.parametrize("suite_value", [False, True])
+def test_suite_config_does_not_override_explicit_suite_flag(suite_value):
+    args = argparse.Namespace(suite_config="suite.json", suite=suite_value)
+
+    assert _suite_config_implies_suite_mode(args) is False
+
+
+def test_missing_suite_config_does_not_imply_suite_mode():
+    args = argparse.Namespace(suite_config=None, suite=None)
+
+    assert _suite_config_implies_suite_mode(args) is False
+
+
+def test_suite_config_activation_enables_extracted_suite_config():
+    args = argparse.Namespace(suite_config="suite.json", suite=None)
+    config = get_template_config()
+    suite_override = {"scenarios": [{"label": "stress"}]}
+
+    if _suite_config_implies_suite_mode(args):
+        optimize.recursive_config_update(config, "backtest.suite_enabled", True, verbose=False)
+    suite_cfg = optimize.extract_suite_config(config, suite_override)
+
+    assert suite_cfg["enabled"] is True
+    assert suite_cfg["scenarios"] == [{"label": "stress"}]
 
 
 def test_candidate_metrics_sidecars_only_attach_to_objects():
@@ -71,6 +166,113 @@ def test_candidate_metrics_sidecars_only_attach_to_objects():
     assert not hasattr(plain_vector, "evaluation_metrics")
     _clear_candidate_metrics(plain_vector)
     assert plain_vector == [1.0, 2.0]
+
+
+def test_deap_evaluation_payload_applies_evaluated_vector_to_parent_individual():
+    class Fitness:
+        values = ()
+        constraint_violation = None
+
+    class Candidate(list):
+        def __init__(self, values):
+            super().__init__(values)
+            self.fitness = Fitness()
+
+    individual = Candidate([1.0, 2.0])
+    payload = build_evaluation_payload(
+        (0.1, 0.2),
+        3.0,
+        {"liquidated": False},
+        [4.0, 5.0],
+    )
+
+    metrics = apply_evaluation_payload(individual, payload)
+
+    assert individual == [4.0, 5.0]
+    assert individual.fitness.values == (0.1, 0.2)
+    assert individual.fitness.constraint_violation == 3.0
+    assert individual.constraint_violation == 3.0
+    assert metrics == {"liquidated": False}
+
+
+def test_deap_evaluation_payload_accepts_legacy_tuple_payload_without_mutating_vector():
+    class Fitness:
+        values = ()
+        constraint_violation = None
+
+    class Candidate(list):
+        def __init__(self, values):
+            super().__init__(values)
+            self.fitness = Fitness()
+
+    individual = Candidate([1.0, 2.0])
+
+    metrics = apply_evaluation_payload(individual, ((0.1,), 2.0, None))
+
+    assert individual == [1.0, 2.0]
+    assert individual.fitness.values == (0.1,)
+    assert individual.fitness.constraint_violation == 2.0
+    assert individual.constraint_violation == 2.0
+    assert metrics is None
+
+
+def test_deap_evolution_forwards_max_pending_to_stream(monkeypatch):
+    class Fitness:
+        def __init__(self):
+            self.values = ()
+            self.constraint_violation = 0.0
+
+        @property
+        def valid(self):
+            return bool(self.values)
+
+    class Candidate(list):
+        def __init__(self, values):
+            super().__init__(values)
+            self.fitness = Fitness()
+
+    captured = {}
+
+    def fake_stream(items, *, submit, on_result, max_pending=None, **_kwargs):
+        captured["max_pending"] = max_pending
+        for idx, individual in items:
+            on_result(
+                idx,
+                build_evaluation_payload(
+                    (0.1,),
+                    0.0,
+                    {"liquidated": False},
+                    individual,
+                ),
+            )
+        return 1
+
+    monkeypatch.setattr(optimize, "stream_async_results", fake_stream)
+    monkeypatch.setattr(optimize, "_record_individual_result", lambda *args, **kwargs: None)
+    population = [Candidate([1.0])]
+
+    ea_mu_plus_lambda_stream(
+        population,
+        toolbox=object(),
+        mu=1,
+        lambda_=1,
+        cxpb=0.0,
+        mutpb=0.0,
+        ngen=1,
+        stats=None,
+        halloffame=None,
+        verbose=False,
+        recorder=MagicMock(),
+        evaluator_config={"bot": {}, "backtest": {}, "optimize": {}},
+        overrides_list=[],
+        pool=object(),
+        duplicate_counter=defaultdict(int),
+        pool_state={"terminated": False},
+        max_pending_evals=3,
+    )
+
+    assert captured["max_pending"] == 3
+    assert population[0].fitness.valid
 
 
 class TestApplyConfigOverrides:
@@ -93,32 +295,81 @@ class TestApplyConfigOverrides:
         _apply_config_overrides(config, {"bot.long.value": 2.0})
         assert config["bot"]["long"]["value"] == 2.0
 
-    def test_nested_override_creates_path(self):
+    def test_missing_intermediate_path_raises(self):
         config = {}
-        _apply_config_overrides(config, {"bot.long.value": 5.0})
-        assert config["bot"]["long"]["value"] == 5.0
+        with pytest.raises(KeyError, match="missing bot"):
+            _apply_config_overrides(config, {"bot.long.value": 5.0})
 
-    def test_override_creates_missing_dicts(self):
+    def test_missing_final_key_raises(self):
         config = {"bot": {}}
-        _apply_config_overrides(config, {"bot.short.param": 10})
-        assert config["bot"]["short"]["param"] == 10
+        with pytest.raises(KeyError, match="missing bot.short"):
+            _apply_config_overrides(config, {"bot.short.param": 10})
 
-    def test_non_string_keys_skipped(self):
+    def test_non_string_keys_raise(self):
         config = {"bot": {}}
-        _apply_config_overrides(config, {123: "value"})
-        assert config == {"bot": {}}
+        with pytest.raises(ValueError, match="dotted strings"):
+            _apply_config_overrides(config, {123: "value"})
 
-    def test_empty_dotted_path_creates_key(self):
-        # Empty string dotted path actually creates an empty-string key
+    def test_empty_dotted_path_raises(self):
         config = {"bot": {}}
-        _apply_config_overrides(config, {"": "value"})
-        # Empty path creates a key with empty string
-        assert config[""] == "value"
+        with pytest.raises(ValueError, match="must not be empty"):
+            _apply_config_overrides(config, {"": "value"})
 
-    def test_replaces_non_dict_intermediate_values(self):
+    def test_non_dict_intermediate_value_raises(self):
         config = {"bot": {"long": "not_a_dict"}}
-        _apply_config_overrides(config, {"bot.long.value": 3.0})
-        assert config["bot"]["long"]["value"] == 3.0
+        with pytest.raises(KeyError, match="bot.long is not a mapping"):
+            _apply_config_overrides(config, {"bot.long.value": 3.0})
+
+    def test_bot_shared_paths_update_grouped_value_and_runtime_alias(self):
+        config = {
+            "bot": {
+                "long": {
+                    "hsl": {"no_restart_drawdown_threshold": 0.3},
+                    "hsl_no_restart_drawdown_threshold": 0.3,
+                    "risk": {"entry_cooldown_minutes": 0.0},
+                    "risk_entry_cooldown_minutes": 9.0,
+                }
+            }
+        }
+
+        _apply_config_overrides(
+            config,
+            {
+                "bot.long.hsl_no_restart_drawdown_threshold": 1.0,
+                "bot.long.risk.entry_cooldown_minutes": 2.5,
+            },
+        )
+
+        assert config["bot"]["long"]["hsl"]["no_restart_drawdown_threshold"] == pytest.approx(1.0)
+        assert config["bot"]["long"]["hsl_no_restart_drawdown_threshold"] == pytest.approx(1.0)
+        assert config["bot"]["long"]["risk"]["entry_cooldown_minutes"] == pytest.approx(2.5)
+        assert config["bot"]["long"]["risk_entry_cooldown_minutes"] == pytest.approx(2.5)
+
+    def test_strategy_flat_override_uses_active_strategy_optimizer_key_path(self):
+        config = {
+            "live": {"strategy_kind": "trailing_martingale"},
+            "bot": {
+                "long": {
+                    "strategy": {
+                        "trailing_martingale": {"entry": {"threshold_base_pct": 0.1}},
+                    }
+                }
+            },
+        }
+
+        _apply_config_overrides(config, {"bot.long.entry_threshold_base_pct": 0.25})
+
+        assert config["bot"]["long"]["strategy"]["trailing_martingale"]["entry"][
+            "threshold_base_pct"
+        ] == pytest.approx(0.25)
+
+    def test_typo_override_path_raises_without_creating_key(self):
+        config = get_template_config()
+
+        with pytest.raises(KeyError, match="n_positons"):
+            _apply_config_overrides(config, {"bot.long.risk.n_positons": 7})
+
+        assert "n_positons" not in config["bot"]["long"]["risk"]
 
 
 class TestLiquidationHelpers:
@@ -392,7 +643,7 @@ def test_optimize_parser_accepts_short_limit_alias():
     assert args.limit_entries == ["adg_strategy_pnl_rebased > 0.0"]
 
 
-def test_optimize_parser_preserves_legacy_multi_char_short_flags_alongside_limit_alias():
+def test_optimize_parser_accepts_nested_bound_flags_alongside_limit_alias():
     parser = optimize.build_command_parser(
         prog="passivbot optimize",
         description="run optimizer",
@@ -439,10 +690,17 @@ def test_optimize_parser_preserves_legacy_multi_char_short_flags_alongside_limit
         dest="clear_limits",
     )
 
-    args = parser.parse_args(["-ltwel", "0", "-l", "adg_strategy_pnl_rebased>0.0"])
+    args = parser.parse_args(
+        [
+            "--optimize.bounds.long.risk.total_wallet_exposure_limit",
+            "0",
+            "-l",
+            "adg_strategy_pnl_rebased>0.0",
+        ]
+    )
 
     assert args.limit_entries == ["adg_strategy_pnl_rebased>0.0"]
-    assert getattr(args, "optimize.bounds.long_total_wallet_exposure_limit") == [0.0]
+    assert getattr(args, "optimize.bounds.long.risk.total_wallet_exposure_limit") == [0.0]
 
 
 def test_optimize_parser_candle_interval_short_flag_parses_as_int():
@@ -483,6 +741,24 @@ def test_optimize_parser_candle_interval_short_flag_parses_as_int():
 
     assert getattr(args, "backtest.candle_interval_minutes") == 2
     assert isinstance(getattr(args, "backtest.candle_interval_minutes"), int)
+
+
+def test_optimize_parser_accepts_polish_bounds_mode():
+    parser = optimize.build_command_parser(
+        prog="passivbot optimize",
+        description="run optimizer",
+        usage="%(prog)s [config_path] [options]",
+        epilog="",
+    )
+    advanced_group = parser.add_argument_group("Advanced Overrides")
+    optimize.add_extra_options(advanced_group, help_all=True)
+
+    args = parser.parse_args(
+        ["--polish-pct", "0.2", "--polish-bounds-mode", "override-all"]
+    )
+
+    assert args.polish_bounds_pct == 0.2
+    assert args.polish_bounds_mode == "override-all"
 
 
 class TestFormatObjectives:
@@ -541,7 +817,13 @@ class TestIndividualToConfig:
             "bot": {
                 "long": {"param1": 0.0, "param2": 0.0},
                 "short": {"param1": 0.0, "param2": 0.0},
-            }
+            },
+            "optimize": _toy_optimize_bounds(
+                "long_param1",
+                "long_param2",
+                "short_param1",
+                "short_param2",
+            ),
         }
         overrides_list = []
         mock_overrides = lambda x, y, z: y
@@ -560,7 +842,13 @@ class TestIndividualToConfig:
             "bot": {
                 "long": {"z_param": 0.0, "a_param": 0.0},
                 "short": {"z_param": 0.0, "a_param": 0.0},
-            }
+            },
+            "optimize": _toy_optimize_bounds(
+                "long_a_param",
+                "long_z_param",
+                "short_a_param",
+                "short_z_param",
+            ),
         }
         overrides_list = []
         mock_overrides = lambda x, y, z: y
@@ -580,7 +868,12 @@ class TestIndividualToConfig:
                 "long": {"param1": 99.0, "param2": 99.0},
                 "short": {"param1": 99.0, "param2": 99.0},
             },
-            "optimize": {"bounds": {}},
+            "optimize": _toy_optimize_bounds(
+                "long_param1",
+                "long_param2",
+                "short_param1",
+                "short_param2",
+            ),
         }
         original_template = deepcopy(template)
         overrides_list = []
@@ -663,6 +956,10 @@ class TestIndividualToConfig:
                 "long": {
                     "param1": 0.0,
                     "param2": 0.0,
+                    "hsl": {
+                        "red_threshold": 0.20,
+                        "no_restart_drawdown_threshold": 0.30,
+                    },
                     "hsl_red_threshold": 0.20,
                     "hsl_no_restart_drawdown_threshold": 0.30,
                 },
@@ -686,7 +983,317 @@ class TestIndividualToConfig:
 
         assert result["bot"]["long"]["hsl_red_threshold"] == pytest.approx(0.25)
         assert result["bot"]["long"]["hsl_no_restart_drawdown_threshold"] == pytest.approx(1.0)
+        assert result["bot"]["long"]["hsl"]["red_threshold"] == pytest.approx(0.25)
+        assert result["bot"]["long"]["hsl"]["no_restart_drawdown_threshold"] == pytest.approx(1.0)
         assert template == original_template
+
+    def test_mirror_short_from_long_override(self):
+        individual = [
+            0.018,
+            100.0,
+            570.0,
+            0.015,
+            0.7,
+            0.47,
+            0.011,
+            63.0,
+            636.0,
+            0.0095,
+            0.33,
+            0.19,
+        ]
+        template = {
+            "live": {"strategy_kind": "ema_anchor"},
+            "bot": {
+                "long": {
+                    "risk": {
+                        "n_positions": 1,
+                        "total_wallet_exposure_limit": 0.55,
+                    },
+                    "forager": {
+                        "volume_ema_span_1m": 520,
+                        "volatility_ema_span_1m": 225,
+                        "volume_drop_pct": 0.57,
+                        "score_weights": {
+                            "volume": 0.0,
+                            "ema_readiness": 0.0,
+                            "volatility": 1.0,
+                        },
+                    },
+                    "hsl": {
+                        "enabled": False,
+                        "red_threshold": 0.2,
+                    },
+                    "unstuck": {
+                        "close_pct": 0.05,
+                        "ema_dist": -0.05,
+                    },
+                    "strategy": {
+                        "ema_anchor": {
+                            "base_qty_pct": 0.012,
+                            "ema_span_0": 72.0,
+                            "ema_span_1": 432.0,
+                            "offset": 0.009,
+                            "offset_psize_weight": 0.4,
+                        }
+                    },
+                },
+                "short": {
+                    "n_positions": 7,
+                    "total_wallet_exposure_limit": 0.12,
+                    "forager_score_weights": {
+                        "volume": 0.9,
+                        "ema_readiness": 0.05,
+                        "volatility": 0.05,
+                    },
+                    "risk": {
+                        "n_positions": 3,
+                        "total_wallet_exposure_limit": 0.25,
+                    },
+                    "forager": {
+                        "volume_ema_span_1m": 360,
+                        "volatility_ema_span_1m": 10,
+                        "volume_drop_pct": 0.5,
+                        "score_weights": {
+                            "volume": 0.2,
+                            "ema_readiness": 0.3,
+                            "volatility": 0.5,
+                        },
+                    },
+                    "hsl": {
+                        "enabled": True,
+                        "red_threshold": 0.1,
+                    },
+                    "unstuck": {
+                        "close_pct": 0.11,
+                        "ema_dist": -0.11,
+                    },
+                    "strategy": {
+                        "ema_anchor": {
+                            "base_qty_pct": 0.004,
+                            "ema_span_0": 48.0,
+                            "ema_span_1": 288.0,
+                            "offset": 0.02,
+                            "offset_psize_weight": 0.2,
+                        }
+                    },
+                },
+            },
+            "optimize": {
+                "enable_overrides": ["mirror_short_from_long"],
+                "bounds": {
+                    "long": {
+                        "risk": {
+                            "total_wallet_exposure_limit": [0.35, 0.8, 0.01],
+                        },
+                        "strategy": {
+                            "ema_anchor": {
+                                "base_qty_pct": [0.006, 0.03, 0.0005],
+                                "ema_span_0": [48, 120, 1],
+                                "ema_span_1": [288, 720, 1],
+                                "offset": [0.006, 0.02, 0.0005],
+                                "offset_psize_weight": [0.2, 0.8, 0.01],
+                            }
+                        },
+                    },
+                    "short": {
+                        "risk": {
+                            "total_wallet_exposure_limit": [0.15, 0.5, 0.01],
+                        },
+                        "strategy": {
+                            "ema_anchor": {
+                                "base_qty_pct": [0.004, 0.02, 0.0005],
+                                "ema_span_0": [48, 120, 1],
+                                "ema_span_1": [288, 720, 1],
+                                "offset": [0.007, 0.02, 0.0005],
+                                "offset_psize_weight": [0.2, 0.8, 0.01],
+                            }
+                        },
+                    },
+                },
+            },
+        }
+
+        result = individual_to_config(
+            individual,
+            optimize.optimizer_overrides,
+            ["mirror_short_from_long"],
+            template,
+        )
+
+        assert result["bot"]["short"]["risk"] == result["bot"]["long"]["risk"]
+        assert result["bot"]["short"]["forager"] == result["bot"]["long"]["forager"]
+        assert result["bot"]["short"]["hsl"] == result["bot"]["long"]["hsl"]
+        assert result["bot"]["short"]["unstuck"] == result["bot"]["long"]["unstuck"]
+        assert (
+            result["bot"]["short"]["strategy"]["ema_anchor"]
+            == result["bot"]["long"]["strategy"]["ema_anchor"]
+        )
+        assert (
+            result["bot"]["short"]["n_positions"]
+            == result["bot"]["short"]["risk"]["n_positions"]
+            == result["bot"]["long"]["risk"]["n_positions"]
+        )
+        assert (
+            result["bot"]["short"]["total_wallet_exposure_limit"]
+            == result["bot"]["short"]["risk"]["total_wallet_exposure_limit"]
+            == result["bot"]["long"]["risk"]["total_wallet_exposure_limit"]
+        )
+        assert (
+            result["bot"]["short"]["forager_score_weights"]
+            == result["bot"]["long"]["forager"]["score_weights"]
+        )
+
+    def test_mirror_short_from_long_override_supports_trailing_martingale(self):
+        config = {
+            "live": {"strategy_kind": "trailing_martingale"},
+            "bot": {
+                "long": {
+                    "risk": {"n_positions": 1, "total_wallet_exposure_limit": 0.9},
+                    "forager": {
+                        "volume_ema_span_1m": 520,
+                        "volatility_ema_span_1m": 225,
+                        "score_weights": {"volume": 0.0, "ema_readiness": 0.0, "volatility": 1.0},
+                    },
+                    "strategy": {
+                        "trailing_martingale": {"ema_span_0": 100.0},
+                        "ema_anchor": {"ema_span_0": 999.0},
+                    },
+                },
+                "short": {
+                    "risk": {"n_positions": 2, "total_wallet_exposure_limit": 0.1},
+                    "forager": {
+                        "volume_ema_span_1m": 10,
+                        "volatility_ema_span_1m": 20,
+                        "score_weights": {"volume": 0.1, "ema_readiness": 0.2, "volatility": 0.7},
+                    },
+                    "strategy": {
+                        "trailing_martingale": {"ema_span_0": 200.0},
+                        "ema_anchor": {"ema_span_0": 123.0},
+                    },
+                },
+            },
+        }
+
+        result = optimize.optimizer_overrides(["mirror_short_from_long"], deepcopy(config), None)
+
+        assert result["bot"]["short"]["risk"] == result["bot"]["long"]["risk"]
+        assert result["bot"]["short"]["forager"] == result["bot"]["long"]["forager"]
+        assert (
+            result["bot"]["short"]["strategy"]["trailing_martingale"]
+            == result["bot"]["long"]["strategy"]["trailing_martingale"]
+        )
+        assert result["bot"]["short"]["strategy"]["ema_anchor"] == {"ema_span_0": 123.0}
+
+    @pytest.mark.parametrize(
+        ("strategy_kind", "bound_key", "expected_path", "new_value"),
+        [
+            (
+                "trailing_martingale",
+                "long_entry_threshold_base_pct",
+                ("bot", "long", "strategy", "trailing_martingale", "entry", "threshold_base_pct"),
+                0.0123,
+            ),
+            (
+                "ema_anchor",
+                "long_offset",
+                ("bot", "long", "strategy", "ema_anchor", "offset"),
+                0.0045,
+            ),
+        ],
+    )
+    def test_strategy_override_survives_optimizer_round_trip_without_inactive_tree(
+        self, strategy_kind, bound_key, expected_path, new_value
+    ):
+        template = {
+            "live": {"strategy_kind": strategy_kind},
+            "bot": {
+                "long": {
+                    "risk": {"n_positions": 1, "total_wallet_exposure_limit": 1.0},
+                    "strategy": {strategy_kind: {}},
+                },
+                "short": {
+                    "risk": {"n_positions": 0, "total_wallet_exposure_limit": 0.0},
+                    "strategy": {strategy_kind: {}},
+                },
+            },
+            "optimize": {"bounds": {bound_key: [new_value, new_value]}},
+        }
+        prepared = prepare_config(template, verbose=False, target="canonical", runtime=None)
+        key_paths = get_optimization_key_paths(prepared)
+        target_idx = next(idx for idx, (key, _) in enumerate(key_paths) if key == bound_key)
+        individual = []
+        for _, path in key_paths:
+            target = prepared
+            for part in path:
+                target = target[part]
+            individual.append(target)
+        individual[target_idx] = new_value
+
+        result = individual_to_config(individual, optimize.optimizer_overrides, [], prepared, key_paths=key_paths)
+
+        target = result
+        for part in expected_path:
+            target = target[part]
+        assert target == pytest.approx(new_value)
+        assert set(result["bot"]["long"]["strategy"]) == {strategy_kind}
+
+    def test_lossless_close_trailing_override_supports_trailing_martingale_shape(self):
+        config = load_prepared_config(
+            "configs/examples/default_trailing_martingale_long.json",
+            verbose=False,
+        )
+        long_strategy = config["bot"]["long"]["strategy"]["trailing_martingale"]
+        long_strategy["close"]["threshold_base_pct"] = 0.001
+        long_strategy["close"]["retracement_base_pct"] = 0.004
+
+        result = optimize.optimizer_overrides(["lossless_close_trailing"], deepcopy(config), "long")
+        strategy = result["bot"]["long"]["strategy"]["trailing_martingale"]
+
+        assert strategy["close"]["threshold_base_pct"] == pytest.approx(0.004)
+        assert strategy["close"]["retracement_base_pct"] == pytest.approx(0.004)
+
+    def test_optimizer_overrides_reject_unknown_names(self):
+        with pytest.raises(ValueError, match="Unknown optimize.enable_overrides value"):
+            optimize.validate_optimizer_overrides(["mirror_short_from_long", "typo_override"])
+
+    @pytest.mark.parametrize(
+        ("override", "expected_start", "expected_end"),
+        [
+            ("forward_tp_grid", 0.001, 0.01),
+            ("backward_tp_grid", 0.01, 0.001),
+        ],
+    )
+    def test_trailing_grid_v7_tp_grid_overrides_reorder_close_markup(
+        self, override, expected_start, expected_end
+    ):
+        config = {
+            "live": {"strategy_kind": "trailing_grid_v7"},
+            "bot": {
+                "long": {
+                    "strategy": {
+                        "trailing_grid_v7": {
+                            "close": {
+                                "grid_markup_start": 0.01,
+                                "grid_markup_end": 0.001,
+                            }
+                        }
+                    }
+                }
+            },
+        }
+
+        result = optimize.optimizer_overrides([override], deepcopy(config), "long")
+        close = result["bot"]["long"]["strategy"]["trailing_grid_v7"]["close"]
+
+        assert close["grid_markup_start"] == pytest.approx(expected_start)
+        assert close["grid_markup_end"] == pytest.approx(expected_end)
+
+    def test_trailing_grid_v7_tp_grid_overrides_reject_other_strategies(self):
+        config = load_prepared_config("configs/examples/ema_anchor.json", verbose=False)
+
+        with pytest.raises(ValueError, match="live.strategy_kind = 'trailing_grid_v7'"):
+            optimize.optimizer_overrides(["forward_tp_grid"], deepcopy(config), "long")
 
     def test_accepts_precomputed_key_paths(self):
         individual = [10.0, 20.0, 30.0, 40.0]
@@ -694,7 +1301,13 @@ class TestIndividualToConfig:
             "bot": {
                 "long": {"z_param": 0.0, "a_param": 0.0},
                 "short": {"z_param": 0.0, "a_param": 0.0},
-            }
+            },
+            "optimize": _toy_optimize_bounds(
+                "long_a_param",
+                "long_z_param",
+                "short_a_param",
+                "short_z_param",
+            ),
         }
         key_paths = get_optimization_key_paths(template)
 
@@ -711,6 +1324,211 @@ class TestIndividualToConfig:
         assert result["bot"]["short"]["a_param"] == 30.0
         assert result["bot"]["short"]["z_param"] == 40.0
 
+    def test_canonicalizes_disabled_close_retracement_params_in_config(self):
+        template = load_prepared_config(
+            "configs/examples/default_trailing_martingale_long.json",
+            verbose=False,
+        )
+        template["optimize"]["bounds"]["long"]["strategy"]["trailing_martingale"]["close"][
+            "retracement_base_pct"
+        ] = [-0.001, 0.01, 0.00001]
+        shape = build_optimization_shape(template)
+        vector = config_to_individual(template, shape.bounds, optimization_shape=shape)
+        key_to_idx = {key: idx for idx, (key, _path) in enumerate(shape.key_paths)}
+
+        vector[key_to_idx["long_close_retracement_base_pct"]] = -0.0005
+        vector[key_to_idx["long_close_retracement_volatility_1h_weight"]] = 37.0
+        vector[key_to_idx["long_close_retracement_volatility_1m_weight"]] = 38.0
+        vector[key_to_idx["long_close_threshold_volatility_1h_weight"]] = 39.0
+
+        result = individual_to_config(
+            vector,
+            optimize.optimizer_overrides,
+            [],
+            template,
+            key_paths=shape.key_paths,
+        )
+        close = result["bot"]["long"]["strategy"]["trailing_martingale"]["close"]
+
+        assert close["retracement_base_pct"] == pytest.approx(0.0)
+        assert close["retracement_volatility_1h_weight"] == pytest.approx(0.01)
+        assert close["retracement_volatility_1m_weight"] == pytest.approx(0.01)
+        assert close["threshold_volatility_1h_weight"] == pytest.approx(39.0)
+
+    def test_canonicalizes_disabled_close_retracement_params_in_vector_for_dedupe(self):
+        template = load_prepared_config(
+            "configs/examples/default_trailing_martingale_long.json",
+            verbose=False,
+        )
+        template["optimize"]["bounds"]["long"]["strategy"]["trailing_martingale"]["close"][
+            "retracement_base_pct"
+        ] = [-0.001, 0.01, 0.00001]
+        template["bot"]["short"]["risk"]["n_positions"] = 1.0
+        template["bot"]["short"]["risk"]["total_wallet_exposure_limit"] = 1.0
+        template["optimize"]["bounds"]["short"]["risk"]["n_positions"] = [1.0, 1.0]
+        template["optimize"]["bounds"]["short"]["risk"]["total_wallet_exposure_limit"] = [
+            1.0,
+            3.0,
+            0.01,
+        ]
+        shape = build_optimization_shape(template)
+        vector = config_to_individual(template, shape.bounds, optimization_shape=shape)
+        key_to_idx = {key: idx for idx, (key, _path) in enumerate(shape.key_paths)}
+
+        vector[key_to_idx["long_close_retracement_base_pct"]] = -0.0005
+        vector[key_to_idx["long_close_retracement_volatility_1h_weight"]] = 37.0
+        vector[key_to_idx["long_close_retracement_volatility_1m_weight"]] = 38.0
+        vector[key_to_idx["short_close_retracement_base_pct"]] = 0.002
+        vector[key_to_idx["short_close_retracement_volatility_1h_weight"]] = 41.0
+
+        config = _canonicalize_optimizer_individual(
+            vector,
+            template,
+            shape.bounds,
+            shape.sig_digits,
+            shape.key_paths,
+            [],
+        )
+        long_close = config["bot"]["long"]["strategy"]["trailing_martingale"]["close"]
+        short_close = config["bot"]["short"]["strategy"]["trailing_martingale"]["close"]
+
+        assert vector[key_to_idx["long_close_retracement_base_pct"]] == pytest.approx(0.0)
+        assert vector[key_to_idx["long_close_retracement_volatility_1h_weight"]] == pytest.approx(
+            0.01
+        )
+        assert vector[key_to_idx["long_close_retracement_volatility_1m_weight"]] == pytest.approx(
+            0.01
+        )
+        assert vector[key_to_idx["short_close_retracement_base_pct"]] == pytest.approx(0.002)
+        assert vector[key_to_idx["short_close_retracement_volatility_1h_weight"]] == pytest.approx(
+            40.0
+        )
+        assert long_close["retracement_base_pct"] == pytest.approx(0.0)
+        assert short_close["retracement_volatility_1h_weight"] == pytest.approx(40.0)
+
+    def test_anchored_fine_tune_materializes_fixed_values_from_anchor(self):
+        template = {
+            "live": {"strategy_kind": "trailing_martingale"},
+            "bot": {
+                "long": {"param1": 0.1, "param2": 0.2},
+                "short": {"param1": 0.3, "param2": 0.4},
+            },
+            "backtest": {"start_date": "2024-01-01"},
+            "optimize": {
+                "bounds": {
+                    "long_n_positions": [1.0, 1.0],
+                    "long_param1": [0.0, 1.0],
+                    "long_param2": [0.0, 1.0],
+                    "long_total_wallet_exposure_limit": [1.0, 1.0],
+                    "short_n_positions": [0.0, 0.0],
+                    "short_total_wallet_exposure_limit": [0.0, 0.0],
+                }
+            },
+            ANCHOR_PLAN_KEY: {
+                "anchors": [
+                    {
+                        "source": "anchor0.json",
+                        "seed_bot": {
+                            "long": {"param1": 0.11, "param2": 0.22},
+                            "short": {"param1": 0.33, "param2": 0.44},
+                        },
+                        "fixed_values": [
+                            {"key": "long_param2", "path": ["bot", "long", "param2"], "value": 0.22}
+                        ],
+                    },
+                    {
+                        "source": "anchor1.json",
+                        "seed_bot": {
+                            "long": {"param1": 0.55, "param2": 0.66},
+                            "short": {"param1": 0.77, "param2": 0.88},
+                        },
+                        "fixed_values": [
+                            {"key": "long_param2", "path": ["bot", "long", "param2"], "value": 0.66}
+                        ],
+                    },
+                ],
+                "fixed_keys": ["long_param2"],
+                "key_paths": [["bot", "long", "param1"]],
+                "tunable_keys": ["long_param1"],
+            },
+        }
+
+        result = individual_to_config([1.0, 0.9], lambda x, y, z: y, [], template)
+
+        assert result["bot"]["long"]["param1"] == pytest.approx(0.9)
+        assert result["bot"]["long"]["param2"] == pytest.approx(0.66)
+        assert result["bot"]["short"]["param1"] == pytest.approx(0.3)
+        assert result["backtest"]["start_date"] == "2024-01-01"
+        assert result["_optimizer_anchor"]["id"] == 1
+        assert result["_optimizer_anchor"]["source"] == "anchor1.json"
+        assert ANCHOR_PLAN_KEY not in result
+
+    def test_anchored_build_optimizer_max_config_uses_filtered_shape(self):
+        template = {
+            "bot": {
+                "long": {
+                    "n_positions": 1.0,
+                    "param1": 0.25,
+                    "param2": 0.75,
+                    "total_wallet_exposure_limit": 1.0,
+                },
+                "short": {"n_positions": 0.0, "total_wallet_exposure_limit": 0.0},
+            },
+            "optimize": {
+                "bounds": {
+                    "long_n_positions": [1.0, 1.0],
+                    "long_param1": [0.0, 1.0],
+                    "long_param2": [0.0, 1.0],
+                    "long_total_wallet_exposure_limit": [1.0, 1.0],
+                    "short_n_positions": [0.0, 0.0],
+                    "short_total_wallet_exposure_limit": [0.0, 0.0],
+                }
+            },
+            ANCHOR_PLAN_KEY: {
+                "anchors": [
+                    {
+                        "source": "anchor0.json",
+                        "seed_bot": {
+                            "long": {
+                                "n_positions": 1.0,
+                                "param1": 0.1,
+                                "param2": 0.2,
+                                "total_wallet_exposure_limit": 1.0,
+                            },
+                            "short": {"n_positions": 0.0, "total_wallet_exposure_limit": 0.0},
+                        },
+                        "fixed_values": [
+                            {"key": "long_param2", "path": ["bot", "long", "param2"], "value": 0.2}
+                        ],
+                    },
+                    {
+                        "source": "anchor1.json",
+                        "seed_bot": {
+                            "long": {
+                                "n_positions": 1.0,
+                                "param1": 0.3,
+                                "param2": 0.4,
+                                "total_wallet_exposure_limit": 1.0,
+                            },
+                            "short": {"n_positions": 0.0, "total_wallet_exposure_limit": 0.0},
+                        },
+                        "fixed_values": [
+                            {"key": "long_param2", "path": ["bot", "long", "param2"], "value": 0.4}
+                        ],
+                    },
+                ],
+                "fixed_keys": ["long_param2"],
+                "key_paths": [["bot", "long", "param1"]],
+                "tunable_keys": ["long_param1"],
+            },
+        }
+
+        result = build_optimizer_max_config(template)
+
+        assert result["bot"]["long"]["param1"] == pytest.approx(1.0)
+        assert result["bot"]["long"]["param2"] == pytest.approx(0.4)
+        assert result["_optimizer_anchor"]["id"] == 1
+
 class TestConfigToIndividual:
     """Test config_to_individual function."""
 
@@ -719,7 +1537,13 @@ class TestConfigToIndividual:
             "bot": {
                 "long": {"param1": 1.5, "param2": 2.5},
                 "short": {"param1": 3.5, "param2": 4.5},
-            }
+            },
+            "optimize": _toy_optimize_bounds(
+                "long_param1",
+                "long_param2",
+                "short_param1",
+                "short_param2",
+            ),
         }
         bounds = [Bound(0.0, 10.0) for _ in range(4)]
         sig_digits = 6
@@ -739,7 +1563,12 @@ class TestConfigToIndividual:
                 "long": {"z_param": 100.0, "a_param": 200.0},
                 "short": {"z_param": 300.0, "a_param": 400.0},
             },
-            "optimize": {"bounds": {}},
+            "optimize": _toy_optimize_bounds(
+                "long_a_param",
+                "long_z_param",
+                "short_a_param",
+                "short_z_param",
+            ),
         }
         bounds = [Bound(0.0, 1000.0)] * 4
         sig_digits = 6
@@ -775,6 +1604,81 @@ class TestConfigToIndividual:
         result = config_to_individual(config, bounds, sig_digits)
 
         assert result == pytest.approx([1.0, 60.0, 2.0, 3.0, 0.22, 4.0])
+
+    def test_uses_precomputed_key_paths(self):
+        config = {
+            "bot": {
+                "long": {"param1": 1.5, "param2": 2.5},
+                "short": {"param1": 3.5, "param2": 4.5},
+            }
+        }
+        bounds = [Bound(0.0, 10.0) for _ in range(4)]
+        key_paths = [
+            ("long_param2", ("bot", "long", "param2")),
+            ("long_param1", ("bot", "long", "param1")),
+            ("short_param2", ("bot", "short", "param2")),
+            ("short_param1", ("bot", "short", "param1")),
+        ]
+
+        result = config_to_individual(config, bounds, sig_digits=6, key_paths=key_paths)
+
+        assert result == pytest.approx([2.5, 1.5, 4.5, 3.5])
+
+    def test_uses_optimization_shape(self):
+        config = load_prepared_config("configs/examples/ema_anchor.json", verbose=False)
+        shape = build_optimization_shape(config)
+
+        result = config_to_individual(config, shape.bounds, optimization_shape=shape)
+
+        assert len(result) == len(shape.bounds)
+
+    def test_uses_anchor_id_with_anchored_optimization_shape(self):
+        config = {
+            "bot": {
+                "long": {
+                    "n_positions": 1.0,
+                    "param1": 0.25,
+                    "param2": 0.75,
+                    "total_wallet_exposure_limit": 1.0,
+                },
+                "short": {"n_positions": 0.0, "total_wallet_exposure_limit": 0.0},
+            },
+            "optimize": {
+                "bounds": {
+                    "long_n_positions": [1.0, 1.0],
+                    "long_param1": [0.0, 1.0],
+                    "long_param2": [0.0, 1.0],
+                    "long_total_wallet_exposure_limit": [1.0, 1.0],
+                    "short_n_positions": [0.0, 0.0],
+                    "short_total_wallet_exposure_limit": [0.0, 0.0],
+                }
+            },
+            ANCHOR_PLAN_KEY: {
+                "anchors": [
+                    {
+                        "bot": {
+                            "long": {
+                                "n_positions": 1.0,
+                                "param1": 0.1,
+                                "param2": 0.2,
+                                "total_wallet_exposure_limit": 1.0,
+                            },
+                            "short": {"n_positions": 0.0, "total_wallet_exposure_limit": 0.0},
+                        }
+                    }
+                ],
+                "fixed_keys": ["long_param2"],
+                "key_paths": [["bot", "long", "param1"]],
+                "tunable_keys": ["long_param1"],
+            },
+        }
+        shape = build_optimization_shape(config)
+
+        result = config_to_individual(config, shape.bounds, optimization_shape=shape, anchor_id=3)
+
+        assert shape.key_paths[0][0] == ANCHOR_GENE_KEY
+        assert [key for key, _ in shape.key_paths] == [ANCHOR_GENE_KEY, "long_param1"]
+        assert result == pytest.approx([0.0, 0.25])
 
 
 class TestValidateArray:
@@ -821,6 +1725,339 @@ class TestValidateArray:
         with pytest.raises(ValueError, match="is entirely NaN"):
             validate_array(arr, "test_array")
 
+    def test_register_exchange_data_preserves_contiguous_arrays_before_shared_copy(self):
+        class RecordingArrayManager:
+            def __init__(self):
+                self.arrays = []
+
+            def create_from(self, array):
+                self.arrays.append(array)
+                return object(), array
+
+        hlcvs = np.zeros((4, 2, 5), dtype=np.float64, order="C")
+        btc_usd_prices = np.ones(4, dtype=np.float64)
+        timestamps = np.arange(4, dtype=np.int64)
+        mss = {"BTC": {"first_valid_index": 0, "last_valid_index": 3}}
+        config = {"backtest": {"coins": {}, "candle_interval_minutes": 1}}
+        manager = RecordingArrayManager()
+
+        with patch("optimize._stamp_optimizer_warmup"):
+            _register_exchange_data(
+                "binance",
+                (["BTC"], hlcvs, mss, None, None, btc_usd_prices, timestamps),
+                config,
+                msss={},
+                hlcvs_specs={},
+                btc_usd_specs={},
+                timestamps_dict={},
+                array_manager=manager,
+            )
+
+        assert manager.arrays[0] is hlcvs
+        assert manager.arrays[1] is btc_usd_prices
+
+
+class TestApplyPolishBounds:
+    """Test apply_polish_bounds function."""
+
+    def test_nested_bounds_center_on_current_config_values(self):
+        config = {
+            "live": {"strategy_kind": "trailing_martingale"},
+            "optimize": {
+                "bounds": {
+                    "long": {
+                        "strategy": {
+                            "trailing_martingale": {
+                                "entry": {"threshold_base_pct": [0.01, 0.1, 0.001]},
+                                "close": {"threshold_we_weight": [-1.0, 1.0]},
+                            }
+                        }
+                    }
+                }
+            },
+            "bot": {
+                "long": {
+                    "strategy": {
+                        "trailing_martingale": {
+                            "entry": {"threshold_base_pct": 0.05},
+                            "close": {"threshold_we_weight": -0.0796},
+                        }
+                    }
+                }
+            },
+        }
+
+        apply_polish_bounds(config, 0.2)
+
+        long_tm_bounds = config["optimize"]["bounds"]["long"]["strategy"]["trailing_martingale"]
+        assert long_tm_bounds["entry"]["threshold_base_pct"] == pytest.approx(
+            [0.04, 0.06, 0.001]
+        )
+        assert long_tm_bounds["close"]["threshold_we_weight"] == pytest.approx(
+            [-0.09552, -0.06368]
+        )
+
+    def test_flat_bounds_keep_flat_shape_and_positive_step(self):
+        config = {
+            "live": {"strategy_kind": "trailing_martingale"},
+            "optimize": {
+                "bounds": {
+                    "long_entry_threshold_base_pct": [0.01, 0.1, 0.001],
+                    "long_close_threshold_we_weight": [-1.0, 1.0],
+                }
+            },
+            "bot": {
+                "long": {
+                    "strategy": {
+                        "trailing_martingale": {
+                            "entry": {"threshold_base_pct": 0.05},
+                            "close": {"threshold_we_weight": -0.0796},
+                        }
+                    }
+                }
+            },
+        }
+
+        apply_polish_bounds(config, 0.2)
+
+        assert config["optimize"]["bounds"]["long_entry_threshold_base_pct"] == pytest.approx(
+            [0.04, 0.06, 0.001]
+        )
+        assert config["optimize"]["bounds"]["long_close_threshold_we_weight"] == pytest.approx(
+            [-0.09552, -0.06368]
+        )
+
+    def test_fixed_bounds_stay_fixed(self):
+        config = {
+            "live": {"strategy_kind": "trailing_martingale"},
+            "optimize": {
+                "bounds": {
+                    "long_entry_threshold_base_pct": 0.05,
+                    "long_close_threshold_we_weight": [-0.07, -0.07],
+                }
+            },
+            "bot": {
+                "long": {
+                    "strategy": {
+                        "trailing_martingale": {
+                            "entry": {"threshold_base_pct": 0.05},
+                            "close": {"threshold_we_weight": -0.07},
+                        }
+                    }
+                }
+            },
+        }
+
+        apply_polish_bounds(config, 0.2)
+
+        assert config["optimize"]["bounds"]["long_entry_threshold_base_pct"] == 0.05
+        assert config["optimize"]["bounds"]["long_close_threshold_we_weight"] == [
+            -0.07,
+            -0.07,
+        ]
+
+    def test_polish_bounds_stay_inside_existing_domain(self):
+        config = {
+            "live": {"strategy_kind": "trailing_martingale"},
+            "optimize": {"bounds": {"long_entry_threshold_base_pct": [0.01, 0.1]}},
+            "bot": {
+                "long": {
+                    "strategy": {
+                        "trailing_martingale": {
+                            "entry": {"threshold_base_pct": 1.0},
+                        }
+                    }
+                }
+            },
+        }
+
+        apply_polish_bounds(config, 0.2)
+
+        assert config["optimize"]["bounds"]["long_entry_threshold_base_pct"] == pytest.approx(
+            [0.08, 0.1]
+        )
+
+    def test_override_tunable_allows_tunable_bounds_outside_existing_domain(self):
+        config = {
+            "live": {"strategy_kind": "trailing_martingale"},
+            "optimize": {"bounds": {"long_entry_threshold_base_pct": [0.01, 0.1]}},
+            "bot": {
+                "long": {
+                    "strategy": {
+                        "trailing_martingale": {
+                            "entry": {"threshold_base_pct": 0.09},
+                        }
+                    }
+                }
+            },
+        }
+
+        apply_polish_bounds(config, 0.5, bounds_mode="override-tunable")
+
+        assert config["optimize"]["bounds"]["long_entry_threshold_base_pct"] == pytest.approx(
+            [0.045, 0.135]
+        )
+
+    def test_override_tunable_uses_current_value_outside_existing_domain(self):
+        config = {
+            "live": {"strategy_kind": "trailing_martingale"},
+            "optimize": {"bounds": {"long_entry_threshold_base_pct": [0.01, 0.1]}},
+            "bot": {
+                "long": {
+                    "strategy": {
+                        "trailing_martingale": {
+                            "entry": {"threshold_base_pct": 1.0},
+                        }
+                    }
+                }
+            },
+        }
+
+        apply_polish_bounds(config, 0.2, bounds_mode="override-tunable")
+
+        assert config["optimize"]["bounds"]["long_entry_threshold_base_pct"] == pytest.approx(
+            [0.8, 1.2]
+        )
+
+    def test_override_tunable_keeps_fixed_bounds_fixed(self):
+        config = {
+            "live": {"strategy_kind": "trailing_martingale"},
+            "optimize": {
+                "bounds": {
+                    "long_entry_threshold_base_pct": 0.05,
+                    "long_close_threshold_we_weight": [-0.07, -0.07],
+                }
+            },
+            "bot": {
+                "long": {
+                    "strategy": {
+                        "trailing_martingale": {
+                            "entry": {"threshold_base_pct": 0.05},
+                            "close": {"threshold_we_weight": -0.07},
+                        }
+                    }
+                }
+            },
+        }
+
+        apply_polish_bounds(config, 0.2, bounds_mode="override-tunable")
+
+        assert config["optimize"]["bounds"]["long_entry_threshold_base_pct"] == 0.05
+        assert config["optimize"]["bounds"]["long_close_threshold_we_weight"] == [
+            -0.07,
+            -0.07,
+        ]
+
+    def test_override_all_expands_fixed_bounds(self):
+        config = {
+            "live": {"strategy_kind": "trailing_martingale"},
+            "optimize": {
+                "bounds": {
+                    "long_entry_threshold_base_pct": 0.05,
+                    "long_close_threshold_we_weight": [-0.07, -0.07],
+                }
+            },
+            "bot": {
+                "long": {
+                    "strategy": {
+                        "trailing_martingale": {
+                            "entry": {"threshold_base_pct": 0.05},
+                            "close": {"threshold_we_weight": -0.07},
+                        }
+                    }
+                }
+            },
+        }
+
+        apply_polish_bounds(config, 0.2, bounds_mode="override-all")
+
+        assert config["optimize"]["bounds"]["long_entry_threshold_base_pct"] == pytest.approx(
+            [0.04, 0.06]
+        )
+        assert config["optimize"]["bounds"]["long_close_threshold_we_weight"] == pytest.approx(
+            [-0.084, -0.056]
+        )
+
+    def test_fixed_params_collapse_after_override_all_polish(self):
+        config = {
+            "live": {"strategy_kind": "trailing_martingale"},
+            "optimize": {
+                "bounds": {
+                    "long": {
+                        "risk": {
+                            "n_positions": [1.0, 10.0, 1.0],
+                            "total_wallet_exposure_limit": [0.1, 3.0, 0.1],
+                        },
+                        "strategy": {
+                            "trailing_martingale": {
+                                "entry": {"threshold_base_pct": [0.01, 0.1, 0.001]}
+                            }
+                        },
+                    }
+                },
+                "fixed_params": [
+                    "bot.long.risk.n_positions",
+                    "bot.long.risk.total_wallet_exposure_limit",
+                ],
+            },
+            "bot": {
+                "long": {
+                    "risk": {
+                        "n_positions": 3,
+                        "total_wallet_exposure_limit": 1.5,
+                    },
+                    "strategy": {
+                        "trailing_martingale": {
+                            "entry": {"threshold_base_pct": 0.05},
+                        }
+                    },
+                }
+            },
+        }
+
+        apply_polish_bounds(config, 0.25, bounds_mode="override-all")
+        apply_fine_tune_bounds(config, [], set())
+
+        long_bounds = config["optimize"]["bounds"]["long"]
+        assert long_bounds["risk"]["n_positions"] == [3.0, 3.0]
+        assert long_bounds["risk"]["total_wallet_exposure_limit"] == [1.5, 1.5]
+        assert long_bounds["strategy"]["trailing_martingale"]["entry"][
+            "threshold_base_pct"
+        ] == pytest.approx([0.0375, 0.0625, 0.001])
+
+    def test_step_dropped_when_polished_range_cannot_support_it(self):
+        config = {
+            "live": {"strategy_kind": "trailing_martingale"},
+            "optimize": {
+                "bounds": {
+                    "long_entry_threshold_base_pct": [0.01, 0.1, 0.05],
+                }
+            },
+            "bot": {
+                "long": {
+                    "strategy": {
+                        "trailing_martingale": {
+                            "entry": {"threshold_base_pct": 0.05},
+                        }
+                    }
+                }
+            },
+        }
+
+        apply_polish_bounds(config, 0.2)
+
+        assert config["optimize"]["bounds"]["long_entry_threshold_base_pct"] == pytest.approx(
+            [0.04, 0.06]
+        )
+
+    def test_invalid_percentage_raises(self):
+        with pytest.raises(ValueError, match="finite non-negative"):
+            apply_polish_bounds({"optimize": {"bounds": {}}}, -0.1)
+
+    def test_invalid_bounds_mode_raises(self):
+        with pytest.raises(ValueError, match="polish bounds mode"):
+            apply_polish_bounds({"optimize": {"bounds": {}}}, 0.1, bounds_mode="wide")
+
 
 class TestApplyFineTuneBounds:
     """Test apply_fine_tune_bounds function."""
@@ -855,37 +2092,97 @@ class TestApplyFineTuneBounds:
             },
         }
         # Only tune param1, param2 should be fixed
-        apply_fine_tune_bounds(config, ["long_param1"], set())
+        apply_fine_tune_bounds(config, ["bot.long.param1"], set())
 
         assert config["optimize"]["bounds"]["long_param1"] == [0.0, 1.0]
         assert config["optimize"]["bounds"]["long_param2"] == [0.7, 0.7]
 
-    def test_fine_tune_params_accept_substring_selectors(self):
+    def test_fine_tune_params_accept_dotted_path_selectors(self):
         config = {
+            "live": {"strategy_kind": "trailing_martingale"},
             "optimize": {
                 "bounds": {
-                    "long_close_grid_markup_start": [0.0, 1.0],
-                    "long_close_grid_qty_pct": [0.0, 1.0],
-                    "long_entry_grid_spacing_pct": [0.0, 1.0],
-                    "short_close_grid_markup_start": [0.0, 1.0],
+                    "long": {
+                        "strategy": {
+                            "trailing_martingale": {
+                                "entry": {"threshold_base_pct": [0.0, 1.0]},
+                                "close": {
+                                    "qty_pct": [0.0, 1.0],
+                                    "threshold_base_pct": [0.0, 1.0],
+                                },
+                            }
+                        },
+                        "unstuck": {"threshold": [0.0, 1.0]},
+                    }
                 }
             },
             "bot": {
                 "long": {
-                    "close_grid_markup_start": 0.11,
-                    "close_grid_qty_pct": 0.22,
-                    "entry_grid_spacing_pct": 0.33,
+                    "strategy": {
+                        "trailing_martingale": {
+                            "entry": {"threshold_base_pct": 0.33},
+                            "close": {"qty_pct": 0.22, "threshold_base_pct": 0.11},
+                        }
+                    },
+                    "unstuck": {"threshold": 0.44},
                 },
-                "short": {"close_grid_markup_start": 0.44},
             },
         }
 
-        apply_fine_tune_bounds(config, ["close_grid"], set())
+        apply_fine_tune_bounds(config, ["long.strategy.close"], set())
 
-        assert config["optimize"]["bounds"]["long_close_grid_markup_start"] == [0.0, 1.0]
-        assert config["optimize"]["bounds"]["long_close_grid_qty_pct"] == [0.0, 1.0]
-        assert config["optimize"]["bounds"]["short_close_grid_markup_start"] == [0.0, 1.0]
-        assert config["optimize"]["bounds"]["long_entry_grid_spacing_pct"] == [0.33, 0.33]
+        tm_bounds = config["optimize"]["bounds"]["long"]["strategy"]["trailing_martingale"]
+        assert tm_bounds["close"]["qty_pct"] == [0.0, 1.0]
+        assert tm_bounds["close"]["threshold_base_pct"] == [0.0, 1.0]
+        assert tm_bounds["entry"]["threshold_base_pct"] == [0.33, 0.33]
+        assert config["optimize"]["bounds"]["long"]["unstuck"]["threshold"] == [0.44, 0.44]
+
+    def test_fine_tune_params_accept_leaf_suffix_selectors(self, caplog):
+        caplog.set_level(logging.INFO)
+        config = {
+            "optimize": {
+                "bounds": {
+                    "long": {
+                        "risk": {
+                            "we_excess_allowance_pct": [0.0, 0.1],
+                            "total_wallet_exposure_limit": [0.3, 0.8],
+                        }
+                    },
+                    "short": {"risk": {"we_excess_allowance_pct": [0.0, 0.1]}},
+                }
+            },
+            "bot": {
+                "long": {
+                    "risk": {
+                        "we_excess_allowance_pct": 0.04,
+                        "total_wallet_exposure_limit": 0.55,
+                    }
+                },
+                "short": {"risk": {"we_excess_allowance_pct": 0.05}},
+            },
+        }
+
+        apply_fine_tune_bounds(config, ["we_excess_allowance_pct"], set())
+
+        assert config["optimize"]["bounds"]["long"]["risk"]["we_excess_allowance_pct"] == [
+            0.0,
+            0.1,
+        ]
+        assert config["optimize"]["bounds"]["short"]["risk"]["we_excess_allowance_pct"] == [
+            0.0,
+            0.1,
+        ]
+        assert config["optimize"]["bounds"]["long"]["risk"]["total_wallet_exposure_limit"] == [
+            0.55,
+            0.55,
+        ]
+        assert (
+            "    long.risk.we_excess_allowance_pct "
+            "(bot.long.risk.we_excess_allowance_pct)"
+        ) in caplog.text
+        assert "  long.risk.we_excess_allowance_pct" in caplog.text
+        assert "  long.risk.total_wallet_exposure_limit" in caplog.text
+        assert "long_risk_we_excess_allowance_pct" not in caplog.text
 
     def test_cli_override_single_value_becomes_fixed(self):
         config = {
@@ -916,6 +2213,48 @@ class TestApplyFineTuneBounds:
         apply_fine_tune_bounds(config, [], {"long_param1"})
 
         assert config["optimize"]["bounds"]["long_param1"] == [5.0, 5.0]
+
+    def test_nested_bounds_fix_non_tuned_params(self):
+        config = {
+            "live": {"strategy_kind": "ema_anchor"},
+            "optimize": {
+                "bounds": {
+                    "long": {
+                        "risk": {
+                            "total_wallet_exposure_limit": [0.35, 0.8, 0.01],
+                        },
+                        "strategy": {
+                            "ema_anchor": {
+                                "base_qty_pct": [0.006, 0.03, 0.0005],
+                                "offset": [0.006, 0.02, 0.0005],
+                            }
+                        },
+                    }
+                }
+            },
+            "bot": {
+                "long": {
+                    "risk": {"total_wallet_exposure_limit": 0.55},
+                    "strategy": {"ema_anchor": {"base_qty_pct": 0.012, "offset": 0.009}},
+                }
+            },
+        }
+
+        apply_fine_tune_bounds(config, ["long.strategy.ema_anchor.offset"], set())
+
+        assert config["optimize"]["bounds"]["long"]["strategy"]["ema_anchor"]["offset"] == [
+            0.006,
+            0.02,
+            0.0005,
+        ]
+        assert config["optimize"]["bounds"]["long"]["strategy"]["ema_anchor"]["base_qty_pct"] == [
+            0.012,
+            0.012,
+        ]
+        assert config["optimize"]["bounds"]["long"]["risk"]["total_wallet_exposure_limit"] == [
+            0.55,
+            0.55,
+        ]
 
     def test_missing_bot_value_logs_warning(self):
         # When bot value is missing for a non-tuned param, it should log warning
@@ -957,7 +2296,7 @@ class TestApplyFineTuneBounds:
                 "long": {"param1": 0.5},
             },
         }
-        apply_fine_tune_bounds(config, ["long_nonexistent"], set())
+        apply_fine_tune_bounds(config, ["long.nonexistent"], set())
 
         assert config["optimize"]["bounds"]["long_param1"] == [0.5, 0.5]
 
@@ -968,7 +2307,7 @@ class TestApplyFineTuneBounds:
                     "long_param1": [0.0, 1.0],
                     "long_param2": [0.0, 1.0],
                 },
-                "fixed_params": ["long_param2"],
+                "fixed_params": ["bot.long.param2"],
             },
             "bot": {
                 "long": {"param1": 0.5, "param2": 0.7},
@@ -979,54 +2318,74 @@ class TestApplyFineTuneBounds:
         assert config["optimize"]["bounds"]["long_param1"] == [0.0, 1.0]
         assert config["optimize"]["bounds"]["long_param2"] == [0.7, 0.7]
 
-    def test_config_fixed_params_accept_substring_selectors(self, caplog):
+    def test_config_fixed_params_accept_dotted_path_prefix_selectors(self, caplog):
         caplog.set_level(logging.INFO)
         config = {
+            "live": {"strategy_kind": "trailing_martingale"},
             "optimize": {
                 "bounds": {
-                    "long_close_grid_markup_end": [0.0, 1.0],
-                    "long_close_grid_markup_start": [0.0, 1.0],
-                    "long_close_grid_qty_pct": [0.0, 1.0],
-                    "long_unstuck_close_pct": [0.0, 1.0],
-                    "short_close_grid_markup_end": [0.0, 1.0],
-                    "short_close_grid_markup_start": [0.0, 1.0],
-                    "short_close_grid_qty_pct": [0.0, 1.0],
+                    "long": {
+                        "strategy": {
+                            "trailing_martingale": {
+                                "entry": {"threshold_base_pct": [0.0, 1.0]},
+                                "close": {"qty_pct": [0.0, 1.0]},
+                            }
+                        },
+                        "unstuck": {"close_pct": [0.0, 1.0]},
+                    },
+                    "short": {
+                        "strategy": {
+                            "trailing_martingale": {
+                                "entry": {"threshold_base_pct": [0.0, 1.0]},
+                            }
+                        }
+                    },
                 },
-                "fixed_params": ["close_grid"],
+                "fixed_params": ["long.strategy"],
             },
             "bot": {
                 "long": {
-                    "close_grid_markup_end": 0.1,
-                    "close_grid_markup_start": 0.2,
-                    "close_grid_qty_pct": 0.3,
-                    "unstuck_close_pct": 0.4,
+                    "strategy": {
+                        "trailing_martingale": {
+                            "entry": {"threshold_base_pct": 0.1},
+                            "close": {"qty_pct": 0.3},
+                        }
+                    },
+                    "unstuck": {"close_pct": 0.4},
                 },
                 "short": {
-                    "close_grid_markup_end": 0.5,
-                    "close_grid_markup_start": 0.6,
-                    "close_grid_qty_pct": 0.7,
+                    "strategy": {
+                        "trailing_martingale": {
+                            "entry": {"threshold_base_pct": 0.5},
+                        }
+                    }
                 },
             },
         }
 
         apply_fine_tune_bounds(config, [], set())
 
-        assert config["optimize"]["bounds"]["long_close_grid_markup_end"] == [0.1, 0.1]
-        assert config["optimize"]["bounds"]["long_close_grid_markup_start"] == [0.2, 0.2]
-        assert config["optimize"]["bounds"]["long_close_grid_qty_pct"] == [0.3, 0.3]
-        assert config["optimize"]["bounds"]["short_close_grid_markup_end"] == [0.5, 0.5]
-        assert config["optimize"]["bounds"]["short_close_grid_markup_start"] == [0.6, 0.6]
-        assert config["optimize"]["bounds"]["short_close_grid_qty_pct"] == [0.7, 0.7]
-        assert config["optimize"]["bounds"]["long_unstuck_close_pct"] == [0.0, 1.0]
-        assert "  close_grid ->" in caplog.text
-        assert "    long_close_grid_markup_end" in caplog.text
-        assert "    short_close_grid_qty_pct" in caplog.text
+        long_tm_bounds = config["optimize"]["bounds"]["long"]["strategy"]["trailing_martingale"]
+        short_tm_bounds = config["optimize"]["bounds"]["short"]["strategy"]["trailing_martingale"]
+        assert long_tm_bounds["entry"]["threshold_base_pct"] == [0.1, 0.1]
+        assert long_tm_bounds["close"]["qty_pct"] == [0.3, 0.3]
+        assert short_tm_bounds["entry"]["threshold_base_pct"] == [0.0, 1.0]
+        assert config["optimize"]["bounds"]["long"]["unstuck"]["close_pct"] == [0.0, 1.0]
+        assert "  long.strategy ->" in caplog.text
+        assert (
+            "    long.entry.threshold_base_pct "
+            "(bot.long.strategy.trailing_martingale.entry.threshold_base_pct)"
+        ) in caplog.text
+        assert (
+            "    long.close.qty_pct "
+            "(bot.long.strategy.trailing_martingale.close.qty_pct)"
+        ) in caplog.text
 
     def test_config_fixed_params_warn_for_unmatched_selectors(self, caplog):
         config = {
             "optimize": {
                 "bounds": {"long_param1": [0.0, 1.0]},
-                "fixed_params": ["missing"],
+                "fixed_params": ["long.missing"],
             },
             "bot": {"long": {"param1": 0.5}},
         }
@@ -1034,46 +2393,397 @@ class TestApplyFineTuneBounds:
         apply_fine_tune_bounds(config, [], set())
 
         assert config["optimize"]["bounds"]["long_param1"] == [0.0, 1.0]
-        assert "optimize.fixed_params selector matched no optimize bounds: missing" in caplog.text
+        assert "optimize.fixed_params selector matched no optimize bounds: long.missing" in caplog.text
 
     def test_config_fixed_params_support_pside_hsl_keys(self):
         config = {
             "optimize": {
                 "bounds": {
-                    "long_hsl_red_threshold": [0.1, 0.3],
+                    "long": {"hsl": {"red_threshold": [0.1, 0.3]}},
                 },
-                "fixed_params": ["long_hsl_red_threshold"],
+                "fixed_params": ["long.hsl.red_threshold"],
             },
             "bot": {
                 "long": {
-                    "hsl_red_threshold": 0.22,
+                    "hsl": {"red_threshold": 0.22},
                 },
                 "short": {},
             },
         }
         apply_fine_tune_bounds(config, [], set())
 
-        assert config["optimize"]["bounds"]["long_hsl_red_threshold"] == [0.22, 0.22]
+        assert config["optimize"]["bounds"]["long"]["hsl"]["red_threshold"] == [0.22, 0.22]
+
+    def test_config_fixed_params_accept_leaf_suffix_selectors(self):
+        config = {
+            "optimize": {
+                "bounds": {
+                    "long": {
+                        "risk": {
+                            "we_excess_allowance_pct": [0.0, 0.1],
+                            "total_wallet_exposure_limit": [0.3, 0.8],
+                        }
+                    },
+                    "short": {"risk": {"we_excess_allowance_pct": [0.0, 0.1]}},
+                },
+                "fixed_params": ["we_excess_allowance_pct"],
+            },
+            "bot": {
+                "long": {
+                    "risk": {
+                        "we_excess_allowance_pct": 0.04,
+                        "total_wallet_exposure_limit": 0.55,
+                    }
+                },
+                "short": {"risk": {"we_excess_allowance_pct": 0.05}},
+            },
+        }
+
+        apply_fine_tune_bounds(config, [], set())
+
+        assert config["optimize"]["bounds"]["long"]["risk"]["we_excess_allowance_pct"] == [
+            0.04,
+            0.04,
+        ]
+        assert config["optimize"]["bounds"]["short"]["risk"]["we_excess_allowance_pct"] == [
+            0.05,
+            0.05,
+        ]
+        assert config["optimize"]["bounds"]["long"]["risk"]["total_wallet_exposure_limit"] == [
+            0.3,
+            0.8,
+        ]
+
+    def test_fixed_params_support_side_wildcard_path_segment(self):
+        config = {
+            "live": {"strategy_kind": "trailing_martingale"},
+            "optimize": {
+                "bounds": {
+                    "long": {
+                        "strategy": {
+                            "trailing_martingale": {
+                                "entry": {"threshold_base_pct": [0.0, 1.0]},
+                                "close": {"qty_pct": [0.0, 1.0]},
+                            }
+                        }
+                    },
+                    "short": {
+                        "strategy": {
+                            "trailing_martingale": {
+                                "entry": {"threshold_base_pct": [0.0, 1.0]},
+                            }
+                        }
+                    },
+                },
+                "fixed_params": ["*.strategy.entry"],
+            },
+            "bot": {
+                "long": {
+                    "strategy": {
+                        "trailing_martingale": {
+                            "entry": {"threshold_base_pct": 0.1},
+                            "close": {"qty_pct": 0.3},
+                        }
+                    },
+                },
+                "short": {
+                    "strategy": {
+                        "trailing_martingale": {
+                            "entry": {"threshold_base_pct": 0.5},
+                        }
+                    }
+                },
+            },
+        }
+
+        apply_fine_tune_bounds(config, [], set())
+
+        long_tm_bounds = config["optimize"]["bounds"]["long"]["strategy"]["trailing_martingale"]
+        short_tm_bounds = config["optimize"]["bounds"]["short"]["strategy"]["trailing_martingale"]
+        assert long_tm_bounds["entry"]["threshold_base_pct"] == [0.1, 0.1]
+        assert short_tm_bounds["entry"]["threshold_base_pct"] == [0.5, 0.5]
+        assert long_tm_bounds["close"]["qty_pct"] == [0.0, 1.0]
+
+    def test_dotted_selector_does_not_match_by_substring(self, caplog):
+        caplog.set_level(logging.WARNING)
+        config = {
+            "live": {"strategy_kind": "trailing_martingale"},
+            "optimize": {
+                "bounds": {
+                    "long": {
+                        "strategy": {
+                            "trailing_martingale": {
+                                "close": {
+                                    "qty_pct": [0.0, 1.0],
+                                    "threshold_base_pct": [0.0, 1.0],
+                                }
+                            }
+                        }
+                    }
+                },
+                "fixed_params": ["long.strategy.cl"],
+            },
+            "bot": {
+                "long": {
+                    "strategy": {
+                        "trailing_martingale": {
+                            "close": {"qty_pct": 0.3, "threshold_base_pct": 0.1},
+                        }
+                    }
+                }
+            },
+        }
+
+        apply_fine_tune_bounds(config, [], set())
+
+        close_bounds = config["optimize"]["bounds"]["long"]["strategy"]["trailing_martingale"][
+            "close"
+        ]
+        assert close_bounds["qty_pct"] == [0.0, 1.0]
+        assert close_bounds["threshold_base_pct"] == [0.0, 1.0]
+        assert "selector matched no optimize bounds: long.strategy.cl" in caplog.text
 
     def test_fine_tune_and_fixed_params_share_single_effective_fixing_path(self):
         config = {
             "optimize": {
                 "bounds": {
+                    "long_n_positions": [1.0, 1.0],
                     "long_param1": [0.0, 1.0],
                     "long_param2": [0.0, 1.0],
                     "long_param3": [0.0, 1.0],
+                    "long_total_wallet_exposure_limit": [1.0, 1.0],
+                    "short_n_positions": [0.0, 0.0],
+                    "short_total_wallet_exposure_limit": [0.0, 0.0],
                 },
-                "fixed_params": ["long_param3"],
+                "fixed_params": ["bot.long.param3"],
             },
             "bot": {
                 "long": {"param1": 0.5, "param2": 0.7, "param3": 0.9},
             },
         }
-        apply_fine_tune_bounds(config, ["long_param1", "long_param3"], set())
+        apply_fine_tune_bounds(config, ["bot.long.param1", "bot.long.param3"], set())
 
         assert config["optimize"]["bounds"]["long_param1"] == [0.0, 1.0]
         assert config["optimize"]["bounds"]["long_param2"] == [0.7, 0.7]
         assert config["optimize"]["bounds"]["long_param3"] == [0.9, 0.9]
+
+    def test_starting_configs_become_anchors_when_fine_tuning(self, tmp_path, caplog):
+        config = {
+            "live": {"strategy_kind": "trailing_martingale"},
+            "optimize": {
+                "bounds": {
+                    "long_n_positions": [1.0, 1.0],
+                    "long_param1": [0.0, 1.0],
+                    "long_param2": [0.0, 1.0],
+                    "long_param3": [0.0, 1.0],
+                    "long_total_wallet_exposure_limit": [1.0, 1.0],
+                    "short_n_positions": [0.0, 0.0],
+                    "short_total_wallet_exposure_limit": [0.0, 0.0],
+                },
+                "fixed_params": ["long.param3"],
+            },
+            "bot": {
+                "long": {
+                    "hsl": {"enabled": True},
+                    "n_positions": 1.0,
+                    "param1": 0.1,
+                    "param2": 0.2,
+                    "param3": 0.3,
+                    "total_wallet_exposure_limit": 1.0,
+                },
+                "short": {"n_positions": 0.0, "total_wallet_exposure_limit": 0.0},
+            },
+        }
+        anchors_dir = tmp_path / "anchors"
+        anchors_dir.mkdir()
+        for idx, values in enumerate(((0.11, 8.0, 0.33), (0.44, 9.0, 0.66))):
+            (anchors_dir / f"anchor_{idx}.json").write_text(
+                json.dumps(
+                    {
+                        "live": {"strategy_kind": "trailing_martingale"},
+                        "bot": {
+                            "long": {
+                                "hsl": {"enabled": False},
+                                "n_positions": 1.0,
+                                "param1": values[0],
+                                "param2": values[1],
+                                "param3": values[2],
+                                "total_wallet_exposure_limit": 1.0,
+                            },
+                            "short": {"n_positions": 0.0, "total_wallet_exposure_limit": 0.0},
+                        },
+                    }
+                )
+            )
+
+        caplog.set_level(logging.WARNING)
+        install_anchored_fine_tune_plan(config, ["long.param1", "long.param3"], str(anchors_dir))
+        shape = build_optimization_shape(config)
+        result = individual_to_config([1.0, 0.9], lambda x, y, z: y, [], config)
+
+        assert config["optimize"]["bounds"]["long_param2"] == [0.0, 1.0]
+        assert [key for key, _ in shape.key_paths] == [ANCHOR_GENE_KEY, "long_param1"]
+        assert result["bot"]["long"]["param1"] == pytest.approx(0.9)
+        assert result["bot"]["long"]["param2"] == pytest.approx(1.0)
+        assert result["bot"]["long"]["param3"] == pytest.approx(0.66)
+        assert result["bot"]["long"]["hsl"]["enabled"] is True
+        assert result["_optimizer_anchor"]["id"] == 1
+        assert "optimizer anchor fixed values clamped to optimize bounds | count=2" in caplog.text
+        assert "anchor_0.json" in caplog.text
+        assert "anchor_1.json" in caplog.text
+        assert "key=long_param2" in caplog.text
+
+    def test_anchored_seed_stream_uses_validated_anchors_only(self, tmp_path):
+        config = {
+            "live": {"strategy_kind": "trailing_martingale"},
+            "optimize": {
+                "bounds": {
+                    "long_n_positions": [1.0, 1.0],
+                    "long_param1": [0.0, 1.0],
+                    "long_param2": [0.0, 1.0],
+                    "long_total_wallet_exposure_limit": [1.0, 1.0],
+                    "short_n_positions": [0.0, 0.0],
+                    "short_total_wallet_exposure_limit": [0.0, 0.0],
+                },
+            },
+            "bot": {
+                "long": {
+                    "n_positions": 1.0,
+                    "param1": 0.1,
+                    "param2": 0.2,
+                    "total_wallet_exposure_limit": 1.0,
+                },
+                "short": {"n_positions": 0.0, "total_wallet_exposure_limit": 0.0},
+            },
+        }
+        anchors_dir = tmp_path / "anchors"
+        anchors_dir.mkdir()
+        for idx, strategy_kind in enumerate(
+            ("trailing_martingale", "ema_anchor", "trailing_martingale")
+        ):
+            anchor = deepcopy(config)
+            anchor["live"]["strategy_kind"] = strategy_kind
+            anchor["bot"]["long"]["param1"] = 0.1 + idx * 0.1
+            (anchors_dir / f"anchor_{idx}.json").write_text(
+                json.dumps(anchor),
+                encoding="utf-8",
+            )
+        install_anchored_fine_tune_plan(config, ["long.param1"], str(anchors_dir))
+        shape = build_optimization_shape(config)
+
+        streamed, raw_count = configs_to_individuals_streaming(
+            iter_anchored_fine_tune_seed_configs(config),
+            shape.bounds,
+            6,
+            optimization_shape=shape,
+        )
+
+        assert raw_count == 2
+        assert sorted(individual[0] for individual in streamed) == [0, 1]
+
+    def test_anchored_seed_stream_preserves_anchor_ids_after_failed_seed(self, caplog):
+        config = {
+            "live": {"strategy_kind": "trailing_martingale"},
+            "optimize": {
+                "bounds": {
+                    "long_n_positions": [1.0, 1.0],
+                    "long_param1": [0.0, 1.0],
+                    "long_total_wallet_exposure_limit": [1.0, 1.0],
+                    "short_n_positions": [0.0, 0.0],
+                    "short_total_wallet_exposure_limit": [0.0, 0.0],
+                },
+                "round_to_n_significant_digits": 6,
+            },
+            "bot": {
+                "long": {
+                    "n_positions": 1.0,
+                    "param1": 0.1,
+                    "total_wallet_exposure_limit": 1.0,
+                },
+                "short": {"n_positions": 0.0, "total_wallet_exposure_limit": 0.0},
+            },
+            ANCHOR_PLAN_KEY: {
+                "anchors": [
+                    {"source": "bad.json", "fixed_values": []},
+                    {"source": "anchor_1.json", "fixed_values": []},
+                    {"source": "anchor_2.json", "fixed_values": []},
+                ],
+                "fixed_keys": [],
+                "key_paths": [["bot", "long", "param1"]],
+                "tunable_keys": ["long_param1"],
+            },
+        }
+        shape = build_optimization_shape(config)
+
+        streamed, raw_count = configs_to_individuals_streaming(
+            [
+                None,
+                {
+                    "bot": deepcopy(config["bot"]),
+                    "_starting_config_source": "anchor_1.json",
+                },
+                {
+                    "bot": {
+                        "long": {
+                            "n_positions": 1.0,
+                            "param1": 0.3,
+                            "total_wallet_exposure_limit": 1.0,
+                        },
+                        "short": {"n_positions": 0.0, "total_wallet_exposure_limit": 0.0},
+                    },
+                    "_starting_config_source": "anchor_2.json",
+                },
+            ],
+            shape.bounds,
+            6,
+            optimization_shape=shape,
+        )
+
+        assert raw_count == 3
+        assert sorted(individual[0] for individual in streamed) == [1, 2]
+        assert "failed to use starting config as optimizer seed" in caplog.text
+
+    def test_starting_seed_values_are_clamped_to_base_bounds_with_logging(self, caplog):
+        config = {
+            "live": {"strategy_kind": "trailing_martingale"},
+            "optimize": {
+                "bounds": {
+                    "long_n_positions": [1.0, 1.0],
+                    "long_param1": [0.0, 1.0],
+                    "long_total_wallet_exposure_limit": [1.0, 1.0],
+                    "short_n_positions": [0.0, 0.0],
+                    "short_total_wallet_exposure_limit": [0.0, 0.0],
+                },
+            },
+            "bot": {
+                "long": {
+                    "n_positions": 1.0,
+                    "param1": 0.2,
+                    "total_wallet_exposure_limit": 1.0,
+                },
+                "short": {"n_positions": 0.0, "total_wallet_exposure_limit": 0.0},
+            },
+        }
+        seed = deepcopy(config)
+        seed["bot"]["long"]["param1"] = 4.2
+        seed["_starting_config_source"] = "seed.json"
+        shape = build_optimization_shape(config)
+
+        caplog.set_level(logging.WARNING)
+        individuals, raw_count = configs_to_individuals_streaming(
+            [seed],
+            shape.bounds,
+            6,
+            optimization_shape=shape,
+        )
+
+        idx = [key for key, _ in shape.key_paths].index("long_param1")
+        assert raw_count == 1
+        assert len(individuals) == 1
+        assert individuals[0][idx] == pytest.approx(1.0)
+        assert "optimizer starting config value clamped to optimize bounds | count=1" in caplog.text
+        assert "source=seed.json" in caplog.text
+        assert "key=long_param1" in caplog.text
 
 
 class TestExtractConfigs:
@@ -1082,15 +2792,6 @@ class TestExtractConfigs:
     def test_nonexistent_path(self):
         result = extract_configs("/nonexistent/path")
         assert result == []
-
-    def test_all_results_bin_skipped(self):
-        with tempfile.NamedTemporaryFile(suffix="_all_results.bin", delete=False) as f:
-            path = f.name
-        try:
-            result = extract_configs(path)
-            assert result == []
-        finally:
-            os.unlink(path)
 
     def test_json_file_loaded(self):
         from config_utils import get_template_config
@@ -1124,9 +2825,8 @@ class TestExtractConfigs:
             result = extract_configs(path)
             assert len(result) == 1
             assert "bot" in result[0]
-            assert (
-                result[0]["bot"]["long"]["forager_score_weights"]["volatility"]
-                == template["bot"]["long"]["forager_score_weights"]["volatility"]
+            assert result[0]["bot"]["long"]["forager"]["score_weights"]["volatility"] == pytest.approx(
+                template["bot"]["long"]["forager"]["score_weights"]["volatility"]
             )
         finally:
             os.unlink(path)
@@ -1274,6 +2974,55 @@ class TestConfigsToIndividuals:
 
         assert len(result) == 0
 
+    def test_full_config_seed_preserves_strategy_kind(self):
+        config = load_prepared_config("configs/examples/ema_anchor.json", verbose=False)
+        from optimization.config_adapter import extract_bounds_tuple_list_from_config
+
+        bounds = extract_bounds_tuple_list_from_config(config)
+
+        result = configs_to_individuals([config], bounds, 6)
+
+        assert len(result) >= 1
+        assert len(result[0]) == len(bounds)
+
+    def test_old_starting_seed_inherits_current_template_bounds_and_defaults(self):
+        config = load_prepared_config("configs/examples/ema_anchor.json", verbose=False)
+        shape = build_optimization_shape(config)
+
+        stale_seed = deepcopy(config)
+        stale_seed["optimize"]["bounds"]["long"]["risk"].pop("entry_cooldown_minutes")
+        stale_seed["optimize"]["bounds"]["short"]["risk"].pop("entry_cooldown_minutes")
+        stale_seed["optimize"]["bounds"]["long"]["strategy"]["ema_anchor"].pop(
+            "entry_double_down_factor"
+        )
+        stale_seed["optimize"]["bounds"]["short"]["strategy"]["ema_anchor"].pop(
+            "entry_double_down_factor"
+        )
+        stale_seed["bot"]["long"]["risk"].pop("entry_cooldown_minutes")
+        stale_seed["bot"]["short"]["risk"].pop("entry_cooldown_minutes")
+        stale_seed["bot"]["long"]["strategy"]["ema_anchor"].pop("entry_double_down_factor")
+        stale_seed["bot"]["short"]["strategy"]["ema_anchor"].pop("entry_double_down_factor")
+
+        result = configs_to_individuals(
+            [stale_seed],
+            shape.bounds,
+            6,
+            optimization_shape=shape,
+        )
+
+        assert len(result) == 1
+        assert len(result[0]) == len(shape.bounds)
+
+    def test_extract_configs_suppresses_entry_grid_inflation_warning_for_starting_seeds(self, caplog):
+        with caplog.at_level(logging.WARNING):
+            result = extract_configs("configs/examples/default_trailing_martingale_long.json")
+
+        assert len(result) == 1
+        assert not any(
+            "entry_grid_inflation_enabled" in rec.message
+            for rec in caplog.records
+        )
+
 
 class TestConstraintAwareFitness:
     """Test ConstraintAwareFitness class."""
@@ -1330,6 +3079,126 @@ class TestConstraintAwareFitness:
 
 class TestResultRecorder:
     """Test ResultRecorder class."""
+
+    def test_pymoo_record_entry_is_canonical_and_mirrored(self):
+        template = load_prepared_config("configs/examples/ema_anchor.json", verbose=False)
+        bounds = extract_bounds_tuple_list_from_config(template)
+        vector = config_to_individual(template, bounds, sig_digits=6)
+
+        entry = build_pymoo_record_entry(
+            vector=vector,
+            metrics={"objectives": {"metric1": 0.5}, "constraint_violation": 0.0},
+            template=template,
+            build_config_fn=individual_to_config,
+            overrides_fn=optimize.optimizer_overrides,
+            overrides_list=["mirror_short_from_long"],
+        )
+        strategy_kind = entry["live"]["strategy_kind"]
+
+        assert entry["bot"]["long"]["risk"] == entry["bot"]["short"]["risk"]
+        assert entry["bot"]["long"]["forager"] == entry["bot"]["short"]["forager"]
+        assert entry["bot"]["long"]["hsl"] == entry["bot"]["short"]["hsl"]
+        assert entry["bot"]["long"]["unstuck"] == entry["bot"]["short"]["unstuck"]
+        assert entry["bot"]["long"]["strategy"][strategy_kind] == entry["bot"]["short"]["strategy"][
+            strategy_kind
+        ]
+        assert sorted(entry["bot"]["long"]["strategy"]) == [strategy_kind]
+        assert sorted(entry["bot"]["short"]["strategy"]) == [strategy_kind]
+
+    def test_recorded_pareto_entry_is_canonical_and_mirrored(self):
+        class Candidate(list):
+            pass
+
+        config = load_prepared_config("configs/examples/ema_anchor.json", verbose=False)
+        bounds = extract_bounds_tuple_list_from_config(config)
+        individual = Candidate(config_to_individual(config, bounds, sig_digits=6))
+        scoring_keys = config["optimize"]["scoring"]
+        objectives = {
+            item["metric"] if isinstance(item, dict) else item: 0.5 for item in scoring_keys
+        }
+
+        individual.evaluation_metrics = {
+            "objectives": objectives,
+            "constraint_violation": 0.0,
+        }
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            recorder = ResultRecorder(
+                results_dir=tmpdir,
+                sig_digits=6,
+                flush_interval=60,
+                scoring_keys=scoring_keys,
+                compress=False,
+                write_all_results=False,
+                bounds=None,
+            )
+
+            _record_individual_result(
+                individual,
+                config,
+                config["optimize"]["enable_overrides"],
+                recorder,
+            )
+
+            pareto_files = list((Path(tmpdir) / "pareto").glob("*.json"))
+            assert len(pareto_files) == 1
+            saved = json.loads(pareto_files[0].read_text())
+            strategy_kind = saved["live"]["strategy_kind"]
+
+            assert saved["bot"]["long"]["risk"] == saved["bot"]["short"]["risk"]
+            assert saved["bot"]["long"]["forager"] == saved["bot"]["short"]["forager"]
+            assert saved["bot"]["long"]["hsl"] == saved["bot"]["short"]["hsl"]
+            assert saved["bot"]["long"]["unstuck"] == saved["bot"]["short"]["unstuck"]
+            assert (
+                saved["bot"]["long"]["strategy"][strategy_kind]
+                == saved["bot"]["short"]["strategy"][strategy_kind]
+            )
+            assert sorted(saved["bot"]["long"]["strategy"]) == [strategy_kind]
+            assert sorted(saved["bot"]["short"]["strategy"]) == [strategy_kind]
+
+    def test_recorded_pareto_entry_with_bounds_preserves_mirror_override(self):
+        template = load_prepared_config("configs/examples/ema_anchor.json", verbose=False)
+        bounds = extract_bounds_tuple_list_from_config(template)
+        vector = config_to_individual(template, bounds, sig_digits=6)
+        scoring_keys = template["optimize"]["scoring"]
+        objectives = {
+            item["metric"] if isinstance(item, dict) else item: 0.5 for item in scoring_keys
+        }
+
+        entry = build_pymoo_record_entry(
+            vector=vector,
+            metrics={"objectives": objectives, "constraint_violation": 0.0},
+            template=template,
+            build_config_fn=individual_to_config,
+            overrides_fn=optimize.optimizer_overrides,
+            overrides_list=["mirror_short_from_long"],
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            recorder = ResultRecorder(
+                results_dir=tmpdir,
+                sig_digits=6,
+                flush_interval=60,
+                scoring_keys=scoring_keys,
+                compress=False,
+                write_all_results=False,
+                bounds=bounds,
+            )
+            recorder.record(entry)
+
+            pareto_files = list((Path(tmpdir) / "pareto").glob("*.json"))
+            assert len(pareto_files) == 1
+            saved = json.loads(pareto_files[0].read_text())
+            strategy_kind = saved["live"]["strategy_kind"]
+
+            assert saved["bot"]["long"]["risk"] == saved["bot"]["short"]["risk"]
+            assert saved["bot"]["long"]["forager"] == saved["bot"]["short"]["forager"]
+            assert saved["bot"]["long"]["hsl"] == saved["bot"]["short"]["hsl"]
+            assert saved["bot"]["long"]["unstuck"] == saved["bot"]["short"]["unstuck"]
+            assert (
+                saved["bot"]["long"]["strategy"][strategy_kind]
+                == saved["bot"]["short"]["strategy"][strategy_kind]
+            )
 
     def test_initialization(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1419,6 +3288,30 @@ class TestResultRecorder:
 
             # Store should have entries
             assert recorder.store.n_iters > 0
+
+            recorder.close()
+
+    def test_record_raises_when_pareto_store_fails(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            recorder = ResultRecorder(
+                results_dir=tmpdir,
+                sig_digits=6,
+                flush_interval=60,
+                scoring_keys=["metric1"],
+                compress=False,
+                write_all_results=False,
+                bounds=None,
+            )
+            data = {
+                "bot": {"long": {}, "short": {}},
+                "metrics": {
+                    "objectives": {"metric1": None},
+                    "constraint_violation": 0.0,
+                },
+            }
+
+            with pytest.raises(RuntimeError, match="Error updating Pareto store"):
+                recorder.record(data)
 
             recorder.close()
 
@@ -1545,6 +3438,69 @@ class TestEvaluator:
         # Check that metric key is created (could be max, mean, etc.)
         assert "drawdown_worst_usd" in evaluator.limit_checks[0]["metric_key"]
 
+    def test_optimizer_can_skip_btc_analysis_when_no_btc_metrics_are_needed(self):
+        from optimize import Evaluator, _optimizer_can_skip_btc_analysis
+        from config_utils import get_template_config
+
+        mock_config = get_template_config()
+        mock_config["backtest"]["btc_collateral_cap"] = 0.0
+        mock_config["optimize"]["scoring"] = ["adg_strategy_eq", "fills_gap_p95_hours"]
+        mock_config["optimize"]["limits"] = [
+            {
+                "metric": "drawdown_worst_strategy_eq",
+                "penalize_if": "greater_than",
+                "value": 0.3,
+            }
+        ]
+
+        evaluator = Evaluator(
+            hlcvs_specs={},
+            btc_usd_specs={},
+            msss={},
+            config=mock_config,
+        )
+
+        assert _optimizer_can_skip_btc_analysis(
+            mock_config,
+            evaluator.scoring_specs,
+            evaluator.limit_checks,
+        )
+
+    def test_optimizer_keeps_btc_analysis_for_btc_scoring_limits_or_collateral(self):
+        from optimize import Evaluator, _optimizer_can_skip_btc_analysis
+        from config_utils import get_template_config
+
+        mock_config = get_template_config()
+        mock_config["backtest"]["btc_collateral_cap"] = 0.0
+        mock_config["optimize"]["scoring"] = ["adg_btc"]
+        mock_config["optimize"]["limits"] = []
+        evaluator = Evaluator(hlcvs_specs={}, btc_usd_specs={}, msss={}, config=mock_config)
+        assert not _optimizer_can_skip_btc_analysis(
+            mock_config,
+            evaluator.scoring_specs,
+            evaluator.limit_checks,
+        )
+
+        mock_config["optimize"]["scoring"] = ["adg_strategy_eq"]
+        mock_config["optimize"]["limits"] = [
+            {"metric": "drawdown_worst_btc", "penalize_if": "greater_than", "value": 0.3}
+        ]
+        evaluator = Evaluator(hlcvs_specs={}, btc_usd_specs={}, msss={}, config=mock_config)
+        assert not _optimizer_can_skip_btc_analysis(
+            mock_config,
+            evaluator.scoring_specs,
+            evaluator.limit_checks,
+        )
+
+        mock_config["backtest"]["btc_collateral_cap"] = 1.0
+        mock_config["optimize"]["limits"] = []
+        evaluator = Evaluator(hlcvs_specs={}, btc_usd_specs={}, msss={}, config=mock_config)
+        assert not _optimizer_can_skip_btc_analysis(
+            mock_config,
+            evaluator.scoring_specs,
+            evaluator.limit_checks,
+        )
+
     def test_build_limit_checks_uses_suite_aggregate_defaults(self):
         from optimize import Evaluator, SuiteEvaluator
         from config_utils import get_template_config
@@ -1647,7 +3603,9 @@ class TestEvaluator:
                 "hard-stop evaluation failed at k 1 ts 2 equity -1 peak_strategy_equity 10: equity must be finite and > 0"
             ),
         ):
-            objectives, penalty, metrics = evaluator.evaluate(individual, [])
+            objectives, penalty, metrics, _ = unpack_evaluation_payload(
+                evaluator.evaluate(individual, [])
+            )
 
         assert objectives == (0.0, 0.0)
         assert penalty == INVALID_BACKTEST_CANDIDATE_PENALTY
@@ -1689,7 +3647,9 @@ class TestEvaluator:
                 "pside 1: equity must be finite and > 0"
             ),
         ):
-            objectives, penalty, metrics = evaluator.evaluate(individual, [])
+            objectives, penalty, metrics, _ = unpack_evaluation_payload(
+                evaluator.evaluate(individual, [])
+            )
 
         assert objectives == (0.0, 0.0)
         assert penalty == INVALID_BACKTEST_CANDIDATE_PENALTY
@@ -1850,7 +3810,9 @@ class TestEvaluator:
                 "hard-stop evaluation failed at k 1 ts 2 equity -1 peak_strategy_equity 10: equity must be finite and > 0"
             ),
         ):
-            objectives, penalty, metrics = evaluator.evaluate(individual, [])
+            objectives, penalty, metrics, _ = unpack_evaluation_payload(
+                evaluator.evaluate(individual, [])
+            )
 
         assert objectives == (0.0,)
         assert penalty == INVALID_BACKTEST_CANDIDATE_PENALTY
@@ -1858,6 +3820,194 @@ class TestEvaluator:
         assert "PanicException" in metrics["error"]
         assert metrics["suite_metrics"] == {}
         assert build_payload.call_args.kwargs["metrics_only"] is True
+
+    def test_suite_evaluate_reuses_compiled_runtime_config_per_scenario(self):
+        from optimize import Evaluator, SuiteEvaluator
+        from config_utils import get_template_config
+
+        class DummyIndividual(list):
+            pass
+
+        mock_config = get_template_config()
+        mock_config["optimize"]["limits"] = []
+        mock_config["optimize"]["scoring"] = ["adg_pnl_w"]
+        mock_config["backtest"]["start_date"] = "2023-01-01"
+        mock_config["backtest"]["end_date"] = "2023-01-02"
+        mock_config["backtest"]["coins"] = {
+            "binance": ["BTC/USDT:USDT"],
+            "bybit": ["BTC/USDT:USDT"],
+        }
+        mock_config["live"]["approved_coins"] = {"long": ["BTC"], "short": []}
+        mock_config["live"]["ignored_coins"] = {"long": [], "short": []}
+
+        base = Evaluator(
+            hlcvs_specs={},
+            btc_usd_specs={},
+            msss={},
+            config=mock_config,
+        )
+        ctx_config = deepcopy(mock_config)
+        ctx = ScenarioEvalContext(
+            label="test",
+            config=ctx_config,
+            exchanges=["binance", "bybit"],
+            hlcvs_specs={},
+            btc_usd_specs={},
+            msss={"binance": {}, "bybit": {}},
+            timestamps={"binance": None, "bybit": None},
+            shared_hlcvs_np={
+                "binance": np.zeros((1, 1, 5)),
+                "bybit": np.zeros((1, 1, 5)),
+            },
+            shared_btc_np={},
+            attachments={"hlcvs": {}, "btc": {}},
+            coin_indices={"binance": None, "bybit": None},
+            overrides={},
+        )
+        evaluator = SuiteEvaluator(base, [ctx], {})
+        individual = DummyIndividual(config_to_individual(mock_config, base.bounds, base.sig_digits))
+        compiled_runtime = {"compiled": True}
+        execution_settings = object()
+
+        with patch("optimize.compile_runtime_config", return_value=compiled_runtime) as compile_cfg, patch(
+            "optimize.get_backtest_execution_settings", return_value=execution_settings
+        ) as get_settings, patch("optimize.build_backtest_payload", return_value=object()) as build_payload, patch(
+            "optimize.execute_backtest",
+            return_value=(None, None, {"liquidated": False}),
+        ), patch(
+            "tools.iterative_backtester.combine_analyses",
+            return_value={"stats": {"adg_pnl_w": {"mean": 0.1}}},
+        ):
+            objectives, penalty, metrics, _ = unpack_evaluation_payload(
+                evaluator.evaluate(individual, [])
+            )
+
+        assert objectives == (-0.1,)
+        assert penalty == 0.0
+        assert metrics["constraint_violation"] == 0.0
+        assert compile_cfg.call_count == 1
+        get_settings.assert_called_once_with(compiled_runtime, is_runtime_compiled=True)
+        assert build_payload.call_count == 2
+        for call in build_payload.call_args_list:
+            assert call.kwargs["runtime_config"] is compiled_runtime
+            assert call.kwargs["execution_settings"] is execution_settings
+            assert call.kwargs["metrics_only"] is True
+
+    def test_suite_evaluate_profile_payload_when_enabled(self, monkeypatch, caplog):
+        from optimize import Evaluator, SuiteEvaluator
+        from config_utils import get_template_config
+
+        class DummyIndividual(list):
+            pass
+
+        monkeypatch.setenv("PASSIVBOT_OPTIMIZE_PROFILE", "1")
+        mock_config = get_template_config()
+        mock_config["optimize"]["limits"] = []
+        mock_config["optimize"]["scoring"] = ["adg_pnl_w"]
+        mock_config["backtest"]["start_date"] = "2023-01-01"
+        mock_config["backtest"]["end_date"] = "2023-01-02"
+        mock_config["backtest"]["coins"] = {"combined": ["BTC/USDT:USDT"]}
+        mock_config["live"]["approved_coins"] = {"long": ["BTC"], "short": []}
+        mock_config["live"]["ignored_coins"] = {"long": [], "short": []}
+
+        base = Evaluator(
+            hlcvs_specs={},
+            btc_usd_specs={},
+            msss={},
+            config=mock_config,
+        )
+        ctx = ScenarioEvalContext(
+            label="test",
+            config=deepcopy(mock_config),
+            exchanges=["combined"],
+            hlcvs_specs={},
+            btc_usd_specs={},
+            msss={"combined": {}},
+            timestamps={"combined": None},
+            shared_hlcvs_np={"combined": np.zeros((1, 1, 5))},
+            shared_btc_np={},
+            attachments={"hlcvs": {}, "btc": {}},
+            coin_indices={"combined": None},
+            overrides={},
+        )
+        evaluator = SuiteEvaluator(base, [ctx], {})
+        individual = DummyIndividual(config_to_individual(mock_config, base.bounds, base.sig_digits))
+        payload = type(
+            "Payload",
+            (),
+            {"rust_profile": {"rust_simulation_ms": 12.5, "rust_analysis_pair_ms": 3.25}},
+        )()
+
+        with caplog.at_level(logging.INFO), patch(
+            "optimize.build_backtest_payload", return_value=payload
+        ), patch(
+            "optimize.execute_backtest",
+            return_value=(None, None, {"liquidated": False}),
+        ), patch(
+            "tools.iterative_backtester.combine_analyses",
+            return_value={"stats": {"adg_pnl_w": {"mean": 0.1}}},
+        ):
+            objectives, penalty, metrics, _ = unpack_evaluation_payload(
+                evaluator.evaluate(individual, [])
+            )
+
+        assert objectives == (-0.1,)
+        assert penalty == 0.0
+        assert metrics["profile"]["scenarios"] == 1
+        assert metrics["profile"]["exchange_evals"] == 1
+        assert metrics["profile"]["total_ms"] >= 0.0
+        assert "rust_backtest_ms" in metrics["profile"]
+        assert metrics["profile"]["rust_simulation_ms"] == 12.5
+        assert metrics["profile"]["rust_analysis_pair_ms"] == 3.25
+        assert any("[opt-profile] suite_eval" in record.message for record in caplog.records)
+
+    def test_suite_scenario_config_overrides_are_isolated_from_candidate_config(self):
+        from optimize import Evaluator, SuiteEvaluator
+        from config_utils import get_template_config
+
+        mock_config = get_template_config()
+        mock_config["bot"]["long"]["risk"]["n_positions"] = 2
+        mock_config["backtest"]["start_date"] = "2023-01-01"
+        mock_config["backtest"]["end_date"] = "2023-01-02"
+        mock_config["backtest"]["coins"] = {"combined": ["BTC/USDT:USDT"]}
+        mock_config["live"]["approved_coins"] = {"long": ["BTC"], "short": []}
+        mock_config["live"]["ignored_coins"] = {"long": [], "short": []}
+
+        base = Evaluator(
+            hlcvs_specs={},
+            btc_usd_specs={},
+            msss={},
+            config=mock_config,
+        )
+        ctx_config = deepcopy(mock_config)
+        ctx_config["backtest"]["start_date"] = "2023-01-03"
+        ctx_config["backtest"]["coins"] = {"combined": ["ETH/USDT:USDT"]}
+        ctx_config["live"]["approved_coins"] = {"long": ["ETH"], "short": []}
+        ctx = ScenarioEvalContext(
+            label="test",
+            config=ctx_config,
+            exchanges=["combined"],
+            hlcvs_specs={},
+            btc_usd_specs={},
+            msss={"combined": {}},
+            timestamps={"combined": None},
+            shared_hlcvs_np={"combined": np.zeros((1, 1, 5))},
+            shared_btc_np={},
+            attachments={"hlcvs": {}, "btc": {}},
+            coin_indices={"combined": None},
+            overrides={"bot.long.risk.n_positions": 7},
+        )
+        evaluator = SuiteEvaluator(base, [ctx], {})
+
+        scenario_config = evaluator._build_scenario_candidate_config(mock_config, ctx)
+
+        assert scenario_config["backtest"]["start_date"] == "2023-01-03"
+        assert scenario_config["backtest"]["coins"] == {"combined": ["ETH/USDT:USDT"]}
+        assert scenario_config["live"]["approved_coins"] == {"long": ["ETH"], "short": []}
+        assert scenario_config["bot"]["long"]["risk"]["n_positions"] == 7
+        assert mock_config["bot"]["long"]["risk"]["n_positions"] == 2
+        assert mock_config["backtest"]["start_date"] == "2023-01-01"
+        assert mock_config["live"]["approved_coins"] == {"long": ["BTC"], "short": []}
 
 
 def _remove_nested_path(mapping, path):
@@ -1868,7 +4018,7 @@ def _remove_nested_path(mapping, path):
 
 
 def test_config_to_individual_accepts_precomputed_optimization_shape():
-    config = load_prepared_config("configs/examples/default_trailing_grid_long_npos7.json", verbose=False)
+    config = load_prepared_config("configs/examples/default_trailing_martingale_long.json", verbose=False)
     shape = build_optimization_shape(config)
 
     result = config_to_individual(config, shape.bounds, optimization_shape=shape)
@@ -1877,7 +4027,7 @@ def test_config_to_individual_accepts_precomputed_optimization_shape():
 
 
 def test_old_starting_seed_inherits_current_template_shape_and_defaults():
-    config = load_prepared_config("configs/examples/default_trailing_grid_long_npos7.json", verbose=False)
+    config = load_prepared_config("configs/examples/default_trailing_martingale_long.json", verbose=False)
     shape = build_optimization_shape(config)
     stale_seed = deepcopy(config)
 
@@ -1897,7 +4047,7 @@ def test_old_starting_seed_inherits_current_template_shape_and_defaults():
 
 
 def test_build_pymoo_record_entry_strips_metadata():
-    template = load_prepared_config("configs/examples/default_trailing_grid_long_npos7.json", verbose=False)
+    template = load_prepared_config("configs/examples/default_trailing_martingale_long.json", verbose=False)
     template["_config_path"] = "artifact.json"
     bounds = extract_bounds_tuple_list_from_config(template)
     vector = config_to_individual(template, bounds, sig_digits=6)
@@ -2136,8 +4286,8 @@ def test_validate_resume_results_counts_entries(tmp_path: Path):
 
 
 def test_optimizer_exit_code_is_nonzero_for_fatal_errors():
-    assert optimize._optimizer_exit_code(interrupted=False, fatal_error=True) == 1
-    assert optimize._optimizer_exit_code(interrupted=True, fatal_error=True) == 130
+    assert optimize._optimizer_exit_code(interrupted=False, failed=True) == 1
+    assert optimize._optimizer_exit_code(interrupted=True, failed=True) == 130
 
 
 def test_result_recorder_all_results_write_failure_is_fatal():
@@ -2166,7 +4316,7 @@ def test_result_recorder_all_results_write_failure_is_fatal():
 
 
 def test_result_recorder_preserves_unquantized_saved_param_values():
-    template = load_prepared_config("configs/examples/default_trailing_grid_long_npos7.json", verbose=False)
+    template = load_prepared_config("configs/examples/default_trailing_martingale_long.json", verbose=False)
     bounds = extract_bounds_tuple_list_from_config(template)
     entry = deepcopy(template)
 

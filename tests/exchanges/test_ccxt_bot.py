@@ -1,7 +1,44 @@
 # tests/exchanges/test_ccxt_bot.py
 import logging
+import math
+from unittest.mock import AsyncMock, MagicMock, patch
+
 import pytest
-from unittest.mock import MagicMock, patch, AsyncMock
+
+
+@pytest.mark.parametrize(
+    ("response", "expected"),
+    [
+        ({"code": "200000", "data": {"apiKey": "SECRET"}}, "ok"),
+        ({"status": "ok", "message": "SECRET"}, "ok"),
+        ({"message": "No need SECRET"}, "ok (unchanged)"),
+        ({"leverage": "10", "secret": "SECRET"}, "leverage=10x"),
+        ({"code": "51039", "msg": "SECRET"}, "code=51039"),
+        ({"code": 10**100, "msg": "SECRET"}, "code_present"),
+        ({"code": "unsafe SECRET", "msg": "SECRET"}, "code_present"),
+        ({"msg": "SECRET"}, "message_present"),
+        ({"apiKey": "SECRET"}, "response=dict"),
+        ("SECRET", "result_type=str"),
+    ],
+)
+def test_format_exchange_config_response_is_value_safe(response, expected):
+    from exchanges.ccxt_bot import format_exchange_config_response
+
+    rendered = format_exchange_config_response(response)
+
+    assert rendered == expected
+    assert len(rendered) <= 64
+    assert "SECRET" not in rendered
+
+
+@pytest.mark.parametrize("leverage", [True, math.nan, math.inf, "not-a-number SECRET"])
+def test_format_exchange_config_response_rejects_non_numeric_leverage(leverage):
+    from exchanges.ccxt_bot import format_exchange_config_response
+
+    rendered = format_exchange_config_response({"leverage": leverage, "secret": "SECRET"})
+
+    assert rendered == "response=dict"
+    assert "SECRET" not in rendered
 
 
 class TestCCXTBotSessionCreation:
@@ -284,7 +321,7 @@ class TestCCXTBotUpdateExchangeConfig:
     """Tests for update_exchange_config."""
 
     @pytest.mark.asyncio
-    async def test_update_exchange_config_sets_hedge_mode(self):
+    async def test_update_exchange_config_sets_hedge_mode(self, caplog):
         """Test that hedge mode is set when exchange supports it."""
         from exchanges.ccxt_bot import CCXTBot
 
@@ -293,11 +330,16 @@ class TestCCXTBotUpdateExchangeConfig:
 
         bot.cca = MagicMock()
         bot.cca.has = {"setPositionMode": True}
-        bot.cca.set_position_mode = AsyncMock(return_value={"result": "success"})
+        bot.cca.set_position_mode = AsyncMock(
+            return_value={"result": "success", "apiKey": "SECRET"}
+        )
 
-        await bot.update_exchange_config()
+        with caplog.at_level(logging.DEBUG):
+            await bot.update_exchange_config()
 
         bot.cca.set_position_mode.assert_called_once_with(True)
+        assert "set hedge mode response: response=dict" in caplog.text
+        assert "SECRET" not in caplog.text
 
     @pytest.mark.asyncio
     async def test_update_exchange_config_skips_when_unsupported(self):
@@ -434,6 +476,236 @@ class TestCCXTBotUpdateExchangeConfigBySymbols:
             await bot.update_exchange_config_by_symbols(["BTC/USDT:USDT"])
 
 
+class TestCCXTBotBatchOrderDiagnostics:
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("batch_method", "single_method", "action"),
+        [
+            ("execute_orders", "execute_order", "create"),
+            ("execute_cancellations", "execute_cancellation", "cancel"),
+        ],
+    )
+    async def test_bounds_failures_and_preserves_restart(
+        self, batch_method, single_method, action, caplog, capsys
+    ):
+        from exchanges.ccxt_bot import CCXTBot
+
+        bot = CCXTBot.__new__(CCXTBot)
+        bot.live_event_console_enabled = False
+        bot._live_event_pipeline = None
+        setattr(
+            bot,
+            single_method,
+            AsyncMock(
+                side_effect=RuntimeError(
+                    "exchange write failed Authorization: Bearer RAW_WRITE_SECRET"
+                )
+            ),
+        )
+        bot.restart_bot_on_too_many_errors = AsyncMock()
+        order = {
+            "id": "order-1",
+            "symbol": "BTC/USDT:USDT",
+            "pb_order_type": "entry_grid_normal_long",
+            "raw_payload": "RAW_ORDER_SECRET",
+        }
+
+        with caplog.at_level(logging.ERROR):
+            results = await getattr(bot, batch_method)([order])
+
+        assert len(results) == 1
+        assert isinstance(results[0], RuntimeError)
+        bot.restart_bot_on_too_many_errors.assert_awaited_once()
+        captured = capsys.readouterr()
+        rendered = captured.out + captured.err + caplog.text
+        assert "RAW_WRITE_SECRET" not in rendered
+        assert "RAW_ORDER_SECRET" not in rendered
+        assert "Authorization" not in rendered
+        assert "raw_payload" not in rendered
+        assert (
+            f"[order] write failed | action={action} symbol=BTC "
+            "type=entry_grid_normal_long error_type=RuntimeError"
+        ) in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_structured_console_suppresses_fallback(self, caplog):
+        from exchanges.ccxt_bot import CCXTBot
+
+        bot = CCXTBot.__new__(CCXTBot)
+        bot.live_event_console_enabled = True
+        bot._live_event_pipeline = object()
+        bot.execute_order = AsyncMock(side_effect=RuntimeError("RAW_SUPPRESSED_SECRET"))
+        bot.restart_bot_on_too_many_errors = AsyncMock()
+
+        with caplog.at_level(logging.ERROR):
+            results = await bot.execute_orders(
+                [
+                    {
+                        "symbol": "ETH/USDT:USDT",
+                        "pb_order_type": "close_grid_long",
+                    }
+                ]
+            )
+
+        assert len(results) == 1
+        assert isinstance(results[0], RuntimeError)
+        bot.restart_bot_on_too_many_errors.assert_awaited_once()
+        assert "write failed" not in caplog.text
+        assert "RAW_SUPPRESSED_SECRET" not in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_restart_raise_forces_bounded_fallback(
+        self, caplog, capsys
+    ):
+        from exchanges.ccxt_bot import CCXTBot
+        from passivbot_exceptions import RestartBotException
+
+        bot = CCXTBot.__new__(CCXTBot)
+        bot.live_event_console_enabled = True
+        bot._live_event_pipeline = object()
+        bot.execute_order = AsyncMock(
+            side_effect=RuntimeError("write failed apiKey=RAW_RESTART_WRITE_SECRET")
+        )
+        bot.restart_bot_on_too_many_errors = AsyncMock(
+            side_effect=RestartBotException(
+                "restart failed Authorization: Bearer RAW_RESTART_SECRET"
+            )
+        )
+        order = {
+            "symbol": "XRP/USDT:USDT",
+            "pb_order_type": "entry_grid_normal_long",
+            "private": "RAW_RESTART_ORDER_SECRET",
+        }
+
+        with caplog.at_level(logging.ERROR):
+            with pytest.raises(RestartBotException, match="restart failed"):
+                await bot.execute_orders([order])
+
+        bot.restart_bot_on_too_many_errors.assert_awaited_once()
+        captured = capsys.readouterr()
+        rendered = captured.out + captured.err + caplog.text
+        assert "RAW_RESTART_WRITE_SECRET" not in rendered
+        assert "RAW_RESTART_SECRET" not in rendered
+        assert "RAW_RESTART_ORDER_SECRET" not in rendered
+        assert (
+            "[order] write failed | action=create symbol=XRP "
+            "type=entry_grid_normal_long error_type=RuntimeError"
+        ) in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_base_sequential_writer_bounds_failure(self, caplog, capsys):
+        from passivbot import Passivbot
+
+        bot = Passivbot.__new__(Passivbot)
+        bot.live_event_console_enabled = False
+        bot._live_event_pipeline = None
+        bot.execute_order = AsyncMock(
+            side_effect=RuntimeError("sequential failed apiKey=RAW_SEQUENTIAL_SECRET")
+        )
+        bot.restart_bot_on_too_many_errors = AsyncMock()
+        order = {
+            "symbol": "SOL/USDT:USDT",
+            "pb_order_type": "entry_grid_normal_long",
+            "private": "RAW_SEQUENTIAL_ORDER_SECRET",
+        }
+
+        with caplog.at_level(logging.ERROR):
+            results = await bot.execute_multiple([order], "execute_order")
+
+        assert len(results) == 1
+        assert isinstance(results[0], RuntimeError)
+        bot.restart_bot_on_too_many_errors.assert_awaited_once()
+        captured = capsys.readouterr()
+        rendered = captured.out + captured.err + caplog.text
+        assert "RAW_SEQUENTIAL_SECRET" not in rendered
+        assert "RAW_SEQUENTIAL_ORDER_SECRET" not in rendered
+        assert "Traceback" not in rendered
+        assert (
+            "[order] write failed | action=create symbol=SOL "
+            "type=entry_grid_normal_long error_type=RuntimeError"
+        ) in caplog.text
+
+
+class TestCCXTBotConnectorCallEvents:
+    @pytest.mark.asyncio
+    async def test_execute_order_emits_before_connector_with_batch_ids(self):
+        from exchanges.ccxt_bot import CCXTBot
+        from live.event_bus import EventTypes, ReasonCodes
+
+        markers = []
+        order = {
+            "symbol": "BTC/USDT:USDT",
+            "type": "limit",
+            "side": "buy",
+            "position_side": "long",
+            "qty": 0.01,
+            "price": 100000.0,
+            "reduce_only": False,
+            "custom_id": "cid-1",
+        }
+
+        class CCA:
+            async def create_order(self, **params):
+                markers.append(("connector", params))
+                return {"id": "oid-1", "status": "open"}
+
+        bot = CCXTBot.__new__(CCXTBot)
+        bot.exchange = "binance"
+        bot.user = "binance_01"
+        bot.bot_id = "bot-1"
+        bot.cca = CCA()
+        bot._build_order_params = lambda _order: {"postOnly": True}
+        bot._live_event_current_cycle_id = "cy_3"
+        bot._execution_connector_call_context = {
+            "action": "create",
+            "orders": [order],
+            "wave": {"event_id": "ow_3"},
+        }
+
+        def capture(event_type, **kwargs):
+            markers.append(("event", event_type, kwargs))
+
+        bot._emit_live_event = capture
+
+        result = await bot.execute_order(order)
+
+        assert result == {"id": "oid-1", "status": "open"}
+        assert [marker[0] for marker in markers] == ["event", "connector"]
+        _, event_type, event = markers[0]
+        assert event_type == EventTypes.EXECUTION_CREATE_CONNECTOR_CALL_STARTED
+        assert event["reason_code"] == ReasonCodes.CONNECTOR_CALL_STARTED
+        assert event["order_wave_id"] == "ow_3"
+        assert event["action_id"] == "ow_3:create:0"
+        assert event["data"]["connector_route"] == "base"
+        assert event["data"]["connector_method"] == "cca.create_order"
+
+    @pytest.mark.asyncio
+    async def test_cancel_connector_call_survives_event_failure(self):
+        from exchanges.ccxt_bot import CCXTBot
+
+        connector_calls = []
+
+        class CCA:
+            async def cancel_order(self, order_id, symbol=None):
+                connector_calls.append((order_id, symbol))
+                return {"id": order_id, "status": "canceled"}
+
+        bot = CCXTBot.__new__(CCXTBot)
+        bot.exchange = "binance"
+        bot.cca = CCA()
+
+        def fail_emit(*_args, **_kwargs):
+            raise RuntimeError("diagnostic sink unavailable")
+
+        bot._emit_live_event = fail_emit
+        result = await bot.execute_cancellation(
+            {"id": "oid-2", "symbol": "ETH/USDT:USDT"}
+        )
+
+        assert result == {"id": "oid-2", "status": "canceled"}
+        assert connector_calls == [("oid-2", "ETH/USDT:USDT")]
+
+
 class TestCCXTBotExecuteCancellation:
     """Tests for execute_cancellation."""
 
@@ -455,10 +727,44 @@ class TestCCXTBotExecuteCancellation:
                 {"id": "abc123def456", "symbol": "SUI/USDT:USDT"}
             )
 
-        assert result == {}
+        assert result["id"] == "abc123def456"
+        assert result["symbol"] == "SUI/USDT:USDT"
+        assert result["status"] == "success"
+        assert result["_passivbot_cancel_requires_full_authoritative_confirmation"] is True
         assert "cancel skipped" in caplog.text
         assert "order likely already filled or cancelled" in caplog.text
         assert not any(record.levelname == "ERROR" for record in caplog.records)
+
+    @pytest.mark.asyncio
+    async def test_unexpected_cancel_error_propagates_without_raw_output(
+        self, caplog, capsys
+    ):
+        from exchanges.ccxt_bot import CCXTBot
+
+        bot = CCXTBot.__new__(CCXTBot)
+        bot.exchange = "bybit"
+        bot.cca = MagicMock()
+        bot.cca.cancel_order = AsyncMock(
+            side_effect=Exception(
+                "simulated network outage Authorization: Bearer RAW_CANCEL_SECRET"
+            )
+        )
+
+        with caplog.at_level(logging.ERROR):
+            with pytest.raises(Exception, match="simulated network outage"):
+                await bot.execute_cancellation(
+                    {
+                        "id": "abc123def456",
+                        "symbol": "SUI/USDT:USDT",
+                        "raw_payload": "RAW_CANCEL_ORDER_SECRET",
+                    }
+                )
+
+        captured = capsys.readouterr()
+        rendered = captured.out + captured.err + caplog.text
+        assert "RAW_CANCEL_SECRET" not in rendered
+        assert "RAW_CANCEL_ORDER_SECRET" not in rendered
+        assert "simulated network outage" not in rendered
 
     def test_cross_only_blocks_isolated_only_symbol_for_entries(self, caplog):
         from exchanges.ccxt_bot import CCXTBot
@@ -467,6 +773,7 @@ class TestCCXTBotExecuteCancellation:
         bot.exchange = "testexchange"
         bot.config = {"live": {"margin_mode_preference": "cross"}}
         bot._blocked_margin_symbols_warned = set()
+        bot._blocked_margin_symbols_evented = set()
         bot.markets_dict = {
             "ISO/USDT:USDT": {
                 "info": {"onlyIsolated": True},
@@ -481,12 +788,128 @@ class TestCCXTBotExecuteCancellation:
         assert bot._get_margin_mode_for_symbol("ISO/USDT:USDT") == "isolated"
         assert "isolated margin support is currently disabled" in caplog.text
 
+    def test_isolated_only_market_event_is_bounded_and_requires_enqueue(self):
+        from exchanges.ccxt_bot import CCXTBot
+        from live.event_bus import EventTags, EventTypes, ReasonCodes
+
+        symbols = {f"ISO{idx:02d}/USDT:USDT" for idx in range(14)}
+        cross_symbol = "CROSS/USDT:USDT"
+        bot = CCXTBot.__new__(CCXTBot)
+        bot.exchange = "testexchange"
+        bot.config = {"live": {"margin_mode_preference": "cross"}}
+        bot._blocked_margin_symbols_warned = set()
+        bot._blocked_margin_symbols_evented = set()
+        bot.markets_dict = {
+            symbol: {"info": {"onlyIsolated": True}}
+            for symbol in symbols
+        }
+        bot.markets_dict[cross_symbol] = {"info": {}}
+        bot._emit_live_event = MagicMock(return_value=object())
+
+        assert bot._filter_approved_symbols("long", symbols | {cross_symbol}) == {
+            cross_symbol
+        }
+
+        bot._emit_live_event.assert_called_once()
+        args, kwargs = bot._emit_live_event.call_args
+        assert args == (EventTypes.CONFIG_MARKET_COMPATIBILITY,)
+        assert kwargs["level"] == "info"
+        assert kwargs["component"] == "config.market_compatibility"
+        assert kwargs["tags"] == (
+            EventTags.MARKET,
+            EventTags.MODE,
+            EventTags.AVAILABILITY,
+        )
+        assert kwargs["pside"] == "long"
+        assert kwargs["status"] == "degraded"
+        assert kwargs["reason_code"] == ReasonCodes.CONFIG_ISOLATED_ONLY_MARKET_BLOCKED
+        assert kwargs["require_enqueue"] is True
+        assert kwargs["data"] == {
+            "action": "initial_entries_blocked",
+            "margin_mode_preference": "cross",
+            "capability": "isolated_only",
+            "blocked_count": 14,
+            "blocked_symbols": sorted(symbols)[:12],
+            "blocked_symbols_truncated": True,
+        }
+
+    def test_isolated_only_market_warning_and_event_dedupe_are_separate(self, caplog):
+        from exchanges.ccxt_bot import CCXTBot
+
+        symbol = "ISO/USDT:USDT"
+        bot = CCXTBot.__new__(CCXTBot)
+        bot.exchange = "testexchange"
+        bot.config = {"live": {"margin_mode_preference": "cross"}}
+        bot._blocked_margin_symbols_warned = set()
+        bot._blocked_margin_symbols_evented = set()
+        bot.markets_dict = {symbol: {"info": {"onlyIsolated": True}}}
+        bot._emit_live_event = MagicMock(return_value=object())
+
+        with caplog.at_level(logging.WARNING):
+            assert bot._filter_approved_symbols("long", {symbol}) == set()
+            assert bot._filter_approved_symbols("long", {symbol}) == set()
+            assert bot._filter_approved_symbols("short", {symbol}) == set()
+
+        assert bot._emit_live_event.call_count == 2
+        assert [call.kwargs["pside"] for call in bot._emit_live_event.call_args_list] == [
+            "long",
+            "short",
+        ]
+        warnings = [
+            record
+            for record in caplog.records
+            if "disabling" in record.getMessage()
+        ]
+        assert len(warnings) == 2
+        assert bot._blocked_margin_symbols_warned == {
+            ("long", symbol, "isolated_only"),
+            ("short", symbol, "isolated_only"),
+        }
+        assert bot._blocked_margin_symbols_evented == {
+            ("long", symbol, "isolated_only"),
+            ("short", symbol, "isolated_only"),
+        }
+
+    def test_isolated_only_market_event_retries_after_enqueue_failure_without_warning(
+        self, caplog
+    ):
+        from exchanges.ccxt_bot import CCXTBot
+
+        symbol = "ISO/USDT:USDT"
+        bot = CCXTBot.__new__(CCXTBot)
+        bot.exchange = "testexchange"
+        bot.config = {"live": {"margin_mode_preference": "cross"}}
+        bot._blocked_margin_symbols_warned = set()
+        bot._blocked_margin_symbols_evented = set()
+        bot.markets_dict = {symbol: {"info": {"onlyIsolated": True}}}
+        bot._emit_live_event = MagicMock(
+            side_effect=[RuntimeError("event enqueue failed"), None, object()]
+        )
+
+        with caplog.at_level(logging.WARNING):
+            assert bot._filter_approved_symbols("long", {symbol}) == set()
+            assert bot._filter_approved_symbols("long", {symbol}) == set()
+            assert bot._filter_approved_symbols("long", {symbol}) == set()
+            assert bot._filter_approved_symbols("long", {symbol}) == set()
+
+        assert bot._emit_live_event.call_count == 3
+        assert bot._blocked_margin_symbols_evented == {
+            ("long", symbol, "isolated_only")
+        }
+        warnings = [
+            record
+            for record in caplog.records
+            if "disabling" in record.getMessage()
+        ]
+        assert len(warnings) == 1
+
     def test_live_margin_mode_is_preserved_when_symbol_has_existing_state(self):
         from exchanges.ccxt_bot import CCXTBot
 
         bot = CCXTBot.__new__(CCXTBot)
         bot.config = {"live": {"margin_mode_preference": "cross"}}
         bot._blocked_margin_symbols_warned = set()
+        bot._blocked_margin_symbols_evented = set()
         bot.markets_dict = {
             "ISO/USDT:USDT": {
                 "marginModes": {"cross": True, "isolated": True},
@@ -507,6 +930,30 @@ class TestCCXTBotExecuteCancellation:
         assert policy["mode"] == "isolated"
         assert policy["blocked"] is False
         assert policy["live_margin_mode"] == "isolated"
+
+    def test_isolated_only_existing_live_state_is_not_blocked_or_emitted(self):
+        from exchanges.ccxt_bot import CCXTBot
+
+        symbol = "ISO/USDT:USDT"
+        bot = CCXTBot.__new__(CCXTBot)
+        bot.config = {"live": {"margin_mode_preference": "cross"}}
+        bot._blocked_margin_symbols_warned = set()
+        bot._blocked_margin_symbols_evented = set()
+        bot.markets_dict = {symbol: {"info": {"onlyIsolated": True}}}
+        bot.positions = {
+            symbol: {
+                "long": {"size": 1.0},
+                "short": {"size": 0.0},
+            }
+        }
+        bot.open_orders = {}
+        bot._live_margin_modes = {symbol: "isolated"}
+        bot._emit_live_event = MagicMock(return_value=object())
+
+        assert bot._filter_approved_symbols("long", {symbol}) == {symbol}
+        bot._emit_live_event.assert_not_called()
+        assert bot._blocked_margin_symbols_warned == set()
+        assert bot._blocked_margin_symbols_evented == set()
 
     def test_normalize_positions_records_live_margin_mode(self):
         from exchanges.ccxt_bot import CCXTBot

@@ -8,89 +8,102 @@ optimization-specific bounds logic.
 from typing import List, Tuple
 
 from config.bot import validate_unstuck_ema_dist_value
+from config.param_paths import (
+    OPTIMIZABLE_BOT_KEY_PATHS,
+    canonical_optimizer_key,
+    resolve_optimizer_key_path,
+)
+from config.optimize_bounds import flatten_optimize_bounds
+from config.shared_bot import flatten_shared_bot_side
 from config.schema import get_template_config
+from config.strategy import normalize_strategy_kind
+from config.strategy_spec import (
+    get_strategy_spec,
+    strategy_optimize_key_path_map,
+)
 from optimization.bounds import Bound
 
-OPTIMIZABLE_BOT_KEY_PATHS = {
-    "long_forager_volume_ema_span": ("bot", "long", "forager_volume_ema_span"),
-    "long_filter_volume_ema_span": ("bot", "long", "forager_volume_ema_span"),
-    "long_forager_volatility_ema_span": ("bot", "long", "forager_volatility_ema_span"),
-    "long_filter_volatility_ema_span": ("bot", "long", "forager_volatility_ema_span"),
-    "long_forager_score_weights_volume": ("bot", "long", "forager_score_weights", "volume"),
-    "long_forager_score_weights_ema_readiness": (
-        "bot",
-        "long",
-        "forager_score_weights",
-        "ema_readiness",
-    ),
-    "long_forager_score_weights_volatility": (
-        "bot",
-        "long",
-        "forager_score_weights",
-        "volatility",
-    ),
-    "short_forager_score_weights_volume": ("bot", "short", "forager_score_weights", "volume"),
-    "short_forager_score_weights_ema_readiness": (
-        "bot",
-        "short",
-        "forager_score_weights",
-        "ema_readiness",
-    ),
-    "short_forager_score_weights_volatility": (
-        "bot",
-        "short",
-        "forager_score_weights",
-        "volatility",
-    ),
-    "short_forager_volume_ema_span": ("bot", "short", "forager_volume_ema_span"),
-    "short_filter_volume_ema_span": ("bot", "short", "forager_volume_ema_span"),
-    "short_forager_volatility_ema_span": ("bot", "short", "forager_volatility_ema_span"),
-    "short_filter_volatility_ema_span": ("bot", "short", "forager_volatility_ema_span"),
-}
 
-DEPRECATED_OPTIMIZE_BOUND_ALIASES = {
-    "long_min_markup": "long_close_grid_markup_start",
-    "short_min_markup": "short_close_grid_markup_start",
-    "long_close_grid_min_markup": "long_close_grid_markup_end",
-    "short_close_grid_min_markup": "short_close_grid_markup_end",
-    "long_filter_volume_ema_span": "long_forager_volume_ema_span",
-    "long_filter_volatility_ema_span": "long_forager_volatility_ema_span",
-    "short_filter_volume_ema_span": "short_forager_volume_ema_span",
-    "short_filter_volatility_ema_span": "short_forager_volatility_ema_span",
-}
+def _flatten_bounds_for_config(config: dict, optimize_bounds: dict) -> dict:
+    strategy_kind = normalize_strategy_kind(config.get("live", {}).get("strategy_kind"))
+    has_flat_keys = any(
+        isinstance(key, str) and (key.startswith("long_") or key.startswith("short_"))
+        for key in optimize_bounds
+    )
+    if not has_flat_keys:
+        return flatten_optimize_bounds(optimize_bounds, strategy_kind=strategy_kind)
+
+    flat_bounds = {
+        key: value
+        for key, value in optimize_bounds.items()
+        if isinstance(key, str) and (key.startswith("long_") or key.startswith("short_"))
+    }
+    nested_bounds = {
+        key: value
+        for key, value in optimize_bounds.items()
+        if not (isinstance(key, str) and (key.startswith("long_") or key.startswith("short_")))
+    }
+    if nested_bounds:
+        flat_bounds = {
+            **flatten_optimize_bounds(nested_bounds, strategy_kind=strategy_kind),
+            **flat_bounds,
+        }
+    return flat_bounds
 
 
-def _validate_standard_optimize_bound_target(bound_key: str, bot_config) -> None:
-    if "_" not in bound_key:
-        return
-    pside, key = bound_key.split("_", 1)
-    if pside not in ("long", "short"):
-        return
-    if key not in bot_config[pside]:
-        raise KeyError(f"optimize bound {bound_key} does not map to bot.{pside}.{key}")
-    value = bot_config[pside][key]
-    if isinstance(value, dict):
-        raise KeyError(f"optimize bound {bound_key} must map to a scalar bot.{pside}.{key}")
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        raise KeyError(
-            f"optimize bound {bound_key} must map to a numeric bot.{pside}.{key}, "
-            f"got {type(value).__name__}"
-        )
+def _flatten_required_optimize_bounds(config: dict) -> dict:
+    raw_bounds = config.get("optimize", {}).get("bounds")
+    if not isinstance(raw_bounds, dict):
+        raise TypeError("config.optimize.bounds must be a non-empty dict")
+    optimize_bounds = _flatten_bounds_for_config(config, raw_bounds)
+    if not optimize_bounds:
+        raise ValueError("config.optimize.bounds must contain at least one optimizer bound")
+    return optimize_bounds
 
 
-def validate_optimize_bounds_against_bot_config(bot_config, optimize_bounds) -> None:
+def _strategy_path_map(config: dict) -> dict[str, Tuple[str, ...]]:
+    strategy_kind = normalize_strategy_kind(config.get("live", {}).get("strategy_kind"))
+    return strategy_optimize_key_path_map(strategy_kind)
+
+
+def resolve_optimization_bound_path(config: dict, bound_key: str) -> Tuple[str, ...] | None:
+    return resolve_optimizer_key_path(config, bound_key)
+
+
+def validate_optimize_bounds_against_bot_config(config: dict, optimize_bounds) -> None:
     if not isinstance(optimize_bounds, dict):
         return
+    bot_config = config.get("bot") or get_template_config()["bot"]
+    optimize_bounds = _flatten_bounds_for_config(config, optimize_bounds)
+    strategy_path_map = _strategy_path_map(config)
     for bound_key in optimize_bounds:
         if not isinstance(bound_key, str):
             continue
-        canonical_key = DEPRECATED_OPTIMIZE_BOUND_ALIASES.get(bound_key)
-        if canonical_key is not None and canonical_key in optimize_bounds:
+        canonical_key = canonical_optimizer_key(bound_key)
+        if canonical_key != bound_key and canonical_key in optimize_bounds:
             continue
+        resolved = resolve_optimization_bound_path(config, bound_key)
+        if resolved is None:
+            raise KeyError(f"optimize bound {bound_key} does not map to a known bot parameter")
+        if canonical_key in strategy_path_map or canonical_key in OPTIMIZABLE_BOT_KEY_PATHS:
+            continue
+        try:
+            pside = resolved[1]
+        except IndexError as exc:
+            raise KeyError(f"optimize bound {bound_key} resolved to invalid path {resolved!r}") from exc
+        flat_pside_cfg = flatten_shared_bot_side(bot_config[pside])
+        key = canonical_key.split("_", 1)[1] if "_" in canonical_key else canonical_key
+        if key not in flat_pside_cfg:
+            raise KeyError(f"optimize bound {bound_key} does not map to bot.{pside}.{key}")
+        value = flat_pside_cfg[key]
+        if isinstance(value, dict):
+            raise KeyError(f"optimize bound {bound_key} must map to a scalar bot.{pside}.{key}")
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise KeyError(
+                f"optimize bound {bound_key} must map to a numeric bot.{pside}.{key}, "
+                f"got {type(value).__name__}"
+            )
         target_key = canonical_key or bound_key
-        if target_key in OPTIMIZABLE_BOT_KEY_PATHS:
-            continue
-        _validate_standard_optimize_bound_target(target_key, bot_config)
         if target_key == "long_unstuck_ema_dist":
             bound = Bound.from_config(target_key, optimize_bounds[bound_key])
             validate_unstuck_ema_dist_value(
@@ -109,32 +122,38 @@ def validate_optimize_bounds_against_bot_config(bot_config, optimize_bounds) -> 
 
 def get_optimization_key_paths(config) -> List[Tuple[str, Tuple[str, ...]]]:
     key_paths: List[Tuple[str, Tuple[str, ...]]] = []
+    template = get_template_config()
     bot_config = config.get("bot")
     if bot_config is None:
-        bot_config = get_template_config()["bot"]
-    optimize_bounds = config.get("optimize", {}).get("bounds", {})
-    validate_optimize_bounds_against_bot_config(bot_config, optimize_bounds)
-    if not optimize_bounds:
-        for pside in ("long", "short"):
-            pside_cfg = bot_config.get(pside, {})
-            for key in sorted(pside_cfg):
-                value = pside_cfg[key]
-                if isinstance(value, bool) or not isinstance(value, (int, float)):
-                    continue
-                key_paths.append((f"{pside}_{key}", ("bot", pside, key)))
-        return key_paths
+        bot_config = template["bot"]
+    strategy_kind = normalize_strategy_kind(config.get("live", {}).get("strategy_kind"))
+    strategy_path_map = _strategy_path_map(config)
+    optimize_bounds = _flatten_required_optimize_bounds(config)
+    validate_optimize_bounds_against_bot_config(config, optimize_bounds)
     for bound_key in sorted(optimize_bounds):
         if not isinstance(bound_key, str):
             continue
-        canonical_key = DEPRECATED_OPTIMIZE_BOUND_ALIASES.get(bound_key)
-        if canonical_key is not None and canonical_key in optimize_bounds:
+        canonical_key = canonical_optimizer_key(bound_key)
+        if canonical_key != bound_key and canonical_key in optimize_bounds:
             continue
-        target_key = canonical_key or bound_key
-        if target_key in OPTIMIZABLE_BOT_KEY_PATHS:
-            key_paths.append((bound_key, OPTIMIZABLE_BOT_KEY_PATHS[target_key]))
+        resolved = resolve_optimization_bound_path(config, bound_key)
+        if resolved is None:
             continue
-        pside, key = target_key.split("_", 1)
-        key_paths.append((bound_key, ("bot", pside, key)))
+        if canonical_key in OPTIMIZABLE_BOT_KEY_PATHS:
+            key_paths.append((bound_key, resolved))
+            continue
+        if canonical_key in strategy_path_map:
+            key_paths.append((bound_key, resolved))
+            continue
+        pside, key = canonical_key.split("_", 1)
+        if pside not in ("long", "short"):
+            continue
+        flat_pside_cfg = flatten_shared_bot_side(bot_config[pside])
+        if key not in flat_pside_cfg:
+            raise KeyError(f"optimize bound {bound_key} does not map to bot.{pside}.{key}")
+        if isinstance(flat_pside_cfg[key], dict):
+            raise KeyError(f"optimize bound {bound_key} must map to a scalar bot.{pside}.{key}")
+        key_paths.append((bound_key, resolved))
     return key_paths
 
 
@@ -150,7 +169,7 @@ def extract_bounds_tuple_list_from_config(config) -> List[Bound]:
         - single value: fixed parameter (low=high, step=None)
     """
     bounds = []
-    optimize_bounds = config["optimize"]["bounds"]
+    optimize_bounds = _flatten_required_optimize_bounds(config)
     key_paths = get_optimization_key_paths(config)
     bot_config = config.get("bot")
     if bot_config is None:

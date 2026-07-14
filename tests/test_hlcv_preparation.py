@@ -122,9 +122,9 @@ def sample_config():
                 "wallet_exposure_limit": 0.5,
                 "ema_span_0": 1000.0,
                 "ema_span_1": 1500.0,
-                "forager_volume_ema_span": 2000.0,
-                "forager_volatility_ema_span": 100.0,
-                "entry_volatility_ema_span_hours": 1.0,
+                "forager_volume_ema_span_1m": 2000.0,
+                "forager_volatility_ema_span_1m": 100.0,
+                "entry_volatility_ema_span_1h": 1.0,
             },
             "short": {
                 "enabled": True,
@@ -133,9 +133,9 @@ def sample_config():
                 "wallet_exposure_limit": 0.5,
                 "ema_span_0": 1000.0,
                 "ema_span_1": 1500.0,
-                "forager_volume_ema_span": 2000.0,
-                "forager_volatility_ema_span": 100.0,
-                "entry_volatility_ema_span_hours": 1.0,
+                "forager_volume_ema_span_1m": 2000.0,
+                "forager_volatility_ema_span_1m": 100.0,
+                "entry_volatility_ema_span_1h": 1.0,
             },
         },
         "live": {
@@ -647,6 +647,97 @@ async def test_prepare_hlcvs_internal_raises_on_non_contiguous_coin_data(
         )
 
 
+@pytest.mark.asyncio
+async def test_prepare_hlcvs_internal_raises_on_coin_fetch_failure(
+    sample_config, monkeypatch
+):
+    class FakeManager:
+        async def load_markets(self):
+            return None
+
+        def has_coin(self, coin):
+            return True
+
+        def update_date_range(self, start_ts):
+            self.start_ts = start_ts
+
+        async def get_ohlcvs(self, coin):
+            if coin == "BAD":
+                raise RuntimeError("simulated fetch outage")
+            return pd.DataFrame(
+                {
+                    "timestamp": [0, 60_000],
+                    "high": [101.0, 102.0],
+                    "low": [99.0, 100.0],
+                    "close": [100.0, 101.0],
+                    "volume": [10.0, 11.0],
+                }
+            )
+
+        def get_market_specific_settings(self, coin):
+            return {"exchange": "binance", "symbol": f"{coin}/USDT:USDT"}
+
+    monkeypatch.setattr(
+        hp,
+        "get_first_timestamps_unified",
+        AsyncMock(return_value={"BAD": 0, "GOOD": 0}),
+    )
+
+    with pytest.raises(RuntimeError, match="get_ohlcvs failed for BAD"):
+        await hp.prepare_hlcvs_internal(
+            sample_config,
+            ["BAD", "GOOD"],
+            "binance",
+            0,
+            0,
+            60_000,
+            FakeManager(),
+        )
+
+
+@pytest.mark.asyncio
+async def test_prepare_hlcvs_internal_raises_on_first_timestamp_failure(
+    sample_config, monkeypatch
+):
+    sample_config["live"]["minimum_coin_age_days"] = 1.0
+
+    class FakeManager:
+        async def load_markets(self):
+            return None
+
+        def has_coin(self, coin):
+            return True
+
+        async def get_first_timestamp(self, coin):
+            raise RuntimeError("simulated timestamp outage")
+
+        def update_date_range(self, start_ts):
+            raise AssertionError("get_ohlcvs should not run after first timestamp failure")
+
+        async def get_ohlcvs(self, coin):
+            raise AssertionError("get_ohlcvs should not run after first timestamp failure")
+
+        def get_market_specific_settings(self, coin):
+            return {"exchange": "binance", "symbol": f"{coin}/USDT:USDT"}
+
+    monkeypatch.setattr(
+        hp,
+        "get_first_timestamps_unified",
+        AsyncMock(return_value={"BAD": 0, "GOOD": 0}),
+    )
+
+    with pytest.raises(RuntimeError, match="get_first_timestamp failed for BAD"):
+        await hp.prepare_hlcvs_internal(
+            sample_config,
+            ["BAD", "GOOD"],
+            "binance",
+            0,
+            0,
+            60_000,
+            FakeManager(),
+        )
+
+
 # ============================================================================
 # Test Class: Error Handling
 # ============================================================================
@@ -1064,6 +1155,40 @@ class TestOHLCVSourceDir:
             assert len(df) == 1441  # end_ts is inclusive (00:00:00 on day 15 to 00:00:00 on day 16)
 
     @pytest.mark.asyncio
+    async def test_source_dir_only_missing_file_returns_empty_without_remote(
+        self, tmp_path, mock_exchange
+    ):
+        """Explicit source-dir-only loads must not fall back to remote candles."""
+        source_dir = tmp_path / "ohlcv_source"
+        source_dir.mkdir(parents=True)
+
+        om = HLCVManager(
+            "binanceusdm",
+            start_date="2024-01-15",
+            end_date="2024-01-16",
+            cc=mock_exchange,
+            ohlcv_source_dir=str(source_dir),
+        )
+        om.markets = {
+            "BTC/USDT:USDT": {
+                "symbol": "BTC/USDT:USDT",
+                "base": "BTC",
+                "quote": "USDT",
+                "maker": 0.0002,
+                "taker": 0.0004,
+                "contractSize": 1.0,
+                "limits": {"cost": {"min": 5.0}, "amount": {"min": 0.001}},
+                "precision": {"price": 0.01, "amount": 0.001},
+            }
+        }
+
+        with patch.object(CandlestickManager, "get_candles") as mock_get_candles:
+            df = await om.get_ohlcvs("BTC", source_dir_only=True)
+
+        mock_get_candles.assert_not_called()
+        assert df.empty
+
+    @pytest.mark.asyncio
     async def test_source_dir_fallback_non_contiguous_small_gap(self, tmp_path, mock_exchange):
         """Test source-dir usage when gaps are within configured tolerance."""
         from ohlcv_utils import dump_ohlcv_data
@@ -1249,7 +1374,7 @@ class TestOHLCVSourceDir:
             ohlcv_source_dir=str(source_dir),
             gap_tolerance_ohlcvs_minutes=120.0,
         )
-        om.tradfi_for_stock_perps = True
+        assert om.tradfi_for_stock_perps is True
 
         om.markets = {
             "XYZ-AAPL/USDC:USDC": {
@@ -1263,6 +1388,29 @@ class TestOHLCVSourceDir:
                 "precision": {"price": 0.01, "amount": 0.001},
             }
         }
+
+        class FakeCm:
+            def standardize_gaps(self, arr, *, start_ts, end_ts, **_kwargs):
+                ts = np.arange(start_ts, end_ts + 60_000, 60_000, dtype=np.int64)
+                out = np.zeros(len(ts), dtype=CANDLE_DTYPE)
+                out["ts"] = ts
+                by_ts = {int(row["ts"]): row for row in arr}
+                prev_close = float(arr[0]["c"])
+                for i, timestamp in enumerate(ts):
+                    row = by_ts.get(int(timestamp))
+                    if row is not None:
+                        out[i] = row
+                        prev_close = float(row["c"])
+                    else:
+                        out[i]["o"] = prev_close
+                        out[i]["h"] = prev_close
+                        out[i]["l"] = prev_close
+                        out[i]["c"] = prev_close
+                        out[i]["bv"] = 0.0
+                return out
+
+        om.load_cc = lambda: None
+        om.cm = FakeCm()
 
         with patch.object(CandlestickManager, "get_candles") as mock_get_candles:
             mock_get_candles.return_value = np.zeros(0, dtype=CANDLE_DTYPE)
@@ -1471,15 +1619,11 @@ class TestPrepareHLCVSCombined:
             )
             return ("binanceusdm", df, 2, 0, 21.0)
 
-        async def fake_compute_exchange_volume_ratios(*args, **kwargs):
-            return {}
-
         monkeypatch.setattr(hp, "HLCVManager", FakeManager)
         monkeypatch.setattr(
             hp, "get_first_timestamps_unified", AsyncMock(return_value={"ETH": 0})
         )
         monkeypatch.setattr(hp, "fetch_data_for_coin_and_exchange", fake_fetch_data_for_coin_and_exchange)
-        monkeypatch.setattr(hp, "compute_exchange_volume_ratios", fake_compute_exchange_volume_ratios)
 
         mss, timestamps, hlcvs, btc_usd_prices = await prepare_hlcvs_combined(sample_config)
 
@@ -1566,16 +1710,12 @@ class TestPrepareHLCVSCombined:
         async def fake_first_timestamps_unified(coins, exchange=None):
             return {coin: int(start_ts) for coin in coins}
 
-        async def fake_compute_exchange_volume_ratios(*args, **kwargs):
-            return {}
-
         monkeypatch.setattr(hp, "HLCVManager", FakeManager)
         monkeypatch.setattr(hp, "compute_backtest_warmup_minutes", lambda cfg: 0)
         monkeypatch.setattr(hp, "compute_per_coin_warmup_minutes", lambda cfg: {"__default__": 0, "ETH": 0})
         monkeypatch.setattr(
             hp, "get_first_timestamps_unified", AsyncMock(return_value={"ETH": int(start_ts)})
         )
-        monkeypatch.setattr(hp, "compute_exchange_volume_ratios", fake_compute_exchange_volume_ratios)
 
         mss, out_timestamps, hlcvs, btc_usd_prices = await prepare_hlcvs_combined(sample_config)
 
@@ -1586,6 +1726,106 @@ class TestPrepareHLCVSCombined:
         assert mss["ETH"]["first_valid_index"] == 0
         assert mss["ETH"]["last_valid_index"] == 0
         assert mss["__meta__"]["btc_source_exchange"] == "binanceusdm"
+
+    @pytest.mark.asyncio
+    async def test_prepare_hlcvs_combined_volume_ratios_do_not_call_legacy_get_ohlcvs(
+        self, sample_config, monkeypatch, tmp_path
+    ):
+        monkeypatch.chdir(tmp_path)
+        sample_config["backtest"]["exchanges"] = ["binance", "bybit"]
+        sample_config["live"]["approved_coins"] = {"long": ["ETH", "SOL"], "short": []}
+        sample_config["backtest"]["start_date"] = "2026-04-01"
+        sample_config["backtest"]["end_date"] = "2026-04-01"
+        sample_config["backtest"]["cm_progress_log_interval_seconds"] = 0.0
+
+        class FakeManager:
+            def __init__(self, exchange, start_date, end_date, **kwargs):
+                self.exchange = exchange
+                self.start_date = start_date
+                self.end_date = end_date
+                self.markets = {
+                    "ETH/USDT:USDT": {"base": "ETH"},
+                    "SOL/USDT:USDT": {"base": "SOL"},
+                    "BTC/USDT:USDT": {"base": "BTC"},
+                }
+                self.cc = None
+
+            async def load_markets(self):
+                return None
+
+            def has_coin(self, coin):
+                return coin in {"ETH", "SOL", "BTC"}
+
+            def get_symbol(self, coin):
+                return f"{coin}/USDT:USDT"
+
+            def update_date_range(self, start_ts, end_ts):
+                self.start_ts = int(start_ts)
+                self.end_ts = int(end_ts)
+
+            def get_market_specific_settings(self, coin):
+                return {
+                    "exchange": self.exchange,
+                    "symbol": f"{coin}/USDT:USDT",
+                    "qty_step": 0.001,
+                    "price_step": 0.1,
+                    "min_cost": 5.0,
+                }
+
+            async def get_ohlcvs(self, coin, *args, **kwargs):
+                raise AssertionError(f"combined prep must not call legacy get_ohlcvs for {coin}")
+
+            async def aclose(self):
+                return None
+
+        start_ts = month_start_ts(2026, 4)
+        timestamps = np.array([start_ts], dtype=np.int64)
+        catalog = OhlcvCatalog(tmp_path / "caches" / "ohlcvs" / "catalog.sqlite")
+        store = OhlcvStore(tmp_path / "caches" / "ohlcvs", catalog)
+
+        volumes = {
+            ("binance", "ETH"): 100.0,
+            ("bybit", "ETH"): 10.0,
+            ("binance", "SOL"): 5.0,
+            ("bybit", "SOL"): 50.0,
+            ("binance", "BTC"): 1_000.0,
+        }
+        closes = {"ETH": 100.0, "SOL": 25.0, "BTC": 50_000.0}
+        for (exchange, coin), volume in volumes.items():
+            close = closes[coin]
+            store.write_rows(
+                exchange,
+                "1m",
+                f"{coin}/USDT:USDT",
+                timestamps,
+                np.array([[close + 1.0, close - 1.0, close, volume]], dtype=np.float32),
+            )
+
+        monkeypatch.setattr(hp, "HLCVManager", FakeManager)
+        monkeypatch.setattr(hp, "compute_backtest_warmup_minutes", lambda cfg: 0)
+        monkeypatch.setattr(
+            hp,
+            "compute_per_coin_warmup_minutes",
+            lambda cfg: {"__default__": 0, "ETH": 0, "SOL": 0},
+        )
+        monkeypatch.setattr(
+            hp,
+            "get_first_timestamps_unified",
+            AsyncMock(return_value={"ETH": int(start_ts), "SOL": int(start_ts)}),
+        )
+
+        mss, out_timestamps, hlcvs, btc_usd_prices = await prepare_hlcvs_combined(sample_config)
+
+        np.testing.assert_array_equal(out_timestamps, timestamps)
+        assert mss["ETH"]["exchange"] == "binance"
+        assert mss["SOL"]["exchange"] == "bybit"
+        ratio = ((100.0 / 10.0) + (5.0 / 50.0)) / 2.0
+        valid_coins = sorted(["ETH", "SOL"])
+        eth_index = valid_coins.index("ETH")
+        sol_index = valid_coins.index("SOL")
+        assert hlcvs[0, eth_index, 3] == pytest.approx(100.0 / ratio)
+        assert hlcvs[0, sol_index, 3] == pytest.approx(50.0)
+        np.testing.assert_allclose(btc_usd_prices, np.array([50_000.0]))
 
 
 @pytest.mark.asyncio
@@ -1716,6 +1956,45 @@ async def test_fetch_data_for_coin_and_exchange_counts_sparse_v2_valid_rows(tmp_
 
 
 @pytest.mark.asyncio
+async def test_fetch_data_for_coin_and_exchange_requests_source_dir_only_for_source_dir():
+    class FakeManager:
+        gap_tolerance_ohlcvs_minutes = 120.0
+        ohlcv_source_dir = "/tmp/source-dir"
+
+        def __init__(self):
+            self.source_dir_only = None
+
+        def has_coin(self, coin):
+            return coin == "BTC"
+
+        def get_symbol(self, coin):
+            return "BTC/USDT:USDT"
+
+        def update_date_range(self, start_ts, end_ts):
+            self.start_ts = start_ts
+            self.end_ts = end_ts
+
+        async def get_ohlcvs(self, coin, *args, **kwargs):
+            self.source_dir_only = kwargs.get("source_dir_only")
+            return pd.DataFrame()
+
+    start_ts = month_start_ts(2026, 4)
+    manager = FakeManager()
+
+    result = await hp.fetch_data_for_coin_and_exchange(
+        "BTC",
+        "binanceusdm",
+        manager,
+        int(start_ts),
+        int(start_ts + 60_000),
+        use_v2_local=False,
+    )
+
+    assert result is None
+    assert manager.source_dir_only is True
+
+
+@pytest.mark.asyncio
 async def test_fetch_ohlcvs_for_v2_store_returns_real_rows_without_synthetic_gap_fill():
     class FakeLock:
         async def __aenter__(self):
@@ -1728,7 +2007,15 @@ async def test_fetch_ohlcvs_for_v2_store_returns_real_rows_without_synthetic_gap
         def _acquire_fetch_lock(self, symbol, timeframe):
             return FakeLock()
 
-        async def _fetch_ohlcv_paginated(self, symbol, since_ms, end_exclusive_ms, *, timeframe):
+        async def _fetch_ohlcv_paginated(
+            self,
+            symbol,
+            since_ms,
+            end_exclusive_ms,
+            *,
+            timeframe,
+            raise_on_partial_empty_page=False,
+        ):
             rows = np.array(
                 [
                     (since_ms, 100.0, 101.0, 99.0, 100.0, 10.0),
@@ -1845,8 +2132,120 @@ def test_combined_valid_mask_conversion_avoids_pandas_downcast_warning():
     ]
 
 
+def test_exchange_volume_ratios_from_candidates_use_common_timestamps():
+    day0 = month_start_ts(2026, 4)
+    day1 = day0 + 86_400_000
+    day2 = day1 + 86_400_000
+
+    def candidate(exchange, volumes_by_ts):
+        timestamps = np.array(list(volumes_by_ts.keys()), dtype=np.int64)
+        volumes = np.array(list(volumes_by_ts.values()), dtype=np.float64)
+        df = pd.DataFrame(
+            {
+                "timestamp": timestamps,
+                "high": np.ones_like(volumes),
+                "low": np.ones_like(volumes),
+                "close": np.ones_like(volumes),
+                "volume": volumes,
+                "valid": np.ones(len(volumes), dtype=bool),
+            }
+        )
+        return hp.CombinedExchangeCandidate(
+            exchange=exchange,
+            df=df,
+            coverage_count=len(df),
+            gap_count=0,
+            total_volume=float(df["volume"].sum()),
+        )
+
+    ratios = hp.compute_exchange_volume_ratios_from_candidates(
+        exchanges=["binance", "bybit"],
+        coins=["ETH", "SOL"],
+        candidates_by_coin={
+            "ETH": (
+                candidate("binanceusdm", {day0: 10.0, day1: 20.0, day2: 10_000.0}),
+                candidate("bybit", {day0: 30.0, day1: 30.0}),
+            ),
+            "SOL": (
+                candidate("binanceusdm", {day0: 100.0}),
+                candidate("bybit", {day0: 50.0, day2: 9_000.0}),
+            ),
+        },
+        start_ts=day0,
+        end_ts=day1,
+    )
+
+    assert ratios[("binance", "bybit")] == pytest.approx(((30.0 / 60.0) + (100.0 / 50.0)) / 2.0)
+
+
+def test_exchange_volume_ratios_from_candidates_do_not_compare_partial_day_to_full_day():
+    day0 = month_start_ts(2026, 4)
+    full_day_timestamps = [day0 + i * 60_000 for i in range(1440)]
+
+    full_day_df = pd.DataFrame(
+        {
+            "timestamp": np.array(full_day_timestamps, dtype=np.int64),
+            "high": np.ones(1440, dtype=np.float64),
+            "low": np.ones(1440, dtype=np.float64),
+            "close": np.ones(1440, dtype=np.float64),
+            "volume": np.ones(1440, dtype=np.float64),
+            "valid": np.ones(1440, dtype=bool),
+        }
+    )
+    one_minute_df = pd.DataFrame(
+        {
+            "timestamp": np.array([day0], dtype=np.int64),
+            "high": [1.0],
+            "low": [1.0],
+            "close": [1.0],
+            "volume": [1.0],
+            "valid": [True],
+        }
+    )
+
+    ratios = hp.compute_exchange_volume_ratios_from_candidates(
+        exchanges=["binance", "bybit"],
+        coins=["BTC"],
+        candidates_by_coin={
+            "BTC": (
+                hp.CombinedExchangeCandidate(
+                    exchange="binanceusdm",
+                    df=full_day_df,
+                    coverage_count=len(full_day_df),
+                    gap_count=0,
+                    total_volume=float(full_day_df["volume"].sum()),
+                ),
+                hp.CombinedExchangeCandidate(
+                    exchange="bybit",
+                    df=one_minute_df,
+                    coverage_count=len(one_minute_df),
+                    gap_count=0,
+                    total_volume=float(one_minute_df["volume"].sum()),
+                ),
+            )
+        },
+        start_ts=day0,
+        end_ts=day0 + 1439 * 60_000,
+    )
+
+    assert ratios[("binance", "bybit")] == pytest.approx(1.0)
+
+
+def test_build_exchange_volume_ratio_map_fails_loudly_without_overlap_to_reference():
+    with pytest.raises(
+        ValueError,
+        match="cannot normalize volumes: no overlapping valid candidate candles",
+    ):
+        hp._build_exchange_volume_ratio_map(
+            exchange_volume_ratios={},
+            selected_exchanges=["binance", "bybit"],
+            reference_exchange="binance",
+            valid_coins=["ETH", "SOL"],
+        )
+
+
 @pytest.mark.asyncio
-async def test_load_combined_coin_candidates_reports_failed_non_forced_exchange(monkeypatch, tmp_path):
+async def test_load_combined_coin_candidates_raises_failed_non_forced_exchange(monkeypatch, tmp_path):
     start_ts = month_start_ts(2026, 4)
     end_ts = start_ts + 60_000
     plan = hp.CombinedCoinPlan(
@@ -1885,23 +2284,18 @@ async def test_load_combined_coin_candidates_reports_failed_non_forced_exchange(
     store = OhlcvStore(tmp_path / "ohlcvs", catalog)
     report = []
 
-    candidates = await hp._load_combined_coin_candidates(
-        plan=plan,
-        om_dict={"binanceusdm": FakeManager("binanceusdm"), "bybit": FakeManager("bybit")},
-        end_ts=end_ts,
-        force_refetch_gaps=False,
-        catalog=catalog,
-        store=store,
-        legacy_root=None,
-        exchanges_to_consider=("binanceusdm", "bybit"),
-        candidate_report=report,
-    )
-
-    assert [candidate.exchange for candidate in candidates] == ["binanceusdm"]
-    failed = [item for item in report if item["exchange"] == "bybit"][0]
-    assert failed["status"] == "ineligible"
-    assert failed["reason"] == "api_error:RuntimeError"
-    assert failed["gap_class"] == "api_error"
+    with pytest.raises(RuntimeError, match=r"Exchange bybit failed for coin BTC"):
+        await hp._load_combined_coin_candidates(
+            plan=plan,
+            om_dict={"binanceusdm": FakeManager("binanceusdm"), "bybit": FakeManager("bybit")},
+            end_ts=end_ts,
+            force_refetch_gaps=False,
+            catalog=catalog,
+            store=store,
+            legacy_root=None,
+            exchanges_to_consider=("binanceusdm", "bybit"),
+            candidate_report=report,
+        )
 
 
 @pytest.mark.asyncio
@@ -2107,6 +2501,55 @@ async def test_combined_force_refetch_btc_prices_use_v2_resolver(monkeypatch, tm
 
 
 @pytest.mark.asyncio
+async def test_combined_btc_source_dir_uses_source_dir_only(monkeypatch, tmp_path):
+    start_ts = month_start_ts(2026, 4)
+    calls = []
+
+    class FakeBtcManager:
+        def __init__(self, exchange, start_date, end_date, **kwargs):
+            self.exchange = exchange
+            self.cc = None
+
+        def update_date_range(self, start_ts, end_ts):
+            self.start_ts = int(start_ts)
+            self.end_ts = int(end_ts)
+
+        async def load_markets(self):
+            return None
+
+        def has_coin(self, coin):
+            return coin == "BTC"
+
+        async def get_ohlcvs(self, coin, *args, **kwargs):
+            calls.append(kwargs.get("source_dir_only"))
+            return pd.DataFrame()
+
+        async def aclose(self):
+            return None
+
+    monkeypatch.setattr(hp, "HLCVManager", FakeBtcManager)
+    catalog = OhlcvCatalog(tmp_path / "catalog.sqlite")
+
+    btc_df, source_exchange = await hp._load_combined_btc_prices(
+        exchanges_to_consider=("binanceusdm",),
+        timestamps=np.arange(start_ts, start_ts + 60_000, 60_000, dtype=np.int64),
+        effective_start_date=hp.ts_to_date(start_ts),
+        end_date=hp.ts_to_date(start_ts),
+        gap_tolerance_ohlcvs_minutes=0.0,
+        force_refetch_gaps=False,
+        catalog=catalog,
+        store=OhlcvStore(tmp_path / "ohlcvs", catalog),
+        legacy_root=None,
+        ohlcv_source_dir=str(tmp_path / "source"),
+        use_v2_local=False,
+    )
+
+    assert btc_df.empty
+    assert source_exchange is None
+    assert calls == [True]
+
+
+@pytest.mark.asyncio
 async def test_try_prepare_hlcvs_v2_local_logs_start_before_work(monkeypatch, tmp_path, caplog):
     monkeypatch.chdir(tmp_path)
     legacy_root = tmp_path / "caches" / "ohlcv"
@@ -2120,12 +2563,18 @@ async def test_try_prepare_hlcvs_v2_local_logs_start_before_work(monkeypatch, tm
     symbol_dir = legacy_root / "binance" / "1m" / "ETH_USDT_USDT"
     symbol_dir.mkdir(parents=True, exist_ok=True)
     np.save(symbol_dir / "2026-04-01.npy", arr)
+    source_symbol_dir = legacy_root / "binance" / "1m" / "ETH_USDT:USDT"
+    source_symbol_dir.mkdir(parents=True, exist_ok=True)
+    np.save(source_symbol_dir / "2026-04-01.npy", arr)
     btc_dir = legacy_root / "binance" / "1m" / "BTC_USDT_USDT"
     btc_dir.mkdir(parents=True, exist_ok=True)
-    np.save(
-        btc_dir / "2026-04-01.npy",
-        np.array([(int(start_ts), 0.0, 50001.0, 49999.0, 50000.0, 100.0)], dtype=LEGACY_DTYPE),
+    btc_arr = np.array(
+        [(int(start_ts), 0.0, 50001.0, 49999.0, 50000.0, 100.0)], dtype=LEGACY_DTYPE
     )
+    np.save(btc_dir / "2026-04-01.npy", btc_arr)
+    btc_source_symbol_dir = legacy_root / "binance" / "1m" / "BTC_USDT:USDT"
+    btc_source_symbol_dir.mkdir(parents=True, exist_ok=True)
+    np.save(btc_source_symbol_dir / "2026-04-01.npy", btc_arr)
     with open(tmp_path / "caches" / "binance" / "first_timestamps.json", "w", encoding="utf-8") as f:
         json.dump({"ETH": int(start_ts), "BTC": int(start_ts)}, f)
 
@@ -2162,6 +2611,7 @@ async def test_try_prepare_hlcvs_v2_local_logs_start_before_work(monkeypatch, tm
             "gap_tolerance_ohlcvs_minutes": 120.0,
             "cm_debug_level": 0,
             "cm_progress_log_interval_seconds": 0.0,
+            "ohlcv_source_dir": str(legacy_root),
         },
         "live": {
             "approved_coins": {"long": ["ETH"], "short": []},

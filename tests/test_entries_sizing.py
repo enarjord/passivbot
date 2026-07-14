@@ -19,7 +19,7 @@ def _calc_next_entry_short(**kwargs):
 
 
 @pytest.mark.skipif(pbr is None or pbr_is_stub, reason="passivbot_rust extension not available")
-def test_initial_entry_qty_long_respects_min_qty_and_allowance():
+def test_initial_entry_qty_long_uses_base_wel_without_runtime_excess():
     params = dict(
         qty_step=0.01,
         price_step=0.1,
@@ -27,19 +27,15 @@ def test_initial_entry_qty_long_respects_min_qty_and_allowance():
         min_cost=0.0,
         c_mult=1.0,
         entry_grid_double_down_factor=1.0,
-        entry_grid_spacing_volatility_weight=0.0,
-        entry_grid_spacing_we_weight=0.0,
+        entry_weight_volatility_1h=0.0,
+        entry_weight_volatility_1m=0.0,
+        entry_we_weight=0.0,
         entry_grid_spacing_pct=0.0,
         entry_initial_ema_dist=0.0,
         entry_initial_qty_pct=0.25,
         entry_trailing_double_down_factor=1.0,
-        entry_trailing_grid_ratio=0.0,
         entry_trailing_retracement_pct=0.0,
-        entry_trailing_retracement_we_weight=0.0,
-        entry_trailing_retracement_volatility_weight=0.0,
         entry_trailing_threshold_pct=0.0,
-        entry_trailing_threshold_we_weight=0.0,
-        entry_trailing_threshold_volatility_weight=0.0,
         wallet_exposure_limit=0.1,
         risk_we_excess_allowance_pct=1.0,
         balance=1000.0,
@@ -50,14 +46,18 @@ def test_initial_entry_qty_long_respects_min_qty_and_allowance():
         max_since_open=0.0,
         min_since_max=0.0,
         ema_bands_lower=95.0,
-        entry_volatility_logrange_ema_1h=0.0,
+        volatility_ema_1h=0.0,
+        volatility_ema_1m=0.0,
         order_book_bid=94.0,
     )
 
     qty, price, order_type = _calc_next_entry_long(**params)
     assert order_type == "entry_initial_normal_long"
 
-    allowed = params["wallet_exposure_limit"] * (1.0 + params["risk_we_excess_allowance_pct"])
+    # Excess allowance is applied upstream (orchestrator/backtest) through the
+    # runtime effective wallet exposure limit; the standalone entry calculator
+    # sizes off the base limit it receives.
+    allowed = params["wallet_exposure_limit"]
     target_cost = params["balance"] * allowed * params["entry_initial_qty_pct"]
     expected_qty = pbr.round_(
         pbr.cost_to_qty(target_cost, price, params["c_mult"]), params["qty_step"]
@@ -67,7 +67,7 @@ def test_initial_entry_qty_long_respects_min_qty_and_allowance():
 
 
 @pytest.mark.skipif(pbr is None or pbr_is_stub, reason="passivbot_rust extension not available")
-def test_initial_entry_qty_short_respects_allowance():
+def test_initial_entry_qty_short_uses_base_wel_without_runtime_excess():
     params = dict(
         qty_step=0.01,
         price_step=0.1,
@@ -75,19 +75,15 @@ def test_initial_entry_qty_short_respects_allowance():
         min_cost=0.0,
         c_mult=1.0,
         entry_grid_double_down_factor=1.0,
-        entry_grid_spacing_volatility_weight=0.0,
-        entry_grid_spacing_we_weight=0.0,
+        entry_weight_volatility_1h=0.0,
+        entry_weight_volatility_1m=0.0,
+        entry_we_weight=0.0,
         entry_grid_spacing_pct=0.0,
         entry_initial_ema_dist=0.0,
         entry_initial_qty_pct=0.25,
         entry_trailing_double_down_factor=1.0,
-        entry_trailing_grid_ratio=0.0,
         entry_trailing_retracement_pct=0.0,
-        entry_trailing_retracement_we_weight=0.0,
-        entry_trailing_retracement_volatility_weight=0.0,
         entry_trailing_threshold_pct=0.0,
-        entry_trailing_threshold_we_weight=0.0,
-        entry_trailing_threshold_volatility_weight=0.0,
         wallet_exposure_limit=0.1,
         risk_we_excess_allowance_pct=1.0,
         balance=1000.0,
@@ -98,14 +94,18 @@ def test_initial_entry_qty_short_respects_allowance():
         max_since_open=0.0,
         min_since_max=0.0,
         ema_bands_upper=105.0,
-        entry_volatility_logrange_ema_1h=0.0,
+        volatility_ema_1h=0.0,
+        volatility_ema_1m=0.0,
         order_book_ask=106.0,
     )
 
     qty, price, order_type = _calc_next_entry_short(**params)
     assert order_type == "entry_initial_normal_short"
 
-    allowed = params["wallet_exposure_limit"] * (1.0 + params["risk_we_excess_allowance_pct"])
+    # Excess allowance is applied upstream (orchestrator/backtest) through the
+    # runtime effective wallet exposure limit; the standalone entry calculator
+    # sizes off the base limit it receives.
+    allowed = params["wallet_exposure_limit"]
     target_cost = params["balance"] * allowed * params["entry_initial_qty_pct"]
     expected_qty = pbr.round_(
         pbr.cost_to_qty(target_cost, price, params["c_mult"]), params["qty_step"]
@@ -123,19 +123,15 @@ def test_reentry_blocked_when_cap_reached():
         min_cost=0.0,
         c_mult=1.0,
         entry_grid_double_down_factor=1.0,
-        entry_grid_spacing_volatility_weight=0.0,
-        entry_grid_spacing_we_weight=0.0,
+        entry_weight_volatility_1h=0.0,
+        entry_weight_volatility_1m=0.0,
+        entry_we_weight=0.0,
         entry_grid_spacing_pct=0.0,
         entry_initial_ema_dist=0.0,
         entry_initial_qty_pct=0.1,
         entry_trailing_double_down_factor=1.0,
-        entry_trailing_grid_ratio=0.0,
         entry_trailing_retracement_pct=0.0,
-        entry_trailing_retracement_we_weight=0.0,
-        entry_trailing_retracement_volatility_weight=0.0,
         entry_trailing_threshold_pct=0.0,
-        entry_trailing_threshold_we_weight=0.0,
-        entry_trailing_threshold_volatility_weight=0.0,
         wallet_exposure_limit=0.05,
         risk_we_excess_allowance_pct=0.0,
         balance=1000.0,
@@ -146,7 +142,8 @@ def test_reentry_blocked_when_cap_reached():
         max_since_open=0.0,
         min_since_max=0.0,
         ema_bands_lower=95.0,
-        entry_volatility_logrange_ema_1h=0.0,
+        volatility_ema_1h=0.0,
+        volatility_ema_1m=0.0,
         order_book_bid=94.0,
     )
 
@@ -165,19 +162,15 @@ def test_reentry_long_is_cropped_to_cap():
         min_cost=0.0,
         c_mult=1.0,
         entry_grid_double_down_factor=2.0,
-        entry_grid_spacing_volatility_weight=0.0,
-        entry_grid_spacing_we_weight=0.0,
+        entry_weight_volatility_1h=0.0,
+        entry_weight_volatility_1m=0.0,
+        entry_we_weight=0.0,
         entry_grid_spacing_pct=0.05,
         entry_initial_ema_dist=0.0,
         entry_initial_qty_pct=0.1,
         entry_trailing_double_down_factor=1.0,
-        entry_trailing_grid_ratio=0.0,
         entry_trailing_retracement_pct=0.0,
-        entry_trailing_retracement_we_weight=0.0,
-        entry_trailing_retracement_volatility_weight=0.0,
         entry_trailing_threshold_pct=0.0,
-        entry_trailing_threshold_we_weight=0.0,
-        entry_trailing_threshold_volatility_weight=0.0,
         wallet_exposure_limit=0.3,
         risk_we_excess_allowance_pct=0.0,
         balance=1000.0,
@@ -188,7 +181,8 @@ def test_reentry_long_is_cropped_to_cap():
         max_since_open=0.0,
         min_since_max=0.0,
         ema_bands_lower=100.0,
-        entry_volatility_logrange_ema_1h=0.0,
+        volatility_ema_1h=0.0,
+        volatility_ema_1m=0.0,
         order_book_bid=95.0,
     )
 
@@ -213,19 +207,15 @@ def test_reentry_short_is_cropped_to_cap():
         min_cost=0.0,
         c_mult=1.0,
         entry_grid_double_down_factor=2.0,
-        entry_grid_spacing_volatility_weight=0.0,
-        entry_grid_spacing_we_weight=0.0,
+        entry_weight_volatility_1h=0.0,
+        entry_weight_volatility_1m=0.0,
+        entry_we_weight=0.0,
         entry_grid_spacing_pct=0.05,
         entry_initial_ema_dist=0.0,
         entry_initial_qty_pct=0.1,
         entry_trailing_double_down_factor=1.0,
-        entry_trailing_grid_ratio=0.0,
         entry_trailing_retracement_pct=0.0,
-        entry_trailing_retracement_we_weight=0.0,
-        entry_trailing_retracement_volatility_weight=0.0,
         entry_trailing_threshold_pct=0.0,
-        entry_trailing_threshold_we_weight=0.0,
-        entry_trailing_threshold_volatility_weight=0.0,
         wallet_exposure_limit=0.3,
         risk_we_excess_allowance_pct=0.0,
         balance=1000.0,
@@ -236,7 +226,8 @@ def test_reentry_short_is_cropped_to_cap():
         max_since_open=0.0,
         min_since_max=0.0,
         ema_bands_upper=100.0,
-        entry_volatility_logrange_ema_1h=0.0,
+        volatility_ema_1h=0.0,
+        volatility_ema_1m=0.0,
         order_book_ask=105.0,
     )
 
@@ -263,19 +254,15 @@ def test_reentry_long_near_cap_stays_normal():
         min_cost=0.0,
         c_mult=1.0,
         entry_grid_double_down_factor=0.5,
-        entry_grid_spacing_volatility_weight=0.0,
-        entry_grid_spacing_we_weight=0.0,
+        entry_weight_volatility_1h=0.0,
+        entry_weight_volatility_1m=0.0,
+        entry_we_weight=0.0,
         entry_grid_spacing_pct=0.05,
         entry_initial_ema_dist=0.0,
         entry_initial_qty_pct=0.1,
         entry_trailing_double_down_factor=1.0,
-        entry_trailing_grid_ratio=0.0,
         entry_trailing_retracement_pct=0.0,
-        entry_trailing_retracement_we_weight=0.0,
-        entry_trailing_retracement_volatility_weight=0.0,
         entry_trailing_threshold_pct=0.0,
-        entry_trailing_threshold_we_weight=0.0,
-        entry_trailing_threshold_volatility_weight=0.0,
         wallet_exposure_limit=0.3,
         risk_we_excess_allowance_pct=0.0,
         balance=1000.0,
@@ -286,7 +273,8 @@ def test_reentry_long_near_cap_stays_normal():
         max_since_open=0.0,
         min_since_max=0.0,
         ema_bands_lower=100.0,
-        entry_volatility_logrange_ema_1h=0.0,
+        volatility_ema_1h=0.0,
+        volatility_ema_1m=0.0,
         order_book_bid=95.0,
     )
 

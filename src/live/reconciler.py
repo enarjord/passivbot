@@ -4,9 +4,10 @@ import json
 import logging
 import math
 import sys
-import traceback
+from collections import Counter
 from typing import Iterable, Optional
 
+from live.fresh_entry_eligibility import FreshEntryEligibilityTrace
 from live.freshness import ACCOUNT_SURFACES
 from pure_funcs import determine_side_from_order_tuple, filter_orders, shorten_custom_id
 from utils import symbol_to_coin, ts_to_date, utc_ms as _utils_utc_ms
@@ -32,6 +33,107 @@ def _utc_ms() -> int:
     if module is not None and hasattr(module, "utc_ms"):
         return int(module.utc_ms())
     return int(_utils_utc_ms())
+
+
+def _orders_removed_by_identity(before: list[dict], after: list[dict]) -> list[dict]:
+    """Return objects removed by an existing filter without comparing mutable payloads."""
+    remaining = Counter(id(order) for order in after)
+    removed = []
+    for order in before:
+        order_id = id(order)
+        if remaining[order_id] > 0:
+            remaining[order_id] -= 1
+        else:
+            removed.append(order)
+    return removed
+
+
+def _trace_record(
+    trace: FreshEntryEligibilityTrace | None,
+    method: str,
+    *args,
+    **kwargs,
+) -> FreshEntryEligibilityTrace | None:
+    """Best-effort diagnostic recording which can never affect order reconciliation."""
+    if trace is None:
+        return None
+    try:
+        getattr(trace, method)(*args, **kwargs)
+        return trace
+    except Exception as exc:
+        logging.debug(
+            "[entry] fresh-entry eligibility trace disabled during reconciliation | "
+            "method=%s error_type=%s",
+            method,
+            type(exc).__name__,
+        )
+        return None
+
+
+def _initialize_fresh_entry_trace(
+    bot,
+    ideal_orders: dict,
+    actual_orders: dict[str, list[dict]],
+) -> FreshEntryEligibilityTrace | None:
+    """Build cycle-local diagnostic scope from already evaluated live symbols and orders."""
+    trace: FreshEntryEligibilityTrace | None = FreshEntryEligibilityTrace()
+    try:
+        flat_ideal = [
+            order
+            for orders in ideal_orders.values()
+            if isinstance(orders, list)
+            for order in orders
+            if isinstance(order, dict)
+        ]
+        flat_actual = [
+            order
+            for orders in actual_orders.values()
+            if isinstance(orders, list)
+            for order in orders
+            if isinstance(order, dict)
+        ]
+        observed_pairs = {
+            (str(order.get("symbol") or ""), str(order.get("position_side") or ""))
+            for order in flat_ideal + flat_actual
+            if order.get("symbol") and order.get("position_side") in {"long", "short"}
+        }
+        active_symbols = set(getattr(bot, "active_symbols", ()) or ())
+        planning_snapshot = getattr(bot, "_current_planning_snapshot", None)
+        active_symbols.update(getattr(planning_snapshot, "symbols", ()) or ())
+        enabled = getattr(bot, "is_pside_enabled", None)
+        if callable(enabled):
+            for pside in ("long", "short"):
+                try:
+                    pside_enabled = bool(enabled(pside))
+                except Exception:
+                    pside_enabled = False
+                if pside_enabled:
+                    observed_pairs.update(
+                        (str(symbol), pside) for symbol in active_symbols if symbol
+                    )
+        for symbol, pside in sorted(observed_pairs):
+            trace.record_evaluated(symbol, pside)
+        trace.record_ideal_orders(flat_ideal)
+        trace.record_protective_orders(flat_ideal)
+        for pair, count in dict(
+            getattr(bot, "_fresh_entry_conversion_blocked_counts", {}) or {}
+        ).items():
+            if not isinstance(pair, tuple) or len(pair) != 2:
+                continue
+            trace.record_count(
+                pair[0],
+                pair[1],
+                "blocked",
+                count=int(count),
+                reason="conversion_zero_or_duplicate",
+            )
+        return trace
+    except Exception as exc:
+        logging.debug(
+            "[entry] fresh-entry eligibility trace initialization failed | error_type=%s",
+            type(exc).__name__,
+        )
+        return None
 
 
 def add_to_recent_order_cancellations(bot, order):
@@ -782,11 +884,44 @@ def mark_account_critical_state_dirty(
 
 async def calc_orders_to_cancel_and_create(bot):
     """Determine which existing orders to cancel and which new ones to place."""
+    bot._fresh_entry_eligibility_trace = None
+    ideal_orders = await bot.calc_ideal_orders()
+    return await calc_orders_to_cancel_and_create_from_ideal(bot, ideal_orders)
+
+
+async def calc_orders_to_cancel_and_create_from_ideal(
+    bot,
+    ideal_orders,
+    *,
+    actual_symbols: Optional[Iterable[str]] = None,
+    actual_psides_by_symbol: Optional[dict[str, Iterable[str]]] = None,
+    apply_initial_entry_gate: bool = True,
+    apply_creation_guardrails: bool = True,
+    apply_mode_filters: bool = True,
+    collect_fresh_entry_eligibility: bool = True,
+):
+    """Reconcile exchange orders against a supplied ideal order map."""
+    bot._fresh_entry_eligibility_trace = None
     if not hasattr(bot, "_last_plan_detail"):
         bot._last_plan_detail = {}
-    ideal_orders = await bot.calc_ideal_orders()
 
-    actual_orders = bot._snapshot_actual_orders()
+    actual_orders = bot._snapshot_actual_orders(
+        actual_symbols, psides_by_symbol=actual_psides_by_symbol
+    )
+    trace = (
+        _initialize_fresh_entry_trace(bot, ideal_orders, actual_orders)
+        if collect_fresh_entry_eligibility and isinstance(ideal_orders, dict)
+        else None
+    )
+    malformed_actual_symbols = set(
+        getattr(bot, "_malformed_actual_order_symbols", set()) or set()
+    )
+    trailing_unavailable_symbols = set(
+        getattr(bot, "_orchestrator_trailing_unavailable_symbols", set()) or set()
+    )
+    malformed_actual_counts = dict(
+        getattr(bot, "_malformed_actual_order_counts", {}) or {}
+    )
     keys = ("symbol", "side", "position_side", "qty", "price")
     to_cancel, to_create = [], []
     plan_summaries = []
@@ -794,25 +929,127 @@ async def calc_orders_to_cancel_and_create(bot):
         ideal_list = (
             ideal_orders.get(symbol, []) if isinstance(ideal_orders, dict) else []
         )
-        cancel_, create_ = bot._reconcile_symbol_orders(
-            symbol, symbol_orders, ideal_list, keys
-        )
-        cancel_, create_ = bot._annotate_order_deltas(cancel_, create_)
+        if symbol in malformed_actual_symbols:
+            trace = _trace_record(
+                trace,
+                "record_blocked_orders",
+                ideal_list,
+                "malformed_actual_orders",
+            )
+            blocked_actual = len(symbol_orders) + int(
+                malformed_actual_counts.get(symbol, 0) or 0
+            )
+            plan_summaries.append(
+                (
+                    symbol,
+                    blocked_actual,
+                    0,
+                    len(ideal_list),
+                    0,
+                    blocked_actual + len(ideal_list),
+                )
+            )
+            continue
+        if trace is not None:
+            cancel_, create_, raw_create = bot._reconcile_symbol_orders(
+                symbol,
+                symbol_orders,
+                ideal_list,
+                keys,
+                apply_mode_filters=apply_mode_filters,
+                return_unfiltered_create=True,
+            )
+            trace = _trace_record(
+                trace,
+                "record_satisfied_orders",
+                _orders_removed_by_identity(ideal_list, raw_create),
+                "exact_reconciliation_match",
+            )
+            trace = _trace_record(
+                trace,
+                "record_blocked_orders",
+                _orders_removed_by_identity(raw_create, create_),
+                "mode_filter",
+            )
+        else:
+            cancel_, create_ = bot._reconcile_symbol_orders(
+                symbol,
+                symbol_orders,
+                ideal_list,
+                keys,
+                apply_mode_filters=apply_mode_filters,
+            )
         pre_cancel = len(cancel_)
         pre_create = len(create_)
+        trailing_skipped = 0
+        if symbol in trailing_unavailable_symbols:
+            before_trailing_create = list(create_)
+            cancel_, create_, trailing_skipped, fully_blocked = (
+                filter_trailing_unavailable_reconciliation(
+                    bot, symbol, cancel_, create_, ideal_list
+                )
+            )
+            trace = _trace_record(
+                trace,
+                "record_blocked_orders",
+                _orders_removed_by_identity(before_trailing_create, create_),
+                "trailing_unavailable",
+            )
+            if fully_blocked:
+                blocked_total = len(symbol_orders) + len(ideal_list)
+                plan_summaries.append(
+                    (
+                        symbol,
+                        len(symbol_orders),
+                        0,
+                        len(ideal_list),
+                        0,
+                        blocked_total,
+                    )
+                )
+                continue
+        cancel_, create_ = bot._annotate_order_deltas(cancel_, create_)
+        before_tolerance_create = list(create_)
         cancel_, create_, skipped = bot._apply_order_match_tolerance(cancel_, create_)
+        trace = _trace_record(
+            trace,
+            "record_satisfied_orders",
+            _orders_removed_by_identity(before_tolerance_create, create_),
+            "order_match_tolerance",
+        )
+        skipped += trailing_skipped
         plan_summaries.append(
             (symbol, pre_cancel, len(cancel_), pre_create, len(create_), skipped)
         )
         to_cancel += cancel_
         to_create += create_
 
-    to_create, initial_entry_gate_skipped = (
-        await bot._apply_initial_entry_distance_gate(to_create)
-    )
+    if apply_initial_entry_gate:
+        before_initial_entry_gate = list(to_create)
+        to_create, initial_entry_gate_skipped = (
+            await bot._apply_initial_entry_distance_gate(to_create)
+        )
+        trace = _trace_record(
+            trace,
+            "record_blocked_orders",
+            _orders_removed_by_identity(before_initial_entry_gate, to_create),
+            "initial_entry_distance_gate",
+        )
+    else:
+        initial_entry_gate_skipped = 0
     to_cancel = await bot._sort_orders_by_market_diff(to_cancel, "to_cancel")
     to_create = await bot._sort_orders_by_market_diff(to_create, "to_create")
-    to_create, freshness_skipped = bot._apply_freshness_creation_guardrails(to_create)
+    if apply_creation_guardrails:
+        before_creation_guardrails = list(to_create)
+        to_create, freshness_skipped = bot._apply_freshness_creation_guardrails(to_create)
+        trace = _trace_record(
+            trace,
+            "record_blocked_orders",
+            _orders_removed_by_identity(before_creation_guardrails, to_create),
+            "freshness_creation_guardrail",
+        )
+    else:
+        freshness_skipped = 0
     if plan_summaries:
         total_pre_cancel = sum(p[1] for p in plan_summaries)
         total_cancel = sum(p[2] for p in plan_summaries)
@@ -834,7 +1071,8 @@ async def calc_orders_to_cancel_and_create(bot):
             if c or cr or skipped:
                 if prev != current:
                     detail_parts.append(
-                        f"{passivbot_cls._log_symbol(symbol)}:c{pre_c}->{c} cr{pre_cr}->{cr} skip{skipped}"
+                        f"{passivbot_cls._log_symbol(symbol)}:c{pre_c}->{c} "
+                        f"cr{pre_cr}->{cr} skip{skipped}"
                     )
         detail = " | ".join(detail_parts[:6])
         summary_key = (
@@ -877,38 +1115,119 @@ async def calc_orders_to_cancel_and_create(bot):
                     f" | {' '.join(extra)}" if extra else "",
                     f" | details: {detail}" if detail else "",
                 )
+    if collect_fresh_entry_eligibility:
+        bot._fresh_entry_eligibility_trace = trace
     return to_cancel, to_create
 
 
-def snapshot_actual_orders(bot) -> dict[str, list[dict]]:
+def snapshot_actual_orders(
+    bot,
+    symbols: Optional[Iterable[str]] = None,
+    *,
+    psides_by_symbol: Optional[dict[str, Iterable[str]]] = None,
+) -> dict[str, list[dict]]:
     """Return a normalized snapshot of currently open orders keyed by symbol."""
     actual_orders: dict[str, list[dict]] = {}
-    for symbol in bot.active_symbols:
+    malformed_symbols: set[str] = set()
+    malformed_counts: dict[str, int] = {}
+    if symbols is None:
+        symbols = getattr(bot, "active_symbols", [])
+    pside_filter = None
+    if psides_by_symbol is not None:
+        pside_filter = {
+            str(symbol): {str(pside) for pside in psides if pside}
+            for symbol, psides in psides_by_symbol.items()
+        }
+    for symbol in sorted(dict.fromkeys(str(symbol) for symbol in symbols if symbol)):
         symbol_orders = []
+        allowed_psides = (
+            pside_filter.get(symbol, set()) if pside_filter is not None else None
+        )
+        if allowed_psides == set():
+            actual_orders[symbol] = symbol_orders
+            continue
         for order in bot.open_orders.get(symbol, []):
             try:
+                if not isinstance(order, dict):
+                    raise TypeError(f"expected dict, got {type(order).__name__}")
+                missing = [
+                    key
+                    for key in ("symbol", "side", "position_side", "qty", "price")
+                    if key not in order
+                ]
+                if missing:
+                    raise ValueError(f"missing required fields {','.join(missing)}")
+                qty = abs(float(order["qty"]))
+                price = float(order["price"])
+                if (
+                    not math.isfinite(qty)
+                    or not math.isfinite(price)
+                    or qty <= 0.0
+                    or price <= 0.0
+                ):
+                    raise ValueError("non-positive or non-finite qty or price")
+                raw_symbol = order["symbol"]
+                raw_side = order["side"]
+                raw_position_side = order["position_side"]
+                if raw_symbol is None or raw_side is None or raw_position_side is None:
+                    raise ValueError("null symbol, side, or position_side")
+                order_symbol = str(raw_symbol).strip()
+                side = str(raw_side).strip()
+                position_side = str(raw_position_side).strip()
+                if not order_symbol or side not in {"buy", "sell"}:
+                    raise ValueError("empty symbol or invalid side")
+                if position_side not in {"long", "short"}:
+                    raise ValueError("invalid position_side")
+                if allowed_psides is not None and position_side not in allowed_psides:
+                    continue
                 symbol_orders.append(
                     {
-                        "symbol": order["symbol"],
-                        "side": order["side"],
-                        "position_side": order["position_side"],
-                        "qty": abs(order["qty"]),
-                        "price": order["price"],
+                        "symbol": order_symbol,
+                        "side": side,
+                        "position_side": position_side,
+                        "qty": qty,
+                        "price": price,
                         "reduce_only": (
-                            order["position_side"] == "long" and order["side"] == "sell"
+                            position_side == "long" and side == "sell"
                         )
                         or (
-                            order["position_side"] == "short" and order["side"] == "buy"
+                            position_side == "short" and side == "buy"
                         ),
                         "id": order.get("id"),
                         "custom_id": order.get("custom_id"),
                     }
                 )
-            except Exception as exc:
-                logging.error(f"error in calc_orders_to_cancel_and_create {exc}")
-                traceback.print_exc()
-                print(order)
+            except (TypeError, KeyError, ValueError) as exc:
+                malformed_symbols.add(symbol)
+                malformed_counts[symbol] = malformed_counts.get(symbol, 0) + 1
+                order_id = order.get("id") if isinstance(order, dict) else None
+                logging.error(
+                    "[order] malformed open order snapshot; "
+                    "blocking order planning for symbol | symbol=%s | "
+                    "order_id=%s | reason=%s",
+                    _pb_attr("Passivbot")._log_symbol(symbol),
+                    order_id or "unknown",
+                    exc,
+                )
         actual_orders[symbol] = symbol_orders
+    bot._malformed_actual_order_symbols = malformed_symbols
+    bot._malformed_actual_order_counts = malformed_counts
+    if malformed_symbols:
+        if hasattr(bot, "_mark_account_critical_state_dirty"):
+            bot._mark_account_critical_state_dirty(
+                reason="malformed_open_order_snapshot",
+                symbols=malformed_symbols,
+                source="snapshot_actual_orders",
+                level=logging.ERROR,
+            )
+        else:
+            mark_account_critical_state_dirty(
+                bot,
+                reason="malformed_open_order_snapshot",
+                symbols=malformed_symbols,
+                source="snapshot_actual_orders",
+                level=logging.ERROR,
+            )
     return actual_orders
 
 
@@ -918,11 +1237,130 @@ def reconcile_symbol_orders(
     actual_orders: list[dict],
     ideal_orders: list,
     keys: tuple[str, ...],
-) -> tuple[list[dict], list[dict]]:
+    *,
+    apply_mode_filters: bool = True,
+    return_unfiltered_create: bool = False,
+) -> tuple[list[dict], list[dict]] | tuple[list[dict], list[dict], list[dict]]:
     """Return cancel/create lists for a single symbol after mode filtering."""
     to_cancel, to_create = filter_orders(actual_orders, ideal_orders, keys)
-    to_cancel, to_create = bot._apply_mode_filters(symbol, to_cancel, to_create)
+    raw_create = list(to_create)
+    if apply_mode_filters:
+        to_cancel, to_create = bot._apply_mode_filters(symbol, to_cancel, to_create)
+    if return_unfiltered_create:
+        return to_cancel, to_create, raw_create
     return to_cancel, to_create
+
+
+def _order_is_reduce_only(order: dict) -> bool:
+    if not isinstance(order, dict):
+        return False
+    reduced = extract_order_reduce_only(order)
+    if reduced is not None:
+        return bool(reduced)
+    side = str(order.get("side") or "").lower()
+    pside = str(order.get("position_side") or order.get("positionSide") or "").lower()
+    return (pside == "long" and side == "sell") or (pside == "short" and side == "buy")
+
+
+def _order_is_panic(order: dict) -> bool:
+    if not isinstance(order, dict):
+        return False
+    pb_type = str(order.get("pb_order_type") or "")
+    if pb_type:
+        return "panic" in pb_type
+    custom_id = str(order.get("custom_id") or "")
+    if not custom_id:
+        return False
+    try:
+        return "panic" in str(_pb_attr("custom_id_to_snake")(custom_id))
+    except Exception:
+        return False
+
+
+def _order_pb_type(order: dict) -> str:
+    if not isinstance(order, dict):
+        return ""
+    pb_type = str(order.get("pb_order_type") or "")
+    if pb_type:
+        return pb_type
+    custom_id = str(order.get("custom_id") or "")
+    if not custom_id:
+        return ""
+    try:
+        return str(_pb_attr("custom_id_to_snake")(custom_id))
+    except Exception:
+        return ""
+
+
+def _reduce_only_order_family(order: dict) -> tuple[str, str] | None:
+    if not _order_is_reduce_only(order):
+        return None
+    pb_type = _order_pb_type(order)
+    if not pb_type:
+        return None
+    parts = pb_type.split("_")
+    pside = str(order.get("position_side") or order.get("positionSide") or "").lower()
+    if parts and parts[-1] in {"long", "short"}:
+        pside = pside or parts[-1]
+        parts = parts[:-1]
+    family = "_".join(parts) if parts else pb_type
+    return pside, family
+
+
+def _trailing_unavailable_reasons(bot, symbol: str) -> set[str]:
+    by_symbol = getattr(bot, "_orchestrator_trailing_unavailable_reasons", {}) or {}
+    reasons = by_symbol.get(symbol, []) if isinstance(by_symbol, dict) else []
+    if isinstance(reasons, str):
+        return {reasons}
+    return {str(reason) for reason in reasons if reason}
+
+
+def filter_trailing_unavailable_reconciliation(
+    bot,
+    symbol: str,
+    to_cancel: list[dict],
+    to_create: list[dict],
+    ideal_orders: list[dict],
+) -> tuple[list[dict], list[dict], int, bool]:
+    """Constrain reconciliation when trailing data is unavailable.
+
+    Missing anchors/fetch failures can make regular trailing closes unsafe, so keep
+    preserving the symbol. The short post-fill window with no newer candle is softer:
+    block new entries, but allow entry cleanup and reduce-only/panic exits.
+    """
+    reasons = _trailing_unavailable_reasons(bot, symbol)
+    has_panic_plan = any(_order_is_panic(order) for order in ideal_orders) or any(
+        _order_is_panic(order) for order in to_create
+    )
+    soft_missing_candles_only = reasons == {"missing_trailing_candles"}
+    if not soft_missing_candles_only and not has_panic_plan:
+        return [], [], len(to_cancel) + len(to_create), True
+
+    filtered_create = [
+        order
+        for order in to_create
+        if _order_is_reduce_only(order) or _order_is_panic(order)
+    ]
+    dropped_create = len(to_create) - len(filtered_create)
+
+    if has_panic_plan:
+        return to_cancel, filtered_create, dropped_create, False
+
+    ideal_reduce_only_families = {
+        family
+        for order in ideal_orders
+        if (family := _reduce_only_order_family(order)) is not None
+    }
+    filtered_cancel = []
+    dropped_cancel = 0
+    for order in to_cancel:
+        if _order_is_reduce_only(order):
+            family = _reduce_only_order_family(order)
+            if family is None or family not in ideal_reduce_only_families:
+                dropped_cancel += 1
+                continue
+        filtered_cancel.append(order)
+    return filtered_cancel, filtered_create, dropped_cancel + dropped_create, False
 
 
 def annotate_order_deltas(
@@ -1124,8 +1562,10 @@ def to_executable_orders(
     bot, ideal_orders: dict, last_prices: dict[str, float]
 ) -> tuple[dict[str, list], set[str]]:
     """Convert raw order tuples into api-ready dicts and find WEL-restricted symbols."""
+    bot._fresh_entry_conversion_blocked_counts = {}
     ideal_orders_f: dict[str, list] = {}
     wel_blocked_symbols: set[str] = set()
+    conversion_blocked_counts: Counter = Counter()
     order_market_diff = _pb_attr("order_market_diff")
     snake_of = _pb_attr("snake_of")
 
@@ -1149,25 +1589,31 @@ def to_executable_orders(
         ):
             position_side = "long" if "long" in order[2] else "short"
             if order[0] == 0.0:
+                if str(order[2]).startswith("entry_initial_"):
+                    conversion_blocked_counts[(symbol, position_side)] += 1
                 continue
             seen_key = str(abs(order[0])) + str(order[1]) + order[2]
             if seen_key in seen:
                 logging.debug("duplicate ideal order for %s skipped: %s", symbol, order)
+                if str(order[2]).startswith("entry_initial_"):
+                    conversion_blocked_counts[(symbol, position_side)] += 1
                 continue
             pb_order_type = snake_of(order[3])
-            if len(order) >= 5:
-                execution_type = str(order[4]).lower()
-            else:
-                execution_type = "limit"
-                panic_close_pref = bot._equity_hard_stop_panic_close_order_type(
-                    position_side
+            # The Rust orchestrator is the single source of execution-type
+            # truth (every live path builds 5-tuples from its execution_type
+            # field); a short tuple here means a broken producer, and
+            # silently defaulting could downgrade a panic market close.
+            if len(order) < 5:
+                raise ValueError(
+                    f"ideal order for {symbol} missing execution_type: {order!r}; "
+                    "the Rust orchestrator must supply it"
                 )
-                if "panic" in pb_order_type:
-                    execution_type = (
-                        "market" if panic_close_pref == "market" else "limit"
-                    )
+            execution_type = str(order[4]).lower()
             if execution_type not in {"limit", "market"}:
-                execution_type = "limit"
+                raise ValueError(
+                    f"ideal order for {symbol} has invalid execution_type "
+                    f"{order[4]!r}; expected limit or market"
+                )
             ideal_orders_f[symbol].append(
                 {
                     "symbol": symbol,
@@ -1182,6 +1628,7 @@ def to_executable_orders(
                 }
             )
             seen.add(seen_key)
+    bot._fresh_entry_conversion_blocked_counts = dict(conversion_blocked_counts)
     return (
         bot._finalize_reduce_only_orders(ideal_orders_f, last_prices),
         wel_blocked_symbols,

@@ -9,7 +9,11 @@ from utils import symbol_to_coin
 
 from .load import load_prepared_config
 from .log_output import log_config_message
+from .shared_bot import BOT_GROUP_FIELD_MAP
+from .strategy import TRAILING_GRID_V7_FLAT_ONLY_KEYS, get_strategy_param_keys
+from .strategy_spec import get_supported_strategy_kinds
 from .transform_log import record_transform
+from risk_limits import normalize_we_excess_allowance_mode
 
 
 def apply_allowed_modifications(src, modifications, allowed_overrides, return_full=True):
@@ -47,6 +51,8 @@ def apply_allowed_modifications(src, modifications, allowed_overrides, return_fu
                 if not return_full and not target_dict[key]:
                     target_dict.pop(key, None)
             elif allowed_value is True:
+                if key in {"risk_we_excess_allowance_mode", "we_excess_allowance_mode"}:
+                    mod_value = normalize_we_excess_allowance_mode(mod_value)
                 if return_full:
                     target_dict[key] = deepcopy(mod_value)
                 else:
@@ -58,75 +64,103 @@ def apply_allowed_modifications(src, modifications, allowed_overrides, return_fu
     return result
 
 
+_ALLOWED_FLAT_BOT_SIDE_MODIFICATIONS = {
+    "unstuck_close_pct": True,
+    "unstuck_ema_dist": True,
+    "unstuck_enabled": True,
+    "unstuck_loss_allowance_pct": True,
+    "unstuck_threshold": True,
+    "wallet_exposure_limit": True,
+    "risk_twel_entry_gate_enabled": False,
+    "risk_wel_enforcer_enabled": True,
+    "risk_wel_enforcer_threshold": True,
+    "risk_we_excess_allowance_pct": True,
+    "risk_we_excess_allowance_mode": True,
+    "risk_twel_enforcer_enabled": False,
+    "risk_twel_enforcer_policy": False,
+    "risk_twel_enforcer_threshold": False,
+}
+
+
+def allowed_flat_bot_side_modification_keys() -> frozenset[str]:
+    return frozenset(
+        key for key, allowed in _ALLOWED_FLAT_BOT_SIDE_MODIFICATIONS.items() if allowed is True
+    )
+
+
+_UNSUPPORTED_FLAT_STRATEGY_OVERRIDE_KEYS = {
+    "close_weight_volatility_1h",
+    "close_weight_volatility_1m",
+    "ema_span_0",
+    "ema_span_1",
+    "entry_volatility_ema_span_1h",
+    "entry_volatility_ema_span_1m",
+    "entry_weight_volatility_1h",
+    "entry_weight_volatility_1m",
+    "entry_we_weight",
+} | TRAILING_GRID_V7_FLAT_ONLY_KEYS
+
+
+def _reject_flat_strategy_coin_overrides(overrides: dict, *, coin: str) -> None:
+    if not isinstance(overrides, dict):
+        return
+    bot_overrides = overrides.get("bot")
+    if not isinstance(bot_overrides, dict):
+        return
+    for pside in ("long", "short"):
+        side_overrides = bot_overrides.get(pside)
+        if not isinstance(side_overrides, dict):
+            continue
+        bad_keys = sorted(
+            key
+            for key in side_overrides
+            if key in _UNSUPPORTED_FLAT_STRATEGY_OVERRIDE_KEYS
+            or any(
+                key in get_strategy_param_keys(strategy_kind)
+                for strategy_kind in get_supported_strategy_kinds()
+            )
+        )
+        if bad_keys:
+            joined = ", ".join(bad_keys)
+            raise ValueError(
+                f"coin_overrides.{coin}.bot.{pside} contains unsupported flat strategy "
+                f"override key(s): {joined}. Run `passivbot tool migrate-config-v7`, "
+                f"or use coin_overrides.{coin}.bot.{pside}.strategy.<strategy_kind>.* in v8."
+            )
+
+
+def _allowed_bot_side_modifications() -> dict:
+    def _allow_dotted_paths(keys: tuple[str, ...]) -> dict:
+        result = {}
+        for key in keys:
+            current = result
+            parts = tuple(part for part in key.split(".") if part)
+            for part in parts[:-1]:
+                current = current.setdefault(part, {})
+            current[parts[-1]] = True
+        return result
+
+    side = deepcopy(_ALLOWED_FLAT_BOT_SIDE_MODIFICATIONS)
+    side["strategy"] = {
+        strategy_kind: _allow_dotted_paths(keys)
+        for strategy_kind in get_supported_strategy_kinds()
+        for keys in (get_strategy_param_keys(strategy_kind),)
+    }
+    for group_name, field_map in BOT_GROUP_FIELD_MAP.items():
+        grouped_allowed = {
+            local_key: _ALLOWED_FLAT_BOT_SIDE_MODIFICATIONS.get(flat_key, False)
+            for local_key, flat_key in field_map.items()
+        }
+        if any(grouped_allowed.values()):
+            side[group_name] = grouped_allowed
+    return side
+
+
 def get_allowed_modifications():
     return {
         "bot": {
-            "long": {
-                "close_grid_markup_end": True,
-                "close_grid_markup_start": True,
-                "close_grid_qty_pct": True,
-                "close_trailing_grid_ratio": True,
-                "close_trailing_qty_pct": True,
-                "close_trailing_retracement_pct": True,
-                "close_trailing_threshold_pct": True,
-                "ema_span_0": True,
-                "ema_span_1": True,
-                "entry_grid_double_down_factor": True,
-                "entry_grid_spacing_pct": True,
-                "entry_volatility_ema_span_hours": True,
-                "entry_grid_spacing_volatility_weight": True,
-                "entry_grid_spacing_we_weight": True,
-                "entry_initial_ema_dist": True,
-                "entry_initial_qty_pct": True,
-                "entry_trailing_double_down_factor": True,
-                "entry_trailing_grid_ratio": True,
-                "entry_trailing_retracement_pct": True,
-                "entry_trailing_retracement_we_weight": True,
-                "entry_trailing_retracement_volatility_weight": True,
-                "entry_trailing_threshold_pct": True,
-                "entry_trailing_threshold_we_weight": True,
-                "entry_trailing_threshold_volatility_weight": True,
-                "unstuck_close_pct": True,
-                "unstuck_ema_dist": True,
-                "unstuck_threshold": True,
-                "wallet_exposure_limit": True,
-                "risk_wel_enforcer_threshold": True,
-                "risk_we_excess_allowance_pct": True,
-                "risk_twel_enforcer_threshold": False,
-            },
-            "short": {
-                "close_grid_markup_end": True,
-                "close_grid_markup_start": True,
-                "close_grid_qty_pct": True,
-                "close_trailing_grid_ratio": True,
-                "close_trailing_qty_pct": True,
-                "close_trailing_retracement_pct": True,
-                "close_trailing_threshold_pct": True,
-                "ema_span_0": True,
-                "ema_span_1": True,
-                "entry_grid_double_down_factor": True,
-                "entry_grid_spacing_pct": True,
-                "entry_volatility_ema_span_hours": True,
-                "entry_grid_spacing_volatility_weight": True,
-                "entry_grid_spacing_we_weight": True,
-                "entry_initial_ema_dist": True,
-                "entry_initial_qty_pct": True,
-                "entry_trailing_double_down_factor": True,
-                "entry_trailing_grid_ratio": True,
-                "entry_trailing_retracement_pct": True,
-                "entry_trailing_retracement_we_weight": True,
-                "entry_trailing_retracement_volatility_weight": True,
-                "entry_trailing_threshold_pct": True,
-                "entry_trailing_threshold_we_weight": True,
-                "entry_trailing_threshold_volatility_weight": True,
-                "unstuck_close_pct": True,
-                "unstuck_ema_dist": True,
-                "unstuck_threshold": True,
-                "wallet_exposure_limit": True,
-                "risk_wel_enforcer_threshold": True,
-                "risk_we_excess_allowance_pct": True,
-                "risk_twel_enforcer_threshold": False,
-            },
+            "long": _allowed_bot_side_modifications(),
+            "short": _allowed_bot_side_modifications(),
         },
         "live": {
             "forced_mode_long": True,
@@ -276,9 +310,11 @@ def parse_overrides(
         parsed_overrides = {}
         loaded = override_loader(result, coin)
         if loaded:
+            _reject_flat_strategy_coin_overrides(loaded, coin=coin)
             parsed_overrides = apply_allowed_modifications(
                 result, loaded, get_allowed_modifications(), return_full=False
             )
+        _reject_flat_strategy_coin_overrides(overrides, coin=coin)
         nested_update(
             parsed_overrides,
             apply_allowed_modifications(

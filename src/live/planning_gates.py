@@ -7,6 +7,7 @@ from typing import Iterable
 
 from live.freshness import ACCOUNT_SURFACES, LIVE_STATE_SURFACES
 from live.market_snapshot import MarketSnapshot
+from live.events import run_diagnostic_step
 from live.planning_snapshot import PlanningSnapshot
 from utils import utc_ms
 
@@ -74,7 +75,15 @@ def staged_planner_precondition_state(
             expected_symbols, now_ms=candle_check_ms
         )
         stamped_signature = ledger.surface_signature("completed_candles")
-        if candle_missing or stamped_signature != signature:
+        equivalent = (
+            bot._completed_candle_signatures_equivalent(
+                signature,
+                stamped_signature,
+            )
+            if hasattr(bot, "_completed_candle_signatures_equivalent")
+            else stamped_signature == signature
+        )
+        if candle_missing or not equivalent:
             missing.append("completed_candles")
             invalid["completed_candles"] = candle_missing or (
                 bot._completed_candle_signature_mismatch_details(
@@ -262,6 +271,12 @@ def log_staged_execution_defer(bot, details: dict) -> None:
         return
     bot._staged_execution_defer_last_log_key = log_key
     bot._staged_execution_defer_last_log_ms = now_ms
+    emitter = getattr(bot, "_emit_planning_unavailable_diagnostic", None)
+    if callable(emitter):
+        run_diagnostic_step(
+            "emit planning_unavailable diagnostic",
+            lambda: emitter(details),
+        )
     logging.log(
         logging.DEBUG if routine_candle_target else logging.INFO,
         "[state] %s",
@@ -335,6 +350,18 @@ def record_routine_completed_candle_defer(bot, details: dict) -> None:
             window_s,
             bot._log_symbols(tuple(sorted(state_symbols)), limit=8),
         )
+        emitter = getattr(bot, "_emit_planning_defer_summary_event", None)
+        if callable(emitter):
+            run_diagnostic_step(
+                "emit planning.defer_summary event",
+                lambda: emitter(
+                    reason_code="completed_candle_target_changed",
+                    count=int(state.get("count", 0) or 0),
+                    window_s=window_s,
+                    symbols=tuple(sorted(state_symbols)),
+                    details=details,
+                ),
+            )
         bot._routine_completed_candle_defer_summary = {
             "window_start_ms": now_ms,
             "last_log_ms": now_ms,
@@ -354,6 +381,7 @@ async def defer_staged_execution_cycle(bot, details: dict, loop_start_ms: int) -
     bot._log_staged_execution_defer(details)
     bot._last_loop_duration_ms = _utc_ms() - loop_start_ms
     bot._maybe_log_health_summary()
+    bot._maybe_log_trailing_status()
     bot._maybe_log_unstuck_status()
     bot._set_log_silence_watchdog_context(phase="runtime", stage="flush_snapshot")
     await bot._monitor_flush_snapshot()
@@ -378,6 +406,18 @@ def build_staged_planning_snapshot(
     ledger = bot._ensure_freshness_ledger()
     required = bot._staged_planner_required_surfaces(include_market_snapshot=True)
     min_epochs = bot._staged_planner_surface_min_epochs(required)
+    packet_getter = getattr(bot, "_planning_data_packets", None)
+    data_packets = (
+        run_diagnostic_step(
+            "collect staged planning data packet metadata",
+            lambda: packet_getter(required),
+            default={},
+        )
+        if callable(packet_getter)
+        else {}
+    )
+    if not isinstance(data_packets, dict):
+        data_packets = {}
     snapshot = PlanningSnapshot.capture(
         ts_ms=_utc_ms(),
         exchange=str(getattr(bot, "exchange", "")),
@@ -388,8 +428,82 @@ def build_staged_planning_snapshot(
         symbols=ordered_symbols,
         market_snapshots=market_snapshots,
         market_snapshot_max_age_ms=bot._live_market_snapshot_max_age_ms(),
+        data_packets=data_packets,
     )
     snapshot.raise_if_invalid(now_ms=_utc_ms(), context="rust order calculation")
+    emitter = getattr(bot, "_emit_snapshot_built_diagnostic", None)
+    if callable(emitter):
+        run_diagnostic_step(
+            "emit snapshot.built diagnostic",
+            lambda: emitter(snapshot, context="rust_order_calculation"),
+        )
+    return snapshot
+
+
+def build_protective_planning_snapshot(
+    bot, symbols: Iterable[str], market_snapshots: dict[str, MarketSnapshot]
+) -> PlanningSnapshot:
+    """Capture the reduced live data contract used for protective panic execution."""
+    ordered_symbols = tuple(
+        sorted(dict.fromkeys(str(symbol) for symbol in symbols if symbol))
+    )
+    required = frozenset({"balance", "positions", "open_orders", "market_snapshot"})
+    ledger = bot._ensure_freshness_ledger()
+    current_epoch = int(getattr(bot, "_authoritative_refresh_epoch", 0) or 0)
+    required_epoch = max(1, current_epoch)
+    min_epochs = {surface: required_epoch for surface in required}
+    missing = sorted(
+        surface
+        for surface in required
+        if ledger.surface_epoch(surface) < int(min_epochs.get(surface, 0) or 0)
+    )
+    invalid: dict[str, list] = {}
+    if "market_snapshot" not in missing and ordered_symbols:
+        market_invalid = bot._market_snapshot_signature_invalid(ordered_symbols)
+        if market_invalid:
+            missing.append("market_snapshot")
+            invalid["market_snapshot"] = market_invalid
+    if missing:
+        raise RuntimeError(
+            "protective planning snapshot invalid before capture: "
+            f"missing current-epoch surfaces={sorted(set(missing))} "
+            f"epoch={current_epoch} "
+            f"required={sorted(required)}"
+            f" invalid={invalid}"
+        )
+    packet_getter = getattr(bot, "_planning_data_packets", None)
+    data_packets = (
+        run_diagnostic_step(
+            "collect protective planning data packet metadata",
+            lambda: packet_getter(required),
+            default={},
+        )
+        if callable(packet_getter)
+        else {}
+    )
+    if not isinstance(data_packets, dict):
+        data_packets = {}
+    snapshot = PlanningSnapshot.capture(
+        ts_ms=_utc_ms(),
+        exchange=str(getattr(bot, "exchange", "")),
+        user=str(bot.config_get(["live", "user"]) or ""),
+        ledger=ledger,
+        required_surfaces=required,
+        min_epochs=min_epochs,
+        symbols=ordered_symbols,
+        market_snapshots=market_snapshots,
+        market_snapshot_max_age_ms=bot._live_market_snapshot_max_age_ms(),
+        data_packets=data_packets,
+    )
+    snapshot.raise_if_invalid(
+        now_ms=_utc_ms(), context="protective panic order calculation"
+    )
+    emitter = getattr(bot, "_emit_snapshot_built_diagnostic", None)
+    if callable(emitter):
+        run_diagnostic_step(
+            "emit snapshot.built diagnostic",
+            lambda: emitter(snapshot, context="protective_panic_order_calculation"),
+        )
     return snapshot
 
 

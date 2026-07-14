@@ -1,5 +1,7 @@
 import math
 
+import numpy as np
+import pandas as pd
 import pytest
 
 import passivbot_rust as pbr
@@ -38,19 +40,15 @@ def test_calc_entries_long_py_quantizes_results():
         min_cost=0.0,
         c_mult=1.0,
         entry_grid_double_down_factor=1.0,
-        entry_grid_spacing_volatility_weight=0.0,
-        entry_grid_spacing_we_weight=0.0,
+        entry_weight_volatility_1h=0.0,
+        entry_weight_volatility_1m=0.0,
+        entry_we_weight=0.0,
         entry_grid_spacing_pct=0.0,
         entry_initial_ema_dist=-0.01,
         entry_initial_qty_pct=0.05,
         entry_trailing_double_down_factor=1.0,
-        entry_trailing_grid_ratio=1.0,
         entry_trailing_retracement_pct=0.0,
-        entry_trailing_retracement_we_weight=0.0,
-        entry_trailing_retracement_volatility_weight=0.0,
         entry_trailing_threshold_pct=0.0,
-        entry_trailing_threshold_we_weight=0.0,
-        entry_trailing_threshold_volatility_weight=0.0,
         wallet_exposure_limit=1.0,
         risk_we_excess_allowance_pct=0.0,
         balance=1000.0,
@@ -61,7 +59,8 @@ def test_calc_entries_long_py_quantizes_results():
         max_since_open=0.0,
         min_since_max=0.0,
         ema_bands_lower=0.6545,
-        entry_volatility_logrange_ema_1h=0.0,
+        volatility_ema_1h=0.0,
+        volatility_ema_1m=0.0,
         order_book_bid=0.66,
     )
     result = pbr.calc_entries_long_py(**params)
@@ -82,10 +81,7 @@ def test_calc_closes_long_py_quantizes_results():
         min_qty=0.0,
         min_cost=0.0,
         c_mult=1.0,
-        close_grid_markup_end=0.0,
-        close_grid_markup_start=0.0,
         close_grid_qty_pct=0.0,
-        close_trailing_grid_ratio=0.0,
         close_trailing_qty_pct=0.0,
         close_trailing_retracement_pct=0.0,
         close_trailing_threshold_pct=0.0,
@@ -106,6 +102,121 @@ def test_calc_closes_long_py_quantizes_results():
     qty, price, _ = result[0]
     assert _is_step_aligned(abs(qty), step_qty)
     assert _is_step_aligned(price, step_price)
+
+
+@requires_extension
+def test_calc_closes_long_py_quantizes_threshold_price():
+    result = pbr.calc_closes_long_py(
+        qty_step=0.01,
+        price_step=0.01,
+        min_qty=0.0,
+        min_cost=0.0,
+        c_mult=1.0,
+        close_grid_qty_pct=1.0,
+        close_trailing_qty_pct=0.0,
+        close_trailing_retracement_pct=0.0,
+        close_trailing_threshold_pct=0.01,
+        wallet_exposure_limit=1.0,
+        risk_we_excess_allowance_pct=0.0,
+        risk_wel_enforcer_threshold=1.0,
+        balance=1000.0,
+        position_size=1.0,
+        position_price=100.0,
+        min_since_open=0.0,
+        max_since_min=0.0,
+        max_since_open=0.0,
+        min_since_max=0.0,
+        order_book_ask=100.0,
+        ema_bands_upper=110.0,
+    )
+    assert result
+    _, price, _ = result[0]
+    assert price == pytest.approx(101.0)
+
+
+@requires_extension
+def test_calc_closes_short_py_quantizes_threshold_price():
+    result = pbr.calc_closes_short_py(
+        qty_step=0.01,
+        price_step=0.01,
+        min_qty=0.0,
+        min_cost=0.0,
+        c_mult=1.0,
+        close_grid_qty_pct=1.0,
+        close_trailing_qty_pct=0.0,
+        close_trailing_retracement_pct=0.0,
+        close_trailing_threshold_pct=0.01,
+        wallet_exposure_limit=1.0,
+        risk_we_excess_allowance_pct=0.0,
+        risk_wel_enforcer_threshold=1.0,
+        balance=1000.0,
+        position_size=-1.0,
+        position_price=100.0,
+        min_since_open=0.0,
+        max_since_min=0.0,
+        max_since_open=0.0,
+        min_since_max=0.0,
+        order_book_bid=100.0,
+    )
+    assert result
+    _, price, _ = result[0]
+    assert price == pytest.approx(99.0)
+
+
+@requires_extension
+def test_calc_ema_anchor_quote_series_py_supports_inventory_and_volatility_inputs():
+    timestamps = np.array(
+        [int(ts.value // 1_000_000) for ts in pd.date_range("2026-01-01", periods=4, freq="1min")],
+        dtype=np.int64,
+    )
+    highs = np.array([101.0, 103.0, 104.0, 105.0], dtype=float)
+    lows = np.array([99.0, 100.0, 101.0, 102.0], dtype=float)
+    closes = np.array([100.0, 101.0, 102.0, 103.0], dtype=float)
+    balances = np.array([1000.0, 1000.0, 1000.0, 1000.0], dtype=float)
+    flat_psize = np.zeros(4, dtype=float)
+    long_psize = np.array([0.0, 0.0, 1.0, 1.0], dtype=float)
+
+    bid_flat, ask_flat = pbr.calc_ema_anchor_quote_series_py(
+        "long",
+        timestamps,
+        highs,
+        lows,
+        closes,
+        balances,
+        flat_psize,
+        price_step=0.1,
+        ema_span_0=2.0,
+        ema_span_1=6.0,
+        offset=0.01,
+        offset_volatility_ema_span_1m=2.0,
+        offset_volatility_1m_weight=0.5,
+        offset_volatility_ema_span_1h=2.0,
+        offset_volatility_1h_weight=0.25,
+        offset_psize_weight=0.2,
+    )
+    bid_long, ask_long = pbr.calc_ema_anchor_quote_series_py(
+        "long",
+        timestamps,
+        highs,
+        lows,
+        closes,
+        balances,
+        long_psize,
+        price_step=0.1,
+        ema_span_0=2.0,
+        ema_span_1=6.0,
+        offset=0.01,
+        offset_volatility_ema_span_1m=2.0,
+        offset_volatility_1m_weight=0.5,
+        offset_volatility_ema_span_1h=2.0,
+        offset_volatility_1h_weight=0.25,
+        offset_psize_weight=0.2,
+    )
+
+    assert len(bid_flat) == 4
+    assert len(ask_flat) == 4
+    assert bid_long[2] < bid_flat[2]
+    assert ask_long[2] < ask_flat[2]
 
 
 @requires_extension

@@ -488,13 +488,15 @@ def _resolve_optimize_limits_for_load(
             return deepcopy(raw_optimize_limits), "preserved_canonical"
         try:
             return normalize_limit_entries(raw_optimize_limits), "normalized_legacy"
-        except Exception:
-            return deepcopy(template_limits), "fallback_template"
+        except Exception as exc:
+            raise ValueError("optimize.limits malformed or unsupported") from exc
 
     if isinstance(raw_optimize_limits, (str, dict)):
         try:
             return normalize_limit_entries(raw_optimize_limits), "normalized_legacy"
-        except Exception:
-            return deepcopy(template_limits), "fallback_template"
+        except Exception as exc:
+            raise ValueError("optimize.limits malformed or unsupported") from exc
 
-    return deepcopy(template_limits), "fallback_template"
+    raise ValueError(
+        f"optimize.limits malformed or unsupported: {type(raw_optimize_limits).__name__}"
+    )

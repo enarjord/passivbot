@@ -21,6 +21,7 @@ from config.metrics import resolve_metric_value
 from config.scoring import (
     ObjectiveSpec,
     default_objective_goal,
+    dominates_objectives,
     extract_objective_specs,
     from_engine_value,
     objective_spec_by_metric,
@@ -66,6 +67,7 @@ class ParetoCandidate:
     objectives: Dict[str, float]
     stats_flat: Dict[str, float]
     aggregated_values: Dict[str, float]
+    scenario: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -347,6 +349,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="Selection method. Default: ideal.",
     )
     parser.add_argument(
+        "--scenario",
+        type=str,
+        default=None,
+        metavar="LABEL",
+        help=(
+            "Rebuild a scenario-specific sub-front from the saved suite Pareto members, "
+            "then select from it using the named scenario's metric values."
+        ),
+    )
+    parser.add_argument(
         "-l",
         "--limit",
         action="append",
@@ -456,6 +468,118 @@ def _extract_suite_metrics(
                 if isinstance(value, (int, float)) and math.isfinite(float(value)):
                     aggregated_values[str(metric)] = float(value)
     return stats_flat, aggregated_values
+
+
+def _scenario_metric_values(
+    entry: Mapping[str, Any], scenario: str, *, source: Path
+) -> Dict[str, float]:
+    suite_metrics = entry.get("suite_metrics")
+    if not isinstance(suite_metrics, Mapping):
+        raise ValueError(
+            f"Scenario {scenario!r} requires suite Pareto artifacts, but {source.name} "
+            "has no suite_metrics payload."
+        )
+    metrics = suite_metrics.get("metrics")
+    if not isinstance(metrics, Mapping):
+        raise ValueError(
+            f"Scenario {scenario!r} requires the current suite_metrics.metrics payload, "
+            f"but {source.name} does not contain it."
+        )
+
+    values: Dict[str, float] = {}
+    available_labels: set[str] = set()
+    for metric, payload in metrics.items():
+        if not isinstance(payload, Mapping):
+            continue
+        scenarios = payload.get("scenarios")
+        if not isinstance(scenarios, Mapping):
+            continue
+        available_labels.update(str(label) for label in scenarios)
+        if scenario not in scenarios:
+            continue
+        value = scenarios[scenario]
+        if not isinstance(value, (int, float)) or not math.isfinite(float(value)):
+            raise ValueError(
+                f"Scenario metric {metric!r} for {scenario!r} in {source.name} "
+                f"is not a finite number: {value!r}"
+            )
+        values[str(metric)] = float(value)
+
+    if not values:
+        available = ", ".join(sorted(available_labels)) if available_labels else "<none>"
+        raise ValueError(
+            f"Unknown or unavailable scenario {scenario!r} in {source.name}. "
+            f"Available scenarios: {available}"
+        )
+    return values
+
+
+def project_candidates_to_scenario(
+    candidates: Sequence[ParetoCandidate],
+    scoring_specs: Sequence[ObjectiveSpec],
+    scenario: str,
+) -> List[ParetoCandidate]:
+    label = str(scenario).strip()
+    if not label:
+        raise ValueError("--scenario requires a non-empty scenario label.")
+
+    projected: List[ParetoCandidate] = []
+    required_metrics = [spec.metric for spec in scoring_specs]
+    for candidate in candidates:
+        values = _scenario_metric_values(candidate.entry, label, source=candidate.path)
+        objectives: Dict[str, float] = {}
+        missing: List[str] = []
+        for metric in required_metrics:
+            value = resolve_metric_value(values, metric)
+            if value is None:
+                missing.append(metric)
+            else:
+                objectives[metric] = float(value)
+        if missing:
+            raise ValueError(
+                f"Scenario {label!r} is missing scoring metric(s) {missing} "
+                f"in {candidate.path.name}."
+            )
+        projected.append(
+            ParetoCandidate(
+                path=candidate.path,
+                entry=candidate.entry,
+                objectives=objectives,
+                stats_flat={f"{metric}_mean": value for metric, value in values.items()},
+                aggregated_values=values,
+                scenario=label,
+            )
+        )
+    return projected
+
+
+def build_scenario_front(
+    candidates: Sequence[ParetoCandidate],
+    scoring_specs: Sequence[ObjectiveSpec],
+) -> List[ParetoCandidate]:
+    metrics = [spec.metric for spec in scoring_specs]
+    front: List[ParetoCandidate] = []
+    front_vectors: List[tuple[float, ...]] = []
+    for candidate in candidates:
+        vector = tuple(float(candidate.objectives[metric]) for metric in metrics)
+        if vector in front_vectors:
+            continue
+        if any(
+            dominates_objectives(existing, vector, scoring_specs)
+            for existing in front_vectors
+        ):
+            continue
+        dominated_indices = [
+            idx
+            for idx, existing in enumerate(front_vectors)
+            if dominates_objectives(vector, existing, scoring_specs)
+        ]
+        for idx in reversed(dominated_indices):
+            front.pop(idx)
+            front_vectors.pop(idx)
+        front.append(candidate)
+        front_vectors.append(vector)
+    return front
 
 
 def _extract_objectives(entry: Mapping[str, Any]) -> Dict[str, float]:
@@ -733,6 +857,13 @@ def _resolve_limit_value(
     metric = str(entry.get("metric", "")).strip()
     if not metric:
         return None
+    if candidate.scenario is not None and "stat" in entry:
+        requested_stat = str(entry.get("stat", "")).strip().lower()
+        if requested_stat != "mean":
+            raise ValueError(
+                f"Scenario {candidate.scenario!r} stores one mean value per metric; "
+                f"limit stat={requested_stat!r} is unavailable for {candidate.path.name}."
+            )
     stat = resolve_limit_stat(
         dict(entry),
         aggregate_cfg=dict(aggregate_cfg) if aggregate_cfg else None,
@@ -750,6 +881,17 @@ def _resolve_limit_value(
         if isinstance(fallback, (int, float)) and math.isfinite(float(fallback)):
             return float(fallback)
     return None
+
+
+def _format_available_limit_metrics(candidate: ParetoCandidate) -> str:
+    available = sorted(
+        {
+            *candidate.objectives.keys(),
+            *candidate.stats_flat.keys(),
+            *candidate.aggregated_values.keys(),
+        }
+    )
+    return ", ".join(available) if available else "<none>"
 
 
 def _limit_rejects(entry: Mapping[str, Any], value: float) -> bool:
@@ -802,7 +944,12 @@ def filter_candidates(
         for entry in enabled_limits:
             value = _resolve_limit_value(candidate, entry, aggregate_cfg)
             if value is None:
-                continue
+                metric = str(entry.get("metric", "")).strip() or "<missing>"
+                available = _format_available_limit_metrics(candidate)
+                raise ValueError(
+                    f"Limit metric {metric!r} could not be resolved for "
+                    f"{candidate.path.name}. Available metrics: {available}"
+                )
             if _limit_rejects(entry, value):
                 rejected = True
                 break
@@ -1084,6 +1231,8 @@ def format_selection_result(
     candidates: Sequence[ParetoCandidate],
     loaded_count: int,
     retained_count: int,
+    scenario: Optional[str] = None,
+    scenario_front_count: Optional[int] = None,
     active_limits: Sequence[Dict[str, Any]],
     result: SelectionResult,
     show_top: int = 1,
@@ -1093,20 +1242,34 @@ def format_selection_result(
     selected_display_path = _display_path(result.candidate.path)
     backtest_command = f"passivbot backtest {selected_display_path}"
     lines: List[str] = []
-    lines.extend(
-        _render_key_value_box(
+    summary_rows = [
+        ("Pareto directory", _display_path(pareto_dir)),
+        ("Loaded candidates", str(loaded_count)),
+        ("Retained after limits", str(retained_count)),
+    ]
+    if scenario is not None:
+        summary_rows.extend(
             [
-                ("Pareto directory", _display_path(pareto_dir)),
-                ("Loaded candidates", str(loaded_count)),
-                ("Retained after limits", str(retained_count)),
-                ("Applied limits", str(len(active_limits))),
-                ("Method", result.method),
-                (score_label, score_value),
-                ("Selected file", selected_filename),
-                ("Selected path", selected_display_path),
+                ("Scenario", scenario),
+                ("Scenario front", str(scenario_front_count or 0)),
+                ("Front scope", "saved aggregate Pareto members"),
             ]
         )
+    summary_rows.extend(
+        [
+            ("Applied limits", str(len(active_limits))),
+            ("Method", result.method),
+            (score_label, score_value),
+            ("Selected file", selected_filename),
+            ("Selected path", selected_display_path),
+        ]
     )
+    lines.extend(_render_key_value_box(summary_rows))
+    if scenario is not None:
+        lines.append(
+            "Scenario-front note: rebuilt only from saved aggregate Pareto members; "
+            "candidates discarded by the suite optimizer are not recoverable here."
+        )
     lines.append(f"Backtest command: {backtest_command}")
     lines.append(f"Method summary: {_method_explanation(result.method)}")
     active_metrics = result.details.get("active_metrics")
@@ -1231,15 +1394,29 @@ def run_from_args(args: argparse.Namespace) -> SelectionResult:
             )
         raw_path = str(latest)
     pareto_dir, candidates, scoring_specs = load_candidates(raw_path)
+    raw_scenario = getattr(args, "scenario", None)
+    scenario = str(raw_scenario).strip() if raw_scenario is not None else None
+    selection_candidates = (
+        project_candidates_to_scenario(candidates, scoring_specs, scenario)
+        if scenario is not None
+        else candidates
+    )
     filtered_candidates, active_limits = filter_candidates(
-        candidates,
+        selection_candidates,
         limits_payload=getattr(args, "limits_payload", None),
         limit_entries=list(getattr(args, "limit_entries", []) or []),
     )
     if not filtered_candidates:
         raise ValueError("No Pareto candidates remained after applying limits.")
+    scenario_front = (
+        build_scenario_front(filtered_candidates, scoring_specs)
+        if scenario is not None
+        else filtered_candidates
+    )
+    if not scenario_front:
+        raise ValueError("No Pareto candidates remained after rebuilding the scenario front.")
     result = select_candidate(
-        filtered_candidates,
+        scenario_front,
         scoring_specs,
         method=method,
         objectives_arg=getattr(args, "objectives", None),
@@ -1249,8 +1426,8 @@ def run_from_args(args: argparse.Namespace) -> SelectionResult:
     )
     show_top = max(1, int(getattr(args, "show_top", 1) or 1))
     if getattr(args, "json_output", False):
-        ranking_order = result.details.get("ranking_order") or [filtered_candidates.index(result.candidate)]
-        score_vector = result.details.get("score_vector") or [result.score] * len(filtered_candidates)
+        ranking_order = result.details.get("ranking_order") or [scenario_front.index(result.candidate)]
+        score_vector = result.details.get("score_vector") or [result.score] * len(scenario_front)
         active_metrics = result.details.get("active_metrics") or list(result.objective_values)
         payload = {
             "pareto_dir": str(pareto_dir),
@@ -1269,7 +1446,7 @@ def run_from_args(args: argparse.Namespace) -> SelectionResult:
             },
             "top_candidates": _json_ready(
                 _ranked_rows(
-                    filtered_candidates,
+                    scenario_front,
                     active_metrics,
                     ranking_order,
                     score_vector,
@@ -1277,14 +1454,25 @@ def run_from_args(args: argparse.Namespace) -> SelectionResult:
                 )
             ),
         }
+        if scenario is not None:
+            payload.update(
+                {
+                    "scenario": scenario,
+                    "front_scope": "saved_aggregate_pareto_members",
+                    "scenario_front_count": len(scenario_front),
+                    "scenario_front_complete": False,
+                }
+            )
         print(json.dumps(payload, indent=2, sort_keys=True))
     else:
         print(
             format_selection_result(
                 pareto_dir,
-                candidates=filtered_candidates,
+                candidates=scenario_front,
                 loaded_count=len(candidates),
                 retained_count=len(filtered_candidates),
+                scenario=scenario,
+                scenario_front_count=len(scenario_front) if scenario is not None else None,
                 active_limits=active_limits,
                 result=result,
                 show_top=show_top,

@@ -110,6 +110,39 @@ def test_validate_visible_metrics_config_accepts_explicit_hsl_and_hard_stop_metr
     validate_visible_metrics_config(cfg)
 
 
+def test_validate_visible_metrics_config_accepts_fill_activity_metrics():
+    cfg = get_template_config()
+    cfg["backtest"]["visible_metrics"] = [
+        "backtest_completion_ratio",
+        "fills_active_days_count",
+        "fills_active_days_ratio",
+        "fills_active_symbols_count",
+        "fills_analysis_duration_days",
+        "fills_count",
+        "fills_count_close",
+        "fills_count_entry",
+        "fills_count_long",
+        "fills_count_short",
+        "fills_entry_per_close",
+        "fills_gap_longest_days",
+        "fills_gap_mean_hours",
+        "fills_gap_median_hours",
+        "fills_gap_p95_hours",
+        "fills_gap_p99_hours",
+        "fills_per_day",
+        "fills_per_day_close",
+        "fills_per_day_entry",
+        "fills_per_day_long",
+        "fills_per_day_per_position_slot",
+        "fills_per_day_per_position_slot_long",
+        "fills_per_day_per_position_slot_short",
+        "fills_per_day_short",
+        "fills_top_symbol_share",
+    ]
+
+    validate_visible_metrics_config(cfg)
+
+
 def test_visible_metrics_exact_hsl_and_hard_stop_names_resolve():
     cfg = get_template_config()
     cfg["backtest"]["visible_metrics"] = [

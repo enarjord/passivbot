@@ -65,6 +65,102 @@ def _install_passivbot_rust_stub():
     )
     stub.calc_min_entry_qty = lambda *args, **kwargs: 0.0
     stub.calc_min_entry_qty_py = stub.calc_min_entry_qty
+
+    def _hsl_no_restart_triggered(
+        restart_after_red_policy, drawdown_raw, drawdown_ema, no_restart_drawdown_threshold
+    ):
+        # Mirrors ehsl::no_restart_triggered exactly (max(raw, ema) contract).
+        if restart_after_red_policy == "always":
+            return False
+        if restart_after_red_policy == "threshold":
+            return max(float(drawdown_raw), float(drawdown_ema)) >= float(
+                no_restart_drawdown_threshold
+            )
+        if restart_after_red_policy == "never":
+            return True
+        raise ValueError(
+            "hsl_restart_after_red_policy must be one of always, threshold, never; "
+            f"got {restart_after_red_policy!r}"
+        )
+
+    stub.hsl_no_restart_triggered = _hsl_no_restart_triggered
+
+    def _hsl_coin_drawdown_signal(
+        *, balance, n_positions, peak_realized, last_realized, current_upnl
+    ):
+        balance = float(balance)
+        n_positions = int(n_positions)
+        peak_realized = float(peak_realized)
+        last_realized = float(last_realized)
+        current_upnl = float(current_upnl)
+        if not math.isfinite(balance) or balance <= 0.0:
+            raise ValueError("balance must be finite and > 0")
+        if n_positions <= 0:
+            raise ValueError("n_positions must be > 0")
+        for name, value in (
+            ("peak_realized", peak_realized),
+            ("last_realized", last_realized),
+            ("current_upnl", current_upnl),
+        ):
+            if not math.isfinite(value):
+                raise ValueError(f"{name} must be finite")
+        slot_budget = balance / n_positions
+        drawdown_usd = max(0.0, peak_realized - (last_realized + current_upnl))
+        return {
+            "slot_budget": slot_budget,
+            "drawdown_usd": drawdown_usd,
+            "drawdown_raw": drawdown_usd / slot_budget,
+        }
+
+    stub.hsl_coin_drawdown_signal = _hsl_coin_drawdown_signal
+
+    def _hsl_red_episode_finalization(
+        *,
+        restart_after_red_policy,
+        stop_timestamp_ms,
+        stop_equity,
+        stop_peak_strategy_equity,
+        previous_no_restart_peak_strategy_equity,
+        drawdown_ema,
+        red_threshold,
+        no_restart_drawdown_threshold,
+        cooldown_minutes_after_red,
+    ):
+        if not (0.0 < float(red_threshold) <= float(no_restart_drawdown_threshold) <= 1.0):
+            raise ValueError(
+                "no_restart_drawdown_threshold must satisfy red_threshold <= threshold <= 1"
+            )
+        peak = max(
+            float(previous_no_restart_peak_strategy_equity),
+            float(stop_peak_strategy_equity),
+            float(stop_equity),
+        )
+        raw = max(0.0, 1.0 - float(stop_equity) / peak)
+        no_restart = _hsl_no_restart_triggered(
+            restart_after_red_policy,
+            raw,
+            drawdown_ema,
+            no_restart_drawdown_threshold,
+        )
+        cooldown_until_ms = None
+        if not no_restart and float(cooldown_minutes_after_red) > 0.0:
+            cooldown_ms = max(1, round(float(cooldown_minutes_after_red) * 60_000.0))
+            cooldown_until_ms = int(stop_timestamp_ms) + int(cooldown_ms)
+        return {
+            "no_restart_peak_strategy_equity": peak,
+            "no_restart_drawdown_raw": raw,
+            "no_restart_latched": no_restart,
+            "cooldown_until_ms": cooldown_until_ms,
+            "disposition": (
+                "no_restart"
+                if no_restart
+                else "cooldown"
+                if cooldown_until_ms is not None
+                else "halted_no_cooldown"
+            ),
+        }
+
+    stub.hsl_red_episode_finalization = _hsl_red_episode_finalization
     stub.round_ = _round
     stub.round_dn = _round_dn
     stub.round_up = _round_up
@@ -128,6 +224,10 @@ def _install_passivbot_rust_stub():
         "close_panic_short": 23,
         "close_auto_reduce_wel_long": 24,
         "close_auto_reduce_wel_short": 25,
+        "entry_ema_anchor_long": 26,
+        "close_ema_anchor_long": 27,
+        "entry_ema_anchor_short": 28,
+        "close_ema_anchor_short": 29,
         "empty": 65535,
     }
     stub.get_order_id_type_from_string = lambda name: _order_map.get(name, 0)

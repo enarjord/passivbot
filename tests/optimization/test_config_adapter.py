@@ -1,7 +1,22 @@
+import passivbot_rust as pbr
+import pytest
+
+import config.strategy_spec as strategy_spec
+from config import prepare_config
+from config.schema import get_template_config
+from config.strategy_spec import get_supported_strategy_kinds
 from optimization.bounds import Bound
 from optimization.config_adapter import extract_bounds_tuple_list_from_config
 from optimization.config_adapter import get_optimization_key_paths
-import pytest
+from optimization.config_adapter import get_strategy_spec
+from optimization.config_adapter import resolve_optimization_bound_path
+
+
+def _get_path(mapping, path):
+    current = mapping
+    for part in path:
+        current = current[part]
+    return current
 
 
 class TestConfigAdapter:
@@ -18,8 +33,6 @@ class TestConfigAdapter:
                 }
             }
         }
-        # We need more bounds to satisfy extract_bounds_tuple_list_from_config
-        # because it iterates over template_config["bot"]
         from config_utils import get_template_config
 
         template = get_template_config()
@@ -36,22 +49,13 @@ class TestConfigAdapter:
                         config["optimize"]["bounds"][bound_key] = [0.0, 1.0]
 
         bounds = extract_bounds_tuple_list_from_config(config)
+        key_paths = get_optimization_key_paths(config)
         assert len(bounds) > 0
         assert isinstance(bounds[0], Bound)
 
-        # Find index for a short parameter
-        short_param_idx = None
-        current_idx = 0
-        for pside in sorted(template["bot"]):
-            for key in sorted(template["bot"][pside]):
-                if pside == "short":
-                    short_param_idx = current_idx
-                    break
-                current_idx += 1
-            if short_param_idx is not None:
-                break
-
-        # Short should be disabled (fixed to low)
+        short_param_idx = next(
+            idx for idx, (_, path) in enumerate(key_paths) if path[:2] == ("bot", "short")
+        )
         assert bounds[short_param_idx].low == bounds[short_param_idx].high
 
     def test_get_optimization_key_paths_includes_pside_hsl_keys_when_bounded(self):
@@ -84,16 +88,10 @@ class TestConfigAdapter:
 
         key_paths = get_optimization_key_paths(config)
 
-        assert (
-            "long_hsl_red_threshold",
-            ("bot", "long", "hsl_red_threshold"),
-        ) in key_paths
-        assert (
-            "short_hsl_ema_span_minutes",
-            ("bot", "short", "hsl_ema_span_minutes"),
-        ) in key_paths
+        assert ("long_hsl_red_threshold", ("bot", "long", "hsl_red_threshold")) in key_paths
+        assert ("short_hsl_ema_span_minutes", ("bot", "short", "hsl_ema_span_minutes")) in key_paths
 
-    def test_get_optimization_key_paths_skips_missing_side_configs(self):
+    def test_get_optimization_key_paths_rejects_empty_bounds(self):
         config = {
             "bot": {
                 "long": {
@@ -104,12 +102,14 @@ class TestConfigAdapter:
             "optimize": {"bounds": {}},
         }
 
-        key_paths = get_optimization_key_paths(config)
-
-        assert key_paths == [
-            ("long_a", ("bot", "long", "a")),
-            ("long_b", ("bot", "long", "b")),
-        ]
+        with pytest.raises(
+            ValueError, match="config.optimize.bounds must contain at least one optimizer bound"
+        ):
+            get_optimization_key_paths(config)
+        with pytest.raises(
+            ValueError, match="config.optimize.bounds must contain at least one optimizer bound"
+        ):
+            extract_bounds_tuple_list_from_config(config)
 
     @pytest.mark.parametrize(
         ("bound_key", "bound_value", "expected"),
@@ -155,3 +155,201 @@ class TestConfigAdapter:
 
         with pytest.raises(ValueError, match=expected):
             get_optimization_key_paths(config)
+
+    def test_get_strategy_spec_exposes_trailing_martingale_metadata(self):
+        spec = get_strategy_spec("trailing_martingale")
+        template = get_template_config()
+        bot_template = template["bot"]
+
+        assert spec["strategy_kind"] == "trailing_martingale"
+        assert spec["defaults"]["long"]["ema_span_0"] == bot_template["long"][
+            "strategy"
+        ]["trailing_martingale"]["ema_span_0"]
+        assert spec["defaults"]["short"]["entry_threshold_base_pct"] == bot_template[
+            "short"
+        ]["strategy"]["trailing_martingale"]["entry"]["threshold_base_pct"]
+        assert spec["optimize_bounds"]["long_ema_span_0"] == template["optimize"][
+            "bounds"
+        ]["long"]["strategy"]["trailing_martingale"]["ema_span_0"]
+        assert any(
+            param["config_path"] == ["strategy", "long", "ema_span_0"]
+            and param["legacy_config_paths"] == []
+            for param in spec["parameters"]
+        )
+
+    def test_rust_strategy_spec_python_api_matches_adapter_cache(self):
+        rust_spec = pbr.get_strategy_spec("trailing_martingale")
+        cached_spec = get_strategy_spec("trailing_martingale")
+
+        assert rust_spec == cached_spec
+
+    def test_rust_strategy_kind_api_is_python_source_of_truth(self):
+        assert tuple(pbr.get_strategy_kinds()) == get_supported_strategy_kinds()
+
+    def test_get_strategy_spec_exposes_ema_anchor_metadata(self):
+        spec = get_strategy_spec("ema_anchor")
+
+        assert spec["strategy_kind"] == "ema_anchor"
+        assert spec["defaults"]["long"]["base_qty_pct"] == 0.01
+        assert spec["defaults"]["short"]["offset"] == 0.002
+        assert spec["defaults"]["long"]["offset_volatility_ema_span_1m"] == 60.0
+        assert spec["optimize_bounds"]["long_offset"] == [0.0, 0.05, 0.0001]
+        assert spec["optimize_bounds"]["long_offset_volatility_1m_weight"] == [0.0, 40.0, 0.1]
+        assert any(
+            param["config_path"] == ["strategy", "long", "base_qty_pct"]
+            and param["legacy_config_paths"] == []
+            for param in spec["parameters"]
+        )
+
+    def test_get_optimization_key_paths_routes_strategy_fields_to_strategy_section(self):
+        config = {
+            "live": {"strategy_kind": "trailing_martingale"},
+            "bot": {
+                "long": {
+                    "n_positions": 1.0,
+                    "total_wallet_exposure_limit": 1.0,
+                    "hsl_red_threshold": 0.25,
+                    "strategy": {
+                        "trailing_martingale": {
+                            "ema_span_0": 10.0,
+                            "entry": {"threshold_base_pct": 0.02},
+                        }
+                    },
+                },
+                "short": {
+                    "n_positions": 1.0,
+                    "total_wallet_exposure_limit": 1.0,
+                    "strategy": {
+                        "trailing_martingale": {
+                            "ema_span_0": 11.0,
+                            "entry": {"threshold_base_pct": 0.03},
+                        }
+                    },
+                },
+            },
+            "optimize": {
+                "bounds": {
+                    "long_n_positions": [1.0, 2.0, 1.0],
+                    "long_total_wallet_exposure_limit": [1.0, 2.0, 0.1],
+                    "short_n_positions": [1.0, 2.0, 1.0],
+                    "short_total_wallet_exposure_limit": [1.0, 2.0, 0.1],
+                    "long_ema_span_0": [200.0, 1440.0, 10.0],
+                    "short_entry_threshold_base_pct": [0.01, 0.04, 1e-05],
+                    "long_hsl_red_threshold": [0.15, 0.35, 0.01],
+                }
+            },
+        }
+
+        key_paths = get_optimization_key_paths(config)
+
+        assert (
+            "long_ema_span_0",
+            ("bot", "long", "strategy", "trailing_martingale", "ema_span_0"),
+        ) in key_paths
+        assert (
+            "short_entry_threshold_base_pct",
+            (
+                "bot",
+                "short",
+                "strategy",
+                "trailing_martingale",
+                "entry",
+                "threshold_base_pct",
+            ),
+        ) in key_paths
+        assert ("long_hsl_red_threshold", ("bot", "long", "hsl_red_threshold")) in key_paths
+
+    def test_get_optimization_key_paths_routes_ema_anchor_fields_to_strategy_section(self):
+        config = {
+            "live": {"strategy_kind": "ema_anchor"},
+            "bot": {
+                "long": {
+                    "n_positions": 1.0,
+                    "total_wallet_exposure_limit": 1.0,
+                    "strategy": {
+                        "ema_anchor": {
+                            "base_qty_pct": 0.01,
+                            "ema_span_0": 55.0,
+                            "ema_span_1": 144.0,
+                            "offset": 0.002,
+                            "offset_volatility_ema_span_1m": 30.0,
+                            "offset_volatility_1m_weight": 2.0,
+                            "offset_volatility_ema_span_1h": 12.0,
+                            "offset_volatility_1h_weight": 1.5,
+                            "offset_psize_weight": 0.1,
+                        }
+                    },
+                },
+                "short": {
+                    "n_positions": 1.0,
+                    "total_wallet_exposure_limit": 1.0,
+                    "strategy": {
+                        "ema_anchor": {
+                            "base_qty_pct": 0.02,
+                            "ema_span_0": 34.0,
+                            "ema_span_1": 89.0,
+                            "offset": 0.003,
+                            "offset_volatility_ema_span_1m": 45.0,
+                            "offset_volatility_1m_weight": 3.0,
+                            "offset_volatility_ema_span_1h": 18.0,
+                            "offset_volatility_1h_weight": 0.5,
+                            "offset_psize_weight": 0.2,
+                        }
+                    },
+                },
+            },
+            "optimize": {
+                "bounds": {
+                    "long_n_positions": [1.0, 2.0, 1.0],
+                    "long_total_wallet_exposure_limit": [1.0, 2.0, 0.1],
+                    "short_n_positions": [1.0, 2.0, 1.0],
+                    "short_total_wallet_exposure_limit": [1.0, 2.0, 0.1],
+                    "long_base_qty_pct": [0.001, 0.05, 0.0001],
+                    "long_offset_volatility_1m_weight": [0.0, 10.0, 0.1],
+                    "short_offset": [0.0, 0.05, 0.0001],
+                }
+            },
+        }
+
+        key_paths = get_optimization_key_paths(config)
+
+        assert ("long_base_qty_pct", ("bot", "long", "strategy", "ema_anchor", "base_qty_pct")) in key_paths
+        assert (
+            "long_offset_volatility_1m_weight",
+            ("bot", "long", "strategy", "ema_anchor", "offset_volatility_1m_weight"),
+        ) in key_paths
+        assert ("short_offset", ("bot", "short", "strategy", "ema_anchor", "offset")) in key_paths
+
+    @pytest.mark.parametrize("strategy_kind", list(get_supported_strategy_kinds()))
+    def test_strategy_optimizer_key_path_map_is_exhaustive_for_rust_spec(self, strategy_kind):
+        config = get_template_config()
+        config["live"]["strategy_kind"] = strategy_kind
+        prepared = prepare_config(config, verbose=False, target="canonical", runtime=None)
+        spec = pbr.get_strategy_spec(strategy_kind)
+
+        for param in spec["parameters"]:
+            optimize_key = param["optimize_key"]
+            config_path = param["config_path"]
+            expected = (
+                "bot",
+                config_path[1],
+                "strategy",
+                strategy_kind,
+                *config_path[2:],
+            )
+
+            resolved = resolve_optimization_bound_path(prepared, optimize_key)
+
+            assert resolved == expected
+            value = _get_path(prepared, resolved)
+            assert not isinstance(value, bool)
+            assert isinstance(value, (int, float))
+
+    def test_missing_rust_strategy_spec_api_fails_loudly(self, monkeypatch):
+        strategy_spec.get_strategy_spec.cache_clear()
+        monkeypatch.setattr(strategy_spec.pbr, "get_strategy_spec", None)
+
+        with pytest.raises(RuntimeError, match="Rust strategy metadata is unavailable or stale"):
+            strategy_spec.get_strategy_spec("trailing_martingale")
+
+        strategy_spec.get_strategy_spec.cache_clear()

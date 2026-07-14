@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import logging
+import math
 import sys
-import traceback
-from collections import defaultdict
+from collections import Counter, defaultdict
 
 from passivbot_exceptions import RestartBotException
-from procedures import print_async_exception
+from live.event_bus import EventTypes, ReasonCodes
+from live.fresh_entry_eligibility import FreshEntryEligibilityTrace
 from pure_funcs import shorten_custom_id
 from utils import utc_ms as _utils_utc_ms
 
@@ -29,31 +30,320 @@ def _utc_ms() -> int:
     return int(_utils_utc_ms())
 
 
+def _live_event_console_available(bot, passivbot_cls) -> bool:
+    checker = getattr(passivbot_cls, "_live_event_console_available", None)
+    return bool(checker(bot)) if callable(checker) else False
+
+
+def _order_is_reduce_only(order: dict) -> bool:
+    if not isinstance(order, dict):
+        return False
+    for key in ("reduce_only", "reduceOnly"):
+        if key in order:
+            return bool(order[key])
+    info = order.get("info")
+    if isinstance(info, dict):
+        for key in ("reduceOnly", "reduce_only"):
+            if key in info:
+                return bool(info[key])
+    return False
+
+
+def _order_pb_type(order: dict) -> str:
+    if not isinstance(order, dict):
+        return ""
+    pb_type = str(order.get("pb_order_type") or "")
+    if pb_type:
+        return pb_type
+    custom_id = str(order.get("custom_id") or "")
+    if not custom_id:
+        info = order.get("info")
+        if isinstance(info, dict):
+            custom_id = str(
+                info.get("clientOrderId")
+                or info.get("clientOid")
+                or info.get("clOrdId")
+                or ""
+            )
+    if not custom_id:
+        return ""
+    return str(_pb_attr("custom_id_to_snake")(custom_id))
+
+
+def _order_is_panic(order: dict) -> bool:
+    return "panic" in _order_pb_type(order)
+
+
+def _order_is_protective_create(order: dict) -> bool:
+    return _order_is_reduce_only(order) or _order_is_panic(order)
+
+
+def _filter_hsl_replay_pending_creates(
+    bot, passivbot_cls, orders: list[dict], order_wave
+) -> list[dict]:
+    pending_pairs = set(
+        getattr(bot, "_equity_hard_stop_coin_replay_pending_pairs", set()) or set()
+    )
+    if not pending_pairs:
+        return orders
+    blocked = [
+        order
+        for order in orders
+        if not _order_is_protective_create(order)
+        and (
+            str(order.get("position_side") or order.get("positionSide") or "").lower(),
+            str(order.get("symbol") or ""),
+        )
+        in pending_pairs
+    ]
+    if not blocked:
+        return orders
+    blocked_ids = {id(order) for order in blocked}
+    if order_wave is not None:
+        order_wave["skipped_create"] += len(blocked)
+    passivbot_cls._emit_execution_create_filter_event(
+        bot,
+        event_type=EventTypes.EXECUTION_CREATE_SKIPPED,
+        status="skipped",
+        reason_code=ReasonCodes.HSL_REPLAY_PENDING,
+        order_count=len(blocked),
+        symbols=_symbols_from_orders(blocked),
+        wave=order_wave,
+        message="initial-entry creates skipped until coin HSL replay is ready",
+        data={"pending_pairs_count": len(pending_pairs)},
+    )
+    return [order for order in orders if id(order) not in blocked_ids]
+
+
+def _symbols_from_orders(orders: list[dict]) -> list[str]:
+    return sorted(str(order["symbol"]) for order in orders if order.get("symbol"))
+
+
+def _orders_removed_by_identity(before: list[dict], after: list[dict]) -> list[dict]:
+    remaining = Counter(id(order) for order in after)
+    removed = []
+    for order in before:
+        order_id = id(order)
+        if remaining[order_id] > 0:
+            remaining[order_id] -= 1
+        else:
+            removed.append(order)
+    return removed
+
+
+def _fresh_entry_trace(bot) -> FreshEntryEligibilityTrace | None:
+    trace = getattr(bot, "_fresh_entry_eligibility_trace", None)
+    return trace if isinstance(trace, FreshEntryEligibilityTrace) else None
+
+
+def _record_fresh_entry_orders(
+    bot, method: str, orders: list[dict], reason: str | None = None
+) -> None:
+    """Record one existing executor decision without allowing diagnostics to affect it."""
+    trace = _fresh_entry_trace(bot)
+    if trace is None:
+        return
+    try:
+        recorder = getattr(trace, method)
+        if reason is None:
+            recorder(orders)
+        else:
+            recorder(orders, reason)
+    except Exception as exc:
+        bot._fresh_entry_eligibility_trace = None
+        logging.debug(
+            "[entry] fresh-entry eligibility trace disabled during execution | "
+            "method=%s error_type=%s",
+            method,
+            type(exc).__name__,
+        )
+
+
+def _emit_fresh_entry_eligibility(bot, passivbot_cls, wave) -> None:
+    """Consume and emit the cycle trace exactly once on a completed local plan."""
+    trace = _fresh_entry_trace(bot)
+    bot._fresh_entry_eligibility_trace = None
+    if trace is None:
+        return
+    try:
+        data = trace.to_event_data()
+    except Exception as exc:
+        logging.debug(
+            "[entry] fresh-entry eligibility payload build failed | error_type=%s",
+            type(exc).__name__,
+        )
+        return
+    try:
+        passivbot_cls._emit_initial_entry_eligibility_event(bot, data=data, wave=wave)
+    except Exception as exc:
+        logging.debug(
+            "[entry] fresh-entry eligibility event emission failed | error_type=%s",
+            type(exc).__name__,
+        )
+
+
+def _create_rejection_reason(result) -> str:
+    if isinstance(result, BaseException):
+        return "result_exception"
+    if not isinstance(result, dict):
+        return "create_not_acknowledged"
+    status = str(result.get("status") or "").lower()
+    info = result.get("info")
+    info_status = ""
+    if isinstance(info, dict):
+        info_status = str(
+            info.get("status") or info.get("ordStatus") or info.get("state") or ""
+        ).lower()
+    terminal = {
+        "canceled",
+        "cancelled",
+        "closed",
+        "expired",
+        "failed",
+        "rejected",
+    }
+    if status in terminal or info_status in terminal:
+        return "terminal_rejection"
+    if not (result.get("id") or result.get("order_id")):
+        return "missing_exchange_order_id"
+    return "create_not_acknowledged"
+
+
+def _remember_ambiguous_create(
+    bot,
+    passivbot_cls,
+    order: dict,
+    emitted_ts: int,
+    *,
+    status: str,
+    reason: str,
+    error: BaseException | None = None,
+) -> None:
+    bot.add_to_recent_order_executions(order)
+    passivbot_cls._record_emitted_order_custom_id(
+        bot,
+        order,
+        emitted_ts=emitted_ts,
+        status=status,
+    )
+    logging.debug(
+        "[order] remembered ambiguous create | symbol=%s type=%s custom_id=%s status=%s reason=%s error_type=%s",
+        passivbot_cls._log_symbol(order.get("symbol")),
+        bot._resolve_pb_order_type(order),
+        shorten_custom_id(str(order.get("custom_id", ""))),
+        status,
+        reason,
+        type(error).__name__ if error is not None else "",
+    )
+
+
 async def execute_to_exchange(bot, *, prepare_cycle: bool = True):
     """Run one execution cycle including config sync and order placement/cancellation."""
+    bot._fresh_entry_eligibility_trace = None
+    try:
+        if prepare_cycle:
+            await bot.execution_cycle()
+        to_cancel, to_create = await bot.calc_orders_to_cancel_and_create()
+        return await execute_order_plan(bot, to_cancel, to_create)
+    finally:
+        bot._fresh_entry_eligibility_trace = None
+
+
+async def execute_order_plan(
+    bot,
+    to_cancel: list[dict],
+    to_create: list[dict],
+    *,
+    configure_creations: bool = True,
+):
+    """Execute a precomputed order plan against the exchange."""
     passivbot_cls = _pb_attr("Passivbot")
-    if prepare_cycle:
-        await bot.execution_cycle()
-    to_cancel, to_create = await bot.calc_orders_to_cancel_and_create()
     order_wave = passivbot_cls._begin_order_wave(bot, to_cancel, to_create)
 
     seen = set()
     for elm in to_cancel:
         key = str(elm["price"]) + str(elm["qty"])
         if key in seen:
-            logging.debug("duplicate cancel candidate: %s", elm)
+            logging.debug(
+                "[order] duplicate cancel candidate | symbol=%s type=%s",
+                passivbot_cls._log_symbol(elm.get("symbol")),
+                _order_pb_type(elm),
+            )
         seen.add(key)
 
     seen = set()
     for elm in to_create:
         key = str(elm["price"]) + str(elm["qty"])
         if key in seen:
-            logging.debug("duplicate create candidate: %s", elm)
+            logging.debug(
+                "[order] duplicate create candidate | symbol=%s type=%s",
+                passivbot_cls._log_symbol(elm.get("symbol")),
+                _order_pb_type(elm),
+            )
         seen.add(key)
+    low_balance = False
+    if not bot.debug_mode:
+        raw_balance = float(bot.get_raw_balance())
+        if not math.isfinite(raw_balance):
+            raise RuntimeError(
+                f"invalid raw balance for order execution: {raw_balance!r}"
+            )
+        balance_threshold = float(getattr(bot, "balance_threshold", 0.0) or 0.0)
+        low_balance = raw_balance < balance_threshold
+        if low_balance and (to_cancel or to_create):
+            blocked_creates = [
+                order for order in to_create if not _order_is_protective_create(order)
+            ]
+            to_create = [
+                order for order in to_create if _order_is_protective_create(order)
+            ]
+            if order_wave is not None:
+                order_wave["skipped_create"] += len(blocked_creates)
+            if blocked_creates:
+                _record_fresh_entry_orders(
+                    bot, "record_blocked_orders", blocked_creates, "low_balance"
+                )
+                passivbot_cls._emit_execution_create_filter_event(
+                    bot,
+                    event_type=EventTypes.EXECUTION_CREATE_SKIPPED,
+                    status="skipped",
+                    reason_code=ReasonCodes.LOW_BALANCE,
+                    order_count=len(blocked_creates),
+                    symbols=_symbols_from_orders(blocked_creates),
+                    wave=order_wave,
+                    message="exposure-increasing creates skipped because balance is below threshold",
+                    data={
+                        "raw_balance": raw_balance,
+                        "balance_threshold": balance_threshold,
+                        "quote": bot.quote,
+                        "allowed_cancel": len(to_cancel),
+                        "allowed_protective_create": len(to_create),
+                    },
+                )
+            if not _live_event_console_available(bot, passivbot_cls):
+                logging.info(
+                    "[balance] too low: %.2f %s; skipped %d exposure-increasing order creates; "
+                    "allowing %d cancellations and %d protective creates",
+                    raw_balance,
+                    bot.quote,
+                    len(blocked_creates),
+                    len(to_cancel),
+                    len(to_create),
+                )
+    before_hsl_filter = list(to_create)
+    to_create = _filter_hsl_replay_pending_creates(
+        bot, passivbot_cls, to_create, order_wave
+    )
+    _record_fresh_entry_orders(
+        bot,
+        "record_blocked_orders",
+        _orders_removed_by_identity(before_hsl_filter, to_create),
+        "hsl_replay_pending",
+    )
     if bot.debug_mode:
         if to_cancel:
-            print(
-                f"would cancel {len(to_cancel)} order{'s' if len(to_cancel) > 1 else ''}"
+            logging.info(
+                "[order] debug mode would cancel orders | count=%d", len(to_cancel)
             )
     else:
         cancel_started_ms = _utc_ms()
@@ -67,28 +357,22 @@ async def execute_to_exchange(bot, *, prepare_cycle: bool = True):
             order_wave["cancel_posted"] = len(res or [])
     if bot.debug_mode:
         if to_create:
-            print(
-                f"would create {len(to_create)} order{'s' if len(to_create) > 1 else ''}"
+            _record_fresh_entry_orders(
+                bot, "record_blocked_orders", to_create, "debug_mode"
             )
-    elif bot.get_raw_balance() < bot.balance_threshold:
-        logging.info(
-            "[balance] too low: %.2f %s; not creating orders",
-            bot.get_raw_balance(),
-            bot.quote,
-        )
+            logging.info(
+                "[order] debug mode would create orders | count=%d", len(to_create)
+            )
     else:
         to_create_mod = []
+        recent_execution_deferred: list[tuple[dict, float]] = []
         for order in to_create:
             xf_log = (
                 f"{passivbot_cls._log_symbol(order['symbol'])} {order['side']} "
                 f"{order['position_side']} {order['qty']} @ {order['price']}"
             )
-            if _pb_attr("order_has_match")(order, to_cancel):
-                logging.debug(
-                    "matching order cancellation found; will be delayed until next cycle: %s",
-                    xf_log,
-                )
-            elif delay_time_ms := bot.order_was_recently_updated(order):
+            if delay_time_ms := bot.order_was_recently_updated(order):
+                recent_execution_deferred.append((order, float(delay_time_ms)))
                 logging.info(
                     "[order] recent execution found; delaying for up to %.1f secs: %s",
                     delay_time_ms / 1000,
@@ -96,15 +380,70 @@ async def execute_to_exchange(bot, *, prepare_cycle: bool = True):
                 )
             else:
                 to_create_mod.append(order)
+        if recent_execution_deferred:
+            _record_fresh_entry_orders(
+                bot,
+                "record_blocked_orders",
+                [order for order, _delay in recent_execution_deferred],
+                "recent_execution",
+            )
+            passivbot_cls._emit_execution_create_filter_event(
+                bot,
+                event_type=EventTypes.EXECUTION_CREATE_DEFERRED,
+                status="deferred",
+                reason_code=ReasonCodes.RECENT_EXECUTION,
+                order_count=len(recent_execution_deferred),
+                symbols=_symbols_from_orders(
+                    [order for order, _delay in recent_execution_deferred]
+                ),
+                wave=order_wave,
+                message="create orders deferred because a matching recent execution exists",
+                data={
+                    "max_delay_ms": int(
+                        max(delay for _order, delay in recent_execution_deferred)
+                    ),
+                    "delays_sample_ms": [
+                        int(delay)
+                        for _order, delay in recent_execution_deferred[:8]
+                    ],
+                },
+            )
         if order_wave is not None:
             order_wave["deferred_create"] += max(0, len(to_create) - len(to_create_mod))
         if bot.state_change_detected_by_symbol:
+            state_filtered_orders = [
+                order
+                for order in to_create_mod
+                if order["symbol"] in bot.state_change_detected_by_symbol
+            ]
             logging.info(
                 "[order] state change detected; skipping order creation for %s until next cycle",
                 passivbot_cls._log_symbols(
                     sorted(bot.state_change_detected_by_symbol), limit=12
                 ),
             )
+            if state_filtered_orders:
+                _record_fresh_entry_orders(
+                    bot,
+                    "record_blocked_orders",
+                    state_filtered_orders,
+                    "state_change_detected",
+                )
+                passivbot_cls._emit_execution_create_filter_event(
+                    bot,
+                    event_type=EventTypes.EXECUTION_CREATE_SKIPPED,
+                    status="skipped",
+                    reason_code=ReasonCodes.STATE_CHANGE_DETECTED,
+                    order_count=len(state_filtered_orders),
+                    symbols=_symbols_from_orders(state_filtered_orders),
+                    wave=order_wave,
+                    message="create orders skipped until authoritative state settles",
+                    data={
+                        "blocked_symbols_count": len(
+                            bot.state_change_detected_by_symbol
+                        )
+                    },
+                )
             before_state_filter = len(to_create_mod)
             to_create_mod = [
                 order
@@ -115,20 +454,46 @@ async def execute_to_exchange(bot, *, prepare_cycle: bool = True):
                 order_wave["skipped_create"] += max(
                     0, before_state_filter - len(to_create_mod)
                 )
-        if to_create_mod:
+        if to_create_mod and configure_creations:
             creation_symbols = sorted({order["symbol"] for order in to_create_mod})
             configured_symbols = await bot.update_exchange_configs(creation_symbols)
             if bot._shutdown_requested():
                 bot._order_wave_in_progress = None
+                bot._fresh_entry_eligibility_trace = None
                 return None
             pending_config = sorted(
                 set(creation_symbols) - set(configured_symbols or set())
             )
             if pending_config:
+                pending_config_orders = [
+                    order for order in to_create_mod if order["symbol"] in pending_config
+                ]
                 logging.warning(
                     "[config] skipping order creation for symbols pending exchange config: %s",
                     passivbot_cls._log_symbols(pending_config, limit=12),
                 )
+                if pending_config_orders:
+                    _record_fresh_entry_orders(
+                        bot,
+                        "record_blocked_orders",
+                        pending_config_orders,
+                        "pending_exchange_config",
+                    )
+                    passivbot_cls._emit_execution_create_filter_event(
+                        bot,
+                        event_type=EventTypes.EXECUTION_CREATE_SKIPPED,
+                        status="skipped",
+                        reason_code=ReasonCodes.PENDING_EXCHANGE_CONFIG,
+                        order_count=len(pending_config_orders),
+                        symbols=_symbols_from_orders(pending_config_orders),
+                        wave=order_wave,
+                        level="warning",
+                        message="create orders skipped while exchange config update is pending",
+                        data={
+                            "configured_symbols_count": len(configured_symbols or set()),
+                            "pending_symbols_count": len(pending_config),
+                        },
+                    )
                 before_config_filter = len(to_create_mod)
                 to_create_mod = [
                     order
@@ -139,6 +504,14 @@ async def execute_to_exchange(bot, *, prepare_cycle: bool = True):
                     order_wave["skipped_create"] += max(
                         0, before_config_filter - len(to_create_mod)
                     )
+        elif to_create_mod:
+            logging.info(
+                "[risk] executing protective order plan without exchange config sync | symbols=%s orders=%d",
+                passivbot_cls._log_symbols(
+                    sorted({order["symbol"] for order in to_create_mod}), limit=12
+                ),
+                len(to_create_mod),
+            )
         before_market_filter = len(to_create_mod)
         to_create_mod = await passivbot_cls._filter_fresh_market_snapshot_creations(
             bot, to_create_mod
@@ -147,24 +520,29 @@ async def execute_to_exchange(bot, *, prepare_cycle: bool = True):
             order_wave["skipped_create"] += max(
                 0, before_market_filter - len(to_create_mod)
             )
-        res = None
-        try:
-            create_started_ms = _utc_ms()
-            bot._order_wave_in_progress = order_wave
+        if to_create_mod:
+            res = None
             try:
-                res = await bot.execute_orders_parent(to_create_mod)
-            finally:
-                bot._order_wave_in_progress = None
-            if order_wave is not None:
-                order_wave["create_ms"] = int(max(0, _utc_ms() - create_started_ms))
-                order_wave["create_posted"] = len(res or [])
-        except RestartBotException:
-            raise
-        except Exception as exc:
-            logging.error(f"error executing orders {to_create_mod} {exc}")
-            print_async_exception(res)
-            traceback.print_exc()
-            await bot.restart_bot_on_too_many_errors()
+                create_started_ms = _utc_ms()
+                bot._order_wave_in_progress = order_wave
+                try:
+                    res = await bot.execute_orders_parent(to_create_mod)
+                finally:
+                    bot._order_wave_in_progress = None
+                if order_wave is not None:
+                    order_wave["create_ms"] = int(max(0, _utc_ms() - create_started_ms))
+                    order_wave["create_posted"] = len(res or [])
+            except RestartBotException:
+                raise
+            except Exception as exc:
+                if not _live_event_console_available(bot, passivbot_cls):
+                    logging.error(
+                        "[order] create batch raised before completion | count=%d error_type=%s",
+                        len(to_create_mod),
+                        type(exc).__name__,
+                    )
+                await bot.restart_bot_on_too_many_errors()
+    _emit_fresh_entry_eligibility(bot, passivbot_cls, order_wave)
     if to_cancel or to_create:
         bot.execution_scheduled = True
     if not passivbot_cls._shutdown_requested(bot):
@@ -182,13 +560,19 @@ async def execute_to_exchange(bot, *, prepare_cycle: bool = True):
 async def execute_orders_parent(bot, orders: list[dict]) -> list[dict]:
     """Submit a batch of orders after throttling and bookkeeping."""
     passivbot_cls = _pb_attr("Passivbot")
-    orders = orders[: int(bot.live_value("max_n_creations_per_batch"))]
+    requested_orders = list(orders)
+    orders = requested_orders[: int(bot.live_value("max_n_creations_per_batch"))]
+    _record_fresh_entry_orders(
+        bot,
+        "record_blocked_orders",
+        _orders_removed_by_identity(requested_orders, orders),
+        "batch_capacity",
+    )
     grouped_orders: dict[str, list[dict]] = defaultdict(list)
     emitted_ts = (
         int(bot.get_exchange_time()) if hasattr(bot, "get_exchange_time") else _utc_ms()
     )
     for order in orders:
-        bot.add_to_recent_order_executions(order)
         passivbot_cls._record_emitted_order_custom_id(
             bot, order, emitted_ts=emitted_ts, status="submitted"
         )
@@ -205,46 +589,193 @@ async def execute_orders_parent(bot, orders: list[dict]) -> list[dict]:
             )
         grouped_orders[order["symbol"]].append(order)
     bot._log_order_action_summary(grouped_orders, "post")
-    res = await bot.execute_orders(orders)
-    if not res:
-        return
-    if len(orders) != len(res):
-        print(
-            f"debug unequal lengths execute_orders_parent: "
-            f"{len(orders)} orders, {len(res)} executions",
-            res,
+    wave = getattr(bot, "_order_wave_in_progress", None)
+    for idx, order in enumerate(orders):
+        passivbot_cls._emit_execution_order_event(
+            bot,
+            event_type=EventTypes.EXECUTION_CREATE_SENT,
+            order=order,
+            action="create",
+            status="started",
+            reason_code=ReasonCodes.SUBMITTED_TO_EXCHANGE,
+            index=idx,
+            wave=wave,
         )
+    _record_fresh_entry_orders(bot, "record_eligible_orders", orders)
+    _emit_fresh_entry_eligibility(bot, passivbot_cls, wave)
+    connector_call_context = {
+        "action": "create",
+        "orders": orders,
+        "wave": wave,
+    }
+    bot._execution_connector_call_context = connector_call_context
+    try:
+        res = await bot.execute_orders(orders)
+    except RestartBotException:
+        raise
+    except Exception as exc:
+        for idx, order in enumerate(orders):
+            passivbot_cls._emit_execution_order_event(
+                bot,
+                event_type=EventTypes.EXECUTION_AMBIGUOUS,
+                order=order,
+                action="create",
+                status="degraded",
+                reason_code=ReasonCodes.EXCHANGE_EXCEPTION,
+                level="warning",
+                index=idx,
+                wave=wave,
+                error=exc,
+            )
+            _remember_ambiguous_create(
+                bot,
+                passivbot_cls,
+                order,
+                emitted_ts,
+                status="create_error_ambiguous",
+                reason=ReasonCodes.EXCHANGE_EXCEPTION,
+                error=exc,
+            )
+        raise
+    finally:
+        if (
+            getattr(bot, "_execution_connector_call_context", None)
+            is connector_call_context
+        ):
+            bot._execution_connector_call_context = None
+    if not res:
+        for idx, order in enumerate(orders):
+            passivbot_cls._emit_execution_order_event(
+                bot,
+                event_type=EventTypes.EXECUTION_AMBIGUOUS,
+                order=order,
+                action="create",
+                status="degraded",
+                reason_code="empty_response",
+                level="warning",
+                index=idx,
+                wave=wave,
+                extra={"response_count": 0, "request_count": len(orders)},
+            )
+            _remember_ambiguous_create(
+                bot,
+                passivbot_cls,
+                order,
+                emitted_ts,
+                status="create_response_missing",
+                reason="empty_response",
+            )
+        return []
+    if len(orders) != len(res):
+        for idx, order in enumerate(orders):
+            passivbot_cls._emit_execution_order_event(
+                bot,
+                event_type=EventTypes.EXECUTION_AMBIGUOUS,
+                order=order,
+                action="create",
+                status="degraded",
+                reason_code=ReasonCodes.LENGTH_MISMATCH,
+                level="warning",
+                index=idx,
+                wave=wave,
+                extra={"response_count": len(res), "request_count": len(orders)},
+            )
+            _remember_ambiguous_create(
+                bot,
+                passivbot_cls,
+                order,
+                emitted_ts,
+                status="create_response_partial",
+                reason=ReasonCodes.LENGTH_MISMATCH,
+            )
+        if not _live_event_console_available(bot, passivbot_cls):
+            logging.warning(
+                "[order] create response count mismatch | requested=%d returned=%d",
+                len(orders),
+                len(res),
+            )
         return []
     to_return = []
-    for ex, order in zip(res, orders):
+    for idx, (ex, order) in enumerate(zip(res, orders)):
         if not bot.did_create_order(ex):
             if isinstance(ex, Exception):
-                passivbot_cls._record_emitted_order_custom_id(
+                reason_code = "result_exception"
+                passivbot_cls._emit_execution_order_event(
                     bot,
+                    event_type=EventTypes.EXECUTION_AMBIGUOUS,
+                    order=order,
+                    action="create",
+                    status="degraded",
+                    reason_code=reason_code,
+                    level="warning",
+                    index=idx,
+                    wave=wave,
+                    result=ex,
+                )
+                _remember_ambiguous_create(
+                    bot,
+                    passivbot_cls,
                     order,
                     emitted_ts=emitted_ts,
                     status="create_error_ambiguous",
+                    reason=reason_code,
+                    error=ex,
                 )
-                logging.debug(
-                    "[order] remembered ambiguous create after exchange error | symbol=%s type=%s custom_id=%s error_type=%s",
+            else:
+                reason_code = _create_rejection_reason(ex)
+                event_type = (
+                    EventTypes.EXECUTION_CREATE_REJECTED
+                    if reason_code == "terminal_rejection"
+                    else EventTypes.EXECUTION_CREATE_FAILED
+                )
+                passivbot_cls._emit_execution_order_event(
+                    bot,
+                    event_type=event_type,
+                    order=order,
+                    action="create",
+                    status="failed",
+                    reason_code=reason_code,
+                    level="warning",
+                    index=idx,
+                    wave=wave,
+                    result=ex if isinstance(ex, dict) else None,
+                )
+            if not _live_event_console_available(bot, passivbot_cls):
+                logging.warning(
+                    "[order] create not acknowledged | symbol=%s type=%s reason=%s error_type=%s",
                     passivbot_cls._log_symbol(order.get("symbol")),
                     bot._resolve_pb_order_type(order),
-                    shorten_custom_id(str(order.get("custom_id", ""))),
-                    type(ex).__name__,
+                    reason_code,
+                    type(ex).__name__ if isinstance(ex, BaseException) else "",
                 )
-            print(f"debug did_create_order false {ex}")
             continue
-        debug_prints = {}
+        normalized_fields: dict[str, list[str]] = {}
         for key in order:
             if key not in ex:
-                debug_prints.setdefault("missing", []).append((key, order[key]))
+                normalized_fields.setdefault("missing", []).append(str(key))
                 ex[key] = order[key]
             elif ex[key] is None:
-                debug_prints.setdefault("is_none", []).append((key, order[key]))
+                normalized_fields.setdefault("is_none", []).append(str(key))
                 ex[key] = order[key]
-        if debug_prints and bot.debug_mode:
-            print("debug create_orders", debug_prints)
+        if normalized_fields and bot.debug_mode:
+            logging.debug(
+                "[order] normalized create response fields | missing_keys=%s none_keys=%s",
+                sorted(normalized_fields.get("missing", []))[:12],
+                sorted(normalized_fields.get("is_none", []))[:12],
+            )
         passivbot_cls._record_emitted_order_custom_id(bot, ex, emitted_ts=emitted_ts)
+        bot.add_to_recent_order_executions(ex)
+        passivbot_cls._emit_execution_order_event(
+            bot,
+            event_type=EventTypes.EXECUTION_CREATE_SUCCEEDED,
+            order=order,
+            action="create",
+            status="succeeded",
+            reason_code=ReasonCodes.EXCHANGE_ACKNOWLEDGED,
+            index=idx,
+            wave=wave,
+            result=ex,
+        )
         to_return.append(ex)
     if to_return:
         for elm in to_return:
@@ -276,7 +807,10 @@ async def execute_cancellations_parent(bot, orders: list[dict]) -> list[dict]:
             rest = [x for x in orders if not x["reduce_only"]]
             orders = (reduce_only_orders + rest)[:max_cancellations]
         except Exception as exc:
-            logging.error(f"debug filter cancellations {exc}")
+            logging.error(
+                "[order] cancellation priority filtering failed; using input order | error_type=%s",
+                type(exc).__name__,
+            )
             orders = orders[:max_cancellations]
     grouped_orders: dict[str, list[dict]] = defaultdict(list)
     for order in orders:
@@ -290,38 +824,141 @@ async def execute_cancellations_parent(bot, orders: list[dict]) -> list[dict]:
         )
         grouped_orders[order["symbol"]].append(order)
     bot._log_order_action_summary(grouped_orders, "cancel")
-    res = await bot.execute_cancellations(orders)
+    wave = getattr(bot, "_order_wave_in_progress", None)
+    for idx, order in enumerate(orders):
+        passivbot_cls._emit_execution_order_event(
+            bot,
+            event_type=EventTypes.EXECUTION_CANCEL_SENT,
+            order=order,
+            action="cancel",
+            status="started",
+            reason_code=ReasonCodes.SUBMITTED_TO_EXCHANGE,
+            index=idx,
+            wave=wave,
+        )
+    connector_call_context = {
+        "action": "cancel",
+        "orders": orders,
+        "wave": wave,
+    }
+    bot._execution_connector_call_context = connector_call_context
+    try:
+        res = await bot.execute_cancellations(orders)
+    except RestartBotException:
+        raise
+    except Exception as exc:
+        for idx, order in enumerate(orders):
+            passivbot_cls._emit_execution_order_event(
+                bot,
+                event_type=EventTypes.EXECUTION_CANCEL_FAILED,
+                order=order,
+                action="cancel",
+                status="failed",
+                reason_code=ReasonCodes.EXCHANGE_EXCEPTION,
+                level="warning",
+                index=idx,
+                wave=wave,
+                error=exc,
+            )
+        raise
+    finally:
+        if (
+            getattr(bot, "_execution_connector_call_context", None)
+            is connector_call_context
+        ):
+            bot._execution_connector_call_context = None
     to_return = []
     if len(orders) != len(res):
         bot.execution_scheduled = True
-        for order in orders:
+        for idx, order in enumerate(orders):
+            passivbot_cls._emit_execution_order_event(
+                bot,
+                event_type=EventTypes.EXECUTION_AMBIGUOUS,
+                order=order,
+                action="cancel",
+                status="degraded",
+                reason_code=ReasonCodes.LENGTH_MISMATCH,
+                level="warning",
+                index=idx,
+                wave=wave,
+                extra={"response_count": len(res), "request_count": len(orders)},
+            )
             bot.state_change_detected_by_symbol.add(order["symbol"])
-        print(
-            f"debug unequal lengths execute_cancellations_parent: "
-            f"{len(orders)} orders, {len(res)} executions",
-            res,
-        )
+        if not _live_event_console_available(bot, passivbot_cls):
+            logging.warning(
+                "[order] cancel response count mismatch | requested=%d returned=%d",
+                len(orders),
+                len(res),
+            )
         return []
-    for ex, order in zip(res, orders):
+    for idx, (ex, order) in enumerate(zip(res, orders)):
         if not bot.did_cancel_order(ex, order):
             bot.state_change_detected_by_symbol.add(order["symbol"])
-            print(f"debug did_cancel_order false {ex} {order}")
+            passivbot_cls._emit_execution_order_event(
+                bot,
+                event_type=EventTypes.EXECUTION_CANCEL_FAILED,
+                order=order,
+                action="cancel",
+                status="failed",
+                reason_code="cancel_not_acknowledged",
+                level="warning",
+                index=idx,
+                wave=wave,
+                result=ex if isinstance(ex, dict) else None,
+                error=ex if isinstance(ex, BaseException) else None,
+            )
+            if not _live_event_console_available(bot, passivbot_cls):
+                logging.warning(
+                    "[order] cancel not acknowledged | symbol=%s type=%s error_type=%s",
+                    passivbot_cls._log_symbol(order.get("symbol")),
+                    bot._resolve_pb_order_type(order),
+                    type(ex).__name__ if isinstance(ex, BaseException) else "",
+                )
             continue
         ambiguous_terminal_state = (
             bot._cancel_result_requires_full_authoritative_confirmation(ex)
         )
         if ambiguous_terminal_state:
             bot.state_change_detected_by_symbol.add(order["symbol"])
-        debug_prints = {}
+        normalized_fields: dict[str, list[str]] = {}
         for key in order:
             if key not in ex:
-                debug_prints.setdefault("missing", []).append((key, order[key]))
+                normalized_fields.setdefault("missing", []).append(str(key))
                 ex[key] = order[key]
             elif ex[key] is None:
-                debug_prints.setdefault("is_none", []).append((key, order[key]))
+                normalized_fields.setdefault("is_none", []).append(str(key))
                 ex[key] = order[key]
-        if debug_prints and bot.debug_mode:
-            print("debug cancel_orders", debug_prints)
+        if normalized_fields and bot.debug_mode:
+            logging.debug(
+                "[order] normalized cancel response fields | missing_keys=%s none_keys=%s",
+                sorted(normalized_fields.get("missing", []))[:12],
+                sorted(normalized_fields.get("is_none", []))[:12],
+            )
+        if ambiguous_terminal_state:
+            passivbot_cls._emit_execution_order_event(
+                bot,
+                event_type=EventTypes.EXECUTION_CANCEL_AMBIGUOUS_TERMINAL,
+                order=order,
+                action="cancel",
+                status="degraded",
+                reason_code="requires_full_authoritative_confirmation",
+                level="warning",
+                index=idx,
+                wave=wave,
+                result=ex,
+            )
+        else:
+            passivbot_cls._emit_execution_order_event(
+                bot,
+                event_type=EventTypes.EXECUTION_CANCEL_SUCCEEDED,
+                order=order,
+                action="cancel",
+                status="succeeded",
+                reason_code=ReasonCodes.EXCHANGE_ACKNOWLEDGED,
+                index=idx,
+                wave=wave,
+                result=ex,
+            )
         to_return.append(ex)
     if to_return:
         for elm in to_return:
@@ -345,11 +982,16 @@ async def execute_cancellations_parent(bot, orders: list[dict]) -> list[dict]:
         )
         if ambiguous_symbols:
             confirmation_surfaces = bot._authoritative_full_confirmation_surfaces()
-            logging.info(
-                "[order] ambiguous cancel terminal state; forcing full account confirmation "
-                "before next cycle | symbols=%s",
-                passivbot_cls._log_symbols(ambiguous_symbols, limit=12),
-            )
+            if not (
+                _live_event_console_available(bot, passivbot_cls)
+                and getattr(getattr(bot, "_live_event_pipeline", None), "console_sink", None)
+                is not None
+            ):
+                logging.info(
+                    "[order] ambiguous cancel terminal state; forcing full account confirmation "
+                    "before next cycle | symbols=%s",
+                    passivbot_cls._log_symbols(ambiguous_symbols, limit=12),
+                )
         if hasattr(bot, "_request_authoritative_confirmation"):
             bot._request_authoritative_confirmation(confirmation_surfaces)
         else:

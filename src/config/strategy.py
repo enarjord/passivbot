@@ -1,0 +1,363 @@
+from copy import deepcopy
+from typing import Optional
+
+from .shared_bot import BOT_SHARED_GROUPS
+from .strategy_spec import (
+    BOT_POSITION_SIDES,
+    DEFAULT_STRATEGY_KIND,
+    EMA_ANCHOR_STRATEGY_KIND,
+    get_all_strategy_defaults,
+    get_strategy_defaults,
+    get_strategy_param_keys,
+    normalize_strategy_kind,
+)
+
+
+TRAILING_GRID_V7_FLAT_ONLY_KEYS = {
+    "close_grid_markup_end",
+    "close_grid_markup_start",
+    "close_grid_qty_pct",
+    "close_trailing_grid_ratio",
+    "close_trailing_qty_pct",
+    "close_trailing_retracement_pct",
+    "close_trailing_threshold_pct",
+    "entry_grid_double_down_factor",
+    "entry_grid_spacing_log_span_hours",
+    "entry_grid_spacing_log_weight",
+    "entry_grid_spacing_pct",
+    "entry_grid_spacing_weight",
+    "entry_grid_spacing_we_weight",
+    "entry_grid_spacing_volatility_weight",
+    "entry_initial_ema_dist",
+    "entry_initial_qty_pct",
+    "entry_log_range_ema_span_hours",
+    "entry_trailing_double_down_factor",
+    "entry_trailing_grid_ratio",
+    "entry_trailing_retracement_log_weight",
+    "entry_trailing_retracement_pct",
+    "entry_trailing_retracement_we_weight",
+    "entry_trailing_retracement_volatility_weight",
+    "entry_trailing_threshold_log_weight",
+    "entry_trailing_threshold_pct",
+    "entry_trailing_threshold_we_weight",
+    "entry_trailing_threshold_volatility_weight",
+    "entry_volatility_ema_span_1h",
+    "entry_volatility_ema_span_hours",
+}
+
+TRAILING_MARTINGALE_EMA_GATE_MODES = frozenset({"disabled", "all", "initial", "reentry"})
+
+
+def _normalize_strategy_side_value(key: str, value, *, strategy_kind: str, pside: str):
+    if strategy_kind == DEFAULT_STRATEGY_KIND and key == "entry.ema_gate_mode":
+        if not isinstance(value, str):
+            raise TypeError(
+                f"bot.{pside}.strategy.{strategy_kind}.entry.ema_gate_mode must be a string"
+            )
+        normalized = value.strip().lower()
+        if normalized not in TRAILING_MARTINGALE_EMA_GATE_MODES:
+            allowed = ", ".join(sorted(TRAILING_MARTINGALE_EMA_GATE_MODES))
+            raise ValueError(
+                f"bot.{pside}.strategy.{strategy_kind}.entry.ema_gate_mode must be one of: {allowed}"
+            )
+        return normalized
+    return value
+
+
+def _path_parts(key: str) -> tuple[str, ...]:
+    return tuple(part for part in key.split(".") if part)
+
+
+def _get_path(mapping: dict, key: str):
+    current = mapping
+    for part in _path_parts(key):
+        if not isinstance(current, dict) or part not in current:
+            return None
+        current = current[part]
+    return current
+
+
+def _has_path(mapping: dict, key: str) -> bool:
+    sentinel = object()
+    return _get_path_or(mapping, key, sentinel) is not sentinel
+
+
+def _get_path_or(mapping: dict, key: str, default):
+    current = mapping
+    for part in _path_parts(key):
+        if not isinstance(current, dict) or part not in current:
+            return default
+        current = current[part]
+    return current
+
+
+def _set_path(mapping: dict, key: str, value) -> None:
+    current = mapping
+    parts = _path_parts(key)
+    for part in parts[:-1]:
+        next_value = current.get(part)
+        if not isinstance(next_value, dict):
+            next_value = {}
+            current[part] = next_value
+        current = next_value
+    current[parts[-1]] = deepcopy(value)
+
+
+def _iter_leaf_paths(mapping: dict, prefix: tuple[str, ...] = ()):
+    for key, value in mapping.items():
+        path = (*prefix, key)
+        if isinstance(value, dict):
+            yield from _iter_leaf_paths(value, path)
+        else:
+            yield ".".join(path), value
+
+
+def get_strategy_store(bot_side: dict | None) -> dict:
+    if not isinstance(bot_side, dict):
+        return {}
+    strategy_store = bot_side.get("strategy")
+    if isinstance(strategy_store, dict):
+        return strategy_store
+    return {}
+
+
+def get_active_strategy_side(
+    bot_side: dict | None,
+    *,
+    strategy_kind: str = DEFAULT_STRATEGY_KIND,
+    pside: str | None = None,
+) -> dict:
+    del pside
+    normalized_kind = normalize_strategy_kind(strategy_kind)
+    strategy_store = get_strategy_store(bot_side)
+    active = strategy_store.get(normalized_kind)
+    if isinstance(active, dict):
+        return active
+    return {}
+
+
+def get_active_strategy_config(config: dict, *, strategy_kind: str | None = None) -> dict:
+    normalized_kind = normalize_strategy_kind(
+        strategy_kind if strategy_kind is not None else config.get("live", {}).get("strategy_kind")
+    )
+    bot_cfg = config.get("bot", {})
+    return {
+        pside: deepcopy(
+            get_active_strategy_side(bot_cfg.get(pside, {}), strategy_kind=normalized_kind, pside=pside)
+        )
+        for pside in BOT_POSITION_SIDES
+    }
+
+
+def build_runtime_strategy_side(
+    strategy_side: dict | None = None,
+    *,
+    strategy_kind: str = DEFAULT_STRATEGY_KIND,
+    pside: str | None = None,
+    override_side: dict | None = None,
+) -> dict:
+    normalized_kind = normalize_strategy_kind(strategy_kind)
+    strategy_keys = get_strategy_param_keys(normalized_kind)
+    defaults_by_side = get_strategy_defaults(normalized_kind)
+    side_defaults = (
+        defaults_by_side.get(pside, {})
+        if pside in BOT_POSITION_SIDES
+        else {}
+    )
+    if isinstance(strategy_side, dict) and "strategy" in strategy_side:
+        strategy_side = get_active_strategy_side(
+            strategy_side,
+            strategy_kind=normalized_kind,
+            pside=pside,
+        )
+    if isinstance(override_side, dict) and "strategy" in override_side:
+        override_side = get_active_strategy_side(
+            override_side,
+            strategy_kind=normalized_kind,
+            pside=pside,
+        )
+
+    result = deepcopy(side_defaults)
+    for key in strategy_keys:
+        if isinstance(override_side, dict) and _has_path(override_side, key):
+            _set_path(
+                result,
+                key,
+                _normalize_strategy_side_value(
+                    key,
+                    _get_path(override_side, key),
+                    strategy_kind=normalized_kind,
+                    pside=pside or "",
+                ),
+            )
+            continue
+        if isinstance(strategy_side, dict) and _has_path(strategy_side, key):
+            _set_path(
+                result,
+                key,
+                _normalize_strategy_side_value(
+                    key,
+                    _get_path(strategy_side, key),
+                    strategy_kind=normalized_kind,
+                    pside=pside or "",
+                ),
+            )
+            continue
+    return result
+
+
+def reject_legacy_flat_strategy_fields(config: dict) -> None:
+    live_cfg = config.setdefault("live", {})
+    normalized_kind = normalize_strategy_kind(live_cfg.get("strategy_kind"))
+    bot_cfg = config.setdefault("bot", {})
+    for pside in BOT_POSITION_SIDES:
+        bot_side = bot_cfg.get(pside)
+        if not isinstance(bot_side, dict):
+            continue
+        legacy_keys = sorted(TRAILING_GRID_V7_FLAT_ONLY_KEYS & set(bot_side))
+        if legacy_keys:
+            joined = ", ".join(f"bot.{pside}.{key}" for key in legacy_keys)
+            raise ValueError(
+                f"{joined} are legacy flat strategy fields and cannot be used at "
+                f"bot.<side> in v8 configs with live.strategy_kind={normalized_kind!r}. "
+                "Run `passivbot tool migrate-config-v7` for v7 configs, or move active "
+                "v8 strategy parameters under "
+                f"bot.<side>.strategy.{normalized_kind} before loading."
+            )
+
+
+reject_trailing_grid_v7_flat_fields_for_trailing_martingale = reject_legacy_flat_strategy_fields
+
+
+def sync_canonical_strategy_config(config: dict, *, tracker: Optional[object] = None) -> None:
+    live_cfg = config.setdefault("live", {})
+    normalized_kind = normalize_strategy_kind(live_cfg.get("strategy_kind"))
+    if "strategy_kind" not in live_cfg:
+        live_cfg["strategy_kind"] = normalized_kind
+        if tracker is not None:
+            tracker.add(["live", "strategy_kind"], normalized_kind)
+    elif live_cfg["strategy_kind"] != normalized_kind:
+        if tracker is not None:
+            tracker.update(["live", "strategy_kind"], live_cfg["strategy_kind"], normalized_kind)
+        live_cfg["strategy_kind"] = normalized_kind
+
+    bot_cfg = config.setdefault("bot", {})
+    reject_legacy_flat_strategy_fields(config)
+    for pside in BOT_POSITION_SIDES:
+        bot_side = bot_cfg.setdefault(pside, {})
+        if not isinstance(bot_side, dict):
+            raise TypeError(f"config.bot.{pside} must be a dict; got {type(bot_side).__name__}")
+        strategy_store = bot_side.get("strategy")
+        if strategy_store is None:
+            strategy_store = {}
+            bot_side["strategy"] = strategy_store
+            if tracker is not None:
+                tracker.add(["bot", pside, "strategy"], {})
+        elif not isinstance(strategy_store, dict):
+            raise TypeError(
+                f"config.bot.{pside}.strategy must be a dict; got {type(strategy_store).__name__}"
+            )
+
+        for kind, defaults_by_side in get_all_strategy_defaults()[pside].items():
+            current_strategy_side = strategy_store.get(kind)
+            if current_strategy_side is None:
+                current_strategy_side = {}
+                strategy_store[kind] = current_strategy_side
+                if tracker is not None:
+                    tracker.add(["bot", pside, "strategy", kind], {})
+            elif not isinstance(current_strategy_side, dict):
+                raise TypeError(
+                    f"config.bot.{pside}.strategy.{kind} must be a dict; "
+                    f"got {type(current_strategy_side).__name__}"
+                )
+
+            for key in get_strategy_param_keys(kind):
+                if key in bot_side:
+                    flat_value = bot_side.pop(key)
+                    if _get_path_or(current_strategy_side, key, None) != flat_value:
+                        old_value = _get_path_or(current_strategy_side, key, None)
+                        _set_path(current_strategy_side, key, flat_value)
+                        if tracker is not None:
+                            if old_value is None:
+                                tracker.rename(
+                                    ["bot", pside, key],
+                                    ["bot", pside, "strategy", kind, *_path_parts(key)],
+                                    flat_value,
+                                )
+                            else:
+                                tracker.update(
+                                    ["bot", pside, "strategy", kind, *_path_parts(key)],
+                                    old_value,
+                                    flat_value,
+                                )
+                    elif tracker is not None:
+                        tracker.remove(["bot", pside, key], flat_value)
+                if not _has_path(current_strategy_side, key):
+                    if _has_path(defaults_by_side, key):
+                        _set_path(current_strategy_side, key, _get_path(defaults_by_side, key))
+                        if tracker is not None:
+                            tracker.add(
+                                ["bot", pside, "strategy", kind, *_path_parts(key)],
+                                _get_path(current_strategy_side, key),
+                            )
+                normalized_value = _normalize_strategy_side_value(
+                    key,
+                    _get_path(current_strategy_side, key),
+                    strategy_kind=kind,
+                    pside=pside,
+                )
+                if _get_path(current_strategy_side, key) != normalized_value:
+                    if tracker is not None:
+                        tracker.update(
+                            ["bot", pside, "strategy", kind, *_path_parts(key)],
+                            _get_path(current_strategy_side, key),
+                            normalized_value,
+                        )
+                    _set_path(current_strategy_side, key, normalized_value)
+
+
+def prune_inactive_strategy_subtrees(config: dict, *, tracker: Optional[object] = None) -> None:
+    bot_cfg = config.get("bot")
+    if not isinstance(bot_cfg, dict):
+        return
+    active_kind = normalize_strategy_kind(config.get("live", {}).get("strategy_kind"))
+    for pside in BOT_POSITION_SIDES:
+        bot_side = bot_cfg.get(pside)
+        if not isinstance(bot_side, dict):
+            continue
+        strategy_store = bot_side.get("strategy")
+        if not isinstance(strategy_store, dict):
+            continue
+        for kind in list(strategy_store):
+            if kind == active_kind:
+                continue
+            removed = strategy_store.pop(kind)
+            if tracker is not None:
+                tracker.remove(["bot", pside, "strategy", kind], removed)
+
+
+def merge_runtime_bot_side(
+    bot_side: dict,
+    strategy_side: dict | None = None,
+    *,
+    pside: str | None = None,
+    override_side: dict | None = None,
+    strategy_kind: str = DEFAULT_STRATEGY_KIND,
+) -> dict:
+    normalized_kind = normalize_strategy_kind(strategy_kind)
+    strategy_keys = set(get_strategy_param_keys(normalized_kind))
+    merged = deepcopy(bot_side) if isinstance(bot_side, dict) else {}
+    merged.pop("strategy", None)
+    for group_name in BOT_SHARED_GROUPS:
+        merged.pop(group_name, None)
+    for key in list(merged):
+        if key in strategy_keys:
+            merged.pop(key)
+    if isinstance(override_side, dict):
+        for key, value in override_side.items():
+            if key == "strategy":
+                continue
+            if key in strategy_keys:
+                continue
+            merged[key] = deepcopy(value)
+    return merged
