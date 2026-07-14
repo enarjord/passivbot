@@ -65,7 +65,7 @@ Every delegated task must state:
 - expected return: findings, diff/commit, validation, and residual risk
 
 Parallel work is allowed only for orthogonal PRs. Work that depends on another
-PR must wait until that PR is merged to `v8`. Sol reviews every delegated diff
+PR must wait until that PR is merged to `master`. Sol reviews every delegated diff
 before push or merge.
 
 ## Current State And History
@@ -135,7 +135,7 @@ State:
 
 ## Implementation Loop
 
-1. Read the compact current-status file and fetch current `origin/v8`.
+1. Read the compact current-status file and fetch current `origin/master`.
 2. Reconcile the active PR/head/gate from GitHub. Read historical progress only
    when evidence is needed.
 3. Select one review-worthy slice. Route routine scoped work to Terra when
@@ -150,7 +150,7 @@ State:
    high-cost semantic loop.
 8. Verify every finding against the current branch. Apply the narrow fix,
    rerun affected tests, push, and require current-head delta review.
-9. Re-fetch `origin/v8`, verify mergeability, gate SHAs, and CI immediately
+9. Re-fetch `origin/master`, verify mergeability, gate SHAs, and CI immediately
    before merge.
 10. Merge only after the gate is satisfied. Update local state.
 11. Deploy according to the declared impact. Sol retains control of actual VPS

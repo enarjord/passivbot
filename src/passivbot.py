@@ -10838,6 +10838,15 @@ class Passivbot:
         blocks = diagnostics.get("loss_gate_blocks", [])
         if not isinstance(blocks, list) or not blocks:
             return
+        emit_blocked_event = getattr(
+            self, "_emit_realized_loss_gate_blocked_event", None
+        )
+        pipeline = getattr(self, "_live_event_pipeline", None)
+        structured_console_available = bool(
+            callable(emit_blocked_event)
+            and Passivbot._live_event_console_available(self)
+            and getattr(pipeline, "console_sink", None) is not None
+        )
         now_ms = utc_ms()
         for block in blocks:
             if not isinstance(block, dict):
@@ -10856,31 +10865,33 @@ class Passivbot:
             projected_balance = float(block.get("projected_balance_after", 0.0) or 0.0)
             balance_floor = float(block.get("balance_floor", 0.0) or 0.0)
             max_loss_pct = float(block.get("max_realized_loss_pct", 1.0) or 1.0)
-            logging.warning(
-                "[risk] order blocked by realized-loss gate | %s %s %s qty=%.10g price=%.10g "
-                "projected_pnl=%.6f projected_balance=%.6f floor=%.6f max_realized_loss_pct=%.6f | "
-                "adjust live.max_realized_loss_pct to change behavior",
-                Passivbot._log_symbol(symbol),
-                pside,
-                order_type,
-                qty,
-                price,
-                projected_pnl,
-                projected_balance,
-                balance_floor,
-                max_loss_pct,
-            )
-            self._emit_realized_loss_gate_blocked_event(
-                symbol=symbol,
-                pside=pside,
-                order_type=order_type,
-                qty=qty,
-                price=price,
-                projected_pnl=projected_pnl,
-                projected_balance=projected_balance,
-                balance_floor=balance_floor,
-                max_realized_loss_pct=max_loss_pct,
-            )
+            if not structured_console_available:
+                logging.warning(
+                    "[risk] order blocked by realized-loss gate | %s %s %s qty=%.10g price=%.10g "
+                    "projected_pnl=%.6f projected_balance=%.6f floor=%.6f max_realized_loss_pct=%.6f | "
+                    "adjust live.max_realized_loss_pct to change behavior",
+                    Passivbot._log_symbol(symbol),
+                    pside,
+                    order_type,
+                    qty,
+                    price,
+                    projected_pnl,
+                    projected_balance,
+                    balance_floor,
+                    max_loss_pct,
+                )
+            if callable(emit_blocked_event):
+                emit_blocked_event(
+                    symbol=symbol,
+                    pside=pside,
+                    order_type=order_type,
+                    qty=qty,
+                    price=price,
+                    projected_pnl=projected_pnl,
+                    projected_balance=projected_balance,
+                    balance_floor=balance_floor,
+                    max_realized_loss_pct=max_loss_pct,
+                )
 
     def _log_min_effective_cost_blocks(
         self, out: dict, idx_to_symbol: dict[int, str]
