@@ -2553,7 +2553,7 @@ async def test_start_bot_treats_hsl_value_error_as_terminal_startup_failure(monk
     bot.warmup_trading_ready_candles = AsyncMock()
     bot._equity_hard_stop_enabled = lambda *args, **kwargs: True
     bot._equity_hard_stop_signal_mode = lambda *args, **kwargs: "coin"
-    bot._equity_hard_stop_initialize_coin_from_history = AsyncMock(
+    bot._equity_hard_stop_start_coin_history_replay = AsyncMock(
         side_effect=ValueError("missing unrealized_pnl_by_coin_pside")
     )
 
