@@ -4,6 +4,8 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+## v8.0.0 - 2026-07-14
+
 - Restored the documented offline HSL restart smoke by pinning its fixture to
   the intended per-side HSL contract and updating its post-flatten drawdown
   assertion to the current panic-fill-anchored finalization semantics. Coin-mode
