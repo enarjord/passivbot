@@ -9,6 +9,14 @@ All notable user-facing changes will be documented in this file.
   warning remains the fallback; gate decisions, diagnostics, and throttling are
   unchanged.
 
+## v8.0.0 - 2026-07-14
+
+- Restored the documented offline HSL restart smoke by pinning its fixture to
+  the intended per-side HSL contract and updating its post-flatten drawdown
+  assertion to the current panic-fill-anchored finalization semantics. Coin-mode
+  fake-live RED handling now exercises the production protective supervisor
+  instead of falling through normal planning while confirmations are pending.
+
 - Detailed min-effective-cost entry blocks now use their structured events as
   the sole normal console/text lines when a live-event console sink is
   available. Legacy detail lines remain the fallback, while the distinct

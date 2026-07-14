@@ -884,6 +884,66 @@ Related detailed plans:
     publish visible without substituting a comment as success. Keep advisory
     review loops clearly labeled until branch protection enforces the check.
 
+20. [ ] Per-asset collateral, debt, and valuation balance events.
+    Status: open. A 2026-07-14 evaluation confirmed that the existing
+    `balance.changed` event and console projection expose only aggregate raw
+    balance, hysteresis-snapped balance, equity, deltas, and source. The
+    authoritative refresh already receives the exact raw balance response
+    alongside the normalized scalar, but `DataPacketMetadata` retains only a
+    bounded hash/reference and the staged refresh discards the raw response
+    after metadata capture. Asset quantities, explicit liabilities, per-asset
+    USD values, and valuation prices therefore do not reach the event stream.
+
+    This is not a formatter-only change. Balance response contracts differ by
+    connector: examples include OKX account `details`, Bybit unified-account
+    `coin` rows, Hyperliquid core/spot clearinghouse state, Gate.io
+    multi-currency margin fields, Defx collateral rows, and generic CCXT
+    `total`/`free`/`used` mappings. In addition, `balance.changed` currently
+    triggers only when aggregate raw or snapped balance changes, so a
+    collateral-composition change can be missed when the account total remains
+    equal.
+
+    Target contract: normalize the already-fetched authoritative balance
+    response into a bounded `asset_balances` collection without making any new
+    exchange or ticker request. Each row should identify the asset and include
+    only values proven by that connector's response, such as total/net amount,
+    free/used amount, explicit debt/liability, USD value, derived or reported
+    USD price, collateral-enabled state, and field provenance. Missing values
+    remain absent; do not infer debt from an undocumented negative field or
+    invent a price. A derived price is allowed only when finite amount and USD
+    value from the same coherent response make the derivation unambiguous.
+
+    The durable event must include bounded count/truncation metadata and a
+    deterministic ordering, while the console should show a shorter clean
+    sample (for example the quote asset, every nonzero explicit debt, and the
+    largest collateral values). Keep full raw account payloads out of events,
+    console, text logs, and monitor artifacts. Emit a balance event when either
+    the aggregate transition or normalized composition signature changes, so
+    equal-total collateral substitutions remain observable. Diagnostic
+    normalization must not change the scalar balance used for trading or add a
+    new failure mode to the authoritative refresh; unsupported or malformed
+    breakdown extraction must instead be explicit and bounded rather than
+    silently replaced with an empty successful snapshot.
+
+    Implementation directions: define one normalized balance-asset row
+    contract and an exchange hook at the point where `capture_balance_snapshot`
+    still owns the raw response; carry the normalized snapshot, not the raw
+    response, through staged publication; track a deterministic composition
+    signature separately from trading balance state; enrich
+    `balance.changed`; and extend the dedicated console formatter with a
+    bounded sanitized asset summary. Implement connector parsers in focused
+    reviewable slices, starting with multi-collateral connectors that already
+    expose authoritative USD values and liabilities. Keep the logging-overhaul
+    loop paused while this item is only backlog work.
+
+    Required tests: connector fixtures for quantities, USD values/prices, and
+    explicit debt signs; missing/non-finite/zero fields; stable ordering and
+    truncation; no raw payload leakage; no additional exchange calls; unchanged
+    scalar balance behavior; composition-only event emission at equal aggregate
+    balance; no duplicate event for an unchanged composition; bounded console
+    formatting and sanitization; and explicit diagnostic-unavailable behavior
+    for unsupported or malformed breakdowns.
+
 ## Merged Work Log
 
 | Date | Item | PR / Commit | Result | Remaining |

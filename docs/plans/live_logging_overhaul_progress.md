@@ -6,7 +6,9 @@ merge, live smoke evidence changes, or new gaps are discovered.
 
 ## Update Policy
 
-- Update this file when a logging-overhaul slice is merged to `v8`.
+- Update this file when a logging-overhaul slice is merged to canonical
+  `master`. Entries before the v8.0.0 cutover retain their historical `v8`
+  branch wording.
 - Update it when a merged slice is deployed to VPS5 and smoke-tested.
 - Keep entries factual and compact: PR/commit, scope, validation, and remaining
   gap.

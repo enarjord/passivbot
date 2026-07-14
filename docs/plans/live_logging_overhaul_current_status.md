@@ -23,7 +23,8 @@ Estimated completion:
 ## Active Review Slice
 
 - Branch: `codex/v8-realized-loss-gate-console-migration`.
-- Base: `9773889ecb8a396bec31e1e11c326aed9fa2cbe7`, merged PR #1220.
+- Base: `a0897f83932db5e6888c1c96f8f1c668d452013f`, the `v8.0.0`
+  cutover merge on canonical `master`.
 - Slice: realized-loss gate console ownership.
 - Triggering evidence: `_log_realized_loss_gate_blocks` writes a detailed
   legacy warning immediately before emitting the already console/text-routed
@@ -483,7 +484,7 @@ Estimated completion:
   observability implementation with explicit file scope.
 - Luna or deterministic automation: metadata polling, state-change detection,
   CI/reviewer summaries, and read-only output parsing.
-- Parallel PRs must be orthogonal. Dependent work waits for merge to `v8`.
+- Parallel PRs must be orthogonal. Dependent work waits for merge to `master`.
 
 ## Next Slice
 
