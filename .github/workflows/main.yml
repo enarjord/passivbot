@@ -1,7 +1,104 @@
 name: CI
-on: [push]
+
+on:
+  pull_request:
+  push:
+    branches:
+      - master
+      - v8
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  build:
+  python:
+    name: Python 3.12
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
-      - run: 'true'
+      - name: Check out repository
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            requirements-live.txt
+            requirements-full.txt
+            requirements-dev.txt
+            requirements-rust.txt
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+        with:
+          toolchain: "1.90.0"
+          components: rustfmt, clippy
+
+      - name: Install Python dependencies
+        run: |
+          python -m venv .venv
+          .venv/bin/python -m pip install --upgrade pip
+          .venv/bin/python -m pip install -r requirements.txt
+
+      - name: Build and verify the Python Rust extension
+        env:
+          PYTHONPATH: src
+        run: |
+          .venv/bin/python -c "from rust_utils import check_and_maybe_compile; check_and_maybe_compile(force=True)"
+          .venv/bin/python -c "import passivbot_rust; from rust_utils import verify_loaded_runtime_extension; print(verify_loaded_runtime_extension())"
+
+      - name: Validate AI documentation
+        env:
+          PYTHONPATH: src
+        run: |
+          .venv/bin/python src/tools/check_ai_docs.py
+          .venv/bin/python src/tools/generate_live_event_registry.py --check
+          .venv/bin/python -m pytest tests/test_ai_docs.py tests/test_live_event_registry_docs.py
+
+      - name: Run Python test suite
+        env:
+          MPLBACKEND: Agg
+          MPLCONFIGDIR: ${{ runner.temp }}/matplotlib
+          PYTHONPATH: src
+        run: .venv/bin/python -m pytest
+
+      - name: Run release CLI smokes
+        env:
+          MPLBACKEND: Agg
+          MPLCONFIGDIR: ${{ runner.temp }}/matplotlib
+          PYTHONPATH: src
+        run: |
+          .venv/bin/python -c "from passivbot_cli.main import main; raise SystemExit(main(['tool', 'migrate-config-v7', '--help']))"
+          .venv/bin/python src/tools/run_fake_live.py \
+            configs/fake_live_hsl_btc.hjson \
+            scenarios/fake_live/hsl_long_red_restart.hjson \
+            --user ci_fake_hsl_restart \
+            --output-dir "${{ runner.temp }}/fake-live"
+
+  rust:
+    name: Rust
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+        with:
+          toolchain: "1.90.0"
+          components: rustfmt, clippy
+
+      - name: Run Rust tests
+        working-directory: passivbot-rust
+        run: cargo test --no-default-features
+
+      - name: Check Rust test targets with default features
+        working-directory: passivbot-rust
+        run: cargo check --tests
