@@ -52,6 +52,9 @@ def _make_mock_pbr():
         no_restart_drawdown_threshold,
         cooldown_minutes_after_red,
     ):
+        u64_max = (1 << 64) - 1
+        if not isinstance(stop_timestamp_ms, int) or not 0 <= stop_timestamp_ms <= u64_max:
+            raise OverflowError("stop_timestamp_ms must fit in u64")
         values = (
             float(stop_equity),
             float(stop_peak_strategy_equity),
@@ -69,6 +72,8 @@ def _make_mock_pbr():
             raise ValueError("stop_peak_strategy_equity must be >= stop_equity")
         if previous_no_restart_peak_strategy_equity < 0.0:
             raise ValueError("previous no-restart peak must be >= 0")
+        if drawdown_ema < 0.0:
+            raise ValueError("drawdown_ema must be >= 0")
         if not (0.0 < red_threshold <= no_restart_drawdown_threshold <= 1.0):
             raise ValueError(
                 "no_restart_drawdown_threshold must satisfy red_threshold <= threshold <= 1"
@@ -89,8 +94,12 @@ def _make_mock_pbr():
         )
         cooldown_until_ms = None
         if not no_restart and cooldown_minutes_after_red > 0.0:
-            cooldown_ms = max(1, round(cooldown_minutes_after_red * 60_000.0))
-            cooldown_until_ms = int(stop_timestamp_ms) + int(cooldown_ms)
+            cooldown_ms_f64 = math.floor(cooldown_minutes_after_red * 60_000.0 + 0.5)
+            if not math.isfinite(cooldown_ms_f64) or cooldown_ms_f64 > float(u64_max):
+                raise ValueError("cooldown_minutes_after_red is too large")
+            # Rust's positive float-to-u64 cast saturates, as does the timestamp add.
+            cooldown_ms = max(1, min(u64_max, int(cooldown_ms_f64)))
+            cooldown_until_ms = min(u64_max, stop_timestamp_ms + cooldown_ms)
         return {
             "no_restart_peak_strategy_equity": peak,
             "no_restart_drawdown_raw": raw,
@@ -507,6 +516,46 @@ def mock_pbr(monkeypatch):
     import passivbot
 
     monkeypatch.setattr(passivbot, "pbr", stub_module, raising=False)
+
+
+def _red_episode_finalization_kwargs(**overrides):
+    kwargs = {
+        "restart_after_red_policy": "always",
+        "stop_timestamp_ms": 1_000,
+        "stop_equity": 90.0,
+        "stop_peak_strategy_equity": 100.0,
+        "previous_no_restart_peak_strategy_equity": 100.0,
+        "drawdown_ema": 0.1,
+        "red_threshold": 0.05,
+        "no_restart_drawdown_threshold": 0.2,
+        "cooldown_minutes_after_red": 1.0,
+    }
+    kwargs.update(overrides)
+    return kwargs
+
+
+def test_mock_hsl_red_episode_finalization_rejects_negative_drawdown_ema():
+    fn = _make_mock_pbr().hsl_red_episode_finalization
+
+    with pytest.raises(ValueError, match="drawdown_ema must be >= 0"):
+        fn(**_red_episode_finalization_kwargs(drawdown_ema=-0.01))
+
+
+def test_mock_hsl_red_episode_finalization_rejects_oversized_cooldown():
+    fn = _make_mock_pbr().hsl_red_episode_finalization
+
+    with pytest.raises(ValueError, match="cooldown_minutes_after_red is too large"):
+        fn(**_red_episode_finalization_kwargs(cooldown_minutes_after_red=1.0e20))
+
+
+def test_mock_hsl_red_episode_finalization_saturates_cooldown_deadline():
+    fn = _make_mock_pbr().hsl_red_episode_finalization
+    u64_max = (1 << 64) - 1
+
+    result = fn(**_red_episode_finalization_kwargs(stop_timestamp_ms=u64_max - 5))
+
+    assert result["cooldown_until_ms"] == u64_max
+    assert result["disposition"] == "cooldown"
 
 
 def _dummy_config():
