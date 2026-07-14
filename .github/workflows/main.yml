@@ -36,6 +36,9 @@ jobs:
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+        with:
+          toolchain: "1.90.0"
+          components: rustfmt, clippy
 
       - name: Install Python dependencies
         run: |
@@ -88,6 +91,9 @@ jobs:
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+        with:
+          toolchain: "1.90.0"
+          components: rustfmt, clippy
 
       - name: Run Rust tests
         working-directory: passivbot-rust
