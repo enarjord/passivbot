@@ -611,27 +611,39 @@ async def _run_fake_cycle(bot):
     if not await bot.update_pos_oos_pnls_ohlcvs():
         return {"updated": False}
     if bot._equity_hard_stop_enabled():
-        if any(
-            bot._equity_hard_stop_runtime_red_latched(pside) and not bot._hsl_state(pside)["halted"]
-            for pside in bot._hsl_psides()
-            if bot._equity_hard_stop_enabled(pside)
-        ):
-            if getattr(bot, "exchange", "").lower() == "fake":
-                return await _run_fake_red_supervisor_step(bot)
-            await bot._equity_hard_stop_run_red_supervisor()
-            return {"red_supervisor": True}
-        await bot._equity_hard_stop_check()
-        if any(
-            bot._equity_hard_stop_runtime_red_latched(pside) and not bot._hsl_state(pside)["halted"]
-            for pside in bot._hsl_psides()
-            if bot._equity_hard_stop_enabled(pside)
-        ):
-            if getattr(bot, "exchange", "").lower() == "fake":
-                return await _run_fake_red_supervisor_step(bot)
-            await bot._equity_hard_stop_run_red_supervisor()
-            return {"red_supervisor": True}
-        if _fake_all_hsl_psides_terminal_latched(bot):
-            return {"terminal_hsl": True}
+        if bot._equity_hard_stop_signal_mode() == "coin":
+            await bot._equity_hard_stop_check()
+            if bot._equity_hard_stop_coin_red_active():
+                # Exercise the production coin RED supervisor instead of the legacy
+                # pside stepping shim. The production path uses protective planning
+                # and its own authoritative refresh contract, which prevents normal
+                # staged planning from running while post-write confirmation is due.
+                await bot._equity_hard_stop_run_coin_red_supervisor()
+                return {"red_supervisor": True, "mode": "coin"}
+        else:
+            if any(
+                bot._equity_hard_stop_runtime_red_latched(pside)
+                and not bot._hsl_state(pside)["halted"]
+                for pside in bot._hsl_psides()
+                if bot._equity_hard_stop_enabled(pside)
+            ):
+                if getattr(bot, "exchange", "").lower() == "fake":
+                    return await _run_fake_red_supervisor_step(bot)
+                await bot._equity_hard_stop_run_red_supervisor()
+                return {"red_supervisor": True}
+            await bot._equity_hard_stop_check()
+            if any(
+                bot._equity_hard_stop_runtime_red_latched(pside)
+                and not bot._hsl_state(pside)["halted"]
+                for pside in bot._hsl_psides()
+                if bot._equity_hard_stop_enabled(pside)
+            ):
+                if getattr(bot, "exchange", "").lower() == "fake":
+                    return await _run_fake_red_supervisor_step(bot)
+                await bot._equity_hard_stop_run_red_supervisor()
+                return {"red_supervisor": True}
+            if _fake_all_hsl_psides_terminal_latched(bot):
+                return {"terminal_hsl": True}
     refresh_authoritative = getattr(bot, "refresh_authoritative_state", None)
     if callable(refresh_authoritative) and not await refresh_authoritative():
         return {"updated": False}

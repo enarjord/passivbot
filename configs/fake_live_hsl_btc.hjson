@@ -106,6 +106,7 @@
     }
     execution_delay_seconds: 1.0
     hedge_mode: false
+    hsl_signal_mode: pside
     hsl_position_during_cooldown_policy: panic
     inactive_coin_candle_ttl_minutes: 10.0
     leverage: 5.0
