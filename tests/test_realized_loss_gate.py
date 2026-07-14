@@ -167,6 +167,11 @@ def _make_bot_for_logging():
     return bot
 
 
+class _FailingConsoleSink:
+    def write(self, _event):
+        raise OSError("console unavailable")
+
+
 # ---------------------------------------------------------------------------
 # _get_realized_pnl_cumsum_stats
 # ---------------------------------------------------------------------------
@@ -599,12 +604,13 @@ class TestLogRealizedLossGateBlocks:
         assert " BTC long " in caplog.text
         assert "close_auto_reduce_wel_long" in caplog.text
 
-    def test_block_emits_structured_event(self, caplog):
+    def test_no_console_sink_uses_legacy_warning_and_emits_event(self, caplog):
         bot = _make_bot_for_logging()
         sink = ListEventSink()
         bot.bot_id = "bot_loss_gate"
         bot.exchange = "binance"
         bot.user = "binance_01"
+        bot.live_event_console_enabled = True
         bot._live_event_current_cycle_id = "cy_loss_gate"
         bot._live_event_pipeline = LiveEventPipeline(
             structured_sinks=[sink],
@@ -650,6 +656,121 @@ class TestLogRealizedLossGateBlocks:
         assert event.data["projected_balance_after"] == pytest.approx(9800.0)
         assert event.data["balance_floor"] == pytest.approx(9900.0)
         assert event.data["max_realized_loss_pct"] == pytest.approx(0.01)
+
+    def test_missing_pipeline_uses_legacy_warning(self, caplog):
+        bot = _make_bot_for_logging()
+        bot.live_event_console_enabled = True
+        emitted = []
+        bot._emit_realized_loss_gate_blocked_event = lambda **kwargs: emitted.append(
+            kwargs
+        )
+        block = {
+            "symbol_idx": 0,
+            "pside": "long",
+            "order_type": "close_auto_reduce_wel_long",
+            "qty": -1.5,
+            "price": 80.0,
+            "projected_pnl": -200.0,
+            "projected_balance_after": 9800.0,
+            "balance_floor": 9900.0,
+            "max_realized_loss_pct": 0.01,
+        }
+
+        with caplog.at_level(logging.WARNING):
+            bot._log_realized_loss_gate_blocks(
+                {"diagnostics": {"loss_gate_blocks": [block]}},
+                {0: "BTCUSDT"},
+            )
+
+        assert "[risk] order blocked by realized-loss gate" in caplog.text
+        assert len(emitted) == 1
+
+    @pytest.mark.parametrize("console_sink_fails", [False, True])
+    def test_structured_console_owns_warning(self, caplog, console_sink_fails):
+        bot = _make_bot_for_logging()
+        structured_sink = ListEventSink()
+        console_sink = _FailingConsoleSink() if console_sink_fails else ListEventSink()
+        bot.bot_id = "bot_loss_gate"
+        bot.exchange = "binance"
+        bot.user = "binance_01"
+        bot.live_event_console_enabled = True
+        bot._live_event_current_cycle_id = "cy_loss_gate"
+        bot._live_event_pipeline = LiveEventPipeline(
+            structured_sinks=[structured_sink],
+            monitor_sinks=[],
+            console_sink=console_sink,
+        )
+        block = {
+            "symbol_idx": 0,
+            "pside": "long",
+            "order_type": "close_auto_reduce_wel_long",
+            "qty": -1.5,
+            "price": 80.0,
+            "projected_pnl": -200.0,
+            "projected_balance_after": 9800.0,
+            "balance_floor": 9900.0,
+            "max_realized_loss_pct": 0.01,
+        }
+
+        try:
+            with caplog.at_level(logging.WARNING):
+                bot._log_realized_loss_gate_blocks(
+                    {"diagnostics": {"loss_gate_blocks": [block]}},
+                    {0: "BTCUSDT"},
+                )
+                bot._log_realized_loss_gate_blocks(
+                    {"diagnostics": {"loss_gate_blocks": [block]}},
+                    {0: "BTCUSDT"},
+                )
+            assert bot._live_event_pipeline.flush(timeout=2.0) is True
+        finally:
+            assert bot._live_event_pipeline.close(timeout=2.0) is True
+
+        assert "[risk] order blocked by realized-loss gate" not in caplog.text
+        events = [
+            event
+            for event in structured_sink.events
+            if event.event_type == EventTypes.REALIZED_LOSS_GATE_BLOCKED
+        ]
+        assert len(events) == 1
+        if console_sink_fails:
+            assert bot._live_event_pipeline.sink_error_counters["console"] >= 1
+        else:
+            assert console_sink.events == events
+
+    def test_missing_emitter_uses_legacy_warning(self, caplog):
+        bot = _make_bot_for_logging()
+        bot.live_event_console_enabled = True
+        console_sink = ListEventSink()
+        bot._live_event_pipeline = LiveEventPipeline(
+            structured_sinks=[ListEventSink()],
+            monitor_sinks=[],
+            console_sink=console_sink,
+        )
+        bot._emit_realized_loss_gate_blocked_event = None
+        block = {
+            "symbol_idx": 0,
+            "pside": "long",
+            "order_type": "close_auto_reduce_wel_long",
+            "qty": -1.5,
+            "price": 80.0,
+            "projected_pnl": -200.0,
+            "projected_balance_after": 9800.0,
+            "balance_floor": 9900.0,
+            "max_realized_loss_pct": 0.01,
+        }
+
+        try:
+            with caplog.at_level(logging.WARNING):
+                bot._log_realized_loss_gate_blocks(
+                    {"diagnostics": {"loss_gate_blocks": [block]}},
+                    {0: "BTCUSDT"},
+                )
+        finally:
+            assert bot._live_event_pipeline.close(timeout=2.0) is True
+
+        assert "[risk] order blocked by realized-loss gate" in caplog.text
+        assert console_sink.events == []
 
     def test_unknown_symbol_idx_logs_unknown(self, caplog):
         bot = _make_bot_for_logging()
