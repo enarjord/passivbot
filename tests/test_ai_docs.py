@@ -11,8 +11,15 @@ def test_ai_documentation_has_no_structural_errors():
     assert errors == []
 
 
-def test_commands_compatibility_route_points_to_canonical_runbook():
-    compatibility_route = AI_DOCS_DIR / "commands.md"
+def test_compatibility_routes_point_to_canonical_documents():
+    expected_routes = {
+        "commands.md": "`runbooks/commands.md`",
+        "pr_auto_review_loop.md": "`runbooks/pr_review.md`",
+        "code_review_prompt.md": "`validation.md`",
+        "principles.yaml": "canonical_document: docs/ai/principles.md",
+    }
 
-    assert compatibility_route.is_file()
-    assert "`runbooks/commands.md`" in compatibility_route.read_text(encoding="utf-8")
+    for route_name, canonical_reference in expected_routes.items():
+        compatibility_route = AI_DOCS_DIR / route_name
+        assert compatibility_route.is_file()
+        assert canonical_reference in compatibility_route.read_text(encoding="utf-8")

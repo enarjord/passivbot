@@ -34,11 +34,26 @@ another's request for changes, and old-head verdicts do not apply to a new head.
 head, decision, and submission time instead of collapsing review history. Ambiguity wakes semantic
 review rather than being resolved by the polling tier.
 
+### Target Selection And Branch Cutovers
+
+- Treat each PR's current base ref and base SHA as its authoritative review target. Do not infer the
+  target from the feature-branch name, an old prompt, or cached scheduler state.
+- Repository-default review loops resolve the current default branch from live GitHub metadata.
+  A loop intentionally scoped to a non-default branch records that exception explicitly rather than
+  hardcoding a historical default.
+- Persist the observed base ref and default branch in compact state. A PR base-ref change or a
+  default-branch change for a default-target loop materially changes review scope: invalidate the
+  cached merge base and gate digest, refetch exact refs, and perform a fresh integrated review.
+- After a default-branch cutover, update scheduler filters, protected-check configuration, and
+  compact cache. Before retiring the old target or compatibility routes, require a changed-head wake
+  to discover a PR against the new default and load this canonical runbook successfully.
+
 ### Cost-Aware Polling
 
 Unchanged polls are deterministic metadata work, not semantic-review work:
 
-1. Fetch open-PR metadata including number, draft state, head SHA, update time, and CI summary.
+1. Fetch open-PR metadata including number, draft state, base ref/SHA, head SHA, update time, and CI
+   summary. Default-target loops also fetch the repository's current default branch.
 2. Compare it with compact saved state.
 3. Fetch reviews/comments and wake semantic review only for a new or materially changed PR.
 4. Do not fetch diffs, create worktrees, rerun tests, or invoke a reasoning model for an unchanged
@@ -65,9 +80,10 @@ not justify weakening it.
 
 ### Semantic Review Triggers
 
-Review when a ready PR is new, its head changes, its effective merge base changes materially, a
-maintainer requests re-review, or new evidence invalidates the prior conclusion. A CI-only state
-change does not duplicate semantic review. Do not approve drafts unless explicitly requested.
+Review when a ready PR is new, its head or base ref changes, its effective merge base changes
+materially, a default-target loop observes a new repository default, a maintainer requests
+re-review, or new evidence invalidates the prior conclusion. A CI-only state change does not
+duplicate semantic review. Do not approve drafts unless explicitly requested.
 
 After a changed head, review the delta and then the integrated full PR. Post one current verdict;
 do not repeat unchanged approvals or status narration.
@@ -82,6 +98,8 @@ polling cadence, and reviewer narration alone cannot prevent a new or unreviewed
 - A stale check, comment, or approval cannot satisfy the current-head gate.
 - The posting path re-fetches the head immediately before publishing the verdict.
 - Merge readiness still requires every configured review and CI gate to be green for the same head.
+- A `COMMENT` review remains advisory even when its prose says `APPROVE`; it cannot satisfy a
+  required GitHub approval or substitute for a protected status/check.
 
 If the automation cannot publish or enforce a SHA-bound check, describe it as advisory monitoring,
 not a mandatory merge gate.
@@ -134,6 +152,10 @@ Use a formal review when available:
 - `APPROVE` when no actionable findings remain
 - `REQUEST_CHANGES` for actionable defects
 - `COMMENT` for clarification or when self-approval is unavailable
+
+When self-approval is unavailable, a `COMMENT` may record the semantic verdict and exact reviewed
+SHAs, but it is not a formal approval. Describe the result as advisory unless a separate protected
+SHA-bound review check records it.
 
 Every verdict records:
 
