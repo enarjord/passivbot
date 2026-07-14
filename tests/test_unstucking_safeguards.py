@@ -1,5 +1,6 @@
 import json
 import logging
+import math
 import sys
 import types
 
@@ -38,6 +39,73 @@ def _make_mock_pbr():
         )
 
     module.hsl_no_restart_triggered = _hsl_no_restart_triggered
+
+    def _hsl_red_episode_finalization(
+        *,
+        restart_after_red_policy,
+        stop_timestamp_ms,
+        stop_equity,
+        stop_peak_strategy_equity,
+        previous_no_restart_peak_strategy_equity,
+        drawdown_ema,
+        red_threshold,
+        no_restart_drawdown_threshold,
+        cooldown_minutes_after_red,
+    ):
+        values = (
+            float(stop_equity),
+            float(stop_peak_strategy_equity),
+            float(previous_no_restart_peak_strategy_equity),
+            float(drawdown_ema),
+            float(red_threshold),
+            float(no_restart_drawdown_threshold),
+            float(cooldown_minutes_after_red),
+        )
+        if not all(math.isfinite(value) for value in values):
+            raise ValueError("HSL red episode finalization inputs must be finite")
+        if stop_equity <= 0.0:
+            raise ValueError("stop_equity must be > 0")
+        if stop_peak_strategy_equity < stop_equity:
+            raise ValueError("stop_peak_strategy_equity must be >= stop_equity")
+        if previous_no_restart_peak_strategy_equity < 0.0:
+            raise ValueError("previous no-restart peak must be >= 0")
+        if not (0.0 < red_threshold <= no_restart_drawdown_threshold <= 1.0):
+            raise ValueError(
+                "no_restart_drawdown_threshold must satisfy red_threshold <= threshold <= 1"
+            )
+        if cooldown_minutes_after_red < 0.0:
+            raise ValueError("cooldown_minutes_after_red must be >= 0")
+        peak = max(
+            previous_no_restart_peak_strategy_equity,
+            stop_peak_strategy_equity,
+            stop_equity,
+        )
+        raw = max(0.0, 1.0 - stop_equity / peak)
+        no_restart = _hsl_no_restart_triggered(
+            restart_after_red_policy,
+            raw,
+            drawdown_ema,
+            no_restart_drawdown_threshold,
+        )
+        cooldown_until_ms = None
+        if not no_restart and cooldown_minutes_after_red > 0.0:
+            cooldown_ms = max(1, round(cooldown_minutes_after_red * 60_000.0))
+            cooldown_until_ms = int(stop_timestamp_ms) + int(cooldown_ms)
+        return {
+            "no_restart_peak_strategy_equity": peak,
+            "no_restart_drawdown_raw": raw,
+            "no_restart_latched": no_restart,
+            "cooldown_until_ms": cooldown_until_ms,
+            "disposition": (
+                "no_restart"
+                if no_restart
+                else "cooldown"
+                if cooldown_until_ms is not None
+                else "halted_no_cooldown"
+            ),
+        }
+
+    module.hsl_red_episode_finalization = _hsl_red_episode_finalization
 
     class _EquityHardStopRollingPeak:
         def __init__(self):
@@ -2863,6 +2931,7 @@ async def test_hard_stop_finalize_red_stop_terminal_latches_and_stops(monkeypatc
     cfg = _dummy_config()
     bot = _make_dummy_bot(cfg)
     _hsl_cfg(bot)["cooldown_minutes_after_red"] = 5.0
+    _hsl_cfg(bot)["red_threshold"] = 0.05
     _hsl_cfg(bot)["no_restart_drawdown_threshold"] = 0.1
 
     async def fake_compute(pside, _ts):
@@ -2903,6 +2972,7 @@ async def test_hard_stop_finalize_red_stop_equal_threshold_latches_terminal(
     cfg = _dummy_config()
     bot = _make_dummy_bot(cfg)
     _hsl_cfg(bot)["cooldown_minutes_after_red"] = 5.0
+    _hsl_cfg(bot)["red_threshold"] = 0.05
     _hsl_cfg(bot)["no_restart_drawdown_threshold"] = 0.1
 
     async def fake_compute(pside, _ts):
@@ -2943,6 +3013,7 @@ async def test_hard_stop_finalize_red_stop_autorestarts_after_cooldown(monkeypat
     cfg = _dummy_config()
     bot = _make_dummy_bot(cfg)
     _hsl_cfg(bot)["cooldown_minutes_after_red"] = 1.0
+    _hsl_cfg(bot)["red_threshold"] = 0.05
     _hsl_cfg(bot)["no_restart_drawdown_threshold"] = 0.2
     _hsl_state(bot)["runtime"]._initialized = True
     _hsl_state(bot)["runtime"]._red_latched = True
@@ -3056,6 +3127,7 @@ async def test_hard_stop_finalize_red_stop_uses_persistent_no_restart_peak(monke
     cfg = _dummy_config()
     bot = _make_dummy_bot(cfg)
     _hsl_cfg(bot)["cooldown_minutes_after_red"] = 1.0
+    _hsl_cfg(bot)["red_threshold"] = 0.05
     _hsl_cfg(bot)["no_restart_drawdown_threshold"] = 0.2
     sink = ListEventSink()
     bot._live_event_current_cycle_id = "cy_hsl_repeat_red"
