@@ -842,8 +842,8 @@ async def test_hsl_replay_scenarios_run_end_to_end(
     _cleanup_fake_user_state(user)
     base_config_path = REPO_ROOT / "configs" / "fake_live_hsl_btc.hjson"
     cfg = load_config(str(base_config_path), verbose=False)
-    # These scenarios assert pside-level RED cooldown semantics. The live default is unified HSL
-    # signal mode, so pin the legacy scenario contract explicitly.
+    # These scenarios assert pside-level RED cooldown semantics. Keep that fixture contract
+    # explicit even though the shared fake-live config now pins the same mode.
     cfg["live"]["hsl_signal_mode"] = "pside"
     cfg["bot"]["long"]["hsl_red_threshold"] = 0.02
     cfg["bot"]["long"].setdefault("hsl", {})["red_threshold"] = 0.02
@@ -891,6 +891,91 @@ async def test_hsl_replay_scenarios_run_end_to_end(
         assert len(step_summaries) == expected_steps
         assert (run_dir / "hsl_trace.json").exists()
         assert expected_log_fragment in (run_dir / "fake_live.log").read_text(encoding="utf-8")
+    finally:
+        _cleanup_fake_user_state(user)
+
+
+@pytest.mark.asyncio
+@pytest.mark.fake_live
+async def test_documented_hsl_restart_scenario_runs_unmodified(tmp_path):
+    """Keep the checked-in offline smoke command and its assertions executable as written."""
+    import passivbot_rust as pbr
+
+    if getattr(pbr, "__is_stub__", False):
+        pytest.skip("requires real passivbot_rust extension")
+
+    user = f"fake_hsl_documented_{tmp_path.name}"
+    _cleanup_fake_user_state(user)
+    try:
+        args = argparse.Namespace(
+            config=str(REPO_ROOT / "configs" / "fake_live_hsl_btc.hjson"),
+            scenario=str(
+                REPO_ROOT / "scenarios" / "fake_live" / "hsl_long_red_restart.hjson"
+            ),
+            user=user,
+            max_steps=None,
+            output_dir=str(tmp_path),
+            log_level=1,
+            snapshot_each_step=False,
+        )
+        assert await _async_main(args) == 0
+    finally:
+        _cleanup_fake_user_state(user)
+
+
+@pytest.mark.asyncio
+@pytest.mark.fake_live
+async def test_coin_hsl_restart_scenario_uses_protective_supervisor(tmp_path):
+    """Coin-mode RED must not fall through normal planning with confirmations pending."""
+    import passivbot_rust as pbr
+
+    if getattr(pbr, "__is_stub__", False):
+        pytest.skip("requires real passivbot_rust extension")
+
+    user = f"fake_hsl_coin_supervisor_{tmp_path.name}"
+    _cleanup_fake_user_state(user)
+    cfg = load_config(
+        str(REPO_ROOT / "configs" / "fake_live_hsl_btc.hjson"), verbose=False
+    )
+    cfg["live"]["hsl_signal_mode"] = "coin"
+    config_path = tmp_path / "fake_live_hsl_btc_coin.json"
+    config_path.write_text(json.dumps(cfg), encoding="utf-8")
+    scenario = hjson.loads(
+        (REPO_ROOT / "scenarios" / "fake_live" / "hsl_long_red_restart.hjson").read_text(
+            encoding="utf-8"
+        )
+    )
+    scenario.pop("assertions", None)
+    scenario_path = tmp_path / "hsl_long_red_restart_coin.hjson"
+    scenario_path.write_text(hjson.dumps(scenario), encoding="utf-8")
+
+    try:
+        args = argparse.Namespace(
+            config=str(config_path),
+            scenario=str(scenario_path),
+            user=user,
+            max_steps=None,
+            output_dir=str(tmp_path),
+            log_level=1,
+            snapshot_each_step=False,
+        )
+        assert await _async_main(args) == 0
+
+        run_dirs = sorted(
+            path
+            for path in tmp_path.iterdir()
+            if path.is_dir() and (path / "remote_calls.json").exists()
+        )
+        assert len(run_dirs) == 1
+        artifacts = _load_run_artifacts(run_dirs[0])
+        assert artifacts["positions"] == []
+        assert any(
+            fill.get("symbol") == "BTC/USDT:USDT"
+            and fill.get("position_side") == "long"
+            and fill.get("side") == "sell"
+            and fill.get("reduceOnly") is True
+            for fill in artifacts["fills"]
+        )
     finally:
         _cleanup_fake_user_state(user)
 
