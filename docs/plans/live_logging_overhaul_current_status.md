@@ -545,9 +545,12 @@ ownership. PR #1221's realized-loss gate console migration is also merged and
 deployed with a settled hard-green smoke. PR #1231's console-verbosity policy
 and PR #1232's canonical-master review contract are merged. PR #1233's
 raw-balance materiality change is merged and present in the VPS5 checkout but
-not yet active in the running processes. Its next implementation follow-up is
-the active warmup-detail slice above. After that slice, evaluate post-ready
-`[boot]` candle-index maintenance chatter.
+not yet active in the running processes. PR #1234's warmup-detail demotion is
+also merged, with runtime activation pending the same authorized restart. The
+active candle-index maintenance demotion is described above. After it merges,
+activate PRs #1233, #1234, and the candle-index slice in one authorized exact
+five-bot restart, run settled smoke validation, and use the resulting natural
+INFO stream to select the next dominant non-action console family.
 
 Do not create progress-only PRs or resume unrelated logging work from stale
 worktrees.
