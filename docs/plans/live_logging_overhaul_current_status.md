@@ -22,37 +22,44 @@ Estimated completion:
 
 ## Active Review Slice
 
-- Branch: `codex/compact-candle-lock-warning`, based on canonical
-  `75bf6cd67f61b902fb5ca4399939c2b2e5945088` after PR #1248.
-- PR: #1249, `Compact candle lock-hold warnings`.
-- Slice: compact only the normal `fetch_lock_hold_timeout` warning while
-  retaining one warning per affected symbol.
-- Triggering evidence: the PR #1248 restart naturally printed six simultaneous
-  OKX lock-hold warnings at 346-349 visible characters. Each repeated the
-  deterministic lock path, configured timeout, implied action, and owner
-  exchange/symbol/timeframe already carried by top-level scope.
-- Scope: retain event, exchange, symbol, timeframe, and compact holder
-  PID/task/attempt/actual-held timing; preserve full owner scope for the
-  separate stale-wait warning path.
+- Branch: `codex/compact-hsl-startup-console`, based on canonical
+  `9aef070e4a4a5b911b56f9dafb2457aacee0875a` after PR #1249.
+- PR: pending, `Compact HSL startup settings line`.
+- Slice: compact only the INFO HSL-enabled settings projection while retaining
+  the side and every currently displayed setting.
+- Triggering evidence: the PR #1249 restart naturally printed one HSL settings
+  line per enabled side at 310-314 visible characters, above the normal
+  240-character record budget.
+- Scope: retain red threshold, EMA span, cooldown, no-restart threshold, signal
+  mode, yellow/orange ratios, orange action, panic-close type, and restart
+  policy with concise stable labels and bounded numeric rendering.
 - Behavior boundary: observability-only; no exchange calls, cache or task
-  mutation, lock scheduling/acquisition/release, timeout/retry/exception or
-  warning-cadence change, Rust, order, risk, backtest, optimizer, or trading
-  behavior.
+  mutation, HSL parsing/validation/state/replay/decision change, Rust, order,
+  risk, backtest, optimizer, or trading behavior.
 - Review gate: temporary maintainer-authorized exact-head Hermes plus green CI
   while Grok is halted.
 - Expected VPS action: after merge, one authorized exact five-bot restart.
-  Observe the warning only if it occurs naturally, and run settled smoke; do
-  not manufacture lock contention, exchange, state, or trading events.
+  Validate the natural startup settings lines and settled smoke; do not
+  manufacture exchange, state, risk, or trading events.
 
 ## Deployed Baseline
 
 - Canonical `master` and VPS5 are
-  `75bf6cd67f61b902fb5ca4399939c2b2e5945088`, PR #1248. The tracked checkout
+  `9aef070e4a4a5b911b56f9dafb2457aacee0875a`, PR #1249. The tracked checkout
   is clean and expected untracked artifacts are preserved.
 - VPS5 runs merged master in bot PIDs
-  `957519/957674/957669/957739/957675`. The exact pane PIDs remain
+  `958819/958821/958823/958825/958827`. The exact pane PIDs remain
   `856294/856332/856364/856398/856434`, and unrelated `misc:0.0` PID `434835`
   is unchanged.
+- PR #1249 was activated with one exact five-bot graceful restart. Every old
+  bot exited naturally within 24 seconds after one SIGINT round; no escalation
+  was used. Eleven logical lock-hold warnings then occurred naturally at
+  205-218 visible characters, versus 346-349 before the change, while retaining
+  per-symbol scope and compact holder identity/timing. Immediate and settled
+  smoke were hard-green. The final fresh window had `216/216` remote and
+  `52/52` account-critical calls successful, seven successful fill refreshes,
+  five config-valid processes, zero hard/log/monitor/pipeline failures, no
+  active HSL replay, and a clean tracked checkout.
 - PR #1248 was activated with one exact five-bot graceful restart. Every old
   bot exited naturally within ten seconds after one SIGINT round. Natural
   KuCoin output reduced the approved-coin override line from 678 to 154 visible
@@ -725,10 +732,12 @@ smoke were hard-green; report-time `D` samples cleared to exact `R/S` states.
 
 PR #1248 is merged, deployed, and naturally validated: its bounded
 `live.approved_coins` startup projection reduced the exact KuCoin line from 678
-to 154 visible characters while retaining counts and bounded samples. The
-active slice compacts the six naturally observed 346-349 character candle
-lock-hold warnings without changing their per-symbol admission or lock
-behavior.
+to 154 visible characters while retaining counts and bounded samples. PR #1249
+is also merged, deployed, and naturally validated: eleven logical lock-hold
+warnings measured 205-218 visible characters while retaining per-symbol scope
+and compact holder identity/timing. The active slice compacts the naturally
+observed 310-314 character HSL-enabled settings line without changing HSL
+configuration or behavior.
 
 Do not create progress-only PRs or resume unrelated logging work from stale
 worktrees.

@@ -2456,6 +2456,30 @@ def _equity_hard_stop_coin_active_pside(self, pside: str) -> bool:
     return total_wallet_exposure_limit > 0.0
 
 
+def _format_hsl_startup_config(
+    pside: str,
+    *,
+    red_threshold: float,
+    ema_span_minutes: float,
+    cooldown_minutes_after_red: float,
+    no_restart_drawdown_threshold: float,
+    signal_mode: str,
+    ratio_yellow: float,
+    ratio_orange: float,
+    orange_tier_mode: str,
+    panic_close_order_type: str,
+    restart_after_red_policy: str,
+) -> str:
+    """Return the bounded operator-facing HSL startup configuration summary."""
+    return (
+        f"[risk] HSL[{pside}] on | red={red_threshold:.6g} ema={ema_span_minutes:.6g} "
+        f"cd={cooldown_minutes_after_red:.6g} no-r={no_restart_drawdown_threshold:.6g} "
+        f"mode={signal_mode} tiers={ratio_yellow:.6g}/{ratio_orange:.6g} "
+        f"orange={orange_tier_mode} panic={panic_close_order_type} "
+        f"restart={restart_after_red_policy}"
+    )
+
+
 def _parse_hsl_config(self) -> dict[str, dict[str, Any]]:
     signal_mode = self._equity_hard_stop_signal_mode()
     out = {}
@@ -2543,22 +2567,19 @@ def _parse_hsl_config(self) -> dict[str, dict[str, Any]]:
                     pside,
                 )
             logging.info(
-                "[risk] HSL[%s] enabled | red_threshold=%.6f ema_span_minutes=%.3f "
-                "cooldown_minutes_after_red=%.3f "
-                "no_restart_drawdown_threshold=%.6f signal_mode=%s "
-                "yellow_ratio=%.3f orange_ratio=%.3f "
-                "orange_mode=%s panic_close=%s restart_after_red=%s",
-                pside,
-                red_threshold,
-                ema_span_minutes,
-                cooldown_minutes_after_red,
-                no_restart_drawdown_threshold,
-                signal_mode,
-                ratio_yellow,
-                ratio_orange,
-                orange_tier_mode,
-                panic_close_order_type,
-                restart_after_red_policy,
+                _format_hsl_startup_config(
+                    pside,
+                    red_threshold=red_threshold,
+                    ema_span_minutes=ema_span_minutes,
+                    cooldown_minutes_after_red=cooldown_minutes_after_red,
+                    no_restart_drawdown_threshold=no_restart_drawdown_threshold,
+                    signal_mode=signal_mode,
+                    ratio_yellow=ratio_yellow,
+                    ratio_orange=ratio_orange,
+                    orange_tier_mode=orange_tier_mode,
+                    panic_close_order_type=panic_close_order_type,
+                    restart_after_red_policy=restart_after_red_policy,
+                )
             )
     return out
 

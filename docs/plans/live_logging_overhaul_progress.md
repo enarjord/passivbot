@@ -15,7 +15,34 @@ merge, live smoke evidence changes, or new gaps are discovered.
 - Do not use this file for design churn; unresolved design details belong in the
   plan or a focused handoff doc.
 
-## Latest Canonical Deployment (PR #1248)
+## Latest Canonical Deployment (PR #1249)
+
+- PR #1249 merged to `master` as `9aef070e4a4a5b911b56f9dafb2457aacee0875a`
+  after exact-head Hermes approval and green Python/Rust CI while Grok was
+  temporarily halted. It compacts only the normal candle lock-hold warning;
+  lock ownership, scheduling, timeout, retry, release, and trading behavior are
+  unchanged.
+- VPS5 fast-forwarded cleanly and gracefully restarted the five exact bot
+  panes. Old PIDs `957519/957669/957674/957675/957739` exited naturally within
+  24 seconds after one SIGINT round; no escalation was used. Pane PIDs and
+  unrelated `misc:0.0` PID `434835` were preserved. New bot PIDs are
+  `958819/958821/958823/958825/958827` for
+  Binance/KuCoin/GateIO/OKX/Hyperliquid respectively.
+- Eleven logical post-restart lock-hold warnings occurred naturally at 205-218
+  visible characters, versus the prior 346-349. They retained event,
+  exchange, symbol, timeframe, holder PID/task/attempt, and actual held time.
+- Immediate smoke was hard-green with `92/92` account-critical calls and 21
+  successful fill refreshes. The final fresh two-minute smoke remained
+  `ok=true` with zero hard/log/monitor/process/pipeline failures, `216/216`
+  remote and `52/52` account-critical calls successful, seven successful fill
+  refreshes, five config-valid processes, no active HSL replay, and a clean
+  tracked repository.
+- The same restart exposed the next boundedness gap: the INFO HSL-enabled
+  settings line measured 310-314 characters across the four forager bots. The
+  next slice compacts only that startup projection while retaining every
+  displayed setting and all HSL semantics.
+
+## Previous Canonical Deployment (PR #1248)
 
 - PR #1248 merged to `master` as `75bf6cd67f61b902fb5ca4399939c2b2e5945088`
   after exact-head Hermes approval and green Python/Rust CI while Grok was
