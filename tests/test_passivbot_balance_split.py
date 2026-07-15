@@ -9498,6 +9498,8 @@ async def test_run_execution_loop_records_nonshutdown_cancelled_error(
                 "status": "-",
                 "code": "-",
                 "endpoint": "unknown",
+                "action": "record_error_restart_backoff",
+                "cycle": "abandoned",
             }),
             {},
         )
@@ -9758,6 +9760,8 @@ async def test_run_execution_loop_error_log_includes_type_status_and_action(capl
                 "status": "500",
                 "code": "500000",
                 "endpoint": "account-overview",
+                "action": "record_error_restart_backoff",
+                "cycle": "abandoned",
             }),
             {},
         )

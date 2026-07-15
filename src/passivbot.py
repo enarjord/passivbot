@@ -5332,17 +5332,26 @@ class Passivbot:
             return True
         self._health_errors += 1
         fields = self._execution_loop_error_fields(exc)
+        incident_action = "record_error_restart_backoff"
+        incident_cycle = "abandoned"
         self._monitor_record_event(
             "error.bot",
             ("error", "bot"),
-            {"source": "run_execution_loop", **fields},
+            {
+                "source": "run_execution_loop",
+                **fields,
+                "action": incident_action,
+                "cycle": incident_cycle,
+            },
         )
         logging.error(
-            "[error] operation=run_execution_loop error_type=%s status=%s code=%s endpoint=%s action=record_error_restart_backoff cycle=abandoned",
+            "[error] operation=run_execution_loop error_type=%s status=%s code=%s endpoint=%s action=%s cycle=%s",
             fields["error_type"],
             fields["status"],
             fields["code"],
             fields["endpoint"],
+            incident_action,
+            incident_cycle,
         )
         self._log_execution_loop_error_burst(fields)
         if logging.getLogger().isEnabledFor(logging.DEBUG):
