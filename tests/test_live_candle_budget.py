@@ -1896,18 +1896,20 @@ def test_warmup_candle_cache_decision_rejects_stale_or_forced_cache(monkeypatch)
 
 @pytest.mark.asyncio
 async def test_warmup_candles_reuses_fresh_1m_cache(monkeypatch, caplog):
-    import logging
     import passivbot as pb_mod
 
     now_ms = 120 * 60_000
     latest_expected = now_ms - 60_000
+    cached_symbol = "CACHED/USDT:USDT"
+    cold_symbols = [f"MISS{idx}/USDT:USDT" for idx in range(20)]
+    symbols = [cached_symbol, *cold_symbols]
     monkeypatch.setattr(pb_mod, "utc_ms", lambda: now_ms)
 
     def fake_compute_live_warmup_windows(*args, **kwargs):
         return (
-            {"CACHED/USDT:USDT": 12, "MISS/USDT:USDT": 12},
-            {"CACHED/USDT:USDT": 0, "MISS/USDT:USDT": 0},
-            {"CACHED/USDT:USDT": True, "MISS/USDT:USDT": True},
+            {symbol: 12 for symbol in symbols},
+            {symbol: 0 for symbol in symbols},
+            {symbol: True for symbol in symbols},
         )
 
     monkeypatch.setattr(
@@ -1934,7 +1936,7 @@ async def test_warmup_candles_reuses_fresh_1m_cache(monkeypatch, caplog):
             return None
 
         def get_completed_candle_health(self, symbol, windows, *, now_ms=None):
-            coverage_ok = symbol == "CACHED/USDT:USDT"
+            coverage_ok = symbol == cached_symbol
             return {
                 "ok": coverage_ok,
                 "timeframes": {
@@ -1996,20 +1998,30 @@ async def test_warmup_candles_reuses_fresh_1m_cache(monkeypatch, caplog):
         return object()
 
     bot._emit_live_event = emit_live_event
-    with caplog.at_level(logging.INFO):
+    with caplog.at_level(logging.DEBUG):
         await pb_mod.Passivbot.warmup_candles_staggered(
             bot,
-            symbols_override=["CACHED/USDT:USDT", "MISS/USDT:USDT"],
+            symbols_override=symbols,
             skip_jitter=True,
             context="trading-ready warmup",
         )
 
-    assert [symbol for symbol, _ in bot.cm.calls] == ["MISS/USDT:USDT"]
+    assert [symbol for symbol, _ in bot.cm.calls] == sorted(cold_symbols)
+    warmup_records = [
+        record for record in caplog.records if record.message.startswith("[warmup]")
+    ]
+    assert warmup_records
+    assert all(record.levelno == logging.DEBUG for record in warmup_records)
+    assert any("trading-ready warmup" in record.message for record in warmup_records)
+    assert any("target" in record.message for record in warmup_records)
+    assert any("slot view" in record.message for record in warmup_records)
+    assert any("windows" in record.message for record in warmup_records)
+    assert any("candles:" in record.message for record in warmup_records)
     assert any(
         "cache decision" in record.message
         and "reused=1" in record.message
-        and "cold=1" in record.message
-        for record in caplog.records
+        and "cold=20" in record.message
+        for record in warmup_records
     )
     warmup_events = [
         kwargs
@@ -2020,16 +2032,58 @@ async def test_warmup_candles_reuses_fresh_1m_cache(monkeypatch, caplog):
     assert warmup_events[0]["cycle_id"] == "cy_warmup"
     assert warmup_events[0]["reason_code"] == "warmup_cache_decision"
     assert warmup_events[0]["data"]["context"] == "trading-ready warmup"
-    assert warmup_events[0]["data"]["symbol_count"] == 2
+    assert warmup_events[0]["data"]["symbol_count"] == 21
     assert warmup_events[0]["data"]["reused_count"] == 1
-    assert warmup_events[0]["data"]["cold_count"] == 1
+    assert warmup_events[0]["data"]["cold_count"] == 20
     assert warmup_events[0]["data"]["cold_path_required"] is True
     assert warmup_events[0]["data"]["reason_counts"] == {
-        "missing_coverage": 1,
+        "missing_coverage": 20,
         "warm_cache_accepted": 1,
     }
     assert warmup_events[0]["data"]["window_min_candles"] == 12
     assert warmup_events[0]["data"]["window_max_candles"] == 12
+
+
+@pytest.mark.asyncio
+async def test_newly_normal_forager_warmup_trigger_is_debug_only(monkeypatch, caplog):
+    import passivbot as pb_mod
+
+    monkeypatch.setattr(pb_mod, "utc_ms", lambda: 1_000_000)
+
+    class FakeBot:
+        _forager_new_normal_warmup_symbols = {"NEW/USDT:USDT"}
+
+        def __init__(self):
+            self.calls = []
+
+        def is_forager_mode(self, pside):
+            return pside == "long"
+
+        async def warmup_candles_staggered(self, **kwargs):
+            self.calls.append(kwargs)
+
+    bot = FakeBot()
+    with caplog.at_level(logging.DEBUG):
+        warmed = await pb_mod.Passivbot._warmup_new_forager_normal_symbols(
+            bot, ["NEW/USDT:USDT"]
+        )
+
+    assert warmed == {"NEW/USDT:USDT"}
+    assert bot.calls == [
+        {
+            "symbols_override": ["NEW/USDT:USDT"],
+            "ttl_ms": 0,
+            "skip_jitter": True,
+            "context": "forager-selected warmup",
+        }
+    ]
+    forager_records = [
+        record
+        for record in caplog.records
+        if "forager-selected normal warmup" in record.message
+    ]
+    assert len(forager_records) == 1
+    assert forager_records[0].levelno == logging.DEBUG
 
 
 @pytest.mark.asyncio

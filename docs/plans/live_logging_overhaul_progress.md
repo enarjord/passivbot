@@ -8175,9 +8175,17 @@ VPS5 deployment status:
 - PR #1231 merged to canonical `master` at `991dadb691`. Its VPS5 evidence-based
   console policy makes operator value and transition/materiality the INFO
   admission contract; the docs-only merge required no restart.
-- Active branch `codex/balance-console-materiality` suppresses only raw-balance
-  jitter from the console when finite snapped delta is zero. Structured,
-  monitor, and durable text delivery remain unchanged. Snapped changes and
-  unclassifiable events fail visible. The legacy raw-only fallback line is also
-  removed; no balance, hysteresis, equity, scheduling, exchange, risk, order,
-  Rust, backtest, or optimizer behavior changes.
+- PR #1232 merged at `9cd1ba3daa` and updated the reusable review contract for
+  canonical `master`.
+- PR #1233 merged at `22ca1a78fa`. The VPS5 checkout fast-forwarded cleanly,
+  preserving expected untracked artifacts, but the five running bot processes
+  still have PR #1221 code loaded pending the next authorized restart. A
+  pre-restart two-minute report matched all five configured processes and the
+  new repository head; one KuCoin `InvalidNonce` failure recovered on the next
+  authoritative fetch.
+- The five current VPS5 logs contain 512 `[warmup]` INFO lines: Binance 168,
+  KuCoin 54, GateIO 52, OKX 222, and Hyperliquid 16. The active
+  `codex/warmup-console-detail-levels` slice moves routine kickoff, target, slot,
+  window, progress, cache-decision, and forager-trigger details to DEBUG while
+  preserving readiness milestones, failures, structured cache decisions, and
+  all warmup behavior.

@@ -4,6 +4,11 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Routine successful candle-warmup details now remain available at DEBUG
+  instead of filling the normal live console. Startup readiness milestones,
+  degraded/failure visibility, structured cache decisions, and warmup behavior
+  are unchanged.
+
 - Backtests now write `drawdown.png` alongside the existing summary plots,
   showing drawdown from the running peak of collateral-agnostic strategy equity.
 

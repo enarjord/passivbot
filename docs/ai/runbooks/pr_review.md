@@ -10,7 +10,8 @@ Review is read-only unless the user explicitly asks for implementation. Do not p
 SSH, signal processes, contact authenticated exchange endpoints, or run a live bot merely because
 those actions might strengthen a review.
 
-An approval applies only to the reviewed head SHA and merge base.
+An approval applies only to the reviewed head SHA and merge base unless the proportional mechanical
+delta exception below is documented and satisfied.
 
 ## Durable Autonomous Loop
 
@@ -30,9 +31,10 @@ Do not persist credentials, full comments, diffs, test output, or exchange data.
 repository refs remain authoritative.
 
 Scope review state by reviewer identity and head SHA. One reviewer's approval does not supersede
-another's request for changes, and old-head verdicts do not apply to a new head. Preserve reviewer,
-head, decision, and submission time instead of collapsing review history. Ambiguity wakes semantic
-review rather than being resolved by the polling tier.
+another's request for changes, and old-head verdicts do not apply to a semantically changed head.
+The proportional mechanical-delta contract below is the only carry-forward exception. Preserve
+reviewer, head, decision, and submission time instead of collapsing review history. Ambiguity wakes
+semantic review rather than being resolved by the polling tier.
 
 ### Target Selection And Branch Cutovers
 
@@ -88,16 +90,39 @@ duplicate semantic review. Do not approve drafts unless explicitly requested.
 After a changed head, review the delta and then the integrated full PR. Post one current verdict;
 do not repeat unchanged approvals or status narration.
 
+### Proportional Mechanical Delta Review
+
+Do not require a redundant full semantic review when a changed head only integrates the current
+target branch or resolves a mechanical conflict without changing the already-reviewed behavior.
+The final adjudicator may carry the prior semantic verdict forward when all of these are true:
+
+1. The target-relative production, test, configuration, and contract diff is unchanged from the
+   semantically reviewed scope.
+2. The new commit delta is inspected directly and contains only mechanical integration work, such
+   as preserving both sides of a changelog/ledger conflict, formatting, or an equivalent no-op.
+3. The integrated branch is mergeable and required CI is green.
+4. The PR records the old reviewed head, new head, target SHA, exact mechanical delta, validation,
+   and the reason a full re-review is unnecessary.
+
+This exception does not apply to code, test-contract, configuration, dependency, generated
+contract, runtime, or substantive documentation changes, nor when the effective merge-base change
+alters integrated behavior. Those changes require a current-head semantic delta and integrated
+review. If an obsolete request-for-changes names only the resolved mechanical blocker, a maintainer
+may dismiss or supersede it with the recorded mechanical-delta evidence; that is not a degraded
+gate. Repository-enforced CI and protection still apply.
+
 ### Enforceable Review Gates
 
 When repository policy makes semantic review mandatory, publish the result as a status or check
 bound to the exact head SHA and enforce that check with repository merge protection. Comments,
 polling cadence, and reviewer narration alone cannot prevent a new or unreviewed head from merging.
 
-- A new head makes the semantic-review check pending until that head is reviewed.
-- A stale check, comment, or approval cannot satisfy the current-head gate.
+- A semantically changed head makes the semantic-review check pending until that head is reviewed.
+- A stale check, comment, or approval alone cannot satisfy the current-head gate. A current-head
+  mechanical-delta check may explicitly carry the prior semantic verdict under the contract above.
 - The posting path re-fetches the head immediately before publishing the verdict.
-- Merge readiness still requires every configured review and CI gate to be green for the same head.
+- Merge readiness still requires every configured semantic review, carried mechanical-delta
+  adjudication where applicable, and CI gate to be green for the integrated current head.
 - A `COMMENT` review remains advisory even when its prose says `APPROVE`; it cannot satisfy a
   required GitHub approval or substitute for a protected status/check.
 
@@ -113,7 +138,7 @@ not a mandatory merge gate.
 
 ## Review Method
 
-1. Read `AGENTS.md`, `docs/ai/principles.md`, `docs/ai/validation.md`, and routed subsystem
+1. Read `AGENTS.md`, `docs/ai/principles.yaml`, `docs/ai/validation.md`, and routed subsystem
    contracts.
 2. Read the PR body and classify affected contracts: documentation/tooling, observability, live
    orchestration, exchange, Rust/trading, backtest, optimizer, config, or data preparation.
@@ -167,7 +192,8 @@ Every verdict records:
 - base-only failures and environmental limitations
 - residual risk and untested surfaces
 
-Never call a PR merge-ready unless required review and CI are green for the same head SHA.
+Never call a PR merge-ready unless required current-head review, or a documented proportional
+mechanical carry-forward, and CI are green for the integrated head SHA.
 
 After a new push, review the delta and re-check the integrated result before superseding the prior
 verdict. Do not post repeated unchanged approvals or polling narration.

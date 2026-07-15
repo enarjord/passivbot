@@ -109,13 +109,19 @@ State:
 
 ## Review Gate
 
-- Merge only after every currently required reviewer and CI are green on the
-  exact current head SHA.
+- Merge only after every currently required semantic reviewer and CI are green
+  on the exact current head SHA, or after prior semantic approval is carried by
+  a documented current-head mechanical-delta adjudication under the canonical
+  review runbook.
 - Prefer formal GitHub reviews or commit-bound checks. If GitHub forbids
   self-approval, accept a structured comment only when it names the reviewer,
   verdict, and exact head SHA.
-- A head change invalidates prior approval unless the reviewer explicitly
-  carries it to the new head after delta/integrated review.
+- A semantic head change invalidates prior approval unless the reviewer carries
+  it to the new head after delta/integrated review. A conflict-only merge,
+  changelog/ledger preservation, formatting, or equivalent mechanical no-op may
+  retain prior semantic approval under the proportional mechanical-delta
+  contract in `docs/ai/runbooks/pr_review.md`; record the exact delta and keep
+  CI and repository protection green.
 - Findings from optional reviewers still require verification and resolution.
 - Use a degraded gate only with explicit maintainer authorization and record it
   in the PR and historical evidence.
