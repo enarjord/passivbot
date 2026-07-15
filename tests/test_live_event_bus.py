@@ -2066,7 +2066,7 @@ def test_console_format_summarizes_health_error_burst_without_raw_error():
             "latest_error_type": "RequestTimeout",
             "latest_status": "-",
             "latest_code": "-",
-            "latest_error": "kucoinfutures GET https://example.invalid/account?apiKey=SECRET",
+            "latest_endpoint": "account-overview",
         },
     )
 

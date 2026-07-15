@@ -9459,6 +9459,10 @@ async def test_run_execution_loop_records_nonshutdown_cancelled_error(
     bot.error_counts = []
     bot._equity_hard_stop_enabled = lambda *args, **kwargs: False
     bot._set_log_silence_watchdog_context = lambda *args, **kwargs: None
+    monitor_events = []
+    bot._monitor_record_event = lambda *args, **kwargs: monitor_events.append(
+        (args, kwargs)
+    )
     bot._monitor_record_error = MagicMock()
     bot._maybe_log_health_summary = lambda: None
     bot._maybe_log_unstuck_status = lambda: None
@@ -9485,13 +9489,26 @@ async def test_run_execution_loop_records_nonshutdown_cancelled_error(
 
     assert result is None
     assert bot._health_errors == 1
-    bot._monitor_record_error.assert_called_once()
+    bot._monitor_record_error.assert_not_called()
+    assert monitor_events == [
+        (
+            ("error.bot", ("error", "bot"), {
+                "source": "run_execution_loop",
+                "error_type": "CancelledError",
+                "status": "-",
+                "code": "-",
+                "endpoint": "unknown",
+            }),
+            {},
+        )
+    ]
     bot.restart_bot_on_too_many_errors.assert_awaited_once()
     bot.execute_to_exchange.assert_not_awaited()
     messages = [record.message for record in caplog.records]
     assert any(
-        "[error] run_execution_loop failed" in message
+        "[error] operation=run_execution_loop" in message
         and "error_type=CancelledError" in message
+        and "endpoint=unknown" in message
         and "action=record_error_restart_backoff" in message
         for message in messages
     )
@@ -9693,6 +9710,10 @@ async def test_run_execution_loop_error_log_includes_type_status_and_action(capl
     bot._health_rate_limits = 0
     bot._equity_hard_stop_enabled = lambda *args, **kwargs: False
     bot._set_log_silence_watchdog_context = lambda *args, **kwargs: None
+    monitor_events = []
+    bot._monitor_record_event = lambda *args, **kwargs: monitor_events.append(
+        (args, kwargs)
+    )
     bot._monitor_record_error = MagicMock()
     bot._maybe_recover_exchange_time_sync = AsyncMock(return_value=False)
     bot.restart_bot_on_too_many_errors = AsyncMock()
@@ -9701,7 +9722,11 @@ async def test_run_execution_loop_error_log_includes_type_status_and_action(capl
     class FakeExchangeError(RuntimeError):
         pass
 
-    exc = FakeExchangeError("kucoinfutures GET https://example.invalid/account-overview")
+    raw_error = (
+        "kucoinfutures GET https://example.invalid/account-overview?api_key=SECRET "
+        "connector said raw-message"
+    )
+    exc = FakeExchangeError(raw_error)
     exc.http_status = 500
     exc.code = "500000"
 
@@ -9718,23 +9743,113 @@ async def test_run_execution_loop_error_log_includes_type_status_and_action(capl
     bot.refresh_authoritative_state = fake_refresh_authoritative_state
     bot.restart_bot_on_too_many_errors.side_effect = fake_restart
 
-    with caplog.at_level(logging.ERROR):
+    with caplog.at_level(logging.DEBUG):
         result = await bot.run_execution_loop()
 
     assert result is None
     assert bot._health_errors == 1
     bot.restart_bot_on_too_many_errors.assert_awaited_once()
+    bot._monitor_record_error.assert_not_called()
+    assert monitor_events == [
+        (
+            ("error.bot", ("error", "bot"), {
+                "source": "run_execution_loop",
+                "error_type": "FakeExchangeError",
+                "status": "500",
+                "code": "500000",
+                "endpoint": "account-overview",
+            }),
+            {},
+        )
+    ]
     messages = [record.message for record in caplog.records]
     assert not any("error with run_execution_loop" in message for message in messages)
     assert any(
-        "[error] run_execution_loop failed" in message
+        "[error] operation=run_execution_loop" in message
         and "error_type=FakeExchangeError" in message
         and "status=500" in message
         and "code=500000" in message
+        and "endpoint=account-overview" in message
         and "cycle=abandoned" in message
         and "action=record_error_restart_backoff" in message
         for message in messages
     )
+    assert all(raw_error not in message for message in messages)
+    assert all("SECRET" not in message for message in messages)
+    debug_stack_messages = [
+        record.message
+        for record in caplog.records
+        if record.levelno == logging.DEBUG and "stack frames" in record.message
+    ]
+    assert len(debug_stack_messages) == 1
+    assert raw_error not in debug_stack_messages[0]
+    assert "FakeExchangeError" not in debug_stack_messages[0]
+
+
+@pytest.mark.asyncio
+async def test_execution_loop_error_normal_info_is_bounded_and_skips_nondebug_frames(
+    caplog, monkeypatch
+):
+    bot = Passivbot.__new__(Passivbot)
+    bot.stop_signal_received = False
+    bot._health_errors = 0
+    bot.error_counts = []
+    bot._maybe_recover_exchange_time_sync = AsyncMock(return_value=False)
+    bot._monitor_record_event = MagicMock()
+    bot.restart_bot = AsyncMock()
+
+    async def fake_sleep(_seconds):
+        return None
+
+    monkeypatch.setattr(asyncio, "sleep", fake_sleep)
+    format_tb = MagicMock()
+    monkeypatch.setattr(passivbot_module.traceback, "format_tb", format_tb)
+    raw_error = "raw-message https://example.invalid/private?api_key=SECRET"
+
+    try:
+        raise RuntimeError(raw_error)
+    except RuntimeError as exc:
+        with caplog.at_level(logging.INFO):
+            assert await bot._handle_execution_loop_failure(
+                exc, allow_time_sync_recovery=False
+            ) is True
+
+    assert bot._health_errors == 1
+    assert len(bot.error_counts) == 1
+    bot.restart_bot.assert_not_awaited()
+    format_tb.assert_not_called()
+    normal_messages = [
+        record.message for record in caplog.records if record.levelno >= logging.INFO
+    ]
+    assert "[health] error_budget count=1 limit=10 window=1h action=continue" in normal_messages
+    assert all(raw_error not in message for message in normal_messages)
+    assert all("SECRET" not in message for message in normal_messages)
+
+
+def test_execution_loop_error_fields_are_bounded_and_classify_unknown_endpoint():
+    bot = Passivbot.__new__(Passivbot)
+
+    class FakeExchangeError(RuntimeError):
+        pass
+
+    exc = FakeExchangeError(
+        "GET https://example.invalid/" + "x" * 80 + "?api_key=SECRET"
+    )
+    exc.status = "500?api_key=SECRET"
+    exc.code = "500000?signature=SIG"
+    exc.info = {"status": "429", "retCode": "RATE_LIMIT"}
+
+    fields = bot._execution_loop_error_fields(exc)
+
+    assert fields == {
+        "error_type": "FakeExchangeError",
+        "status": "429",
+        "code": "RATE_LIMIT",
+        "endpoint": "unknown",
+    }
+    assert "SECRET" not in str(fields)
+    assert "SIG" not in str(fields)
+    assert "example.invalid" not in str(fields)
 
 
 def test_execution_loop_error_burst_summarizes_repeated_endpoints(caplog, monkeypatch):
@@ -9746,7 +9861,7 @@ def test_execution_loop_error_burst_summarizes_repeated_endpoints(caplog, monkey
         "error_type": "RequestTimeout",
         "status": "-",
         "code": "-",
-        "error": "kucoinfutures GET https://api-futures.kucoin.com/api/v1/account-overview?currency=USDT",
+        "endpoint": "account-overview",
     }
 
     with caplog.at_level(logging.WARNING):
@@ -9783,6 +9898,7 @@ def test_execution_loop_error_burst_structured_console_owns_warning(caplog, monk
         "error_type": "RequestTimeout",
         "status": "-",
         "code": "-",
+        "endpoint": "account-overview",
         "error": (
             "kucoinfutures GET https://api-futures.kucoin.com/api/v1/"
             "account-overview?api_key=SECRET&signature=SIG"
@@ -9820,9 +9936,13 @@ def test_execution_loop_error_burst_structured_console_owns_warning(caplog, monk
         {"endpoint": "account-overview", "count": 3}
     ]
     assert event.data["latest_error_type"] == "RequestTimeout"
-    assert "SECRET" not in event.data["latest_error"]
-    assert "SIG" not in event.data["latest_error"]
-    assert "[redacted]" in event.data["latest_error"]
+    assert event.data["latest_status"] == "-"
+    assert event.data["latest_code"] == "-"
+    assert event.data["latest_endpoint"] == "account-overview"
+    assert "latest_error" not in event.data
+    assert "SECRET" not in str(event.data)
+    assert "SIG" not in str(event.data)
+    assert "api-futures.kucoin.com" not in str(event.data)
     assert console_sink.events == [event]
     assert bot._live_event_pipeline.close(timeout=2.0) is True
 
@@ -9853,7 +9973,7 @@ def test_execution_loop_error_burst_uses_legacy_fallback_without_structured_cons
         "error_type": "RequestTimeout",
         "status": "-",
         "code": "-",
-        "error": "kucoinfutures GET https://api-futures.kucoin.com/api/v1/account-overview",
+        "endpoint": "account-overview",
     }
 
     with caplog.at_level(logging.WARNING):
@@ -9892,7 +10012,7 @@ def test_execution_loop_error_burst_uses_legacy_fallback_when_emitter_unavailabl
         "error_type": "RequestTimeout",
         "status": "-",
         "code": "-",
-        "error": "kucoinfutures GET https://api-futures.kucoin.com/api/v1/account-overview",
+        "endpoint": "account-overview",
     }
 
     with caplog.at_level(logging.WARNING):
@@ -9926,7 +10046,7 @@ def test_execution_loop_error_burst_keeps_structured_console_owner_when_queue_is
         "error_type": "RequestTimeout",
         "status": "-",
         "code": "-",
-        "error": "kucoinfutures GET https://api-futures.kucoin.com/api/v1/account-overview",
+        "endpoint": "account-overview",
     }
 
     with caplog.at_level(logging.WARNING):
@@ -9947,6 +10067,28 @@ def test_execution_loop_error_burst_keeps_structured_console_owner_when_queue_is
     pipeline._queue.get_nowait()
     pipeline._queue.task_done()
     assert pipeline.close(timeout=2.0) is True
+
+
+@pytest.mark.asyncio
+async def test_execution_loop_error_budget_keeps_count_and_restart_threshold(caplog, monkeypatch):
+    bot = Passivbot.__new__(Passivbot)
+    now = 1_000_000
+    monkeypatch.setattr(passivbot_module, "utc_ms", lambda: now)
+    bot.error_counts = [now - 60 * 60 * 1000] + [now - 1] * 8
+    bot.restart_bot = AsyncMock()
+
+    with caplog.at_level(logging.INFO):
+        await bot.restart_bot_on_too_many_errors()
+        with pytest.raises(Exception, match="too many errors"):
+            await bot.restart_bot_on_too_many_errors()
+
+    assert len(bot.error_counts) == 10
+    bot.restart_bot.assert_awaited_once()
+    messages = [record.message for record in caplog.records]
+    assert messages == [
+        "[health] error_budget count=9 limit=10 window=1h action=continue",
+        "[health] error_budget count=10 limit=10 window=1h action=restart_at_limit",
+    ]
 
 
 def test_staged_refresh_timing_summary_aggregates_routine_fast_refreshes(
