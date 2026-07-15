@@ -10278,13 +10278,12 @@ class Passivbot:
                 or "confirm" in str(source)
                 or "staged" in str(source)
             )
-            log_level = (
+            structured_event_level = (
                 logging.INFO
                 if new_events or blocking_or_confirmation_refresh or elapsed_ms >= 30_000
                 else logging.DEBUG
             )
-            logging.log(
-                log_level,
+            logging.debug(
                 "[fills] refresh timing | source=%s mode=%s | elapsed=%dms | before=%d after=%d new=%d | lookback=%s scope=%s coverage_ready=%s coverage_reason=%s overlap_minutes=%s pending_pnl=%d",
                 source,
                 refresh_mode,
@@ -10323,7 +10322,7 @@ class Passivbot:
                 coverage_before=coverage_status,
                 coverage_after=post_refresh_coverage_status,
                 overlap_minutes=overlap_minutes,
-                level=logging.getLevelName(log_level).lower(),
+                level=logging.getLevelName(structured_event_level).lower(),
             )
 
             return pnls_complete and coverage_ready_after

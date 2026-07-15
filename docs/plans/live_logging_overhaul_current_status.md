@@ -22,39 +22,50 @@ Estimated completion:
 
 ## Active Review Slice
 
-- Branch: `codex/staged-refresh-console-threshold`.
-- Base: `a97a815a52ce66eac274bee7f0b2ac31f496ee37`, canonical `master`
-  after PR #1239.
-- Slice: keep completed staged account-refresh timing lines at DEBUG unless the
-  cohort wall time reaches ten seconds.
-- Triggering evidence: the measured five-bot console sample contained 33
-  immediate `[state] staged refresh timings` INFO lines, about 13.2 records per
-  bot-hour and more than 20% of the non-action INFO budget. Natural post-PR
-  #1239 startup output again included sub-ten-second completed timing lines.
-- Scope: decouple console/text level from the existing `interesting` predicate.
-  Preserve structured INFO timing events for pending confirmations, meaningful
-  changes, unusual plans, and ten-second cohorts; preserve periodic summaries
-  for routine samples.
-- Behavior boundary: preserve timing calculations, fetch plans, concurrency,
-  exchange calls, readiness, `staged refresh still waiting` transitions,
-  structured event payloads, order/risk behavior, Rust, backtest, and optimizer
-  behavior.
+- Branch: `codex/fill-timing-console-detail`.
+- Base: `9441fa45091f557145cb56f4fce00374b636a8cd`, canonical `master`
+  after PR #1240.
+- Slice: keep successful fill-refresh and fetcher-request timing detail at
+  DEBUG; request-error timing remains INFO.
+- Triggering evidence: natural post-ready output retained successful
+  `[fills] refresh timing` lines at `1600-7608ms` and a successful
+  `[fills] fetcher request timing` line at `33850ms`. These are maintenance
+  diagnostics, while actual fills have dedicated operator records and complete
+  `fills.refresh_summary` events remain durable off console/text.
+- Scope: remove source, fill-count, and elapsed-time INFO promotion from the
+  completed refresh timing line, and remove elapsed-time INFO promotion from
+  successful fetcher request timing. Preserve request-error INFO visibility.
+- Behavior boundary: preserve refresh selection and execution, cache/history
+  coverage, actual fill records, warnings and degraded states, structured event
+  payloads, error propagation, order/risk behavior, Rust, backtest, and
+  optimizer behavior.
 - Publication state, exact head, mergeability, CI, and current-head reviewer
   verdicts: query live GitHub metadata; do not embed self-invalidating values.
 - Expected VPS action: after merge, one authorized exact five-bot restart may
-  activate the console threshold. Validate natural INFO absence below ten
-  seconds and retained INFO at or above ten seconds; do not manufacture state,
-  exchange, readiness, or trading events.
+  activate the level changes. Validate natural successful fill timing absence
+  from INFO while structured summaries and normal fill behavior continue; do
+  not manufacture fills, failures, state, or trading events.
 
 ## Deployed Baseline
 
 - Canonical `master` and VPS5 checkout:
-  `a97a815a52ce66eac274bee7f0b2ac31f496ee37`, PR #1239; tracked status clean
+  `9441fa45091f557145cb56f4fce00374b636a8cd`, PR #1240; tracked status clean
   and expected untracked artifacts preserved.
 - VPS5 runs the same head in bot PIDs
-  `944582/944692/944584/944476/944694`. The exact pane PIDs remain
+  `945997/945999/946001/946002/946003`. The exact pane PIDs remain
   `856294/856332/856364/856398/856434`, and unrelated `misc:0.0` PID `434835`
   is unchanged.
+- PR #1240 was activated with one exact five-bot graceful restart. Every old
+  bot exited naturally after one SIGINT round; no escalation was required.
+  The immediate window caught one real KuCoin authoritative-state timeout and
+  active startup HSL replay. Both aged out before the settled two-minute smoke,
+  which was `ok=true` with `176/176` remote calls and `32/32`
+  account-critical calls successful, six successful fill refreshes, all five
+  expected processes/configs in state `R`, and zero hard, log, monitor,
+  process, or event-pipeline failures. Natural INFO completed staged-refresh
+  lines were all at or above ten seconds (`10061-13600ms`), while structured
+  INFO retained interesting sub-threshold samples at `2190ms`, `5948ms`, and
+  `7431ms`, proving the sink boundary without manufactured events.
 - PR #1239 was activated with one exact five-bot graceful restart. Every old
   bot exited naturally after one SIGINT round; no escalation was required.
   The immediate startup window retained one real KuCoin authoritative-state
@@ -623,9 +634,12 @@ naturally validated: all five bots completed market-ready cycles without the
 1002-1050 character aggregate appearing in normal INFO logs. PR #1239's bounded
 candle-fetch warning and durable remote-call redaction are also merged and
 deployed. Its settled smoke is green; no natural candle-fetch failure occurred
-in the bounded post-restart window. The active slice above now moves completed
-sub-ten-second staged-refresh timing detail off the normal console while
-retaining structured INFO events for interesting samples.
+in the bounded post-restart window. PR #1240's staged-refresh console threshold
+is merged, deployed, and naturally validated: completed INFO lines were all at
+or above ten seconds while interesting sub-threshold structured INFO samples
+remained durable. The active slice above now removes successful fill-refresh
+timing detail from the normal console while preserving actual fills, request
+errors, warnings, and structured summaries.
 
 Do not create progress-only PRs or resume unrelated logging work from stale
 worktrees.

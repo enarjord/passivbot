@@ -4639,7 +4639,9 @@ async def test_manager_refresh_records_successful_empty_refresh(tmp_path: Path):
 
 
 @pytest.mark.asyncio
-async def test_manager_refresh_logs_fetcher_request_timing(tmp_path: Path, caplog):
+async def test_manager_refresh_logs_slow_successful_fetcher_request_timing_at_debug(
+    tmp_path: Path, caplog, monkeypatch
+):
     cache_dir = tmp_path / "fills_request_timing"
 
     class _Api:
@@ -4665,15 +4667,27 @@ async def test_manager_refresh_logs_fetcher_request_timing(tmp_path: Path, caplo
         fetcher=_ApiFetcher(),
         cache_path=cache_dir,
     )
+    monotonic_times = iter([0.0] * 7 + [11.0])
+    with monkeypatch.context() as timing_patch:
+        timing_patch.setattr(
+            fem.time,
+            "monotonic",
+            lambda: next(monotonic_times, 11.0),
+        )
+        with caplog.at_level(logging.DEBUG, logger=fem.logger.name):
+            await manager.refresh(start_ms=123, end_ms=456)
 
-    with caplog.at_level(logging.DEBUG, logger=fem.logger.name):
-        await manager.refresh(start_ms=123, end_ms=456)
-
-    messages = [record.message for record in caplog.records]
-    assert any("[fills] fetcher request timing" in msg for msg in messages)
-    assert any("requests=3" in msg for msg in messages)
-    assert any("fetch_b:n=2" in msg for msg in messages)
-    assert any("range=1970-01-01 00:00:00..1970-01-01 00:00:00" in msg for msg in messages)
+    timing_records = [
+        record
+        for record in caplog.records
+        if "[fills] fetcher request timing" in record.message
+    ]
+    assert len(timing_records) == 1
+    assert timing_records[0].levelno == logging.DEBUG
+    assert "elapsed=11000ms" in timing_records[0].message
+    assert "requests=3" in timing_records[0].message
+    assert "fetch_b:n=2" in timing_records[0].message
+    assert "range=1970-01-01 00:00:00..1970-01-01 00:00:00" in timing_records[0].message
 
 
 @pytest.mark.asyncio
@@ -4703,11 +4717,16 @@ async def test_manager_refresh_logs_fetcher_error_detail(tmp_path: Path, caplog)
         with pytest.raises(RuntimeError, match="remote timeout detail"):
             await manager.refresh(start_ms=123, end_ms=456)
 
-    messages = [record.message for record in caplog.records]
-    assert any("[fills] fetcher request timing" in msg for msg in messages)
-    assert any("fetch_a:n=1" in msg for msg in messages)
-    assert any("err_type=RuntimeError" in msg for msg in messages)
-    assert any("err_msg=remote timeout detail" in msg for msg in messages)
+    timing_records = [
+        record
+        for record in caplog.records
+        if "[fills] fetcher request timing" in record.message
+    ]
+    assert len(timing_records) == 1
+    assert timing_records[0].levelno == logging.INFO
+    assert "fetch_a:n=1" in timing_records[0].message
+    assert "err_type=RuntimeError" in timing_records[0].message
+    assert "err_msg=remote timeout detail" in timing_records[0].message
 
 
 def test_fill_event_cache_disk_full_raises_clear_error(tmp_path: Path, monkeypatch, sample_events):

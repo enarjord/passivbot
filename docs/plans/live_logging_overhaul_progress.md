@@ -8311,3 +8311,26 @@ VPS5 deployment status:
   slice keeps those completed lines at DEBUG while preserving interesting
   structured INFO events, periodic timing summaries, readiness, and refresh
   behavior.
+
+### 2026-07-15: Staged Refresh Threshold Deployed And Fill Timing Follow-Up
+
+- PR #1240 merged to canonical `master` at `9441fa4509` after exact-head Hermes
+  and Grok approval plus green Python and Rust CI. VPS5 fast-forwarded cleanly,
+  and all five exact bots exited naturally after one SIGINT round. Exact pane
+  PIDs and unrelated `misc:0.0` PID `434835` remained unchanged.
+- The immediate window caught one real KuCoin authoritative-state timeout and
+  active startup HSL replay. Both aged out before the settled two-minute smoke,
+  which was `ok=true` with `176/176` remote calls and `32/32`
+  account-critical calls successful, six successful fill refreshes, five
+  matching processes/configs all in state `R`, and zero hard, log, monitor,
+  process, or event-pipeline failures.
+- Natural completed staged-refresh INFO lines were all at or above ten seconds
+  (`10061-13600ms`). Complete structured INFO still retained interesting
+  sub-threshold samples at `2190ms`, `5948ms`, and `7431ms`, proving the level
+  boundary without manufacturing state or trading events.
+- Natural post-ready output also retained successful `[fills] refresh timing`
+  detail at `1600-7608ms` and a successful `[fills] fetcher request timing`
+  line at `33850ms`. The active `codex/fill-timing-console-detail` slice keeps
+  successful timing diagnostics at DEBUG while preserving request-error INFO,
+  actual fill lines, warnings, structured `fills.refresh_summary` events,
+  refresh behavior, and failure propagation.
