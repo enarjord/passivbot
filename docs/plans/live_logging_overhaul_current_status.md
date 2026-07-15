@@ -24,7 +24,7 @@ Estimated completion:
 
 - Branch: `codex/compact-candle-lock-warning`, based on canonical
   `75bf6cd67f61b902fb5ca4399939c2b2e5945088` after PR #1248.
-- PR: pending, `Compact candle lock-hold warnings`.
+- PR: #1249, `Compact candle lock-hold warnings`.
 - Slice: compact only the normal `fetch_lock_hold_timeout` warning while
   retaining one warning per affected symbol.
 - Triggering evidence: the PR #1248 restart naturally printed six simultaneous
