@@ -22,32 +22,30 @@ Estimated completion:
 
 ## Active Review Slice
 
-- Branch: `codex/warmup-console-detail-levels`.
-- Base: `a869aedea161ca4fbd11f801a6ff91be2b215354`, canonical `master`
-  after PR #1230.
-- Slice: keep routine successful candle-warmup detail off the normal INFO
-  console while preserving DEBUG and structured diagnostics.
-- Triggering evidence: the current five VPS5 logs contain 512 `[warmup]` INFO
-  lines since the PR #1221 restart. Repeated kickoff, target, slot, window,
-  progress, cache-decision, and forager-trigger lines dominate this family even
-  though they are neither durable state changes nor readiness transitions.
-- Scope: demote those seven routine text producers to DEBUG. Preserve
-  `cache.warmup_decision`, `bot.startup_timing`, `bot.ready`, startup
-  start/completion milestones, and every degraded/failure signal. Also codify
-  proportional carry-forward of semantic approval for directly verified
-  mechanical integration deltas.
-- Behavior boundary: preserve candle fetching, cache acceptance, concurrency,
-  awaits, forager selection, readiness, scheduling, exchange calls, order/risk
-  behavior, Rust, backtest, and optimizer behavior.
+- Branch: `codex/candle-index-console-detail`.
+- Base: `e1dcf3164a88b77762e3cd3ed3e40b834513469a`, canonical `master`
+  after PR #1234.
+- Slice: keep successful candle-index maintenance detail off the normal INFO
+  console and stop labeling post-ready maintenance as `[boot]`.
+- Triggering evidence: the current five VPS5 logs contain 168 successful
+  candle-index start/completion lines: Binance 54, KuCoin 20, GateIO 16, OKX
+  72, and Hyperliquid 6. Repeated one-symbol post-ready rebuilds dominate this
+  family even though they are neither readiness milestones nor failures.
+- Scope: demote successful index-rebuild start/completion text to DEBUG under
+  `[candle]`. Preserve rebuild calls, ranges, counters, failure visibility,
+  startup readiness milestones, and all structured events.
+- Behavior boundary: preserve candle fetching, index rebuilding, cache
+  acceptance, readiness, scheduling, exchange calls, order/risk behavior,
+  Rust, backtest, and optimizer behavior.
 - Publication state, exact head, mergeability, CI, and current-head reviewer
   verdicts: query live GitHub metadata; do not embed self-invalidating values.
 - Expected VPS action: after merge, one authorized exact five-bot restart may
-  activate and validate both PR #1233 and this slice. Do not manufacture balance
-  or warmup events.
+  activate and validate PRs #1233, #1234, and this slice. Do not manufacture
+  balance, warmup, or candle-maintenance events.
 
 ## Deployed Baseline
 
-- Canonical `master`: `a869aedea161ca4fbd11f801a6ff91be2b215354`, PR #1230.
+- Canonical `master`: `e1dcf3164a88b77762e3cd3ed3e40b834513469a`, PR #1234.
 - VPS5 repository checkout: `22ca1a78fa16c2dad827fcf39a6b1fb245302c2b`,
   PR #1233; tracked status clean and expected untracked artifacts preserved.
 - VPS5 running-process baseline remains PR #1221 code until the next authorized
@@ -62,6 +60,10 @@ Estimated completion:
   jitter from the console while preserving structured, monitor, and durable
   text delivery. Runtime activation and natural-event validation await the next
   authorized restart.
+- PR #1234 merged at `e1dcf3164a88b77762e3cd3ed3e40b834513469a`.
+  It moves routine successful warmup detail to DEBUG while preserving startup
+  milestones, failures, structured cache decisions, and all warmup behavior.
+  Runtime activation awaits the next authorized restart.
 - PR #1221 merged and deployed at
   `dacd66adebfd230999aebf7f9fbd34a5b2990490`. It made the structured
   realized-loss gate warning the sole normal console/text owner while preserving
