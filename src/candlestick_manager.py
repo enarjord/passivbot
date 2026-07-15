@@ -1476,8 +1476,8 @@ class CandlestickManager:
         will be emitted again if the condition persists.
         """
         now = time.monotonic()
-        last = self._warning_last_log.get(throttle_key, 0.0)
-        if (now - last) < self._warning_throttle_seconds:
+        last = self._warning_last_log.get(throttle_key)
+        if last is not None and (now - last) < self._warning_throttle_seconds:
             return
         self._warning_last_log[throttle_key] = now
         self._log("warning", event, **fields)

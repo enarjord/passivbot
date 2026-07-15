@@ -344,6 +344,7 @@ async def test_ccxt_fetch_warning_uses_bounded_signature_and_keeps_callback_payl
         return None
 
     monkeypatch.setattr(cm, "_sleep_interruptible", no_sleep)
+    monkeypatch.setattr("candlestick_manager.time.monotonic", lambda: 50.0)
     warning_records = []
 
     class CaptureHandler(logging.Handler):

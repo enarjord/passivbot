@@ -6,6 +6,8 @@ All notable user-facing changes will be documented in this file.
 
 - Candle-fetch retry and exhaustion warnings now use bounded operator
   signatures instead of retaining raw request parameters and exception text.
+  Their first occurrence is emitted even during the process's initial
+  five-minute throttle window.
   Structured remote-call events omit raw exception text and replace explicit
   request URLs with a redacted marker plus stable hash; retries, callback
   invocation, and candle behavior are unchanged.
