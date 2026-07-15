@@ -351,8 +351,10 @@ async def test_ccxt_fetch_warning_uses_bounded_signature_and_keeps_callback_payl
             warning_records.append(record)
 
     handler = CaptureHandler(level=logging.WARNING)
+    original_global_disable = logging.root.manager.disable
     original_disabled = cm.log.disabled
     original_level = cm.log.level
+    logging.disable(logging.NOTSET)
     cm.log.disabled = False
     cm.log.setLevel(logging.WARNING)
     cm.log.addHandler(handler)
@@ -369,6 +371,7 @@ async def test_ccxt_fetch_warning_uses_bounded_signature_and_keeps_callback_payl
         cm.log.removeHandler(handler)
         cm.log.setLevel(original_level)
         cm.log.disabled = original_disabled
+        logging.disable(original_global_disable)
         handler.close()
 
     warning_records = [
