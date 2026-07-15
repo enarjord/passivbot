@@ -4189,21 +4189,21 @@ class Passivbot:
             wmin, wmax = (
                 (min(wmins), max(wmins)) if wmins else (default_win, default_win)
             )
-            logging.info(
+            logging.debug(
                 f"[warmup] {context}: {n} symbols, concurrency={concurrency}, ttl={int(ttl_ms/1000)}s, window=[{wmin},{wmax}]m"
             )
             try:
                 longest_span = int(math.ceil(wmax / max(1.0, (1.0 + warmup_ratio))))
             except Exception:
                 longest_span = wmax
-            logging.info(
+            logging.debug(
                 "[warmup] target | longest_span=%dm warmup_ratio=%.3g max_warmup_minutes=%s",
                 int(longest_span),
                 float(warmup_ratio),
                 "none" if not max_warmup_minutes else str(int(max_warmup_minutes)),
             )
             try:
-                logging.info(
+                logging.debug(
                     "[warmup] slot view | long: %d/%d open=%s forager=%s symbols=%d | short: %d/%d open=%s forager=%s symbols=%d",
                     pos_counts.get("long", 0),
                     max_counts.get("long", 0),
@@ -4231,7 +4231,7 @@ class Passivbot:
                 long_max = max(long_wins) if long_wins else 0
                 short_min = min(short_wins) if short_wins else 0
                 short_max = max(short_wins) if short_wins else 0
-                logging.info(
+                logging.debug(
                     "[warmup] windows | long:[%d,%d]m short:[%d,%d]m",
                     long_min,
                     long_max,
@@ -4316,7 +4316,7 @@ class Passivbot:
                             remaining = max(0, n - completed)
                             eta_s = int(remaining / max(1e-6, rate))
                             pct = int(100 * completed / n)
-                            logging.info(
+                            logging.debug(
                                 f"[warmup] candles: {completed}/{n} {pct}% elapsed={int(elapsed_s)}s eta~{eta_s}s"
                             )
                             last_log_ms = now_ms
@@ -4330,7 +4330,7 @@ class Passivbot:
             )
             or "none"
         )
-        logging.info(
+        logging.debug(
             "[warmup] cache decision | context=%s timeframe=1m reused=%d cold=%d reasons=%s elapsed=%.2fs",
             context,
             cache_reused_1m,
@@ -13715,7 +13715,7 @@ class Passivbot:
         for symbol in due:
             attempts[symbol] = now_ms
         self._forager_normal_warmup_attempt_ms = attempts
-        logging.info(
+        logging.debug(
             "[warmup] forager-selected normal warmup: %d symbols=%s",
             len(due),
             Passivbot._log_symbols(due, limit=8),

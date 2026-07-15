@@ -22,40 +22,46 @@ Estimated completion:
 
 ## Active Review Slice
 
-- Branch: `codex/balance-console-materiality`.
-- Base: `991dadb69124e838a4a3b63fff65036a223b4195`, the PR #1231
-  console-verbosity policy merge on canonical `master`.
-- Slice: console-only suppression of raw wallet-balance jitter.
-- Triggering evidence: the VPS5 console-volume study found balance and warmup
-  families dominated healthy output. The merged policy requires balance after
-  the initial snapshot to represent a material or attributable account change,
-  while the current pipeline projects every raw-balance movement even when the
-  hysteresis-snapped balance is unchanged.
-- Scope: suppress `balance.changed` from the console only when its finite
-  `balance_snapped_delta` is zero. Preserve structured, monitor, and durable text
-  delivery. Keep snapped changes and events with absent or malformed
-  materiality metadata console-visible. Remove the legacy 15-minute raw-only
-  fallback line while retaining snapped-change fallback output.
-- Behavior boundary: preserve balance calculation, hysteresis, event payload,
-  event production, monitor history, durable text, equity diagnostics,
-  scheduling, exchange calls, order/risk behavior, Rust, backtest, and optimizer
-  behavior.
+- Branch: `codex/warmup-console-detail-levels`.
+- Base: `a869aedea161ca4fbd11f801a6ff91be2b215354`, canonical `master`
+  after PR #1230.
+- Slice: keep routine successful candle-warmup detail off the normal INFO
+  console while preserving DEBUG and structured diagnostics.
+- Triggering evidence: the current five VPS5 logs contain 512 `[warmup]` INFO
+  lines since the PR #1221 restart. Repeated kickoff, target, slot, window,
+  progress, cache-decision, and forager-trigger lines dominate this family even
+  though they are neither durable state changes nor readiness transitions.
+- Scope: demote those seven routine text producers to DEBUG. Preserve
+  `cache.warmup_decision`, `bot.startup_timing`, `bot.ready`, startup
+  start/completion milestones, and every degraded/failure signal. Also codify
+  proportional carry-forward of semantic approval for directly verified
+  mechanical integration deltas.
+- Behavior boundary: preserve candle fetching, cache acceptance, concurrency,
+  awaits, forager selection, readiness, scheduling, exchange calls, order/risk
+  behavior, Rust, backtest, and optimizer behavior.
 - Publication state, exact head, mergeability, CI, and current-head reviewer
   verdicts: query live GitHub metadata; do not embed self-invalidating values.
-- Expected VPS action: restart and observe only after this slice merges;
-  this isolated implementation work does not contact VPS5 or exchanges.
+- Expected VPS action: after merge, one authorized exact five-bot restart may
+  activate and validate both PR #1233 and this slice. Do not manufacture balance
+  or warmup events.
 
 ## Deployed Baseline
 
-- Canonical `master`: `991dadb69124e838a4a3b63fff65036a223b4195`, PR #1231.
-- VPS5 repository: `dacd66adebfd230999aebf7f9fbd34a5b2990490`, PR #1221; exact
-  tracked status clean and expected untracked artifacts preserved.
-- VPS5 expected bots: five; running with PR #1221 restart PIDs
-  `927721/927781/927842/927899/927963`; pane PIDs unchanged; unrelated
-  `misc:0.0` remains PID `434835`
+- Canonical `master`: `a869aedea161ca4fbd11f801a6ff91be2b215354`, PR #1230.
+- VPS5 repository checkout: `22ca1a78fa16c2dad827fcf39a6b1fb245302c2b`,
+  PR #1233; tracked status clean and expected untracked artifacts preserved.
+- VPS5 running-process baseline remains PR #1221 code until the next authorized
+  restart. The exact five bot PIDs are still
+  `927721/927781/927842/927899/927963`; pane PIDs and unrelated `misc:0.0`
+  PID `434835` are unchanged.
 - PR #1231 merged at `991dadb69124e838a4a3b63fff65036a223b4195`.
   It defines evidence-based console admission, incident projection, and volume
   budgets. It is documentation-only, so no VPS5 restart was required.
+- PR #1233 merged at `22ca1a78fa16c2dad827fcf39a6b1fb245302c2b`
+  and the VPS5 checkout fast-forwarded cleanly. It suppresses raw-only balance
+  jitter from the console while preserving structured, monitor, and durable
+  text delivery. Runtime activation and natural-event validation await the next
+  authorized restart.
 - PR #1221 merged and deployed at
   `dacd66adebfd230999aebf7f9fbd34a5b2990490`. It made the structured
   realized-loss gate warning the sole normal console/text owner while preserving
@@ -534,9 +540,12 @@ ambiguous-cancel console migration, PR #1219's entry-distance-gate console
 migration, and PR #1220's min-effective-cost console migration are merged and
 deployed. Natural post-PR #1220 GateIO output proved structured single
 ownership. PR #1221's realized-loss gate console migration is also merged and
-deployed with a settled hard-green smoke. PR #1231's console-verbosity policy is
-merged without a runtime deployment. Its first implementation follow-up is the
-active raw-only balance-console materiality slice above.
+deployed with a settled hard-green smoke. PR #1231's console-verbosity policy
+and PR #1232's canonical-master review contract are merged. PR #1233's
+raw-balance materiality change is merged and present in the VPS5 checkout but
+not yet active in the running processes. Its next implementation follow-up is
+the active warmup-detail slice above. After that slice, evaluate post-ready
+`[boot]` candle-index maintenance chatter.
 
 Do not create progress-only PRs or resume unrelated logging work from stale
 worktrees.
