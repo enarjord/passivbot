@@ -3998,16 +3998,17 @@ class CandlestickManager:
                         "error_repr": err_repr,
                     }
                 )
+                action = "exhausted" if attempt == max_attempts - 1 else "retry"
                 self._throttled_warning(
-                    f"ccxt_fetch_ohlcv_failed:{symbol}:{tf}:{err_type}",
+                    f"ccxt_fetch_ohlcv_failed:{symbol}:{tf}:{err_type}:{action}",
                     "ccxt_fetch_ohlcv_failed",
                     symbol=symbol,
-                    tf=str(tf) if tf is not None else None,
+                    tf=tf_norm,
                     attempt=attempt + 1,
-                    params=params if "params" in locals() else None,
+                    max_attempts=max_attempts,
+                    elapsed_ms=elapsed_ms,
                     error_type=err_type,
-                    error=str(e),
-                    error_repr=err_repr,
+                    action=action,
                 )
                 sleep_s = backoff
                 msg = str(e) or ""

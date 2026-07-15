@@ -5,7 +5,6 @@ import hashlib
 import math
 import re
 from collections import Counter
-from urllib.parse import urlsplit, urlunsplit
 from typing import Any
 
 from live.event_bus import (
@@ -64,30 +63,13 @@ def _sanitize_remote_text(value: Any, *, max_len: int = 500) -> str:
 def _sanitize_remote_url(value: Any) -> tuple[str, str | None]:
     raw = str(value)
     raw_hash = hashlib.sha256(raw.encode("utf-8")).hexdigest()
-    try:
-        parsed = urlsplit(raw)
-    except Exception:
-        return _sanitize_remote_text(raw, max_len=500), raw_hash
-    if parsed.query or parsed.fragment:
-        sanitized = urlunsplit(
-            (
-                parsed.scheme,
-                parsed.netloc,
-                parsed.path,
-                "[redacted]" if parsed.query else "",
-                "[redacted]" if parsed.fragment else "",
-            )
-        )
-    else:
-        sanitized = raw
-    return _sanitize_remote_text(sanitized, max_len=500), raw_hash
+    return "[redacted-url]", raw_hash
 
 
 def _sanitize_remote_fetch_payload(payload: dict[str, Any]) -> dict[str, Any]:
     data = dict(payload)
-    for key in ("error", "error_repr"):
-        if data.get(key) is not None:
-            data[key] = _sanitize_remote_text(data[key], max_len=500)
+    data.pop("error", None)
+    data.pop("error_repr", None)
     if data.get("url") is not None:
         url, url_hash = _sanitize_remote_url(data["url"])
         data["url"] = url

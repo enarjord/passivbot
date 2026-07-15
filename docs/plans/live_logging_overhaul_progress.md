@@ -8266,3 +8266,25 @@ VPS5 deployment status:
   active `codex/open-tail-projection-console-detail` slice retains that routine
   aggregate at DEBUG while preserving compact active-tail warnings, structured
   late-projection events, EMA values, and readiness.
+
+### 2026-07-15: Open-Tail Detail Demotion Deployed And Candle Failure Follow-Up
+
+- PR #1238 merged to canonical `master` at `c70a88b147` after exact-head Hermes
+  and Grok approval plus green Python and Rust CI. VPS5 fast-forwarded cleanly,
+  and all five exact bots exited naturally after one SIGINT round. Exact pane
+  PIDs and unrelated `misc:0.0` PID `434835` remained unchanged.
+- The immediate window retained one real KuCoin authoritative-balance timeout
+  and degraded cycle. The settled two-minute smoke was `ok=true` with `262/264`
+  remote calls and all `41/41` account-critical calls successful, six
+  successful fill refreshes, five valid processes, and zero hard, log,
+  monitor, or event-pipeline failures. The two remaining failures were non-hard
+  candle-fetch timeouts.
+- Every bot completed a natural market-ready cycle and normal INFO logs
+  contained zero `open-tail EMA projection contexts` records, proving the
+  demotion without manufacturing candle or trading events.
+- Those natural candle timeouts exposed the next operator-sink issue: KuCoin
+  and GateIO warnings measured 513 and 487 characters and retained duplicated
+  raw exception text, full request URLs, and query parameters. The active
+  `codex/bounded-candle-fetch-warning` slice replaces the normal text with
+  bounded retry/terminal signatures. Durable remote-call events omit raw
+  exception text; explicit URLs retain only a redacted marker and stable hash.

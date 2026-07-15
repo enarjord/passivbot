@@ -14,6 +14,7 @@ from candlestick_manager import (
     CANDLE_DTYPE,
     GAP_REASON_NO_ARCHIVE,
     ONE_MIN_MS,
+    OhlcvFetchError,
     _GAP_MAX_RETRIES,
     _GATEIO_RECENT_1M_LIMIT_CANDLES,
     _floor_minute,
@@ -314,6 +315,92 @@ def test_remote_fetch_callback_exception_is_isolated(tmp_path):
     cm._emit_remote_fetch({"kind": "ccxt_fetch_ohlcv", "stage": "start"})
 
     assert calls == [{"kind": "ccxt_fetch_ohlcv", "stage": "start"}]
+
+
+@pytest.mark.asyncio
+async def test_ccxt_fetch_warning_uses_bounded_signature_and_keeps_callback_payload(
+    tmp_path, monkeypatch, caplog
+):
+    url = "https://api.example.invalid/ohlcv?apiKey=SECRET&signature=abc"
+
+    class UrlBearingError(RuntimeError):
+        pass
+
+    class _Ex:
+        id = "binance"
+
+        async def fetch_ohlcv(self, *_args, **_kwargs):
+            raise UrlBearingError(url)
+
+    callback_payloads = []
+    cm = CandlestickManager(
+        exchange=_Ex(),
+        exchange_name="binance",
+        cache_dir=str(tmp_path / "caches"),
+        remote_fetch_callback=callback_payloads.append,
+    )
+
+    async def no_sleep(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(cm, "_sleep_interruptible", no_sleep)
+    caplog.set_level(logging.WARNING, logger=cm.log.name)
+
+    with pytest.raises(OhlcvFetchError):
+        await cm._ccxt_fetch_ohlcv_once(
+            "BTC/USDT:USDT",
+            since_ms=1_723_456_000_000,
+            limit=100,
+            end_exclusive_ms=1_723_456_060_000,
+            timeframe="1H",
+        )
+
+    warning_records = [
+        record
+        for record in caplog.records
+        if "event=ccxt_fetch_ohlcv_failed" in record.getMessage()
+    ]
+    assert len(warning_records) == 2
+    retry_warning = warning_records[0].getMessage()
+    exhausted_warning = warning_records[1].getMessage()
+    for field in (
+        "exchange=binance",
+        "symbol=BTC",
+        "tf=1h",
+        "attempt=1",
+        "max_attempts=5",
+        "elapsed_ms=",
+        "error_type=UrlBearingError",
+        "action=retry",
+    ):
+        assert field in retry_warning
+    for field in (
+        "exchange=binance",
+        "symbol=BTC",
+        "tf=1h",
+        "attempt=5",
+        "max_attempts=5",
+        "elapsed_ms=",
+        "error_type=UrlBearingError",
+        "action=exhausted",
+    ):
+        assert field in exhausted_warning
+    for raw_value in (
+        url,
+        repr(UrlBearingError(url)),
+        "params=",
+        "error=",
+        "error_repr=",
+    ):
+        assert all(raw_value not in warning for warning in (retry_warning, exhausted_warning))
+    assert len(retry_warning) <= 240
+    assert len(exhausted_warning) <= 240
+
+    error_payloads = [payload for payload in callback_payloads if payload.get("stage") == "error"]
+    assert error_payloads
+    assert error_payloads[0]["params"] == {"until": 1_723_456_059_999}
+    assert error_payloads[0]["error"] == url
+    assert error_payloads[0]["error_repr"] == repr(UrlBearingError(url))
 
 
 @pytest.mark.asyncio
