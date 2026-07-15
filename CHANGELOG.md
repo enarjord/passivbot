@@ -4,6 +4,11 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Routine open-tail EMA projection-context aggregates now remain available at
+  DEBUG instead of printing thousand-character diagnostics in the normal live
+  console. Compact active-tail transitions and warnings, EMA projection,
+  readiness, and trading behavior are unchanged.
+
 - Rust-orchestrated forager selection changes now have one normal console/text
   owner: the producer's materiality-aware INFO summary. Their complete
   `forager.selection` events remain available in structured and monitor sinks

@@ -14780,7 +14780,7 @@ class Passivbot:
                     examples.append(Passivbot._log_symbol(sym))
             log_ema_issue(
                 ("open_tail_projection_context_summary",),
-                logging.INFO,
+                logging.DEBUG,
                 "[candle] open-tail EMA projection contexts | symbols=%d | %s",
                 len(projection_contexts),
                 "; ".join(examples),
