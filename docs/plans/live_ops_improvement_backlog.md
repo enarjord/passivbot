@@ -884,6 +884,14 @@ Related detailed plans:
     publish visible without substituting a comment as success. Keep advisory
     review loops clearly labeled until branch protection enforces the check.
 
+    Current evidence: after the v8.0.0 default-branch cutover on 2026-07-14,
+    `master` protection enforced strict `Python 3.12` and `Rust` checks plus
+    conversation resolution, but required zero formal approvals and no
+    semantic-review status/check. Hermes, Grok, or self-authored `COMMENT`
+    verdicts therefore remain advisory until this item is implemented. Reviewer
+    schedulers must also migrate their base-branch filters and compact cache to
+    the live default branch before the cutover can be considered complete.
+
 20. [ ] Per-asset collateral, debt, and valuation balance events.
     Status: open. A 2026-07-14 evaluation confirmed that the existing
     `balance.changed` event and console projection expose only aggregate raw

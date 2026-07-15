@@ -63,4 +63,6 @@ generated registries remain test failures.
 `principles.yaml`, `commands.md`, `pr_auto_review_loop.md`, and `code_review_prompt.md` remain as
 narrow routes for active external automations. Their canonical content lives in `principles.md`,
 `runbooks/commands.md`, `runbooks/pr_review.md`, and `validation.md`. Remove the routes only after
-every scheduled consumer has migrated and a changed-head wake proves the new reads succeed.
+every scheduled consumer has migrated and a changed-head wake proves the new reads succeed. Review
+schedulers must also migrate base-branch filters and compact state after a default-branch cutover;
+the proving wake must discover a PR against the new target rather than merely load the new path.
