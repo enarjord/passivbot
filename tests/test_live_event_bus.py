@@ -1674,9 +1674,72 @@ def test_console_format_summarizes_forager_selection():
 def test_forager_selection_console_route_is_throttled():
     route = DEFAULT_ROUTES[EventTypes.FORAGER_SELECTION]
 
+    assert route.structured is True
+    assert route.monitor is True
     assert route.console is True
     assert route.text is True
     assert route.throttle_interval_ms == 5 * 60 * 1000
+
+
+def test_rust_forager_selection_event_skips_console_and_text_only():
+    structured = ListEventSink()
+    monitor = ListEventSink()
+    console = ListEventSink()
+    text = ListEventSink()
+    pipeline = LiveEventPipeline(
+        structured_sinks=[structured],
+        monitor_sinks=[monitor],
+        console_sink=console,
+        text_sink=text,
+    )
+    event = LiveEvent(
+        EventTypes.FORAGER_SELECTION,
+        status="succeeded",
+        pside="long",
+        data={
+            "selected_symbols": ["BTC/USDT:USDT"],
+            "slots_to_fill": 1,
+            "source": "rust_orchestrator",
+        },
+    )
+
+    pipeline.emit(event)
+
+    assert pipeline.flush(timeout=2.0) is True
+    assert structured.events == [event]
+    assert monitor.events == [event]
+    assert console.events == []
+    assert text.events == []
+    assert pipeline.close(timeout=2.0) is True
+
+
+def test_python_forager_selection_event_remains_operator_visible():
+    structured = ListEventSink()
+    monitor = ListEventSink()
+    console = ListEventSink()
+    text = ListEventSink()
+    pipeline = LiveEventPipeline(
+        structured_sinks=[structured],
+        monitor_sinks=[monitor],
+        console_sink=console,
+        text_sink=text,
+    )
+    event = LiveEvent(
+        EventTypes.FORAGER_SELECTION,
+        status="skipped",
+        pside="long",
+        reason_code="all_features_unavailable",
+        data={"selected_symbols": [], "source": "python_filter"},
+    )
+
+    pipeline.emit(event)
+
+    assert pipeline.flush(timeout=2.0) is True
+    assert structured.events == [event]
+    assert monitor.events == [event]
+    assert console.events == [event]
+    assert text.events == [event]
+    assert pipeline.close(timeout=2.0) is True
 
 
 def test_console_format_summarizes_hsl_status_distance_to_red():

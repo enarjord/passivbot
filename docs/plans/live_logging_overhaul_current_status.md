@@ -22,38 +22,52 @@ Estimated completion:
 
 ## Active Review Slice
 
-- Branch: `codex/forager-refresh-console-detail`.
-- Base: `f88274a715e6db347500e2cbc601e11ef6b16a71`, canonical `master`
-  after PR #1235.
-- Slice: keep successful background forager candle-refresh completion detail
-  off the normal INFO console while retaining it at DEBUG.
-- Triggering evidence: in the first bounded post-readiness window after the
-  PRs #1233-#1235 activation restart, successful forager-refresh completion was
-  already the dominant routine non-action family. Six completions appeared in
-  about six minutes across Binance, GateIO, and OKX; GateIO emitted three in
-  under three minutes. These are successful post-ready maintenance outcomes,
-  not readiness milestones or failures.
-- Scope: demote only the successful `forager refresh complete` line to DEBUG.
-  Preserve refresh scheduling, cadence, fetches, counters, wall-time-cap INFO
-  notices, failures, readiness, and structured events.
-- Behavior boundary: preserve candle fetching, cache acceptance, readiness,
-  scheduling, exchange calls, order/risk behavior, Rust, backtest, and optimizer
-  behavior.
+- Branch: `codex/forager-selection-console-ownership`.
+- Base: `d4b3055da68bfc4a1ff8f8e2c953c93318d8b3f5`, canonical `master`
+  after PR #1236.
+- Slice: give Rust-orchestrated material forager selection changes one normal
+  console/text owner while retaining every complete `forager.selection` event
+  in durable sinks and preserving Python-filter selection visibility.
+- Triggering evidence: fresh post-PR #1236 logs emitted paired summaries for
+  each initial material selection on Binance, GateIO, and OKX: one structured
+  `[forager] succeeded ...` line and one producer-owned `[forager] long
+  selection ...` line. Later changes continued to use the two independent
+  cadence/materiality paths.
+- Scope: suppress only Rust-orchestrator events from the operator sinks. Keep
+  their structured and monitor delivery enabled, keep the compact formatter for
+  queries, leave Python-filter events console/text-visible, and leave the Rust
+  producer's selected-set/slot/replacement materiality and 30-minute heartbeat
+  unchanged.
+- Behavior boundary: preserve event production and payloads, forager scoring,
+  selection, hysteresis, scheduling, exchange calls, order/risk behavior, Rust,
+  backtest, and optimizer behavior.
 - Publication state, exact head, mergeability, CI, and current-head reviewer
   verdicts: query live GitHub metadata; do not embed self-invalidating values.
 - Expected VPS action: after merge, one authorized exact five-bot restart may
-  activate the level change. Validate from natural maintenance only; do not
-  manufacture candle-refresh events.
+  activate the projection change. Validate from natural selections only; do not
+  manufacture selection or trading events.
 
 ## Deployed Baseline
 
 - Canonical `master` and VPS5 checkout:
-  `f88274a715e6db347500e2cbc601e11ef6b16a71`, PR #1235; tracked status clean
+  `d4b3055da68bfc4a1ff8f8e2c953c93318d8b3f5`, PR #1236; tracked status clean
   and expected untracked artifacts preserved.
 - VPS5 runs the same head in bot PIDs
-  `938583/938585/938587/938588/938589`. The exact pane PIDs remain
+  `940154/940128/940093/939941/940094`. The exact pane PIDs remain
   `856294/856332/856364/856398/856434`, and unrelated `misc:0.0` PID `434835`
   is unchanged.
+- PR #1236 was activated with one exact five-bot graceful restart. All old bots
+  exited naturally after one SIGINT round; no escalation was required. A
+  startup KuCoin authoritative-open-orders timeout aged out. The settled
+  two-minute smoke was `ok=true`: `216/216` remote calls and all `57/57`
+  account-critical calls succeeded, eight fill refreshes succeeded, all five
+  processes/configs matched, and hard, log-attention, monitor, and pipeline
+  failures were zero. One sampled `D` state cleared immediately, with all five
+  processes then observed running in their original panes.
+- Natural post-restart logs contain zero `forager refresh complete` INFO lines
+  on all five bots while normal candle/cache activity continued. The same logs
+  exposed paired structured and producer-owned INFO summaries for material
+  forager selections, which triggers the active ownership slice above.
 - PRs #1233, #1234, and #1235 were activated together with one exact five-bot
   graceful restart. Four old bots exited within ten seconds; KuCoin exited
   naturally after a bounded uninterruptible wait, with no escalation. The
@@ -564,9 +578,12 @@ and PR #1232's canonical-master review contract are merged. PR #1233's
 raw-balance materiality change, PR #1234's warmup-detail demotion, and PR
 #1235's candle-index maintenance demotion are merged, deployed, and active on
 VPS5. The settled smoke is green, and natural output proves the warmup and
-candle-index level boundaries. The resulting post-readiness sample identified
-successful forager candle-refresh completion as the dominant routine non-action
-family; the active slice above moves only that success detail to DEBUG.
+candle-index level boundaries. PR #1236's forager-refresh completion demotion is
+also merged, deployed, and naturally absent from the normal INFO logs. Fresh
+output then exposed dual console ownership for Rust-orchestrated material
+forager selections; the active slice above retains the producer's
+materiality-aware summary and removes only those events' second console/text
+projection. Python-filter selection visibility remains unchanged.
 
 Do not create progress-only PRs or resume unrelated logging work from stale
 worktrees.
