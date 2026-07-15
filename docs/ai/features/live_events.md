@@ -113,6 +113,23 @@ account-mode fatal events may request a bounded best-effort flush before the exi
 but event failure never suppresses that error. Isolated-only market events remain observational and
 must not alter filtering or existing-position handling.
 
+## Exchange Configuration Outcomes
+
+`exchange.config_refresh` covers both periodic market refreshes and bounded connector-local
+configuration outcomes. Per-symbol connector events use the existing success/failure reason codes
+and distinguish the observed result in `data.outcome`:
+
+- `confirmed`: the exchange returned normally; this does not claim that a setting changed
+- `unchanged`: the exchange explicitly reported that the requested setting already matched
+- `failed`: the request raised or returned a connector-classified failure
+
+Connector-local payloads include only bounded `context`, `operation`, `outcome`, optional
+digit-only `response_code`, `error_type`, and the envelope's `symbol`. They exclude raw responses, exception
+text, request parameters, URLs, and tracebacks. An explicit unchanged outcome is DEBUG; confirmed
+success remains INFO until the connector can prove whether it changed state; failures retain their
+existing operator-visible warning or error. The event route remains structured/monitor-only, and
+event emission failure must not change exchange configuration control flow or results.
+
 ## Dynamic Registry Values
 
 - `authoritative_reason_code(surface)` produces `authoritative_<surface>`.

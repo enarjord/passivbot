@@ -22,39 +22,54 @@ Estimated completion:
 
 ## Active Review Slice
 
-- Branch: `codex/fill-timing-console-detail`.
-- Base: `9441fa45091f557145cb56f4fce00374b636a8cd`, canonical `master`
-  after PR #1240.
-- Slice: keep successful fill-refresh and fetcher-request timing detail at
-  DEBUG; request-error timing remains INFO.
-- Triggering evidence: natural post-ready output retained successful
-  `[fills] refresh timing` lines at `1600-7608ms` and a successful
-  `[fills] fetcher request timing` line at `33850ms`. These are maintenance
-  diagnostics, while actual fills have dedicated operator records and complete
-  `fills.refresh_summary` events remain durable off console/text.
-- Scope: remove source, fill-count, and elapsed-time INFO promotion from the
-  completed refresh timing line, and remove elapsed-time INFO promotion from
-  successful fetcher request timing. Preserve request-error INFO visibility.
-- Behavior boundary: preserve refresh selection and execution, cache/history
-  coverage, actual fill records, warnings and degraded states, structured event
-  payloads, error propagation, order/risk behavior, Rust, backtest, and
-  optimizer behavior.
+- Branch: `codex/okx-config-outcome-event`.
+- PR: #1242.
+- Base: `953ac80e316d1dcb4f64f852fba9a89f06c70638`, canonical `master`
+  after PR #1241.
+- Slice: migrate OKX per-symbol margin-mode/leverage outcomes into the existing
+  structured `exchange.config_refresh` family and keep explicit unchanged
+  responses at DEBUG.
+- Triggering evidence: the logging policy reserves INFO for new operator facts,
+  while OKX's explicit `59107` already-configured response currently prints as
+  a successful INFO line. Unlike normal responses, this outcome proves that no
+  exchange setting changed. A read-only four-hour VPS5 sample contained nine
+  normal OKX `margin=ok` outcomes and no `59107`; normal outcomes remain INFO
+  and provide a natural post-deploy producer path, while the unchanged branch
+  must be validated locally rather than manufactured live.
+- Scope: add bounded per-symbol `confirmed|unchanged|failed` outcome metadata,
+  retain normal success and failure operator lines, and demote only the explicit
+  unchanged line. Reuse the existing event type, route, and reason codes.
+- Behavior boundary: preserve exchange calls and requested values, task and
+  exception control flow, success/failure handling, log visibility for confirmed
+  outcomes and failures, sink isolation, order/risk behavior, Rust, backtest,
+  and optimizer behavior. Raw responses and exception text do not enter the new
+  connector-local event payload.
 - Publication state, exact head, mergeability, CI, and current-head reviewer
   verdicts: query live GitHub metadata; do not embed self-invalidating values.
 - Expected VPS action: after merge, one authorized exact five-bot restart may
-  activate the level changes. Validate natural successful fill timing absence
-  from INFO while structured summaries and normal fill behavior continue; do
-  not manufacture fills, failures, state, or trading events.
+  activate the event producer and level change. Validate natural OKX startup
+  outcomes, normal operation, and structured delivery. Absence of a natural
+  unchanged outcome is acceptable; do not manufacture exchange responses,
+  failures, state, or trading events.
 
 ## Deployed Baseline
 
 - Canonical `master` and VPS5 checkout:
-  `9441fa45091f557145cb56f4fce00374b636a8cd`, PR #1240; tracked status clean
+  `953ac80e316d1dcb4f64f852fba9a89f06c70638`, PR #1241; tracked status clean
   and expected untracked artifacts preserved.
 - VPS5 runs the same head in bot PIDs
-  `945997/945999/946001/946002/946003`. The exact pane PIDs remain
+  `946686/946688/946690/946692/946694`. The exact pane PIDs remain
   `856294/856332/856364/856398/856434`, and unrelated `misc:0.0` PID `434835`
   is unchanged.
+- PR #1241 was activated with one exact five-bot graceful restart. Every old
+  bot exited naturally after one SIGINT round; no escalation was required.
+  The settled smoke was `ok=true` with `225/225` remote calls and `48/48`
+  account-critical calls successful, eight successful fill refreshes, all HSL
+  replays complete, five matching processes/configs, states `R=4,S=1`, and
+  zero hard, log, monitor, process, or event-pipeline failures. Fresh natural
+  logs contained zero successful fill-refresh or fetcher-request timing INFO
+  lines, while structured smoke evidence retained eight successful refresh
+  summaries. No fill or failure was manufactured.
 - PR #1240 was activated with one exact five-bot graceful restart. Every old
   bot exited naturally after one SIGINT round; no escalation was required.
   The immediate window caught one real KuCoin authoritative-state timeout and
@@ -637,9 +652,11 @@ deployed. Its settled smoke is green; no natural candle-fetch failure occurred
 in the bounded post-restart window. PR #1240's staged-refresh console threshold
 is merged, deployed, and naturally validated: completed INFO lines were all at
 or above ten seconds while interesting sub-threshold structured INFO samples
-remained durable. The active slice above now removes successful fill-refresh
-timing detail from the normal console while preserving actual fills, request
-errors, warnings, and structured summaries.
+remained durable. PR #1241's successful fill-refresh timing demotion is also
+merged, deployed, and naturally validated: successful timing detail is absent
+from normal INFO while structured refresh summaries remain available. The
+active slice above now gives OKX configuration outcomes bounded structured
+evidence and demotes only explicit unchanged responses.
 
 Do not create progress-only PRs or resume unrelated logging work from stale
 worktrees.

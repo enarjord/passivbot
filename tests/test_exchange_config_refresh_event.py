@@ -17,6 +17,7 @@ sys.modules.setdefault(
 )
 
 from passivbot import Passivbot
+from live.event_emitters import emit_exchange_config_refresh_event
 
 
 def _make_bot_with_event_sink():
@@ -106,3 +107,48 @@ async def test_maintenance_exchange_config_emit_failure_preserves_original_error
 
     assert raised.value is exc
     bot.init_markets.assert_awaited_once_with(verbose=False)
+
+
+def test_exchange_config_outcome_metadata_is_bounded_and_value_safe():
+    bot, sink = _make_bot_with_event_sink()
+
+    emit_exchange_config_refresh_event(
+        bot,
+        context="update_exchange_config_by_symbols",
+        operation="set_margin_mode",
+        status="failed",
+        symbol="BTC/USDT:USDT",
+        outcome="failed",
+        response_code="51039",
+        error_type="RuntimeError",
+        level="error",
+    )
+    emit_exchange_config_refresh_event(
+        bot,
+        context="update_exchange_config_by_symbols",
+        operation="set_margin_mode",
+        status="failed",
+        symbol="https://example.invalid/api?apiKey=supersecret",
+        outcome="unexpected",
+        response_code='{"code":"51039","apiKey":"supersecret"}',
+        error_type="RuntimeError apiKey=supersecret",
+        level="error",
+    )
+
+    assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    assert len(sink.events) == 2
+    valid_event, unsafe_event = sink.events
+    assert valid_event.level == "error"
+    assert valid_event.symbol == "BTC/USDT:USDT"
+    assert valid_event.data["outcome"] == "failed"
+    assert valid_event.data["response_code"] == "51039"
+    assert valid_event.data["error_type"] == "RuntimeError"
+    assert "error" not in valid_event.data
+    assert not {
+        "outcome",
+        "response_code",
+        "error_type",
+    }.intersection(unsafe_event.data)
+    assert unsafe_event.symbol is None
+    assert "supersecret" not in repr(unsafe_event.data)
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
