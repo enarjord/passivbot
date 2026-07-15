@@ -2342,6 +2342,90 @@ async def test_forager_candidate_refresh_rotates_by_completed_candle_staleness(
 
 
 @pytest.mark.asyncio
+async def test_forager_candidate_refresh_success_detail_is_debug(monkeypatch, caplog):
+    import logging
+    import passivbot as pb_mod
+
+    now_holder = {"now": 10_000_000}
+    monkeypatch.setattr(pb_mod, "utc_ms", lambda: now_holder["now"])
+    symbols = {"A/USDT:USDT", "B/USDT:USDT"}
+
+    class FakeCM:
+        default_window_candles = 120
+
+        def __init__(self):
+            self.calls = []
+
+        def get_last_final_ts(self, symbol):
+            return now_holder["now"] - 60 * 60_000
+
+        def get_last_refresh_ms(self, symbol):
+            return now_holder["now"] - 60 * 60_000
+
+        async def get_candles(self, symbol, **kwargs):
+            self.calls.append((symbol, kwargs))
+            now_holder["now"] += 16_000
+            return []
+
+    class FakeBot:
+        config = {
+            "live": {
+                "max_ohlcv_fetches_per_minute": 8,
+                "max_forager_candle_refresh_seconds": 45,
+            }
+        }
+        approved_coins_minus_ignored_coins = {"long": symbols, "short": set()}
+        active_symbols = []
+        positions = {}
+        open_orders = {}
+        inactive_coin_candle_ttl_ms = 600_000
+        stop_signal_received = False
+        start_time_ms = 0
+        cm = FakeCM()
+
+        def is_forager_mode(self, pside=None):
+            return pside in (None, "long")
+
+        def get_max_n_positions(self, pside):
+            return 2 if pside == "long" else 0
+
+        def get_current_n_positions(self, pside):
+            return 0
+
+        def _get_fetch_delay_seconds(self):
+            return 0.0
+
+        def bp(self, pside, key, symbol):
+            if key in {
+                "forager_volume_ema_span_1m",
+                "forager_volatility_ema_span_1m",
+            }:
+                return 10.0
+            return 0.0
+
+        _forager_refresh_budget = pb_mod.Passivbot._forager_refresh_budget
+        _token_bucket_budget = pb_mod.Passivbot._token_bucket_budget
+        _forager_target_staleness_ms = pb_mod.Passivbot._forager_target_staleness_ms
+        _candle_staleness_ms = pb_mod.Passivbot._candle_staleness_ms
+
+    bot = FakeBot()
+    with caplog.at_level(logging.DEBUG):
+        await pb_mod.Passivbot._refresh_forager_candidate_candles(bot)
+
+    assert len(bot.cm.calls) == 2
+    completion_records = [
+        record
+        for record in caplog.records
+        if "forager refresh complete" in record.message
+    ]
+    assert len(completion_records) == 1
+    assert completion_records[0].levelno == logging.DEBUG
+    assert completion_records[0].message == (
+        "[candle] forager refresh complete refreshed=2 elapsed=32s"
+    )
+
+
+@pytest.mark.asyncio
 async def test_forager_candidate_refresh_skips_only_urgent_symbols(monkeypatch):
     import passivbot as pb_mod
 

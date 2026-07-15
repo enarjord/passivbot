@@ -22,48 +22,65 @@ Estimated completion:
 
 ## Active Review Slice
 
-- Branch: `codex/candle-index-console-detail`.
-- Base: `e1dcf3164a88b77762e3cd3ed3e40b834513469a`, canonical `master`
-  after PR #1234.
-- Slice: keep successful candle-index maintenance detail off the normal INFO
-  console and stop labeling post-ready maintenance as `[boot]`.
-- Triggering evidence: the current five VPS5 logs contain 168 successful
-  candle-index start/completion lines: Binance 54, KuCoin 20, GateIO 16, OKX
-  72, and Hyperliquid 6. Repeated one-symbol post-ready rebuilds dominate this
-  family even though they are neither readiness milestones nor failures.
-- Scope: demote successful index-rebuild start/completion text to DEBUG under
-  `[candle]`. Preserve rebuild calls, ranges, counters, failure visibility,
-  startup readiness milestones, and all structured events.
-- Behavior boundary: preserve candle fetching, index rebuilding, cache
-  acceptance, readiness, scheduling, exchange calls, order/risk behavior,
-  Rust, backtest, and optimizer behavior.
+- Branch: `codex/forager-refresh-console-detail`.
+- Base: `f88274a715e6db347500e2cbc601e11ef6b16a71`, canonical `master`
+  after PR #1235.
+- Slice: keep successful background forager candle-refresh completion detail
+  off the normal INFO console while retaining it at DEBUG.
+- Triggering evidence: in the first bounded post-readiness window after the
+  PRs #1233-#1235 activation restart, successful forager-refresh completion was
+  already the dominant routine non-action family. Six completions appeared in
+  about six minutes across Binance, GateIO, and OKX; GateIO emitted three in
+  under three minutes. These are successful post-ready maintenance outcomes,
+  not readiness milestones or failures.
+- Scope: demote only the successful `forager refresh complete` line to DEBUG.
+  Preserve refresh scheduling, cadence, fetches, counters, wall-time-cap INFO
+  notices, failures, readiness, and structured events.
+- Behavior boundary: preserve candle fetching, cache acceptance, readiness,
+  scheduling, exchange calls, order/risk behavior, Rust, backtest, and optimizer
+  behavior.
 - Publication state, exact head, mergeability, CI, and current-head reviewer
   verdicts: query live GitHub metadata; do not embed self-invalidating values.
 - Expected VPS action: after merge, one authorized exact five-bot restart may
-  activate and validate PRs #1233, #1234, and this slice. Do not manufacture
-  balance, warmup, or candle-maintenance events.
+  activate the level change. Validate from natural maintenance only; do not
+  manufacture candle-refresh events.
 
 ## Deployed Baseline
 
-- Canonical `master`: `e1dcf3164a88b77762e3cd3ed3e40b834513469a`, PR #1234.
-- VPS5 repository checkout: `22ca1a78fa16c2dad827fcf39a6b1fb245302c2b`,
-  PR #1233; tracked status clean and expected untracked artifacts preserved.
-- VPS5 running-process baseline remains PR #1221 code until the next authorized
-  restart. The exact five bot PIDs are still
-  `927721/927781/927842/927899/927963`; pane PIDs and unrelated `misc:0.0`
-  PID `434835` are unchanged.
+- Canonical `master` and VPS5 checkout:
+  `f88274a715e6db347500e2cbc601e11ef6b16a71`, PR #1235; tracked status clean
+  and expected untracked artifacts preserved.
+- VPS5 runs the same head in bot PIDs
+  `938583/938585/938587/938588/938589`. The exact pane PIDs remain
+  `856294/856332/856364/856398/856434`, and unrelated `misc:0.0` PID `434835`
+  is unchanged.
+- PRs #1233, #1234, and #1235 were activated together with one exact five-bot
+  graceful restart. Four old bots exited within ten seconds; KuCoin exited
+  naturally after a bounded uninterruptible wait, with no escalation. The
+  settled two-minute smoke was `ok=true`: `259/260` remote calls succeeded,
+  all `46/46` account-critical calls succeeded, seven fill refreshes succeeded,
+  all five expected processes/configs matched, HSL replay completed, and hard,
+  log-attention, monitor, and event-pipeline failures were zero. The sole remote
+  failure was a non-hard KuCoin candle-fetch timeout.
+- Fresh natural output contained zero routine `[warmup]` INFO lines and zero
+  successful candle-index maintenance INFO lines on all five bots. Startup
+  readiness milestones remained visible, proving the PRs #1234-#1235 level
+  boundary without manufactured events. Raw-only balance jitter did not occur
+  naturally in the bounded window, so PR #1233 retained explicit
+  no-observation evidence.
 - PR #1231 merged at `991dadb69124e838a4a3b63fff65036a223b4195`.
   It defines evidence-based console admission, incident projection, and volume
   budgets. It is documentation-only, so no VPS5 restart was required.
 - PR #1233 merged at `22ca1a78fa16c2dad827fcf39a6b1fb245302c2b`
   and the VPS5 checkout fast-forwarded cleanly. It suppresses raw-only balance
   jitter from the console while preserving structured, monitor, and durable
-  text delivery. Runtime activation and natural-event validation await the next
-  authorized restart.
+  text delivery. It is now active on VPS5; the bounded post-restart window did
+  not contain a natural raw-only balance transition to validate the projection.
 - PR #1234 merged at `e1dcf3164a88b77762e3cd3ed3e40b834513469a`.
   It moves routine successful warmup detail to DEBUG while preserving startup
   milestones, failures, structured cache decisions, and all warmup behavior.
-  Runtime activation awaits the next authorized restart.
+  It is now active on VPS5, where fresh natural logs retained readiness
+  milestones without routine `[warmup]` INFO detail.
 - PR #1221 merged and deployed at
   `dacd66adebfd230999aebf7f9fbd34a5b2990490`. It made the structured
   realized-loss gate warning the sole normal console/text owner while preserving
@@ -544,13 +561,12 @@ deployed. Natural post-PR #1220 GateIO output proved structured single
 ownership. PR #1221's realized-loss gate console migration is also merged and
 deployed with a settled hard-green smoke. PR #1231's console-verbosity policy
 and PR #1232's canonical-master review contract are merged. PR #1233's
-raw-balance materiality change is merged and present in the VPS5 checkout but
-not yet active in the running processes. PR #1234's warmup-detail demotion is
-also merged, with runtime activation pending the same authorized restart. The
-active candle-index maintenance demotion is described above. After it merges,
-activate PRs #1233, #1234, and the candle-index slice in one authorized exact
-five-bot restart, run settled smoke validation, and use the resulting natural
-INFO stream to select the next dominant non-action console family.
+raw-balance materiality change, PR #1234's warmup-detail demotion, and PR
+#1235's candle-index maintenance demotion are merged, deployed, and active on
+VPS5. The settled smoke is green, and natural output proves the warmup and
+candle-index level boundaries. The resulting post-readiness sample identified
+successful forager candle-refresh completion as the dominant routine non-action
+family; the active slice above moves only that success detail to DEBUG.
 
 Do not create progress-only PRs or resume unrelated logging work from stale
 worktrees.
