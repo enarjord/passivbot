@@ -63,6 +63,9 @@ _MEMORY_SNAPSHOT_TASK_NAME_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_.-]{0,95}")
 _MEMORY_SNAPSHOT_SENSITIVE_TASK_RE = re.compile(
     r"(?i)(?:api(?:_?key)?|secret|token|password|authorization|cookie)"
 )
+_EXECUTION_LOOP_ERROR_STATUS_RE = re.compile(r"[0-9]{1,3}")
+_EXECUTION_LOOP_ERROR_CODE_RE = re.compile(r"-?[A-Za-z0-9][A-Za-z0-9_-]{0,47}")
+_EXECUTION_LOOP_ERROR_ENDPOINT_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,47}")
 
 
 def _sanitize_remote_text(value: Any, *, max_len: int = 500) -> str:
@@ -100,6 +103,18 @@ def _bounded_exchange_config_event_field(
         return None
     text = str(value)
     return text if pattern.fullmatch(text) else None
+
+
+def _bounded_execution_loop_error_field(
+    value: Any, pattern: re.Pattern[str], *, fallback: str = "-"
+) -> str:
+    if value is None:
+        return fallback
+    try:
+        text = str(value).strip()
+    except Exception:
+        return fallback
+    return text if pattern.fullmatch(text) else fallback
 
 
 def _remote_fetch_payload_key(payload: dict[str, Any]) -> tuple[Any, ...]:
@@ -1861,7 +1876,12 @@ def _emit_execution_loop_error_burst_event_unchecked(
 ) -> None:
     try:
         top_endpoints = [
-            {"endpoint": str(name), "count": int(n)}
+            {
+                "endpoint": _bounded_execution_loop_error_field(
+                    name, _EXECUTION_LOOP_ERROR_ENDPOINT_RE, fallback="unknown"
+                ),
+                "count": max(0, int(n)),
+            }
             for name, n in endpoints.most_common(5)
         ]
     except Exception:
@@ -1871,12 +1891,21 @@ def _emit_execution_loop_error_burst_event_unchecked(
         "count": max(0, int(count)),
         "window_s": max(0, int(window_s)),
         "top_endpoints": top_endpoints,
-        "latest_error_type": str(latest.get("error_type") or "-"),
-        "latest_status": str(latest.get("status") or "-"),
-        "latest_code": str(latest.get("code") or "-"),
+        "latest_error_type": _bounded_execution_loop_error_field(
+            latest.get("error_type"), _EXCHANGE_CONFIG_EVENT_ERROR_TYPE_RE
+        ),
+        "latest_status": _bounded_execution_loop_error_field(
+            latest.get("status"), _EXECUTION_LOOP_ERROR_STATUS_RE
+        ),
+        "latest_code": _bounded_execution_loop_error_field(
+            latest.get("code"), _EXECUTION_LOOP_ERROR_CODE_RE
+        ),
+        "latest_endpoint": _bounded_execution_loop_error_field(
+            latest.get("endpoint"),
+            _EXECUTION_LOOP_ERROR_ENDPOINT_RE,
+            fallback="unknown",
+        ),
     }
-    if latest.get("error") is not None:
-        data["latest_error"] = _sanitize_remote_text(latest.get("error"), max_len=500)
     _safe_emit(
         bot,
         EventTypes.HEALTH_SUMMARY,

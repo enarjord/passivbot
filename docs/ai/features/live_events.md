@@ -130,6 +130,20 @@ success remains INFO until the connector can prove whether it changed state; fai
 existing operator-visible warning or error. The event route remains structured/monitor-only, and
 event emission failure must not change exchange configuration control flow or results.
 
+## Execution-Loop Incidents
+
+An execution-loop failure publishes a bounded `error.bot` record and an equivalent first-occurrence
+operator signature. The stable diagnostic fields are operation/source, exception type, optional
+bounded status/code and endpoint, action, and cycle. This family excludes raw exception text,
+request URLs, response payloads, and traceback values. Stack frames may be retained only in the
+protected DEBUG text path and must not include the exception value.
+
+Equivalent repeats use `health.summary` with the execution-error-burst reason. Its latest-failure
+fields are `latest_error_type`, optional `latest_status`, `latest_code`, and `latest_endpoint`; it
+must not retain `latest_error`. These projections are observability-only: error counting,
+timestamp recovery, restart thresholds, backoff, and trading behavior remain owned by the existing
+execution-loop policy.
+
 ## Memory Snapshots
 
 `resource.memory_snapshot` records the existing material memory diagnostic when it first becomes
