@@ -8334,3 +8334,27 @@ VPS5 deployment status:
   successful timing diagnostics at DEBUG while preserving request-error INFO,
   actual fill lines, warnings, structured `fills.refresh_summary` events,
   refresh behavior, and failure propagation.
+
+### 2026-07-15: Fill Timing Demotion Deployed And OKX Config Outcome Follow-Up
+
+- PR #1241 merged to canonical `master` at `953ac80e31` after exact-head Hermes
+  and Grok approval plus green Python and Rust CI. VPS5 fast-forwarded cleanly,
+  and all five exact bots exited naturally after one SIGINT round. Exact pane
+  PIDs and unrelated `misc:0.0` PID `434835` remained unchanged.
+- The settled smoke was `ok=true` with `225/225` remote calls and `48/48`
+  account-critical calls successful, eight successful fill refreshes, all HSL
+  replays complete, five matching processes/configs, states `R=4,S=1`, and
+  zero hard, log, monitor, process, or event-pipeline failures.
+- Fresh natural logs contained zero successful fill-refresh or fetcher-request
+  timing INFO lines, while the structured smoke window retained all eight
+  successful refresh summaries. No fill or failure was manufactured.
+- Code and policy review identified the next narrow sink boundary: OKX's
+  explicit `59107` already-configured response prints at INFO even though it
+  proves no setting changed. The active `codex/okx-config-outcome-event` slice
+  adds bounded per-symbol structured outcomes and demotes only that unchanged
+  line, preserving normal success/failure visibility and exchange behavior.
+- A read-only four-hour VPS5 sample found nine normal OKX `margin=ok` outcomes
+  and no `59107`, so the normal producer path can be validated naturally after
+  deploy while the unchanged branch remains a local regression-test claim.
+  The same window exposed nine Binance mixed leverage/unchanged lines; that
+  separate connector contract is intentionally outside this OKX-scoped PR.

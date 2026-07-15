@@ -4,6 +4,11 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- OKX per-symbol margin-mode/leverage configuration now emits bounded structured
+  outcome events. Explicit already-configured responses stay available at DEBUG
+  instead of appearing as routine INFO, while confirmed responses and failures
+  retain their existing operator visibility and exchange behavior.
+
 - Successful fill-refresh and fetcher-request timing detail now stays at DEBUG
   instead of appearing in the normal live console. Fetcher request errors,
   actual fills, degraded warnings, structured refresh summaries, refresh
