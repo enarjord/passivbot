@@ -4068,9 +4068,13 @@ VPS5 deployment status:
 | Operator tools | In progress | `live-event-query`, trace summaries, order trace reconstruction, cycle trace reconstruction, time-window filters, severity-level filters, problem-event filters, event-file discovery metadata, `live-smoke-report` startup baselines/process liveness/remote-call failures/remote-call timings/remote-call health groups and top-level totals/account-critical health/risk-events/execution-health/shutdown-events/time windows/unparseable-log policy/brief smoke counters/brief problem-event groups/supervisor duplicate-extra process diagnostics, incident bundle trace/process/time-window/problem-event reports and query-scope filters, ID filters, `ticker-endpoint-probe` account-critical/time-sync/candle-freshness/fill-history-sample/rate-limit health summaries and account-only mode, `live-config-preflight` offline config summaries, `live-performance-report` timing aggregation with summary/filter, decision-boundary, input-staleness including market snapshot staleness, startup phase timing summaries, HSL replay pair/rate/stage summaries, forager/EMA readiness, cache warmup, resource-pressure percentiles, and unified operation-duration support | Cross-bot incident workflow, safe restart orchestration, bounded historical performance-report scans, active probe expansion beyond current endpoint/freshness summaries |
 | Operational restart goals | Split to adjacent work | PR #619 shutdown progress; PR #622 warm-cache startup; PR #656/#668 cache integrity smoke doctor | Continue separate reviewed PRs for shutdown/warmup/cache proof improvements |
 
-## Current Work
+## Historical Work Snapshot (Superseded)
 
-### In Progress: HSL Replay ETA Smoke Report
+This block records the in-progress handoff from 2026-06-30 and is not the
+current automation target. Use `live_logging_overhaul_current_status.md` for the
+active branch, PR, review gate, and rollout instructions.
+
+### Historical: HSL Replay ETA Smoke Report
 
 - Branch: `codex/v8-smoke-hsl-replay-eta`.
 - Scope: read-only live smoke report projection and tests.
