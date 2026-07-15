@@ -23,6 +23,7 @@ Estimated completion:
 ## Active Review Slice
 
 - Branch: `codex/okx-config-outcome-event`.
+- PR: #1242.
 - Base: `953ac80e316d1dcb4f64f852fba9a89f06c70638`, canonical `master`
   after PR #1241.
 - Slice: migrate OKX per-symbol margin-mode/leverage outcomes into the existing
