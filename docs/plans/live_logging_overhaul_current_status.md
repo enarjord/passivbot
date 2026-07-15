@@ -24,7 +24,7 @@ Estimated completion:
 
 - Branch: `codex/compact-hsl-startup-console`, based on canonical
   `9aef070e4a4a5b911b56f9dafb2457aacee0875a` after PR #1249.
-- PR: pending, `Compact HSL startup settings line`.
+- PR: #1250, `Compact HSL startup settings line`.
 - Slice: compact only the INFO HSL-enabled settings projection while retaining
   the side and every currently displayed setting.
 - Triggering evidence: the PR #1249 restart naturally printed one HSL settings
