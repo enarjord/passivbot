@@ -149,3 +149,21 @@ async def test_okx_exchange_config_event_failure_does_not_change_success_control
     emitter.assert_called_once()
     cca.set_margin_mode.assert_awaited_once_with("cross", symbol=SYMBOL, params={"lever": 5})
     assert "margin=ok" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_okx_task_creation_failure_does_not_emit_false_outcome(caplog):
+    cca = types.SimpleNamespace(set_margin_mode=AsyncMock())
+    bot = _make_bot(cca)
+    bot._calc_leverage_for_symbol = Mock(
+        side_effect=RuntimeError("apiKey=SECRET task creation failed")
+    )
+
+    with caplog.at_level(logging.ERROR):
+        await bot.update_exchange_config_by_symbols([SYMBOL])
+
+    cca.set_margin_mode.assert_not_awaited()
+    bot._emit_exchange_config_refresh_event.assert_not_called()
+    assert "task creation failed" in caplog.text
+    assert "cross-margin update failed" in caplog.text
+    assert "SECRET" not in caplog.text
