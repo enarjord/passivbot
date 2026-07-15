@@ -568,6 +568,13 @@ Related detailed plans:
     warning. Migrate that detail with the same emitter/pipeline/sink fallback
     contract while preserving every gate decision and throttle.
 
+    PR #1246 is the active risk-status materiality slice. It keeps every
+    five-minute trailing and unstuck observation in structured/monitor sinks
+    while limiting console/text projection to first observations, qualitative
+    or material numeric transitions, and hourly reminders. The change is
+    observability-only and leaves status calculation, planning, risk, and order
+    behavior unchanged.
+
     Two post-PR #1220 console observations remain deferred rather than folded
     into the realized-loss slice. Hyperliquid balance lines surfaced signed
     floating-point jitter near `1e-13`; decide a console-only materiality or

@@ -24,7 +24,7 @@ Estimated completion:
 
 - Branch: `codex/trailing-unstuck-console-materiality`, based on canonical
   `de5f21c96d92aab1c465e0be40035ed3ec6a6d0a` after PR #1245.
-- PR: pending publication, `Bound trailing and unstuck console materiality`.
+- PR: #1246, `Bound trailing and unstuck console materiality`.
 - Slice: retain complete five-minute `trailing.status` and `unstuck.status`
   observations in structured/monitor sinks while limiting console/text output
   to first observations, qualitative or material numeric transitions, and
