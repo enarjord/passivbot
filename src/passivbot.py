@@ -17155,7 +17155,7 @@ class Passivbot:
                     max(0, len(to_refresh) - refreshed_count),
                 )
             elif len(to_refresh) > 1 and elapsed_s >= 30:
-                logging.info(
+                logging.debug(
                     "[candle] forager refresh complete refreshed=%d elapsed=%ds",
                     refreshed_count,
                     elapsed_s,

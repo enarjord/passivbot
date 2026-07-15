@@ -8197,3 +8197,26 @@ VPS5 deployment status:
   Hyperliquid 6. Repeated post-ready one-symbol maintenance calls are mislabeled
   `[boot]`; the active `codex/candle-index-console-detail` slice retains this
   detail at DEBUG under `[candle]` without changing index work or failures.
+
+### 2026-07-15: Activated Console Demotions And Forager Refresh Follow-Up
+
+- PR #1235 merged to canonical `master` at `f88274a715`. VPS5 fast-forwarded
+  cleanly and one exact five-bot graceful restart activated PRs #1233-#1235.
+  Four old bots exited within ten seconds. KuCoin exited naturally after a
+  bounded uninterruptible wait; no force action was used. Exact pane PIDs and
+  unrelated `misc:0.0` PID `434835` remained unchanged.
+- The settled two-minute smoke was `ok=true`: `259/260` remote calls and all
+  `46/46` account-critical calls succeeded, seven fill refreshes succeeded,
+  five expected processes/configs matched, HSL replay completed, and hard,
+  log-attention, monitor, and event-pipeline failures were zero. The one remote
+  failure was a non-hard KuCoin candle-fetch timeout.
+- Natural fresh logs contained no routine `[warmup]` INFO and no successful
+  candle-index maintenance INFO on any bot; readiness milestones remained.
+  Raw-only balance jitter did not occur in the bounded window and was not
+  manufactured.
+- In the first post-readiness sample, six successful background forager candle
+  refresh completions appeared in about six minutes across Binance, GateIO,
+  and OKX; GateIO emitted three in under three minutes. The active
+  `codex/forager-refresh-console-detail` slice moves only this successful
+  post-ready maintenance detail to DEBUG while preserving wall-cap notices,
+  failures, scheduling, fetches, and trading behavior.

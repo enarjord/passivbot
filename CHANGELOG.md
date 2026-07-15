@@ -4,6 +4,10 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Successful background forager candle-refresh completions now remain available
+  at DEBUG instead of repeating in the normal live console. Refresh scheduling,
+  wall-time-cap notices, failures, and candle behavior are unchanged.
+
 - Successful candle-index maintenance now stays available at DEBUG under the
   `[candle]` tag instead of appearing as repeated `[boot]` INFO output after
   readiness. Index rebuild behavior and failure visibility are unchanged.
