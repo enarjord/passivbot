@@ -5307,7 +5307,8 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
         total_scanned_rows = 0
         replay_started_s = time.monotonic()
         pre_replay_elapsed_s = max(0.0, replay_started_s - history_loaded_s)
-        last_progress_log_s = replay_started_s
+        last_progress_event_s = replay_started_s
+        last_progress_console_s: float | None = None
         replay_symbols = set(symbols)
         active_pairs = tuple(
             (pside, symbol)
@@ -5379,29 +5380,34 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
             *,
             force: bool = False,
         ) -> None:
-            nonlocal last_progress_log_s
+            nonlocal last_progress_event_s, last_progress_console_s
             now_s = time.monotonic()
-            if not force and now_s - last_progress_log_s < 15.0:
+            if not force and now_s - last_progress_event_s < 15.0:
                 return
-            last_progress_log_s = now_s
+            last_progress_event_s = now_s
             elapsed_s = max(0.0, now_s - replay_started_s)
             rows_per_second = float(rows) / elapsed_s if elapsed_s > 0.0 else None
             scanned_rows_per_second = (
                 float(total_scanned_rows) / elapsed_s if elapsed_s > 0.0 else None
             )
             pair_elapsed_s = max(0.0, now_s - pair_started_s)
-            logging.info(
-                "[risk] HSL coin history reconstruction progress | pair=%d/%d pside=%s symbol=%s applied_rows=%d scanned_rows=%d total_rows=%d total_scanned_rows=%d elapsed=%.1fs",
-                pair_idx,
-                len(active_pairs),
-                pside,
-                symbol,
-                applied_rows,
-                scanned_rows,
-                rows,
-                total_scanned_rows,
-                now_s - replay_started_s,
-            )
+            if (
+                last_progress_console_s is None
+                or now_s - last_progress_console_s >= 30.0
+            ):
+                last_progress_console_s = now_s
+                logging.info(
+                    "[risk] HSL coin history reconstruction progress | pair=%d/%d pside=%s symbol=%s applied_rows=%d scanned_rows=%d total_rows=%d total_scanned_rows=%d elapsed=%.1fs",
+                    pair_idx,
+                    len(active_pairs),
+                    pside,
+                    symbol,
+                    applied_rows,
+                    scanned_rows,
+                    rows,
+                    total_scanned_rows,
+                    now_s - replay_started_s,
+                )
             _emit_hsl_replay_event(
                 self,
                 "hsl.replay.progress",
