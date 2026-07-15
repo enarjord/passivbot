@@ -3057,8 +3057,15 @@ def test_candle_remote_fetch_error_sanitizes_and_keeps_correlation():
             **base,
             "stage": "error",
             "error_type": "AuthError",
-            "error": "token SECRET apiKey=abc Bearer xyz",
-            "error_repr": "Auth(apiKey=SECRET, token=SECRET) " + ("x" * 700),
+            "error": (
+                "token SECRET apiKey=abc Bearer xyz "
+                "GET https://api.example.invalid/private?apiKey=abc&signature=SECRET"
+            ),
+            "error_repr": (
+                "Auth(apiKey=SECRET, token=SECRET, "
+                "url='https://api.example.invalid/private?token=SECRET') "
+                + ("x" * 700)
+            ),
         }
     )
 
@@ -3068,11 +3075,9 @@ def test_candle_remote_fetch_error_sanitizes_and_keeps_correlation():
     assert failed.event_type == EventTypes.REMOTE_CALL_FAILED
     assert failed.remote_call_id == started.remote_call_id
     assert failed.remote_call_group_id == started.remote_call_group_id
-    assert "SECRET" not in failed.data["error"]
-    assert "abc" not in failed.data["error"]
-    assert "xyz" not in failed.data["error"].lower()
-    assert "SECRET" not in failed.data["error_repr"]
-    assert len(failed.data["error_repr"]) <= 514
+    assert failed.data["error_type"] == "AuthError"
+    assert "error" not in failed.data
+    assert "error_repr" not in failed.data
     assert bot._live_event_remote_call_ids == {}
 
 
@@ -3096,7 +3101,7 @@ def test_candle_remote_fetch_url_is_sanitized_and_hashed():
     started, skipped = sink.events
     assert skipped.remote_call_id == started.remote_call_id
     for event in (started, skipped):
-        assert event.data["url"] == "https://data.example/archive.zip?[redacted]#[redacted]"
+        assert event.data["url"] == "[redacted-url]"
         assert event.data["url_hash"]
         assert len(event.data["url_hash"]) == 64
         assert "SECRET" not in event.data["url"]
