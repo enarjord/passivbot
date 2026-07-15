@@ -351,13 +351,15 @@ async def test_ccxt_fetch_warning_uses_bounded_signature_and_keeps_callback_payl
             warning_records.append(record)
 
     handler = CaptureHandler(level=logging.WARNING)
+    capture_log = logging.Logger(
+        "test.candlestick_manager.ccxt_fetch_warning", level=logging.WARNING
+    )
+    capture_log.propagate = False
+    capture_log.addHandler(handler)
     original_global_disable = logging.root.manager.disable
-    original_disabled = cm.log.disabled
-    original_level = cm.log.level
+    original_log = cm.log
     logging.disable(logging.NOTSET)
-    cm.log.disabled = False
-    cm.log.setLevel(logging.WARNING)
-    cm.log.addHandler(handler)
+    cm.log = capture_log
     try:
         with pytest.raises(OhlcvFetchError):
             await cm._ccxt_fetch_ohlcv_once(
@@ -368,10 +370,9 @@ async def test_ccxt_fetch_warning_uses_bounded_signature_and_keeps_callback_payl
                 timeframe="1H",
             )
     finally:
-        cm.log.removeHandler(handler)
-        cm.log.setLevel(original_level)
-        cm.log.disabled = original_disabled
+        cm.log = original_log
         logging.disable(original_global_disable)
+        capture_log.removeHandler(handler)
         handler.close()
 
     warning_records = [
