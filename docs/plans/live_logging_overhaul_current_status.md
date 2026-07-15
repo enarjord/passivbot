@@ -22,36 +22,42 @@ Estimated completion:
 
 ## Active Review Slice
 
-- Branch: `codex/compact-trailing-status-console`, based on canonical
-  `fc5c2cae88817744ebe330ad9c1b321087d70250` after PR #1246.
-- PR: #1247, `Compact trailing status console projection`.
-- Slice: compact only the operator-facing `trailing.status` console/text
-  formatter while preserving complete structured and monitor payloads.
-- Triggering evidence: the first natural post-PR #1246 Hyperliquid trailing
-  record was 311 visible characters. It repeated long field names for status,
-  threshold and retracement gates even though the structured event retained all
-  detail, exceeding the normal 240-character record budget.
-- Scope: retain action/status, symbol and position side, selected mode, gate
-  states, material threshold/retracement values, current price, and available
-  cycle correlation using compact human labels.
+- Branch: `codex/bound-approved-coins-console`, based on canonical
+  `e3c6332c6b1f4ff692f94867f9dbfaf182cc0684` after PR #1247.
+- PR: #1248, `Bound approved-coins startup log`.
+- Slice: bound only the INFO config-change projection for
+  `live.approved_coins` while preserving complete applied config values.
+- Triggering evidence: the PR #1247 restart naturally printed a 678-character
+  KuCoin CLI-override line containing the full prior list and duplicate long/
+  short collections, exceeding the normal 240-character record budget.
+- Scope: retain the config path, old/new shapes, per-side counts, and at most
+  three deterministic symbol samples plus explicit truncation counts.
 - Behavior boundary: observability-only; no exchange calls, cache or task
-  mutation, event admission or payload change, planning or status calculation
-  change, cadence change, Rust, order, risk, backtest, or optimizer behavior.
+  mutation, config application or schema change, non-target config log change,
+  Rust, order, risk, backtest, optimizer, or trading behavior.
 - Review gate: temporary maintainer-authorized exact-head Hermes plus green CI
   while Grok is halted.
 - Expected VPS action: after merge, one authorized exact five-bot restart.
-  Validate the next naturally visible trailing line and settled smoke; do not
-  manufacture trailing, exchange, state, or trading events.
+  Validate the natural KuCoin startup override line and settled smoke; do not
+  manufacture exchange, state, or trading events.
 
 ## Deployed Baseline
 
 - Canonical `master` and VPS5 are
-  `fc5c2cae88817744ebe330ad9c1b321087d70250`, PR #1246. The tracked checkout
+  `e3c6332c6b1f4ff692f94867f9dbfaf182cc0684`, PR #1247. The tracked checkout
   is clean and expected untracked artifacts are preserved.
 - VPS5 runs merged master in bot PIDs
-  `953285/953287/953289/953291/953292`. The exact pane PIDs remain
+  `955304/955366/955200/955422/955306`. The exact pane PIDs remain
   `856294/856332/856364/856398/856434`, and unrelated `misc:0.0` PID `434835`
   is unchanged.
+- PR #1247 was activated with one exact five-bot graceful restart. Every old
+  bot exited naturally after one SIGINT round, with no escalation. The
+  immediate five-minute smoke was hard-green with `338/338` remote and `93/93`
+  account-critical calls successful. The settled smoke remained `ok=true`
+  with zero hard failures and `55/55` account-critical calls successful; one
+  non-account-critical candle timeout remained non-hard evidence, and two
+  report-time `D` samples cleared to exact `R/S` states. Natural Hyperliquid
+  output proved the compact trailing projection at 211 visible characters.
 - PR #1246 was activated with one exact five-bot graceful restart. Every old
   bot exited naturally after one SIGINT round; KuCoin was last at about 30
   seconds, with no escalation. The first natural cadence emitted five durable
@@ -619,7 +625,7 @@ Estimated completion:
 
 - Normal gate: all reviewers currently designated by the maintainer plus green
   CI on the exact head SHA.
-- Temporary gate while Claude is rate-limited: Hermes + Grok 4.5 + green CI.
+- Temporary gate while Grok 4.5 is halted: exact-head Hermes + green CI.
 - Findings from any additional reviewer must still be verified and resolved.
 - Any pushed delta requires current-head re-review.
 
@@ -701,8 +707,16 @@ is also merged and deployed: bounded execution incidents and compact memory
 snapshots are naturally validated with a settled hard-green smoke. PR #1246 is
 merged, deployed, and naturally validated: producer-owned materiality suppresses
 unchanged trailing/unstuck human repeats while preserving five-minute durable
-observations. Active PR #1247 compacts the remaining 311-character visible
-trailing projection without changing its payload, admission, or behavior.
+observations. PR #1247 is also merged, deployed, and naturally validated: its
+compact trailing projection reduced the observed Hyperliquid line from 311 to
+211 visible characters while retaining the operator-relevant state and leaving
+payload, admission, cadence, and behavior unchanged. The restart and settled
+smoke were hard-green; report-time `D` samples cleared to exact `R/S` states.
+
+The active slice bounds the naturally observed 678-character
+`live.approved_coins` startup override line with per-side counts and bounded
+symbol samples. It changes only the config-change log projection; applied
+config values and non-target config logging remain unchanged.
 
 Do not create progress-only PRs or resume unrelated logging work from stale
 worktrees.

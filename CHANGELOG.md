@@ -4,6 +4,11 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- CLI overrides of `live.approved_coins` now use a bounded startup log summary
+  with per-side counts and three-symbol samples instead of printing the full
+  old and new collections. Config application and non-target config-change
+  logging are unchanged.
+
 - Visible `trailing.status` console/text records now use a compact operator
   projection that fits the normal line budget while retaining status, position
   identity, mode, trigger gates, material threshold/retracement values, current
