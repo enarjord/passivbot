@@ -151,6 +151,7 @@ class EventTypes:
     BOT_SHUTDOWN_STAGE = "bot.shutdown.stage"
     BOT_STOPPED = "bot.stopped"
     HEALTH_SUMMARY = "health.summary"
+    RESOURCE_MEMORY_SNAPSHOT = "resource.memory_snapshot"
     MARKET_SNAPSHOT_DIAGNOSTIC_SKIPPED = "market.snapshot_diagnostic_skipped"
     CYCLE_STARTED = "cycle.started"
     CYCLE_COMPLETED = "cycle.completed"
@@ -265,6 +266,7 @@ class EventTags:
     LOAD = "load"
     LOGGING = "logging"
     MARKET = "market"
+    MEMORY = "memory"
     MODE = "mode"
     ORDER = "order"
     PLANNING = "planning"
@@ -317,6 +319,7 @@ class ReasonCodes:
     LOW_BALANCE = "low_balance"
     MARKET_SNAPSHOT_DIAGNOSTIC_SKIPPED = "market_snapshot_diagnostic_skipped"
     MIN_EFFECTIVE_COST_BLOCKED = "min_effective_cost_blocked"
+    MEMORY_SNAPSHOT = "memory_snapshot"
     NEW_FILL = "new_fill"
     NEW_FILL_BATCH = "new_fill_batch"
     OPEN_TAIL_PROJECTION = "open_tail_projection"
@@ -479,6 +482,7 @@ PHASE1_EVENT_TYPES = {
     EventTypes.BOT_SHUTDOWN_STAGE,
     EventTypes.BOT_STOPPED,
     EventTypes.HEALTH_SUMMARY,
+    EventTypes.RESOURCE_MEMORY_SNAPSHOT,
     EventTypes.CYCLE_STARTED,
     EventTypes.CYCLE_COMPLETED,
     EventTypes.CYCLE_DEGRADED,
@@ -781,6 +785,7 @@ DEFAULT_ROUTES: dict[str, EventRoute] = {
     EventTypes.BOT_SHUTDOWN_STAGE: EventRoute(console=True, text=True),
     EventTypes.BOT_STOPPED: EventRoute(console=True, text=True),
     EventTypes.HEALTH_SUMMARY: EventRoute(console=True, text=True),
+    EventTypes.RESOURCE_MEMORY_SNAPSHOT: EventRoute(console=True, text=True),
     EventTypes.MARKET_SNAPSHOT_DIAGNOSTIC_SKIPPED: EventRoute(
         console=False, text=False
     ),
@@ -991,6 +996,7 @@ _CONSOLE_EVENT_TAGS = {
     EventTypes.FILLS_INGESTED_SUMMARY: "fill",
     EventTypes.POSITION_CHANGED: "pos",
     EventTypes.BALANCE_CHANGED: "balance",
+    EventTypes.RESOURCE_MEMORY_SNAPSHOT: "memory",
     EventTypes.RISK_MODE_CHANGED: "risk",
     EventTypes.HSL_TRANSITION: "risk",
     EventTypes.HSL_STATUS: "risk",
@@ -1469,6 +1475,47 @@ def _format_console_balance_changed(event: LiveEvent) -> str:
         f"{'snap':<5}{snapped_transition} | "
         f"equity={equity} source={source}"
     )
+
+
+def format_memory_snapshot_console(data: Mapping[str, Any]) -> str:
+    """Project a bounded memory snapshot without retaining diagnostic samples."""
+    rss_bytes = _data_int(data, "rss_bytes")
+    delta_pct = _data_number(data, "rss_delta_pct")
+    cache = data.get("cache") if isinstance(data.get("cache"), Mapping) else {}
+    timeframe_cache = (
+        data.get("timeframe_cache")
+        if isinstance(data.get("timeframe_cache"), Mapping)
+        else {}
+    )
+    tasks = data.get("tasks") if isinstance(data.get("tasks"), Mapping) else {}
+
+    parts = ["[memory]"]
+    if rss_bytes is not None:
+        parts.append(f"rss={rss_bytes / 1024.0 / 1024.0:.1f}MiB")
+    if delta_pct is not None and math.isfinite(delta_pct):
+        parts.append(f"delta={delta_pct:+.1f}%")
+    cache_bytes = _data_int(cache, "bytes")
+    cache_symbols = _data_int(cache, "symbols")
+    if cache_bytes is not None:
+        cache_part = f"cache={cache_bytes / 1024.0 / 1024.0:.1f}MiB"
+        if cache_symbols is not None:
+            cache_part += f"/{cache_symbols}sym"
+        parts.append(cache_part)
+    tf_bytes = _data_int(timeframe_cache, "bytes")
+    tf_ranges = _data_int(timeframe_cache, "ranges")
+    if tf_bytes is not None:
+        tf_part = f"tf={tf_bytes / 1024.0 / 1024.0:.1f}MiB"
+        if tf_ranges is not None:
+            tf_part += f"/{tf_ranges}rng"
+        parts.append(tf_part)
+    total_tasks = _data_int(tasks, "total")
+    pending_tasks = _data_int(tasks, "pending")
+    if total_tasks is not None:
+        task_part = f"tasks={total_tasks}"
+        if pending_tasks is not None:
+            task_part += f"/{pending_tasks}"
+        parts.append(task_part)
+    return " ".join(parts)[:240]
 
 
 def _console_risk_mode_changed_summary(event: LiveEvent) -> list[str]:
@@ -2055,6 +2102,8 @@ def format_console_event(event: LiveEvent) -> str:
         return _format_console_position_changed(event)
     if event.event_type == EventTypes.BALANCE_CHANGED:
         return _format_console_balance_changed(event)
+    if event.event_type == EventTypes.RESOURCE_MEMORY_SNAPSHOT:
+        return format_memory_snapshot_console(event.data)
     base = f"[{_console_tag(event)}]"
     if event.status:
         base += f" {event.status}"

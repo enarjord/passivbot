@@ -4,6 +4,12 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Material live memory snapshots now emit a bounded `resource.memory_snapshot`
+  event and one compact operator line instead of a 457-525 character cache and
+  task diagnostic. The complete bounded samples remain available in structured
+  and monitor sinks, detailed diagnostics remain at DEBUG, and collection,
+  cadence, admission, and trading behavior are unchanged.
+
 - Execution-loop failures now use a bounded incident signature in normal
   console, monitor, and structured burst output instead of retaining raw
   exception text, request URLs, and unconditional tracebacks. Stack frames

@@ -3897,7 +3897,137 @@ def test_memory_snapshot_is_interesting_only_initially_or_on_large_change():
         bot._memory_snapshot_is_interesting(prev={"rss": 100}, pct_change=10.0) is False
     )
     assert (
+        bot._memory_snapshot_is_interesting(prev={"rss": 100}, pct_change=24.999)
+        is False
+    )
+    assert (
+        bot._memory_snapshot_is_interesting(prev={"rss": 100}, pct_change=25.0)
+        is True
+    )
+    assert (
+        bot._memory_snapshot_is_interesting(prev={"rss": 100}, pct_change=-25.0)
+        is True
+    )
+    assert (
         bot._memory_snapshot_is_interesting(prev={"rss": 100}, pct_change=30.0) is True
+    )
+
+
+def _memory_snapshot_bot():
+    bot = Passivbot.__new__(Passivbot)
+    bot.cm = SimpleNamespace(
+        _cache={
+            "BTC/USDT:USDT": np.zeros((3, 6), dtype=np.float64),
+            "ETH/USDT:USDT": np.zeros((2, 6), dtype=np.float64),
+        },
+        _tf_range_cache={
+            "BTC/USDT:USDT": {("1m", 1): (np.zeros((4, 6), dtype=np.float64),)},
+        },
+    )
+    bot._mem_log_prev = None
+    bot.live_event_console_enabled = False
+    bot._live_event_pipeline = None
+    return bot
+
+
+def test_memory_snapshot_event_falls_back_to_compact_info_and_keeps_debug_detail(
+    monkeypatch, caplog
+):
+    bot = _memory_snapshot_bot()
+    emitted = []
+    bot._emit_memory_snapshot_event = lambda **kwargs: emitted.append(kwargs)
+    monkeypatch.setattr(
+        passivbot_module, "_get_process_rss_bytes", lambda: 198 * 1024 * 1024
+    )
+
+    with caplog.at_level(logging.DEBUG):
+        bot._log_memory_snapshot(now_ms=1_000)
+
+    assert len(emitted) == 1
+    assert emitted[0]["rss_bytes"] == 198 * 1024 * 1024
+    assert len(emitted[0]["cache_samples"]) == 2
+    assert len(emitted[0]["timeframe_cache_samples"]) == 1
+    info_messages = [
+        record.message
+        for record in caplog.records
+        if record.levelno == logging.INFO and record.message.startswith("[memory]")
+    ]
+    assert info_messages == [
+        "[memory] rss=198.0MiB cache=0.0MiB/2sym tf=0.0MiB/1rng"
+    ]
+    assert all(len(message) <= 240 for message in info_messages)
+    assert any("cm_top=BTC" in record.message for record in caplog.records)
+    assert bot._mem_log_prev == {
+        "timestamp": 1_000,
+        "rss": 198 * 1024 * 1024,
+        "cm_cache_bytes": 240,
+    }
+
+
+def test_memory_snapshot_structured_console_owns_info_and_routine_stays_debug(
+    monkeypatch, caplog
+):
+    bot = _memory_snapshot_bot()
+    emitted = []
+    bot._emit_memory_snapshot_event = lambda **kwargs: emitted.append(kwargs)
+    bot.live_event_console_enabled = True
+    bot._live_event_pipeline = SimpleNamespace(console_sink=object())
+    monkeypatch.setattr(
+        passivbot_module, "_get_process_rss_bytes", lambda: 198 * 1024 * 1024
+    )
+
+    with caplog.at_level(logging.DEBUG):
+        bot._log_memory_snapshot(now_ms=1_000)
+
+    assert len(emitted) == 1
+    assert not any(
+        record.levelno == logging.INFO and record.message.startswith("[memory]")
+        for record in caplog.records
+    )
+    assert any(
+        record.levelno == logging.DEBUG and record.message.startswith("[memory]")
+        for record in caplog.records
+    )
+
+    caplog.clear()
+    bot._mem_log_prev = {"timestamp": 1_000, "rss": 200 * 1024 * 1024}
+    monkeypatch.setattr(
+        passivbot_module, "_get_process_rss_bytes", lambda: 220 * 1024 * 1024
+    )
+    with caplog.at_level(logging.DEBUG):
+        bot._log_memory_snapshot(now_ms=2_000)
+
+    assert len(emitted) == 1
+    assert not any(
+        record.levelno == logging.INFO and record.message.startswith("[memory]")
+        for record in caplog.records
+    )
+    assert any(
+        record.levelno == logging.DEBUG and record.message.startswith("[memory]")
+        for record in caplog.records
+    )
+
+
+def test_memory_snapshot_event_failure_isolated_from_snapshot_state(monkeypatch, caplog):
+    bot = _memory_snapshot_bot()
+
+    def fail_emit(**kwargs):
+        del kwargs
+        raise OSError("event sink unavailable")
+
+    bot._emit_memory_snapshot_event = fail_emit
+    monkeypatch.setattr(
+        passivbot_module, "_get_process_rss_bytes", lambda: 198 * 1024 * 1024
+    )
+
+    with caplog.at_level(logging.DEBUG):
+        bot._log_memory_snapshot(now_ms=1_000)
+
+    assert bot._mem_log_prev["timestamp"] == 1_000
+    assert bot._mem_log_prev["rss"] == 198 * 1024 * 1024
+    assert any(
+        "failed to emit memory snapshot event" in record.message
+        for record in caplog.records
     )
 
 

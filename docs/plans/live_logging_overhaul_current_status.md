@@ -22,38 +22,39 @@ Estimated completion:
 
 ## Active Review Slice
 
-- Branch: `codex/execution-incident-projection`.
-- PR: #1244, `Bound execution-loop incident projection`.
-- Base: `c6fba829031f64a9ecd59eadcaaecf36db40236c`, canonical `master`
-  after PR #1243.
-- Slice: replace raw execution-loop exception output with a bounded incident
-  signature in normal console, monitor, and structured burst projections.
-- Triggering evidence: the authorized post-PR #1243 restart produced a natural
-  KuCoin execution-loop timeout whose normal tmux output included a full
-  request URL, an unconditional traceback, and an untagged error-budget line.
-  Repeated pane captures proved this was the actual operator console rather
-  than only a protected developer sink.
-- Scope: retain exception class, bounded status/code and endpoint, action,
-  cycle, and error-budget state; keep stack frames available only at DEBUG
-  without the exception value; remove raw exception text and URLs from this
-  incident family.
-- Behavior boundary: preserve exception propagation policy, error counters,
-  restart threshold and backoff, timestamp recovery, burst cadence, exchange
-  calls, order behavior, Rust, backtest, and optimizer behavior. Generic
-  startup/process error handling remains unchanged.
-- Publication state, exact head, mergeability, CI, and current-head reviewer
-  verdicts: query live GitHub metadata; do not embed self-invalidating values.
-- Expected VPS action: after merge, one authorized exact five-bot restart may
-  activate the bounded projection. Validate normal operation and inspect only
-  naturally occurring failures; do not manufacture exchange, failure, state,
-  or trading events.
+- Branch: `codex/memory-snapshot-event`, integrated with canonical `master`
+  after PR #1244.
+- PR: #1245, `Add bounded memory snapshot event`.
+- Slice: publish the existing material memory diagnostic as bounded
+  `resource.memory_snapshot` data and project one compact operator line.
+- Triggering evidence: current post-PR #1243 VPS5 segments produced natural
+  `[memory]` INFO records measuring 457-525 characters. They mixed RSS, cache
+  totals and samples, timeframe-cache ranges, and task names into one line,
+  exceeding the 240-character normal-console budget.
+- Scope: preserve the existing collection pass, initial-or-25-percent RSS
+  admission, and prior-RSS state; retain bounded detail in the event/monitor
+  payload and full developer detail at DEBUG; use a compact legacy fallback
+  only when the structured console is unavailable.
+- Behavior boundary: observability-only; no exchange calls, cache or task
+  mutation, timing change, Rust, order, risk, backtest, or optimizer behavior.
+- Integration boundary: PR #1244 merged as `bff64d3a82a6b227cf70514ffd08916f9c2c9cb7`.
+  The #1245 integration preserves both additive validator sets and both event
+  contracts; all function bodies and tests merged automatically. The temporary
+  maintainer-authorized gate while Grok is halted is exact-head Hermes plus
+  green CI, with prior semantic approval carried only under the proportional
+  mechanical-delta contract.
+- Expected VPS action: after merge, deploy PRs #1244 and #1245 together with
+  one authorized exact five-bot restart. Validate normal operation, the natural
+  initial memory projection, and naturally occurring incidents only; do not
+  manufacture exchange, failure, state, or trading events.
 
 ## Deployed Baseline
 
-- Canonical `master` and VPS5 checkout:
-  `c6fba829031f64a9ecd59eadcaaecf36db40236c`, PR #1243; tracked status clean
-  and expected untracked artifacts preserved.
-- VPS5 runs the same head in bot PIDs
+- Canonical `master` is `bff64d3a82a6b227cf70514ffd08916f9c2c9cb7`,
+  PR #1244. VPS5 remains on `c6fba829031f64a9ecd59eadcaaecf36db40236c`,
+  PR #1243, pending the combined #1244/#1245 deployment; its tracked status is
+  clean and expected untracked artifacts are preserved.
+- VPS5 runs the PR #1243 head in bot PIDs
   `948822/948824/948826/948828/948830`. The exact pane PIDs remain
   `856294/856332/856364/856398/856434`, and unrelated `misc:0.0` PID `434835`
   is unchanged.
@@ -677,9 +678,9 @@ hard-green settled smoke. No natural config outcome occurred in the bounded
 window. PR #1243's HSL replay console cadence is merged, deployed, and
 naturally validated: intermediate console progress stayed at least 30 seconds
 apart while complete structured progress remained durable. Its restart exposed
-the active slice above: a natural execution-loop failure still projected raw
-request URLs, an unconditional traceback, and an untagged error-budget line to
-the operator console.
+the execution-loop incident projection addressed by merged PR #1244. PR #1245
+is the active memory-snapshot integration slice; both producer changes remain
+pending one combined VPS5 activation.
 
 Do not create progress-only PRs or resume unrelated logging work from stale
 worktrees.

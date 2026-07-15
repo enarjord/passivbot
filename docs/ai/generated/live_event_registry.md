@@ -80,6 +80,7 @@ The code-owned registries live in `src/live/event_bus.py`. Payload and emission 
 - `remote_call.started`
 - `remote_call.succeeded`
 - `remote_call.throttled`
+- `resource.memory_snapshot`
 - `risk.entry_cooldown_delta_anchored`
 - `risk.mode_changed`
 - `risk.realized_loss_gate_blocked`
@@ -123,6 +124,7 @@ The code-owned registries live in `src/live/event_bus.py`. Payload and emission 
 - `load`
 - `logging`
 - `market`
+- `memory`
 - `mode`
 - `order`
 - `planning`
@@ -198,6 +200,7 @@ The code-owned registries live in `src/live/event_bus.py`. Payload and emission 
 - `limit_order_create_market_distance`
 - `low_balance`
 - `market_snapshot_diagnostic_skipped`
+- `memory_snapshot`
 - `min_effective_cost_blocked`
 - `new_fill`
 - `new_fill_batch`

@@ -144,6 +144,25 @@ must not retain `latest_error`. These projections are observability-only: error 
 timestamp recovery, restart thresholds, backoff, and trading behavior remain owned by the existing
 execution-loop policy.
 
+## Memory Snapshots
+
+`resource.memory_snapshot` records the existing material memory diagnostic when it first becomes
+available or when absolute process-RSS movement reaches the producer's 25 percent boundary. It does
+not add a collection pass, timer, threshold, cache traversal, task inspection, or trading control.
+Routine samples remain available only in the protected DEBUG text path.
+
+The bounded payload contains finite RSS bytes and percent delta; cache bytes, candle count, symbol
+count, and at most three symbol samples; timeframe-cache bytes, range count, and at most three
+symbol/timeframe samples; and task total, pending count, and at most four sanitized task-name/count
+entries. Samples use strict length and character allowlists and exclude URLs, query strings,
+exception text, paths, raw payloads, and secrets.
+
+The event is the sole normal console/text owner when the structured console is available. Its
+compact projection reports aggregate RSS, cache, timeframe-cache, and task counts and must satisfy
+the normal 240-character budget. The legacy compact INFO line is a fallback only when the event
+console or emitter is unavailable. Event or sink failure remains isolated and must not change the
+producer's prior-RSS state, cadence, collection, cache state, tasks, or trading behavior.
+
 ## Dynamic Registry Values
 
 - `authoritative_reason_code(surface)` produces `authoritative_<surface>`.
