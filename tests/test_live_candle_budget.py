@@ -5,6 +5,53 @@ import pytest
 from live.event_bus import EventTypes
 
 
+@pytest.mark.asyncio
+async def test_candle_index_rebuild_success_detail_is_debug(monkeypatch, caplog):
+    import passivbot as pb_mod
+
+    monkeypatch.setattr(pb_mod, "utc_ms", lambda: 1_000_000)
+
+    class FakeCM:
+        def __init__(self):
+            self.calls = []
+
+        def rebuild_index_for_range(self, *args, **kwargs):
+            self.calls.append((args, kwargs))
+            return {"updated": 7, "removed": 2}
+
+    class FakeBot:
+        stop_signal_received = False
+        cm = FakeCM()
+        _shutdown_requested = pb_mod.Passivbot._shutdown_requested
+
+    caplog.set_level(logging.DEBUG)
+    bot = FakeBot()
+
+    await pb_mod.Passivbot.rebuild_required_candle_indices(
+        bot,
+        ["BTC/USDT:USDT"],
+        {"BTC/USDT:USDT": 120},
+        {"BTC/USDT:USDT": 0},
+        900_000,
+        0,
+    )
+
+    assert bot.cm.calls == [
+        (
+            ("BTC/USDT:USDT", 0, 900_000),
+            {"timeframe": "1m", "log_level": "debug"},
+        )
+    ]
+    records = [record for record in caplog.records if "[candle]" in record.message]
+    assert [record.levelno for record in records] == [logging.DEBUG, logging.DEBUG]
+    assert records[0].message == (
+        "[candle] rebuilding index for 1 symbols (recent ranges only)"
+    )
+    assert records[1].message == (
+        "[candle] index rebuild complete: updated=7 removed=2 elapsed=0.00s"
+    )
+
+
 def _forager_score_weights(volume=0.0, ema_readiness=0.0, volatility=0.0):
     return {
         "volume": float(volume),

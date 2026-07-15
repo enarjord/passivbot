@@ -4,6 +4,10 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Successful candle-index maintenance now stays available at DEBUG under the
+  `[candle]` tag instead of appearing as repeated `[boot]` INFO output after
+  readiness. Index rebuild behavior and failure visibility are unchanged.
+
 - Routine successful candle-warmup details now remain available at DEBUG
   instead of filling the normal live console. Startup readiness milestones,
   degraded/failure visibility, structured cache decisions, and warmup behavior

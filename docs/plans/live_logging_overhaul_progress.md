@@ -8189,3 +8189,11 @@ VPS5 deployment status:
   window, progress, cache-decision, and forager-trigger details to DEBUG while
   preserving readiness milestones, failures, structured cache decisions, and
   all warmup behavior.
+- PR #1234 received exact-head Hermes and Grok 4.5 approval with green CI and
+  merged to canonical `master` at `e1dcf3164a`. Its runtime activation remains
+  pending the next authorized exact five-bot restart.
+- The same five current logs contain 168 successful candle-index
+  start/completion INFO lines: Binance 54, KuCoin 20, GateIO 16, OKX 72, and
+  Hyperliquid 6. Repeated post-ready one-symbol maintenance calls are mislabeled
+  `[boot]`; the active `codex/candle-index-console-detail` slice retains this
+  detail at DEBUG under `[candle]` without changing index work or failures.

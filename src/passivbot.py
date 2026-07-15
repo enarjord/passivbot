@@ -4533,8 +4533,8 @@ class Passivbot:
             return
 
         started = utc_ms()
-        logging.info(
-            "[boot] rebuilding candle index for %d symbols (recent ranges only)...",
+        logging.debug(
+            "[candle] rebuilding index for %d symbols (recent ranges only)",
             len(symbols),
         )
 
@@ -4574,8 +4574,8 @@ class Passivbot:
 
         updated_total, removed_total = await asyncio.to_thread(_rebuild_sync)
         elapsed_s = max(0.0, (utc_ms() - started) / 1000.0)
-        logging.info(
-            "[boot] candle index rebuild complete: updated=%d removed=%d elapsed=%.2fs",
+        logging.debug(
+            "[candle] index rebuild complete: updated=%d removed=%d elapsed=%.2fs",
             updated_total,
             removed_total,
             elapsed_s,
