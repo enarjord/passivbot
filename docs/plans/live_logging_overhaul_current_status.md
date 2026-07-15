@@ -22,45 +22,52 @@ Estimated completion:
 
 ## Active Review Slice
 
-- Branch: `codex/okx-config-outcome-event`.
-- PR: #1242.
-- Base: `953ac80e316d1dcb4f64f852fba9a89f06c70638`, canonical `master`
-  after PR #1241.
-- Slice: migrate OKX per-symbol margin-mode/leverage outcomes into the existing
-  structured `exchange.config_refresh` family and keep explicit unchanged
-  responses at DEBUG.
-- Triggering evidence: the logging policy reserves INFO for new operator facts,
-  while OKX's explicit `59107` already-configured response currently prints as
-  a successful INFO line. Unlike normal responses, this outcome proves that no
-  exchange setting changed. A read-only four-hour VPS5 sample contained nine
-  normal OKX `margin=ok` outcomes and no `59107`; normal outcomes remain INFO
-  and provide a natural post-deploy producer path, while the unchanged branch
-  must be validated locally rather than manufactured live.
-- Scope: add bounded per-symbol `confirmed|unchanged|failed` outcome metadata,
-  retain normal success and failure operator lines, and demote only the explicit
-  unchanged line. Reuse the existing event type, route, and reason codes.
-- Behavior boundary: preserve exchange calls and requested values, task and
-  exception control flow, success/failure handling, log visibility for confirmed
-  outcomes and failures, sink isolation, order/risk behavior, Rust, backtest,
-  and optimizer behavior. Raw responses and exception text do not enter the new
-  connector-local event payload.
+- Branch: `codex/hsl-replay-console-cadence`.
+- PR: query live GitHub metadata after publication.
+- Base: `3072878525317d6d7e0811ef191e48cabedcf8fc`, canonical `master`
+  after PR #1242.
+- Slice: bound intermediate HSL coin-history replay progress on the normal
+  console to one update per 30 seconds while retaining complete structured
+  replay progress.
+- Triggering evidence: the authorized post-PR #1242 VPS5 restart produced 27
+  Binance, 26 GateIO, 14 KuCoin, and 16 OKX reconstruction-progress INFO
+  records. Several pair-completion records arrived seconds apart because the
+  producer's per-pair `force` path bypasses its normal cadence. Each replay
+  already had a distinct start and completion line, and the logging policy caps
+  blocking startup progress at one console update per 30 seconds.
+- Scope: separate durable-event cadence from console cadence, preserve the
+  first progress line and final completion, and prevent forced pair-boundary
+  events from forcing extra console records.
+- Behavior boundary: preserve every current `hsl.replay.progress` event and
+  payload, replay ordering, readiness and safety state, yields, calculations,
+  exchange behavior, Rust, backtest, and optimizer behavior.
 - Publication state, exact head, mergeability, CI, and current-head reviewer
   verdicts: query live GitHub metadata; do not embed self-invalidating values.
 - Expected VPS action: after merge, one authorized exact five-bot restart may
-  activate the event producer and level change. Validate natural OKX startup
-  outcomes, normal operation, and structured delivery. Absence of a natural
-  unchanged outcome is acceptable; do not manufacture exchange responses,
-  failures, state, or trading events.
+  activate the console cadence. Validate natural HSL startup replay counts,
+  completion visibility, structured progress retention, and normal operation.
+  Do not manufacture replay, exchange, failure, state, or trading events.
 
 ## Deployed Baseline
 
 - Canonical `master` and VPS5 checkout:
-  `953ac80e316d1dcb4f64f852fba9a89f06c70638`, PR #1241; tracked status clean
+  `3072878525317d6d7e0811ef191e48cabedcf8fc`, PR #1242; tracked status clean
   and expected untracked artifacts preserved.
 - VPS5 runs the same head in bot PIDs
-  `946686/946688/946690/946692/946694`. The exact pane PIDs remain
+  `947807/947809/947811/947813/947815`. The exact pane PIDs remain
   `856294/856332/856364/856398/856434`, and unrelated `misc:0.0` PID `434835`
   is unchanged.
+- PR #1242 was activated with one exact five-bot graceful restart. Every old
+  bot exited naturally after one SIGINT round; KuCoin was last at 40 seconds,
+  and no escalation was required. One real KuCoin authoritative-state timeout
+  made the first settled window red, then recovered without intervention. The
+  final two-minute smoke was `ok=true` with `198/198` remote calls and `46/46`
+  account-critical calls successful, eight successful fill refreshes, five
+  matching processes/configs in state `R`, and zero hard, log, monitor,
+  process, or event-pipeline failures. No natural OKX config-refresh outcome
+  occurred in the bounded window and none was manufactured. Fresh HSL replay
+  progress counts of `27/26/14/16` on Binance/GateIO/KuCoin/OKX exposed the
+  active console-cadence follow-up.
 - PR #1241 was activated with one exact five-bot graceful restart. Every old
   bot exited naturally after one SIGINT round; no escalation was required.
   The settled smoke was `ok=true` with `225/225` remote calls and `48/48`
@@ -654,9 +661,11 @@ is merged, deployed, and naturally validated: completed INFO lines were all at
 or above ten seconds while interesting sub-threshold structured INFO samples
 remained durable. PR #1241's successful fill-refresh timing demotion is also
 merged, deployed, and naturally validated: successful timing detail is absent
-from normal INFO while structured refresh summaries remain available. The
-active slice above now gives OKX configuration outcomes bounded structured
-evidence and demotes only explicit unchanged responses.
+from normal INFO while structured refresh summaries remain available. PR
+#1242's bounded OKX configuration outcomes are merged and deployed with a
+hard-green settled smoke. No natural config outcome occurred in the bounded
+window. The active slice above instead addresses the naturally observed HSL
+replay progress burst while preserving its durable event history.
 
 Do not create progress-only PRs or resume unrelated logging work from stale
 worktrees.

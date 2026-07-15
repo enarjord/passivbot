@@ -8358,3 +8358,26 @@ VPS5 deployment status:
   deploy while the unchanged branch remains a local regression-test claim.
   The same window exposed nine Binance mixed leverage/unchanged lines; that
   separate connector contract is intentionally outside this OKX-scoped PR.
+
+### 2026-07-15: OKX Config Outcomes Deployed And HSL Progress Follow-Up
+
+- PR #1242 merged to canonical `master` at `3072878525` after exact-head Hermes
+  and Grok approval plus green Python and Rust CI. VPS5 fast-forwarded cleanly,
+  and all five exact bots exited naturally after one SIGINT round. KuCoin was
+  last at 40 seconds; no escalation was required. Exact pane PIDs and unrelated
+  `misc:0.0` PID `434835` remained unchanged.
+- One real KuCoin authoritative-state timeout made the first settled window
+  red, then recovered without intervention. The final two-minute smoke was
+  `ok=true` with `198/198` remote calls and `46/46` account-critical calls
+  successful, eight successful fill refreshes, five matching processes/configs
+  in state `R`, and zero hard, log, monitor, process, or event-pipeline
+  failures. The checkout was clean at the exact merged head.
+- No natural OKX config-refresh outcome occurred in the bounded post-restart
+  window, so neither an unchanged response nor any exchange state was
+  manufactured for validation.
+- Natural HSL startup replay produced 27 Binance, 26 GateIO, 14 KuCoin, and 16
+  OKX reconstruction-progress INFO records. Pair-boundary force bypassed the
+  producer cadence and created seconds-apart bursts despite distinct start and
+  completion records. The active `codex/hsl-replay-console-cadence` slice keeps
+  all structured progress events but caps intermediate console progress at one
+  update per 30 seconds.
