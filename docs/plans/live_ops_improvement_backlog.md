@@ -576,8 +576,9 @@ Related detailed plans:
     behavior unchanged. Two natural post-restart cadences proved both durable
     detail and suppression; settled smoke was hard-green. The first visible
     trailing line still measured 311 characters, so the active
-    `codex/compact-trailing-status-console` follow-up compacts that formatter to
-    the normal 240-character budget without changing event data or admission.
+    PR #1247, `codex/compact-trailing-status-console`, compacts that formatter
+    to the normal 240-character budget without changing event data or
+    admission.
 
     Two post-PR #1220 console observations remain deferred rather than folded
     into the realized-loss slice. Hyperliquid balance lines surfaced signed

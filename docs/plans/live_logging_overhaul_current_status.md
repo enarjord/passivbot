@@ -24,7 +24,7 @@ Estimated completion:
 
 - Branch: `codex/compact-trailing-status-console`, based on canonical
   `fc5c2cae88817744ebe330ad9c1b321087d70250` after PR #1246.
-- PR: pending publication, `Compact trailing status console projection`.
+- PR: #1247, `Compact trailing status console projection`.
 - Slice: compact only the operator-facing `trailing.status` console/text
   formatter while preserving complete structured and monitor payloads.
 - Triggering evidence: the first natural post-PR #1246 Hyperliquid trailing
