@@ -24,7 +24,7 @@ Estimated completion:
 
 - Branch: `codex/bound-approved-coins-console`, based on canonical
   `e3c6332c6b1f4ff692f94867f9dbfaf182cc0684` after PR #1247.
-- PR: pending, `Bound approved-coins startup log`.
+- PR: #1248, `Bound approved-coins startup log`.
 - Slice: bound only the INFO config-change projection for
   `live.approved_coins` while preserving complete applied config values.
 - Triggering evidence: the PR #1247 restart naturally printed a 678-character
