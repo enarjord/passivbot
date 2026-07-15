@@ -4068,9 +4068,13 @@ VPS5 deployment status:
 | Operator tools | In progress | `live-event-query`, trace summaries, order trace reconstruction, cycle trace reconstruction, time-window filters, severity-level filters, problem-event filters, event-file discovery metadata, `live-smoke-report` startup baselines/process liveness/remote-call failures/remote-call timings/remote-call health groups and top-level totals/account-critical health/risk-events/execution-health/shutdown-events/time windows/unparseable-log policy/brief smoke counters/brief problem-event groups/supervisor duplicate-extra process diagnostics, incident bundle trace/process/time-window/problem-event reports and query-scope filters, ID filters, `ticker-endpoint-probe` account-critical/time-sync/candle-freshness/fill-history-sample/rate-limit health summaries and account-only mode, `live-config-preflight` offline config summaries, `live-performance-report` timing aggregation with summary/filter, decision-boundary, input-staleness including market snapshot staleness, startup phase timing summaries, HSL replay pair/rate/stage summaries, forager/EMA readiness, cache warmup, resource-pressure percentiles, and unified operation-duration support | Cross-bot incident workflow, safe restart orchestration, bounded historical performance-report scans, active probe expansion beyond current endpoint/freshness summaries |
 | Operational restart goals | Split to adjacent work | PR #619 shutdown progress; PR #622 warm-cache startup; PR #656/#668 cache integrity smoke doctor | Continue separate reviewed PRs for shutdown/warmup/cache proof improvements |
 
-## Current Work
+## Historical Work Snapshot (Superseded)
 
-### In Progress: HSL Replay ETA Smoke Report
+This block records the in-progress handoff from 2026-06-30 and is not the
+current automation target. Use `live_logging_overhaul_current_status.md` for the
+active branch, PR, review gate, and rollout instructions.
+
+### Historical: HSL Replay ETA Smoke Report
 
 - Branch: `codex/v8-smoke-hsl-replay-eta`.
 - Scope: read-only live smoke report projection and tests.
@@ -8402,3 +8406,31 @@ VPS5 deployment status:
   `codex/execution-incident-projection` slice replaces that family with a
   bounded signature while preserving counters, restart/backoff, timestamp
   recovery, exchange calls, and trading behavior.
+
+### 2026-07-15: Incident And Memory Projections Deployed; Risk Status Follow-Up
+
+- PR #1244 merged as `bff64d3a82` and PR #1245 merged as `de5f21c96d` under
+  the temporary maintainer-authorized Hermes-plus-CI gate while Grok was
+  halted. PR #1245's current-master integration retained both additive event
+  contracts; direct target-relative diff proofs and 428 focused tests showed
+  no semantic production/test delta from its approved head.
+- VPS5 fast-forwarded cleanly and activated both PRs with one exact five-bot
+  restart. All old bots exited naturally after one SIGINT round; KuCoin was
+  last at 40 seconds. Exact pane PIDs and unrelated `misc:0.0` PID `434835`
+  remained unchanged.
+- One natural KuCoin startup timeout made the immediate window red, then
+  recovered without intervention. Its normal log retained a bounded operation,
+  exception type, endpoint, and action without a raw URL or traceback. All five
+  bots naturally emitted complete `resource.memory_snapshot` monitor payloads
+  and compact 84-107 character console lines.
+- The final two-minute smoke was `ok=true` with `217/217` remote calls and
+  `54/54` account-critical calls successful, six successful fill refreshes,
+  five config-valid processes in states `R=4,S=1`, and zero hard, log,
+  monitor, process, or event-pipeline failures. The checkout was clean at the
+  exact merged head.
+- The preceding Hyperliquid segment contained 27 trailing and 20 unstuck INFO
+  lines over about 135 minutes. Sub-display-precision trailing drift and
+  `-1.70` to `-1.76` allowance oscillation repeatedly appeared as changed. The
+  active `codex/trailing-unstuck-console-materiality` slice preserves every
+  five-minute structured observation while applying explicit producer-owned
+  transition and numeric materiality to console/text output.

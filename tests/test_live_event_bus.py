@@ -2298,7 +2298,7 @@ def test_console_format_fills_ingested_summary_does_not_claim_zero_for_all_pendi
     )
 
 
-def test_operator_visibility_suppresses_fill_console_and_text_only():
+def test_operator_visibility_suppresses_all_operator_sinks_only():
     structured = ListEventSink()
     monitor = ListEventSink()
     console = ListEventSink()
@@ -2309,18 +2309,25 @@ def test_operator_visibility_suppresses_fill_console_and_text_only():
         console_sink=console,
         text_sink=text,
     )
-    event = LiveEvent(
+    fill_event = LiveEvent(
         EventTypes.FILL_INGESTED,
         data={"operator_visible": False, "qty": 1.0, "price": 100.0},
     )
+    trailing_event = LiveEvent(
+        EventTypes.TRAILING_STATUS,
+        data={"operator_visible": False, "threshold_pct": 0.01},
+    )
+    missing_metadata_event = LiveEvent(EventTypes.TRAILING_STATUS, data={})
 
-    pipeline.emit(event)
+    pipeline.emit(fill_event)
+    pipeline.emit(trailing_event)
+    pipeline.emit(missing_metadata_event)
 
     assert pipeline.flush(timeout=2.0) is True
-    assert structured.events == [event]
-    assert monitor.events == [event]
-    assert console.events == []
-    assert text.events == []
+    assert structured.events == [fill_event, trailing_event, missing_metadata_event]
+    assert monitor.events == [fill_event, trailing_event, missing_metadata_event]
+    assert console.events == [missing_metadata_event]
+    assert text.events == [missing_metadata_event]
     assert pipeline.close(timeout=2.0) is True
 
 

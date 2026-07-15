@@ -4036,10 +4036,8 @@ def test_unstuck_status_logs_info_on_change_then_hourly(monkeypatch, caplog):
     bot._unstuck_last_log_ms = 0
     bot._unstuck_log_interval_ms = 5 * 60 * 1000
     bot._unstuck_unchanged_info_log_interval_ms = 60 * 60 * 1000
-    bot._unstuck_allowance_log_hyst_snap_pct = 0.002
-    bot._unstuck_allowance_log_snap_by_pside = {}
-    bot._unstuck_last_status_signature = None
-    bot._unstuck_last_status_info_ms = 0
+    bot._unstuck_operator_visible_baseline_by_pside = {}
+    bot._unstuck_operator_visible_ms_by_pside = {}
     bot._monitor_runtime_unstuck_hints = {
         "long": {
             "next_symbol": "BTC/USDT:USDT",
@@ -4098,9 +4096,15 @@ def test_unstuck_status_logs_info_on_change_then_hourly(monkeypatch, caplog):
     unstuck_logs = [
         record.message for record in caplog.records if "[unstuck]" in record.message
     ]
-    assert len(unstuck_logs) == 4
+    assert len(unstuck_logs) == 3
     assert len(captured_events) == 4
-    assert [event["changed"] for event in captured_events] == [True, True, True, False]
+    assert [event["changed"] for event in captured_events] == [True, True, False, False]
+    assert [event["operator_visible"] for event in captured_events] == [
+        True,
+        True,
+        False,
+        True,
+    ]
     assert captured_events[0]["side_statuses"]["long"]["allowance"] == pytest.approx(
         -41.01
     )
@@ -4121,10 +4125,8 @@ def test_unstuck_status_suppresses_legacy_log_when_event_console_active(
     bot._unstuck_last_log_ms = 0
     bot._unstuck_log_interval_ms = 5 * 60 * 1000
     bot._unstuck_unchanged_info_log_interval_ms = 60 * 60 * 1000
-    bot._unstuck_allowance_log_hyst_snap_pct = 0.002
-    bot._unstuck_allowance_log_snap_by_pside = {}
-    bot._unstuck_last_status_signature = None
-    bot._unstuck_last_status_info_ms = 0
+    bot._unstuck_operator_visible_baseline_by_pside = {}
+    bot._unstuck_operator_visible_ms_by_pside = {}
     bot._monitor_runtime_unstuck_hints = {}
     captured_events = []
     bot._emit_unstuck_status_event = lambda **kwargs: captured_events.append(kwargs)
@@ -4147,25 +4149,35 @@ def test_unstuck_status_suppresses_legacy_log_when_event_console_active(
     assert not any("[unstuck]" in record.message for record in caplog.records)
 
 
-def test_hysteresis_snapped_unstuck_allowance_updates_only_after_threshold():
+def test_unstuck_allowance_materiality_uses_five_percent_boundary():
+    baseline = -41.0
+
+    assert not Passivbot._unstuck_allowance_materially_changed(0.0, 0.0)
+    assert not Passivbot._unstuck_allowance_materially_changed(baseline, -43.049)
+    assert Passivbot._unstuck_allowance_materially_changed(baseline, -43.05)
+
     bot = Passivbot.__new__(Passivbot)
-    bot._unstuck_allowance_log_hyst_snap_pct = 0.002
-    bot._unstuck_allowance_log_snap_by_pside = {}
+    bot._unstuck_unchanged_info_log_interval_ms = 60 * 60 * 1000
+    bot._unstuck_operator_visible_baseline_by_pside = {}
+    bot._unstuck_operator_visible_ms_by_pside = {}
+    first = bot._unstuck_status_operator_decision(
+        {"long": {"status": "ok", "allowance": -100.0}}, now_ms=1
+    )
+    gradual = bot._unstuck_status_operator_decision(
+        {"long": {"status": "ok", "allowance": -103.0}}, now_ms=2
+    )
+    accumulated = bot._unstuck_status_operator_decision(
+        {"long": {"status": "ok", "allowance": -105.0}}, now_ms=3
+    )
 
-    first = bot._get_hysteresis_snapped_unstuck_allowance("long", -41.00)
-    small = bot._get_hysteresis_snapped_unstuck_allowance("long", -41.03)
-    large = bot._get_hysteresis_snapped_unstuck_allowance("long", -41.20)
-
-    assert first == pytest.approx(-41.00)
-    assert small == pytest.approx(-41.00)
-    assert large == pytest.approx(-41.20)
+    assert first == (True, True)
+    assert gradual == (False, False)
+    assert accumulated == (True, True)
 
 
 def test_unstuck_status_reports_coin_override_loss_allowance_pct():
     bot = Passivbot.__new__(Passivbot)
     bot._pnls_manager = object()
-    bot._unstuck_allowance_log_hyst_snap_pct = 0.002
-    bot._unstuck_allowance_log_snap_by_pside = {}
     bot.coin_overrides = {
         "HYPE/USDT:USDT": {"bot": {"long": {"unstuck_loss_allowance_pct": 0.005}}},
         "BTC/USDT:USDT": {"bot": {"long": {}}},
@@ -4289,8 +4301,8 @@ def test_trailing_status_emits_on_change_then_hourly(monkeypatch):
     bot._trailing_last_status_check_ms = 0
     bot._trailing_status_check_interval_ms = 5 * 60 * 1000
     bot._trailing_unchanged_info_log_interval_ms = 60 * 60 * 1000
-    bot._trailing_last_status_signature = None
-    bot._trailing_last_status_info_ms = 0
+    bot._trailing_operator_visible_baseline_by_key = {}
+    bot._trailing_operator_visible_ms_by_key = {}
     captured_events = []
     bot._emit_trailing_status_event = lambda **kwargs: captured_events.append(kwargs)
     now = [5 * 60 * 1000]
@@ -4326,12 +4338,108 @@ def test_trailing_status_emits_on_change_then_hourly(monkeypatch):
     now[0] += 60 * 60 * 1000
     bot._maybe_log_trailing_status()
 
-    assert len(captured_events) == 3
-    assert [event["changed"] for event in captured_events] == [True, True, False]
+    assert len(captured_events) == 5
+    assert [event["changed"] for event in captured_events] == [True, False, True, False, False]
+    assert [event["operator_visible"] for event in captured_events] == [
+        True,
+        False,
+        True,
+        False,
+        True,
+    ]
     assert captured_events[0]["symbol"] == "BTC/USDT:USDT"
     assert captured_events[0]["pside"] == "long"
     assert captured_events[0]["kind"] == "entry"
-    assert captured_events[1]["payload"]["status"] == "waiting_retracement"
+    assert captured_events[2]["payload"]["status"] == "waiting_retracement"
+
+
+def test_trailing_status_materiality_boundaries_and_per_item_visibility(monkeypatch):
+    assert not Passivbot._trailing_status_number_materially_changed(
+        0.0, 0.0, relative=True
+    )
+    assert not Passivbot._trailing_status_number_materially_changed(
+        0.01, 0.010499, relative=False
+    )
+    assert Passivbot._trailing_status_number_materially_changed(
+        0.01, 0.0105, relative=False
+    )
+    assert not Passivbot._trailing_status_number_materially_changed(
+        100.0, 100.499, relative=True
+    )
+    assert Passivbot._trailing_status_number_materially_changed(
+        100.0, 100.5, relative=True
+    )
+
+    bot = Passivbot.__new__(Passivbot)
+    bot._trailing_last_status_check_ms = 0
+    bot._trailing_status_check_interval_ms = 5 * 60 * 1000
+    bot._trailing_unchanged_info_log_interval_ms = 60 * 60 * 1000
+    bot._trailing_operator_visible_baseline_by_key = {}
+    bot._trailing_operator_visible_ms_by_key = {}
+    captured_events = []
+    bot._emit_trailing_status_event = lambda **kwargs: captured_events.append(kwargs)
+    now = [5 * 60 * 1000]
+    monkeypatch.setattr(passivbot_module, "utc_ms", lambda: now[0])
+    items = [
+        {
+            "symbol": "BTC/USDT:USDT",
+            "pside": "long",
+            "kind": "entry",
+            "payload": {"status": "waiting_threshold", "threshold_pct": 0.01},
+        },
+        {
+            "symbol": "ETH/USDT:USDT",
+            "pside": "long",
+            "kind": "entry",
+            "payload": {"status": "waiting_threshold", "threshold_pct": 0.01},
+        },
+    ]
+    bot._build_trailing_status_items = lambda: deepcopy(items)
+
+    bot._maybe_log_trailing_status()
+    now[0] += 5 * 60 * 1000
+    items[0]["payload"]["threshold_pct"] = 0.0105
+    bot._maybe_log_trailing_status()
+
+    assert [event["operator_visible"] for event in captured_events] == [
+        True,
+        True,
+        True,
+        False,
+    ]
+    assert [event["changed"] for event in captured_events] == [True, True, True, False]
+
+
+def test_trailing_status_reappearing_item_is_operator_visible(monkeypatch):
+    bot = Passivbot.__new__(Passivbot)
+    bot._trailing_last_status_check_ms = 0
+    bot._trailing_status_check_interval_ms = 5 * 60 * 1000
+    bot._trailing_unchanged_info_log_interval_ms = 60 * 60 * 1000
+    bot._trailing_operator_visible_baseline_by_key = {}
+    bot._trailing_operator_visible_ms_by_key = {}
+    captured_events = []
+    bot._emit_trailing_status_event = lambda **kwargs: captured_events.append(kwargs)
+    now = [5 * 60 * 1000]
+    monkeypatch.setattr(passivbot_module, "utc_ms", lambda: now[0])
+    item = {
+        "symbol": "BTC/USDT:USDT",
+        "pside": "long",
+        "kind": "entry",
+        "payload": {"status": "waiting_threshold", "threshold_pct": 0.01},
+    }
+    items = [deepcopy(item)]
+    bot._build_trailing_status_items = lambda: deepcopy(items)
+
+    bot._maybe_log_trailing_status()
+    items.clear()
+    now[0] += 5 * 60 * 1000
+    bot._maybe_log_trailing_status()
+    items.append(deepcopy(item))
+    now[0] += 5 * 60 * 1000
+    bot._maybe_log_trailing_status()
+
+    assert [event["operator_visible"] for event in captured_events] == [True, True]
+    assert [event["changed"] for event in captured_events] == [True, True]
 
 
 @pytest.mark.asyncio

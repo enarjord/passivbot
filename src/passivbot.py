@@ -608,6 +608,11 @@ def compute_live_warmup_windows(
 
 
 class Passivbot:
+    UNSTUCK_ALLOWANCE_MATERIALITY_RELATIVE_DELTA = 0.05
+    TRAILING_RATIO_MATERIALITY_ABSOLUTE_DELTA = 0.0005
+    TRAILING_PRICE_MATERIALITY_RELATIVE_DELTA = 0.005
+    STATUS_OPERATOR_HEARTBEAT_INTERVAL_MS = 60 * 60 * 1000
+
     _begin_live_event_cycle = live_event_emitters.begin_live_event_cycle
     _current_live_event_cycle_id = live_event_emitters.current_live_event_cycle_id
     _emit_live_cycle_completed = live_event_emitters.emit_live_cycle_completed
@@ -1268,18 +1273,16 @@ class Passivbot:
         # Unstuck logging throttle
         self._unstuck_last_log_ms = 0
         self._unstuck_log_interval_ms = 5 * 60 * 1000  # 5 minutes
-        self._unstuck_unchanged_info_log_interval_ms = 60 * 60 * 1000  # 1 hour
-        self._unstuck_last_status_signature = None
-        self._unstuck_last_status_info_ms = 0
+        self._unstuck_unchanged_info_log_interval_ms = self.STATUS_OPERATOR_HEARTBEAT_INTERVAL_MS
+        self._unstuck_operator_visible_baseline_by_pside = {}
+        self._unstuck_operator_visible_ms_by_pside = {}
         self._unstuck_last_selection_signature = None
         self._unstuck_last_selection_info_ms = 0
-        self._unstuck_allowance_log_hyst_snap_pct = 0.002
-        self._unstuck_allowance_log_snap_by_pside = {}
         self._trailing_last_status_check_ms = 0
         self._trailing_status_check_interval_ms = 5 * 60 * 1000
-        self._trailing_unchanged_info_log_interval_ms = 60 * 60 * 1000
-        self._trailing_last_status_signature = None
-        self._trailing_last_status_info_ms = 0
+        self._trailing_unchanged_info_log_interval_ms = self.STATUS_OPERATOR_HEARTBEAT_INTERVAL_MS
+        self._trailing_operator_visible_baseline_by_key = {}
+        self._trailing_operator_visible_ms_by_key = {}
 
         # Realized-loss gate logging throttle
         self._loss_gate_last_log_ms = {}
@@ -2432,9 +2435,6 @@ class Passivbot:
                 signature_parts.append((pside, "no_history"))
             else:
                 allowance = info["allowance"]
-                snapped_allowance = self._get_hysteresis_snapped_unstuck_allowance(
-                    pside, allowance
-                )
                 overrides_str = self._format_unstuck_override_pcts_for_logging(
                     info.get("override_loss_allowance_pcts", {})
                 )
@@ -2453,7 +2453,7 @@ class Passivbot:
                     (
                         pside,
                         "over_budget" if allowance < 0 else "ok",
-                        round(float(snapped_allowance), 2),
+                        round(float(allowance), 2),
                         tuple(sorted(info.get("override_loss_allowance_pcts", {}).items())),
                         str(info.get("next_symbol") or ""),
                         round(
@@ -2485,25 +2485,84 @@ class Passivbot:
         ) = self._get_unstuck_status_snapshot_parts_and_signature()
         return parts, signature
 
-    def _get_hysteresis_snapped_unstuck_allowance(
-        self, pside: str, allowance_raw: float
-    ) -> float:
-        """Return the hysteresis-snapped allowance used for INFO log change detection."""
-        snaps = getattr(self, "_unstuck_allowance_log_snap_by_pside", None)
-        if snaps is None:
-            snaps = {}
-            self._unstuck_allowance_log_snap_by_pside = snaps
-        prev = snaps.get(pside)
-        if prev is None:
-            snaps[pside] = float(allowance_raw)
-            return float(allowance_raw)
-        denom = max(abs(float(allowance_raw)), 1e-9)
-        threshold = float(
-            getattr(self, "_unstuck_allowance_log_hyst_snap_pct", 0.002) or 0.002
+    @staticmethod
+    def _status_materiality_number(value: Any) -> float | None:
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            return None
+        return number if math.isfinite(number) else None
+
+    @classmethod
+    def _unstuck_allowance_materially_changed(
+        cls, baseline: float | None, current: float | None
+    ) -> bool:
+        if baseline is None or current is None:
+            return baseline != current
+        denominator = max(abs(baseline), 1e-12)
+        delta = abs(current - baseline)
+        boundary = denominator * cls.UNSTUCK_ALLOWANCE_MATERIALITY_RELATIVE_DELTA
+        return delta > boundary or math.isclose(
+            delta, boundary, rel_tol=1e-12, abs_tol=0.0
         )
-        if abs(float(allowance_raw) - float(prev)) / denom > threshold:
-            snaps[pside] = float(allowance_raw)
-        return float(snaps[pside])
+
+    @staticmethod
+    def _unstuck_status_qualitative_signature(info: dict) -> tuple:
+        return (
+            str(info.get("status") or "unknown"),
+            Passivbot._status_materiality_number(info.get("allowance")) is not None
+            and Passivbot._status_materiality_number(info.get("allowance")) < 0.0,
+            tuple(sorted((info.get("override_loss_allowance_pcts") or {}).items())),
+            str(info.get("next_symbol") or ""),
+            info.get("next_target_price"),
+            info.get("next_target_distance_ratio"),
+            info.get("next_unstuck_trigger_distance_ratio"),
+        )
+
+    def _unstuck_status_operator_decision(
+        self, side_infos: dict[str, dict], now_ms: int
+    ) -> tuple[bool, bool]:
+        baselines = getattr(self, "_unstuck_operator_visible_baseline_by_pside", None)
+        if not isinstance(baselines, dict):
+            baselines = {}
+            self._unstuck_operator_visible_baseline_by_pside = baselines
+        visible_ms = getattr(self, "_unstuck_operator_visible_ms_by_pside", None)
+        if not isinstance(visible_ms, dict):
+            visible_ms = {}
+            self._unstuck_operator_visible_ms_by_pside = visible_ms
+        heartbeat_interval_ms = int(
+            getattr(
+                self,
+                "_unstuck_unchanged_info_log_interval_ms",
+                self.STATUS_OPERATOR_HEARTBEAT_INTERVAL_MS,
+            )
+        )
+        operator_visible = False
+        material_changed = False
+        for pside, info in sorted(side_infos.items()):
+            current = dict(info or {})
+            qualitative = self._unstuck_status_qualitative_signature(current)
+            allowance = self._status_materiality_number(current.get("allowance"))
+            baseline = baselines.get(pside)
+            changed = baseline is None or (
+                qualitative != baseline["qualitative"]
+                or self._unstuck_allowance_materially_changed(
+                    baseline["allowance"], allowance
+                )
+            )
+            heartbeat = (
+                not changed
+                and now_ms - int(visible_ms.get(pside, 0) or 0) >= heartbeat_interval_ms
+            )
+            if changed or heartbeat:
+                baselines[pside] = {
+                    "qualitative": qualitative,
+                    "allowance": allowance,
+                }
+                visible_ms[pside] = now_ms
+                operator_visible = True
+                material_changed = material_changed or changed
+        return operator_visible, material_changed
 
     def _maybe_log_unstuck_status(self) -> None:
         """Log unstuck status on meaningful change, with an hourly INFO heartbeat."""
@@ -2514,24 +2573,18 @@ class Passivbot:
         (
             side_infos,
             parts,
-            signature,
+            _signature,
         ) = self._get_unstuck_status_snapshot_parts_and_signature()
-        status_changed = signature != getattr(
-            self, "_unstuck_last_status_signature", None
+        operator_visible, status_changed = self._unstuck_status_operator_decision(
+            side_infos, now_ms
         )
-        last_info_ms = int(getattr(self, "_unstuck_last_status_info_ms", 0) or 0)
-        if (
-            status_changed
-            or (now_ms - last_info_ms) >= self._unstuck_unchanged_info_log_interval_ms
-        ):
-            if not Passivbot._live_event_console_available(self):
-                logging.info("[unstuck] %s", " | ".join(parts))
-            self._emit_unstuck_status_event(
-                side_statuses=side_infos,
-                changed=status_changed,
-            )
-            self._unstuck_last_status_info_ms = now_ms
-            self._unstuck_last_status_signature = signature
+        if operator_visible and not Passivbot._live_event_console_available(self):
+            logging.info("[unstuck] %s", " | ".join(parts))
+        self._emit_unstuck_status_event(
+            side_statuses=side_infos,
+            changed=status_changed,
+            operator_visible=operator_visible,
+        )
 
     def _maybe_log_unstuck_selection(
         self,
@@ -2617,53 +2670,104 @@ class Passivbot:
         return number if math.isfinite(number) else float(default)
 
     @staticmethod
-    def _trailing_status_signature(items: list[dict]) -> tuple:
-        signature = []
-        for item in items:
-            payload = item.get("payload", {}) if isinstance(item, dict) else {}
-            if not isinstance(payload, dict):
-                payload = {}
-            signature.append(
-                (
-                    item.get("symbol"),
-                    item.get("pside"),
-                    item.get("kind"),
-                    bool(payload.get("diagnostics_supported", True)),
-                    str(
-                        payload.get("status")
-                        or payload.get("trailing_status")
-                        or "unknown"
-                    ),
-                    bool(payload.get("threshold_met"))
-                    if "threshold_met" in payload
-                    else None,
-                    bool(payload.get("retracement_met"))
-                    if "retracement_met" in payload
-                    else None,
-                    round(
-                        Passivbot._trailing_status_float(payload.get("threshold_pct")),
-                        8,
-                    ),
-                    round(
-                        Passivbot._trailing_status_float(
-                            payload.get("retracement_pct")
-                        ),
-                        8,
-                    ),
-                    round(
-                        Passivbot._trailing_status_float(payload.get("threshold_price")),
-                        8,
-                    ),
-                    round(
-                        Passivbot._trailing_status_float(
-                            payload.get("retracement_price")
-                        ),
-                        8,
-                    ),
-                    str(payload.get("unsupported_reason") or ""),
-                )
+    def _trailing_status_qualitative_signature(payload: dict) -> tuple:
+        return (
+            bool(payload.get("diagnostics_supported", True)),
+            str(payload.get("strategy_kind") or ""),
+            str(payload.get("status") or payload.get("trailing_status") or "unknown"),
+            str(payload.get("selected_mode") or ""),
+            str(payload.get("order_type") or ""),
+            bool(payload.get("triggered", False)),
+            bool(payload.get("threshold_met")) if "threshold_met" in payload else None,
+            bool(payload.get("retracement_met"))
+            if "retracement_met" in payload
+            else None,
+            str(payload.get("unsupported_reason") or ""),
+        )
+
+    @staticmethod
+    def _trailing_status_item_key(item: dict) -> tuple[str, str, str]:
+        return (
+            str(item.get("symbol") or ""),
+            str(item.get("pside") or ""),
+            str(item.get("kind") or "position"),
+        )
+
+    @classmethod
+    def _trailing_status_number_materially_changed(
+        cls,
+        baseline: float | None,
+        current: float | None,
+        *,
+        relative: bool,
+    ) -> bool:
+        if baseline is None or current is None:
+            return baseline != current
+        delta = abs(current - baseline)
+        if relative:
+            boundary = max(abs(baseline), 1e-12) * cls.TRAILING_PRICE_MATERIALITY_RELATIVE_DELTA
+            return delta > boundary or math.isclose(
+                delta, boundary, rel_tol=1e-12, abs_tol=0.0
             )
-        return tuple(sorted(signature))
+        boundary = cls.TRAILING_RATIO_MATERIALITY_ABSOLUTE_DELTA
+        return delta > boundary or math.isclose(
+            delta, boundary, rel_tol=1e-12, abs_tol=0.0
+        )
+
+    def _trailing_status_operator_decision(
+        self, item: dict, now_ms: int
+    ) -> tuple[bool, bool]:
+        key = self._trailing_status_item_key(item)
+        payload = dict(item.get("payload", {}) or {})
+        baselines = getattr(self, "_trailing_operator_visible_baseline_by_key", None)
+        if not isinstance(baselines, dict):
+            baselines = {}
+            self._trailing_operator_visible_baseline_by_key = baselines
+        visible_ms = getattr(self, "_trailing_operator_visible_ms_by_key", None)
+        if not isinstance(visible_ms, dict):
+            visible_ms = {}
+            self._trailing_operator_visible_ms_by_key = visible_ms
+        values = {
+            name: self._status_materiality_number(payload.get(name))
+            for name in (
+                "threshold_pct",
+                "retracement_pct",
+                "threshold_price",
+                "retracement_price",
+            )
+        }
+        qualitative = self._trailing_status_qualitative_signature(payload)
+        baseline = baselines.get(key)
+        material_changed = baseline is None or qualitative != baseline["qualitative"]
+        if not material_changed:
+            for name in ("threshold_pct", "retracement_pct"):
+                if self._trailing_status_number_materially_changed(
+                    baseline["values"][name], values[name], relative=False
+                ):
+                    material_changed = True
+                    break
+        if not material_changed:
+            for name in ("threshold_price", "retracement_price"):
+                if self._trailing_status_number_materially_changed(
+                    baseline["values"][name], values[name], relative=True
+                ):
+                    material_changed = True
+                    break
+        heartbeat_interval_ms = int(
+            getattr(
+                self,
+                "_trailing_unchanged_info_log_interval_ms",
+                self.STATUS_OPERATOR_HEARTBEAT_INTERVAL_MS,
+            )
+        )
+        heartbeat = (
+            not material_changed
+            and now_ms - int(visible_ms.get(key, 0) or 0) >= heartbeat_interval_ms
+        )
+        if material_changed or heartbeat:
+            baselines[key] = {"qualitative": qualitative, "values": values}
+            visible_ms[key] = now_ms
+        return material_changed or heartbeat, material_changed
 
     def _unsupported_trailing_status_item(
         self,
@@ -2821,38 +2925,31 @@ class Passivbot:
         except Exception as exc:
             logging.debug("[trailing] failed building status event items: %s", exc)
             return
-        if not items:
-            return
-        signature = self._trailing_status_signature(items)
-        status_changed = signature != getattr(
-            self, "_trailing_last_status_signature", None
-        )
-        last_info_ms = int(getattr(self, "_trailing_last_status_info_ms", 0) or 0)
-        unchanged_interval = int(
-            getattr(
-                self,
-                "_trailing_unchanged_info_log_interval_ms",
-                60 * 60 * 1000,
-            )
-            or 0
-        )
-        if (
-            not status_changed
-            and unchanged_interval > 0
-            and (now_ms - last_info_ms) < unchanged_interval
+        active_keys = {self._trailing_status_item_key(item) for item in items}
+        for state_name in (
+            "_trailing_operator_visible_baseline_by_key",
+            "_trailing_operator_visible_ms_by_key",
         ):
+            state = getattr(self, state_name, None)
+            if not isinstance(state, dict):
+                continue
+            for key in set(state).difference(active_keys):
+                state.pop(key, None)
+        if not items:
             return
         for item in items:
             payload = dict(item.get("payload", {}) or {})
+            operator_visible, status_changed = self._trailing_status_operator_decision(
+                item, now_ms
+            )
             self._emit_trailing_status_event(
                 symbol=str(item.get("symbol") or ""),
                 pside=str(item.get("pside") or ""),
                 kind=str(item.get("kind") or "position"),
                 payload=payload,
                 changed=status_changed,
+                operator_visible=operator_visible,
             )
-        self._trailing_last_status_signature = signature
-        self._trailing_last_status_info_ms = now_ms
 
     async def start_bot(self):
         """Initialise state, warm cached data, and launch background loops."""

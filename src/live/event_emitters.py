@@ -4356,6 +4356,7 @@ def _trailing_status_summary(payload: dict[str, Any]) -> dict[str, Any]:
         ),
         "unsupported_reason": str(payload.get("unsupported_reason") or "") or None,
         "changed": bool(payload.get("changed", False)),
+        "operator_visible": bool(payload.get("operator_visible", True)),
     }
     return {key: value for key, value in out.items() if value is not None}
 
@@ -4368,6 +4369,7 @@ def emit_trailing_status_event(
     kind: str,
     payload: dict[str, Any],
     changed: bool,
+    operator_visible: bool,
 ) -> None:
     try:
         data = _trailing_status_summary(
@@ -4376,6 +4378,7 @@ def emit_trailing_status_event(
                 "kind": str(kind),
                 "pside": str(pside),
                 "changed": bool(changed),
+                "operator_visible": bool(operator_visible),
             }
         )
         bot._emit_live_event(
@@ -4405,6 +4408,7 @@ def emit_unstuck_status_event(
     *,
     side_statuses: dict[str, dict[str, Any]],
     changed: bool,
+    operator_visible: bool,
 ) -> None:
     try:
         sides = {
@@ -4431,6 +4435,7 @@ def emit_unstuck_status_event(
             reason_code=ReasonCodes.UNSTUCK_STATUS,
             data={
                 "changed": bool(changed),
+                "operator_visible": bool(operator_visible),
                 "status_counts": status_counts,
                 "over_budget_sides": over_budget_sides,
                 "sides": sides,

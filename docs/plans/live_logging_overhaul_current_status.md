@@ -22,42 +22,52 @@ Estimated completion:
 
 ## Active Review Slice
 
-- Branch: `codex/memory-snapshot-event`, integrated with canonical `master`
-  after PR #1244.
-- PR: #1245, `Add bounded memory snapshot event`.
-- Slice: publish the existing material memory diagnostic as bounded
-  `resource.memory_snapshot` data and project one compact operator line.
-- Triggering evidence: current post-PR #1243 VPS5 segments produced natural
-  `[memory]` INFO records measuring 457-525 characters. They mixed RSS, cache
-  totals and samples, timeframe-cache ranges, and task names into one line,
-  exceeding the 240-character normal-console budget.
-- Scope: preserve the existing collection pass, initial-or-25-percent RSS
-  admission, and prior-RSS state; retain bounded detail in the event/monitor
-  payload and full developer detail at DEBUG; use a compact legacy fallback
-  only when the structured console is unavailable.
+- Branch: `codex/trailing-unstuck-console-materiality`, based on canonical
+  `de5f21c96d92aab1c465e0be40035ed3ec6a6d0a` after PR #1245.
+- PR: #1246, `Bound trailing and unstuck console materiality`.
+- Slice: retain complete five-minute `trailing.status` and `unstuck.status`
+  observations in structured/monitor sinks while limiting console/text output
+  to first observations, qualitative or material numeric transitions, and
+  hourly reminders.
+- Triggering evidence: one natural Hyperliquid segment emitted 27 trailing and
+  20 unstuck INFO lines from `18:24:16Z` through `20:39:13Z`. Trailing status
+  repeated about every five minutes because ratios changed below displayed
+  precision; unstuck allowance oscillated around `-1.70` to `-1.76` while each
+  repeat was marked changed.
+- Scope: producer-owned `operator_visible`; five-percent relative unstuck
+  allowance hysteresis; per-item trailing materiality at 0.05 percentage points
+  for ratios and 0.5 percent for prices; generic console/text suppression only
+  when visibility is explicitly false. Missing metadata remains visible.
 - Behavior boundary: observability-only; no exchange calls, cache or task
-  mutation, timing change, Rust, order, risk, backtest, or optimizer behavior.
-- Integration boundary: PR #1244 merged as `bff64d3a82a6b227cf70514ffd08916f9c2c9cb7`.
-  The #1245 integration preserves both additive validator sets and both event
-  contracts; all function bodies and tests merged automatically. The temporary
-  maintainer-authorized gate while Grok is halted is exact-head Hermes plus
-  green CI, with prior semantic approval carried only under the proportional
-  mechanical-delta contract.
-- Expected VPS action: after merge, deploy PRs #1244 and #1245 together with
-  one authorized exact five-bot restart. Validate normal operation, the natural
-  initial memory projection, and naturally occurring incidents only; do not
-  manufacture exchange, failure, state, or trading events.
+  mutation, planning or status calculation change, cadence increase, Rust,
+  order, risk, backtest, or optimizer behavior.
+- Review gate: temporary maintainer-authorized exact-head Hermes plus green CI
+  while Grok is halted.
+- Expected VPS action: after merge, one authorized exact five-bot restart.
+  Validate five-minute durable observations and natural console suppression;
+  do not manufacture trailing, unstuck, exchange, state, or trading events.
 
 ## Deployed Baseline
 
-- Canonical `master` is `bff64d3a82a6b227cf70514ffd08916f9c2c9cb7`,
-  PR #1244. VPS5 remains on `c6fba829031f64a9ecd59eadcaaecf36db40236c`,
-  PR #1243, pending the combined #1244/#1245 deployment; its tracked status is
-  clean and expected untracked artifacts are preserved.
-- VPS5 runs the PR #1243 head in bot PIDs
-  `948822/948824/948826/948828/948830`. The exact pane PIDs remain
+- Canonical `master` and VPS5 are
+  `de5f21c96d92aab1c465e0be40035ed3ec6a6d0a`, PR #1245. The tracked checkout
+  is clean and expected untracked artifacts are preserved.
+- VPS5 runs merged master in bot PIDs
+  `951819/951822/951825/951828/951830`. The exact pane PIDs remain
   `856294/856332/856364/856398/856434`, and unrelated `misc:0.0` PID `434835`
   is unchanged.
+- PRs #1244 and #1245 were activated together with one exact five-bot graceful
+  restart. Every old bot exited naturally after one SIGINT round; KuCoin was
+  last at 40 seconds, with no escalation. A real immediate KuCoin timeout
+  recovered without intervention and naturally proved the bounded #1244
+  incident line: operation, error type, endpoint, and action remained visible,
+  while raw URL and traceback text were absent from the new log.
+- All five bots naturally emitted `resource.memory_snapshot`; the complete
+  bounded payloads reached monitor storage and compact console lines measured
+  84-107 characters. The final two-minute smoke was `ok=true` with `217/217`
+  remote calls and `54/54` account-critical calls successful, six successful
+  fill refreshes, five matching processes/configs in states `R=4,S=1`, and
+  zero hard, log, monitor, process, or event-pipeline failures.
 - PR #1243 was activated with one exact five-bot graceful restart. Every old
   bot exited naturally after one SIGINT round; KuCoin was last at 35 seconds,
   and no escalation was required. Natural Binance, GateIO, and KuCoin replay
@@ -679,8 +689,10 @@ window. PR #1243's HSL replay console cadence is merged, deployed, and
 naturally validated: intermediate console progress stayed at least 30 seconds
 apart while complete structured progress remained durable. Its restart exposed
 the execution-loop incident projection addressed by merged PR #1244. PR #1245
-is the active memory-snapshot integration slice; both producer changes remain
-pending one combined VPS5 activation.
+is also merged and deployed: bounded execution incidents and compact memory
+snapshots are naturally validated with a settled hard-green smoke. The active
+slice applies producer-owned materiality to repeated trailing and unstuck human
+projections while preserving their five-minute durable observations.
 
 Do not create progress-only PRs or resume unrelated logging work from stale
 worktrees.
