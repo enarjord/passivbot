@@ -4,6 +4,11 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Successful fill-refresh and fetcher-request timing detail now stays at DEBUG
+  instead of appearing in the normal live console. Fetcher request errors,
+  actual fills, degraded warnings, structured refresh summaries, refresh
+  behavior, and failure propagation are unchanged.
+
 - Completed staged account-refresh timing lines now stay at DEBUG unless the
   cohort takes at least ten seconds. Interesting sub-ten-second samples remain
   available as structured INFO events, and periodic timing summaries,

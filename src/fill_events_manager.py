@@ -4518,12 +4518,7 @@ class FillEventsManager:
                 self.fetcher.api = original_api
             fetch_elapsed_ms = int(max(0.0, (time.monotonic() - fetch_started) * 1000.0))
             if request_stats.count or fetch_elapsed_ms >= 5_000:
-                level = (
-                    logging.INFO
-                    if fetch_elapsed_ms >= 10_000
-                    or request_stats.error_count
-                    else logging.DEBUG
-                )
+                level = logging.INFO if request_stats.error_count else logging.DEBUG
                 logger.log(
                     level,
                     "[fills] fetcher request timing | exchange=%s user=%s fetcher=%s "

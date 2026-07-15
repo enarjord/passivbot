@@ -3451,8 +3451,8 @@ async def test_update_pnls_routine_empty_refresh_timing_demoted_to_debug(
         def set_history_scope(self, scope):
             self.history_scope = scope
 
-    times = iter([1_000_000, 1_015_000])
-    monkeypatch.setattr(passivbot_module, "utc_ms", lambda: next(times, 1_015_000))
+    times = iter([1_000_000, 1_030_000])
+    monkeypatch.setattr(passivbot_module, "utc_ms", lambda: next(times, 1_030_000))
     bot.stop_signal_received = False
     bot.config = {
         "live": {
@@ -3480,7 +3480,91 @@ async def test_update_pnls_routine_empty_refresh_timing_demoted_to_debug(
     ]
     assert len(fill_timing_records) == 1
     assert fill_timing_records[0].levelno == logging.DEBUG
-    assert "elapsed=15000ms" in fill_timing_records[0].message
+    assert "elapsed=30000ms" in fill_timing_records[0].message
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("source", "add_new_fill"),
+    [
+        ("staged_blocking", False),
+        ("routine_prefetch:minute_boundary", True),
+    ],
+    ids=["staged_source", "new_fill"],
+)
+async def test_update_pnls_completed_refresh_timing_trigger_cases_stay_debug(
+    monkeypatch, caplog, source, add_new_fill
+):
+    bot = Passivbot.__new__(Passivbot)
+    cached_event = SimpleNamespace(
+        timestamp=1_700_000_000_000,
+        id="fill-1",
+        source_ids=["fill-1"],
+    )
+    refreshed_events = [cached_event]
+    if add_new_fill:
+        refreshed_events.append(
+            SimpleNamespace(
+                timestamp=1_700_000_060_000,
+                id="fill-2",
+                source_ids=["fill-2"],
+            )
+        )
+
+    class _Manager:
+        def __init__(self):
+            self._events = [cached_event]
+            self.history_scope = "all"
+
+        async def refresh_latest(self, **kwargs):
+            self._events = list(refreshed_events)
+
+        def get_events(self):
+            return list(self._events)
+
+        def get_history_scope(self):
+            return self.history_scope
+
+        def set_history_scope(self, scope):
+            self.history_scope = scope
+
+    times = iter([1_000_000, 1_001_000])
+    monkeypatch.setattr(passivbot_module, "utc_ms", lambda: next(times, 1_001_000))
+    bot.stop_signal_received = False
+    bot.config = {
+        "live": {
+            "fills_recent_overlap_minutes": 10.0,
+            "pnls_max_lookback_days": "all",
+        }
+    }
+    bot._authoritative_pending_confirmations = {}
+    bot._pnls_manager = _Manager()
+    bot.init_pnls = AsyncMock()
+    bot.live_value = lambda key: "all" if key == "pnls_max_lookback_days" else None
+    bot.get_exchange_time = lambda: 1_700_000_060_000
+    bot._log_new_fill_events = lambda new_events: None
+    bot._monitor_record_event = lambda *args, **kwargs: None
+    bot._monitor_record_error = lambda *args, **kwargs: None
+    refresh_summaries = []
+    bot._emit_fills_refresh_summary_event = lambda **kwargs: refresh_summaries.append(
+        kwargs
+    )
+    bot.logging_level = 0
+    bot._health_rate_limits = 0
+
+    with caplog.at_level(logging.DEBUG):
+        result = await bot.update_pnls(source=source)
+
+    assert result is True
+    fill_timing_records = [
+        record for record in caplog.records if "[fills] refresh timing" in record.message
+    ]
+    assert len(fill_timing_records) == 1
+    assert fill_timing_records[0].levelno == logging.DEBUG
+    assert f"source={source}" in fill_timing_records[0].message
+    assert f"new={int(add_new_fill)}" in fill_timing_records[0].message
+    assert len(refresh_summaries) == 1
+    assert refresh_summaries[0]["level"] == "info"
 
 
 def test_min_effective_cost_blocks_are_aggregated(caplog):
