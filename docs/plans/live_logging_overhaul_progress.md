@@ -15,7 +15,35 @@ merge, live smoke evidence changes, or new gaps are discovered.
 - Do not use this file for design churn; unresolved design details belong in the
   plan or a focused handoff doc.
 
-## Latest Canonical Deployment (PR #1247)
+## Latest Canonical Deployment (PR #1248)
+
+- PR #1248 merged to `master` as `75bf6cd67f61b902fb5ca4399939c2b2e5945088`
+  after exact-head Hermes approval and green Python/Rust CI while Grok was
+  temporarily halted. It bounds only the `live.approved_coins` config-change
+  projection; config application, schema, non-target config logs, and trading
+  behavior are unchanged.
+- VPS5 fast-forwarded cleanly and gracefully restarted the five exact bot
+  panes. Old PIDs `955200/955304/955306/955366/955422` exited naturally within
+  ten seconds after one SIGINT round; pane PIDs and unrelated `misc:0.0` PID
+  `434835` were preserved. New bot PIDs are
+  `957519/957674/957669/957739/957675` for
+  Binance/KuCoin/GateIO/OKX/Hyperliquid respectively.
+- Natural KuCoin startup output reduced the exact approved-coin override from
+  678 to 154 visible characters while retaining the old collection count/
+  sample and both 19-coin side counts/samples. Real pre- and post-restart
+  KuCoin timeouts recovered without intervention. The final fresh two-minute
+  smoke was `ok=true` with zero hard/log/monitor/process failures, `56/56`
+  account-critical calls successful, nine successful fill refreshes, all five
+  expected config-valid processes in exact `R/S` states, and a clean tracked
+  repository. One non-account-critical candle timeout remained visible as
+  non-hard evidence.
+- The same restart exposed six simultaneous `fetch_lock_hold_timeout` warnings
+  at 346-349 characters each. They repeated deterministic path and owner-scope
+  fields already present in the warning. The next slice compacts only that
+  projection while preserving one warning per affected symbol and all lock
+  behavior.
+
+## Previous Canonical Deployment (PR #1247)
 
 - PR #1247 merged to `master` as `e3c6332c6b1f4ff692f94867f9dbfaf182cc0684`
   after exact-head Hermes approval and green Python/Rust CI while Grok was

@@ -4,6 +4,12 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Candle fetch-lock hold warnings now retain the affected exchange, symbol,
+  timeframe, and compact local-holder identity/timing without repeating the
+  deterministic lock path, duplicated owner scope, configured timeout, or
+  implied action. Watchdog timing, lock behavior, and warning cadence are
+  unchanged.
+
 - CLI overrides of `live.approved_coins` now use a bounded startup log summary
   with per-side counts and three-symbol samples instead of printing the full
   old and new collections. Config application and non-target config-change

@@ -1168,7 +1168,7 @@ class CandlestickManager:
             with suppress(Exception):
                 os.utime(path, None)
 
-    def _read_lockfile_owner(self, path: str) -> str:
+    def _read_lockfile_owner(self, path: str, *, compact: bool = False) -> str:
         try:
             with open(path, "r", encoding="utf-8") as f:
                 payload = json.load(f)
@@ -1177,7 +1177,12 @@ class CandlestickManager:
         if not isinstance(payload, dict):
             return "-"
         bits = []
-        for key in ("pid", "exchange", "symbol", "timeframe", "task", "attempt"):
+        keys = (
+            ("pid", "task", "attempt")
+            if compact
+            else ("pid", "exchange", "symbol", "timeframe", "task", "attempt")
+        )
+        for key in keys:
             value = payload.get(key)
             if value is not None:
                 bits.append(f"{key}={value}")
@@ -1214,16 +1219,13 @@ class CandlestickManager:
             record = self._held_fetch_locks.get(key)
             if record is None or float(record.acquired_at) != float(acquired_at):
                 return
-            owner = self._read_lockfile_owner(record.path)
+            owner = self._read_lockfile_owner(record.path, compact=True)
             self._log(
                 "warning",
                 "fetch_lock_hold_timeout",
                 symbol=symbol,
                 timeframe=timeframe,
-                held_seconds=f"{timeout_s:.1f}",
-                lock_path=record.path,
                 owner=owner,
-                action="holder_still_active",
             )
 
         self._cancel_fetch_lock_watchdog(key)
