@@ -4,6 +4,11 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Completed staged account-refresh timing lines now stay at DEBUG unless the
+  cohort takes at least ten seconds. Interesting sub-ten-second samples remain
+  available as structured INFO events, and periodic timing summaries,
+  readiness, exchange calls, and trading behavior are unchanged.
+
 - Candle-fetch retry and exhaustion warnings now use bounded operator
   signatures instead of retaining raw request parameters and exception text.
   Their first occurrence is emitted even during the process's initial

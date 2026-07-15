@@ -22,41 +22,48 @@ Estimated completion:
 
 ## Active Review Slice
 
-- Branch: `codex/bounded-candle-fetch-warning`.
-- Base: `c70a88b14789fd86146fb9021e9b600bfb65b37a`, canonical `master`
-  after PR #1238.
-- Slice: replace raw candle-fetch failure text in the normal warning sink with
-  one bounded operator signature.
-- Triggering evidence: the first natural post-PR #1238 window contained KuCoin
-  and GateIO candle-fetch timeout warnings measuring 513 and 487 characters.
-  Each duplicated raw exception text and retained a complete request URL plus
-  query parameters, while the useful operator facts were the exchange, symbol,
-  timeframe, attempt, and exception class.
-- Scope: replace `params`, `error`, and `error_repr` in the
-  `ccxt_fetch_ohlcv_failed` warning with bounded attempt/max-attempt, elapsed,
-  error-type, and retry/exhausted fields. Keep retry and terminal transitions
-  independently throttled. Preserve the callback input shape while replacing
-  raw exception text in durable remote-call events with its exception class;
-  explicit URL fields retain only a redacted marker and stable hash.
-- Behavior boundary: preserve candle requests, retry and rate-limit
-  classification, five-minute throttling cadence per transition, exception
-  propagation, callback invocation, readiness, exchange calls, order/risk
-  behavior, Rust, backtest, and optimizer behavior.
+- Branch: `codex/staged-refresh-console-threshold`.
+- Base: `a97a815a52ce66eac274bee7f0b2ac31f496ee37`, canonical `master`
+  after PR #1239.
+- Slice: keep completed staged account-refresh timing lines at DEBUG unless the
+  cohort wall time reaches ten seconds.
+- Triggering evidence: the measured five-bot console sample contained 33
+  immediate `[state] staged refresh timings` INFO lines, about 13.2 records per
+  bot-hour and more than 20% of the non-action INFO budget. Natural post-PR
+  #1239 startup output again included sub-ten-second completed timing lines.
+- Scope: decouple console/text level from the existing `interesting` predicate.
+  Preserve structured INFO timing events for pending confirmations, meaningful
+  changes, unusual plans, and ten-second cohorts; preserve periodic summaries
+  for routine samples.
+- Behavior boundary: preserve timing calculations, fetch plans, concurrency,
+  exchange calls, readiness, `staged refresh still waiting` transitions,
+  structured event payloads, order/risk behavior, Rust, backtest, and optimizer
+  behavior.
 - Publication state, exact head, mergeability, CI, and current-head reviewer
   verdicts: query live GitHub metadata; do not embed self-invalidating values.
 - Expected VPS action: after merge, one authorized exact five-bot restart may
-  activate the warning format. Validate from a natural candle-fetch failure if
-  one occurs; do not manufacture exchange, candle, readiness, or trading events.
+  activate the console threshold. Validate natural INFO absence below ten
+  seconds and retained INFO at or above ten seconds; do not manufacture state,
+  exchange, readiness, or trading events.
 
 ## Deployed Baseline
 
 - Canonical `master` and VPS5 checkout:
-  `c70a88b14789fd86146fb9021e9b600bfb65b37a`, PR #1238; tracked status clean
+  `a97a815a52ce66eac274bee7f0b2ac31f496ee37`, PR #1239; tracked status clean
   and expected untracked artifacts preserved.
 - VPS5 runs the same head in bot PIDs
-  `942412/942414/942416/942417/942418`. The exact pane PIDs remain
+  `944582/944692/944584/944476/944694`. The exact pane PIDs remain
   `856294/856332/856364/856398/856434`, and unrelated `misc:0.0` PID `434835`
   is unchanged.
+- PR #1239 was activated with one exact five-bot graceful restart. Every old
+  bot exited naturally after one SIGINT round; no escalation was required.
+  The immediate startup window retained one real KuCoin authoritative-state
+  timeout and degraded cycle. It aged out before the settled two-minute smoke,
+  which was `ok=true` with `219/219` remote calls and `50/50` account-critical
+  calls successful, six successful fill refreshes, five matching processes and
+  configs, states `R=4,S=1`, and zero hard, log, monitor, process, or
+  event-pipeline failures. No natural candle-fetch failure occurred in the
+  bounded post-restart window, so the new warning format was not manufactured.
 - PR #1238 was activated with one exact five-bot graceful restart. Every old
   bot exited naturally after one SIGINT round; no escalation was required.
   The immediate window retained one real KuCoin authoritative-balance timeout
@@ -613,9 +620,12 @@ Python-filter selection visibility remains unchanged.
 
 PR #1238's open-tail EMA projection-context demotion is merged, deployed, and
 naturally validated: all five bots completed market-ready cycles without the
-1002-1050 character aggregate appearing in normal INFO logs. The active slice
-above now bounds candle-fetch retry/exhaustion warnings and removes raw
-exception prose and request URLs from durable remote-call events.
+1002-1050 character aggregate appearing in normal INFO logs. PR #1239's bounded
+candle-fetch warning and durable remote-call redaction are also merged and
+deployed. Its settled smoke is green; no natural candle-fetch failure occurred
+in the bounded post-restart window. The active slice above now moves completed
+sub-ten-second staged-refresh timing detail off the normal console while
+retaining structured INFO events for interesting samples.
 
 Do not create progress-only PRs or resume unrelated logging work from stale
 worktrees.

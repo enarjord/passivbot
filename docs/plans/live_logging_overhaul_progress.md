@@ -8288,3 +8288,26 @@ VPS5 deployment status:
   `codex/bounded-candle-fetch-warning` slice replaces the normal text with
   bounded retry/terminal signatures. Durable remote-call events omit raw
   exception text; explicit URLs retain only a redacted marker and stable hash.
+
+### 2026-07-15: Bounded Candle Failures Deployed And Refresh Timing Follow-Up
+
+- PR #1239 merged to canonical `master` at `a97a815a52` after exact-head Hermes
+  and Grok approval plus green Python and Rust CI. Its final review fix ensures
+  the first throttled warning is emitted during early process uptime.
+- VPS5 fast-forwarded cleanly and all five exact bots exited naturally after
+  one SIGINT round. Exact pane PIDs and unrelated `misc:0.0` PID `434835`
+  remained unchanged; expected untracked artifacts were preserved.
+- The immediate startup window retained one real KuCoin authoritative-state
+  timeout and degraded cycle. It aged out before the settled two-minute smoke,
+  which was `ok=true` with `219/219` remote calls and `50/50` account-critical
+  calls successful, six successful fill refreshes, five matching processes and
+  configs, states `R=4,S=1`, and zero hard, log, monitor, process, or
+  event-pipeline failures. No natural candle-fetch failure occurred in the
+  bounded post-restart window, so the new warning format was not manufactured.
+- The prior console-volume sample contained 33 immediate completed staged
+  refresh timing INFO lines, about 13.2 records per bot-hour and more than 20%
+  of the non-action budget. Natural post-restart startup output again contained
+  sub-ten-second lines. The active `codex/staged-refresh-console-threshold`
+  slice keeps those completed lines at DEBUG while preserving interesting
+  structured INFO events, periodic timing summaries, readiness, and refresh
+  behavior.

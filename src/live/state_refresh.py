@@ -349,9 +349,7 @@ def log_staged_refresh_timings(
                 residual_ms,
             )
             return
-        log_level = logging.DEBUG
-    else:
-        log_level = logging.INFO
+    console_log_level = logging.INFO if wall_ms >= 10_000 else logging.DEBUG
     parts = [
         f"{surface}={int(timings_ms[surface])}ms" for surface in sorted(timings_ms)
     ]
@@ -359,7 +357,7 @@ def log_staged_refresh_timings(
         parts.append(f"residual={residual_ms}ms")
         parts.append("residual_hint=scheduler_or_lock_wait")
     suffix = " | pending_confirmations=yes" if pending_confirmations else ""
-    if log_level < logging.INFO:
+    if not interesting:
         bot._record_staged_refresh_timing_summary(
             plan,
             timings_ms,
@@ -368,7 +366,7 @@ def log_staged_refresh_timings(
             max_surface_ms,
             residual_ms,
         )
-    if log_level >= logging.INFO:
+    if interesting:
         event_emitters.emit_state_refresh_timing_event(
             bot,
             plan=plan,
@@ -384,7 +382,7 @@ def log_staged_refresh_timings(
             level="info",
         )
     logging.log(
-        log_level,
+        console_log_level,
         "[state] staged refresh timings | plan=%s | wall=%dms | surface_sum=%dms | surface_max=%dms | parallel=%s | %s%s",
         ",".join(sorted(plan)),
         wall_ms,

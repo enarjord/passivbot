@@ -3099,7 +3099,7 @@ def test_log_staged_refresh_timings_logs_only_for_slow_refreshes(caplog):
             "[state] staged refresh timings | plan=balance,fills,open_orders,positions | wall=8500ms | surface_sum=11500ms | surface_max=4000ms | parallel=yes | balance=2500ms fills=4000ms open_orders=2000ms positions=3000ms residual=4500ms residual_hint=scheduler_or_lock_wait",
         ),
         (
-            "INFO",
+            "DEBUG",
             "[state] staged refresh timings | plan=balance,fills,open_orders,positions | wall=4100ms | surface_sum=5100ms | surface_max=1700ms | parallel=yes | balance=1200ms fills=1300ms open_orders=900ms positions=1700ms residual=2400ms residual_hint=scheduler_or_lock_wait",
         ),
         (
@@ -3109,7 +3109,7 @@ def test_log_staged_refresh_timings_logs_only_for_slow_refreshes(caplog):
     ]
 
 
-def test_log_staged_refresh_timings_emits_structured_event():
+def test_log_staged_refresh_timings_keeps_meaningful_change_structured_at_info(caplog):
     sink = ListEventSink()
     bot = Passivbot.__new__(Passivbot)
     bot._live_event_current_cycle_id = "cy_refresh"
@@ -3117,13 +3117,21 @@ def test_log_staged_refresh_timings_emits_structured_event():
     bot._authoritative_pending_confirmations = {}
     bot._authoritative_refresh_epoch_changed = {"positions"}
 
-    bot._log_staged_refresh_timings(
-        {"balance", "positions", "open_orders", "fills"},
-        {"balance": 1200, "positions": 1700, "open_orders": 900, "fills": 1300},
-        4100,
-    )
+    with caplog.at_level(logging.DEBUG):
+        bot._log_staged_refresh_timings(
+            {"balance", "positions", "open_orders", "fills"},
+            {"balance": 1200, "positions": 1700, "open_orders": 900, "fills": 1300},
+            4100,
+        )
 
     assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    timing_logs = [
+        record
+        for record in caplog.records
+        if "[state] staged refresh timings" in record.message
+    ]
+    assert len(timing_logs) == 1
+    assert timing_logs[0].levelno == logging.DEBUG
     event = sink.events[0]
     assert event.event_type == EventTypes.STATE_REFRESH_TIMING
     assert event.level == "info"
