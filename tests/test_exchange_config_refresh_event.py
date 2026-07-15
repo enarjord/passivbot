@@ -129,7 +129,7 @@ def test_exchange_config_outcome_metadata_is_bounded_and_value_safe():
         operation="set_margin_mode",
         status="failed",
         symbol="https://example.invalid/api?apiKey=supersecret",
-        outcome="failed apiKey=supersecret",
+        outcome="unexpected",
         response_code='{"code":"51039","apiKey":"supersecret"}',
         error_type="RuntimeError apiKey=supersecret",
         level="error",

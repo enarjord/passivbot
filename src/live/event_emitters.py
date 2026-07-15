@@ -50,9 +50,9 @@ _SENSITIVE_VALUE_RE = re.compile(
 )
 _AUTH_HEADER_RE = re.compile(r"(?i)\b(bearer|basic)\s+[A-Za-z0-9._~+/=-]+")
 _EXCHANGE_CONFIG_EVENT_SYMBOL_RE = re.compile(r"[A-Za-z0-9_./:-]{1,160}")
-_EXCHANGE_CONFIG_EVENT_OUTCOME_RE = re.compile(r"[a-z][a-z_]{0,63}")
 _EXCHANGE_CONFIG_EVENT_RESPONSE_CODE_RE = re.compile(r"-?[0-9]{1,12}")
 _EXCHANGE_CONFIG_EVENT_ERROR_TYPE_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,79}")
+_EXCHANGE_CONFIG_EVENT_OUTCOMES = {"confirmed", "unchanged", "failed"}
 _LIVE_EVENT_LEVELS = {"debug", "info", "warning", "error"}
 
 
@@ -681,14 +681,17 @@ def _emit_exchange_config_refresh_event_unchecked(
     symbol_value = _bounded_exchange_config_event_field(
         symbol, _EXCHANGE_CONFIG_EVENT_SYMBOL_RE
     )
+    outcome_value = (
+        outcome
+        if isinstance(outcome, str) and outcome in _EXCHANGE_CONFIG_EVENT_OUTCOMES
+        else None
+    )
     data: dict[str, Any] = {
         "context": str(context or "unknown"),
         "operation": str(operation or "unknown"),
         "started_ms": int(started_ms) if started_ms is not None else None,
         "elapsed_ms": int(elapsed_ms) if elapsed_ms is not None else None,
-        "outcome": _bounded_exchange_config_event_field(
-            outcome, _EXCHANGE_CONFIG_EVENT_OUTCOME_RE
-        ),
+        "outcome": outcome_value,
         "response_code": _bounded_exchange_config_event_field(
             response_code, _EXCHANGE_CONFIG_EVENT_RESPONSE_CODE_RE
         ),
