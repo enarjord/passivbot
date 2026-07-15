@@ -1111,6 +1111,91 @@ def test_update_config_with_args_logs_optimize_limits_as_diff(caplog):
     assert " -> " not in target[-1]
 
 
+def test_update_config_with_args_bounds_approved_coins_cli_override_log(caplog):
+    config = get_template_config()
+    old_coins = ["BTC", "ETH", "SOL", "XRP", "DOGE"]
+    override_coins = ["ADA", "AVAX", "DOT", "LINK", "MATIC", "ATOM"]
+    config["live"]["approved_coins"] = old_coins
+    args = SimpleNamespace()
+    vars(args)["live.approved_coins"] = override_coins
+
+    with caplog.at_level(logging.INFO):
+        update_config_with_args(config, args, verbose=True)
+
+    assert config["live"]["approved_coins"] == {
+        "long": override_coins,
+        "short": override_coins,
+    }
+    message = next(
+        rec.message
+        for rec in caplog.records
+        if rec.message.startswith("[config] changed live.approved_coins")
+    )
+    assert "list:5[BTC,ETH,SOL,+2]" in message
+    assert "sides(long:6[ADA,AVAX,DOT,+3]" in message
+    assert "short:6[ADA,AVAX,DOT,+3]" in message
+    assert len("2026-07-15T22:24:59Z INFO     [config] " + message) <= 240
+
+
+def test_approved_coins_change_log_samples_deterministically():
+    value = {"long": ["SOL", "BTC", "ETH", "XRP"], "short": ["DOGE"]}
+
+    message, args = config_utils._format_config_change_message(
+        "live.approved_coins", value, value
+    )
+
+    assert args == ()
+    assert message == (
+        "changed live.approved_coins sides("
+        "long:4[SOL,BTC,ETH,+1],short:1[DOGE]) -> "
+        "sides(long:4[SOL,BTC,ETH,+1],short:1[DOGE])"
+    )
+
+
+def test_approved_coins_change_log_stays_within_info_budget_for_large_mappings():
+    old_value = [f"OLD-SYMBOL-{i:03d}-LONG" for i in range(100)]
+    new_value = {
+        "long": [f"LONG-SYMBOL-{i:03d}-LONG" for i in range(100)],
+        "short": [f"SHORT-SYMBOL-{i:03d}-LONG" for i in range(100)],
+    }
+
+    message, args = config_utils._format_config_change_message(
+        "live.approved_coins", old_value, new_value
+    )
+
+    assert args == ()
+    assert "list:100[OLD-SYMB...,OLD-SYMB...,OLD-SYMB...,+97]" in message
+    assert "long:100[LONG-SYM...,LONG-SYM...,LONG-SYM...,+97]" in message
+    assert "short:100[SHORT-SY...,SHORT-SY...,SHORT-SY...,+97]" in message
+    assert len("2026-07-15T22:24:59Z INFO     [config] " + message) <= 240
+
+
+def test_approved_coins_change_log_bounds_malformed_and_unexpected_values():
+    malformed = {"long": "X" * 1_000, "extra": ["Y" * 1_000]}
+
+    message, args = config_utils._format_config_change_message(
+        "live.approved_coins", malformed, object()
+    )
+
+    assert args == ()
+    assert message == "changed live.approved_coins dict:2 -> type=object"
+    assert len(message) < 240
+    assert "X" * 20 not in message
+    assert "Y" * 20 not in message
+
+
+def test_config_change_log_keeps_non_target_generic_formatting():
+    old_value = {"value": [1, 2]}
+    new_value = {"value": [3, 4]}
+
+    message, args = config_utils._format_config_change_message(
+        "backtest.start_date", old_value, new_value
+    )
+
+    assert message == "changed %s %s -> %s"
+    assert args == ("backtest.start_date", old_value, new_value)
+
+
 def test_backtest_filter_min_cost_inherits_from_live():
     cfg = get_template_config()
     cfg["live"]["filter_by_min_effective_cost"] = True

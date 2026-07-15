@@ -15,6 +15,33 @@ merge, live smoke evidence changes, or new gaps are discovered.
 - Do not use this file for design churn; unresolved design details belong in the
   plan or a focused handoff doc.
 
+## Latest Canonical Deployment (PR #1247)
+
+- PR #1247 merged to `master` as `e3c6332c6b1f4ff692f94867f9dbfaf182cc0684`
+  after exact-head Hermes approval and green Python/Rust CI while Grok was
+  temporarily halted. The change compacts only the human projection of visible
+  `trailing.status` records; structured payloads, materiality admission,
+  cadence, risk calculations, and trading behavior are unchanged.
+- VPS5 fast-forwarded cleanly and gracefully restarted the five exact bot
+  panes. Old PIDs `953285/953287/953289/953291/953292` exited naturally after
+  one SIGINT round; pane PIDs and unrelated `misc:0.0` PID `434835` were
+  preserved. New bot PIDs are `955304/955366/955200/955422/955306` for
+  Binance/KuCoin/GateIO/OKX/Hyperliquid respectively.
+- The immediate five-minute smoke was hard-green with `338/338` remote and
+  `93/93` account-critical calls successful, twenty successful fill refreshes,
+  five expected processes matched, no hard/log/monitor/pipeline failures, and
+  a clean tracked repository. The settled two-minute smoke remained
+  `ok=true`, with zero hard failures and `55/55` account-critical calls
+  successful; one non-account-critical KuCoin candle timeout remained visible
+  as non-hard evidence. Two report-time `D` samples cleared to exact `R/S`
+  states on the quiet follow-up.
+- Natural Hyperliquid output validated the compact formatter at 211 visible
+  characters versus the prior 311, retaining cycle, close/armed state, mode,
+  threshold and retracement gates/values, current price, symbol, and side.
+  The same restart exposed the next boundedness gap: a CLI-approved-coin
+  override printed a 678-character full collection diff. The next slice limits
+  that startup projection without changing the applied config.
+
 ## Historical Status Snapshot (PR #1191)
 
 Snapshot captured: 2026-07-11.

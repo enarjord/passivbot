@@ -128,9 +128,79 @@ def _format_optimize_limits_change_for_log(
     return " | ".join(parts)
 
 
+_APPROVED_COINS_LOG_SAMPLE_SIZE = 3
+_APPROVED_COINS_LOG_SYMBOL_MAX_LENGTH = 8
+
+
+def _format_approved_coins_symbol_for_log(value: Any) -> str:
+    if not isinstance(value, str):
+        return f"<{type(value).__name__}>"
+    symbol = value[:_APPROVED_COINS_LOG_SYMBOL_MAX_LENGTH].replace("\n", " ").replace(
+        "\r", " "
+    )
+    if len(value) > _APPROVED_COINS_LOG_SYMBOL_MAX_LENGTH:
+        return f"{symbol}..."
+    return symbol
+
+
+def _format_approved_coins_collection_for_log(value: list[Any]) -> str:
+    count = len(value)
+    if not count:
+        return "0[]"
+    sample = [
+        _format_approved_coins_symbol_for_log(symbol)
+        for symbol in value[:_APPROVED_COINS_LOG_SAMPLE_SIZE]
+    ]
+    if count > _APPROVED_COINS_LOG_SAMPLE_SIZE:
+        sample.append(f"+{count - _APPROVED_COINS_LOG_SAMPLE_SIZE}")
+    return f"{count}[{','.join(sample)}]"
+
+
+def _format_approved_coins_list_for_log(value: list[Any]) -> str:
+    return f"list:{_format_approved_coins_collection_for_log(value)}"
+
+
+def _format_approved_coins_shape_for_log(value: Any) -> str:
+    if isinstance(value, list):
+        return _format_approved_coins_list_for_log(value)
+    if isinstance(value, dict):
+        return f"dict:{len(value)}"
+    if isinstance(value, str):
+        return f"str:{len(value)}"
+    if isinstance(value, (tuple, set, frozenset)):
+        return f"{type(value).__name__}:{len(value)}"
+    if value is None:
+        return "none"
+    return f"type={type(value).__name__}"
+
+
+def _format_approved_coins_change_for_log(old_value: Any, new_value: Any) -> str:
+    def format_value(value: Any) -> str:
+        if (
+            isinstance(value, dict)
+            and set(value) == {"long", "short"}
+            and isinstance(value["long"], list)
+            and isinstance(value["short"], list)
+        ):
+            return (
+                "sides("
+                f"long:{_format_approved_coins_collection_for_log(value['long'])},"
+                f"short:{_format_approved_coins_collection_for_log(value['short'])}"
+                ")"
+            )
+        return _format_approved_coins_shape_for_log(value)
+
+    return (
+        "changed live.approved_coins "
+        f"{format_value(old_value)} -> {format_value(new_value)}"
+    )
+
+
 def _format_config_change_message(
     full_path: str, old_value: Any, new_value: Any
 ) -> tuple[str, tuple[Any, ...]]:
+    if full_path == "live.approved_coins":
+        return _format_approved_coins_change_for_log(old_value, new_value), ()
     if full_path == "optimize.limits":
         custom = _format_optimize_limits_change_for_log(old_value, new_value)
         if custom is not None:
