@@ -9677,8 +9677,6 @@ class Passivbot:
             self._previous_balance_raw = 0.0
         if not hasattr(self, "_previous_balance_snapped"):
             self._previous_balance_snapped = 0.0
-        if not hasattr(self, "_last_raw_only_log_time"):
-            self._last_raw_only_log_time = 0.0
         balance_raw = self.get_raw_balance()
         balance_snapped = self.get_hysteresis_snapped_balance()
         if (
@@ -9686,13 +9684,10 @@ class Passivbot:
             or balance_snapped != self._previous_balance_snapped
         ):
             snap_changed = balance_snapped != self._previous_balance_snapped
-            raw_only = not snap_changed
-            now = time.time()
-            should_log = snap_changed or (now - self._last_raw_only_log_time >= 900.0)
             try:
                 equity = balance_raw + (await self.calc_upnl_sum())
                 self._monitor_last_equity = float(equity)
-                if should_log and not Passivbot._live_event_console_available(self):
+                if snap_changed and not Passivbot._live_event_console_available(self):
                     logging.info(
                         "[balance] raw %.6f -> %.6f | snap %.6f -> %.6f | equity: %.4f source: %s",
                         self._previous_balance_raw,
@@ -9702,8 +9697,6 @@ class Passivbot:
                         equity,
                         source,
                     )
-                if should_log and raw_only:
-                    self._last_raw_only_log_time = now
                 self._monitor_record_event(
                     "account.balance",
                     ("account", "balance"),

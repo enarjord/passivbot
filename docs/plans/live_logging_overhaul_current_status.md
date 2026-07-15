@@ -1,6 +1,6 @@
 # Live Logging Overhaul Current Status
 
-Updated: 2026-07-13.
+Updated: 2026-07-15.
 
 This is the compact operational source for the active logging-overhaul loop.
 Read it before the historical progress ledger. Update it whenever the active
@@ -22,22 +22,24 @@ Estimated completion:
 
 ## Active Review Slice
 
-- Branch: `codex/v8-realized-loss-gate-console-migration`.
-- Base: `a0897f83932db5e6888c1c96f8f1c668d452013f`, the `v8.0.0`
-  cutover merge on canonical `master`.
-- Slice: realized-loss gate console ownership.
-- Triggering evidence: `_log_realized_loss_gate_blocks` writes a detailed
-  legacy warning immediately before emitting the already console/text-routed
-  `risk.realized_loss_gate_blocked` event. Existing tests asserted both paths,
-  confirming direct duplicate ownership.
-- Scope: make the existing structured realized-loss gate event the sole normal
-  console/text owner when an enabled live-event pipeline has an actual console
-  sink. Preserve the legacy warning when the emitter, pipeline, or console sink
-  is unavailable. Enqueue or sink degradation must remain single-owner and
-  surface through pipeline health rather than trigger dynamic dual writing.
-- Behavior boundary: preserve Rust-owned diagnostics, per-symbol/pside/order
-  type throttling, warning severity, event payload and routing, configuration,
-  gate decisions, order filtering, exchange calls, and all trading behavior.
+- Branch: `codex/balance-console-materiality`.
+- Base: `991dadb69124e838a4a3b63fff65036a223b4195`, the PR #1231
+  console-verbosity policy merge on canonical `master`.
+- Slice: console-only suppression of raw wallet-balance jitter.
+- Triggering evidence: the VPS5 console-volume study found balance and warmup
+  families dominated healthy output. The merged policy requires balance after
+  the initial snapshot to represent a material or attributable account change,
+  while the current pipeline projects every raw-balance movement even when the
+  hysteresis-snapped balance is unchanged.
+- Scope: suppress `balance.changed` from the console only when its finite
+  `balance_snapped_delta` is zero. Preserve structured, monitor, and durable text
+  delivery. Keep snapped changes and events with absent or malformed
+  materiality metadata console-visible. Remove the legacy 15-minute raw-only
+  fallback line while retaining snapped-change fallback output.
+- Behavior boundary: preserve balance calculation, hysteresis, event payload,
+  event production, monitor history, durable text, equity diagnostics,
+  scheduling, exchange calls, order/risk behavior, Rust, backtest, and optimizer
+  behavior.
 - Publication state, exact head, mergeability, CI, and current-head reviewer
   verdicts: query live GitHub metadata; do not embed self-invalidating values.
 - Expected VPS action: restart and observe only after this slice merges;
@@ -45,12 +47,24 @@ Estimated completion:
 
 ## Deployed Baseline
 
-- Remote `v8`: `9773889ecb8a396bec31e1e11c326aed9fa2cbe7`, PR #1220
-- VPS5 repository: `9773889ecb8a396bec31e1e11c326aed9fa2cbe7`, PR #1220; exact
-  tracked status clean and expected untracked artifacts preserved
-- VPS5 expected bots: five; running with PR #1220 restart PIDs
-  `913308/913310/913312/913314/913316`; pane PIDs unchanged; unrelated
+- Canonical `master`: `991dadb69124e838a4a3b63fff65036a223b4195`, PR #1231.
+- VPS5 repository: `dacd66adebfd230999aebf7f9fbd34a5b2990490`, PR #1221; exact
+  tracked status clean and expected untracked artifacts preserved.
+- VPS5 expected bots: five; running with PR #1221 restart PIDs
+  `927721/927781/927842/927899/927963`; pane PIDs unchanged; unrelated
   `misc:0.0` remains PID `434835`
+- PR #1231 merged at `991dadb69124e838a4a3b63fff65036a223b4195`.
+  It defines evidence-based console admission, incident projection, and volume
+  budgets. It is documentation-only, so no VPS5 restart was required.
+- PR #1221 merged and deployed at
+  `dacd66adebfd230999aebf7f9fbd34a5b2990490`. It made the structured
+  realized-loss gate warning the sole normal console/text owner while preserving
+  the legacy fallback and all gate behavior. Only the five exact bot panes were
+  gracefully restarted; unrelated processes and local artifacts were preserved.
+  After transient GateIO/KuCoin timeouts and HSL replay completed naturally, the
+  final two-minute smoke was `ok=true`: `198/198` remote calls, `49/49`
+  account-critical calls, six successful fill refreshes, five expected
+  processes, and zero hard, log-attention, monitor, or event-pipeline failures.
 - PR #1220 merged and deployed at
   `9773889ecb8a396bec31e1e11c326aed9fa2cbe7`. It made structured
   min-effective-cost block events own normal per-block console/text output
@@ -519,8 +533,10 @@ migration, PR #1217's execution-loop error-burst console migration, PR #1218's
 ambiguous-cancel console migration, PR #1219's entry-distance-gate console
 migration, and PR #1220's min-effective-cost console migration are merged and
 deployed. Natural post-PR #1220 GateIO output proved structured single
-ownership. Static follow-up found direct legacy/structured dual ownership for
-realized-loss gate blocks, tracked by the active slice above.
+ownership. PR #1221's realized-loss gate console migration is also merged and
+deployed with a settled hard-green smoke. PR #1231's console-verbosity policy is
+merged without a runtime deployment. Its first implementation follow-up is the
+active raw-only balance-console materiality slice above.
 
 Do not create progress-only PRs or resume unrelated logging work from stale
 worktrees.

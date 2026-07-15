@@ -2027,6 +2027,17 @@ def _operator_sink_event_visible(event: LiveEvent) -> bool:
     return True
 
 
+def _console_sink_event_visible(event: LiveEvent) -> bool:
+    if not _operator_sink_event_visible(event):
+        return False
+    if event.event_type == EventTypes.BALANCE_CHANGED:
+        data = event.data if isinstance(event.data, Mapping) else {}
+        snapped_delta = _data_number(data, "balance_snapped_delta")
+        # Missing or malformed materiality metadata must remain operator-visible.
+        return snapped_delta is None or snapped_delta != 0.0
+    return True
+
+
 def format_console_event(event: LiveEvent) -> str:
     if (
         event.event_type == EventTypes.HEALTH_SUMMARY
@@ -2830,7 +2841,7 @@ class LiveEventPipeline:
         if (
             route.console
             and self.console_sink is not None
-            and _operator_sink_event_visible(live_event)
+            and _console_sink_event_visible(live_event)
             and self._should_emit_throttled_sink("console", live_event, route)
         ):
             self._write_sink("console", self.console_sink, live_event)

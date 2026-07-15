@@ -4,6 +4,12 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Raw-only wallet-balance jitter no longer appears on the normal live console
+  when the hysteresis-snapped balance is unchanged. The complete
+  `balance.changed` event remains available in structured, monitor, and durable
+  text sinks; snapped changes and events without valid materiality metadata
+  remain console-visible.
+
 - Realized-loss gate blocks now use their structured warning as the sole normal
   console/text line when a live-event console sink is available. The legacy
   warning remains the fallback; gate decisions, diagnostics, and throttling are
