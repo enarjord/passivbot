@@ -108,6 +108,7 @@ async def test_fetch_lock_watchdog_logs_stale_local_holder_without_release(tmp_p
         default_window_candles=5,
     )
     cm._lock_hold_timeout_seconds = 0.01
+    cm.debug_level = 1
     key = ("BTC/USDC:USDC", "1m")
     lock_path = cm._fetch_lock_path(*key)
 
@@ -123,9 +124,63 @@ async def test_fetch_lock_watchdog_logs_stale_local_holder_without_release(tmp_p
             assert key in cm._held_fetch_locks
 
     assert key not in cm._held_fetch_locks
-    assert any(
-        "fetch_lock_hold_timeout" in record.message for record in caplog.records
+    warning = next(
+        record for record in caplog.records if "fetch_lock_hold_timeout" in record.message
     )
+    assert "called_by=" in warning.message
+    assert "exchange=fake" in warning.message
+    assert "symbol=BTC" in warning.message
+    assert "timeframe=1m" in warning.message
+    assert "owner=pid=" in warning.message
+    assert "task=" in warning.message
+    assert "attempt=1" in warning.message
+    assert "held_s=" in warning.message
+    assert "lock_path=" not in warning.message
+    assert warning.message.count("exchange=fake") == 1
+    assert warning.message.count("symbol=BTC") == 1
+    assert warning.message.count("timeframe=1m") == 1
+    assert "held_seconds=" not in warning.message
+    assert "action=holder_still_active" not in warning.message
+    rendered = f"2026-07-15 12:34:56,789 WARNING passivbot.candlestick_manager {warning.message}"
+    assert len(rendered) <= 240
+
+
+def test_read_lockfile_owner_defaults_to_full_context_for_stale_waiting(tmp_path):
+    cm = CandlestickManager(
+        exchange=FakeExchange(),
+        exchange_name="hyperliquid",
+        cache_dir=str(tmp_path / "caches"),
+        default_window_candles=5,
+    )
+    path = tmp_path / "fetch.lock"
+    path.write_text(
+        json.dumps(
+            {
+                "pid": 1234,
+                "exchange": "hyperliquid",
+                "symbol": "BTC/USDC:USDC",
+                "timeframe": "1m",
+                "task": "candle-refresh",
+                "attempt": 2,
+                "acquired_at": time.time() - 1.0,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    owner = cm._read_lockfile_owner(str(path))
+    compact_owner = cm._read_lockfile_owner(str(path), compact=True)
+
+    assert "pid=1234" in owner
+    assert "exchange=hyperliquid" in owner
+    assert "symbol=BTC/USDC:USDC" in owner
+    assert "timeframe=1m" in owner
+    assert "task=candle-refresh" in owner
+    assert "attempt=2" in owner
+    assert "held_s=" in owner
+    assert "exchange=" not in compact_owner
+    assert "symbol=" not in compact_owner
+    assert "timeframe=" not in compact_owner
 
 
 @pytest.mark.asyncio
