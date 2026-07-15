@@ -4,6 +4,14 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Five-minute `trailing.status` and `unstuck.status` snapshots now remain
+  complete in structured and monitor sinks while normal console/text output is
+  limited to first observations, qualitative or material numeric transitions,
+  and hourly reminders. Unstuck allowance movement uses five-percent relative
+  hysteresis; trailing ratio and price movement use explicit 0.05 percentage-
+  point and 0.5-percent boundaries. Trading, risk, planning, and event cadence
+  are unchanged.
+
 - Material live memory snapshots now emit a bounded `resource.memory_snapshot`
   event and one compact operator line instead of a 457-525 character cache and
   task diagnostic. The complete bounded samples remain available in structured

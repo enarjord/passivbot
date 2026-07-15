@@ -2066,11 +2066,12 @@ def _hsl_status_operator_visible(event: LiveEvent) -> bool:
 
 
 def _operator_sink_event_visible(event: LiveEvent) -> bool:
+    data = event.data if isinstance(event.data, Mapping) else {}
+    if data.get("operator_visible") is False:
+        return False
     if event.event_type == EventTypes.FILL_INGESTED:
-        data = event.data if isinstance(event.data, Mapping) else {}
-        return data.get("operator_visible") is not False
+        return True
     if event.event_type == EventTypes.FORAGER_SELECTION:
-        data = event.data if isinstance(event.data, Mapping) else {}
         return str(data.get("source") or "") != "rust_orchestrator"
     if event.event_type == EventTypes.HSL_STATUS:
         return _hsl_status_operator_visible(event)

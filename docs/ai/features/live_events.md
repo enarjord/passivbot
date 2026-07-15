@@ -144,6 +144,29 @@ must not retain `latest_error`. These projections are observability-only: error 
 timestamp recovery, restart thresholds, backoff, and trading behavior remain owned by the existing
 execution-loop policy.
 
+## Trailing And Unstuck Status Materiality
+
+`trailing.status` and `unstuck.status` retain one complete observation every five minutes while the
+corresponding status producer is active. `operator_visible=false` suppresses only console and
+durable text projection; structured and monitor sinks still receive the event. Missing visibility
+metadata remains operator-visible. The first observation, a qualitative transition, a material
+numeric transition, and the existing hourly reminder use `operator_visible=true`. The `changed`
+field is true only for the first or materially changed observation, not for an unchanged hourly
+reminder.
+
+Unstuck allowance materiality uses five-percent relative hysteresis against the last
+operator-visible baseline. Status, over-budget crossing, configured overrides, candidate symbol,
+and existing target fields remain qualitative transition inputs. Trailing visibility is owned per
+`symbol`/`pside`/`kind` item so one changing position does not expose unrelated repeats. Its
+threshold and retracement ratios are material at an absolute ratio delta of `0.0005` (0.05
+percentage points); threshold and retracement prices are material at a relative delta of `0.005`
+(0.5 percent). Qualitative status, support, and trigger flags remain immediate.
+
+These thresholds affect human projection only. They must not change Rust planning, order emission,
+position handling, unstuck eligibility, trailing calculations, the five-minute observation cadence,
+or event payload values. Legacy direct INFO logging remains a fallback only when the structured
+console is unavailable and follows the same producer-owned admission decision.
+
 ## Memory Snapshots
 
 `resource.memory_snapshot` records the existing material memory diagnostic when it first becomes

@@ -3725,6 +3725,7 @@ def test_unstuck_status_event_emits_structured_summary():
             "short": {"status": "disabled"},
         },
         changed=True,
+        operator_visible=True,
     )
 
     assert bot._live_event_pipeline.flush(timeout=2.0) is True
@@ -3735,6 +3736,7 @@ def test_unstuck_status_event_emits_structured_summary():
     assert event.component == "risk.unstuck.status"
     assert event.tags == ("risk", "unstuck", "summary")
     assert event.data["changed"] is True
+    assert event.data["operator_visible"] is True
     assert event.data["status_counts"] == {"disabled": 1, "ok": 1}
     assert event.data["over_budget_sides"] == ["long"]
     long = event.data["sides"]["long"]
@@ -3801,6 +3803,7 @@ def test_trailing_status_event_emits_structured_summary():
             "position_price": 100_000.0,
             "position_size": 0.01,
         },
+        operator_visible=True,
     )
 
     assert bot._live_event_pipeline.flush(timeout=2.0) is True
@@ -3813,6 +3816,7 @@ def test_trailing_status_event_emits_structured_summary():
     assert event.component == "risk.trailing.status"
     assert event.tags == ("risk", "trailing", "position")
     assert event.data["changed"] is True
+    assert event.data["operator_visible"] is True
     assert event.data["kind"] == "close"
     assert event.data["trailing_status"] == "waiting_retracement"
     assert event.data["selected_mode"] == "trailing"
