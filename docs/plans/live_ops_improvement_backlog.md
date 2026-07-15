@@ -568,12 +568,16 @@ Related detailed plans:
     warning. Migrate that detail with the same emitter/pipeline/sink fallback
     contract while preserving every gate decision and throttle.
 
-    PR #1246 is the active risk-status materiality slice. It keeps every
+    PR #1246 merged and deployed the risk-status materiality slice. It keeps every
     five-minute trailing and unstuck observation in structured/monitor sinks
     while limiting console/text projection to first observations, qualitative
     or material numeric transitions, and hourly reminders. The change is
     observability-only and leaves status calculation, planning, risk, and order
-    behavior unchanged.
+    behavior unchanged. Two natural post-restart cadences proved both durable
+    detail and suppression; settled smoke was hard-green. The first visible
+    trailing line still measured 311 characters, so the active
+    `codex/compact-trailing-status-console` follow-up compacts that formatter to
+    the normal 240-character budget without changing event data or admission.
 
     Two post-PR #1220 console observations remain deferred rather than folded
     into the realized-loss slice. Hyperliquid balance lines surfaced signed

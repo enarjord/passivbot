@@ -8434,3 +8434,28 @@ active branch, PR, review gate, and rollout instructions.
   active `codex/trailing-unstuck-console-materiality` slice preserves every
   five-minute structured observation while applying explicit producer-owned
   transition and numeric materiality to console/text output.
+
+### 2026-07-15: Risk Status Materiality Deployed; Trailing Format Follow-Up
+
+- PR #1246 merged as `fc5c2cae88` after exact-head Hermes approval and green
+  Python/Rust CI under the temporary maintainer-authorized Hermes-plus-CI gate.
+  The stale progress-ledger current-work block was explicitly marked historical
+  after Hermes identified the contradictory handoff.
+- VPS5 fast-forwarded cleanly and activated the PR with one exact five-bot
+  restart. All old bots exited naturally after one SIGINT round; KuCoin was
+  last at about 30 seconds. Exact pane PIDs and unrelated `misc:0.0` PID
+  `434835` remained unchanged.
+- The first natural cadence emitted five durable trailing/unstuck events with
+  `changed=true` and `operator_visible=true` plus five console lines. The second
+  cadence emitted five durable events with `changed=false` and
+  `operator_visible=false` and zero console lines. Hyperliquid naturally varied
+  below the configured materiality boundaries, proving data retention and
+  human suppression without manufactured activity.
+- The final two-minute smoke was `ok=true`: `224/224` remote and `56/56`
+  account-critical calls succeeded, nine fill refreshes succeeded, five exact
+  processes/configs were in state `R`, and hard/log/monitor/process/pipeline
+  failures were zero. The repository was clean at the exact merged head.
+- The first visible Hyperliquid trailing line measured 311 characters and
+  repeated verbose field names already represented in the complete event. The
+  active `codex/compact-trailing-status-console` follow-up is formatter-only and
+  targets the normal 240-character budget without changing payload or behavior.
