@@ -4,6 +4,12 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Material live memory snapshots now emit a bounded `resource.memory_snapshot`
+  event and one compact operator line instead of a 457-525 character cache and
+  task diagnostic. The complete bounded samples remain available in structured
+  and monitor sinks, detailed diagnostics remain at DEBUG, and collection,
+  cadence, admission, and trading behavior are unchanged.
+
 - Intermediate HSL coin-history replay progress now appears on the normal live
   console at most once every 30 seconds. The first progress update, completion,
   complete structured progress events, replay behavior, and safety readiness

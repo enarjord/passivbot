@@ -61,6 +61,7 @@ from live.events import DiagnosticEvent, emit_diagnostic_event, run_diagnostic_s
 from live.event_bus import (
     ConsoleSummarySink,
     EventTypes,
+    format_memory_snapshot_console,
     format_periodic_health_summary,
     LIVE_EVENT_CONSOLE_ENV,
     LIVE_EVENT_DEBUG_PROFILE_ENV,
@@ -646,6 +647,7 @@ class Passivbot:
         live_event_emitters.emit_rust_orchestrator_returned_event
     )
     _emit_balance_changed_event = live_event_emitters.emit_balance_changed_event
+    _emit_memory_snapshot_event = live_event_emitters.emit_memory_snapshot_event
     _emit_fills_refresh_summary_event = (
         live_event_emitters.emit_fills_refresh_summary_event
     )
@@ -3460,9 +3462,14 @@ class Passivbot:
         cache_candles = None
         cache_symbols = None
         cache_top = None
+        cache_top_samples = None
         tf_cache_bytes = None
         tf_cache_ranges = None
         tf_cache_top = None
+        tf_cache_top_samples = None
+        total_tasks = None
+        pending = None
+        task_top_samples = None
         try:
             cache = getattr(self.cm, "_cache", {}) if hasattr(self, "cm") else {}
             cache_symbols = len(cache)
@@ -3477,6 +3484,7 @@ class Passivbot:
             cache_candles = sum(rows for _, _, rows in stats)
             if stats:
                 top = sorted(stats, key=lambda item: item[1], reverse=True)[:3]
+                cache_top_samples = top
                 cache_top = ", ".join(
                     f"{Passivbot._log_symbol(sym)}:{bytes_ / (1024 * 1024):.1f}MiB/{rows}"
                     for sym, bytes_, rows in top
@@ -3505,6 +3513,7 @@ class Passivbot:
                 tf_cache_bytes = sum(size for _, size, _ in tf_stats)
                 tf_cache_ranges = len(tf_stats)
                 top_tf = sorted(tf_stats, key=lambda item: item[1], reverse=True)[:3]
+                tf_cache_top_samples = top_tf
                 tf_cache_top = ", ".join(
                     f"{Passivbot._log_symbol(sym)}:{tf}:{bytes_ / (1024 * 1024):.1f}MiB/{rows}"
                     for (sym, tf), bytes_, rows in top_tf
@@ -3519,7 +3528,7 @@ class Passivbot:
                 pct_change = 100.0 * (rss - prev_rss) / prev_rss
         parts = [f"[memory] rss={rss / (1024 * 1024):.2f} MiB"]
         if pct_change is not None:
-            parts.append(f"Δ={pct_change:+.2f}% vs previous snapshot")
+            parts.append(f"delta={pct_change:+.2f}% vs previous snapshot")
         if cache_bytes is not None:
             cache_mib = cache_bytes / (1024 * 1024)
             cache_desc = f"cm_cache={cache_mib:.2f} MiB"
@@ -3558,23 +3567,68 @@ class Passivbot:
                 if not name:
                     name = type(t).__name__
                 task_counts[name] = task_counts.get(name, 0) + 1
+            task_top_samples = sorted(
+                task_counts.items(), key=lambda kv: kv[1], reverse=True
+            )[:4]
             top_tasks = ", ".join(
-                f"{name}:{count}"
-                for name, count in sorted(
-                    task_counts.items(), key=lambda kv: kv[1], reverse=True
-                )[:4]
+                f"{name}:{count}" for name, count in task_top_samples
             )
             parts.append(f"tasks={total_tasks} pending={pending}")
             if top_tasks:
                 parts.append(f"task_top={top_tasks}")
         except Exception:
             pass
-        log_level = (
-            logging.INFO
-            if self._memory_snapshot_is_interesting(prev=prev, pct_change=pct_change)
-            else logging.DEBUG
+        detail_message = "; ".join(parts)
+        interesting = self._memory_snapshot_is_interesting(
+            prev=prev, pct_change=pct_change
         )
-        logging.log(log_level, "%s", "; ".join(parts))
+        if interesting:
+            emit_memory_snapshot = getattr(self, "_emit_memory_snapshot_event", None)
+            pipeline = getattr(self, "_live_event_pipeline", None)
+            structured_console_available = bool(
+                callable(emit_memory_snapshot)
+                and Passivbot._live_event_console_available(self)
+                and getattr(pipeline, "console_sink", None) is not None
+            )
+            if callable(emit_memory_snapshot):
+                try:
+                    emit_memory_snapshot(
+                        rss_bytes=rss,
+                        rss_delta_pct=pct_change,
+                        cache_bytes=cache_bytes,
+                        cache_candles=cache_candles,
+                        cache_symbols=cache_symbols,
+                        cache_samples=cache_top_samples,
+                        timeframe_cache_bytes=tf_cache_bytes,
+                        timeframe_cache_ranges=tf_cache_ranges,
+                        timeframe_cache_samples=tf_cache_top_samples,
+                        task_total=total_tasks,
+                        task_pending=pending,
+                        task_samples=task_top_samples,
+                    )
+                except Exception as exc:
+                    logging.debug("[event] failed to emit memory snapshot event: %s", exc)
+            if not structured_console_available:
+                logging.info(
+                    "%s",
+                    format_memory_snapshot_console(
+                        {
+                            "rss_bytes": rss,
+                            "rss_delta_pct": pct_change,
+                            "cache": {
+                                "bytes": cache_bytes,
+                                "candles": cache_candles,
+                                "symbols": cache_symbols,
+                            },
+                            "timeframe_cache": {
+                                "bytes": tf_cache_bytes,
+                                "ranges": tf_cache_ranges,
+                            },
+                            "tasks": {"total": total_tasks, "pending": pending},
+                        }
+                    ),
+                )
+        logging.debug("%s", detail_message)
         self._mem_log_prev = {"timestamp": now_ms, "rss": rss}
         if cache_bytes is not None:
             self._mem_log_prev["cm_cache_bytes"] = cache_bytes

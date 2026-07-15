@@ -54,6 +54,15 @@ _EXCHANGE_CONFIG_EVENT_RESPONSE_CODE_RE = re.compile(r"-?[0-9]{1,12}")
 _EXCHANGE_CONFIG_EVENT_ERROR_TYPE_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,79}")
 _EXCHANGE_CONFIG_EVENT_OUTCOMES = {"confirmed", "unchanged", "failed"}
 _LIVE_EVENT_LEVELS = {"debug", "info", "warning", "error"}
+_MEMORY_SNAPSHOT_MAX_BYTES = (1 << 63) - 1
+_MEMORY_SNAPSHOT_MAX_COUNT = 1_000_000_000
+_MEMORY_SNAPSHOT_MAX_DELTA_PCT = 1_000_000.0
+_MEMORY_SNAPSHOT_SYMBOL_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,95}")
+_MEMORY_SNAPSHOT_TIMEFRAME_RE = re.compile(r"[1-9][0-9]{0,5}[smhdwM]")
+_MEMORY_SNAPSHOT_TASK_NAME_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_.-]{0,95}")
+_MEMORY_SNAPSHOT_SENSITIVE_TASK_RE = re.compile(
+    r"(?i)(?:api(?:_?key)?|secret|token|password|authorization|cookie)"
+)
 
 
 def _sanitize_remote_text(value: Any, *, max_len: int = 500) -> str:
@@ -1103,6 +1112,188 @@ def _safe_int(value: Any) -> int | None:
     try:
         return int(value)
     except (TypeError, ValueError):
+        return None
+
+
+def _bounded_memory_snapshot_int(value: Any, *, maximum: int) -> int | None:
+    if isinstance(value, bool):
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(number) or number < 0.0:
+        return None
+    return min(int(number), maximum)
+
+
+def _bounded_memory_snapshot_delta(value: Any) -> float | None:
+    number = _safe_finite_float(value)
+    if number is None:
+        return None
+    return round(
+        max(-_MEMORY_SNAPSHOT_MAX_DELTA_PCT, min(number, _MEMORY_SNAPSHOT_MAX_DELTA_PCT)),
+        6,
+    )
+
+
+def _bounded_memory_snapshot_label(
+    value: Any, pattern: re.Pattern[str], *, reject_sensitive: bool = False
+) -> str:
+    if not isinstance(value, str):
+        return "unknown"
+    if (
+        "://" in value
+        or "//" in value
+        or not pattern.fullmatch(value)
+        or (reject_sensitive and _MEMORY_SNAPSHOT_SENSITIVE_TASK_RE.search(value))
+    ):
+        return "unknown"
+    return value
+
+
+def _memory_snapshot_cache_samples(value: Any, *, timeframe: bool) -> list[dict[str, Any]]:
+    if not isinstance(value, (list, tuple)):
+        return []
+    samples: list[dict[str, Any]] = []
+    for raw in value[:3]:
+        if not isinstance(raw, (list, tuple)):
+            continue
+        if timeframe and len(raw) == 3 and isinstance(raw[0], tuple) and len(raw[0]) == 2:
+            symbol_raw, timeframe_raw = raw[0]
+            bytes_raw, candles_raw = raw[1:]
+        elif timeframe and len(raw) == 4:
+            symbol_raw, timeframe_raw, bytes_raw, candles_raw = raw
+        elif not timeframe and len(raw) == 3:
+            symbol_raw, bytes_raw, candles_raw = raw
+            timeframe_raw = None
+        else:
+            continue
+        symbol = _bounded_memory_snapshot_label(symbol_raw, _MEMORY_SNAPSHOT_SYMBOL_RE)
+        sample: dict[str, Any] = {"symbol": symbol}
+        if timeframe:
+            sample["timeframe"] = _bounded_memory_snapshot_label(
+                timeframe_raw, _MEMORY_SNAPSHOT_TIMEFRAME_RE
+            )
+        bytes_ = _bounded_memory_snapshot_int(
+            bytes_raw, maximum=_MEMORY_SNAPSHOT_MAX_BYTES
+        )
+        candles = _bounded_memory_snapshot_int(
+            candles_raw, maximum=_MEMORY_SNAPSHOT_MAX_COUNT
+        )
+        if bytes_ is None or candles is None:
+            continue
+        sample["bytes"] = bytes_
+        sample["candles"] = candles
+        samples.append(sample)
+    return samples
+
+
+def _memory_snapshot_task_samples(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, (list, tuple)):
+        return []
+    samples: list[dict[str, Any]] = []
+    for raw in value[:4]:
+        if not isinstance(raw, (list, tuple)) or len(raw) != 2:
+            continue
+        count = _bounded_memory_snapshot_int(
+            raw[1], maximum=_MEMORY_SNAPSHOT_MAX_COUNT
+        )
+        if count is None:
+            continue
+        samples.append(
+            {
+                "name": _bounded_memory_snapshot_label(
+                    raw[0], _MEMORY_SNAPSHOT_TASK_NAME_RE, reject_sensitive=True
+                ),
+                "count": count,
+            }
+        )
+    return samples
+
+
+def emit_memory_snapshot_event(
+    bot: Any,
+    *,
+    rss_bytes: Any,
+    rss_delta_pct: Any = None,
+    cache_bytes: Any = None,
+    cache_candles: Any = None,
+    cache_symbols: Any = None,
+    cache_samples: Any = None,
+    timeframe_cache_bytes: Any = None,
+    timeframe_cache_ranges: Any = None,
+    timeframe_cache_samples: Any = None,
+    task_total: Any = None,
+    task_pending: Any = None,
+    task_samples: Any = None,
+) -> Any:
+    """Emit a bounded, observability-only memory snapshot event."""
+    try:
+        emit = getattr(bot, "_emit_live_event", None)
+        if not callable(emit):
+            return None
+        data: dict[str, Any] = {}
+        bounded_rss = _bounded_memory_snapshot_int(
+            rss_bytes, maximum=_MEMORY_SNAPSHOT_MAX_BYTES
+        )
+        if bounded_rss is None:
+            return None
+        data["rss_bytes"] = bounded_rss
+        delta = _bounded_memory_snapshot_delta(rss_delta_pct)
+        if delta is not None:
+            data["rss_delta_pct"] = delta
+        cache: dict[str, Any] = {}
+        for key, raw_value, maximum in (
+            ("bytes", cache_bytes, _MEMORY_SNAPSHOT_MAX_BYTES),
+            ("candles", cache_candles, _MEMORY_SNAPSHOT_MAX_COUNT),
+            ("symbols", cache_symbols, _MEMORY_SNAPSHOT_MAX_COUNT),
+        ):
+            bounded = _bounded_memory_snapshot_int(raw_value, maximum=maximum)
+            if bounded is not None:
+                cache[key] = bounded
+        samples = _memory_snapshot_cache_samples(cache_samples, timeframe=False)
+        if samples:
+            cache["samples"] = samples
+        if cache:
+            data["cache"] = cache
+        timeframe_cache: dict[str, Any] = {}
+        for key, raw_value, maximum in (
+            ("bytes", timeframe_cache_bytes, _MEMORY_SNAPSHOT_MAX_BYTES),
+            ("ranges", timeframe_cache_ranges, _MEMORY_SNAPSHOT_MAX_COUNT),
+        ):
+            bounded = _bounded_memory_snapshot_int(raw_value, maximum=maximum)
+            if bounded is not None:
+                timeframe_cache[key] = bounded
+        samples = _memory_snapshot_cache_samples(timeframe_cache_samples, timeframe=True)
+        if samples:
+            timeframe_cache["samples"] = samples
+        if timeframe_cache:
+            data["timeframe_cache"] = timeframe_cache
+        tasks: dict[str, Any] = {}
+        for key, raw_value in (("total", task_total), ("pending", task_pending)):
+            bounded = _bounded_memory_snapshot_int(
+                raw_value, maximum=_MEMORY_SNAPSHOT_MAX_COUNT
+            )
+            if bounded is not None:
+                tasks[key] = bounded
+        samples = _memory_snapshot_task_samples(task_samples)
+        if samples:
+            tasks["samples"] = samples
+        if tasks:
+            data["tasks"] = tasks
+        return emit(
+            EventTypes.RESOURCE_MEMORY_SNAPSHOT,
+            level="info",
+            component="resource.memory",
+            tags=(EventTags.RESOURCE, EventTags.MEMORY),
+            cycle_id=current_live_event_cycle_id(bot),
+            status="succeeded",
+            reason_code=ReasonCodes.MEMORY_SNAPSHOT,
+            data=data,
+        )
+    except Exception as exc:
+        logging.debug("[event] failed to emit memory snapshot event: %s", exc)
         return None
 
 

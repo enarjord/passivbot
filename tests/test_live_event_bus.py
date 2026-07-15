@@ -8,6 +8,7 @@ import time
 import pytest
 
 import live.event_bus as live_event_bus_module
+import live.event_emitters as live_event_emitters
 from live.event_bus import (
     DEFAULT_ROUTES,
     EventRoute,
@@ -23,6 +24,7 @@ from live.event_bus import (
     ReasonCodes,
     authoritative_reason_code,
     format_console_event,
+    format_memory_snapshot_console,
     live_event_debug_profile_enabled,
     normalize_live_event_console_enabled,
     normalize_live_event_debug_profiles,
@@ -82,6 +84,10 @@ def test_live_event_tag_registry_values_are_unique_and_query_safe():
 
 def test_market_compatibility_event_type_is_stable():
     assert EventTypes.CONFIG_MARKET_COMPATIBILITY == "config.market_compatibility"
+
+
+def test_memory_snapshot_event_type_is_stable():
+    assert EventTypes.RESOURCE_MEMORY_SNAPSHOT == "resource.memory_snapshot"
 
 
 def test_startup_phase_readiness_contract_is_bounded_and_defensive():
@@ -372,6 +378,10 @@ def test_route_table_keeps_data_events_off_console_by_default():
     assert DEFAULT_ROUTES[EventTypes.BOT_SHUTDOWN_STAGE].text is True
     assert DEFAULT_ROUTES[EventTypes.HEALTH_SUMMARY].console is True
     assert DEFAULT_ROUTES[EventTypes.HEALTH_SUMMARY].text is True
+    assert DEFAULT_ROUTES[EventTypes.RESOURCE_MEMORY_SNAPSHOT].structured is True
+    assert DEFAULT_ROUTES[EventTypes.RESOURCE_MEMORY_SNAPSHOT].monitor is True
+    assert DEFAULT_ROUTES[EventTypes.RESOURCE_MEMORY_SNAPSHOT].console is True
+    assert DEFAULT_ROUTES[EventTypes.RESOURCE_MEMORY_SNAPSHOT].text is True
     assert DEFAULT_ROUTES[EventTypes.HSL_STATUS].console is True
     assert DEFAULT_ROUTES[EventTypes.HSL_STATUS].text is True
     assert DEFAULT_ROUTES[EventTypes.TRAILING_STATUS].console is True
@@ -1455,6 +1465,102 @@ def test_console_format_is_compact_and_operator_facing():
         "pside=long reason=stale_ema entries deferred"
     )
     assert format_console_event(event) == expected
+
+
+def test_memory_snapshot_event_payload_is_bounded_and_monitor_safe():
+    class Bot:
+        def __init__(self):
+            self.calls = []
+
+        def _emit_live_event(self, event_type, **kwargs):
+            self.calls.append((event_type, kwargs))
+            return kwargs
+
+    bot = Bot()
+    live_event_emitters.emit_memory_snapshot_event(
+        bot,
+        rss_bytes=198 * 1024 * 1024,
+        rss_delta_pct=91.0,
+        cache_bytes=5 * 1024 * 1024,
+        cache_candles=100,
+        cache_symbols=39,
+        cache_samples=[
+            ("BTC/USDT:USDT", 2**70, 10),
+            ("https://example.invalid/secret", 3, 4),
+            ("X" * 128, 5, 6),
+            ("ignored", 7, 8),
+        ],
+        timeframe_cache_bytes=4 * 1024 * 1024,
+        timeframe_cache_ranges=115,
+        timeframe_cache_samples=[
+            ("ETH/USDT:USDT", "1m", 9, 10),
+            ("SOL/USDT:USDT", "https://bad", 11, 12),
+            ("X" * 128, "1h", 13, 14),
+            ("ignored", "1m", 15, 16),
+        ],
+        task_total=5,
+        task_pending=5,
+        task_samples=[
+            ("run_forever", 1),
+            ("secret_worker", 2),
+            ("X" * 128, 3),
+            ("Worker-1", 4),
+            ("ignored", 5),
+        ],
+    )
+
+    assert len(bot.calls) == 1
+    event_type, kwargs = bot.calls[0]
+    assert event_type == EventTypes.RESOURCE_MEMORY_SNAPSHOT
+    assert kwargs["level"] == "info"
+    assert kwargs["reason_code"] == ReasonCodes.MEMORY_SNAPSHOT
+    assert kwargs["tags"] == (
+        EventTags.RESOURCE,
+        EventTags.MEMORY,
+    )
+    data = kwargs["data"]
+    assert data["rss_bytes"] == 198 * 1024 * 1024
+    assert data["rss_delta_pct"] == 91.0
+    assert data["cache"]["bytes"] == 5 * 1024 * 1024
+    assert len(data["cache"]["samples"]) == 3
+    assert data["cache"]["samples"][0]["bytes"] == (1 << 63) - 1
+    assert data["cache"]["samples"][1]["symbol"] == "unknown"
+    assert data["cache"]["samples"][2]["symbol"] == "unknown"
+    assert len(data["timeframe_cache"]["samples"]) == 3
+    assert data["timeframe_cache"]["samples"][1]["timeframe"] == "unknown"
+    assert len(data["tasks"]["samples"]) == 4
+    assert data["tasks"]["samples"][1]["name"] == "unknown"
+    assert data["tasks"]["samples"][2]["name"] == "unknown"
+    monitor_payload = LiveEvent(event_type, data=data).to_monitor_event()[2]
+    serialized = json.dumps(monitor_payload, sort_keys=True)
+    assert "https://" not in serialized
+    assert "secret" not in serialized
+    assert "X" * 128 not in serialized
+
+
+def test_memory_snapshot_console_formatter_is_compact_and_omits_samples():
+    data = {
+        "rss_bytes": 198 * 1024 * 1024,
+        "rss_delta_pct": 91.0,
+        "cache": {
+            "bytes": 5 * 1024 * 1024,
+            "symbols": 39,
+            "samples": [{"symbol": "private-task-name", "bytes": 1, "candles": 1}],
+        },
+        "timeframe_cache": {"bytes": 4 * 1024 * 1024, "ranges": 115},
+        "tasks": {"total": 5, "pending": 5, "samples": [{"name": "private"}]},
+    }
+    message = format_memory_snapshot_console(data)
+
+    assert message == (
+        "[memory] rss=198.0MiB delta=+91.0% cache=5.0MiB/39sym "
+        "tf=4.0MiB/115rng tasks=5/5"
+    )
+    assert len(message) <= 240
+    assert "private" not in message
+    assert format_console_event(
+        LiveEvent(EventTypes.RESOURCE_MEMORY_SNAPSHOT, data=data)
+    ) == message
 
 
 def test_console_format_summarizes_order_wave_payload():
