@@ -23,7 +23,7 @@ Estimated completion:
 ## Active Review Slice
 
 - Branch: `codex/hsl-replay-console-cadence`.
-- PR: query live GitHub metadata after publication.
+- PR: #1243, `Bound HSL replay console progress cadence`.
 - Base: `3072878525317d6d7e0811ef191e48cabedcf8fc`, canonical `master`
   after PR #1242.
 - Slice: bound intermediate HSL coin-history replay progress on the normal
