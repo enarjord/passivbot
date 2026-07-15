@@ -49,6 +49,11 @@ _SENSITIVE_VALUE_RE = re.compile(
     r"(\s*(?:[:=]|\s)\s*)([^\s,;&]+)"
 )
 _AUTH_HEADER_RE = re.compile(r"(?i)\b(bearer|basic)\s+[A-Za-z0-9._~+/=-]+")
+_EXCHANGE_CONFIG_EVENT_SYMBOL_RE = re.compile(r"[A-Za-z0-9_./:-]{1,160}")
+_EXCHANGE_CONFIG_EVENT_OUTCOME_RE = re.compile(r"[a-z][a-z_]{0,63}")
+_EXCHANGE_CONFIG_EVENT_RESPONSE_CODE_RE = re.compile(r"-?[0-9]{1,12}")
+_EXCHANGE_CONFIG_EVENT_ERROR_TYPE_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,79}")
+_LIVE_EVENT_LEVELS = {"debug", "info", "warning", "error"}
 
 
 def _sanitize_remote_text(value: Any, *, max_len: int = 500) -> str:
@@ -76,6 +81,16 @@ def _sanitize_remote_fetch_payload(payload: dict[str, Any]) -> dict[str, Any]:
         if url_hash is not None:
             data["url_hash"] = url_hash
     return data
+
+
+def _bounded_exchange_config_event_field(
+    value: Any,
+    pattern: re.Pattern[str],
+) -> str | None:
+    if value is None:
+        return None
+    text = str(value)
+    return text if pattern.fullmatch(text) else None
 
 
 def _remote_fetch_payload_key(payload: dict[str, Any]) -> tuple[Any, ...]:
@@ -654,22 +669,41 @@ def _emit_exchange_config_refresh_event_unchecked(
     started_ms: int | None = None,
     elapsed_ms: int | None = None,
     error: BaseException | None = None,
+    symbol: str | None = None,
+    outcome: str | None = None,
+    response_code: str | int | None = None,
+    error_type: str | None = None,
+    level: str | None = None,
 ) -> None:
     status_value = str(status or "unknown")
     failed = status_value == "failed"
+    default_level = "warning" if failed else "debug"
     data: dict[str, Any] = {
         "context": str(context or "unknown"),
         "operation": str(operation or "unknown"),
         "started_ms": int(started_ms) if started_ms is not None else None,
         "elapsed_ms": int(elapsed_ms) if elapsed_ms is not None else None,
+        "symbol": _bounded_exchange_config_event_field(
+            symbol, _EXCHANGE_CONFIG_EVENT_SYMBOL_RE
+        ),
+        "outcome": _bounded_exchange_config_event_field(
+            outcome, _EXCHANGE_CONFIG_EVENT_OUTCOME_RE
+        ),
+        "response_code": _bounded_exchange_config_event_field(
+            response_code, _EXCHANGE_CONFIG_EVENT_RESPONSE_CODE_RE
+        ),
     }
     if error is not None:
         data["error_type"] = type(error).__name__
         data["error"] = _sanitize_remote_text(error, max_len=500)
+    elif error_type is not None:
+        data["error_type"] = _bounded_exchange_config_event_field(
+            error_type, _EXCHANGE_CONFIG_EVENT_ERROR_TYPE_RE
+        )
     _safe_emit(
         bot,
         EventTypes.EXCHANGE_CONFIG_REFRESH,
-        level="warning" if failed else "debug",
+        level=level if level in _LIVE_EVENT_LEVELS else default_level,
         component="exchange.config_refresh",
         tags=(EventTags.EXCHANGE,),
         cycle_id=current_live_event_cycle_id(bot),

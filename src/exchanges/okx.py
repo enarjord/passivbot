@@ -223,6 +223,33 @@ class OKXBot(CCXTBot):
         params["positionSide"] = order["position_side"]
         return params
 
+    def _emit_exchange_config_outcome_event(
+        self,
+        *,
+        symbol: str,
+        status: str,
+        outcome: str,
+        level: str,
+        response_code: str | None = None,
+        error: BaseException | None = None,
+    ) -> None:
+        try:
+            self._emit_exchange_config_refresh_event(
+                context="update_exchange_config_by_symbols",
+                operation="set_margin_mode",
+                status=status,
+                symbol=symbol,
+                outcome=outcome,
+                response_code=response_code,
+                error_type=type(error).__name__ if error is not None else None,
+                level=level,
+            )
+        except Exception as exc:
+            logging.debug(
+                "[event] failed to emit OKX exchange config-refresh outcome | error_type=%s",
+                type(exc).__name__,
+            )
+
     async def update_exchange_config_by_symbols(self, symbols: [str]):
         coros_to_call_margin_mode = {}
         for symbol in symbols:
@@ -248,16 +275,39 @@ class OKXBot(CCXTBot):
             log_symbol = symbol_to_coin(symbol, verbose=False) or symbol
             res = None
             to_print = ""
+            unchanged = False
             try:
                 res = await coros_to_call_margin_mode[symbol]
                 to_print += f"margin={format_exchange_config_response(res)}"
+                self._emit_exchange_config_outcome_event(
+                    symbol=symbol,
+                    status="succeeded",
+                    outcome="confirmed",
+                    level="info",
+                )
             except Exception as e:
                 err_str = str(e)
                 if '"code":"59107"' in err_str:
                     to_print += f"margin=ok (unchanged)"
+                    unchanged = True
+                    self._emit_exchange_config_outcome_event(
+                        symbol=symbol,
+                        status="succeeded",
+                        outcome="unchanged",
+                        response_code="59107",
+                        level="debug",
+                    )
                 elif '"code":"51039"' in err_str:
                     logging.warning(
                         f"{log_symbol}: unable to adjust margin mode/leverage (possibly PM or open positions)"
+                    )
+                    self._emit_exchange_config_outcome_event(
+                        symbol=symbol,
+                        status="failed",
+                        outcome="failed",
+                        response_code="51039",
+                        error=e,
+                        level="warning",
                     )
                     continue
                 else:
@@ -266,8 +316,19 @@ class OKXBot(CCXTBot):
                         log_symbol,
                         self._format_exchange_config_error(e),
                     )
+                    if symbol in coros_to_call_margin_mode:
+                        self._emit_exchange_config_outcome_event(
+                            symbol=symbol,
+                            status="failed",
+                            outcome="failed",
+                            error=e,
+                            level="error",
+                        )
             if to_print:
-                logging.info(f"{log_symbol}: {to_print}")
+                if unchanged:
+                    logging.debug(f"{log_symbol}: {to_print}")
+                else:
+                    logging.info(f"{log_symbol}: {to_print}")
 
     async def update_exchange_config(self):
         # Detect current account mode; adjust expectations before attempting changes.
