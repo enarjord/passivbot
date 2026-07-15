@@ -4,6 +4,9 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Backtests now write `drawdown.png` alongside the existing summary plots,
+  showing drawdown from the running peak of collateral-agnostic strategy equity.
+
 - Raw-only wallet-balance jitter no longer appears on the normal live console
   when the hysteresis-snapped balance is unchanged. The complete
   `balance.changed` event remains available in structured, monitor, and durable
