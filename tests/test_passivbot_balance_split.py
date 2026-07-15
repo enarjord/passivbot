@@ -4152,6 +4152,7 @@ def test_unstuck_status_suppresses_legacy_log_when_event_console_active(
 def test_unstuck_allowance_materiality_uses_five_percent_boundary():
     baseline = -41.0
 
+    assert not Passivbot._unstuck_allowance_materially_changed(0.0, 0.0)
     assert not Passivbot._unstuck_allowance_materially_changed(baseline, -43.049)
     assert Passivbot._unstuck_allowance_materially_changed(baseline, -43.05)
 
@@ -4353,6 +4354,9 @@ def test_trailing_status_emits_on_change_then_hourly(monkeypatch):
 
 
 def test_trailing_status_materiality_boundaries_and_per_item_visibility(monkeypatch):
+    assert not Passivbot._trailing_status_number_materially_changed(
+        0.0, 0.0, relative=True
+    )
     assert not Passivbot._trailing_status_number_materially_changed(
         0.01, 0.010499, relative=False
     )

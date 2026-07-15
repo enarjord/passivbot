@@ -2503,7 +2503,7 @@ class Passivbot:
         delta = abs(current - baseline)
         boundary = denominator * cls.UNSTUCK_ALLOWANCE_MATERIALITY_RELATIVE_DELTA
         return delta > boundary or math.isclose(
-            delta, boundary, rel_tol=1e-12, abs_tol=1e-12
+            delta, boundary, rel_tol=1e-12, abs_tol=0.0
         )
 
     @staticmethod
@@ -2707,13 +2707,11 @@ class Passivbot:
         if relative:
             boundary = max(abs(baseline), 1e-12) * cls.TRAILING_PRICE_MATERIALITY_RELATIVE_DELTA
             return delta > boundary or math.isclose(
-                delta, boundary, rel_tol=1e-12, abs_tol=1e-12
+                delta, boundary, rel_tol=1e-12, abs_tol=0.0
             )
-        return delta > cls.TRAILING_RATIO_MATERIALITY_ABSOLUTE_DELTA or math.isclose(
-            delta,
-            cls.TRAILING_RATIO_MATERIALITY_ABSOLUTE_DELTA,
-            rel_tol=1e-12,
-            abs_tol=1e-12,
+        boundary = cls.TRAILING_RATIO_MATERIALITY_ABSOLUTE_DELTA
+        return delta > boundary or math.isclose(
+            delta, boundary, rel_tol=1e-12, abs_tol=0.0
         )
 
     def _trailing_status_operator_decision(
