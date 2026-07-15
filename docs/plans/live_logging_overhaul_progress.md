@@ -8242,3 +8242,27 @@ VPS5 deployment status:
   Rust-orchestrator events' independent console/text projection. Python-filter
   selection events remain operator-visible; the Rust producer's selected-set,
   slot, and replacement materiality plus periodic heartbeat remain unchanged.
+
+### 2026-07-15: Forager Selection Ownership Deployed And Open-Tail Follow-Up
+
+- PR #1237 merged to canonical `master` at `a6aad93902` after exact-head Hermes
+  and Grok approval plus green Python and Rust CI. VPS5 fast-forwarded cleanly.
+  Two bots exited immediately after one SIGINT round; GateIO and Binance briefly
+  entered uninterruptible I/O sleep while KuCoin drained, then all three exited
+  naturally within the bounded wait. Exact pane PIDs and unrelated `misc:0.0`
+  PID `434835` remained unchanged.
+- The immediate smoke was `ok=true` with `19/19` remote calls and `14/14`
+  account-critical calls successful. The settled smoke was also `ok=true` with
+  `249/251` remote calls, all `47/47` account-critical calls, six successful
+  fill refreshes, five valid processes, and zero hard, log-attention, monitor,
+  or event-pipeline failures. Two KuCoin candle-fetch timeouts were non-hard.
+- Natural Binance, GateIO, and OKX logs retained only the richer producer-owned
+  material selection INFO line. Exact Rust `forager.selection` records remained
+  in monitor storage, proving the structured/monitor path stayed durable while
+  the duplicate operator projection was removed.
+- The first fresh cycle emitted one `open-tail EMA projection contexts` INFO
+  record on every bot. The lines measured 1002-1050 characters and expanded up
+  to eight symbol timestamp contexts for 19-39 flat projections per bot. The
+  active `codex/open-tail-projection-console-detail` slice retains that routine
+  aggregate at DEBUG while preserving compact active-tail warnings, structured
+  late-projection events, EMA values, and readiness.

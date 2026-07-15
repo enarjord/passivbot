@@ -901,7 +901,7 @@ async def test_orchestrator_ema_bundle_marks_flat_forager_candidate_required_m1_
 
 
 @pytest.mark.asyncio
-async def test_orchestrator_ema_bundle_late_projection_marks_candidate_unavailable(
+async def test_orchestrator_ema_bundle_projection_context_summary_is_debug(
     monkeypatch,
     caplog,
 ):
@@ -909,12 +909,9 @@ async def test_orchestrator_ema_bundle_late_projection_marks_candidate_unavailab
 
     now_ms = 2_000_000
     monkeypatch.setattr(pb_mod, "utc_ms", lambda: now_ms)
-    symbol = "LATE/USDT:USDT"
+    symbols = ["LATE_A/USDT:USDT", "LATE_B/USDT:USDT"]
 
     class FakeCM:
-        def __init__(self):
-            self.health_calls = 0
-
         def get_last_refresh_ms(self, symbol):
             return now_ms - 30_000
 
@@ -922,9 +919,6 @@ async def test_orchestrator_ema_bundle_late_projection_marks_candidate_unavailab
             return 0
 
         def get_completed_candle_health(self, symbol, windows=None, now_ms=None):
-            self.health_calls += 1
-            if windows == {"1m": 1} and self.health_calls == 1:
-                return {"ok": True, "timeframes": {"1m": {"coverage_ok": True}}}
             return {
                 "ok": False,
                 "timeframes": {
@@ -1002,7 +996,10 @@ async def test_orchestrator_ema_bundle_late_projection_marks_candidate_unavailab
                 "strategy_kind": "trailing_martingale",
             }
         }
-        positions = {symbol: {"long": {"size": 0.0}, "short": {"size": 0.0}}}
+        positions = {
+            symbol: {"long": {"size": 0.0}, "short": {"size": 0.0}}
+            for symbol in symbols
+        }
         open_orders = {}
         PB_modes = {"long": {}, "short": {}}
         active_symbols = []
@@ -1062,30 +1059,60 @@ async def test_orchestrator_ema_bundle_late_projection_marks_candidate_unavailab
     bot = FakeBot()
     events = []
     bot._live_event_current_cycle_id = "cy_tail"
+    bot._orchestrator_ema_issue_last_log_ms = {
+        ("open_tail_projection_context_summary",): now_ms - 15 * 60 * 1000
+    }
 
     def emit_live_event(event_type, *args, **kwargs):
         events.append((event_type, kwargs))
         return object()
 
     bot._emit_live_event = emit_live_event
-    with caplog.at_level(logging.INFO):
+    with caplog.at_level(logging.DEBUG):
         (
             m1_close_emas,
             m1_volume_emas,
             m1_log_range_emas,
-            _h1_log_range_emas,
+            h1_log_range_emas,
             volumes_long,
             log_ranges_long,
         ) = await pb_mod.Passivbot._load_orchestrator_ema_bundle(
-            bot, [symbol], modes=bot.PB_modes
+            bot, symbols, modes=bot.PB_modes
         )
 
-    assert m1_close_emas[symbol]
-    assert m1_volume_emas[symbol][5.0] == pytest.approx(42.0)
-    assert m1_log_range_emas[symbol] == {}
-    assert volumes_long[symbol] == pytest.approx(42.0)
-    assert symbol not in log_ranges_long
-    assert bot._orchestrator_ema_unavailable_symbols == {symbol}
+    projection_summary_records = [
+        record
+        for record in caplog.records
+        if "open-tail EMA projection contexts" in record.message
+    ]
+    assert len(projection_summary_records) == 1
+    assert projection_summary_records[0].levelno == logging.DEBUG
+    assert "symbols=2" in projection_summary_records[0].message
+    assert bot._orchestrator_ema_issue_last_log_ms[
+        ("open_tail_projection_context_summary",)
+    ] == now_ms
+    assert not any(
+        "open-tail EMA projection contexts" in record.message
+        and record.levelno == logging.INFO
+        for record in caplog.records
+    )
+    for symbol in symbols:
+        assert set(m1_close_emas[symbol]) == {10.0, 20.0, (10.0 * 20.0) ** 0.5}
+        assert all(
+            value == pytest.approx(100.0)
+            for value in m1_close_emas[symbol].values()
+        )
+        assert m1_volume_emas[symbol][5.0] == pytest.approx(42.0)
+        assert m1_log_range_emas[symbol] == {}
+        assert h1_log_range_emas[symbol] == {}
+        assert volumes_long[symbol] == pytest.approx(42.0)
+        assert symbol not in log_ranges_long
+        assert (
+            bot._orchestrator_ema_projection_details[symbol]["tail_gap_age_ms"]
+            == 60_000
+        )
+    assert bot._orchestrator_ema_projection_symbols == set(symbols)
+    assert bot._orchestrator_ema_unavailable_symbols == set(symbols)
     assert not any(
         "late open-tail EMA projection context" in record.message
         and record.levelno >= logging.INFO
@@ -1096,13 +1123,17 @@ async def test_orchestrator_ema_bundle_late_projection_marks_candidate_unavailab
         for event_type, kwargs in events
         if event_type == EventTypes.CANDLE_TAIL_PROJECTED
     ]
-    assert len(tail_events) == 1
-    assert tail_events[0]["cycle_id"] == "cy_tail"
-    assert tail_events[0]["symbol"] == symbol
-    assert tail_events[0]["reason_code"] == "late_open_tail_projection"
-    assert tail_events[0]["data"]["latest_expected_ts"] == 1_920_000
-    assert tail_events[0]["data"]["last_cached_ts"] == 1_860_000
-    assert tail_events[0]["data"]["tail_gap_age_ms"] == 60_000
+    assert len(tail_events) == len(symbols)
+    assert {event["cycle_id"] for event in tail_events} == {"cy_tail"}
+    assert {event["symbol"] for event in tail_events} == set(symbols)
+    assert {event["reason_code"] for event in tail_events} == {
+        "late_open_tail_projection"
+    }
+    assert {event["data"]["latest_expected_ts"] for event in tail_events} == {
+        1_920_000
+    }
+    assert {event["data"]["last_cached_ts"] for event in tail_events} == {1_860_000}
+    assert {event["data"]["tail_gap_age_ms"] for event in tail_events} == {60_000}
 
 
 @pytest.mark.asyncio

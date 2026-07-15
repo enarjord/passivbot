@@ -22,40 +22,51 @@ Estimated completion:
 
 ## Active Review Slice
 
-- Branch: `codex/forager-selection-console-ownership`.
-- Base: `d4b3055da68bfc4a1ff8f8e2c953c93318d8b3f5`, canonical `master`
-  after PR #1236.
-- Slice: give Rust-orchestrated material forager selection changes one normal
-  console/text owner while retaining every complete `forager.selection` event
-  in durable sinks and preserving Python-filter selection visibility.
-- Triggering evidence: fresh post-PR #1236 logs emitted paired summaries for
-  each initial material selection on Binance, GateIO, and OKX: one structured
-  `[forager] succeeded ...` line and one producer-owned `[forager] long
-  selection ...` line. Later changes continued to use the two independent
-  cadence/materiality paths.
-- Scope: suppress only Rust-orchestrator events from the operator sinks. Keep
-  their structured and monitor delivery enabled, keep the compact formatter for
-  queries, leave Python-filter events console/text-visible, and leave the Rust
-  producer's selected-set/slot/replacement materiality and 30-minute heartbeat
-  unchanged.
-- Behavior boundary: preserve event production and payloads, forager scoring,
-  selection, hysteresis, scheduling, exchange calls, order/risk behavior, Rust,
+- Branch: `codex/open-tail-projection-console-detail`.
+- Base: `a6aad939023f71e2ddeb9ae507505e05935e46b1`, canonical `master`
+  after PR #1237.
+- Slice: keep routine open-tail EMA projection-context aggregates off the
+  normal INFO console while retaining the complete diagnostic at DEBUG.
+- Triggering evidence: the first natural post-PR #1237 cycle emitted one such
+  INFO record on every VPS5 bot. The five lines were 1002-1050 characters long,
+  listed up to eight full symbol/timestamp contexts, and represented 19-39 flat
+  projection contexts per bot rather than a new operator transition.
+- Scope: demote only the throttled `open-tail EMA projection contexts`
+  aggregate from INFO to DEBUG. Preserve its message and 15-minute diagnostic
+  cadence, compact active-tail INFO/WARNING transitions, late structured
+  `candle.tail_projected` events, and all EMA outputs.
+- Behavior boundary: preserve projection eligibility, candle fetching, EMA
+  values, readiness, scheduling, exchange calls, order/risk behavior, Rust,
   backtest, and optimizer behavior.
 - Publication state, exact head, mergeability, CI, and current-head reviewer
   verdicts: query live GitHub metadata; do not embed self-invalidating values.
 - Expected VPS action: after merge, one authorized exact five-bot restart may
-  activate the projection change. Validate from natural selections only; do not
-  manufacture selection or trading events.
+  activate the level change. Validate from natural projection contexts only; do
+  not manufacture candle, readiness, or trading events.
 
 ## Deployed Baseline
 
 - Canonical `master` and VPS5 checkout:
-  `d4b3055da68bfc4a1ff8f8e2c953c93318d8b3f5`, PR #1236; tracked status clean
+  `a6aad939023f71e2ddeb9ae507505e05935e46b1`, PR #1237; tracked status clean
   and expected untracked artifacts preserved.
 - VPS5 runs the same head in bot PIDs
-  `940154/940128/940093/939941/940094`. The exact pane PIDs remain
+  `941443/941446/941447/941448/941449`. The exact pane PIDs remain
   `856294/856332/856364/856398/856434`, and unrelated `misc:0.0` PID `434835`
   is unchanged.
+- PR #1237 was activated with one exact five-bot graceful restart. Two bots
+  exited immediately after one SIGINT round; GateIO and Binance briefly entered
+  uninterruptible I/O sleep while KuCoin drained, and all three then exited
+  naturally within the bounded wait without escalation. The immediate smoke
+  was `ok=true` with `19/19` remote and `14/14` account-critical calls
+  successful. The settled smoke remained `ok=true`: `249/251` remote calls and
+  all `47/47` account-critical calls succeeded, six fill refreshes succeeded,
+  all five processes/configs matched, and hard, log-attention, monitor, and
+  pipeline failures were zero. The two remote failures were non-hard KuCoin
+  candle-fetch timeouts.
+- Natural Binance, GateIO, and OKX logs now contain only the producer-owned
+  materiality-aware forager selection INFO lines; no structured `[forager]
+  succeeded` duplicate appeared. Exact Rust `forager.selection` records remain
+  present in monitor storage, proving durable delivery was preserved.
 - PR #1236 was activated with one exact five-bot graceful restart. All old bots
   exited naturally after one SIGINT round; no escalation was required. A
   startup KuCoin authoritative-open-orders timeout aged out. The settled
@@ -67,7 +78,7 @@ Estimated completion:
 - Natural post-restart logs contain zero `forager refresh complete` INFO lines
   on all five bots while normal candle/cache activity continued. The same logs
   exposed paired structured and producer-owned INFO summaries for material
-  forager selections, which triggers the active ownership slice above.
+  forager selections, which triggered PR #1237's ownership fix.
 - PRs #1233, #1234, and #1235 were activated together with one exact five-bot
   graceful restart. Four old bots exited within ten seconds; KuCoin exited
   naturally after a bounded uninterruptible wait, with no escalation. The
@@ -581,9 +592,14 @@ VPS5. The settled smoke is green, and natural output proves the warmup and
 candle-index level boundaries. PR #1236's forager-refresh completion demotion is
 also merged, deployed, and naturally absent from the normal INFO logs. Fresh
 output then exposed dual console ownership for Rust-orchestrated material
-forager selections; the active slice above retains the producer's
-materiality-aware summary and removes only those events' second console/text
-projection. Python-filter selection visibility remains unchanged.
+forager selections. PR #1237's source-scoped ownership fix is also merged,
+deployed, and naturally validated: normal logs retain only the producer-owned
+material summary while monitor storage retains the complete Rust event.
+Python-filter selection visibility remains unchanged.
+
+The first fresh cycle after activation emitted five 1002-1050 character
+open-tail EMA context aggregates; the active slice above moves only that routine
+diagnostic to DEBUG.
 
 Do not create progress-only PRs or resume unrelated logging work from stale
 worktrees.
