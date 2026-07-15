@@ -611,9 +611,11 @@ deployed, and naturally validated: normal logs retain only the producer-owned
 material summary while monitor storage retains the complete Rust event.
 Python-filter selection visibility remains unchanged.
 
-The first fresh cycle after activation emitted five 1002-1050 character
-open-tail EMA context aggregates; the active slice above moves only that routine
-diagnostic to DEBUG.
+PR #1238's open-tail EMA projection-context demotion is merged, deployed, and
+naturally validated: all five bots completed market-ready cycles without the
+1002-1050 character aggregate appearing in normal INFO logs. The active slice
+above now bounds candle-fetch retry/exhaustion warnings and removes raw
+exception prose and request URLs from durable remote-call events.
 
 Do not create progress-only PRs or resume unrelated logging work from stale
 worktrees.

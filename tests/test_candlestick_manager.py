@@ -319,7 +319,7 @@ def test_remote_fetch_callback_exception_is_isolated(tmp_path):
 
 @pytest.mark.asyncio
 async def test_ccxt_fetch_warning_uses_bounded_signature_and_keeps_callback_payload(
-    tmp_path, monkeypatch, caplog
+    tmp_path, monkeypatch
 ):
     url = "https://api.example.invalid/ohlcv?apiKey=SECRET&signature=abc"
 
@@ -344,20 +344,36 @@ async def test_ccxt_fetch_warning_uses_bounded_signature_and_keeps_callback_payl
         return None
 
     monkeypatch.setattr(cm, "_sleep_interruptible", no_sleep)
-    caplog.set_level(logging.WARNING, logger=cm.log.name)
+    warning_records = []
 
-    with pytest.raises(OhlcvFetchError):
-        await cm._ccxt_fetch_ohlcv_once(
-            "BTC/USDT:USDT",
-            since_ms=1_723_456_000_000,
-            limit=100,
-            end_exclusive_ms=1_723_456_060_000,
-            timeframe="1H",
-        )
+    class CaptureHandler(logging.Handler):
+        def emit(self, record):
+            warning_records.append(record)
+
+    handler = CaptureHandler(level=logging.WARNING)
+    original_disabled = cm.log.disabled
+    original_level = cm.log.level
+    cm.log.disabled = False
+    cm.log.setLevel(logging.WARNING)
+    cm.log.addHandler(handler)
+    try:
+        with pytest.raises(OhlcvFetchError):
+            await cm._ccxt_fetch_ohlcv_once(
+                "BTC/USDT:USDT",
+                since_ms=1_723_456_000_000,
+                limit=100,
+                end_exclusive_ms=1_723_456_060_000,
+                timeframe="1H",
+            )
+    finally:
+        cm.log.removeHandler(handler)
+        cm.log.setLevel(original_level)
+        cm.log.disabled = original_disabled
+        handler.close()
 
     warning_records = [
         record
-        for record in caplog.records
+        for record in warning_records
         if "event=ccxt_fetch_ohlcv_failed" in record.getMessage()
     ]
     assert len(warning_records) == 2

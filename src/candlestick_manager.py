@@ -4000,7 +4000,7 @@ class CandlestickManager:
                 )
                 action = "exhausted" if attempt == max_attempts - 1 else "retry"
                 self._throttled_warning(
-                    f"ccxt_fetch_ohlcv_failed:{symbol}:{tf}:{err_type}:{action}",
+                    f"ccxt_fetch_ohlcv_failed:{symbol}:{tf_norm}:{err_type}:{action}",
                     "ccxt_fetch_ohlcv_failed",
                     symbol=symbol,
                     tf=tf_norm,
