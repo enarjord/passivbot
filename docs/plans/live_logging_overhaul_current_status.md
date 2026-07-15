@@ -22,24 +22,22 @@ Estimated completion:
 
 ## Active Review Slice
 
-- Branch: `codex/v8-min-effective-cost-console-migration`.
-- Base: `23d9e72af180e8636de7f80cdff8178a60e61937`, merged PR #1219.
-- Slice: min-effective-cost entry-block console ownership.
-- Triggering evidence: fresh post-PR #1219 GateIO logs showed legacy `[entry]
-  initial entry blocked by min effective cost` immediately followed by the
-  structured `entry.min_effective_cost_blocked` line for the same SOL-long
-  decision.
-- Scope: make each existing structured min-effective-cost block event the sole
-  normal console/text owner when an enabled live-event pipeline has an actual
-  console sink. Preserve legacy detail when the emitter, pipeline, or console
-  sink is unavailable. Keep the distinct throttled aggregate summary for more
-  than three eligible blocks and every DEBUG detail/suppression line. Enqueue or
-  sink degradation must remain single-owner and surface through pipeline health
-  rather than trigger dynamic dual writing.
-- Behavior boundary: preserve Rust-owned diagnostics, side eligibility,
-  unchanged-set and per-symbol throttles, detail limit, aggregate cadence and
-  counts, payloads, routes, configuration, order filtering, exchange calls,
-  and all trading behavior.
+- Branch: `codex/v8-realized-loss-gate-console-migration`.
+- Base: `a0897f83932db5e6888c1c96f8f1c668d452013f`, the `v8.0.0`
+  cutover merge on canonical `master`.
+- Slice: realized-loss gate console ownership.
+- Triggering evidence: `_log_realized_loss_gate_blocks` writes a detailed
+  legacy warning immediately before emitting the already console/text-routed
+  `risk.realized_loss_gate_blocked` event. Existing tests asserted both paths,
+  confirming direct duplicate ownership.
+- Scope: make the existing structured realized-loss gate event the sole normal
+  console/text owner when an enabled live-event pipeline has an actual console
+  sink. Preserve the legacy warning when the emitter, pipeline, or console sink
+  is unavailable. Enqueue or sink degradation must remain single-owner and
+  surface through pipeline health rather than trigger dynamic dual writing.
+- Behavior boundary: preserve Rust-owned diagnostics, per-symbol/pside/order
+  type throttling, warning severity, event payload and routing, configuration,
+  gate decisions, order filtering, exchange calls, and all trading behavior.
 - Publication state, exact head, mergeability, CI, and current-head reviewer
   verdicts: query live GitHub metadata; do not embed self-invalidating values.
 - Expected VPS action: restart and observe only after this slice merges;
@@ -47,12 +45,27 @@ Estimated completion:
 
 ## Deployed Baseline
 
-- Remote `v8`: `23d9e72af180e8636de7f80cdff8178a60e61937`, PR #1219
-- VPS5 repository: `23d9e72af180e8636de7f80cdff8178a60e61937`, PR #1219; exact
+- Remote `v8`: `9773889ecb8a396bec31e1e11c326aed9fa2cbe7`, PR #1220
+- VPS5 repository: `9773889ecb8a396bec31e1e11c326aed9fa2cbe7`, PR #1220; exact
   tracked status clean and expected untracked artifacts preserved
-- VPS5 expected bots: five; running with PR #1219 restart PIDs
-  `912288/912290/912292/912293/912294`; pane PIDs unchanged; unrelated
+- VPS5 expected bots: five; running with PR #1220 restart PIDs
+  `913308/913310/913312/913314/913316`; pane PIDs unchanged; unrelated
   `misc:0.0` remains PID `434835`
+- PR #1220 merged and deployed at
+  `9773889ecb8a396bec31e1e11c326aed9fa2cbe7`. It made structured
+  min-effective-cost block events own normal per-block console/text output
+  while preserving the aggregate summary, DEBUG details, fallback, throttles,
+  and trading behavior. All five old bot processes exited naturally within ten
+  seconds after one signal round; no escalation was needed. Pane PIDs and
+  unrelated `misc:0.0` PID `434835` remained unchanged. Fresh two-minute smoke
+  windows were `ok=true`; the final recorded `279/279` remote calls, `44/44`
+  account-critical calls, seven successful fill refreshes, five config-valid
+  processes, and zero hard/log/pipeline failures. Every active HSL replay had
+  completed required protective work with no failed or stale status. A sampled
+  OKX `D` state cleared and remained `R` across five consecutive checks. Natural
+  GateIO output contained only the structured min-effective-cost line and no
+  adjacent legacy warning, proving runtime single ownership without
+  manufacturing a decision.
 - PR #1219 merged and deployed at
   `23d9e72af180e8636de7f80cdff8178a60e61937`. It made structured
   initial-entry distance-gate blocked/cleared events own normal console/text
@@ -471,7 +484,7 @@ Estimated completion:
   observability implementation with explicit file scope.
 - Luna or deterministic automation: metadata polling, state-change detection,
   CI/reviewer summaries, and read-only output parsing.
-- Parallel PRs must be orthogonal. Dependent work waits for merge to `v8`.
+- Parallel PRs must be orthogonal. Dependent work waits for merge to `master`.
 
 ## Next Slice
 
@@ -503,11 +516,11 @@ justify another retention optimization.
 
 PR #1215's fill console/text migration, PR #1216's periodic health console
 migration, PR #1217's execution-loop error-burst console migration, PR #1218's
-ambiguous-cancel console migration, and PR #1219's entry-distance-gate console
-migration are merged and deployed. Natural post-PR #1219 blocked events on four
-bots proved structured single ownership. The same fresh GateIO log exposed the
-next adjacent legacy/structured duplicate for min-effective-cost entry blocks,
-tracked by the active slice above.
+ambiguous-cancel console migration, PR #1219's entry-distance-gate console
+migration, and PR #1220's min-effective-cost console migration are merged and
+deployed. Natural post-PR #1220 GateIO output proved structured single
+ownership. Static follow-up found direct legacy/structured dual ownership for
+realized-loss gate blocks, tracked by the active slice above.
 
 Do not create progress-only PRs or resume unrelated logging work from stale
 worktrees.

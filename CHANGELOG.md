@@ -4,6 +4,11 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Realized-loss gate blocks now use their structured warning as the sole normal
+  console/text line when a live-event console sink is available. The legacy
+  warning remains the fallback; gate decisions, diagnostics, and throttling are
+  unchanged.
+
 ## v8.0.0 - 2026-07-14
 
 - Restored the documented offline HSL restart smoke by pinning its fixture to
