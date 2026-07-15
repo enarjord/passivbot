@@ -964,6 +964,32 @@ Related detailed plans:
     formatting and sanitization; and explicit diagnostic-unavailable behavior
     for unsupported or malformed breakdowns.
 
+21. [ ] Historical secret-bearing text-log inventory and remediation.
+    Status: open. A read-only VPS5 console-length audit on 2026-07-15
+    accidentally admitted old untimestamped traceback fragments and confirmed
+    that retained May text logs include raw private websocket URLs/tokens and
+    full exchange error bodies. Current recent-window producers and smoke paths
+    use bounded redacted diagnostics, but historical disk retention still
+    violates the no-secret sink policy. The observed websocket tokens are
+    likely short-lived, but expiry must not be treated as a redaction control.
+    A value-free scan of 306 timestamped lines from the five current canonical
+    logs after the PR #1249 restart found zero private-websocket-query,
+    authorization, API-key-label, or raw-HTML-body matches.
+
+    Target contract: inventory historical secret-like text-log artifacts
+    without printing matched values; report only bounded counts, file identity,
+    age, and stable hashes. Verify the current producers no longer emit each
+    detected class, then define an operator-approved quarantine or purge plan
+    that preserves the minimum forensic metadata required for incident review.
+    Do not rewrite, delete, rotate, upload, or copy existing VPS artifacts
+    without explicit authorization.
+
+    Required validation: fixtures for private websocket URLs, authorization
+    material, signatures, API keys, query tokens, raw HTTP bodies, and benign
+    lookalikes; value-free report output; bounded scanning of large/rotated
+    logs; current-producer regression tests; and a dry-run VPS inventory before
+    any destructive remediation proposal.
+
 ## Merged Work Log
 
 | Date | Item | PR / Commit | Result | Remaining |

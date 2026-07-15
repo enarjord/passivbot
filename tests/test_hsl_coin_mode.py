@@ -221,36 +221,56 @@ def test_compact_sparse_replay_indices_keep_rolling_window_expiry_boundary():
     assert indices.tolist() == [0, 2, 3, 4, 5, 9]
 
 
-def test_parse_hsl_config_warns_about_history_reinterpretation(caplog):
-    bot = FakeHslBot(config={"live": {"hsl_signal_mode": "coin"}})
+def test_parse_hsl_config_logs_compact_complete_startup_summary(caplog):
+    bot = FakeHslBot(config={"live": {"hsl_signal_mode": "unified"}})
     values = {
         "hsl_enabled": True,
-        "hsl_red_threshold": 0.05,
-        "hsl_ema_span_minutes": 120.0,
-        "hsl_cooldown_minutes_after_red": 60.0,
-        "hsl_no_restart_drawdown_threshold": 0.08,
-        "hsl_tier_ratios": {"yellow": 0.5, "orange": 0.75},
-        "hsl_tier_ratios.yellow": 0.5,
-        "hsl_tier_ratios.orange": 0.75,
+        "hsl_red_threshold": 0.123456789,
+        "hsl_ema_span_minutes": 1.23456789e308,
+        "hsl_cooldown_minutes_after_red": 1.23456789e308,
+        "hsl_no_restart_drawdown_threshold": 0.987654321,
+        "hsl_tier_ratios": {"yellow": 0.3456789, "orange": 0.8765432},
+        "hsl_tier_ratios.yellow": 0.3456789,
+        "hsl_tier_ratios.orange": 0.8765432,
         "hsl_orange_tier_mode": "tp_only_with_active_entry_cancellation",
-        "hsl_panic_close_order_type": "limit",
+        "hsl_panic_close_order_type": "market",
         "hsl_restart_after_red_policy": "threshold",
     }
-    bot._hsl_psides = lambda: ["long"]
+    bot._hsl_psides = lambda: ["short"]
     bot._equity_hard_stop_signal_mode = MethodType(
         hsl._equity_hard_stop_signal_mode,
         bot,
     )
     bot.bot_value = lambda pside, key: values[key]
 
-    with caplog.at_level(logging.WARNING):
+    with caplog.at_level(logging.INFO):
         parsed = hsl._parse_hsl_config(bot)
 
-    assert parsed["long"]["enabled"] is True
+    assert parsed == {
+        "short": {
+            "enabled": True,
+            "red_threshold": 0.123456789,
+            "ema_span_minutes": 1.23456789e308,
+            "cooldown_minutes_after_red": 1.23456789e308,
+            "no_restart_drawdown_threshold": 0.987654321,
+            "tier_ratios": {"yellow": 0.3456789, "orange": 0.8765432},
+            "orange_tier_mode": "tp_only_with_active_entry_cancellation",
+            "panic_close_order_type": "market",
+            "restart_after_red_policy": "threshold",
+        }
+    }
     messages = [record.getMessage() for record in caplog.records]
     assert any("docs/equity_hard_stop_loss_risks.md" in message for message in messages)
     assert any("Deposits, withdrawals" in message for message in messages)
     assert any("HSL mode changes" in message for message in messages)
+    startup = next(message for message in messages if message.startswith("[risk] HSL[short] on"))
+    assert startup == (
+        "[risk] HSL[short] on | red=0.123457 ema=1.23457e+308 cd=1.23457e+308 "
+        "no-r=0.987654 mode=unified tiers=0.345679/0.876543 "
+        "orange=tp_only_with_active_entry_cancellation panic=market restart=threshold"
+    )
+    normal_console_prefix = "2026-07-15T12:34:56Z INFO     [hyperliquid] "
+    assert len(normal_console_prefix + startup) <= 240
 
 
 def test_hsl_replay_matrix_row_derives_upnl_from_rust_pnl_helpers():

@@ -4,6 +4,11 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- HSL startup settings now use a compact INFO projection that retains the
+  configured thresholds, spans, mode, tier ratios, actions, and restart policy
+  within the normal console line budget. HSL validation, state reconstruction,
+  risk decisions, and trading behavior are unchanged.
+
 - Candle fetch-lock hold warnings now retain the affected exchange, symbol,
   timeframe, and compact local-holder identity/timing without repeating the
   deterministic lock path, duplicated owner scope, configured timeout, or
