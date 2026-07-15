@@ -139,16 +139,16 @@ def test_exchange_config_outcome_metadata_is_bounded_and_value_safe():
     assert len(sink.events) == 2
     valid_event, unsafe_event = sink.events
     assert valid_event.level == "error"
-    assert valid_event.data["symbol"] == "BTC/USDT:USDT"
+    assert valid_event.symbol == "BTC/USDT:USDT"
     assert valid_event.data["outcome"] == "failed"
     assert valid_event.data["response_code"] == "51039"
     assert valid_event.data["error_type"] == "RuntimeError"
     assert "error" not in valid_event.data
     assert not {
-        "symbol",
         "outcome",
         "response_code",
         "error_type",
     }.intersection(unsafe_event.data)
+    assert unsafe_event.symbol is None
     assert "supersecret" not in repr(unsafe_event.data)
     assert bot._live_event_pipeline.close(timeout=2.0) is True

@@ -678,14 +678,14 @@ def _emit_exchange_config_refresh_event_unchecked(
     status_value = str(status or "unknown")
     failed = status_value == "failed"
     default_level = "warning" if failed else "debug"
+    symbol_value = _bounded_exchange_config_event_field(
+        symbol, _EXCHANGE_CONFIG_EVENT_SYMBOL_RE
+    )
     data: dict[str, Any] = {
         "context": str(context or "unknown"),
         "operation": str(operation or "unknown"),
         "started_ms": int(started_ms) if started_ms is not None else None,
         "elapsed_ms": int(elapsed_ms) if elapsed_ms is not None else None,
-        "symbol": _bounded_exchange_config_event_field(
-            symbol, _EXCHANGE_CONFIG_EVENT_SYMBOL_RE
-        ),
         "outcome": _bounded_exchange_config_event_field(
             outcome, _EXCHANGE_CONFIG_EVENT_OUTCOME_RE
         ),
@@ -706,6 +706,7 @@ def _emit_exchange_config_refresh_event_unchecked(
         level=level if level in _LIVE_EVENT_LEVELS else default_level,
         component="exchange.config_refresh",
         tags=(EventTags.EXCHANGE,),
+        symbol=symbol_value,
         cycle_id=current_live_event_cycle_id(bot),
         status=status_value,
         reason_code=(
