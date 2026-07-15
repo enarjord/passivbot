@@ -698,9 +698,11 @@ naturally validated: intermediate console progress stayed at least 30 seconds
 apart while complete structured progress remained durable. Its restart exposed
 the execution-loop incident projection addressed by merged PR #1244. PR #1245
 is also merged and deployed: bounded execution incidents and compact memory
-snapshots are naturally validated with a settled hard-green smoke. The active
-slice applies producer-owned materiality to repeated trailing and unstuck human
-projections while preserving their five-minute durable observations.
+snapshots are naturally validated with a settled hard-green smoke. PR #1246 is
+merged, deployed, and naturally validated: producer-owned materiality suppresses
+unchanged trailing/unstuck human repeats while preserving five-minute durable
+observations. Active PR #1247 compacts the remaining 311-character visible
+trailing projection without changing its payload, admission, or behavior.
 
 Do not create progress-only PRs or resume unrelated logging work from stale
 worktrees.
