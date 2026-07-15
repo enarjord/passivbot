@@ -23,7 +23,7 @@ Estimated completion:
 ## Active Review Slice
 
 - Branch: `codex/execution-incident-projection`.
-- PR: query live GitHub metadata after publication.
+- PR: #1244, `Bound execution-loop incident projection`.
 - Base: `c6fba829031f64a9ecd59eadcaaecf36db40236c`, canonical `master`
   after PR #1243.
 - Slice: replace raw execution-loop exception output with a bounded incident
