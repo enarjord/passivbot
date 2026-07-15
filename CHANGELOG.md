@@ -4,6 +4,12 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Rust-orchestrated forager selection changes now have one normal console/text
+  owner: the producer's materiality-aware INFO summary. Their complete
+  `forager.selection` events remain available in structured and monitor sinks
+  without printing a second independently throttled summary. Python-filter
+  selection events retain their existing console/text projection.
+
 - Successful background forager candle-refresh completions now remain available
   at DEBUG instead of repeating in the normal live console. Refresh scheduling,
   wall-time-cap notices, failures, and candle behavior are unchanged.

@@ -8220,3 +8220,25 @@ VPS5 deployment status:
   `codex/forager-refresh-console-detail` slice moves only this successful
   post-ready maintenance detail to DEBUG while preserving wall-cap notices,
   failures, scheduling, fetches, and trading behavior.
+
+### 2026-07-15: Forager Refresh Demotion Deployed And Selection Ownership
+
+- PR #1236 merged to canonical `master` at `d4b3055da6`. VPS5 fast-forwarded
+  cleanly and all five exact bots exited naturally after one SIGINT round.
+  Their pane PIDs and unrelated `misc:0.0` PID `434835` remained unchanged;
+  expected untracked artifacts were preserved.
+- The immediate smoke caught one KuCoin authoritative-open-orders timeout.
+  The settled two-minute report was `ok=true` with `216/216` remote calls and
+  `57/57` account-critical calls successful, eight successful fill refreshes,
+  all five processes/configs matched, and zero hard, log-attention, monitor, or
+  pipeline failures. One sampled `D` process state cleared immediately.
+- Fresh logs contain zero `forager refresh complete` INFO lines on all five
+  bots while normal candle/cache activity continued. Natural material forager
+  selections on Binance, GateIO, and OKX instead exposed two console owners:
+  the structured `[forager] succeeded ...` route and the producer's richer,
+  materiality-aware `[forager] long selection ...` summary.
+- The active `codex/forager-selection-console-ownership` slice keeps every
+  `forager.selection` event in structured and monitor sinks but removes the
+  Rust-orchestrator events' independent console/text projection. Python-filter
+  selection events remain operator-visible; the Rust producer's selected-set,
+  slot, and replacement materiality plus periodic heartbeat remain unchanged.
