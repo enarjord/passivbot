@@ -45,10 +45,11 @@ Estimated completion:
   naturally occurring failures; do not manufacture exchange, failure, state,
   or trading events.
 
-## Parallel Implementation Slice
+## Parallel Review Slice
 
 - Branch: `codex/memory-snapshot-event`, based independently on deployed
   `c6fba829031f64a9ecd59eadcaaecf36db40236c`.
+- PR: #1245, `Add bounded memory snapshot event`.
 - Slice: publish the existing material memory diagnostic as bounded
   `resource.memory_snapshot` data and project one compact operator line.
 - Triggering evidence: current post-PR #1243 VPS5 segments produced natural
