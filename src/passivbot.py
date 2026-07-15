@@ -5161,46 +5161,90 @@ class Passivbot:
                     return True
         return False
 
+    @staticmethod
+    def _execution_loop_error_field(
+        value: Any, pattern: re.Pattern[str], *, fallback: str = "-"
+    ) -> str:
+        """Return a bounded token for operator and monitor error projections."""
+        if value is None:
+            return fallback
+        try:
+            text = str(value).strip()
+        except Exception:
+            return fallback
+        return text if pattern.fullmatch(text) else fallback
+
     def _execution_loop_error_fields(self, exc: BaseException) -> dict[str, str]:
-        """Return compact fields for execution-loop error logs."""
+        """Return bounded classifications for execution-loop incident projections."""
         fields: dict[str, str] = {
-            "error_type": type(exc).__name__,
+            "error_type": self._execution_loop_error_field(
+                type(exc).__name__, re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,79}")
+            ),
             "status": "-",
             "code": "-",
-            "error": str(exc),
+            "endpoint": self._execution_loop_error_endpoint(exc),
         }
         for attr in ("http_status", "status", "status_code"):
-            value = getattr(exc, attr, None)
-            if value not in (None, ""):
-                fields["status"] = str(value)
+            try:
+                value = getattr(exc, attr, None)
+            except Exception:
+                continue
+            status = self._execution_loop_error_field(
+                value, re.compile(r"[0-9]{1,3}")
+            )
+            if status != "-":
+                fields["status"] = status
                 break
         for attr in ("code", "exact", "error_code"):
-            value = getattr(exc, attr, None)
-            if value not in (None, ""):
-                fields["code"] = str(value)
+            try:
+                value = getattr(exc, attr, None)
+            except Exception:
+                continue
+            code = self._execution_loop_error_field(
+                value, re.compile(r"-?[A-Za-z0-9][A-Za-z0-9_-]{0,47}")
+            )
+            if code != "-":
+                fields["code"] = code
                 break
-        info = getattr(exc, "info", None)
+        try:
+            info = getattr(exc, "info", None)
+        except Exception:
+            info = None
         if isinstance(info, dict):
             for key in ("code", "retCode", "errorCode"):
                 value = info.get(key)
-                if value not in (None, ""):
-                    fields["code"] = str(value)
+                code = self._execution_loop_error_field(
+                    value, re.compile(r"-?[A-Za-z0-9][A-Za-z0-9_-]{0,47}")
+                )
+                if code != "-":
+                    fields["code"] = code
                     break
             for key in ("status", "statusCode"):
                 value = info.get(key)
-                if value not in (None, ""):
-                    fields["status"] = str(value)
+                status = self._execution_loop_error_field(
+                    value, re.compile(r"[0-9]{1,3}")
+                )
+                if status != "-":
+                    fields["status"] = status
                     break
         return fields
 
-    def _execution_loop_error_endpoint(self, error: str) -> str:
-        """Extract a compact endpoint label from an exchange error string."""
-        match = re.search(r"https?://[^\s]+", str(error or ""))
+    def _execution_loop_error_endpoint(self, exc: BaseException) -> str:
+        """Extract a bounded endpoint classification without retaining the URL."""
+        try:
+            error = str(exc)
+        except Exception:
+            return "unknown"
+        match = re.search(r"https?://[^\s\"'<>]+", error)
         if not match:
             return "unknown"
         url = match.group(0).split("?", 1)[0].rstrip("/")
         endpoint = url.rsplit("/", 1)[-1]
-        return endpoint or "unknown"
+        return self._execution_loop_error_field(
+            endpoint,
+            re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,47}"),
+            fallback="unknown",
+        )
 
     def _log_execution_loop_error_burst(self, fields: dict[str, str]) -> None:
         """Summarize repeated execution-loop failures without hiding individual errors."""
@@ -5223,7 +5267,11 @@ class Passivbot:
         if not isinstance(endpoints, Counter):
             endpoints = Counter()
             state["endpoints"] = endpoints
-        endpoint = self._execution_loop_error_endpoint(fields.get("error", ""))
+        endpoint = self._execution_loop_error_field(
+            fields.get("endpoint"),
+            re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,47}"),
+            fallback="unknown",
+        )
         endpoints[endpoint] += 1
         count = int(state["count"])
         last_log_ms = int(state.get("last_log_ms", 0) or 0)
@@ -5283,22 +5331,33 @@ class Passivbot:
             await asyncio.sleep(0.5)
             return True
         self._health_errors += 1
-        self._monitor_record_error(
-            "error.bot",
-            exc,
-            tags=("error", "bot"),
-            payload={"source": "run_execution_loop"},
-        )
         fields = self._execution_loop_error_fields(exc)
+        incident_action = "record_error_restart_backoff"
+        incident_cycle = "abandoned"
+        self._monitor_record_event(
+            "error.bot",
+            ("error", "bot"),
+            {
+                "source": "run_execution_loop",
+                **fields,
+                "action": incident_action,
+                "cycle": incident_cycle,
+            },
+        )
         logging.error(
-            "[error] run_execution_loop failed | error_type=%s status=%s code=%s action=record_error_restart_backoff cycle=abandoned error=%s",
+            "[error] operation=run_execution_loop error_type=%s status=%s code=%s endpoint=%s action=%s cycle=%s",
             fields["error_type"],
             fields["status"],
             fields["code"],
-            fields["error"],
+            fields["endpoint"],
+            incident_action,
+            incident_cycle,
         )
         self._log_execution_loop_error_burst(fields)
-        traceback.print_exception(type(exc), exc, exc.__traceback__)
+        if logging.getLogger().isEnabledFor(logging.DEBUG):
+            stack_frames = "".join(traceback.format_tb(exc.__traceback__))
+            if stack_frames:
+                logging.debug("[error] execution loop stack frames:\n%s", stack_frames)
         await self.restart_bot_on_too_many_errors()
         await asyncio.sleep(1.0)
         return True
@@ -16530,8 +16589,16 @@ class Passivbot:
             x for x in self.error_counts if x > now - 1000 * 60 * 60
         ] + [now]
         max_n_errors_per_hour = 10
+        action = (
+            "restart_at_limit"
+            if len(self.error_counts) >= max_n_errors_per_hour
+            else "continue"
+        )
         logging.info(
-            f"error count: {len(self.error_counts)} of {max_n_errors_per_hour} errors per hour"
+            "[health] error_budget count=%d limit=%d window=1h action=%s",
+            len(self.error_counts),
+            max_n_errors_per_hour,
+            action,
         )
         if len(self.error_counts) >= max_n_errors_per_hour:
             await self.restart_bot()

@@ -22,41 +22,51 @@ Estimated completion:
 
 ## Active Review Slice
 
-- Branch: `codex/hsl-replay-console-cadence`.
-- PR: #1243, `Bound HSL replay console progress cadence`.
-- Base: `3072878525317d6d7e0811ef191e48cabedcf8fc`, canonical `master`
-  after PR #1242.
-- Slice: bound intermediate HSL coin-history replay progress on the normal
-  console to one update per 30 seconds while retaining complete structured
-  replay progress.
-- Triggering evidence: the authorized post-PR #1242 VPS5 restart produced 27
-  Binance, 26 GateIO, 14 KuCoin, and 16 OKX reconstruction-progress INFO
-  records. Several pair-completion records arrived seconds apart because the
-  producer's per-pair `force` path bypasses its normal cadence. Each replay
-  already had a distinct start and completion line, and the logging policy caps
-  blocking startup progress at one console update per 30 seconds.
-- Scope: separate durable-event cadence from console cadence, preserve the
-  first progress line and final completion, and prevent forced pair-boundary
-  events from forcing extra console records.
-- Behavior boundary: preserve every current `hsl.replay.progress` event and
-  payload, replay ordering, readiness and safety state, yields, calculations,
-  exchange behavior, Rust, backtest, and optimizer behavior.
+- Branch: `codex/execution-incident-projection`.
+- PR: #1244, `Bound execution-loop incident projection`.
+- Base: `c6fba829031f64a9ecd59eadcaaecf36db40236c`, canonical `master`
+  after PR #1243.
+- Slice: replace raw execution-loop exception output with a bounded incident
+  signature in normal console, monitor, and structured burst projections.
+- Triggering evidence: the authorized post-PR #1243 restart produced a natural
+  KuCoin execution-loop timeout whose normal tmux output included a full
+  request URL, an unconditional traceback, and an untagged error-budget line.
+  Repeated pane captures proved this was the actual operator console rather
+  than only a protected developer sink.
+- Scope: retain exception class, bounded status/code and endpoint, action,
+  cycle, and error-budget state; keep stack frames available only at DEBUG
+  without the exception value; remove raw exception text and URLs from this
+  incident family.
+- Behavior boundary: preserve exception propagation policy, error counters,
+  restart threshold and backoff, timestamp recovery, burst cadence, exchange
+  calls, order behavior, Rust, backtest, and optimizer behavior. Generic
+  startup/process error handling remains unchanged.
 - Publication state, exact head, mergeability, CI, and current-head reviewer
   verdicts: query live GitHub metadata; do not embed self-invalidating values.
 - Expected VPS action: after merge, one authorized exact five-bot restart may
-  activate the console cadence. Validate natural HSL startup replay counts,
-  completion visibility, structured progress retention, and normal operation.
-  Do not manufacture replay, exchange, failure, state, or trading events.
+  activate the bounded projection. Validate normal operation and inspect only
+  naturally occurring failures; do not manufacture exchange, failure, state,
+  or trading events.
 
 ## Deployed Baseline
 
 - Canonical `master` and VPS5 checkout:
-  `3072878525317d6d7e0811ef191e48cabedcf8fc`, PR #1242; tracked status clean
+  `c6fba829031f64a9ecd59eadcaaecf36db40236c`, PR #1243; tracked status clean
   and expected untracked artifacts preserved.
 - VPS5 runs the same head in bot PIDs
-  `947807/947809/947811/947813/947815`. The exact pane PIDs remain
+  `948822/948824/948826/948828/948830`. The exact pane PIDs remain
   `856294/856332/856364/856398/856434`, and unrelated `misc:0.0` PID `434835`
   is unchanged.
+- PR #1243 was activated with one exact five-bot graceful restart. Every old
+  bot exited naturally after one SIGINT round; KuCoin was last at 35 seconds,
+  and no escalation was required. Natural Binance, GateIO, and KuCoin replay
+  progress lines were all at least 30 seconds apart while complete structured
+  progress remained durable. The final two-minute smoke was `ok=true` with
+  `204/204` remote calls and `55/55` account-critical calls successful, eight
+  successful fill refreshes, five matching processes/configs, and zero hard,
+  log, monitor, process, or event-pipeline failures. Two real KuCoin startup
+  timeouts in the first five-minute window recovered without intervention and
+  exposed the active incident-projection follow-up.
 - PR #1242 was activated with one exact five-bot graceful restart. Every old
   bot exited naturally after one SIGINT round; KuCoin was last at 40 seconds,
   and no escalation was required. One real KuCoin authoritative-state timeout
@@ -664,8 +674,12 @@ merged, deployed, and naturally validated: successful timing detail is absent
 from normal INFO while structured refresh summaries remain available. PR
 #1242's bounded OKX configuration outcomes are merged and deployed with a
 hard-green settled smoke. No natural config outcome occurred in the bounded
-window. The active slice above instead addresses the naturally observed HSL
-replay progress burst while preserving its durable event history.
+window. PR #1243's HSL replay console cadence is merged, deployed, and
+naturally validated: intermediate console progress stayed at least 30 seconds
+apart while complete structured progress remained durable. Its restart exposed
+the active slice above: a natural execution-loop failure still projected raw
+request URLs, an unconditional traceback, and an untagged error-budget line to
+the operator console.
 
 Do not create progress-only PRs or resume unrelated logging work from stale
 worktrees.

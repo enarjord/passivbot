@@ -8381,3 +8381,24 @@ VPS5 deployment status:
   completion records. The active `codex/hsl-replay-console-cadence` slice keeps
   all structured progress events but caps intermediate console progress at one
   update per 30 seconds.
+
+### 2026-07-15: HSL Cadence Deployed And Execution Incident Follow-Up
+
+- PR #1243 merged to canonical `master` at `c6fba82903` after exact-head
+  Hermes and Grok approval plus green Python and Rust CI. VPS5 fast-forwarded
+  cleanly, and all five exact bots exited naturally after one SIGINT round;
+  KuCoin was last at 35 seconds. Pane PIDs and unrelated `misc:0.0` PID
+  `434835` remained unchanged.
+- Natural Binance, GateIO, and KuCoin replay progress lines were all at least
+  30 seconds apart. A five-minute structured window retained 102 replay
+  progress events while the console projected only 15 intermediate lines,
+  proving durable detail was preserved. The final two-minute smoke was
+  `ok=true` with `204/204` remote and `55/55` account-critical calls
+  successful, eight fill refreshes, five matching processes/configs, and no
+  hard, log, monitor, process, or event-pipeline failures.
+- Two real KuCoin startup timeouts recovered without intervention. The normal
+  tmux console exposed a full request URL, an unconditional traceback, and an
+  untagged error-budget line. The active
+  `codex/execution-incident-projection` slice replaces that family with a
+  bounded signature while preserving counters, restart/backoff, timestamp
+  recovery, exchange calls, and trading behavior.

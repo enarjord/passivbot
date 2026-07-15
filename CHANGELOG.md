@@ -4,6 +4,13 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Execution-loop failures now use a bounded incident signature in normal
+  console, monitor, and structured burst output instead of retaining raw
+  exception text, request URLs, and unconditional tracebacks. Stack frames
+  remain available at DEBUG without the exception value, and the error-budget
+  summary is compact and tagged; retry, restart, and trading behavior are
+  unchanged.
+
 - Intermediate HSL coin-history replay progress now appears on the normal live
   console at most once every 30 seconds. The first progress update, completion,
   complete structured progress events, replay behavior, and safety readiness
