@@ -167,6 +167,12 @@ position handling, unstuck eligibility, trailing calculations, the five-minute o
 or event payload values. Legacy direct INFO logging remains a fallback only when the structured
 console is unavailable and follows the same producer-owned admission decision.
 
+When a trailing observation is operator-visible, its console/text projection must remain within the
+normal 240-character record budget. Keep the action/status, `symbol`/`pside`, selected mode,
+threshold and retracement gate states and material values, current price, and available correlation
+while using compact labels. Complete diagnostics remain in structured/monitor data; compaction must
+not remove payload fields or change admission, cadence, or behavior.
+
 ## Memory Snapshots
 
 `resource.memory_snapshot` records the existing material memory diagnostic when it first becomes

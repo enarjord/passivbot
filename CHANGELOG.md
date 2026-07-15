@@ -4,6 +4,13 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Visible `trailing.status` console/text records now use a compact operator
+  projection that fits the normal line budget while retaining status, position
+  identity, mode, trigger gates, material threshold/retracement values, current
+  price, and correlation. Structured and monitor payloads, visibility
+  admission, cadence, trailing calculations, and trading behavior are
+  unchanged.
+
 - Five-minute `trailing.status` and `unstuck.status` snapshots now remain
   complete in structured and monitor sinks while normal console/text output is
   limited to first observations, qualitative or material numeric transitions,

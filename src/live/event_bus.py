@@ -1893,16 +1893,53 @@ def _console_trailing_status_summary(event: LiveEvent) -> list[str]:
         reason = _data_str(data, "unsupported_reason")
         if reason:
             parts.append(f"unsupported={reason}")
-        return parts
+    return parts
+
+
+def _compact_trailing_console_label(value: object, *, limit: int) -> str:
+    label = _format_console_label(value)
+    if len(label) <= limit:
+        return label
+    return label[: limit - 3] + "..."
+
+
+def _format_console_trailing_status(event: LiveEvent) -> str | None:
+    data = event.data if isinstance(event.data, Mapping) else {}
+    if data.get("diagnostics_supported") is False:
+        return None
+
+    parts = ["[trailing]"]
+    if event.status:
+        parts.append(event.status)
+    if event.cycle_id:
+        parts.append(f"cycle={_compact_trailing_console_label(event.cycle_id, limit=36)}")
+
+    kind = _data_str(data, "kind")
     trailing_status = _data_str(data, "trailing_status")
-    if trailing_status:
-        parts.append(f"trailing_status={trailing_status}")
+    if kind and trailing_status:
+        parts.append(
+            f"{_compact_trailing_console_label(kind, limit=12)}/"
+            f"{_compact_trailing_console_label(trailing_status, limit=24)}"
+        )
+    elif kind:
+        parts.append(f"kind={_compact_trailing_console_label(kind, limit=12)}")
+    elif trailing_status:
+        parts.append(f"status={_compact_trailing_console_label(trailing_status, limit=24)}")
+
     selected_mode = _data_str(data, "selected_mode")
     if selected_mode:
-        parts.append(f"mode={selected_mode}")
+        parts.append(f"mode={_compact_trailing_console_label(selected_mode, limit=20)}")
+
+    gate_states: list[str] = []
     threshold_met = data.get("threshold_met")
     if threshold_met is not None:
-        parts.append(f"threshold_met={'yes' if bool(threshold_met) else 'no'}")
+        gate_states.append(f"t:{'y' if bool(threshold_met) else 'n'}")
+    retracement_met = data.get("retracement_met")
+    if retracement_met is not None:
+        gate_states.append(f"r:{'y' if bool(retracement_met) else 'n'}")
+    if gate_states:
+        parts.append(f"gates={'/'.join(gate_states)}")
+
     threshold_pct = _data_number(data, "threshold_pct")
     threshold_price = _data_number(data, "threshold_price")
     if threshold_pct is not None and threshold_price:
@@ -1910,13 +1947,8 @@ def _console_trailing_status_summary(event: LiveEvent) -> list[str]:
     elif threshold_pct is not None:
         parts.append(f"threshold={threshold_pct * 100.0:.4f}%")
     elif threshold_price:
-        parts.append(f"threshold_price={threshold_price:g}")
-    threshold_dist = _data_number(data, "current_vs_threshold_ratio")
-    if threshold_dist is not None:
-        parts.append(f"threshold_dist={threshold_dist * 100.0:.4f}%")
-    retracement_met = data.get("retracement_met")
-    if retracement_met is not None:
-        parts.append(f"retracement_met={'yes' if bool(retracement_met) else 'no'}")
+        parts.append(f"threshold={threshold_price:g}")
+
     retracement_pct = _data_number(data, "retracement_pct")
     retracement_price = _data_number(data, "retracement_price")
     if retracement_pct is not None and retracement_price:
@@ -1924,19 +1956,16 @@ def _console_trailing_status_summary(event: LiveEvent) -> list[str]:
     elif retracement_pct is not None:
         parts.append(f"retracement={retracement_pct * 100.0:.4f}%")
     elif retracement_price:
-        parts.append(f"retracement_price={retracement_price:g}")
-    retracement_dist = _data_number(data, "current_vs_retracement_ratio")
-    if retracement_dist is not None:
-        parts.append(f"retracement_dist={retracement_dist * 100.0:.4f}%")
-    projected = _data_number(data, "threshold_projection_retracement_price")
-    if projected and retracement_pct is not None:
-        parts.append(f"if_threshold_retrace={retracement_pct * 100.0:.4f}%@{projected:g}")
-    elif projected:
-        parts.append(f"if_threshold_retrace_price={projected:g}")
+        parts.append(f"retracement={retracement_price:g}")
+
     current_price = _data_number(data, "current_price")
     if current_price:
-        parts.append(f"current={current_price:g}")
-    return parts
+        parts.append(f"cur={current_price:g}")
+    if event.symbol:
+        parts.append(f"symbol={_compact_trailing_console_label(event.symbol, limit=48)}")
+    if event.pside:
+        parts.append(f"pside={_compact_trailing_console_label(event.pside, limit=8)}")
+    return " ".join(parts)
 
 
 def _console_unstuck_status_summary(event: LiveEvent) -> list[str]:
@@ -2105,6 +2134,10 @@ def format_console_event(event: LiveEvent) -> str:
         return _format_console_balance_changed(event)
     if event.event_type == EventTypes.RESOURCE_MEMORY_SNAPSHOT:
         return format_memory_snapshot_console(event.data)
+    if event.event_type == EventTypes.TRAILING_STATUS:
+        trailing_status = _format_console_trailing_status(event)
+        if trailing_status is not None:
+            return trailing_status
     base = f"[{_console_tag(event)}]"
     if event.status:
         base += f" {event.status}"

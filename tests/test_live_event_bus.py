@@ -1997,12 +1997,50 @@ def test_console_format_summarizes_trailing_status():
     )
 
     assert format_console_event(event) == (
-        "[trailing] succeeded cycle=cy_trailing kind=entry "
-        "trailing_status=waiting_threshold mode=grid threshold_met=no threshold=1.2500%@98750 "
-        "threshold_dist=2.2785% retracement_met=no retracement=0.4000%@99145 "
-        "retracement_dist=1.8710% if_threshold_retrace=0.4000%@99145 current=101000 "
-        "symbol=BTC/USDT:USDT pside=long reason=trailing_status"
+        "[trailing] succeeded cycle=cy_trailing entry/waiting_threshold mode=grid "
+        "gates=t:n/r:n threshold=1.2500%@98750 retracement=0.4000%@99145 cur=101000 "
+        "symbol=BTC/USDT:USDT pside=long"
     )
+
+
+def test_console_format_compacts_trailing_status_with_long_identifiers():
+    cycle_id = "cy_20260715_123456789012345678901234"
+    symbol = "LONG-UNDERLYING-NAME-2026-PERP/USDC:USDC"
+    event = LiveEvent(
+        EventTypes.TRAILING_STATUS,
+        status="succeeded",
+        cycle_id=cycle_id,
+        symbol=symbol,
+        pside="long",
+        reason_code="trailing_status",
+        data={
+            "kind": "close",
+            "trailing_status": "armed",
+            "selected_mode": "auto_reduce",
+            "threshold_met": True,
+            "threshold_pct": -0.019649,
+            "threshold_price": 887.25,
+            "retracement_met": True,
+            "retracement_pct": 0.000212,
+            "retracement_price": 1049.58,
+            "current_price": 902.465,
+            "current_vs_threshold_ratio": -0.140163,
+            "current_vs_retracement_ratio": -0.140163,
+            "threshold_projection_retracement_price": 1030.0,
+        },
+    )
+
+    rendered = format_console_event(event)
+
+    assert rendered == (
+        f"[trailing] succeeded cycle={cycle_id} close/armed mode=auto_reduce "
+        "gates=t:y/r:y threshold=-1.9649%@887.25 retracement=0.0212%@1049.58 cur=902.465 "
+        f"symbol={symbol} pside=long"
+    )
+    assert len(rendered) <= 240
+    assert event.data["current_vs_threshold_ratio"] == -0.140163
+    assert event.data["current_vs_retracement_ratio"] == -0.140163
+    assert event.data["threshold_projection_retracement_price"] == 1030.0
 
 
 def test_console_format_summarizes_unsupported_trailing_status():

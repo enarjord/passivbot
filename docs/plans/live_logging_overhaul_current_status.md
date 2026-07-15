@@ -22,40 +22,48 @@ Estimated completion:
 
 ## Active Review Slice
 
-- Branch: `codex/trailing-unstuck-console-materiality`, based on canonical
-  `de5f21c96d92aab1c465e0be40035ed3ec6a6d0a` after PR #1245.
-- PR: #1246, `Bound trailing and unstuck console materiality`.
-- Slice: retain complete five-minute `trailing.status` and `unstuck.status`
-  observations in structured/monitor sinks while limiting console/text output
-  to first observations, qualitative or material numeric transitions, and
-  hourly reminders.
-- Triggering evidence: one natural Hyperliquid segment emitted 27 trailing and
-  20 unstuck INFO lines from `18:24:16Z` through `20:39:13Z`. Trailing status
-  repeated about every five minutes because ratios changed below displayed
-  precision; unstuck allowance oscillated around `-1.70` to `-1.76` while each
-  repeat was marked changed.
-- Scope: producer-owned `operator_visible`; five-percent relative unstuck
-  allowance hysteresis; per-item trailing materiality at 0.05 percentage points
-  for ratios and 0.5 percent for prices; generic console/text suppression only
-  when visibility is explicitly false. Missing metadata remains visible.
+- Branch: `codex/compact-trailing-status-console`, based on canonical
+  `fc5c2cae88817744ebe330ad9c1b321087d70250` after PR #1246.
+- PR: #1247, `Compact trailing status console projection`.
+- Slice: compact only the operator-facing `trailing.status` console/text
+  formatter while preserving complete structured and monitor payloads.
+- Triggering evidence: the first natural post-PR #1246 Hyperliquid trailing
+  record was 311 visible characters. It repeated long field names for status,
+  threshold and retracement gates even though the structured event retained all
+  detail, exceeding the normal 240-character record budget.
+- Scope: retain action/status, symbol and position side, selected mode, gate
+  states, material threshold/retracement values, current price, and available
+  cycle correlation using compact human labels.
 - Behavior boundary: observability-only; no exchange calls, cache or task
-  mutation, planning or status calculation change, cadence increase, Rust,
-  order, risk, backtest, or optimizer behavior.
+  mutation, event admission or payload change, planning or status calculation
+  change, cadence change, Rust, order, risk, backtest, or optimizer behavior.
 - Review gate: temporary maintainer-authorized exact-head Hermes plus green CI
   while Grok is halted.
 - Expected VPS action: after merge, one authorized exact five-bot restart.
-  Validate five-minute durable observations and natural console suppression;
-  do not manufacture trailing, unstuck, exchange, state, or trading events.
+  Validate the next naturally visible trailing line and settled smoke; do not
+  manufacture trailing, exchange, state, or trading events.
 
 ## Deployed Baseline
 
 - Canonical `master` and VPS5 are
-  `de5f21c96d92aab1c465e0be40035ed3ec6a6d0a`, PR #1245. The tracked checkout
+  `fc5c2cae88817744ebe330ad9c1b321087d70250`, PR #1246. The tracked checkout
   is clean and expected untracked artifacts are preserved.
 - VPS5 runs merged master in bot PIDs
-  `951819/951822/951825/951828/951830`. The exact pane PIDs remain
+  `953285/953287/953289/953291/953292`. The exact pane PIDs remain
   `856294/856332/856364/856398/856434`, and unrelated `misc:0.0` PID `434835`
   is unchanged.
+- PR #1246 was activated with one exact five-bot graceful restart. Every old
+  bot exited naturally after one SIGINT round; KuCoin was last at about 30
+  seconds, with no escalation. The first natural cadence emitted five durable
+  trailing/unstuck events with `changed=true` and `operator_visible=true` plus
+  five human lines. The second cadence emitted five durable events with
+  `changed=false` and `operator_visible=false` and zero human lines, including
+  natural sub-threshold Hyperliquid drift.
+- The final two-minute smoke was `ok=true` with `224/224` remote calls and
+  `56/56` account-critical calls successful, nine successful fill refreshes,
+  five matching/config-valid processes in state `R`, and zero hard, log,
+  monitor, process, or event-pipeline failures. The 311-character first
+  trailing line exposed the active formatter-only follow-up.
 - PRs #1244 and #1245 were activated together with one exact five-bot graceful
   restart. Every old bot exited naturally after one SIGINT round; KuCoin was
   last at 40 seconds, with no escalation. A real immediate KuCoin timeout
@@ -690,9 +698,11 @@ naturally validated: intermediate console progress stayed at least 30 seconds
 apart while complete structured progress remained durable. Its restart exposed
 the execution-loop incident projection addressed by merged PR #1244. PR #1245
 is also merged and deployed: bounded execution incidents and compact memory
-snapshots are naturally validated with a settled hard-green smoke. The active
-slice applies producer-owned materiality to repeated trailing and unstuck human
-projections while preserving their five-minute durable observations.
+snapshots are naturally validated with a settled hard-green smoke. PR #1246 is
+merged, deployed, and naturally validated: producer-owned materiality suppresses
+unchanged trailing/unstuck human repeats while preserving five-minute durable
+observations. Active PR #1247 compacts the remaining 311-character visible
+trailing projection without changing its payload, admission, or behavior.
 
 Do not create progress-only PRs or resume unrelated logging work from stale
 worktrees.
