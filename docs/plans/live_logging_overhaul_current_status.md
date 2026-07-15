@@ -1,6 +1,6 @@
 # Live Logging Overhaul Current Status
 
-Updated: 2026-07-13.
+Updated: 2026-07-15.
 
 This is the compact operational source for the active logging-overhaul loop.
 Read it before the historical progress ledger. Update it whenever the active
@@ -22,24 +22,24 @@ Estimated completion:
 
 ## Active Review Slice
 
-- Branch: `codex/v8-min-effective-cost-console-migration`.
-- Base: `23d9e72af180e8636de7f80cdff8178a60e61937`, merged PR #1219.
-- Slice: min-effective-cost entry-block console ownership.
-- Triggering evidence: fresh post-PR #1219 GateIO logs showed legacy `[entry]
-  initial entry blocked by min effective cost` immediately followed by the
-  structured `entry.min_effective_cost_blocked` line for the same SOL-long
-  decision.
-- Scope: make each existing structured min-effective-cost block event the sole
-  normal console/text owner when an enabled live-event pipeline has an actual
-  console sink. Preserve legacy detail when the emitter, pipeline, or console
-  sink is unavailable. Keep the distinct throttled aggregate summary for more
-  than three eligible blocks and every DEBUG detail/suppression line. Enqueue or
-  sink degradation must remain single-owner and surface through pipeline health
-  rather than trigger dynamic dual writing.
-- Behavior boundary: preserve Rust-owned diagnostics, side eligibility,
-  unchanged-set and per-symbol throttles, detail limit, aggregate cadence and
-  counts, payloads, routes, configuration, order filtering, exchange calls,
-  and all trading behavior.
+- Branch: `codex/balance-console-materiality`.
+- Base: `991dadb69124e838a4a3b63fff65036a223b4195`, the PR #1231
+  console-verbosity policy merge on canonical `master`.
+- Slice: console-only suppression of raw wallet-balance jitter.
+- Triggering evidence: the VPS5 console-volume study found balance and warmup
+  families dominated healthy output. The merged policy requires balance after
+  the initial snapshot to represent a material or attributable account change,
+  while the current pipeline projects every raw-balance movement even when the
+  hysteresis-snapped balance is unchanged.
+- Scope: suppress `balance.changed` from the console only when its finite
+  `balance_snapped_delta` is zero. Preserve structured, monitor, and durable text
+  delivery. Keep snapped changes and events with absent or malformed
+  materiality metadata console-visible. Remove the legacy 15-minute raw-only
+  fallback line while retaining snapped-change fallback output.
+- Behavior boundary: preserve balance calculation, hysteresis, event payload,
+  event production, monitor history, durable text, equity diagnostics,
+  scheduling, exchange calls, order/risk behavior, Rust, backtest, and optimizer
+  behavior.
 - Publication state, exact head, mergeability, CI, and current-head reviewer
   verdicts: query live GitHub metadata; do not embed self-invalidating values.
 - Expected VPS action: restart and observe only after this slice merges;
@@ -47,12 +47,39 @@ Estimated completion:
 
 ## Deployed Baseline
 
-- Remote `v8`: `23d9e72af180e8636de7f80cdff8178a60e61937`, PR #1219
-- VPS5 repository: `23d9e72af180e8636de7f80cdff8178a60e61937`, PR #1219; exact
-  tracked status clean and expected untracked artifacts preserved
-- VPS5 expected bots: five; running with PR #1219 restart PIDs
-  `912288/912290/912292/912293/912294`; pane PIDs unchanged; unrelated
+- Canonical `master`: `991dadb69124e838a4a3b63fff65036a223b4195`, PR #1231.
+- VPS5 repository: `dacd66adebfd230999aebf7f9fbd34a5b2990490`, PR #1221; exact
+  tracked status clean and expected untracked artifacts preserved.
+- VPS5 expected bots: five; running with PR #1221 restart PIDs
+  `927721/927781/927842/927899/927963`; pane PIDs unchanged; unrelated
   `misc:0.0` remains PID `434835`
+- PR #1231 merged at `991dadb69124e838a4a3b63fff65036a223b4195`.
+  It defines evidence-based console admission, incident projection, and volume
+  budgets. It is documentation-only, so no VPS5 restart was required.
+- PR #1221 merged and deployed at
+  `dacd66adebfd230999aebf7f9fbd34a5b2990490`. It made the structured
+  realized-loss gate warning the sole normal console/text owner while preserving
+  the legacy fallback and all gate behavior. Only the five exact bot panes were
+  gracefully restarted; unrelated processes and local artifacts were preserved.
+  After transient GateIO/KuCoin timeouts and HSL replay completed naturally, the
+  final two-minute smoke was `ok=true`: `198/198` remote calls, `49/49`
+  account-critical calls, six successful fill refreshes, five expected
+  processes, and zero hard, log-attention, monitor, or event-pipeline failures.
+- PR #1220 merged and deployed at
+  `9773889ecb8a396bec31e1e11c326aed9fa2cbe7`. It made structured
+  min-effective-cost block events own normal per-block console/text output
+  while preserving the aggregate summary, DEBUG details, fallback, throttles,
+  and trading behavior. All five old bot processes exited naturally within ten
+  seconds after one signal round; no escalation was needed. Pane PIDs and
+  unrelated `misc:0.0` PID `434835` remained unchanged. Fresh two-minute smoke
+  windows were `ok=true`; the final recorded `279/279` remote calls, `44/44`
+  account-critical calls, seven successful fill refreshes, five config-valid
+  processes, and zero hard/log/pipeline failures. Every active HSL replay had
+  completed required protective work with no failed or stale status. A sampled
+  OKX `D` state cleared and remained `R` across five consecutive checks. Natural
+  GateIO output contained only the structured min-effective-cost line and no
+  adjacent legacy warning, proving runtime single ownership without
+  manufacturing a decision.
 - PR #1219 merged and deployed at
   `23d9e72af180e8636de7f80cdff8178a60e61937`. It made structured
   initial-entry distance-gate blocked/cleared events own normal console/text
@@ -471,7 +498,7 @@ Estimated completion:
   observability implementation with explicit file scope.
 - Luna or deterministic automation: metadata polling, state-change detection,
   CI/reviewer summaries, and read-only output parsing.
-- Parallel PRs must be orthogonal. Dependent work waits for merge to `v8`.
+- Parallel PRs must be orthogonal. Dependent work waits for merge to `master`.
 
 ## Next Slice
 
@@ -503,11 +530,13 @@ justify another retention optimization.
 
 PR #1215's fill console/text migration, PR #1216's periodic health console
 migration, PR #1217's execution-loop error-burst console migration, PR #1218's
-ambiguous-cancel console migration, and PR #1219's entry-distance-gate console
-migration are merged and deployed. Natural post-PR #1219 blocked events on four
-bots proved structured single ownership. The same fresh GateIO log exposed the
-next adjacent legacy/structured duplicate for min-effective-cost entry blocks,
-tracked by the active slice above.
+ambiguous-cancel console migration, PR #1219's entry-distance-gate console
+migration, and PR #1220's min-effective-cost console migration are merged and
+deployed. Natural post-PR #1220 GateIO output proved structured single
+ownership. PR #1221's realized-loss gate console migration is also merged and
+deployed with a settled hard-green smoke. PR #1231's console-verbosity policy is
+merged without a runtime deployment. Its first implementation follow-up is the
+active raw-only balance-console materiality slice above.
 
 Do not create progress-only PRs or resume unrelated logging work from stale
 worktrees.

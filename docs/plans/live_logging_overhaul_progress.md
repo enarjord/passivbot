@@ -6,7 +6,9 @@ merge, live smoke evidence changes, or new gaps are discovered.
 
 ## Update Policy
 
-- Update this file when a logging-overhaul slice is merged to `v8`.
+- Update this file when a logging-overhaul slice is merged to canonical
+  `master`. Entries before the v8.0.0 cutover retain their historical `v8`
+  branch wording.
 - Update it when a merged slice is deployed to VPS5 and smoke-tested.
 - Keep entries factual and compact: PR/commit, scope, validation, and remaining
   gap.
@@ -69,6 +71,21 @@ Retuned goal boundary:
 
 VPS5 deployment status:
 
+- PR #1220 merged to `v8` as
+  `9773889ecb8a396bec31e1e11c326aed9fa2cbe7` after exact-head Hermes and
+  Grok 4.5 green reviews plus green CI. Structured min-effective-cost block
+  events now own normal per-block console/text output while legacy fallback,
+  DEBUG detail, aggregate summaries, throttles, and trading behavior remain
+  unchanged. The five old bot processes exited naturally within ten seconds
+  after one signal round; pane PIDs and unrelated `misc:0.0` PID `434835`
+  remained unchanged. New PIDs are `913308/913310/913312/913314/913316`.
+  Fresh two-minute smoke windows were green; the final recorded `279/279`
+  remote calls, `44/44` account-critical calls, seven successful fill
+  refreshes, five config-valid processes, zero hard/log/pipeline failures, and
+  complete required protective work for every active HSL replay. A sampled OKX
+  `D` state cleared and stayed `R` across five consecutive checks. Natural
+  GateIO output showed only the structured min-effective-cost line, with no
+  adjacent legacy warning.
 - PR #1219 merged to `v8` as
   `23d9e72af180e8636de7f80cdff8178a60e61937` after exact-head Hermes and
   Grok 4.5 green reviews plus green CI. Structured initial-entry distance-gate
@@ -8147,3 +8164,20 @@ VPS5 deployment status:
   monitor configuration, trading behavior, or lock-holder attribution.
 - Expected VPS action: exact five-bot graceful restart, immediate and settled
   smoke, and before/after monitor maintenance plus lock-wait evidence.
+
+### 2026-07-15: Console Policy And Raw-Balance Materiality
+
+- PR #1221 merged and deployed to VPS5 at `dacd66adeb`. Only the five exact bot
+  panes restarted. After transient remote timeouts and HSL replay recovered, the
+  final bounded two-minute smoke was `ok=true` with `198/198` remote calls,
+  `49/49` account-critical calls, six successful fill refreshes, five expected
+  processes, and zero hard, log-attention, monitor, or event-pipeline failures.
+- PR #1231 merged to canonical `master` at `991dadb691`. Its VPS5 evidence-based
+  console policy makes operator value and transition/materiality the INFO
+  admission contract; the docs-only merge required no restart.
+- Active branch `codex/balance-console-materiality` suppresses only raw-balance
+  jitter from the console when finite snapped delta is zero. Structured,
+  monitor, and durable text delivery remain unchanged. Snapped changes and
+  unclassifiable events fail visible. The legacy raw-only fallback line is also
+  removed; no balance, hysteresis, equity, scheduling, exchange, risk, order,
+  Rust, backtest, or optimizer behavior changes.

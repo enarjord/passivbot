@@ -3571,6 +3571,61 @@ async def test_handle_balance_update_suppresses_legacy_log_when_event_console_ac
     assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 
+@pytest.mark.asyncio
+async def test_handle_balance_update_keeps_raw_only_change_off_legacy_console(caplog):
+    import passivbot as pb_mod
+
+    sink = ListEventSink()
+
+    class FakeBot:
+        _current_live_event_cycle_id = pb_mod.Passivbot._current_live_event_cycle_id
+        _emit_balance_changed_event = pb_mod.Passivbot._emit_balance_changed_event
+        _emit_live_event = pb_mod.Passivbot._emit_live_event
+        _live_event_console_available = pb_mod.Passivbot._live_event_console_available
+        _monitor_record_event = pb_mod.Passivbot._monitor_record_event
+
+        def __init__(self):
+            self.exchange = "binance"
+            self.user = "binance_01"
+            self.bot_id = "bot_1"
+            self.live_event_console_enabled = False
+            self._live_event_current_cycle_id = "cy_raw_only"
+            self._live_event_pipeline = LiveEventPipeline(
+                structured_sinks=[sink],
+                monitor_sinks=[],
+            )
+            self.monitor_publisher = RecorderPublisher()
+            self._previous_balance_raw = 90.0
+            self._previous_balance_snapped = 95.0
+            self._monitor_last_equity = 0.0
+            self.execution_scheduled = False
+
+        def get_raw_balance(self):
+            return 100.0
+
+        def get_hysteresis_snapped_balance(self):
+            return 95.0
+
+        async def calc_upnl_sum(self):
+            return 7.5
+
+    bot = FakeBot()
+
+    with caplog.at_level(logging.INFO):
+        await pb_mod.Passivbot.handle_balance_update(bot, source="REST")
+
+    assert bot.execution_scheduled is True
+    assert not any("[balance] raw" in record.message for record in caplog.records)
+    assert bot.monitor_publisher.events[-1]["kind"] == "account.balance"
+    assert bot.monitor_publisher.events[-1]["payload"]["equity"] == pytest.approx(107.5)
+    assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    event = sink.events[-1]
+    assert event.event_type == EventTypes.BALANCE_CHANGED
+    assert event.data["balance_raw_delta"] == pytest.approx(10.0)
+    assert event.data["balance_snapped_delta"] == pytest.approx(0.0)
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
+
+
 def test_risk_mode_changed_event_emits_structured_summary():
     import passivbot as pb_mod
 

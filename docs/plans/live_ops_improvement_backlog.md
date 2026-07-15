@@ -557,6 +557,25 @@ Related detailed plans:
     structured event should own normal detail output when its console sink is
     available, while the distinct throttled aggregate summary for larger block
     sets remains operator-visible.
+    PR #1220 removed that min-effective-cost duplicate and deployed at
+    `9773889ecb8a396bec31e1e11c326aed9fa2cbe7`. Its final bounded smoke was
+    green with five config-valid bots, `279/279` remote and `44/44`
+    account-critical calls, seven fill refreshes, complete required HSL replay
+    work, zero hard/log/pipeline failures, and a clean repository. Natural
+    GateIO output proved structured single ownership. Static follow-up found
+    direct duplicate ownership in `_log_realized_loss_gate_blocks`: the legacy
+    warning immediately precedes an already console/text-routed structured
+    warning. Migrate that detail with the same emitter/pipeline/sink fallback
+    contract while preserving every gate decision and throttle.
+
+    Two post-PR #1220 console observations remain deferred rather than folded
+    into the realized-loss slice. Hyperliquid balance lines surfaced signed
+    floating-point jitter near `1e-13`; decide a console-only materiality or
+    display-normalization contract without changing structured balance data.
+    KuCoin emitted paired per-symbol required-EMA warnings with overlapping
+    context and a long nested error; trace producer ownership and fail-closed
+    semantics before changing either line because EMA availability is
+    trading-critical.
 
     Work log:
     - 2026-06-30: Added value-safe `live-smoke-report` HSL status projections
@@ -864,6 +883,14 @@ Related detailed plans:
     only the GitHub permissions needed to publish the check, and make failure to
     publish visible without substituting a comment as success. Keep advisory
     review loops clearly labeled until branch protection enforces the check.
+
+    Current evidence: after the v8.0.0 default-branch cutover on 2026-07-14,
+    `master` protection enforced strict `Python 3.12` and `Rust` checks plus
+    conversation resolution, but required zero formal approvals and no
+    semantic-review status/check. Hermes, Grok, or self-authored `COMMENT`
+    verdicts therefore remain advisory until this item is implemented. Reviewer
+    schedulers must also migrate their base-branch filters and compact cache to
+    the live default branch before the cutover can be considered complete.
 
 20. [ ] Per-asset collateral, debt, and valuation balance events.
     Status: open. A 2026-07-14 evaluation confirmed that the existing
