@@ -2155,6 +2155,68 @@ def test_operator_visibility_suppresses_fill_console_and_text_only():
     assert pipeline.close(timeout=2.0) is True
 
 
+def test_balance_raw_only_change_skips_console_but_preserves_durable_sinks():
+    structured = ListEventSink()
+    monitor = ListEventSink()
+    console = ListEventSink()
+    text = ListEventSink()
+    pipeline = LiveEventPipeline(
+        structured_sinks=[structured],
+        monitor_sinks=[monitor],
+        console_sink=console,
+        text_sink=text,
+    )
+    event = LiveEvent(
+        EventTypes.BALANCE_CHANGED,
+        data={
+            "previous_balance_raw": 1_000.0,
+            "balance_raw": 999.5,
+            "balance_raw_delta": -0.5,
+            "previous_balance_snapped": 1_000.0,
+            "balance_snapped": 1_000.0,
+            "balance_snapped_delta": 0.0,
+            "equity": 999.5,
+            "source": "REST",
+        },
+    )
+
+    pipeline.emit(event)
+
+    assert pipeline.flush(timeout=2.0) is True
+    assert structured.events == [event]
+    assert monitor.events == [event]
+    assert console.events == []
+    assert text.events == [event]
+    assert pipeline.close(timeout=2.0) is True
+
+
+@pytest.mark.parametrize(
+    "data",
+    [
+        {"balance_snapped_delta": 1.0},
+        {},
+        {"balance_snapped_delta": float("nan")},
+        {"balance_snapped_delta": float("inf")},
+    ],
+)
+def test_balance_console_keeps_material_and_unclassifiable_changes_visible(data):
+    console = ListEventSink()
+    text = ListEventSink()
+    pipeline = LiveEventPipeline(
+        structured_sinks=[],
+        monitor_sinks=[],
+        console_sink=console,
+        text_sink=text,
+    )
+    event = LiveEvent(EventTypes.BALANCE_CHANGED, data=data)
+
+    pipeline.emit(event)
+
+    assert console.events == [event]
+    assert text.events == [event]
+    assert pipeline.close(timeout=2.0) is True
+
+
 @pytest.mark.parametrize(
     ("action", "old_size", "old_price", "new_size", "new_price"),
     [

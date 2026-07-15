@@ -8164,3 +8164,20 @@ VPS5 deployment status:
   monitor configuration, trading behavior, or lock-holder attribution.
 - Expected VPS action: exact five-bot graceful restart, immediate and settled
   smoke, and before/after monitor maintenance plus lock-wait evidence.
+
+### 2026-07-15: Console Policy And Raw-Balance Materiality
+
+- PR #1221 merged and deployed to VPS5 at `dacd66adeb`. Only the five exact bot
+  panes restarted. After transient remote timeouts and HSL replay recovered, the
+  final bounded two-minute smoke was `ok=true` with `198/198` remote calls,
+  `49/49` account-critical calls, six successful fill refreshes, five expected
+  processes, and zero hard, log-attention, monitor, or event-pipeline failures.
+- PR #1231 merged to canonical `master` at `991dadb691`. Its VPS5 evidence-based
+  console policy makes operator value and transition/materiality the INFO
+  admission contract; the docs-only merge required no restart.
+- Active branch `codex/balance-console-materiality` suppresses only raw-balance
+  jitter from the console when finite snapped delta is zero. Structured,
+  monitor, and durable text delivery remain unchanged. Snapped changes and
+  unclassifiable events fail visible. The legacy raw-only fallback line is also
+  removed; no balance, hysteresis, equity, scheduling, exchange, risk, order,
+  Rust, backtest, or optimizer behavior changes.
