@@ -4,6 +4,11 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Intermediate HSL coin-history replay progress now appears on the normal live
+  console at most once every 30 seconds. The first progress update, completion,
+  complete structured progress events, replay behavior, and safety readiness
+  are unchanged.
+
 - OKX per-symbol margin-mode/leverage configuration now emits bounded structured
   outcome events. Explicit already-configured responses stay available at DEBUG
   instead of appearing as routine INFO, while confirmed responses and failures

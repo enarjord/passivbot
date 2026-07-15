@@ -2023,6 +2023,80 @@ async def test_coin_hsl_history_replay_emits_lifecycle_events():
 
 
 @pytest.mark.asyncio
+async def test_coin_hsl_replay_forced_pair_events_do_not_bypass_console_cadence(
+    monkeypatch, caplog
+):
+    from live.event_bus import EventTypes
+
+    bot = make_coin_bot()
+    symbols = ("A", "B", "C", "D")
+    emitted_events = []
+    clock = {"now_s": 0.0}
+
+    def emit_live_event(event_type, **kwargs):
+        emitted_events.append(SimpleNamespace(event_type=event_type, **kwargs))
+        return object()
+
+    async def fake_history(current_balance=None, **kwargs):
+        return {
+            "timeline": [
+                {
+                    "timestamp": 60_000,
+                    "balance": 100.0,
+                    "realized_pnl": 0.0,
+                    "realized_pnl_by_coin_pside": {
+                        symbol: {"long": 0.0, "short": 0.0} for symbol in symbols
+                    },
+                    "unrealized_pnl_by_coin_pside": {
+                        symbol: {"long": 0.0, "short": 0.0} for symbol in symbols
+                    },
+                }
+            ],
+            "panic_flatten_events": [],
+            "fill_events": [],
+        }
+
+    async def advance_clock_for_pair(pside=None, symbol=None):
+        clock["now_s"] = {"A": 10.0, "B": 20.0, "C": 30.0, "D": 40.0}[symbol]
+        return 0.0
+
+    bot._live_event_pipeline = object()
+    bot._emit_live_event = emit_live_event
+    bot.get_balance_equity_history = fake_history
+    bot._calc_upnl_sum_strict = advance_clock_for_pair
+    monkeypatch.setattr(hsl, "time", SimpleNamespace(monotonic=lambda: clock["now_s"]))
+
+    with caplog.at_level(logging.INFO):
+        await bot._equity_hard_stop_initialize_coin_from_history()
+
+    pair_events = [
+        event
+        for event in emitted_events
+        if event.event_type == EventTypes.HSL_REPLAY_PROGRESS
+        and event.reason_code == "pair_replay_progress"
+    ]
+    assert [(event.symbol, event.data["pair_idx"]) for event in pair_events] == [
+        ("A", 1),
+        ("A", 1),
+        ("B", 2),
+        ("C", 3),
+        ("D", 4),
+    ]
+    progress_logs = [
+        record.getMessage()
+        for record in caplog.records
+        if "HSL coin history reconstruction progress" in record.getMessage()
+    ]
+    assert len(progress_logs) == 2
+    assert "pair=1/4 pside=long symbol=A" in progress_logs[0]
+    assert "pair=3/4 pside=long symbol=C" in progress_logs[1]
+    assert any(
+        "HSL coin history reconstruction completed" in record.getMessage()
+        for record in caplog.records
+    )
+
+
+@pytest.mark.asyncio
 async def test_coin_hsl_history_replay_reports_scanned_optional_rows_without_apply():
     from live.event_bus import EventTypes, ListEventSink, LiveEventPipeline
 
