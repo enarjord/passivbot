@@ -24,8 +24,9 @@ Estimated completion:
 
 - Branch: `codex/smoke-process-only-sampling`, based on canonical
   `9bcf6c24fe4ec73bf8431277f32b9020d0349b5f` after PR #1283.
-- PR: pending. Slice: expose the existing bounded local process sampler through
-  a dedicated `passivbot tool live-process-report` entrypoint.
+- PR: #1285, `Add local-only live process report`; semantic implementation
+  head `e78a01df39`. Slice: expose the existing bounded local process sampler
+  through a dedicated `passivbot tool live-process-report` entrypoint.
 - Triggering evidence: the approved #1283 full smoke command was rejected by
   the production-action approval layer as a possible authenticated exchange
   probe even though the requested validation was process-only. Retrying or
