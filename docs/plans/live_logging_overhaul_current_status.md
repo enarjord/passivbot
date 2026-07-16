@@ -24,8 +24,10 @@ Estimated completion:
 
 - Branch: `codex/log-secret-query-fragments`, based on canonical
   `4015a3b3f145d58db3e1a873ec4cc5ce465368f7` after PR #1266.
-- PR: pending. Slice: detect secret-like query parameters in scheme-less
-  request paths and query fragments in the read-only historical log inventory.
+- PR: #1267, `Detect secret query fragments in log inventory`; semantic head
+  `361ad1e6bf9de9b5c912059c17522b6ab7da52ac`. Slice: detect secret-like
+  query parameters in scheme-less request paths and query fragments in the
+  read-only historical log inventory.
 - Triggering evidence: the inventory recognizes credential parameters inside
   full HTTP/websocket URLs, but misses forms such as
   `GET /path?apiKey=[value]` because the generic labeled matcher deliberately
