@@ -4,6 +4,11 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Successful maintainer cancellation summaries and hourly scheduler-jitter
+  detail now remain available at DEBUG instead of adding routine INFO lines.
+  Maintainer cancellation failures remain ERROR. Task cancellation, scheduler
+  timing, exchange calls, and trading behavior are unchanged.
+
 - Startup lifecycle output now has one normal human-ready signal: structured
   startup timing. `bot.started` keeps its structured console/text projection
   with a legacy fallback only when that projection is unavailable, while

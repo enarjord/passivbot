@@ -22,25 +22,22 @@ Estimated completion:
 
 ## Active Review Slice
 
-- Branch: `codex/compact-startup-lifecycle-console`, based on canonical
-  `82a56bb15445a1effff8501aa9f66540009b8f3f` after PR #1262.
-- PR: #1263, `Compact startup lifecycle console logging`; semantic head
-  `6bee544c61ba381de56a9e6b7a138294c5ef14aa`. Slice: consolidate startup
-  console ownership: retain structured `bot.started` visibility with its
-  legacy-console fallback, use startup timing as the human-ready signal, and
-  keep durable `bot.ready` out of console/text.
-- Triggering evidence: a fresh five-file startup sample had 281 lines,
-  including 78 `[boot]` lines, 10 decorative READY separators, a duplicate
-  readiness path, and 8 random-jitter detail lines.
-- Scope: startup lifecycle routing plus DEBUG-only warmup/maintainer detail.
-  Background candle-warmup success detail is `[candle]` DEBUG; its failure
-  remains immediate ERROR.
-- Behavior boundary: observability-only; no Rust, task timing, waits, task
-  starts, exception behavior, monitor persistence, exchange behavior, or
+- Branch: `codex/demote-maintainer-lifecycle-detail`, based on canonical
+  `e6d2461a54c9e446a3aee4ff367653aedafa8494` after PR #1263.
+- PR: pending. Slice: keep successful maintainer stop summaries and hourly
+  scheduler-jitter detail at DEBUG while preserving cancellation failures at
+  ERROR.
+- Triggering evidence: the exact five post-PR #1263 startup segments retained
+  four empty `stopped data maintainers: {}` INFO lines and five routine hourly
+  jitter INFO lines after adjacent startup detail had moved to DEBUG.
+- Scope: log-level-only maintainer lifecycle projection and removal of the
+  redundant close-wrapper stop summary.
+- Behavior boundary: observability-only; no Rust, cancellation calls, task
+  timing, waits, scheduler cadence, exception behavior, exchange behavior, or
   trading behavior changes.
-- Validation: focused event-bus, startup-monitor, and candle-warmup tests, a
-  two-step offline fake-live startup smoke, Python compilation, docs and
-  generated-registry checks, and diff whitespace check.
+- Validation: focused maintainer success/failure level tests, broader startup
+  and monitor tests, Python compilation, docs checks, and diff whitespace
+  check.
 - Review gate: temporary maintainer-authorized exact-head Hermes plus green
   Python and Rust CI while Grok is halted.
 - Expected VPS action: after merge, one authorized exact five-bot graceful
@@ -50,11 +47,21 @@ Estimated completion:
 ## Deployed Baseline
 
 - Canonical `master` and VPS5 are
-  `82a56bb15445a1effff8501aa9f66540009b8f3f`, PR #1262. The tracked checkout
+  `e6d2461a54c9e446a3aee4ff367653aedafa8494`, PR #1263. The tracked checkout
   is clean and expected untracked artifacts are preserved.
 - VPS5 runs merged master in bot PIDs
-  `975507/975510/975511/975513/975515`. The exact pane parents are unchanged,
+  `977722/977725/977728/977731/977734`. The exact pane parents are unchanged,
   and unrelated `misc:0.0` PID `434835` is unchanged.
+- PR #1263 was activated with one SIGINT at `2026-07-16T07:54:15Z` to old
+  PIDs `975507/975510/975511/975513/975515`; all exited naturally by
+  `07:54:37Z`. The settled smoke was `ok=true` with zero hard, log, monitor,
+  process, or event-pipeline failures, `251/252` remote and all `37/37`
+  account-critical calls successful, seven successful fill refreshes, and five
+  exact processes in states `R=4,S=1`. One non-hard KuCoin candle timeout was
+  retained. Every bot emitted exactly one `[bot] started`, one
+  `phase=startup-ready`, zero removed lifecycle INFO lines, and a durable
+  `bot.ready` event; Hyperliquid also completed full warmup in the bounded
+  window.
 - PR #1262 merged as `82a56bb15445a1effff8501aa9f66540009b8f3f` and was
   activated with one SIGINT at `2026-07-16T06:54:33Z` to old PIDs
   `974157/974160/974161/974163/974165`; all exited naturally by `06:54:56Z`.
@@ -908,13 +915,14 @@ hard-green. PR #1260 is also merged, deployed, and naturally validated: all
 five approved-coin membership lines measured 130-150 visible characters with
 zero legacy duplicates and a hard-green settled smoke. PR #1261's compact
 startup HSL warning and PR #1262's initial-entry distance-gate admission are
-also merged, deployed, and naturally validated. The active PR #1263
-consolidates startup lifecycle console ownership: `bot.started` owns the
-structured human start signal with a legacy fallback, `bot.ready` remains
-durable structured/monitor data, startup timing owns the human ready signal,
-and routine warmup/maintainer detail moves to DEBUG while the legacy READY
-banner is removed. It does not change startup task ordering, exchange calls,
-risk, or trading behavior.
+also merged, deployed, and naturally validated. PR #1263's startup lifecycle
+console consolidation is also merged, deployed, and naturally validated:
+every bot emitted exactly one human start and ready signal, durable
+`bot.ready` remained present, and removed lifecycle INFO lines stayed absent.
+The active maintainer-detail slice demotes successful stop summaries and hourly
+scheduler jitter to DEBUG while preserving cancellation errors at ERROR. It
+does not change task cancellation, scheduler timing, exchange calls, risk, or
+trading behavior.
 
 Do not create progress-only PRs or resume unrelated logging work from stale
 worktrees.
