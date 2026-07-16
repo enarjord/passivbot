@@ -614,6 +614,7 @@ class Passivbot:
     STATUS_OPERATOR_HEARTBEAT_INTERVAL_MS = 60 * 60 * 1000
     # The longest live INFO prefix is 44 characters: timestamp, level, and Hyperliquid.
     CANDLE_HEALTH_CONSOLE_MESSAGE_MAX_LEN = 196
+    FORAGER_SELECTION_CONSOLE_MESSAGE_MAX_LEN = 196
     _CANDLE_HEALTH_CONSOLE_SAMPLE_LIMIT = 3
     _CANDLE_HEALTH_CONSOLE_SYMBOL_MAX_LEN = 24
     _CANDLE_HEALTH_CONSOLE_TIMEFRAME_MAX_LEN = 8
@@ -11350,6 +11351,110 @@ class Passivbot:
                     examples,
                 )
 
+    @staticmethod
+    def _format_forager_selection_console_token(value: Any, max_len: int) -> str:
+        """Return one bounded token for the human forager-selection projection."""
+        text = str(value)
+        text = "".join(
+            char
+            if char.isascii()
+            and char.isprintable()
+            and not char.isspace()
+            and char not in {",", ";", "|", "=", "<", ">", "[", "]", "(", ")"}
+            else "_"
+            for char in text
+        )
+        if not text:
+            return "?"
+        if len(text) <= max_len:
+            return text
+        return f"{text[: max_len - 3]}..."
+
+    @staticmethod
+    def _format_forager_selection_console_float(value: Any) -> str:
+        """Return a compact finite numeric token for the human selection projection."""
+        try:
+            number = float(value)
+        except (TypeError, ValueError, OverflowError):
+            return "0"
+        if number != number or abs(number) == float("inf"):
+            return "0"
+        return f"{number:.3g}"
+
+    @staticmethod
+    def _format_forager_selection_console_rank(value: Any) -> str:
+        """Return a short rank token without allowing unbounded console width."""
+        try:
+            rank = int(value)
+        except (TypeError, ValueError, OverflowError):
+            return "0"
+        if rank > 999:
+            return "999+"
+        if rank < -999:
+            return "-999+"
+        return str(rank)
+
+    @staticmethod
+    def _format_forager_selection_summary(
+        *,
+        pside: Any,
+        slots_to_fill: Any,
+        selected_symbols: tuple[str, ...],
+        incumbent_symbols: tuple[str, ...],
+        score_hysteresis_pct: Any,
+        reason: Any,
+        top_scores: list[tuple[str, Any, Any]],
+        hysteresis_events: list[tuple[str, str, Any, bool]],
+    ) -> str:
+        """Format the bounded INFO projection without changing diagnostics or admission."""
+        token = Passivbot._format_forager_selection_console_token
+        integer = Passivbot._format_candle_health_console_int
+        number = Passivbot._format_forager_selection_console_float
+
+        def compact_symbols(symbols: tuple[str, ...]) -> str:
+            if not symbols:
+                return "-"
+            shown = [token(symbol, 8) for symbol in symbols[:3]]
+            if len(symbols) > len(shown):
+                shown.append(f"+{integer(len(symbols) - len(shown))}")
+            return ",".join(shown)
+
+        def append_samples(
+            message: str, label: str, samples: list[str], total: int
+        ) -> str:
+            result = message
+            for sample_count in range(1, len(samples) + 1):
+                candidate = f"{message} {label}={','.join(samples[:sample_count])}"
+                omitted = total - sample_count
+                if omitted > 0:
+                    candidate += f",+{integer(omitted)}"
+                if len(candidate) > Passivbot.FORAGER_SELECTION_CONSOLE_MESSAGE_MAX_LEN:
+                    break
+                result = candidate
+            return result
+
+        reason_token = token(reason, 24)
+        if reason_token.endswith("..."):
+            reason_token = token(reason, 8)
+        message = (
+            f"[forager] {token(pside, 8)} selection | "
+            f"slots={integer(slots_to_fill)} "
+            f"selected={compact_symbols(selected_symbols)} "
+            f"incumbents={compact_symbols(incumbent_symbols)} "
+            f"hyst={number(score_hysteresis_pct)} "
+            f"reason={reason_token}"
+        )
+        event_samples = [
+            f"{'kept' if kept_incumbent else 'replaced'}:{token(incumbent, 6)}<->{token(challenger, 6)} gap={number(gap)}"
+            for incumbent, challenger, gap, kept_incumbent in hysteresis_events[:1]
+        ]
+        top_samples = [
+            f"{Passivbot._format_forager_selection_console_rank(rank)}:{token(symbol, 8)}={number(score)}"
+            for symbol, rank, score in top_scores[:3]
+        ]
+        message = append_samples(message, "events", event_samples, len(hysteresis_events))
+        return append_samples(message, "top", top_samples, len(top_scores))
+
     def _log_forager_selection_diagnostics(
         self, out: dict, idx_to_symbol: dict[int, str]
     ) -> None:
@@ -11562,16 +11667,33 @@ class Passivbot:
                     else "selection_changed" if info_changed else "periodic"
                 )
                 logging.info(
-                    "[forager] %s selection | slots=%s selected=%s incumbents=%s "
-                    "hyst=%.6f reason=%s top=%s events=%s",
-                    pside,
-                    int(selection.get("slots_to_fill", 0) or 0),
-                    ",".join(selected_symbols) if selected_symbols else "-",
-                    ",".join(incumbent_symbols) if incumbent_symbols else "-",
-                    float(selection.get("score_hysteresis_pct", 0.0) or 0.0),
-                    reason,
-                    _fmt_top(top_scores, 5, with_components=False),
-                    _fmt_events(events),
+                    Passivbot._format_forager_selection_summary(
+                        pside=pside,
+                        slots_to_fill=selection.get("slots_to_fill", 0),
+                        selected_symbols=selected_symbols,
+                        incumbent_symbols=incumbent_symbols,
+                        score_hysteresis_pct=selection.get(
+                            "score_hysteresis_pct", 0.0
+                        ),
+                        reason=reason,
+                        top_scores=[
+                            (
+                                _symbol(item.get("symbol_idx")),
+                                item.get("rank", index + 1),
+                                item.get("score", 0.0),
+                            )
+                            for index, item in enumerate(top_scores)
+                        ],
+                        hysteresis_events=[
+                            (
+                                _symbol(event.get("incumbent_symbol_idx")),
+                                _symbol(event.get("challenger_symbol_idx")),
+                                event.get("score_gap", 0.0),
+                                bool(event.get("kept_incumbent")),
+                            )
+                            for event in events
+                        ],
+                    )
                 )
                 state["info_key"] = info_key
                 state["event_key"] = event_key

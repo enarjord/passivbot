@@ -4,6 +4,11 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Forager selection transitions now use a bounded operator summary with slot,
+  selected/incumbent, hysteresis, reason, ranking, and replacement context.
+  Complete structured and DEBUG diagnostics, transition cadence, Rust-owned
+  selection behavior, and trading behavior are unchanged.
+
 - Candle-health transition summaries now retain their aggregate counts and
   bounded missing-candle examples within the normal console record budget.
   Complete debug diagnostics, candle-health calculations, fetch behavior,

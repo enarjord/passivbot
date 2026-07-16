@@ -617,6 +617,15 @@ Related detailed plans:
     projection while preserving full debug diagnostics, health calculations,
     transition cadence, readiness, fetch behavior, and trading behavior.
 
+    PR #1254 merged and deployed the candle-health projection. Four natural
+    lines measured 156-211 characters, none exceeded 240, and the settled
+    smoke was hard-green. The same exact new logs contained forager selection
+    transitions at 247-250 characters on Binance, GateIO, and OKX. The active
+    `codex/compact-forager-selection-console` slice bounds only that human INFO
+    projection while preserving the structured event, full DEBUG score and
+    hysteresis diagnostics, transition cadence, Rust output, selection, and
+    trading behavior.
+
     Two post-PR #1220 console observations remain deferred rather than folded
     into the realized-loss slice. Hyperliquid balance lines surfaced signed
     floating-point jitter near `1e-13`; decide a console-only materiality or
