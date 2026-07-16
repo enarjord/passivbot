@@ -22,36 +22,40 @@ Estimated completion:
 
 ## Active Review Slice
 
-- Branch: `codex/log-secret-inventory`, based on canonical
-  `8e55f3642841b0730afc7e7b2b73632a8e7d8071` after PR #1264.
-- PR: #1265, `Add read-only historical log secret inventory`; semantic head
-  `6340b87e021882929f998b4df8ee198e60231461`. Slice: add the non-destructive
-  inventory half of backlog item #21 for historical secret-bearing text logs.
-- Triggering evidence: a 2026-07-15 read-only audit confirmed retained old logs
-  contain private websocket credentials and raw exchange error bodies, while a
-  bounded sample of current canonical logs was clean.
-- Scope: a bounded text/gzip scanner and value-free JSON CLI reporting only
-  secret-class counts, root-relative file identity, age, size, scan status, and
-  stable hashes.
-- Behavior boundary: read-only local tooling; no raw match values or lines, log
-  mutation, quarantine, deletion, copy/upload, exchange access, bot process
+- Branch: `codex/startup-budget-coverage-summary`, based on canonical
+  `fc4a134fb7b856ea426afb750559ff7ae94c7a07` after PR #1265.
+- PR: pending. Slice: make brief startup timing reports distinguish assessed
+  budgets from unavailable or no-baseline projections.
+- Triggering evidence: `_brief_startup_timings()` counts phases over budget but
+  does not expose the existing elapsed/phase budget statuses, so
+  `over_budget_phases=0` can conceal incomplete assessment coverage.
+- Scope: aggregate the existing report-only budget status fields in the brief
+  projection and add focused local fixtures for complete, incomplete, and
+  malformed metadata.
+- Behavior boundary: read-only report projection; no runtime events, startup
+  phase logic, budget thresholds, enforcement, exchange access, bot process
   changes, Rust, risk, order, or trading behavior.
-- Validation: class and benign-lookalike fixtures, serialized-output leakage
-  assertions, stable ordering/hashes, gzip and scan-bound coverage, CLI tests,
-  Python compilation, docs checks, and a VPS5 dry-run inventory.
+- Validation: focused smoke-report tests, Python compilation, docs checks, and
+  a bounded VPS5 report-only smoke after merge.
 - Review gate: temporary maintainer-authorized exact-head Hermes plus green
   Python and Rust CI while Grok is halted.
-- Expected VPS action: pull and run a bounded read-only inventory only; no bot
-  restart and no artifact remediation without separate operator approval.
+- Expected VPS action: pull and run a bounded read-only smoke report only; no
+  bot restart.
 
 ## Deployed Baseline
 
 - Canonical `master` and VPS5 are
-  `8e55f3642841b0730afc7e7b2b73632a8e7d8071`, PR #1264. The tracked checkout
+  `fc4a134fb7b856ea426afb750559ff7ae94c7a07`, PR #1265. The tracked checkout
   is clean and expected untracked artifacts are preserved.
 - VPS5 runs merged master in bot PIDs
   `979190/979193/979196/979199/979202`. The exact pane parents are unchanged,
   and unrelated `misc:0.0` PID `434835` is unchanged.
+- PR #1265 required no restart. Its bounded read-only VPS5 dry run scanned 40
+  of 1,182 discovered files with a 250,000-byte decompressed cap per file,
+  skipped six symlinks, and reported zero discovery or read errors. Ten
+  retained May logs contained private websocket/query credential classes; no
+  values or source lines were emitted. No remediation was attempted. The five
+  bot PIDs and unrelated `misc:0.0` PID remained unchanged.
 - PR #1264 was activated with one SIGINT at `2026-07-16T08:34:29Z` to old
   PIDs `977722/977725/977728/977731/977734`; all exited naturally within 23
   seconds. The settled two-minute smoke was `ok=true` with zero hard, log,
@@ -930,9 +934,11 @@ every bot emitted exactly one human start and ready signal, durable
 `bot.ready` remained present, and removed lifecycle INFO lines stayed absent.
 PR #1264's maintainer-detail demotion is also merged, deployed, and naturally
 validated: successful stop summaries and hourly scheduler jitter remain at
-DEBUG while cancellation errors remain at ERROR. The active PR #1265 slice
-adds only bounded, value-free historical secret-log inventory; artifact
-remediation remains separate and requires explicit operator approval.
+DEBUG while cancellation errors remain at ERROR. PR #1265's bounded,
+value-free historical secret-log inventory is also merged and deployed; its
+dry run confirmed retained credential-bearing logs without exposing values or
+changing artifacts. The active startup-budget coverage slice makes incomplete
+brief-report assessment visible without changing startup or budget behavior.
 
 Do not create progress-only PRs or resume unrelated logging work from stale
 worktrees.

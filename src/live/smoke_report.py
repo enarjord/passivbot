@@ -56,6 +56,10 @@ LOG_LINE_TS_PATTERN = re.compile(
     r"^(?P<ts>\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z)\b"
 )
 STARTUP_TIMING_BASELINE_WINDOW = 20
+STARTUP_BUDGET_STATUSES = frozenset(
+    {"unavailable", "no_baseline", "within_budget", "over_budget"}
+)
+STARTUP_BUDGET_INCOMPLETE_STATUSES = frozenset({"unavailable", "no_baseline"})
 DEFAULT_PROCESS_MATCH = "passivbot live"
 LOG_WINDOW_UNPARSED_POLICIES = {"keep", "drop"}
 DEFAULT_LOG_WINDOW_UNPARSED_POLICY = "keep"
@@ -7526,10 +7530,21 @@ def _summary_startup_timings(
     }
 
 
+def _brief_startup_budget_status(projection: Any) -> tuple[str, bool]:
+    status = projection.get("status") if isinstance(projection, dict) else None
+    if isinstance(status, str) and status in STARTUP_BUDGET_STATUSES:
+        return status, False
+    return "unavailable", True
+
+
 def _brief_startup_timings(startup_timings: Any) -> dict[str, Any]:
     rows = startup_timings if isinstance(startup_timings, list) else []
     phase_count = 0
     over_budget_phases = 0
+    incomplete_budget_phases = 0
+    invalid_or_missing_budget_assessments = 0
+    elapsed_budget_status_counts: Counter[str] = Counter()
+    phase_budget_status_counts: Counter[str] = Counter()
     max_latest_elapsed_ms: int | None = None
     max_latest_phase_ms: int | None = None
     max_startup_elapsed_ms: int | None = None
@@ -7576,20 +7591,39 @@ def _brief_startup_timings(startup_timings: Any) -> dict[str, Any]:
                 )
             elapsed_budget = phase_data.get("elapsed_budget")
             phase_budget = phase_data.get("phase_budget")
+            elapsed_budget_status, elapsed_budget_invalid = _brief_startup_budget_status(
+                elapsed_budget
+            )
+            phase_budget_status, phase_budget_invalid = _brief_startup_budget_status(
+                phase_budget
+            )
+            for status, counts in (
+                (elapsed_budget_status, elapsed_budget_status_counts),
+                (phase_budget_status, phase_budget_status_counts),
+            ):
+                counts[status] += 1
+            invalid_or_missing_budget_assessments += int(elapsed_budget_invalid)
+            invalid_or_missing_budget_assessments += int(phase_budget_invalid)
             if (
-                isinstance(elapsed_budget, dict)
-                and elapsed_budget.get("status") == "over_budget"
-            ) or (
-                isinstance(phase_budget, dict)
-                and phase_budget.get("status") == "over_budget"
+                elapsed_budget_status == "over_budget"
+                or phase_budget_status == "over_budget"
             ):
                 over_budget_phases += 1
+            if (
+                elapsed_budget_status in STARTUP_BUDGET_INCOMPLETE_STATUSES
+                or phase_budget_status in STARTUP_BUDGET_INCOMPLETE_STATUSES
+            ):
+                incomplete_budget_phases += 1
     return {
         key: value
         for key, value in {
             "bots": len(rows),
             "phases": phase_count,
             "over_budget_phases": over_budget_phases,
+            "incomplete_budget_phases": incomplete_budget_phases,
+            "invalid_or_missing_budget_assessments": invalid_or_missing_budget_assessments,
+            "elapsed_budget_status_counts": dict(sorted(elapsed_budget_status_counts.items())),
+            "phase_budget_status_counts": dict(sorted(phase_budget_status_counts.items())),
             "startup_phase_bots": startup_phase_bots,
             "max_latest_elapsed_ms": max_latest_elapsed_ms,
             "max_latest_phase_ms": max_latest_phase_ms,
