@@ -24,8 +24,10 @@ Estimated completion:
 
 - Branch: `codex/smoke-forager-feature-health`, based on canonical
   `9869263d74829f163b0bc8010fa18d1bf41de055` after PR #1270.
-- PR: pending. Slice: expose existing `forager.feature_unavailable` events in
-  full, summary, brief, and section-selective live smoke reports.
+- PR: #1271, `Expose forager feature health in smoke reports`; semantic
+  implementation head `47b084b62e`. Slice: expose existing
+  `forager.feature_unavailable` events in full, summary, brief, and
+  section-selective live smoke reports.
 - Triggering evidence: the producer already emits bounded structured-only
   candidate, missing-feature, age, fetch-budget, and symbol-sample context, and
   `live-performance-report` consumes it. Smoke reports currently omit it.
