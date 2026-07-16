@@ -24,9 +24,10 @@ Estimated completion:
 
 - Branch: `codex/demote-maintainer-lifecycle-detail`, based on canonical
   `e6d2461a54c9e446a3aee4ff367653aedafa8494` after PR #1263.
-- PR: pending. Slice: keep successful maintainer stop summaries and hourly
-  scheduler-jitter detail at DEBUG while preserving cancellation failures at
-  ERROR.
+- PR: #1264, `Demote routine maintainer lifecycle console detail`; semantic
+  head `714ab5bf83d24b1bce5e01e927c476b0c1294eca`. Slice: keep successful
+  maintainer stop summaries and hourly scheduler-jitter detail at DEBUG while
+  preserving cancellation failures at ERROR.
 - Triggering evidence: the exact five post-PR #1263 startup segments retained
   four empty `stopped data maintainers: {}` INFO lines and five routine hourly
   jitter INFO lines after adjacent startup detail had moved to DEBUG.
