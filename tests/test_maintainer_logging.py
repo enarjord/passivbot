@@ -19,6 +19,14 @@ class _FailingTask:
         raise RuntimeError("cancel failed")
 
 
+class _AsyncClient:
+    def __init__(self, calls):
+        self.calls = calls
+
+    async def close(self):
+        self.calls.append("cca")
+
+
 def test_stop_data_maintainers_keeps_success_detail_at_debug(caplog):
     bot = SimpleNamespace(
         maintainers={"hourly": _Task()},
@@ -43,6 +51,29 @@ def test_stop_data_maintainers_keeps_cancellation_failures_at_error(caplog):
     assert result == {}
     assert "error stopping maintainer hourly cancel failed" in caplog.text
     assert any(record.levelno == logging.ERROR for record in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_close_stops_maintainers_once_without_duplicate_info(caplog):
+    calls = []
+
+    def stop_data_maintainers():
+        calls.append("stop")
+        return {"hourly": True}
+
+    bot = SimpleNamespace(
+        stop_data_maintainers=stop_data_maintainers,
+        cca=_AsyncClient(calls),
+        ccp=None,
+        _close_live_event_pipeline=lambda timeout: calls.append(("pipeline", timeout)),
+    )
+
+    with caplog.at_level(logging.DEBUG):
+        await Passivbot.close(bot)
+
+    assert calls == ["stop", "cca", ("pipeline", 2.0)]
+    assert "stopped data maintainers" not in caplog.text
+    assert not [record for record in caplog.records if record.levelno == logging.INFO]
 
 
 @pytest.mark.asyncio
