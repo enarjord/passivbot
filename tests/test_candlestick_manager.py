@@ -19,6 +19,7 @@ from candlestick_manager import (
     _GATEIO_RECENT_1M_LIMIT_CANDLES,
     _floor_minute,
 )
+from logging_setup import DEFAULT_DATEFMT, DEFAULT_FORMAT_WITH_PREFIX
 
 
 def test_normalize_ccxt_ohlcv_filters_nonfinite_and_nonpositive_rows(tmp_path):
@@ -337,6 +338,7 @@ async def test_ccxt_fetch_warning_uses_bounded_signature_and_keeps_callback_payl
         exchange=_Ex(),
         exchange_name="binance",
         cache_dir=str(tmp_path / "caches"),
+        debug=1,
         remote_fetch_callback=callback_payloads.append,
     )
 
@@ -346,12 +348,18 @@ async def test_ccxt_fetch_warning_uses_bounded_signature_and_keeps_callback_payl
     monkeypatch.setattr(cm, "_sleep_interruptible", no_sleep)
     monkeypatch.setattr("candlestick_manager.time.monotonic", lambda: 50.0)
     warning_records = []
+    rendered_warnings = []
 
     class CaptureHandler(logging.Handler):
         def emit(self, record):
+            record.log_prefix = "kucoin"
             warning_records.append(record)
+            rendered_warnings.append(self.format(record))
 
     handler = CaptureHandler(level=logging.WARNING)
+    formatter = logging.Formatter(DEFAULT_FORMAT_WITH_PREFIX, datefmt=DEFAULT_DATEFMT)
+    formatter.converter = time.gmtime
+    handler.setFormatter(formatter)
     capture_log = logging.Logger(
         "test.candlestick_manager.ccxt_fetch_warning", level=logging.WARNING
     )
@@ -416,6 +424,10 @@ async def test_ccxt_fetch_warning_uses_bounded_signature_and_keeps_callback_payl
         assert all(raw_value not in warning for warning in (retry_warning, exhausted_warning))
     assert len(retry_warning) <= 240
     assert len(exhausted_warning) <= 240
+    assert len(rendered_warnings) == 2
+    assert all(len(warning) <= 240 for warning in rendered_warnings)
+    assert all("called_by=" not in warning for warning in rendered_warnings)
+    assert all("[kucoin]" in warning for warning in rendered_warnings)
 
     error_payloads = [payload for payload in callback_payloads if payload.get("stage") == "error"]
     assert error_payloads

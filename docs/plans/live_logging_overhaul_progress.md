@@ -15,7 +15,30 @@ merge, live smoke evidence changes, or new gaps are discovered.
 - Do not use this file for design churn; unresolved design details belong in the
   plan or a focused handoff doc.
 
-## Latest Canonical Deployment (PR #1256)
+## Latest Canonical Deployment (PR #1257)
+
+- PR #1257 merged to `master` as `b1a637c0def5349b6d6fb94de34c8c6c044bd307`
+  after exact-head Hermes approval and green Python/Rust CI while Grok was
+  temporarily halted. It makes the structured `ema.unavailable` event the
+  normal candidate-required-EMA console/text owner at the existing
+  fifteen-minute cadence; the complete payload, EMA readiness and nontradable
+  decisions, calculations, and trading behavior are unchanged.
+- VPS5 fast-forwarded cleanly and sent one SIGINT round to exact old PIDs
+  `968739/968741/968743/968745/968747`; all exited naturally within 16 seconds
+  without escalation. Pane PIDs and unrelated `misc:0.0` PID `434835` were
+  preserved. Final PIDs are `970778/970780/970782/970784/970786` for
+  Binance/KuCoin/GateIO/OKX/Hyperliquid respectively.
+- The settled two-minute smoke was `ok=true` with zero hard/log/monitor/process
+  failures, `241/241` remote and `58/58` account-critical calls successful,
+  nine successful fill refreshes, no active HSL replay, all five exact
+  processes in state `R`, and clean tracked `master`.
+- No candidate-required-EMA condition occurred naturally in the new segments,
+  so no target line was manufactured; zero legacy summary duplicates appeared.
+  The same exact logs contained two natural post-ready KuCoin
+  `ccxt_fetch_ohlcv_failed` retry warnings at 256-257 visible characters. The
+  next slice bounds that human warning projection.
+
+## Previous Canonical Deployment (PR #1256)
 
 - PR #1256 merged to `master` as `8db319a5b4e56dceffb59cb95f7baefab3e0da90`
   after exact-head Hermes approval and green Python/Rust CI while Grok was

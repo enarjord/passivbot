@@ -1321,8 +1321,9 @@ class CandlestickManager:
         except Exception:
             ex = self.exchange_name
         base = [f"[candle] event={event}"]
-        # In debug modes, include caller info for traceability
-        if self.debug_level >= 1:
+        # In debug modes, include caller info for traceability. The bounded OHLCV
+        # failure warning retains its incident signature without this low-value detail.
+        if self.debug_level >= 1 and event != "ccxt_fetch_ohlcv_failed":
             try:
                 caller = get_caller_name()
                 base.append(f"called_by={caller}")

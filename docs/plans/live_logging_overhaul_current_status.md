@@ -22,36 +22,46 @@ Estimated completion:
 
 ## Active Review Slice
 
-- Branch: `codex/compact-required-ema-unavailable-console`, based on canonical
-  `8db319a5b4e56dceffb59cb95f7baefab3e0da90` after PR #1256.
-- PR: #1257, `Compact required-EMA unavailable console output`.
-- Slice: bound the required-EMA-unavailable warning within the normal record
-  budget while retaining the unavailable count, classified cause, explicit
-  nontradable-until-fresh action, and a bounded symbol/EMA diagnostic sample.
-- Triggering evidence: fresh post-PR #1256 VPS5 logs contained recurring
-  required-EMA-unavailable warnings at 374-447 visible characters on Binance,
-  GateIO, OKX, and Hyperliquid.
-- Scope: preserve the complete structured `ema.unavailable` payload,
-  nontradable decision, reason semantics, producer cadence, and calculations;
-  compact only the throttled human console/text projection.
-- Behavior boundary: observability-only; no EMA collection/calculation,
-  readiness or nontradable decision, cadence, exchange call, Rust, order,
-  risk, backtest, optimizer, or trading behavior.
+- Branch: `codex/bound-candle-fetch-failure-console`, based on canonical
+  `b1a637c0def5349b6d6fb94de34c8c6c044bd307` after PR #1257.
+- PR: #1258, `Bound candle-fetch failure console output`.
+- Slice: keep candle-fetch retry/exhaustion warnings within the normal console
+  record budget while retaining operation, exchange, symbol/timeframe,
+  attempt, elapsed time, exception class, and action.
+- Triggering evidence: fresh post-PR #1257 VPS5 logs contained two natural
+  post-ready KuCoin `ccxt_fetch_ohlcv_failed` retry warnings at 256-257 visible
+  characters.
+- Scope: preserve complete structured remote-call evidence, retry/exhaustion
+  classification, redaction, and developer diagnostics; compact only the
+  human warning projection.
+- Behavior boundary: observability-only; no candle fetch, retry/backoff,
+  timeout, cache/readiness, exchange call, Rust, order, risk, backtest,
+  optimizer, or trading behavior.
 - Review gate: temporary maintainer-authorized exact-head Hermes plus green CI
   while Grok is halted.
 - Expected VPS action: after merge, one authorized exact five-bot restart.
-  Validate natural required-EMA-unavailable lines when available and settled
-  smoke; do not manufacture exchange, state, risk, or trading events.
+  Validate natural candle-fetch warnings when available and settled smoke; do
+  not manufacture exchange, state, risk, or trading events.
 
 ## Deployed Baseline
 
 - Canonical `master` and VPS5 are
-  `8db319a5b4e56dceffb59cb95f7baefab3e0da90`, PR #1256. The tracked checkout
+  `b1a637c0def5349b6d6fb94de34c8c6c044bd307`, PR #1257. The tracked checkout
   is clean and expected untracked artifacts are preserved.
 - VPS5 runs merged master in bot PIDs
-  `968739/968741/968743/968745/968747`. The exact pane PIDs remain
+  `970778/970780/970782/970784/970786`. The exact pane PIDs remain
   `856294/856332/856364/856398/856434`, and unrelated `misc:0.0` PID `434835`
   is unchanged.
+- PR #1257 was activated after one exact five-bot SIGINT round; old PIDs
+  `968739/968741/968743/968745/968747` all exited naturally within 16 seconds
+  without escalation. The settled two-minute smoke was `ok=true` with zero
+  hard/log/monitor/process failures, `241/241` remote and `58/58`
+  account-critical calls successful, nine successful fill refreshes, no active
+  HSL replay, all five exact processes in state `R`, and a clean tracked
+  checkout. No candidate-required-EMA condition occurred naturally in the new
+  segments, so no compact target line was manufactured; zero legacy summary
+  duplicates appeared. The exact new logs then exposed two natural post-ready
+  KuCoin candle-fetch retry warnings at 256-257 visible characters.
 - PR #1256 was activated after one exact five-bot SIGINT round; old PIDs
   `967753/967755/967757/967759/967760` all exited naturally within eight
   seconds without escalation. Four natural periodic health lines on Binance,
@@ -832,9 +842,11 @@ merged, deployed, and naturally validated: three forager selection lines
 measured 182-185 visible characters with a hard-green settled smoke. PR #1256
 is also merged, deployed, and naturally validated: four periodic health lines
 measured 202-209 visible characters while preserving all operator-relevant
-health facts. The active slice compacts the naturally observed 374-447
-character required-EMA-unavailable warnings without changing EMA readiness,
-nontradable decisions, cadence, or trading behavior.
+health facts. PR #1257 is also merged and deployed with a hard-green settled
+smoke. Its candidate-required-EMA target did not occur naturally in the new
+segments, and zero legacy summary duplicates appeared. The active slice bounds
+the naturally observed 256-257 character candle-fetch retry warnings without
+changing fetch, retry, readiness, or trading behavior.
 
 Do not create progress-only PRs or resume unrelated logging work from stale
 worktrees.
