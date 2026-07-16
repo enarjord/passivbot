@@ -11,7 +11,7 @@ class _FailingConsoleSink:
         raise OSError("console unavailable")
 
 
-def _make_bot_with_event_sink(*, console_sink=None):
+def _make_bot_with_event_sink(*, console_sink=None, monitor_sinks=(), text_sink=None):
     bot = Passivbot.__new__(Passivbot)
     bot.bot_id = "bot_distance_gate"
     bot.exchange = "binance"
@@ -24,8 +24,9 @@ def _make_bot_with_event_sink(*, console_sink=None):
     sink = ListEventSink()
     bot._live_event_pipeline = LiveEventPipeline(
         structured_sinks=[sink],
-        monitor_sinks=[],
+        monitor_sinks=monitor_sinks,
         console_sink=console_sink,
+        text_sink=text_sink,
     )
     return bot, sink
 
@@ -80,6 +81,9 @@ def test_initial_entry_distance_gate_block_emits_structured_event(monkeypatch):
     assert event.data["distance_pct"] == pytest.approx(5.0)
     assert event.data["threshold_pct"] == pytest.approx(1.0)
     assert event.data["tolerance_pct"] == pytest.approx(0.05)
+    assert event.data["operator_visible"] is True
+    assert event.data["active_count"] == 1
+    assert event.data["suppressed_count"] == 0
 
 
 def test_initial_entry_distance_gate_event_respects_info_throttle(monkeypatch, caplog):
@@ -207,6 +211,76 @@ def test_initial_entry_distance_gate_structured_console_owns_block_and_clear(
         assert console_sink.events == gate_events
 
 
+def test_initial_entry_distance_gate_blocks_are_bounded_per_bot_but_remain_durable(
+    monkeypatch, caplog
+):
+    monitor = ListEventSink()
+    console = ListEventSink()
+    text = ListEventSink()
+    bot, structured = _make_bot_with_event_sink(
+        console_sink=console, monitor_sinks=[monitor], text_sink=text
+    )
+    bot._initial_entry_distance_gate_console_interval_ms = 5 * 60 * 1000
+    now_ms = 1_000
+    monkeypatch.setattr("passivbot.utc_ms", lambda: now_ms)
+
+    try:
+        with caplog.at_level(logging.INFO):
+            bot._log_initial_entry_distance_gate_block(
+                _initial_entry_order(),
+                market_price=100_000.0,
+                signed_dist=0.05,
+                threshold=0.01,
+            )
+            now_ms = 2_000
+            bot._log_initial_entry_distance_gate_block(
+                {**_initial_entry_order(), "symbol": "ETH/USDT:USDT"},
+                market_price=100_000.0,
+                signed_dist=0.05,
+                threshold=0.01,
+            )
+            bot._log_initial_entry_distance_gate_cleared(
+                {**_initial_entry_order(), "symbol": "ETH/USDT:USDT"},
+                market_price=96_000.0,
+                signed_dist=0.005,
+                threshold=0.01,
+            )
+            now_ms = 301_000
+            bot._log_initial_entry_distance_gate_block(
+                {**_initial_entry_order(), "symbol": "SOL/USDT:USDT"},
+                market_price=100_000.0,
+                signed_dist=0.05,
+                threshold=0.01,
+            )
+        assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    finally:
+        assert bot._live_event_pipeline.close(timeout=2.0) is True
+
+    events = [
+        event
+        for event in structured.events
+        if event.event_type == EventTypes.ENTRY_INITIAL_DISTANCE_GATE_BLOCKED
+    ]
+    assert len(events) == 3
+    assert [event.data["operator_visible"] for event in events] == [True, False, True]
+    assert [event.data["active_count"] for event in events] == [1, 2, 2]
+    assert [event.data["suppressed_count"] for event in events] == [0, 1, 1]
+    cleared = [
+        event
+        for event in structured.events
+        if event.event_type == EventTypes.ENTRY_INITIAL_DISTANCE_GATE_CLEARED
+    ]
+    assert len(cleared) == 1
+    assert monitor.events == [events[0], events[1], cleared[0], events[2]]
+    assert console.events == [events[0], cleared[0], events[2]]
+    assert text.events == [events[0], cleared[0], events[2]]
+    assert not [
+        record
+        for record in caplog.records
+        if "initial entry staged but not placed" in record.message
+    ]
+
+
 def test_initial_entry_distance_gate_uses_legacy_fallback_without_console_sink(caplog):
     bot, sink = _make_bot_with_event_sink(console_sink=None)
     order = _initial_entry_order()
@@ -215,6 +289,12 @@ def test_initial_entry_distance_gate_uses_legacy_fallback_without_console_sink(c
         with caplog.at_level(logging.INFO):
             bot._log_initial_entry_distance_gate_block(
                 order,
+                market_price=100_000.0,
+                signed_dist=0.05,
+                threshold=0.01,
+            )
+            bot._log_initial_entry_distance_gate_block(
+                {**order, "symbol": "ETH/USDT:USDT"},
                 market_price=100_000.0,
                 signed_dist=0.05,
                 threshold=0.01,
@@ -241,6 +321,7 @@ def test_initial_entry_distance_gate_uses_legacy_fallback_without_console_sink(c
             EventTypes.ENTRY_INITIAL_DISTANCE_GATE_CLEARED,
         }
     ] == [
+        EventTypes.ENTRY_INITIAL_DISTANCE_GATE_BLOCKED,
         EventTypes.ENTRY_INITIAL_DISTANCE_GATE_BLOCKED,
         EventTypes.ENTRY_INITIAL_DISTANCE_GATE_CLEARED,
     ]

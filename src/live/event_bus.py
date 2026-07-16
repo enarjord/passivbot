@@ -2554,6 +2554,13 @@ def _format_initial_entry_distance_gate_console(event: LiveEvent) -> str:
         )
         + "%",
     ) if "tolerance_pct" in data else ()
+    aggregate_candidates = (
+        "active=" + str(min(max(_data_int(data, "active_count") or 0, 0), 999)),
+        "sup=" + str(min(max(_data_int(data, "suppressed_count") or 0, 0), 999)),
+    ) if (
+        event.event_type == EventTypes.ENTRY_INITIAL_DISTANCE_GATE_BLOCKED
+        and ("active_count" in data or "suppressed_count" in data)
+    ) else ()
     candidates = (
         *cycle_candidate,
         "symbol="
@@ -2583,6 +2590,7 @@ def _format_initial_entry_distance_gate_console(event: LiveEvent) -> str:
         )
         + "%",
         *tolerance_candidate,
+        *aggregate_candidates,
     )
     for candidate in candidates:
         if (

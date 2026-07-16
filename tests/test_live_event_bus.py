@@ -2397,6 +2397,8 @@ def test_console_format_summarizes_initial_entry_distance_gate_block():
             "distance_pct": 2.278481012658,
             "threshold_pct": 1.25,
             "tolerance_pct": 0.1,
+            "active_count": 3,
+            "suppressed_count": 2,
         },
     )
 
@@ -2405,7 +2407,7 @@ def test_console_format_summarizes_initial_entry_distance_gate_block():
     assert rendered == (
         "[entry] blocked cy=cy_entry_gate symbol=BTC/USDT:USDT pside=long "
         "type=entry_initial_normal_long q=0.001 px=98750 mkt=101000 "
-        "d=2.2785% max=1.2500% tol=0.1000%"
+        "d=2.2785% max=1.2500% tol=0.1000% active=3 sup=2"
     )
     assert len(f"2026-07-15T12:34:56Z INFO     [hyperliquid] {rendered}") <= 240
 
@@ -2455,6 +2457,8 @@ def test_console_format_bounds_and_sanitizes_initial_entry_distance_gate_payload
             "distance_pct": 0.0,
             "threshold_pct": 0.0,
             "tolerance_pct": 0.0,
+            "active_count": 50_000,
+            "suppressed_count": 50_000,
         },
     )
     payload_before = dict(event.data)
@@ -2466,6 +2470,7 @@ def test_console_format_bounds_and_sanitizes_initial_entry_distance_gate_payload
     assert "\n" not in rendered
     assert "\t" not in rendered
     assert "q=0 px=0 mkt=0 d=0.0000% max=0.0000% tol=0.0000%" in rendered
+    assert "active=999 sup=999" in rendered
     assert event.data == payload_before
 
 

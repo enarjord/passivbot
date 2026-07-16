@@ -3542,6 +3542,9 @@ def emit_initial_entry_distance_gate_event(
     signed_dist: float,
     threshold: float,
     tolerance: float | None = None,
+    operator_visible: bool = True,
+    active_count: int | None = None,
+    suppressed_count: int | None = None,
 ) -> None:
     try:
         symbol = str(order.get("symbol") or "")
@@ -3554,12 +3557,17 @@ def emit_initial_entry_distance_gate_event(
             "distance_pct": _safe_float(float(signed_dist) * 100.0),
             "threshold_pct": _safe_float(float(threshold) * 100.0),
             "action": str(action),
+            "operator_visible": bool(operator_visible),
             "order_type": str(
                 order.get("pb_order_type") or order.get("type") or "unknown"
             ),
         }
         if tolerance is not None:
             data["tolerance_pct"] = _safe_float(float(tolerance) * 100.0)
+        if active_count is not None:
+            data["active_count"] = max(0, min(int(active_count), 999))
+        if suppressed_count is not None:
+            data["suppressed_count"] = max(0, min(int(suppressed_count), 999))
         bot._emit_live_event(
             event_type,
             level="info",
