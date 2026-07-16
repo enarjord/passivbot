@@ -2177,7 +2177,11 @@ def test_live_smoke_report_summarizes_forager_feature_health(tmp_path):
                     "log_range_count": 1,
                     "max_age_ms": 5000,
                     "fetch_budget": 3,
-                    "unavailable": ["OLD/USDT:USDT"],
+                    "unavailable": {
+                        "count": 1,
+                        "sample": ["OLD/USDT:USDT"],
+                        "truncated": 0,
+                    },
                 },
             ),
             _monitor_row(
@@ -2193,10 +2197,14 @@ def test_live_smoke_report_summarizes_forager_feature_health(tmp_path):
                     "log_range_count": 2,
                     "max_age_ms": 7000,
                     "fetch_budget": 4,
-                    "unavailable": [
-                        "AAVE/USDT:USDT",
-                        "api_key=SHOULD_NOT_RENDER",
-                    ],
+                    "unavailable": {
+                        "count": 2,
+                        "sample": [
+                            "AAVE/USDT:USDT",
+                            "api_key=SHOULD_NOT_RENDER",
+                        ],
+                        "truncated": 0,
+                    },
                 },
             ),
         ],
@@ -2219,7 +2227,11 @@ def test_live_smoke_report_summarizes_forager_feature_health(tmp_path):
                     "log_range_count": 0,
                     "max_age_ms": 9000,
                     "fetch_budget": 2,
-                    "unavailable": ["ARB/USDT:USDT"],
+                    "unavailable": {
+                        "count": 1,
+                        "sample": ["ARB/USDT:USDT"],
+                        "truncated": 0,
+                    },
                 },
             )
         ],
@@ -2244,6 +2256,11 @@ def test_live_smoke_report_summarizes_forager_feature_health(tmp_path):
     assert health["groups"][0]["bot"] == "gateio/gateio_01"
     assert health["groups"][1]["count"] == 2
     assert health["groups"][1]["latest_data"]["candidate_count"] == 40
+    assert health["groups"][1]["latest_data"]["unavailable_symbols"] == {
+        "count": 2,
+        "sample": ["AAVE/USDT:USDT", "api_key=[redacted]"],
+        "truncated": 0,
+    }
     assert "SHOULD_NOT_RENDER" not in json.dumps(health)
 
     summary_health = summary["forager_feature_health"]

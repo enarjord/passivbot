@@ -2376,13 +2376,6 @@ def _forager_feature_health_group(
 ) -> dict[str, Any]:
     data = live_event.get("data")
     payload = data if isinstance(data, dict) else {}
-    symbols: Counter[str] = Counter()
-    unavailable = payload.get("unavailable")
-    if isinstance(unavailable, list):
-        for symbol in unavailable:
-            safe_symbol = _redact_log_text(str(symbol), max_len=80)
-            if safe_symbol:
-                symbols[safe_symbol] += 1
     latest_data = {}
     for key in (
         "candidate_count",
@@ -2394,8 +2387,8 @@ def _forager_feature_health_group(
         value = _non_negative_int(payload.get(key))
         if value is not None:
             latest_data[key] = int(value)
-    symbol_sample = _symbol_sample(
-        symbols,
+    symbol_sample = _summary_symbol_sample(
+        payload.get("unavailable"),
         limit=FORAGER_FEATURE_SYMBOL_SAMPLE_LIMIT,
     )
     if symbol_sample:
@@ -2463,6 +2456,7 @@ def _summarize_forager_feature_health(
     )
     latest_values: dict[str, list[int]] = defaultdict(list)
     latest_symbols: Counter[str] = Counter()
+    latest_unavailable_count = 0
     for group in groups.values():
         latest = group.get("latest_data")
         if not isinstance(latest, dict):
@@ -2479,6 +2473,9 @@ def _summarize_forager_feature_health(
                 latest_values[key].append(int(value))
         symbol_summary = latest.get("unavailable_symbols")
         if isinstance(symbol_summary, dict):
+            latest_unavailable_count += int(
+                _non_negative_int(symbol_summary.get("count")) or 0
+            )
             for symbol in symbol_summary.get("sample") or []:
                 latest_symbols[str(symbol)] += 1
     compact_groups = [
@@ -2503,12 +2500,19 @@ def _summarize_forager_feature_health(
     }
     if latest_values["max_age_ms"]:
         summary["latest_max_age_ms_max"] = max(latest_values["max_age_ms"])
-    symbol_sample = _symbol_sample(
-        latest_symbols,
-        limit=FORAGER_FEATURE_SYMBOL_SAMPLE_LIMIT,
-    )
-    if symbol_sample:
-        summary["latest_unavailable_symbols"] = symbol_sample
+    if latest_unavailable_count:
+        symbol_sample = _symbol_sample(
+            latest_symbols,
+            limit=FORAGER_FEATURE_SYMBOL_SAMPLE_LIMIT,
+        )
+        summary["latest_unavailable_symbols"] = {
+            "count": latest_unavailable_count,
+            "sample": symbol_sample.get("sample", []),
+            "truncated": max(
+                0,
+                latest_unavailable_count - len(symbol_sample.get("sample", [])),
+            ),
+        }
     return summary
 
 
