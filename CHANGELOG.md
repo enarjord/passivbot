@@ -7,6 +7,13 @@ All notable user-facing changes will be documented in this file.
 - Added `passivbot tool trailing-inspect`, an offline one-shot explanation of effective
   `trailing_martingale` entry and close thresholds, retracements, and analytical prices from a
   config or explicit parameter overrides.
+- Live smoke reports now expose bounded cycle terminal-outcome health from
+  existing `cycle.completed` and `cycle.degraded` events. The projection shows
+  latest successful/degraded outcomes, successful completion after the latest
+  observed degradation, elapsed time, order-change presence, and allowlisted
+  phase maxima without copying arbitrary payload details or exception text.
+  Existing hard-failure verdicts, cycle execution, exchange access, and trading
+  behavior are unchanged.
 
 - Live smoke reports now expose bounded latest-per-bot planning-snapshot health
   from existing `snapshot.built` events: required-surface and age coverage,

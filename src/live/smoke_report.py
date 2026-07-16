@@ -165,6 +165,16 @@ EXCHANGE_CONFIG_REFRESH_HEALTH_GROUP_LIMIT = 20
 DATA_PACKET_HEALTH_GROUP_LIMIT = 20
 PLANNING_SNAPSHOT_HEALTH_GROUP_LIMIT = 20
 PLANNING_SNAPSHOT_VALUE_LIMIT = 8
+CYCLE_HEALTH_GROUP_LIMIT = 20
+CYCLE_HEALTH_PHASES = (
+    "authoritative",
+    "planning_universe",
+    "market_state",
+    "execute",
+    "monitor_flush",
+    "execution_delay",
+    "scheduled_wait",
+)
 RISK_EVENT_TYPES = {
     EventTypes.RISK_MODE_CHANGED,
     EventTypes.HSL_TRANSITION,
@@ -3300,6 +3310,197 @@ def _summarize_planning_snapshot_health(
         "latest_data_packet_count_total": data_packet_count_total,
         "groups_truncated": len(ordered) > PLANNING_SNAPSHOT_HEALTH_GROUP_LIMIT,
         "groups": compact_groups,
+    }
+
+
+def _cycle_health_position(record: dict[str, Any] | None) -> tuple[int, int, str, int]:
+    record = record if isinstance(record, dict) else {}
+    return _sort_event_position_key(
+        ts=record.get("ts"),
+        seq=record.get("seq"),
+        path=record.get("path") or "",
+        line_no=int(record.get("line") or 0),
+    )
+
+
+def _cycle_health_record(
+    *,
+    row: dict[str, Any],
+    live_event: dict[str, Any],
+    path: Path,
+    line_no: int,
+) -> dict[str, Any]:
+    event_type = str(live_event.get("event_type") or row.get("kind") or "")
+    payload = live_event.get("data")
+    payload = payload if isinstance(payload, dict) else {}
+    ids = _event_ids(live_event)
+    timings = payload.get("timings_ms")
+    timings = timings if isinstance(timings, dict) else {}
+    phase_timings = {
+        phase: int(duration)
+        for phase in CYCLE_HEALTH_PHASES
+        if (duration := _non_negative_int(timings.get(phase))) is not None
+    }
+    orders_changed = payload.get("orders_changed")
+    return {
+        "event_type": event_type,
+        "ts": row.get("ts"),
+        "seq": row.get("seq"),
+        "path": str(path),
+        "line": int(line_no),
+        "cycle_id": ids.get("cycle_id"),
+        "status": _data_packet_safe_text(live_event.get("status")),
+        "reason_code": _data_packet_safe_text(live_event.get("reason_code")),
+        "level": _data_packet_safe_text(live_event.get("level")),
+        "elapsed_ms": _non_negative_int(payload.get("elapsed_ms")),
+        "phase_timings_ms": phase_timings,
+        "orders_changed": orders_changed if isinstance(orders_changed, bool) else None,
+    }
+
+
+def _merge_cycle_health_group(
+    groups: dict[str, dict[str, Any]],
+    *,
+    bot_key: str,
+    record: dict[str, Any],
+) -> None:
+    key = str(bot_key or "unknown")
+    group = groups.setdefault(
+        key,
+        {
+            "bot": key,
+            "count": 0,
+            "event_types": Counter(),
+            "latest_event": None,
+            "latest_completed": None,
+            "latest_degraded": None,
+        },
+    )
+    group["count"] = int(group.get("count") or 0) + 1
+    event_type = str(record.get("event_type") or "unknown")
+    event_types = group.get("event_types")
+    if not isinstance(event_types, Counter):
+        event_types = Counter(event_types or {})
+        group["event_types"] = event_types
+    event_types[event_type] += 1
+    if _cycle_health_position(record) > _cycle_health_position(
+        group.get("latest_event")
+    ):
+        group["latest_event"] = record
+    target = None
+    if event_type == EventTypes.CYCLE_COMPLETED:
+        target = "latest_completed"
+    elif event_type == EventTypes.CYCLE_DEGRADED:
+        target = "latest_degraded"
+    if target and _cycle_health_position(record) > _cycle_health_position(
+        group.get(target)
+    ):
+        group[target] = record
+
+
+def _public_cycle_health_record(record: Any) -> dict[str, Any]:
+    if not isinstance(record, dict):
+        return {}
+    return {
+        key: value
+        for key, value in record.items()
+        if key not in {"seq", "path", "line"} and value not in (None, {}, [])
+    }
+
+
+def _summarize_cycle_health(
+    groups: dict[str, dict[str, Any]],
+    event_type_counts: Counter[str],
+) -> dict[str, Any]:
+    latest_outcomes: Counter[str] = Counter()
+    latest_degraded_reasons: Counter[str] = Counter()
+    latest_phase_max_ms: dict[str, int] = {}
+    completed_after_degraded_bots = 0
+    latest_degraded_bots = 0
+    latest_completed_bots = 0
+    latest_degraded_observed_bots = 0
+    latest_orders_changed_bots = 0
+    latest_elapsed_ms_max = 0
+    compact_groups: list[dict[str, Any]] = []
+    ordered = sorted(
+        groups.values(),
+        key=lambda group: _cycle_health_position(group.get("latest_event")),
+        reverse=True,
+    )
+    for group in ordered:
+        completed = group.get("latest_completed")
+        completed = completed if isinstance(completed, dict) else None
+        degraded = group.get("latest_degraded")
+        degraded = degraded if isinstance(degraded, dict) else None
+        completed_position = _cycle_health_position(completed)
+        degraded_position = _cycle_health_position(degraded)
+        completed_after_degraded = bool(
+            completed is not None
+            and degraded is not None
+            and completed_position > degraded_position
+        )
+        if completed is not None:
+            latest_completed_bots += 1
+            elapsed_ms = int(_non_negative_int(completed.get("elapsed_ms")) or 0)
+            latest_elapsed_ms_max = max(latest_elapsed_ms_max, elapsed_ms)
+            if completed.get("orders_changed") is True:
+                latest_orders_changed_bots += 1
+            phase_timings = completed.get("phase_timings_ms")
+            if isinstance(phase_timings, dict):
+                for phase in CYCLE_HEALTH_PHASES:
+                    duration = _non_negative_int(phase_timings.get(phase))
+                    if duration is not None:
+                        latest_phase_max_ms[phase] = max(
+                            int(duration), latest_phase_max_ms.get(phase, 0)
+                        )
+        if degraded is not None:
+            latest_degraded_observed_bots += 1
+            latest_degraded_reasons[
+                str(degraded.get("reason_code") or "unknown")
+            ] += 1
+        if completed_after_degraded:
+            completed_after_degraded_bots += 1
+        if degraded is not None and (
+            completed is None or degraded_position > completed_position
+        ):
+            outcome = "degraded"
+            latest_degraded_bots += 1
+        elif completed is not None:
+            outcome = "succeeded"
+        else:
+            outcome = "unknown"
+        latest_outcomes[outcome] += 1
+        compact_groups.append(
+            {
+                "bot": group.get("bot"),
+                "count": int(group.get("count") or 0),
+                "event_types": dict(
+                    Counter(group.get("event_types") or {}).most_common()
+                ),
+                "latest_outcome": outcome,
+                "completed_after_latest_degraded": completed_after_degraded,
+                "latest_event": _public_cycle_health_record(group.get("latest_event")),
+                "latest_completed": _public_cycle_health_record(completed),
+                "latest_degraded": _public_cycle_health_record(degraded),
+            }
+        )
+    return {
+        "total": sum(int(group.get("count") or 0) for group in groups.values()),
+        "event_types": dict(event_type_counts.most_common()),
+        "bots": len(groups),
+        "completed": int(event_type_counts.get(EventTypes.CYCLE_COMPLETED) or 0),
+        "degraded": int(event_type_counts.get(EventTypes.CYCLE_DEGRADED) or 0),
+        "latest_outcomes": dict(latest_outcomes.most_common()),
+        "latest_completed_bots": latest_completed_bots,
+        "latest_degraded_observed_bots": latest_degraded_observed_bots,
+        "latest_degraded_bots": latest_degraded_bots,
+        "completed_after_latest_degraded_bots": completed_after_degraded_bots,
+        "latest_degraded_reasons": dict(latest_degraded_reasons.most_common()),
+        "latest_elapsed_ms_max": latest_elapsed_ms_max,
+        "latest_orders_changed_bots": latest_orders_changed_bots,
+        "latest_phase_max_ms": latest_phase_max_ms,
+        "groups_truncated": len(compact_groups) > CYCLE_HEALTH_GROUP_LIMIT,
+        "groups": compact_groups[:CYCLE_HEALTH_GROUP_LIMIT],
     }
 
 
@@ -7851,6 +8052,8 @@ def _scan_events(
     data_packet_health_event_type_counts: Counter[str] = Counter()
     planning_snapshot_health_groups: dict[str, dict[str, Any]] = {}
     planning_snapshot_health_event_type_counts: Counter[str] = Counter()
+    cycle_health_groups: dict[str, dict[str, Any]] = {}
+    cycle_health_event_type_counts: Counter[str] = Counter()
     staged_readiness_groups: dict[tuple[Any, ...], dict[str, Any]] = {}
     staged_readiness_event_type_counts: Counter[str] = Counter()
     planning_output_groups: dict[tuple[Any, ...], dict[str, Any]] = {}
@@ -8150,6 +8353,21 @@ def _scan_events(
                                 line_no=line_no,
                             ),
                         )
+                    if event_type in {
+                        EventTypes.CYCLE_COMPLETED,
+                        EventTypes.CYCLE_DEGRADED,
+                    }:
+                        cycle_health_event_type_counts[str(event_type)] += 1
+                        _merge_cycle_health_group(
+                            cycle_health_groups,
+                            bot_key=bot_key,
+                            record=_cycle_health_record(
+                                row=row,
+                                live_event=live_event,
+                                path=path,
+                                line_no=line_no,
+                            ),
+                        )
                     if _staged_readiness_event(live_event):
                         staged_readiness_event_type_counts[str(event_type)] += 1
                         _merge_staged_readiness_group(
@@ -8398,6 +8616,10 @@ def _scan_events(
         "planning_snapshot_health": _summarize_planning_snapshot_health(
             planning_snapshot_health_groups,
             planning_snapshot_health_event_type_counts,
+        ),
+        "cycle_health": _summarize_cycle_health(
+            cycle_health_groups,
+            cycle_health_event_type_counts,
         ),
         "staged_readiness_health": _summarize_staged_readiness_health(
             staged_readiness_groups,
@@ -8860,6 +9082,7 @@ def build_live_smoke_report(
         ],
         "data_packet_health": event_scan["data_packet_health"],
         "planning_snapshot_health": event_scan["planning_snapshot_health"],
+        "cycle_health": event_scan["cycle_health"],
         "staged_readiness_health": event_scan["staged_readiness_health"],
         "planning_output_health": event_scan["planning_output_health"],
         "event_pipeline_health": event_scan["event_pipeline_health"],
@@ -9488,6 +9711,11 @@ def summarize_live_smoke_report(
         if isinstance(report.get("planning_snapshot_health"), dict)
         else {}
     )
+    cycle_health = (
+        report.get("cycle_health")
+        if isinstance(report.get("cycle_health"), dict)
+        else {}
+    )
     staged_readiness_health = (
         report.get("staged_readiness_health")
         if isinstance(report.get("staged_readiness_health"), dict)
@@ -9705,6 +9933,10 @@ def summarize_live_smoke_report(
         ),
         "planning_snapshot_health": _summary_unfiltered_health_groups(
             planning_snapshot_health,
+            limit=max_groups,
+        ),
+        "cycle_health": _summary_unfiltered_health_groups(
+            cycle_health,
             limit=max_groups,
         ),
         "staged_readiness_health": _summary_staged_readiness_health(
@@ -10432,6 +10664,11 @@ def summarize_live_smoke_report_brief(report: dict[str, Any]) -> dict[str, Any]:
         if isinstance(report.get("planning_snapshot_health"), dict)
         else {}
     )
+    cycle_health = (
+        report.get("cycle_health")
+        if isinstance(report.get("cycle_health"), dict)
+        else {}
+    )
     staged_readiness_health = (
         report.get("staged_readiness_health")
         if isinstance(report.get("staged_readiness_health"), dict)
@@ -10766,6 +11003,11 @@ def summarize_live_smoke_report_brief(report: dict[str, Any]) -> dict[str, Any]:
             for key, value in planning_snapshot_health.items()
             if key not in {"groups", "groups_truncated"}
         },
+        "cycles": {
+            key: value
+            for key, value in cycle_health.items()
+            if key not in {"groups", "groups_truncated"}
+        },
         "staged_readiness": staged_readiness_brief,
         "planning_output": {
             key: value
@@ -11022,6 +11264,7 @@ SMOKE_REPORT_SECTION_BASE_SELECTORS = frozenset(
 SMOKE_REPORT_SECTION_ALIASES: dict[str, tuple[str, ...]] = {
     "account_critical_remote_calls": ("account_critical_remote_call_health",),
     "cache": ("cache_health",),
+    "cycles": ("cycle_health",),
     "data_packets": ("data_packet_health",),
     "ema_readiness": ("ema_readiness_health",),
     "event_pipeline": ("event_pipeline_health",),
