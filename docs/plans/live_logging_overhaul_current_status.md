@@ -22,24 +22,26 @@ Estimated completion:
 
 ## Active Review Slice
 
-- Branch: `codex/smoke-planning-snapshot-health`, based on canonical
-  `0990d351c690b5270d8c53f3c1ad5bf5d54650a5` after PR #1279.
-- PR: #1280, `Report planning-snapshot smoke health`; semantic implementation
-  head `886d1311e6`. Slice: project existing `snapshot.built` events into
-  bounded latest-per-bot planning-snapshot health.
-- Triggering evidence: the focused post-PR #1278 five-minute inventory
-  naturally contained 35 snapshot-build events while smoke reports exposed no
-  required-surface, freshness, missing-market, availability, or packet-count
-  summary.
-- Scope: retain the latest snapshot observation per bot and expose bounded
-  required-surface and age coverage, market-snapshot counts and freshness,
-  availability status counts, packet counts, and correlation IDs. Keep symbol
-  lists, packet rows, raw references, hashes, values, and embedded availability
-  records query-only.
+- Branch: `codex/smoke-cycle-recovery-health`, based on canonical
+  `8ba5f5e71a4bf44ea002a519ae05d91c7a261dd8` after PR #1280.
+- PR: #1282, `Report cycle recovery smoke health`; semantic implementation head
+  `6235f16f61`. Slice: project existing `cycle.completed` and
+  `cycle.degraded` events into bounded latest-per-bot terminal-outcome and
+  recovery health.
+- Triggering evidence: the post-PR #1280 five-minute inventory naturally
+  contained 35 successful cycle completions and one degraded cycle. A later
+  fresh window caught a real KuCoin account-state timeout and then subsequent
+  successful calls/cycles, while smoke retained the hard event without a
+  bounded cycle-level recovery projection.
+- Scope: expose terminal event counts, latest successful/degraded outcome,
+  successful completion after the latest observed degradation, elapsed time,
+  order-change presence, degraded reason, correlation ID, and seven code-owned
+  phase durations. Keep arbitrary payload details, exception text, raw
+  references, symbols, and unknown timing keys out of the projection.
 - Behavior boundary: read-only report projection only. No smoke verdict,
   attention classification, console output, event production, exchange access,
   packet production, readiness, configuration, or trading changes.
-- Validation: focused latest-per-bot/aggregate/redaction regression, full
+- Validation: focused terminal-order/recovery/allowlist regression, full
   smoke-report tests, compilation, and docs checks.
 - Review gate: temporary maintainer-authorized exact-head Hermes plus green
   Python and Rust CI while Grok is halted.
@@ -48,11 +50,23 @@ Estimated completion:
 
 ## Deployed Baseline
 
-- VPS5's deployed logging baseline is
-  `ccd1cc68956edd8c509fb2b86b759c801e3868b8`, PR #1278. Canonical `master`
-  has since advanced to `0990d351c690b5270d8c53f3c1ad5bf5d54650a5`
-  through unrelated Binance archive PR #1279. The VPS5 tracked checkout is
-  clean and expected untracked artifacts are preserved.
+- Canonical `master` and VPS5 are
+  `8ba5f5e71a4bf44ea002a519ae05d91c7a261dd8`, PR #1280. The tracked checkout
+  is clean and expected untracked artifacts are preserved.
+- PR #1280 required no restart. Exact bot PIDs
+  `985592/985594/985596/985598/985600`, all five pane parents, and unrelated
+  `misc:0.0` PID `434835` remained unchanged. The immediate two-minute smoke
+  was `ok=true` with `197/197` remote calls, `54/54` account-critical calls,
+  `9/9` fill refreshes, and five exact/config-valid processes.
+- A focused five-minute report naturally projected 34 snapshots across all five
+  bots, with zero missing or stale markets. An intermediate fresh smoke caught
+  a real KuCoin balance/positions/open-orders `RequestTimeout` and correctly
+  remained hard-red; all processes were already in `R`, later calls succeeded,
+  and the event was not hidden. The final fresh two-minute smoke was `ok=true`
+  with zero hard/log/monitor/process failures, `242/242` remote calls, `55/55`
+  account-critical calls, `12/12` fill refreshes, and 16 snapshots across all
+  five bots with zero missing or stale markets. No event or trading activity
+  was manufactured.
 - PR #1278 required no restart. Exact bot PIDs
   `985592/985594/985596/985598/985600`, all five pane parents, and unrelated
   `misc:0.0` PID `434835` remained unchanged. Immediate and settled bounded
@@ -1060,11 +1074,11 @@ without restart. PR #1273's forager eligibility projection, PR #1274's
 requested-window event inventory, and PR #1275's planning symbol-state health
 are also merged, deployed, and naturally validated. PR #1276's initial-entry
 eligibility health, PR #1277's correlated planning-output health, and PR
-#1278's latest-per-bot-and-kind data-packet health are merged, deployed, and
-naturally validated. The active follow-up adds bounded latest-per-bot
-planning-snapshot health without copying symbol lists, packet rows, raw packet
-metadata, or embedded availability records, and without changing verdicts or
-runtime behavior.
+#1278's latest-per-bot-and-kind data-packet health and PR #1280's planning
+snapshot health are merged, deployed, and naturally validated. The active
+follow-up adds bounded cycle terminal-outcome and recovery health without
+copying arbitrary payload details or exception text, and without changing
+verdicts or runtime behavior.
 
 Do not create progress-only PRs or resume unrelated logging work from stale
 worktrees.
