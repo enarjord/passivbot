@@ -24,8 +24,9 @@ Estimated completion:
 
 - Branch: `codex/smoke-planning-symbol-state-health`, based on canonical
   `bcbfa12808a00e39c1e4eb78e43e13746be553fa` after PR #1274.
-- PR: pending. Slice: project existing `planning.symbol_state` events into the
-  staged-readiness smoke health surface.
+- PR: #1275, `Report planning symbol-state smoke health`; semantic
+  implementation head `23696ded95`. Slice: project existing
+  `planning.symbol_state` events into the staged-readiness smoke health surface.
 - Triggering evidence: the fresh post-PR #1274 two-minute event inventory
   naturally contained 18 `planning.symbol_state` events, while staged-readiness
   health exposed only staged cycle degradation, `planning.unavailable`, and
