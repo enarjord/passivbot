@@ -22,36 +22,44 @@ Estimated completion:
 
 ## Active Review Slice
 
-- Branch: `codex/startup-budget-coverage-summary`, based on canonical
-  `fc4a134fb7b856ea426afb750559ff7ae94c7a07` after PR #1265.
-- PR: #1266, `Expose startup budget coverage in brief reports`; semantic head
-  `cfebc940406900606d7d8852f77f4238473dcf4c`. Slice: make brief startup
-  timing reports distinguish assessed budgets from unavailable or no-baseline
-  projections.
-- Triggering evidence: `_brief_startup_timings()` counts phases over budget but
-  does not expose the existing elapsed/phase budget statuses, so
-  `over_budget_phases=0` can conceal incomplete assessment coverage.
-- Scope: aggregate the existing report-only budget status fields in the brief
-  projection and add focused local fixtures for complete, incomplete, and
-  malformed metadata.
-- Behavior boundary: read-only report projection; no runtime events, startup
-  phase logic, budget thresholds, enforcement, exchange access, bot process
-  changes, Rust, risk, order, or trading behavior.
-- Validation: focused smoke-report tests, Python compilation, docs checks, and
-  a bounded VPS5 report-only smoke after merge.
+- Branch: `codex/log-secret-query-fragments`, based on canonical
+  `4015a3b3f145d58db3e1a873ec4cc5ce465368f7` after PR #1266.
+- PR: #1267, `Detect secret query fragments in log inventory`; semantic head
+  `361ad1e6bf9de9b5c912059c17522b6ab7da52ac`. Slice: detect secret-like
+  query parameters in scheme-less request paths and query fragments in the
+  read-only historical log inventory.
+- Triggering evidence: the inventory recognizes credential parameters inside
+  full HTTP/websocket URLs, but misses forms such as
+  `GET /path?apiKey=[value]` because the generic labeled matcher deliberately
+  excludes `?` and `&` prefixes.
+- Scope: broaden only the existing value-free query-parameter classification
+  and add focused full-URL, scheme-less, redacted, benign, and leakage tests.
+- Behavior boundary: read-only local tooling; no source values/lines, artifact
+  mutation or remediation, exchange access, bot process changes, Rust, risk,
+  order, or trading behavior.
+- Validation: focused inventory tests, Python compilation, a 1 MB classifier
+  timing smoke, docs checks, and a bounded VPS5 inventory after merge.
 - Review gate: temporary maintainer-authorized exact-head Hermes plus green
   Python and Rust CI while Grok is halted.
-- Expected VPS action: pull and run a bounded read-only smoke report only; no
-  bot restart.
+- Expected VPS action: pull and run a bounded read-only inventory only; no bot
+  restart or remediation.
 
 ## Deployed Baseline
 
 - Canonical `master` and VPS5 are
-  `fc4a134fb7b856ea426afb750559ff7ae94c7a07`, PR #1265. The tracked checkout
+  `4015a3b3f145d58db3e1a873ec4cc5ce465368f7`, PR #1266. The tracked checkout
   is clean and expected untracked artifacts are preserved.
 - VPS5 runs merged master in bot PIDs
   `979190/979193/979196/979199/979202`. The exact pane parents are unchanged,
   and unrelated `misc:0.0` PID `434835` is unchanged.
+- PR #1266 required no restart. A four-hour, current-segment-only brief report
+  scanned six monitor files and 19,163 records with zero monitor parse errors,
+  and emitted the new startup budget coverage fields. Startup timing rows had
+  already rotated out, so all coverage counts were naturally zero. The
+  section-only report retained two hard and 319 attention problem events and
+  was not represented as a green deploy-health verdict. Exact bot and
+  `misc:0.0` PIDs remained unchanged; a transient GateIO `D` sample cleared to
+  `R` after 20 seconds.
 - PR #1265 required no restart. Its bounded read-only VPS5 dry run scanned 40
   of 1,182 discovered files with a 250,000-byte decompressed cap per file,
   skipped six symlinks, and reported zero discovery or read errors. Ten
@@ -939,8 +947,10 @@ validated: successful stop summaries and hourly scheduler jitter remain at
 DEBUG while cancellation errors remain at ERROR. PR #1265's bounded,
 value-free historical secret-log inventory is also merged and deployed; its
 dry run confirmed retained credential-bearing logs without exposing values or
-changing artifacts. The active startup-budget coverage slice makes incomplete
-brief-report assessment visible without changing startup or budget behavior.
+changing artifacts. PR #1266's brief startup-budget coverage is also merged
+and deployed without restart; its bounded report emitted the new fields while
+retaining natural problem-event verdicts. The active inventory follow-up closes
+the scheme-less credential-query detection gap without remediation.
 
 Do not create progress-only PRs or resume unrelated logging work from stale
 worktrees.
