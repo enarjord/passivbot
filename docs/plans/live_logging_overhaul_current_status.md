@@ -24,6 +24,8 @@ Estimated completion:
 
 - Branch: `codex/aggregate-entry-distance-gate-console`, based on canonical
   `452bd621424def1e626e5fa73b551b52ef1b2773` after PR #1261.
+- PR: #1262, `Bound initial entry distance-gate console volume`; semantic head
+  `d4a815e91455b12eecfc695c1ad026b2fb839d8a`.
 - Slice: preserve the existing per-symbol initial-entry distance-gate blocked
   records in structured/monitor sinks while admitting at most one blocked
   console/text representative per bot per five minutes.
@@ -35,6 +37,11 @@ Estimated completion:
   thresholds, market fetches, exchange behavior, or event durability changes.
 - Validation: focused event/gate and event-pipeline/formatter tests, Python
   compilation, docs and generated-registry checks, and diff whitespace check.
+- Review gate: temporary maintainer-authorized exact-head Hermes plus green
+  Python and Rust CI while Grok is halted.
+- Expected VPS action: after merge, one authorized exact five-bot graceful
+  restart and natural blocked-event/durable-event observation; do not
+  manufacture trading, risk, lock, or state events.
 
 ## Deployed Baseline
 
