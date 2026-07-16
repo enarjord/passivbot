@@ -11,6 +11,12 @@ All notable user-facing changes will be documented in this file.
   query-only; smoke verdicts, exchange access, and trading behavior are
   unchanged.
 
+- Binance backtest OHLCV downloads now fill the current v2 store from checksum-verified Binance
+  Vision monthly archives first, parallel daily archives second, and CCXT last. Monthly archives
+  are limited to sufficiently incomplete published months, recent days stay on CCXT, existing
+  valid rows are never overwritten, and CCXT repairs archive failures or real gaps within archive
+  data. The legacy downloader path is not re-enabled.
+
 - Live smoke reports now include bounded latest-per-bot planning-output health
   from existing `rust_orchestrator.returned` and `action.planned` events. The
   projection correlates cycle and remote-call IDs, Rust timing and order
