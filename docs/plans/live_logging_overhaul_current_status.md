@@ -24,8 +24,10 @@ Estimated completion:
 
 - Branch: `codex/smoke-entry-initial-eligibility-health`, based on canonical
   `e5603244565807167494ffc53898f98f736f876a` after PR #1275.
-- PR: pending. Slice: project existing `entry.initial_eligibility` aggregates
-  into the staged-readiness smoke health surface.
+- PR: #1276, `Report initial-entry eligibility smoke health`; semantic
+  implementation head `b3840ed5df`. Slice: project existing
+  `entry.initial_eligibility` aggregates into the staged-readiness smoke health
+  surface.
 - Triggering evidence: the settled post-PR #1275 two-minute inventory naturally
   contained 12 `entry.initial_eligibility` events while staged-readiness health
   exposed only planning and staged-cycle families. A bounded query confirmed
