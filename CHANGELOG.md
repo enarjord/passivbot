@@ -4,6 +4,11 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Candle-fetch retry and exhaustion warnings now fit the normal rendered
+  console record budget while retaining exchange, symbol/timeframe, attempt,
+  elapsed time, exception class, and action. Structured diagnostics, redaction,
+  retry behavior, candle readiness, and trading behavior are unchanged.
+
 - Required-EMA-unavailable warnings now use a bounded structured console/text
   projection with counts, classified cause, nontradable-until-fresh action,
   and compact symbol/error/EMA identity. The complete structured payload,
