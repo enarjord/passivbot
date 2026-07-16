@@ -109,6 +109,33 @@ passivbot tool iterative-backtester configs/examples/ema_anchor.json --auto-run 
 passivbot tool iterative-history-plot backtests/.../fills.csv
 ```
 
+## Trailing parameter inspector
+
+`passivbot tool trailing-inspect` explains the effective `trailing_martingale` entry and close
+thresholds for a hypothetical position. It is offline and read-only. It shows each wallet-exposure
+and volatility contribution, the threshold boundary, the retracement distance from the running
+extreme, the nominal confirmation price if the reversal starts exactly at the threshold, and the
+order-reference price used after both conditions pass.
+
+Without `--config`, the command uses the Rust-owned strategy defaults. With `--config`, it loads the
+selected side's canonical `bot.<side>.strategy.trailing_martingale` parameters. Individual flags
+override either source. Percent values use config ratios, so `0.01` means 1%.
+
+```shell
+passivbot tool trailing-inspect \
+  --symbol COIN --side long \
+  --position-size 150 --position-price 20 \
+  --wallet-exposure 0.6 --effective-wallet-exposure-limit 0.9 \
+  --volatility-ema-1m 0.007 --volatility-ema-1h 0.0033
+
+passivbot tool trailing-inspect \
+  --config configs/examples/default_trailing_martingale_long.json \
+  --side long --position-price 20 \
+  --wallet-exposure 0.6 --effective-wallet-exposure-limit 0.9 \
+  --volatility-ema-1m 0.007 --volatility-ema-1h 0.0033 \
+  --entry-threshold-base-pct 0.02 --json
+```
+
 ## Historical data helpers
 
 - `passivbot download` – Pre-warm the v2 OHLCV store using the same config/date/exchange selection as backtesting.
