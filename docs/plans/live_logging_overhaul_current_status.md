@@ -22,36 +22,49 @@ Estimated completion:
 
 ## Active Review Slice
 
-- Branch: `codex/bound-clock-offset-refresh-console`, based on canonical
-  `a64159cf1d29c42113433c1990b38d9b8e1bd8fe` after PR #1258.
-- PR: #1259, `Bound exchange time-sync diagnostics`.
-- Slice: remove raw exception text from exchange clock-offset recovery/no-hook
-  warnings and durable `exchange.time_sync` diagnostics while retaining the
-  stable exception class, source, recovery result, and bounded client outcomes.
-- Triggering evidence: fresh post-PR #1258 VPS5 logs contained one natural
-  post-ready KuCoin clock-offset recovery warning at 266 visible characters,
-  including raw `InvalidNonce` exception text.
-- Scope: bound and redact only the human warning projection and corresponding
-  structured diagnostic field; preserve time-sync recovery, client refresh,
-  retry/caller policy, and all stable outcome facts.
-- Behavior boundary: observability-only; no clock-offset calculation, client
-  refresh, exception classification, retry, exchange call, Rust, order, risk,
+- Branch: `codex/bound-approved-coin-delta-console`, based on canonical
+  `e41118f0424ff3d4161e308b8844af5f35a8b7a9` after PR #1259.
+- PR: #1260, `Bound coin-list membership console output`.
+- Slice: make the existing `forager.eligibility_changed` event the sole normal
+  console/text owner for approved/ignored coin membership changes, with
+  per-side counts and bounded symbol samples.
+- Triggering evidence: fresh post-PR #1259 VPS5 startup logs contained natural
+  `added to approved_coins` records at 245-250 visible characters on Binance,
+  GateIO, and Hyperliquid. Each printed the complete changed symbol list and
+  exceeded the normal 240-character record budget.
+- Scope: add only a bounded structured console/text formatter and bounded
+  legacy fallback; preserve event admission and the existing structured/
+  monitor payload.
+- Behavior boundary: observability-only; no membership calculation, list
+  mutation, forager selection, config, exchange call, Rust, order, risk,
   backtest, optimizer, or trading behavior.
 - Review gate: temporary maintainer-authorized exact-head Hermes plus green CI
   while Grok is halted.
 - Expected VPS action: after merge, one authorized exact five-bot restart.
-  Validate natural time-sync warnings when available and settled smoke; do not
-  manufacture timestamp failures, exchange, state, risk, or trading events.
+  Validate the natural startup membership records and settled smoke; do not
+  manufacture exchange, state, risk, or trading events.
 
 ## Deployed Baseline
 
 - Canonical `master` and VPS5 are
-  `a64159cf1d29c42113433c1990b38d9b8e1bd8fe`, PR #1258. The tracked checkout
+  `e41118f0424ff3d4161e308b8844af5f35a8b7a9`, PR #1259. The tracked checkout
   is clean and expected untracked artifacts are preserved.
 - VPS5 runs merged master in bot PIDs
-  `971695/971697/971699/971701/971703`. The exact pane PIDs remain
+  `972601/972603/972605/972607/972609`. The exact pane PIDs remain
   `856294/856332/856364/856398/856434`, and unrelated `misc:0.0` PID `434835`
   is unchanged.
+- PR #1259 was activated after one exact five-bot SIGINT round; old PIDs
+  `971695/971697/971699/971701/971703` all exited naturally within 28 seconds
+  without escalation. The settled three-minute smoke was `ok=true` with zero
+  hard/log/monitor/process failures, `483/486` remote and `49/50`
+  account-critical calls successful, seven successful fill refreshes, all
+  three observed HSL replays completed, five matching/config-valid processes,
+  and a clean tracked checkout. The three recoverable remote failures were one
+  Binance `InvalidNonce` and two KuCoin candle timeouts. The natural Binance
+  clock-offset recovery line measured 203 visible characters, retained stable
+  recovery facts, and contained no raw exception text. A transient report-time
+  `D` sample cleared on direct process inspection. The same exact new logs
+  exposed natural approved-coin membership lines at 245-250 characters.
 - PR #1258 was activated after one exact five-bot SIGINT round; old PIDs
   `970778/970780/970782/970784/970786` all exited naturally within 24 seconds
   without escalation. The settled two-minute smoke was `ok=true` with zero
@@ -858,9 +871,12 @@ smoke. Its candidate-required-EMA target did not occur naturally in the new
 segments, and zero legacy summary duplicates appeared. PR #1258 is merged,
 deployed, and naturally validated: the observed candle-fetch retry warning
 measured 201 visible characters with zero legacy caller-bearing duplicates and
-a hard-green settled smoke. The active slice bounds and redacts the naturally
-observed 266-character clock-offset recovery warning without changing
-time-sync or trading behavior.
+a hard-green settled smoke. PR #1259 is also merged, deployed, and naturally
+validated: a real Binance `InvalidNonce` recovery produced a 203-character
+clock-offset line with no raw exception text and the settled smoke was
+hard-green. The active slice migrates the naturally observed 245-250-character
+coin-membership lists to one bounded structured console/text owner without
+changing eligibility or trading behavior.
 
 Do not create progress-only PRs or resume unrelated logging work from stale
 worktrees.

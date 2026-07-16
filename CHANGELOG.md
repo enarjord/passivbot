@@ -4,6 +4,11 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Approved/ignored coin membership changes now use one bounded structured
+  console/text projection with per-side counts and symbol samples instead of
+  unbounded legacy symbol lists. Existing structured event data, membership
+  calculation, list mutation, and trading behavior are unchanged.
+
 - Exchange clock-offset recovery warnings and durable time-sync diagnostics no
   longer retain raw exception text. They keep the stable exception class,
   source, recovery status, and bounded client outcome details within the normal
