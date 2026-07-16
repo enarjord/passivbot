@@ -1,9 +1,15 @@
 from __future__ import annotations
 
+import math
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from live.restart_smoke_targets import (
+    MAX_TARGET_SAMPLE_INTERVAL_S,
+    MAX_TARGET_SAMPLES,
+    MAX_TMUX_IDENTIFIER_CHARS,
+)
 from live.smoke_report import (
     DEFAULT_LOG_WINDOW_UNPARSED_POLICY,
     LOG_WINDOW_UNPARSED_POLICIES,
@@ -28,6 +34,9 @@ DEFAULT_INCIDENT_BUNDLE_OUTPUT_HELP = (
 )
 DEFAULT_MONITOR_ROOT = "monitor"
 DEFAULT_LOGS_ROOT = "logs"
+DEFAULT_TARGET_SAMPLES = 3
+DEFAULT_TARGET_SAMPLE_INTERVAL_S = 5.0
+MIN_STABLE_TARGET_SAMPLES = 2
 UNSAFE_PROCESS_SIGNAL_PATTERNS = (
     "pkill -f 'passivbot live'",
     "pgrep -f 'passivbot live' | xargs kill",
@@ -207,6 +216,77 @@ def _repo_check_commands(repo_path: str | Path | None) -> list[str]:
     ]
 
 
+def _target_preflight_plan(
+    supervisor_config: str | Path,
+    *,
+    session_name: str | None,
+    samples: int,
+    sample_interval_s: float,
+) -> dict[str, Any]:
+    samples = int(samples)
+    sample_interval_s = float(sample_interval_s)
+    if samples < MIN_STABLE_TARGET_SAMPLES or samples > MAX_TARGET_SAMPLES:
+        raise ValueError(
+            "target_samples must be between "
+            f"{MIN_STABLE_TARGET_SAMPLES} and {MAX_TARGET_SAMPLES}"
+        )
+    if (
+        not math.isfinite(sample_interval_s)
+        or sample_interval_s <= 0.0
+        or sample_interval_s > MAX_TARGET_SAMPLE_INTERVAL_S
+    ):
+        raise ValueError(
+            "target_sample_interval_s must be greater than 0 and at most "
+            f"{MAX_TARGET_SAMPLE_INTERVAL_S:g}"
+        )
+
+    confirmed_session = None
+    if session_name is not None:
+        confirmed_session = str(session_name).strip()
+        if not confirmed_session:
+            raise ValueError("target_session_name must be non-empty")
+        if len(confirmed_session) > MAX_TMUX_IDENTIFIER_CHARS:
+            raise ValueError(
+                "target_session_name must not exceed "
+                f"{MAX_TMUX_IDENTIFIER_CHARS} characters"
+            )
+
+    command = None
+    if confirmed_session is not None:
+        command = _shell_join(
+            [
+                "passivbot",
+                "tool",
+                "live-restart-target-report",
+                str(supervisor_config),
+                "--session-name",
+                confirmed_session,
+                "--samples",
+                str(samples),
+                "--interval-s",
+                f"{sample_interval_s:g}",
+                "--compact",
+            ]
+        )
+    return {
+        "configured": command is not None,
+        "session_name": confirmed_session,
+        "samples": samples,
+        "sample_interval_s": sample_interval_s,
+        "command": command,
+        "execute": False,
+        "required_for_future_execution": True,
+        "required_verdict": "ok=true and sampling.stable=true",
+        "expected_fields": [
+            "exact confirmed tmux session",
+            "complete expected window and pane inventory",
+            "exact pane ID and pane PID per configured bot",
+            "matched bot PID and pane ownership proof",
+            "multi-sample stable target identity verdict",
+        ],
+    }
+
+
 def _config_preflight_plan(bots: list[dict[str, Any]]) -> dict[str, Any]:
     commands: list[str] = []
     seen: set[str] = set()
@@ -346,6 +426,9 @@ def build_live_restart_smoke_plan(
     summary_smoke_report: bool = False,
     smoke_sections: list[str] | tuple[str, ...] | None = None,
     performance_sections: list[str] | tuple[str, ...] | None = None,
+    target_session_name: str | None = None,
+    target_samples: int = DEFAULT_TARGET_SAMPLES,
+    target_sample_interval_s: float = DEFAULT_TARGET_SAMPLE_INTERVAL_S,
     execute: bool = False,
 ) -> dict[str, Any]:
     if execute:
@@ -383,6 +466,12 @@ def build_live_restart_smoke_plan(
         for section in (performance_sections or ())
         if str(section).strip()
     ]
+    target_preflight_plan = _target_preflight_plan(
+        supervisor_config,
+        session_name=target_session_name,
+        samples=target_samples,
+        sample_interval_s=target_sample_interval_s,
+    )
 
     supervisor = parse_tmuxp_live_commands(supervisor_config)
     bots = list(supervisor.get("expected") or [])
@@ -395,6 +484,8 @@ def build_live_restart_smoke_plan(
         "does_not_start_passivbot_live",
         "does_not_contact_exchanges",
     ]
+    if not target_preflight_plan["configured"]:
+        warnings.append("stable_target_preflight_not_configured")
     issues: list[dict[str, str]] = []
     if supervisor.get("error"):
         issues.append(
@@ -456,6 +547,11 @@ def build_live_restart_smoke_plan(
     )
     config_preflight_plan = _config_preflight_plan(bots)
     config_preflight_commands = list(config_preflight_plan["commands"])
+    target_preflight_commands = (
+        [str(target_preflight_plan["command"])]
+        if target_preflight_plan["configured"]
+        else []
+    )
     planned_bots = []
     for index, bot in enumerate(bots, start=1):
         planned_bots.append(
@@ -498,6 +594,11 @@ def build_live_restart_smoke_plan(
             "smoke_sections": list(smoke_sections),
             "performance_sections": list(performance_sections),
             "incident_bundle_output": _display_path(incident_bundle_output),
+            "target_session_name": target_preflight_plan["session_name"],
+            "target_samples": target_preflight_plan["samples"],
+            "target_sample_interval_s": target_preflight_plan[
+                "sample_interval_s"
+            ],
         },
         "supervisor_config": {
             "path": _display_path(supervisor.get("path")),
@@ -517,6 +618,7 @@ def build_live_restart_smoke_plan(
                     {"command": command, "execute": False}
                     for command in _repo_check_commands(repo_path)
                     + config_preflight_commands
+                    + target_preflight_commands
                 ],
             },
             {
@@ -607,6 +709,7 @@ def build_live_restart_smoke_plan(
                 "cache-related live settings and readiness attention",
             ],
         },
+        "target_preflight": target_preflight_plan,
         "process_signal_safety": _process_signal_safety_contract(),
         "timeout_escalation_ladder": [
             {
@@ -652,6 +755,10 @@ def build_live_restart_smoke_plan(
         "execution_policy": {
             "execute_flag": "not_implemented",
             "future_execution_requires_review": True,
+            "future_execution_requires_stable_target_preflight": True,
+            "stable_target_preflight_configured": target_preflight_plan[
+                "configured"
+            ],
             "rejected_operations": [
                 "ssh",
                 "tmux signal/send-keys",
@@ -682,6 +789,7 @@ def summarize_live_restart_smoke_plan(report: dict[str, Any]) -> dict[str, Any]:
     smoke_report = report.get("smoke_report")
     incident_bundle = report.get("incident_bundle")
     config_preflight = report.get("config_preflight")
+    target_preflight = report.get("target_preflight")
     execution_policy = report.get("execution_policy")
     signal_safety = report.get("process_signal_safety")
     return {
@@ -753,6 +861,48 @@ def summarize_live_restart_smoke_plan(report: dict[str, Any]) -> dict[str, Any]:
                 else None
             ),
         },
+        "target_preflight": {
+            "configured": (
+                target_preflight.get("configured")
+                if isinstance(target_preflight, dict)
+                else False
+            ),
+            "session_name": (
+                target_preflight.get("session_name")
+                if isinstance(target_preflight, dict)
+                else None
+            ),
+            "samples": (
+                target_preflight.get("samples")
+                if isinstance(target_preflight, dict)
+                else None
+            ),
+            "sample_interval_s": (
+                target_preflight.get("sample_interval_s")
+                if isinstance(target_preflight, dict)
+                else None
+            ),
+            "command": (
+                target_preflight.get("command")
+                if isinstance(target_preflight, dict)
+                else None
+            ),
+            "execute": (
+                target_preflight.get("execute")
+                if isinstance(target_preflight, dict)
+                else None
+            ),
+            "required_for_future_execution": (
+                target_preflight.get("required_for_future_execution")
+                if isinstance(target_preflight, dict)
+                else None
+            ),
+            "required_verdict": (
+                target_preflight.get("required_verdict")
+                if isinstance(target_preflight, dict)
+                else None
+            ),
+        },
         "process_signal_safety": {
             "strategy": (
                 signal_safety.get("strategy") if isinstance(signal_safety, dict) else None
@@ -785,6 +935,18 @@ def summarize_live_restart_smoke_plan(report: dict[str, Any]) -> dict[str, Any]:
             ),
             "future_execution_requires_review": (
                 execution_policy.get("future_execution_requires_review")
+                if isinstance(execution_policy, dict)
+                else None
+            ),
+            "future_execution_requires_stable_target_preflight": (
+                execution_policy.get(
+                    "future_execution_requires_stable_target_preflight"
+                )
+                if isinstance(execution_policy, dict)
+                else None
+            ),
+            "stable_target_preflight_configured": (
+                execution_policy.get("stable_target_preflight_configured")
                 if isinstance(execution_policy, dict)
                 else None
             ),

@@ -85,6 +85,23 @@ def test_live_restart_smoke_plan_builds_plan_from_supervisor_config(tmp_path):
             "cache-related live settings and readiness attention",
         ],
     }
+    assert report["target_preflight"] == {
+        "configured": False,
+        "session_name": None,
+        "samples": 3,
+        "sample_interval_s": 5.0,
+        "command": None,
+        "execute": False,
+        "required_for_future_execution": True,
+        "required_verdict": "ok=true and sampling.stable=true",
+        "expected_fields": [
+            "exact confirmed tmux session",
+            "complete expected window and pane inventory",
+            "exact pane ID and pane PID per configured bot",
+            "matched bot PID and pane ownership proof",
+            "multi-sample stable target identity verdict",
+        ],
+    }
     assert (
         report["phases"][0]["planned_commands"][-1]["command"]
         == "passivbot tool live-config-preflight configs/forager.json --compact"
@@ -134,6 +151,89 @@ def test_live_restart_smoke_plan_builds_plan_from_supervisor_config(tmp_path):
         "rejected_operations"
     ]
     assert "does_not_start_passivbot_live" in report["warnings"]
+    assert "stable_target_preflight_not_configured" in report["warnings"]
+
+
+def test_live_restart_smoke_plan_binds_stable_target_preflight(tmp_path):
+    supervisor_config = tmp_path / "bots vps5.yaml"
+    _write_supervisor(
+        supervisor_config,
+        [
+            "session_name: passivbot",
+            "windows:",
+            "  - window_name: binance_01",
+            "    panes:",
+            "      - passivbot live configs/forager.json -u binance_01",
+        ],
+    )
+
+    report = build_live_restart_smoke_plan(
+        supervisor_config,
+        target_session_name="passivbot ops",
+        target_samples=4,
+        target_sample_interval_s=2.5,
+    )
+
+    expected_command = (
+        "passivbot tool live-restart-target-report "
+        f"'{supervisor_config}' --session-name 'passivbot ops' "
+        "--samples 4 --interval-s 2.5 --compact"
+    )
+    assert report["ok"] is True
+    assert report["target_preflight"] == {
+        "configured": True,
+        "session_name": "passivbot ops",
+        "samples": 4,
+        "sample_interval_s": 2.5,
+        "command": expected_command,
+        "execute": False,
+        "required_for_future_execution": True,
+        "required_verdict": "ok=true and sampling.stable=true",
+        "expected_fields": [
+            "exact confirmed tmux session",
+            "complete expected window and pane inventory",
+            "exact pane ID and pane PID per configured bot",
+            "matched bot PID and pane ownership proof",
+            "multi-sample stable target identity verdict",
+        ],
+    }
+    assert report["phases"][0]["planned_commands"][-1] == {
+        "command": expected_command,
+        "execute": False,
+    }
+    assert report["execution_policy"][
+        "future_execution_requires_stable_target_preflight"
+    ] is True
+    assert report["execution_policy"]["stable_target_preflight_configured"] is True
+    assert "stable_target_preflight_not_configured" not in report["warnings"]
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "message"),
+    [
+        ({"target_samples": 1}, "target_samples must be between 2 and 5"),
+        ({"target_samples": 6}, "target_samples must be between 2 and 5"),
+        (
+            {"target_sample_interval_s": -0.1},
+            "target_sample_interval_s must be greater than 0 and at most 30",
+        ),
+        (
+            {"target_sample_interval_s": 0},
+            "target_sample_interval_s must be greater than 0 and at most 30",
+        ),
+        (
+            {"target_sample_interval_s": 31},
+            "target_sample_interval_s must be greater than 0 and at most 30",
+        ),
+        (
+            {"target_session_name": " "},
+            "target_session_name must be non-empty",
+        ),
+    ],
+)
+def test_live_restart_smoke_plan_validates_target_preflight_bounds(kwargs, message):
+    with pytest.raises(ValueError, match=message):
+        build_live_restart_smoke_plan("bots.yaml", **kwargs)
 
 
 def test_live_restart_smoke_plan_can_focus_smoke_sections(tmp_path):
@@ -375,7 +475,18 @@ def test_live_restart_smoke_plan_cli_outputs_json(tmp_path, capsys):
 
     assert (
         live_restart_smoke_plan.main(
-            [str(supervisor_config), "--compact", "--shutdown-timeout-s", "30"]
+            [
+                str(supervisor_config),
+                "--compact",
+                "--shutdown-timeout-s",
+                "30",
+                "--target-session-name",
+                "passivbot",
+                "--target-samples",
+                "4",
+                "--target-interval-s",
+                "2.5",
+            ]
         )
         == 0
     )
@@ -406,6 +517,13 @@ def test_live_restart_smoke_plan_cli_outputs_json(tmp_path, capsys):
         in report["incident_bundle"]["command"]
     )
     assert "--compact" in report["incident_bundle"]["command"]
+    assert report["target_preflight"]["configured"] is True
+    assert report["target_preflight"]["session_name"] == "passivbot"
+    assert report["target_preflight"]["samples"] == 4
+    assert report["target_preflight"]["sample_interval_s"] == 2.5
+    assert report["target_preflight"]["command"].endswith(
+        "--session-name passivbot --samples 4 --interval-s 2.5 --compact"
+    )
 
 
 def test_live_restart_smoke_plan_can_disable_planned_event_scan_bounds(
@@ -539,6 +657,7 @@ def test_live_restart_smoke_plan_summary_projects_concise_commands(tmp_path, cap
         supervisor_config,
         repo_path="/srv/passivbot",
         smoke_window_minutes=7,
+        target_session_name="passivbot",
     )
     summary = summarize_live_restart_smoke_plan(full_report)
 
@@ -569,11 +688,29 @@ def test_live_restart_smoke_plan_summary_projects_concise_commands(tmp_path, cap
         "execute": False,
         "skipped_without_config_path_count": 0,
     }
+    assert summary["target_preflight"] == {
+        "configured": True,
+        "session_name": "passivbot",
+        "samples": 3,
+        "sample_interval_s": 5.0,
+        "command": (
+            "passivbot tool live-restart-target-report "
+            f"{supervisor_config} --session-name passivbot --samples 3 "
+            "--interval-s 5 --compact"
+        ),
+        "execute": False,
+        "required_for_future_execution": True,
+        "required_verdict": "ok=true and sampling.stable=true",
+    }
     assert summary["incident_bundle"]["event_segments"] == (
         "disabled_by_default_for_fast_restart_smoke_bundle"
     )
     assert summary["timeout_escalation_ladder"][1]["planned_command_count"] == 2
     assert summary["execution_policy"]["execute_flag"] == "not_implemented"
+    assert summary["execution_policy"][
+        "future_execution_requires_stable_target_preflight"
+    ] is True
+    assert summary["execution_policy"]["stable_target_preflight_configured"] is True
     assert summary["execution_policy"]["rejected_operation_count"] >= 1
     assert summary["warnings"]["count"] == len(full_report["warnings"])
     assert summary["issues"] == {"count": 0, "items": []}
