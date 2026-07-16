@@ -344,6 +344,10 @@ Related detailed plans:
      reports retain the latest lifecycle's per-bot startup snapshot independent
      of current-before-rotated file traversal while preserving historical
      aggregate distributions.
+   - 2026-07-16: Active `codex/startup-budget-coverage-summary` slice makes the
+     brief projection aggregate existing elapsed/phase budget statuses so
+     unavailable or no-baseline phases cannot look implicitly within budget.
+     It remains report-only and non-enforcing.
 
 5. [x] Resource pressure telemetry.
    Status: initial implementation merged. `health.summary` events now include
@@ -626,11 +630,10 @@ Related detailed plans:
     hysteresis diagnostics, transition cadence, Rust output, selection, and
     trading behavior.
 
-    Two post-PR #1220 console observations remain deferred rather than folded
-    into the realized-loss slice. Hyperliquid balance lines surfaced signed
-    floating-point jitter near `1e-13`; decide a console-only materiality or
-    display-normalization contract without changing structured balance data.
-    KuCoin emitted paired per-symbol required-EMA warnings with overlapping
+    Of two post-PR #1220 console observations, PR #1233 resolved Hyperliquid
+    balance jitter by admitting console/text balance changes only when the
+    snapped balance changes while retaining every raw structured event. KuCoin
+    emitted paired per-symbol required-EMA warnings with overlapping
     context and a long nested error; trace producer ownership and fail-closed
     semantics before changing either line because EMA availability is
     trading-critical.

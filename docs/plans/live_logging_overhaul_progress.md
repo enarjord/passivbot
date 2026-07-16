@@ -15,7 +15,26 @@ merge, live smoke evidence changes, or new gaps are discovered.
 - Do not use this file for design churn; unresolved design details belong in the
   plan or a focused handoff doc.
 
-## Latest Canonical Deployment (PR #1264)
+## Latest Canonical Deployment (PR #1265)
+
+- PR #1265 merged to `master` as
+  `fc4a134fb7b856ea426afb750559ff7ae94c7a07`. It adds a bounded, value-free,
+  read-only historical log inventory; it does not mutate artifacts, contact an
+  exchange, or change bot behavior.
+- VPS5 fast-forwarded cleanly with no restart. A bounded dry run scanned 40 of
+  1,182 discovered files at most 250,000 decompressed bytes each, skipped six
+  symlinks, and had zero discovery or read errors. Ten retained May logs
+  contained private websocket/query credential classes; no matched values or
+  source lines were emitted, and no remediation was attempted.
+- Exact bot PIDs `979190/979193/979196/979199/979202`, pane parents, and
+  unrelated `misc:0.0` PID `434835` remained unchanged. The tracked checkout
+  remained clean with expected untracked artifacts preserved.
+- The next report-only slice makes brief startup timing output disclose
+  existing budget-assessment status coverage, so zero over-budget phases
+  cannot be mistaken for complete assessment when baselines or latest timings
+  are unavailable.
+
+## Previous Canonical Deployment (PR #1264)
 
 - PR #1264 merged to `master` as
   `8e55f3642841b0730afc7e7b2b73632a8e7d8071`. It keeps successful maintainer

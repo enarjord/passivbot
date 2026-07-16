@@ -4,6 +4,10 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Brief live smoke reports now summarize startup elapsed/phase budget status
+  coverage, distinguishing unavailable and no-baseline assessments from
+  within-budget phases without changing startup behavior or thresholds.
+
 - A new read-only `log-secret-inventory` tool scans bounded current and rotated
   text-log input for secret-like artifact classes without returning matched
   values or source lines. Reports contain only aggregate class counts, bounded

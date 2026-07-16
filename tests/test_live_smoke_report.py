@@ -3670,6 +3670,10 @@ def test_live_smoke_report_summarizes_startup_phase_baselines(tmp_path):
         "bots": 1,
         "phases": 2,
         "over_budget_phases": 2,
+        "incomplete_budget_phases": 0,
+        "invalid_or_missing_budget_assessments": 0,
+        "elapsed_budget_status_counts": {"over_budget": 2},
+        "phase_budget_status_counts": {"over_budget": 2},
         "startup_phase_bots": 1,
         "max_latest_elapsed_ms": 10000,
         "max_latest_phase_ms": 7000,
@@ -3724,6 +3728,61 @@ def test_live_smoke_report_startup_budget_no_baseline(tmp_path):
     assert "trading_impact" not in phase
     brief = summarize_live_smoke_report_brief(report)
     assert "readiness_scope_counts" not in brief["startup_timings"]
+    assert brief["startup_timings"]["elapsed_budget_status_counts"] == {
+        "no_baseline": 1
+    }
+    assert brief["startup_timings"]["phase_budget_status_counts"] == {
+        "no_baseline": 1
+    }
+    assert brief["startup_timings"]["incomplete_budget_phases"] == 1
+    assert brief["startup_timings"]["invalid_or_missing_budget_assessments"] == 0
+
+
+def test_brief_startup_timings_counts_budget_coverage_and_malformed_metadata():
+    brief = smoke_report_module._brief_startup_timings(
+        [
+            {
+                "phases": {
+                    "available": {
+                        "elapsed_budget": {"status": "within_budget"},
+                        "phase_budget": {"status": "over_budget"},
+                    },
+                    "no-baseline": {
+                        "elapsed_budget": {"status": "no_baseline"},
+                        "phase_budget": {"status": "within_budget"},
+                    },
+                    "unavailable": {
+                        "elapsed_budget": {"status": "unavailable"},
+                        "phase_budget": {"status": "no_baseline"},
+                    },
+                    "malformed": {
+                        "elapsed_budget": None,
+                        "phase_budget": {"status": []},
+                    },
+                }
+            }
+        ]
+    )
+
+    assert brief == {
+        "bots": 1,
+        "phases": 4,
+        "over_budget_phases": 1,
+        "incomplete_budget_phases": 3,
+        "invalid_or_missing_budget_assessments": 2,
+        "elapsed_budget_status_counts": {
+            "no_baseline": 1,
+            "unavailable": 2,
+            "within_budget": 1,
+        },
+        "phase_budget_status_counts": {
+            "no_baseline": 1,
+            "over_budget": 1,
+            "unavailable": 1,
+            "within_budget": 1,
+        },
+        "startup_phase_bots": 0,
+    }
 
 
 def test_live_smoke_report_startup_readiness_resets_on_bot_started(tmp_path):
@@ -3792,6 +3851,10 @@ def test_live_smoke_report_startup_readiness_resets_on_bot_started(tmp_path):
         "bots": 1,
         "phases": 1,
         "over_budget_phases": 0,
+        "incomplete_budget_phases": 1,
+        "invalid_or_missing_budget_assessments": 0,
+        "elapsed_budget_status_counts": {"no_baseline": 1},
+        "phase_budget_status_counts": {"no_baseline": 1},
         "startup_phase_bots": 0,
         "max_latest_elapsed_ms": 1000,
         "max_latest_phase_ms": 1000,
