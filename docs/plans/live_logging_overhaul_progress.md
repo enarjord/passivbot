@@ -15,7 +15,33 @@ merge, live smoke evidence changes, or new gaps are discovered.
 - Do not use this file for design churn; unresolved design details belong in the
   plan or a focused handoff doc.
 
-## Latest Canonical Deployment (PR #1252)
+## Latest Canonical Deployment (PR #1253)
+
+- PR #1253 merged to `master` as `048f1a722afe11a5e3aeda2340859893d6c8bb49`
+  after exact-head Hermes approval and green Python/Rust CI while Grok was
+  temporarily halted. It compacts only the structured initial-entry
+  distance-gate blocked/cleared console projection; payload, admission,
+  fallback, gate decisions, and trading behavior are unchanged.
+- VPS5 fast-forwarded cleanly and sent one SIGINT round to exact old PIDs
+  `963164/963166/964008/963169/963170`; all exited naturally within four
+  seconds, with no escalation. Pane PIDs and unrelated `misc:0.0` PID `434835`
+  were preserved. Final PIDs are `965117/965119/965121/965123/965124` for
+  Binance/KuCoin/GateIO/OKX/Hyperliquid respectively.
+- Sixteen natural blocked records across Binance, GateIO, and OKX measured
+  181-190 visible characters. None exceeded 240 and zero legacy duplicate
+  appeared in the exact post-deploy log files.
+- The initial window contained active expected HSL replay and one recoverable
+  KuCoin authoritative-state timeout cycle. The final two-minute smoke was
+  `ok=true` with zero hard/log/monitor/process failures, `52/52`
+  account-critical calls successful, eight successful fill refreshes, no
+  active HSL replay, five matching/config-valid processes in normal `R/S`
+  states, and clean tracked `master`. One non-account-critical KuCoin OHLCV
+  timeout remained non-hard evidence.
+- The same exact new log files contained natural candle-health transition
+  summaries at 257-263 visible characters on Binance, GateIO, and OKX. The
+  next slice bounds only that human INFO projection.
+
+## Previous Canonical Deployment (PR #1252)
 
 - PR #1252 merged to `master` as `4ccf1e2523a217caa78b3ce3acbf2c949590926d`
   after exact-head Hermes approval and green Python/Rust CI while Grok was

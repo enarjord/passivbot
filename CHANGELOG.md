@@ -4,6 +4,11 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Candle-health transition summaries now retain their aggregate counts and
+  bounded missing-candle examples within the normal console record budget.
+  Complete debug diagnostics, candle-health calculations, fetch behavior,
+  readiness checks, and trading behavior are unchanged.
+
 - Initial-entry distance-gate blocked/cleared events now use a bounded compact
   console/text projection while retaining the complete structured payload,
   existing event admission, and legacy fallback. Entry eligibility, distance
