@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import sys
 import time
 from pathlib import Path
@@ -13,6 +14,8 @@ if str(SRC_ROOT) not in sys.path:
 from live.smoke_report import (  # noqa: E402
     DEFAULT_LOG_WINDOW_UNPARSED_POLICY,
     LOG_WINDOW_UNPARSED_POLICIES,
+    MAX_PROCESS_SAMPLES,
+    MAX_PROCESS_SAMPLE_INTERVAL_S,
     build_live_smoke_report,
     default_logs_root_for_monitor,
     project_live_smoke_report_sections,
@@ -67,6 +70,26 @@ def build_parser() -> argparse.ArgumentParser:
         "--process-match",
         default="passivbot live",
         help="Substring used before canonicalizing passivbot live process rows.",
+    )
+    parser.add_argument(
+        "--process-samples",
+        type=int,
+        default=1,
+        help=(
+            "Read the local process table this many times and report bounded "
+            "state persistence/recovery. Default 1 preserves snapshot behavior; "
+            f"maximum {MAX_PROCESS_SAMPLES}."
+        ),
+    )
+    parser.add_argument(
+        "--process-sample-interval-s",
+        type=float,
+        default=5.0,
+        help=(
+            "Seconds between opt-in process samples. Used only when "
+            "--process-samples is greater than 1; maximum "
+            f"{MAX_PROCESS_SAMPLE_INTERVAL_S:g}."
+        ),
     )
     parser.add_argument(
         "--include-rotated",
@@ -206,12 +229,30 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--event-tail-lines must be non-negative")
     if int(args.max_event_files_per_bot) < 0:
         parser.error("--max-event-files-per-bot must be non-negative")
+    if (
+        int(args.process_samples) < 1
+        or int(args.process_samples) > MAX_PROCESS_SAMPLES
+    ):
+        parser.error(
+            f"--process-samples must be between 1 and {MAX_PROCESS_SAMPLES}"
+        )
+    if (
+        not math.isfinite(float(args.process_sample_interval_s))
+        or float(args.process_sample_interval_s) < 0.0
+        or float(args.process_sample_interval_s) > MAX_PROCESS_SAMPLE_INTERVAL_S
+    ):
+        parser.error(
+            "--process-sample-interval-s must be between 0 and "
+            f"{MAX_PROCESS_SAMPLE_INTERVAL_S:g}"
+        )
     report = build_live_smoke_report(
         args.monitor_root,
         logs_root=logs_root,
         include_processes=bool(args.processes),
         supervisor_config=args.supervisor_config,
         process_command_match=str(args.process_match),
+        process_samples=int(args.process_samples),
+        process_sample_interval_s=float(args.process_sample_interval_s),
         include_rotated=bool(args.include_rotated),
         since_ms=since_ms,
         until_ms=until_ms,

@@ -9170,3 +9170,24 @@ active branch, PR, review gate, and rollout instructions.
   repeated verbose field names already represented in the complete event. The
   active `codex/compact-trailing-status-console` follow-up is formatter-only and
   targets the normal 240-character budget without changing payload or behavior.
+
+### 2026-07-16: Cycle Recovery Health Deployed; Process Sampling Follow-Up
+
+- PR #1282 merged to canonical `master` at `82bfa98e20` after exact-head
+  Hermes approval and green Python/Rust CI under the temporary
+  maintainer-authorized Hermes-plus-CI gate. VPS5 fast-forwarded cleanly
+  without a restart or process signal; the five exact bot PIDs, pane parents,
+  and unrelated `misc:0.0` PID `434835` remained unchanged.
+- The immediate focused report naturally retained a latest KuCoin
+  `InvalidNonce` degradation. The fresh two-minute smoke was `ok=true` with
+  zero hard failures, `193/194` remote calls, `56/57` account-critical calls,
+  `9/9` fill refreshes, and five exact/config-valid processes.
+- The settled focused report was `ok=true`: all five latest cycle outcomes
+  were successful, and KuCoin was counted as completed after the retained
+  degradation. A final exact process check then observed that unchanged
+  KuCoin PID in `D` for about 20 seconds before three consecutive `R` samples.
+  No event, failure, process state, or trading activity was manufactured.
+- The active `codex/smoke-process-state-sampling` follow-up adds opt-in bounded
+  process-state sampling so repeated smoke checks can distinguish observed,
+  persistent, and recovered uninterruptible sleep while preserving the
+  one-snapshot default and existing smoke verdict.

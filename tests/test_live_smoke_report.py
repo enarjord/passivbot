@@ -8177,6 +8177,28 @@ def test_live_smoke_report_cli_rejects_negative_max_event_files_per_bot(capsys):
     assert "--max-event-files-per-bot must be non-negative" in capsys.readouterr().err
 
 
+def test_live_smoke_report_cli_rejects_unbounded_process_sampling(capsys):
+    with pytest.raises(SystemExit) as exc_info:
+        live_smoke_report.main(
+            [
+                "monitor",
+                "--process-samples",
+                str(smoke_report_module.MAX_PROCESS_SAMPLES + 1),
+            ]
+        )
+
+    assert exc_info.value.code == 2
+    assert "--process-samples must be between" in capsys.readouterr().err
+
+    with pytest.raises(SystemExit) as exc_info:
+        live_smoke_report.main(
+            ["monitor", "--process-sample-interval-s", "nan"]
+        )
+
+    assert exc_info.value.code == 2
+    assert "--process-sample-interval-s must be between" in capsys.readouterr().err
+
+
 def test_live_smoke_report_process_status_matches_supervisor_config(
     tmp_path,
     monkeypatch,
@@ -8366,6 +8388,156 @@ def test_live_smoke_report_summarizes_current_process_pressure(
     assert {key: summary["processes"][key] for key in expected} == expected
     assert {key: brief["processes"][key] for key in expected} == expected
     json.dumps(report["processes"], allow_nan=False)
+
+
+def test_live_smoke_report_samples_process_state_recovery_and_persistence(
+    tmp_path,
+    monkeypatch,
+):
+    _write_minimal_monitor_event(tmp_path / "monitor")
+    command = (
+        "/root/passivbot/venv/bin/passivbot live "
+        "configs/forager.json -u binance_01"
+    )
+    gateio_command = (
+        "/root/passivbot/venv/bin/passivbot live "
+        "configs/forager.json -u gateio_01"
+    )
+    scans = iter(
+        [
+            (
+                [
+                    f"123 1 42 Dl+ 1.0 2.0 100 {command}",
+                    f"456 1 42 D 1.0 2.0 100 {gateio_command}",
+                ],
+                None,
+            ),
+            (
+                [
+                    f"123 1 47 Rl+ 1.0 2.0 100 {command}",
+                    f"456 1 47 D 1.0 2.0 100 {gateio_command}",
+                    f"789 1 1 R 1.0 2.0 100 {command}",
+                ],
+                None,
+            ),
+            (
+                [
+                    f"123 1 52 Rl+ 1.0 2.0 100 {command}",
+                    f"456 1 52 D 1.0 2.0 100 {gateio_command}",
+                    f"789 1 6 R 1.0 2.0 100 {command}",
+                ],
+                None,
+            ),
+        ]
+    )
+    sleeps = []
+    monkeypatch.setattr(smoke_report_module, "_ps_process_rows", lambda: next(scans))
+    monkeypatch.setattr(smoke_report_module.time, "sleep", sleeps.append)
+
+    report = build_live_smoke_report(
+        tmp_path / "monitor",
+        logs_root=None,
+        include_processes=True,
+        process_samples=3,
+        process_sample_interval_s=5.0,
+    )
+    summary = summarize_live_smoke_report(report)
+    brief = summarize_live_smoke_report_brief(report)
+    sampling = report["processes"]["sampling"]
+
+    assert sleeps == [5.0, 5.0]
+    assert sampling == {
+        "enabled": True,
+        "requested_samples": 3,
+        "completed_samples": 3,
+        "interval_s": 5.0,
+        "scheduled_span_s": 10.0,
+        "scan_error_count": 0,
+        "pids_observed": 3,
+        "stable_pids": 2,
+        "command_pid_churn_count": 1,
+        "uninterruptible_observed_count": 2,
+        "uninterruptible_persistent_count": 1,
+        "uninterruptible_recovered_count": 1,
+        "uninterruptible_active_count": 1,
+        "state_observations": {"D": 4, "R": 4},
+        "groups": [
+            {
+                "pid": 123,
+                "account": "binance_01",
+                "config_path": "configs/forager.json",
+                "config_key": "binance_01:configs/forager.json",
+                "sample_count": 3,
+                "states": {"D": 1, "R": 2},
+                "first_state": "D",
+                "latest_state": "R",
+                "present_in_final_sample": True,
+                "uninterruptible_observations": 1,
+                "observed_uninterruptible": True,
+                "persistent_uninterruptible": False,
+                "recovered_from_uninterruptible": True,
+            },
+            {
+                "pid": 456,
+                "account": "gateio_01",
+                "config_path": "configs/forager.json",
+                "config_key": "gateio_01:configs/forager.json",
+                "sample_count": 3,
+                "states": {"D": 3},
+                "first_state": "D",
+                "latest_state": "D",
+                "present_in_final_sample": True,
+                "uninterruptible_observations": 3,
+                "observed_uninterruptible": True,
+                "persistent_uninterruptible": True,
+                "recovered_from_uninterruptible": False,
+            },
+            {
+                "pid": 789,
+                "account": "binance_01",
+                "config_path": "configs/forager.json",
+                "config_key": "binance_01:configs/forager.json",
+                "sample_count": 2,
+                "states": {"R": 2},
+                "first_state": "R",
+                "latest_state": "R",
+                "present_in_final_sample": True,
+                "uninterruptible_observations": 0,
+                "observed_uninterruptible": False,
+                "persistent_uninterruptible": False,
+                "recovered_from_uninterruptible": False,
+            },
+        ],
+        "groups_truncated": False,
+    }
+    assert summary["processes"]["sampling"]["groups"] == sampling["groups"]
+    assert brief["processes"]["sampling"] == {
+        key: sampling[key] for key in smoke_report_module.PROCESS_SAMPLING_FIELDS
+    }
+    assert report["ok"] is True
+    rendered = json.dumps(sampling, sort_keys=True)
+    assert "passivbot live" not in rendered
+    assert "/root/passivbot" not in rendered
+    assert "secret" not in rendered
+
+
+def test_live_smoke_report_rejects_unbounded_process_sampling(tmp_path):
+    _write_minimal_monitor_event(tmp_path / "monitor")
+
+    with pytest.raises(ValueError, match="process_samples must be between"):
+        build_live_smoke_report(
+            tmp_path / "monitor",
+            logs_root=None,
+            include_processes=True,
+            process_samples=smoke_report_module.MAX_PROCESS_SAMPLES + 1,
+        )
+    with pytest.raises(ValueError, match="process_sample_interval_s must be between"):
+        build_live_smoke_report(
+            tmp_path / "monitor",
+            logs_root=None,
+            include_processes=True,
+            process_sample_interval_s=float("inf"),
+        )
 
 
 def test_live_smoke_report_process_status_reports_duplicates_and_extra_live_processes(
