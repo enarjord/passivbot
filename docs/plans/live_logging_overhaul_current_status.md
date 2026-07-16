@@ -24,7 +24,7 @@ Estimated completion:
 
 - Branch: `codex/bound-candle-fetch-failure-console`, based on canonical
   `b1a637c0def5349b6d6fb94de34c8c6c044bd307` after PR #1257.
-- PR: pending, `Bound candle-fetch failure console output`.
+- PR: #1258, `Bound candle-fetch failure console output`.
 - Slice: keep candle-fetch retry/exhaustion warnings within the normal console
   record budget while retaining operation, exchange, symbol/timeframe,
   attempt, elapsed time, exception class, and action.
