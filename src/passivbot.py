@@ -615,10 +615,14 @@ class Passivbot:
     # The longest live INFO prefix is 44 characters: timestamp, level, and Hyperliquid.
     CANDLE_HEALTH_CONSOLE_MESSAGE_MAX_LEN = 196
     FORAGER_SELECTION_CONSOLE_MESSAGE_MAX_LEN = 196
+    EXCHANGE_TIME_SYNC_CONSOLE_MESSAGE_MAX_LEN = 196
     _CANDLE_HEALTH_CONSOLE_SAMPLE_LIMIT = 3
     _CANDLE_HEALTH_CONSOLE_SYMBOL_MAX_LEN = 24
     _CANDLE_HEALTH_CONSOLE_TIMEFRAME_MAX_LEN = 8
     _CANDLE_HEALTH_CONSOLE_INT_MAX = 999_999
+    _EXCHANGE_TIME_SYNC_CONSOLE_SOURCE_MAX_LEN = 24
+    _EXCHANGE_TIME_SYNC_CONSOLE_ERROR_TYPE_MAX_LEN = 24
+    _EXCHANGE_TIME_SYNC_CONSOLE_CLIENT_MAX_LEN = 12
 
     _begin_live_event_cycle = live_event_emitters.begin_live_event_cycle
     _current_live_event_cycle_id = live_event_emitters.current_live_event_cycle_id
@@ -813,6 +817,77 @@ class Passivbot:
             symbol,
             Passivbot._log_order_type(order),
             type(error).__name__,
+        )
+
+    @staticmethod
+    def _format_exchange_time_sync_console_token(value: Any, max_len: int) -> str:
+        """Return a bounded single-field token for clock-offset recovery warnings."""
+        text = str(value)
+        text = "".join(
+            char
+            if char.isascii()
+            and char.isprintable()
+            and not char.isspace()
+            and char not in {"[", "]", ",", "|"}
+            else "_"
+            for char in text
+        )
+        if not text:
+            return "?"
+        if len(text) <= max_len:
+            return text
+        return f"{text[: max_len - 3]}..."
+
+    @staticmethod
+    def _format_exchange_time_sync_offset(value: Any) -> str:
+        """Return a numeric clock-offset token without retaining arbitrary option values."""
+        try:
+            number = float(value)
+        except (TypeError, ValueError, OverflowError):
+            return "?"
+        if not math.isfinite(number):
+            return "?"
+        return f"{number:.6g}"
+
+    @staticmethod
+    def _format_exchange_time_sync_warning(
+        *,
+        source: Any,
+        error: BaseException,
+        synced_clients: list[str],
+        failed_clients: list[str],
+        hook_available: bool,
+    ) -> str:
+        """Format the bounded legacy console projection for time-sync recovery."""
+        token = Passivbot._format_exchange_time_sync_console_token
+
+        def client_summary(clients: list[str]) -> str:
+            if not clients:
+                return "-"
+            sample = token(
+                clients[0], Passivbot._EXCHANGE_TIME_SYNC_CONSOLE_CLIENT_MAX_LEN
+            )
+            if len(clients) > 1:
+                sample += f",+{len(clients) - 1}"
+            return sample
+
+        recovered = bool(synced_clients)
+        if not hook_available:
+            action = "no_hook"
+            status = "skipped"
+        elif recovered and not failed_clients:
+            action = "offset_refreshed"
+            status = "succeeded"
+        else:
+            action = "offset_refresh_partial"
+            status = "degraded"
+        return (
+            f"[time] clock offset | action={action} "
+            f"source={token(source, Passivbot._EXCHANGE_TIME_SYNC_CONSOLE_SOURCE_MAX_LEN)} "
+            f"status={status} recovered={str(recovered).lower()} "
+            f"synced={len(synced_clients)}[{client_summary(synced_clients)}] "
+            f"failed={len(failed_clients)}[{client_summary(failed_clients)}] "
+            f"error_type={token(type(error).__name__, Passivbot._EXCHANGE_TIME_SYNC_CONSOLE_ERROR_TYPE_MAX_LEN)}"
         )
 
     async def _handle_order_write_failures(
@@ -2189,15 +2264,22 @@ class Passivbot:
                 if inspect.isawaitable(result):
                     await result
                 after = (getattr(client, "options", {}) or {}).get("timeDifference")
-                synced_clients.append(f"{client_name}:{before}->{after}")
+                synced_clients.append(
+                    f"{client_name}:{Passivbot._format_exchange_time_sync_offset(before)}"
+                    f"->{Passivbot._format_exchange_time_sync_offset(after)}"
+                )
             except Exception as sync_exc:
                 failed_clients.append(f"{client_name}:{type(sync_exc).__name__}")
         if not synced_clients and not failed_clients:
             logging.warning(
-                "[time] exchange timestamp/nonce error but no CCXT time-sync hook is available | source=%s error_type=%s error=%s",
-                source,
-                type(exc).__name__,
-                str(exc),
+                "%s",
+                Passivbot._format_exchange_time_sync_warning(
+                    source=source,
+                    error=exc,
+                    synced_clients=synced_clients,
+                    failed_clients=failed_clients,
+                    hook_available=False,
+                ),
             )
             self._emit_exchange_time_sync_event(
                 source=source,
@@ -2213,12 +2295,14 @@ class Passivbot:
         self._exchange_time_sync_last_log_ms = now_ms
         logging.log(
             level,
-            "[time] refreshed exchange clock offset after timestamp/nonce error | source=%s clients=%s failed=%s error_type=%s error=%s",
-            source,
-            ",".join(synced_clients) if synced_clients else "-",
-            ",".join(failed_clients) if failed_clients else "-",
-            type(exc).__name__,
-            str(exc),
+            "%s",
+            Passivbot._format_exchange_time_sync_warning(
+                source=source,
+                error=exc,
+                synced_clients=synced_clients,
+                failed_clients=failed_clients,
+                hook_available=True,
+            ),
         )
         self._emit_exchange_time_sync_event(
             source=source,

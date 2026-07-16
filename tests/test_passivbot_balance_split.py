@@ -10141,9 +10141,11 @@ async def test_exchange_time_sync_recovery_refreshes_ccxt_clients(caplog):
         ),
     )
 
-    exc = RuntimeError(
-        'binanceusdm {"code":-1021,"msg":"Timestamp for this request is outside of the recvWindow."}'
+    raw_error = (
+        'binanceusdm {"code":-1021,"msg":"Timestamp for this request is outside of '
+        'the recvWindow.","apiKey":"supersecret"}'
     )
+    exc = RuntimeError(raw_error)
     with caplog.at_level(logging.WARNING):
         recovered = await bot._maybe_recover_exchange_time_sync(
             exc, source="test"
@@ -10154,7 +10156,13 @@ async def test_exchange_time_sync_recovery_refreshes_ccxt_clients(caplog):
     bot.ccp.load_time_difference.assert_awaited_once()
     assert bot.cca.options["timeDifference"] == 25
     assert bot.ccp.options["timeDifference"] == 30
-    assert any("[time] refreshed exchange clock offset" in r.message for r in caplog.records)
+    warnings = [record.message for record in caplog.records if record.levelno == logging.WARNING]
+    assert warnings == [
+        "[time] clock offset | action=offset_refreshed source=test status=succeeded "
+        "recovered=true synced=2[cca:10->25,+1] failed=0[-] error_type=RuntimeError"
+    ]
+    assert raw_error not in warnings[0]
+    assert "supersecret" not in warnings[0]
     assert bot._live_event_pipeline.flush(timeout=2.0) is True
     assert len(sink.events) == 1
     event = sink.events[0]
@@ -10169,6 +10177,9 @@ async def test_exchange_time_sync_recovery_refreshes_ccxt_clients(caplog):
     assert event.data["recovered"] is True
     assert event.data["synced_clients"] == ["cca:10->25", "ccp:-5->30"]
     assert event.data["failed_clients"] == []
+    assert "error" not in event.data
+    assert raw_error not in str(event.data)
+    assert "supersecret" not in str(event.data)
     assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 
@@ -10193,7 +10204,12 @@ async def test_exchange_time_sync_no_hook_emits_unavailable_event(caplog):
         )
 
     assert recovered is False
-    assert any("no CCXT time-sync hook" in r.message for r in caplog.records)
+    warnings = [record.message for record in caplog.records if record.levelno == logging.WARNING]
+    assert warnings == [
+        "[time] clock offset | action=no_hook source=fetch_balance status=skipped "
+        "recovered=false synced=0[-] failed=0[-] error_type=RuntimeError"
+    ]
+    assert "supersecret" not in warnings[0]
     assert bot._live_event_pipeline.flush(timeout=2.0) is True
     assert len(sink.events) == 1
     event = sink.events[0]
@@ -10205,9 +10221,41 @@ async def test_exchange_time_sync_no_hook_emits_unavailable_event(caplog):
     assert event.data["recovered"] is False
     assert event.data["synced_count"] == 0
     assert event.data["failed_count"] == 0
-    assert "supersecret" not in event.data["error"]
-    assert "[redacted]" in event.data["error"]
+    assert event.data["error_type"] == "RuntimeError"
+    assert "error" not in event.data
+    assert "supersecret" not in str(event.data)
     assert bot._live_event_pipeline.close(timeout=2.0) is True
+
+
+def test_exchange_time_sync_warning_stays_within_full_console_line_budget():
+    error_type = type("TimeSync" + ("Error" * 100), (RuntimeError,), {})
+    raw_error = "timestamp failure apiKey=supersecret " + ("x" * 500)
+    message = Passivbot._format_exchange_time_sync_warning(
+        source="refresh_" + ("source" * 100),
+        error=error_type(raw_error),
+        synced_clients=["cca:" + ("1" * 100) + "->" + ("2" * 100)],
+        failed_clients=["ccp:" + ("RequestTimeout" * 100)],
+        hook_available=True,
+    )
+    record = logging.LogRecord(
+        "test", logging.WARNING, __file__, 0, "%s", (message,), None
+    )
+    record.created = 0.0
+    record.log_prefix = "hyperliquid"
+    formatter = logging.Formatter(DEFAULT_FORMAT_WITH_PREFIX, datefmt=DEFAULT_DATEFMT)
+    formatter.converter = time.gmtime
+    rendered = formatter.format(record)
+
+    assert raw_error not in message
+    assert "supersecret" not in message
+    assert "\n" not in message
+    assert "\r" not in message
+    assert "\t" not in message
+    assert len(message) <= Passivbot.EXCHANGE_TIME_SYNC_CONSOLE_MESSAGE_MAX_LEN
+    assert Passivbot.EXCHANGE_TIME_SYNC_CONSOLE_MESSAGE_MAX_LEN == 240 - (
+        len(rendered) - len(message)
+    )
+    assert len(rendered) <= 240
 
 
 @pytest.mark.asyncio
@@ -10256,7 +10304,11 @@ async def test_run_execution_loop_recovers_timestamp_error_without_traceback(cap
     bot.cca.load_time_difference.assert_awaited_once()
     bot.restart_bot_on_too_many_errors.assert_awaited_once()
     bot.execute_to_exchange.assert_not_awaited()
-    assert any("[time] refreshed exchange clock offset" in r.message for r in caplog.records)
+    assert any(
+        "[time] clock offset | action=offset_refreshed "
+        "source=run_execution_loop status=succeeded" in r.message
+        for r in caplog.records
+    )
     assert not [r for r in caplog.records if "error with run_execution_loop" in r.message]
 
 
