@@ -1017,7 +1017,7 @@ Related detailed plans:
     Status: partial. PR #1265 merged and deployed the bounded, value-free,
     read-only inventory and dry-run validation contract. PR #1267 recognizes
     credential query parameters in scheme-less request paths while preserving
-    the same report schema. The active aggregate-summary follow-up removes
+    the same report schema. PR #1268's active aggregate-summary follow-up removes
     per-file detail from shareable/operator output while preserving aggregate
     scan evidence. Quarantine or purge remains separate and requires explicit
     operator approval. A read-only VPS5 console-length audit on 2026-07-15
@@ -1046,7 +1046,7 @@ Related detailed plans:
     - 2026-07-16: PR #1267's bounded VPS5 scan classified 144 secret-query
       matches versus 143 private-websocket-query matches, proving one additional
       non-websocket query fragment was found without exposing values.
-    - 2026-07-16: Active `codex/log-secret-inventory-summary` adds an
+    - 2026-07-16: PR #1268 adds an
       aggregate-only projection after compact full output still measured roughly
       6,000 tokens for 40 file rows.
 

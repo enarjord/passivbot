@@ -24,8 +24,9 @@ Estimated completion:
 
 - Branch: `codex/log-secret-inventory-summary`, based on canonical
   `951e42d07303d5c78ca31d4df9ee5f21e5b931cb` after PR #1267.
-- PR: pending. Slice: add a bounded aggregate-only projection to the read-only
-  historical log inventory.
+- PR: #1268, `Add bounded log secret inventory summary`; semantic head
+  `0db1a8d847cba28d59d83c3a0dd13572db935699`. Slice: add a bounded
+  aggregate-only projection to the read-only historical log inventory.
 - Triggering evidence: the 40-file bounded #1267 VPS smoke emitted roughly
   6,000 tokens even with compact JSON because every per-file path, age, size,
   status, and hash remained present.
