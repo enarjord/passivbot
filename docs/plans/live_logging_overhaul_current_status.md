@@ -24,7 +24,8 @@ Estimated completion:
 
 - Branch: `codex/smoke-planned-action-health`, based on canonical
   `6378d40a55116f94fe65f1b24f4981101d838e74` after PR #1276.
-- PR: pending. Slice: project existing `rust_orchestrator.returned` and
+- PR: #1277, `Report planning-output smoke health`; semantic implementation
+  head `3796c32849`. Slice: project existing `rust_orchestrator.returned` and
   `action.planned` events into bounded planning-output smoke health.
 - Triggering evidence: a bounded post-PR #1276 inventory naturally contained
   36 correlated Rust-return/action-planned pairs across all five bots. The
