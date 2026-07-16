@@ -156,8 +156,29 @@ def test_tool_help_lists_supported_tools(capsys):
     assert "pareto-dash" in out
     assert "pareto-explorer" in out
     assert "streamline-json" in out
+    assert "trailing-inspect" in out
     assert "verify-hlcvs-data" in out
     assert "requires full install" in out
+
+
+def test_trailing_inspect_tool_dispatch_forwards_module_and_prog(monkeypatch):
+    captured = {}
+
+    def fake_invoke_module_main(module_name):
+        captured["module_name"] = module_name
+        captured["argv"] = sys.argv[:]
+        return True, 0
+
+    monkeypatch.setattr(cli_main, "_invoke_module_main", fake_invoke_module_main)
+
+    assert cli_main.main(["tool", "trailing-inspect", "--position-price", "20"]) == 0
+
+    assert captured["module_name"] == "tools.trailing_inspect"
+    assert captured["argv"] == [
+        "passivbot tool trailing-inspect",
+        "--position-price",
+        "20",
+    ]
 
 
 def test_console_main_reexecs_into_active_virtualenv(monkeypatch, tmp_path):

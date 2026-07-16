@@ -220,6 +220,10 @@ TOOL_COMMANDS: dict[str, CommandSpec] = {
         requires_full=True,
     ),
     "streamline-json": CommandSpec("tools.streamline_json", "reformat config or result JSON"),
+    "trailing-inspect": CommandSpec(
+        "tools.trailing_inspect",
+        "explain trailing_martingale entry and close thresholds",
+    ),
     "ticker-probe": CommandSpec(
         "tools.probe_ticker_capabilities",
         "read-only exchange ticker capability probe",
