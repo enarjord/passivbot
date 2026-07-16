@@ -22,39 +22,44 @@ Estimated completion:
 
 ## Active Review Slice
 
-- Branch: `codex/smoke-process-only-sampling`, based on canonical
-  `9bcf6c24fe4ec73bf8431277f32b9020d0349b5f` after PR #1283.
-- PR: #1285, `Add local-only live process report`; semantic implementation
-  head `e78a01df39`. Slice: expose the existing bounded local process sampler
-  through a dedicated `passivbot tool live-process-report` entrypoint.
-- Triggering evidence: the approved #1283 full smoke command was rejected by
-  the production-action approval layer as a possible authenticated exchange
-  probe even though the requested validation was process-only. Retrying or
-  working around that rejection would violate the live-action contract.
-- Scope: import only the process-report builder, accept only supervisor/match
-  and bounded sampling arguments, and emit an explicit machine-readable safety
-  contract alongside the established process/config verdict.
-- Behavior boundary: local reads are limited to the process table, an optional
-  supervisor config, and referenced local bot configs used by existing config
-  checks. The command does not read monitor events or text logs, access
-  credential stores, contact networks or exchanges, control processes, or
-  write files.
-- Validation: focused builder/CLI/safety/verdict/bounds regressions, direct CLI
-  dispatch verification, compilation, smoke-report regression tests, and docs
-  checks.
+- Branch: `codex/process-report-brief`, based on canonical
+  `175986fd9cd9912402fadf14411abbbf966a088d` after PR #1285.
+- PR: pending. Slice: add a bounded aggregate-only `--brief` projection to
+  `passivbot tool live-process-report`.
+- Triggering evidence: both post-merge VPS5 process reports were hard-green,
+  but the full command/config/process/group rows made the otherwise useful
+  repeated operator check very large. The settled report naturally proved
+  GateIO recovery and ended with all five exact processes in `R`.
+- Scope: preserve verdict, expected/matched/running and anomaly counts,
+  config-check totals, resource/state totals, and sampling recovery counters
+  while omitting command, account, path, PID, and per-process rows.
+- Behavior boundary: output projection only. Process discovery, config checks,
+  sampling bounds, safety contract, exit verdict, local read boundaries, and
+  the absence of network/exchange/process-control/file-write paths are
+  unchanged.
+- Validation: focused brief shape/omission/verdict tests, full process/smoke
+  report regressions, compilation, and docs checks.
 - Review gate: temporary maintainer-authorized exact-head Hermes plus green
   Python and Rust CI while Grok is halted.
-- Expected VPS action: pull and run the local-only process report after merge;
-  no bot restart or process signal is expected for this read-only tooling slice.
+- Expected VPS action: pull and run the local-only process report with
+  `--brief`; no bot restart or process signal is expected.
 
 ## Deployed Baseline
 
 - Canonical `master` and VPS5 are
-  `9bcf6c24fe4ec73bf8431277f32b9020d0349b5f`, PR #1283. VPS5 fast-forwarded
-  from `82bfa98e` with a tracked-clean checkout and expected untracked
-  artifacts preserved. The configured pane process IDs
-  `856294/856332/856364/856398/856434` and unrelated `misc:0.0` PID `434835`
+  `175986fd9cd9912402fadf14411abbbf966a088d`, PR #1285. VPS5 fast-forwarded
+  from `9bcf6c24` with a tracked-clean checkout. Configured pane process IDs
+  `856294/856332/856364/856398/856434`, exact bot PIDs
+  `985592/985594/985596/985598/985600`, and unrelated `misc:0.0` PID `434835`
   remained unchanged; no restart or process signal occurred.
+- The immediate four-sample local-only process report was `ok=true`: all five
+  expected commands/configs matched, with zero missing, duplicate, extra,
+  config, or scan failures and five stable PIDs. It naturally observed one
+  recovered Binance `D` sample and a GateIO `D` final sample. The settled
+  four-sample report was also `ok=true`, retained five stable PIDs and zero
+  hard failures, naturally observed GateIO recovery, and ended in `R=5` with
+  zero active or persistent uninterruptible processes. No exchange request,
+  process action, or event was manufactured.
 - PR #1283's merged process sampler passed current-head Python/Rust CI and 132
   focused local smoke/incident/docs tests. The requested VPS5 full smoke command
   was not executed after the production-action approval layer rejected it as a
@@ -1103,10 +1108,11 @@ snapshot health, and PR #1282's cycle terminal-outcome/recovery health are
 merged, deployed, and naturally validated. PR #1283's bounded multi-sample
 process-state recovery is also merged and deployed without a restart or process
 signal; its full VPS smoke remained intentionally unrun after the
-production-action rejection. Active PR #1285 adds the dedicated local-only
-`live-process-report` path for bounded process/supervisor validation without
-monitor, log, network, exchange, credential-store, file-write, or process-control
-access.
+production-action rejection. PR #1285's dedicated local-only
+`live-process-report` path is also merged, deployed, and naturally validated
+with five stable exact processes and recovered uninterruptible observations.
+The active `codex/process-report-brief` follow-up adds aggregate-only output for
+repeated operator checks without changing collection or safety behavior.
 
 Do not create progress-only PRs or resume unrelated logging work from stale
 worktrees.

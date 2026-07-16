@@ -9171,6 +9171,24 @@ active branch, PR, review gate, and rollout instructions.
   active `codex/compact-trailing-status-console` follow-up is formatter-only and
   targets the normal 240-character budget without changing payload or behavior.
 
+### 2026-07-16: Local-Only Process Report Deployed
+
+- PR #1285 merged to canonical `master` at `175986fd9c` after exact-head
+  Hermes approval and green Python/Rust CI. VPS5 fast-forwarded cleanly without
+  a restart or process signal; five pane parents, exact bot PIDs
+  `985592/985594/985596/985598/985600`, and `misc:0.0` PID `434835` remained
+  unchanged.
+- Immediate and settled four-sample local-only process reports were `ok=true`
+  with all five expected commands/configs matched, five stable PIDs, and zero
+  missing, duplicate, extra, config, or scan failures. The first report
+  naturally observed recovered Binance uninterruptible sleep and ended with
+  GateIO in `D`; the settled report naturally observed GateIO recovery and
+  ended `R=5` with zero active or persistent uninterruptible processes.
+- No exchange request, process action, or event was manufactured. The active
+  `codex/process-report-brief` follow-up adds aggregate-only repeated-check
+  output because the complete process/config/group rows are intentionally
+  detailed but too large for routine operator loops.
+
 ### 2026-07-16: Process Sampling Deployed; Local-Only Validation Split
 
 - PR #1283 merged to canonical `master` at `9bcf6c24fe` after current-head

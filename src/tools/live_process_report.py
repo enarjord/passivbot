@@ -14,6 +14,7 @@ from live.smoke_report import (  # noqa: E402
     MAX_PROCESS_SAMPLES,
     MAX_PROCESS_SAMPLE_INTERVAL_S,
     build_live_process_report,
+    summarize_live_process_report,
 )
 
 
@@ -73,6 +74,14 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--brief",
+        action="store_true",
+        help=(
+            "Emit aggregate process/config/sampling counters without command, "
+            "account, path, PID, or per-process rows."
+        ),
+    )
+    parser.add_argument(
         "--compact",
         action="store_true",
         help="Emit compact single-line JSON.",
@@ -93,13 +102,16 @@ def main(argv: list[str] | None = None) -> int:
         )
     except ValueError as exc:
         parser.error(str(exc))
+    output_processes = (
+        summarize_live_process_report(processes) if args.brief else processes
+    )
     report = {
         "schema_version": 1,
         "tool": "live-process-report",
         "ok": bool(processes.get("ok")),
         "hard_failures": int(processes.get("hard_failures") or 0),
         "safety": SAFETY_CONTRACT,
-        "processes": processes,
+        "processes": output_processes,
     }
     print(json.dumps(report, indent=None if args.compact else 2, sort_keys=True))
     return 0 if report["ok"] else 1
