@@ -24,9 +24,10 @@ Estimated completion:
 
 - Branch: `codex/startup-phase-budget-events`, based on canonical
   `f8ec74792d69e229fd63bf4cdf7ab7a092a79cd4` after PR #1268.
-- PR: pending. Slice: add optional durable diagnostic budgets to existing
-  `bot.startup_timing` events and make smoke reports prefer them over historical
-  p95 projections.
+- PR: #1269, `Add diagnostic startup phase budgets`; semantic head
+  `a7f460b384d1e1e684d71cb390c952ac718a5a3f`. Slice: add optional durable
+  diagnostic budgets to existing `bot.startup_timing` events and make smoke
+  reports prefer them over historical p95 projections.
 - Triggering evidence: PR #1266 made missing/no-baseline startup budget
   assessments explicit, but the only available budget remained a local prior
   p95. Operators still could not compare startup timing against an intentional
