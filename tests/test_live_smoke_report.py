@@ -4560,6 +4560,163 @@ def test_live_smoke_report_summarizes_latest_planning_snapshots_without_raw_data
     assert section["planning_snapshot_health"] == health
 
 
+def test_live_smoke_report_summarizes_cycle_completion_after_degradation(tmp_path):
+    binance_events = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    gateio_events = tmp_path / "monitor" / "gateio" / "gateio_01" / "events"
+    _write_ndjson(
+        binance_events / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="cycle.completed",
+                seq=1,
+                ts=500,
+                level="debug",
+                reason_code="",
+                ids={"cycle_id": "cy_older"},
+                data={"elapsed_ms": 9999, "orders_changed": False},
+            ),
+            _monitor_row(
+                event_type="cycle.degraded",
+                seq=2,
+                ts=1000,
+                status="degraded",
+                level="error",
+                reason_code="RequestTimeout",
+                ids={"cycle_id": "cy_failed"},
+                data={
+                    "timings_ms": {
+                        "authoritative": 900,
+                        "UNSAFE_PHASE_SHOULD_NOT_RENDER": 9999,
+                    },
+                    "details": "DETAILS_SHOULD_NOT_RENDER",
+                    "exception": "EXCEPTION_SHOULD_NOT_RENDER",
+                },
+            ),
+            _monitor_row(
+                event_type="cycle.completed",
+                seq=3,
+                ts=2000,
+                status="succeeded",
+                level="debug",
+                reason_code="",
+                ids={"cycle_id": "cy_recovered"},
+                data={
+                    "elapsed_ms": 120,
+                    "timings_ms": {
+                        "authoritative": 40,
+                        "execute": 50,
+                        "monitor_flush": 30,
+                        "UNSAFE_PHASE_SHOULD_NOT_RENDER": 9999,
+                    },
+                    "orders_changed": True,
+                    "raw_ref": "RAW_REF_SHOULD_NOT_RENDER",
+                },
+            ),
+        ],
+    )
+    _write_ndjson(
+        gateio_events / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="cycle.completed",
+                seq=1,
+                ts=1500,
+                exchange="gateio",
+                user="gateio_01",
+                status="succeeded",
+                level="debug",
+                reason_code="",
+                ids={"cycle_id": "cy_gate_ok"},
+                data={
+                    "elapsed_ms": 80,
+                    "timings_ms": {"execute": 60},
+                    "orders_changed": False,
+                },
+            ),
+            _monitor_row(
+                event_type="cycle.degraded",
+                seq=2,
+                ts=2500,
+                exchange="gateio",
+                user="gateio_01",
+                status="degraded",
+                reason_code="stale_state",
+                ids={"cycle_id": "cy_gate_bad"},
+                data={"details": "GATE_DETAILS_SHOULD_NOT_RENDER"},
+            ),
+        ],
+    )
+
+    report = build_live_smoke_report(tmp_path / "monitor", logs_root=None)
+    summary = summarize_live_smoke_report(report)
+    brief = summarize_live_smoke_report_brief(report)
+    section = project_live_smoke_report_sections(report, ["cycles"])
+
+    health = report["cycle_health"]
+    assert health["total"] == 5
+    assert health["event_types"] == {
+        "cycle.completed": 3,
+        "cycle.degraded": 2,
+    }
+    assert health["bots"] == 2
+    assert health["completed"] == 3
+    assert health["degraded"] == 2
+    assert health["latest_outcomes"] == {"succeeded": 1, "degraded": 1}
+    assert health["latest_completed_bots"] == 2
+    assert health["latest_degraded_observed_bots"] == 2
+    assert health["latest_degraded_bots"] == 1
+    assert health["completed_after_latest_degraded_bots"] == 1
+    assert health["latest_degraded_reasons"] == {
+        "RequestTimeout": 1,
+        "stale_state": 1,
+    }
+    assert health["latest_elapsed_ms_max"] == 120
+    assert health["latest_orders_changed_bots"] == 1
+    assert health["latest_phase_max_ms"] == {
+        "authoritative": 40,
+        "execute": 60,
+        "monitor_flush": 30,
+    }
+    binance = next(
+        group for group in health["groups"] if group["bot"] == "binance/binance_01"
+    )
+    assert binance["count"] == 3
+    assert binance["event_types"] == {
+        "cycle.completed": 2,
+        "cycle.degraded": 1,
+    }
+    assert binance["latest_outcome"] == "succeeded"
+    assert binance["completed_after_latest_degraded"] is True
+    assert binance["latest_completed"] == {
+        "event_type": "cycle.completed",
+        "ts": 2000,
+        "cycle_id": "cy_recovered",
+        "status": "succeeded",
+        "level": "debug",
+        "elapsed_ms": 120,
+        "phase_timings_ms": {
+            "authoritative": 40,
+            "execute": 50,
+            "monitor_flush": 30,
+        },
+        "orders_changed": True,
+    }
+    assert binance["latest_degraded"]["reason_code"] == "RequestTimeout"
+    gateio = next(
+        group for group in health["groups"] if group["bot"] == "gateio/gateio_01"
+    )
+    assert gateio["latest_outcome"] == "degraded"
+    assert gateio["completed_after_latest_degraded"] is False
+    for projected in (health, summary["cycle_health"], brief["cycles"]):
+        assert projected["completed_after_latest_degraded_bots"] == 1
+        serialized = json.dumps(projected)
+        assert "SHOULD_NOT_RENDER" not in serialized
+        assert "raw_ref" not in serialized
+        assert '"details"' not in serialized
+        assert '"exception"' not in serialized
+    assert section["cycle_health"] == health
+
+
 def test_live_smoke_report_problem_events_include_state_refresh_progress(tmp_path):
     events_dir = tmp_path / "monitor" / "kucoin" / "kucoin_01" / "events"
     _write_ndjson(
