@@ -24,7 +24,7 @@ Estimated completion:
 
 - Branch: `codex/compact-candle-health-console`, based on canonical
   `048f1a722afe11a5e3aeda2340859893d6c8bb49` after PR #1253.
-- PR: pending, `Compact candle-health console summaries`.
+- PR: #1254, `Compact candle-health console summaries`.
 - Slice: bound the existing candle-health transition INFO summary within the
   normal record budget while retaining aggregate health counts and useful
   whole-field missing-candle examples.
