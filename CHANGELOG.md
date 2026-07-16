@@ -4,6 +4,9 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- `log-secret-inventory --summary` now emits bounded aggregate scan evidence
+  without the per-file paths, ages, or hashes retained by the full report.
+
 - The read-only log secret inventory now detects credential-like query
   parameters in scheme-less request paths and query fragments as well as full
   URLs, without returning matched values.

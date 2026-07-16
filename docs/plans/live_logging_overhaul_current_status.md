@@ -22,23 +22,23 @@ Estimated completion:
 
 ## Active Review Slice
 
-- Branch: `codex/log-secret-query-fragments`, based on canonical
-  `4015a3b3f145d58db3e1a873ec4cc5ce465368f7` after PR #1266.
-- PR: #1267, `Detect secret query fragments in log inventory`; semantic head
-  `361ad1e6bf9de9b5c912059c17522b6ab7da52ac`. Slice: detect secret-like
-  query parameters in scheme-less request paths and query fragments in the
-  read-only historical log inventory.
-- Triggering evidence: the inventory recognizes credential parameters inside
-  full HTTP/websocket URLs, but misses forms such as
-  `GET /path?apiKey=[value]` because the generic labeled matcher deliberately
-  excludes `?` and `&` prefixes.
-- Scope: broaden only the existing value-free query-parameter classification
-  and add focused full-URL, scheme-less, redacted, benign, and leakage tests.
+- Branch: `codex/log-secret-inventory-summary`, based on canonical
+  `951e42d07303d5c78ca31d4df9ee5f21e5b931cb` after PR #1267.
+- PR: #1268, `Add bounded log secret inventory summary`; semantic head
+  `0db1a8d847a2528407a4a868a33d55239ee6a97f`. Slice: add a bounded
+  aggregate-only projection to the read-only historical log inventory.
+- Triggering evidence: the 40-file bounded #1267 VPS smoke emitted roughly
+  6,000 tokens even with compact JSON because every per-file path, age, size,
+  status, and hash remained present.
+- Scope: add `--summary` while preserving the full report as the default. The
+  projection retains scan limits, discovery/read/skip counts, total bytes,
+  positive/truncated file counts, and aggregate class counts, but omits the
+  per-file array, paths, ages, and hashes.
 - Behavior boundary: read-only local tooling; no source values/lines, artifact
   mutation or remediation, exchange access, bot process changes, Rust, risk,
   order, or trading behavior.
-- Validation: focused inventory tests, Python compilation, a 1 MB classifier
-  timing smoke, docs checks, and a bounded VPS5 inventory after merge.
+- Validation: focused inventory/CLI tests, Python compilation, docs checks,
+  and a bounded VPS5 summary inventory after merge.
 - Review gate: temporary maintainer-authorized exact-head Hermes plus green
   Python and Rust CI while Grok is halted.
 - Expected VPS action: pull and run a bounded read-only inventory only; no bot
@@ -47,11 +47,15 @@ Estimated completion:
 ## Deployed Baseline
 
 - Canonical `master` and VPS5 are
-  `4015a3b3f145d58db3e1a873ec4cc5ce465368f7`, PR #1266. The tracked checkout
+  `951e42d07303d5c78ca31d4df9ee5f21e5b931cb`, PR #1267. The tracked checkout
   is clean and expected untracked artifacts are preserved.
-- VPS5 runs merged master in bot PIDs
-  `979190/979193/979196/979199/979202`. The exact pane parents are unchanged,
-  and unrelated `misc:0.0` PID `434835` is unchanged.
+- PR #1267 required no restart. Its 40-file, 250,000-byte bounded inventory
+  found 144 secret-query matches versus 143 private-websocket-query matches,
+  proving one additional non-websocket query fragment was classified. The scan
+  discovered 1,182 files, skipped six symlinks, and had zero discovery or read
+  errors. No values or source lines were emitted and no remediation occurred.
+  All five configured bot panes and unrelated `misc:0.0` remained present; no
+  process signal was sent.
 - PR #1266 required no restart. A four-hour, current-segment-only brief report
   scanned six monitor files and 19,163 records with zero monitor parse errors,
   and emitted the new startup budget coverage fields. Startup timing rows had
@@ -947,10 +951,10 @@ validated: successful stop summaries and hourly scheduler jitter remain at
 DEBUG while cancellation errors remain at ERROR. PR #1265's bounded,
 value-free historical secret-log inventory is also merged and deployed; its
 dry run confirmed retained credential-bearing logs without exposing values or
-changing artifacts. PR #1266's brief startup-budget coverage is also merged
-and deployed without restart; its bounded report emitted the new fields while
-retaining natural problem-event verdicts. The active inventory follow-up closes
-the scheme-less credential-query detection gap without remediation.
+changing artifacts. PR #1266's brief startup-budget coverage and PR #1267's
+scheme-less credential-query detection are also merged and deployed without
+restart. The active #1268 inventory follow-up adds aggregate-only output
+without remediation or changing the full report default.
 
 Do not create progress-only PRs or resume unrelated logging work from stale
 worktrees.

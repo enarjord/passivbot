@@ -15,7 +15,25 @@ merge, live smoke evidence changes, or new gaps are discovered.
 - Do not use this file for design churn; unresolved design details belong in the
   plan or a focused handoff doc.
 
-## Latest Canonical Deployment (PR #1266)
+## Latest Canonical Deployment (PR #1267)
+
+- PR #1267 merged to `master` as
+  `951e42d07303d5c78ca31d4df9ee5f21e5b931cb`. It extends the value-free
+  inventory's existing query classification to scheme-less request paths and
+  fragments without changing report retention or runtime behavior.
+- VPS5 fast-forwarded cleanly with no restart. The bounded 40-file,
+  250,000-byte scan found 144 secret-query matches versus 143 private
+  websocket-query matches, proving one additional non-websocket query fragment
+  was classified. It discovered 1,182 files, skipped six symlinks, and had zero
+  discovery or read errors.
+- No source values or lines were emitted, no artifacts were remediated, and no
+  process signal was sent. All five configured bot panes and unrelated
+  `misc:0.0` remained present.
+- Even compact JSON was roughly 6,000 tokens because it retained every
+  per-file row. The next read-only slice adds an aggregate-only summary
+  projection while preserving the full report as the default.
+
+## Previous Canonical Deployment (PR #1266)
 
 - PR #1266 merged to `master` as
   `4015a3b3f145d58db3e1a873ec4cc5ce465368f7`. It adds existing startup

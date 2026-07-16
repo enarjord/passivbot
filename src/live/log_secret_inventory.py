@@ -241,3 +241,44 @@ def build_log_secret_inventory(
         "class_counts": dict(class_counts),
         "files": files,
     }
+
+
+def summarize_log_secret_inventory(report: dict) -> dict:
+    """Return a bounded projection without per-file paths or hashes."""
+    files = report.get("files", [])
+    if not isinstance(files, list):
+        files = []
+    positive_files = 0
+    truncated_files = 0
+    bytes_scanned = 0
+    for file_summary in files:
+        if not isinstance(file_summary, dict):
+            continue
+        class_counts = file_summary.get("class_counts", {})
+        if isinstance(class_counts, dict) and any(
+            isinstance(value, int) and value > 0 for value in class_counts.values()
+        ):
+            positive_files += 1
+        if file_summary.get("truncated") is True:
+            truncated_files += 1
+        scanned = file_summary.get("bytes_scanned")
+        if isinstance(scanned, int) and scanned > 0:
+            bytes_scanned += scanned
+
+    summary = dict(report.get("summary", {}))
+    summary.update(
+        {
+            "bytes_scanned": bytes_scanned,
+            "files_positive": positive_files,
+            "files_truncated": truncated_files,
+        }
+    )
+    return {
+        "report_type": report.get("report_type"),
+        "projection": "summary",
+        "read_only": report.get("read_only") is True,
+        "root": report.get("root"),
+        "limits": dict(report.get("limits", {})),
+        "summary": summary,
+        "class_counts": dict(report.get("class_counts", {})),
+    }
