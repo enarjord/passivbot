@@ -24,7 +24,7 @@ Estimated completion:
 
 - Branch: `codex/bound-clock-offset-refresh-console`, based on canonical
   `a64159cf1d29c42113433c1990b38d9b8e1bd8fe` after PR #1258.
-- PR: pending, `Bound exchange time-sync diagnostics`.
+- PR: #1259, `Bound exchange time-sync diagnostics`.
 - Slice: remove raw exception text from exchange clock-offset recovery/no-hook
   warnings and durable `exchange.time_sync` diagnostics while retaining the
   stable exception class, source, recovery result, and bounded client outcomes.
