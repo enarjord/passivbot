@@ -4377,6 +4377,189 @@ def test_live_smoke_report_summarizes_latest_data_packets_without_raw_refs(tmp_p
     assert section["data_packet_health"] == health
 
 
+def test_live_smoke_report_summarizes_latest_planning_snapshots_without_raw_data(
+    tmp_path,
+):
+    binance_events = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    gateio_events = tmp_path / "monitor" / "gateio" / "gateio_01" / "events"
+    _write_ndjson(
+        binance_events / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="snapshot.built",
+                seq=1,
+                ts=1000,
+                ids={"cycle_id": "cy_old", "snapshot_id": "snap_old"},
+                data={
+                    "context": "normal_order_calculation",
+                    "symbols": ["OLD_SYMBOL_SHOULD_NOT_RENDER"],
+                    "required_surfaces": ["balance"],
+                    "market_snapshot_summary": {
+                        "count": 99,
+                        "symbol_count": 99,
+                        "missing_count": 99,
+                        "max_age_ms": 99999,
+                        "configured_max_age_ms": 1,
+                    },
+                    "planning_availability": {
+                        "record_count": 99,
+                        "status_counts": {"unavailable": 99},
+                    },
+                },
+            ),
+            _monitor_row(
+                event_type="snapshot.built",
+                seq=2,
+                ts=2000,
+                ids={"cycle_id": "cy_new", "snapshot_id": "snap_new"},
+                data={
+                    "context": "normal_order_calculation",
+                    "symbols": ["RAW_SYMBOL_SHOULD_NOT_RENDER"],
+                    "required_surfaces": [
+                        "balance",
+                        "positions",
+                        "open_orders",
+                        "completed_candles",
+                    ],
+                    "surface_ages": [
+                        {"name": "balance", "age_ms": 10, "epoch": 10},
+                        {"name": "positions", "age_ms": 12, "epoch": 10},
+                        {"name": "open_orders", "age_ms": 14, "epoch": 10},
+                        {"name": "completed_candles", "age_ms": 20, "epoch": 10},
+                        {"name": None, "age_ms": 999999, "raw": "SHOULD_NOT_RENDER"},
+                    ],
+                    "market_snapshot_summary": {
+                        "count": 3,
+                        "symbol_count": 3,
+                        "missing_count": 0,
+                        "max_age_ms": 30,
+                        "min_age_ms": 10,
+                        "mean_age_ms": 20,
+                        "configured_max_age_ms": 5000,
+                        "sources": ["ticker", "mark"],
+                    },
+                    "data_packets": [
+                        {"raw_ref": "REF_SHOULD_NOT_RENDER"},
+                        {"raw_hash": "HASH_SHOULD_NOT_RENDER"},
+                        {"value": "VALUE_SHOULD_NOT_RENDER"},
+                    ],
+                    "planning_availability": {
+                        "cycle_id": 44,
+                        "snapshot_id": "PAYLOAD_ID_SHOULD_NOT_RENDER",
+                        "record_count": 6,
+                        "status_counts": {"available": 5, "unavailable": 1},
+                        "records": ["RECORD_SHOULD_NOT_RENDER"],
+                    },
+                },
+            ),
+        ],
+    )
+    _write_ndjson(
+        gateio_events / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="snapshot.built",
+                seq=1,
+                ts=1500,
+                exchange="gateio",
+                user="gateio_01",
+                ids={"cycle_id": "cy_gate", "snapshot_id": "snap_gate"},
+                data={
+                    "context": "protective_panic_order_calculation",
+                    "symbols": ["GATE_RAW_SHOULD_NOT_RENDER"],
+                    "required_surfaces": ["balance", "positions"],
+                    "surface_ages": [
+                        {"name": "balance", "age_ms": 6000},
+                        {"name": "positions", "age_ms": 100},
+                    ],
+                    "market_snapshot_summary": {
+                        "count": 1,
+                        "symbol_count": 3,
+                        "missing_count": 2,
+                        "max_age_ms": 7000,
+                        "configured_max_age_ms": 5000,
+                        "sources": ["ticker"],
+                    },
+                    "data_packets": [
+                        {"raw_ref": "GATE_REF_SHOULD_NOT_RENDER"},
+                        {"raw_hash": "GATE_HASH_SHOULD_NOT_RENDER"},
+                    ],
+                    "planning_availability": {
+                        "record_count": 2,
+                        "status_counts": {"unavailable": 2},
+                    },
+                },
+            )
+        ],
+    )
+
+    report = build_live_smoke_report(tmp_path / "monitor", logs_root=None)
+    summary = summarize_live_smoke_report(report)
+    brief = summarize_live_smoke_report_brief(report)
+    section = project_live_smoke_report_sections(report, ["planning_snapshots"])
+
+    health = report["planning_snapshot_health"]
+    assert health["total"] == 3
+    assert health["event_types"] == {"snapshot.built": 3}
+    assert health["bots"] == 2
+    assert health["latest_contexts"] == {
+        "normal_order_calculation": 1,
+        "protective_panic_order_calculation": 1,
+    }
+    assert health["latest_required_surface_count_total"] == 6
+    assert health["latest_required_surfaces"] == {
+        "balance": 2,
+        "positions": 2,
+        "completed_candles": 1,
+        "open_orders": 1,
+    }
+    assert health["latest_market_snapshot_count_total"] == 4
+    assert health["latest_market_symbol_count_total"] == 6
+    assert health["latest_market_missing_count_total"] == 2
+    assert health["latest_market_max_age_ms_max"] == 7000
+    assert health["latest_market_stale_bots"] == 1
+    assert health["latest_market_sources"] == {"ticker": 2, "mark": 1}
+    assert health["latest_planning_record_count_total"] == 8
+    assert health["latest_planning_status_counts"] == {
+        "available": 5,
+        "unavailable": 3,
+    }
+    assert health["latest_data_packet_count_total"] == 5
+    binance = next(
+        group for group in health["groups"] if group["bot"] == "binance/binance_01"
+    )
+    assert binance["count"] == 2
+    assert binance["latest_ids"] == {
+        "cycle_id": "cy_new",
+        "snapshot_id": "snap_new",
+    }
+    assert binance["latest_surface_ages"] == {
+        "count": 4,
+        "max_age_ms": 20,
+        "by_surface_max_age_ms": {
+            "completed_candles": 20,
+            "open_orders": 14,
+            "positions": 12,
+            "balance": 10,
+        },
+        "truncated": 0,
+    }
+    for projected in (
+        health,
+        summary["planning_snapshot_health"],
+        brief["planning_snapshots"],
+    ):
+        assert projected["latest_market_snapshot_count_total"] == 4
+        serialized = json.dumps(projected)
+        assert "SHOULD_NOT_RENDER" not in serialized
+        assert "raw_ref" not in serialized
+        assert "raw_hash" not in serialized
+        assert '"symbols"' not in serialized
+        assert '"records"' not in serialized
+        assert '"data_packets"' not in serialized
+    assert section["planning_snapshot_health"] == health
+
+
 def test_live_smoke_report_problem_events_include_state_refresh_progress(tmp_path):
     events_dir = tmp_path / "monitor" / "kucoin" / "kucoin_01" / "events"
     _write_ndjson(

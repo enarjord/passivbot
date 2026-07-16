@@ -4,6 +4,14 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Live smoke reports now expose bounded latest-per-bot planning-snapshot health
+  from existing `snapshot.built` events: required-surface and age coverage,
+  market-snapshot freshness and missing counts, availability status counts,
+  packet counts, and correlation IDs. Symbol lists, packet rows, raw references,
+  hashes, values, and embedded availability records remain query-only; smoke
+  verdicts, snapshot construction, exchange access, and trading behavior are
+  unchanged.
+
 - Live smoke reports now expose bounded latest-per-bot-and-kind health from
   existing `data_packet.updated` events: packet kinds, quality, freshness,
   source, revision, safe coverage counts, and warning/error counts. Raw packet
