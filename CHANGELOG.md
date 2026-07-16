@@ -4,6 +4,11 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Live smoke reports now expose bounded existing
+  `forager.feature_unavailable` evidence across full, summary, brief, and
+  section-selective output. The projection does not change smoke verdicts,
+  console output, forager selection, readiness, or trading behavior.
+
 - Live configs may now define optional diagnostic `startup_phase_budgets` for
   canonical startup timing phases. Existing `bot.startup_timing` events carry
   configured elapsed and phase budgets, and live smoke reports prefer those

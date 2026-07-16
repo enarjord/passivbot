@@ -15,7 +15,27 @@ merge, live smoke evidence changes, or new gaps are discovered.
 - Do not use this file for design churn; unresolved design details belong in the
   plan or a focused handoff doc.
 
-## Latest Canonical Deployment (PR #1269)
+## Latest Canonical Deployment (PR #1270)
+
+- PR #1270 merged to `master` as
+  `9869263d74829f163b0bc8010fa18d1bf41de055`. It makes the read-only live
+  performance report retain latest-lifecycle configured startup-budget
+  assessments and aggregate their status without changing startup or trading.
+- VPS5 fast-forwarded cleanly with no restart. Exact bot PIDs
+  `985592/985594/985596/985598/985600`, all five pane parents, and unrelated
+  `misc:0.0` PID `434835` remained unchanged.
+- A bounded performance report was `ok=true` with zero errors or warnings and
+  retained the legacy no-budget shape for naturally unconfigured events. The
+  final two-minute smoke was `ok=true` with zero hard/log/monitor/process/
+  pipeline failures, `147/147` remote and `37/37` account-critical calls
+  successful, nine successful fill refreshes, and all five matching/config-
+  valid processes in states `R=4,S=1` with no uninterruptible sleep.
+- Fifteen non-hard attention events remained durable: eleven EMA readiness,
+  two staged-cycle degradation, and two websocket reconnect events. The next
+  report-only slice exposes existing structured forager feature-unavailability
+  evidence in live smoke reports without changing verdicts or behavior.
+
+## Previous Canonical Deployment (PR #1269)
 
 - PR #1269 merged to `master` as
   `d511341366fea26b48d064f2bbe5b25a4408664b`. It adds optional configured
@@ -33,9 +53,9 @@ merge, live smoke evidence changes, or new gaps are discovered.
   sleep, no active HSL replay, and a clean tracked checkout.
 - VPS5 intentionally has no configured phase budgets, so reports retained
   `no_baseline` assessments with zero invalid configured metadata. No budget
-  event or trading activity was manufactured. The next read-only reporting
-  slice makes `live-performance-report` consume the durable configured-budget
-  metadata already assessed by `live-smoke-report`.
+  event or trading activity was manufactured. PR #1270 subsequently made
+  `live-performance-report` consume the durable configured-budget metadata
+  already assessed by `live-smoke-report`.
 
 ## Previous Canonical Deployment (PR #1268)
 
