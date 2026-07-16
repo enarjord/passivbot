@@ -68,6 +68,7 @@ def _target_snapshot(
     pane_id: str = "%20",
     pane_pid: int = 20,
     process_pid: int = 100,
+    relaunch_ready: bool = True,
     ok: bool = True,
 ) -> dict:
     return {
@@ -82,6 +83,14 @@ def _target_snapshot(
                 "pane_pid": pane_pid,
                 "process_pid": process_pid,
                 "ownership_proof": "matched_process_ppid_equals_pane_pid",
+                "relaunch": {
+                    "ready": relaunch_ready,
+                    "method": (
+                        "exact_pane_input_after_verified_exit"
+                        if relaunch_ready
+                        else None
+                    ),
+                },
             }
         ],
         "issues": (
@@ -122,6 +131,8 @@ def test_live_restart_target_report_resolves_exact_panes_and_ignores_other_sessi
     assert report["hard_failures"] == 0
     assert report["expected_targets"] == 2
     assert report["resolved_targets"] == 2
+    assert report["relaunch_ready_targets"] == 2
+    assert report["relaunch_unready_targets"] == 0
     assert report["session_panes"] == 2
     assert [target["target"] for target in report["targets"]] == [
         "%20",
@@ -132,6 +143,18 @@ def test_live_restart_target_report_resolves_exact_panes_and_ignores_other_sessi
     assert {
         target["ownership_proof"] for target in report["targets"]
     } == {"matched_process_ppid_equals_pane_pid"}
+    assert {target["relaunch"]["ready"] for target in report["targets"]} == {
+        True
+    }
+    assert {target["relaunch"]["method"] for target in report["targets"]} == {
+        "exact_pane_input_after_verified_exit"
+    }
+    assert all(
+        target["relaunch"]["command_source"] == "supervisor_config"
+        and target["relaunch"]["requires_process_exit"] is True
+        and target["relaunch"]["requires_post_stop_pane_recheck"] is True
+        for target in report["targets"]
+    )
     assert report["extra_panes"] == []
     assert report["issues"] == []
     assert "sampling" not in report
@@ -376,6 +399,16 @@ def test_live_restart_target_report_accepts_direct_pane_process(monkeypatch):
     assert report["targets"][0]["ownership_proof"] == (
         "matched_process_pid_equals_pane_pid"
     )
+    assert report["relaunch_ready_targets"] == 0
+    assert report["relaunch_unready_targets"] == 1
+    assert report["targets"][0]["relaunch"] == {
+        "ready": False,
+        "method": None,
+        "reason": "bot_process_is_direct_tmux_pane_process",
+        "command_source": "supervisor_config",
+        "requires_process_exit": True,
+        "requires_post_stop_pane_recheck": True,
+    }
 
 
 def test_live_restart_target_report_propagates_process_and_tmux_failures(
@@ -496,6 +529,8 @@ def test_live_restart_target_report_fails_changed_sampled_identity(monkeypatch):
                     "pane_pid": 20,
                     "process_pid": 100,
                     "ownership_proof": "matched_process_ppid_equals_pane_pid",
+                    "relaunch_ready": True,
+                    "relaunch_method": "exact_pane_input_after_verified_exit",
                 },
             },
             {
@@ -505,10 +540,40 @@ def test_live_restart_target_report_fails_changed_sampled_identity(monkeypatch):
                     "pane_pid": 21,
                     "process_pid": 100,
                     "ownership_proof": "matched_process_ppid_equals_pane_pid",
+                    "relaunch_ready": True,
+                    "relaunch_method": "exact_pane_input_after_verified_exit",
                 },
             },
         ],
     }
+    assert report["issues"][-1]["code"] == "target_sampling_unstable"
+
+
+def test_live_restart_target_report_fails_changed_relaunch_proof(monkeypatch):
+    snapshots = [
+        _target_snapshot(),
+        _target_snapshot(relaunch_ready=False),
+    ]
+    monkeypatch.setattr(
+        target_module,
+        "_build_live_restart_target_snapshot",
+        lambda *_args, **_kwargs: snapshots.pop(0),
+    )
+    monkeypatch.setattr(target_module.time, "sleep", lambda _seconds: None)
+
+    report = build_live_restart_target_report(
+        "bots.yaml",
+        session_name="passivbot",
+        samples=2,
+        sample_interval_s=0.0,
+    )
+
+    assert report["ok"] is False
+    assert report["sampling"]["stable"] is False
+    assert report["sampling"]["changed_target_count"] == 1
+    observations = report["sampling"]["changed_targets"][0]["observations"]
+    assert observations[0]["identity"]["relaunch_ready"] is True
+    assert observations[1]["identity"]["relaunch_ready"] is False
     assert report["issues"][-1]["code"] == "target_sampling_unstable"
 
 
