@@ -1686,10 +1686,8 @@ def test_log_health_summary_structured_console_owns_periodic_line(caplog, monkey
     health_records = [record for record in caplog.records if "[health]" in record.message]
     assert [record.name for record in health_records] == ["passivbot.live_event_console"]
     assert health_records[0].message == (
-        "[health] uptime=1m0s | loop=2.5s | positions=1L/0S | "
-        "balance=1000.00 USDT (snap 999.50) | orders=+2/-1 | "
-        "fills=3 (pnl=+1.25 USDT) | errors=1/10 | ws=4 | rate_limits=5 | "
-        "rss=0.9MiB"
+        "[health] up=1m0s loop=2.5s pos=1L/0S bal=1000.00 USDT (snap 999.50) "
+        "ord=+2/-1 fills=3 (pnl=+1.25 USDT) err=1/10 ws=4 rate_lim=5 rss=0.9MiB"
     )
     assert bot.candle_health_called is True
     assert bot.payload_now_ms == 200000
@@ -1774,9 +1772,8 @@ def test_log_health_summary_uses_legacy_fallback_without_console_sink(
     health_records = [record for record in caplog.records if "[health]" in record.message]
     assert len(health_records) == 1
     assert health_records[0].message == (
-        "[health] uptime=19m33s | loop=39.5s | positions=0L/0S | "
-        "balance=2946.66 USDT (snap 2951.82) | orders=+0/-0 | fills=0 | "
-        "errors=0/10 | rss=83.6MiB"
+        "[health] up=19m33s loop=39.5s pos=0L/0S bal=2946.66 USDT (snap 2951.82) "
+        "ord=+0/-0 fills=0 err=0/10 rss=83.6MiB"
     )
     assert sink.events[0].event_type == EventTypes.HEALTH_SUMMARY
     assert bot._live_event_pipeline.close(timeout=2.0) is True
@@ -1825,8 +1822,7 @@ def test_log_health_summary_uses_fallback_when_emitter_missing(caplog, monkeypat
 
     assert bot.payload_reset_event_pipeline_timing is False
     assert [record.message for record in caplog.records if "[health]" in record.message] == [
-        "[health] uptime=1s | loop=n/a | positions=0L/0S | orders=+0/-0 | "
-        "fills=0 | errors=0/10"
+        "[health] up=1s loop=n/a pos=0L/0S ord=+0/-0 fills=0 err=0/10"
     ]
     assert bot._live_event_pipeline.close(timeout=2.0) is True
 

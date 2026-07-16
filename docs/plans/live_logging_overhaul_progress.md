@@ -15,7 +15,32 @@ merge, live smoke evidence changes, or new gaps are discovered.
 - Do not use this file for design churn; unresolved design details belong in the
   plan or a focused handoff doc.
 
-## Latest Canonical Deployment (PR #1254)
+## Latest Canonical Deployment (PR #1255)
+
+- PR #1255 merged to `master` as `050d01db56f4ac3678944a5e439248edbbb46acb`
+  after exact-head Hermes approval and green Python/Rust CI while Grok was
+  temporarily halted. It compacts only the forager selection console/text
+  projection; the complete structured payload and DEBUG diagnostics,
+  transition admission and cadence, Rust selection, and trading behavior are
+  unchanged.
+- VPS5 fast-forwarded cleanly and sent one SIGINT round to exact old PIDs
+  `966831/966834/966836/966837/966838`; all exited naturally without
+  escalation. Pane PIDs and unrelated `misc:0.0` PID `434835` were preserved.
+  Final PIDs are `967753/967755/967757/967759/967760` for
+  Binance/KuCoin/GateIO/OKX/Hyperliquid respectively.
+- Three natural forager selection lines on Binance, GateIO, and OKX measured
+  182-185 visible characters. They retained all three selected symbols,
+  hysteresis, reason, the top three scores, and the omitted-score count; none
+  exceeded 240.
+- The final settled smoke was `ok=true` with zero hard failures, `248/248`
+  remote and `49/49` account-critical calls successful, eight successful fill
+  refreshes, no active HSL replay, all five exact processes in state `R`, and
+  clean tracked `master`.
+- The same exact new log files contained natural periodic health summaries at
+  244-248 visible characters on Binance, GateIO, OKX, and Hyperliquid. The next
+  slice compacts only that recurring human projection.
+
+## Previous Canonical Deployment (PR #1254)
 
 - PR #1254 merged to `master` as `e7f87e18085f1bd53e2f6975ba5ecd4c14e60745`
   after exact-head Hermes approval and green Python/Rust CI while Grok was
