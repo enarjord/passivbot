@@ -24,7 +24,8 @@ Estimated completion:
 
 - Branch: `codex/smoke-data-packet-health`, based on canonical
   `deee460a18f1f532a4c3a4c6e89a4befd5469d2a` after PR #1277.
-- PR: pending. Slice: project existing `data_packet.updated` events into
+- PR: #1278, `Report data-packet smoke health`; semantic implementation head
+  `e940064301`. Slice: project existing `data_packet.updated` events into
   bounded latest-per-bot-and-kind smoke health.
 - Triggering evidence: the focused post-PR #1277 five-minute inventory
   naturally contained 87 packet-update events while smoke reports exposed no
