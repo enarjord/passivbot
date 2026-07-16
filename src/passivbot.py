@@ -3102,7 +3102,8 @@ class Passivbot:
         Passivbot._startup_timing_begin(self)
         self._log_startup_banner()
         self._bot_ready = False
-        logging.info("[boot] starting bot %s...", self.exchange)
+        if not Passivbot._live_event_console_available(self):
+            logging.info("[boot] starting bot %s...", self.exchange)
         boot_stage = "start"
         try:
             live_event_debug_profiles = list(
@@ -3235,22 +3236,12 @@ class Passivbot:
                 )
                 return
             self._log_memory_snapshot()
-            logging.info("[boot] starting data maintainers...")
+            logging.debug("[boot] starting data maintainers...")
             boot_stage = "start_data_maintainers"
             await self.start_data_maintainers()
             boot_stage = "start_background_candle_warmup"
             await self.start_background_candle_warmup()
 
-            logging.info("[boot] starting execution loop...")
-            logging.info(
-                "[boot] ══════════════════════════════════════════════════════════════════════"
-            )
-            logging.info(
-                "[boot] READY - Bot initialization complete, entering main trading loop"
-            )
-            logging.info(
-                "[boot] ══════════════════════════════════════════════════════════════════════"
-            )
             Passivbot._startup_timing_mark(self, "startup")
             self._bot_ready = True
             ready_ts = utc_ms()
@@ -4396,7 +4387,7 @@ class Passivbot:
         if max_jitter > 0 and not skip_jitter:
             jitter = random.uniform(0, max_jitter)
             if jitter > 5:
-                logging.info(
+                logging.debug(
                     "[boot] warmup jitter: waiting %.1fs before starting (max=%.0fs)...",
                     jitter,
                     max_jitter,
@@ -4410,11 +4401,11 @@ class Passivbot:
                     )
                     waited += sleep_chunk
                     if waited < jitter:
-                        logging.info(
+                        logging.debug(
                             "[boot] warmup jitter: %.0fs remaining...", jitter - waited
                         )
             else:
-                logging.info(
+                logging.debug(
                     "[boot] warmup jitter: sleeping %.1fs (max=%.0fs)",
                     jitter,
                     max_jitter,
@@ -4781,16 +4772,16 @@ class Passivbot:
     async def _background_candle_warmup_task(self) -> None:
         """Broad approved-coin warmup after bot startup; best-effort and cancellable."""
         try:
-            logging.info("[boot] background candle warmup starting")
+            logging.debug("[candle] background warmup starting")
             await self.warmup_candles_staggered(context="background warmup")
-            logging.info("[boot] background candle warmup complete")
+            logging.debug("[candle] background warmup complete")
             Passivbot._startup_timing_mark(self, "full-warmup")
         except asyncio.CancelledError:
             logging.debug("[shutdown] background candle warmup cancelled")
             raise
         except Exception as exc:
             logging.error(
-                "[boot] background candle warmup failed: %s", exc, exc_info=True
+                "[candle] background warmup failed: %s", exc, exc_info=True
             )
 
     async def start_background_candle_warmup(self) -> None:

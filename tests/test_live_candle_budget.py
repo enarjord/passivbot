@@ -2165,7 +2165,13 @@ async def test_newly_normal_forager_warmup_trigger_is_debug_only(monkeypatch, ca
 
 
 @pytest.mark.asyncio
-async def test_warmup_candles_force_cold_startup_fetches_cached_symbol(monkeypatch):
+@pytest.mark.parametrize(
+    ("jitter", "expected_fragments"),
+    [(3.0, ("sleeping",)), (12.0, ("waiting", "remaining"))],
+)
+async def test_warmup_candles_force_cold_startup_fetches_cached_symbol(
+    monkeypatch, caplog, jitter, expected_fragments
+):
     import passivbot as pb_mod
 
     now_ms = 120 * 60_000
@@ -2221,7 +2227,12 @@ async def test_warmup_candles_force_cold_startup_fetches_cached_symbol(monkeypat
             return []
 
     class FakeBot:
-        config = {"live": {"force_cold_startup": True}}
+        config = {
+            "live": {
+                "force_cold_startup": True,
+                "warmup_jitter_seconds": 30.0,
+            }
+        }
         exchange = "bybit"
         user = "test_user"
         approved_coins_minus_ignored_coins = {"long": set(), "short": set()}
@@ -2253,15 +2264,23 @@ async def test_warmup_candles_force_cold_startup_fetches_cached_symbol(monkeypat
         async def rebuild_required_candle_indices(self, *args, **kwargs):
             return None
 
+    monkeypatch.setattr(pb_mod.random, "uniform", lambda *_args: jitter)
     bot = FakeBot()
-    await pb_mod.Passivbot.warmup_candles_staggered(
-        bot,
-        symbols_override=["CACHED/USDT:USDT"],
-        skip_jitter=True,
-        context="trading-ready warmup",
-    )
+    with caplog.at_level(logging.DEBUG):
+        await pb_mod.Passivbot.warmup_candles_staggered(
+            bot,
+            symbols_override=["CACHED/USDT:USDT"],
+            context="trading-ready warmup",
+        )
 
     assert [symbol for symbol, _ in bot.cm.calls] == ["CACHED/USDT:USDT"]
+    jitter_records = [record for record in caplog.records if "warmup jitter" in record.message]
+    assert all(record.levelno == logging.DEBUG for record in jitter_records)
+    assert len(jitter_records) == len(expected_fragments)
+    assert all(
+        any(fragment in record.message for record in jitter_records)
+        for fragment in expected_fragments
+    )
 
 
 @pytest.mark.asyncio
@@ -2292,6 +2311,56 @@ async def test_background_candle_warmup_is_scheduled_not_awaited():
     assert not task.done()
     bot.release.set()
     await task
+
+
+@pytest.mark.asyncio
+async def test_background_candle_warmup_success_is_debug_and_keeps_timing_mark(caplog):
+    import passivbot as pb_mod
+
+    class FakeBot:
+        live_event_console_enabled = True
+        _live_event_pipeline = object()
+
+        def __init__(self):
+            self.events = []
+
+        async def warmup_candles_staggered(self, **kwargs):
+            assert kwargs == {"context": "background warmup"}
+
+        def _emit_live_event(self, event_type, **kwargs):
+            self.events.append((event_type, kwargs))
+
+    bot = FakeBot()
+
+    with caplog.at_level(logging.DEBUG):
+        await pb_mod.Passivbot._background_candle_warmup_task(bot)
+
+    records = [record for record in caplog.records if "background warmup" in record.message]
+    assert [record.levelno for record in records] == [logging.DEBUG, logging.DEBUG]
+    assert [record.message for record in records] == [
+        "[candle] background warmup starting",
+        "[candle] background warmup complete",
+    ]
+    assert bot.events[0][0] == EventTypes.BOT_STARTUP_TIMING
+    assert bot.events[0][1]["level"] == "info"
+    assert bot.events[0][1]["data"]["phase"] == "full-warmup"
+
+
+@pytest.mark.asyncio
+async def test_background_candle_warmup_failure_remains_error(caplog):
+    import passivbot as pb_mod
+
+    class FakeBot:
+        async def warmup_candles_staggered(self, **kwargs):
+            raise RuntimeError("warmup failed")
+
+    with caplog.at_level(logging.DEBUG):
+        await pb_mod.Passivbot._background_candle_warmup_task(FakeBot())
+
+    records = [record for record in caplog.records if "background warmup failed" in record.message]
+    assert len(records) == 1
+    assert records[0].levelno == logging.ERROR
+    assert records[0].message == "[candle] background warmup failed: warmup failed"
 
 
 @pytest.mark.asyncio

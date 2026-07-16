@@ -779,7 +779,7 @@ class EventRoute:
 DEFAULT_ROUTE = EventRoute(structured=True, monitor=True, console=False, text=False)
 DEFAULT_ROUTES: dict[str, EventRoute] = {
     EventTypes.BOT_STARTED: EventRoute(console=True, text=True),
-    EventTypes.BOT_READY: EventRoute(console=True, text=True),
+    EventTypes.BOT_READY: EventRoute(),
     EventTypes.BOT_STARTUP_TIMING: EventRoute(console=True, text=True),
     EventTypes.BOT_STOPPING: EventRoute(console=True, text=True),
     EventTypes.BOT_SHUTDOWN_STAGE: EventRoute(console=True, text=True),
