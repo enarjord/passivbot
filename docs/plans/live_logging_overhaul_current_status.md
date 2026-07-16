@@ -24,8 +24,10 @@ Estimated completion:
 
 - Branch: `codex/smoke-window-event-inventory`, based on canonical
   `20238b50792da0a69b6fa2b13272c75ea4a0eade` after PR #1273.
-- PR: pending. Slice: make time-bounded smoke-report event inventory obey the
-  same requested window as the report's health and bot projections.
+- PR: #1274, `Scope smoke event inventory to requested window`; semantic
+  implementation head `69aa1ae1d7`. Slice: make time-bounded smoke-report
+  event inventory obey the same requested window as the report's health and
+  bot projections.
 - Triggering evidence: PR #1273's VPS5 deploy showed that a current-only
   30-minute section report could list `forager.eligibility_changed` in the
   monitor-wide event-type inventory even though no matching event was present
