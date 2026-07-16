@@ -314,6 +314,13 @@ Related detailed plans:
      succeeded. The settled window naturally contained one existing
      `forager.eligibility_changed` event that smoke reports still omitted; the
      active follow-up adds that bounded membership-transition projection.
+   - 2026-07-16: PR #1282 added bounded cycle terminal-outcome and recovery
+     health. Its no-restart VPS5 deploy retained a real KuCoin nonce
+     degradation, then proved the next successful cycle. A final exact PID
+     check found that same unchanged process in `D` for about 20 seconds before
+     three consecutive `R` samples. The active read-only follow-up makes this
+     bounded process-state observation/recovery sequence reproducible in the
+     smoke tool without adding restart execution.
 
    Remaining refinements: safe pull/stop/start orchestration remains open.
    The concise and brief summaries are intentionally bounded; further changes

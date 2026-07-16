@@ -4,6 +4,13 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Live smoke reports can now opt into bounded repeated process-table sampling
+  to distinguish observed, persistent, and recovered uninterruptible-sleep
+  states while reporting stable PIDs, command/PID churn, and aggregate state
+  observations. The default remains one process snapshot, the final sample
+  retains the existing liveness/config verdict contract, and the sampler never
+  signals or restarts a process.
+
 - Live smoke reports now expose bounded cycle terminal-outcome health from
   existing `cycle.completed` and `cycle.degraded` events. The projection shows
   latest successful/degraded outcomes, successful completion after the latest

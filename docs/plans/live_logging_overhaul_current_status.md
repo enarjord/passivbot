@@ -22,37 +22,50 @@ Estimated completion:
 
 ## Active Review Slice
 
-- Branch: `codex/smoke-cycle-recovery-health`, based on canonical
-  `8ba5f5e71a4bf44ea002a519ae05d91c7a261dd8` after PR #1280.
-- PR: #1282, `Report cycle recovery smoke health`; semantic implementation head
-  `6235f16f61`. Slice: project existing `cycle.completed` and
-  `cycle.degraded` events into bounded latest-per-bot terminal-outcome and
-  recovery health.
-- Triggering evidence: the post-PR #1280 five-minute inventory naturally
-  contained 35 successful cycle completions and one degraded cycle. A later
-  fresh window caught a real KuCoin account-state timeout and then subsequent
-  successful calls/cycles, while smoke retained the hard event without a
-  bounded cycle-level recovery projection.
-- Scope: expose terminal event counts, latest successful/degraded outcome,
-  successful completion after the latest observed degradation, elapsed time,
-  order-change presence, degraded reason, correlation ID, and seven code-owned
-  phase durations. Keep arbitrary payload details, exception text, raw
-  references, symbols, and unknown timing keys out of the projection.
-- Behavior boundary: read-only report projection only. No smoke verdict,
-  attention classification, console output, event production, exchange access,
-  packet production, readiness, configuration, or trading changes.
-- Validation: focused terminal-order/recovery/allowlist regression, full
-  smoke-report tests, compilation, and docs checks.
+- Branch: `codex/smoke-process-state-sampling`, based on canonical
+  `82bfa98e202a3fbba71937d751e1d0c651e33f72` after PR #1282.
+- PR: pending. Slice: add opt-in bounded repeated process-table sampling to
+  distinguish transient, persistent, and recovered uninterruptible-sleep
+  observations during smoke checks.
+- Triggering evidence: PR #1282's settled cycle report was green and naturally
+  proved KuCoin completion after a retained nonce degradation. The final exact
+  process check then caught the unchanged KuCoin PID in `D` for about 20
+  seconds before three consecutive `R` samples. The existing one-shot process
+  projection could show either sample but not the observed recovery.
+- Scope: sample the existing canonical live-process scan up to a strict count
+  and interval bound, use the last sample for established liveness/config
+  checks, and expose bounded stable-PID, state-observation, command/PID churn,
+  observed/persistent/recovered `D`, and per-PID summary evidence.
+- Behavior boundary: read-only smoke tooling only. The single-snapshot default
+  and smoke verdict remain unchanged; sampling never signals, stops, starts, or
+  restarts processes and does not contact exchanges.
+- Validation: focused recovery/persistence/churn/redaction and bounds
+  regressions, full smoke-report tests, compilation, and docs checks.
 - Review gate: temporary maintainer-authorized exact-head Hermes plus green
   Python and Rust CI while Grok is halted.
-- Expected VPS action: pull and run bounded report/smoke checks after merge;
-  no bot restart is expected for this read-only reporting slice.
+- Expected VPS action: pull and run an opt-in bounded process-sampling smoke
+  after merge; no bot restart is expected for this read-only tooling slice.
 
 ## Deployed Baseline
 
 - Canonical `master` and VPS5 are
-  `8ba5f5e71a4bf44ea002a519ae05d91c7a261dd8`, PR #1280. The tracked checkout
+  `82bfa98e202a3fbba71937d751e1d0c651e33f72`, PR #1282. The tracked checkout
   is clean and expected untracked artifacts are preserved.
+- PR #1282 required no restart or process signal. Exact bot PIDs
+  `985592/985594/985596/985598/985600`, all five pane parents, and unrelated
+  `misc:0.0` PID `434835` remained unchanged. The immediate focused report
+  projected 37 completions and two degradations across all five bots and
+  correctly retained a latest KuCoin `InvalidNonce` degradation. The fresh
+  two-minute smoke was `ok=true` with zero hard failures, `193/194` remote
+  calls, `56/57` account-critical calls, `9/9` fill refreshes, and five exact
+  processes/configs matched.
+- The settled focused report was `ok=true` with zero hard failures and 20
+  completions plus one retained degradation. All five latest outcomes were
+  successful, and KuCoin was explicitly counted as completed after its latest
+  degradation. A final exact process check caught that same KuCoin PID in `D`
+  for about 20 seconds before three consecutive `R` samples, exposing the
+  active process-sampling follow-up. No event or trading activity was
+  manufactured.
 - PR #1280 required no restart. Exact bot PIDs
   `985592/985594/985596/985598/985600`, all five pane parents, and unrelated
   `misc:0.0` PID `434835` remained unchanged. The immediate two-minute smoke
@@ -1074,11 +1087,11 @@ without restart. PR #1273's forager eligibility projection, PR #1274's
 requested-window event inventory, and PR #1275's planning symbol-state health
 are also merged, deployed, and naturally validated. PR #1276's initial-entry
 eligibility health, PR #1277's correlated planning-output health, and PR
-#1278's latest-per-bot-and-kind data-packet health and PR #1280's planning
-snapshot health are merged, deployed, and naturally validated. The active
-follow-up adds bounded cycle terminal-outcome and recovery health without
-copying arbitrary payload details or exception text, and without changing
-verdicts or runtime behavior.
+#1278's latest-per-bot-and-kind data-packet health, PR #1280's planning
+snapshot health, and PR #1282's cycle terminal-outcome/recovery health are
+merged, deployed, and naturally validated. The active follow-up makes bounded
+multi-sample process-state recovery visible without changing the single-sample
+default, process control, or runtime behavior.
 
 Do not create progress-only PRs or resume unrelated logging work from stale
 worktrees.

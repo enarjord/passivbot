@@ -6,6 +6,7 @@ import math
 import re
 import stat
 import subprocess
+import time
 from collections import Counter, defaultdict, deque
 from datetime import datetime
 from pathlib import Path
@@ -85,6 +86,9 @@ SMOKE_REPORT_SUMMARY_GROUP_LIMIT = 8
 SMOKE_REPORT_BRIEF_LOG_SAMPLE_LIMIT = 3
 SMOKE_REPORT_BRIEF_REMOTE_CALL_SLOWEST_LIMIT = 3
 SMOKE_REPORT_BRIEF_HSL_REPLAY_ACTIVE_LIMIT = 5
+MAX_PROCESS_SAMPLES = 12
+MAX_PROCESS_SAMPLE_INTERVAL_S = 30.0
+PROCESS_SAMPLE_GROUP_LIMIT = 20
 CURRENT_PROCESS_PRESSURE_FIELDS = (
     "state_counts",
     "uninterruptible_sleep_count",
@@ -97,6 +101,22 @@ CURRENT_PROCESS_PRESSURE_FIELDS = (
     "mem_pct_total",
     "mem_pct_max",
     "mem_reporting_processes",
+)
+PROCESS_SAMPLING_FIELDS = (
+    "enabled",
+    "requested_samples",
+    "completed_samples",
+    "interval_s",
+    "scheduled_span_s",
+    "scan_error_count",
+    "pids_observed",
+    "stable_pids",
+    "command_pid_churn_count",
+    "uninterruptible_observed_count",
+    "uninterruptible_persistent_count",
+    "uninterruptible_recovered_count",
+    "uninterruptible_active_count",
+    "state_observations",
 )
 _SMOKE_REPORT_SECTION_BASE_KEYS = (
     "ok",
@@ -7126,6 +7146,122 @@ def _running_live_processes(*, command_match: str) -> dict[str, Any]:
     }
 
 
+def _summarize_process_sampling(
+    scans: Iterable[dict[str, Any]],
+    *,
+    requested_samples: int,
+    interval_s: float,
+) -> dict[str, Any]:
+    scan_rows = list(scans)
+    completed_samples = len(scan_rows)
+    by_pid: dict[int, dict[str, Any]] = {}
+    command_pids: dict[str, set[int]] = defaultdict(set)
+    state_observations: Counter[str] = Counter()
+
+    for sample_index, scan in enumerate(scan_rows):
+        for process in scan.get("running") or []:
+            pid = process.get("pid")
+            if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
+                continue
+            state = str(process.get("stat") or "").strip()[:1].upper()
+            if state:
+                state_observations[state] += 1
+            row = by_pid.setdefault(
+                pid,
+                {
+                    "pid": pid,
+                    "sample_indexes": set(),
+                    "states": Counter(),
+                    "first_state": state or None,
+                    "latest_state": state or None,
+                    "latest_process": process,
+                },
+            )
+            row["sample_indexes"].add(sample_index)
+            if state:
+                row["states"][state] += 1
+                row["latest_state"] = state
+            row["latest_process"] = process
+            match_key = str(process.get("_match_key") or "")
+            if match_key:
+                command_pids[match_key].add(pid)
+
+    groups: list[dict[str, Any]] = []
+    for pid, row in sorted(by_pid.items()):
+        states = row["states"]
+        observed_samples = len(row["sample_indexes"])
+        d_observations = int(states["D"])
+        latest_state = row.get("latest_state")
+        latest_process = row["latest_process"]
+        present_in_final_sample = bool(
+            completed_samples > 0
+            and completed_samples - 1 in row["sample_indexes"]
+        )
+        group = {
+            "pid": pid,
+            "account": latest_process.get("account"),
+            "config_path": latest_process.get("config_path"),
+            "config_key": latest_process.get("config_key"),
+            "sample_count": observed_samples,
+            "states": dict(sorted(states.items())),
+            "first_state": row.get("first_state"),
+            "latest_state": latest_state,
+            "present_in_final_sample": present_in_final_sample,
+            "uninterruptible_observations": d_observations,
+            "observed_uninterruptible": d_observations > 0,
+            "persistent_uninterruptible": bool(
+                completed_samples > 0
+                and observed_samples == completed_samples
+                and d_observations == completed_samples
+            ),
+            "recovered_from_uninterruptible": bool(
+                d_observations > 0
+                and present_in_final_sample
+                and latest_state not in (None, "D")
+            ),
+        }
+        groups.append(
+            {key: value for key, value in group.items() if value is not None}
+        )
+
+    return {
+        "enabled": requested_samples > 1,
+        "requested_samples": requested_samples,
+        "completed_samples": completed_samples,
+        "interval_s": round(float(interval_s), 3),
+        "scheduled_span_s": round(
+            max(0, completed_samples - 1) * float(interval_s), 3
+        ),
+        "scan_error_count": sum(
+            1 for scan in scan_rows if scan.get("scan_error") is not None
+        ),
+        "pids_observed": len(groups),
+        "stable_pids": sum(
+            1 for group in groups if group["sample_count"] == completed_samples
+        ),
+        "command_pid_churn_count": sum(
+            1 for pids in command_pids.values() if len(pids) > 1
+        ),
+        "uninterruptible_observed_count": sum(
+            1 for group in groups if group["observed_uninterruptible"]
+        ),
+        "uninterruptible_persistent_count": sum(
+            1 for group in groups if group["persistent_uninterruptible"]
+        ),
+        "uninterruptible_recovered_count": sum(
+            1 for group in groups if group["recovered_from_uninterruptible"]
+        ),
+        "uninterruptible_active_count": sum(
+            1
+            for group in groups
+            if group["present_in_final_sample"] and group.get("latest_state") == "D"
+        ),
+        "state_observations": dict(sorted(state_observations.items())),
+        "groups": groups[:PROCESS_SAMPLE_GROUP_LIMIT],
+        "groups_truncated": len(groups) > PROCESS_SAMPLE_GROUP_LIMIT,
+    }
+
+
 def _summarize_current_process_pressure(
     processes: Iterable[dict[str, Any]],
 ) -> dict[str, Any]:
@@ -7373,9 +7509,26 @@ def _build_process_report(
     include_processes: bool,
     supervisor_config: str | Path | None,
     process_command_match: str,
+    process_samples: int = 1,
+    process_sample_interval_s: float = 5.0,
     config_base_dir: Path | None = None,
 ) -> dict[str, Any]:
-    enabled = bool(include_processes or supervisor_config)
+    process_samples = int(process_samples)
+    process_sample_interval_s = float(process_sample_interval_s)
+    if process_samples < 1 or process_samples > MAX_PROCESS_SAMPLES:
+        raise ValueError(
+            f"process_samples must be between 1 and {MAX_PROCESS_SAMPLES}"
+        )
+    if (
+        not math.isfinite(process_sample_interval_s)
+        or process_sample_interval_s < 0.0
+        or process_sample_interval_s > MAX_PROCESS_SAMPLE_INTERVAL_S
+    ):
+        raise ValueError(
+            "process_sample_interval_s must be between 0 and "
+            f"{MAX_PROCESS_SAMPLE_INTERVAL_S:g}"
+        )
+    enabled = bool(include_processes or supervisor_config or process_samples > 1)
     if not enabled:
         return {
             "enabled": False,
@@ -7399,7 +7552,14 @@ def _build_process_report(
         }
 
     config = _parse_tmuxp_live_commands(supervisor_config)
-    running_scan = _running_live_processes(command_match=process_command_match)
+    running_scans: list[dict[str, Any]] = []
+    for sample_index in range(process_samples):
+        if sample_index > 0 and process_sample_interval_s > 0.0:
+            time.sleep(process_sample_interval_s)
+        running_scans.append(
+            _running_live_processes(command_match=process_command_match)
+        )
+    running_scan = running_scans[-1]
     running = running_scan["running"]
     expected = config["expected"]
     missing: list[dict[str, Any]] = []
@@ -7455,7 +7615,7 @@ def _build_process_report(
         config_base_dir=config_base_dir,
     )
     hard_failures += int(config_checks.get("hard_failures") or 0)
-    return {
+    report = {
         "enabled": True,
         "ok": hard_failures == 0,
         "hard_failures": hard_failures,
@@ -7479,6 +7639,13 @@ def _build_process_report(
         **_summarize_current_process_pressure(running),
         "config_checks": config_checks,
     }
+    if process_samples > 1:
+        report["sampling"] = _summarize_process_sampling(
+            running_scans,
+            requested_samples=process_samples,
+            interval_s=process_sample_interval_s,
+        )
+    return report
 
 
 def _non_negative_int(value: Any) -> int | None:
@@ -8952,6 +9119,8 @@ def build_live_smoke_report(
     include_processes: bool = False,
     supervisor_config: str | Path | None = None,
     process_command_match: str = DEFAULT_PROCESS_MATCH,
+    process_samples: int = 1,
+    process_sample_interval_s: float = 5.0,
     include_rotated: bool = False,
     since_ms: int | None = None,
     until_ms: int | None = None,
@@ -8987,6 +9156,8 @@ def build_live_smoke_report(
         include_processes=include_processes,
         supervisor_config=supervisor_config,
         process_command_match=process_command_match,
+        process_samples=process_samples,
+        process_sample_interval_s=process_sample_interval_s,
         config_base_dir=repository_root,
     )
     repository_report = _build_repository_report(monitor_root, repo_root=repository_root)
@@ -9799,6 +9970,27 @@ def summarize_live_smoke_report(
             )
             if key in processes
         }
+        | (
+            {
+                "sampling": {
+                    key: processes["sampling"].get(key)
+                    for key in PROCESS_SAMPLING_FIELDS
+                    if key in processes["sampling"]
+                }
+                | {
+                    "groups": (processes["sampling"].get("groups") or [])[
+                        :max_groups
+                    ],
+                    "groups_truncated": bool(
+                        processes["sampling"].get("groups_truncated")
+                        or len(processes["sampling"].get("groups") or [])
+                        > max_groups
+                    ),
+                }
+            }
+            if isinstance(processes.get("sampling"), dict)
+            else {}
+        )
         | {
             "missing_expected_count": len(processes.get("missing_expected") or []),
             "duplicate_configured_command_matches_count": len(
@@ -10883,6 +11075,17 @@ def summarize_live_smoke_report_brief(report: dict[str, Any]) -> dict[str, Any]:
             )
             if key in processes
         }
+        | (
+            {
+                "sampling": {
+                    key: processes["sampling"].get(key)
+                    for key in PROCESS_SAMPLING_FIELDS
+                    if key in processes["sampling"]
+                }
+            }
+            if isinstance(processes.get("sampling"), dict)
+            else {}
+        )
         | {
             "missing_expected_count": len(processes.get("missing_expected") or []),
             "duplicate_configured_command_matches_count": len(
