@@ -24,8 +24,10 @@ Estimated completion:
 
 - Branch: `codex/restart-target-contract-fingerprint`, based on canonical
   `b490bd75bebd0228628c1b628b46d3f3ac52cee4` after PR #1290.
-- PR: pending. Slice: bind exact pane/PID/relaunch stability to the parsed
-  supervisor command contract across the pre-action sample window.
+- PR: #1291, `Bind restart target sampling to supervisor contract`; semantic
+  implementation head `9667698b6d`. Slice: bind exact pane/PID/relaunch
+  stability to the parsed supervisor command contract across the pre-action
+  sample window.
 - Triggering evidence: PR #1290 proves all five VPS5 bots have stable
   pane-parent relaunch paths, but target sampling does not yet prove that the
   parsed supervisor command source stayed unchanged while those targets were
