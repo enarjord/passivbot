@@ -6882,7 +6882,6 @@ def _scan_events(
                     event_type = live_event.get("event_type") or row.get("kind")
                     if event_type:
                         event_type = str(event_type)
-                        monitor_event_type_counts[event_type] += 1
                         if row.get("kind") and str(row.get("kind")) != event_type:
                             issues.append(
                                 _monitor_issue(
@@ -6919,8 +6918,6 @@ def _scan_events(
                     cycle_id = ids.get("cycle_id")
                     if cycle_id is None:
                         missing_cycle_id += 1
-                    else:
-                        cycle_counts[str(cycle_id)] += 1
                     row_ts = _non_negative_int(row.get("ts"))
                     if since_ms is not None or until_ms is not None:
                         if row_ts is None:
@@ -6933,6 +6930,10 @@ def _scan_events(
                             events_skipped_after += 1
                             continue
                     events_considered += 1
+                    if event_type:
+                        monitor_event_type_counts[event_type] += 1
+                    if cycle_id is not None:
+                        cycle_counts[str(cycle_id)] += 1
                     bot_key = _bot_key(live_event, row)
                     bot = bots[bot_key]
                     bot["events"] += 1

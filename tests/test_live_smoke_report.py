@@ -6170,6 +6170,10 @@ def test_live_smoke_report_time_window_filters_structured_problem_events(tmp_pat
         "events_skipped_after": 0,
         "invalid_window_ts": 0,
     }
+    assert report["monitor"]["event_types"] == {"cycle.completed": 1}
+    assert report["monitor"]["cycle_ids_sample"] == [
+        {"cycle_id": "cy_fresh", "events": 1}
+    ]
     assert report["bots"] == [
         {
             "bot": "binance/binance_01",
