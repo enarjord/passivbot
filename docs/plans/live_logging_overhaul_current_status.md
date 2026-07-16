@@ -928,10 +928,11 @@ also merged, deployed, and naturally validated. PR #1263's startup lifecycle
 console consolidation is also merged, deployed, and naturally validated:
 every bot emitted exactly one human start and ready signal, durable
 `bot.ready` remained present, and removed lifecycle INFO lines stayed absent.
-The active maintainer-detail slice demotes successful stop summaries and hourly
-scheduler jitter to DEBUG while preserving cancellation errors at ERROR. It
-does not change task cancellation, scheduler timing, exchange calls, risk, or
-trading behavior.
+PR #1264's maintainer-detail demotion is also merged, deployed, and naturally
+validated: successful stop summaries and hourly scheduler jitter remain at
+DEBUG while cancellation errors remain at ERROR. The active PR #1265 slice
+adds only bounded, value-free historical secret-log inventory; artifact
+remediation remains separate and requires explicit operator approval.
 
 Do not create progress-only PRs or resume unrelated logging work from stale
 worktrees.
