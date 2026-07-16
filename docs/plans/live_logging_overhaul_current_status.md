@@ -24,8 +24,10 @@ Estimated completion:
 
 - Branch: `codex/restart-plan-target-gate`, based on canonical
   `e004ede7ddaa4935bc8bf69739285724656198d3` after PR #1288.
-- PR: pending. Slice: bind the deployed stable exact-target report into the
-  existing plan-only restart smoke workflow as an explicit pre-action gate.
+- PR: #1289, `Bind restart plan to stable target preflight`; semantic
+  implementation head `9011d4e0f5`. Slice: bind the deployed stable
+  exact-target report into the existing plan-only restart smoke workflow as an
+  explicit pre-action gate.
 - Triggering evidence: PR #1288's immediate and settled three-sample reports
   proved stable pane IDs, pane PIDs, bot PIDs, and ownership for all five bots,
   but `live-restart-smoke-plan` still does not emit that required gate.
