@@ -24,8 +24,10 @@ Estimated completion:
 
 - Branch: `codex/smoke-cycle-recovery-health`, based on canonical
   `8ba5f5e71a4bf44ea002a519ae05d91c7a261dd8` after PR #1280.
-- PR: pending. Slice: project existing `cycle.completed` and `cycle.degraded`
-  events into bounded latest-per-bot terminal-outcome and recovery health.
+- PR: #1282, `Report cycle recovery smoke health`; semantic implementation head
+  `6235f16f61`. Slice: project existing `cycle.completed` and
+  `cycle.degraded` events into bounded latest-per-bot terminal-outcome and
+  recovery health.
 - Triggering evidence: the post-PR #1280 five-minute inventory naturally
   contained 35 successful cycle completions and one degraded cycle. A later
   fresh window caught a real KuCoin account-state timeout and then subsequent
