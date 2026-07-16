@@ -4,6 +4,13 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Added `passivbot tool live-process-report`, a bounded local-only process
+  sampler that does not read monitor events or text logs, access credential
+  stores, contact networks or exchanges, control processes, or write files.
+  It can compare the local process table with an optional supervisor config
+  and sample process-state persistence/recovery using the existing smoke-report
+  process contract.
+
 - Live smoke reports can now opt into bounded repeated process-table sampling
   to distinguish observed, persistent, and recovered uninterruptible-sleep
   states while reporting stable PIDs, command/PID churn, and aggregate state

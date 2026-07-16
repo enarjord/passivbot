@@ -7648,6 +7648,25 @@ def _build_process_report(
     return report
 
 
+def build_live_process_report(
+    *,
+    supervisor_config: str | Path | None = None,
+    process_command_match: str = DEFAULT_PROCESS_MATCH,
+    process_samples: int = 1,
+    process_sample_interval_s: float = 5.0,
+    config_base_dir: Path | None = None,
+) -> dict[str, Any]:
+    """Build the bounded local process-table section without scanning smoke inputs."""
+    return _build_process_report(
+        include_processes=True,
+        supervisor_config=supervisor_config,
+        process_command_match=process_command_match,
+        process_samples=process_samples,
+        process_sample_interval_s=process_sample_interval_s,
+        config_base_dir=config_base_dir,
+    )
+
+
 def _non_negative_int(value: Any) -> int | None:
     try:
         parsed = int(value)

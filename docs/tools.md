@@ -308,6 +308,13 @@ Monitor commands are documented in detail in [monitor.md](monitor.md). The CLI s
   escalation ladder as policy only: graceful Ctrl+C/request stop, bounded wait, a second
   graceful signal when warranted, SIGTERM, then SIGKILL. The smoke report never sends those
   signals.
+- `passivbot tool live-process-report` runs the same bounded process-table and
+  optional supervisor-config checks without entering the smoke report's monitor-event or
+  text-log paths. It does not access credential stores, contact a network or exchange, control
+  processes, or write files. Use `--samples N --interval-s SECONDS` for bounded persistence and
+  recovery evidence; the existing maxima are enforced. The JSON `safety` object declares this
+  capability boundary, and the command exits nonzero when the process/config verdict has hard
+  failures.
 - `passivbot tool live-incident-bundle` writes a local `.tar.gz` evidence
   bundle with monitor event reports, problem-event reports, smoke evidence,
   redacted log excerpts, monitor snapshots, runtime metadata, and optional

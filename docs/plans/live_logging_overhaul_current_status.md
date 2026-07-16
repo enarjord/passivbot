@@ -22,36 +22,45 @@ Estimated completion:
 
 ## Active Review Slice
 
-- Branch: `codex/smoke-process-state-sampling`, based on canonical
-  `82bfa98e202a3fbba71937d751e1d0c651e33f72` after PR #1282.
-- PR: #1283, `Add bounded process-state sampling to live smoke reports`;
-  semantic implementation head `cafbeef441`. Slice: add opt-in bounded
-  repeated process-table sampling to distinguish transient, persistent, and
-  recovered uninterruptible-sleep observations during smoke checks.
-- Triggering evidence: PR #1282's settled cycle report was green and naturally
-  proved KuCoin completion after a retained nonce degradation. The final exact
-  process check then caught the unchanged KuCoin PID in `D` for about 20
-  seconds before three consecutive `R` samples. The existing one-shot process
-  projection could show either sample but not the observed recovery.
-- Scope: sample the existing canonical live-process scan up to a strict count
-  and interval bound, use the last sample for established liveness/config
-  checks, and expose bounded stable-PID, state-observation, command/PID churn,
-  observed/persistent/recovered `D`, and per-PID summary evidence.
-- Behavior boundary: read-only smoke tooling only. The single-snapshot default
-  and smoke verdict remain unchanged; sampling never signals, stops, starts, or
-  restarts processes and does not contact exchanges.
-- Validation: focused recovery/persistence/churn/redaction and bounds
-  regressions, full smoke-report tests, compilation, and docs checks.
+- Branch: `codex/smoke-process-only-sampling`, based on canonical
+  `9bcf6c24fe4ec73bf8431277f32b9020d0349b5f` after PR #1283.
+- PR: pending. Slice: expose the existing bounded local process sampler through
+  a dedicated `passivbot tool live-process-report` entrypoint.
+- Triggering evidence: the approved #1283 full smoke command was rejected by
+  the production-action approval layer as a possible authenticated exchange
+  probe even though the requested validation was process-only. Retrying or
+  working around that rejection would violate the live-action contract.
+- Scope: import only the process-report builder, accept only supervisor/match
+  and bounded sampling arguments, and emit an explicit machine-readable safety
+  contract alongside the established process/config verdict.
+- Behavior boundary: local reads are limited to the process table, an optional
+  supervisor config, and referenced local bot configs used by existing config
+  checks. The command does not read monitor events or text logs, access
+  credential stores, contact networks or exchanges, control processes, or
+  write files.
+- Validation: focused builder/CLI/safety/verdict/bounds regressions, direct CLI
+  dispatch verification, compilation, smoke-report regression tests, and docs
+  checks.
 - Review gate: temporary maintainer-authorized exact-head Hermes plus green
   Python and Rust CI while Grok is halted.
-- Expected VPS action: pull and run an opt-in bounded process-sampling smoke
-  after merge; no bot restart is expected for this read-only tooling slice.
+- Expected VPS action: pull and run the local-only process report after merge;
+  no bot restart or process signal is expected for this read-only tooling slice.
 
 ## Deployed Baseline
 
 - Canonical `master` and VPS5 are
-  `82bfa98e202a3fbba71937d751e1d0c651e33f72`, PR #1282. The tracked checkout
-  is clean and expected untracked artifacts are preserved.
+  `9bcf6c24fe4ec73bf8431277f32b9020d0349b5f`, PR #1283. VPS5 fast-forwarded
+  from `82bfa98e` with a tracked-clean checkout and expected untracked
+  artifacts preserved. The configured pane process IDs
+  `856294/856332/856364/856398/856434` and unrelated `misc:0.0` PID `434835`
+  remained unchanged; no restart or process signal occurred.
+- PR #1283's merged process sampler passed current-head Python/Rust CI and 132
+  focused local smoke/incident/docs tests. The requested VPS5 full smoke command
+  was not executed after the production-action approval layer rejected it as a
+  possible authenticated exchange probe. The rejection was preserved: no retry,
+  bypass, authenticated exchange request, process action, or manufactured event
+  occurred. The active local-only process-report slice separates the remaining
+  validation from monitor/log and exchange-adjacent command paths.
 - PR #1282 required no restart or process signal. Exact bot PIDs
   `985592/985594/985596/985598/985600`, all five pane parents, and unrelated
   `misc:0.0` PID `434835` remained unchanged. The immediate focused report
