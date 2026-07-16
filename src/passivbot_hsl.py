@@ -2550,7 +2550,7 @@ def _parse_hsl_config(self) -> dict[str, dict[str, Any]]:
         if enabled:
             logging.warning(
                 "[risk] HSL[%s] enabled; review %s. Deposits, withdrawals, "
-                "balance overrides, HSL mode changes, and HSL budget/threshold "
+                "balance overrides, and HSL mode/budget/threshold "
                 "changes can reinterpret reconstructed history.",
                 pside,
                 _HSL_RISKS_DOC,

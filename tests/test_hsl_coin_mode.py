@@ -260,17 +260,24 @@ def test_parse_hsl_config_logs_compact_complete_startup_summary(caplog):
         }
     }
     messages = [record.getMessage() for record in caplog.records]
-    assert any("docs/equity_hard_stop_loss_risks.md" in message for message in messages)
-    assert any("Deposits, withdrawals" in message for message in messages)
-    assert any("HSL mode changes" in message for message in messages)
+    warnings = [record for record in caplog.records if record.levelno == logging.WARNING]
+    assert len(warnings) == 1
+    warning = warnings[0].getMessage()
+    assert warning == (
+        "[risk] HSL[short] enabled; review docs/equity_hard_stop_loss_risks.md. "
+        "Deposits, withdrawals, balance overrides, and HSL mode/budget/threshold "
+        "changes can reinterpret reconstructed history."
+    )
     startup = next(message for message in messages if message.startswith("[risk] HSL[short] on"))
     assert startup == (
         "[risk] HSL[short] on | red=0.123457 ema=1.23457e+308 cd=1.23457e+308 "
         "no-r=0.987654 mode=unified tiers=0.345679/0.876543 "
         "orange=tp_only_with_active_entry_cancellation panic=market restart=threshold"
     )
-    normal_console_prefix = "2026-07-15T12:34:56Z INFO     [hyperliquid] "
-    assert len(normal_console_prefix + startup) <= 240
+    warning_prefix = "2026-07-15T12:34:56Z WARNING  [hyperliquid] "
+    info_prefix = "2026-07-15T12:34:56Z INFO     [hyperliquid] "
+    assert len(warning_prefix + warning) <= 240
+    assert len(info_prefix + startup) <= 240
 
 
 def test_hsl_replay_matrix_row_derives_upnl_from_rust_pnl_helpers():

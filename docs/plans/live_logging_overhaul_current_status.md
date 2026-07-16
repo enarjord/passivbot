@@ -22,37 +22,44 @@ Estimated completion:
 
 ## Active Review Slice
 
-- Branch: `codex/bound-approved-coin-delta-console`, based on canonical
-  `e41118f0424ff3d4161e308b8844af5f35a8b7a9` after PR #1259.
-- PR: #1260, `Bound coin-list membership console output`.
-- Slice: make the existing `forager.eligibility_changed` event the sole normal
-  console/text owner for approved/ignored coin membership changes, with
-  per-side counts and bounded symbol samples.
-- Triggering evidence: fresh post-PR #1259 VPS5 startup logs contained natural
-  `added to approved_coins` records at 245-250 visible characters on Binance,
-  GateIO, and Hyperliquid. Each printed the complete changed symbol list and
-  exceeded the normal 240-character record budget.
-- Scope: add only a bounded structured console/text formatter and bounded
-  legacy fallback; preserve event admission and the existing structured/
-  monitor payload.
-- Behavior boundary: observability-only; no membership calculation, list
-  mutation, forager selection, config, exchange call, Rust, order, risk,
-  backtest, optimizer, or trading behavior.
+- Branch: `codex/compact-hsl-risk-disclaimer`, based on canonical
+  `3eec4466c4ae4aa76ba54f92bcc6604c80643d0d` after PR #1260.
+- PR: #1261, `Compact startup HSL safety warning`.
+- Slice: compact the once-per-enabled-side startup HSL safety warning while
+  retaining every operator-relevant condition and the risk documentation path.
+- Triggering evidence: fresh post-PR #1260 VPS5 logs contained one
+  241-character Binance HSL safety warning, the only record above the normal
+  240-character budget across the exact new log segments.
+- Scope: change only the warning literal and focused regression assertions;
+  preserve WARNING admission and once-per-enabled-side behavior.
+- Behavior boundary: observability-only; no HSL configuration, replay, history
+  reconstruction, risk calculation, exchange call, Rust, order, backtest,
+  optimizer, or trading behavior.
 - Review gate: temporary maintainer-authorized exact-head Hermes plus green CI
   while Grok is halted.
 - Expected VPS action: after merge, one authorized exact five-bot restart.
-  Validate the natural startup membership records and settled smoke; do not
+  Validate the natural startup HSL warning and settled smoke; do not
   manufacture exchange, state, risk, or trading events.
 
 ## Deployed Baseline
 
 - Canonical `master` and VPS5 are
-  `e41118f0424ff3d4161e308b8844af5f35a8b7a9`, PR #1259. The tracked checkout
+  `3eec4466c4ae4aa76ba54f92bcc6604c80643d0d`, PR #1260. The tracked checkout
   is clean and expected untracked artifacts are preserved.
 - VPS5 runs merged master in bot PIDs
-  `972601/972603/972605/972607/972609`. The exact pane PIDs remain
+  `973301/973303/973305/973307/973309`. The exact pane PIDs remain
   `856294/856332/856364/856398/856434`, and unrelated `misc:0.0` PID `434835`
   is unchanged.
+- PR #1260 was activated after one exact five-bot SIGINT round; old PIDs
+  `972601/972603/972605/972607/972609` all exited naturally within 24 seconds
+  without escalation. The final settled smoke was `ok=true` with zero
+  hard/log/monitor/process failures, `371/371` remote and `80/80`
+  account-critical calls successful, 11 successful fill refreshes, no active
+  HSL replay, all five exact processes in normal `R/S` states, and a clean
+  tracked checkout. All five bots naturally emitted the new structured
+  approved-coin membership projection at 130-150 visible characters, versus
+  245-250 before, with zero legacy membership lines. The same exact new logs
+  exposed one 241-character Binance startup HSL safety warning.
 - PR #1259 was activated after one exact five-bot SIGINT round; old PIDs
   `971695/971697/971699/971701/971703` all exited naturally within 28 seconds
   without escalation. The settled three-minute smoke was `ok=true` with zero
@@ -874,9 +881,11 @@ measured 201 visible characters with zero legacy caller-bearing duplicates and
 a hard-green settled smoke. PR #1259 is also merged, deployed, and naturally
 validated: a real Binance `InvalidNonce` recovery produced a 203-character
 clock-offset line with no raw exception text and the settled smoke was
-hard-green. The active slice migrates the naturally observed 245-250-character
-coin-membership lists to one bounded structured console/text owner without
-changing eligibility or trading behavior.
+hard-green. PR #1260 is also merged, deployed, and naturally validated: all
+five approved-coin membership lines measured 130-150 visible characters with
+zero legacy duplicates and a hard-green settled smoke. The active slice
+compacts the only remaining over-budget new record, a 241-character startup HSL
+safety warning, without changing warning admission, risk, or trading behavior.
 
 Do not create progress-only PRs or resume unrelated logging work from stale
 worktrees.
