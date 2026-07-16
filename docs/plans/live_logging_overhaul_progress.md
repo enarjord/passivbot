@@ -15,7 +15,29 @@ merge, live smoke evidence changes, or new gaps are discovered.
 - Do not use this file for design churn; unresolved design details belong in the
   plan or a focused handoff doc.
 
-## Latest Canonical Deployment (PR #1268)
+## Latest Canonical Deployment (PR #1269)
+
+- PR #1269 merged to `master` as
+  `d511341366fea26b48d064f2bbe5b25a4408664b`. It adds optional configured
+  diagnostic budgets to existing startup timing events and makes smoke reports
+  prefer them over historical p95 projections without enforcing the budgets.
+- VPS5 sent one SIGINT at `2026-07-16T11:59:17Z` to exact old PIDs
+  `979190/979193/979196/979199/979202`; all exited naturally within 36 seconds.
+  New PIDs are `985592/985594/985596/985598/985600`; pane parents and unrelated
+  `misc:0.0` PID `434835` remained unchanged.
+- Immediate smoke was hard-green. A later window retained one real recovered
+  KuCoin fill-refresh timeout and was not treated as green. The fresh final
+  two-minute window was `ok=true` with zero hard/log/monitor/process/pipeline
+  failures, `46/46` account-critical calls and `7/7` fill refreshes successful,
+  five matching/config-valid processes in states `R=4,S=1`, no uninterruptible
+  sleep, no active HSL replay, and a clean tracked checkout.
+- VPS5 intentionally has no configured phase budgets, so reports retained
+  `no_baseline` assessments with zero invalid configured metadata. No budget
+  event or trading activity was manufactured. The next read-only reporting
+  slice makes `live-performance-report` consume the durable configured-budget
+  metadata already assessed by `live-smoke-report`.
+
+## Previous Canonical Deployment (PR #1268)
 
 - PR #1268 merged to `master` as
   `f8ec74792d69e229fd63bf4cdf7ab7a092a79cd4`. It adds an aggregate-only
@@ -29,9 +51,9 @@ merge, live smoke evidence changes, or new gaps are discovered.
 - No source values or lines were emitted, no artifacts were remediated, and no
   process signal was sent. All five configured bot panes and unrelated
   `misc:0.0` remained present.
-- The next substantive slice adds optional durable diagnostic budgets to
-  existing startup timing events and gives those configured targets precedence
-  over historical p95 report projections without enforcing them.
+- PR #1269 subsequently added optional durable diagnostic budgets to existing
+  startup timing events and gave those configured targets report precedence
+  without enforcing them.
 
 ## Previous Canonical Deployment (PR #1267)
 

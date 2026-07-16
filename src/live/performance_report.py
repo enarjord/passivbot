@@ -1226,6 +1226,69 @@ def _startup_readiness_contract(
     return expected
 
 
+def _startup_config_budget_projection(
+    *,
+    data: dict[str, Any],
+    budget_key: str,
+    latest_ms: int | None,
+) -> dict[str, int | str | None] | None:
+    if data.get("budget_source") != "config" or budget_key not in data:
+        return None
+    raw_budget = data.get(budget_key)
+    if (
+        isinstance(raw_budget, bool)
+        or not isinstance(raw_budget, int)
+        or raw_budget < 0
+    ):
+        return {
+            "status": "invalid_budget",
+            "latest_ms": latest_ms,
+            "budget_ms": None,
+            "usage_pct": None,
+            "over_budget_by_ms": None,
+            "source": "config",
+        }
+    budget_ms = int(raw_budget)
+    over_budget_by_ms = (
+        None if latest_ms is None else max(0, int(latest_ms) - budget_ms)
+    )
+    return {
+        "status": (
+            "unavailable"
+            if latest_ms is None
+            else "over_budget"
+            if over_budget_by_ms
+            else "within_budget"
+        ),
+        "latest_ms": latest_ms,
+        "budget_ms": budget_ms,
+        "usage_pct": _usage_pct(latest_ms, budget_ms),
+        "over_budget_by_ms": over_budget_by_ms,
+        "source": "config",
+    }
+
+
+def _startup_config_budget_assessments(
+    data: dict[str, Any],
+    *,
+    elapsed_ms: int | None,
+    since_previous_ms: int | None,
+) -> dict[str, dict[str, int | str | None]]:
+    assessments = {}
+    for output_key, budget_key, latest_ms in (
+        ("elapsed_budget", "elapsed_budget_ms", elapsed_ms),
+        ("phase_budget", "since_previous_budget_ms", since_previous_ms),
+    ):
+        projection = _startup_config_budget_projection(
+            data=data,
+            budget_key=budget_key,
+            latest_ms=latest_ms,
+        )
+        if projection is not None:
+            assessments[output_key] = projection
+    return assessments
+
+
 class _StartupSourceCompletenessTracker:
     """Track newer incomplete event sources without retaining their rows."""
 
@@ -1303,6 +1366,7 @@ class _StartupReadinessAccumulator:
                 "bot": bot,
                 "_candidates": {},
                 "startup_phases_ms": {},
+                "startup_phase_budgets": {},
                 "latest_ts": None,
             }
             self.bots[bot] = state
@@ -1344,6 +1408,7 @@ class _StartupReadinessAccumulator:
                 "bot": bot,
                 "_candidates": retained,
                 "startup_phases_ms": {},
+                "startup_phase_budgets": {},
                 "latest_ts": None,
             }
         )
@@ -1374,6 +1439,12 @@ class _StartupReadinessAccumulator:
         if event_type == "bot.startup_timing":
             stage = candidate["stage"]
             elapsed_ms = candidate.get("elapsed_ms")
+            phase_budgets = state.setdefault("startup_phase_budgets", {})
+            budget_assessments = candidate.get("budget_assessments")
+            if budget_assessments:
+                phase_budgets[stage] = budget_assessments
+            else:
+                phase_budgets.pop(stage, None)
             if elapsed_ms is None:
                 return
             state["startup_phases_ms"][stage] = int(elapsed_ms)
@@ -1471,6 +1542,7 @@ class _StartupReadinessAccumulator:
                     "_candidates": retained,
                     "_started_order": event_order,
                     "startup_phases_ms": {},
+                    "startup_phase_budgets": {},
                     "latest_ts": int(ts) if ts is not None else None,
                 }
             )
@@ -1521,10 +1593,16 @@ class _StartupReadinessAccumulator:
         if event_type == "bot.startup_timing":
             assert stage is not None
             candidate_key = f"startup:{stage}"
+            since_previous_ms = _non_negative_ms(data.get("since_previous_ms"))
             candidate.update(
                 {
                     "stage": stage,
                     "elapsed_ms": elapsed_ms,
+                    "budget_assessments": _startup_config_budget_assessments(
+                        data,
+                        elapsed_ms=elapsed_ms,
+                        since_previous_ms=since_previous_ms,
+                    ),
                     "contract": contract,
                 }
             )
@@ -1595,6 +1673,7 @@ class _StartupReadinessAccumulator:
         ready_count = 0
         hsl_active_count = 0
         debug_profile_counts: Counter[str] = Counter()
+        startup_budget_status_counts: Counter[str] = Counter()
         limit = max(0, int(group_limit))
         phase_labels = [
             phase
@@ -1618,6 +1697,20 @@ class _StartupReadinessAccumulator:
             }
             if len(phases) > limit:
                 item["startup_phases_truncated"] = True
+            phase_budgets = dict(
+                sorted((state.get("startup_phase_budgets") or {}).items())
+            )
+            for assessments in phase_budgets.values():
+                for projection in assessments.values():
+                    status = projection.get("status")
+                    if isinstance(status, str):
+                        startup_budget_status_counts[status] += 1
+            if phase_budgets:
+                item["startup_phase_budgets"] = dict(
+                    list(phase_budgets.items())[:limit]
+                )
+                if len(phase_budgets) > limit:
+                    item["startup_phase_budgets_truncated"] = True
             readiness_sla = dict(sorted((state.get("readiness_sla") or {}).items()))
             if readiness_sla:
                 item["readiness_sla"] = dict(list(readiness_sla.items())[:limit])
@@ -1648,7 +1741,7 @@ class _StartupReadinessAccumulator:
                 item["debug_profiles"] = debug_profiles
                 debug_profile_counts.update(debug_profiles)
             bot_items.append({key: value for key, value in item.items() if value not in (None, {})})
-        return {
+        result = {
             "bot_count": len(bot_items),
             "ready_count": int(ready_count),
             "hsl_replay_active_count": int(hsl_active_count),
@@ -1683,6 +1776,11 @@ class _StartupReadinessAccumulator:
             "bots_truncated": len(bot_items) > limit,
             "bots": bot_items[:limit],
         }
+        if startup_budget_status_counts:
+            result["startup_budget_status_counts"] = dict(
+                sorted(startup_budget_status_counts.items())
+            )
+        return result
 
 
 _STARTUP_MILESTONE_EVENT_TYPES = {
