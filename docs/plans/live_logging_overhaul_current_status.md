@@ -24,7 +24,7 @@ Estimated completion:
 
 - Branch: `codex/compact-hsl-risk-disclaimer`, based on canonical
   `3eec4466c4ae4aa76ba54f92bcc6604c80643d0d` after PR #1260.
-- PR: pending, `Compact startup HSL safety warning`.
+- PR: #1261, `Compact startup HSL safety warning`.
 - Slice: compact the once-per-enabled-side startup HSL safety warning while
   retaining every operator-relevant condition and the risk documentation path.
 - Triggering evidence: fresh post-PR #1260 VPS5 logs contained one
