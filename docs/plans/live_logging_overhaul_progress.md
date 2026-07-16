@@ -15,7 +15,26 @@ merge, live smoke evidence changes, or new gaps are discovered.
 - Do not use this file for design churn; unresolved design details belong in the
   plan or a focused handoff doc.
 
-## Latest Canonical Deployment (PR #1274)
+## Latest Canonical Deployment (PR #1275)
+
+- PR #1275 merged to `master` as
+  `e5603244565807167494ffc53898f98f736f876a`. It projects existing
+  `planning.symbol_state` events into bounded latest-per-bot staged-readiness
+  health without changing verdicts or runtime behavior.
+- VPS5 fast-forwarded cleanly with no restart. Exact bot PIDs
+  `985592/985594/985596/985598/985600`, all five pane parents, and unrelated
+  `misc:0.0` PID `434835` remained unchanged; tracked state stayed clean.
+- The bounded two-minute smoke was `ok=true` with zero hard/log/monitor/process
+  failures, `291/291` remote and `58/58` account-critical calls successful,
+  nine successful fill refreshes, and five exact/config-valid live processes.
+  Transient `D` samples cleared to a final exact state of `R=4,S=1`.
+- The focused report naturally projected 13 symbol-state events across four
+  bots with bounded aggregate and redacted symbol evidence. The same settled
+  inventory contained 12 natural `entry.initial_eligibility` events, motivating
+  the next report-only aggregate slice. No event or trading activity was
+  manufactured.
+
+## Previous Canonical Deployment (PR #1274)
 
 - PR #1274 merged to `master` as
   `bcbfa12808a00e39c1e4eb78e43e13746be553fa`. It scopes monitor event-type

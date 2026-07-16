@@ -3963,6 +3963,122 @@ def test_live_smoke_report_summarizes_latest_planning_symbol_state_per_bot(tmp_p
     assert section["staged_readiness_health"] == health
 
 
+def test_live_smoke_report_summarizes_latest_initial_entry_eligibility_per_bot(
+    tmp_path,
+):
+    binance_events = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    gateio_events = tmp_path / "monitor" / "gateio" / "gateio_01" / "events"
+    _write_ndjson(
+        binance_events / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="entry.initial_eligibility",
+                seq=1,
+                ts=1000,
+                level="debug",
+                reason_code="fresh_entry_eligibility",
+                ids={"cycle_id": "cy_old", "order_wave_id": "ow_old"},
+                data={
+                    "evaluated_count": 99,
+                    "records_total": 99,
+                    "outcome_counts": {"blocked_candidate": 99},
+                    "reason_counts": {"stale_old_reason": 99},
+                    "records_truncated": True,
+                },
+            ),
+            _monitor_row(
+                event_type="entry.initial_eligibility",
+                seq=2,
+                ts=2000,
+                level="debug",
+                reason_code="fresh_entry_eligibility",
+                ids={"cycle_id": "cy_new", "order_wave_id": "ow_new"},
+                data={
+                    "evaluated_count": 4,
+                    "records_total": 4,
+                    "outcome_counts": {
+                        "blocked_candidate": 1,
+                        "eligible": 1,
+                        "no_candidate": 2,
+                    },
+                    "reason_counts": {
+                        "low_balance": 1,
+                        "rust_no_initial_candidate": 2,
+                    },
+                    "records": [
+                        {"symbol": "api_key=SHOULD_NOT_RENDER"}
+                    ],
+                    "records_truncated": True,
+                },
+            ),
+        ],
+    )
+    _write_ndjson(
+        gateio_events / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="entry.initial_eligibility",
+                seq=1,
+                ts=1500,
+                exchange="gateio",
+                user="gateio_01",
+                level="debug",
+                reason_code="fresh_entry_eligibility",
+                ids={"cycle_id": "cy_gate", "order_wave_id": "ow_gate"},
+                data={
+                    "evaluated_count": 2,
+                    "records_total": 2,
+                    "outcome_counts": {"no_candidate": 2},
+                    "reason_counts": {"rust_no_initial_candidate": 2},
+                    "records_truncated": False,
+                },
+            )
+        ],
+    )
+
+    report = build_live_smoke_report(tmp_path / "monitor", logs_root=None)
+    summary = summarize_live_smoke_report(report)
+    brief = summarize_live_smoke_report_brief(report)
+    section = project_live_smoke_report_sections(report, ["staged_readiness"])
+
+    health = report["staged_readiness_health"]
+    assert health["total"] == 3
+    assert health["bots"] == 2
+    assert health["event_types"] == {"entry.initial_eligibility": 3}
+    assert health["latest_initial_entry_eligibility_bots"] == 2
+    assert health["latest_initial_entry_evaluated_total"] == 6
+    assert health["latest_initial_entry_records_total"] == 6
+    assert health["latest_initial_entry_outcome_counts"] == {
+        "no_candidate": 4,
+        "blocked_candidate": 1,
+        "eligible": 1,
+    }
+    assert health["latest_initial_entry_reason_counts"] == {
+        "rust_no_initial_candidate": 4,
+        "low_balance": 1,
+    }
+    assert health["latest_initial_entry_records_truncated_bots"] == 1
+    assert "stale_old_reason" not in json.dumps(health)
+    assert "SHOULD_NOT_RENDER" not in json.dumps(health)
+    binance_group = next(
+        group for group in health["groups"] if group["bot"] == "binance/binance_01"
+    )
+    assert binance_group["count"] == 2
+    assert binance_group["latest_ids"] == {
+        "cycle_id": "cy_new",
+        "order_wave_id": "ow_new",
+    }
+    for projected in (summary["staged_readiness_health"], brief["staged_readiness"]):
+        assert projected["latest_initial_entry_evaluated_total"] == 6
+        assert projected["latest_initial_entry_outcome_counts"] == {
+            "no_candidate": 4,
+            "blocked_candidate": 1,
+            "eligible": 1,
+        }
+        assert "SHOULD_NOT_RENDER" not in json.dumps(projected)
+    assert section["staged_readiness_health"] == health
+
+
 def test_live_smoke_report_problem_events_include_state_refresh_progress(tmp_path):
     events_dir = tmp_path / "monitor" / "kucoin" / "kucoin_01" / "events"
     _write_ndjson(

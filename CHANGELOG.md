@@ -5,6 +5,12 @@ All notable user-facing changes will be documented in this file.
 ## Unreleased
 
 - Staged-readiness smoke reports now include bounded latest-per-bot
+  `entry.initial_eligibility` aggregates: evaluated and record totals, outcome
+  and reason counts, truncation coverage, and correlation IDs. Raw per-symbol
+  records remain query-only, and smoke verdicts, entry eligibility, exchange
+  access, and trading behavior are unchanged.
+
+- Staged-readiness smoke reports now include bounded latest-per-bot
   `planning.symbol_state` evidence across full, summary, brief, and selected
   output. The projection reports availability counts, unavailable reasons,
   order classes, surfaces, and redacted symbol samples without changing smoke
