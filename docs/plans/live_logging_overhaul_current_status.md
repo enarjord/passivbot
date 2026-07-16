@@ -24,8 +24,9 @@ Estimated completion:
 
 - Branch: `codex/log-secret-inventory`, based on canonical
   `8e55f3642841b0730afc7e7b2b73632a8e7d8071` after PR #1264.
-- PR: pending. Slice: add the non-destructive inventory half of backlog item
-  #21 for historical secret-bearing text logs.
+- PR: #1265, `Add read-only historical log secret inventory`; semantic head
+  `6340b87e021882929f998b4df8ee198e60231461`. Slice: add the non-destructive
+  inventory half of backlog item #21 for historical secret-bearing text logs.
 - Triggering evidence: a 2026-07-15 read-only audit confirmed retained old logs
   contain private websocket credentials and raw exchange error bodies, while a
   bounded sample of current canonical logs was clean.
