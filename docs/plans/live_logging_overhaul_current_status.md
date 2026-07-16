@@ -24,8 +24,9 @@ Estimated completion:
 
 - Branch: `codex/smoke-planning-snapshot-health`, based on canonical
   `0990d351c6302453cb39f55f991d5b0989a42c3b` after PR #1279.
-- PR: pending. Slice: project existing `snapshot.built` events into bounded
-  latest-per-bot planning-snapshot health.
+- PR: #1280, `Report planning-snapshot smoke health`; semantic implementation
+  head `886d1311e6`. Slice: project existing `snapshot.built` events into
+  bounded latest-per-bot planning-snapshot health.
 - Triggering evidence: the focused post-PR #1278 five-minute inventory
   naturally contained 35 snapshot-build events while smoke reports exposed no
   required-surface, freshness, missing-market, availability, or packet-count
