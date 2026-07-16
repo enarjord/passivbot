@@ -137,6 +137,9 @@ FORAGER_ELIGIBILITY_SYMBOL_SAMPLE_LIMIT = 8
 STAGED_READINESS_GROUP_LIMIT = 20
 STAGED_READINESS_VALUE_LIMIT = 8
 STAGED_READINESS_SYMBOL_SAMPLE_LIMIT = 8
+PLANNING_OUTPUT_HEALTH_GROUP_LIMIT = 20
+PLANNING_OUTPUT_VALUE_LIMIT = 8
+PLANNING_OUTPUT_SYMBOL_SAMPLE_LIMIT = 8
 EVENT_PIPELINE_HEALTH_GROUP_LIMIT = 20
 RESOURCE_PRESSURE_GROUP_LIMIT = 20
 RESOURCE_PRESSURE_FIELDS = (
@@ -2978,6 +2981,348 @@ def _staged_readiness_symbol_summary(
         "count": count,
         "sample": sample,
         "truncated": max(0, count - len(sample)),
+    }
+
+
+def _planning_output_count_map(value: Any) -> dict[str, int]:
+    if not isinstance(value, dict):
+        return {}
+    counts: Counter[str] = Counter()
+    for key, raw in value.items():
+        parsed = _non_negative_int(raw)
+        if key is None or parsed is None:
+            continue
+        safe_key = _redact_log_text(str(key), max_len=80)
+        if safe_key:
+            counts[safe_key] += int(parsed)
+    return dict(counts.most_common(PLANNING_OUTPUT_VALUE_LIMIT))
+
+
+def _planning_output_symbol_summary(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {}
+    sample_counts: Counter[str] = Counter()
+    sample = value.get("sample")
+    if isinstance(sample, list):
+        for symbol in sample:
+            if symbol is None:
+                continue
+            safe_symbol = _redact_log_text(str(symbol), max_len=80)
+            if safe_symbol:
+                sample_counts[safe_symbol] += 1
+    count = _non_negative_int(value.get("count"))
+    if count is None:
+        count = len(sample_counts)
+    count = max(int(count), len(sample_counts))
+    if count <= 0:
+        return {}
+    bounded_sample = _symbol_sample(
+        sample_counts,
+        limit=PLANNING_OUTPUT_SYMBOL_SAMPLE_LIMIT,
+    ).get("sample", [])
+    return {
+        "count": count,
+        "sample": bounded_sample,
+        "truncated": max(0, count - len(bounded_sample)),
+    }
+
+
+def _planning_output_event(live_event: dict[str, Any]) -> bool:
+    return live_event.get("event_type") in {
+        EventTypes.RUST_ORCHESTRATOR_RETURNED,
+        EventTypes.ACTION_PLANNED,
+    }
+
+
+def _planning_output_group(
+    *,
+    bot_key: str,
+    row: dict[str, Any],
+    live_event: dict[str, Any],
+    path: Path,
+    line_no: int,
+) -> dict[str, Any]:
+    event_type = live_event.get("event_type") or row.get("kind")
+    payload = live_event.get("data")
+    payload = payload if isinstance(payload, dict) else {}
+    ids = _event_ids(live_event)
+    rust_returned = event_type == EventTypes.RUST_ORCHESTRATOR_RETURNED
+    action_planned = event_type == EventTypes.ACTION_PLANNED
+    orders_truncated = payload.get("orders_truncated")
+    orders_truncated = (
+        orders_truncated if isinstance(orders_truncated, bool) else None
+    )
+    return {
+        "bot": bot_key,
+        "event_type": event_type,
+        "count": 1,
+        "event_types": {str(event_type): 1},
+        "latest_ts": row.get("ts"),
+        "latest_seq": row.get("seq"),
+        "latest_path": str(path),
+        "latest_line": int(line_no),
+        "latest_ids": {
+            key: ids.get(key)
+            for key in ("cycle_id", "remote_call_id")
+            if ids.get(key) is not None
+        },
+        "latest_rust_ts": row.get("ts") if rust_returned else None,
+        "latest_rust_seq": row.get("seq") if rust_returned else None,
+        "latest_rust_path": str(path) if rust_returned else None,
+        "latest_rust_line": int(line_no) if rust_returned else None,
+        "latest_rust_status": live_event.get("status") if rust_returned else None,
+        "latest_rust_elapsed_ms": (
+            _non_negative_int(payload.get("elapsed_ms")) if rust_returned else None
+        ),
+        "latest_rust_order_count": (
+            _non_negative_int(payload.get("order_count")) if rust_returned else None
+        ),
+        "latest_action_ts": row.get("ts") if action_planned else None,
+        "latest_action_seq": row.get("seq") if action_planned else None,
+        "latest_action_path": str(path) if action_planned else None,
+        "latest_action_line": int(line_no) if action_planned else None,
+        "latest_action_status": live_event.get("status") if action_planned else None,
+        "latest_action_order_count": (
+            _non_negative_int(payload.get("order_count")) if action_planned else None
+        ),
+        "latest_action_by_order_type": (
+            _planning_output_count_map(payload.get("by_order_type"))
+            if action_planned
+            else {}
+        ),
+        "latest_action_by_pside": (
+            _planning_output_count_map(payload.get("by_pside"))
+            if action_planned
+            else {}
+        ),
+        "latest_action_by_execution_type": (
+            _planning_output_count_map(payload.get("by_execution_type"))
+            if action_planned
+            else {}
+        ),
+        "latest_action_symbols": (
+            _planning_output_symbol_summary(payload.get("symbols"))
+            if action_planned
+            else {}
+        ),
+        "latest_action_orders_truncated": (
+            orders_truncated if action_planned else None
+        ),
+    }
+
+
+def _planning_output_group_key(group: dict[str, Any]) -> tuple[Any, ...]:
+    ids = group.get("latest_ids")
+    ids = ids if isinstance(ids, dict) else {}
+    cycle_id = ids.get("cycle_id")
+    remote_call_id = ids.get("remote_call_id")
+    if cycle_id is None and remote_call_id is None:
+        return (
+            group.get("bot"),
+            group.get("event_type"),
+            group.get("latest_path"),
+            group.get("latest_line"),
+        )
+    return (group.get("bot"), cycle_id, remote_call_id)
+
+
+def _planning_output_position_key(
+    group: dict[str, Any],
+    *,
+    prefix: str = "latest",
+) -> tuple[int, int, str, int]:
+    return _sort_event_position_key(
+        ts=group.get(f"{prefix}_ts"),
+        seq=group.get(f"{prefix}_seq"),
+        path=group.get(f"{prefix}_path") or "",
+        line_no=int(group.get(f"{prefix}_line") or 0),
+    )
+
+
+def _merge_planning_output_group(
+    groups: dict[tuple[Any, ...], dict[str, Any]],
+    group: dict[str, Any],
+) -> None:
+    key = _planning_output_group_key(group)
+    existing = groups.get(key)
+    if existing is None:
+        groups[key] = group
+        return
+    existing["count"] = int(existing.get("count") or 0) + 1
+    existing["event_types"] = _sum_counter_maps(
+        (existing.get("event_types"), group.get("event_types"))
+    )
+    if _planning_output_position_key(group) > _planning_output_position_key(existing):
+        for field in (
+            "event_type",
+            "latest_ts",
+            "latest_seq",
+            "latest_path",
+            "latest_line",
+            "latest_ids",
+        ):
+            existing[field] = group.get(field)
+    event_type = group.get("event_type")
+    if event_type == EventTypes.RUST_ORCHESTRATOR_RETURNED:
+        if existing.get("latest_rust_ts") is None or _planning_output_position_key(
+            group, prefix="latest_rust"
+        ) > _planning_output_position_key(existing, prefix="latest_rust"):
+            for field in (
+                "latest_rust_ts",
+                "latest_rust_seq",
+                "latest_rust_path",
+                "latest_rust_line",
+                "latest_rust_status",
+                "latest_rust_elapsed_ms",
+                "latest_rust_order_count",
+            ):
+                existing[field] = group.get(field)
+    elif event_type == EventTypes.ACTION_PLANNED:
+        if existing.get("latest_action_ts") is None or _planning_output_position_key(
+            group, prefix="latest_action"
+        ) > _planning_output_position_key(existing, prefix="latest_action"):
+            for field in (
+                "latest_action_ts",
+                "latest_action_seq",
+                "latest_action_path",
+                "latest_action_line",
+                "latest_action_status",
+                "latest_action_order_count",
+                "latest_action_by_order_type",
+                "latest_action_by_pside",
+                "latest_action_by_execution_type",
+                "latest_action_symbols",
+                "latest_action_orders_truncated",
+            ):
+                existing[field] = group.get(field)
+
+
+def _summarize_planning_output_health(
+    groups: dict[tuple[Any, ...], dict[str, Any]],
+    event_type_counts: Counter[str],
+) -> dict[str, Any]:
+    ordered = sorted(
+        groups.values(),
+        key=_planning_output_position_key,
+        reverse=True,
+    )
+    compact_groups = [
+        {
+            key: value
+            for key, value in group.items()
+            if key
+            not in {
+                "latest_path",
+                "latest_line",
+                "latest_seq",
+                "latest_rust_path",
+                "latest_rust_line",
+                "latest_rust_seq",
+                "latest_action_path",
+                "latest_action_line",
+                "latest_action_seq",
+            }
+            and value not in (None, {}, [])
+        }
+        for group in ordered[:PLANNING_OUTPUT_HEALTH_GROUP_LIMIT]
+    ]
+    latest_by_bot: dict[str, dict[str, Any]] = {}
+    for group in groups.values():
+        bot = str(group.get("bot") or "unknown")
+        previous = latest_by_bot.get(bot)
+        if previous is None or _planning_output_position_key(
+            group
+        ) > _planning_output_position_key(previous):
+            latest_by_bot[bot] = group
+    latest_groups = list(latest_by_bot.values())
+    symbol_count = 0
+    symbols: Counter[str] = Counter()
+    for group in latest_groups:
+        symbol_summary = group.get("latest_action_symbols")
+        if not isinstance(symbol_summary, dict):
+            continue
+        symbol_count += int(_non_negative_int(symbol_summary.get("count")) or 0)
+        sample = symbol_summary.get("sample")
+        if isinstance(sample, list):
+            for symbol in sample:
+                if symbol is not None:
+                    symbols[str(symbol)] += 1
+    symbol_sample = _symbol_sample(
+        symbols,
+        limit=PLANNING_OUTPUT_SYMBOL_SAMPLE_LIMIT,
+    ).get("sample", [])
+    return {
+        "total": sum(int(group.get("count") or 0) for group in groups.values()),
+        "event_types": dict(event_type_counts.most_common()),
+        "bots": len(latest_by_bot),
+        "groups_truncated": len(ordered) > PLANNING_OUTPUT_HEALTH_GROUP_LIMIT,
+        "latest_rust_returned_bots": sum(
+            1 for group in latest_groups if group.get("latest_rust_ts") is not None
+        ),
+        "latest_action_planned_bots": sum(
+            1 for group in latest_groups if group.get("latest_action_ts") is not None
+        ),
+        "latest_correlated_bots": sum(
+            1
+            for group in latest_groups
+            if group.get("latest_rust_ts") is not None
+            and group.get("latest_action_ts") is not None
+        ),
+        "latest_rust_elapsed_ms_max": max(
+            (
+                int(_non_negative_int(group.get("latest_rust_elapsed_ms")) or 0)
+                for group in latest_groups
+                if group.get("latest_rust_elapsed_ms") is not None
+            ),
+            default=0,
+        ),
+        "latest_rust_order_count_total": sum(
+            int(_non_negative_int(group.get("latest_rust_order_count")) or 0)
+            for group in latest_groups
+        ),
+        "latest_action_order_count_total": sum(
+            int(_non_negative_int(group.get("latest_action_order_count")) or 0)
+            for group in latest_groups
+        ),
+        "latest_order_count_mismatch_bots": sum(
+            1
+            for group in latest_groups
+            if group.get("latest_rust_order_count") is not None
+            and group.get("latest_action_order_count") is not None
+            and int(group.get("latest_rust_order_count") or 0)
+            != int(group.get("latest_action_order_count") or 0)
+        ),
+        "latest_action_by_order_type": _planning_output_count_map(
+            _sum_counter_maps(
+                group.get("latest_action_by_order_type") for group in latest_groups
+            )
+        ),
+        "latest_action_by_pside": _planning_output_count_map(
+            _sum_counter_maps(
+                group.get("latest_action_by_pside") for group in latest_groups
+            )
+        ),
+        "latest_action_by_execution_type": _planning_output_count_map(
+            _sum_counter_maps(
+                group.get("latest_action_by_execution_type")
+                for group in latest_groups
+            )
+        ),
+        "latest_action_symbols": (
+            {
+                "count": symbol_count,
+                "sample": symbol_sample,
+                "truncated": max(0, symbol_count - len(symbol_sample)),
+            }
+            if symbol_count
+            else {}
+        ),
+        "latest_action_orders_truncated_bots": sum(
+            1
+            for group in latest_groups
+            if group.get("latest_action_orders_truncated") is True
+        ),
+        "groups": compact_groups,
     }
 
 
@@ -7069,6 +7414,8 @@ def _scan_events(
     exchange_config_refresh_event_type_counts: Counter[str] = Counter()
     staged_readiness_groups: dict[tuple[Any, ...], dict[str, Any]] = {}
     staged_readiness_event_type_counts: Counter[str] = Counter()
+    planning_output_groups: dict[tuple[Any, ...], dict[str, Any]] = {}
+    planning_output_event_type_counts: Counter[str] = Counter()
     event_pipeline_health_groups: dict[tuple[Any, ...], dict[str, Any]] = {}
     event_pipeline_health_event_type_counts: Counter[str] = Counter()
     resource_pressure_groups: dict[tuple[Any, ...], dict[str, Any]] = {}
@@ -7350,6 +7697,18 @@ def _scan_events(
                                 line_no=line_no,
                             ),
                         )
+                    if _planning_output_event(live_event):
+                        planning_output_event_type_counts[str(event_type)] += 1
+                        _merge_planning_output_group(
+                            planning_output_groups,
+                            _planning_output_group(
+                                bot_key=bot_key,
+                                row=row,
+                                live_event=live_event,
+                                path=path,
+                                line_no=line_no,
+                            ),
+                        )
                     if event_type == EventTypes.HEALTH_SUMMARY:
                         event_pipeline_health_group = _event_pipeline_health_group(
                             bot_key=bot_key,
@@ -7570,6 +7929,10 @@ def _scan_events(
         "staged_readiness_health": _summarize_staged_readiness_health(
             staged_readiness_groups,
             staged_readiness_event_type_counts,
+        ),
+        "planning_output_health": _summarize_planning_output_health(
+            planning_output_groups,
+            planning_output_event_type_counts,
         ),
         "event_pipeline_health": _summarize_event_pipeline_health(
             event_pipeline_health_groups,
@@ -8023,6 +8386,7 @@ def build_live_smoke_report(
             "exchange_config_refresh_health"
         ],
         "staged_readiness_health": event_scan["staged_readiness_health"],
+        "planning_output_health": event_scan["planning_output_health"],
         "event_pipeline_health": event_scan["event_pipeline_health"],
         "resource_pressure": event_scan["resource_pressure"],
         "hsl_replay_health": event_scan["hsl_replay_health"],
@@ -8389,6 +8753,26 @@ def _summary_staged_readiness_health(
     return out
 
 
+def _summary_planning_output_health(
+    summary: dict[str, Any],
+    *,
+    limit: int,
+) -> dict[str, Any]:
+    groups = summary.get("groups")
+    if not isinstance(groups, list):
+        groups = []
+    limit = max(0, int(limit))
+    return {
+        key: value
+        for key, value in summary.items()
+        if key not in {"groups", "groups_truncated"}
+    } | {
+        "groups_truncated": bool(summary.get("groups_truncated"))
+        or len(groups) > limit,
+        "groups": groups[:limit],
+    }
+
+
 def _shareable_summary_group(
     group: Any,
     *,
@@ -8608,6 +8992,11 @@ def summarize_live_smoke_report(
         if isinstance(report.get("staged_readiness_health"), dict)
         else {}
     )
+    planning_output_health = (
+        report.get("planning_output_health")
+        if isinstance(report.get("planning_output_health"), dict)
+        else {}
+    )
     event_pipeline_health = (
         report.get("event_pipeline_health")
         if isinstance(report.get("event_pipeline_health"), dict)
@@ -8811,6 +9200,10 @@ def summarize_live_smoke_report(
         ),
         "staged_readiness_health": _summary_staged_readiness_health(
             staged_readiness_health,
+            limit=max_groups,
+        ),
+        "planning_output_health": _summary_planning_output_health(
+            planning_output_health,
             limit=max_groups,
         ),
         "event_pipeline_health": _summary_limited_groups(
@@ -9525,6 +9918,11 @@ def summarize_live_smoke_report_brief(report: dict[str, Any]) -> dict[str, Any]:
         if isinstance(report.get("staged_readiness_health"), dict)
         else {}
     )
+    planning_output_health = (
+        report.get("planning_output_health")
+        if isinstance(report.get("planning_output_health"), dict)
+        else {}
+    )
     event_pipeline_health = (
         report.get("event_pipeline_health")
         if isinstance(report.get("event_pipeline_health"), dict)
@@ -9840,6 +10238,11 @@ def summarize_live_smoke_report_brief(report: dict[str, Any]) -> dict[str, Any]:
             "event_types": exchange_config_refresh_health.get("event_types") or {},
         },
         "staged_readiness": staged_readiness_brief,
+        "planning_output": {
+            key: value
+            for key, value in planning_output_health.items()
+            if key not in {"groups", "groups_truncated"}
+        },
         "event_pipeline": {
             key: value
             for key, value in {
@@ -10097,6 +10500,7 @@ SMOKE_REPORT_SECTION_ALIASES: dict[str, tuple[str, ...]] = {
     "forager_eligibility": ("forager_eligibility_health",),
     "forager_features": ("forager_feature_health",),
     "hsl_replay": ("hsl_replay_health",),
+    "planning_output": ("planning_output_health",),
     "remote_calls": ("remote_call_health", "remote_call_timings"),
     "resources": ("resource_pressure",),
     "staged_readiness": ("staged_readiness_health",),

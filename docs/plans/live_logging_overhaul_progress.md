@@ -15,7 +15,29 @@ merge, live smoke evidence changes, or new gaps are discovered.
 - Do not use this file for design churn; unresolved design details belong in the
   plan or a focused handoff doc.
 
-## Latest Canonical Deployment (PR #1275)
+## Latest Canonical Deployment (PR #1276)
+
+- PR #1276 merged to `master` as
+  `6378d40a55116f94fe65f1b24f4981101d838e74`. It projects existing
+  `entry.initial_eligibility` events into bounded latest-per-bot
+  staged-readiness health without copying raw per-symbol records or changing
+  verdicts or runtime behavior.
+- VPS5 fast-forwarded cleanly with no restart. Exact bot PIDs
+  `985592/985594/985596/985598/985600`, all five pane parents, and unrelated
+  `misc:0.0` PID `434835` remained unchanged; tracked state stayed clean.
+- The settled bounded two-minute smoke was `ok=true` with zero
+  hard/log/monitor/process failures, `233/233` remote and `63/63`
+  account-critical calls successful, eight successful fill refreshes, and five
+  exact/config-valid live processes. Transient exact-process `D` samples
+  cleared immediately to final states `R=3,S=2`.
+- The focused report naturally projected 18 initial-entry observations across
+  all five bots and 152 latest records: 12 blocked candidates and 140
+  no-candidate outcomes, with producer truncation on three bots. A bounded
+  five-minute inventory also found 36 correlated Rust-return/action-planned
+  pairs, motivating the next report-only aggregate slice. No event or trading
+  activity was manufactured.
+
+## Previous Canonical Deployment (PR #1275)
 
 - PR #1275 merged to `master` as
   `e5603244565807167494ffc53898f98f736f876a`. It projects existing

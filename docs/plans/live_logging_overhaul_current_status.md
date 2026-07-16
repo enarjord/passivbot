@@ -22,23 +22,24 @@ Estimated completion:
 
 ## Active Review Slice
 
-- Branch: `codex/smoke-entry-initial-eligibility-health`, based on canonical
-  `e5603244565807167494ffc53898f98f736f876a` after PR #1275.
-- PR: #1276, `Report initial-entry eligibility smoke health`; semantic
-  implementation head `b3840ed5df`. Slice: project existing
-  `entry.initial_eligibility` aggregates into the staged-readiness smoke health
-  surface.
-- Triggering evidence: the settled post-PR #1275 two-minute inventory naturally
-  contained 12 `entry.initial_eligibility` events while staged-readiness health
-  exposed only planning and staged-cycle families. A bounded query confirmed
-  producer-owned outcome and reason counts plus bounded per-symbol records.
-- Scope: retain the latest eligibility observation per bot and expose bounded
-  evaluated/record totals, outcome/reason counts, truncation coverage, and
-  correlation IDs. Keep raw per-symbol records query-only.
+- Branch: `codex/smoke-planned-action-health`, based on canonical
+  `6378d40a55116f94fe65f1b24f4981101d838e74` after PR #1276.
+- PR: #1277, `Report planning-output smoke health`; semantic implementation
+  head `3796c32849`. Slice: project existing `rust_orchestrator.returned` and
+  `action.planned` events into bounded planning-output smoke health.
+- Triggering evidence: a bounded post-PR #1276 inventory naturally contained
+  36 correlated Rust-return/action-planned pairs across all five bots. The
+  existing smoke report inventoried those event types but did not summarize
+  their output or expose pairing and count mismatches.
+- Scope: retain the latest Rust and planned-action observation per bot, pair
+  them by cycle and remote-call IDs, and expose bounded Rust elapsed/order
+  counts, planned order type/position-side/execution-type counts, redacted
+  symbol samples, truncation, and order-count mismatch coverage. Keep raw
+  orders, quantities, prices, and hashes query-only.
 - Behavior boundary: read-only report projection only. No smoke verdict,
   attention classification, console output, event production, exchange access,
-  entry eligibility, planning, configuration, or trading changes.
-- Validation: focused latest-per-bot/bounded-record regression, full
+  planning, configuration, or trading changes.
+- Validation: focused latest-per-bot/correlation/redaction regression, full
   smoke-report tests, compilation, and docs checks.
 - Review gate: temporary maintainer-authorized exact-head Hermes plus green
   Python and Rust CI while Grok is halted.
@@ -48,20 +49,22 @@ Estimated completion:
 ## Deployed Baseline
 
 - Canonical `master` and VPS5 are
-  `e5603244565807167494ffc53898f98f736f876a`, PR #1275. The tracked checkout
+  `6378d40a55116f94fe65f1b24f4981101d838e74`, PR #1276. The tracked checkout
   is clean and expected untracked artifacts are preserved.
-- PR #1275 required no restart. Exact bot PIDs
+- PR #1276 required no restart. Exact bot PIDs
   `985592/985594/985596/985598/985600`, all five pane parents, and unrelated
   `misc:0.0` PID `434835` remained unchanged. The bounded two-minute smoke was
-  `ok=true` with zero hard/log/monitor/process failures, `291/291` remote and
-  `58/58` account-critical calls successful, `9/9` fill refreshes successful,
-  and five exact/config-valid live processes. Transient preflight/report `D`
-  samples cleared to a final exact process state of `R=4,S=1`.
-- The focused staged-readiness report naturally projected 13
-  `planning.symbol_state` events across four bots, with bounded latest-per-bot
-  status, reason, order-class, surface, and redacted symbol evidence. The same
-  settled inventory contained 12 natural `entry.initial_eligibility` events,
-  exposing the active follow-up. No event or trading activity was manufactured.
+  `ok=true` with zero hard/log/monitor/process failures, `233/233` remote and
+  `63/63` account-critical calls successful, `8/8` fill refreshes successful,
+  and five exact/config-valid live processes. Transient exact-process `D`
+  samples cleared immediately to final states `R=3,S=2`.
+- The focused staged-readiness report naturally projected 18
+  `entry.initial_eligibility` events across all five bots. The latest
+  observations covered 152 records: 12 blocked candidates and 140 no-candidate
+  outcomes, with three bots reporting producer truncation. A bounded five-minute
+  inventory also found 36 naturally correlated Rust-return/action-planned
+  pairs across all five bots, exposing the active follow-up. No event or trading
+  activity was manufactured.
 - PR #1274 required no restart. Exact bot PIDs
   `985592/985594/985596/985598/985600`, all five pane parents, and unrelated
   `misc:0.0` PID `434835` remained unchanged. The fresh two-minute smoke was
@@ -1054,9 +1057,10 @@ deployed without restart. PR #1271's forager feature-unavailability projection
 and PR #1272's planning-defer/absent-selector projection are merged and deployed
 without restart. PR #1273's forager eligibility projection, PR #1274's
 requested-window event inventory, and PR #1275's planning symbol-state health
-are also merged, deployed, and naturally validated. The active follow-up adds
-bounded latest-per-bot `entry.initial_eligibility` aggregates to staged
-readiness without copying raw records or changing verdicts/runtime behavior.
+are also merged, deployed, and naturally validated. PR #1276's initial-entry
+eligibility health is merged, deployed, and naturally validated. The active
+follow-up adds bounded latest-per-bot correlated planning-output health without
+copying raw orders or changing verdicts/runtime behavior.
 
 Do not create progress-only PRs or resume unrelated logging work from stale
 worktrees.
