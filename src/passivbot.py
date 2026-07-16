@@ -748,6 +748,16 @@ class Passivbot:
             and getattr(self, "_live_event_pipeline", None) is not None
         )
 
+    def _ema_fallback_structured_console_available(self) -> bool:
+        """Return True when the EMA fallback event owns the normal console warning."""
+        pipeline = getattr(self, "_live_event_pipeline", None)
+        return bool(
+            callable(getattr(self, "_emit_ema_fallback_used_event", None))
+            and Passivbot._live_event_console_available(self)
+            and callable(getattr(pipeline, "emit", None))
+            and getattr(pipeline, "console_sink", None) is not None
+        )
+
     @staticmethod
     def _log_symbol(symbol: Any) -> str:
         """Return a compact operator-facing symbol label for logs only."""
@@ -15708,7 +15718,12 @@ class Passivbot:
                 max_fallbacks,
                 "; ".join(examples),
             )
-        if close_ema_fallbacks:
+        close_fallback_structured_console = (
+            Passivbot._ema_fallback_structured_console_available(self)
+            if close_ema_fallbacks
+            else False
+        )
+        if close_ema_fallbacks and not close_fallback_structured_console:
             fallback_count = sum(len(items) for items in close_ema_fallbacks.values())
             max_fallbacks = max(
                 count

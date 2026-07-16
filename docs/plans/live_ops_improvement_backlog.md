@@ -589,6 +589,16 @@ Related detailed plans:
     to a compact console/text projection. Complete structured timing data and
     legacy fallback remain unchanged.
 
+    PR #1251 merged and deployed the staged-refresh projection. Three natural
+    admitted lines measured 155-171 characters versus 252-305 before, zero
+    legacy duplicates appeared, and the settled smoke was hard-green. A
+    retained natural Binance close-EMA fallback summary measured 308
+    characters. The active `codex/compact-ema-fallback-console` slice makes the
+    existing `ema.fallback_used` event its compact console/text owner only for
+    active close fallbacks, preserving the fifteen-minute warning cadence,
+    per-cycle durable events, recovery/forager suppression, and exact legacy
+    fallback.
+
     Two post-PR #1220 console observations remain deferred rather than folded
     into the realized-loss slice. Hyperliquid balance lines surfaced signed
     floating-point jitter near `1e-13`; decide a console-only materiality or

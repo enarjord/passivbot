@@ -24,6 +24,7 @@ from live.event_bus import (
     ReasonCodes,
     authoritative_reason_code,
     format_console_event,
+    format_ema_fallback_console,
     format_memory_snapshot_console,
     format_state_refresh_timing_console,
     live_event_debug_profile_enabled,
@@ -322,7 +323,6 @@ def test_route_table_keeps_data_events_off_console_by_default():
         EventTypes.ACTION_PLANNED,
         EventTypes.EMA_BUNDLE_STARTED,
         EventTypes.EMA_BUNDLE_COMPLETED,
-        EventTypes.EMA_FALLBACK_USED,
         EventTypes.EMA_UNAVAILABLE,
         EventTypes.CANDLE_COVERAGE_CHECKED,
         EventTypes.CANDLE_TAIL_PROJECTED,
@@ -348,6 +348,10 @@ def test_route_table_keeps_data_events_off_console_by_default():
     assert DEFAULT_ROUTES[EventTypes.CONFIG_MARKET_COMPATIBILITY].monitor is True
     assert DEFAULT_ROUTES[EventTypes.CONFIG_MARKET_COMPATIBILITY].console is False
     assert DEFAULT_ROUTES[EventTypes.CONFIG_MARKET_COMPATIBILITY].text is False
+    ema_fallback_route = DEFAULT_ROUTES[EventTypes.EMA_FALLBACK_USED]
+    assert ema_fallback_route.console is True
+    assert ema_fallback_route.text is True
+    assert ema_fallback_route.throttle_interval_ms == 15 * 60 * 1000
     assert DEFAULT_ROUTES[EventTypes.ORDER_WAVE_COMPLETED].console is True
     assert DEFAULT_ROUTES[EventTypes.ORDER_WAVE_COMPLETED].text is True
     assert DEFAULT_ROUTES[EventTypes.EXECUTION_CREATE_DEFERRED].console is False
@@ -1566,6 +1570,165 @@ def test_memory_snapshot_console_formatter_is_compact_and_omits_samples():
     assert format_console_event(
         LiveEvent(EventTypes.RESOURCE_MEMORY_SNAPSHOT, data=data)
     ) == message
+
+
+def test_ema_fallback_console_route_hides_recovery_and_forager_events_but_keeps_them_durable():
+    structured = ListEventSink()
+    console = ListEventSink()
+    text = ListEventSink()
+    pipeline = LiveEventPipeline(
+        structured_sinks=[structured],
+        monitor_sinks=[],
+        console_sink=console,
+        text_sink=text,
+    )
+    recovery = LiveEvent(
+        EventTypes.EMA_FALLBACK_USED,
+        ts_ms=1_000,
+        data={"close_fallback_count": 0, "close_recovered_count": 2},
+    )
+    forager = LiveEvent(
+        EventTypes.EMA_FALLBACK_USED,
+        ts_ms=1_001,
+        data={"close_fallback_count": 0, "forager_cached_fallback_count": 2},
+    )
+    close_first = LiveEvent(
+        EventTypes.EMA_FALLBACK_USED,
+        ts_ms=2_000,
+        data={"close_fallback_count": 1},
+    )
+    close_throttled = LiveEvent(
+        EventTypes.EMA_FALLBACK_USED,
+        ts_ms=2_000 + 15 * 60 * 1000 - 1,
+        data={"close_fallback_count": 1},
+    )
+    close_boundary = LiveEvent(
+        EventTypes.EMA_FALLBACK_USED,
+        ts_ms=2_000 + 15 * 60 * 1000,
+        data={"close_fallback_count": 1},
+    )
+
+    for event in (recovery, forager, close_first, close_throttled, close_boundary):
+        pipeline.emit(event)
+
+    assert console.events == [close_first, close_boundary]
+    assert text.events == [close_first, close_boundary]
+    assert pipeline.flush(timeout=2.0) is True
+    assert structured.events == [
+        recovery,
+        forager,
+        close_first,
+        close_throttled,
+        close_boundary,
+    ]
+    assert pipeline.close(timeout=2.0) is True
+
+
+def test_ema_fallback_console_formatter_retains_compact_warning_semantics():
+    data = {
+        "close_fallback_count": 3,
+        "close_fallback_symbols": {
+            "count": 2,
+            "sample": ["BTC/USDT:USDT", "ETH/USDT:USDT"],
+            "truncated": 0,
+        },
+        "examples": {
+            "close_fallback": [
+                {
+                    "symbol": "BTC/USDT:USDT",
+                    "spans": [10.0, 20.0],
+                    "max_age_ms": 120_000,
+                    "max_fallbacks": 3,
+                    "reason": "previous_ema_timeout",
+                },
+                {
+                    "symbol": "ETH/USDT:USDT",
+                    "spans": [30.0],
+                    "max_age_ms": 60_000,
+                    "max_fallbacks": 2,
+                    "reason": "cache_read_timeout",
+                },
+            ]
+        },
+    }
+    event = LiveEvent(EventTypes.EMA_FALLBACK_USED, status="recovered", data=data)
+    before = event.to_dict()
+
+    message = format_ema_fallback_console(event.data)
+
+    assert message.startswith("[ema] close fallback n=3 sym=2(BTC/USDT:USDT,ETH/USDT:USDT)")
+    assert "age=120000ms" in message
+    assert "streak=3" in message
+    assert "ex=BTC/USDT:USDT[10,20] age=120000ms n=3 why=previous_ema_time" in message
+    assert "recovered" not in message
+    assert "reason=" not in message
+    assert format_console_event(event) == message
+    assert event.to_dict() == before
+
+
+def test_ema_fallback_console_formatter_classifies_exception_reason_without_message():
+    message = format_ema_fallback_console(
+        {
+            "close_fallback_count": 1,
+            "close_fallback_symbols": {"count": 1, "sample": ["BTC/USDT:USDT"]},
+            "examples": {
+                "close_fallback": [
+                    {
+                        "symbol": "BTC/USDT:USDT",
+                        "spans": [60.0],
+                        "max_age_ms": 1000,
+                        "max_fallbacks": 1,
+                        "reason": "RequestTimeout: https://private.example/token",
+                    }
+                ]
+            },
+        }
+    )
+
+    assert "why=RequestTimeout" in message
+    assert "private.example" not in message
+
+
+def test_ema_fallback_console_formatter_is_bounded_without_mutating_payload():
+    maximum = (1 << 63) - 1
+    data = {
+        "close_fallback_count": maximum,
+        "close_fallback_symbols": {
+            "count": maximum,
+            "sample": ["X" * 10_000, "Y" * 10_000, "ignored"],
+        },
+        "examples": {
+            "close_fallback": [
+                {
+                    "symbol": "A" * 10_000,
+                    "spans": [1e300, 1e-300, 999.0],
+                    "max_age_ms": maximum,
+                    "max_fallbacks": maximum,
+                    "reason": "timeout " * 10_000,
+                },
+                {
+                    "symbol": "B" * 10_000,
+                    "spans": [2e300],
+                    "max_age_ms": maximum,
+                    "max_fallbacks": maximum,
+                    "reason": "stale " * 10_000,
+                },
+            ]
+        },
+    }
+    event = LiveEvent(EventTypes.EMA_FALLBACK_USED, data=data)
+    before = event.to_dict()
+
+    message = format_console_event(event)
+    longest_prefix = "2026-07-15T23:45:40Z WARNING  [hyperliquid] "
+
+    assert len(longest_prefix + message) <= 240
+    assert "n=999999999+" in message
+    assert "sym=999999999+(XXXXXXXXXXXXXXXX,YYYYYYYYYYYYYYYY)" in message
+    assert "age=999999999+ms" in message
+    assert "streak=999999999+" in message
+    assert "ex=AAAAAAAA" in message
+    assert event.to_dict() == before
 
 
 def test_state_refresh_timing_console_formatters_retain_operator_timing_signals():

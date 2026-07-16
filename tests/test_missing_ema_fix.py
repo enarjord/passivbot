@@ -790,8 +790,50 @@ async def test_kucoin_avax_close_ema_fallback_uses_previous_ema_not_price(caplog
     warning_messages = [
         record.message for record in caplog.records if record.levelno >= logging.WARNING
     ]
-    assert any("close EMA fallback summary" in message for message in warning_messages)
+    fallback_summaries = [
+        message for message in warning_messages if "close EMA fallback summary" in message
+    ]
+    assert len(fallback_summaries) == 1
     assert not any("close EMA fallback AVAX" in message for message in warning_messages)
+
+
+@pytest.mark.asyncio
+async def test_close_ema_fallback_event_console_owns_normal_warning(caplog, monkeypatch):
+    try:
+        import passivbot as pb_mod
+    except ImportError:
+        pytest.skip("passivbot module not importable in test environment")
+
+    symbol = "AVAX/USDT:USDT"
+    spans = (10.0, (10.0 * 20.0) ** 0.5, 20.0)
+    bot = _BundleReproBot(
+        symbol,
+        close_mode="timeout",
+        prev_close_ema={span: 100.0 for span in spans},
+    )
+    emitted = []
+    bot.live_event_console_enabled = True
+    bot._live_event_pipeline = type(
+        "Pipeline", (), {"console_sink": object(), "emit": lambda self, event: event}
+    )()
+
+    def emit_ema_fallback(bot_arg, **kwargs):
+        emitted.append((bot_arg, kwargs))
+
+    monkeypatch.setattr(
+        pb_mod.Passivbot,
+        "_emit_ema_fallback_used_event",
+        staticmethod(emit_ema_fallback),
+    )
+    bot._emit_ema_fallback_used_event = emit_ema_fallback
+
+    with caplog.at_level(logging.WARNING):
+        await pb_mod.Passivbot._load_orchestrator_ema_bundle(bot, [symbol], bot.PB_modes)
+
+    assert len(emitted) == 1
+    assert emitted[0][0] is bot
+    assert emitted[0][1]["close_ema_fallbacks"]
+    assert not any("close EMA fallback summary" in record.message for record in caplog.records)
 
 
 @pytest.mark.asyncio

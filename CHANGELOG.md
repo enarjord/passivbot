@@ -4,6 +4,12 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Close-EMA carry-forward warnings now use a bounded structured console/text
+  projection with counts, symbol/span examples, age, fallback streak, and a
+  classified reason. The existing fifteen-minute warning cadence, complete
+  event payload, legacy fallback, EMA calculations, and trading behavior are
+  unchanged.
+
 - Slow staged account-refresh timings and periodic timing summaries now use a
   compact structured console/text projection. The existing ten-second detail
   threshold, complete event payloads, legacy fallback, refresh calls, and
