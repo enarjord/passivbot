@@ -15,7 +15,26 @@ merge, live smoke evidence changes, or new gaps are discovered.
 - Do not use this file for design churn; unresolved design details belong in the
   plan or a focused handoff doc.
 
-## Latest Canonical Deployment (PR #1260)
+## Latest Canonical Deployment (PR #1261)
+
+- PR #1261 merged to `master` as
+  `452bd621424def1e626e5fa73b551b52ef1b2773`. It compacts the startup HSL
+  safety warning without changing warning admission, HSL configuration, risk,
+  or trading behavior.
+- VPS5 sent one SIGINT at `06:18:37Z` to exact old PIDs
+  `973301/973303/973305/973307/973309`; all exited naturally by `06:19:12Z`
+  without escalation. New PIDs are `974157/974160/974161/974163/974165`.
+- Natural HSL warnings measured 224-228 visible characters, with `0/287` over
+  240. The final two-minute smoke was `ok=true`: `202/202` remote and `49/49`
+  account-critical calls succeeded, nine fill refreshes completed, HSL replay
+  completed, states were `R=4,S=1`, hard/log/monitor/process/pipeline failures
+  were zero, and the head was clean. Transient startup KuCoin `RequestTimeout`
+  and Binance `InvalidNonce` recovered naturally.
+- A five-minute exact-log window retained 10 initial-entry distance-gate blocked
+  records, 26% of 38 records, with no line over 240. The next slice keeps those
+  records durable while bounding blocked console/text output per bot.
+
+## Previous Canonical Deployment (PR #1260)
 
 - PR #1260 merged to `master` as
   `3eec4466c4ae4aa76ba54f92bcc6604c80643d0d` after exact-head Hermes approval

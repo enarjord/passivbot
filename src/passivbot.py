@@ -16916,6 +16916,43 @@ class Passivbot:
             and getattr(pipeline, "console_sink", None) is not None
         )
 
+    def _initial_entry_distance_gate_console_decision(
+        self, now_ms: int
+    ) -> tuple[bool, int, int]:
+        """Choose the bot-level operator projection for an admitted block event."""
+        state = getattr(self, "_initial_entry_distance_gate_console_state", None)
+        if not isinstance(state, dict):
+            state = {}
+            self._initial_entry_distance_gate_console_state = state
+        interval_ms = max(
+            0,
+            int(
+                getattr(
+                    self,
+                    "_initial_entry_distance_gate_console_interval_ms",
+                    5 * 60 * 1000,
+                )
+                or 0
+            ),
+        )
+        last_visible_ms = state.get("last_visible_ms")
+        operator_visible = (
+            last_visible_ms is None
+            or now_ms - int(last_visible_ms) >= interval_ms
+        )
+        suppressed_count = min(int(state.get("suppressed_count", 0) or 0), 999)
+        if operator_visible:
+            state["last_visible_ms"] = now_ms
+            state["suppressed_count"] = 0
+        else:
+            suppressed_count = min(suppressed_count + 1, 999)
+            state["suppressed_count"] = suppressed_count
+        active_state = getattr(self, "_initial_entry_distance_gate_log_state", {})
+        active_count = min(
+            len(active_state) if isinstance(active_state, dict) else 0, 999
+        )
+        return operator_visible, active_count, suppressed_count
+
     def _log_initial_entry_distance_gate_block(
         self,
         order: dict,
@@ -16956,7 +16993,15 @@ class Passivbot:
                 self._resolve_pb_order_type(order),
             )
             return
-        if not self._initial_entry_gate_structured_console_available():
+        (
+            operator_visible,
+            active_count,
+            suppressed_count,
+        ) = self._initial_entry_distance_gate_console_decision(now_ms)
+        if (
+            operator_visible
+            and not self._initial_entry_gate_structured_console_available()
+        ):
             logging.info(
                 "[entry] initial entry staged but not placed | symbol=%s pside=%s qty=%.10g price=%.10g market=%.10g dist=%.4f%% threshold=%.4f%% tolerance=%.4f%% type=%s reason=initial_entry_distance_gate",
                 Passivbot._log_symbol(probe["symbol"]),
@@ -16982,6 +17027,9 @@ class Passivbot:
                 signed_dist=signed_dist,
                 threshold=threshold,
                 tolerance=tolerance,
+                operator_visible=operator_visible,
+                active_count=active_count,
+                suppressed_count=suppressed_count,
             )
 
     def _log_initial_entry_distance_gate_cleared(

@@ -22,34 +22,44 @@ Estimated completion:
 
 ## Active Review Slice
 
-- Branch: `codex/compact-hsl-risk-disclaimer`, based on canonical
-  `3eec4466c4ae4aa76ba54f92bcc6604c80643d0d` after PR #1260.
-- PR: #1261, `Compact startup HSL safety warning`.
-- Slice: compact the once-per-enabled-side startup HSL safety warning while
-  retaining every operator-relevant condition and the risk documentation path.
-- Triggering evidence: fresh post-PR #1260 VPS5 logs contained one
-  241-character Binance HSL safety warning, the only record above the normal
-  240-character budget across the exact new log segments.
-- Scope: change only the warning literal and focused regression assertions;
-  preserve WARNING admission and once-per-enabled-side behavior.
-- Behavior boundary: observability-only; no HSL configuration, replay, history
-  reconstruction, risk calculation, exchange call, Rust, order, backtest,
-  optimizer, or trading behavior.
-- Review gate: temporary maintainer-authorized exact-head Hermes plus green CI
-  while Grok is halted.
-- Expected VPS action: after merge, one authorized exact five-bot restart.
-  Validate the natural startup HSL warning and settled smoke; do not
-  manufacture exchange, state, risk, or trading events.
+- Branch: `codex/aggregate-entry-distance-gate-console`, based on canonical
+  `452bd621424def1e626e5fa73b551b52ef1b2773` after PR #1261.
+- PR: #1262, `Bound initial entry distance-gate console volume`; semantic head
+  `d4a815e91455b12eecfc695c1ad026b2fb839d8a`.
+- Slice: preserve the existing per-symbol initial-entry distance-gate blocked
+  records in structured/monitor sinks while admitting at most one blocked
+  console/text representative per bot per five minutes.
+- Triggering evidence: the PR #1261 post-deploy window retained 10 blocked
+  records in five minutes, 26% of 38 records, with no line over 240 characters.
+- Scope: producer-owned operator visibility, bounded active/suppressed counts,
+  compact projection, and legacy INFO fallback ownership only.
+- Behavior boundary: observability-only; no Rust, order construction/filtering,
+  thresholds, market fetches, exchange behavior, or event durability changes.
+- Validation: focused event/gate and event-pipeline/formatter tests, Python
+  compilation, docs and generated-registry checks, and diff whitespace check.
+- Review gate: temporary maintainer-authorized exact-head Hermes plus green
+  Python and Rust CI while Grok is halted.
+- Expected VPS action: after merge, one authorized exact five-bot graceful
+  restart and natural blocked-event/durable-event observation; do not
+  manufacture trading, risk, lock, or state events.
 
 ## Deployed Baseline
 
 - Canonical `master` and VPS5 are
-  `3eec4466c4ae4aa76ba54f92bcc6604c80643d0d`, PR #1260. The tracked checkout
+  `452bd621424def1e626e5fa73b551b52ef1b2773`, PR #1261. The tracked checkout
   is clean and expected untracked artifacts are preserved.
 - VPS5 runs merged master in bot PIDs
-  `973301/973303/973305/973307/973309`. The exact pane PIDs remain
+  `974157/974160/974161/974163/974165`. The exact pane PIDs remain
   `856294/856332/856364/856398/856434`, and unrelated `misc:0.0` PID `434835`
   is unchanged.
+- PR #1261 was activated after one exact five-bot SIGINT at `06:18:37Z`; old
+  PIDs `973301/973303/973305/973307/973309` all exited naturally by `06:19:12Z`
+  without escalation. Natural HSL warning lengths were 224-228 characters, with
+  `0/287` above 240. The final two-minute smoke was `ok=true` with `202/202`
+  remote and `49/49` account-critical calls successful, nine fill refreshes,
+  HSL replay complete, states `R=4,S=1`, zero hard/log/monitor/process/pipeline
+  failures, and a clean head. Transient startup KuCoin `RequestTimeout` and
+  Binance `InvalidNonce` recovered naturally.
 - PR #1260 was activated after one exact five-bot SIGINT round; old PIDs
   `972601/972603/972605/972607/972609` all exited naturally within 24 seconds
   without escalation. The final settled smoke was `ok=true` with zero

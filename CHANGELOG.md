@@ -46,11 +46,12 @@ All notable user-facing changes will be documented in this file.
   Complete debug diagnostics, candle-health calculations, fetch behavior,
   readiness checks, and trading behavior are unchanged.
 
-- Initial-entry distance-gate blocked/cleared events now use a bounded compact
-  console/text projection while retaining the complete structured payload,
-  existing event admission, and legacy fallback. Entry eligibility, distance
-  calculation, gate decisions, order creation, and trading behavior are
-  unchanged.
+- Initial-entry distance-gate blocked events now retain every existing
+  per-symbol structured/monitor record while limiting console/text and legacy
+  fallback output to one bot-level representative per five minutes, with
+  bounded active/suppressed counts. Cleared transitions remain immediate; entry
+  eligibility, distance calculation, gate decisions, order creation, and
+  trading behavior are unchanged.
 
 - Close-EMA carry-forward warnings now use a bounded structured console/text
   projection with counts, symbol/span examples, age, fallback streak, and a
