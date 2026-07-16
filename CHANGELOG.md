@@ -4,6 +4,12 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- The startup HSL safety warning now uses compact mode/budget/threshold wording
+  so its complete deposit, withdrawal, balance-override, configuration-change,
+  and history-reinterpretation warning fits the normal console record budget.
+  Warning admission, HSL configuration, risk behavior, and trading behavior are
+  unchanged.
+
 - Approved/ignored coin membership changes now use one bounded structured
   console/text projection with per-side counts and symbol samples instead of
   unbounded legacy symbol lists. Existing structured event data, membership

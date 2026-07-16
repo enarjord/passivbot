@@ -15,7 +15,31 @@ merge, live smoke evidence changes, or new gaps are discovered.
 - Do not use this file for design churn; unresolved design details belong in the
   plan or a focused handoff doc.
 
-## Latest Canonical Deployment (PR #1259)
+## Latest Canonical Deployment (PR #1260)
+
+- PR #1260 merged to `master` as
+  `3eec4466c4ae4aa76ba54f92bcc6604c80643d0d` after exact-head Hermes approval
+  and green Python/Rust CI while Grok was temporarily halted. It makes
+  `forager.eligibility_changed` the sole normal structured console/text owner
+  for approved/ignored membership changes, retaining counts and bounded samples
+  with a bounded legacy fallback; membership and trading behavior are
+  unchanged.
+- VPS5 fast-forwarded cleanly and sent one SIGINT round to exact old PIDs
+  `972601/972603/972605/972607/972609`; all exited naturally within 24 seconds
+  without escalation. Pane PIDs and unrelated `misc:0.0` PID `434835` were
+  preserved. Final PIDs are `973301/973303/973305/973307/973309` for
+  Binance/KuCoin/GateIO/OKX/Hyperliquid respectively.
+- The final settled smoke was `ok=true` with zero hard/log/monitor/process
+  failures, `371/371` remote and `80/80` account-critical calls successful, 11
+  successful fill refreshes, no active HSL replay, all five matching/config-
+  valid processes in normal `R/S` states, and clean tracked `master`.
+- All five bots naturally emitted the structured approved-coin membership
+  projection at 130-150 visible characters, versus 245-250 before. Zero legacy
+  membership lines appeared. The exact new segments then exposed one
+  241-character Binance startup HSL safety warning, the only remaining record
+  above the normal budget; the next slice compacts only that warning literal.
+
+## Previous Canonical Deployment (PR #1259)
 
 - PR #1259 merged to `master` as
   `e41118f0424ff3d4161e308b8844af5f35a8b7a9` after exact-head Hermes approval
