@@ -22,23 +22,22 @@ Estimated completion:
 
 ## Active Review Slice
 
-- Branch: `codex/live-performance-startup-budgets`, based on canonical
-  `d511341366fea26b48d064f2bbe5b25a4408664b` after PR #1269.
-- PR: #1270, `Add startup budget assessments to performance reports`;
-  semantic implementation head `1d33d6f8a4`. Slice: make
-  `live-performance-report` consume the configured startup-budget metadata
-  already carried by `bot.startup_timing` events.
-- Triggering evidence: PR #1269 made configured startup budgets durable and
-  taught smoke reports to assess them, but the parallel startup-readiness
-  accumulator in `live-performance-report` still discarded those fields.
-- Scope: add bounded latest-lifecycle per-bot elapsed and phase budget
-  assessments plus aggregate status counts. Strictly classify malformed
-  configured budget metadata and preserve the legacy report shape when no
-  configured budget is present.
-- Behavior boundary: read-only report metadata only. No event production,
-  startup, readiness, exchange access, order construction, or trading changes.
-- Validation: focused performance-report regression tests, broader report and
-  config tests, compilation, and docs checks.
+- Branch: `codex/smoke-forager-feature-health`, based on canonical
+  `9869263d74829f163b0bc8010fa18d1bf41de055` after PR #1270.
+- PR: #1271, `Expose forager feature health in smoke reports`; semantic
+  implementation head `47b084b62e`. Slice: expose existing
+  `forager.feature_unavailable` events in full, summary, brief, and
+  section-selective live smoke reports.
+- Triggering evidence: the producer already emits bounded structured-only
+  candidate, missing-feature, age, fetch-budget, and symbol-sample context, and
+  `live-performance-report` consumes it. Smoke reports currently omit it.
+- Scope: aggregate latest event data per bot/position side, retain bounded
+  redacted symbol samples, and expose report-level counts and maxima.
+- Behavior boundary: read-only report projection only. No smoke verdict,
+  attention classification, console output, event production, forager
+  selection, readiness, exchange access, or trading changes.
+- Validation: producer-shaped report fixtures, full/summary/brief/section
+  projection tests, full smoke-report tests, compilation, and docs checks.
 - Review gate: temporary maintainer-authorized exact-head Hermes plus green
   Python and Rust CI while Grok is halted.
 - Expected VPS action: pull and run bounded report/smoke checks after merge;
@@ -47,8 +46,19 @@ Estimated completion:
 ## Deployed Baseline
 
 - Canonical `master` and VPS5 are
-  `d511341366fea26b48d064f2bbe5b25a4408664b`, PR #1269. The tracked checkout
+  `9869263d74829f163b0bc8010fa18d1bf41de055`, PR #1270. The tracked checkout
   is clean and expected untracked artifacts are preserved.
+- PR #1270 required no restart. VPS5 fast-forwarded cleanly while exact bot
+  PIDs `985592/985594/985596/985598/985600`, all five pane parents, and
+  unrelated `misc:0.0` PID `434835` remained unchanged.
+- A bounded performance report was `ok=true` with zero errors or warnings and
+  preserved the legacy no-budget shape for naturally unconfigured startup
+  events. The two-minute smoke was `ok=true` with zero hard, log, monitor,
+  process, or event-pipeline failures, `147/147` remote and `37/37`
+  account-critical calls successful, `9/9` fill refreshes successful, all five
+  processes/configs matched in states `R=4,S=1`, and no uninterruptible sleep.
+  Fifteen non-hard attention events remained durable: eleven EMA readiness,
+  two staged-cycle degradation, and two websocket reconnect events.
 - PR #1269 was activated with one SIGINT at `2026-07-16T11:59:17Z` to exact
   old PIDs `979190/979193/979196/979199/979202`; all exited naturally within
   36 seconds. New PIDs are `985592/985594/985596/985598/985600`; all five pane
@@ -976,8 +986,9 @@ changing artifacts. PR #1266's brief startup-budget coverage, PR #1267's
 scheme-less credential-query detection, and PR #1268's aggregate-only inventory
 projection are also merged and deployed without restart. PR #1269's configured
 startup-budget events are merged and deployed with the same non-enforcement
-boundary. The active follow-up makes the performance report consume that
-durable metadata consistently with smoke reporting.
+boundary. PR #1270's matching performance projection is also merged and
+deployed without restart. The active follow-up exposes existing structured-only
+forager feature-unavailability evidence in smoke reports.
 
 Do not create progress-only PRs or resume unrelated logging work from stale
 worktrees.

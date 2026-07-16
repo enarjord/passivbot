@@ -2158,6 +2158,124 @@ def test_live_smoke_report_summarizes_ema_readiness_health(tmp_path):
     }
 
 
+def test_live_smoke_report_summarizes_forager_feature_health(tmp_path):
+    binance_events = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    gateio_events = tmp_path / "monitor" / "gateio" / "gateio_01" / "events"
+    _write_ndjson(
+        binance_events / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="forager.feature_unavailable",
+                seq=1,
+                ts=1000,
+                status="skipped",
+                level="debug",
+                pside="long",
+                data={
+                    "candidate_count": 30,
+                    "volume_count": 2,
+                    "log_range_count": 1,
+                    "max_age_ms": 5000,
+                    "fetch_budget": 3,
+                    "unavailable": {
+                        "count": 1,
+                        "sample": ["OLD/USDT:USDT"],
+                        "truncated": 0,
+                    },
+                },
+            ),
+            _monitor_row(
+                event_type="forager.feature_unavailable",
+                seq=2,
+                ts=2000,
+                status="skipped",
+                level="debug",
+                pside="long",
+                data={
+                    "candidate_count": 40,
+                    "volume_count": 3,
+                    "log_range_count": 2,
+                    "max_age_ms": 7000,
+                    "fetch_budget": 4,
+                    "unavailable": {
+                        "count": 2,
+                        "sample": [
+                            "AAVE/USDT:USDT",
+                            "api_key=SHOULD_NOT_RENDER",
+                        ],
+                        "truncated": 0,
+                    },
+                },
+            ),
+        ],
+    )
+    _write_ndjson(
+        gateio_events / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="forager.feature_unavailable",
+                exchange="gateio",
+                user="gateio_01",
+                seq=1,
+                ts=3000,
+                status="skipped",
+                level="debug",
+                pside="short",
+                data={
+                    "candidate_count": 20,
+                    "volume_count": 1,
+                    "log_range_count": 0,
+                    "max_age_ms": 9000,
+                    "fetch_budget": 2,
+                    "unavailable": {
+                        "count": 1,
+                        "sample": ["ARB/USDT:USDT"],
+                        "truncated": 0,
+                    },
+                },
+            )
+        ],
+    )
+
+    report = build_live_smoke_report(tmp_path / "monitor", logs_root=None)
+    summary = summarize_live_smoke_report(report, max_groups=1)
+    brief = summarize_live_smoke_report_brief(report)
+    projected = project_live_smoke_report_sections(report, ["forager_features"])
+
+    health = report["forager_feature_health"]
+    assert report["ok"] is True
+    assert health["total"] == 3
+    assert health["bots"] == 2
+    assert health["event_types"] == {"forager.feature_unavailable": 3}
+    assert health["latest_candidate_count_total"] == 60
+    assert health["latest_volume_count_total"] == 4
+    assert health["latest_log_range_count_total"] == 2
+    assert health["latest_fetch_budget_total"] == 6
+    assert health["latest_max_age_ms_max"] == 9000
+    assert health["latest_unavailable_symbols"]["count"] == 3
+    assert health["groups"][0]["bot"] == "gateio/gateio_01"
+    assert health["groups"][1]["count"] == 2
+    assert health["groups"][1]["latest_data"]["candidate_count"] == 40
+    assert health["groups"][1]["latest_data"]["unavailable_symbols"] == {
+        "count": 2,
+        "sample": ["AAVE/USDT:USDT", "api_key=[redacted]"],
+        "truncated": 0,
+    }
+    assert "SHOULD_NOT_RENDER" not in json.dumps(health)
+
+    summary_health = summary["forager_feature_health"]
+    assert summary_health["latest_candidate_count_total"] == 60
+    assert summary_health["groups_truncated"] is True
+    assert len(summary_health["groups"]) == 1
+    assert brief["forager_features"] == {
+        key: value
+        for key, value in health.items()
+        if key not in {"groups", "groups_truncated"}
+    }
+    assert projected["forager_feature_health"] == health
+    assert "ema_readiness_health" not in projected
+
+
 def test_live_smoke_report_summarizes_exchange_config_refresh_health(tmp_path):
     events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
     _write_ndjson(

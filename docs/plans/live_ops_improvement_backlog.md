@@ -322,8 +322,8 @@ Related detailed plans:
    median/p95 baselines from local monitor events plus report-only budget
    projections against prior p95 phase baselines. PR #1269 added optional
    durable diagnostic budgets to existing timing events and gives configured
-   values smoke-report precedence. The active follow-up carries those same
-   assessments into `live-performance-report`; enforcement and broader
+   values smoke-report precedence. PR #1270 carries those same assessments
+   into `live-performance-report`; enforcement and broader
    readiness-stage coverage remain out of scope.
 
    Startup currently has timing events, but the next step is durable budget
@@ -355,7 +355,7 @@ Related detailed plans:
      `bot.startup_timing` events, and makes smoke reports prefer them over prior
      p95 projections. The values are diagnostic and never gate startup or
      trading.
-   - 2026-07-16: Active `codex/live-performance-startup-budgets` makes the
+   - 2026-07-16: PR #1270 makes the
      performance report retain bounded latest-lifecycle configured-budget
      assessments and aggregate their status without changing startup behavior.
 
@@ -853,6 +853,10 @@ Related detailed plans:
       active/normal forager symbols, reusing local real-candle EMA metrics
       within the configured forager staleness cap. Candidate-only symbols still
       remain unavailable instead of receiving synthetic ranking tails.
+    - 2026-07-16: Active `codex/smoke-forager-feature-health` exposes the
+      producer's existing structured-only feature-unavailability evidence in
+      bounded smoke-report projections. It does not change readiness or the
+      create-side handoff contract.
 
 18. [ ] Binance hourly hedge-mode/config refresh traceback classification.
     Status: structured event, smoke projection, performance projection, and live
