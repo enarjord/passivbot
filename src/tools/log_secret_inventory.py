@@ -13,6 +13,7 @@ from live.log_secret_inventory import (  # noqa: E402
     DEFAULT_MAX_BYTES_PER_FILE,
     DEFAULT_MAX_FILES,
     build_log_secret_inventory,
+    summarize_log_secret_inventory,
 )
 
 
@@ -24,6 +25,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("logs_root", nargs="?", default="logs", help="Local log directory to scan.")
     parser.add_argument("--max-files", type=int, default=DEFAULT_MAX_FILES)
     parser.add_argument("--max-bytes-per-file", type=int, default=DEFAULT_MAX_BYTES_PER_FILE)
+    parser.add_argument(
+        "--summary",
+        action="store_true",
+        help="Omit per-file paths and hashes; emit aggregate scan evidence only.",
+    )
     parser.add_argument("--compact", action="store_true", help="Emit compact single-line JSON.")
     return parser
 
@@ -39,6 +45,8 @@ def main(argv: list[str] | None = None) -> int:
     except ValueError as exc:
         print(f"passivbot tool log-secret-inventory: {exc}", file=sys.stderr)
         return 2
+    if args.summary:
+        report = summarize_log_secret_inventory(report)
     print(json.dumps(report, indent=None if args.compact else 2, sort_keys=True))
     return 0
 

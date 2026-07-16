@@ -1015,11 +1015,12 @@ Related detailed plans:
 
 21. [ ] Historical secret-bearing text-log inventory and remediation.
     Status: partial. PR #1265 merged and deployed the bounded, value-free,
-    read-only inventory and dry-run validation contract. The active
-    `codex/log-secret-query-fragments` follow-up recognizes credential query
-    parameters in scheme-less request paths while preserving the same report
-    schema. Quarantine or purge remains separate and requires explicit operator
-    approval. A read-only VPS5 console-length audit on 2026-07-15
+    read-only inventory and dry-run validation contract. PR #1267 recognizes
+    credential query parameters in scheme-less request paths while preserving
+    the same report schema. The active aggregate-summary follow-up removes
+    per-file detail from shareable/operator output while preserving aggregate
+    scan evidence. Quarantine or purge remains separate and requires explicit
+    operator approval. A read-only VPS5 console-length audit on 2026-07-15
     accidentally admitted old untimestamped traceback fragments and confirmed
     that retained May text logs include raw private websocket URLs/tokens and
     full exchange error bodies. Current recent-window producers and smoke paths
@@ -1042,8 +1043,12 @@ Related detailed plans:
     - 2026-07-16: PR #1265's bounded VPS5 dry run scanned 40 of 1,182 files,
       identified ten retained May logs with private websocket/query credential
       classes, emitted no values or source lines, and changed no artifacts.
-    - 2026-07-16: Active `codex/log-secret-query-fragments` closes the verified
-      scheme-less query detection gap without remediation or schema changes.
+    - 2026-07-16: PR #1267's bounded VPS5 scan classified 144 secret-query
+      matches versus 143 private-websocket-query matches, proving one additional
+      non-websocket query fragment was found without exposing values.
+    - 2026-07-16: Active `codex/log-secret-inventory-summary` adds an
+      aggregate-only projection after compact full output still measured roughly
+      6,000 tokens for 40 file rows.
 
     Required validation: fixtures for private websocket URLs, authorization
     material, signatures, API keys, query tokens, raw HTTP bodies, and benign

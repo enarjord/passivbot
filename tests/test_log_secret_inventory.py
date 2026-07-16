@@ -10,6 +10,7 @@ from live.log_secret_inventory import (
     SECRET_CLASSES,
     build_log_secret_inventory,
     classify_secret_like_text,
+    summarize_log_secret_inventory,
 )
 from passivbot_cli import main as cli_main
 from tools import log_secret_inventory
@@ -203,6 +204,48 @@ def test_tool_compact_json_output(tmp_path: Path, capsys):
     assert "\n" not in output.rstrip("\n")
     assert "tool-secret" not in output
     assert json.loads(output)["class_counts"]["labeled_secret_values"] == 1
+
+
+def test_summary_projection_aggregates_scan_evidence_without_file_details(tmp_path: Path):
+    (tmp_path / "a.log").write_text("token=summary-secret")
+    (tmp_path / "b.log").write_bytes(b"x" * 20)
+
+    report = build_log_secret_inventory(
+        tmp_path, max_bytes_per_file=8, now_s=0
+    )
+    summary = summarize_log_secret_inventory(report)
+    serialized = json.dumps(summary, sort_keys=True)
+
+    assert summary["projection"] == "summary"
+    assert summary["summary"]["bytes_scanned"] == 16
+    assert summary["summary"]["files_positive"] == 1
+    assert summary["summary"]["files_truncated"] == 2
+    assert summary["class_counts"]["labeled_secret_values"] == 1
+    assert "files" not in summary
+    assert "a.log" not in serialized
+    assert "sha256" not in serialized
+    assert "summary-secret" not in serialized
+
+
+def test_tool_summary_compact_json_output_omits_file_details(tmp_path: Path, capsys):
+    (tmp_path / "account-name.log").write_text("token=tool-summary-secret")
+
+    assert (
+        log_secret_inventory.main(
+            [str(tmp_path), "--summary", "--compact"]
+        )
+        == 0
+    )
+    output = capsys.readouterr().out
+    report = json.loads(output)
+
+    assert "\n" not in output.rstrip("\n")
+    assert report["projection"] == "summary"
+    assert report["summary"]["files_positive"] == 1
+    assert report["class_counts"]["labeled_secret_values"] == 1
+    assert "files" not in report
+    assert "account-name.log" not in output
+    assert "tool-summary-secret" not in output
 
 
 def test_unified_cli_dispatches_log_secret_inventory(tmp_path: Path, capsys):
