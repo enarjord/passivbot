@@ -15,7 +15,31 @@ merge, live smoke evidence changes, or new gaps are discovered.
 - Do not use this file for design churn; unresolved design details belong in the
   plan or a focused handoff doc.
 
-## Latest Canonical Deployment (PR #1253)
+## Latest Canonical Deployment (PR #1254)
+
+- PR #1254 merged to `master` as `e7f87e18085f1bd53e2f6975ba5ecd4c14e60745`
+  after exact-head Hermes approval and green Python/Rust CI while Grok was
+  temporarily halted. It bounds only the candle-health transition INFO
+  projection; full DEBUG diagnostics, transition cadence, candle health,
+  readiness, fetch behavior, and trading behavior are unchanged.
+- VPS5 fast-forwarded cleanly and sent one SIGINT round to exact old PIDs
+  `965117/965119/965121/965123/965124`; all exited naturally within eight
+  seconds, with no escalation. Pane PIDs and unrelated `misc:0.0` PID `434835`
+  were preserved. Final PIDs are `966831/966834/966836/966837/966838` for
+  Binance/KuCoin/GateIO/OKX/Hyperliquid respectively.
+- Four natural candle-health summaries on Binance, GateIO, OKX, and
+  Hyperliquid measured 156-211 visible characters. They retained aggregate
+  counts, up to three whole missing-candle samples, and `+N more`; none
+  exceeded 240.
+- The final two-minute smoke was `ok=true` with zero hard/log/monitor/process
+  failures, `301/301` remote and `33/33` account-critical calls successful,
+  seven successful fill refreshes, no active HSL replay, five matching/
+  config-valid processes in normal `R/S` states, and clean tracked `master`.
+- The same exact new log files contained natural forager selection transition
+  lines at 247-250 visible characters on Binance, GateIO, and OKX. The next
+  slice bounds only that human INFO projection.
+
+## Previous Canonical Deployment (PR #1253)
 
 - PR #1253 merged to `master` as `048f1a722afe11a5e3aeda2340859893d6c8bb49`
   after exact-head Hermes approval and green Python/Rust CI while Grok was

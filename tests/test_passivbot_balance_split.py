@@ -3605,6 +3605,210 @@ def test_min_effective_cost_blocks_are_aggregated(caplog):
     assert any("blocked=5 detailed=3 suppressed=0" in msg for msg in infos)
 
 
+def test_forager_selection_summary_formatter_exact_format():
+    message = Passivbot._format_forager_selection_summary(
+        pside="long",
+        slots_to_fill=1,
+        selected_symbols=("DOGE", "SOL", "ETH"),
+        incumbent_symbols=("DOGE",),
+        score_hysteresis_pct=0.005,
+        reason="selection_changed",
+        top_scores=[("SOL", 1, 0.625), ("DOGE", 2, 0.623)],
+        hysteresis_events=[("DOGE", "SOL", 0.002, True)],
+    )
+
+    assert message == (
+        "[forager] long selection | slots=1 selected=DOGE,SOL,ETH incumbents=DOGE "
+        "hyst=0.005 reason=selection_changed events=kept:DOGE<->SOL gap=0.002 "
+        "top=1:SOL=0.625,2:DOGE=0.623"
+    )
+
+
+def test_forager_selection_summary_formatter_bounds_hostile_tokens_for_live_console():
+    hostile = "bad, field;|\n\t" + ("x" * 300)
+    message = Passivbot._format_forager_selection_summary(
+        pside=hostile,
+        slots_to_fill=10**20,
+        selected_symbols=tuple(hostile for _ in range(10)),
+        incumbent_symbols=tuple(hostile for _ in range(10)),
+        score_hysteresis_pct=0.005,
+        reason=hostile,
+        top_scores=[(hostile, 10**20, 0.625) for _ in range(10)],
+        hysteresis_events=[(hostile, hostile, 0.002, True) for _ in range(10)],
+    )
+    record = logging.LogRecord(
+        "test", logging.INFO, __file__, 0, "%s", (message,), None
+    )
+    record.created = 0.0
+    record.log_prefix = "hyperliquid"
+    formatter = logging.Formatter(DEFAULT_FORMAT_WITH_PREFIX, datefmt=DEFAULT_DATEFMT)
+    formatter.converter = time.gmtime
+    rendered = formatter.format(record)
+
+    assert "\n" not in message
+    assert "\r" not in message
+    assert "\t" not in message
+    assert hostile not in message
+    assert "selected=bad__...,bad__...,bad__...,+7" in message
+    assert "incumbents=bad__...,bad__...,bad__...,+7" in message
+    assert len(message) <= Passivbot.FORAGER_SELECTION_CONSOLE_MESSAGE_MAX_LEN
+    assert Passivbot.FORAGER_SELECTION_CONSOLE_MESSAGE_MAX_LEN == 240 - (
+        len(rendered) - len(message)
+    )
+    assert len(rendered) <= 240
+
+
+def test_forager_selection_diagnostics_preserves_transition_and_cadence(monkeypatch, caplog):
+    bot = Passivbot.__new__(Passivbot)
+    bot._forager_selection_info_interval_ms = 1_000
+    bot._forager_selection_debug_interval_ms = 1_000
+    now = [1_000]
+    monkeypatch.setattr(passivbot_module, "utc_ms", lambda: now[0])
+    base = {
+        "diagnostics": {
+            "forager_selections": [
+                {
+                    "pside": "long",
+                    "slots_to_fill": 1,
+                    "score_hysteresis_pct": 0.005,
+                    "selected_symbol_indices": [0],
+                    "incumbent_symbol_indices": [0],
+                    "top_scores": [
+                        {"symbol_idx": 0, "rank": 1, "score": 0.625, "selected": True},
+                        {"symbol_idx": 1, "rank": 2, "score": 0.623, "selected": False},
+                    ],
+                    "hysteresis_events": [
+                        {
+                            "incumbent_symbol_idx": 0,
+                            "challenger_symbol_idx": 1,
+                            "score_gap": 0.002,
+                            "kept_incumbent": True,
+                        }
+                    ],
+                }
+            ]
+        }
+    }
+    replacement = deepcopy(base)
+    selection = replacement["diagnostics"]["forager_selections"][0]
+    selection["selected_symbol_indices"] = [1]
+    selection["incumbent_symbol_indices"] = [1]
+    selection["hysteresis_events"][0]["kept_incumbent"] = False
+    idx_to_symbol = {0: "SOL/USDT:USDT", 1: "DOGE/USDT:USDT"}
+
+    with caplog.at_level(logging.DEBUG):
+        Passivbot._log_forager_selection_diagnostics(bot, base, idx_to_symbol)
+        now[0] = 1_001
+        Passivbot._log_forager_selection_diagnostics(bot, replacement, idx_to_symbol)
+        now[0] = 2_001
+        Passivbot._log_forager_selection_diagnostics(bot, replacement, idx_to_symbol)
+
+    info_messages = [
+        record.message
+        for record in caplog.records
+        if record.levelno == logging.INFO and "[forager] long selection" in record.message
+    ]
+    debug_messages = [
+        record.message
+        for record in caplog.records
+        if record.levelno == logging.DEBUG and "[forager] long score detail" in record.message
+    ]
+    assert [message.split("reason=", 1)[1].split(" ", 1)[0] for message in info_messages] == [
+        "selection_changed",
+        "hysteresis_replacement",
+        "periodic",
+    ]
+    assert "events=replaced:SOL<->DOGE gap=0.002" in info_messages[1]
+    assert len(debug_messages) == 3
+
+
+def test_forager_selection_compact_info_preserves_structured_and_debug_detail(caplog):
+    bot = Passivbot.__new__(Passivbot)
+    sink = ListEventSink()
+    bot.exchange = "binance"
+    bot.user = "binance_01"
+    bot.bot_id = "bot_1"
+    bot._live_event_current_cycle_id = "cy_forager_compact"
+    bot._live_event_pipeline = LiveEventPipeline(
+        structured_sinks=[sink], monitor_sinks=[]
+    )
+    long_coin = "X" * 80
+    challenger_coin = "Y" * 80
+    symbol = f"{long_coin}/USDT:USDT"
+    challenger = f"{challenger_coin}/USDT:USDT"
+    out = {
+        "diagnostics": {
+            "forager_selections": [
+                {
+                    "pside": "long",
+                    "slots_to_fill": 1,
+                    "score_hysteresis_pct": 0.005,
+                    "selected_symbol_indices": [0],
+                    "incumbent_symbol_indices": [0],
+                    "top_scores": [
+                        {
+                            "symbol_idx": 0,
+                            "rank": 1,
+                            "score": 0.625,
+                            "volume_component": 0.4,
+                            "ema_readiness_component": 0.5,
+                            "volatility_component": 1.0,
+                            "selected": True,
+                            "incumbent": True,
+                        }
+                    ],
+                    "hysteresis_events": [
+                        {
+                            "incumbent_symbol_idx": 0,
+                            "challenger_symbol_idx": 1,
+                            "score_gap": 0.002,
+                            "kept_incumbent": True,
+                        }
+                    ],
+                }
+            ]
+        }
+    }
+
+    with caplog.at_level(logging.DEBUG):
+        Passivbot._log_forager_selection_diagnostics(
+            bot, out, {0: symbol, 1: challenger}
+        )
+
+    info_message = next(
+        record.message
+        for record in caplog.records
+        if record.levelno == logging.INFO and "[forager] long selection" in record.message
+    )
+    debug_message = next(
+        record.message
+        for record in caplog.records
+        if record.levelno == logging.DEBUG and "[forager] long score detail" in record.message
+    )
+    assert long_coin not in info_message
+    assert long_coin in debug_message
+    assert "vol=0.400" in debug_message
+    assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    event = next(
+        event for event in sink.events if event.event_type == EventTypes.FORAGER_SELECTION
+    )
+    assert event.data["selected_symbols"] == [symbol]
+    assert event.data["incumbent_symbols"] == [symbol]
+    assert event.data["top_scores"] == [
+        {
+            "symbol": symbol,
+            "rank": 1,
+            "score": 0.625,
+            "volume_component": 0.4,
+            "ema_readiness_component": 0.5,
+            "volatility_component": 1.0,
+            "selected": True,
+            "incumbent": True,
+        }
+    ]
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
+
+
 def test_forager_selection_diagnostics_log_scores_and_hysteresis(caplog):
     bot = Passivbot.__new__(Passivbot)
     sink = ListEventSink()

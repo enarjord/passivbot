@@ -22,36 +22,48 @@ Estimated completion:
 
 ## Active Review Slice
 
-- Branch: `codex/compact-candle-health-console`, based on canonical
-  `048f1a722afe11a5e3aeda2340859893d6c8bb49` after PR #1253.
-- PR: #1254, `Compact candle-health console summaries`.
-- Slice: bound the existing candle-health transition INFO summary within the
-  normal record budget while retaining aggregate health counts and useful
-  whole-field missing-candle examples.
-- Triggering evidence: the PR #1253 deployment produced natural candle-health
-  summaries at 257-263 visible characters on Binance, GateIO, and OKX. They
-  were the longest recurring over-budget family in the exact new log files.
-- Scope: preserve the complete debug diagnostic payload, transition key and
-  cadence, actionable missing/stale/synthetic calculations, and full report;
+- Branch: `codex/compact-forager-selection-console`, based on canonical
+  `e7f87e18085f1bd53e2f6975ba5ecd4c14e60745` after PR #1254.
+- PR: #1255, `Compact forager selection console output`.
+- Slice: bound the Rust-owned forager selection transition INFO projection
+  within the normal record budget while retaining useful selected/incumbent,
+  hysteresis, reason, ranking, and replacement context.
+- Triggering evidence: the PR #1254 deployment produced natural forager
+  selection lines at 247-250 visible characters on Binance, GateIO, and OKX.
+  They were the largest remaining recurring over-budget family in the exact
+  new log files.
+- Scope: preserve the complete structured selection event and DEBUG score/
+  component/event diagnostics, transition keys and cadence, and Rust output;
   compact only the human INFO projection.
-- Behavior boundary: observability-only; no candle fetch/cache, health
-  calculation, readiness, exchange call, Rust, order, risk, backtest,
-  optimizer, or trading behavior.
+- Behavior boundary: observability-only; no candidate scoring, hysteresis,
+  forager selection, exchange call, Rust, order, risk, backtest, optimizer, or
+  trading behavior.
 - Review gate: temporary maintainer-authorized exact-head Hermes plus green CI
   while Grok is halted.
 - Expected VPS action: after merge, one authorized exact five-bot restart.
-  Validate natural candle-health transition lines and settled smoke; do not
+  Validate natural forager selection transition lines and settled smoke; do not
   manufacture exchange, state, risk, or trading events.
 
 ## Deployed Baseline
 
 - Canonical `master` and VPS5 are
-  `048f1a722afe11a5e3aeda2340859893d6c8bb49`, PR #1253. The tracked checkout
+  `e7f87e18085f1bd53e2f6975ba5ecd4c14e60745`, PR #1254. The tracked checkout
   is clean and expected untracked artifacts are preserved.
 - VPS5 runs merged master in bot PIDs
-  `965117/965119/965121/965123/965124`. The exact pane PIDs remain
+  `966831/966834/966836/966837/966838`. The exact pane PIDs remain
   `856294/856332/856364/856398/856434`, and unrelated `misc:0.0` PID `434835`
   is unchanged.
+- PR #1254 was activated after one exact five-bot SIGINT round; all old bots
+  exited naturally within eight seconds and no escalation was used. Four
+  natural candle-health summaries on Binance, GateIO, OKX, and Hyperliquid
+  measured 156-211 visible characters, retained aggregate counts, whole
+  samples, and `+N more`, and none exceeded 240. The final two-minute smoke was
+  `ok=true` with zero hard/log/monitor/process failures, `301/301` remote and
+  `33/33` account-critical calls successful, seven successful fill refreshes,
+  no active HSL replay, five matching/config-valid processes in normal `R/S`
+  states, and a clean tracked checkout. The exact new logs then exposed
+  natural forager selection lines at 247-250 characters on Binance, GateIO,
+  and OKX.
 - PR #1253 was activated after one exact five-bot SIGINT round; all old bots
   exited naturally within four seconds and no escalation was used. Natural
   initial-entry distance-gate records appeared 16 times across Binance,
@@ -792,9 +804,11 @@ close-EMA warnings measured 158-225 visible characters with zero post-deploy
 legacy duplicates and a hard-green settled smoke after one bounded GateIO
 retry. PR #1253 is also merged, deployed, and naturally validated: 16
 initial-entry distance-gate lines measured 181-190 visible characters with
-zero legacy duplicates and a hard-green settled smoke. The active slice
-compacts the naturally observed 257-263 character candle-health summaries
-without changing candle or trading behavior.
+zero legacy duplicates and a hard-green settled smoke. PR #1254 is also
+merged, deployed, and naturally validated: four candle-health lines measured
+156-211 visible characters with a hard-green settled smoke. The active slice
+compacts the naturally observed 247-250 character forager selection lines
+without changing selection or trading behavior.
 
 Do not create progress-only PRs or resume unrelated logging work from stale
 worktrees.
