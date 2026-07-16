@@ -4079,6 +4079,172 @@ def test_live_smoke_report_summarizes_latest_initial_entry_eligibility_per_bot(
     assert section["staged_readiness_health"] == health
 
 
+def test_live_smoke_report_summarizes_latest_planning_output_per_bot(tmp_path):
+    binance_events = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    gateio_events = tmp_path / "monitor" / "gateio" / "gateio_01" / "events"
+    _write_ndjson(
+        binance_events / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="rust_orchestrator.returned",
+                seq=1,
+                ts=1000,
+                level="debug",
+                ids={"cycle_id": "cy_old", "remote_call_id": "rust_old"},
+                data={"elapsed_ms": 999, "order_count": 99},
+            ),
+            _monitor_row(
+                event_type="action.planned",
+                seq=2,
+                ts=1001,
+                level="debug",
+                ids={"cycle_id": "cy_old", "remote_call_id": "rust_old"},
+                data={
+                    "order_count": 99,
+                    "by_order_type": {"stale_old_order": 99},
+                    "orders_truncated": True,
+                },
+            ),
+            _monitor_row(
+                event_type="rust_orchestrator.returned",
+                seq=3,
+                ts=2000,
+                level="debug",
+                ids={"cycle_id": "cy_new", "remote_call_id": "rust_new"},
+                data={
+                    "elapsed_ms": 22,
+                    "order_count": 3,
+                    "input_hash": "api_key=INPUT_HASH_SHOULD_NOT_RENDER",
+                    "output_hash": "api_key=OUTPUT_HASH_SHOULD_NOT_RENDER",
+                },
+            ),
+            _monitor_row(
+                event_type="action.planned",
+                seq=4,
+                ts=2001,
+                level="debug",
+                ids={"cycle_id": "cy_new", "remote_call_id": "rust_new"},
+                data={
+                    "order_count": 3,
+                    "by_order_type": {
+                        "entry_initial_normal_long": 2,
+                        "close_grid_long": 1,
+                    },
+                    "by_pside": {"long": 3},
+                    "by_execution_type": {"limit": 3},
+                    "symbols": {
+                        "count": 3,
+                        "sample": ["ETH/USDT:USDT", "ONDO/USDT:USDT", "UNI/USDT:USDT"],
+                        "truncated": 0,
+                    },
+                    "orders_sample": [
+                        {"symbol": "api_key=RAW_ORDER_SHOULD_NOT_RENDER", "qty": 1.0}
+                    ],
+                    "orders_truncated": True,
+                },
+            ),
+        ],
+    )
+    _write_ndjson(
+        gateio_events / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="rust_orchestrator.returned",
+                seq=1,
+                ts=1500,
+                exchange="gateio",
+                user="gateio_01",
+                level="debug",
+                ids={"cycle_id": "cy_gate", "remote_call_id": "rust_gate"},
+                data={"elapsed_ms": 40, "order_count": 2},
+            ),
+            _monitor_row(
+                event_type="action.planned",
+                seq=2,
+                ts=1501,
+                exchange="gateio",
+                user="gateio_01",
+                level="debug",
+                ids={"cycle_id": "cy_gate", "remote_call_id": "rust_gate"},
+                data={
+                    "order_count": 1,
+                    "by_order_type": {"entry_initial_normal_long": 1},
+                    "by_pside": {"long": 1},
+                    "by_execution_type": {"limit": 1},
+                    "symbols": {
+                        "count": 1,
+                        "sample": ["BTC/USDT:USDT"],
+                        "truncated": 0,
+                    },
+                    "orders_truncated": False,
+                },
+            ),
+        ],
+    )
+
+    report = build_live_smoke_report(tmp_path / "monitor", logs_root=None)
+    summary = summarize_live_smoke_report(report)
+    brief = summarize_live_smoke_report_brief(report)
+    section = project_live_smoke_report_sections(report, ["planning_output"])
+
+    health = report["planning_output_health"]
+    assert health["total"] == 6
+    assert health["bots"] == 2
+    assert health["event_types"] == {
+        "rust_orchestrator.returned": 3,
+        "action.planned": 3,
+    }
+    assert health["latest_rust_returned_bots"] == 2
+    assert health["latest_action_planned_bots"] == 2
+    assert health["latest_correlated_bots"] == 2
+    assert health["latest_rust_elapsed_ms_max"] == 40
+    assert health["latest_rust_order_count_total"] == 5
+    assert health["latest_action_order_count_total"] == 4
+    assert health["latest_order_count_mismatch_bots"] == 1
+    assert health["latest_action_by_order_type"] == {
+        "entry_initial_normal_long": 3,
+        "close_grid_long": 1,
+    }
+    assert "stale_old_order" not in health["latest_action_by_order_type"]
+    assert health["latest_action_by_pside"] == {"long": 4}
+    assert health["latest_action_by_execution_type"] == {"limit": 4}
+    assert health["latest_action_symbols"] == {
+        "count": 4,
+        "sample": [
+            "BTC/USDT:USDT",
+            "ETH/USDT:USDT",
+            "ONDO/USDT:USDT",
+            "UNI/USDT:USDT",
+        ],
+        "truncated": 0,
+    }
+    assert health["latest_action_orders_truncated_bots"] == 1
+    binance_group = next(
+        group
+        for group in health["groups"]
+        if group["bot"] == "binance/binance_01"
+        and group["latest_ids"]["cycle_id"] == "cy_new"
+    )
+    assert binance_group["count"] == 2
+    assert binance_group["latest_ids"] == {
+        "cycle_id": "cy_new",
+        "remote_call_id": "rust_new",
+    }
+    for projected in (
+        health,
+        summary["planning_output_health"],
+        brief["planning_output"],
+    ):
+        assert projected["latest_action_order_count_total"] == 4
+        serialized = json.dumps(projected)
+        assert "SHOULD_NOT_RENDER" not in serialized
+        assert "orders_sample" not in serialized
+        assert "input_hash" not in serialized
+        assert "output_hash" not in serialized
+        assert "qty" not in serialized
+    assert section["planning_output_health"] == health
+
+
 def test_live_smoke_report_problem_events_include_state_refresh_progress(tmp_path):
     events_dir = tmp_path / "monitor" / "kucoin" / "kucoin_01" / "events"
     _write_ndjson(

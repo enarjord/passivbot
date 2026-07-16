@@ -4,6 +4,14 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Live smoke reports now include bounded latest-per-bot planning-output health
+  from existing `rust_orchestrator.returned` and `action.planned` events. The
+  projection correlates cycle and remote-call IDs, Rust timing and order
+  counts, planned order classifications, redacted symbol samples, truncation,
+  and count mismatches without copying raw orders, quantities, prices, or
+  hashes. Smoke verdicts, planning, exchange access, and trading behavior are
+  unchanged.
+
 - Staged-readiness smoke reports now include bounded latest-per-bot
   `entry.initial_eligibility` aggregates: evaluated and record totals, outcome
   and reason counts, truncation coverage, and correlation IDs. Raw per-symbol
