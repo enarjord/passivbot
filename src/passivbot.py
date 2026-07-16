@@ -765,6 +765,16 @@ class Passivbot:
             and getattr(pipeline, "console_sink", None) is not None
         )
 
+    def _ema_unavailable_structured_console_available(self) -> bool:
+        """Return True when the EMA unavailable event owns the normal console warning."""
+        pipeline = getattr(self, "_live_event_pipeline", None)
+        return bool(
+            callable(getattr(self, "_emit_ema_unavailable_event", None))
+            and Passivbot._live_event_console_available(self)
+            and callable(getattr(pipeline, "emit", None))
+            and getattr(pipeline, "console_sink", None) is not None
+        )
+
     @staticmethod
     def _log_symbol(symbol: Any) -> str:
         """Return a compact operator-facing symbol label for logs only."""
@@ -15989,7 +15999,12 @@ class Passivbot:
                 "; ".join(examples),
                 interval_ms=15 * 60 * 1000,
             )
-        if candidate_ema_unavailable_details:
+        required_ema_unavailable_structured_console = (
+            Passivbot._ema_unavailable_structured_console_available(self)
+            if candidate_ema_unavailable_details
+            else False
+        )
+        if candidate_ema_unavailable_details and not required_ema_unavailable_structured_console:
             parts = []
             all_symbols: set[str] = set()
             for reason, items in sorted(candidate_ema_unavailable_details.items()):

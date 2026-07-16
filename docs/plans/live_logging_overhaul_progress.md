@@ -15,7 +15,32 @@ merge, live smoke evidence changes, or new gaps are discovered.
 - Do not use this file for design churn; unresolved design details belong in the
   plan or a focused handoff doc.
 
-## Latest Canonical Deployment (PR #1255)
+## Latest Canonical Deployment (PR #1256)
+
+- PR #1256 merged to `master` as `8db319a5b4e56dceffb59cb95f7baefab3e0da90`
+  after exact-head Hermes approval and green Python/Rust CI while Grok was
+  temporarily halted. It compacts only the periodic health console/text
+  projection; the complete structured payload, route, producer cadence,
+  calculations, counters, fallback ownership, and trading behavior are
+  unchanged.
+- VPS5 fast-forwarded cleanly and sent one SIGINT round to exact old PIDs
+  `967753/967755/967757/967759/967760`; all exited naturally within eight
+  seconds without escalation. Pane PIDs and unrelated `misc:0.0` PID `434835`
+  were preserved. Final PIDs are `968739/968741/968743/968745/968747` for
+  Binance/KuCoin/GateIO/OKX/Hyperliquid respectively.
+- Four natural periodic health lines on Binance, GateIO, OKX, and Hyperliquid
+  measured 202-209 visible characters. They retained uptime, loop, position,
+  balance, order/fill/error, RSS, and slow-phase context; none exceeded 240.
+- A settled one-minute report was `ok=true` with zero hard failures, `138/138`
+  remote and `29/29` account-critical calls successful, three successful fill
+  refreshes, no active HSL replay, and clean tracked `master`. A bounded
+  ten-sample process series showed brief rotating filesystem journal/page
+  waits, four all-normal samples, and no persistently blocked PID.
+- The same exact new log files contained required-EMA-unavailable warnings at
+  374-447 visible characters on Binance, GateIO, OKX, and Hyperliquid. The next
+  slice compacts only that throttled human projection.
+
+## Previous Canonical Deployment (PR #1255)
 
 - PR #1255 merged to `master` as `050d01db56f4ac3678944a5e439248edbbb46acb`
   after exact-head Hermes approval and green Python/Rust CI while Grok was

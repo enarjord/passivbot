@@ -25,6 +25,7 @@ from live.event_bus import (
     authoritative_reason_code,
     format_console_event,
     format_ema_fallback_console,
+    format_ema_unavailable_console,
     format_memory_snapshot_console,
     format_state_refresh_timing_console,
     live_event_debug_profile_enabled,
@@ -323,7 +324,6 @@ def test_route_table_keeps_data_events_off_console_by_default():
         EventTypes.ACTION_PLANNED,
         EventTypes.EMA_BUNDLE_STARTED,
         EventTypes.EMA_BUNDLE_COMPLETED,
-        EventTypes.EMA_UNAVAILABLE,
         EventTypes.CANDLE_COVERAGE_CHECKED,
         EventTypes.CANDLE_TAIL_PROJECTED,
         EventTypes.CACHE_LOAD_COMPLETED,
@@ -352,6 +352,10 @@ def test_route_table_keeps_data_events_off_console_by_default():
     assert ema_fallback_route.console is True
     assert ema_fallback_route.text is True
     assert ema_fallback_route.throttle_interval_ms == 15 * 60 * 1000
+    ema_unavailable_route = DEFAULT_ROUTES[EventTypes.EMA_UNAVAILABLE]
+    assert ema_unavailable_route.console is True
+    assert ema_unavailable_route.text is True
+    assert ema_unavailable_route.throttle_interval_ms == 15 * 60 * 1000
     assert DEFAULT_ROUTES[EventTypes.ORDER_WAVE_COMPLETED].console is True
     assert DEFAULT_ROUTES[EventTypes.ORDER_WAVE_COMPLETED].text is True
     assert DEFAULT_ROUTES[EventTypes.EXECUTION_CREATE_DEFERRED].console is False
@@ -1728,6 +1732,124 @@ def test_ema_fallback_console_formatter_is_bounded_without_mutating_payload():
     assert "age=999999999+ms" in message
     assert "streak=999999999+" in message
     assert "ex=AAAAAAAA" in message
+    assert event.to_dict() == before
+
+
+def test_ema_unavailable_console_route_throttles_human_projection_but_keeps_detail_durable():
+    structured = ListEventSink()
+    console = ListEventSink()
+    text = ListEventSink()
+    pipeline = LiveEventPipeline(
+        structured_sinks=[structured],
+        monitor_sinks=[],
+        console_sink=console,
+        text_sink=text,
+    )
+    data = {
+        "candidate_unavailable": {"count": 1, "sample": ["BTC/USDT:USDT"]},
+        "candidate_unavailable_groups": [
+            {
+                "reason": "cache_only_fetch_failed",
+                "symbols": {"count": 1, "sample": ["BTC/USDT:USDT"]},
+                "error_types": ["RuntimeError"],
+                "example_error": "missing required h1_log_range EMA",
+                "per_symbol_diagnostic": "detail must stay structured",
+            }
+        ],
+    }
+    first = LiveEvent(EventTypes.EMA_UNAVAILABLE, ts_ms=1_000, data=data)
+    throttled = LiveEvent(
+        EventTypes.EMA_UNAVAILABLE,
+        ts_ms=1_000 + 15 * 60 * 1000 - 1,
+        data=data,
+    )
+    boundary = LiveEvent(
+        EventTypes.EMA_UNAVAILABLE,
+        ts_ms=1_000 + 15 * 60 * 1000,
+        data=data,
+    )
+
+    for event in (first, throttled, boundary):
+        pipeline.emit(event)
+
+    assert console.events == [first, boundary]
+    assert text.events == [first, boundary]
+    assert pipeline.flush(timeout=2.0) is True
+    assert structured.events == [first, throttled, boundary]
+    assert structured.events[0].data["candidate_unavailable_groups"][0][
+        "per_symbol_diagnostic"
+    ] == "detail must stay structured"
+    assert pipeline.close(timeout=2.0) is True
+
+
+def test_ema_unavailable_console_formatter_is_bounded_and_retains_required_signals():
+    data = {
+        "candidate_unavailable": {
+            "count": 7,
+            "sample": ["BTC/USDT:USDT", "ETH/USDT:USDT", "SOL/USDT:USDT"],
+        },
+        "candidate_unavailable_groups": [
+            {
+                "reason": "cache_only_fetch_failed",
+                "symbols": {
+                    "count": 4,
+                    "sample": [
+                        "BTC/USDT:USDT",
+                        "ETH/USDT:USDT",
+                        "SOL/USDT:USDT",
+                    ],
+                },
+                "error_types": ["MissingLogRangeEma", "RuntimeError"],
+                "example_error": (
+                    "[ema] missing required h1_log_range EMA for BTC/USDT:USDT: "
+                    "span=672 reason=non-finite value"
+                ),
+                "per_symbol_diagnostic": "x" * 10_000,
+            }
+        ],
+    }
+    event = LiveEvent(EventTypes.EMA_UNAVAILABLE, data=data)
+    before = event.to_dict()
+
+    message = format_ema_unavailable_console(event.data)
+    longest_prefix = "2026-07-15T23:45:40Z WARNING  [hyperliquid] "
+
+    assert message == (
+        "[ema] unavailable n=7 group=cache_only_fetch_failed "
+        "action=mark_nontradable_until_fresh sym=4(BTC,ETH,+2) "
+        "err=MissingLogRangeEma ema=h1_log_range"
+    )
+    assert len(longest_prefix + message) <= 240
+    assert "SOL/USDT:USDT" not in message
+    assert "per_symbol_diagnostic" not in message
+    assert format_console_event(event) == message
+    assert event.to_dict() == before
+
+
+def test_ema_unavailable_console_formatter_keeps_identity_under_pathological_lengths():
+    maximum = (1 << 63) - 1
+    data = {
+        "candidate_unavailable": {"count": maximum},
+        "candidate_unavailable_groups": [
+            {
+                "reason": "r" * 10_000,
+                "symbols": {"count": maximum, "sample": ["S" * 10_000] * 3},
+                "error_types": ["E" * 10_000],
+                "example_error": "missing required h1_log_range EMA",
+            }
+        ],
+    }
+    event = LiveEvent(EventTypes.EMA_UNAVAILABLE, data=data)
+    before = event.to_dict()
+
+    message = format_ema_unavailable_console(event.data)
+    longest_prefix = "2026-07-15T23:45:40Z WARNING  [hyperliquid] "
+
+    assert len(message) <= 188
+    assert len(longest_prefix + message) <= 240
+    assert "action=mark_nontradable_until_fresh" in message
+    assert "ema=h1_log_range" in message
+    assert "S" * 15 not in message
     assert event.to_dict() == before
 
 

@@ -22,37 +22,48 @@ Estimated completion:
 
 ## Active Review Slice
 
-- Branch: `codex/compact-periodic-health-console`, based on canonical
-  `050d01db56f4ac3678944a5e439248edbbb46acb` after PR #1255.
-- PR: #1256, `Compact periodic health console output`.
-- Slice: bound the periodic health INFO projection within the normal record
-  budget while retaining uptime, loop, positions, balance, order/fill/error,
-  resource, and slow-phase context.
-- Triggering evidence: the PR #1255 deployment produced natural periodic
-  health lines at 244-248 visible characters on Binance, GateIO, OKX, and
-  Hyperliquid. This recurring family represented four of the fresh post-ready
-  over-budget records; the other repeated long family was startup-only.
-- Scope: preserve the complete structured `health.summary` payload, event
-  route, producer cadence, calculations, counters, and fallback ownership;
-  compact only the human console/text projection.
-- Behavior boundary: observability-only; no health collection, counters,
-  cadence, exchange call, Rust, order, risk, backtest, optimizer, or trading
-  behavior.
+- Branch: `codex/compact-required-ema-unavailable-console`, based on canonical
+  `8db319a5b4e56dceffb59cb95f7baefab3e0da90` after PR #1256.
+- PR: #1257, `Compact required-EMA unavailable console output`.
+- Slice: bound the required-EMA-unavailable warning within the normal record
+  budget while retaining the unavailable count, classified cause, explicit
+  nontradable-until-fresh action, and a bounded symbol/EMA diagnostic sample.
+- Triggering evidence: fresh post-PR #1256 VPS5 logs contained recurring
+  required-EMA-unavailable warnings at 374-447 visible characters on Binance,
+  GateIO, OKX, and Hyperliquid.
+- Scope: preserve the complete structured `ema.unavailable` payload,
+  nontradable decision, reason semantics, producer cadence, and calculations;
+  compact only the throttled human console/text projection.
+- Behavior boundary: observability-only; no EMA collection/calculation,
+  readiness or nontradable decision, cadence, exchange call, Rust, order,
+  risk, backtest, optimizer, or trading behavior.
 - Review gate: temporary maintainer-authorized exact-head Hermes plus green CI
   while Grok is halted.
 - Expected VPS action: after merge, one authorized exact five-bot restart.
-  Validate natural periodic health lines and settled smoke; do not manufacture
-  exchange, state, risk, or trading events.
+  Validate natural required-EMA-unavailable lines when available and settled
+  smoke; do not manufacture exchange, state, risk, or trading events.
 
 ## Deployed Baseline
 
 - Canonical `master` and VPS5 are
-  `050d01db56f4ac3678944a5e439248edbbb46acb`, PR #1255. The tracked checkout
+  `8db319a5b4e56dceffb59cb95f7baefab3e0da90`, PR #1256. The tracked checkout
   is clean and expected untracked artifacts are preserved.
 - VPS5 runs merged master in bot PIDs
-  `967753/967755/967757/967759/967760`. The exact pane PIDs remain
+  `968739/968741/968743/968745/968747`. The exact pane PIDs remain
   `856294/856332/856364/856398/856434`, and unrelated `misc:0.0` PID `434835`
   is unchanged.
+- PR #1256 was activated after one exact five-bot SIGINT round; old PIDs
+  `967753/967755/967757/967759/967760` all exited naturally within eight
+  seconds without escalation. Four natural periodic health lines on Binance,
+  GateIO, OKX, and Hyperliquid measured 202-209 visible characters and retained
+  uptime, loop, position, balance, order/fill/error, RSS, and slow-phase
+  context. A settled one-minute report was `ok=true` with zero hard failures,
+  `138/138` remote and `29/29` account-critical calls successful, three
+  successful fill refreshes, no active HSL replay, and a clean tracked
+  checkout. A bounded ten-sample process series showed brief rotating
+  filesystem journal/page waits, four all-normal samples, and no persistently
+  blocked PID. The exact new logs then exposed required-EMA-unavailable
+  warnings at 374-447 visible characters on four bots.
 - PR #1255 was activated after one exact five-bot SIGINT round; all old bots
   exited naturally without escalation. Three natural forager selection lines
   on Binance, GateIO, and OKX measured 182-185 visible characters, retained
@@ -818,9 +829,12 @@ zero legacy duplicates and a hard-green settled smoke. PR #1254 is also
 merged, deployed, and naturally validated: four candle-health lines measured
 156-211 visible characters with a hard-green settled smoke. PR #1255 is also
 merged, deployed, and naturally validated: three forager selection lines
-measured 182-185 visible characters with a hard-green settled smoke. The
-active slice compacts the naturally observed 244-248 character periodic health
-lines without changing health collection, cadence, or trading behavior.
+measured 182-185 visible characters with a hard-green settled smoke. PR #1256
+is also merged, deployed, and naturally validated: four periodic health lines
+measured 202-209 visible characters while preserving all operator-relevant
+health facts. The active slice compacts the naturally observed 374-447
+character required-EMA-unavailable warnings without changing EMA readiness,
+nontradable decisions, cadence, or trading behavior.
 
 Do not create progress-only PRs or resume unrelated logging work from stale
 worktrees.

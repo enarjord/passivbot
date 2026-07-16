@@ -889,6 +889,62 @@ async def test_candidate_ema_unavailable_logs_single_warning_summary(caplog):
     assert not any("missing required close EMA TAO" in message for message in warning_messages)
 
 
+@pytest.mark.asyncio
+async def test_candidate_ema_unavailable_event_console_owns_normal_warning(caplog, monkeypatch):
+    try:
+        import passivbot as pb_mod
+    except ImportError:
+        pytest.skip("passivbot module not importable in test environment")
+
+    symbol = "AVAX/USDT:USDT"
+    bot = _BundleReproBot(symbol, close_mode="nan")
+    bot.PB_modes = {"long": {}, "short": {}}
+    bot.positions = {
+        symbol: {
+            "long": {"size": 0.0, "price": 0.0},
+            "short": {"size": 0.0, "price": 0.0},
+        }
+    }
+    bot.cm.get_last_refresh_ms = lambda _symbol: int(time.time() * 1000)
+    bot._candle_staleness_ms = lambda _symbol, now_ms=None: 0
+    bot.is_forager_mode = lambda *args, **kwargs: True
+    original_bot_value = bot.bot_value
+
+    def bot_value(pside, key):
+        if key == "forager_score_weights":
+            return {"volume": 1.0, "volatility": 1.0}
+        if key == "forager_volume_drop_pct":
+            return 0.0
+        return original_bot_value(pside, key)
+
+    bot.bot_value = bot_value
+    bot.live_event_console_enabled = True
+    bot._live_event_pipeline = type(
+        "Pipeline", (), {"console_sink": object(), "emit": lambda self, event: event}
+    )()
+    emitted = []
+
+    def emit_ema_unavailable(bot_arg, **kwargs):
+        emitted.append((bot_arg, kwargs))
+
+    monkeypatch.setattr(
+        pb_mod.Passivbot,
+        "_emit_ema_unavailable_event",
+        staticmethod(emit_ema_unavailable),
+    )
+    bot._emit_ema_unavailable_event = emit_ema_unavailable
+
+    with caplog.at_level(logging.WARNING):
+        await pb_mod.Passivbot._load_orchestrator_ema_bundle(bot, [symbol], bot.PB_modes)
+
+    assert len(emitted) == 1
+    assert emitted[0][0] is bot
+    assert emitted[0][1]["candidate_ema_unavailable_details"]
+    assert not any(
+        "required EMA unavailable summary" in record.message for record in caplog.records
+    )
+
+
 def _enable_forager_required_ranking(bot):
     bot.is_forager_mode = lambda *args, **kwargs: True
     original_bot_value = bot.bot_value
