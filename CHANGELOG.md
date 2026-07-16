@@ -4,6 +4,12 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Added bounded `--samples` and `--interval-s` stability checks to
+  `passivbot tool live-restart-target-report`. Multi-sample reports fail if any
+  local preflight is hard-red or if a window's canonical pane ID, pane PID,
+  matched bot PID, or ownership proof changes during the sample window. Restart
+  execution and process control remain unavailable.
+
 - Added `passivbot tool live-restart-target-report`, a bounded local-only
   preflight that joins supervisor-config window names with canonical tmux pane
   IDs and proves ownership by matching each bot process PID or parent PID to

@@ -22,38 +22,42 @@ Estimated completion:
 
 ## Active Review Slice
 
-- Branch: `codex/restart-target-preflight`, based on canonical
-  `7a12430abfc0edf36f0848d42d95c987024e55cc` after PR #1286.
-- PR: #1287, `Add exact live restart target preflight`; semantic implementation
-  head `f2cebddb10`. Slice: add a bounded local-only exact tmux target preflight
-  for the existing non-executing restart/smoke plan.
-- Triggering evidence: process reports now prove exact configured command/PID
-  matches but correctly state that tmux pane ownership is unavailable. The
-  restart safety contract requires exact pane or PID targets and forbids broad
-  process-pattern signals, so target resolution must be explicit before any
-  executor can be reviewed.
-- Scope: require an explicit tmux session name, join supervisor window names
-  to bounded read-only pane metadata, prove ownership from matched-process PID
-  or PPID versus pane PID, retain the existing process/config verdict, and fail
-  on missing, duplicate, unconfigured, or mismatched panes.
-- Behavior boundary: preflight only. No signals, process starts/control, SSH,
-  git actions, network/exchange access, credential loading, file writes, or
-  restart execution.
-- Validation: focused target resolution/failure/verdict/CLI regressions plus
-  existing process and restart-plan tests, compilation, and docs checks.
+- Branch: `codex/restart-target-stability`, based on canonical
+  `6cb8bc3c73c1e5b8c7ed1e70fa953e07a8e6b85e` after PR #1287.
+- PR: pending. Slice: add bounded multi-sample stability proof to the local-only
+  exact tmux target preflight.
+- Triggering evidence: PR #1287 now proves exact pane/process ownership, but a
+  one-shot result can become stale before a future signal. The deployed target
+  report resolved all five bots exactly; the immediate process state included
+  one natural `D` that cleared by the settled repeat, reinforcing the need for
+  a bounded stable pre-action identity window.
+- Scope: sample the existing complete local target report up to five times,
+  retain bounded per-window observations, and fail if any sample is hard-red or
+  any pane ID, pane PID, bot PID, or ownership proof changes.
+- Behavior boundary: read-only sampling and verdict only. No signals, process
+  starts/control, SSH, git actions, network/exchange access, credential loading,
+  file writes, or restart execution.
+- Validation: focused stable/changed/failed/bounds/CLI regressions plus existing
+  target, process, restart-plan, compilation, and docs checks.
 - Review gate: temporary maintainer-authorized exact-head Hermes plus green
   Python and Rust CI while Grok is halted.
-- Expected VPS action: pull and run the local-only target report; no bot
-  restart or process signal is expected.
+- Expected VPS action: pull and run the target report with three bounded
+  samples; no bot restart or process signal is expected.
 
 ## Deployed Baseline
 
 - Canonical `master` and VPS5 are
-  `7a12430abfc0edf36f0848d42d95c987024e55cc`, PR #1286. VPS5 fast-forwarded
-  from `175986fd` with a tracked-clean checkout. Configured pane process IDs
+  `6cb8bc3c73c1e5b8c7ed1e70fa953e07a8e6b85e`, PR #1287. VPS5 fast-forwarded
+  from `7a12430a` with a tracked-clean checkout. Configured pane process IDs
   `856294/856332/856364/856398/856434`, exact bot PIDs
   `985592/985594/985596/985598/985600`, and unrelated `misc:0.0` PID `434835`
   remained unchanged; no restart or process signal occurred.
+- Immediate and settled local-only target reports were `ok=true` with all five
+  expected windows resolved to canonical pane IDs `%358/%359/%360/%361/%362`,
+  exact PPID-to-pane-PID ownership, and zero missing, duplicate, extra, config,
+  or scan failures. The immediate `D=1,R=2,S=2` process snapshot naturally
+  settled to `R=5`; all pane and bot PIDs remained unchanged. No exchange
+  request, process action, or event was manufactured.
 - Immediate and settled four-sample `--brief` process reports were `ok=true`
   with all five expected commands/configs matched, five stable PIDs, and zero
   missing, duplicate, extra, config, or scan failures. The first naturally
@@ -1119,10 +1123,10 @@ signal; its full VPS smoke remained intentionally unrun after the
 production-action rejection. PR #1285's dedicated local-only
 `live-process-report` path is also merged, deployed, and naturally validated
 with five stable exact processes and recovered uninterruptible observations.
-PR #1286's aggregate-only follow-up is merged, deployed, and naturally
-validated without changing collection or safety behavior. The active
-`codex/restart-target-preflight` slice resolves the exact tmux pane ownership
-gap without adding restart execution.
+PR #1286's aggregate-only follow-up and PR #1287's exact tmux target preflight
+are merged, deployed, and naturally validated without process control. The
+active `codex/restart-target-stability` slice closes the pre-action identity
+race with bounded read-only samples and still does not add restart execution.
 
 Do not create progress-only PRs or resume unrelated logging work from stale
 worktrees.

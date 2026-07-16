@@ -31,6 +31,18 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Emit compact single-line JSON.",
     )
+    parser.add_argument(
+        "--samples",
+        type=int,
+        default=1,
+        help="Bounded target-identity samples to collect (default: 1; max: 5).",
+    )
+    parser.add_argument(
+        "--interval-s",
+        type=float,
+        default=1.0,
+        help="Seconds between target-identity samples (default: 1; max: 30).",
+    )
     return parser
 
 
@@ -42,6 +54,8 @@ def main(argv: list[str] | None = None) -> int:
             args.supervisor_config,
             session_name=args.session_name,
             config_base_dir=Path.cwd(),
+            samples=args.samples,
+            sample_interval_s=args.interval_s,
         )
     except ValueError as exc:
         parser.error(str(exc))
