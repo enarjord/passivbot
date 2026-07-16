@@ -24,8 +24,9 @@ Estimated completion:
 
 - Branch: `codex/restart-target-preflight`, based on canonical
   `7a12430abfc0edf36f0848d42d95c987024e55cc` after PR #1286.
-- PR: pending. Slice: add a bounded local-only exact tmux target preflight for
-  the existing non-executing restart/smoke plan.
+- PR: #1287, `Add exact live restart target preflight`; semantic implementation
+  head `f2cebddb10`. Slice: add a bounded local-only exact tmux target preflight
+  for the existing non-executing restart/smoke plan.
 - Triggering evidence: process reports now prove exact configured command/PID
   matches but correctly state that tmux pane ownership is unavailable. The
   restart safety contract requires exact pane or PID targets and forbids broad
