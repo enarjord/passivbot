@@ -382,6 +382,16 @@ Monitor commands are documented in detail in [monitor.md](monitor.md). The CLI s
   configured live command whose config path could not be derived. Use planner
   `--summary` when you only need the bot count, phase names, preflight commands,
   smoke command, and incident-bundle command without every per-bot phase detail.
+- `passivbot tool live-restart-target-report SUPERVISOR_CONFIG --session-name
+  SESSION` performs the local-only exact-target preflight required before any
+  future restart executor may signal a pane. It joins expected supervisor
+  window names with canonical tmux pane IDs and read-only pane metadata plus the
+  existing process/config verdict, proves ownership by requiring the matched bot
+  process PID or PPID to equal the pane PID, and fails on missing, duplicate, or
+  unconfigured panes and mismatched ownership in the exact confirmed session.
+  Other sessions such as `misc` are ignored. The report is bounded and never
+  signals, starts, or controls processes, contacts a network or exchange,
+  accesses credential stores, or writes files.
 - `passivbot tool live-performance-report` summarizes local live monitor event timings for
   operator performance analysis. It is read-only and does not contact exchanges. Use
   `--recent-minutes` for a time window, `--summary` for a bounded operator projection, and

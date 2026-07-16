@@ -4,6 +4,13 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Added `passivbot tool live-restart-target-report`, a bounded local-only
+  preflight that joins supervisor-config window names with canonical tmux pane
+  IDs and proves ownership by matching each bot process PID or parent PID to
+  its pane PID. It fails on missing, duplicate, unconfigured, or mismatched
+  panes and never signals, starts, or controls a process, contacts a network
+  or exchange, loads credentials, or writes files.
+
 - Added `passivbot tool live-process-report`, a bounded local-only process
   sampler that does not read monitor events or text logs, access credential
   stores, contact networks or exchanges, control processes, or write files.

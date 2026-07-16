@@ -321,6 +321,11 @@ Related detailed plans:
      three consecutive `R` samples. The active read-only follow-up makes this
      bounded process-state observation/recovery sequence reproducible in the
      smoke tool without adding restart execution.
+   - 2026-07-16: PR #1286 deployed aggregate-only process checks that retained
+     the complete process/config verdict and naturally proved transient `D`
+     recovery. The active exact-target preflight now joins supervisor window
+     names to read-only tmux pane metadata while keeping all restart execution
+     and process signals unavailable.
 
    Remaining refinements: safe pull/stop/start orchestration remains open.
    The concise and brief summaries are intentionally bounded; further changes
@@ -1185,7 +1190,7 @@ Related detailed plans:
 | 2026-06-30 | #3/#4 Live restart/smoke automation and startup budget tracking | PR #886 / `60c79c3a` | Exposed existing startup timing evidence in `live-smoke-report --summary` and `--brief`; VPS5 5-minute smoke stayed hard-green and showed the new `startup_timings` brief key | Safe pull/stop/start orchestration and durable startup budget config/events remain open |
 | 2026-06-30 | #3 Live restart/smoke automation | PR #888 / `4b435d33` | Exposed bounded text-log window counters in `live-smoke-report --brief`; VPS5 5-minute smoke stayed hard-green and showed `logs.window.lines_skipped_before=1730` | Safe pull/stop/start orchestration remains open |
 | 2026-06-30 | #3 Live restart/smoke automation | PR #890 / `1498abc9` | Exposed `event_window.enabled` in `live-smoke-report --brief`; VPS5 5-minute smoke stayed hard-green and showed `event_window.enabled=true` | Safe pull/stop/start orchestration remains open |
-| 2026-07-16 | #3 Live restart/smoke automation | PR #1286 / semantic head `52022bf79f`, after PR #1285 / `175986fd9c` | PR #1285 separated bounded process/supervisor validation into a local-only command and VPS5 validated five stable exact bots with natural `D` recovery; PR #1286 adds aggregate-only repeated-check output | Merge and validate brief output; safe pull/stop/start orchestration remains open |
+| 2026-07-16 | #3 Live restart/smoke automation | PR #1287 / semantic head `f2cebddb10`, after PR #1286 / `7a12430abf` | PR #1286 deployed aggregate-only process checks with five stable bots and natural `D` recovery; PR #1287 resolves exact tmux pane targets without signals or restart execution | Review and validate target preflight; safe pull/stop/start execution remains open |
 | 2026-06-30 | #2 Event query and timeline CLI extensions | PR #892 / `7e7ce16f` | Added `live-event-query --level` filtering for structured event severity; VPS5 query smoke matched 33 warning-level events with `ok=true` and all five bots still running | Cross-bot incident workflow remains open; Binance config-refresh traceback classification added as item #18 |
 | 2026-06-30 | #18 Binance hourly hedge-mode/config refresh classification | PR #894 / `796ceb38` | Added off-console/text `exchange.config_refresh` events for hourly maintenance refresh success/failure with sanitized bounded error fields and fail-loud behavior preserved | Live emission evidence after next bot restart; smoke/report classification remains open |
 | 2026-06-30 | #18 Binance hourly hedge-mode/config refresh classification | PR #896 / `53b8accb` | Added `live-smoke-report` full/summary/brief health projections for `exchange.config_refresh`, excluding raw error text; VPS5 no-restart smoke stayed hard-green and showed the new brief section | Live emission evidence after next bot restart; smoke/report classification remains open |
