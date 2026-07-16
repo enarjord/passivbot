@@ -14,6 +14,10 @@
 3. The tool loads canonical config through the staged loader (`load_prepared_config(..., live_only=True, target="canonical")`). It does not instantiate a live `Passivbot`.
 4. Manual mode exists because historical snapshots or offline experiments may not have all required fields.
 5. The wizard asks for the core trailing inputs first and only prompts for the extra sizing/grid parameters when the user opts into advanced mode.
+6. `passivbot tool trailing-inspect` is the smaller one-shot parameter-intuition surface. It uses
+   canonical nested strategy parameters and mirrors the Rust formulas: entry distances are
+   multiplicative, close threshold terms are additive, and close retracement has no wallet-exposure
+   term.
 
 ## Validation
 
@@ -21,11 +25,15 @@
 2. entry/close diagnostics should match the existing monitor trailing slice
 3. command handling should mutate inputs deterministically and support dump/reset/help flows
 4. the tool wrapper should start with `--help` without import errors
+5. the one-shot inspector should cover additive close thresholds, separate entry multipliers,
+   long/short geometry, config extraction, overrides, and unified CLI dispatch
 
 ## Key Code
 
 - `src/trailing_diagnostics.py`
 - `src/trailing_diagnostics_tool.py`
 - `src/tools/trailing_diagnostics.py`
+- `src/tools/trailing_inspect.py`
 - `src/passivbot_monitor.py`
 - `tests/test_trailing_diagnostics.py`
+- `tests/test_trailing_inspect_tool.py`
