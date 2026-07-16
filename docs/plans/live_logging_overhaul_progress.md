@@ -15,7 +15,27 @@ merge, live smoke evidence changes, or new gaps are discovered.
 - Do not use this file for design churn; unresolved design details belong in the
   plan or a focused handoff doc.
 
-## Latest Canonical Deployment (PR #1276)
+## Latest Canonical Deployment (PR #1277)
+
+- PR #1277 merged to `master` as
+  `deee460a18f1f532a4c3a4c6e89a4befd5469d2a`. It projects existing
+  `rust_orchestrator.returned` and `action.planned` events into bounded
+  correlated latest-per-bot planning-output health without copying raw orders,
+  quantities, prices, or hashes or changing verdicts/runtime behavior.
+- VPS5 fast-forwarded cleanly with no restart. Exact bot PIDs
+  `985592/985594/985596/985598/985600`, all five pane parents, and unrelated
+  `misc:0.0` PID `434835` remained unchanged; tracked state stayed clean.
+- Immediate and settled two-minute smokes were `ok=true` with zero
+  hard/log/monitor/process failures, `189/189` and `191/191` remote calls
+  successful, and five exact/config-valid live processes. Final exact states
+  were `R=4,S=1`.
+- The focused five-minute report naturally projected 60 planning-output events
+  as 30 correlated pairs across all five bots with zero latest count
+  mismatches. The same window contained 87 packet-update events, motivating the
+  next report-only packet-health slice. No event or trading activity was
+  manufactured.
+
+## Previous Canonical Deployment (PR #1276)
 
 - PR #1276 merged to `master` as
   `6378d40a55116f94fe65f1b24f4981101d838e74`. It projects existing

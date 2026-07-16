@@ -4245,6 +4245,138 @@ def test_live_smoke_report_summarizes_latest_planning_output_per_bot(tmp_path):
     assert section["planning_output_health"] == health
 
 
+def test_live_smoke_report_summarizes_latest_data_packets_without_raw_refs(tmp_path):
+    binance_events = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    gateio_events = tmp_path / "monitor" / "gateio" / "gateio_01" / "events"
+    _write_ndjson(
+        binance_events / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="data_packet.updated",
+                seq=1,
+                ts=1000,
+                ids={"cycle_id": "cy_old"},
+                data={
+                    "kind": "positions",
+                    "scope": "global",
+                    "revision": 1,
+                    "source": "authoritative_surface",
+                    "quality": "ok",
+                    "freshness": {"status": "fresh"},
+                    "coverage": {"row_count": 99},
+                    "raw_ref": "positions:API_KEY_SHOULD_NOT_RENDER",
+                    "raw_hash": "HASH_SHOULD_NOT_RENDER",
+                },
+            ),
+            _monitor_row(
+                event_type="data_packet.updated",
+                seq=2,
+                ts=2000,
+                ids={"cycle_id": "cy_new"},
+                data={
+                    "kind": "positions",
+                    "scope": "global",
+                    "revision": 2,
+                    "source": "authoritative_surface",
+                    "quality": "ok",
+                    "freshness": {"status": "fresh", "age_ms": 4},
+                    "coverage": {"row_count": 2, "unsafe": "SHOULD_NOT_RENDER"},
+                    "warnings": ["api_key=WARNING_SHOULD_NOT_RENDER"],
+                },
+            ),
+            _monitor_row(
+                event_type="data_packet.updated",
+                seq=3,
+                ts=2100,
+                ids={"cycle_id": "cy_new"},
+                data={
+                    "kind": "balance",
+                    "scope": "global",
+                    "revision": 2,
+                    "source": "authoritative_surface",
+                    "quality": "ok",
+                    "freshness": {"status": "fresh"},
+                    "coverage": {"value_present": True},
+                    "balance_value": "VALUE_SHOULD_NOT_RENDER",
+                },
+            ),
+        ],
+    )
+    _write_ndjson(
+        gateio_events / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="data_packet.updated",
+                seq=1,
+                ts=1500,
+                exchange="gateio",
+                user="gateio_01",
+                ids={"cycle_id": "cy_gate"},
+                data={
+                    "kind": "open_orders",
+                    "scope": "global",
+                    "revision": 7,
+                    "source": "websocket",
+                    "quality": "degraded",
+                    "freshness": {
+                        "status": "stale",
+                        "age_ms": 6000,
+                        "max_age_ms": 5000,
+                        "reason": "packet_age_exceeded",
+                    },
+                    "coverage": {"row_count": 4},
+                    "errors": ["secret=ERROR_SHOULD_NOT_RENDER"],
+                },
+            )
+        ],
+    )
+
+    report = build_live_smoke_report(tmp_path / "monitor", logs_root=None)
+    summary = summarize_live_smoke_report(report)
+    brief = summarize_live_smoke_report_brief(report)
+    section = project_live_smoke_report_sections(report, ["data_packets"])
+
+    health = report["data_packet_health"]
+    assert health["total"] == 4
+    assert health["event_types"] == {"data_packet.updated": 4}
+    assert health["bots"] == 2
+    assert health["latest_packets"] == 3
+    assert health["packet_kinds"] == {
+        "positions": 2,
+        "balance": 1,
+        "open_orders": 1,
+    }
+    assert health["latest_qualities"] == {"ok": 2, "degraded": 1}
+    assert health["latest_freshness_statuses"] == {"fresh": 2, "stale": 1}
+    assert health["latest_sources"] == {"authoritative_surface": 2, "websocket": 1}
+    assert health["latest_warning_packets"] == 1
+    assert health["latest_error_packets"] == 1
+    assert health["latest_row_count_total"] == 6
+    assert health["latest_value_present_packets"] == 1
+    assert health["latest_value_missing_packets"] == 0
+    positions = next(
+        group for group in health["groups"] if group["packet_kind"] == "positions"
+    )
+    assert positions["count"] == 2
+    assert positions["latest_revision"] == 2
+    assert positions["latest_coverage"] == {"row_count": 2}
+    assert positions["latest_ids"] == {"cycle_id": "cy_new"}
+    for projected in (
+        health,
+        summary["data_packet_health"],
+        brief["data_packets"],
+    ):
+        assert projected["latest_packets"] == 3
+        serialized = json.dumps(projected)
+        assert "SHOULD_NOT_RENDER" not in serialized
+        assert "raw_ref" not in serialized
+        assert "raw_hash" not in serialized
+        assert '"warnings"' not in serialized
+        assert '"errors"' not in serialized
+        assert "VALUE_SHOULD_NOT_RENDER" not in serialized
+    assert section["data_packet_health"] == health
+
+
 def test_live_smoke_report_problem_events_include_state_refresh_progress(tmp_path):
     events_dir = tmp_path / "monitor" / "kucoin" / "kucoin_01" / "events"
     _write_ndjson(
