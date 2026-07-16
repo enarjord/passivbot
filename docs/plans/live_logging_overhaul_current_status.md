@@ -24,8 +24,9 @@ Estimated completion:
 
 - Branch: `codex/process-report-brief`, based on canonical
   `175986fd9cd9912402fadf14411abbbf966a088d` after PR #1285.
-- PR: pending. Slice: add a bounded aggregate-only `--brief` projection to
-  `passivbot tool live-process-report`.
+- PR: #1286, `Add brief live process report projection`; semantic
+  implementation head `52022bf79f`. Slice: add a bounded aggregate-only
+  `--brief` projection to `passivbot tool live-process-report`.
 - Triggering evidence: both post-merge VPS5 process reports were hard-green,
   but the full command/config/process/group rows made the otherwise useful
   repeated operator check very large. The settled report naturally proved

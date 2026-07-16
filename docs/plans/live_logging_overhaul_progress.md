@@ -9184,10 +9184,10 @@ active branch, PR, review gate, and rollout instructions.
   naturally observed recovered Binance uninterruptible sleep and ended with
   GateIO in `D`; the settled report naturally observed GateIO recovery and
   ended `R=5` with zero active or persistent uninterruptible processes.
-- No exchange request, process action, or event was manufactured. The active
-  `codex/process-report-brief` follow-up adds aggregate-only repeated-check
-  output because the complete process/config/group rows are intentionally
-  detailed but too large for routine operator loops.
+- No exchange request, process action, or event was manufactured. Active PR
+  #1286 adds aggregate-only repeated-check output because the complete
+  process/config/group rows are intentionally detailed but too large for
+  routine operator loops.
 
 ### 2026-07-16: Process Sampling Deployed; Local-Only Validation Split
 
