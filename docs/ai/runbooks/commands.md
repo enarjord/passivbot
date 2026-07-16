@@ -85,6 +85,8 @@ passivbot tool pareto-dash --data-root optimize_results
 passivbot tool verify-hlcvs-data
 passivbot tool ohlcvs-doctor --repair-catalog
 passivbot tool streamline-json configs/examples/default_trailing_martingale_long.json
+passivbot tool migrate-config-v7 config_v7.json config_v8.json
+passivbot tool compare-backtests path/to/v7/result path/to/v8/result
 ```
 
 ## High-Signal Gotcha

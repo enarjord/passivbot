@@ -157,6 +157,7 @@ def test_tool_help_lists_supported_tools(capsys):
     assert "pareto-explorer" in out
     assert "streamline-json" in out
     assert "trailing-inspect" in out
+    assert "compare-backtests" in out
     assert "verify-hlcvs-data" in out
     assert "requires full install" in out
 
