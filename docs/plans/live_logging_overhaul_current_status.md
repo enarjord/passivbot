@@ -22,36 +22,46 @@ Estimated completion:
 
 ## Active Review Slice
 
-- Branch: `codex/compact-ema-fallback-console`, based on canonical
-  `b6fabcfdbbdd823277c12896b770f008c01bb163` after PR #1251.
-- PR: #1252, `Compact close-EMA fallback warning`.
-- Slice: make the existing structured `ema.fallback_used` event the compact
-  normal console/text owner only when close-EMA carry-forward is active.
-- Triggering evidence: a natural Binance close-EMA fallback summary measured
-  308 visible characters for four fallbacks across WLD and ZEC. Its repeated
-  age, streak, span, and reason labels exceeded the normal record budget.
-- Scope: preserve the exact fifteen-minute human warning cadence, complete
-  per-cycle structured/monitor events, classified reason, bounded examples,
-  and legacy fallback. Recovery-only and forager-cached fallback events remain
-  durable but console/text-hidden.
-- Behavior boundary: observability-only; no EMA input, calculation, fallback
-  eligibility/age limit, nontradable handling, exchange call, Rust, order,
+- Branch: `codex/compact-entry-distance-console`, based on canonical
+  `4ccf1e2523a217caa78b3ce3acbf2c949590926d` after PR #1252.
+- PR: #1253, `Compact initial-entry distance-gate output`.
+- Slice: compact the existing structured initial-entry distance-gate
+  blocked/cleared console/text projection within the normal record budget.
+- Triggering evidence: the PR #1252 deployment produced 21 natural blocked
+  lines at 222-270 visible characters; 20 exceeded 240. Repeated machine
+  action/type/reason labels dominated the human projection.
+- Scope: preserve complete structured payloads, event admission/routes, zero
+  numeric values, structured console ownership, and exact legacy fallback;
+  compact only the human projection.
+- Behavior boundary: observability-only; no entry eligibility, distance or
+  tolerance calculation, gate decision, exchange call, Rust, order creation,
   risk, backtest, optimizer, or trading behavior.
 - Review gate: temporary maintainer-authorized exact-head Hermes plus green CI
   while Grok is halted.
 - Expected VPS action: after merge, one authorized exact five-bot restart.
-  Validate the natural startup settings lines and settled smoke; do not
+  Validate natural entry-gate lines and settled smoke; do not
   manufacture exchange, state, risk, or trading events.
 
 ## Deployed Baseline
 
 - Canonical `master` and VPS5 are
-  `b6fabcfdbbdd823277c12896b770f008c01bb163`, PR #1251. The tracked checkout
+  `4ccf1e2523a217caa78b3ce3acbf2c949590926d`, PR #1252. The tracked checkout
   is clean and expected untracked artifacts are preserved.
 - VPS5 runs merged master in bot PIDs
-  `961227/961230/961232/961233/961234`. The exact pane PIDs remain
+  `963164/963166/964008/963169/963170`. The exact pane PIDs remain
   `856294/856332/856364/856398/856434`, and unrelated `misc:0.0` PID `434835`
   is unchanged.
+- PR #1252 was activated after one exact five-bot SIGINT round; all old bots
+  exited naturally within ten seconds and no escalation was used. GateIO's
+  first new process then failed closed during HSL replay because one required
+  held-pair unrealized-PnL minute was unavailable. One bounded exact-pane retry
+  succeeded, reached `bot.ready`, and completed replay. Natural compact
+  close-EMA warnings measured 158, 166, and 225 visible characters on OKX,
+  Binance, and GateIO, with zero legacy duplicates in the post-deploy files.
+  The final two-minute smoke was `ok=true` with zero hard/log/monitor/process/
+  pipeline failures, `347/347` remote and `53/53` account-critical calls
+  successful, seven successful fill refreshes, no active HSL replay, five
+  config-valid processes in state `R`, and a clean tracked checkout.
 - PR #1251 was activated with one exact five-bot graceful restart. Every old
   bot exited naturally within ten seconds after one SIGINT round; no escalation
   was used. Three natural admitted slow-refresh lines measured 155-171 visible
@@ -763,8 +773,11 @@ validated: the four forager HSL settings lines measured 163-167 visible
 characters while retaining all configured settings. PR #1251 is also merged,
 deployed, and naturally validated: admitted staged-refresh lines measured
 155-171 visible characters with zero legacy duplicates and a hard-green
-settled smoke. The active slice compacts the naturally observed 308-character
-close-EMA fallback warning without changing EMA fallback or trading behavior.
+settled smoke. PR #1252 is merged, deployed, and naturally validated: compact
+close-EMA warnings measured 158-225 visible characters with zero post-deploy
+legacy duplicates and a hard-green settled smoke after one bounded GateIO
+retry. The active slice compacts the naturally observed 222-270 character
+initial-entry distance-gate lines without changing entry or trading behavior.
 
 Do not create progress-only PRs or resume unrelated logging work from stale
 worktrees.

@@ -2393,6 +2393,93 @@ def format_ema_fallback_console(data: Mapping[str, Any]) -> str:
     return " ".join(parts)
 
 
+_INITIAL_ENTRY_DISTANCE_GATE_CONSOLE_RECORD_LIMIT = 188
+_INITIAL_ENTRY_DISTANCE_GATE_CONSOLE_CYCLE_LIMIT = 24
+_INITIAL_ENTRY_DISTANCE_GATE_CONSOLE_SYMBOL_LIMIT = 24
+_INITIAL_ENTRY_DISTANCE_GATE_CONSOLE_PSIDE_LIMIT = 8
+_INITIAL_ENTRY_DISTANCE_GATE_CONSOLE_TYPE_LIMIT = 32
+
+
+def _bounded_initial_entry_distance_gate_console_text(
+    value: object, *, limit: int
+) -> str:
+    """Return a sanitized, bounded display token for the gate projection."""
+    return _format_console_label(value).replace(" ", "-")[:limit] or "-"
+
+
+def _format_initial_entry_distance_gate_console_pct(value: float | None) -> str:
+    if value is None or not math.isfinite(value):
+        return "-"
+    return f"{value:.4f}"
+
+
+def _format_initial_entry_distance_gate_console(event: LiveEvent) -> str:
+    """Render a compact blocked or cleared initial-entry distance-gate transition."""
+    data = event.data if isinstance(event.data, Mapping) else {}
+    transition = (
+        "blocked"
+        if event.event_type == EventTypes.ENTRY_INITIAL_DISTANCE_GATE_BLOCKED
+        else "cleared"
+    )
+    parts = ["[entry]", transition]
+    cycle_candidate = (
+        (
+            "cy="
+            + _bounded_initial_entry_distance_gate_console_text(
+                event.cycle_id,
+                limit=_INITIAL_ENTRY_DISTANCE_GATE_CONSOLE_CYCLE_LIMIT,
+            ),
+        )
+        if event.cycle_id
+        else ()
+    )
+    tolerance_candidate = (
+        "tol="
+        + _format_initial_entry_distance_gate_console_pct(
+            _data_number(data, "tolerance_pct")
+        )
+        + "%",
+    ) if "tolerance_pct" in data else ()
+    candidates = (
+        *cycle_candidate,
+        "symbol="
+        + _bounded_initial_entry_distance_gate_console_text(
+            event.symbol, limit=_INITIAL_ENTRY_DISTANCE_GATE_CONSOLE_SYMBOL_LIMIT
+        ),
+        "pside="
+        + _bounded_initial_entry_distance_gate_console_text(
+            event.pside, limit=_INITIAL_ENTRY_DISTANCE_GATE_CONSOLE_PSIDE_LIMIT
+        ),
+        "type="
+        + _bounded_initial_entry_distance_gate_console_text(
+            _data_str(data, "order_type"),
+            limit=_INITIAL_ENTRY_DISTANCE_GATE_CONSOLE_TYPE_LIMIT,
+        ),
+        f"q={_format_console_number(_data_number(data, 'qty'))}",
+        f"px={_format_console_number(_data_number(data, 'price'))}",
+        f"mkt={_format_console_number(_data_number(data, 'market_price'))}",
+        "d="
+        + _format_initial_entry_distance_gate_console_pct(
+            _data_number(data, "distance_pct")
+        )
+        + "%",
+        "max="
+        + _format_initial_entry_distance_gate_console_pct(
+            _data_number(data, "threshold_pct")
+        )
+        + "%",
+        *tolerance_candidate,
+    )
+    for candidate in candidates:
+        if (
+            len(" ".join((*parts, candidate)))
+            > _INITIAL_ENTRY_DISTANCE_GATE_CONSOLE_RECORD_LIMIT
+        ):
+            break
+        parts.append(candidate)
+    return " ".join(parts)
+
+
 def format_console_event(event: LiveEvent) -> str:
     if (
         event.event_type == EventTypes.HEALTH_SUMMARY
@@ -2411,6 +2498,11 @@ def format_console_event(event: LiveEvent) -> str:
         return format_memory_snapshot_console(event.data)
     if event.event_type == EventTypes.EMA_FALLBACK_USED:
         return format_ema_fallback_console(event.data)
+    if event.event_type in {
+        EventTypes.ENTRY_INITIAL_DISTANCE_GATE_BLOCKED,
+        EventTypes.ENTRY_INITIAL_DISTANCE_GATE_CLEARED,
+    }:
+        return _format_initial_entry_distance_gate_console(event)
     if event.event_type == EventTypes.STATE_REFRESH_TIMING:
         data = event.data if isinstance(event.data, Mapping) else {}
         return format_state_refresh_timing_console(data)
