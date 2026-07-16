@@ -334,6 +334,10 @@ Related detailed plans:
      and settled three-sample reports retained all five exact targets with zero
      changed identities or failed samples. The active follow-up binds this
      local-only hard gate into the non-executing restart smoke plan.
+   - 2026-07-16: PR #1289 deployed the exact stable-target command and required
+     verdict in the non-executing restart plan. The active follow-up classifies
+     whether each bot has a pane-parent candidate relaunch path with a mandatory
+     post-stop recheck, without exposing its command or adding process control.
 
    Remaining refinements: safe pull/stop/start orchestration remains open.
    The concise and brief summaries are intentionally bounded; further changes
@@ -1198,7 +1202,7 @@ Related detailed plans:
 | 2026-06-30 | #3/#4 Live restart/smoke automation and startup budget tracking | PR #886 / `60c79c3a` | Exposed existing startup timing evidence in `live-smoke-report --summary` and `--brief`; VPS5 5-minute smoke stayed hard-green and showed the new `startup_timings` brief key | Safe pull/stop/start orchestration and durable startup budget config/events remain open |
 | 2026-06-30 | #3 Live restart/smoke automation | PR #888 / `4b435d33` | Exposed bounded text-log window counters in `live-smoke-report --brief`; VPS5 5-minute smoke stayed hard-green and showed `logs.window.lines_skipped_before=1730` | Safe pull/stop/start orchestration remains open |
 | 2026-06-30 | #3 Live restart/smoke automation | PR #890 / `1498abc9` | Exposed `event_window.enabled` in `live-smoke-report --brief`; VPS5 5-minute smoke stayed hard-green and showed `event_window.enabled=true` | Safe pull/stop/start orchestration remains open |
-| 2026-07-16 | #3 Live restart/smoke automation | Active `codex/restart-plan-target-gate`, after PR #1288 / `e004ede7dd` | PR #1288 deployed two hard-green three-sample reports with five stable exact targets and zero changed identities; active work binds that local-only gate into the non-executing restart plan | Review and validate plan binding; safe pull/stop/start execution remains open |
+| 2026-07-16 | #3 Live restart/smoke automation | Active `codex/restart-target-relaunch-contract`, after PR #1289 / `d6cac1017b` | PR #1289 deployed the exact stable-target command in the non-executing plan with a hard-green local smoke; active work proves every target has a pane-parent candidate relaunch path with mandatory post-stop recheck | Review and validate relaunch classification; safe pull/stop/start execution remains open |
 | 2026-06-30 | #2 Event query and timeline CLI extensions | PR #892 / `7e7ce16f` | Added `live-event-query --level` filtering for structured event severity; VPS5 query smoke matched 33 warning-level events with `ok=true` and all five bots still running | Cross-bot incident workflow remains open; Binance config-refresh traceback classification added as item #18 |
 | 2026-06-30 | #18 Binance hourly hedge-mode/config refresh classification | PR #894 / `796ceb38` | Added off-console/text `exchange.config_refresh` events for hourly maintenance refresh success/failure with sanitized bounded error fields and fail-loud behavior preserved | Live emission evidence after next bot restart; smoke/report classification remains open |
 | 2026-06-30 | #18 Binance hourly hedge-mode/config refresh classification | PR #896 / `53b8accb` | Added `live-smoke-report` full/summary/brief health projections for `exchange.config_refresh`, excluding raw error text; VPS5 no-restart smoke stayed hard-green and showed the new brief section | Live emission evidence after next bot restart; smoke/report classification remains open |

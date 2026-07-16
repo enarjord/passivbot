@@ -22,30 +22,40 @@ Estimated completion:
 
 ## Active Review Slice
 
-- Branch: `codex/restart-plan-target-gate`, based on canonical
-  `e004ede7ddaa4935bc8bf69739285724656198d3` after PR #1288.
-- PR: #1289, `Bind restart plan to stable target preflight`; semantic
-  implementation head `9011d4e0f5`. Slice: bind the deployed stable
-  exact-target report into the existing plan-only restart smoke workflow as an
-  explicit pre-action gate.
-- Triggering evidence: PR #1288's immediate and settled three-sample reports
-  proved stable pane IDs, pane PIDs, bot PIDs, and ownership for all five bots,
-  but `live-restart-smoke-plan` still does not emit that required gate.
-- Scope: add an explicit target session plus bounded 2-5 sample/window options,
-  emit the exact local-only target-report command in pre-restart readiness, and
-  project its required verdict in complete and summary output.
-- Behavior boundary: command generation only. The planner remains plan-only and
-  does not inspect tmux, run the target report, signal or start processes, use
-  SSH/git, contact a network/exchange, load credentials, or write files.
-- Validation: focused planner/CLI/summary/bounds regressions plus existing
-  target, process, restart-plan, compilation, and docs checks.
+- Branch: `codex/restart-target-relaunch-contract`, based on canonical
+  `d6cac1017b27c56c2dca57c9ca0f637cd300dac2` after PR #1289.
+- PR: pending. Slice: prove that each exact bot target has a pane-parent
+  candidate path for a later separately reviewed relaunch action, subject to a
+  mandatory post-stop pane recheck.
+- Triggering evidence: VPS5 pane metadata retains empty `pane_start_command`
+  while exact bot PIDs are children of stable bash pane PIDs. A future executor
+  must derive commands from supervisor config and must not assume every direct
+  pane-owned process leaves a usable pane after exit.
+- Scope: classify child-of-pane targets as relaunch-ready, expose bounded method
+  and recheck metadata without command content, count ready/unready targets,
+  sample the relaunch proof, and add the all-targets-ready planner requirement.
+- Behavior boundary: read-only classification only. No configured command is
+  emitted, no tmux action or process control is added, and network/exchange,
+  credential, SSH/git, and file-write boundaries remain unchanged.
+- Validation: focused child/direct-owner, aggregate, sampling, planner, CLI,
+  target, process, compilation, and docs regressions.
 - Review gate: temporary maintainer-authorized exact-head Hermes plus green
   Python and Rust CI while Grok is halted.
-- Expected VPS action: pull and inspect a compact plan with the exact session;
-  no bot restart, tmux action, or process signal is expected.
+- Expected VPS action: pull and run the existing local-only stable target report
+  plus compact plan; no bot restart, tmux action, or process signal is expected.
 
 ## Deployed Baseline
 
+- Canonical `master` and VPS5 are
+  `d6cac1017b27c56c2dca57c9ca0f637cd300dac2`, PR #1289. VPS5 fast-forwarded
+  cleanly from `e004ede7` without restart or signal; exact pane IDs/PIDs, bot
+  PIDs, and unrelated `misc:0.0` PID `434835` remained unchanged.
+- The compact plan was `ok=true` for five bots with zero issues, an explicitly
+  configured three-sample/five-second exact target command, and execution still
+  unavailable. A corrected four-sample local-only process smoke was `ok=true`
+  with five stable PIDs, zero hard/config/process failures, one non-persistent
+  final `D`, and no PID churn; the settled exact sample was `R=3,S=2`. No
+  exchange request, process action, or event was manufactured.
 - Canonical `master` and VPS5 are
   `e004ede7ddaa4935bc8bf69739285724656198d3`, PR #1288. VPS5 fast-forwarded
   cleanly from `6cb8bc3c` without a restart or process signal; all five pane
@@ -1133,10 +1143,11 @@ production-action rejection. PR #1285's dedicated local-only
 `live-process-report` path is also merged, deployed, and naturally validated
 with five stable exact processes and recovered uninterruptible observations.
 PR #1286's aggregate-only follow-up, PR #1287's exact tmux target preflight,
-and PR #1288's bounded target-identity stability are merged, deployed, and
-naturally validated without process control. The active
-`codex/restart-plan-target-gate` slice binds that stable local-only verdict into
-the existing non-executing restart plan.
+PR #1288's bounded target-identity stability, and PR #1289's plan binding are
+merged, deployed, and naturally validated without process control. The active
+`codex/restart-target-relaunch-contract` slice proves the pane-parent candidate
+path and mandatory post-stop recheck without exposing or executing configured
+commands.
 
 Do not create progress-only PRs or resume unrelated logging work from stale
 worktrees.

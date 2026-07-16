@@ -4,6 +4,12 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Exact live restart targets now classify whether the bot is a child of its
+  tmux pane parent and therefore has a bounded candidate relaunch path after a
+  required post-stop pane recheck. The report exposes only method/proof
+  metadata, never the configured command, and restart plans require every
+  resolved target to be relaunch-ready.
+
 - `passivbot tool live-restart-smoke-plan` can now bind an explicitly
   confirmed tmux session into its pre-restart readiness phase with
   `--target-session-name`. The generated local-only target preflight requires

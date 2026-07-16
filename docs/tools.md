@@ -403,6 +403,15 @@ Monitor commands are documented in detail in [monitor.md](monitor.md). The CLI s
   `--interval-s SECONDS` to require the same pane ID, pane PID, matched bot PID,
   and ownership proof across a bounded pre-action window; any hard-red sample
   or identity change makes the report fail.
+  Each resolved target also classifies whether the matched bot is a child of
+  the pane PID and therefore has a candidate relaunch path through that exact
+  pane after the bot exits. The report exposes the bounded relaunch method,
+  supervisor-config command source, and mandatory post-stop pane recheck, but
+  never emits the configured command or assumes the pane is ready before that
+  recheck. Direct pane-process targets remain valid ownership matches but are
+  explicitly relaunch-unready. A future executor
+  must require `relaunch_ready_targets == resolved_targets` in addition to the
+  hard-green stable sampling verdict.
 - `passivbot tool live-performance-report` summarizes local live monitor event timings for
   operator performance analysis. It is read-only and does not contact exchanges. Use
   `--recent-minutes` for a time window, `--summary` for a bounded operator projection, and

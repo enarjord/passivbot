@@ -276,13 +276,17 @@ def _target_preflight_plan(
         "command": command,
         "execute": False,
         "required_for_future_execution": True,
-        "required_verdict": "ok=true and sampling.stable=true",
+        "required_verdict": (
+            "ok=true, sampling.stable=true, and "
+            "relaunch_ready_targets=resolved_targets"
+        ),
         "expected_fields": [
             "exact confirmed tmux session",
             "complete expected window and pane inventory",
             "exact pane ID and pane PID per configured bot",
             "matched bot PID and pane ownership proof",
             "multi-sample stable target identity verdict",
+            "all resolved targets have a persistent pane-parent relaunch path",
         ],
     }
 

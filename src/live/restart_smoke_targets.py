@@ -232,6 +232,7 @@ def _build_live_restart_target_snapshot(
                 }
             )
             continue
+        relaunch_ready = process_ppid == pane_pid
         targets.append(
             {
                 "window_name": window_name,
@@ -246,6 +247,22 @@ def _build_live_restart_target_snapshot(
                     if process_pid == pane_pid
                     else "matched_process_ppid_equals_pane_pid"
                 ),
+                "relaunch": {
+                    "ready": relaunch_ready,
+                    "method": (
+                        "exact_pane_input_after_verified_exit"
+                        if relaunch_ready
+                        else None
+                    ),
+                    "reason": (
+                        None
+                        if relaunch_ready
+                        else "bot_process_is_direct_tmux_pane_process"
+                    ),
+                    "command_source": "supervisor_config",
+                    "requires_process_exit": True,
+                    "requires_post_stop_pane_recheck": True,
+                },
             }
         )
 
@@ -268,6 +285,12 @@ def _build_live_restart_target_snapshot(
     )
     process_hard_failures = int(processes.get("hard_failures") or 0)
     hard_failures = process_hard_failures + target_hard_failures
+    relaunch_ready_targets = sum(
+        1
+        for target in targets
+        if isinstance(target.get("relaunch"), dict)
+        and target["relaunch"].get("ready") is True
+    )
     return {
         "tool": "live-restart-target-report",
         "schema_version": 1,
@@ -277,6 +300,8 @@ def _build_live_restart_target_snapshot(
         "session_name": confirmed_session,
         "expected_targets": len(expected_rows),
         "resolved_targets": len(targets),
+        "relaunch_ready_targets": relaunch_ready_targets,
+        "relaunch_unready_targets": len(targets) - relaunch_ready_targets,
         "session_panes": len(session_panes),
         "processes": summarize_live_process_report(processes),
         "targets": targets,
@@ -287,11 +312,15 @@ def _build_live_restart_target_snapshot(
 
 
 def _target_identity(target: dict[str, Any]) -> dict[str, Any]:
+    relaunch = target.get("relaunch")
+    relaunch_row = relaunch if isinstance(relaunch, dict) else {}
     return {
         "pane_id": target["pane_id"],
         "pane_pid": target["pane_pid"],
         "process_pid": target["process_pid"],
         "ownership_proof": target["ownership_proof"],
+        "relaunch_ready": relaunch_row.get("ready"),
+        "relaunch_method": relaunch_row.get("method"),
     }
 
 

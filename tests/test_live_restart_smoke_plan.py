@@ -93,13 +93,17 @@ def test_live_restart_smoke_plan_builds_plan_from_supervisor_config(tmp_path):
         "command": None,
         "execute": False,
         "required_for_future_execution": True,
-        "required_verdict": "ok=true and sampling.stable=true",
+        "required_verdict": (
+            "ok=true, sampling.stable=true, and "
+            "relaunch_ready_targets=resolved_targets"
+        ),
         "expected_fields": [
             "exact confirmed tmux session",
             "complete expected window and pane inventory",
             "exact pane ID and pane PID per configured bot",
             "matched bot PID and pane ownership proof",
             "multi-sample stable target identity verdict",
+            "all resolved targets have a persistent pane-parent relaunch path",
         ],
     }
     assert (
@@ -188,13 +192,17 @@ def test_live_restart_smoke_plan_binds_stable_target_preflight(tmp_path):
         "command": expected_command,
         "execute": False,
         "required_for_future_execution": True,
-        "required_verdict": "ok=true and sampling.stable=true",
+        "required_verdict": (
+            "ok=true, sampling.stable=true, and "
+            "relaunch_ready_targets=resolved_targets"
+        ),
         "expected_fields": [
             "exact confirmed tmux session",
             "complete expected window and pane inventory",
             "exact pane ID and pane PID per configured bot",
             "matched bot PID and pane ownership proof",
             "multi-sample stable target identity verdict",
+            "all resolved targets have a persistent pane-parent relaunch path",
         ],
     }
     assert report["phases"][0]["planned_commands"][-1] == {
@@ -700,7 +708,10 @@ def test_live_restart_smoke_plan_summary_projects_concise_commands(tmp_path, cap
         ),
         "execute": False,
         "required_for_future_execution": True,
-        "required_verdict": "ok=true and sampling.stable=true",
+        "required_verdict": (
+            "ok=true, sampling.stable=true, and "
+            "relaunch_ready_targets=resolved_targets"
+        ),
     }
     assert summary["incident_bundle"]["event_segments"] == (
         "disabled_by_default_for_fast_restart_smoke_bundle"
