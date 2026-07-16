@@ -307,9 +307,13 @@ Related detailed plans:
      `forager.feature_unavailable` evidence to smoke reports. Its no-restart
      VPS5 deploy stayed hard-green with all five bots matched. A naturally
      empty event window exposed that the registered `forager_features` section
-     selector was rejected when the optional section was omitted; the active
-     follow-up repairs selector validation and adds existing
-     `planning.defer_summary` evidence to staged readiness.
+     selector was rejected when the optional section was omitted.
+   - 2026-07-16: PR #1272 repaired registered absent-section selection and
+     added existing `planning.defer_summary` evidence to staged readiness. Its
+     no-restart VPS5 deploy stayed hard-green, and focused zero-event selectors
+     succeeded. The settled window naturally contained one existing
+     `forager.eligibility_changed` event that smoke reports still omitted; the
+     active follow-up adds that bounded membership-transition projection.
 
    Remaining refinements: safe pull/stop/start orchestration remains open.
    The concise and brief summaries are intentionally bounded; further changes

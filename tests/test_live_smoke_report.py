@@ -2276,6 +2276,128 @@ def test_live_smoke_report_summarizes_forager_feature_health(tmp_path):
     assert "ema_readiness_health" not in projected
 
 
+def test_live_smoke_report_summarizes_forager_eligibility_health(tmp_path):
+    binance_events = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    gateio_events = tmp_path / "monitor" / "gateio" / "gateio_01" / "events"
+    _write_ndjson(
+        binance_events / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="forager.eligibility_changed",
+                seq=1,
+                ts=1000,
+                status="succeeded",
+                level="info",
+                data={
+                    "source": "config_sources",
+                    "list_kind": "approved_coins",
+                    "operation": "added",
+                    "changes": [
+                        {
+                            "pside": "long",
+                            "count": 1,
+                            "symbols": ["OLD/USDT:USDT"],
+                        }
+                    ],
+                },
+            ),
+            _monitor_row(
+                event_type="forager.eligibility_changed",
+                seq=2,
+                ts=2000,
+                status="succeeded",
+                level="info",
+                data={
+                    "source": "config_sources",
+                    "list_kind": "approved_coins",
+                    "operation": "added",
+                    "changes": [
+                        {
+                            "pside": "long",
+                            "count": 3,
+                            "symbols": [
+                                "AAVE/USDT:USDT",
+                                "api_key=SHOULD_NOT_RENDER",
+                            ],
+                        },
+                        {
+                            "pside": "short",
+                            "count": 2,
+                            "symbols": ["ARB/USDT:USDT", "WLD/USDT:USDT"],
+                        },
+                    ],
+                },
+            ),
+        ],
+    )
+    _write_ndjson(
+        gateio_events / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="forager.eligibility_changed",
+                exchange="gateio",
+                user="gateio_01",
+                seq=1,
+                ts=3000,
+                status="succeeded",
+                level="info",
+                data={
+                    "source": "live_value",
+                    "list_kind": "ignored_coins",
+                    "operation": "removed",
+                    "changes": [
+                        {
+                            "pside": "short",
+                            "count": 1,
+                            "symbols": ["ZEC/USDT:USDT"],
+                        }
+                    ],
+                },
+            )
+        ],
+    )
+
+    report = build_live_smoke_report(tmp_path / "monitor", logs_root=None)
+    summary = summarize_live_smoke_report(report, max_groups=1)
+    brief = summarize_live_smoke_report_brief(report)
+    projected = project_live_smoke_report_sections(report, ["forager_eligibility"])
+
+    health = report["forager_eligibility_health"]
+    assert report["ok"] is True
+    assert health["total"] == 3
+    assert health["bots"] == 2
+    assert health["event_types"] == {"forager.eligibility_changed": 3}
+    assert health["latest_changed_total"] == 6
+    assert health["latest_by_list_kind"] == {
+        "approved_coins": 5,
+        "ignored_coins": 1,
+    }
+    assert health["latest_by_operation"] == {"added": 5, "removed": 1}
+    assert health["latest_by_pside"] == {"long": 3, "short": 3}
+    assert health["latest_by_source"] == {"config_sources": 5, "live_value": 1}
+    assert health["latest_changed_symbols"]["count"] == 6
+    assert health["groups"][0]["bot"] == "gateio/gateio_01"
+    assert health["groups"][1]["count"] == 2
+    assert health["groups"][1]["latest_data"]["changes"][0]["symbols"] == {
+        "count": 3,
+        "sample": ["AAVE/USDT:USDT", "api_key=[redacted]"],
+        "truncated": 1,
+    }
+    assert "SHOULD_NOT_RENDER" not in json.dumps(health)
+
+    summary_health = summary["forager_eligibility_health"]
+    assert summary_health["latest_changed_total"] == 6
+    assert summary_health["groups_truncated"] is True
+    assert len(summary_health["groups"]) == 1
+    assert brief["forager_eligibility"] == {
+        key: value
+        for key, value in health.items()
+        if key not in {"groups", "groups_truncated"}
+    }
+    assert projected["forager_eligibility_health"] == health
+    assert "forager_feature_health" not in projected
+
+
 def test_live_smoke_report_accepts_registered_optional_section_when_absent(tmp_path):
     monitor_root = tmp_path / "monitor"
     _write_ndjson(
@@ -2284,10 +2406,16 @@ def test_live_smoke_report_accepts_registered_optional_section_when_absent(tmp_p
     )
     report = build_live_smoke_report(monitor_root, logs_root=None)
 
-    for selector in ("forager_features", "forager_feature_health"):
+    for selector in (
+        "forager_eligibility",
+        "forager_eligibility_health",
+        "forager_features",
+        "forager_feature_health",
+    ):
         projected = project_live_smoke_report_sections(report, [selector])
 
         assert projected["ok"] is True
+        assert "forager_eligibility_health" not in projected
         assert "forager_feature_health" not in projected
         assert "staged_readiness_health" not in projected
 
@@ -6974,24 +7102,26 @@ def test_live_smoke_report_cli_accepts_absent_registered_optional_section(
         monitor_root / "binance" / "binance_01" / "events" / "current.ndjson",
         [],
     )
-    assert (
-        live_smoke_report.main(
-            [
-                str(monitor_root),
-                "--logs-root",
-                "",
-                "--summary",
-                "--section",
-                "forager_features",
-                "--compact",
-            ]
+    for selector in ("forager_eligibility", "forager_features"):
+        assert (
+            live_smoke_report.main(
+                [
+                    str(monitor_root),
+                    "--logs-root",
+                    "",
+                    "--summary",
+                    "--section",
+                    selector,
+                    "--compact",
+                ]
+            )
+            == 0
         )
-        == 0
-    )
 
-    summary = json.loads(capsys.readouterr().out)
-    assert summary["ok"] is True
-    assert "forager_feature_health" not in summary
+        summary = json.loads(capsys.readouterr().out)
+        assert summary["ok"] is True
+        assert "forager_eligibility_health" not in summary
+        assert "forager_feature_health" not in summary
 
 
 def test_live_smoke_report_cli_rejects_unknown_section(capsys):

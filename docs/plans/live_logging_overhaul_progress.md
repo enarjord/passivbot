@@ -15,7 +15,29 @@ merge, live smoke evidence changes, or new gaps are discovered.
 - Do not use this file for design churn; unresolved design details belong in the
   plan or a focused handoff doc.
 
-## Latest Canonical Deployment (PR #1271)
+## Latest Canonical Deployment (PR #1272)
+
+- PR #1272 merged to `master` as
+  `af69725ed04b9a9a0402634455fd6bb05d71d7f5`. It adds existing bounded
+  `planning.defer_summary` evidence to staged-readiness smoke reports and keeps
+  registered optional selectors valid when their event family is absent,
+  without changing verdicts or runtime behavior.
+- VPS5 fast-forwarded cleanly with no restart. Exact bot PIDs
+  `985592/985594/985596/985598/985600`, all five pane parents, and unrelated
+  `misc:0.0` PID `434835` remained unchanged; tracked state stayed clean.
+- The final two-minute smoke was `ok=true` with zero hard/log/monitor/process
+  failures, `279/279` remote and `44/44` account-critical calls successful,
+  seven successful fill refreshes, and all five matching/config-valid
+  processes in states `R=3,S=2` with no uninterruptible sleep. Twelve non-hard
+  EMA readiness events remained durable.
+- The formerly failing absent `forager_features` selector returned a valid
+  base-only report, and the staged-readiness selector returned a valid
+  zero-event section. No planning-defer event occurred naturally. The same
+  settled window contained one existing `forager.eligibility_changed` event;
+  the next report-only slice exposes that membership transition without
+  manufacturing events or changing eligibility.
+
+## Previous Canonical Deployment (PR #1271)
 
 - PR #1271 merged to `master` as
   `e3640fa7338db2b64942a0773464f6499982dd8a`. It projects existing bounded
