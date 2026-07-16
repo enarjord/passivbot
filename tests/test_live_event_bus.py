@@ -383,6 +383,12 @@ def test_route_table_keeps_data_events_off_console_by_default():
     assert DEFAULT_ROUTES[EventTypes.RISK_MODE_CHANGED].text is True
     assert DEFAULT_ROUTES[EventTypes.HSL_TRANSITION].console is True
     assert DEFAULT_ROUTES[EventTypes.HSL_TRANSITION].text is True
+    assert DEFAULT_ROUTES[EventTypes.BOT_STARTED].console is True
+    assert DEFAULT_ROUTES[EventTypes.BOT_STARTED].text is True
+    assert DEFAULT_ROUTES[EventTypes.BOT_READY].structured is True
+    assert DEFAULT_ROUTES[EventTypes.BOT_READY].monitor is True
+    assert DEFAULT_ROUTES[EventTypes.BOT_READY].console is False
+    assert DEFAULT_ROUTES[EventTypes.BOT_READY].text is False
     assert DEFAULT_ROUTES[EventTypes.BOT_STARTUP_TIMING].console is True
     assert DEFAULT_ROUTES[EventTypes.BOT_STARTUP_TIMING].text is True
     assert DEFAULT_ROUTES[EventTypes.BOT_SHUTDOWN_STAGE].console is True
@@ -407,6 +413,28 @@ def test_route_table_keeps_data_events_off_console_by_default():
     assert DEFAULT_ROUTES[EventTypes.UNSTUCK_SELECTION].text is True
     assert DEFAULT_ROUTES[EventTypes.REALIZED_LOSS_GATE_BLOCKED].console is True
     assert DEFAULT_ROUTES[EventTypes.REALIZED_LOSS_GATE_BLOCKED].text is True
+
+
+def test_bot_ready_remains_durable_when_human_sinks_are_suppressed():
+    structured = ListEventSink()
+    monitor = ListEventSink()
+    console = ListEventSink()
+    text = ListEventSink()
+    pipeline = LiveEventPipeline(
+        structured_sinks=[structured],
+        monitor_sinks=[monitor],
+        console_sink=console,
+        text_sink=text,
+    )
+
+    assert pipeline.emit(LiveEvent(EventTypes.BOT_READY, status="succeeded")) is not None
+    assert pipeline.flush(timeout=2.0) is True
+
+    assert [event.event_type for event in structured.events] == [EventTypes.BOT_READY]
+    assert [event.event_type for event in monitor.events] == [EventTypes.BOT_READY]
+    assert console.events == []
+    assert text.events == []
+    assert pipeline.close(timeout=2.0) is True
 
 
 def test_forager_eligibility_console_formatter_is_bounded_and_preserves_payload():

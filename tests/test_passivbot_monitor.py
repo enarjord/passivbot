@@ -4978,7 +4978,13 @@ def test_order_wave_settlement_emits_confirmation_timeout_once():
 
 
 @pytest.mark.asyncio
-async def test_start_bot_records_startup_error_stop_and_early_snapshot(monkeypatch):
+@pytest.mark.parametrize(
+    ("structured_console", "expect_legacy_start"),
+    [(False, True), (True, False)],
+)
+async def test_start_bot_records_startup_error_stop_and_early_snapshot(
+    monkeypatch, caplog, structured_console, expect_legacy_start
+):
     import passivbot as pb_mod
 
     async def _noop(*args, **kwargs):
@@ -5018,6 +5024,8 @@ async def test_start_bot_records_startup_error_stop_and_early_snapshot(monkeypat
             self._log_silence_watchdog_stage = "idle"
             self._log_silence_watchdog_task = None
             self._bot_ready = False
+            self.live_event_console_enabled = structured_console
+            self._live_event_pipeline = object() if structured_console else None
 
         def _log_startup_banner(self):
             return None
@@ -5043,8 +5051,21 @@ async def test_start_bot_records_startup_error_stop_and_early_snapshot(monkeypat
 
     bot = FakeBot()
 
-    with pytest.raises(RuntimeError, match="maintainers failed"):
-        await pb_mod.Passivbot.start_bot(bot)
+    with caplog.at_level(logging.DEBUG):
+        with pytest.raises(RuntimeError, match="maintainers failed"):
+            await pb_mod.Passivbot.start_bot(bot)
+
+    start_records = [
+        record for record in caplog.records if record.message.startswith("[boot] starting bot")
+    ]
+    assert bool(start_records) is expect_legacy_start
+    assert all(record.levelno == logging.INFO for record in start_records)
+    maintainer_records = [
+        record
+        for record in caplog.records
+        if record.message == "[boot] starting data maintainers..."
+    ]
+    assert [record.levelno for record in maintainer_records] == [logging.DEBUG]
 
     assert bot.snapshot_flushes
     assert bot.snapshot_flushes[0]["force"] is True

@@ -22,36 +22,49 @@ Estimated completion:
 
 ## Active Review Slice
 
-- Branch: `codex/aggregate-entry-distance-gate-console`, based on canonical
-  `452bd621424def1e626e5fa73b551b52ef1b2773` after PR #1261.
-- PR: #1262, `Bound initial entry distance-gate console volume`; semantic head
-  `d4a815e91455b12eecfc695c1ad026b2fb839d8a`.
-- Slice: preserve the existing per-symbol initial-entry distance-gate blocked
-  records in structured/monitor sinks while admitting at most one blocked
-  console/text representative per bot per five minutes.
-- Triggering evidence: the PR #1261 post-deploy window retained 10 blocked
-  records in five minutes, 26% of 38 records, with no line over 240 characters.
-- Scope: producer-owned operator visibility, bounded active/suppressed counts,
-  compact projection, and legacy INFO fallback ownership only.
-- Behavior boundary: observability-only; no Rust, order construction/filtering,
-  thresholds, market fetches, exchange behavior, or event durability changes.
-- Validation: focused event/gate and event-pipeline/formatter tests, Python
-  compilation, docs and generated-registry checks, and diff whitespace check.
+- Branch: `codex/compact-startup-lifecycle-console`, based on canonical
+  `82a56bb15445a1effff8501aa9f66540009b8f3f` after PR #1262.
+- PR: #1263, `Compact startup lifecycle console logging`; semantic head
+  `6bee544c61ba381de56a9e6b7a138294c5ef14aa`. Slice: consolidate startup
+  console ownership: retain structured `bot.started` visibility with its
+  legacy-console fallback, use startup timing as the human-ready signal, and
+  keep durable `bot.ready` out of console/text.
+- Triggering evidence: a fresh five-file startup sample had 281 lines,
+  including 78 `[boot]` lines, 10 decorative READY separators, a duplicate
+  readiness path, and 8 random-jitter detail lines.
+- Scope: startup lifecycle routing plus DEBUG-only warmup/maintainer detail.
+  Background candle-warmup success detail is `[candle]` DEBUG; its failure
+  remains immediate ERROR.
+- Behavior boundary: observability-only; no Rust, task timing, waits, task
+  starts, exception behavior, monitor persistence, exchange behavior, or
+  trading behavior changes.
+- Validation: focused event-bus, startup-monitor, and candle-warmup tests, a
+  two-step offline fake-live startup smoke, Python compilation, docs and
+  generated-registry checks, and diff whitespace check.
 - Review gate: temporary maintainer-authorized exact-head Hermes plus green
   Python and Rust CI while Grok is halted.
 - Expected VPS action: after merge, one authorized exact five-bot graceful
-  restart and natural blocked-event/durable-event observation; do not
-  manufacture trading, risk, lock, or state events.
+  restart and natural startup observation only; do not manufacture trading,
+  risk, lock, or state events.
 
 ## Deployed Baseline
 
 - Canonical `master` and VPS5 are
-  `452bd621424def1e626e5fa73b551b52ef1b2773`, PR #1261. The tracked checkout
+  `82a56bb15445a1effff8501aa9f66540009b8f3f`, PR #1262. The tracked checkout
   is clean and expected untracked artifacts are preserved.
 - VPS5 runs merged master in bot PIDs
-  `974157/974160/974161/974163/974165`. The exact pane PIDs remain
-  `856294/856332/856364/856398/856434`, and unrelated `misc:0.0` PID `434835`
-  is unchanged.
+  `975507/975510/975511/975513/975515`. The exact pane parents are unchanged,
+  and unrelated `misc:0.0` PID `434835` is unchanged.
+- PR #1262 merged as `82a56bb15445a1effff8501aa9f66540009b8f3f` and was
+  activated with one SIGINT at `2026-07-16T06:54:33Z` to old PIDs
+  `974157/974160/974161/974163/974165`; all exited naturally by `06:54:56Z`.
+  An immediate KuCoin authoritative timeout recovered, and settled smoke was
+  `ok=true` with zero hard failures, `220/222` remote and `43/43`
+  account-critical calls successful, six fill refreshes successful, all three
+  observed HSL replays complete, and five exact processes in state `R`.
+- Eleven natural durable `entry.initial_distance_gate_blocked` events produced
+  three console representatives (one each on Binance, GateIO, and OKX), with
+  eight structured events suppressed; `active_max=4` and `suppressed_max=3`.
 - PR #1261 was activated after one exact five-bot SIGINT at `06:18:37Z`; old
   PIDs `973301/973303/973305/973307/973309` all exited naturally by `06:19:12Z`
   without escalation. Natural HSL warning lengths were 224-228 characters, with
@@ -893,9 +906,15 @@ validated: a real Binance `InvalidNonce` recovery produced a 203-character
 clock-offset line with no raw exception text and the settled smoke was
 hard-green. PR #1260 is also merged, deployed, and naturally validated: all
 five approved-coin membership lines measured 130-150 visible characters with
-zero legacy duplicates and a hard-green settled smoke. The active slice
-compacts the only remaining over-budget new record, a 241-character startup HSL
-safety warning, without changing warning admission, risk, or trading behavior.
+zero legacy duplicates and a hard-green settled smoke. PR #1261's compact
+startup HSL warning and PR #1262's initial-entry distance-gate admission are
+also merged, deployed, and naturally validated. The active PR #1263
+consolidates startup lifecycle console ownership: `bot.started` owns the
+structured human start signal with a legacy fallback, `bot.ready` remains
+durable structured/monitor data, startup timing owns the human ready signal,
+and routine warmup/maintainer detail moves to DEBUG while the legacy READY
+banner is removed. It does not change startup task ordering, exchange calls,
+risk, or trading behavior.
 
 Do not create progress-only PRs or resume unrelated logging work from stale
 worktrees.

@@ -4,6 +4,15 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Startup lifecycle output now has one normal human-ready signal: structured
+  startup timing. `bot.started` keeps its structured console/text projection
+  with a legacy fallback only when that projection is unavailable, while
+  durable `bot.ready` stays out of console/text. Decorative READY banners,
+  duplicate execution-loop startup lines, and routine warmup/maintainer detail
+  no longer add INFO noise. Background candle-warmup success detail is DEBUG
+  under `[candle]`; failure remains immediate ERROR. Startup timing, task
+  scheduling, monitor persistence, and trading behavior are unchanged.
+
 - The startup HSL safety warning now uses compact mode/budget/threshold wording
   so its complete deposit, withdrawal, balance-override, configuration-change,
   and history-reinterpretation warning fits the normal console record budget.

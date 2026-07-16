@@ -15,7 +15,28 @@ merge, live smoke evidence changes, or new gaps are discovered.
 - Do not use this file for design churn; unresolved design details belong in the
   plan or a focused handoff doc.
 
-## Latest Canonical Deployment (PR #1261)
+## Latest Canonical Deployment (PR #1262)
+
+- PR #1262 merged to `master` as
+  `82a56bb15445a1effff8501aa9f66540009b8f3f`. It keeps every initial-entry
+  distance-gate blocked event durable while admitting at most one console/text
+  representative per bot per five minutes; entry eligibility, distance
+  calculation, gate decisions, order creation, and trading behavior are
+  unchanged.
+- VPS5 sent one SIGINT at `2026-07-16T06:54:33Z` to exact old PIDs
+  `974157/974160/974161/974163/974165`; all exited naturally by `06:54:56Z`.
+  New PIDs are `975507/975510/975511/975513/975515`; pane parents and unrelated
+  `misc:0.0` PID `434835` were unchanged.
+- An immediate KuCoin authoritative timeout recovered naturally. The settled
+  smoke was `ok=true` with zero hard failures, `220/222` remote and `43/43`
+  account-critical calls successful, six fill refreshes successful, all three
+  observed HSL replays complete, and five exact processes in state `R`.
+- Eleven natural durable `entry.initial_distance_gate_blocked` events produced
+  three console representatives (one each on Binance, GateIO, and OKX), with
+  eight structured events suppressed; `active_max=4` and `suppressed_max=3`.
+  The next slice consolidates duplicate startup lifecycle console ownership.
+
+## Previous Canonical Deployment (PR #1261)
 
 - PR #1261 merged to `master` as
   `452bd621424def1e626e5fa73b551b52ef1b2773`. It compacts the startup HSL
