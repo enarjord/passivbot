@@ -24,9 +24,11 @@ Estimated completion:
 
 - Branch: `codex/smoke-planning-defer-health`, based on canonical
   `e3640fa7338db2b64942a0773464f6499982dd8a` after PR #1271.
-- PR: pending. Slice: expose existing `planning.defer_summary` evidence in the
-  staged-readiness smoke projection and keep registered optional section
-  selectors valid when their event family is naturally absent.
+- PR: #1272, `Expose planning defer health in smoke reports`; semantic
+  implementation head `8fa8ff3ba6`. Slice: expose existing
+  `planning.defer_summary` evidence in the staged-readiness smoke projection
+  and keep registered optional section selectors valid when their event family
+  is naturally absent.
 - Triggering evidence: PR #1271's bounded VPS5 `--section forager_features`
   check returned exit 2 because zero natural events omitted the optional
   section before selector validation. The adjacent structured-only planning
