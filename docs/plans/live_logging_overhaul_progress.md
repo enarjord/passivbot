@@ -15,7 +15,31 @@ merge, live smoke evidence changes, or new gaps are discovered.
 - Do not use this file for design churn; unresolved design details belong in the
   plan or a focused handoff doc.
 
-## Latest Canonical Deployment (PR #1257)
+## Latest Canonical Deployment (PR #1258)
+
+- PR #1258 merged to `master` as
+  `a64159cf1d29c42113433c1990b38d9b8e1bd8fe` after exact-head Hermes approval
+  and green Python/Rust CI while Grok was temporarily halted. It omits dynamic
+  caller identity only from the human `ccxt_fetch_ohlcv_failed` warning;
+  structured remote-call diagnostics, retry/backoff, readiness, and trading
+  behavior are unchanged.
+- VPS5 fast-forwarded cleanly and sent one SIGINT round to exact old PIDs
+  `970778/970780/970782/970784/970786`; all exited naturally within 24 seconds
+  without escalation. Pane PIDs and unrelated `misc:0.0` PID `434835` were
+  preserved. Final PIDs are `971695/971697/971699/971701/971703` for
+  Binance/KuCoin/GateIO/OKX/Hyperliquid respectively.
+- The settled two-minute smoke was `ok=true` with zero
+  hard/log/monitor/process failures, `317/317` remote and `31/31`
+  account-critical calls successful, six successful fill refreshes, no active
+  HSL replay, all five exact processes in normal `R/S` states, and clean
+  tracked `master`.
+- One natural post-ready KuCoin `ccxt_fetch_ohlcv_failed` warning measured 201
+  visible characters with zero legacy caller-bearing duplicates. The same
+  exact logs exposed one natural post-ready clock-offset recovery warning at
+  266 visible characters that retained raw exception text; the next slice
+  bounds and redacts that diagnostic projection.
+
+## Previous Canonical Deployment (PR #1257)
 
 - PR #1257 merged to `master` as `b1a637c0def5349b6d6fb94de34c8c6c044bd307`
   after exact-head Hermes approval and green Python/Rust CI while Grok was

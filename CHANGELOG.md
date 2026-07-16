@@ -4,6 +4,11 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Exchange clock-offset recovery warnings and durable time-sync diagnostics no
+  longer retain raw exception text. They keep the stable exception class,
+  source, recovery status, and bounded client outcome details within the normal
+  rendered console record budget.
+
 - Candle-fetch retry and exhaustion warnings now fit the normal rendered
   console record budget while retaining exchange, symbol/timeframe, attempt,
   elapsed time, exception class, and action. Structured diagnostics, redaction,

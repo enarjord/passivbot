@@ -66,6 +66,13 @@ _MEMORY_SNAPSHOT_SENSITIVE_TASK_RE = re.compile(
 _EXECUTION_LOOP_ERROR_STATUS_RE = re.compile(r"[0-9]{1,3}")
 _EXECUTION_LOOP_ERROR_CODE_RE = re.compile(r"-?[A-Za-z0-9][A-Za-z0-9_-]{0,47}")
 _EXECUTION_LOOP_ERROR_ENDPOINT_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,47}")
+_EXCHANGE_TIME_SYNC_SOURCE_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,79}")
+_EXCHANGE_TIME_SYNC_CLIENT_RE = re.compile(
+    r"[A-Za-z_][A-Za-z0-9_]{0,15}:[A-Za-z0-9?.+\-]+->[A-Za-z0-9?.+\-]+"
+    r"|[A-Za-z_][A-Za-z0-9_]{0,15}:[A-Za-z_][A-Za-z0-9_]{0,63}"
+)
+_EXCHANGE_TIME_SYNC_ERROR_TYPE_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,79}")
+_EXCHANGE_TIME_SYNC_CLIENT_SAMPLE_LIMIT = 8
 
 
 def _sanitize_remote_text(value: Any, *, max_len: int = 500) -> str:
@@ -112,6 +119,16 @@ def _bounded_execution_loop_error_field(
         return fallback
     try:
         text = str(value).strip()
+    except Exception:
+        return fallback
+    return text if pattern.fullmatch(text) else fallback
+
+
+def _bounded_exchange_time_sync_field(
+    value: Any, pattern: re.Pattern[str], *, fallback: str = "unknown"
+) -> str:
+    try:
+        text = str(value)
     except Exception:
         return fallback
     return text if pattern.fullmatch(text) else fallback
@@ -593,8 +610,14 @@ def _emit_exchange_time_sync_event_unchecked(
     failed_clients: list[str] | tuple[str, ...],
     hook_available: bool,
 ) -> None:
-    synced = [str(item) for item in list(synced_clients or [])[:8]]
-    failed = [str(item) for item in list(failed_clients or [])[:8]]
+    synced = [
+        _bounded_exchange_time_sync_field(item, _EXCHANGE_TIME_SYNC_CLIENT_RE)
+        for item in list(synced_clients or [])[:_EXCHANGE_TIME_SYNC_CLIENT_SAMPLE_LIMIT]
+    ]
+    failed = [
+        _bounded_exchange_time_sync_field(item, _EXCHANGE_TIME_SYNC_CLIENT_RE)
+        for item in list(failed_clients or [])[:_EXCHANGE_TIME_SYNC_CLIENT_SAMPLE_LIMIT]
+    ]
     recovered = bool(synced)
     if not hook_available:
         status = "skipped"
@@ -618,9 +641,12 @@ def _emit_exchange_time_sync_event_unchecked(
         status=status,
         reason_code=reason_code,
         data={
-            "source": str(source or "unknown"),
-            "error_type": type(error).__name__,
-            "error": _sanitize_remote_text(error, max_len=500),
+            "source": _bounded_exchange_time_sync_field(
+                source, _EXCHANGE_TIME_SYNC_SOURCE_RE
+            ),
+            "error_type": _bounded_exchange_time_sync_field(
+                type(error).__name__, _EXCHANGE_TIME_SYNC_ERROR_TYPE_RE
+            ),
             "hook_available": bool(hook_available),
             "recovered": recovered,
             "synced_clients": synced,

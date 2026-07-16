@@ -22,36 +22,47 @@ Estimated completion:
 
 ## Active Review Slice
 
-- Branch: `codex/bound-candle-fetch-failure-console`, based on canonical
-  `b1a637c0def5349b6d6fb94de34c8c6c044bd307` after PR #1257.
-- PR: #1258, `Bound candle-fetch failure console output`.
-- Slice: keep candle-fetch retry/exhaustion warnings within the normal console
-  record budget while retaining operation, exchange, symbol/timeframe,
-  attempt, elapsed time, exception class, and action.
-- Triggering evidence: fresh post-PR #1257 VPS5 logs contained two natural
-  post-ready KuCoin `ccxt_fetch_ohlcv_failed` retry warnings at 256-257 visible
-  characters.
-- Scope: preserve complete structured remote-call evidence, retry/exhaustion
-  classification, redaction, and developer diagnostics; compact only the
-  human warning projection.
-- Behavior boundary: observability-only; no candle fetch, retry/backoff,
-  timeout, cache/readiness, exchange call, Rust, order, risk, backtest,
-  optimizer, or trading behavior.
+- Branch: `codex/bound-clock-offset-refresh-console`, based on canonical
+  `a64159cf1d29c42113433c1990b38d9b8e1bd8fe` after PR #1258.
+- PR: pending, `Bound exchange time-sync diagnostics`.
+- Slice: remove raw exception text from exchange clock-offset recovery/no-hook
+  warnings and durable `exchange.time_sync` diagnostics while retaining the
+  stable exception class, source, recovery result, and bounded client outcomes.
+- Triggering evidence: fresh post-PR #1258 VPS5 logs contained one natural
+  post-ready KuCoin clock-offset recovery warning at 266 visible characters,
+  including raw `InvalidNonce` exception text.
+- Scope: bound and redact only the human warning projection and corresponding
+  structured diagnostic field; preserve time-sync recovery, client refresh,
+  retry/caller policy, and all stable outcome facts.
+- Behavior boundary: observability-only; no clock-offset calculation, client
+  refresh, exception classification, retry, exchange call, Rust, order, risk,
+  backtest, optimizer, or trading behavior.
 - Review gate: temporary maintainer-authorized exact-head Hermes plus green CI
   while Grok is halted.
 - Expected VPS action: after merge, one authorized exact five-bot restart.
-  Validate natural candle-fetch warnings when available and settled smoke; do
-  not manufacture exchange, state, risk, or trading events.
+  Validate natural time-sync warnings when available and settled smoke; do not
+  manufacture timestamp failures, exchange, state, risk, or trading events.
 
 ## Deployed Baseline
 
 - Canonical `master` and VPS5 are
-  `b1a637c0def5349b6d6fb94de34c8c6c044bd307`, PR #1257. The tracked checkout
+  `a64159cf1d29c42113433c1990b38d9b8e1bd8fe`, PR #1258. The tracked checkout
   is clean and expected untracked artifacts are preserved.
 - VPS5 runs merged master in bot PIDs
-  `970778/970780/970782/970784/970786`. The exact pane PIDs remain
+  `971695/971697/971699/971701/971703`. The exact pane PIDs remain
   `856294/856332/856364/856398/856434`, and unrelated `misc:0.0` PID `434835`
   is unchanged.
+- PR #1258 was activated after one exact five-bot SIGINT round; old PIDs
+  `970778/970780/970782/970784/970786` all exited naturally within 24 seconds
+  without escalation. The settled two-minute smoke was `ok=true` with zero
+  hard/log/monitor/process failures, `317/317` remote and `31/31`
+  account-critical calls successful, six successful fill refreshes, no active
+  HSL replay, all five exact processes in normal `R/S` states, and a clean
+  tracked checkout. One natural post-ready KuCoin
+  `ccxt_fetch_ohlcv_failed` warning measured 201 visible characters with zero
+  legacy caller-bearing duplicates. The same exact logs exposed one natural
+  post-ready clock-offset recovery warning at 266 visible characters that
+  retained raw exception text.
 - PR #1257 was activated after one exact five-bot SIGINT round; old PIDs
   `968739/968741/968743/968745/968747` all exited naturally within 16 seconds
   without escalation. The settled two-minute smoke was `ok=true` with zero
@@ -844,9 +855,12 @@ is also merged, deployed, and naturally validated: four periodic health lines
 measured 202-209 visible characters while preserving all operator-relevant
 health facts. PR #1257 is also merged and deployed with a hard-green settled
 smoke. Its candidate-required-EMA target did not occur naturally in the new
-segments, and zero legacy summary duplicates appeared. The active slice bounds
-the naturally observed 256-257 character candle-fetch retry warnings without
-changing fetch, retry, readiness, or trading behavior.
+segments, and zero legacy summary duplicates appeared. PR #1258 is merged,
+deployed, and naturally validated: the observed candle-fetch retry warning
+measured 201 visible characters with zero legacy caller-bearing duplicates and
+a hard-green settled smoke. The active slice bounds and redacts the naturally
+observed 266-character clock-offset recovery warning without changing
+time-sync or trading behavior.
 
 Do not create progress-only PRs or resume unrelated logging work from stale
 worktrees.
