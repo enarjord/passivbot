@@ -24,7 +24,7 @@ Estimated completion:
 
 - Branch: `codex/compact-periodic-health-console`, based on canonical
   `050d01db56f4ac3678944a5e439248edbbb46acb` after PR #1255.
-- PR: pending, `Compact periodic health console output`.
+- PR: #1256, `Compact periodic health console output`.
 - Slice: bound the periodic health INFO projection within the normal record
   budget while retaining uptime, loop, positions, balance, order/fill/error,
   resource, and slow-phase context.
