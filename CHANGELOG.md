@@ -43,6 +43,13 @@ All notable user-facing changes will be documented in this file.
   `trailing_martingale` entry and close thresholds, retracements, and analytical prices from a
   config or explicit parameter overrides.
 
+- V7 trailing-grid migration now disables the v8 TWEL entry gate when a non-positive v7 TWEL
+  threshold disables its enforcer, collapses compatible v7 live/backtest warmup caps into the
+  shared v8 field, and validates the complete canonical result before writing. The CLI now writes
+  a durable JSON report by default while showing a concise action summary, and the new
+  `compare-backtests` tool reports dataset, metric, equity-path, and fill-event differences between
+  completed v7 and v8 artifacts without assigning a safety verdict.
+
 - Live smoke reports now expose bounded cycle terminal-outcome health from
   existing `cycle.completed` and `cycle.degraded` events. The projection shows
   latest successful/degraded outcomes, successful completion after the latest

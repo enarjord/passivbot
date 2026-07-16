@@ -203,6 +203,12 @@ def _iter_leaf_items(mapping: dict, prefix: tuple[str, ...] = ()):
             yield path, value
 
 
+def _append_warning(report: dict, message: str, *, behavior_change: bool = False) -> None:
+    report.setdefault("warnings", []).append(message)
+    if behavior_change:
+        report.setdefault("behavior_change_warnings", []).append(message)
+
+
 @lru_cache(maxsize=1)
 def _supported_strategy_leaf_paths() -> frozenset[tuple[str, ...]]:
     return frozenset(
@@ -297,11 +303,41 @@ def _copy_supported_top_level_sections(source: dict, target: dict, report: dict)
         for key, value in source_section.items():
             if section == "optimize" and key == "bounds":
                 continue
+            if section == "backtest" and key == "max_warmup_minutes":
+                continue
             if key in target_section:
                 target_section[key] = deepcopy(value)
                 report["moved_fields"].append(f"{section}.{key}")
             else:
                 report["manual_review_fields"].append(f"{section}.{key}")
+
+
+def _migrate_max_warmup_minutes(source: dict, target: dict, report: dict) -> None:
+    """Collapse v7's live/backtest warmup caps into v8's shared live field."""
+    source_live = source.get("live")
+    source_backtest = source.get("backtest")
+    if not isinstance(source_backtest, dict) or "max_warmup_minutes" not in source_backtest:
+        return
+
+    backtest_value = source_backtest["max_warmup_minutes"]
+    if isinstance(source_live, dict) and "max_warmup_minutes" in source_live:
+        live_value = source_live["max_warmup_minutes"]
+        if live_value != backtest_value:
+            report["manual_review_fields"].append(
+                "backtest.max_warmup_minutes conflicts with live.max_warmup_minutes for "
+                "v8 live.max_warmup_minutes; kept the v7 live value"
+            )
+            return
+        report["moved_fields"].append(
+            "backtest.max_warmup_minutes -> live.max_warmup_minutes "
+            "(same value as live.max_warmup_minutes)"
+        )
+        return
+
+    target.setdefault("live", {})["max_warmup_minutes"] = deepcopy(backtest_value)
+    report["moved_fields"].append(
+        "backtest.max_warmup_minutes -> live.max_warmup_minutes"
+    )
 
 
 def _report_unknown_top_level_sections(source: dict, report: dict) -> None:
@@ -327,6 +363,32 @@ def migration_report_has_unresolved(report: dict) -> bool:
         report.get("manual_review_fields")
         or report.get("dropped_unsupported_fields")
     )
+
+
+def migration_report_has_invalid_output(report: dict) -> bool:
+    validation = report.get("canonical_validation")
+    return isinstance(validation, dict) and validation.get("status") == "error"
+
+
+def _validate_migrated_config(config: dict) -> dict:
+    from config.load import prepare_config
+
+    try:
+        prepare_config(
+            config,
+            verbose=False,
+            target="canonical",
+            runtime=None,
+            raw_snapshot=config,
+            effective_snapshot=config,
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        return {
+            "status": "error",
+            "error_type": type(exc).__name__,
+            "message": str(exc),
+        }
+    return {"status": "ok"}
 
 
 def _source_side_has_shared_value(source_side: dict, flat_key: str) -> bool:
@@ -566,10 +628,11 @@ def _record_inserted_v8_defaults(source: dict, target: dict, report: dict) -> No
     if inserted:
         examples = ", ".join(inserted[:8])
         suffix = "" if len(inserted) <= 8 else f", ... ({len(inserted)} total)"
-        report["warnings"].append(
+        _append_warning(
+            report,
             "v7 migration inserted v8 default values for fields absent from the source config; "
             f"review report.inserted_v8_defaults before running live/large optimizations: "
-            f"{examples}{suffix}."
+            f"{examples}{suffix}.",
         )
 
 
@@ -592,10 +655,12 @@ def _force_v7_absent_risk_defaults(source: dict, target: dict, report: dict) -> 
                 old_value = target_risk.get(local_key)
                 target_risk[local_key] = value
                 if old_value != value:
-                    report["warnings"].append(
+                    _append_warning(
+                        report,
                         f"bot.{pside}.risk.{local_key} was not a v7 parameter; "
                         f"using {value!r} for v7 behavior instead of the v8 template value "
-                        f"{old_value!r}."
+                        f"{old_value!r}.",
+                        behavior_change=True,
                     )
             if flat_key == "risk_entry_cooldown_minutes" and not _source_has_shared_bound(
                 source, pside, flat_key
@@ -603,46 +668,77 @@ def _force_v7_absent_risk_defaults(source: dict, target: dict, report: dict) -> 
                 target_bounds_risk[local_key] = [float(value), float(value), 0.1]
 
 
-def _disable_enforcers_for_zero_v7_thresholds(source: dict, target: dict, report: dict) -> None:
-    bot = source.get("bot", {})
-    if not isinstance(bot, dict):
-        return
+def _disable_zero_threshold_controls_for_side(
+    source_side: dict,
+    target_side: dict,
+    *,
+    source_prefix: str,
+    target_prefix: str,
+    report: dict,
+) -> None:
     enforcer_pairs = (
         (
             "risk_wel_enforcer_threshold",
             "position_exposure_enforcer_threshold",
             "position_exposure_enforcer_enabled",
+            None,
         ),
         (
             "risk_twel_enforcer_threshold",
             "total_exposure_enforcer_threshold",
             "total_exposure_enforcer_enabled",
+            "total_exposure_entry_gate_enabled",
         ),
     )
+    for flat_threshold_key, threshold_key, enabled_key, related_gate_key in enforcer_pairs:
+        if not _source_side_has_shared_value(source_side, flat_threshold_key):
+            continue
+        raw_threshold = get_grouped_bot_value(source_side, flat_threshold_key)
+        try:
+            threshold = float(raw_threshold)
+        except (TypeError, ValueError):
+            continue
+        if not math.isfinite(threshold) or threshold > 0.0:
+            continue
+        target_risk = target_side.setdefault("risk", {})
+        if target_risk.get(enabled_key) is not False:
+            target_risk[enabled_key] = False
+            _append_warning(
+                report,
+                f"{target_prefix}.risk.{enabled_key} set false because source "
+                f"{source_prefix}.{flat_threshold_key}={raw_threshold!r} maps to "
+                f"{target_prefix}.risk.{threshold_key}={raw_threshold!r}; v8 requires "
+                "disabled enforcers when thresholds are zero or negative.",
+                behavior_change=True,
+            )
+        if related_gate_key is not None and target_risk.get(related_gate_key) is not False:
+            target_risk[related_gate_key] = False
+            _append_warning(
+                report,
+                f"{target_prefix}.risk.{related_gate_key} set false because source "
+                f"{source_prefix}.{flat_threshold_key}={raw_threshold!r} maps to "
+                f"{target_prefix}.risk.{threshold_key}={raw_threshold!r}; v8 entry gates "
+                "require a positive threshold.",
+                behavior_change=True,
+            )
+
+
+def _disable_enforcers_for_zero_v7_thresholds(source: dict, target: dict, report: dict) -> None:
+    bot = source.get("bot", {})
+    if not isinstance(bot, dict):
+        return
     for pside in ("long", "short"):
         source_side = bot.get(pside, {})
-        if not isinstance(source_side, dict):
+        target_side = target.get("bot", {}).get(pside)
+        if not isinstance(source_side, dict) or not isinstance(target_side, dict):
             continue
-        target_risk = target["bot"][pside].setdefault("risk", {})
-        for flat_threshold_key, threshold_key, enabled_key in enforcer_pairs:
-            if not _source_side_has_shared_value(source_side, flat_threshold_key):
-                continue
-            raw_threshold = get_grouped_bot_value(source_side, flat_threshold_key)
-            try:
-                threshold = float(raw_threshold)
-            except (TypeError, ValueError):
-                continue
-            if not math.isfinite(threshold) or threshold > 0.0:
-                continue
-            if target_risk.get(enabled_key) is False:
-                continue
-            target_risk[enabled_key] = False
-            report["warnings"].append(
-                f"bot.{pside}.risk.{enabled_key} set false because source "
-                f"bot.{pside}.{flat_threshold_key}={raw_threshold!r} maps to "
-                f"bot.{pside}.risk.{threshold_key}={raw_threshold!r}; v8 requires disabled "
-                "enforcers when thresholds are zero or negative."
-            )
+        _disable_zero_threshold_controls_for_side(
+            source_side,
+            target_side,
+            source_prefix=f"bot.{pside}",
+            target_prefix=f"bot.{pside}",
+            report=report,
+        )
 
 
 def _warn_if_risk_excess_would_be_clamped(risk: dict, *, path: str, report: dict) -> None:
@@ -664,14 +760,16 @@ def _warn_if_risk_excess_would_be_clamped(risk: dict, *, path: str, report: dict
     if raw_allowed_wel <= twel:
         return
     bounded_excess = max(0.0, twel / base_wel - 1.0)
-    report["warnings"].append(
+    _append_warning(
+        report,
         f"{path}.we_excess_allowance_pct={excess:g} would give v7 raw per-position "
         f"WEL {raw_allowed_wel:g}, above side TWEL {twel:g} "
         f"(base WEL = {base_wel:g}). The migrated v8 config keeps "
         f"{path}.we_excess_allowance_mode='bounded', so the effective excess allowance is "
         f"capped at {bounded_excess:g}. To intentionally use v7 raw/unclamped behavior, set "
         f"{path}.we_excess_allowance_mode='legacy_raw' after migration and review the added "
-        f"risk explicitly."
+        f"risk explicitly.",
+        behavior_change=True,
     )
 
 
@@ -1242,8 +1340,10 @@ def migrate_v7_trailing_grid_config(source: dict, *, source_path: str | None = N
         "manual_review_fields": [],
         "inserted_v8_defaults": [],
         "warnings": [],
+        "behavior_change_warnings": [],
     }
     _copy_supported_top_level_sections(source, target, report)
+    _migrate_max_warmup_minutes(source, target, report)
     _report_unknown_top_level_sections(source, report)
     target["live"]["strategy_kind"] = TRAILING_GRID_V7_KIND
     _prune_strategy_store(target)
@@ -1286,6 +1386,7 @@ def migrate_v7_trailing_grid_config(source: dict, *, source_path: str | None = N
     _disable_enforcers_for_zero_v7_thresholds(source, target, report)
     _record_inserted_v8_defaults(source, target, report)
     _warn_if_v7_excess_would_be_clamped(target, report)
+    report["canonical_validation"] = _validate_migrated_config(target)
     return target, report
 
 
@@ -1302,10 +1403,15 @@ def migrate_v7_trailing_grid_file(
     output_path = Path(output_path)
     source = load_raw_config(input_path)
     migrated, report = migrate_v7_trailing_grid_config(source, source_path=str(input_path))
+    invalid_output = migration_report_has_invalid_output(report)
     unresolved = migration_report_has_unresolved(report)
     report["manual_review_required"] = unresolved
     report["allow_manual_review_output"] = bool(allow_manual_review_output)
     report["output_config_path"] = str(output_path)
+    if invalid_output:
+        report["output_written"] = False
+        report["status"] = "invalid_migrated_config"
+        return migrated, report
     if unresolved and not allow_manual_review_output:
         report["output_written"] = False
         report["status"] = "manual_review_required"

@@ -1,6 +1,7 @@
 from copy import deepcopy
 import json
 import logging
+from pathlib import Path
 
 import passivbot_rust as pbr
 import pytest
@@ -15,9 +16,11 @@ from config import (
 )
 from config.optimize_bounds import get_optimize_bounds_defaults
 from config.migrations.trailing_grid_v7 import migrate_v7_trailing_grid_config
+from config.migrations import trailing_grid_v7 as trailing_grid_v7_migration
 from config.overrides import parse_overrides
 from config.strategy_spec import get_supported_strategy_kinds
 from tools.migrate_config_v7 import main as migrate_config_v7_main
+from tools import migrate_config_v7 as migrate_config_v7_tool
 
 
 def _set_path(mapping, path, value):
@@ -302,6 +305,7 @@ def test_migrate_v7_trailing_grid_config_outputs_canonical_v8_strategy_shape():
     assert override["entry"]["trailing_grid_ratio"] == pytest.approx(1.0)
     assert override["close"]["grid_markup_start"] == pytest.approx(0.02)
     assert report["destination_strategy_kind"] == "trailing_grid_v7"
+    assert report["canonical_validation"] == {"status": "ok"}
     assert any("entry_trailing_grid_ratio" in item for item in report["moved_fields"])
     assert any(
         "entry_cooldown_minutes was not a v7 parameter" in item
@@ -439,6 +443,7 @@ def test_migrate_v7_trailing_grid_zero_enforcer_thresholds_disable_enforcers():
         assert risk["total_exposure_enforcer_threshold"] == 0
         assert risk["position_exposure_enforcer_enabled"] is False
         assert risk["total_exposure_enforcer_enabled"] is False
+        assert risk["total_exposure_entry_gate_enabled"] is False
         assert (
             f"bot.{pside}.risk.position_exposure_enforcer_enabled"
             not in report["inserted_v8_defaults"]
@@ -449,6 +454,47 @@ def test_migrate_v7_trailing_grid_zero_enforcer_thresholds_disable_enforcers():
         )
     assert any("position_exposure_enforcer_enabled set false" in item for item in report["warnings"])
     assert any("total_exposure_enforcer_enabled set false" in item for item in report["warnings"])
+    assert any("total_exposure_entry_gate_enabled set false" in item for item in report["warnings"])
+    assert report["canonical_validation"] == {"status": "ok"}
+
+
+def test_migrate_v7_trailing_grid_moves_backtest_only_max_warmup_to_live():
+    source = _minimal_v7_trailing_grid_config()
+    source["backtest"]["max_warmup_minutes"] = 720
+
+    migrated, report = migrate_v7_trailing_grid_config(source)
+
+    assert migrated["live"]["max_warmup_minutes"] == 720
+    assert "backtest.max_warmup_minutes" not in report["manual_review_fields"]
+    assert (
+        "backtest.max_warmup_minutes -> live.max_warmup_minutes"
+        in report["moved_fields"]
+    )
+
+
+def test_migrate_v7_trailing_grid_collapses_matching_live_and_backtest_warmup_caps():
+    source = _minimal_v7_trailing_grid_config()
+    source["live"]["max_warmup_minutes"] = 1440
+    source["backtest"]["max_warmup_minutes"] = 1440
+
+    migrated, report = migrate_v7_trailing_grid_config(source)
+
+    assert migrated["live"]["max_warmup_minutes"] == 1440
+    assert not any("max_warmup_minutes" in item for item in report["manual_review_fields"])
+
+
+def test_migrate_v7_trailing_grid_requires_review_for_conflicting_warmup_caps():
+    source = _minimal_v7_trailing_grid_config()
+    source["live"]["max_warmup_minutes"] = 1440
+    source["backtest"]["max_warmup_minutes"] = 720
+
+    migrated, report = migrate_v7_trailing_grid_config(source)
+
+    assert migrated["live"]["max_warmup_minutes"] == 1440
+    assert any(
+        "backtest.max_warmup_minutes conflicts with live.max_warmup_minutes" in item
+        for item in report["manual_review_fields"]
+    )
 
 
 def test_migrate_config_v7_cli_clean_migration_writes_output_and_returns_zero(tmp_path):
@@ -463,8 +509,42 @@ def test_migrate_config_v7_cli_clean_migration_writes_output_and_returns_zero(tm
 
     assert rc == 0
     assert output_path.exists()
+    assert output_path.with_suffix(".migration-report.json").exists()
     loaded = json.loads(output_path.read_text(encoding="utf-8"))
     assert loaded["live"]["strategy_kind"] == "trailing_grid_v7"
+
+
+def test_migrate_config_v7_default_report_path_never_overwrites_output_path():
+    output_path = Path("config.migration-report.json")
+
+    assert migrate_config_v7_tool.default_report_path(output_path) != output_path
+
+
+def test_migrate_config_v7_cli_rejects_report_path_equal_to_output(tmp_path, capsys):
+    source = _minimal_v7_trailing_grid_config()
+    input_path = tmp_path / "legacy.json"
+    output_path = tmp_path / "migrated.json"
+    input_path.write_text(json.dumps(source), encoding="utf-8")
+
+    rc = migrate_config_v7_main(
+        [str(input_path), str(output_path), "--report", str(output_path)]
+    )
+
+    assert rc == 2
+    assert not output_path.exists()
+    assert "report path must differ" in capsys.readouterr().err
+
+
+def test_migrate_config_v7_cli_rejects_in_place_migration(tmp_path, capsys):
+    config_path = tmp_path / "legacy.json"
+    original = json.dumps(_minimal_v7_trailing_grid_config())
+    config_path.write_text(original, encoding="utf-8")
+
+    rc = migrate_config_v7_main([str(config_path), str(config_path)])
+
+    assert rc == 2
+    assert config_path.read_text(encoding="utf-8") == original
+    assert "input config and output config paths must differ" in capsys.readouterr().err
 
 
 def test_migrate_config_v7_cli_prints_migration_warnings(tmp_path, capsys):
@@ -480,8 +560,10 @@ def test_migrate_config_v7_cli_prints_migration_warnings(tmp_path, capsys):
     captured = capsys.readouterr()
 
     assert rc == 0
-    assert "warning: bot.long.risk.we_excess_allowance_pct=0.1" in captured.err
+    assert "behavior warning: bot.long.risk.we_excess_allowance_pct=0.1" in captured.err
     assert "legacy_raw" in captured.err
+    assert "Migration status: ok" in captured.out
+    assert not captured.out.lstrip().startswith("{")
 
 
 def test_migrate_config_v7_cli_unresolved_returns_nonzero_without_output_but_writes_report(
@@ -531,6 +613,53 @@ def test_migrate_config_v7_cli_override_writes_unresolved_best_effort_output(tmp
     assert report["status"] == "unsafe_manual_review_output_written"
     assert report["output_written"] is True
     assert report["allow_manual_review_output"] is True
+
+
+def test_migrate_config_v7_cli_json_prints_machine_report_without_action_duplicates(
+    tmp_path, capsys
+):
+    source = _minimal_v7_trailing_grid_config()
+    input_path = tmp_path / "legacy.json"
+    output_path = tmp_path / "migrated.json"
+    input_path.write_text(json.dumps(source), encoding="utf-8")
+
+    rc = migrate_config_v7_main([str(input_path), str(output_path), "--json"])
+    captured = capsys.readouterr()
+
+    assert rc == 0
+    payload = json.loads(captured.out)
+    assert payload["status"] == "ok"
+    assert payload["report_path"] == str(output_path.with_suffix(".migration-report.json"))
+    assert captured.err == ""
+
+
+def test_migrate_config_v7_cli_never_writes_invalid_canonical_output(
+    tmp_path, monkeypatch, capsys
+):
+    source = _minimal_v7_trailing_grid_config()
+    input_path = tmp_path / "legacy.json"
+    output_path = tmp_path / "migrated.json"
+    input_path.write_text(json.dumps(source), encoding="utf-8")
+    monkeypatch.setattr(
+        trailing_grid_v7_migration,
+        "_validate_migrated_config",
+        lambda _config: {
+            "status": "error",
+            "error_type": "ValueError",
+            "message": "synthetic invalid migration",
+        },
+    )
+
+    rc = migrate_config_v7_tool.main([str(input_path), str(output_path)])
+    captured = capsys.readouterr()
+
+    assert rc == 2
+    assert not output_path.exists()
+    report_path = output_path.with_suffix(".migration-report.json")
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    assert report["status"] == "invalid_migrated_config"
+    assert report["output_written"] is False
+    assert "synthetic invalid migration" in captured.err
 
 
 def test_migrate_v7_trailing_grid_rejects_root_ema_only_config():
