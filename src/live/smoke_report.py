@@ -134,6 +134,7 @@ FORAGER_FEATURE_HEALTH_GROUP_LIMIT = 20
 FORAGER_FEATURE_SYMBOL_SAMPLE_LIMIT = 8
 STAGED_READINESS_GROUP_LIMIT = 20
 STAGED_READINESS_VALUE_LIMIT = 8
+STAGED_READINESS_SYMBOL_SAMPLE_LIMIT = 8
 EVENT_PIPELINE_HEALTH_GROUP_LIMIT = 20
 RESOURCE_PRESSURE_GROUP_LIMIT = 20
 RESOURCE_PRESSURE_FIELDS = (
@@ -2691,7 +2692,10 @@ def _staged_readiness_event(live_event: dict[str, Any]) -> bool:
     reason_code = str(live_event.get("reason_code") or "")
     if event_type == EventTypes.CYCLE_DEGRADED:
         return reason_code.startswith("staged_execution")
-    return event_type == EventTypes.PLANNING_UNAVAILABLE
+    return event_type in {
+        EventTypes.PLANNING_UNAVAILABLE,
+        EventTypes.PLANNING_DEFER_SUMMARY,
+    }
 
 
 def _string_counts(value: Any) -> dict[str, int]:
@@ -2751,6 +2755,33 @@ def _staged_readiness_timings_ms(value: Any) -> dict[str, int]:
     )
 
 
+def _staged_readiness_symbol_summary(payload: dict[str, Any]) -> dict[str, Any]:
+    symbols: Counter[str] = Counter()
+    raw_symbols = payload.get("symbols")
+    if isinstance(raw_symbols, list):
+        for symbol in raw_symbols:
+            if symbol is None:
+                continue
+            safe_symbol = _redact_log_text(str(symbol), max_len=80)
+            if safe_symbol:
+                symbols[safe_symbol] += 1
+    count = _non_negative_int(payload.get("symbols_count"))
+    if count is None:
+        count = len(symbols)
+    count = max(int(count), len(symbols))
+    if count <= 0:
+        return {}
+    sample = _symbol_sample(
+        symbols,
+        limit=STAGED_READINESS_SYMBOL_SAMPLE_LIMIT,
+    ).get("sample", [])
+    return {
+        "count": count,
+        "sample": sample,
+        "truncated": max(0, count - len(sample)),
+    }
+
+
 def _max_counter_maps(values: Iterable[Any]) -> dict[str, int]:
     out: dict[str, int] = {}
     for value in values:
@@ -2782,16 +2813,38 @@ def _staged_readiness_group(
     payload = data if isinstance(data, dict) else {}
     details = payload.get("details")
     detail_payload = details if isinstance(details, dict) else payload
+    event_type = live_event.get("event_type") or row.get("kind")
+    defer_summary = event_type == EventTypes.PLANNING_DEFER_SUMMARY
     ids = _event_ids(live_event)
     invalid = detail_payload.get("invalid")
     missing_surfaces = _string_counts(detail_payload.get("missing"))
-    invalid_surfaces = _invalid_surface_counts(invalid)
+    invalid_surfaces = (
+        _string_counts(payload.get("invalid_surfaces"))
+        if defer_summary
+        else _invalid_surface_counts(invalid)
+    )
+    required_surfaces = (
+        _string_counts(payload.get("required")) if defer_summary else {}
+    )
     reason_code = _staged_readiness_text(live_event.get("reason_code"))
     latest_context = _staged_readiness_text(detail_payload.get("context"))
     latest_defer_reason = _staged_readiness_text(detail_payload.get("defer_reason"))
     latest_timings_ms = _staged_readiness_timings_ms(payload.get("timings_ms"))
+    latest_defer_count = (
+        _non_negative_int(payload.get("count")) if defer_summary else None
+    )
+    latest_defer_window_s = (
+        _non_negative_int(payload.get("window_s")) if defer_summary else None
+    )
+    latest_defer_symbols = (
+        _staged_readiness_symbol_summary(payload) if defer_summary else {}
+    )
+    latest_will_retry = (
+        _staged_readiness_text(payload.get("will_retry")) if defer_summary else None
+    )
     return {
         "bot": bot_key,
+        "event_type": event_type,
         "reason_code": reason_code,
         "status": live_event.get("status"),
         "level": live_event.get("level"),
@@ -2806,6 +2859,11 @@ def _staged_readiness_group(
         "latest_missing_surfaces": missing_surfaces,
         "latest_invalid_surfaces": invalid_surfaces,
         "latest_timings_ms": latest_timings_ms,
+        "latest_defer_count": latest_defer_count,
+        "latest_defer_window_s": latest_defer_window_s,
+        "latest_defer_symbols": latest_defer_symbols,
+        "latest_required_surfaces": required_surfaces,
+        "latest_will_retry": latest_will_retry,
         "latest_completed_candle_mismatch_counts": _completed_candle_mismatch_counts(
             invalid
         ),
@@ -2826,6 +2884,7 @@ def _merge_staged_readiness_group(
 ) -> None:
     key = (
         group.get("bot"),
+        group.get("event_type"),
         group.get("reason_code"),
         group.get("status"),
     )
@@ -2859,6 +2918,11 @@ def _merge_staged_readiness_group(
             "latest_missing_surfaces",
             "latest_invalid_surfaces",
             "latest_timings_ms",
+            "latest_defer_count",
+            "latest_defer_window_s",
+            "latest_defer_symbols",
+            "latest_required_surfaces",
+            "latest_will_retry",
             "latest_completed_candle_mismatch_counts",
             "latest_missing_surface_count",
             "latest_invalid_surface_count",
@@ -2891,7 +2955,7 @@ def _summarize_staged_readiness_health(
         }
         for group in ordered[:STAGED_READINESS_GROUP_LIMIT]
     ]
-    return {
+    summary = {
         "total": sum(int(group.get("count", 0)) for group in groups.values()),
         "groups_truncated": len(ordered) > STAGED_READINESS_GROUP_LIMIT,
         "event_types": dict(event_type_counts.most_common()),
@@ -2930,6 +2994,61 @@ def _summarize_staged_readiness_health(
         ),
         "groups": compact_groups,
     }
+    defer_groups = [
+        group
+        for group in groups.values()
+        if group.get("event_type") == EventTypes.PLANNING_DEFER_SUMMARY
+    ]
+    if defer_groups:
+        symbol_count = 0
+        symbols: Counter[str] = Counter()
+        for group in defer_groups:
+            symbol_summary = group.get("latest_defer_symbols")
+            if not isinstance(symbol_summary, dict):
+                continue
+            symbol_count += int(
+                _non_negative_int(symbol_summary.get("count")) or 0
+            )
+            for symbol in symbol_summary.get("sample") or []:
+                symbols[str(symbol)] += 1
+        summary.update(
+            {
+                "latest_defer_count_total": sum(
+                    int(_non_negative_int(group.get("latest_defer_count")) or 0)
+                    for group in defer_groups
+                ),
+                "latest_defer_window_s_max": max(
+                    (
+                        int(
+                            _non_negative_int(group.get("latest_defer_window_s"))
+                            or 0
+                        )
+                        for group in defer_groups
+                    ),
+                    default=0,
+                ),
+                "latest_defer_symbol_count_total": symbol_count,
+                "latest_required_surfaces": _sum_counter_maps(
+                    group.get("latest_required_surfaces") for group in defer_groups
+                ),
+                "latest_will_retry": _sum_counter_maps(
+                    {group.get("latest_will_retry"): 1}
+                    for group in defer_groups
+                    if group.get("latest_will_retry") not in (None, "")
+                ),
+            }
+        )
+        if symbol_count:
+            sample = _symbol_sample(
+                symbols,
+                limit=STAGED_READINESS_SYMBOL_SAMPLE_LIMIT,
+            ).get("sample", [])
+            summary["latest_defer_symbols"] = {
+                "count": symbol_count,
+                "sample": sample,
+                "truncated": max(0, symbol_count - len(sample)),
+            }
+    return summary
 
 
 def _safe_counter_mapping(value: Any) -> dict[str, int]:
@@ -7537,14 +7656,6 @@ def _summary_limited_groups(
                 "latest_candidate_error_type_counts"
             )
             or None,
-            "latest_missing_surface_total": summary.get("latest_missing_surface_total"),
-            "latest_invalid_surface_total": summary.get("latest_invalid_surface_total"),
-            "latest_missing_surfaces": summary.get("latest_missing_surfaces") or None,
-            "latest_invalid_surfaces": summary.get("latest_invalid_surfaces") or None,
-            "reason_codes": summary.get("reason_codes") or None,
-            "latest_defer_reasons": summary.get("latest_defer_reasons") or None,
-            "latest_contexts": summary.get("latest_contexts") or None,
-            "latest_timings_ms_max": summary.get("latest_timings_ms_max") or None,
             "latest_queue_depth_total": summary.get("latest_queue_depth_total"),
             "latest_queue_unfinished_total": summary.get(
                 "latest_queue_unfinished_total"
@@ -7737,6 +7848,34 @@ def _summary_limited_groups(
         }.items()
         if value is not None
     }
+
+
+def _summary_staged_readiness_health(
+    summary: dict[str, Any],
+    *,
+    limit: int,
+) -> dict[str, Any]:
+    out = _summary_limited_groups(summary, limit=limit)
+    for key in (
+        "latest_missing_surface_total",
+        "latest_invalid_surface_total",
+        "latest_missing_surfaces",
+        "latest_invalid_surfaces",
+        "reason_codes",
+        "latest_defer_reasons",
+        "latest_contexts",
+        "latest_timings_ms_max",
+        "latest_defer_count_total",
+        "latest_defer_window_s_max",
+        "latest_defer_symbol_count_total",
+        "latest_defer_symbols",
+        "latest_required_surfaces",
+        "latest_will_retry",
+    ):
+        value = summary.get(key)
+        if value not in (None, {}, []):
+            out[key] = value
+    return out
 
 
 def _shareable_summary_group(
@@ -8144,7 +8283,7 @@ def summarize_live_smoke_report(
             exchange_config_refresh_health,
             limit=max_groups,
         ),
-        "staged_readiness_health": _summary_limited_groups(
+        "staged_readiness_health": _summary_staged_readiness_health(
             staged_readiness_health,
             limit=max_groups,
         ),
@@ -8922,10 +9061,21 @@ def summarize_live_smoke_report_brief(report: dict[str, Any]) -> dict[str, Any]:
         "latest_defer_reasons",
         "latest_contexts",
         "latest_timings_ms_max",
+        "latest_defer_symbols",
+        "latest_required_surfaces",
+        "latest_will_retry",
     ):
         value = staged_readiness_health.get(key)
         if isinstance(value, dict) and value:
             staged_readiness_brief[key] = value
+    for key in (
+        "latest_defer_count_total",
+        "latest_defer_window_s_max",
+        "latest_defer_symbol_count_total",
+    ):
+        value = staged_readiness_health.get(key)
+        if value is not None:
+            staged_readiness_brief[key] = _count_value(value)
     risk_events_brief = {
         "total": _count_value(risk_events.get("total")),
         "event_types": risk_events.get("event_types") or {},
@@ -9410,6 +9560,12 @@ def project_live_smoke_report_sections(
     available = available_live_smoke_report_sections(report)
     available_set = set(available)
     base_selector_set = set(SMOKE_REPORT_SECTION_BASE_SELECTORS)
+    known_optional_sections = set(SMOKE_REPORT_SECTION_ALIASES)
+    known_optional_sections.update(
+        target
+        for targets in SMOKE_REPORT_SECTION_ALIASES.values()
+        for target in targets
+    )
     resolved = []
     resolved_base = []
     unknown = []
@@ -9420,6 +9576,8 @@ def project_live_smoke_report_sections(
         targets = (section, *SMOKE_REPORT_SECTION_ALIASES.get(section, ()))
         matched_targets = [target for target in targets if target in available_set]
         if not matched_targets:
+            if section in known_optional_sections:
+                continue
             unknown.append(section)
             continue
         for target in matched_targets:
@@ -9429,8 +9587,10 @@ def project_live_smoke_report_sections(
         raise ValueError(
             "unknown --section value(s): "
             + ", ".join(unknown)
-            + "; available sections: "
-            + ", ".join(sorted((*available, *base_selector_set)))
+            + "; valid sections: "
+            + ", ".join(
+                sorted((*available_set, *base_selector_set, *known_optional_sections))
+            )
             + "; use all for the full report"
         )
 

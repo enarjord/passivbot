@@ -303,6 +303,13 @@ Related detailed plans:
      stage evidence is. VPS5 deploy smoke at `e1fcb038` was green, but its
      sampled window had `hsl_replay.active_bots=0`, so the active fields were
      not populated by live data in that run.
+   - 2026-07-16: PR #1271 added bounded existing
+     `forager.feature_unavailable` evidence to smoke reports. Its no-restart
+     VPS5 deploy stayed hard-green with all five bots matched. A naturally
+     empty event window exposed that the registered `forager_features` section
+     selector was rejected when the optional section was omitted; the active
+     follow-up repairs selector validation and adds existing
+     `planning.defer_summary` evidence to staged readiness.
 
    Remaining refinements: safe pull/stop/start orchestration remains open.
    The concise and brief summaries are intentionally bounded; further changes
