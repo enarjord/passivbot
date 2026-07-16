@@ -57,6 +57,11 @@ TOOL_COMMANDS: dict[str, CommandSpec] = {
         "scan local OHLCV cache for crash-window suite scenarios (requires full install)",
         requires_full=True,
     ),
+    "compare-backtests": CommandSpec(
+        "tools.compare_backtests",
+        "compare completed backtest artifacts (requires full install)",
+        requires_full=True,
+    ),
     "fetch-balance": CommandSpec("tools.fetch_balance", "fetch exchange balances"),
     "hyperliquid-balance-probe": CommandSpec(
         "tools.probe_hyperliquid_balance",
