@@ -15,7 +15,27 @@ merge, live smoke evidence changes, or new gaps are discovered.
 - Do not use this file for design churn; unresolved design details belong in the
   plan or a focused handoff doc.
 
-## Latest Canonical Deployment (PR #1270)
+## Latest Canonical Deployment (PR #1271)
+
+- PR #1271 merged to `master` as
+  `e3640fa7338db2b64942a0773464f6499982dd8a`. It projects existing bounded
+  `forager.feature_unavailable` events into full, summary, brief, and selected
+  smoke reports without changing verdicts or runtime behavior.
+- VPS5 fast-forwarded cleanly with no restart. Exact bot PIDs
+  `985592/985594/985596/985598/985600`, all five pane parents, and unrelated
+  `misc:0.0` PID `434835` remained unchanged; tracked state stayed clean.
+- The settled two-minute smoke was `ok=true` with zero hard/log/monitor/
+  process/pipeline failures, `186/186` remote and `55/55` account-critical
+  calls successful, nine successful fill refreshes, and all five matching/
+  config-valid processes in states `R=4,S=1` with no uninterruptible sleep.
+  Fourteen non-hard EMA readiness events remained durable.
+- No forager-feature-unavailable event occurred naturally. The bounded section
+  probe instead exposed that a registered optional selector was rejected when
+  its zero-event section was omitted. The next report-only slice repairs that
+  path and consumes existing `planning.defer_summary` evidence; nothing was
+  manufactured.
+
+## Previous Canonical Deployment (PR #1270)
 
 - PR #1270 merged to `master` as
   `9869263d74829f163b0bc8010fa18d1bf41de055`. It makes the read-only live

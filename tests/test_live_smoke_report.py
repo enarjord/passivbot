@@ -2276,6 +2276,22 @@ def test_live_smoke_report_summarizes_forager_feature_health(tmp_path):
     assert "ema_readiness_health" not in projected
 
 
+def test_live_smoke_report_accepts_registered_optional_section_when_absent(tmp_path):
+    monitor_root = tmp_path / "monitor"
+    _write_ndjson(
+        monitor_root / "binance" / "binance_01" / "events" / "current.ndjson",
+        [],
+    )
+    report = build_live_smoke_report(monitor_root, logs_root=None)
+
+    for selector in ("forager_features", "forager_feature_health"):
+        projected = project_live_smoke_report_sections(report, [selector])
+
+        assert projected["ok"] is True
+        assert "forager_feature_health" not in projected
+        assert "staged_readiness_health" not in projected
+
+
 def test_live_smoke_report_summarizes_exchange_config_refresh_health(tmp_path):
     events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
     _write_ndjson(
@@ -3438,6 +3454,36 @@ def test_live_smoke_report_summarizes_staged_readiness_health(tmp_path):
                 },
             ),
             _monitor_row(
+                event_type="planning.defer_summary",
+                seq=5,
+                ts=1750,
+                status="deferred",
+                level="info",
+                reason_code="completed_candle_target_changed",
+                ids={"cycle_id": "cy_defer_summary"},
+                data={
+                    "count": 20,
+                    "window_s": 1860,
+                    "symbols": [
+                        "BTC/USDT:USDT",
+                        "ETH/USDT:USDT",
+                        "api_key=SHOULD_NOT_RENDER",
+                    ],
+                    "symbols_count": 3,
+                    "symbols_truncated": False,
+                    "missing": ["completed_candles"],
+                    "required": [
+                        "balance",
+                        "completed_candles",
+                        "market_snapshot",
+                    ],
+                    "context": "planning",
+                    "epoch": 42,
+                    "invalid_surfaces": ["completed_candles"],
+                    "will_retry": "automatic",
+                },
+            ),
+            _monitor_row(
                 event_type="cycle.degraded",
                 seq=2,
                 ts=2000,
@@ -3492,31 +3538,56 @@ def test_live_smoke_report_summarizes_staged_readiness_health(tmp_path):
     brief = summarize_live_smoke_report_brief(report)
 
     health = report["staged_readiness_health"]
-    assert health["total"] == 3
+    assert health["total"] == 4
     assert health["bots"] == 1
-    assert health["latest_missing_surface_total"] == 2
-    assert health["latest_invalid_surface_total"] == 3
+    assert health["latest_missing_surface_total"] == 3
+    assert health["latest_invalid_surface_total"] == 4
     assert health["latest_missing_surfaces"] == {
-        "completed_candles": 1,
-        "market_prices": 1,
-    }
-    assert health["latest_invalid_surfaces"] == {
         "completed_candles": 2,
         "market_prices": 1,
     }
-    assert health["event_types"] == {"cycle.degraded": 2, "planning.unavailable": 1}
+    assert health["latest_invalid_surfaces"] == {
+        "completed_candles": 3,
+        "market_prices": 1,
+    }
+    assert health["event_types"] == {
+        "cycle.degraded": 2,
+        "planning.unavailable": 1,
+        "planning.defer_summary": 1,
+    }
     assert health["reason_codes"] == {
         "staged_execution_not_ready": 2,
         "staged_execution_precondition": 1,
+        "completed_candle_target_changed": 1,
     }
     assert health["latest_defer_reasons"] == {"staged_planner_inputs_not_fresh": 2}
     assert health["latest_contexts"] == {
         "rust order calculation": 2,
+        "planning": 1,
     }
     assert health["latest_timings_ms_max"] == {
         "market_state": 303339,
         "planning_universe": 1919,
     }
+    assert health["latest_defer_count_total"] == 20
+    assert health["latest_defer_window_s_max"] == 1860
+    assert health["latest_defer_symbol_count_total"] == 3
+    assert health["latest_defer_symbols"] == {
+        "count": 3,
+        "sample": [
+            "BTC/USDT:USDT",
+            "ETH/USDT:USDT",
+            "api_key=[redacted]",
+        ],
+        "truncated": 0,
+    }
+    assert health["latest_required_surfaces"] == {
+        "balance": 1,
+        "completed_candles": 1,
+        "market_snapshot": 1,
+    }
+    assert health["latest_will_retry"] == {"automatic": 1}
+    assert "SHOULD_NOT_RENDER" not in json.dumps(health)
     assert health["groups"][0]["count"] == 2
     assert health["groups"][0]["latest_ids"] == {"cycle_id": "cy_stage_2"}
     assert health["groups"][0]["latest_context"] == "rust order calculation"
@@ -3531,16 +3602,25 @@ def test_live_smoke_report_summarizes_staged_readiness_health(tmp_path):
     assert health["groups"][0]["latest_completed_candle_mismatch_counts"] == {
         "completed_candle_target_changed": 2
     }
-    assert summary["staged_readiness_health"]["total"] == 3
+    defer_group = next(
+        group
+        for group in health["groups"]
+        if group["event_type"] == "planning.defer_summary"
+    )
+    assert defer_group["latest_defer_count"] == 20
+    assert defer_group["latest_defer_window_s"] == 1860
+    assert defer_group["latest_invalid_surfaces"] == {"completed_candles": 1}
+    assert defer_group["latest_ids"] == {"cycle_id": "cy_defer_summary"}
+    assert summary["staged_readiness_health"]["total"] == 4
     assert summary["staged_readiness_health"]["groups"][0]["latest_ids"] == {
         "cycle_id": "cy_stage_2"
     }
     assert summary["staged_readiness_health"]["latest_missing_surfaces"] == {
-        "completed_candles": 1,
+        "completed_candles": 2,
         "market_prices": 1,
     }
     assert summary["staged_readiness_health"]["latest_invalid_surfaces"] == {
-        "completed_candles": 2,
+        "completed_candles": 3,
         "market_prices": 1,
     }
     assert summary["staged_readiness_health"]["latest_timings_ms_max"] == {
@@ -3548,31 +3628,55 @@ def test_live_smoke_report_summarizes_staged_readiness_health(tmp_path):
         "planning_universe": 1919,
     }
     assert brief["staged_readiness"] == {
-        "total": 3,
+        "total": 4,
         "bots": 1,
-        "latest_missing_surface_total": 2,
-        "latest_invalid_surface_total": 3,
+        "latest_missing_surface_total": 3,
+        "latest_invalid_surface_total": 4,
         "latest_missing_surfaces": {
-            "completed_candles": 1,
-            "market_prices": 1,
-        },
-        "latest_invalid_surfaces": {
             "completed_candles": 2,
             "market_prices": 1,
         },
-        "event_types": {"cycle.degraded": 2, "planning.unavailable": 1},
+        "latest_invalid_surfaces": {
+            "completed_candles": 3,
+            "market_prices": 1,
+        },
+        "event_types": {
+            "cycle.degraded": 2,
+            "planning.unavailable": 1,
+            "planning.defer_summary": 1,
+        },
         "reason_codes": {
             "staged_execution_not_ready": 2,
             "staged_execution_precondition": 1,
+            "completed_candle_target_changed": 1,
         },
         "latest_defer_reasons": {"staged_planner_inputs_not_fresh": 2},
         "latest_contexts": {
             "rust order calculation": 2,
+            "planning": 1,
         },
         "latest_timings_ms_max": {
             "market_state": 303339,
             "planning_universe": 1919,
         },
+        "latest_defer_symbols": {
+            "count": 3,
+            "sample": [
+                "BTC/USDT:USDT",
+                "ETH/USDT:USDT",
+                "api_key=[redacted]",
+            ],
+            "truncated": 0,
+        },
+        "latest_required_surfaces": {
+            "balance": 1,
+            "completed_candles": 1,
+            "market_snapshot": 1,
+        },
+        "latest_will_retry": {"automatic": 1},
+        "latest_defer_count_total": 20,
+        "latest_defer_window_s_max": 1860,
+        "latest_defer_symbol_count_total": 3,
     }
 
 
@@ -6859,6 +6963,35 @@ def test_live_smoke_report_cli_accepts_base_metadata_section(tmp_path, capsys):
     assert "repository" in summary
     assert "monitor" not in summary
     assert "logs" not in summary
+
+
+def test_live_smoke_report_cli_accepts_absent_registered_optional_section(
+    tmp_path,
+    capsys,
+):
+    monitor_root = tmp_path / "monitor"
+    _write_ndjson(
+        monitor_root / "binance" / "binance_01" / "events" / "current.ndjson",
+        [],
+    )
+    assert (
+        live_smoke_report.main(
+            [
+                str(monitor_root),
+                "--logs-root",
+                "",
+                "--summary",
+                "--section",
+                "forager_features",
+                "--compact",
+            ]
+        )
+        == 0
+    )
+
+    summary = json.loads(capsys.readouterr().out)
+    assert summary["ok"] is True
+    assert "forager_feature_health" not in summary
 
 
 def test_live_smoke_report_cli_rejects_unknown_section(capsys):

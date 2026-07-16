@@ -4,6 +4,12 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Staged-readiness smoke summaries now include bounded existing
+  `planning.defer_summary` evidence such as defer counts, windows, required
+  surfaces, retry mode, and redacted symbol samples. Registered optional
+  section selectors also remain valid when their event family is naturally
+  absent from the selected window.
+
 - Live smoke reports now expose bounded existing
   `forager.feature_unavailable` evidence across full, summary, brief, and
   section-selective output. The projection does not change smoke verdicts,

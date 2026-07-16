@@ -22,22 +22,26 @@ Estimated completion:
 
 ## Active Review Slice
 
-- Branch: `codex/smoke-forager-feature-health`, based on canonical
-  `9869263d74829f163b0bc8010fa18d1bf41de055` after PR #1270.
-- PR: #1271, `Expose forager feature health in smoke reports`; semantic
-  implementation head `47b084b62e`. Slice: expose existing
-  `forager.feature_unavailable` events in full, summary, brief, and
-  section-selective live smoke reports.
-- Triggering evidence: the producer already emits bounded structured-only
-  candidate, missing-feature, age, fetch-budget, and symbol-sample context, and
-  `live-performance-report` consumes it. Smoke reports currently omit it.
-- Scope: aggregate latest event data per bot/position side, retain bounded
-  redacted symbol samples, and expose report-level counts and maxima.
+- Branch: `codex/smoke-planning-defer-health`, based on canonical
+  `e3640fa7338db2b64942a0773464f6499982dd8a` after PR #1271.
+- PR: #1272, `Expose planning defer health in smoke reports`; semantic
+  implementation head `8fa8ff3ba6`. Slice: expose existing
+  `planning.defer_summary` evidence in the staged-readiness smoke projection
+  and keep registered optional section selectors valid when their event family
+  is naturally absent.
+- Triggering evidence: PR #1271's bounded VPS5 `--section forager_features`
+  check returned exit 2 because zero natural events omitted the optional
+  section before selector validation. The adjacent structured-only planning
+  defer summaries are also not consumed by staged-readiness reporting.
+- Scope: project latest per-group defer counts, windows, missing/invalid/
+  required surfaces, retry mode, and bounded redacted symbol samples; repair
+  selector validation without forcing absent sections into report output.
 - Behavior boundary: read-only report projection only. No smoke verdict,
-  attention classification, console output, event production, forager
-  selection, readiness, exchange access, or trading changes.
-- Validation: producer-shaped report fixtures, full/summary/brief/section
-  projection tests, full smoke-report tests, compilation, and docs checks.
+  attention classification, console output, event production, planning,
+  readiness, exchange access, or trading changes.
+- Validation: producer-shaped report fixtures, absent-section CLI regression,
+  full/summary/brief/section projection tests, full smoke-report tests,
+  compilation, and docs checks.
 - Review gate: temporary maintainer-authorized exact-head Hermes plus green
   Python and Rust CI while Grok is halted.
 - Expected VPS action: pull and run bounded report/smoke checks after merge;
@@ -46,8 +50,19 @@ Estimated completion:
 ## Deployed Baseline
 
 - Canonical `master` and VPS5 are
-  `9869263d74829f163b0bc8010fa18d1bf41de055`, PR #1270. The tracked checkout
+  `e3640fa7338db2b64942a0773464f6499982dd8a`, PR #1271. The tracked checkout
   is clean and expected untracked artifacts are preserved.
+- PR #1271 required no restart. Exact bot PIDs
+  `985592/985594/985596/985598/985600`, all five pane parents, and unrelated
+  `misc:0.0` PID `434835` remained unchanged. The settled two-minute smoke was
+  `ok=true` with zero hard/log/monitor/process/pipeline failures, `186/186`
+  remote and `55/55` account-critical calls successful, `9/9` fill refreshes
+  successful, and all five processes/configs matched in states `R=4,S=1`
+  with no uninterruptible sleep. Fourteen non-hard EMA readiness events
+  remained durable.
+- No `forager.feature_unavailable` event occurred naturally in the bounded
+  window. The zero-event section probe exposed the registered-selector defect
+  addressed by the active slice; no event or trading activity was manufactured.
 - PR #1270 required no restart. VPS5 fast-forwarded cleanly while exact bot
   PIDs `985592/985594/985596/985598/985600`, all five pane parents, and
   unrelated `misc:0.0` PID `434835` remained unchanged.
@@ -987,8 +1002,10 @@ scheme-less credential-query detection, and PR #1268's aggregate-only inventory
 projection are also merged and deployed without restart. PR #1269's configured
 startup-budget events are merged and deployed with the same non-enforcement
 boundary. PR #1270's matching performance projection is also merged and
-deployed without restart. The active follow-up exposes existing structured-only
-forager feature-unavailability evidence in smoke reports.
+deployed without restart. PR #1271's forager feature-unavailability projection
+is merged and deployed without restart. The active follow-up repairs its
+naturally exposed absent-section selector path and adds the adjacent existing
+planning defer summaries to staged-readiness reporting.
 
 Do not create progress-only PRs or resume unrelated logging work from stale
 worktrees.
