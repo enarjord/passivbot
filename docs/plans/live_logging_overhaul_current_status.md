@@ -906,9 +906,15 @@ validated: a real Binance `InvalidNonce` recovery produced a 203-character
 clock-offset line with no raw exception text and the settled smoke was
 hard-green. PR #1260 is also merged, deployed, and naturally validated: all
 five approved-coin membership lines measured 130-150 visible characters with
-zero legacy duplicates and a hard-green settled smoke. The active slice
-compacts the only remaining over-budget new record, a 241-character startup HSL
-safety warning, without changing warning admission, risk, or trading behavior.
+zero legacy duplicates and a hard-green settled smoke. PR #1261's compact
+startup HSL warning and PR #1262's initial-entry distance-gate admission are
+also merged, deployed, and naturally validated. The active PR #1263
+consolidates startup lifecycle console ownership: `bot.started` owns the
+structured human start signal with a legacy fallback, `bot.ready` remains
+durable structured/monitor data, startup timing owns the human ready signal,
+and routine warmup/maintainer detail moves to DEBUG while the legacy READY
+banner is removed. It does not change startup task ordering, exchange calls,
+risk, or trading behavior.
 
 Do not create progress-only PRs or resume unrelated logging work from stale
 worktrees.
