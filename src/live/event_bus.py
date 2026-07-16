@@ -104,7 +104,7 @@ _STARTUP_PHASE_READINESS_CONTRACTS: Mapping[str, tuple[str, str]] = MappingProxy
         "full-warmup": ("background_candles_complete", "entry_blocker"),
     }
 )
-_STARTUP_TIMING_PHASES = frozenset(
+STARTUP_TIMING_PHASES = frozenset(
     {
         "account",
         "active-candle",
@@ -140,7 +140,7 @@ def startup_timing_phase(data: object) -> str | None:
     value = phase or stage
     if not value:
         return None
-    return value if value in _STARTUP_TIMING_PHASES else "other"
+    return value if value in STARTUP_TIMING_PHASES else "other"
 
 
 class EventTypes:

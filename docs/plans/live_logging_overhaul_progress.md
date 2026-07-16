@@ -15,7 +15,25 @@ merge, live smoke evidence changes, or new gaps are discovered.
 - Do not use this file for design churn; unresolved design details belong in the
   plan or a focused handoff doc.
 
-## Latest Canonical Deployment (PR #1267)
+## Latest Canonical Deployment (PR #1268)
+
+- PR #1268 merged to `master` as
+  `f8ec74792d69e229fd63bf4cdf7ab7a092a79cd4`. It adds an aggregate-only
+  projection to the bounded read-only log secret inventory while preserving
+  the full per-file report as the default.
+- VPS5 fast-forwarded cleanly with no restart. The summary scanned 40 of 1,182
+  discovered files and 8,153,519 bytes, reported ten positive and 25 truncated
+  files, skipped six symlinks, and had zero unreadable files or discovery
+  errors. It retained aggregate counts of 144 secret-query and 143 private
+  websocket-query matches without per-file paths, ages, or hashes.
+- No source values or lines were emitted, no artifacts were remediated, and no
+  process signal was sent. All five configured bot panes and unrelated
+  `misc:0.0` remained present.
+- The next substantive slice adds optional durable diagnostic budgets to
+  existing startup timing events and gives those configured targets precedence
+  over historical p95 report projections without enforcing them.
+
+## Previous Canonical Deployment (PR #1267)
 
 - PR #1267 merged to `master` as
   `951e42d07303d5c78ca31d4df9ee5f21e5b931cb`. It extends the value-free
@@ -30,8 +48,8 @@ merge, live smoke evidence changes, or new gaps are discovered.
   process signal was sent. All five configured bot panes and unrelated
   `misc:0.0` remained present.
 - Even compact JSON was roughly 6,000 tokens because it retained every
-  per-file row. The next read-only slice adds an aggregate-only summary
-  projection while preserving the full report as the default.
+  per-file row; PR #1268 added an aggregate-only summary while preserving the
+  full report as the default.
 
 ## Previous Canonical Deployment (PR #1266)
 

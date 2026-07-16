@@ -3738,6 +3738,96 @@ def test_live_smoke_report_startup_budget_no_baseline(tmp_path):
     assert brief["startup_timings"]["invalid_or_missing_budget_assessments"] == 0
 
 
+def test_live_smoke_report_prefers_event_configured_startup_budgets(tmp_path):
+    events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="bot.startup_timing",
+                seq=1,
+                ts=1000,
+                reason_code="startup_phase_ready",
+                data={
+                    "phase": "account",
+                    "elapsed_ms": 2_000,
+                    "since_previous_ms": 2_000,
+                },
+            ),
+            _monitor_row(
+                event_type="bot.startup_timing",
+                seq=2,
+                ts=2000,
+                reason_code="startup_phase_ready",
+                data={
+                    "phase": "account",
+                    "elapsed_ms": 3_000,
+                    "since_previous_ms": 3_000,
+                    "budget_source": "config",
+                    "elapsed_budget_ms": 2_500,
+                    "since_previous_budget_ms": 5_000,
+                },
+            ),
+        ],
+    )
+
+    report = build_live_smoke_report(tmp_path / "monitor", logs_root=None)
+    phase = report["startup_timings"][0]["phases"]["account"]
+
+    assert phase["elapsed_budget"] == {
+        "status": "over_budget",
+        "latest_ms": 3_000,
+        "budget_ms": 2_500,
+        "baseline_samples": 1,
+        "usage_pct": 120,
+        "over_budget_by_ms": 500,
+        "source": "config",
+    }
+    assert phase["phase_budget"] == {
+        "status": "within_budget",
+        "latest_ms": 3_000,
+        "budget_ms": 5_000,
+        "baseline_samples": 1,
+        "usage_pct": 60,
+        "over_budget_by_ms": 0,
+        "source": "config",
+    }
+
+
+def test_live_smoke_report_marks_malformed_configured_budget_incomplete(tmp_path):
+    events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="bot.startup_timing",
+                seq=1,
+                ts=1000,
+                reason_code="startup_phase_ready",
+                data={
+                    "phase": "account",
+                    "elapsed_ms": 2_000,
+                    "since_previous_ms": 2_000,
+                    "budget_source": "config",
+                    "elapsed_budget_ms": "bad",
+                },
+            )
+        ],
+    )
+
+    report = build_live_smoke_report(tmp_path / "monitor", logs_root=None)
+    phase = report["startup_timings"][0]["phases"]["account"]
+    brief = summarize_live_smoke_report_brief(report)
+
+    assert phase["elapsed_budget"]["status"] == "invalid_budget"
+    assert phase["elapsed_budget"]["source"] == "config"
+    assert brief["startup_timings"]["elapsed_budget_status_counts"] == {
+        "invalid_budget": 1
+    }
+    assert brief["startup_timings"]["incomplete_budget_phases"] == 1
+    assert brief["startup_timings"]["invalid_or_missing_budget_assessments"] == 1
+
+
 def test_brief_startup_timings_counts_budget_coverage_and_malformed_metadata():
     brief = smoke_report_module._brief_startup_timings(
         [

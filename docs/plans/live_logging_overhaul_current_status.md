@@ -22,33 +22,44 @@ Estimated completion:
 
 ## Active Review Slice
 
-- Branch: `codex/log-secret-inventory-summary`, based on canonical
-  `951e42d07303d5c78ca31d4df9ee5f21e5b931cb` after PR #1267.
-- PR: #1268, `Add bounded log secret inventory summary`; semantic head
-  `0db1a8d847a2528407a4a868a33d55239ee6a97f`. Slice: add a bounded
-  aggregate-only projection to the read-only historical log inventory.
-- Triggering evidence: the 40-file bounded #1267 VPS smoke emitted roughly
-  6,000 tokens even with compact JSON because every per-file path, age, size,
-  status, and hash remained present.
-- Scope: add `--summary` while preserving the full report as the default. The
-  projection retains scan limits, discovery/read/skip counts, total bytes,
-  positive/truncated file counts, and aggregate class counts, but omits the
-  per-file array, paths, ages, and hashes.
-- Behavior boundary: read-only local tooling; no source values/lines, artifact
-  mutation or remediation, exchange access, bot process changes, Rust, risk,
-  order, or trading behavior.
-- Validation: focused inventory/CLI tests, Python compilation, docs checks,
-  and a bounded VPS5 summary inventory after merge.
+- Branch: `codex/startup-phase-budget-events`, based on canonical
+  `f8ec74792d69e229fd63bf4cdf7ab7a092a79cd4` after PR #1268.
+- PR: pending. Slice: add optional durable diagnostic budgets to existing
+  `bot.startup_timing` events and make smoke reports prefer them over historical
+  p95 projections.
+- Triggering evidence: PR #1266 made missing/no-baseline startup budget
+  assessments explicit, but the only available budget remained a local prior
+  p95. Operators still could not compare startup timing against an intentional
+  per-phase target carried with the event.
+- Scope: add open `live.startup_phase_budgets` config keyed by canonical phase,
+  with independently optional process-elapsed and since-previous-mark budgets;
+  validate it, copy configured values into existing timing events, and prefer
+  those values in full/summary/brief smoke projections.
+- Behavior boundary: diagnostic metadata and reporting only. Budgets do not
+  gate startup, readiness, exchange access, order construction, or trading.
+  Empty configuration preserves existing event and report behavior.
+- Validation: config roundtrip/rejection tests, event propagation tests, smoke
+  precedence/malformed-metadata tests, focused Python tests, compilation, and
+  docs checks.
 - Review gate: temporary maintainer-authorized exact-head Hermes plus green
   Python and Rust CI while Grok is halted.
-- Expected VPS action: pull and run a bounded read-only inventory only; no bot
-  restart or remediation.
+- Expected VPS action: after merge, pull and gracefully restart only the five
+  configured bot panes, preserving `misc:0.0`, then run bounded settled smoke.
+  Current VPS configs are expected to keep the new map empty, so live smoke
+  proves compatibility rather than manufacturing configured-budget events.
 
 ## Deployed Baseline
 
 - Canonical `master` and VPS5 are
-  `951e42d07303d5c78ca31d4df9ee5f21e5b931cb`, PR #1267. The tracked checkout
+  `f8ec74792d69e229fd63bf4cdf7ab7a092a79cd4`, PR #1268. The tracked checkout
   is clean and expected untracked artifacts are preserved.
+- PR #1268 required no restart. Its bounded aggregate-only inventory scanned
+  40 of 1,182 discovered files and 8,153,519 bytes, reported ten positive and
+  25 truncated files, skipped six symlinks, and had zero unreadable files or
+  discovery errors. It retained the #1267 class counts of 144 secret-query and
+  143 private-websocket-query matches without per-file paths, ages, or hashes.
+  All five configured bot panes and unrelated `misc:0.0` remained present; no
+  process signal or remediation occurred.
 - PR #1267 required no restart. Its 40-file, 250,000-byte bounded inventory
   found 144 secret-query matches versus 143 private-websocket-query matches,
   proving one additional non-websocket query fragment was classified. The scan
@@ -951,10 +962,11 @@ validated: successful stop summaries and hourly scheduler jitter remain at
 DEBUG while cancellation errors remain at ERROR. PR #1265's bounded,
 value-free historical secret-log inventory is also merged and deployed; its
 dry run confirmed retained credential-bearing logs without exposing values or
-changing artifacts. PR #1266's brief startup-budget coverage and PR #1267's
-scheme-less credential-query detection are also merged and deployed without
-restart. The active #1268 inventory follow-up adds aggregate-only output
-without remediation or changing the full report default.
+changing artifacts. PR #1266's brief startup-budget coverage, PR #1267's
+scheme-less credential-query detection, and PR #1268's aggregate-only inventory
+projection are also merged and deployed without restart. The active
+startup-budget slice adds intentional diagnostic targets to existing timing
+events without turning observability into a readiness or trading gate.
 
 Do not create progress-only PRs or resume unrelated logging work from stale
 worktrees.

@@ -216,6 +216,47 @@ def test_startup_timing_mark_emits_structured_event(monkeypatch, caplog):
     assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 
+def test_startup_timing_event_carries_configured_diagnostic_budgets(monkeypatch):
+    import passivbot as pb_mod
+
+    sink = ListEventSink()
+    clock_values = iter([1_000, 3_500])
+    monkeypatch.setattr(pb_mod, "utc_ms", lambda: next(clock_values))
+
+    class FakeBot:
+        _startup_timing_begin = pb_mod.Passivbot._startup_timing_begin
+        _startup_timing_mark = pb_mod.Passivbot._startup_timing_mark
+        _emit_live_event = pb_mod.Passivbot._emit_live_event
+
+        def __init__(self):
+            self.exchange = "gateio"
+            self.user = "gateio_01"
+            self.bot_id = "bot_1"
+            self.config = {
+                "live": {
+                    "startup_phase_budgets": {
+                        "account": {
+                            "elapsed_ms": 10_000,
+                            "since_previous_ms": 5_000,
+                        }
+                    }
+                }
+            }
+            self._live_event_pipeline = LiveEventPipeline(
+                structured_sinks=[sink], monitor_sinks=[]
+            )
+
+    bot = FakeBot()
+    bot._startup_timing_begin()
+    bot._startup_timing_mark("account")
+
+    assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    assert sink.events[0].data["budget_source"] == "config"
+    assert sink.events[0].data["elapsed_budget_ms"] == 10_000
+    assert sink.events[0].data["since_previous_budget_ms"] == 5_000
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
+
+
 def test_startup_timing_debug_profile_adds_bounded_phase_shape(
     monkeypatch,
 ):
