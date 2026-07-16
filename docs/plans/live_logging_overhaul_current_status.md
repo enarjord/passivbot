@@ -24,7 +24,7 @@ Estimated completion:
 
 - Branch: `codex/compact-state-refresh-console`, based on canonical
   `0dea5c0698f77c20610352aed43ef47969814423` after PR #1250.
-- PR: pending, `Compact staged-refresh timing console output`.
+- PR: #1251, `Compact staged-refresh timing console output`.
 - Slice: make the existing structured `state.refresh_timing` event the sole
   normal console/text owner for admitted slow refreshes and periodic summaries.
 - Triggering evidence: the PR #1250 restart naturally printed five admitted
