@@ -22,22 +22,24 @@ Estimated completion:
 
 ## Active Review Slice
 
-- Branch: `codex/smoke-data-packet-health`, based on canonical
-  `deee460a18f1f532a4c3a4c6e89a4befd5469d2a` after PR #1277.
-- PR: #1278, `Report data-packet smoke health`; semantic implementation head
-  `e940064301`. Slice: project existing `data_packet.updated` events into
-  bounded latest-per-bot-and-kind smoke health.
-- Triggering evidence: the focused post-PR #1277 five-minute inventory
-  naturally contained 87 packet-update events while smoke reports exposed no
-  packet quality, freshness, source, or coverage summary.
-- Scope: retain the latest packet observation per bot and packet kind, and
-  expose bounded kind, quality, freshness, source, revision, safe coverage,
-  and warning/error counts. Keep raw references, hashes, timestamps, values,
-  and warning/error text query-only.
+- Branch: `codex/smoke-planning-snapshot-health`, based on canonical
+  `0990d351c690b5270d8c53f3c1ad5bf5d54650a5` after PR #1279.
+- PR: #1280, `Report planning-snapshot smoke health`; semantic implementation
+  head `886d1311e6`. Slice: project existing `snapshot.built` events into
+  bounded latest-per-bot planning-snapshot health.
+- Triggering evidence: the focused post-PR #1278 five-minute inventory
+  naturally contained 35 snapshot-build events while smoke reports exposed no
+  required-surface, freshness, missing-market, availability, or packet-count
+  summary.
+- Scope: retain the latest snapshot observation per bot and expose bounded
+  required-surface and age coverage, market-snapshot counts and freshness,
+  availability status counts, packet counts, and correlation IDs. Keep symbol
+  lists, packet rows, raw references, hashes, values, and embedded availability
+  records query-only.
 - Behavior boundary: read-only report projection only. No smoke verdict,
   attention classification, console output, event production, exchange access,
   packet production, readiness, configuration, or trading changes.
-- Validation: focused latest-per-kind/latest-revision/redaction regression, full
+- Validation: focused latest-per-bot/aggregate/redaction regression, full
   smoke-report tests, compilation, and docs checks.
 - Review gate: temporary maintainer-authorized exact-head Hermes plus green
   Python and Rust CI while Grok is halted.
@@ -46,21 +48,24 @@ Estimated completion:
 
 ## Deployed Baseline
 
-- Canonical `master` and VPS5 are
-  `deee460a18f1f532a4c3a4c6e89a4befd5469d2a`, PR #1277. The tracked checkout
-  is clean and expected untracked artifacts are preserved.
-- PR #1277 required no restart. Exact bot PIDs
+- VPS5's deployed logging baseline is
+  `ccd1cc68956edd8c509fb2b86b759c801e3868b8`, PR #1278. Canonical `master`
+  has since advanced to `0990d351c690b5270d8c53f3c1ad5bf5d54650a5`
+  through unrelated Binance archive PR #1279. The VPS5 tracked checkout is
+  clean and expected untracked artifacts are preserved.
+- PR #1278 required no restart. Exact bot PIDs
   `985592/985594/985596/985598/985600`, all five pane parents, and unrelated
   `misc:0.0` PID `434835` remained unchanged. Immediate and settled bounded
   two-minute smokes were `ok=true` with zero hard/log/monitor/process failures,
-  `189/189` and `191/191` remote calls successful, and five exact/config-valid
-  live processes in final states `R=4,S=1`.
-- The immediate planning-output projection retained correlated latest pairs on
-  all five bots with zero order-count mismatches. The focused five-minute
-  report naturally projected 60 events as 30 Rust-return/action-planned pairs,
-  retained all five latest correlations, and found zero mismatches. The same
-  window contained 87 natural packet-update events, exposing the active
-  follow-up. No event or trading activity was manufactured.
+  `170/170` and `173/173` remote calls successful, `45/45` and `47/47`
+  account-critical calls successful, and `5/5` and `9/9` fill refreshes
+  successful. A transient immediate `D=1,R=1,S=3` sample settled to all five
+  exact/config-valid processes in state `R` with no uninterruptible sleep.
+- The focused five-minute data-packet report naturally projected 110 events
+  across all five bots as 15 latest packet observations, three packet kinds per
+  bot. All were fresh and quality `ok`, with zero latest warning/error packets.
+  The same natural inventory contained 35 `snapshot.built` events, exposing the
+  active follow-up. No event or trading activity was manufactured.
 - PR #1274 required no restart. Exact bot PIDs
   `985592/985594/985596/985598/985600`, all five pane parents, and unrelated
   `misc:0.0` PID `434835` remained unchanged. The fresh two-minute smoke was
@@ -1054,10 +1059,12 @@ and PR #1272's planning-defer/absent-selector projection are merged and deployed
 without restart. PR #1273's forager eligibility projection, PR #1274's
 requested-window event inventory, and PR #1275's planning symbol-state health
 are also merged, deployed, and naturally validated. PR #1276's initial-entry
-eligibility health and PR #1277's correlated planning-output health are merged,
-deployed, and naturally validated. The active follow-up adds bounded
-latest-per-bot-and-kind data-packet health without copying raw packet metadata
-or changing verdicts/runtime behavior.
+eligibility health, PR #1277's correlated planning-output health, and PR
+#1278's latest-per-bot-and-kind data-packet health are merged, deployed, and
+naturally validated. The active follow-up adds bounded latest-per-bot
+planning-snapshot health without copying symbol lists, packet rows, raw packet
+metadata, or embedded availability records, and without changing verdicts or
+runtime behavior.
 
 Do not create progress-only PRs or resume unrelated logging work from stale
 worktrees.

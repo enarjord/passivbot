@@ -163,6 +163,8 @@ HSL_REPLAY_STALE_ACTIVE_EVENT_AGE_MS = 5 * 60 * 1000
 HSL_REPLAY_LONG_RUNNING_ACTIVE_MS = 10 * 60 * 1000
 EXCHANGE_CONFIG_REFRESH_HEALTH_GROUP_LIMIT = 20
 DATA_PACKET_HEALTH_GROUP_LIMIT = 20
+PLANNING_SNAPSHOT_HEALTH_GROUP_LIMIT = 20
+PLANNING_SNAPSHOT_VALUE_LIMIT = 8
 RISK_EVENT_TYPES = {
     EventTypes.RISK_MODE_CHANGED,
     EventTypes.HSL_TRANSITION,
@@ -3030,6 +3032,273 @@ def _summarize_data_packet_health(
         "latest_value_present_packets": latest_value_present_packets,
         "latest_value_missing_packets": latest_value_missing_packets,
         "groups_truncated": len(ordered) > DATA_PACKET_HEALTH_GROUP_LIMIT,
+        "groups": compact_groups,
+    }
+
+
+def _planning_snapshot_string_summary(value: Any) -> dict[str, Any]:
+    if not isinstance(value, list):
+        return {}
+    counts: Counter[str] = Counter()
+    for item in value:
+        if item is None:
+            continue
+        safe_item = _redact_log_text(str(item), max_len=80)
+        if safe_item:
+            counts[safe_item] += 1
+    count = sum(counts.values())
+    sample = [item for item, _ in counts.most_common(PLANNING_SNAPSHOT_VALUE_LIMIT)]
+    return (
+        {
+            "count": count,
+            "sample": sample,
+            "truncated": max(0, count - len(sample)),
+        }
+        if count
+        else {}
+    )
+
+
+def _planning_snapshot_surface_ages(value: Any) -> dict[str, Any]:
+    if not isinstance(value, list):
+        return {}
+    age_by_surface: dict[str, int] = {}
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        name = _data_packet_safe_text(item.get("name"))
+        age_ms = _non_negative_int(item.get("age_ms"))
+        if name is None or age_ms is None:
+            continue
+        age_by_surface[name] = max(int(age_ms), age_by_surface.get(name, 0))
+    bounded = sorted(
+        age_by_surface.items(),
+        key=lambda item: (-item[1], item[0]),
+    )[:PLANNING_SNAPSHOT_VALUE_LIMIT]
+    return (
+        {
+            "count": len(age_by_surface),
+            "max_age_ms": max(age_by_surface.values()),
+            "by_surface_max_age_ms": dict(bounded),
+            "truncated": max(0, len(age_by_surface) - len(bounded)),
+        }
+        if age_by_surface
+        else {}
+    )
+
+
+def _planning_snapshot_market_summary(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {}
+    out: dict[str, Any] = {}
+    for key in (
+        "count",
+        "symbol_count",
+        "missing_count",
+        "max_age_ms",
+        "min_age_ms",
+        "mean_age_ms",
+        "configured_max_age_ms",
+    ):
+        parsed = _non_negative_int(value.get(key))
+        if parsed is not None:
+            out[key] = int(parsed)
+    sources = _planning_snapshot_string_summary(value.get("sources"))
+    if sources:
+        out["sources"] = sources
+    return out
+
+
+def _planning_snapshot_availability(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {}
+    out: dict[str, Any] = {}
+    record_count = _non_negative_int(value.get("record_count"))
+    if record_count is not None:
+        out["record_count"] = int(record_count)
+    status_counts = value.get("status_counts")
+    if isinstance(status_counts, dict):
+        safe_counts: Counter[str] = Counter()
+        for status, raw in status_counts.items():
+            parsed = _non_negative_int(raw)
+            safe_status = _data_packet_safe_text(status)
+            if parsed is not None and safe_status:
+                safe_counts[safe_status] += int(parsed)
+        if safe_counts:
+            out["status_counts"] = dict(
+                safe_counts.most_common(PLANNING_SNAPSHOT_VALUE_LIMIT)
+            )
+    return out
+
+
+def _planning_snapshot_health_group(
+    *,
+    bot_key: str,
+    row: dict[str, Any],
+    live_event: dict[str, Any],
+    path: Path,
+    line_no: int,
+) -> dict[str, Any]:
+    payload = live_event.get("data")
+    payload = payload if isinstance(payload, dict) else {}
+    ids = _event_ids(live_event)
+    data_packets = payload.get("data_packets")
+    return {
+        "bot": bot_key,
+        "event_type": live_event.get("event_type") or row.get("kind"),
+        "count": 1,
+        "latest_ts": row.get("ts"),
+        "latest_seq": row.get("seq"),
+        "latest_path": str(path),
+        "latest_line": int(line_no),
+        "latest_ids": {
+            key: ids.get(key)
+            for key in ("cycle_id", "snapshot_id")
+            if ids.get(key) is not None
+        },
+        "latest_context": _data_packet_safe_text(payload.get("context"), max_len=120),
+        "latest_required_surfaces": _planning_snapshot_string_summary(
+            payload.get("required_surfaces")
+        ),
+        "latest_surface_ages": _planning_snapshot_surface_ages(
+            payload.get("surface_ages")
+        ),
+        "latest_market_snapshots": _planning_snapshot_market_summary(
+            payload.get("market_snapshot_summary")
+        ),
+        "latest_planning_availability": _planning_snapshot_availability(
+            payload.get("planning_availability")
+        ),
+        "latest_data_packet_count": (
+            len(data_packets) if isinstance(data_packets, list) else 0
+        ),
+    }
+
+
+def _merge_planning_snapshot_health_group(
+    groups: dict[str, dict[str, Any]],
+    group: dict[str, Any],
+) -> None:
+    key = str(group.get("bot") or "unknown")
+    existing = groups.get(key)
+    if existing is None:
+        groups[key] = group
+        return
+    existing["count"] = int(existing.get("count") or 0) + 1
+    current_key = _sort_event_position_key(
+        ts=group.get("latest_ts"),
+        seq=group.get("latest_seq"),
+        path=group.get("latest_path") or "",
+        line_no=int(group.get("latest_line") or 0),
+    )
+    existing_key = _sort_event_position_key(
+        ts=existing.get("latest_ts"),
+        seq=existing.get("latest_seq"),
+        path=existing.get("latest_path") or "",
+        line_no=int(existing.get("latest_line") or 0),
+    )
+    if current_key > existing_key:
+        count = existing["count"]
+        existing.update(group)
+        existing["count"] = count
+
+
+def _summarize_planning_snapshot_health(
+    groups: dict[str, dict[str, Any]],
+    event_type_counts: Counter[str],
+) -> dict[str, Any]:
+    ordered = sorted(
+        groups.values(),
+        key=lambda group: _sort_event_position_key(
+            ts=group.get("latest_ts"),
+            seq=group.get("latest_seq"),
+            path=group.get("latest_path") or "",
+            line_no=int(group.get("latest_line") or 0),
+        ),
+        reverse=True,
+    )
+    contexts: Counter[str] = Counter()
+    required_surfaces: Counter[str] = Counter()
+    market_sources: Counter[str] = Counter()
+    availability_statuses: Counter[str] = Counter()
+    required_surface_count_total = 0
+    market_snapshot_count_total = 0
+    market_symbol_count_total = 0
+    market_missing_count_total = 0
+    market_max_age_ms_max = 0
+    market_stale_bots = 0
+    planning_record_count_total = 0
+    data_packet_count_total = 0
+    for group in groups.values():
+        contexts[str(group.get("latest_context") or "unknown")] += 1
+        required = group.get("latest_required_surfaces")
+        required = required if isinstance(required, dict) else {}
+        required_surface_count_total += int(
+            _non_negative_int(required.get("count")) or 0
+        )
+        for surface in required.get("sample") or []:
+            required_surfaces[str(surface)] += 1
+        market = group.get("latest_market_snapshots")
+        market = market if isinstance(market, dict) else {}
+        market_snapshot_count_total += int(_non_negative_int(market.get("count")) or 0)
+        market_symbol_count_total += int(
+            _non_negative_int(market.get("symbol_count")) or 0
+        )
+        market_missing_count_total += int(
+            _non_negative_int(market.get("missing_count")) or 0
+        )
+        max_age_ms = int(_non_negative_int(market.get("max_age_ms")) or 0)
+        configured_max_age_ms = int(
+            _non_negative_int(market.get("configured_max_age_ms")) or 0
+        )
+        market_max_age_ms_max = max(market_max_age_ms_max, max_age_ms)
+        if configured_max_age_ms and max_age_ms > configured_max_age_ms:
+            market_stale_bots += 1
+        sources = market.get("sources")
+        sources = sources if isinstance(sources, dict) else {}
+        for source in sources.get("sample") or []:
+            market_sources[str(source)] += 1
+        availability = group.get("latest_planning_availability")
+        availability = availability if isinstance(availability, dict) else {}
+        planning_record_count_total += int(
+            _non_negative_int(availability.get("record_count")) or 0
+        )
+        status_counts = availability.get("status_counts")
+        if isinstance(status_counts, dict):
+            availability_statuses.update(status_counts)
+        data_packet_count_total += int(group.get("latest_data_packet_count") or 0)
+    compact_groups = [
+        {
+            key: value
+            for key, value in group.items()
+            if key not in {"latest_path", "latest_line", "latest_seq"}
+            and value not in (None, {}, [])
+        }
+        for group in ordered[:PLANNING_SNAPSHOT_HEALTH_GROUP_LIMIT]
+    ]
+    return {
+        "total": sum(int(group.get("count") or 0) for group in groups.values()),
+        "event_types": dict(event_type_counts.most_common()),
+        "bots": len(groups),
+        "latest_contexts": dict(contexts.most_common()),
+        "latest_required_surface_count_total": required_surface_count_total,
+        "latest_required_surfaces": dict(
+            required_surfaces.most_common(PLANNING_SNAPSHOT_VALUE_LIMIT)
+        ),
+        "latest_market_snapshot_count_total": market_snapshot_count_total,
+        "latest_market_symbol_count_total": market_symbol_count_total,
+        "latest_market_missing_count_total": market_missing_count_total,
+        "latest_market_max_age_ms_max": market_max_age_ms_max,
+        "latest_market_stale_bots": market_stale_bots,
+        "latest_market_sources": dict(
+            market_sources.most_common(PLANNING_SNAPSHOT_VALUE_LIMIT)
+        ),
+        "latest_planning_record_count_total": planning_record_count_total,
+        "latest_planning_status_counts": dict(
+            availability_statuses.most_common(PLANNING_SNAPSHOT_VALUE_LIMIT)
+        ),
+        "latest_data_packet_count_total": data_packet_count_total,
+        "groups_truncated": len(ordered) > PLANNING_SNAPSHOT_HEALTH_GROUP_LIMIT,
         "groups": compact_groups,
     }
 
@@ -7580,6 +7849,8 @@ def _scan_events(
     exchange_config_refresh_event_type_counts: Counter[str] = Counter()
     data_packet_health_groups: dict[tuple[str, str], dict[str, Any]] = {}
     data_packet_health_event_type_counts: Counter[str] = Counter()
+    planning_snapshot_health_groups: dict[str, dict[str, Any]] = {}
+    planning_snapshot_health_event_type_counts: Counter[str] = Counter()
     staged_readiness_groups: dict[tuple[Any, ...], dict[str, Any]] = {}
     staged_readiness_event_type_counts: Counter[str] = Counter()
     planning_output_groups: dict[tuple[Any, ...], dict[str, Any]] = {}
@@ -7865,6 +8136,20 @@ def _scan_events(
                                 line_no=line_no,
                             ),
                         )
+                    if event_type == EventTypes.SNAPSHOT_BUILT:
+                        planning_snapshot_health_event_type_counts[
+                            str(event_type)
+                        ] += 1
+                        _merge_planning_snapshot_health_group(
+                            planning_snapshot_health_groups,
+                            _planning_snapshot_health_group(
+                                bot_key=bot_key,
+                                row=row,
+                                live_event=live_event,
+                                path=path,
+                                line_no=line_no,
+                            ),
+                        )
                     if _staged_readiness_event(live_event):
                         staged_readiness_event_type_counts[str(event_type)] += 1
                         _merge_staged_readiness_group(
@@ -8109,6 +8394,10 @@ def _scan_events(
         "data_packet_health": _summarize_data_packet_health(
             data_packet_health_groups,
             data_packet_health_event_type_counts,
+        ),
+        "planning_snapshot_health": _summarize_planning_snapshot_health(
+            planning_snapshot_health_groups,
+            planning_snapshot_health_event_type_counts,
         ),
         "staged_readiness_health": _summarize_staged_readiness_health(
             staged_readiness_groups,
@@ -8570,6 +8859,7 @@ def build_live_smoke_report(
             "exchange_config_refresh_health"
         ],
         "data_packet_health": event_scan["data_packet_health"],
+        "planning_snapshot_health": event_scan["planning_snapshot_health"],
         "staged_readiness_health": event_scan["staged_readiness_health"],
         "planning_output_health": event_scan["planning_output_health"],
         "event_pipeline_health": event_scan["event_pipeline_health"],
@@ -9193,6 +9483,11 @@ def summarize_live_smoke_report(
         if isinstance(report.get("data_packet_health"), dict)
         else {}
     )
+    planning_snapshot_health = (
+        report.get("planning_snapshot_health")
+        if isinstance(report.get("planning_snapshot_health"), dict)
+        else {}
+    )
     staged_readiness_health = (
         report.get("staged_readiness_health")
         if isinstance(report.get("staged_readiness_health"), dict)
@@ -9406,6 +9701,10 @@ def summarize_live_smoke_report(
         ),
         "data_packet_health": _summary_data_packet_health(
             data_packet_health,
+            limit=max_groups,
+        ),
+        "planning_snapshot_health": _summary_unfiltered_health_groups(
+            planning_snapshot_health,
             limit=max_groups,
         ),
         "staged_readiness_health": _summary_staged_readiness_health(
@@ -10128,6 +10427,11 @@ def summarize_live_smoke_report_brief(report: dict[str, Any]) -> dict[str, Any]:
         if isinstance(report.get("data_packet_health"), dict)
         else {}
     )
+    planning_snapshot_health = (
+        report.get("planning_snapshot_health")
+        if isinstance(report.get("planning_snapshot_health"), dict)
+        else {}
+    )
     staged_readiness_health = (
         report.get("staged_readiness_health")
         if isinstance(report.get("staged_readiness_health"), dict)
@@ -10457,6 +10761,11 @@ def summarize_live_smoke_report_brief(report: dict[str, Any]) -> dict[str, Any]:
             for key, value in data_packet_health.items()
             if key not in {"groups", "groups_truncated"}
         },
+        "planning_snapshots": {
+            key: value
+            for key, value in planning_snapshot_health.items()
+            if key not in {"groups", "groups_truncated"}
+        },
         "staged_readiness": staged_readiness_brief,
         "planning_output": {
             key: value
@@ -10722,6 +11031,7 @@ SMOKE_REPORT_SECTION_ALIASES: dict[str, tuple[str, ...]] = {
     "forager_features": ("forager_feature_health",),
     "hsl_replay": ("hsl_replay_health",),
     "planning_output": ("planning_output_health",),
+    "planning_snapshots": ("planning_snapshot_health",),
     "remote_calls": ("remote_call_health", "remote_call_timings"),
     "resources": ("resource_pressure",),
     "staged_readiness": ("staged_readiness_health",),
