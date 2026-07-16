@@ -24,7 +24,7 @@ Estimated completion:
 
 - Branch: `codex/compact-entry-distance-console`, based on canonical
   `4ccf1e2523a217caa78b3ce3acbf2c949590926d` after PR #1252.
-- PR: pending, `Compact initial-entry distance-gate output`.
+- PR: #1253, `Compact initial-entry distance-gate output`.
 - Slice: compact the existing structured initial-entry distance-gate
   blocked/cleared console/text projection within the normal record budget.
 - Triggering evidence: the PR #1252 deployment produced 21 natural blocked
