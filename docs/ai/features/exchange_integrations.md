@@ -187,6 +187,37 @@ Handling in Passivbot:
 2. Accept only the exact documented success envelope in the WEEX adapter;
    delegate every other response to CCXT's normal error mapping.
 
+### Live OHLCV pagination and indicator inputs
+
+Problem:
+
+1. WEEX's recent kline endpoint returns at most 1,000 rows, includes the
+   currently forming candle, and tail-anchors the response instead of honoring
+   an old `since` value. Only 999 finalized candles are therefore available
+   from one recent request.
+2. The historical endpoint returns at most 100 rows and tail-anchors an
+   over-wide time range. An unbounded request can silently skip the beginning
+   of a live warmup window.
+3. CCXT exposes WEEX candle volume as base volume. Passivbot's quote-volume EMA
+   therefore uses the generic approximation `base_volume * (high + low + close) / 3`,
+   not raw exchange quote turnover.
+
+Handling in Passivbot:
+
+1. Page older 1m and 1h live warmup ranges forward through bounded 100-candle
+   historical windows, then switch to the recent endpoint only when its
+   finalized tail covers the remaining range.
+2. Exclude the forming candle and require exact finalized-candle coverage before
+   publishing close, volume, quote-volume, or volatility EMAs.
+3. Require exact 1m coverage before rebuilding trailing extrema or extending an
+   HSL replay cache. Missing coverage marks trailing state unavailable or makes
+   HSL fall back to its authoritative full replay path.
+4. Keep bulk historical WEEX backtest downloading out of scope; this bounded
+   paging exists for live warmup, restart reconstruction, and runtime indicators.
+
+Primary references: [WEEX V3 current klines](https://www.weex.com/api-doc/contract/Market_API/GetKlines)
+and [WEEX V3 historical klines](https://www.weex.com/api-doc/contract/Market_API/GetHistoryKlines).
+
 ### Fill-history retention and pagination
 
 Problem: WEEX returns at most 100 trade-detail rows per request, permits at most

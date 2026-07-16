@@ -34,6 +34,7 @@ from cli_utils import (
 from candlestick_manager import (
     CandlestickManager,
     CANDLE_DTYPE,
+    candle_range_has_full_coverage,
     synthesize_1m_from_higher_tf,
 )
 from fill_events_manager import (
@@ -7920,6 +7921,24 @@ class Passivbot:
             arr = np.sort(arr, order="ts")
             for pside, changed_ts in last_position_changes[symbol].items():
                 if pside not in required_trailing.get(symbol, set()):
+                    continue
+                candle_now_ms = (
+                    int(self.cm._now_ms())
+                    if callable(getattr(self.cm, "_now_ms", None))
+                    else int(utc_ms())
+                )
+                coverage_start = (
+                    int(changed_ts) // ONE_MIN_MS
+                ) * ONE_MIN_MS + ONE_MIN_MS
+                coverage_end = (
+                    candle_now_ms // ONE_MIN_MS
+                ) * ONE_MIN_MS - ONE_MIN_MS
+                if coverage_start <= coverage_end and not candle_range_has_full_coverage(
+                    arr, coverage_start, coverage_end, timeframe="1m"
+                ):
+                    unavailable_reasons["incomplete_trailing_candle_window"].add(
+                        symbol
+                    )
                     continue
                 mask = arr["ts"] > int(changed_ts)
                 if not np.any(mask):

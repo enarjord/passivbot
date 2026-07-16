@@ -10,6 +10,12 @@ All notable user-facing changes will be documented in this file.
   bid/ask pricing, positions, open orders, and fill/PnL ingestion. WEEX
   historical 1m backtest-data downloading is not included.
 
+- WEEX live 1m and 1h candle warmups now page through bounded historical
+  windows before using the recent tail, so long EMA windows, trailing extrema,
+  and HSL restart reconstruction are not silently truncated at 999 finalized
+  candles. Indicator/trailing/HSL consumers fail closed on incomplete windows;
+  WEEX bulk historical backtest downloading remains intentionally unsupported.
+
 - Updated the live CCXT dependency from 4.5.48 to 4.5.66. WEEX uses a narrowly
   scoped compatibility handler for its documented successful configuration
   response, which upstream CCXT 4.5.66 otherwise raises as an exchange error.

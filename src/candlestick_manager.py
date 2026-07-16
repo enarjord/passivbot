@@ -117,6 +117,8 @@ def _log_symbol(symbol: Any) -> str:
 _LOCK_BACKOFF_INITIAL = 0.1
 _LOCK_BACKOFF_MAX = 2.0
 _GATEIO_RECENT_1M_LIMIT_CANDLES = 9_990
+_WEEX_RECENT_OHLCV_LIMIT = 1_000
+_WEEX_HISTORICAL_OHLCV_LIMIT = 100
 
 
 def _ensure_legacy_ohlcv_cache_base(cache_dir: str) -> str:
@@ -577,6 +579,35 @@ def _tf_to_ms(s: Optional[str]) -> int:
     if unit == "d":
         return n * 1440 * ONE_MIN_MS
     return ONE_MIN_MS
+
+
+def candle_range_has_full_coverage(
+    arr: np.ndarray,
+    start_ts: int,
+    end_ts: int,
+    *,
+    timeframe: Optional[str] = None,
+    tf: Optional[str] = None,
+) -> bool:
+    """Return whether every aligned candle in the requested range exists."""
+    period_ms = _tf_to_ms(timeframe if timeframe is not None else tf)
+    start = (int(start_ts) // period_ms) * period_ms
+    end = (int(end_ts) // period_ms) * period_ms
+    if end < start:
+        return True
+    if not isinstance(arr, np.ndarray) or arr.size == 0:
+        return False
+    try:
+        timestamps = np.asarray(arr["ts"], dtype=np.int64)
+    except (KeyError, TypeError, ValueError):
+        return False
+    timestamps = np.sort(timestamps[(timestamps >= start) & (timestamps <= end)])
+    expected_count = int((end - start) // period_ms) + 1
+    if timestamps.size != expected_count:
+        return False
+    if int(timestamps[0]) != start or int(timestamps[-1]) != end:
+        return False
+    return expected_count <= 1 or bool(np.all(np.diff(timestamps) == period_ms))
 
 
 # ----- CandlestickManager -----
@@ -3864,6 +3895,7 @@ class CandlestickManager:
 
         exid = (self._ex_id or "").lower() if isinstance(self._ex_id, str) else ""
         is_bybit = "bybit" in exid
+        is_weex = "weex" in exid
         is_hyperliquid = "hyperliquid" in exid
         max_attempts = 9 if is_bybit else 5
         backoff = 1.0 if is_bybit else 0.5
@@ -3876,9 +3908,16 @@ class CandlestickManager:
             await self._apply_rate_limit_backoff()
             try:
                 params: Dict[str, Any] = {}
+                request_limit = int(limit)
                 # Provide an end bound for exchanges that support it.
                 # Note: Avoid passing 'until' to Bitget due to API validation errors on non-1m tfs.
-                if end_exclusive_ms is not None:
+                if is_weex and end_exclusive_ms is not None:
+                    request_limit, params = self._weex_ohlcv_request_plan(
+                        since_ms=int(since_ms),
+                        end_exclusive_ms=int(end_exclusive_ms),
+                        timeframe=tf_norm,
+                    )
+                elif end_exclusive_ms is not None:
                     exid = (self._ex_id or "").lower() if isinstance(self._ex_id, str) else ""
                     # Avoid 'until' for exchanges where it yields tail-anchored or inconsistent pages
                     # leading to incomplete forward pagination on first run.
@@ -3906,7 +3945,7 @@ class CandlestickManager:
                         "symbol": symbol,
                         "tf": tf_norm,
                         "since_ts": int(since_ms),
-                        "limit": int(limit),
+                        "limit": int(request_limit),
                         "attempt": int(attempt + 1),
                         "params": dict(params),
                     }
@@ -3917,7 +3956,7 @@ class CandlestickManager:
                     symbol=symbol,
                     tf=tf_norm,
                     since_ts=int(since_ms),
-                    limit=limit,
+                    limit=request_limit,
                     attempt=attempt + 1,
                     params=params,
                 )
@@ -3932,7 +3971,7 @@ class CandlestickManager:
                             symbol,
                             timeframe=tf_norm,
                             since=since_ms,
-                            limit=limit,
+                            limit=request_limit,
                             params=params,
                         )
                 else:
@@ -3940,7 +3979,7 @@ class CandlestickManager:
                         symbol,
                         timeframe=tf_norm,
                         since=since_ms,
-                        limit=limit,
+                        limit=request_limit,
                         params=params,
                     )
                 first_ts = None
@@ -4053,6 +4092,53 @@ class CandlestickManager:
                 f"since_ts={int(since_ms)} limit={int(limit)} attempts={max_attempts}"
             ) from last_exc
         return []
+
+    def _weex_ohlcv_request_plan(
+        self,
+        *,
+        since_ms: int,
+        end_exclusive_ms: int,
+        timeframe: str,
+    ) -> Tuple[int, Dict[str, Any]]:
+        """Choose WEEX's recent or bounded historical kline endpoint.
+
+        The recent endpoint ignores ``since`` and tail-anchors up to 1,000
+        rows, including the currently forming candle. The historical endpoint
+        returns at most 100 rows and tail-anchors over-wide ranges. Bound every
+        historical request to one forward page, then use the cheaper recent
+        endpoint only when the remaining range fits its finalized-candle tail.
+        """
+        period_ms = _tf_to_ms(timeframe)
+        since = int(since_ms)
+        end_exclusive = int(end_exclusive_ms)
+        now = int(self._now_ms())
+        current_bucket = (now // period_ms) * period_ms
+        latest_finalized = current_bucket - period_ms
+        recent_finalized_capacity = _WEEX_RECENT_OHLCV_LIMIT - 1
+        recent_oldest = latest_finalized - period_ms * (
+            recent_finalized_capacity - 1
+        )
+
+        if end_exclusive >= current_bucket and since >= recent_oldest:
+            requested_rows = max(
+                1, int(math.ceil((end_exclusive - since) / float(period_ms)))
+            )
+            # Include the current forming candle; completed-candle callers
+            # discard it at end_exclusive.
+            recent_limit = min(
+                _WEEX_RECENT_OHLCV_LIMIT,
+                max(1, requested_rows + 1),
+            )
+            return recent_limit, {}
+
+        page_end = min(
+            end_exclusive - 1,
+            since + period_ms * (_WEEX_HISTORICAL_OHLCV_LIMIT - 1),
+        )
+        return _WEEX_HISTORICAL_OHLCV_LIMIT, {
+            "historical": True,
+            "until": int(page_end),
+        }
 
     # ----- Array slicing helpers -----
 
@@ -6939,7 +7025,12 @@ class CandlestickManager:
             fill_trailing_gaps=False,
             allow_remote_fetch=False,
         )
-        if raw.size == 0 or not self._ema_window_has_expected_tail(raw, int(last_cached)):
+        if raw.size == 0 or not self._ema_window_has_required_coverage(
+            raw,
+            start_ts,
+            int(last_cached),
+            timeframe=timeframe,
+        ):
             return {}
 
         out: Dict[str, float] = {}
@@ -6998,6 +7089,43 @@ class CandlestickManager:
             return False
         return bool(np.any(timestamps == int(end_ts)))
 
+    def _ema_window_has_required_coverage(
+        self,
+        arr: np.ndarray,
+        start_ts: int,
+        end_ts: int,
+        *,
+        timeframe: Optional[str] = None,
+        tf: Optional[str] = None,
+    ) -> bool:
+        # WEEX's recent endpoint silently tail-anchors a 1,000-row response.
+        # Requiring the whole window prevents a truncated warmup from looking
+        # like a valid long-span EMA while preserving the established sparse
+        # leading-history contract for other exchanges.
+        exid = str(self._ex_id or "").lower()
+        if "weex" not in exid:
+            return self._ema_window_has_expected_tail(arr, end_ts)
+        return candle_range_has_full_coverage(
+            arr, start_ts, end_ts, timeframe=timeframe, tf=tf
+        )
+
+    def candle_range_has_full_coverage(
+        self,
+        arr: np.ndarray,
+        start_ts: int,
+        end_ts: int,
+        *,
+        timeframe: Optional[str] = None,
+        tf: Optional[str] = None,
+    ) -> bool:
+        return candle_range_has_full_coverage(
+            arr,
+            start_ts,
+            end_ts,
+            timeframe=timeframe,
+            tf=tf,
+        )
+
     async def get_latest_ema_close(
         self,
         symbol: str,
@@ -7035,7 +7163,9 @@ class CandlestickManager:
         )
         if arr.size == 0:
             return float("nan")
-        if not self._ema_window_has_expected_tail(arr, end_ts):
+        if not self._ema_window_has_required_coverage(
+            arr, start_ts, end_ts, timeframe=out_tf
+        ):
             return float("nan")
         closes = np.asarray(arr["c"], dtype=np.float64)
         res = float(self._ema(closes, span))
@@ -7272,7 +7402,9 @@ class CandlestickManager:
         )
         if arr.size == 0:
             return float("nan")
-        if not self._ema_window_has_expected_tail(arr, end_ts):
+        if not self._ema_window_has_required_coverage(
+            arr, start_ts, end_ts, timeframe=out_tf
+        ):
             return float("nan")
         series = series_fn(arr)
         res = float(self._ema(series, span))
@@ -7346,7 +7478,9 @@ class CandlestickManager:
             for metric_key in missing:
                 out[metric_key] = float("nan")
             return out
-        if not self._ema_window_has_expected_tail(raw, end_ts):
+        if not self._ema_window_has_required_coverage(
+            raw, start_ts, end_ts, timeframe=out_tf
+        ):
             for metric_key in missing:
                 out[metric_key] = float("nan")
             return out
@@ -7376,13 +7510,13 @@ class CandlestickManager:
         for metric_key in missing:
             span = float(spans_by_metric[metric_key])
             span_candles = max(1, int(math.ceil(span)))
+            metric_start_ts = int(end_ts - period_ms * (span_candles - 1))
             # Get window ending at end_ts. Prefer slicing by tail length; if data is short, use what we have.
             tail = raw[-span_candles:] if raw.size > span_candles else raw
             if period_ms == ONE_MIN_MS:
                 # Re-apply gap standardization on the requested metric window.
                 # This matches get_candles(strict=False) behavior for the same [start,end] window.
                 # tail is a slice of sorted get_candles output, so assume_sorted=True
-                metric_start_ts = int(end_ts - period_ms * (span_candles - 1))
                 tail = self.standardize_gaps(
                     tail,
                     start_ts=metric_start_ts,
@@ -7392,7 +7526,12 @@ class CandlestickManager:
                     assume_sorted=True,
                     symbol=symbol,
                 )
-            if tail.size == 0:
+            if tail.size == 0 or not self._ema_window_has_required_coverage(
+                tail,
+                metric_start_ts,
+                end_ts,
+                timeframe=out_tf,
+            ):
                 out[metric_key] = float("nan")
                 continue
             series = series_for(metric_key, tail)

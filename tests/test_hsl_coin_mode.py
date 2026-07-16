@@ -3570,6 +3570,28 @@ async def test_hsl_cache_reuse_falls_back_on_missing_or_incompatible_cache(
         await bot._equity_hard_stop_try_reuse_replay_cache(exchange_now) is not None
     )
 
+    # A candle hole inside the cache-extension gap must reject reuse. Carrying
+    # the last cached close across an unproven minute would understate HSL risk.
+    bot = _make_reuse_bot(
+        tmp_path,
+        monkeypatch,
+        fills=all_fills,
+        exchange_now=exchange_now,
+        positions=final_positions,
+    )
+
+    async def incomplete_gap_candles(*args, **kwargs):
+        import numpy as np
+        import passivbot as passivbot_module
+
+        return np.array(
+            [row for row in _REUSE_CANDLES if row[0] != _REUSE_BASE_TS + 180_000],
+            dtype=passivbot_module.CANDLE_DTYPE,
+        )
+
+    bot.cm.get_candles = incomplete_gap_candles
+    assert await bot._equity_hard_stop_try_reuse_replay_cache(exchange_now) is None
+
     # HSL config change rotates the digest: rejected.
     bot = _make_reuse_bot(
         tmp_path,

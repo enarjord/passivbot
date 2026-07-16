@@ -35,6 +35,18 @@
    SHA-256 sidecar before parsing, and write only invalid v2 rows. Monthly archives are attempted
    only after Binance's first-Monday publication window plus a buffer; daily archives exclude the
    current day and two preceding complete UTC days.
+8. WEEX live warmups use exchange-specific hybrid pagination: bounded 100-row historical windows
+   followed by the recent endpoint only when its 999 finalized-row tail covers the remainder. This
+   supports deep-enough 1m and 1h live EMA, trailing, and HSL restart windows without enabling WEEX
+   bulk backtest-data download.
+9. WEEX EMA windows, plus exchange-independent trailing-extrema and HSL replay-cache extension
+   consumers, require exact aligned candle coverage. A short WEEX tail or interior hole returns
+   unavailable/NaN state; incomplete trailing/HSL windows become unavailable or fall back to
+   authoritative replay. Other exchanges retain their established sparse leading-history EMA
+   contract.
+10. Quote-volume EMA is derived from normalized CCXT base volume and typical price
+    (`base_volume * (high + low + close) / 3`). It is an approximation when an exchange, including
+    WEEX, does not expose raw quote turnover through unified OHLCV.
 
 Cache paths use `to_standard_exchange_name()` rather than raw CCXT identifiers such as
 `binanceusdm` or `kucoinfutures`.
@@ -55,6 +67,8 @@ Cache paths use `to_standard_exchange_name()` rather than raw CCXT identifiers s
 1. Gap fill behavior and continuity.
 2. Replacement/invalidation behavior when real data arrives.
 3. Pagination boundary correctness per exchange.
+   WEEX validation must cover both 1m and 1h ranges that cross the recent/history boundary and
+   assert that every historical request spans no more than 100 aligned candles.
 4. Backtest/live parity for live tail-gap EMA projection behavior.
 5. Binance archive threshold, publication-lag, checksum, source-order, non-overwrite, and CCXT
    fallback behavior, including public unauthenticated download smokes.

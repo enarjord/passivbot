@@ -1057,6 +1057,7 @@ async def test_missing_trailing_fill_anchor_marks_symbol_unavailable(monkeypatch
     symbol = _set_basic_state(bot)
     bot._pnls_manager = _DummyPnlsManager([])
     bot.is_trailing = lambda sym, pside=None: pside == "long"
+    bot.cm._now_ms = lambda: 240_000
     candle_calls = []
 
     async def fake_get_candles(*args, **kwargs):
@@ -1115,6 +1116,7 @@ async def test_trailing_anchor_uses_position_timestamp_when_fill_history_is_out_
     bot.positions[symbol]["long"]["timestamp"] = 120_000
     bot._pnls_manager = _DummyPnlsManager([])
     bot.is_trailing = lambda sym, pside=None: pside == "long"
+    bot.cm._now_ms = lambda: 240_000
     candle_calls = []
 
     async def fake_get_candles(sym, *, start_ts, end_ts=None, strict=False):
@@ -1130,6 +1132,49 @@ async def test_trailing_anchor_uses_position_timestamp_when_fill_history_is_out_
     assert candle_calls == [(symbol, 120_000, None, False)]
     assert bot._orchestrator_trailing_unavailable_symbols == set()
     assert bot.trailing_prices[symbol]["long"]["max_since_open"] == pytest.approx(101.0)
+
+
+@pytest.mark.asyncio
+async def test_trailing_rejects_incomplete_candle_window_and_preserves_bundle(caplog):
+    cfg = _dummy_config()
+    bot = _make_dummy_bot(cfg)
+    symbol = _set_basic_state(bot)
+    bot.positions[symbol]["long"]["timestamp"] = 120_000
+    bot._pnls_manager = _DummyPnlsManager([])
+    bot.is_trailing = lambda sym, pside=None: pside == "long"
+    bot.cm._now_ms = lambda: 300_000
+    previous_bundle = {
+        "min_since_open": 95.0,
+        "max_since_min": 105.0,
+        "max_since_open": 110.0,
+        "min_since_max": 102.0,
+    }
+    bot.trailing_prices = {
+        symbol: {
+            "long": dict(previous_bundle),
+            "short": {
+                "min_since_open": 0.0,
+                "max_since_min": 0.0,
+                "max_since_open": 0.0,
+                "min_since_max": 0.0,
+            },
+        }
+    }
+
+    async def fake_get_candles(*args, **kwargs):
+        return _make_candles([(240_000, 100.0, 101.0, 99.0, 100.5, 1.0)])
+
+    bot.cm.get_candles = fake_get_candles
+    caplog.set_level(logging.WARNING)
+
+    await bot.update_trailing_data()
+
+    assert bot.trailing_prices[symbol]["long"] == previous_bundle
+    assert bot._orchestrator_trailing_unavailable_symbols == {symbol}
+    assert bot._orchestrator_trailing_unavailable_reasons[symbol] == [
+        "incomplete_trailing_candle_window"
+    ]
+    assert "incomplete_trailing_candle_window" in caplog.text
 
 
 @pytest.mark.asyncio

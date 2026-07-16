@@ -15,6 +15,8 @@ from typing import Any, Iterable, Optional
 
 import passivbot_rust as pbr
 
+from candlestick_manager import candle_range_has_full_coverage
+
 from config.access import (
     get_optional_live_value,
     require_live_value,
@@ -2066,6 +2068,31 @@ async def _hsl_replay_load_extend_and_reconcile_cache(
                 strict=False,
                 timeframe="1m",
             )
+            coverage_start = watermark_ts + _HSL_REPLAY_MATRIX_INTERVAL_MS
+            coverage_end = (
+                int(now_ms) // _HSL_REPLAY_MATRIX_INTERVAL_MS
+            ) * _HSL_REPLAY_MATRIX_INTERVAL_MS - _HSL_REPLAY_MATRIX_INTERVAL_MS
+            if (
+                coverage_start <= coverage_end
+                and not candle_range_has_full_coverage(
+                    candles,
+                    coverage_start,
+                    coverage_end,
+                    timeframe="1m",
+                )
+            ):
+                logging.warning(
+                    "[risk] HSL replay cache reuse rejected: incomplete candle "
+                    "extension for %s requested_start=%s requested_end=%s "
+                    "first=%s last=%s rows=%s",
+                    symbol,
+                    coverage_start,
+                    coverage_end,
+                    int(candles[0]["ts"]) if candles.size else None,
+                    int(candles[-1]["ts"]) if candles.size else None,
+                    int(candles.size),
+                )
+                return None
             closes: dict[int, float] = {}
             for row in candles:
                 closes[int(row["ts"])] = float(row["c"])

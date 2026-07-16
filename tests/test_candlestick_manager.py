@@ -560,6 +560,41 @@ async def test_latest_ema_helpers_reject_short_tail_without_caching(tmp_path, mo
 
 
 @pytest.mark.asyncio
+async def test_latest_ema_helpers_reject_internal_candle_gap(tmp_path, monkeypatch):
+    cm = CandlestickManager(exchange=None, exchange_name="weex", cache_dir=str(tmp_path / "caches"))
+    fixed_now_ms = 1725590400000
+    monkeypatch.setattr("time.time", lambda: fixed_now_ms / 1000.0)
+    symbol = "GAPPED/USDT"
+    span = 3.0
+    end_ts = fixed_now_ms - ONE_MIN_MS
+    start_ts = end_ts - 2 * ONE_MIN_MS
+    gapped = np.array(
+        [
+            (start_ts, 10.0, 11.0, 9.0, 10.0, 1.0),
+            (end_ts, 12.0, 13.0, 11.0, 12.0, 1.0),
+        ],
+        dtype=CANDLE_DTYPE,
+    )
+
+    async def fake_get_candles(*_args, **_kwargs):
+        return gapped
+
+    monkeypatch.setattr(cm, "get_candles", fake_get_candles)
+
+    close = await cm.get_latest_ema_close(symbol, span)
+    quote_volume = await cm.get_latest_ema_quote_volume(symbol, span)
+    log_range = await cm.get_latest_ema_log_range(symbol, span)
+    metrics = await cm.get_latest_ema_metrics(
+        symbol, {"close": span, "qv": span, "log_range": span}
+    )
+
+    assert math.isnan(close)
+    assert math.isnan(quote_volume)
+    assert math.isnan(log_range)
+    assert all(math.isnan(metrics[key]) for key in ("close", "qv", "log_range"))
+
+
+@pytest.mark.asyncio
 async def test_stock_perp_latest_emas_fill_no_trade_tail(tmp_path, monkeypatch):
     fixed_now_ms = 1725811200000  # Sunday-style off-hours timestamp.
     monkeypatch.setattr("time.time", lambda: fixed_now_ms / 1000.0)
