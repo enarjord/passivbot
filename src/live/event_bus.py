@@ -811,7 +811,9 @@ DEFAULT_ROUTES: dict[str, EventRoute] = {
     EventTypes.CONFIG_MARKET_COMPATIBILITY: EventRoute(console=False, text=False),
     EventTypes.EMA_BUNDLE_STARTED: EventRoute(console=False, text=False),
     EventTypes.EMA_BUNDLE_COMPLETED: EventRoute(console=False, text=False),
-    EventTypes.EMA_FALLBACK_USED: EventRoute(console=False, text=False),
+    EventTypes.EMA_FALLBACK_USED: EventRoute(
+        console=True, text=True, throttle_interval_ms=15 * 60 * 1000
+    ),
     EventTypes.EMA_UNAVAILABLE: EventRoute(console=False, text=False),
     EventTypes.CANDLE_COVERAGE_CHECKED: EventRoute(console=False, text=False),
     EventTypes.CANDLE_TAIL_PROJECTED: EventRoute(console=False, text=False),
@@ -998,6 +1000,7 @@ _CONSOLE_EVENT_TAGS = {
     EventTypes.POSITION_CHANGED: "pos",
     EventTypes.BALANCE_CHANGED: "balance",
     EventTypes.RESOURCE_MEMORY_SNAPSHOT: "memory",
+    EventTypes.EMA_FALLBACK_USED: "ema",
     EventTypes.RISK_MODE_CHANGED: "risk",
     EventTypes.HSL_TRANSITION: "risk",
     EventTypes.HSL_STATUS: "risk",
@@ -2107,6 +2110,8 @@ def _operator_sink_event_visible(event: LiveEvent) -> bool:
         return str(data.get("source") or "") != "rust_orchestrator"
     if event.event_type == EventTypes.HSL_STATUS:
         return _hsl_status_operator_visible(event)
+    if event.event_type == EventTypes.EMA_FALLBACK_USED:
+        return (_data_int(data, "close_fallback_count") or 0) > 0
     return True
 
 
@@ -2248,6 +2253,146 @@ def format_state_refresh_timing_console(data: Mapping[str, Any]) -> str:
     return " ".join(parts)
 
 
+_EMA_FALLBACK_CONSOLE_TOKEN_LIMIT = 16
+_EMA_FALLBACK_CONSOLE_REASON_LIMIT = 18
+_EMA_FALLBACK_CONSOLE_SAMPLE_LIMIT = 2
+_EMA_FALLBACK_CONSOLE_EXAMPLE_LIMIT = 2
+_EMA_FALLBACK_CONSOLE_RECORD_LIMIT = 188
+_EMA_FALLBACK_CONSOLE_COUNT_LIMIT = 999_999_999
+
+
+def _bounded_ema_console_text(value: object, *, limit: int) -> str:
+    """Return a compact token without exposing arbitrary payload text."""
+    cleaned = re.sub(r"\s+", "-", str(value or "").strip())
+    bounded = "".join(
+        char for index, char in enumerate(cleaned) if index < max(0, int(limit))
+    )
+    return bounded or "-"
+
+
+def _bounded_ema_console_count(value: object) -> str:
+    try:
+        count = max(0, int(value))
+    except (TypeError, ValueError, OverflowError):
+        return "-"
+    if count > _EMA_FALLBACK_CONSOLE_COUNT_LIMIT:
+        return f"{_EMA_FALLBACK_CONSOLE_COUNT_LIMIT}+"
+    return str(count)
+
+
+def _bounded_ema_console_span(value: object) -> str:
+    try:
+        span = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return "-"
+    if not math.isfinite(span):
+        return "-"
+    return f"{span:.6g}"
+
+
+def _bounded_ema_console_reason(value: object, *, limit: int) -> str:
+    reason = str(value or "").strip()
+    if reason.startswith("non-finite close EMA value"):
+        return "non_finite"
+    if re.fullmatch(r"[A-Za-z0-9_.-]+", reason):
+        return _bounded_ema_console_text(reason, limit=limit)
+    if ":" in reason:
+        error_type = reason.split(":", 1)[0].strip()
+        if re.fullmatch(r"[A-Za-z0-9_.-]+", error_type):
+            return _bounded_ema_console_text(error_type, limit=limit)
+    return "error"
+
+
+def _ema_fallback_examples(data: Mapping[str, Any]) -> list[Mapping[str, Any]]:
+    examples = data.get("examples")
+    if not isinstance(examples, Mapping):
+        return []
+    close_fallback = examples.get("close_fallback")
+    if not isinstance(close_fallback, (list, tuple)):
+        return []
+    return [item for item in close_fallback if isinstance(item, Mapping)]
+
+
+def _format_ema_fallback_console_example(
+    example: Mapping[str, Any],
+    *,
+    symbol_limit: int = _EMA_FALLBACK_CONSOLE_TOKEN_LIMIT,
+    span_limit: int = _EMA_FALLBACK_CONSOLE_SAMPLE_LIMIT,
+    reason_limit: int = _EMA_FALLBACK_CONSOLE_REASON_LIMIT,
+) -> str:
+    spans = example.get("spans")
+    if isinstance(spans, (list, tuple)):
+        span_text = ",".join(
+            _bounded_ema_console_span(span)
+            for index, span in enumerate(spans)
+            if index < span_limit
+        )
+    else:
+        span_text = "-"
+    if not span_text:
+        span_text = "-"
+    return "".join(
+        (
+            _bounded_ema_console_text(example.get("symbol"), limit=symbol_limit),
+            f"[{span_text}]",
+            f" age={_bounded_ema_console_count(example.get('max_age_ms'))}ms",
+            f" n={_bounded_ema_console_count(example.get('max_fallbacks'))}",
+            f" why={_bounded_ema_console_reason(example.get('reason'), limit=reason_limit)}",
+        )
+    )
+
+
+def format_ema_fallback_console(data: Mapping[str, Any]) -> str:
+    """Render the close-EMA fallback warning without generic event decoration."""
+    examples = _ema_fallback_examples(data)
+    max_age_ms = max(
+        (_data_int(example, "max_age_ms") or 0 for example in examples), default=0
+    )
+    max_fallbacks = max(
+        (_data_int(example, "max_fallbacks") or 0 for example in examples), default=0
+    )
+    symbols = data.get("close_fallback_symbols")
+    if isinstance(symbols, Mapping):
+        sample_values = symbols.get("sample")
+        symbol_count = _bounded_ema_console_count(symbols.get("count"))
+    else:
+        sample_values = ()
+        symbol_count = "-"
+    if isinstance(sample_values, (list, tuple, set, frozenset)):
+        sample = ",".join(
+            _bounded_ema_console_text(
+                value, limit=_EMA_FALLBACK_CONSOLE_TOKEN_LIMIT
+            )
+            for index, value in enumerate(sample_values)
+            if index < _EMA_FALLBACK_CONSOLE_SAMPLE_LIMIT
+        )
+    else:
+        sample = "-"
+    parts = [
+        "[ema] close fallback",
+        f"n={_bounded_ema_console_count(data.get('close_fallback_count'))}",
+        f"sym={symbol_count}({sample or '-'})",
+        f"age={_bounded_ema_console_count(max_age_ms)}ms",
+        f"streak={_bounded_ema_console_count(max_fallbacks)}",
+    ]
+    emitted_examples = 0
+    for example in examples:
+        if emitted_examples >= _EMA_FALLBACK_CONSOLE_EXAMPLE_LIMIT:
+            break
+        candidate = f"ex={_format_ema_fallback_console_example(example)}"
+        if len(" ".join((*parts, candidate))) > _EMA_FALLBACK_CONSOLE_RECORD_LIMIT:
+            candidate = "ex=" + _format_ema_fallback_console_example(
+                example, symbol_limit=8, span_limit=1, reason_limit=8
+            )
+        if len(" ".join((*parts, candidate))) > _EMA_FALLBACK_CONSOLE_RECORD_LIMIT:
+            break
+        parts.append(candidate)
+        emitted_examples += 1
+    if not emitted_examples:
+        parts.append("ex=-")
+    return " ".join(parts)
+
+
 def format_console_event(event: LiveEvent) -> str:
     if (
         event.event_type == EventTypes.HEALTH_SUMMARY
@@ -2264,6 +2409,8 @@ def format_console_event(event: LiveEvent) -> str:
         return _format_console_balance_changed(event)
     if event.event_type == EventTypes.RESOURCE_MEMORY_SNAPSHOT:
         return format_memory_snapshot_console(event.data)
+    if event.event_type == EventTypes.EMA_FALLBACK_USED:
+        return format_ema_fallback_console(event.data)
     if event.event_type == EventTypes.STATE_REFRESH_TIMING:
         data = event.data if isinstance(event.data, Mapping) else {}
         return format_state_refresh_timing_console(data)

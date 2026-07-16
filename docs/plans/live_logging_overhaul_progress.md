@@ -15,7 +15,36 @@ merge, live smoke evidence changes, or new gaps are discovered.
 - Do not use this file for design churn; unresolved design details belong in the
   plan or a focused handoff doc.
 
-## Latest Canonical Deployment (PR #1250)
+## Latest Canonical Deployment (PR #1251)
+
+- PR #1251 merged to `master` as `b6fabcfdbbdd823277c12896b770f008c01bb163`
+  after exact-head Hermes approval and green Python/Rust CI while Grok was
+  temporarily halted. It makes the existing structured staged-refresh timing
+  event the compact console/text owner at the unchanged ten-second threshold;
+  refresh calls, state application, and trading behavior are unchanged.
+- VPS5 fast-forwarded cleanly and gracefully restarted the five exact bot
+  panes. Old PIDs `959818/959820/959822/959824/959826` exited naturally within
+  ten seconds after one SIGINT round; no escalation was used. Pane PIDs and
+  unrelated `misc:0.0` PID `434835` were preserved. New bot PIDs are
+  `961227/961230/961232/961233/961234` for
+  Binance/KuCoin/GateIO/OKX/Hyperliquid respectively.
+- Three natural admitted slow-refresh lines measured 155-171 visible
+  characters, versus 252-305 before, while retaining plan, wall and per-surface
+  timings, parallel execution, and material residuals. Hyperliquid retained
+  its combined `pos+bal` surface. No legacy duplicate appeared.
+- The immediate smoke was hard-green with `181/181` remote and `56/56`
+  account-critical calls successful, thirteen successful fill refreshes, and
+  five config-valid processes while expected HSL replay was active. The final
+  two-minute smoke remained `ok=true` with zero hard/log/monitor/process/
+  pipeline failures, `202/203` remote and `46/46` account-critical calls
+  successful, six successful fill refreshes, no active HSL replay, and a clean
+  tracked repository. The one remote failure was non-account-critical; one
+  report-time `D` sample cleared to exact `R` on all five processes.
+- A natural retained Binance close-EMA fallback summary measured 308 visible
+  characters. The next slice makes its existing structured event the bounded
+  console/text owner while preserving warning cadence and EMA behavior.
+
+## Previous Canonical Deployment (PR #1250)
 
 - PR #1250 merged to `master` as `0dea5c0698f77c20610352aed43ef47969814423`
   after exact-head Hermes approval and green Python/Rust CI while Grok was

@@ -22,21 +22,21 @@ Estimated completion:
 
 ## Active Review Slice
 
-- Branch: `codex/compact-state-refresh-console`, based on canonical
-  `0dea5c0698f77c20610352aed43ef47969814423` after PR #1250.
-- PR: #1251, `Compact staged-refresh timing console output`.
-- Slice: make the existing structured `state.refresh_timing` event the sole
-  normal console/text owner for admitted slow refreshes and periodic summaries.
-- Triggering evidence: the PR #1250 restart naturally printed five admitted
-  slow-refresh lines at 252-305 visible characters. The longest retained a
-  four-surface plan, per-surface timings, parallel execution, and scheduler or
-  lock residual context.
-- Scope: preserve the exact ten-second detail threshold, complete structured
-  payloads, and legacy logging fallback; compact only the human projection.
-  Interesting sub-ten-second events remain durable but console/text-hidden.
-- Behavior boundary: observability-only; no refresh plan, exchange call,
-  readiness, state application, Rust, order, risk, backtest, optimizer, or
-  trading behavior.
+- Branch: `codex/compact-ema-fallback-console`, based on canonical
+  `b6fabcfdbbdd823277c12896b770f008c01bb163` after PR #1251.
+- PR: #1252, `Compact close-EMA fallback warning`.
+- Slice: make the existing structured `ema.fallback_used` event the compact
+  normal console/text owner only when close-EMA carry-forward is active.
+- Triggering evidence: a natural Binance close-EMA fallback summary measured
+  308 visible characters for four fallbacks across WLD and ZEC. Its repeated
+  age, streak, span, and reason labels exceeded the normal record budget.
+- Scope: preserve the exact fifteen-minute human warning cadence, complete
+  per-cycle structured/monitor events, classified reason, bounded examples,
+  and legacy fallback. Recovery-only and forager-cached fallback events remain
+  durable but console/text-hidden.
+- Behavior boundary: observability-only; no EMA input, calculation, fallback
+  eligibility/age limit, nontradable handling, exchange call, Rust, order,
+  risk, backtest, optimizer, or trading behavior.
 - Review gate: temporary maintainer-authorized exact-head Hermes plus green CI
   while Grok is halted.
 - Expected VPS action: after merge, one authorized exact five-bot restart.
@@ -46,12 +46,23 @@ Estimated completion:
 ## Deployed Baseline
 
 - Canonical `master` and VPS5 are
-  `0dea5c0698f77c20610352aed43ef47969814423`, PR #1250. The tracked checkout
+  `b6fabcfdbbdd823277c12896b770f008c01bb163`, PR #1251. The tracked checkout
   is clean and expected untracked artifacts are preserved.
 - VPS5 runs merged master in bot PIDs
-  `959818/959820/959822/959824/959826`. The exact pane PIDs remain
+  `961227/961230/961232/961233/961234`. The exact pane PIDs remain
   `856294/856332/856364/856398/856434`, and unrelated `misc:0.0` PID `434835`
   is unchanged.
+- PR #1251 was activated with one exact five-bot graceful restart. Every old
+  bot exited naturally within ten seconds after one SIGINT round; no escalation
+  was used. Three natural admitted slow-refresh lines measured 155-171 visible
+  characters, versus 252-305 before, while retaining plans, wall and surface
+  timings, parallel execution, and material residuals. Zero legacy duplicate
+  lines appeared. The final two-minute smoke was `ok=true` with zero hard/log/
+  monitor/process/pipeline failures, `202/203` remote and `46/46`
+  account-critical calls successful, six successful fill refreshes, no active
+  HSL replay, five config-valid processes, and a clean tracked checkout. The
+  single remote failure was non-account-critical; one report-time `D` sample
+  cleared to exact `R` on all five processes.
 - PR #1250 was activated with one exact five-bot graceful restart. Every old
   bot exited naturally within 24 seconds after one SIGINT round; no escalation
   was used. Natural forager HSL settings lines measured 163-167 visible
@@ -749,10 +760,11 @@ is also merged, deployed, and naturally validated: eleven logical lock-hold
 warnings measured 205-218 visible characters while retaining per-symbol scope
 and compact holder identity/timing. PR #1250 is merged, deployed, and naturally
 validated: the four forager HSL settings lines measured 163-167 visible
-characters while retaining all configured settings. The active slice compacts
-the naturally observed 252-305 character admitted staged-refresh timing lines
-without changing their ten-second threshold, durable payload, or refresh
-behavior.
+characters while retaining all configured settings. PR #1251 is also merged,
+deployed, and naturally validated: admitted staged-refresh lines measured
+155-171 visible characters with zero legacy duplicates and a hard-green
+settled smoke. The active slice compacts the naturally observed 308-character
+close-EMA fallback warning without changing EMA fallback or trading behavior.
 
 Do not create progress-only PRs or resume unrelated logging work from stale
 worktrees.
