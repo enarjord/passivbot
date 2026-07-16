@@ -9171,6 +9171,21 @@ active branch, PR, review gate, and rollout instructions.
   active `codex/compact-trailing-status-console` follow-up is formatter-only and
   targets the normal 240-character budget without changing payload or behavior.
 
+### 2026-07-16: Exact Restart Target Preflight Deployed
+
+- PR #1287 merged to canonical `master` at `6cb8bc3c73` after exact-head
+  Hermes approval and green Python/Rust CI. VPS5 fast-forwarded cleanly without
+  a restart or process signal; all five pane PIDs, bot PIDs, and unrelated
+  `misc:0.0` PID `434835` remained unchanged.
+- Immediate and settled local-only target reports were `ok=true` with five
+  expected/resolved windows, canonical pane IDs `%358/%359/%360/%361/%362`,
+  exact PPID-to-pane-PID ownership, and zero missing, duplicate, extra, config,
+  or scan failures. The immediate `D=1,R=2,S=2` process snapshot settled to
+  `R=5` naturally.
+- No exchange request, process action, or event was manufactured. Active
+  `codex/restart-target-stability` adds a bounded pre-action identity window
+  without making restart execution available.
+
 ### 2026-07-16: Brief Process Report Deployed
 
 - PR #1286 merged to canonical `master` at `7a12430abf` after exact-head

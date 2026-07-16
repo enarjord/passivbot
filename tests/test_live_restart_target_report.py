@@ -63,6 +63,35 @@ def _pane(session: str, window: str, index: int, pid: int) -> dict:
     }
 
 
+def _target_snapshot(
+    *,
+    pane_id: str = "%20",
+    pane_pid: int = 20,
+    process_pid: int = 100,
+    ok: bool = True,
+) -> dict:
+    return {
+        "tool": "live-restart-target-report",
+        "schema_version": 1,
+        "ok": ok,
+        "hard_failures": 0 if ok else 1,
+        "targets": [
+            {
+                "window_name": "binance_01",
+                "pane_id": pane_id,
+                "pane_pid": pane_pid,
+                "process_pid": process_pid,
+                "ownership_proof": "matched_process_ppid_equals_pane_pid",
+            }
+        ],
+        "issues": (
+            []
+            if ok
+            else [{"code": "tmux_target_missing", "severity": "error"}]
+        ),
+    }
+
+
 def test_live_restart_target_report_resolves_exact_panes_and_ignores_other_sessions(
     monkeypatch,
 ):
@@ -105,6 +134,7 @@ def test_live_restart_target_report_resolves_exact_panes_and_ignores_other_sessi
     } == {"matched_process_ppid_equals_pane_pid"}
     assert report["extra_panes"] == []
     assert report["issues"] == []
+    assert "sampling" not in report
     assert report["safety"]["process_control"] is False
     assert report["safety"]["signals_processes"] is False
     assert report["safety"]["starts_processes"] is False
@@ -396,6 +426,177 @@ def test_live_restart_target_report_requires_explicit_session(monkeypatch):
         )
 
 
+def test_live_restart_target_report_proves_stable_sampled_identities(monkeypatch):
+    snapshots = [_target_snapshot() for _ in range(3)]
+    sleeps = []
+    monkeypatch.setattr(
+        target_module,
+        "_build_live_restart_target_snapshot",
+        lambda *_args, **_kwargs: snapshots.pop(0),
+    )
+    monkeypatch.setattr(target_module.time, "sleep", sleeps.append)
+
+    report = build_live_restart_target_report(
+        "bots.yaml",
+        session_name="passivbot",
+        samples=3,
+        sample_interval_s=0.25,
+    )
+
+    assert report["ok"] is True
+    assert report["hard_failures"] == 0
+    assert report["sampling"] == {
+        "requested_samples": 3,
+        "collected_samples": 3,
+        "interval_s": 0.25,
+        "stable": True,
+        "successful_samples": 3,
+        "failed_samples": 0,
+        "failed_sample_issues": [],
+        "stable_targets": 1,
+        "changed_target_count": 0,
+        "changed_targets_truncated": 0,
+        "changed_targets": [],
+    }
+    assert sleeps == [0.25, 0.25]
+
+
+def test_live_restart_target_report_fails_changed_sampled_identity(monkeypatch):
+    snapshots = [
+        _target_snapshot(),
+        _target_snapshot(pane_id="%21", pane_pid=21),
+    ]
+    monkeypatch.setattr(
+        target_module,
+        "_build_live_restart_target_snapshot",
+        lambda *_args, **_kwargs: snapshots.pop(0),
+    )
+    monkeypatch.setattr(target_module.time, "sleep", lambda _seconds: None)
+
+    report = build_live_restart_target_report(
+        "bots.yaml",
+        session_name="passivbot",
+        samples=2,
+        sample_interval_s=0.0,
+    )
+
+    assert report["ok"] is False
+    assert report["hard_failures"] == 1
+    assert report["sampling"]["stable"] is False
+    assert report["sampling"]["failed_samples"] == 0
+    assert report["sampling"]["changed_target_count"] == 1
+    assert report["sampling"]["changed_targets_truncated"] == 0
+    assert report["sampling"]["changed_targets"][0] == {
+        "window_name": "binance_01",
+        "observations": [
+            {
+                "sample": 1,
+                "identity": {
+                    "pane_id": "%20",
+                    "pane_pid": 20,
+                    "process_pid": 100,
+                    "ownership_proof": "matched_process_ppid_equals_pane_pid",
+                },
+            },
+            {
+                "sample": 2,
+                "identity": {
+                    "pane_id": "%21",
+                    "pane_pid": 21,
+                    "process_pid": 100,
+                    "ownership_proof": "matched_process_ppid_equals_pane_pid",
+                },
+            },
+        ],
+    }
+    assert report["issues"][-1]["code"] == "target_sampling_unstable"
+
+
+def test_live_restart_target_report_fails_when_any_sample_is_hard_red(
+    monkeypatch,
+):
+    snapshots = [_target_snapshot(ok=False), _target_snapshot()]
+    monkeypatch.setattr(
+        target_module,
+        "_build_live_restart_target_snapshot",
+        lambda *_args, **_kwargs: snapshots.pop(0),
+    )
+    monkeypatch.setattr(target_module.time, "sleep", lambda _seconds: None)
+
+    report = build_live_restart_target_report(
+        "bots.yaml",
+        session_name="passivbot",
+        samples=2,
+        sample_interval_s=0.0,
+    )
+
+    assert report["ok"] is False
+    assert report["hard_failures"] == 1
+    assert report["sampling"]["failed_samples"] == 1
+    assert report["sampling"]["failed_sample_issues"] == [
+        {
+            "sample": 1,
+            "hard_failures": 1,
+            "issue_codes": ["tmux_target_missing"],
+        }
+    ]
+    assert report["issues"][-1] == {
+        "code": "target_sampling_unstable",
+        "severity": "error",
+        "failed_samples": 1,
+        "changed_target_count": 0,
+    }
+
+
+def test_target_sampling_bounds_changed_target_rows():
+    def targets(prefix):
+        return [
+            {
+                "window_name": f"{prefix}_{index}",
+                "pane_id": f"%{index}",
+                "pane_pid": index + 100,
+                "process_pid": index + 200,
+                "ownership_proof": "matched_process_ppid_equals_pane_pid",
+            }
+            for index in range(target_module.MAX_RESTART_TARGETS)
+        ]
+
+    sampling = target_module._summarize_target_sampling(
+        [
+            {"ok": True, "targets": targets("first")},
+            {"ok": True, "targets": targets("second")},
+        ],
+        interval_s=0.0,
+    )
+
+    assert sampling["stable"] is False
+    assert sampling["changed_target_count"] == target_module.MAX_RESTART_TARGETS * 2
+    assert len(sampling["changed_targets"]) == target_module.MAX_RESTART_TARGETS
+    assert sampling["changed_targets_truncated"] == target_module.MAX_RESTART_TARGETS
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "message"),
+    [
+        ({"samples": 0}, "samples must be between"),
+        ({"samples": target_module.MAX_TARGET_SAMPLES + 1}, "samples must be between"),
+        ({"sample_interval_s": -1.0}, "sample_interval_s must be between"),
+        (
+            {"sample_interval_s": target_module.MAX_TARGET_SAMPLE_INTERVAL_S + 1.0},
+            "sample_interval_s must be between",
+        ),
+        ({"sample_interval_s": float("nan")}, "sample_interval_s must be between"),
+    ],
+)
+def test_live_restart_target_report_rejects_unbounded_sampling(kwargs, message):
+    with pytest.raises(ValueError, match=message):
+        build_live_restart_target_report(
+            "bots.yaml",
+            session_name="passivbot",
+            **kwargs,
+        )
+
+
 def test_live_restart_target_report_cli_preserves_verdict(monkeypatch, capsys):
     captured = {}
 
@@ -419,6 +620,41 @@ def test_live_restart_target_report_cli_preserves_verdict(monkeypatch, capsys):
     assert json.loads(capsys.readouterr().out)["hard_failures"] == 3
     assert captured["args"] == ("bots.yaml",)
     assert captured["kwargs"]["session_name"] == "passivbot"
+    assert captured["kwargs"]["samples"] == 1
+    assert captured["kwargs"]["sample_interval_s"] == 1.0
+
+
+def test_live_restart_target_report_cli_forwards_sampling(monkeypatch, capsys):
+    captured = {}
+
+    def fake_report(*_args, **kwargs):
+        captured.update(kwargs)
+        return {"ok": True, "hard_failures": 0, "targets": []}
+
+    monkeypatch.setattr(
+        live_restart_target_report,
+        "build_live_restart_target_report",
+        fake_report,
+    )
+
+    assert (
+        live_restart_target_report.main(
+            [
+                "bots.yaml",
+                "--session-name",
+                "passivbot",
+                "--samples",
+                "3",
+                "--interval-s",
+                "2.5",
+                "--compact",
+            ]
+        )
+        == 0
+    )
+    assert json.loads(capsys.readouterr().out)["ok"] is True
+    assert captured["samples"] == 3
+    assert captured["sample_interval_s"] == 2.5
 
 
 def test_live_restart_target_report_tool_dispatch_forwards_module(monkeypatch):

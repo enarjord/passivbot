@@ -391,7 +391,10 @@ Monitor commands are documented in detail in [monitor.md](monitor.md). The CLI s
   unconfigured panes and mismatched ownership in the exact confirmed session.
   Other sessions such as `misc` are ignored. The report is bounded and never
   signals, starts, or controls processes, contacts a network or exchange,
-  accesses credential stores, or writes files.
+  accesses credential stores, or writes files. Use `--samples N` with
+  `--interval-s SECONDS` to require the same pane ID, pane PID, matched bot PID,
+  and ownership proof across a bounded pre-action window; any hard-red sample
+  or identity change makes the report fail.
 - `passivbot tool live-performance-report` summarizes local live monitor event timings for
   operator performance analysis. It is read-only and does not contact exchanges. Use
   `--recent-minutes` for a time window, `--summary` for a bounded operator projection, and
