@@ -1749,16 +1749,16 @@ def format_periodic_health_summary(data: Mapping[str, Any]) -> str:
     long_count = _data_int(data, "positions_long")
     short_count = _data_int(data, "positions_short")
     parts = [
-        f"uptime={_format_console_duration_ms(uptime_ms or 0)}",
+        f"up={_format_console_duration_ms(uptime_ms or 0)}",
         f"loop={loop_ms / 1000.0:.1f}s" if loop_ms and loop_ms > 0 else "loop=n/a",
-        f"positions={long_count or 0}L/{short_count or 0}S",
+        f"pos={long_count or 0}L/{short_count or 0}S",
     ]
 
     balance = _data_number(data, "balance_raw")
     quote = _data_str(data, "quote")
     if balance is not None:
         suffix = f" {quote}" if quote else ""
-        balance_part = f"balance={balance:.2f}{suffix}"
+        balance_part = f"bal={balance:.2f}{suffix}"
         snapped = _data_number(data, "balance_snapped")
         if snapped is not None and abs(balance - snapped) > 1e-9:
             balance_part += f" (snap {snapped:.2f})"
@@ -1766,7 +1766,7 @@ def format_periodic_health_summary(data: Mapping[str, Any]) -> str:
 
     placed = _data_int(data, "orders_placed")
     cancelled = _data_int(data, "orders_cancelled")
-    parts.append(f"orders=+{placed or 0}/-{cancelled or 0}")
+    parts.append(f"ord=+{placed or 0}/-{cancelled or 0}")
 
     fills = _data_int(data, "fills")
     fills = fills if fills is not None else 0
@@ -1780,20 +1780,20 @@ def format_periodic_health_summary(data: Mapping[str, Any]) -> str:
 
     errors = _data_int(data, "errors_last_hour")
     error_budget_max = _data_int(data, "error_budget_max")
-    parts.append(f"errors={errors or 0}/{error_budget_max or 10}")
+    parts.append(f"err={errors or 0}/{error_budget_max or 10}")
 
     ws = _data_int(data, "ws_reconnects")
     if ws:
         parts.append(f"ws={ws}")
     rate_limits = _data_int(data, "rate_limits")
     if rate_limits:
-        parts.append(f"rate_limits={rate_limits}")
+        parts.append(f"rate_lim={rate_limits}")
     rss_bytes = _data_int(data, "rss_bytes")
     if rss_bytes is not None:
         parts.append(f"rss={rss_bytes / 1024.0 / 1024.0:.1f}MiB")
     summary_lag_ms = _data_int(data, "health_summary_lag_ms")
     if summary_lag_ms:
-        parts.append(f"health_lag={summary_lag_ms / 1000.0:.1f}s")
+        parts.append(f"lag={summary_lag_ms / 1000.0:.1f}s")
 
     slow_phases = data.get("slow_phases")
     if isinstance(slow_phases, list):
@@ -1818,13 +1818,13 @@ def format_periodic_health_summary(data: Mapping[str, Any]) -> str:
         )
     dropped = _data_int(data, "event_dropped_total")
     if dropped:
-        parts.append(f"event_dropped={dropped}")
+        parts.append(f"event_drop={dropped}")
     sink_errors = _data_int(data, "event_sink_error_total")
     if sink_errors:
-        parts.append(f"sink_errors={sink_errors}")
+        parts.append(f"sink_err={sink_errors}")
     if data.get("event_pipeline_worker_alive") is False:
         parts.append("event_worker=dead")
-    return "[health] " + " | ".join(parts)
+    return "[health] " + " ".join(parts)
 
 
 def _format_console_ratio(value: Any) -> str | None:

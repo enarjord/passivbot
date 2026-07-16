@@ -4,6 +4,11 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Periodic health summaries now use compact operator labels and separators so
+  uptime, loop, position, balance, order/fill/error, resource, and slow-phase
+  context fit the normal console record budget. Complete structured payloads,
+  cadence, health calculations, and trading behavior are unchanged.
+
 - Forager selection transitions now use a bounded operator summary with slot,
   selected/incumbent, hysteresis, reason, ranking, and replacement context.
   Complete structured and DEBUG diagnostics, transition cadence, Rust-owned

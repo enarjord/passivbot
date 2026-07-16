@@ -2509,10 +2509,9 @@ def test_console_format_summarizes_periodic_health():
     )
 
     assert format_console_event(event) == (
-        "[health] uptime=2m3s | loop=1.2s | positions=2L/1S | "
-        "balance=1005.25 USDT (snap 1004.75) | orders=+3/-1 | "
-        "fills=2 (pnl=-1.50 USDT) | errors=1/10 | ws=2 | rate_limits=3 | "
-        "rss=150.0MiB | event_q=4/1000 | event_dropped=2 | sink_errors=1"
+        "[health] up=2m3s loop=1.2s pos=2L/1S bal=1005.25 USDT (snap 1004.75) "
+        "ord=+3/-1 fills=2 (pnl=-1.50 USDT) err=1/10 ws=2 rate_lim=3 "
+        "rss=150.0MiB event_q=4/1000 event_drop=2 sink_err=1"
     )
 
 
@@ -2546,10 +2545,50 @@ def test_console_format_periodic_health_keeps_zero_balance_and_known_zero_pnl():
     )
 
     assert format_console_event(event) == (
-        "[health] uptime=19m33s | loop=39.5s | positions=0L/0S | "
-        "balance=0.00 USDT | orders=+0/-0 | fills=1 (pnl=+0.00 USDT) | "
-        "errors=0/10 | rss=83.6MiB"
+        "[health] up=19m33s loop=39.5s pos=0L/0S bal=0.00 USDT ord=+0/-0 "
+        "fills=1 (pnl=+0.00 USDT) err=0/10 rss=83.6MiB"
     )
+
+
+def test_console_format_periodic_health_compacts_representative_longest_payload():
+    event = LiveEvent(
+        EventTypes.HEALTH_SUMMARY,
+        reason_code=ReasonCodes.PERIODIC_HEALTH_SUMMARY,
+        data={
+            "uptime_ms": 1_173_000,
+            "last_loop_duration_ms": 39_500,
+            "positions_long": 0,
+            "positions_short": 0,
+            "balance_raw": 2_946.66,
+            "balance_snapped": 2_951.82,
+            "quote": "USDT",
+            "orders_placed": 0,
+            "orders_cancelled": 0,
+            "fills": 0,
+            "errors_last_hour": 0,
+            "error_budget_max": 10,
+            "ws_reconnects": 4,
+            "rate_limits": 5,
+            "rss_bytes": 87_658_496,
+            "health_summary_lag_ms": 2_345,
+            "slow_phases": [
+                {"phase": "maintenance", "duration_ms": 5_000},
+                {"phase": "account", "duration_ms": 3_000},
+                {"phase": "market", "duration_ms": 1_000},
+            ],
+        },
+    )
+
+    rendered = format_console_event(event)
+
+    assert rendered == (
+        "[health] up=19m33s loop=39.5s pos=0L/0S bal=2946.66 USDT "
+        "(snap 2951.82) ord=+0/-0 fills=0 err=0/10 ws=4 rate_lim=5 rss=83.6MiB "
+        "lag=2.3s slow=maintenance:5.0s,account:3.0s,market:1.0s"
+    )
+    assert len(rendered) == 182
+    assert len("2026-07-15 12:34:56,789 INFO binance " + rendered) == 219
+    assert len("2026-07-15 12:34:56,789 INFO binance " + rendered) <= 240
 
 
 def test_console_format_summarizes_health_error_burst_without_raw_error():

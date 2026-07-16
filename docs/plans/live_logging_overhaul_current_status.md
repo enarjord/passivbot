@@ -1,6 +1,6 @@
 # Live Logging Overhaul Current Status
 
-Updated: 2026-07-15.
+Updated: 2026-07-16.
 
 This is the compact operational source for the active logging-overhaul loop.
 Read it before the historical progress ledger. Update it whenever the active
@@ -22,37 +22,47 @@ Estimated completion:
 
 ## Active Review Slice
 
-- Branch: `codex/compact-forager-selection-console`, based on canonical
-  `e7f87e18085f1bd53e2f6975ba5ecd4c14e60745` after PR #1254.
-- PR: #1255, `Compact forager selection console output`.
-- Slice: bound the Rust-owned forager selection transition INFO projection
-  within the normal record budget while retaining useful selected/incumbent,
-  hysteresis, reason, ranking, and replacement context.
-- Triggering evidence: the PR #1254 deployment produced natural forager
-  selection lines at 247-250 visible characters on Binance, GateIO, and OKX.
-  They were the largest remaining recurring over-budget family in the exact
-  new log files.
-- Scope: preserve the complete structured selection event and DEBUG score/
-  component/event diagnostics, transition keys and cadence, and Rust output;
-  compact only the human INFO projection.
-- Behavior boundary: observability-only; no candidate scoring, hysteresis,
-  forager selection, exchange call, Rust, order, risk, backtest, optimizer, or
-  trading behavior.
+- Branch: `codex/compact-periodic-health-console`, based on canonical
+  `050d01db56f4ac3678944a5e439248edbbb46acb` after PR #1255.
+- PR: pending, `Compact periodic health console output`.
+- Slice: bound the periodic health INFO projection within the normal record
+  budget while retaining uptime, loop, positions, balance, order/fill/error,
+  resource, and slow-phase context.
+- Triggering evidence: the PR #1255 deployment produced natural periodic
+  health lines at 244-248 visible characters on Binance, GateIO, OKX, and
+  Hyperliquid. This recurring family represented four of the fresh post-ready
+  over-budget records; the other repeated long family was startup-only.
+- Scope: preserve the complete structured `health.summary` payload, event
+  route, producer cadence, calculations, counters, and fallback ownership;
+  compact only the human console/text projection.
+- Behavior boundary: observability-only; no health collection, counters,
+  cadence, exchange call, Rust, order, risk, backtest, optimizer, or trading
+  behavior.
 - Review gate: temporary maintainer-authorized exact-head Hermes plus green CI
   while Grok is halted.
 - Expected VPS action: after merge, one authorized exact five-bot restart.
-  Validate natural forager selection transition lines and settled smoke; do not
-  manufacture exchange, state, risk, or trading events.
+  Validate natural periodic health lines and settled smoke; do not manufacture
+  exchange, state, risk, or trading events.
 
 ## Deployed Baseline
 
 - Canonical `master` and VPS5 are
-  `e7f87e18085f1bd53e2f6975ba5ecd4c14e60745`, PR #1254. The tracked checkout
+  `050d01db56f4ac3678944a5e439248edbbb46acb`, PR #1255. The tracked checkout
   is clean and expected untracked artifacts are preserved.
 - VPS5 runs merged master in bot PIDs
-  `966831/966834/966836/966837/966838`. The exact pane PIDs remain
+  `967753/967755/967757/967759/967760`. The exact pane PIDs remain
   `856294/856332/856364/856398/856434`, and unrelated `misc:0.0` PID `434835`
   is unchanged.
+- PR #1255 was activated after one exact five-bot SIGINT round; all old bots
+  exited naturally without escalation. Three natural forager selection lines
+  on Binance, GateIO, and OKX measured 182-185 visible characters, retained
+  all three selected symbols, hysteresis, reason, the top three scores, and
+  the omitted-score count, and none exceeded 240. The final settled smoke was
+  `ok=true` with zero hard failures, `248/248` remote and `49/49`
+  account-critical calls successful, eight successful fill refreshes, no
+  active HSL replay, all five exact processes in state `R`, and a clean tracked
+  checkout. The exact new logs then exposed natural periodic health summaries
+  at 244-248 visible characters on four bots.
 - PR #1254 was activated after one exact five-bot SIGINT round; all old bots
   exited naturally within eight seconds and no escalation was used. Four
   natural candle-health summaries on Binance, GateIO, OKX, and Hyperliquid
@@ -806,9 +816,11 @@ retry. PR #1253 is also merged, deployed, and naturally validated: 16
 initial-entry distance-gate lines measured 181-190 visible characters with
 zero legacy duplicates and a hard-green settled smoke. PR #1254 is also
 merged, deployed, and naturally validated: four candle-health lines measured
-156-211 visible characters with a hard-green settled smoke. The active slice
-compacts the naturally observed 247-250 character forager selection lines
-without changing selection or trading behavior.
+156-211 visible characters with a hard-green settled smoke. PR #1255 is also
+merged, deployed, and naturally validated: three forager selection lines
+measured 182-185 visible characters with a hard-green settled smoke. The
+active slice compacts the naturally observed 244-248 character periodic health
+lines without changing health collection, cadence, or trading behavior.
 
 Do not create progress-only PRs or resume unrelated logging work from stale
 worktrees.
