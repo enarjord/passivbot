@@ -320,10 +320,11 @@ Related detailed plans:
    Status: partial. Startup timing and warmup cache decision events exist, and
    `live-smoke-report` now summarizes latest startup phase timings with rolling
    median/p95 baselines from local monitor events plus report-only budget
-   projections against prior p95 phase baselines. The active slice adds
-   optional durable diagnostic budgets to existing timing events and gives
-   configured values report precedence; enforcement and broader readiness-stage
-   coverage remain out of scope.
+   projections against prior p95 phase baselines. PR #1269 added optional
+   durable diagnostic budgets to existing timing events and gives configured
+   values smoke-report precedence. The active follow-up carries those same
+   assessments into `live-performance-report`; enforcement and broader
+   readiness-stage coverage remain out of scope.
 
    Startup currently has timing events, but the next step is durable budget
    accounting by phase: account-critical fetches, fill/PnL refresh, active
@@ -349,11 +350,14 @@ Related detailed plans:
    - 2026-07-16: PR #1266 made the brief projection aggregate existing
      elapsed/phase budget statuses so unavailable or no-baseline phases cannot
      look implicitly within budget. It remains report-only and non-enforcing.
-   - 2026-07-16: Active `codex/startup-phase-budget-events` adds optional
+   - 2026-07-16: PR #1269 added optional
      `live.startup_phase_budgets`, carries configured targets on existing
      `bot.startup_timing` events, and makes smoke reports prefer them over prior
      p95 projections. The values are diagnostic and never gate startup or
      trading.
+   - 2026-07-16: Active `codex/live-performance-startup-budgets` makes the
+     performance report retain bounded latest-lifecycle configured-budget
+     assessments and aggregate their status without changing startup behavior.
 
 5. [x] Resource pressure telemetry.
    Status: initial implementation merged. `health.summary` events now include

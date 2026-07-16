@@ -1340,6 +1340,149 @@ def test_live_performance_report_startup_readiness_summary(tmp_path, monkeypatch
     assert bot["hsl_replay"]["latest_event_age_ms"] == 60000
 
 
+def test_live_performance_report_startup_readiness_assesses_configured_budgets(
+    tmp_path,
+):
+    events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(event_type="bot.started", seq=1, ts=1000),
+            _monitor_row(
+                event_type="bot.startup_timing",
+                seq=2,
+                ts=2000,
+                data={
+                    "phase": "account",
+                    "elapsed_ms": 3000,
+                    "since_previous_ms": 1600,
+                    "budget_source": "config",
+                    "elapsed_budget_ms": 2500,
+                    "since_previous_budget_ms": 5000,
+                },
+            ),
+        ],
+    )
+
+    report = build_live_performance_report(tmp_path / "monitor")
+    startup = report["startup_readiness"]
+
+    assert startup["startup_budget_status_counts"] == {
+        "over_budget": 1,
+        "within_budget": 1,
+    }
+    assert startup["bots"][0]["startup_phase_budgets"] == {
+        "account": {
+            "elapsed_budget": {
+                "status": "over_budget",
+                "latest_ms": 3000,
+                "budget_ms": 2500,
+                "usage_pct": 120,
+                "over_budget_by_ms": 500,
+                "source": "config",
+            },
+            "phase_budget": {
+                "status": "within_budget",
+                "latest_ms": 1600,
+                "budget_ms": 5000,
+                "usage_pct": 32,
+                "over_budget_by_ms": 0,
+                "source": "config",
+            },
+        }
+    }
+    summary = summarize_live_performance_report(report, group_limit=1)
+    assert summary["startup_readiness"]["startup_budget_status_counts"] == {
+        "over_budget": 1,
+        "within_budget": 1,
+    }
+    assert summary["startup_readiness"]["bots"][0][
+        "startup_phase_budgets"
+    ] == startup["bots"][0]["startup_phase_budgets"]
+
+
+def test_live_performance_report_startup_readiness_rejects_malformed_config_budget(
+    tmp_path,
+):
+    events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="bot.startup_timing",
+                seq=1,
+                ts=1000,
+                data={
+                    "phase": "account",
+                    "elapsed_ms": 900,
+                    "since_previous_ms": 800,
+                    "budget_source": "config",
+                    "elapsed_budget_ms": "bad",
+                },
+            ),
+            _monitor_row(
+                event_type="bot.startup_timing",
+                seq=2,
+                ts=2000,
+                data={
+                    "phase": "hsl",
+                    "elapsed_ms": 2500,
+                    "since_previous_ms": 1600,
+                    "elapsed_budget_ms": 3000,
+                    "since_previous_budget_ms": 2000,
+                },
+            ),
+        ],
+    )
+
+    startup = build_live_performance_report(tmp_path / "monitor")[
+        "startup_readiness"
+    ]
+
+    assert startup["startup_budget_status_counts"] == {"invalid_budget": 1}
+    budgets = startup["bots"][0]["startup_phase_budgets"]
+    assert budgets["account"] == {
+        "elapsed_budget": {
+            "status": "invalid_budget",
+            "latest_ms": 900,
+            "budget_ms": None,
+            "usage_pct": None,
+            "over_budget_by_ms": None,
+            "source": "config",
+        }
+    }
+    assert "phase_budget" not in budgets["account"]
+    assert "hsl" not in budgets
+
+
+def test_live_performance_report_startup_readiness_legacy_shape_has_no_budgets(
+    tmp_path,
+):
+    events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="bot.startup_timing",
+                seq=1,
+                ts=1000,
+                data={
+                    "phase": "account",
+                    "elapsed_ms": 900,
+                    "since_previous_ms": 800,
+                },
+            )
+        ],
+    )
+
+    startup = build_live_performance_report(tmp_path / "monitor")[
+        "startup_readiness"
+    ]
+
+    assert "startup_budget_status_counts" not in startup
+    assert "startup_phase_budgets" not in startup["bots"][0]
+
+
 def test_live_performance_report_rejects_mismatched_startup_readiness_contract(
     tmp_path,
 ):
@@ -1514,7 +1657,12 @@ def test_live_performance_report_startup_readiness_resets_on_restart(tmp_path):
                 event_type="bot.startup_timing",
                 seq=2,
                 ts=1100,
-                data={"stage": "account", "elapsed_ms": 300},
+                data={
+                    "stage": "account",
+                    "elapsed_ms": 300,
+                    "budget_source": "config",
+                    "elapsed_budget_ms": 500,
+                },
             ),
             _monitor_row(
                 event_type="hsl.replay.completed",
@@ -1545,6 +1693,8 @@ def test_live_performance_report_startup_readiness_resets_on_restart(tmp_path):
     assert startup["debug_profile_counts"] == {"state": 1}
     assert "bot_ready_ts" not in bot
     assert "startup_phases_ms" not in bot
+    assert "startup_phase_budgets" not in bot
+    assert "startup_budget_status_counts" not in startup
     assert "hsl_replay" not in bot
 
 

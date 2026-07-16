@@ -22,38 +22,45 @@ Estimated completion:
 
 ## Active Review Slice
 
-- Branch: `codex/startup-phase-budget-events`, based on canonical
-  `f8ec74792d69e229fd63bf4cdf7ab7a092a79cd4` after PR #1268.
-- PR: #1269, `Add diagnostic startup phase budgets`; semantic head
-  `a7f460b384d1e1e684d71cb390c952ac718a5a3f`. Slice: add optional durable
-  diagnostic budgets to existing `bot.startup_timing` events and make smoke
-  reports prefer them over historical p95 projections.
-- Triggering evidence: PR #1266 made missing/no-baseline startup budget
-  assessments explicit, but the only available budget remained a local prior
-  p95. Operators still could not compare startup timing against an intentional
-  per-phase target carried with the event.
-- Scope: add open `live.startup_phase_budgets` config keyed by canonical phase,
-  with independently optional process-elapsed and since-previous-mark budgets;
-  validate it, copy configured values into existing timing events, and prefer
-  those values in full/summary/brief smoke projections.
-- Behavior boundary: diagnostic metadata and reporting only. Budgets do not
-  gate startup, readiness, exchange access, order construction, or trading.
-  Empty configuration preserves existing event and report behavior.
-- Validation: config roundtrip/rejection tests, event propagation tests, smoke
-  precedence/malformed-metadata tests, focused Python tests, compilation, and
-  docs checks.
+- Branch: `codex/live-performance-startup-budgets`, based on canonical
+  `d511341366fea26b48d064f2bbe5b25a4408664b` after PR #1269.
+- PR: pending. Slice: make `live-performance-report` consume the configured
+  startup-budget metadata already carried by `bot.startup_timing` events.
+- Triggering evidence: PR #1269 made configured startup budgets durable and
+  taught smoke reports to assess them, but the parallel startup-readiness
+  accumulator in `live-performance-report` still discarded those fields.
+- Scope: add bounded latest-lifecycle per-bot elapsed and phase budget
+  assessments plus aggregate status counts. Strictly classify malformed
+  configured budget metadata and preserve the legacy report shape when no
+  configured budget is present.
+- Behavior boundary: read-only report metadata only. No event production,
+  startup, readiness, exchange access, order construction, or trading changes.
+- Validation: focused performance-report regression tests, broader report and
+  config tests, compilation, and docs checks.
 - Review gate: temporary maintainer-authorized exact-head Hermes plus green
   Python and Rust CI while Grok is halted.
-- Expected VPS action: after merge, pull and gracefully restart only the five
-  configured bot panes, preserving `misc:0.0`, then run bounded settled smoke.
-  Current VPS configs are expected to keep the new map empty, so live smoke
-  proves compatibility rather than manufacturing configured-budget events.
+- Expected VPS action: pull and run bounded report/smoke checks after merge;
+  no bot restart is expected for this read-only reporting slice.
 
 ## Deployed Baseline
 
 - Canonical `master` and VPS5 are
-  `f8ec74792d69e229fd63bf4cdf7ab7a092a79cd4`, PR #1268. The tracked checkout
+  `d511341366fea26b48d064f2bbe5b25a4408664b`, PR #1269. The tracked checkout
   is clean and expected untracked artifacts are preserved.
+- PR #1269 was activated with one SIGINT at `2026-07-16T11:59:17Z` to exact
+  old PIDs `979190/979193/979196/979199/979202`; all exited naturally within
+  36 seconds. New PIDs are `985592/985594/985596/985598/985600`; all five pane
+  parents and unrelated `misc:0.0` PID `434835` remained unchanged.
+- Immediate smoke was hard-green. One later window retained a real recovered
+  KuCoin fill-refresh timeout and was not treated as deployment green. A fresh
+  two-minute settled window was `ok=true` with zero hard, log, monitor,
+  process, or event-pipeline failures, `46/46` account-critical calls and
+  `7/7` fill refreshes successful, all five expected processes/configs
+  matched, states `R=4,S=1`, no uninterruptible sleep, and no active HSL
+  replay. Two non-hard candle timeouts remained durable.
+- VPS5 intentionally has no configured `startup_phase_budgets`. Reports showed
+  `no_baseline`, with zero invalid configured assessments; no budget event,
+  exchange state, or trading activity was manufactured for validation.
 - PR #1268 required no restart. Its bounded aggregate-only inventory scanned
   40 of 1,182 discovered files and 8,153,519 bytes, reported ten positive and
   25 truncated files, skipped six symlinks, and had zero unreadable files or
@@ -965,9 +972,10 @@ value-free historical secret-log inventory is also merged and deployed; its
 dry run confirmed retained credential-bearing logs without exposing values or
 changing artifacts. PR #1266's brief startup-budget coverage, PR #1267's
 scheme-less credential-query detection, and PR #1268's aggregate-only inventory
-projection are also merged and deployed without restart. The active
-startup-budget slice adds intentional diagnostic targets to existing timing
-events without turning observability into a readiness or trading gate.
+projection are also merged and deployed without restart. PR #1269's configured
+startup-budget events are merged and deployed with the same non-enforcement
+boundary. The active follow-up makes the performance report consume that
+durable metadata consistently with smoke reporting.
 
 Do not create progress-only PRs or resume unrelated logging work from stale
 worktrees.
