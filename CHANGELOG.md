@@ -9,7 +9,9 @@ All notable user-facing changes will be documented in this file.
   stores, contact networks or exchanges, control processes, or write files.
   It can compare the local process table with an optional supervisor config
   and sample process-state persistence/recovery using the existing smoke-report
-  process contract.
+  process contract. Use `--brief` for aggregate-only process, config, resource,
+  state, and sampling counters without command, account, path, PID, or
+  per-process rows.
 
 - Live smoke reports can now opt into bounded repeated process-table sampling
   to distinguish observed, persistent, and recovered uninterruptible-sleep

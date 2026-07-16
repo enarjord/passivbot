@@ -5,7 +5,7 @@ import json
 import pytest
 
 import live.smoke_report as smoke_report_module
-from live.smoke_report import build_live_process_report
+from live.smoke_report import build_live_process_report, summarize_live_process_report
 from tools import live_process_report
 
 
@@ -93,6 +93,80 @@ def test_live_process_report_cli_returns_process_verdict(monkeypatch, capsys):
 
     assert live_process_report.main(["--compact"]) == 1
     assert json.loads(capsys.readouterr().out)["hard_failures"] == 2
+
+
+def test_live_process_report_brief_omits_identity_and_command_rows(
+    monkeypatch,
+    capsys,
+):
+    processes = {
+        "enabled": True,
+        "ok": True,
+        "hard_failures": 0,
+        "expected_total": 5,
+        "matched_expected": 5,
+        "running_live_total": 5,
+        "config": {
+            "path": "/root/private-supervisor.yaml",
+            "exists": True,
+            "error": None,
+        },
+        "state_counts": {"R": 5},
+        "uninterruptible_sleep_count": 0,
+        "missing_expected": [],
+        "duplicate_configured_command_matches": [],
+        "extra_passivbot_live_processes": [],
+        "unexpected_running": [],
+        "running": [
+            {
+                "pid": 123,
+                "account": "secret_account",
+                "config_path": "configs/private.json",
+                "command": "passivbot live configs/private.json -u secret_account",
+            }
+        ],
+        "config_checks": {
+            "enabled": True,
+            "ok": True,
+            "checked": 5,
+            "skipped": 0,
+            "hard_failures": 0,
+            "issues": [],
+        },
+        "sampling": {
+            "enabled": True,
+            "requested_samples": 4,
+            "completed_samples": 4,
+            "interval_s": 5.0,
+            "uninterruptible_recovered_count": 1,
+            "groups": [
+                {
+                    "pid": 123,
+                    "account": "secret_account",
+                    "config_path": "configs/private.json",
+                }
+            ],
+        },
+    }
+    monkeypatch.setattr(
+        live_process_report,
+        "build_live_process_report",
+        lambda **_kwargs: processes,
+    )
+
+    assert live_process_report.main(["--brief", "--compact"]) == 0
+
+    report = json.loads(capsys.readouterr().out)
+    assert report["processes"] == summarize_live_process_report(processes)
+    assert report["processes"]["state_counts"] == {"R": 5}
+    assert report["processes"]["config_checks"]["issues_count"] == 0
+    assert report["processes"]["sampling"]["requested_samples"] == 4
+    rendered = json.dumps(report, sort_keys=True)
+    assert "secret_account" not in rendered
+    assert "private.json" not in rendered
+    assert "passivbot live" not in rendered
+    assert '"pid"' not in rendered
+    assert '"groups"' not in rendered
 
 
 def test_live_process_report_cli_rejects_unbounded_sampling(capsys):

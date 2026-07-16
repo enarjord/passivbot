@@ -314,7 +314,8 @@ Monitor commands are documented in detail in [monitor.md](monitor.md). The CLI s
   processes, or write files. Use `--samples N --interval-s SECONDS` for bounded persistence and
   recovery evidence; the existing maxima are enforced. The JSON `safety` object declares this
   capability boundary, and the command exits nonzero when the process/config verdict has hard
-  failures.
+  failures. Use `--brief` for aggregate-only process/config/resource/state/sampling counters
+  without command, account, path, PID, or per-process rows.
 - `passivbot tool live-incident-bundle` writes a local `.tar.gz` evidence
   bundle with monitor event reports, problem-event reports, smoke evidence,
   redacted log excerpts, monitor snapshots, runtime metadata, and optional
