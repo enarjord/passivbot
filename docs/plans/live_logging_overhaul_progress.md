@@ -9186,6 +9186,20 @@ active branch, PR, review gate, and rollout instructions.
   `codex/restart-target-stability` adds a bounded pre-action identity window
   without making restart execution available.
 
+### 2026-07-16: Stable Restart Targets Deployed
+
+- PR #1288 merged to canonical `master` at `e004ede7dd` after exact-head
+  Hermes approval and green Python/Rust CI. VPS5 fast-forwarded cleanly without
+  a restart or process signal; all five pane IDs/PIDs, bot PIDs, and unrelated
+  `misc:0.0` PID `434835` remained unchanged.
+- Immediate and settled three-sample local-only target reports were `ok=true`
+  and `sampling.stable=true`, with five stable targets, `3/3` successful
+  samples, zero failed samples, zero changed targets, and no issues. Immediate
+  process state `R=2,S=3` settled to `R=4,S=1` naturally.
+- No exchange request, process action, or event was manufactured. Active
+  `codex/restart-plan-target-gate` adds the exact stable report command and
+  required verdict to the existing non-executing restart plan.
+
 ### 2026-07-16: Brief Process Report Deployed
 
 - PR #1286 merged to canonical `master` at `7a12430abf` after exact-head

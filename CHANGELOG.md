@@ -4,6 +4,12 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- `passivbot tool live-restart-smoke-plan` can now bind an explicitly
+  confirmed tmux session into its pre-restart readiness phase with
+  `--target-session-name`. The generated local-only target preflight requires
+  2-5 stable identity samples, remains non-executing, and makes the missing
+  target gate visible when no session is configured.
+
 - Added bounded `--samples` and `--interval-s` stability checks to
   `passivbot tool live-restart-target-report`. Multi-sample reports fail if any
   local preflight is hard-red or if a window's canonical pane ID, pane PID,

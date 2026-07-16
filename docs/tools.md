@@ -379,9 +379,17 @@ Monitor commands are documented in detail in [monitor.md](monitor.md). The CLI s
   path to avoid overwriting prior evidence. The pre-restart readiness phase also
   includes one deduplicated `live-config-preflight` command for each configured
   live config path found in the supervisor config, plus a skip count for any
-  configured live command whose config path could not be derived. Use planner
+  configured live command whose config path could not be derived. Use
+  `--target-session-name SESSION` to append the exact local-only
+  `live-restart-target-report` gate to that phase. The planner defaults to
+  three samples five seconds apart; use `--target-samples N` (2-5) and
+  `--target-interval-s SECONDS` (greater than 0, at most 30) to change the
+  bounded stability window.
+  The command is only emitted, never run. Omitting the exact session keeps the
+  plan valid and explicitly marks the stable target gate unconfigured. Use
   `--summary` when you only need the bot count, phase names, preflight commands,
-  smoke command, and incident-bundle command without every per-bot phase detail.
+  target-preflight verdict requirement, smoke command, and incident-bundle
+  command without every per-bot phase detail.
 - `passivbot tool live-restart-target-report SUPERVISOR_CONFIG --session-name
   SESSION` performs the local-only exact-target preflight required before any
   future restart executor may signal a pane. It joins expected supervisor
