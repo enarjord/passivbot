@@ -25,6 +25,7 @@ from live.event_bus import (
     authoritative_reason_code,
     format_console_event,
     format_memory_snapshot_console,
+    format_state_refresh_timing_console,
     live_event_debug_profile_enabled,
     normalize_live_event_console_enabled,
     normalize_live_event_debug_profiles,
@@ -382,6 +383,10 @@ def test_route_table_keeps_data_events_off_console_by_default():
     assert DEFAULT_ROUTES[EventTypes.RESOURCE_MEMORY_SNAPSHOT].monitor is True
     assert DEFAULT_ROUTES[EventTypes.RESOURCE_MEMORY_SNAPSHOT].console is True
     assert DEFAULT_ROUTES[EventTypes.RESOURCE_MEMORY_SNAPSHOT].text is True
+    assert DEFAULT_ROUTES[EventTypes.STATE_REFRESH_TIMING].structured is True
+    assert DEFAULT_ROUTES[EventTypes.STATE_REFRESH_TIMING].monitor is True
+    assert DEFAULT_ROUTES[EventTypes.STATE_REFRESH_TIMING].console is True
+    assert DEFAULT_ROUTES[EventTypes.STATE_REFRESH_TIMING].text is True
     assert DEFAULT_ROUTES[EventTypes.HSL_STATUS].console is True
     assert DEFAULT_ROUTES[EventTypes.HSL_STATUS].text is True
     assert DEFAULT_ROUTES[EventTypes.TRAILING_STATUS].console is True
@@ -1561,6 +1566,136 @@ def test_memory_snapshot_console_formatter_is_compact_and_omits_samples():
     assert format_console_event(
         LiveEvent(EventTypes.RESOURCE_MEMORY_SNAPSHOT, data=data)
     ) == message
+
+
+def test_state_refresh_timing_console_formatters_retain_operator_timing_signals():
+    detail = {
+        "plan": ["balance", "fills", "open_orders", "positions"],
+        "timings_ms": {
+            "balance": 2500,
+            "fills": 4000,
+            "open_orders": 2000,
+            "positions": 3000,
+        },
+        "wall_ms": 10_000,
+        "residual_ms": 6000,
+        "parallel": True,
+    }
+    summary = {
+        "summary": True,
+        "plan": ["balance", "fills", "open_orders", "positions"],
+        "count": 60,
+        "wall_ms": {"min": 100, "mean": 130, "max": 159},
+        "residual_ms": {"min": 0, "mean": 10, "max": 20},
+        "surfaces_ms": {
+            "balance": {"min": 90, "mean": 120, "max": 140},
+            "open_orders": {"min": 100, "mean": 130, "max": 159},
+        },
+    }
+
+    assert format_state_refresh_timing_console(detail) == (
+        "[state] refresh plan=bal,fills,orders,pos wall=10000ms "
+        "surfaces_ms=bal:2500,fills:4000,orders:2000,pos:3000 parallel residual=6000ms"
+    )
+    assert format_state_refresh_timing_console(summary) == (
+        "[state] refresh summary plan=bal,fills,orders,pos n=60 "
+        "wall_ms=100/130/159 slow=orders:100/130/159 resid_ms=0/10/20"
+    )
+
+
+def test_state_refresh_timing_console_and_text_admission_preserves_detail_durability():
+    structured = ListEventSink()
+    console = ListEventSink()
+    text = ListEventSink()
+    pipeline = LiveEventPipeline(
+        structured_sinks=[structured],
+        monitor_sinks=[],
+        console_sink=console,
+        text_sink=text,
+    )
+    hidden_detail = LiveEvent(
+        EventTypes.STATE_REFRESH_TIMING,
+        data={"wall_ms": 9999, "timings_ms": {"balance": 9999}},
+    )
+    admitted_detail = LiveEvent(
+        EventTypes.STATE_REFRESH_TIMING,
+        data={"wall_ms": 10_000, "timings_ms": {"balance": 10_000}},
+    )
+    aggregate = LiveEvent(
+        EventTypes.STATE_REFRESH_TIMING,
+        data={"summary": True, "wall_ms": {"min": 1, "mean": 2, "max": 3}},
+    )
+
+    pipeline.emit(hidden_detail)
+    pipeline.emit(admitted_detail)
+    pipeline.emit(aggregate)
+
+    assert console.events == [admitted_detail, aggregate]
+    assert text.events == [admitted_detail, aggregate]
+    assert pipeline.flush(timeout=2.0) is True
+    assert structured.events == [hidden_detail, admitted_detail, aggregate]
+    assert pipeline.close(timeout=2.0) is True
+
+
+def test_state_refresh_timing_console_formatters_are_bounded_without_mutating_payload():
+    maximum = (1 << 63) - 1
+    detail_data = {
+        "plan": ["unbounded-plan-name"] * 5,
+        "timings_ms": {f"unbounded-surface-{idx}": maximum for idx in range(5)},
+        "wall_ms": maximum,
+        "residual_ms": maximum,
+        "parallel": True,
+    }
+    summary_data = {
+        "summary": True,
+        "plan": ["unbounded-plan-name"] * 5,
+        "count": maximum,
+        "wall_ms": {"min": maximum, "mean": maximum, "max": maximum},
+        "residual_ms": {"min": maximum, "mean": maximum, "max": maximum},
+        "surfaces_ms": {
+            "unbounded-surface": {"min": maximum, "mean": maximum, "max": maximum}
+        },
+    }
+    detail_event = LiveEvent(EventTypes.STATE_REFRESH_TIMING, data=detail_data)
+    summary_event = LiveEvent(EventTypes.STATE_REFRESH_TIMING, data=summary_data)
+    detail_before = detail_event.to_dict()
+    summary_before = summary_event.to_dict()
+
+    detail_message = format_console_event(detail_event)
+    summary_message = format_console_event(summary_event)
+    longest_prefix = "2026-07-15T23:45:40Z WARNING  [hyperliquid] "
+
+    assert len(longest_prefix + detail_message) <= 240
+    assert "plan=unbound,unbound,unbound,+more" in detail_message
+    assert "wall=" in detail_message
+    assert "surfaces_ms=" in detail_message
+    assert "parallel" in detail_message
+    assert "residual=" in detail_message
+    assert len(longest_prefix + summary_message) <= 240
+    assert "plan=unbound,unbound,unbound,+more" in summary_message
+    assert "wall_ms=" in summary_message
+    assert "slow=unbound:" in summary_message
+    assert "resid_ms=" in summary_message
+    assert detail_event.to_dict() == detail_before
+    assert summary_event.to_dict() == summary_before
+
+
+def test_state_refresh_timing_console_formatter_names_combined_position_balance_surface():
+    message = format_state_refresh_timing_console(
+        {
+            "plan": ["balance", "fills", "open_orders", "positions"],
+            "timings_ms": {
+                "fills": 1384,
+                "open_orders": 12372,
+                "positions_balance": 13376,
+            },
+            "wall_ms": 13381,
+            "residual_ms": 5,
+            "parallel": True,
+        }
+    )
+
+    assert "surfaces_ms=fills:1384,orders:12372,pos+bal:13376" in message
 
 
 def test_console_format_summarizes_order_wave_payload():

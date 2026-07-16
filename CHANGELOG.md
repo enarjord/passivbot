@@ -4,6 +4,11 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Slow staged account-refresh timings and periodic timing summaries now use a
+  compact structured console/text projection. The existing ten-second detail
+  threshold, complete event payloads, legacy fallback, refresh calls, and
+  trading behavior are unchanged.
+
 - HSL startup settings now use a compact INFO projection that retains the
   configured thresholds, spans, mode, tier ratios, actions, and restart policy
   within the normal console line budget. HSL validation, state reconstruction,
