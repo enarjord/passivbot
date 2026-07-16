@@ -7695,9 +7695,9 @@ class Passivbot:
                     logging.error(f"error stopping WS_ohlcvs_1m_tasks {key} {e}")
             if res0s:
                 if verbose:
-                    logging.info(f"stopped ohlcvs watcher tasks {res0s}")
+                    logging.debug(f"stopped ohlcvs watcher tasks {res0s}")
         if verbose:
-            logging.info(f"stopped data maintainers: {res}")
+            logging.debug(f"stopped data maintainers: {res}")
         return res
 
     def has_position(self, pside=None, symbol=None):
@@ -17899,7 +17899,7 @@ class Passivbot:
         # Random jitter (0–120s) so multiple bots on the same VPS don't fire
         # init_markets simultaneously and blow through IP-based rate limits.
         jitter_s = random.uniform(0, 120)
-        logging.info("[hourly] starting maintenance cycle (jitter=%.1fs)", jitter_s)
+        logging.debug("[hourly] starting maintenance cycle (jitter=%.1fs)", jitter_s)
         while not self.stop_signal_received:
             try:
                 now = utc_ms()
@@ -18299,7 +18299,7 @@ class Passivbot:
 
     async def close(self):
         """Stop background tasks and close exchange clients."""
-        logging.info(f"Stopped data maintainers: {self.stop_data_maintainers()}")
+        self.stop_data_maintainers()
         await self.cca.close()
         if self.ccp is not None:
             await self.ccp.close()

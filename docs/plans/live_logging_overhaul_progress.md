@@ -15,7 +15,29 @@ merge, live smoke evidence changes, or new gaps are discovered.
 - Do not use this file for design churn; unresolved design details belong in the
   plan or a focused handoff doc.
 
-## Latest Canonical Deployment (PR #1262)
+## Latest Canonical Deployment (PR #1263)
+
+- PR #1263 merged to `master` as
+  `e6d2461a54c9e446a3aee4ff367653aedafa8494`. It consolidates startup
+  lifecycle console ownership while retaining structured/monitor durability;
+  task ordering, waits, exchange calls, and trading behavior are unchanged.
+- VPS5 sent one SIGINT at `2026-07-16T07:54:15Z` to exact old PIDs
+  `975507/975510/975511/975513/975515`; all exited naturally by `07:54:37Z`.
+  New PIDs are `977722/977725/977728/977731/977734`; pane parents and unrelated
+  `misc:0.0` PID `434835` were unchanged.
+- The settled two-minute smoke was `ok=true` with zero hard, log, monitor,
+  process, or event-pipeline failures, `251/252` remote and all `37/37`
+  account-critical calls successful, seven successful fill refreshes, five
+  matching/config-valid processes in states `R=4,S=1`, and a clean tracked
+  checkout. One non-hard KuCoin candle timeout was retained.
+- Every bot naturally emitted exactly one `[bot] started`, one retained
+  `phase=startup-ready`, zero removed lifecycle INFO lines, and a durable
+  `bot.ready` event. Hyperliquid also completed full warmup without the demoted
+  success/jitter detail. The same exact startup segments retained four empty
+  maintainer-stop summaries and five hourly scheduler-jitter INFO lines; the
+  next slice demotes only that routine detail.
+
+## Previous Canonical Deployment (PR #1262)
 
 - PR #1262 merged to `master` as
   `82a56bb15445a1effff8501aa9f66540009b8f3f`. It keeps every initial-entry
