@@ -115,6 +115,10 @@ TOOL_COMMANDS: dict[str, CommandSpec] = {
         "tools.live_performance_report",
         "summarize local live performance timing events",
     ),
+    "live-process-report": CommandSpec(
+        "tools.live_process_report",
+        "sample local live process state without monitor or network access",
+    ),
     "live-config-preflight": CommandSpec(
         "tools.live_config_preflight",
         "read-only offline live config preflight report",

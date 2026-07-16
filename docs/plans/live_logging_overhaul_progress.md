@@ -9171,6 +9171,26 @@ active branch, PR, review gate, and rollout instructions.
   active `codex/compact-trailing-status-console` follow-up is formatter-only and
   targets the normal 240-character budget without changing payload or behavior.
 
+### 2026-07-16: Process Sampling Deployed; Local-Only Validation Split
+
+- PR #1283 merged to canonical `master` at `9bcf6c24fe` after current-head
+  Hermes approval and green Python/Rust CI under the temporary
+  maintainer-authorized Hermes-plus-CI gate. The final changelog-only
+  integration delta preserved the reviewed production/test/config/contract
+  diff, and 132 focused local smoke, incident, and docs tests passed.
+- VPS5 fast-forwarded from `82bfa98e` to `9bcf6c24` with a tracked-clean
+  checkout. Configured pane process IDs
+  `856294/856332/856364/856398/856434` and unrelated `misc:0.0` PID `434835`
+  remained unchanged; no restart or process signal was required.
+- The requested full `live-smoke-report` validation was not executed after the
+  production-action approval layer rejected it as a possible authenticated
+  exchange probe. The rejection was not retried or bypassed, and no exchange
+  request, process action, or trading/risk/state event was manufactured.
+- The active `codex/smoke-process-only-sampling` follow-up adds a dedicated
+  local-only process-report command. It reuses the bounded #1283 sampler while
+  remaining outside monitor-event, text-log, credential-store, network,
+  exchange, process-control, and file-write paths.
+
 ### 2026-07-16: Cycle Recovery Health Deployed; Process Sampling Follow-Up
 
 - PR #1282 merged to canonical `master` at `82bfa98e20` after exact-head
