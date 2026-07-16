@@ -1100,9 +1100,13 @@ are also merged, deployed, and naturally validated. PR #1276's initial-entry
 eligibility health, PR #1277's correlated planning-output health, and PR
 #1278's latest-per-bot-and-kind data-packet health, PR #1280's planning
 snapshot health, and PR #1282's cycle terminal-outcome/recovery health are
-merged, deployed, and naturally validated. The active follow-up makes bounded
-multi-sample process-state recovery visible without changing the single-sample
-default, process control, or runtime behavior.
+merged, deployed, and naturally validated. PR #1283's bounded multi-sample
+process-state recovery is also merged and deployed without a restart or process
+signal; its full VPS smoke remained intentionally unrun after the
+production-action rejection. Active PR #1285 adds the dedicated local-only
+`live-process-report` path for bounded process/supervisor validation without
+monitor, log, network, exchange, credential-store, file-write, or process-control
+access.
 
 Do not create progress-only PRs or resume unrelated logging work from stale
 worktrees.
