@@ -24,9 +24,10 @@ Estimated completion:
 
 - Branch: `codex/smoke-forager-eligibility-health`, based on canonical
   `af69725ed04b9a9a0402634455fd6bb05d71d7f5` after PR #1272.
-- PR: pending, `Expose forager eligibility health in smoke reports`. Slice:
-  expose existing `forager.eligibility_changed` evidence in full, summary,
-  brief, and section-selective smoke reports.
+- PR: #1273, `Expose forager eligibility health in smoke reports`; semantic
+  implementation head `7fdea0047f`. Slice: expose existing
+  `forager.eligibility_changed` evidence in full, summary, brief, and
+  section-selective smoke reports.
 - Triggering evidence: the settled PR #1272 VPS5 smoke naturally contained one
   `forager.eligibility_changed` event while the smoke report omitted that
   operator-relevant approved/ignored membership transition.
