@@ -608,6 +608,15 @@ Related detailed plans:
     structured human projection while preserving payload, admission, legacy
     fallback, gate decisions, and trading behavior.
 
+    PR #1253 merged and deployed the initial-entry distance-gate projection.
+    Sixteen natural blocked lines measured 181-190 characters, none exceeded
+    240, zero legacy duplicates appeared, and the settled smoke was hard-green.
+    The same exact new logs contained candle-health transition summaries at
+    257-263 characters on Binance, GateIO, and OKX. The active
+    `codex/compact-candle-health-console` slice bounds only that human INFO
+    projection while preserving full debug diagnostics, health calculations,
+    transition cadence, readiness, fetch behavior, and trading behavior.
+
     Two post-PR #1220 console observations remain deferred rather than folded
     into the realized-loss slice. Hyperliquid balance lines surfaced signed
     floating-point jitter near `1e-13`; decide a console-only materiality or

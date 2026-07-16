@@ -22,35 +22,49 @@ Estimated completion:
 
 ## Active Review Slice
 
-- Branch: `codex/compact-entry-distance-console`, based on canonical
-  `4ccf1e2523a217caa78b3ce3acbf2c949590926d` after PR #1252.
-- PR: #1253, `Compact initial-entry distance-gate output`.
-- Slice: compact the existing structured initial-entry distance-gate
-  blocked/cleared console/text projection within the normal record budget.
-- Triggering evidence: the PR #1252 deployment produced 21 natural blocked
-  lines at 222-270 visible characters; 20 exceeded 240. Repeated machine
-  action/type/reason labels dominated the human projection.
-- Scope: preserve complete structured payloads, event admission/routes, zero
-  numeric values, structured console ownership, and exact legacy fallback;
-  compact only the human projection.
-- Behavior boundary: observability-only; no entry eligibility, distance or
-  tolerance calculation, gate decision, exchange call, Rust, order creation,
-  risk, backtest, optimizer, or trading behavior.
+- Branch: `codex/compact-candle-health-console`, based on canonical
+  `048f1a722afe11a5e3aeda2340859893d6c8bb49` after PR #1253.
+- PR: #1254, `Compact candle-health console summaries`.
+- Slice: bound the existing candle-health transition INFO summary within the
+  normal record budget while retaining aggregate health counts and useful
+  whole-field missing-candle examples.
+- Triggering evidence: the PR #1253 deployment produced natural candle-health
+  summaries at 257-263 visible characters on Binance, GateIO, and OKX. They
+  were the longest recurring over-budget family in the exact new log files.
+- Scope: preserve the complete debug diagnostic payload, transition key and
+  cadence, actionable missing/stale/synthetic calculations, and full report;
+  compact only the human INFO projection.
+- Behavior boundary: observability-only; no candle fetch/cache, health
+  calculation, readiness, exchange call, Rust, order, risk, backtest,
+  optimizer, or trading behavior.
 - Review gate: temporary maintainer-authorized exact-head Hermes plus green CI
   while Grok is halted.
 - Expected VPS action: after merge, one authorized exact five-bot restart.
-  Validate natural entry-gate lines and settled smoke; do not
+  Validate natural candle-health transition lines and settled smoke; do not
   manufacture exchange, state, risk, or trading events.
 
 ## Deployed Baseline
 
 - Canonical `master` and VPS5 are
-  `4ccf1e2523a217caa78b3ce3acbf2c949590926d`, PR #1252. The tracked checkout
+  `048f1a722afe11a5e3aeda2340859893d6c8bb49`, PR #1253. The tracked checkout
   is clean and expected untracked artifacts are preserved.
 - VPS5 runs merged master in bot PIDs
-  `963164/963166/964008/963169/963170`. The exact pane PIDs remain
+  `965117/965119/965121/965123/965124`. The exact pane PIDs remain
   `856294/856332/856364/856398/856434`, and unrelated `misc:0.0` PID `434835`
   is unchanged.
+- PR #1253 was activated after one exact five-bot SIGINT round; all old bots
+  exited naturally within four seconds and no escalation was used. Natural
+  initial-entry distance-gate records appeared 16 times across Binance,
+  GateIO, and OKX at 181-190 visible characters, with zero records above 240
+  and zero legacy duplicates. The initial window included active expected HSL
+  replay and one recoverable KuCoin authoritative-state timeout cycle. The
+  final two-minute smoke was `ok=true` with zero hard/log/monitor/process
+  failures, `52/52` account-critical calls successful, eight successful fill
+  refreshes, no active HSL replay, five matching/config-valid processes in
+  normal `R/S` states, and a clean tracked checkout. One non-account-critical
+  KuCoin OHLCV fetch timeout remained non-hard evidence. The exact new logs
+  then exposed natural candle-health summaries at 257-263 characters on
+  Binance, GateIO, and OKX.
 - PR #1252 was activated after one exact five-bot SIGINT round; all old bots
   exited naturally within ten seconds and no escalation was used. GateIO's
   first new process then failed closed during HSL replay because one required
@@ -776,8 +790,11 @@ deployed, and naturally validated: admitted staged-refresh lines measured
 settled smoke. PR #1252 is merged, deployed, and naturally validated: compact
 close-EMA warnings measured 158-225 visible characters with zero post-deploy
 legacy duplicates and a hard-green settled smoke after one bounded GateIO
-retry. The active slice compacts the naturally observed 222-270 character
-initial-entry distance-gate lines without changing entry or trading behavior.
+retry. PR #1253 is also merged, deployed, and naturally validated: 16
+initial-entry distance-gate lines measured 181-190 visible characters with
+zero legacy duplicates and a hard-green settled smoke. The active slice
+compacts the naturally observed 257-263 character candle-health summaries
+without changing candle or trading behavior.
 
 Do not create progress-only PRs or resume unrelated logging work from stale
 worktrees.

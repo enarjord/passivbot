@@ -612,6 +612,12 @@ class Passivbot:
     TRAILING_RATIO_MATERIALITY_ABSOLUTE_DELTA = 0.0005
     TRAILING_PRICE_MATERIALITY_RELATIVE_DELTA = 0.005
     STATUS_OPERATOR_HEARTBEAT_INTERVAL_MS = 60 * 60 * 1000
+    # The longest live INFO prefix is 44 characters: timestamp, level, and Hyperliquid.
+    CANDLE_HEALTH_CONSOLE_MESSAGE_MAX_LEN = 196
+    _CANDLE_HEALTH_CONSOLE_SAMPLE_LIMIT = 3
+    _CANDLE_HEALTH_CONSOLE_SYMBOL_MAX_LEN = 24
+    _CANDLE_HEALTH_CONSOLE_TIMEFRAME_MAX_LEN = 8
+    _CANDLE_HEALTH_CONSOLE_INT_MAX = 999_999
 
     _begin_live_event_cycle = live_event_emitters.begin_live_event_cycle
     _current_live_event_cycle_id = live_event_emitters.current_live_event_cycle_id
@@ -5049,6 +5055,80 @@ class Passivbot:
             "unhealthy_symbols": sorted(unhealthy),
         }
 
+    @staticmethod
+    def _format_candle_health_console_token(value: Any, max_len: int) -> str:
+        """Return one bounded, single-field token for the candle health console summary."""
+        text = str(value)
+        text = "".join(
+            char
+            if char.isascii()
+            and char.isprintable()
+            and not char.isspace()
+            and char not in {";", "|"}
+            else "_"
+            for char in text
+        )
+        if not text:
+            return "?"
+        if len(text) <= max_len:
+            return text
+        return f"{text[: max_len - 3]}..."
+
+    @staticmethod
+    def _format_candle_health_console_int(value: Any) -> str:
+        """Return a fixed-width-safe integer token for the candle health console summary."""
+        try:
+            number = int(value)
+        except (TypeError, ValueError, OverflowError):
+            return "0"
+        sign = "-" if number < 0 else ""
+        magnitude = abs(number)
+        if magnitude > Passivbot._CANDLE_HEALTH_CONSOLE_INT_MAX:
+            return f"{sign}{Passivbot._CANDLE_HEALTH_CONSOLE_INT_MAX}+"
+        return f"{number}"
+
+    @staticmethod
+    def _format_candle_health_summary(
+        symbol_count: int,
+        unhealthy_surface_count: int,
+        stale_count: int,
+        synthetic_count: int,
+        worst_missing: int,
+        unhealthy_samples: list[tuple[str, str, int, int | None]],
+    ) -> str:
+        """Format the bounded human projection without changing health diagnostics."""
+        integer = Passivbot._format_candle_health_console_int
+        base_message = (
+            "[candle] health: "
+            f"symbols={integer(symbol_count)} "
+            f"unhealthy_surfaces={integer(unhealthy_surface_count)} "
+            f"stale={integer(stale_count)} "
+            f"synthetic={integer(synthetic_count)} "
+            f"worst_missing={integer(worst_missing)}"
+        )
+        message = base_message
+        samples = []
+        for symbol, timeframe, missing, tail in unhealthy_samples[
+            : Passivbot._CANDLE_HEALTH_CONSOLE_SAMPLE_LIMIT
+        ]:
+            sample = (
+                f"{Passivbot._format_candle_health_console_token(symbol, Passivbot._CANDLE_HEALTH_CONSOLE_SYMBOL_MAX_LEN)} "
+                f"{Passivbot._format_candle_health_console_token(timeframe, Passivbot._CANDLE_HEALTH_CONSOLE_TIMEFRAME_MAX_LEN)} "
+                f"missing={integer(missing)}"
+            )
+            if tail is not None:
+                sample += f" tail={integer(tail)}"
+            samples.append(sample)
+        for sample_count in range(1, len(samples) + 1):
+            remainder = len(unhealthy_samples) - sample_count
+            candidate = f"{base_message} | {'; '.join(samples[:sample_count])}"
+            if remainder > 0:
+                candidate += f"; +{integer(remainder)} more"
+            if len(candidate) > Passivbot.CANDLE_HEALTH_CONSOLE_MESSAGE_MAX_LEN:
+                break
+            message = candidate
+        return message
+
     def _maybe_log_candle_health_summary(self) -> None:
         """Log periodic candle health diagnostics without fetching remote data."""
         try:
@@ -5075,6 +5155,7 @@ class Passivbot:
             stale_count = 0
             synthetic_count = 0
             unhealthy_details = []
+            unhealthy_samples = []
             try:
                 stale_minutes = float(
                     get_optional_live_value(
@@ -5115,14 +5196,19 @@ class Passivbot:
                             stale_count += 1
                     if actionable_missing:
                         tail_note = ""
+                        tail_gap_candles = None
                         if bool(tf_report.get("open_tail_gap", False)):
-                            tail_note = f" tail={int(tf_report.get('tail_gap_candles', 0) or 0)}"
+                            tail_gap_candles = int(
+                                tf_report.get("tail_gap_candles", 0) or 0
+                            )
+                            tail_note = f" tail={tail_gap_candles}"
+                        display_symbol = Passivbot._log_symbol(symbol)
                         unhealthy_details.append(
-                            f"{Passivbot._log_symbol(symbol)} {tf} missing={missing}{tail_note}"
+                            f"{display_symbol} {tf} missing={missing}{tail_note}"
                         )
-            detail = "; ".join(unhealthy_details[:5])
-            if len(unhealthy_details) > 5:
-                detail += f"; +{len(unhealthy_details) - 5} more"
+                        unhealthy_samples.append(
+                            (display_symbol, str(tf), missing, tail_gap_candles)
+                        )
             debug_payload = {
                 symbol: {
                     tf: {
@@ -5160,13 +5246,15 @@ class Passivbot:
             if interesting and key != last_key:
                 self._candle_health_last_log_key = key
                 logging.info(
-                    "[candle] health: symbols=%d unhealthy_surfaces=%d stale=%d synthetic=%d worst_missing=%d%s",
-                    len(symbol_reports),
-                    len(unhealthy_details),
-                    stale_count,
-                    synthetic_count,
-                    worst_missing,
-                    f" | {detail}" if detail else "",
+                    "%s",
+                    Passivbot._format_candle_health_summary(
+                        len(symbol_reports),
+                        len(unhealthy_details),
+                        stale_count,
+                        synthetic_count,
+                        worst_missing,
+                        unhealthy_samples,
+                    ),
                 )
             elif not interesting:
                 logging.debug("[candle] health ok | symbols=%d", len(symbol_reports))

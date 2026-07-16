@@ -40,6 +40,7 @@ import passivbot as passivbot_module
 from config import get_template_config, prepare_config
 from freshness_ledger import ACCOUNT_SURFACES, LIVE_STATE_SURFACES, FreshnessLedger
 from live.planning_availability import PlanningAvailability
+from logging_setup import DEFAULT_DATEFMT, DEFAULT_FORMAT_WITH_PREFIX
 from market_snapshot import MarketSnapshot
 from planning_snapshot import (
     PlanningMarketSnapshot,
@@ -3887,6 +3888,123 @@ def test_candle_health_missing_trailing_1m_gap_is_not_actionable_during_grace():
         )
         is True
     )
+
+
+def test_candle_health_summary_formatter_exact_format():
+    message = Passivbot._format_candle_health_summary(
+        symbol_count=3,
+        unhealthy_surface_count=3,
+        stale_count=2,
+        synthetic_count=4,
+        worst_missing=6,
+        unhealthy_samples=[
+            ("BTC", "1m", 2, 3),
+            ("ETH", "1h", 1, None),
+            ("SOL", "15m", 6, None),
+        ],
+    )
+
+    assert message == (
+        "[candle] health: symbols=3 unhealthy_surfaces=3 stale=2 synthetic=4 "
+        "worst_missing=6 | BTC 1m missing=2 tail=3; ETH 1h missing=1; SOL 15m missing=6"
+    )
+
+
+def test_candle_health_summary_formatter_bounds_hostile_labels_for_live_console():
+    hostile = "bad label;|\n\t" + ("x" * 100)
+    message = Passivbot._format_candle_health_summary(
+        symbol_count=10**20,
+        unhealthy_surface_count=10,
+        stale_count=10**20,
+        synthetic_count=10**20,
+        worst_missing=10**20,
+        unhealthy_samples=[(hostile, hostile, 10**20, 10**20) for _ in range(10)],
+    )
+    record = logging.LogRecord(
+        "test", logging.INFO, __file__, 0, "%s", (message,), None
+    )
+    record.created = 0.0
+    record.log_prefix = "hyperliquid"
+    formatter = logging.Formatter(DEFAULT_FORMAT_WITH_PREFIX, datefmt=DEFAULT_DATEFMT)
+    formatter.converter = time.gmtime
+    rendered = formatter.format(record)
+
+    assert "\n" not in message
+    assert "\r" not in message
+    assert "\t" not in message
+    assert "+9 more" in message
+    assert len(message) <= Passivbot.CANDLE_HEALTH_CONSOLE_MESSAGE_MAX_LEN
+    assert Passivbot.CANDLE_HEALTH_CONSOLE_MESSAGE_MAX_LEN == 240 - (
+        len(rendered) - len(message)
+    )
+    assert len(rendered) <= 240
+
+
+def test_candle_health_summary_projection_preserves_debug_payload_and_transition(monkeypatch, caplog):
+    bot = Passivbot.__new__(Passivbot)
+    bot.active_symbols = ["BTC/USDT:USDT"]
+    bot.open_orders = {}
+    bot.positions = {}
+    bot.config = {"live": {}}
+    report = {
+        "symbols": {
+            "BTC/USDT:USDT": {
+                "timeframes": {
+                    "1m": {
+                        "coverage_ok": False,
+                        "required": True,
+                        "missing_candles": 2,
+                        "last_cached_ts": 0,
+                        "end_ts": 60_000,
+                        "runtime_synthetic_count": 3,
+                        "open_tail_gap": True,
+                        "tail_gap_candles": 2,
+                    }
+                }
+            }
+        }
+    }
+    calls = []
+
+    def build_report(symbols):
+        calls.append(set(symbols))
+        return report
+
+    monkeypatch.setattr(bot, "build_required_candle_health_report", build_report)
+
+    with caplog.at_level(logging.DEBUG):
+        bot._maybe_log_candle_health_summary()
+        bot._maybe_log_candle_health_summary()
+
+    info_messages = [
+        record.message
+        for record in caplog.records
+        if record.levelno == logging.INFO and record.message.startswith("[candle] health:")
+    ]
+    debug_records = [
+        record
+        for record in caplog.records
+        if record.message.startswith("[candle] health diagnostics |")
+    ]
+    assert calls == [{"BTC/USDT:USDT"}, {"BTC/USDT:USDT"}]
+    assert info_messages == [
+        "[candle] health: symbols=1 unhealthy_surfaces=1 stale=0 synthetic=3 "
+        "worst_missing=2 | BTC 1m missing=2 tail=2"
+    ]
+    assert len(debug_records) == 2
+    assert debug_records[0].args[1] == {
+        "BTC/USDT:USDT": {
+            "1m": {
+                "ok": False,
+                "required": True,
+                "missing": 2,
+                "last_cached_ts": 0,
+                "synthetic": 3,
+                "open_tail_gap": True,
+                "tail_gap_candles": 2,
+            }
+        }
+    }
 
 
 def test_memory_snapshot_is_interesting_only_initially_or_on_large_change():
