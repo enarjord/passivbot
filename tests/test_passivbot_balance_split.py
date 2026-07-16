@@ -10407,6 +10407,129 @@ def test_staged_refresh_timing_summary_emits_structured_event(monkeypatch):
     assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 
+def test_staged_refresh_timing_threshold_uses_structured_console_owner(caplog, monkeypatch):
+    structured_sink = ListEventSink()
+    console_sink = ListEventSink()
+    text_sink = ListEventSink()
+    bot = Passivbot.__new__(Passivbot)
+    bot.live_event_console_enabled = True
+    bot._live_event_pipeline = LiveEventPipeline(
+        structured_sinks=[structured_sink],
+        monitor_sinks=[],
+        console_sink=console_sink,
+        text_sink=text_sink,
+    )
+    bot._authoritative_pending_confirmations = {}
+    bot._authoritative_refresh_epoch_changed = set()
+    monkeypatch.setattr(passivbot_module, "utc_ms", lambda: 1_000_000)
+
+    with caplog.at_level(logging.DEBUG):
+        bot._log_staged_refresh_timings(
+            {"balance", "fills", "open_orders", "positions"},
+            {"balance": 2500, "fills": 4000, "open_orders": 2000, "positions": 3000},
+            9999,
+        )
+        bot._log_staged_refresh_timings(
+            {"balance", "fills", "open_orders", "positions"},
+            {"balance": 2500, "fills": 4000, "open_orders": 2000, "positions": 3000},
+            10_000,
+        )
+
+    legacy_records = [
+        record
+        for record in caplog.records
+        if "[state] staged refresh timings" in record.message
+    ]
+    assert [(record.levelno, record.message) for record in legacy_records] == [
+        (
+            logging.DEBUG,
+            "[state] staged refresh timings | plan=balance,fills,open_orders,positions | "
+            "wall=9999ms | surface_sum=11500ms | surface_max=4000ms | parallel=yes | "
+            "balance=2500ms fills=4000ms open_orders=2000ms positions=3000ms "
+            "residual=5999ms residual_hint=scheduler_or_lock_wait",
+        )
+    ]
+    assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    assert len(structured_sink.events) == 1
+    event = structured_sink.events[0]
+    assert event.data["wall_ms"] == 10_000
+    assert event.data["timings_ms"] == {
+        "balance": 2500,
+        "fills": 4000,
+        "open_orders": 2000,
+        "positions": 3000,
+    }
+    assert console_sink.events == [event]
+    assert text_sink.events == [event]
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
+
+
+def test_staged_refresh_timing_uses_exact_legacy_fallback_without_console(caplog, monkeypatch):
+    structured_sink = ListEventSink()
+    bot = Passivbot.__new__(Passivbot)
+    bot.live_event_console_enabled = True
+    bot._live_event_pipeline = LiveEventPipeline(
+        structured_sinks=[structured_sink],
+        monitor_sinks=[],
+        console_sink=None,
+    )
+    bot._authoritative_pending_confirmations = {}
+    bot._authoritative_refresh_epoch_changed = set()
+    monkeypatch.setattr(passivbot_module, "utc_ms", lambda: 1_000_000)
+
+    with caplog.at_level(logging.INFO):
+        bot._log_staged_refresh_timings(
+            {"balance", "fills", "open_orders", "positions"},
+            {"balance": 2500, "fills": 4000, "open_orders": 2000, "positions": 3000},
+            10_000,
+        )
+
+    assert [record.message for record in caplog.records] == [
+        "[state] staged refresh timings | plan=balance,fills,open_orders,positions | "
+        "wall=10000ms | surface_sum=11500ms | surface_max=4000ms | parallel=yes | "
+        "balance=2500ms fills=4000ms open_orders=2000ms positions=3000ms "
+        "residual=6000ms residual_hint=scheduler_or_lock_wait"
+    ]
+    assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    assert structured_sink.events[0].data["wall_ms"] == 10_000
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
+
+
+def test_staged_refresh_timing_summary_uses_structured_console_owner(caplog, monkeypatch):
+    structured_sink = ListEventSink()
+    console_sink = ListEventSink()
+    bot = Passivbot.__new__(Passivbot)
+    bot.live_event_console_enabled = True
+    bot._live_event_pipeline = LiveEventPipeline(
+        structured_sinks=[structured_sink],
+        monitor_sinks=[],
+        console_sink=console_sink,
+    )
+    bot._authoritative_pending_confirmations = {}
+    bot._authoritative_refresh_epoch_changed = set()
+    monkeypatch.setattr(passivbot_module, "utc_ms", lambda: 1_000_000)
+
+    with caplog.at_level(logging.INFO):
+        for i in range(60):
+            bot._log_staged_refresh_timings(
+                {"open_orders"},
+                {"open_orders": 100 + i},
+                100 + i,
+            )
+
+    assert not [
+        record
+        for record in caplog.records
+        if "[state] staged refresh timing summary" in record.message
+    ]
+    assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    assert len(structured_sink.events) == 1
+    event = structured_sink.events[0]
+    assert event.data["summary"] is True
+    assert console_sink.events == [event]
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
+
+
 def test_staged_refresh_timing_summary_includes_debug_moderate_refreshes(
     caplog, monkeypatch
 ):

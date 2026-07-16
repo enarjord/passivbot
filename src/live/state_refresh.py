@@ -17,6 +17,15 @@ def _utc_ms() -> int:
     return int(utc_ms())
 
 
+def _state_refresh_structured_console_available(bot) -> bool:
+    pipeline = getattr(bot, "_live_event_pipeline", None)
+    return bool(
+        getattr(bot, "live_event_console_enabled", False)
+        and callable(getattr(pipeline, "emit", None))
+        and getattr(pipeline, "console_sink", None) is not None
+    )
+
+
 async def refresh_authoritative_state(bot) -> bool:
     """Refresh authoritative account state before planning/execution."""
     if bot.stop_signal_received:
@@ -381,6 +390,8 @@ def log_staged_refresh_timings(
             epoch_changed=epoch_changed,
             level="info",
         )
+    if wall_ms >= 10_000 and _state_refresh_structured_console_available(bot):
+        return
     logging.log(
         console_log_level,
         "[state] staged refresh timings | plan=%s | wall=%dms | surface_sum=%dms | surface_max=%dms | parallel=%s | %s%s",
@@ -464,6 +475,9 @@ def record_staged_refresh_timing_summary(
         residual=summary["residual"],
         surfaces=surfaces,
     )
+    if _state_refresh_structured_console_available(bot):
+        summaries.pop(plan_key, None)
+        return
     logging.info(
         "[state] staged refresh timing summary | plan=%s | count=%d since=%s | wall=%s | surface_sum=%s | surface_max=%s | residual=%s | %s",
         plan_key,

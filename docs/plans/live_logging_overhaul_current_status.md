@@ -22,20 +22,21 @@ Estimated completion:
 
 ## Active Review Slice
 
-- Branch: `codex/compact-hsl-startup-console`, based on canonical
-  `9aef070e4a4a5b911b56f9dafb2457aacee0875a` after PR #1249.
-- PR: #1250, `Compact HSL startup settings line`.
-- Slice: compact only the INFO HSL-enabled settings projection while retaining
-  the side and every currently displayed setting.
-- Triggering evidence: the PR #1249 restart naturally printed one HSL settings
-  line per enabled side at 310-314 visible characters, above the normal
-  240-character record budget.
-- Scope: retain red threshold, EMA span, cooldown, no-restart threshold, signal
-  mode, yellow/orange ratios, orange action, panic-close type, and restart
-  policy with concise stable labels and bounded numeric rendering.
-- Behavior boundary: observability-only; no exchange calls, cache or task
-  mutation, HSL parsing/validation/state/replay/decision change, Rust, order,
-  risk, backtest, optimizer, or trading behavior.
+- Branch: `codex/compact-state-refresh-console`, based on canonical
+  `0dea5c0698f77c20610352aed43ef47969814423` after PR #1250.
+- PR: #1251, `Compact staged-refresh timing console output`.
+- Slice: make the existing structured `state.refresh_timing` event the sole
+  normal console/text owner for admitted slow refreshes and periodic summaries.
+- Triggering evidence: the PR #1250 restart naturally printed five admitted
+  slow-refresh lines at 252-305 visible characters. The longest retained a
+  four-surface plan, per-surface timings, parallel execution, and scheduler or
+  lock residual context.
+- Scope: preserve the exact ten-second detail threshold, complete structured
+  payloads, and legacy logging fallback; compact only the human projection.
+  Interesting sub-ten-second events remain durable but console/text-hidden.
+- Behavior boundary: observability-only; no refresh plan, exchange call,
+  readiness, state application, Rust, order, risk, backtest, optimizer, or
+  trading behavior.
 - Review gate: temporary maintainer-authorized exact-head Hermes plus green CI
   while Grok is halted.
 - Expected VPS action: after merge, one authorized exact five-bot restart.
@@ -45,12 +46,23 @@ Estimated completion:
 ## Deployed Baseline
 
 - Canonical `master` and VPS5 are
-  `9aef070e4a4a5b911b56f9dafb2457aacee0875a`, PR #1249. The tracked checkout
+  `0dea5c0698f77c20610352aed43ef47969814423`, PR #1250. The tracked checkout
   is clean and expected untracked artifacts are preserved.
 - VPS5 runs merged master in bot PIDs
-  `958819/958821/958823/958825/958827`. The exact pane PIDs remain
+  `959818/959820/959822/959824/959826`. The exact pane PIDs remain
   `856294/856332/856364/856398/856434`, and unrelated `misc:0.0` PID `434835`
   is unchanged.
+- PR #1250 was activated with one exact five-bot graceful restart. Every old
+  bot exited naturally within 24 seconds after one SIGINT round; no escalation
+  was used. Natural forager HSL settings lines measured 163-167 visible
+  characters, versus 310-314 before, while retaining every configured setting.
+  One KuCoin timeout cycle and active GateIO replay appeared in the first
+  startup window and recovered naturally. The final two-minute smoke was
+  `ok=true` with zero hard/log/monitor/process/pipeline failures, `43/43`
+  account-critical calls successful, eight successful fill refreshes, no
+  active HSL replay, five config-valid processes in states `R=4,S=1`, and a
+  clean tracked checkout. One non-account-critical remote failure remained
+  non-hard evidence.
 - PR #1249 was activated with one exact five-bot graceful restart. Every old
   bot exited naturally within 24 seconds after one SIGINT round; no escalation
   was used. Eleven logical lock-hold warnings then occurred naturally at
@@ -735,9 +747,12 @@ PR #1248 is merged, deployed, and naturally validated: its bounded
 to 154 visible characters while retaining counts and bounded samples. PR #1249
 is also merged, deployed, and naturally validated: eleven logical lock-hold
 warnings measured 205-218 visible characters while retaining per-symbol scope
-and compact holder identity/timing. The active slice compacts the naturally
-observed 310-314 character HSL-enabled settings line without changing HSL
-configuration or behavior.
+and compact holder identity/timing. PR #1250 is merged, deployed, and naturally
+validated: the four forager HSL settings lines measured 163-167 visible
+characters while retaining all configured settings. The active slice compacts
+the naturally observed 252-305 character admitted staged-refresh timing lines
+without changing their ten-second threshold, durable payload, or refresh
+behavior.
 
 Do not create progress-only PRs or resume unrelated logging work from stale
 worktrees.

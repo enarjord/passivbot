@@ -825,6 +825,7 @@ DEFAULT_ROUTES: dict[str, EventRoute] = {
     EventTypes.REMOTE_CALL_SUCCEEDED: EventRoute(console=False),
     EventTypes.REMOTE_CALL_FAILED: EventRoute(console=False),
     EventTypes.REMOTE_CALL_THROTTLED: EventRoute(console=False),
+    EventTypes.STATE_REFRESH_TIMING: EventRoute(console=True, text=True),
     EventTypes.RUST_ORCHESTRATOR_CALLED: EventRoute(console=False),
     EventTypes.RUST_ORCHESTRATOR_RETURNED: EventRoute(
         console=True, text=True, throttle_interval_ms=60_000
@@ -2098,6 +2099,8 @@ def _operator_sink_event_visible(event: LiveEvent) -> bool:
     data = event.data if isinstance(event.data, Mapping) else {}
     if data.get("operator_visible") is False:
         return False
+    if event.event_type == EventTypes.STATE_REFRESH_TIMING:
+        return data.get("summary") is True or _state_refresh_timing_wall_ms(data) >= 10_000
     if event.event_type == EventTypes.FILL_INGESTED:
         return True
     if event.event_type == EventTypes.FORAGER_SELECTION:
@@ -2118,6 +2121,133 @@ def _console_sink_event_visible(event: LiveEvent) -> bool:
     return True
 
 
+_STATE_REFRESH_CONSOLE_LABELS = {
+    "balance": "bal",
+    "fills": "fills",
+    "open_orders": "orders",
+    "positions": "pos",
+    "positions_balance": "pos+bal",
+}
+_STATE_REFRESH_CONSOLE_LABEL_MAX = 7
+_STATE_REFRESH_CONSOLE_MAX_MS = (1 << 63) - 1
+
+
+def _state_refresh_timing_wall_ms(data: Mapping[str, Any]) -> int:
+    try:
+        value = int(data.get("wall_ms", 0))
+    except (TypeError, ValueError, OverflowError):
+        return 0
+    return max(0, min(value, _STATE_REFRESH_CONSOLE_MAX_MS))
+
+
+def _format_state_refresh_console_label(value: object) -> str:
+    label = _STATE_REFRESH_CONSOLE_LABELS.get(str(value), None)
+    if label is not None:
+        return label
+    label = _format_console_label(value)
+    return label[:_STATE_REFRESH_CONSOLE_LABEL_MAX]
+
+
+def _format_state_refresh_console_ms(value: object) -> str:
+    try:
+        milliseconds = int(value)
+    except (TypeError, ValueError, OverflowError):
+        return "-"
+    milliseconds = max(0, min(milliseconds, _STATE_REFRESH_CONSOLE_MAX_MS))
+    if milliseconds < 1_000_000:
+        return str(milliseconds)
+    return f"{milliseconds:.4g}"
+
+
+def _format_state_refresh_console_stats(value: object) -> str:
+    if not isinstance(value, Mapping):
+        return "-"
+    return "/".join(
+        _format_state_refresh_console_ms(value.get(key)) for key in ("min", "mean", "max")
+    )
+
+
+def _format_state_refresh_console_labels(value: object) -> str:
+    if not isinstance(value, (list, tuple, set, frozenset)):
+        return "-"
+    labels = [_format_state_refresh_console_label(item) for item in value]
+    labels = [label for label in labels if label and label != "-"]
+    if len(labels) <= 4:
+        return ",".join(labels) or "-"
+    return ",".join(labels[:3]) + ",+more"
+
+
+def _format_state_refresh_console_timings(value: object) -> str:
+    if not isinstance(value, Mapping):
+        return "-"
+    timings = [
+        (_format_state_refresh_console_label(surface), _format_state_refresh_console_ms(elapsed))
+        for surface, elapsed in value.items()
+    ]
+    timings.sort(key=lambda item: item[0])
+    if len(timings) <= 4:
+        shown = timings
+        suffix = ""
+    else:
+        shown = timings[:3]
+        suffix = ",+more"
+    return ",".join(f"{surface}:{elapsed}" for surface, elapsed in shown) + suffix or "-"
+
+
+def _format_state_refresh_console_slowest_surface(value: object) -> str:
+    if not isinstance(value, Mapping) or not value:
+        return "-"
+    candidates: list[tuple[int, str, Mapping[str, Any]]] = []
+    for surface, stats in value.items():
+        if not isinstance(stats, Mapping):
+            continue
+        try:
+            maximum = int(stats.get("max", 0))
+        except (TypeError, ValueError, OverflowError):
+            maximum = 0
+        candidates.append((max(0, maximum), _format_state_refresh_console_label(surface), stats))
+    if not candidates:
+        return "-"
+    _maximum, surface, stats = max(candidates, key=lambda item: (item[0], item[1]))
+    return f"{surface}:{_format_state_refresh_console_stats(stats)}"
+
+
+def format_state_refresh_timing_console(data: Mapping[str, Any]) -> str:
+    """Render bounded operator projections for staged-refresh timing events."""
+    plan = _format_state_refresh_console_labels(data.get("plan"))
+    if data.get("summary") is True:
+        try:
+            count = max(0, int(data.get("count", 0)))
+        except (TypeError, ValueError, OverflowError):
+            count = 0
+        count_label = str(min(count, 1_000_000))
+        if count > 1_000_000:
+            count_label += "+"
+        return " ".join(
+            (
+                "[state] refresh summary",
+                f"plan={plan}",
+                f"n={count_label}",
+                f"wall_ms={_format_state_refresh_console_stats(data.get('wall_ms'))}",
+                f"slow={_format_state_refresh_console_slowest_surface(data.get('surfaces_ms'))}",
+                f"resid_ms={_format_state_refresh_console_stats(data.get('residual_ms'))}",
+            )
+        )
+
+    parts = [
+        "[state] refresh",
+        f"plan={plan}",
+        f"wall={_format_state_refresh_console_ms(data.get('wall_ms'))}ms",
+        f"surfaces_ms={_format_state_refresh_console_timings(data.get('timings_ms'))}",
+    ]
+    if data.get("parallel") is True:
+        parts.append("parallel")
+    residual_ms = _state_refresh_timing_wall_ms({"wall_ms": data.get("residual_ms")})
+    if residual_ms >= 500:
+        parts.append(f"residual={_format_state_refresh_console_ms(residual_ms)}ms")
+    return " ".join(parts)
+
+
 def format_console_event(event: LiveEvent) -> str:
     if (
         event.event_type == EventTypes.HEALTH_SUMMARY
@@ -2134,6 +2264,9 @@ def format_console_event(event: LiveEvent) -> str:
         return _format_console_balance_changed(event)
     if event.event_type == EventTypes.RESOURCE_MEMORY_SNAPSHOT:
         return format_memory_snapshot_console(event.data)
+    if event.event_type == EventTypes.STATE_REFRESH_TIMING:
+        data = event.data if isinstance(event.data, Mapping) else {}
+        return format_state_refresh_timing_console(data)
     if event.event_type == EventTypes.TRAILING_STATUS:
         trailing_status = _format_console_trailing_status(event)
         if trailing_status is not None:

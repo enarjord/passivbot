@@ -580,6 +580,15 @@ Related detailed plans:
     to the normal 240-character budget without changing event data or
     admission.
 
+    PR #1250 merged and deployed the bounded HSL startup-settings projection.
+    Natural forager lines measured 163-167 characters versus 310-314 before,
+    and the settled smoke was hard-green. The same restart exposed five
+    admitted staged-refresh timing lines at 252-305 characters. The active
+    `codex/compact-state-refresh-console` slice routes only the existing
+    periodic summary and detail at or above the existing ten-second threshold
+    to a compact console/text projection. Complete structured timing data and
+    legacy fallback remain unchanged.
+
     Two post-PR #1220 console observations remain deferred rather than folded
     into the realized-loss slice. Hyperliquid balance lines surfaced signed
     floating-point jitter near `1e-13`; decide a console-only materiality or
