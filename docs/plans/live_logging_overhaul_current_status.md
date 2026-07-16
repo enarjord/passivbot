@@ -24,8 +24,10 @@ Estimated completion:
 
 - Branch: `codex/live-performance-startup-budgets`, based on canonical
   `d511341366fea26b48d064f2bbe5b25a4408664b` after PR #1269.
-- PR: pending. Slice: make `live-performance-report` consume the configured
-  startup-budget metadata already carried by `bot.startup_timing` events.
+- PR: #1270, `Add startup budget assessments to performance reports`;
+  semantic implementation head `1d33d6f8a4`. Slice: make
+  `live-performance-report` consume the configured startup-budget metadata
+  already carried by `bot.startup_timing` events.
 - Triggering evidence: PR #1269 made configured startup budgets durable and
   taught smoke reports to assess them, but the parallel startup-readiness
   accumulator in `live-performance-report` still discarded those fields.
