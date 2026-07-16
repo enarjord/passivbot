@@ -24,7 +24,7 @@ Estimated completion:
 
 - Branch: `codex/compact-forager-selection-console`, based on canonical
   `e7f87e18085f1bd53e2f6975ba5ecd4c14e60745` after PR #1254.
-- PR: pending, `Compact forager selection console output`.
+- PR: #1255, `Compact forager selection console output`.
 - Slice: bound the Rust-owned forager selection transition INFO projection
   within the normal record budget while retaining useful selected/incumbent,
   hysteresis, reason, ranking, and replacement context.
