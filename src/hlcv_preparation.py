@@ -16,6 +16,13 @@ import numpy as np
 import pandas as pd
 
 from candlestick_manager import CandlestickManager, OhlcvTerminalEmptyPage
+from binance_ohlcv_archive import (
+    BinanceArchiveRequest,
+    BinanceArchiveResult,
+    BinanceOhlcvArchiveClient,
+    plan_binance_archive_requests,
+    symbol_to_archive_code,
+)
 from backtest_dataset_materializer import BacktestDatasetMaterializer, materialize_frames
 from ohlcv_catalog import KNOWN_GAP_RETRY_MS, OhlcvCatalog
 from ohlcv_legacy_import import import_legacy_range_into_store
@@ -251,6 +258,7 @@ class HLCVManager:
             self.cm_progress_log_interval_seconds = 0.0
         self.force_refetch_gaps = bool(force_refetch_gaps)
         self.cm: Optional[CandlestickManager] = None
+        self.binance_archive_client: Optional[BinanceOhlcvArchiveClient] = None
         self.ohlcv_source_dir = str(ohlcv_source_dir) if ohlcv_source_dir else None
         self.tradfi_for_stock_perps = _has_stock_perp_calendar_context(self.ohlcv_source_dir)
 
@@ -301,6 +309,11 @@ class HLCVManager:
 
     async def aclose(self) -> None:
         """Close CandlestickManager resources (not the ccxt exchange)."""
+        if self.binance_archive_client is not None:
+            try:
+                await self.binance_archive_client.aclose()
+            finally:
+                self.binance_archive_client = None
         if self.cm is None:
             return
         try:
@@ -308,6 +321,11 @@ class HLCVManager:
         except Exception:
             pass
         self.cm = None
+
+    def get_binance_archive_client(self) -> BinanceOhlcvArchiveClient:
+        if self.binance_archive_client is None:
+            self.binance_archive_client = BinanceOhlcvArchiveClient()
+        return self.binance_archive_client
 
     def close(self) -> None:
         """Best-effort sync close for CandlestickManager resources."""
@@ -2591,6 +2609,43 @@ async def _fetch_invalid_windows_into_v2_store_results(
     allow_pre_inception_prefix: bool = False,
 ) -> list[V2FetchResult]:
     results: list[V2FetchResult] = []
+    archive_capable = to_standard_exchange_name(exchange) == "binance" and callable(
+        getattr(om, "get_binance_archive_client", None)
+    )
+    archive_rows = (
+        await _fetch_binance_archives_into_v2_store(
+            om=om,
+            catalog=catalog,
+            store=store,
+            exchange=exchange,
+            coin=coin,
+            symbol=symbol,
+            timestamps=timestamps,
+            valid=valid,
+        )
+        if archive_capable
+        else 0
+    )
+    if archive_rows:
+        refreshed = store.read_range(
+            exchange,
+            "1m",
+            symbol,
+            int(timestamps[0]),
+            int(timestamps[-1]),
+        )
+        timestamps = refreshed.timestamps
+        valid = refreshed.valid
+        if valid.all():
+            return [
+                V2FetchResult(
+                    True,
+                    "binance_archive_ok",
+                    wrote_rows=int(archive_rows),
+                    first_ts=int(timestamps[0]),
+                    last_ts=int(timestamps[-1]),
+                )
+            ]
     full_start_ts = int(timestamps[0])
     full_end_ts = int(timestamps[-1])
     context_ms = max(
@@ -2600,7 +2655,12 @@ async def _fetch_invalid_windows_into_v2_store_results(
     for window_start_ts, window_end_ts in _iter_invalid_windows(timestamps, valid):
         fetch_start_ts = max(full_start_ts, int(window_start_ts) - context_ms)
         fetch_end_ts = min(full_end_ts, int(window_end_ts) + context_ms)
-        raw_result = await _fetch_coin_range_into_v2_store(
+        fetch_range = (
+            _fetch_coin_range_via_ccxt_into_v2_store
+            if archive_capable
+            else _fetch_coin_range_into_v2_store
+        )
+        raw_result = await fetch_range(
             om=om,
             catalog=catalog,
             store=store,
@@ -2620,6 +2680,246 @@ async def _fetch_invalid_windows_into_v2_store_results(
         if not result:
             break
     return results
+
+
+def _archive_attempt_number(
+    catalog: OhlcvCatalog,
+    *,
+    exchange: str,
+    symbol: str,
+    request: BinanceArchiveRequest,
+) -> int:
+    exact_attempts = [
+        item.attempt
+        for item in catalog.list_fetch_attempts(
+            exchange,
+            "1m",
+            symbol,
+            int(request.start_ts),
+            int(request.end_ts),
+        )
+        if int(item.start_ts) == int(request.start_ts)
+        and int(item.end_ts) == int(request.end_ts)
+    ]
+    return max(exact_attempts, default=0) + 1
+
+
+def _record_binance_archive_result(
+    catalog: OhlcvCatalog,
+    *,
+    exchange: str,
+    symbol: str,
+    result: BinanceArchiveResult,
+    latency_ms: int,
+) -> None:
+    request = result.request
+    frame_rows = int(len(result.frame)) if result.frame is not None else 0
+    note_parts = [
+        f"source=binance_{request.kind}_archive",
+        f"period={request.period_key}",
+        f"missing_candles={request.missing_candles}",
+        f"archive_rows={frame_rows}",
+    ]
+    if result.error:
+        note_parts.append(f"error={result.error}")
+    catalog.record_fetch_attempt(
+        exchange=exchange,
+        timeframe="1m",
+        symbol=symbol,
+        start_ts=int(request.start_ts),
+        end_ts=int(request.end_ts),
+        attempt=_archive_attempt_number(
+            catalog,
+            exchange=exchange,
+            symbol=symbol,
+            request=request,
+        ),
+        outcome=f"archive_{request.kind}_{result.status}",
+        latency_ms=int(latency_ms),
+        note=" ".join(note_parts),
+    )
+
+
+def _write_binance_archive_results(
+    *,
+    store: OhlcvStore,
+    exchange: str,
+    symbol: str,
+    results: Sequence[BinanceArchiveResult],
+) -> int:
+    successful = [
+        result
+        for result in results
+        if result.status == "ok" and result.frame is not None and not result.frame.empty
+    ]
+    if not successful:
+        return 0
+
+    frames_by_month: dict[tuple[int, int], list[pd.DataFrame]] = defaultdict(list)
+    for result in successful:
+        assert result.frame is not None
+        frame = result.frame.copy()
+        month_keys = pd.to_datetime(frame["timestamp"], unit="ms", utc=True)
+        for (year, month), indices in frame.groupby(
+            [month_keys.dt.year, month_keys.dt.month], sort=True
+        ).groups.items():
+            frames_by_month[(int(year), int(month))].append(frame.loc[indices])
+
+    rows_written = 0
+    for (year, month), frames in sorted(frames_by_month.items()):
+        frame = (
+            pd.concat(frames, ignore_index=True)
+            .sort_values("timestamp", kind="mergesort")
+            .drop_duplicates(subset=["timestamp"], keep="last")
+            .reset_index(drop=True)
+        )
+        month_start = int(datetime(year, month, 1, tzinfo=timezone.utc).timestamp() * 1000)
+        if month == 12:
+            next_month = datetime(year + 1, 1, 1, tzinfo=timezone.utc)
+        else:
+            next_month = datetime(year, month + 1, 1, tzinfo=timezone.utc)
+        month_end = int(next_month.timestamp() * 1000) - 60_000
+        existing = store.read_range(exchange, "1m", symbol, month_start, month_end)
+        offsets = ((frame["timestamp"].to_numpy(dtype=np.int64) - month_start) // 60_000).astype(
+            np.int64,
+            copy=False,
+        )
+        in_bounds = (offsets >= 0) & (offsets < len(existing.valid))
+        if not bool(in_bounds.any()):
+            continue
+        frame = frame.loc[in_bounds].reset_index(drop=True)
+        offsets = offsets[in_bounds]
+        missing_only = ~existing.valid[offsets]
+        if not bool(missing_only.any()):
+            continue
+        frame = frame.loc[missing_only].reset_index(drop=True)
+        timestamps_ms = frame["timestamp"].to_numpy(dtype=np.int64, copy=False)
+        values = np.column_stack(
+            [
+                frame["high"].to_numpy(dtype=np.float32, copy=False),
+                frame["low"].to_numpy(dtype=np.float32, copy=False),
+                frame["close"].to_numpy(dtype=np.float32, copy=False),
+                frame["volume"].to_numpy(dtype=np.float32, copy=False),
+            ]
+        )
+        store.write_rows(exchange, "1m", symbol, timestamps_ms, values)
+        rows_written += int(len(timestamps_ms))
+    return rows_written
+
+
+async def _fetch_binance_archives_into_v2_store(
+    *,
+    om: HLCVManager,
+    catalog: OhlcvCatalog,
+    store: OhlcvStore,
+    exchange: str,
+    coin: str,
+    symbol: str,
+    timestamps: np.ndarray,
+    valid: np.ndarray,
+) -> int:
+    if to_standard_exchange_name(exchange) != "binance":
+        return 0
+    get_client = getattr(om, "get_binance_archive_client", None)
+    if not callable(get_client):
+        return 0
+    if len(timestamps) == 0 or bool(np.asarray(valid, dtype=np.bool_).all()):
+        return 0
+
+    now_ms = utc_ms()
+    symbol_code = symbol_to_archive_code(symbol)
+    monthly_requests, _ = plan_binance_archive_requests(
+        timestamps,
+        valid,
+        symbol_code=symbol_code,
+        now_ms=now_ms,
+    )
+    client = get_client()
+    total_rows_written = 0
+    successful_months: set[str] = set()
+
+    if monthly_requests:
+        started = time.perf_counter()
+        monthly_results = await client.fetch_many(monthly_requests)
+        elapsed_ms = int(round((time.perf_counter() - started) * 1000.0))
+        per_request_latency_ms = max(0, elapsed_ms // max(1, len(monthly_results)))
+        for result in monthly_results:
+            _record_binance_archive_result(
+                catalog,
+                exchange=exchange,
+                symbol=symbol,
+                result=result,
+                latency_ms=per_request_latency_ms,
+            )
+            if result.status == "ok":
+                successful_months.add(result.request.period_key)
+        written = _write_binance_archive_results(
+            store=store,
+            exchange=exchange,
+            symbol=symbol,
+            results=monthly_results,
+        )
+        total_rows_written += written
+        logging.info(
+            "[%s] Binance monthly archive fetch for %s: requested=%d ok=%d rows_written=%d",
+            exchange,
+            coin,
+            len(monthly_results),
+            sum(result.status == "ok" for result in monthly_results),
+            written,
+        )
+
+    refreshed = store.read_range(
+        exchange,
+        "1m",
+        symbol,
+        int(timestamps[0]),
+        int(timestamps[-1]),
+    )
+    _, daily_requests = plan_binance_archive_requests(
+        refreshed.timestamps,
+        refreshed.valid,
+        symbol_code=symbol_code,
+        now_ms=now_ms,
+        monthly_min_missing_candles=sys.maxsize,
+    )
+    if successful_months:
+        daily_requests = [
+            request
+            for request in daily_requests
+            if request.period_key[:7] not in successful_months
+        ]
+
+    if daily_requests:
+        started = time.perf_counter()
+        daily_results = await client.fetch_many(daily_requests)
+        elapsed_ms = int(round((time.perf_counter() - started) * 1000.0))
+        per_request_latency_ms = max(0, elapsed_ms // max(1, len(daily_results)))
+        for result in daily_results:
+            _record_binance_archive_result(
+                catalog,
+                exchange=exchange,
+                symbol=symbol,
+                result=result,
+                latency_ms=per_request_latency_ms,
+            )
+        written = _write_binance_archive_results(
+            store=store,
+            exchange=exchange,
+            symbol=symbol,
+            results=daily_results,
+        )
+        total_rows_written += written
+        logging.info(
+            "[%s] Binance daily archive fetch for %s: requested=%d ok=%d rows_written=%d",
+            exchange,
+            coin,
+            len(daily_results),
+            sum(result.status == "ok" for result in daily_results),
+            written,
+        )
+
+    return total_rows_written
 
 
 def _terminal_empty_page_last_ts(exc: OhlcvTerminalEmptyPage) -> int | None:
@@ -2903,6 +3203,119 @@ async def _retry_unconfirmed_short_tail_range(
 
 
 async def _fetch_coin_range_into_v2_store(
+    *,
+    om: HLCVManager,
+    catalog: OhlcvCatalog,
+    store: OhlcvStore,
+    exchange: str,
+    coin: str,
+    symbol: str,
+    start_ts: int,
+    end_ts: int,
+    allow_unbounded_edge_gaps: bool = False,
+    allow_pre_inception_prefix: bool = False,
+    clear_valid_range_ms: tuple[int, int] | None = None,
+) -> V2FetchResult:
+    if to_standard_exchange_name(exchange) != "binance" or not callable(
+        getattr(om, "get_binance_archive_client", None)
+    ):
+        return await _fetch_coin_range_via_ccxt_into_v2_store(
+            om=om,
+            catalog=catalog,
+            store=store,
+            exchange=exchange,
+            coin=coin,
+            symbol=symbol,
+            start_ts=start_ts,
+            end_ts=end_ts,
+            allow_unbounded_edge_gaps=allow_unbounded_edge_gaps,
+            allow_pre_inception_prefix=allow_pre_inception_prefix,
+            clear_valid_range_ms=clear_valid_range_ms,
+        )
+    if (
+        clear_valid_range_ms is not None
+        or allow_unbounded_edge_gaps
+        or allow_pre_inception_prefix
+    ):
+        return await _fetch_coin_range_via_ccxt_into_v2_store(
+            om=om,
+            catalog=catalog,
+            store=store,
+            exchange=exchange,
+            coin=coin,
+            symbol=symbol,
+            start_ts=start_ts,
+            end_ts=end_ts,
+            allow_unbounded_edge_gaps=allow_unbounded_edge_gaps,
+            allow_pre_inception_prefix=allow_pre_inception_prefix,
+            clear_valid_range_ms=clear_valid_range_ms,
+        )
+
+    existing = store.read_range(exchange, "1m", symbol, int(start_ts), int(end_ts))
+    archive_rows = await _fetch_binance_archives_into_v2_store(
+        om=om,
+        catalog=catalog,
+        store=store,
+        exchange=exchange,
+        coin=coin,
+        symbol=symbol,
+        timestamps=existing.timestamps,
+        valid=existing.valid,
+    )
+    refreshed = store.read_range(exchange, "1m", symbol, int(start_ts), int(end_ts))
+    if refreshed.valid.all():
+        return V2FetchResult(
+            True,
+            "binance_archive_ok",
+            wrote_rows=int(archive_rows),
+            first_ts=int(refreshed.timestamps[0]),
+            last_ts=int(refreshed.timestamps[-1]),
+        )
+
+    invalid_windows = _iter_invalid_windows(refreshed.timestamps, refreshed.valid)
+    results: list[V2FetchResult] = []
+    for window_start_ts, window_end_ts in invalid_windows:
+        result = await _fetch_coin_range_via_ccxt_into_v2_store(
+            om=om,
+            catalog=catalog,
+            store=store,
+            exchange=exchange,
+            coin=coin,
+            symbol=symbol,
+            start_ts=int(window_start_ts),
+            end_ts=int(window_end_ts),
+        )
+        results.append(result)
+        if not result.ok:
+            return V2FetchResult(
+                False,
+                result.reason,
+                wrote_rows=int(archive_rows + sum(item.wrote_rows for item in results)),
+                first_ts=result.first_ts,
+                last_ts=result.last_ts,
+                leading_missing_bars=result.leading_missing_bars,
+                trailing_missing_bars=result.trailing_missing_bars,
+                max_internal_missing_bars=result.max_internal_missing_bars,
+            )
+
+    final = store.read_range(exchange, "1m", symbol, int(start_ts), int(end_ts))
+    remaining = int((~final.valid).sum())
+    total_written = int(archive_rows + sum(item.wrote_rows for item in results))
+    return V2FetchResult(
+        remaining == 0 or any(item.ok for item in results),
+        "ok" if remaining == 0 else "internal_gaps",
+        wrote_rows=total_written,
+        first_ts=(
+            int(final.timestamps[np.flatnonzero(final.valid)[0]]) if final.valid.any() else None
+        ),
+        last_ts=(
+            int(final.timestamps[np.flatnonzero(final.valid)[-1]]) if final.valid.any() else None
+        ),
+        max_internal_missing_bars=remaining,
+    )
+
+
+async def _fetch_coin_range_via_ccxt_into_v2_store(
     *,
     om: HLCVManager,
     catalog: OhlcvCatalog,

@@ -14,6 +14,12 @@ For the recommended user workflow, examples, and best practices, see [Config Wor
 - **compress_cache**: Set to `true` to save disk space. Set to `false` for faster loading.
 - **end_date**: End date of backtest, e.g., `2024-06-23`. Set to `'now'` to use today's date as the end date.
 - **exchanges**: Exchanges from which to fetch 1m OHLCV data for backtesting and optimizing. The most exercised choices are `binance` and `bybit`, which are also the current default profile. `bitget` and `gateio` are supported, with the GateIO history caveat below. `kucoin` has archive-fetch support but should be treated as experimental for backtesting until broader real-data smoke coverage is collected. Use short exchange names in configs; Passivbot converts to CCXT-specific IDs such as `binanceusdm` and `kucoinfutures` only when it talks to CCXT.
+  Binance backtests fill missing v2 1m data from Binance Vision monthly archives first, eligible
+  daily archives second, and CCXT last. Monthly archives are used only for closed, published months
+  with more than seven days of missing candles; daily archives are used for older days with more
+  than 1,000 missing candles. Recent or small gaps and gaps inside archive data fall back to CCXT.
+  Archive downloads run concurrently within each tier and are verified against Binance's SHA-256
+  sidecars before being written to the v2 store.
   **GateIO note:** If you already have `caches/ohlcv/gateio` data on disk, delete it before a fresh run so Passivbot rebuilds the cache with base-volume-normalized data.
   GateIO's public 1m OHLCV endpoint only serves a recent window of roughly 10,000 candles; use `backtest.ohlcv_source_dir` or another candle source for older GateIO backtests.
 - **coin_sources**: Optional mapping of `coin -> exchange` used to override the automatic exchange selection when multiple exchanges are configured. Scenarios may add more overrides; conflicting assignments raise an error.

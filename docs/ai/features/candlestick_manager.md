@@ -4,6 +4,11 @@
 
 1. Prefer existing local data before remote calls.
 2. For backtest preparation, use v2 OHLCV chunks first, legacy raw shards second, and targeted remote fetches last.
+   For missing Binance futures 1m data in the current v2 path, remote source priority is Binance
+   Vision monthly archives, Binance Vision daily archives, then CCXT. More than seven days of
+   missing bars in an eligible closed month selects the monthly archive. Eligible days with more
+   than 1,000 missing bars select daily archives. Small gaps, recent days, archive failures, and
+   any gaps remaining inside a successful archive are repaired through CCXT.
 3. Treat exchange-side late starts and early ends as coverage metadata, not local corruption.
 4. Fill only internal gaps within the configured tolerance. Larger internal gaps must be repaired,
    excluded from the returned tradable window, or fail; do not make them tradable via synthetic rows.
@@ -26,6 +31,10 @@
    continuity gaps, not for unknown stale tails caused by refresh budget or REST delay.
 6. Projection is stateless per read. Real candles always win on the next read, and bounded internal
    gaps continue to use the normal synthetic gap path with replacement/invalidation tracking.
+7. Binance monthly and daily archive requests are parallel within each tier, verify the published
+   SHA-256 sidecar before parsing, and write only invalid v2 rows. Monthly archives are attempted
+   only after Binance's first-Monday publication window plus a buffer; daily archives exclude the
+   current day and two preceding complete UTC days.
 
 Cache paths use `to_standard_exchange_name()` rather than raw CCXT identifiers such as
 `binanceusdm` or `kucoinfutures`.
@@ -47,9 +56,13 @@ Cache paths use `to_standard_exchange_name()` rather than raw CCXT identifiers s
 2. Replacement/invalidation behavior when real data arrives.
 3. Pagination boundary correctness per exchange.
 4. Backtest/live parity for live tail-gap EMA projection behavior.
+5. Binance archive threshold, publication-lag, checksum, source-order, non-overwrite, and CCXT
+   fallback behavior, including public unauthenticated download smokes.
 
 ## Key Code
 
 - `src/candlestick_manager.py`
+- `src/binance_ohlcv_archive.py`
+- `src/hlcv_preparation.py`
 - `src/tools/verify_hlcvs_data.py`
 - `exchange_integrations.md`
