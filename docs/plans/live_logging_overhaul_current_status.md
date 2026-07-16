@@ -24,8 +24,9 @@ Estimated completion:
 
 - Branch: `codex/restart-target-stability`, based on canonical
   `6cb8bc3c73c1e5b8c7ed1e70fa953e07a8e6b85e` after PR #1287.
-- PR: pending. Slice: add bounded multi-sample stability proof to the local-only
-  exact tmux target preflight.
+- PR: #1288, `Verify exact restart targets across samples`; semantic
+  implementation head `97e47aa326`. Slice: add bounded multi-sample stability
+  proof to the local-only exact tmux target preflight.
 - Triggering evidence: PR #1287 now proves exact pane/process ownership, but a
   one-shot result can become stale before a future signal. The deployed target
   report resolved all five bots exactly; the immediate process state included
