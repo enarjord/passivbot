@@ -4,6 +4,12 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- A new read-only `log-secret-inventory` tool scans bounded current and rotated
+  text-log input for secret-like artifact classes without returning matched
+  values or source lines. Reports contain only aggregate class counts, bounded
+  root-relative file identity, age, size, scan status, and stable hashes. The
+  tool never rewrites, deletes, quarantines, copies, or uploads log artifacts.
+
 - Successful maintainer cancellation summaries and hourly scheduler-jitter
   detail now remain available at DEBUG instead of adding routine INFO lines.
   Maintainer cancellation failures remain ERROR. Task cancellation, scheduler
