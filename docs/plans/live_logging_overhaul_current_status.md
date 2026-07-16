@@ -23,7 +23,7 @@ Estimated completion:
 ## Active Review Slice
 
 - Branch: `codex/smoke-planning-snapshot-health`, based on canonical
-  `0990d351c6302453cb39f55f991d5b0989a42c3b` after PR #1279.
+  `0990d351c690b5270d8c53f3c1ad5bf5d54650a5` after PR #1279.
 - PR: #1280, `Report planning-snapshot smoke health`; semantic implementation
   head `886d1311e6`. Slice: project existing `snapshot.built` events into
   bounded latest-per-bot planning-snapshot health.
@@ -50,7 +50,7 @@ Estimated completion:
 
 - VPS5's deployed logging baseline is
   `ccd1cc68956edd8c509fb2b86b759c801e3868b8`, PR #1278. Canonical `master`
-  has since advanced to `0990d351c6302453cb39f55f991d5b0989a42c3b`
+  has since advanced to `0990d351c690b5270d8c53f3c1ad5bf5d54650a5`
   through unrelated Binance archive PR #1279. The VPS5 tracked checkout is
   clean and expected untracked artifacts are preserved.
 - PR #1278 required no restart. Exact bot PIDs
