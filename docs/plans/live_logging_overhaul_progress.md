@@ -15,7 +15,29 @@ merge, live smoke evidence changes, or new gaps are discovered.
 - Do not use this file for design churn; unresolved design details belong in the
   plan or a focused handoff doc.
 
-## Latest Canonical Deployment (PR #1272)
+## Latest Canonical Deployment (PR #1273)
+
+- PR #1273 merged to `master` as
+  `20238b50792da0a69b6fa2b13272c75ea4a0eade`. It projects existing bounded
+  `forager.eligibility_changed` evidence into full, summary, brief, and
+  section-selective smoke reports without changing verdicts or runtime
+  behavior.
+- VPS5 fast-forwarded cleanly with no restart. Exact bot PIDs
+  `985592/985594/985596/985598/985600`, all five pane parents, and unrelated
+  `misc:0.0` PID `434835` remained unchanged; tracked state stayed clean.
+- A current-plus-rotated 180-minute query found six natural eligibility events
+  across all five bots, including two on KuCoin. The focused report retained
+  bounded redacted symbol samples. The final two-minute smoke was `ok=true`
+  with zero hard/log/monitor/process failures, `210/210` remote and `55/55`
+  account-critical calls successful, nine successful fill refreshes, and all
+  five matching/config-valid processes. One report-time OKX `D` sample cleared
+  after ten seconds to final states `R=4,S=1`.
+- The deploy also proved that monitor event-type inventory was scan-wide even
+  with a requested time window. The next read-only report slice scopes that
+  inventory and sampled cycle IDs to `since_ms`/`until_ms`; no event or trading
+  activity was manufactured.
+
+## Previous Canonical Deployment (PR #1272)
 
 - PR #1272 merged to `master` as
   `af69725ed04b9a9a0402634455fd6bb05d71d7f5`. It adds existing bounded
@@ -32,10 +54,11 @@ merge, live smoke evidence changes, or new gaps are discovered.
   EMA readiness events remained durable.
 - The formerly failing absent `forager_features` selector returned a valid
   base-only report, and the staged-readiness selector returned a valid
-  zero-event section. No planning-defer event occurred naturally. The same
-  settled window contained one existing `forager.eligibility_changed` event;
-  the next report-only slice exposes that membership transition without
-  manufacturing events or changing eligibility.
+  zero-event section. No planning-defer event occurred naturally. The
+  monitor-wide inventory listed `forager.eligibility_changed`, but later
+  window-scoped query evidence showed that event was not in the settled
+  two-minute window. PR #1273 subsequently exposed and validated six natural
+  rotated eligibility events without manufacturing activity.
 
 ## Previous Canonical Deployment (PR #1271)
 

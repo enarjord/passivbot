@@ -4,6 +4,10 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Time-bounded live smoke reports now scope monitor event-type inventory and
+  sampled cycle IDs to the requested event window. Full-file validation and
+  scanned-record counters remain unchanged.
+
 - Live smoke reports now expose bounded existing
   `forager.eligibility_changed` evidence across full, summary, brief, and
   section-selective output, including approved/ignored add/remove counts,
