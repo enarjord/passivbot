@@ -24,9 +24,10 @@ Estimated completion:
 
 - Branch: `codex/smoke-process-state-sampling`, based on canonical
   `82bfa98e202a3fbba71937d751e1d0c651e33f72` after PR #1282.
-- PR: pending. Slice: add opt-in bounded repeated process-table sampling to
-  distinguish transient, persistent, and recovered uninterruptible-sleep
-  observations during smoke checks.
+- PR: #1283, `Add bounded process-state sampling to live smoke reports`;
+  semantic implementation head `cafbeef441`. Slice: add opt-in bounded
+  repeated process-table sampling to distinguish transient, persistent, and
+  recovered uninterruptible-sleep observations during smoke checks.
 - Triggering evidence: PR #1282's settled cycle report was green and naturally
   proved KuCoin completion after a retained nonce degradation. The final exact
   process check then caught the unchanged KuCoin PID in `D` for about 20
