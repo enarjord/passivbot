@@ -9200,6 +9200,26 @@ active branch, PR, review gate, and rollout instructions.
   `codex/restart-plan-target-gate` adds the exact stable report command and
   required verdict to the existing non-executing restart plan.
 
+### 2026-07-16: Restart Target Relaunch Contract Deployed
+
+- PR #1290 merged to canonical `master` at `b490bd75be` after exact-head
+  Hermes approval and green Python/Rust CI. VPS5 fast-forwarded from
+  `d6cac101` without a restart or process signal; exact pane IDs/PIDs, bot PIDs
+  `985592/985594/985596/985598/985600`, and unrelated `misc:0.0` PID `434835`
+  remained unchanged.
+- Immediate and settled three-sample local-only target reports were `ok=true`
+  and stable with all five resolved targets relaunch-ready, zero failed
+  samples, zero identity changes, and no issues. Every relaunch proof requires
+  verified process exit and an exact post-stop pane recheck. The compact plan
+  was `ok=true`, had zero issues, and required the same all-targets-ready
+  verdict while execution remained unavailable.
+- A bounded four-sample process report observed real temporary I/O waits with
+  five stable PIDs and no hard/config/process failure. The quiet exact-PID
+  follow-up cleared to `R=4,S=1`. No exchange request, process action, or event
+  was manufactured. Active `codex/restart-target-contract-fingerprint` binds
+  target stability to the parsed supervisor command contract without exposing
+  command content.
+
 ### 2026-07-16: Stable Target Gate Bound Into Restart Plan
 
 - PR #1289 merged to canonical `master` at `d6cac1017b` after exact-head

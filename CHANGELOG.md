@@ -4,6 +4,10 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Exact live restart target sampling now binds pane/PID stability to an opaque
+  fingerprint of the parsed supervisor command contract, failing closed when
+  that contract changes without exposing command content.
+
 - Exact live restart targets now classify whether the bot is a child of its
   tmux pane parent and therefore has a bounded candidate relaunch path after a
   required post-stop pane recheck. The report exposes only method/proof
