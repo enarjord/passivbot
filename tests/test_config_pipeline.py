@@ -51,6 +51,44 @@ def _strategy_side(config, pside, kind=None):
     return config["bot"][pside]["strategy"][kind]
 
 
+def test_startup_phase_budgets_validate_and_roundtrip():
+    source = get_template_config()
+    assert source["live"]["startup_phase_budgets"] == {}
+    source["live"]["startup_phase_budgets"] = {
+        "account": {"elapsed_ms": 120_000, "since_previous_ms": 60_000},
+        "full-warmup": {"elapsed_ms": 900_000},
+    }
+
+    prepared = prepare_config(source, verbose=False, target="canonical", runtime=None)
+
+    assert prepared["live"]["startup_phase_budgets"] == source["live"][
+        "startup_phase_budgets"
+    ]
+
+
+@pytest.mark.parametrize(
+    "budgets,error_type,error_match",
+    [
+        ([], TypeError, "startup_phase_budgets must be a dict"),
+        ({"unknown": {"elapsed_ms": 1}}, ValueError, "phase must be one of"),
+        ({"account": []}, TypeError, "account must be a dict"),
+        ({"account": {}}, ValueError, "must define at least one budget"),
+        ({"account": {"other_ms": 1}}, ValueError, "unknown keys"),
+        ({"account": {"elapsed_ms": True}}, TypeError, "must be an integer"),
+        ({"account": {"elapsed_ms": 1.5}}, TypeError, "must be an integer"),
+        ({"account": {"elapsed_ms": -1}}, ValueError, "must be >= 0"),
+    ],
+)
+def test_startup_phase_budgets_reject_invalid_values(
+    budgets, error_type, error_match
+):
+    source = get_template_config()
+    source["live"]["startup_phase_budgets"] = budgets
+
+    with pytest.raises(error_type, match=error_match):
+        prepare_config(source, verbose=False, target="canonical", runtime=None)
+
+
 @pytest.mark.parametrize("strategy_kind", list(get_supported_strategy_kinds()))
 def test_rust_strategy_spec_matches_python_template_defaults(strategy_kind):
     source = get_template_config()

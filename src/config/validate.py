@@ -1,5 +1,8 @@
 import math
 
+from live.event_bus import STARTUP_TIMING_PHASES
+from risk_limits import normalize_we_excess_allowance_mode
+
 from .access import require_config_dict
 from .bot import (
     normalize_twel_enforcer_policy,
@@ -13,7 +16,34 @@ from .strategy import (
     get_active_strategy_side,
     normalize_strategy_kind,
 )
-from risk_limits import normalize_we_excess_allowance_mode
+
+_STARTUP_BUDGET_KEYS = frozenset({"elapsed_ms", "since_previous_ms"})
+
+
+def _validate_startup_phase_budgets(live_config: dict) -> None:
+    budgets = live_config.get("startup_phase_budgets")
+    if not isinstance(budgets, dict):
+        raise TypeError("config.live.startup_phase_budgets must be a dict")
+    for phase, phase_budgets in budgets.items():
+        if phase not in STARTUP_TIMING_PHASES:
+            allowed = ", ".join(sorted(STARTUP_TIMING_PHASES))
+            raise ValueError(
+                "config.live.startup_phase_budgets phase must be one of: " + allowed
+            )
+        path = f"config.live.startup_phase_budgets.{phase}"
+        if not isinstance(phase_budgets, dict):
+            raise TypeError(f"{path} must be a dict")
+        unknown = sorted(set(phase_budgets) - _STARTUP_BUDGET_KEYS)
+        if unknown:
+            raise ValueError(f"{path} has unknown keys: {', '.join(unknown)}")
+        if not phase_budgets:
+            raise ValueError(f"{path} must define at least one budget")
+        for key, value in phase_budgets.items():
+            value_path = f"{path}.{key}"
+            if isinstance(value, bool) or not isinstance(value, int):
+                raise TypeError(f"{value_path} must be an integer")
+            if value < 0:
+                raise ValueError(f"{value_path} must be >= 0")
 
 
 def validate_config(
@@ -86,6 +116,7 @@ def validate_config(
     normalize_hsl_cooldown_position_policy(
         config["live"]["hsl_position_during_cooldown_policy"]
     )
+    _validate_startup_phase_budgets(config["live"])
     ticker_strategy = str(
         config["live"].get("market_snapshot_ticker_strategy", "auto")
     ).lower()

@@ -4,6 +4,13 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Live configs may now define optional diagnostic `startup_phase_budgets` for
+  canonical startup timing phases. Existing `bot.startup_timing` events carry
+  configured elapsed and phase budgets, and live smoke reports prefer those
+  explicit values over historical p95 projections. The budgets are reporting
+  metadata only and do not gate startup, readiness, exchange access, or
+  trading.
+
 - `log-secret-inventory --summary` now emits bounded aggregate scan evidence
   without the per-file paths, ages, or hashes retained by the full report.
 

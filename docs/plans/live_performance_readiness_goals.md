@@ -319,7 +319,10 @@ classification when enough source events exist.
   exchange write from existing events. PR #1196 added true local fresh-entry
   eligibility evidence, and PR #1197 projects its first qualifying event as
   startup readiness. PR #1198 adds distinct local connector-call boundary
-  evidence without claiming exchange receipt or acknowledgement.
+  evidence without claiming exchange receipt or acknowledgement. The active
+  startup-budget slice adds optional configured elapsed and since-previous
+  diagnostic targets to the same timing events; smoke reports prefer those
+  targets over prior p95 projections, but they never gate readiness or trading.
 - [ ] Startup: process start to held-position protective HSL ready.
 - [ ] Startup: process start to fresh-entry ready.
 - [ ] Startup: process start to first planning cycle started/completed.

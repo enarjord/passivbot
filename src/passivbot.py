@@ -3349,6 +3349,26 @@ class Passivbot:
         since_previous_s = max(0.0, (now_ms - previous_ms) / 1000.0)
         marks[label] = now_ms
         self._startup_timing_last_mark_ms = now_ms
+        budget_kwargs = {}
+        startup_phase_budgets = get_optional_live_value(
+            getattr(self, "config", {}), "startup_phase_budgets", {}
+        )
+        if isinstance(startup_phase_budgets, dict):
+            phase_budgets = startup_phase_budgets.get(label)
+            if isinstance(phase_budgets, dict):
+                for config_key, event_key in (
+                    ("elapsed_ms", "elapsed_budget_ms"),
+                    ("since_previous_ms", "since_previous_budget_ms"),
+                ):
+                    value = phase_budgets.get(config_key)
+                    if (
+                        isinstance(value, int)
+                        and not isinstance(value, bool)
+                        and value >= 0
+                    ):
+                        budget_kwargs[event_key] = value
+                if budget_kwargs:
+                    budget_kwargs["budget_source"] = "config"
         if not Passivbot._live_event_console_available(self):
             suffix = f" | {details}" if details else ""
             logging.info(
@@ -3364,6 +3384,7 @@ class Passivbot:
             elapsed_ms=max(0, int(now_ms - started_ms)),
             since_previous_ms=max(0, int(now_ms - previous_ms)),
             details=str(details or ""),
+            **budget_kwargs,
         )
 
     def _force_cold_startup(self) -> bool:

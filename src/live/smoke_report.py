@@ -57,9 +57,17 @@ LOG_LINE_TS_PATTERN = re.compile(
 )
 STARTUP_TIMING_BASELINE_WINDOW = 20
 STARTUP_BUDGET_STATUSES = frozenset(
-    {"unavailable", "no_baseline", "within_budget", "over_budget"}
+    {
+        "unavailable",
+        "no_baseline",
+        "invalid_budget",
+        "within_budget",
+        "over_budget",
+    }
 )
-STARTUP_BUDGET_INCOMPLETE_STATUSES = frozenset({"unavailable", "no_baseline"})
+STARTUP_BUDGET_INCOMPLETE_STATUSES = frozenset(
+    {"unavailable", "no_baseline", "invalid_budget"}
+)
 DEFAULT_PROCESS_MATCH = "passivbot live"
 LOG_WINDOW_UNPARSED_POLICIES = {"keep", "drop"}
 DEFAULT_LOG_WINDOW_UNPARSED_POLICY = "keep"
@@ -5834,7 +5842,38 @@ def _startup_budget_projection(
     *,
     latest_ms: int | None,
     baseline_values: list[int],
+    explicit_budget_ms: int | None = None,
+    explicit_budget_invalid: bool = False,
 ) -> dict[str, int | str | None]:
+    if explicit_budget_invalid:
+        return {
+            "status": "invalid_budget",
+            "latest_ms": latest_ms,
+            "budget_ms": None,
+            "baseline_samples": len(baseline_values),
+            "usage_pct": None,
+            "over_budget_by_ms": None,
+            "source": "config",
+        }
+    if explicit_budget_ms is not None:
+        over_budget_by_ms = (
+            None if latest_ms is None else max(0, latest_ms - explicit_budget_ms)
+        )
+        return {
+            "status": (
+                "unavailable"
+                if latest_ms is None
+                else "over_budget"
+                if over_budget_by_ms
+                else "within_budget"
+            ),
+            "latest_ms": latest_ms,
+            "budget_ms": explicit_budget_ms,
+            "baseline_samples": len(baseline_values),
+            "usage_pct": _usage_pct(latest_ms, explicit_budget_ms),
+            "over_budget_by_ms": over_budget_by_ms,
+            "source": "config",
+        }
     if latest_ms is None:
         return {
             "status": "unavailable",
@@ -5897,6 +5936,16 @@ def _startup_timing_record(
         "path": str(path),
         "line": int(line_no),
     }
+    if data.get("budget_source") == "config":
+        record["budget_source"] = "config"
+        for key in ("elapsed_budget_ms", "since_previous_budget_ms"):
+            if key not in data:
+                continue
+            value = _non_negative_int(data.get(key))
+            if value is None:
+                record[f"{key}_invalid"] = True
+            else:
+                record[key] = value
     contract = startup_phase_readiness_contract(phase)
     if (
         contract is not None
@@ -5996,10 +6045,18 @@ def _summarize_startup_timings(
                 "elapsed_budget": _startup_budget_projection(
                     latest_ms=latest_elapsed,
                     baseline_values=elapsed_budget_values,
+                    explicit_budget_ms=latest.get("elapsed_budget_ms"),
+                    explicit_budget_invalid=bool(
+                        latest.get("elapsed_budget_ms_invalid")
+                    ),
                 ),
                 "phase_budget": _startup_budget_projection(
                     latest_ms=latest_phase,
                     baseline_values=phase_budget_values,
+                    explicit_budget_ms=latest.get("since_previous_budget_ms"),
+                    explicit_budget_invalid=bool(
+                        latest.get("since_previous_budget_ms_invalid")
+                    ),
                 ),
                 "latest_elapsed_vs_p95_pct": _usage_pct(
                     latest_elapsed, elapsed_summary["p95_ms"]
@@ -7533,7 +7590,7 @@ def _summary_startup_timings(
 def _brief_startup_budget_status(projection: Any) -> tuple[str, bool]:
     status = projection.get("status") if isinstance(projection, dict) else None
     if isinstance(status, str) and status in STARTUP_BUDGET_STATUSES:
-        return status, False
+        return status, status == "invalid_budget"
     return "unavailable", True
 
 

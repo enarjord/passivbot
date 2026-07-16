@@ -441,6 +441,7 @@
         "order_match_tolerance_pct": 0.0002,
         "pnls_max_lookback_days": 30.0,
         "recv_window_ms": 5000,
+        "startup_phase_budgets": {},
         "strategy_kind": "trailing_martingale",
         "time_in_force": "good_till_cancelled",
         "user": "bybit_01",

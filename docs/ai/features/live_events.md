@@ -12,6 +12,21 @@ eligibility, replay order, or runtime decisions.
 
 The generated value reference is `../generated/live_event_registry.md`.
 
+## Startup Timing Budgets
+
+`live.startup_phase_budgets` may define optional diagnostic budgets for the canonical
+`bot.startup_timing` phases `account`, `active-candle`, `full-warmup`, `hsl`, `market`, and
+`startup`. Each phase may carry `elapsed_ms`, measured from process startup, and
+`since_previous_ms`, measured from the preceding startup timing mark. Configured values are copied
+to the existing event as `elapsed_budget_ms` and `since_previous_budget_ms` with
+`budget_source=config`.
+
+These fields are reporting metadata only. They must not delay, fail, skip, or otherwise control
+startup, readiness, exchange access, order construction, or trading. Smoke reports prefer a valid
+event-carried configured budget for that dimension and retain the prior local p95 projection only
+when no configured value is present. Malformed event-carried configured metadata is reported as
+`invalid_budget`; it must not be silently replaced by a historical baseline.
+
 ## Fill Console Projection
 
 `fill.ingested` is the canonical normal-fill event. Every new fill remains present in structured

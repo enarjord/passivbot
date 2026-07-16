@@ -1498,6 +1498,9 @@ def _emit_startup_timing_event_unchecked(
     elapsed_ms: int,
     since_previous_ms: int,
     details: str = "",
+    elapsed_budget_ms: int | None = None,
+    since_previous_budget_ms: int | None = None,
+    budget_source: str | None = None,
 ) -> None:
     elapsed = _safe_int(elapsed_ms)
     since_previous = _safe_int(since_previous_ms)
@@ -1514,6 +1517,17 @@ def _emit_startup_timing_event_unchecked(
         data.update(readiness_contract)
     if details:
         data["details"] = str(details)
+    configured_budgets = {
+        "elapsed_budget_ms": _safe_int(elapsed_budget_ms),
+        "since_previous_budget_ms": _safe_int(since_previous_budget_ms),
+    }
+    if budget_source == "config" and any(
+        value is not None and value >= 0 for value in configured_budgets.values()
+    ):
+        data["budget_source"] = "config"
+        for key, value in configured_budgets.items():
+            if value is not None and value >= 0:
+                data[key] = int(value)
     if live_event_debug_profile_enabled(bot, "startup"):
         data["debug_profile"] = "startup"
         data["debug"] = _startup_debug_payload(data)

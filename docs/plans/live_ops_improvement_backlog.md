@@ -320,8 +320,10 @@ Related detailed plans:
    Status: partial. Startup timing and warmup cache decision events exist, and
    `live-smoke-report` now summarizes latest startup phase timings with rolling
    median/p95 baselines from local monitor events plus report-only budget
-   projections against prior p95 phase baselines. Explicit durable phase budget
-   configuration/events are not implemented.
+   projections against prior p95 phase baselines. The active slice adds
+   optional durable diagnostic budgets to existing timing events and gives
+   configured values report precedence; enforcement and broader readiness-stage
+   coverage remain out of scope.
 
    Startup currently has timing events, but the next step is durable budget
    accounting by phase: account-critical fetches, fill/PnL refresh, active
@@ -344,10 +346,14 @@ Related detailed plans:
      reports retain the latest lifecycle's per-bot startup snapshot independent
      of current-before-rotated file traversal while preserving historical
      aggregate distributions.
-   - 2026-07-16: Active `codex/startup-budget-coverage-summary` slice makes the
-     brief projection aggregate existing elapsed/phase budget statuses so
-     unavailable or no-baseline phases cannot look implicitly within budget.
-     It remains report-only and non-enforcing.
+   - 2026-07-16: PR #1266 made the brief projection aggregate existing
+     elapsed/phase budget statuses so unavailable or no-baseline phases cannot
+     look implicitly within budget. It remains report-only and non-enforcing.
+   - 2026-07-16: Active `codex/startup-phase-budget-events` adds optional
+     `live.startup_phase_budgets`, carries configured targets on existing
+     `bot.startup_timing` events, and makes smoke reports prefer them over prior
+     p95 projections. The values are diagnostic and never gate startup or
+     trading.
 
 5. [x] Resource pressure telemetry.
    Status: initial implementation merged. `health.summary` events now include
@@ -1017,9 +1023,10 @@ Related detailed plans:
     Status: partial. PR #1265 merged and deployed the bounded, value-free,
     read-only inventory and dry-run validation contract. PR #1267 recognizes
     credential query parameters in scheme-less request paths while preserving
-    the same report schema. PR #1268's active aggregate-summary follow-up removes
-    per-file detail from shareable/operator output while preserving aggregate
-    scan evidence. Quarantine or purge remains separate and requires explicit
+    the same report schema. PR #1268 merged and deployed an aggregate-summary
+    projection that removes per-file detail from shareable/operator output
+    while preserving aggregate scan evidence. Quarantine or purge remains
+    separate and requires explicit
     operator approval. A read-only VPS5 console-length audit on 2026-07-15
     accidentally admitted old untimestamped traceback fragments and confirmed
     that retained May text logs include raw private websocket URLs/tokens and
@@ -1046,9 +1053,9 @@ Related detailed plans:
     - 2026-07-16: PR #1267's bounded VPS5 scan classified 144 secret-query
       matches versus 143 private-websocket-query matches, proving one additional
       non-websocket query fragment was found without exposing values.
-    - 2026-07-16: PR #1268 adds an
-      aggregate-only projection after compact full output still measured roughly
-      6,000 tokens for 40 file rows.
+    - 2026-07-16: PR #1268's bounded VPS5 summary scanned 40 of 1,182 files and
+      8,153,519 bytes, retained the 144/143 query-class counts, omitted
+      per-file paths/ages/hashes, and reported zero read or discovery errors.
 
     Required validation: fixtures for private websocket URLs, authorization
     material, signatures, API keys, query tokens, raw HTTP bodies, and benign
