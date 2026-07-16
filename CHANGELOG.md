@@ -4,6 +4,12 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Required-EMA-unavailable warnings now use a bounded structured console/text
+  projection with counts, classified cause, nontradable-until-fresh action,
+  and compact symbol/error/EMA identity. The complete structured payload,
+  existing fifteen-minute human cadence, EMA readiness decisions, and trading
+  behavior are unchanged.
+
 - Periodic health summaries now use compact operator labels and separators so
   uptime, loop, position, balance, order/fill/error, resource, and slow-phase
   context fit the normal console record budget. Complete structured payloads,

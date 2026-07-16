@@ -814,7 +814,9 @@ DEFAULT_ROUTES: dict[str, EventRoute] = {
     EventTypes.EMA_FALLBACK_USED: EventRoute(
         console=True, text=True, throttle_interval_ms=15 * 60 * 1000
     ),
-    EventTypes.EMA_UNAVAILABLE: EventRoute(console=False, text=False),
+    EventTypes.EMA_UNAVAILABLE: EventRoute(
+        console=True, text=True, throttle_interval_ms=15 * 60 * 1000
+    ),
     EventTypes.CANDLE_COVERAGE_CHECKED: EventRoute(console=False, text=False),
     EventTypes.CANDLE_TAIL_PROJECTED: EventRoute(console=False, text=False),
     EventTypes.CACHE_LOAD_COMPLETED: EventRoute(console=False, text=False),
@@ -1001,6 +1003,7 @@ _CONSOLE_EVENT_TAGS = {
     EventTypes.BALANCE_CHANGED: "balance",
     EventTypes.RESOURCE_MEMORY_SNAPSHOT: "memory",
     EventTypes.EMA_FALLBACK_USED: "ema",
+    EventTypes.EMA_UNAVAILABLE: "ema",
     EventTypes.RISK_MODE_CHANGED: "risk",
     EventTypes.HSL_TRANSITION: "risk",
     EventTypes.HSL_STATUS: "risk",
@@ -2112,6 +2115,11 @@ def _operator_sink_event_visible(event: LiveEvent) -> bool:
         return _hsl_status_operator_visible(event)
     if event.event_type == EventTypes.EMA_FALLBACK_USED:
         return (_data_int(data, "close_fallback_count") or 0) > 0
+    if event.event_type == EventTypes.EMA_UNAVAILABLE:
+        candidate_unavailable = data.get("candidate_unavailable")
+        return isinstance(candidate_unavailable, Mapping) and (
+            (_data_int(candidate_unavailable, "count") or 0) > 0
+        )
     return True
 
 
@@ -2393,6 +2401,112 @@ def format_ema_fallback_console(data: Mapping[str, Any]) -> str:
     return " ".join(parts)
 
 
+_EMA_UNAVAILABLE_CONSOLE_GROUP_LIMIT = 36
+_EMA_UNAVAILABLE_CONSOLE_ERROR_LIMIT = 24
+_EMA_UNAVAILABLE_CONSOLE_SAMPLE_LIMIT = 2
+_EMA_UNAVAILABLE_CONSOLE_RECORD_LIMIT = 188
+_EMA_UNAVAILABLE_COMPACT_GROUP_LIMIT = 19
+_EMA_UNAVAILABLE_COMPACT_ERROR_LIMIT = 13
+_EMA_UNAVAILABLE_COMPACT_SYMBOL_LIMIT = 14
+_EMA_UNAVAILABLE_EMA_TYPE_RE = re.compile(
+    r"\b(?P<ema_type>m1_close|m1_volume|m1_log_range|h1_log_range)\s+EMA\b",
+    re.IGNORECASE,
+)
+
+
+def _ema_unavailable_console_group(data: Mapping[str, Any]) -> Mapping[str, Any]:
+    groups = data.get("candidate_unavailable_groups")
+    if not isinstance(groups, (list, tuple)):
+        return {}
+    return next((group for group in groups if isinstance(group, Mapping)), {})
+
+
+def _ema_unavailable_console_symbol_preview(
+    group: Mapping[str, Any], *, symbol_limit: int = _EMA_FALLBACK_CONSOLE_TOKEN_LIMIT
+) -> str:
+    symbols = group.get("symbols")
+    if not isinstance(symbols, Mapping):
+        return "-"
+    count = _bounded_ema_console_count(symbols.get("count"))
+    sample_values = symbols.get("sample")
+    if not isinstance(sample_values, (list, tuple, set, frozenset)):
+        return f"{count}(-)"
+    sample = [
+        _bounded_ema_console_text(
+            _format_position_console_coin(value), limit=symbol_limit
+        )
+        for index, value in enumerate(sample_values)
+        if index < _EMA_UNAVAILABLE_CONSOLE_SAMPLE_LIMIT
+    ]
+    try:
+        omitted = max(0, int(symbols.get("count", 0)) - len(sample))
+    except (TypeError, ValueError, OverflowError):
+        omitted = 0
+    if omitted:
+        sample.append(f"+{_bounded_ema_console_count(omitted)}")
+    return f"{count}({','.join(sample) or '-'})"
+
+
+def _ema_unavailable_console_ema_type(group: Mapping[str, Any]) -> str | None:
+    example_error = group.get("example_error")
+    match = _EMA_UNAVAILABLE_EMA_TYPE_RE.search(str(example_error or ""))
+    if match is None:
+        return None
+    return _bounded_ema_console_text(
+        match.group("ema_type"), limit=_EMA_UNAVAILABLE_CONSOLE_ERROR_LIMIT
+    )
+
+
+def format_ema_unavailable_console(data: Mapping[str, Any]) -> str:
+    """Project required EMA unavailability without reducing structured diagnostics."""
+    candidate_unavailable = data.get("candidate_unavailable")
+    count = (
+        _bounded_ema_console_count(candidate_unavailable.get("count"))
+        if isinstance(candidate_unavailable, Mapping)
+        else "-"
+    )
+    group = _ema_unavailable_console_group(data)
+    reason = group.get("reason")
+    parts = [
+        "[ema] unavailable",
+        f"n={count}",
+        "group="
+        + _bounded_ema_console_text(
+            reason, limit=_EMA_UNAVAILABLE_CONSOLE_GROUP_LIMIT
+        ),
+        "action=mark_nontradable_until_fresh",
+        f"sym={_ema_unavailable_console_symbol_preview(group)}",
+    ]
+    error_types = group.get("error_types")
+    if isinstance(error_types, (list, tuple)) and error_types:
+        parts.append(
+            "err="
+            + _bounded_ema_console_text(
+                error_types[0], limit=_EMA_UNAVAILABLE_CONSOLE_ERROR_LIMIT
+            )
+        )
+    ema_type = _ema_unavailable_console_ema_type(group)
+    if ema_type:
+        parts.append(f"ema={ema_type}")
+    message = " ".join(parts)
+    if len(message) <= _EMA_UNAVAILABLE_CONSOLE_RECORD_LIMIT:
+        return message
+
+    parts[2] = "group=" + _bounded_ema_console_text(
+        reason, limit=_EMA_UNAVAILABLE_COMPACT_GROUP_LIMIT
+    )
+    parts[4] = "sym=" + _ema_unavailable_console_symbol_preview(
+        group, symbol_limit=_EMA_UNAVAILABLE_COMPACT_SYMBOL_LIMIT
+    )
+    for index, part in enumerate(parts):
+        if part.startswith("err="):
+            parts[index] = "err=" + _bounded_ema_console_text(
+                error_types[0], limit=_EMA_UNAVAILABLE_COMPACT_ERROR_LIMIT
+            )
+            break
+    return " ".join(parts)
+
+
 _INITIAL_ENTRY_DISTANCE_GATE_CONSOLE_RECORD_LIMIT = 188
 _INITIAL_ENTRY_DISTANCE_GATE_CONSOLE_CYCLE_LIMIT = 24
 _INITIAL_ENTRY_DISTANCE_GATE_CONSOLE_SYMBOL_LIMIT = 24
@@ -2498,6 +2612,8 @@ def format_console_event(event: LiveEvent) -> str:
         return format_memory_snapshot_console(event.data)
     if event.event_type == EventTypes.EMA_FALLBACK_USED:
         return format_ema_fallback_console(event.data)
+    if event.event_type == EventTypes.EMA_UNAVAILABLE:
+        return format_ema_unavailable_console(event.data)
     if event.event_type in {
         EventTypes.ENTRY_INITIAL_DISTANCE_GATE_BLOCKED,
         EventTypes.ENTRY_INITIAL_DISTANCE_GATE_CLEARED,
