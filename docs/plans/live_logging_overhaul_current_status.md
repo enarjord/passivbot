@@ -24,9 +24,10 @@ Estimated completion:
 
 - Branch: `codex/restart-target-relaunch-contract`, based on canonical
   `d6cac1017b27c56c2dca57c9ca0f637cd300dac2` after PR #1289.
-- PR: pending. Slice: prove that each exact bot target has a pane-parent
-  candidate path for a later separately reviewed relaunch action, subject to a
-  mandatory post-stop pane recheck.
+- PR: #1290, `Classify exact restart target relaunch paths`; semantic
+  implementation head `63a432c580`. Slice: prove that each exact bot target has
+  a pane-parent candidate path for a later separately reviewed relaunch action,
+  subject to a mandatory post-stop pane recheck.
 - Triggering evidence: VPS5 pane metadata retains empty `pane_start_command`
   while exact bot PIDs are children of stable bash pane PIDs. A future executor
   must derive commands from supervisor config and must not assume every direct
