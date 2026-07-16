@@ -22,36 +22,72 @@ Estimated completion:
 
 ## Active Review Slice
 
-- Branch: `codex/smoke-process-state-sampling`, based on canonical
-  `82bfa98e202a3fbba71937d751e1d0c651e33f72` after PR #1282.
-- PR: #1283, `Add bounded process-state sampling to live smoke reports`;
-  semantic implementation head `cafbeef441`. Slice: add opt-in bounded
-  repeated process-table sampling to distinguish transient, persistent, and
-  recovered uninterruptible-sleep observations during smoke checks.
-- Triggering evidence: PR #1282's settled cycle report was green and naturally
-  proved KuCoin completion after a retained nonce degradation. The final exact
-  process check then caught the unchanged KuCoin PID in `D` for about 20
-  seconds before three consecutive `R` samples. The existing one-shot process
-  projection could show either sample but not the observed recovery.
-- Scope: sample the existing canonical live-process scan up to a strict count
-  and interval bound, use the last sample for established liveness/config
-  checks, and expose bounded stable-PID, state-observation, command/PID churn,
-  observed/persistent/recovered `D`, and per-PID summary evidence.
-- Behavior boundary: read-only smoke tooling only. The single-snapshot default
-  and smoke verdict remain unchanged; sampling never signals, stops, starts, or
-  restarts processes and does not contact exchanges.
-- Validation: focused recovery/persistence/churn/redaction and bounds
-  regressions, full smoke-report tests, compilation, and docs checks.
+- Branch: `codex/restart-plan-target-gate`, based on canonical
+  `e004ede7ddaa4935bc8bf69739285724656198d3` after PR #1288.
+- PR: #1289, `Bind restart plan to stable target preflight`; semantic
+  implementation head `9011d4e0f5`. Slice: bind the deployed stable
+  exact-target report into the existing plan-only restart smoke workflow as an
+  explicit pre-action gate.
+- Triggering evidence: PR #1288's immediate and settled three-sample reports
+  proved stable pane IDs, pane PIDs, bot PIDs, and ownership for all five bots,
+  but `live-restart-smoke-plan` still does not emit that required gate.
+- Scope: add an explicit target session plus bounded 2-5 sample/window options,
+  emit the exact local-only target-report command in pre-restart readiness, and
+  project its required verdict in complete and summary output.
+- Behavior boundary: command generation only. The planner remains plan-only and
+  does not inspect tmux, run the target report, signal or start processes, use
+  SSH/git, contact a network/exchange, load credentials, or write files.
+- Validation: focused planner/CLI/summary/bounds regressions plus existing
+  target, process, restart-plan, compilation, and docs checks.
 - Review gate: temporary maintainer-authorized exact-head Hermes plus green
   Python and Rust CI while Grok is halted.
-- Expected VPS action: pull and run an opt-in bounded process-sampling smoke
-  after merge; no bot restart is expected for this read-only tooling slice.
+- Expected VPS action: pull and inspect a compact plan with the exact session;
+  no bot restart, tmux action, or process signal is expected.
 
 ## Deployed Baseline
 
 - Canonical `master` and VPS5 are
-  `82bfa98e202a3fbba71937d751e1d0c651e33f72`, PR #1282. The tracked checkout
-  is clean and expected untracked artifacts are preserved.
+  `e004ede7ddaa4935bc8bf69739285724656198d3`, PR #1288. VPS5 fast-forwarded
+  cleanly from `6cb8bc3c` without a restart or process signal; all five pane
+  IDs/PIDs, bot PIDs, and unrelated `misc:0.0` PID `434835` remained unchanged.
+- Immediate and settled three-sample local-only target reports were `ok=true`
+  and `sampling.stable=true`, with `3/3` successful samples, five stable
+  targets, zero failed samples, zero changed targets, and no issues. Immediate
+  process state `R=2,S=3` settled to `R=4,S=1`; no exchange request, process
+  action, or event was manufactured.
+- Canonical `master` and VPS5 are
+  `6cb8bc3c73c1e5b8c7ed1e70fa953e07a8e6b85e`, PR #1287. VPS5 fast-forwarded
+  from `7a12430a` with a tracked-clean checkout. Configured pane process IDs
+  `856294/856332/856364/856398/856434`, exact bot PIDs
+  `985592/985594/985596/985598/985600`, and unrelated `misc:0.0` PID `434835`
+  remained unchanged; no restart or process signal occurred.
+- Immediate and settled local-only target reports were `ok=true` with all five
+  expected windows resolved to canonical pane IDs `%358/%359/%360/%361/%362`,
+  exact PPID-to-pane-PID ownership, and zero missing, duplicate, extra, config,
+  or scan failures. The immediate `D=1,R=2,S=2` process snapshot naturally
+  settled to `R=5`; all pane and bot PIDs remained unchanged. No exchange
+  request, process action, or event was manufactured.
+- Immediate and settled four-sample `--brief` process reports were `ok=true`
+  with all five expected commands/configs matched, five stable PIDs, and zero
+  missing, duplicate, extra, config, or scan failures. The first naturally
+  ended with one active but non-persistent `D`; the settled repeat observed
+  recovery and ended `R=3,S=2` with zero active or persistent uninterruptible
+  processes. No exchange request, process action, or event was manufactured.
+- The immediate four-sample local-only process report was `ok=true`: all five
+  expected commands/configs matched, with zero missing, duplicate, extra,
+  config, or scan failures and five stable PIDs. It naturally observed one
+  recovered Binance `D` sample and a GateIO `D` final sample. The settled
+  four-sample report was also `ok=true`, retained five stable PIDs and zero
+  hard failures, naturally observed GateIO recovery, and ended in `R=5` with
+  zero active or persistent uninterruptible processes. No exchange request,
+  process action, or event was manufactured.
+- PR #1283's merged process sampler passed current-head Python/Rust CI and 132
+  focused local smoke/incident/docs tests. The requested VPS5 full smoke command
+  was not executed after the production-action approval layer rejected it as a
+  possible authenticated exchange probe. The rejection was preserved: no retry,
+  bypass, authenticated exchange request, process action, or manufactured event
+  occurred. PR #1285's local-only process-report slice separated the remaining
+  validation from monitor/log and exchange-adjacent command paths.
 - PR #1282 required no restart or process signal. Exact bot PIDs
   `985592/985594/985596/985598/985600`, all five pane parents, and unrelated
   `misc:0.0` PID `434835` remained unchanged. The immediate focused report
@@ -1090,9 +1126,17 @@ are also merged, deployed, and naturally validated. PR #1276's initial-entry
 eligibility health, PR #1277's correlated planning-output health, and PR
 #1278's latest-per-bot-and-kind data-packet health, PR #1280's planning
 snapshot health, and PR #1282's cycle terminal-outcome/recovery health are
-merged, deployed, and naturally validated. The active follow-up makes bounded
-multi-sample process-state recovery visible without changing the single-sample
-default, process control, or runtime behavior.
+merged, deployed, and naturally validated. PR #1283's bounded multi-sample
+process-state recovery is also merged and deployed without a restart or process
+signal; its full VPS smoke remained intentionally unrun after the
+production-action rejection. PR #1285's dedicated local-only
+`live-process-report` path is also merged, deployed, and naturally validated
+with five stable exact processes and recovered uninterruptible observations.
+PR #1286's aggregate-only follow-up, PR #1287's exact tmux target preflight,
+and PR #1288's bounded target-identity stability are merged, deployed, and
+naturally validated without process control. The active
+`codex/restart-plan-target-gate` slice binds that stable local-only verdict into
+the existing non-executing restart plan.
 
 Do not create progress-only PRs or resume unrelated logging work from stale
 worktrees.

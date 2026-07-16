@@ -308,6 +308,14 @@ Monitor commands are documented in detail in [monitor.md](monitor.md). The CLI s
   escalation ladder as policy only: graceful Ctrl+C/request stop, bounded wait, a second
   graceful signal when warranted, SIGTERM, then SIGKILL. The smoke report never sends those
   signals.
+- `passivbot tool live-process-report` runs the same bounded process-table and
+  optional supervisor-config checks without entering the smoke report's monitor-event or
+  text-log paths. It does not access credential stores, contact a network or exchange, control
+  processes, or write files. Use `--samples N --interval-s SECONDS` for bounded persistence and
+  recovery evidence; the existing maxima are enforced. The JSON `safety` object declares this
+  capability boundary, and the command exits nonzero when the process/config verdict has hard
+  failures. Use `--brief` for aggregate-only process/config/resource/state/sampling counters
+  without command, account, path, PID, or per-process rows.
 - `passivbot tool live-incident-bundle` writes a local `.tar.gz` evidence
   bundle with monitor event reports, problem-event reports, smoke evidence,
   redacted log excerpts, monitor snapshots, runtime metadata, and optional
@@ -371,9 +379,30 @@ Monitor commands are documented in detail in [monitor.md](monitor.md). The CLI s
   path to avoid overwriting prior evidence. The pre-restart readiness phase also
   includes one deduplicated `live-config-preflight` command for each configured
   live config path found in the supervisor config, plus a skip count for any
-  configured live command whose config path could not be derived. Use planner
+  configured live command whose config path could not be derived. Use
+  `--target-session-name SESSION` to append the exact local-only
+  `live-restart-target-report` gate to that phase. The planner defaults to
+  three samples five seconds apart; use `--target-samples N` (2-5) and
+  `--target-interval-s SECONDS` (greater than 0, at most 30) to change the
+  bounded stability window.
+  The command is only emitted, never run. Omitting the exact session keeps the
+  plan valid and explicitly marks the stable target gate unconfigured. Use
   `--summary` when you only need the bot count, phase names, preflight commands,
-  smoke command, and incident-bundle command without every per-bot phase detail.
+  target-preflight verdict requirement, smoke command, and incident-bundle
+  command without every per-bot phase detail.
+- `passivbot tool live-restart-target-report SUPERVISOR_CONFIG --session-name
+  SESSION` performs the local-only exact-target preflight required before any
+  future restart executor may signal a pane. It joins expected supervisor
+  window names with canonical tmux pane IDs and read-only pane metadata plus the
+  existing process/config verdict, proves ownership by requiring the matched bot
+  process PID or PPID to equal the pane PID, and fails on missing, duplicate, or
+  unconfigured panes and mismatched ownership in the exact confirmed session.
+  Other sessions such as `misc` are ignored. The report is bounded and never
+  signals, starts, or controls processes, contacts a network or exchange,
+  accesses credential stores, or writes files. Use `--samples N` with
+  `--interval-s SECONDS` to require the same pane ID, pane PID, matched bot PID,
+  and ownership proof across a bounded pre-action window; any hard-red sample
+  or identity change makes the report fail.
 - `passivbot tool live-performance-report` summarizes local live monitor event timings for
   operator performance analysis. It is read-only and does not contact exchanges. Use
   `--recent-minutes` for a time window, `--summary` for a bounded operator projection, and

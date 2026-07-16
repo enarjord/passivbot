@@ -7648,6 +7648,84 @@ def _build_process_report(
     return report
 
 
+def build_live_process_report(
+    *,
+    supervisor_config: str | Path | None = None,
+    process_command_match: str = DEFAULT_PROCESS_MATCH,
+    process_samples: int = 1,
+    process_sample_interval_s: float = 5.0,
+    config_base_dir: Path | None = None,
+) -> dict[str, Any]:
+    """Build the bounded local process-table section without scanning smoke inputs."""
+    return _build_process_report(
+        include_processes=True,
+        supervisor_config=supervisor_config,
+        process_command_match=process_command_match,
+        process_samples=process_samples,
+        process_sample_interval_s=process_sample_interval_s,
+        config_base_dir=config_base_dir,
+    )
+
+
+def summarize_live_process_report(processes: dict[str, Any]) -> dict[str, Any]:
+    """Return aggregate-only process evidence without command or identity rows."""
+    config_checks = (
+        processes.get("config_checks")
+        if isinstance(processes.get("config_checks"), dict)
+        else {}
+    )
+    summary = {
+        key: processes.get(key)
+        for key in (
+            "enabled",
+            "ok",
+            "hard_failures",
+            "expected_total",
+            "matched_expected",
+            "running_live_total",
+            "classification_source",
+            "tmux_pane_ownership",
+            "scan_error",
+            *CURRENT_PROCESS_PRESSURE_FIELDS,
+        )
+        if key in processes
+    }
+    summary.update(
+        {
+            "missing_expected_count": len(processes.get("missing_expected") or []),
+            "duplicate_configured_command_matches_count": len(
+                processes.get("duplicate_configured_command_matches") or []
+            ),
+            "extra_passivbot_live_processes_count": len(
+                processes.get("extra_passivbot_live_processes") or []
+            ),
+            "unexpected_running_count": len(
+                processes.get("unexpected_running") or []
+            ),
+            "config_checks": {
+                key: config_checks.get(key)
+                for key in (
+                    "enabled",
+                    "ok",
+                    "checked",
+                    "skipped",
+                    "hard_failures",
+                )
+                if key in config_checks
+            }
+            | {"issues_count": len(config_checks.get("issues") or [])},
+        }
+    )
+    sampling = processes.get("sampling")
+    if isinstance(sampling, dict):
+        summary["sampling"] = {
+            key: sampling.get(key)
+            for key in PROCESS_SAMPLING_FIELDS
+            if key in sampling
+        }
+    return summary
+
+
 def _non_negative_int(value: Any) -> int | None:
     try:
         parsed = int(value)
@@ -10801,11 +10879,6 @@ def summarize_live_smoke_report_brief(report: dict[str, Any]) -> dict[str, Any]:
     processes = (
         report.get("processes") if isinstance(report.get("processes"), dict) else {}
     )
-    process_config_checks = (
-        processes.get("config_checks")
-        if isinstance(processes.get("config_checks"), dict)
-        else {}
-    )
     repository = (
         report.get("repository") if isinstance(report.get("repository"), dict) else {}
     )
@@ -11059,57 +11132,7 @@ def summarize_live_smoke_report_brief(report: dict[str, Any]) -> dict[str, Any]:
             )
             if key in event_window
         },
-        "processes": {
-            key: processes.get(key)
-            for key in (
-                "enabled",
-                "ok",
-                "hard_failures",
-                "expected_total",
-                "matched_expected",
-                "running_live_total",
-                "classification_source",
-                "tmux_pane_ownership",
-                "scan_error",
-                *CURRENT_PROCESS_PRESSURE_FIELDS,
-            )
-            if key in processes
-        }
-        | (
-            {
-                "sampling": {
-                    key: processes["sampling"].get(key)
-                    for key in PROCESS_SAMPLING_FIELDS
-                    if key in processes["sampling"]
-                }
-            }
-            if isinstance(processes.get("sampling"), dict)
-            else {}
-        )
-        | {
-            "missing_expected_count": len(processes.get("missing_expected") or []),
-            "duplicate_configured_command_matches_count": len(
-                processes.get("duplicate_configured_command_matches") or []
-            ),
-            "extra_passivbot_live_processes_count": len(
-                processes.get("extra_passivbot_live_processes") or []
-            ),
-            "unexpected_running_count": len(processes.get("unexpected_running") or []),
-            "config_checks": {
-                key: process_config_checks.get(key)
-                for key in (
-                    "enabled",
-                    "ok",
-                    "checked",
-                    "skipped",
-                    "hard_failures",
-                )
-                if key in process_config_checks
-            }
-            | {
-                "issues_count": len(process_config_checks.get("issues") or []),
-            },
-        },
+        "processes": summarize_live_process_report(processes),
         "logs": {
             "max_files": _count_value(logs.get("max_files")),
             "tail_lines": _count_value(logs.get("tail_lines")),

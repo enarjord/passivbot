@@ -9171,6 +9171,88 @@ active branch, PR, review gate, and rollout instructions.
   active `codex/compact-trailing-status-console` follow-up is formatter-only and
   targets the normal 240-character budget without changing payload or behavior.
 
+### 2026-07-16: Exact Restart Target Preflight Deployed
+
+- PR #1287 merged to canonical `master` at `6cb8bc3c73` after exact-head
+  Hermes approval and green Python/Rust CI. VPS5 fast-forwarded cleanly without
+  a restart or process signal; all five pane PIDs, bot PIDs, and unrelated
+  `misc:0.0` PID `434835` remained unchanged.
+- Immediate and settled local-only target reports were `ok=true` with five
+  expected/resolved windows, canonical pane IDs `%358/%359/%360/%361/%362`,
+  exact PPID-to-pane-PID ownership, and zero missing, duplicate, extra, config,
+  or scan failures. The immediate `D=1,R=2,S=2` process snapshot settled to
+  `R=5` naturally.
+- No exchange request, process action, or event was manufactured. Active
+  `codex/restart-target-stability` adds a bounded pre-action identity window
+  without making restart execution available.
+
+### 2026-07-16: Stable Restart Targets Deployed
+
+- PR #1288 merged to canonical `master` at `e004ede7dd` after exact-head
+  Hermes approval and green Python/Rust CI. VPS5 fast-forwarded cleanly without
+  a restart or process signal; all five pane IDs/PIDs, bot PIDs, and unrelated
+  `misc:0.0` PID `434835` remained unchanged.
+- Immediate and settled three-sample local-only target reports were `ok=true`
+  and `sampling.stable=true`, with five stable targets, `3/3` successful
+  samples, zero failed samples, zero changed targets, and no issues. Immediate
+  process state `R=2,S=3` settled to `R=4,S=1` naturally.
+- No exchange request, process action, or event was manufactured. Active
+  `codex/restart-plan-target-gate` adds the exact stable report command and
+  required verdict to the existing non-executing restart plan.
+
+### 2026-07-16: Brief Process Report Deployed
+
+- PR #1286 merged to canonical `master` at `7a12430abf` after exact-head
+  Hermes approval and green Python/Rust CI. VPS5 fast-forwarded cleanly without
+  a restart or process signal; all five configured pane PIDs and unrelated
+  `misc:0.0` PID `434835` remained unchanged.
+- Immediate and settled four-sample brief reports were `ok=true` with all five
+  expected commands/configs matched, five stable PIDs, and zero missing,
+  duplicate, extra, config, or scan failures. The first naturally ended with
+  one active but non-persistent `D`; the settled repeat observed recovery and
+  ended `R=3,S=2` with zero active or persistent uninterruptible processes.
+- No exchange request, process action, or event was manufactured. Active
+  `codex/restart-target-preflight` adds the read-only exact tmux pane ownership
+  prerequisite for future restart execution.
+
+### 2026-07-16: Local-Only Process Report Deployed
+
+- PR #1285 merged to canonical `master` at `175986fd9c` after exact-head
+  Hermes approval and green Python/Rust CI. VPS5 fast-forwarded cleanly without
+  a restart or process signal; five pane parents, exact bot PIDs
+  `985592/985594/985596/985598/985600`, and `misc:0.0` PID `434835` remained
+  unchanged.
+- Immediate and settled four-sample local-only process reports were `ok=true`
+  with all five expected commands/configs matched, five stable PIDs, and zero
+  missing, duplicate, extra, config, or scan failures. The first report
+  naturally observed recovered Binance uninterruptible sleep and ended with
+  GateIO in `D`; the settled report naturally observed GateIO recovery and
+  ended `R=5` with zero active or persistent uninterruptible processes.
+- No exchange request, process action, or event was manufactured. Active PR
+  #1286 adds aggregate-only repeated-check output because the complete
+  process/config/group rows are intentionally detailed but too large for
+  routine operator loops.
+
+### 2026-07-16: Process Sampling Deployed; Local-Only Validation Split
+
+- PR #1283 merged to canonical `master` at `9bcf6c24fe` after current-head
+  Hermes approval and green Python/Rust CI under the temporary
+  maintainer-authorized Hermes-plus-CI gate. The final changelog-only
+  integration delta preserved the reviewed production/test/config/contract
+  diff, and 132 focused local smoke, incident, and docs tests passed.
+- VPS5 fast-forwarded from `82bfa98e` to `9bcf6c24` with a tracked-clean
+  checkout. Configured pane process IDs
+  `856294/856332/856364/856398/856434` and unrelated `misc:0.0` PID `434835`
+  remained unchanged; no restart or process signal was required.
+- The requested full `live-smoke-report` validation was not executed after the
+  production-action approval layer rejected it as a possible authenticated
+  exchange probe. The rejection was not retried or bypassed, and no exchange
+  request, process action, or trading/risk/state event was manufactured.
+- The active `codex/smoke-process-only-sampling` follow-up adds a dedicated
+  local-only process-report command. It reuses the bounded #1283 sampler while
+  remaining outside monitor-event, text-log, credential-store, network,
+  exchange, process-control, and file-write paths.
+
 ### 2026-07-16: Cycle Recovery Health Deployed; Process Sampling Follow-Up
 
 - PR #1282 merged to canonical `master` at `82bfa98e20` after exact-head

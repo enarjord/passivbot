@@ -120,6 +120,10 @@ TOOL_COMMANDS: dict[str, CommandSpec] = {
         "tools.live_performance_report",
         "summarize local live performance timing events",
     ),
+    "live-process-report": CommandSpec(
+        "tools.live_process_report",
+        "sample local live process state without monitor or network access",
+    ),
     "live-config-preflight": CommandSpec(
         "tools.live_config_preflight",
         "read-only offline live config preflight report",
@@ -139,6 +143,10 @@ TOOL_COMMANDS: dict[str, CommandSpec] = {
     "live-restart-smoke-plan": CommandSpec(
         "tools.live_restart_smoke_plan",
         "build a read-only dry-run live restart smoke plan",
+    ),
+    "live-restart-target-report": CommandSpec(
+        "tools.live_restart_target_report",
+        "resolve exact local tmux restart targets without process control",
     ),
     "inspect-ohlcvs": CommandSpec(
         "tools.inspect_ohlcvs",

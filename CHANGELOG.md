@@ -4,6 +4,34 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- `passivbot tool live-restart-smoke-plan` can now bind an explicitly
+  confirmed tmux session into its pre-restart readiness phase with
+  `--target-session-name`. The generated local-only target preflight requires
+  2-5 stable identity samples, remains non-executing, and makes the missing
+  target gate visible when no session is configured.
+
+- Added bounded `--samples` and `--interval-s` stability checks to
+  `passivbot tool live-restart-target-report`. Multi-sample reports fail if any
+  local preflight is hard-red or if a window's canonical pane ID, pane PID,
+  matched bot PID, or ownership proof changes during the sample window. Restart
+  execution and process control remain unavailable.
+
+- Added `passivbot tool live-restart-target-report`, a bounded local-only
+  preflight that joins supervisor-config window names with canonical tmux pane
+  IDs and proves ownership by matching each bot process PID or parent PID to
+  its pane PID. It fails on missing, duplicate, unconfigured, or mismatched
+  panes and never signals, starts, or controls a process, contacts a network
+  or exchange, loads credentials, or writes files.
+
+- Added `passivbot tool live-process-report`, a bounded local-only process
+  sampler that does not read monitor events or text logs, access credential
+  stores, contact networks or exchanges, control processes, or write files.
+  It can compare the local process table with an optional supervisor config
+  and sample process-state persistence/recovery using the existing smoke-report
+  process contract. Use `--brief` for aggregate-only process, config, resource,
+  state, and sampling counters without command, account, path, PID, or
+  per-process rows.
+
 - Live smoke reports can now opt into bounded repeated process-table sampling
   to distinguish observed, persistent, and recovered uninterruptible-sleep
   states while reporting stable PIDs, command/PID churn, and aggregate state
