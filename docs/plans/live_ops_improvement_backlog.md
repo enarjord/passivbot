@@ -1011,7 +1011,10 @@ Related detailed plans:
     for unsupported or malformed breakdowns.
 
 21. [ ] Historical secret-bearing text-log inventory and remediation.
-    Status: open. A read-only VPS5 console-length audit on 2026-07-15
+    Status: partial. The active `codex/log-secret-inventory` slice adds only the
+    bounded, value-free, read-only inventory and dry-run validation contract.
+    Quarantine or purge remains separate and requires explicit operator
+    approval. A read-only VPS5 console-length audit on 2026-07-15
     accidentally admitted old untimestamped traceback fragments and confirmed
     that retained May text logs include raw private websocket URLs/tokens and
     full exchange error bodies. Current recent-window producers and smoke paths

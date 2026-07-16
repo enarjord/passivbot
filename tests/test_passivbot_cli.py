@@ -146,6 +146,7 @@ def test_tool_help_lists_supported_tools(capsys):
     assert "hyperliquid-position-probe" in out
     assert "inspect-ohlcvs" in out
     assert "live-event-query" in out
+    assert "log-secret-inventory" in out
     assert "merge-paretos" in out
     assert "monitor-dev" in out
     assert "monitor-relay" in out

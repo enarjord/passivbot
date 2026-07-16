@@ -22,37 +22,44 @@ Estimated completion:
 
 ## Active Review Slice
 
-- Branch: `codex/demote-maintainer-lifecycle-detail`, based on canonical
-  `e6d2461a54c9e446a3aee4ff367653aedafa8494` after PR #1263.
-- PR: #1264, `Demote routine maintainer lifecycle console detail`; semantic
-  head `714ab5bf83bba93b8551e3af88a2a9e86fc70c2a`. Slice: keep successful
-  maintainer stop summaries and hourly scheduler-jitter detail at DEBUG while
-  preserving cancellation failures at ERROR.
-- Triggering evidence: the exact five post-PR #1263 startup segments retained
-  four empty `stopped data maintainers: {}` INFO lines and five routine hourly
-  jitter INFO lines after adjacent startup detail had moved to DEBUG.
-- Scope: log-level-only maintainer lifecycle projection and removal of the
-  redundant close-wrapper stop summary.
-- Behavior boundary: observability-only; no Rust, cancellation calls, task
-  timing, waits, scheduler cadence, exception behavior, exchange behavior, or
-  trading behavior changes.
-- Validation: focused maintainer success/failure level tests, broader startup
-  and monitor tests, Python compilation, docs checks, and diff whitespace
-  check.
+- Branch: `codex/log-secret-inventory`, based on canonical
+  `8e55f3642841b0730afc7e7b2b73632a8e7d8071` after PR #1264.
+- PR: pending. Slice: add the non-destructive inventory half of backlog item
+  #21 for historical secret-bearing text logs.
+- Triggering evidence: a 2026-07-15 read-only audit confirmed retained old logs
+  contain private websocket credentials and raw exchange error bodies, while a
+  bounded sample of current canonical logs was clean.
+- Scope: a bounded text/gzip scanner and value-free JSON CLI reporting only
+  secret-class counts, root-relative file identity, age, size, scan status, and
+  stable hashes.
+- Behavior boundary: read-only local tooling; no raw match values or lines, log
+  mutation, quarantine, deletion, copy/upload, exchange access, bot process
+  changes, Rust, risk, order, or trading behavior.
+- Validation: class and benign-lookalike fixtures, serialized-output leakage
+  assertions, stable ordering/hashes, gzip and scan-bound coverage, CLI tests,
+  Python compilation, docs checks, and a VPS5 dry-run inventory.
 - Review gate: temporary maintainer-authorized exact-head Hermes plus green
   Python and Rust CI while Grok is halted.
-- Expected VPS action: after merge, one authorized exact five-bot graceful
-  restart and natural startup observation only; do not manufacture trading,
-  risk, lock, or state events.
+- Expected VPS action: pull and run a bounded read-only inventory only; no bot
+  restart and no artifact remediation without separate operator approval.
 
 ## Deployed Baseline
 
 - Canonical `master` and VPS5 are
-  `e6d2461a54c9e446a3aee4ff367653aedafa8494`, PR #1263. The tracked checkout
+  `8e55f3642841b0730afc7e7b2b73632a8e7d8071`, PR #1264. The tracked checkout
   is clean and expected untracked artifacts are preserved.
 - VPS5 runs merged master in bot PIDs
-  `977722/977725/977728/977731/977734`. The exact pane parents are unchanged,
+  `979190/979193/979196/979199/979202`. The exact pane parents are unchanged,
   and unrelated `misc:0.0` PID `434835` is unchanged.
+- PR #1264 was activated with one SIGINT at `2026-07-16T08:34:29Z` to old
+  PIDs `977722/977725/977728/977731/977734`; all exited naturally within 23
+  seconds. The settled two-minute smoke was `ok=true` with zero hard, log,
+  monitor, process, or event-pipeline failures, `281/281` remote and `28/28`
+  account-critical calls successful, six successful fill refreshes, and five
+  exact processes in state `R`. All five fresh logs contained zero INFO
+  matches for successful maintainer-stop, OHLCV-watcher-stop, or hourly-jitter
+  detail. No cancellation failure occurred naturally, and none was
+  manufactured.
 - PR #1263 was activated with one SIGINT at `2026-07-16T07:54:15Z` to old
   PIDs `975507/975510/975511/975513/975515`; all exited naturally by
   `07:54:37Z`. The settled smoke was `ok=true` with zero hard, log, monitor,

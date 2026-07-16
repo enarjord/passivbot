@@ -15,7 +15,30 @@ merge, live smoke evidence changes, or new gaps are discovered.
 - Do not use this file for design churn; unresolved design details belong in the
   plan or a focused handoff doc.
 
-## Latest Canonical Deployment (PR #1263)
+## Latest Canonical Deployment (PR #1264)
+
+- PR #1264 merged to `master` as
+  `8e55f3642841b0730afc7e7b2b73632a8e7d8071`. It keeps successful maintainer
+  stop and hourly scheduler-jitter detail at DEBUG while retaining
+  cancellation failures at ERROR; cancellation, scheduler, exchange, and
+  trading behavior are unchanged.
+- VPS5 sent one SIGINT at `2026-07-16T08:34:29Z` to exact old PIDs
+  `977722/977725/977728/977731/977734`; all exited naturally within 23 seconds.
+  New PIDs are `979190/979193/979196/979199/979202`; pane parents and unrelated
+  `misc:0.0` PID `434835` were unchanged.
+- The settled two-minute smoke was `ok=true` with zero hard, log, monitor,
+  process, or event-pipeline failures, `281/281` remote and all `28/28`
+  account-critical calls successful, six successful fill refreshes, five
+  matching/config-valid processes in state `R`, and a clean tracked checkout.
+- The five fresh logs contained zero INFO matches for successful maintainer
+  stop, OHLCV-watcher stop, or hourly scheduler-jitter detail. No cancellation
+  error occurred naturally, and none was manufactured. A short console audit
+  found no justified follow-up demotion: HSL replay progress and slow staged
+  refreshes already follow deliberate admission contracts, while websocket
+  aggregation needs a longer incident sample. The next substantive slice is
+  the non-destructive historical secret-log inventory from backlog item #21.
+
+## Previous Canonical Deployment (PR #1263)
 
 - PR #1263 merged to `master` as
   `e6d2461a54c9e446a3aee4ff367653aedafa8494`. It consolidates startup

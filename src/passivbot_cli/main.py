@@ -103,6 +103,10 @@ TOOL_COMMANDS: dict[str, CommandSpec] = {
         "tools.live_event_query",
         "query structured live event NDJSON",
     ),
+    "log-secret-inventory": CommandSpec(
+        "tools.log_secret_inventory",
+        "read-only value-free inventory of secret-like local log material",
+    ),
     "live-incident-bundle": CommandSpec(
         "tools.live_incident_bundle",
         "collect local live incident evidence into a tarball",
