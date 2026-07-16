@@ -24,8 +24,10 @@ Estimated completion:
 
 - Branch: `codex/startup-budget-coverage-summary`, based on canonical
   `fc4a134fb7b856ea426afb750559ff7ae94c7a07` after PR #1265.
-- PR: pending. Slice: make brief startup timing reports distinguish assessed
-  budgets from unavailable or no-baseline projections.
+- PR: #1266, `Expose startup budget coverage in brief reports`; semantic head
+  `cfebc940406900606d7d8852f77f4238473dcf4c`. Slice: make brief startup
+  timing reports distinguish assessed budgets from unavailable or no-baseline
+  projections.
 - Triggering evidence: `_brief_startup_timings()` counts phases over budget but
   does not expose the existing elapsed/phase budget statuses, so
   `over_budget_phases=0` can conceal incomplete assessment coverage.
