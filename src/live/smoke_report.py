@@ -162,6 +162,7 @@ HSL_REPLAY_HEALTH_GROUP_LIMIT = 20
 HSL_REPLAY_STALE_ACTIVE_EVENT_AGE_MS = 5 * 60 * 1000
 HSL_REPLAY_LONG_RUNNING_ACTIVE_MS = 10 * 60 * 1000
 EXCHANGE_CONFIG_REFRESH_HEALTH_GROUP_LIMIT = 20
+DATA_PACKET_HEALTH_GROUP_LIMIT = 20
 RISK_EVENT_TYPES = {
     EventTypes.RISK_MODE_CHANGED,
     EventTypes.HSL_TRANSITION,
@@ -2864,6 +2865,171 @@ def _summarize_exchange_config_refresh_health(
         "failed_bots": len(failed_bots),
         "latest_failed_bots": len(latest_failed_bots),
         "recovered_bots": len(recovered_bots),
+        "groups": compact_groups,
+    }
+
+
+def _data_packet_safe_text(value: Any, *, max_len: int = 80) -> str | None:
+    if value is None:
+        return None
+    redacted = _redact_log_text(str(value), max_len=max_len)
+    return redacted or None
+
+
+def _data_packet_coverage(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {}
+    coverage: dict[str, Any] = {}
+    if isinstance(value.get("value_present"), bool):
+        coverage["value_present"] = bool(value["value_present"])
+    row_count = _non_negative_int(value.get("row_count"))
+    if row_count is not None:
+        coverage["row_count"] = int(row_count)
+    return coverage
+
+
+def _data_packet_health_group(
+    *,
+    bot_key: str,
+    row: dict[str, Any],
+    live_event: dict[str, Any],
+    path: Path,
+    line_no: int,
+) -> dict[str, Any]:
+    payload = live_event.get("data")
+    payload = payload if isinstance(payload, dict) else {}
+    freshness = payload.get("freshness")
+    freshness = freshness if isinstance(freshness, dict) else {}
+    ids = _event_ids(live_event)
+    warnings = payload.get("warnings")
+    errors = payload.get("errors")
+    return {
+        "bot": bot_key,
+        "event_type": live_event.get("event_type") or row.get("kind"),
+        "count": 1,
+        "packet_kind": _data_packet_safe_text(payload.get("kind")) or "unknown",
+        "status": _data_packet_safe_text(live_event.get("status")),
+        "reason_code": _data_packet_safe_text(live_event.get("reason_code")),
+        "latest_ts": row.get("ts"),
+        "latest_seq": row.get("seq"),
+        "latest_path": str(path),
+        "latest_line": int(line_no),
+        "latest_ids": {
+            key: ids.get(key)
+            for key in ("cycle_id", "snapshot_id")
+            if ids.get(key) is not None
+        },
+        "latest_scope": _data_packet_safe_text(payload.get("scope")),
+        "latest_revision": _non_negative_int(payload.get("revision")),
+        "latest_source": _data_packet_safe_text(payload.get("source")),
+        "latest_quality": _data_packet_safe_text(payload.get("quality")),
+        "latest_freshness_status": _data_packet_safe_text(freshness.get("status")),
+        "latest_freshness_age_ms": _non_negative_int(freshness.get("age_ms")),
+        "latest_freshness_max_age_ms": _non_negative_int(
+            freshness.get("max_age_ms")
+        ),
+        "latest_freshness_reason": _data_packet_safe_text(freshness.get("reason")),
+        "latest_coverage": _data_packet_coverage(payload.get("coverage")),
+        "latest_warning_count": len(warnings) if isinstance(warnings, list) else 0,
+        "latest_error_count": len(errors) if isinstance(errors, list) else 0,
+    }
+
+
+def _merge_data_packet_health_group(
+    groups: dict[tuple[str, str], dict[str, Any]],
+    group: dict[str, Any],
+) -> None:
+    key = (str(group.get("bot") or "unknown"), str(group.get("packet_kind")))
+    existing = groups.get(key)
+    if existing is None:
+        groups[key] = group
+        return
+    existing["count"] = int(existing.get("count") or 0) + 1
+    current_key = _sort_event_position_key(
+        ts=group.get("latest_ts"),
+        seq=group.get("latest_seq"),
+        path=group.get("latest_path") or "",
+        line_no=int(group.get("latest_line") or 0),
+    )
+    existing_key = _sort_event_position_key(
+        ts=existing.get("latest_ts"),
+        seq=existing.get("latest_seq"),
+        path=existing.get("latest_path") or "",
+        line_no=int(existing.get("latest_line") or 0),
+    )
+    if current_key > existing_key:
+        count = existing["count"]
+        existing.update(group)
+        existing["count"] = count
+
+
+def _summarize_data_packet_health(
+    groups: dict[tuple[str, str], dict[str, Any]],
+    event_type_counts: Counter[str],
+) -> dict[str, Any]:
+    ordered = sorted(
+        groups.values(),
+        key=lambda group: _sort_event_position_key(
+            ts=group.get("latest_ts"),
+            seq=group.get("latest_seq"),
+            path=group.get("latest_path") or "",
+            line_no=int(group.get("latest_line") or 0),
+        ),
+        reverse=True,
+    )
+    packet_kinds: Counter[str] = Counter()
+    latest_qualities: Counter[str] = Counter()
+    latest_freshness_statuses: Counter[str] = Counter()
+    latest_sources: Counter[str] = Counter()
+    latest_row_count_total = 0
+    latest_value_present_packets = 0
+    latest_value_missing_packets = 0
+    for group in groups.values():
+        packet_kinds[str(group.get("packet_kind") or "unknown")] += int(
+            group.get("count") or 0
+        )
+        latest_qualities[str(group.get("latest_quality") or "unknown")] += 1
+        latest_freshness_statuses[
+            str(group.get("latest_freshness_status") or "unknown")
+        ] += 1
+        latest_sources[str(group.get("latest_source") or "unknown")] += 1
+        coverage = group.get("latest_coverage")
+        coverage = coverage if isinstance(coverage, dict) else {}
+        latest_row_count_total += int(
+            _non_negative_int(coverage.get("row_count")) or 0
+        )
+        if coverage.get("value_present") is True:
+            latest_value_present_packets += 1
+        elif coverage.get("value_present") is False:
+            latest_value_missing_packets += 1
+    compact_groups = [
+        {
+            key: value
+            for key, value in group.items()
+            if key not in {"latest_path", "latest_line", "latest_seq"}
+            and value not in (None, {}, [])
+        }
+        for group in ordered[:DATA_PACKET_HEALTH_GROUP_LIMIT]
+    ]
+    return {
+        "total": sum(int(group.get("count") or 0) for group in groups.values()),
+        "event_types": dict(event_type_counts.most_common()),
+        "bots": len({str(group.get("bot")) for group in groups.values()}),
+        "latest_packets": len(groups),
+        "packet_kinds": dict(packet_kinds.most_common()),
+        "latest_qualities": dict(latest_qualities.most_common()),
+        "latest_freshness_statuses": dict(latest_freshness_statuses.most_common()),
+        "latest_sources": dict(latest_sources.most_common()),
+        "latest_warning_packets": sum(
+            1 for group in groups.values() if int(group.get("latest_warning_count") or 0)
+        ),
+        "latest_error_packets": sum(
+            1 for group in groups.values() if int(group.get("latest_error_count") or 0)
+        ),
+        "latest_row_count_total": latest_row_count_total,
+        "latest_value_present_packets": latest_value_present_packets,
+        "latest_value_missing_packets": latest_value_missing_packets,
+        "groups_truncated": len(ordered) > DATA_PACKET_HEALTH_GROUP_LIMIT,
         "groups": compact_groups,
     }
 
@@ -7412,6 +7578,8 @@ def _scan_events(
     forager_eligibility_health_event_type_counts: Counter[str] = Counter()
     exchange_config_refresh_groups: dict[tuple[Any, ...], dict[str, Any]] = {}
     exchange_config_refresh_event_type_counts: Counter[str] = Counter()
+    data_packet_health_groups: dict[tuple[str, str], dict[str, Any]] = {}
+    data_packet_health_event_type_counts: Counter[str] = Counter()
     staged_readiness_groups: dict[tuple[Any, ...], dict[str, Any]] = {}
     staged_readiness_event_type_counts: Counter[str] = Counter()
     planning_output_groups: dict[tuple[Any, ...], dict[str, Any]] = {}
@@ -7685,6 +7853,18 @@ def _scan_events(
                                 line_no=line_no,
                             ),
                         )
+                    if event_type == EventTypes.DATA_PACKET_UPDATED:
+                        data_packet_health_event_type_counts[str(event_type)] += 1
+                        _merge_data_packet_health_group(
+                            data_packet_health_groups,
+                            _data_packet_health_group(
+                                bot_key=bot_key,
+                                row=row,
+                                live_event=live_event,
+                                path=path,
+                                line_no=line_no,
+                            ),
+                        )
                     if _staged_readiness_event(live_event):
                         staged_readiness_event_type_counts[str(event_type)] += 1
                         _merge_staged_readiness_group(
@@ -7925,6 +8105,10 @@ def _scan_events(
         "exchange_config_refresh_health": _summarize_exchange_config_refresh_health(
             exchange_config_refresh_groups,
             exchange_config_refresh_event_type_counts,
+        ),
+        "data_packet_health": _summarize_data_packet_health(
+            data_packet_health_groups,
+            data_packet_health_event_type_counts,
         ),
         "staged_readiness_health": _summarize_staged_readiness_health(
             staged_readiness_groups,
@@ -8385,6 +8569,7 @@ def build_live_smoke_report(
         "exchange_config_refresh_health": event_scan[
             "exchange_config_refresh_health"
         ],
+        "data_packet_health": event_scan["data_packet_health"],
         "staged_readiness_health": event_scan["staged_readiness_health"],
         "planning_output_health": event_scan["planning_output_health"],
         "event_pipeline_health": event_scan["event_pipeline_health"],
@@ -8753,7 +8938,7 @@ def _summary_staged_readiness_health(
     return out
 
 
-def _summary_planning_output_health(
+def _summary_unfiltered_health_groups(
     summary: dict[str, Any],
     *,
     limit: int,
@@ -8771,6 +8956,22 @@ def _summary_planning_output_health(
         or len(groups) > limit,
         "groups": groups[:limit],
     }
+
+
+def _summary_planning_output_health(
+    summary: dict[str, Any],
+    *,
+    limit: int,
+) -> dict[str, Any]:
+    return _summary_unfiltered_health_groups(summary, limit=limit)
+
+
+def _summary_data_packet_health(
+    summary: dict[str, Any],
+    *,
+    limit: int,
+) -> dict[str, Any]:
+    return _summary_unfiltered_health_groups(summary, limit=limit)
 
 
 def _shareable_summary_group(
@@ -8987,6 +9188,11 @@ def summarize_live_smoke_report(
         if isinstance(report.get("exchange_config_refresh_health"), dict)
         else {}
     )
+    data_packet_health = (
+        report.get("data_packet_health")
+        if isinstance(report.get("data_packet_health"), dict)
+        else {}
+    )
     staged_readiness_health = (
         report.get("staged_readiness_health")
         if isinstance(report.get("staged_readiness_health"), dict)
@@ -9196,6 +9402,10 @@ def summarize_live_smoke_report(
         ),
         "exchange_config_refresh_health": _summary_limited_groups(
             exchange_config_refresh_health,
+            limit=max_groups,
+        ),
+        "data_packet_health": _summary_data_packet_health(
+            data_packet_health,
             limit=max_groups,
         ),
         "staged_readiness_health": _summary_staged_readiness_health(
@@ -9913,6 +10123,11 @@ def summarize_live_smoke_report_brief(report: dict[str, Any]) -> dict[str, Any]:
         if isinstance(report.get("exchange_config_refresh_health"), dict)
         else {}
     )
+    data_packet_health = (
+        report.get("data_packet_health")
+        if isinstance(report.get("data_packet_health"), dict)
+        else {}
+    )
     staged_readiness_health = (
         report.get("staged_readiness_health")
         if isinstance(report.get("staged_readiness_health"), dict)
@@ -10237,6 +10452,11 @@ def summarize_live_smoke_report_brief(report: dict[str, Any]) -> dict[str, Any]:
             ),
             "event_types": exchange_config_refresh_health.get("event_types") or {},
         },
+        "data_packets": {
+            key: value
+            for key, value in data_packet_health.items()
+            if key not in {"groups", "groups_truncated"}
+        },
         "staged_readiness": staged_readiness_brief,
         "planning_output": {
             key: value
@@ -10493,6 +10713,7 @@ SMOKE_REPORT_SECTION_BASE_SELECTORS = frozenset(
 SMOKE_REPORT_SECTION_ALIASES: dict[str, tuple[str, ...]] = {
     "account_critical_remote_calls": ("account_critical_remote_call_health",),
     "cache": ("cache_health",),
+    "data_packets": ("data_packet_health",),
     "ema_readiness": ("ema_readiness_health",),
     "event_pipeline": ("event_pipeline_health",),
     "exchange_config_refresh": ("exchange_config_refresh_health",),

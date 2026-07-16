@@ -4,6 +4,13 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Live smoke reports now expose bounded latest-per-bot-and-kind health from
+  existing `data_packet.updated` events: packet kinds, quality, freshness,
+  source, revision, safe coverage counts, and warning/error counts. Raw packet
+  references, hashes, timestamps, values, and warning/error text remain
+  query-only; smoke verdicts, exchange access, and trading behavior are
+  unchanged.
+
 - Live smoke reports now include bounded latest-per-bot planning-output health
   from existing `rust_orchestrator.returned` and `action.planned` events. The
   projection correlates cycle and remote-call IDs, Rust timing and order
