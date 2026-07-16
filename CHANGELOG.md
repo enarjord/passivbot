@@ -4,6 +4,16 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Added live WEEX USDT perpetual-futures support through CCXT, including
+  authenticated account state, simultaneous long/short order placement and
+  cancellation, per-symbol combined-position/margin/leverage setup, live
+  bid/ask pricing, positions, open orders, and fill/PnL ingestion. WEEX
+  historical 1m backtest-data downloading is not included.
+
+- Updated the live CCXT dependency from 4.5.48 to 4.5.66. WEEX uses a narrowly
+  scoped compatibility handler for its documented successful configuration
+  response, which upstream CCXT 4.5.66 otherwise raises as an exchange error.
+
 - Live smoke reports can now opt into bounded repeated process-table sampling
   to distinguish observed, persistent, and recovered uninterruptible-sleep
   states while reporting stable PIDs, command/PID churn, and aggregate state

@@ -48,6 +48,12 @@
         "secret": "secret",
         "passphrase": "passphrase"
     },
+    "weex_01" : {
+        "exchange": "weex",
+        "key": "key",
+        "secret": "secret",
+        "passphrase": "passphrase"
+    },
     "_comment_paradex": "Paradex uses L2 StarkNet auth (like Hyperliquid).",
     "paradex_01": {
         "exchange": "paradex",

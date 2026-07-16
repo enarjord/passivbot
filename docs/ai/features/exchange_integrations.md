@@ -138,6 +138,71 @@ Handling:
 2. Clip 1m historical fetches to the recent-window bound and mark older spans as `no_archive`.
 3. Require external OHLCV source data or another candle source for older Gate.io backtests.
 
+## WEEX Futures
+
+### V3 hedge-order contract
+
+Problem:
+
+1. WEEX V3 identifies entries and closes with the combination of `side` and
+   `positionSide` (`LONG` or `SHORT`). Its regular-order request does not
+   document a `reduceOnly` field.
+2. The unified CCXT request accepts quantity in base-asset units even though
+   market metadata also exposes `contractVal`; treating that metadata as a
+   contracts-to-base multiplier under-sizes orders.
+3. WEEX configures position and margin mode per symbol, not account-wide.
+4. WEEX `SEPARATED` mode creates split positions and rejects ordinary
+   Passivbot closes with `-1054` (position ID missing). `COMBINED` mode merges
+   same-direction orders into the explicit long/short positions expected by
+   Passivbot and supports regular quantity-based closes.
+
+Handling in Passivbot:
+
+1. Send explicit `positionSide`, `newClientOrderId`, and `timeInForce`; use
+   `POST_ONLY` for configured post-only orders and do not send `reduceOnly`.
+2. Keep WEEX `c_mult=1.0` at the Passivbot/CCXT boundary and use the exchange's
+   base-quantity precision and minimum.
+3. Read the symbol's current position and margin modes, set WEEX `COMBINED`
+   position mode plus the selected cross/isolated margin mode when needed, then
+   set leverage. Keep Passivbot's internal long/short hedge planning enabled;
+   CCXT's generic `hedged` boolean calls this WEEX mode false.
+4. Treat missing or ambiguous `positionSide` on orders and fills as an error;
+   do not infer it from buy/sell alone.
+
+Primary reference: [WEEX V3 place-order API](https://www.weex.com/api-doc/contract/Transaction_API/PlaceOrder).
+
+### Market data and CCXT compatibility
+
+Problem:
+
+1. WEEX's 24-hour futures ticker payload does not provide a live bid and ask.
+2. WEEX configuration mutations return the documented envelope
+   `code=200, msg=success`, which CCXT 4.5.66 incorrectly classifies as an
+   exchange error merely because `msg` is present.
+
+Handling in Passivbot:
+
+1. Fetch live quotes from the V3 contract book-ticker endpoint and reject
+   missing, non-finite, non-positive, or crossed quotes.
+2. Accept only the exact documented success envelope in the WEEX adapter;
+   delegate every other response to CCXT's normal error mapping.
+
+### Fill-history retention and pagination
+
+Problem: WEEX returns at most 100 trade-detail rows per request, permits at most
+seven days per query, and retains up to 365 days.
+
+Handling:
+
+1. Split requested history into seven-day windows and page forward by fill
+   timestamp within each window.
+2. Preserve exchange trade and order IDs, explicit position side, realized PnL,
+   and fees; enrich missing Passivbot client-order IDs from order detail.
+3. Keep WEEX historical 1m backtest-data downloading out of the live adapter;
+   it is not a supported WEEX data source in this release.
+
+Primary reference: [WEEX V3 trade-detail API](https://www.weex.com/api-doc/contract/Transaction_API/GetTradeDetails).
+
 ## General Guidance
 
 1. Check raw exchange payloads when CCXT abstraction is insufficient.

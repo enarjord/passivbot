@@ -27,12 +27,15 @@
 | OKX | `fetch_my_trades` | positions history |
 | KuCoin | trades + positions history | positions history |
 | Gate.io | `fetch_my_trades` | embedded |
+| WEEX | `fetch_my_trades` in seven-day windows | embedded `realizedPnl` |
 
 ## Non-Obvious Details
 
 1. Exchanges split fill/PnL data across different endpoints.
 2. Bybit requires hybrid pagination for better closed-PnL completeness.
 3. Historical retention limits can make old PnL records unavailable.
+4. WEEX trade-detail queries are limited to 100 rows and seven days per request,
+   with up to 365 days of retention; its client order id may require an order-detail lookup.
 
 ## Failure Semantics And Risks
 

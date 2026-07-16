@@ -18664,6 +18664,10 @@ def setup_bot(config):
         from exchanges.kucoin import KucoinBot
 
         bot = KucoinBot(config)
+    elif user_info["exchange"] == "weex":
+        from exchanges.weex import WeexBot
+
+        bot = WeexBot(config)
     elif user_info["exchange"] == "paradex":
         from exchanges.paradex import ParadexBot
 
