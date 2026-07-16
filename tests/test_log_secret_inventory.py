@@ -50,6 +50,31 @@ def test_classifies_all_required_secret_classes_and_ignores_benign_lookalikes():
     assert classify_secret_like_text("response body:")["raw_http_body_html_markers"] == 0
 
 
+def test_classifies_scheme_less_secret_query_params_without_retaining_values(tmp_path: Path):
+    secrets = ("path-api-key-secret", "signature-secret", "token-secret", "full-url-secret")
+    text = "\n".join(
+        [
+            f"GET /private/orders?apiKey={secrets[0]}",
+            f"GET /private/orders?limit=10&signature={secrets[1]}&token={secrets[2]}",
+            "GET /private/orders?token=[redacted]&signature=[redacted]",
+            'response={"url":"/private/orders?token=[redacted]"}',
+            "query=/private/orders?signature=[redacted], status=failed",
+            "GET /private/orders?api_key_count=2&token_present=true&signature_enabled=true",
+            f"https://example.invalid/path?password={secrets[3]}",
+        ]
+    )
+
+    counts = classify_secret_like_text(text)
+
+    assert counts["secret_url_query_params"] == 4
+    assert counts["labeled_secret_values"] == 0
+
+    (tmp_path / "service.log").write_text(text)
+    serialized = json.dumps(build_log_secret_inventory(tmp_path), sort_keys=True)
+
+    assert all(secret not in serialized for secret in secrets)
+
+
 def test_report_is_value_free_and_root_relative(tmp_path: Path):
     secrets = (
         "private-ws-token",

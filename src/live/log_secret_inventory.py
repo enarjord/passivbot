@@ -47,9 +47,10 @@ _BEARER_BASIC_RE = re.compile(
 _PEM_PRIVATE_KEY_RE = re.compile(
     r"-----BEGIN (?:[A-Z0-9 ]+ )?PRIVATE KEY-----", re.IGNORECASE
 )
-_SECRET_URL_QUERY_RE = re.compile(
-    r"\b(?:https?|wss?)://[^\s\"'<>]*[?&](?:api[_-]?key|api[_-]?secret|token|"
-    r"signature|password|passphrase|secret)=(?!\[redacted\](?:[&#\s]|$))[^\s\"'<>&#]+",
+_SECRET_QUERY_RE = re.compile(
+    r"[?&](?:api[_-]?key|api[_-]?secret|token|"
+    r"signature|password|passphrase|secret)="
+    r"(?!\[redacted\](?:\W|$))[^\s\"'<>&#]+",
     re.IGNORECASE,
 )
 _RAW_HTTP_BODY_HTML_RE = re.compile(
@@ -92,7 +93,7 @@ def classify_secret_like_text(text: str) -> dict[str, int]:
     )
     counts["bearer_basic_schemes"] = len(_BEARER_BASIC_RE.findall(text))
     counts["pem_private_keys"] = len(_PEM_PRIVATE_KEY_RE.findall(text))
-    counts["secret_url_query_params"] = len(_SECRET_URL_QUERY_RE.findall(text))
+    counts["secret_url_query_params"] = len(_SECRET_QUERY_RE.findall(text))
     counts["raw_http_body_html_markers"] = len(_RAW_HTTP_BODY_HTML_RE.findall(text))
     counts["labeled_secret_values"] = sum(
         1

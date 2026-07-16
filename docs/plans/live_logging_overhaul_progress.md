@@ -15,7 +15,25 @@ merge, live smoke evidence changes, or new gaps are discovered.
 - Do not use this file for design churn; unresolved design details belong in the
   plan or a focused handoff doc.
 
-## Latest Canonical Deployment (PR #1265)
+## Latest Canonical Deployment (PR #1266)
+
+- PR #1266 merged to `master` as
+  `4015a3b3f145d58db3e1a873ec4cc5ce465368f7`. It adds existing startup
+  elapsed/phase budget status coverage to the brief smoke projection without
+  changing events, baselines, thresholds, startup, or trading behavior.
+- VPS5 fast-forwarded cleanly with no restart. A bounded four-hour
+  current-segment-only report scanned six monitor files and 19,163 records
+  with zero monitor parse errors, and emitted the new coverage fields. Startup
+  timing rows had rotated out, so their counts were naturally zero.
+- The section-only report retained two hard and 319 attention problem events
+  and was not treated as a green deploy-health verdict. Exact bot PIDs and
+  unrelated `misc:0.0` PID `434835` remained unchanged. A transient GateIO
+  `D` sample cleared to `R` after 20 seconds.
+- Static follow-up confirmed the inventory's query classifier still required
+  an HTTP/websocket scheme; the next read-only slice recognizes scheme-less
+  request paths and query fragments without retaining values.
+
+## Previous Canonical Deployment (PR #1265)
 
 - PR #1265 merged to `master` as
   `fc4a134fb7b856ea426afb750559ff7ae94c7a07`. It adds a bounded, value-free,

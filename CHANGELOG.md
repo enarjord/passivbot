@@ -4,6 +4,10 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- The read-only log secret inventory now detects credential-like query
+  parameters in scheme-less request paths and query fragments as well as full
+  URLs, without returning matched values.
+
 - Brief live smoke reports now summarize startup elapsed/phase budget status
   coverage, distinguishing unavailable and no-baseline assessments from
   within-budget phases without changing startup behavior or thresholds.
