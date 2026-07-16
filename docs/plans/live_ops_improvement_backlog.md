@@ -599,6 +599,15 @@ Related detailed plans:
     per-cycle durable events, recovery/forager suppression, and exact legacy
     fallback.
 
+    PR #1252 merged and deployed the close-EMA projection. Three natural lines
+    measured 158-225 characters, zero post-deploy legacy duplicates appeared,
+    and the settled smoke was hard-green after one bounded GateIO startup
+    retry. The same logs contained 21 natural initial-entry distance-gate
+    blocked lines at 222-270 characters, 20 above budget. The active
+    `codex/compact-entry-distance-console` slice compacts only their existing
+    structured human projection while preserving payload, admission, legacy
+    fallback, gate decisions, and trading behavior.
+
     Two post-PR #1220 console observations remain deferred rather than folded
     into the realized-loss slice. Hyperliquid balance lines surfaced signed
     floating-point jitter near `1e-13`; decide a console-only materiality or

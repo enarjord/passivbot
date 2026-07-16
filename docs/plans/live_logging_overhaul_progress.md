@@ -15,7 +15,34 @@ merge, live smoke evidence changes, or new gaps are discovered.
 - Do not use this file for design churn; unresolved design details belong in the
   plan or a focused handoff doc.
 
-## Latest Canonical Deployment (PR #1251)
+## Latest Canonical Deployment (PR #1252)
+
+- PR #1252 merged to `master` as `4ccf1e2523a217caa78b3ce3acbf2c949590926d`
+  after exact-head Hermes approval and green Python/Rust CI while Grok was
+  temporarily halted. It makes active close-EMA carry-forward events the
+  compact console/text owner at the unchanged fifteen-minute human cadence;
+  EMA calculations, fallback eligibility, and trading behavior are unchanged.
+- VPS5 fast-forwarded cleanly and sent one SIGINT round to exact old PIDs
+  `961227/961230/961232/961233/961234`; all exited naturally within ten
+  seconds, with no escalation. Pane PIDs and unrelated `misc:0.0` PID `434835`
+  were preserved. GateIO's first replacement failed closed during HSL replay
+  when one required held-pair unrealized-PnL minute was unavailable; one
+  bounded same-pane retry succeeded, reached `bot.ready`, and completed replay.
+  Final PIDs are `963164/963166/964008/963169/963170` for
+  Binance/KuCoin/GateIO/OKX/Hyperliquid respectively.
+- Natural compact close-EMA warnings measured 158, 166, and 225 visible
+  characters on OKX, Binance, and GateIO. They retained fallback and symbol
+  counts, age, streak, span examples, and classified reason; zero legacy
+  duplicate appeared in the post-deploy log files.
+- The final two-minute smoke was `ok=true` with zero hard/log/monitor/process/
+  pipeline failures, `347/347` remote and `53/53` account-critical calls
+  successful, seven successful fill refreshes, no active HSL replay, five
+  matching/config-valid processes in state `R`, and clean tracked `master`.
+- The same window contained 21 natural initial-entry distance-gate blocked
+  lines at 222-270 visible characters; 20 exceeded 240. The next slice compacts
+  only their existing structured human projection.
+
+## Previous Canonical Deployment (PR #1251)
 
 - PR #1251 merged to `master` as `b6fabcfdbbdd823277c12896b770f008c01bb163`
   after exact-head Hermes approval and green Python/Rust CI while Grok was
