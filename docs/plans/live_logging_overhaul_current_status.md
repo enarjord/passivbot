@@ -24,7 +24,7 @@ Estimated completion:
 
 - Branch: `codex/compact-ema-fallback-console`, based on canonical
   `b6fabcfdbbdd823277c12896b770f008c01bb163` after PR #1251.
-- PR: pending, `Compact close-EMA fallback warning`.
+- PR: #1252, `Compact close-EMA fallback warning`.
 - Slice: make the existing structured `ema.fallback_used` event the compact
   normal console/text owner only when close-EMA carry-forward is active.
 - Triggering evidence: a natural Binance close-EMA fallback summary measured
