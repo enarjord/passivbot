@@ -24,7 +24,7 @@ Estimated completion:
 
 - Branch: `codex/bound-approved-coin-delta-console`, based on canonical
   `e41118f0424ff3d4161e308b8844af5f35a8b7a9` after PR #1259.
-- PR: pending, `Bound coin-list membership console output`.
+- PR: #1260, `Bound coin-list membership console output`.
 - Slice: make the existing `forager.eligibility_changed` event the sole normal
   console/text owner for approved/ignored coin membership changes, with
   per-side counts and bounded symbol samples.
