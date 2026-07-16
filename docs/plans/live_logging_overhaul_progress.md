@@ -15,7 +15,28 @@ merge, live smoke evidence changes, or new gaps are discovered.
 - Do not use this file for design churn; unresolved design details belong in the
   plan or a focused handoff doc.
 
-## Latest Canonical Deployment (PR #1273)
+## Latest Canonical Deployment (PR #1274)
+
+- PR #1274 merged to `master` as
+  `bcbfa12808a00e39c1e4eb78e43e13746be553fa`. It scopes monitor event-type
+  inventory and sampled cycle IDs to the requested smoke-report time window
+  while preserving full-file validation and scanned-record counters.
+- VPS5 fast-forwarded cleanly with no restart. Exact bot PIDs
+  `985592/985594/985596/985598/985600`, all five pane parents, and unrelated
+  `misc:0.0` PID `434835` remained unchanged; tracked state stayed clean.
+- A bounded 30-minute report observed one natural KuCoin eligibility event and
+  counted that event type exactly once. A fresh two-minute focused report had
+  no eligibility event and omitted the event type from inventory, directly
+  validating the fixed boundary. The fresh smoke was `ok=true` with zero
+  hard/log/monitor/process failures, `248/248` remote and `57/57`
+  account-critical calls successful, eight successful fill refreshes, and all
+  five exact/config-valid processes in state `R` with no uninterruptible sleep.
+- The same fresh event inventory naturally contained 18
+  `planning.symbol_state` events. The next report-only slice adds bounded
+  latest-per-bot symbol-state evidence to staged-readiness health; no event or
+  trading activity was manufactured.
+
+## Previous Canonical Deployment (PR #1273)
 
 - PR #1273 merged to `master` as
   `20238b50792da0a69b6fa2b13272c75ea4a0eade`. It projects existing bounded

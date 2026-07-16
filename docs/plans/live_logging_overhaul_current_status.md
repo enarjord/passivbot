@@ -22,25 +22,24 @@ Estimated completion:
 
 ## Active Review Slice
 
-- Branch: `codex/smoke-window-event-inventory`, based on canonical
-  `20238b50792da0a69b6fa2b13272c75ea4a0eade` after PR #1273.
-- PR: #1274, `Scope smoke event inventory to requested window`; semantic
-  implementation head `69aa1ae1d7`. Slice: make time-bounded smoke-report
-  event inventory obey the same requested window as the report's health and
-  bot projections.
-- Triggering evidence: PR #1273's VPS5 deploy showed that a current-only
-  30-minute section report could list `forager.eligibility_changed` in the
-  monitor-wide event-type inventory even though no matching event was present
-  in the requested window. A bounded current-plus-rotated 180-minute query was
-  required to find the six natural events used to validate the new section.
-- Scope: count monitor event types and sampled cycle IDs only after the
-  existing `since_ms`/`until_ms` filter. Keep full-file parsing, validation,
-  issue reporting, and scanned-record counters unchanged.
+- Branch: `codex/smoke-planning-symbol-state-health`, based on canonical
+  `bcbfa12808a00e39c1e4eb78e43e13746be553fa` after PR #1274.
+- PR: #1275, `Report planning symbol-state smoke health`; semantic
+  implementation head `23696ded95`. Slice: project existing
+  `planning.symbol_state` events into the staged-readiness smoke health surface.
+- Triggering evidence: the fresh post-PR #1274 two-minute event inventory
+  naturally contained 18 `planning.symbol_state` events, while staged-readiness
+  health exposed only staged cycle degradation, `planning.unavailable`, and
+  `planning.defer_summary` evidence.
+- Scope: retain the latest symbol-state observation per bot and expose bounded
+  record/status counts, unavailable reasons, order classes, surfaces, and
+  redacted symbol samples in full, summary, brief, and selected staged-readiness
+  output.
 - Behavior boundary: read-only report projection only. No smoke verdict,
   attention classification, console output, event production, exchange access,
-  configuration, or trading changes.
-- Validation: focused time-window regression, full smoke-report tests,
-  compilation, and docs checks.
+  planning, configuration, or trading changes.
+- Validation: focused latest-per-bot/redaction regression, full smoke-report
+  tests, compilation, and docs checks.
 - Review gate: temporary maintainer-authorized exact-head Hermes plus green
   Python and Rust CI while Grok is halted.
 - Expected VPS action: pull and run bounded report/smoke checks after merge;
@@ -49,8 +48,22 @@ Estimated completion:
 ## Deployed Baseline
 
 - Canonical `master` and VPS5 are
-  `20238b50792da0a69b6fa2b13272c75ea4a0eade`, PR #1273. The tracked checkout
+  `bcbfa12808a00e39c1e4eb78e43e13746be553fa`, PR #1274. The tracked checkout
   is clean and expected untracked artifacts are preserved.
+- PR #1274 required no restart. Exact bot PIDs
+  `985592/985594/985596/985598/985600`, all five pane parents, and unrelated
+  `misc:0.0` PID `434835` remained unchanged. The fresh two-minute smoke was
+  `ok=true` with zero hard/log/monitor/process failures, `248/248` remote and
+  `57/57` account-critical calls successful, `8/8` fill refreshes successful,
+  and all five processes/configs matched in state `R` with no uninterruptible
+  sleep.
+- One natural KuCoin `forager.eligibility_changed` event appeared in a bounded
+  30-minute window and the scoped monitor inventory counted exactly one. A
+  fresh two-minute focused report contained no eligibility section and omitted
+  that event type from inventory, directly validating the requested-window
+  boundary. The historical 30-minute report retained four hard failures and
+  was not represented as deploy-green. No event or trading activity was
+  manufactured.
 - PR #1273 required no restart. Exact bot PIDs
   `985592/985594/985596/985598/985600`, all five pane parents, and unrelated
   `misc:0.0` PID `434835` remained unchanged. The settled two-minute smoke was
@@ -1027,10 +1040,11 @@ startup-budget events are merged and deployed with the same non-enforcement
 boundary. PR #1270's matching performance projection is also merged and
 deployed without restart. PR #1271's forager feature-unavailability projection
 and PR #1272's planning-defer/absent-selector projection are merged and deployed
-without restart. PR #1273's forager eligibility projection is also merged,
-deployed, and naturally validated from six rotated events across all five bots.
-The active follow-up makes the monitor event-type and sampled-cycle inventory
-obey the same requested time window as the report health projections.
+without restart. PR #1273's forager eligibility projection and PR #1274's
+requested-window event inventory are also merged, deployed, and naturally
+validated. The active follow-up projects the already-emitted
+`planning.symbol_state` family into bounded latest-per-bot staged-readiness
+health without changing verdicts or runtime behavior.
 
 Do not create progress-only PRs or resume unrelated logging work from stale
 worktrees.

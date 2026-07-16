@@ -4,6 +4,12 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Staged-readiness smoke reports now include bounded latest-per-bot
+  `planning.symbol_state` evidence across full, summary, brief, and selected
+  output. The projection reports availability counts, unavailable reasons,
+  order classes, surfaces, and redacted symbol samples without changing smoke
+  verdicts, console output, planning, exchange access, or trading behavior.
+
 - Time-bounded live smoke reports now scope monitor event-type inventory and
   sampled cycle IDs to the requested event window. Full-file validation and
   scanned-record counters remain unchanged.

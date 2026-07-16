@@ -3808,6 +3808,161 @@ def test_live_smoke_report_summarizes_staged_readiness_health(tmp_path):
     }
 
 
+def test_live_smoke_report_summarizes_latest_planning_symbol_state_per_bot(tmp_path):
+    binance_events = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    gateio_events = tmp_path / "monitor" / "gateio" / "gateio_01" / "events"
+    _write_ndjson(
+        binance_events / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="planning.symbol_state",
+                seq=1,
+                ts=1000,
+                level="debug",
+                reason_code="snapshot_symbol_state",
+                ids={"cycle_id": "cy_old", "snapshot_id": "snap_old"},
+                data={
+                    "context": "rust order calculation",
+                    "summary": {
+                        "cycle_id": 1,
+                        "record_count": 99,
+                        "status_counts": {"unavailable": 99},
+                    },
+                    "unavailable_count": 99,
+                    "unavailable_by_reason": {"stale_old_reason": 99},
+                    "unavailable_by_order_class": {"initial_entry": 99},
+                    "unavailable_by_surface": {"market_prices": 99},
+                    "unavailable_symbols": ["OLD/USDT:USDT"],
+                    "unavailable_symbols_count": 99,
+                },
+            ),
+            _monitor_row(
+                event_type="planning.symbol_state",
+                seq=2,
+                ts=2000,
+                level="debug",
+                reason_code="snapshot_symbol_state",
+                ids={"cycle_id": "cy_new", "snapshot_id": "snap_new"},
+                data={
+                    "context": "rust order calculation",
+                    "summary": {
+                        "cycle_id": 2,
+                        "record_count": 4,
+                        "status_counts": {"available": 2, "unavailable": 2},
+                    },
+                    "unavailable_count": 2,
+                    "unavailable_by_reason": {
+                        "market_prices_too_old": 1,
+                        "missing_canonical_candles": 1,
+                    },
+                    "unavailable_by_order_class": {
+                        "hsl_panic_close": 1,
+                        "initial_entry": 1,
+                    },
+                    "unavailable_by_surface": {
+                        "canonical_candles": 1,
+                        "market_prices": 1,
+                    },
+                    "unavailable_symbols": [
+                        "BTC/USDT:USDT",
+                        "api_key=SHOULD_NOT_RENDER",
+                    ],
+                    "unavailable_symbols_count": 2,
+                    "records_sample": [
+                        {"symbol": "api_key=SHOULD_NOT_RENDER"}
+                    ],
+                },
+            ),
+        ],
+    )
+    _write_ndjson(
+        gateio_events / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="planning.symbol_state",
+                seq=1,
+                ts=1500,
+                exchange="gateio",
+                user="gateio_01",
+                level="debug",
+                reason_code="snapshot_symbol_state",
+                ids={"cycle_id": "cy_gate", "snapshot_id": "snap_gate"},
+                data={
+                    "context": "rust order calculation",
+                    "summary": {
+                        "cycle_id": 3,
+                        "record_count": 3,
+                        "status_counts": {"available": 2, "unavailable": 1},
+                    },
+                    "unavailable_count": 1,
+                    "unavailable_by_reason": {"market_prices_too_old": 1},
+                    "unavailable_by_order_class": {"initial_entry": 1},
+                    "unavailable_by_surface": {"market_prices": 1},
+                    "unavailable_symbols": ["ETH/USDT:USDT"],
+                    "unavailable_symbols_count": 1,
+                },
+            )
+        ],
+    )
+
+    report = build_live_smoke_report(tmp_path / "monitor", logs_root=None)
+    summary = summarize_live_smoke_report(report)
+    brief = summarize_live_smoke_report_brief(report)
+    section = project_live_smoke_report_sections(report, ["staged_readiness"])
+
+    health = report["staged_readiness_health"]
+    assert health["total"] == 3
+    assert health["bots"] == 2
+    assert health["event_types"] == {"planning.symbol_state": 3}
+    assert health["latest_symbol_state_bots"] == 2
+    assert health["latest_symbol_state_record_total"] == 7
+    assert health["latest_symbol_state_status_counts"] == {
+        "available": 4,
+        "unavailable": 3,
+    }
+    assert health["latest_symbol_state_unavailable_total"] == 3
+    assert health["latest_symbol_state_unavailable_by_reason"] == {
+        "market_prices_too_old": 2,
+        "missing_canonical_candles": 1,
+    }
+    assert health["latest_symbol_state_unavailable_by_order_class"] == {
+        "initial_entry": 2,
+        "hsl_panic_close": 1,
+    }
+    assert health["latest_symbol_state_unavailable_by_surface"] == {
+        "market_prices": 2,
+        "canonical_candles": 1,
+    }
+    assert health["latest_symbol_state_unavailable_symbols"] == {
+        "count": 3,
+        "sample": [
+            "BTC/USDT:USDT",
+            "ETH/USDT:USDT",
+            "api_key=[redacted]",
+        ],
+        "truncated": 0,
+    }
+    assert "stale_old_reason" not in json.dumps(health)
+    assert "SHOULD_NOT_RENDER" not in json.dumps(health)
+    binance_group = next(
+        group for group in health["groups"] if group["bot"] == "binance/binance_01"
+    )
+    assert binance_group["count"] == 2
+    assert binance_group["latest_ids"] == {
+        "cycle_id": "cy_new",
+        "snapshot_id": "snap_new",
+    }
+    for projected in (summary["staged_readiness_health"], brief["staged_readiness"]):
+        assert projected["latest_symbol_state_record_total"] == 7
+        assert projected["latest_symbol_state_unavailable_total"] == 3
+        assert projected["latest_symbol_state_unavailable_by_reason"] == {
+            "market_prices_too_old": 2,
+            "missing_canonical_candles": 1,
+        }
+        assert "SHOULD_NOT_RENDER" not in json.dumps(projected)
+    assert section["staged_readiness_health"] == health
+
+
 def test_live_smoke_report_problem_events_include_state_refresh_progress(tmp_path):
     events_dir = tmp_path / "monitor" / "kucoin" / "kucoin_01" / "events"
     _write_ndjson(

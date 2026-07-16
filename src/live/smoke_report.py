@@ -2873,6 +2873,7 @@ def _staged_readiness_event(live_event: dict[str, Any]) -> bool:
     return event_type in {
         EventTypes.PLANNING_UNAVAILABLE,
         EventTypes.PLANNING_DEFER_SUMMARY,
+        EventTypes.PLANNING_SYMBOL_STATE,
     }
 
 
@@ -2933,9 +2934,28 @@ def _staged_readiness_timings_ms(value: Any) -> dict[str, int]:
     )
 
 
-def _staged_readiness_symbol_summary(payload: dict[str, Any]) -> dict[str, Any]:
+def _staged_readiness_count_map(value: Any) -> dict[str, int]:
+    if not isinstance(value, dict):
+        return {}
+    counts: Counter[str] = Counter()
+    for key, raw in value.items():
+        parsed = _non_negative_int(raw)
+        if key is None or parsed is None:
+            continue
+        safe_key = _redact_log_text(str(key), max_len=80)
+        if safe_key:
+            counts[safe_key] += int(parsed)
+    return dict(counts.most_common(STAGED_READINESS_VALUE_LIMIT))
+
+
+def _staged_readiness_symbol_summary(
+    payload: dict[str, Any],
+    *,
+    symbols_key: str = "symbols",
+    count_key: str = "symbols_count",
+) -> dict[str, Any]:
     symbols: Counter[str] = Counter()
-    raw_symbols = payload.get("symbols")
+    raw_symbols = payload.get(symbols_key)
     if isinstance(raw_symbols, list):
         for symbol in raw_symbols:
             if symbol is None:
@@ -2943,7 +2963,7 @@ def _staged_readiness_symbol_summary(payload: dict[str, Any]) -> dict[str, Any]:
             safe_symbol = _redact_log_text(str(symbol), max_len=80)
             if safe_symbol:
                 symbols[safe_symbol] += 1
-    count = _non_negative_int(payload.get("symbols_count"))
+    count = _non_negative_int(payload.get(count_key))
     if count is None:
         count = len(symbols)
     count = max(int(count), len(symbols))
@@ -2993,6 +3013,9 @@ def _staged_readiness_group(
     detail_payload = details if isinstance(details, dict) else payload
     event_type = live_event.get("event_type") or row.get("kind")
     defer_summary = event_type == EventTypes.PLANNING_DEFER_SUMMARY
+    symbol_state = event_type == EventTypes.PLANNING_SYMBOL_STATE
+    state_summary = payload.get("summary")
+    state_summary = state_summary if isinstance(state_summary, dict) else {}
     ids = _event_ids(live_event)
     invalid = detail_payload.get("invalid")
     missing_surfaces = _string_counts(detail_payload.get("missing"))
@@ -3020,6 +3043,15 @@ def _staged_readiness_group(
     latest_will_retry = (
         _staged_readiness_text(payload.get("will_retry")) if defer_summary else None
     )
+    latest_symbol_state_symbols = (
+        _staged_readiness_symbol_summary(
+            payload,
+            symbols_key="unavailable_symbols",
+            count_key="unavailable_symbols_count",
+        )
+        if symbol_state
+        else {}
+    )
     return {
         "bot": bot_key,
         "event_type": event_type,
@@ -3042,6 +3074,37 @@ def _staged_readiness_group(
         "latest_defer_symbols": latest_defer_symbols,
         "latest_required_surfaces": required_surfaces,
         "latest_will_retry": latest_will_retry,
+        "latest_symbol_state_record_count": (
+            _non_negative_int(state_summary.get("record_count"))
+            if symbol_state
+            else None
+        ),
+        "latest_symbol_state_status_counts": (
+            _staged_readiness_count_map(state_summary.get("status_counts"))
+            if symbol_state
+            else {}
+        ),
+        "latest_symbol_state_unavailable_count": (
+            _non_negative_int(payload.get("unavailable_count"))
+            if symbol_state
+            else None
+        ),
+        "latest_symbol_state_unavailable_by_reason": (
+            _staged_readiness_count_map(payload.get("unavailable_by_reason"))
+            if symbol_state
+            else {}
+        ),
+        "latest_symbol_state_unavailable_by_order_class": (
+            _staged_readiness_count_map(payload.get("unavailable_by_order_class"))
+            if symbol_state
+            else {}
+        ),
+        "latest_symbol_state_unavailable_by_surface": (
+            _staged_readiness_count_map(payload.get("unavailable_by_surface"))
+            if symbol_state
+            else {}
+        ),
+        "latest_symbol_state_unavailable_symbols": latest_symbol_state_symbols,
         "latest_completed_candle_mismatch_counts": _completed_candle_mismatch_counts(
             invalid
         ),
@@ -3101,6 +3164,13 @@ def _merge_staged_readiness_group(
             "latest_defer_symbols",
             "latest_required_surfaces",
             "latest_will_retry",
+            "latest_symbol_state_record_count",
+            "latest_symbol_state_status_counts",
+            "latest_symbol_state_unavailable_count",
+            "latest_symbol_state_unavailable_by_reason",
+            "latest_symbol_state_unavailable_by_order_class",
+            "latest_symbol_state_unavailable_by_surface",
+            "latest_symbol_state_unavailable_symbols",
             "latest_completed_candle_mismatch_counts",
             "latest_missing_surface_count",
             "latest_invalid_surface_count",
@@ -3222,6 +3292,101 @@ def _summarize_staged_readiness_health(
                 limit=STAGED_READINESS_SYMBOL_SAMPLE_LIMIT,
             ).get("sample", [])
             summary["latest_defer_symbols"] = {
+                "count": symbol_count,
+                "sample": sample,
+                "truncated": max(0, symbol_count - len(sample)),
+            }
+    symbol_state_groups_by_bot: dict[str, dict[str, Any]] = {}
+    for group in groups.values():
+        if group.get("event_type") != EventTypes.PLANNING_SYMBOL_STATE:
+            continue
+        bot = str(group.get("bot") or "unknown")
+        previous = symbol_state_groups_by_bot.get(bot)
+        if previous is None or _sort_event_position_key(
+            ts=group.get("latest_ts"),
+            seq=group.get("latest_seq"),
+            path=group.get("latest_path") or "",
+            line_no=int(group.get("latest_line") or 0),
+        ) > _sort_event_position_key(
+            ts=previous.get("latest_ts"),
+            seq=previous.get("latest_seq"),
+            path=previous.get("latest_path") or "",
+            line_no=int(previous.get("latest_line") or 0),
+        ):
+            symbol_state_groups_by_bot[bot] = group
+    symbol_state_groups = list(symbol_state_groups_by_bot.values())
+    if symbol_state_groups:
+        symbol_count = 0
+        symbols: Counter[str] = Counter()
+        for group in symbol_state_groups:
+            symbol_summary = group.get("latest_symbol_state_unavailable_symbols")
+            if not isinstance(symbol_summary, dict):
+                continue
+            symbol_count += int(_non_negative_int(symbol_summary.get("count")) or 0)
+            for symbol in symbol_summary.get("sample") or []:
+                symbols[str(symbol)] += 1
+        summary.update(
+            {
+                "latest_symbol_state_bots": len(symbol_state_groups),
+                "latest_symbol_state_record_total": sum(
+                    int(
+                        _non_negative_int(
+                            group.get("latest_symbol_state_record_count")
+                        )
+                        or 0
+                    )
+                    for group in symbol_state_groups
+                ),
+                "latest_symbol_state_status_counts": _staged_readiness_count_map(
+                    _sum_counter_maps(
+                        group.get("latest_symbol_state_status_counts")
+                        for group in symbol_state_groups
+                    )
+                ),
+                "latest_symbol_state_unavailable_total": sum(
+                    int(
+                        _non_negative_int(
+                            group.get("latest_symbol_state_unavailable_count")
+                        )
+                        or 0
+                    )
+                    for group in symbol_state_groups
+                ),
+                "latest_symbol_state_unavailable_by_reason": (
+                    _staged_readiness_count_map(
+                        _sum_counter_maps(
+                            group.get("latest_symbol_state_unavailable_by_reason")
+                            for group in symbol_state_groups
+                        )
+                    )
+                ),
+                "latest_symbol_state_unavailable_by_order_class": (
+                    _staged_readiness_count_map(
+                        _sum_counter_maps(
+                            group.get(
+                                "latest_symbol_state_unavailable_by_order_class"
+                            )
+                            for group in symbol_state_groups
+                        )
+                    )
+                ),
+                "latest_symbol_state_unavailable_by_surface": (
+                    _staged_readiness_count_map(
+                        _sum_counter_maps(
+                            group.get("latest_symbol_state_unavailable_by_surface")
+                            for group in symbol_state_groups
+                        )
+                    )
+                ),
+                "latest_symbol_state_unavailable_symbol_count_total": symbol_count,
+            }
+        )
+        if symbol_count:
+            sample = _symbol_sample(
+                symbols,
+                limit=STAGED_READINESS_SYMBOL_SAMPLE_LIMIT,
+            ).get("sample", [])
+            summary["latest_symbol_state_unavailable_symbols"] = {
                 "count": symbol_count,
                 "sample": sample,
                 "truncated": max(0, symbol_count - len(sample)),
@@ -8106,6 +8271,15 @@ def _summary_staged_readiness_health(
         "latest_defer_symbols",
         "latest_required_surfaces",
         "latest_will_retry",
+        "latest_symbol_state_bots",
+        "latest_symbol_state_record_total",
+        "latest_symbol_state_status_counts",
+        "latest_symbol_state_unavailable_total",
+        "latest_symbol_state_unavailable_by_reason",
+        "latest_symbol_state_unavailable_by_order_class",
+        "latest_symbol_state_unavailable_by_surface",
+        "latest_symbol_state_unavailable_symbol_count_total",
+        "latest_symbol_state_unavailable_symbols",
     ):
         value = summary.get(key)
         if value not in (None, {}, []):
@@ -9319,6 +9493,11 @@ def summarize_live_smoke_report_brief(report: dict[str, Any]) -> dict[str, Any]:
         "latest_defer_symbols",
         "latest_required_surfaces",
         "latest_will_retry",
+        "latest_symbol_state_status_counts",
+        "latest_symbol_state_unavailable_by_reason",
+        "latest_symbol_state_unavailable_by_order_class",
+        "latest_symbol_state_unavailable_by_surface",
+        "latest_symbol_state_unavailable_symbols",
     ):
         value = staged_readiness_health.get(key)
         if isinstance(value, dict) and value:
@@ -9327,6 +9506,10 @@ def summarize_live_smoke_report_brief(report: dict[str, Any]) -> dict[str, Any]:
         "latest_defer_count_total",
         "latest_defer_window_s_max",
         "latest_defer_symbol_count_total",
+        "latest_symbol_state_bots",
+        "latest_symbol_state_record_total",
+        "latest_symbol_state_unavailable_total",
+        "latest_symbol_state_unavailable_symbol_count_total",
     ):
         value = staged_readiness_health.get(key)
         if value is not None:
