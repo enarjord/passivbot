@@ -26,6 +26,7 @@ from live.event_bus import (
     format_console_event,
     format_ema_fallback_console,
     format_ema_unavailable_console,
+    format_forager_eligibility_console,
     format_memory_snapshot_console,
     format_state_refresh_timing_console,
     live_event_debug_profile_enabled,
@@ -314,9 +315,10 @@ def test_route_table_keeps_data_events_off_console_by_default():
     assert DEFAULT_ROUTES[EventTypes.DATA_PACKET_UPDATED].structured is True
     assert DEFAULT_ROUTES[EventTypes.DATA_PACKET_UPDATED].monitor is True
     assert DEFAULT_ROUTES[EventTypes.DATA_PACKET_UPDATED].console is False
+    assert DEFAULT_ROUTES[EventTypes.FORAGER_ELIGIBILITY_CHANGED].console is True
+    assert DEFAULT_ROUTES[EventTypes.FORAGER_ELIGIBILITY_CHANGED].text is True
     for event_type in (
         EventTypes.FORAGER_FEATURE_UNAVAILABLE,
-        EventTypes.FORAGER_ELIGIBILITY_CHANGED,
         EventTypes.ENTRY_INITIAL_ELIGIBILITY,
         EventTypes.EXECUTION_CREATE_CONNECTOR_CALL_STARTED,
         EventTypes.EXECUTION_CANCEL_CONNECTOR_CALL_STARTED,
@@ -405,6 +407,71 @@ def test_route_table_keeps_data_events_off_console_by_default():
     assert DEFAULT_ROUTES[EventTypes.UNSTUCK_SELECTION].text is True
     assert DEFAULT_ROUTES[EventTypes.REALIZED_LOSS_GATE_BLOCKED].console is True
     assert DEFAULT_ROUTES[EventTypes.REALIZED_LOSS_GATE_BLOCKED].text is True
+
+
+def test_forager_eligibility_console_formatter_is_bounded_and_preserves_payload():
+    data = {
+        "source": "config_sources",
+        "list_kind": "approved_coins",
+        "operation": "added",
+        "changes": [
+            {
+                "pside": "long",
+                "count": 5,
+                "symbols": [
+                    "ZZZ/USDT:USDT",
+                    "\x1b[31mBBB\nbad/USDT:USDT",
+                    "AAA/USDT:USDT",
+                    "CCC/USDT:USDT",
+                ],
+            },
+            {"pside": "short", "count": 7, "symbols": ["SHORT/USDT:USDT"]},
+        ],
+    }
+    event = LiveEvent(EventTypes.FORAGER_ELIGIBILITY_CHANGED, data=data)
+    before = event.to_dict()
+
+    message = format_forager_eligibility_console(data)
+
+    assert message == (
+        "[forager] list=approved_coins op=added counts=long:5,short:7 "
+        "samples=AAA,BBB_bad,CCC omitted=9"
+    )
+    assert len(message) <= 240
+    assert len("2026-07-16T05:18:56Z INFO     [hyperliquid] " + message) <= 240
+    assert "\n" not in message
+    assert format_console_event(event) == message
+    assert event.to_dict() == before
+
+
+def test_forager_eligibility_console_route_keeps_event_durable():
+    structured = ListEventSink()
+    monitor = ListEventSink()
+    console = ListEventSink()
+    text = ListEventSink()
+    pipeline = LiveEventPipeline(
+        structured_sinks=[structured],
+        monitor_sinks=[monitor],
+        console_sink=console,
+        text_sink=text,
+    )
+    event = LiveEvent(
+        EventTypes.FORAGER_ELIGIBILITY_CHANGED,
+        data={
+            "list_kind": "ignored_coins",
+            "operation": "removed",
+            "changes": [{"pside": "long", "count": 1, "symbols": ["BTC/USDT:USDT"]}],
+        },
+    )
+
+    pipeline.emit(event)
+
+    assert console.events == [event]
+    assert text.events == [event]
+    assert pipeline.flush(timeout=2.0) is True
+    assert structured.events == [event]
+    assert monitor.events == [event]
+    assert pipeline.close(timeout=2.0) is True
 
 
 def test_redact_payload_recurses_and_payload_hash_is_stable():

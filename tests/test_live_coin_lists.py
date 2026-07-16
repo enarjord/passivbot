@@ -521,8 +521,13 @@ def test_refresh_approved_ignored_coin_lists_emits_bounded_aggregate_events(capl
         for event in events
         for change in event.data["changes"]
     )
-    assert any("added to approved_coins" in record.message for record in caplog.records)
-    assert any("removed from ignored_coins" in record.message for record in caplog.records)
+    fallback_messages = [
+        record.message for record in caplog.records if record.message.startswith("[forager]")
+    ]
+    assert len(fallback_messages) == 4
+    assert all(len(message) <= 240 for message in fallback_messages)
+    assert all("omitted=" in message for message in fallback_messages)
+    assert all("A03" not in message for message in fallback_messages)
 
     bot.refresh_approved_ignored_coins_lists()
     assert bot._live_event_pipeline.flush(timeout=2.0) is True
@@ -580,5 +585,61 @@ def test_refresh_approved_ignored_coin_lists_ignores_event_emission_failure(capl
     }
     assert bot.approved_coins["short"] == {"SHORT/USDT:USDT"}
     assert bot.ignored_coins == {"long": {"IGNORED/USDT:USDT"}, "short": set()}
-    assert any("added to approved_coins" in record.message for record in caplog.records)
-    assert any("removed from ignored_coins" in record.message for record in caplog.records)
+    fallback_messages = [
+        record.message for record in caplog.records if record.message.startswith("[forager]")
+    ]
+    assert len(fallback_messages) == 4
+    assert all(len(message) <= 240 for message in fallback_messages)
+
+
+def test_refresh_approved_ignored_coin_lists_structured_console_owns_normal_output(caplog):
+    bot = _make_eligibility_event_bot()
+    structured = ListEventSink()
+    console = ListEventSink()
+    text = ListEventSink()
+    bot.live_event_console_enabled = True
+    bot._live_event_pipeline = LiveEventPipeline(
+        structured_sinks=[structured], console_sink=console, text_sink=text
+    )
+
+    with caplog.at_level(logging.INFO):
+        bot.refresh_approved_ignored_coins_lists()
+
+    assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    events = [
+        event
+        for event in structured.events
+        if event.event_type == EventTypes.FORAGER_ELIGIBILITY_CHANGED
+    ]
+    assert len(events) == 4
+    assert console.events == events
+    assert text.events == events
+    assert not [
+        record for record in caplog.records if record.message.startswith("[forager]")
+    ]
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
+
+
+def test_refresh_approved_ignored_coin_lists_does_not_restore_legacy_output_on_event_failure(
+    caplog,
+):
+    bot = _make_eligibility_event_bot()
+    bot.live_event_console_enabled = True
+    bot._live_event_pipeline = LiveEventPipeline(console_sink=ListEventSink())
+
+    def fail_emit(*_args, **_kwargs):
+        raise RuntimeError("event sink unavailable")
+
+    bot._emit_live_event = fail_emit
+
+    with caplog.at_level(logging.INFO):
+        bot.refresh_approved_ignored_coins_lists()
+
+    assert bot.approved_coins["long"] == {
+        f"A{index:02d}/USDT:USDT" for index in range(14)
+    }
+    assert bot.ignored_coins == {"long": {"IGNORED/USDT:USDT"}, "short": set()}
+    assert not [
+        record for record in caplog.records if record.message.startswith("[forager]")
+    ]
+    assert bot._live_event_pipeline.close(timeout=2.0) is True

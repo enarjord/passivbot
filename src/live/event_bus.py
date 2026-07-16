@@ -807,7 +807,7 @@ DEFAULT_ROUTES: dict[str, EventRoute] = {
         console=True, text=True, throttle_interval_ms=5 * 60 * 1000
     ),
     EventTypes.FORAGER_FEATURE_UNAVAILABLE: EventRoute(console=False, text=False),
-    EventTypes.FORAGER_ELIGIBILITY_CHANGED: EventRoute(console=False, text=False),
+    EventTypes.FORAGER_ELIGIBILITY_CHANGED: EventRoute(console=True, text=True),
     EventTypes.CONFIG_MARKET_COMPATIBILITY: EventRoute(console=False, text=False),
     EventTypes.EMA_BUNDLE_STARTED: EventRoute(console=False, text=False),
     EventTypes.EMA_BUNDLE_COMPLETED: EventRoute(console=False, text=False),
@@ -2594,6 +2594,95 @@ def _format_initial_entry_distance_gate_console(event: LiveEvent) -> str:
     return " ".join(parts)
 
 
+_FORAGER_ELIGIBILITY_CONSOLE_RECORD_LIMIT = 188
+_FORAGER_ELIGIBILITY_CONSOLE_TOKEN_LIMIT = 16
+_FORAGER_ELIGIBILITY_CONSOLE_SAMPLE_LIMIT = 3
+_FORAGER_ELIGIBILITY_CONSOLE_COUNT_LIMIT = 999_999_999
+
+
+def _bounded_forager_eligibility_console_token(value: object, *, limit: int) -> str:
+    """Return a one-field, sanitized token for a coin-list console projection."""
+    cleaned = _ANSI_ESCAPE_RE.sub("", str(value or ""))
+    token = "".join(
+        char
+        if char.isascii()
+        and char.isprintable()
+        and not char.isspace()
+        and char not in {",", "=", "|", "[", "]"}
+        else "_"
+        for char in cleaned
+    )
+    token = token[:limit]
+    return token or "-"
+
+
+def _forager_eligibility_console_count(value: object) -> int:
+    try:
+        return min(_FORAGER_ELIGIBILITY_CONSOLE_COUNT_LIMIT, max(0, int(value)))
+    except (TypeError, ValueError, OverflowError):
+        return 0
+
+
+def _format_forager_eligibility_console_count(value: int) -> str:
+    if value >= _FORAGER_ELIGIBILITY_CONSOLE_COUNT_LIMIT:
+        return f"{_FORAGER_ELIGIBILITY_CONSOLE_COUNT_LIMIT}+"
+    return str(value)
+
+
+def format_forager_eligibility_console(data: Mapping[str, Any]) -> str:
+    """Project eligibility membership changes without exposing unbounded symbol lists."""
+    counts = {"long": 0, "short": 0}
+    samples: list[str] = []
+    changes = data.get("changes") if isinstance(data, Mapping) else None
+    if isinstance(changes, (list, tuple)):
+        for change in changes:
+            if not isinstance(change, Mapping):
+                continue
+            pside = str(change.get("pside") or "")
+            if pside not in counts:
+                continue
+            counts[pside] = min(
+                _FORAGER_ELIGIBILITY_CONSOLE_COUNT_LIMIT,
+                counts[pside] + _forager_eligibility_console_count(change.get("count")),
+            )
+            symbols = change.get("symbols")
+            if isinstance(symbols, (list, tuple)):
+                samples.extend(
+                    _bounded_forager_eligibility_console_token(
+                        _format_position_console_coin(symbol),
+                        limit=_FORAGER_ELIGIBILITY_CONSOLE_TOKEN_LIMIT,
+                    )
+                    for symbol in symbols[:12]
+                )
+    samples = sorted(samples)[:_FORAGER_ELIGIBILITY_CONSOLE_SAMPLE_LIMIT]
+    total = min(
+        _FORAGER_ELIGIBILITY_CONSOLE_COUNT_LIMIT, counts["long"] + counts["short"]
+    )
+    omitted = max(0, total - len(samples))
+    message = " ".join(
+        (
+            "[forager]",
+            "list="
+            + _bounded_forager_eligibility_console_token(
+                data.get("list_kind") if isinstance(data, Mapping) else None,
+                limit=_FORAGER_ELIGIBILITY_CONSOLE_TOKEN_LIMIT,
+            ),
+            "op="
+            + _bounded_forager_eligibility_console_token(
+                data.get("operation") if isinstance(data, Mapping) else None,
+                limit=_FORAGER_ELIGIBILITY_CONSOLE_TOKEN_LIMIT,
+            ),
+            "counts=long:"
+            + _format_forager_eligibility_console_count(counts["long"])
+            + ",short:"
+            + _format_forager_eligibility_console_count(counts["short"]),
+            "samples=" + (",".join(samples) or "-"),
+            "omitted=" + _format_forager_eligibility_console_count(omitted),
+        )
+    )
+    return message[:_FORAGER_ELIGIBILITY_CONSOLE_RECORD_LIMIT]
+
+
 def format_console_event(event: LiveEvent) -> str:
     if (
         event.event_type == EventTypes.HEALTH_SUMMARY
@@ -2614,6 +2703,8 @@ def format_console_event(event: LiveEvent) -> str:
         return format_ema_fallback_console(event.data)
     if event.event_type == EventTypes.EMA_UNAVAILABLE:
         return format_ema_unavailable_console(event.data)
+    if event.event_type == EventTypes.FORAGER_ELIGIBILITY_CHANGED:
+        return format_forager_eligibility_console(event.data)
     if event.event_type in {
         EventTypes.ENTRY_INITIAL_DISTANCE_GATE_BLOCKED,
         EventTypes.ENTRY_INITIAL_DISTANCE_GATE_CLEARED,

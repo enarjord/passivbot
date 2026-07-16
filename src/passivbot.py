@@ -61,6 +61,7 @@ from live.events import DiagnosticEvent, emit_diagnostic_event, run_diagnostic_s
 from live.event_bus import (
     ConsoleSummarySink,
     EventTypes,
+    format_forager_eligibility_console,
     format_memory_snapshot_console,
     format_periodic_health_summary,
     LIVE_EVENT_CONSOLE_ENV,
@@ -777,6 +778,39 @@ class Passivbot:
             and Passivbot._live_event_console_available(self)
             and callable(getattr(pipeline, "emit", None))
             and getattr(pipeline, "console_sink", None) is not None
+        )
+
+    def _forager_eligibility_structured_console_available(self) -> bool:
+        """Return True when eligibility events own normal console/text output."""
+        pipeline = getattr(self, "_live_event_pipeline", None)
+        return bool(
+            callable(getattr(self, "_emit_forager_eligibility_changed_event", None))
+            and Passivbot._live_event_console_available(self)
+            and callable(getattr(pipeline, "emit", None))
+            and getattr(pipeline, "console_sink", None) is not None
+        )
+
+    @staticmethod
+    def _format_forager_eligibility_legacy_console_summary(
+        *, list_kind: str, operation: str, changes: dict[str, set[str]]
+    ) -> str:
+        """Format the bounded legacy fallback from the same membership-change facts."""
+        return format_forager_eligibility_console(
+            {
+                "list_kind": list_kind,
+                "operation": operation,
+                "changes": [
+                    {
+                        "pside": pside,
+                        "count": len(changes.get(pside, set())),
+                        "symbols": sorted(str(symbol) for symbol in changes.get(pside, set()))[
+                            :3
+                        ],
+                    }
+                    for pside in ("long", "short")
+                    if changes.get(pside)
+                ],
+            }
         )
 
     @staticmethod
@@ -18384,57 +18418,24 @@ class Passivbot:
                         pside, self.approved_coins[pside] - self.ignored_coins[pside]
                     )
                 )
-            # aggregate add/remove logs for readability
-            for k, summary in (("added", added_summary.get("approved_coins", {})),):
-                if summary:
-                    parts = []
-                    for pside, coins in summary.items():
-                        if coins:
-                            parts.append(
-                                f"{pside}: {','.join(sorted(Passivbot._log_symbol(x) for x in coins))}"
-                            )
-                    if parts:
-                        logging.info("added to approved_coins | %s", " | ".join(parts))
-            for k, summary in (("removed", removed_summary.get("approved_coins", {})),):
-                if summary:
-                    parts = []
-                    for pside, coins in summary.items():
-                        if coins:
-                            parts.append(
-                                f"{pside}: {','.join(sorted(Passivbot._log_symbol(x) for x in coins))}"
-                            )
-                    if parts:
-                        logging.info(
-                            "removed from approved_coins | %s", " | ".join(parts)
-                        )
-            for k, summary in (("added", added_summary.get("ignored_coins", {})),):
-                if summary:
-                    parts = []
-                    for pside, coins in summary.items():
-                        if coins:
-                            parts.append(
-                                f"{pside}: {','.join(sorted(Passivbot._log_symbol(x) for x in coins))}"
-                            )
-                    if parts:
-                        logging.info("added to ignored_coins | %s", " | ".join(parts))
-            for k, summary in (("removed", removed_summary.get("ignored_coins", {})),):
-                if summary:
-                    parts = []
-                    for pside, coins in summary.items():
-                        if coins:
-                            parts.append(
-                                f"{pside}: {','.join(sorted(Passivbot._log_symbol(x) for x in coins))}"
-                            )
-                    if parts:
-                        logging.info(
-                            "removed from ignored_coins | %s", " | ".join(parts)
-                        )
+            structured_console_available = (
+                self._forager_eligibility_structured_console_available()
+            )
             for list_kind in ("approved_coins", "ignored_coins"):
                 for operation, summary in (
                     ("added", added_summary.get(list_kind, {})),
                     ("removed", removed_summary.get(list_kind, {})),
                 ):
                     if summary:
+                        if not structured_console_available:
+                            logging.info(
+                                "%s",
+                                Passivbot._format_forager_eligibility_legacy_console_summary(
+                                    list_kind=list_kind,
+                                    operation=operation,
+                                    changes=summary,
+                                ),
+                            )
                         self._emit_forager_eligibility_changed_event(
                             source=source_by_list_kind[list_kind],
                             list_kind=list_kind,

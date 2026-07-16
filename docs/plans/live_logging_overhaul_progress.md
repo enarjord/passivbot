@@ -15,7 +15,34 @@ merge, live smoke evidence changes, or new gaps are discovered.
 - Do not use this file for design churn; unresolved design details belong in the
   plan or a focused handoff doc.
 
-## Latest Canonical Deployment (PR #1258)
+## Latest Canonical Deployment (PR #1259)
+
+- PR #1259 merged to `master` as
+  `e41118f0424ff3d4161e308b8844af5f35a8b7a9` after exact-head Hermes approval
+  and green Python/Rust CI while Grok was temporarily halted. It removes raw
+  exception text from exchange time-sync human and durable diagnostics while
+  retaining stable exception class, source, recovery status, and bounded
+  client outcomes; refresh, retry, and trading behavior are unchanged.
+- VPS5 fast-forwarded cleanly and sent one SIGINT round to exact old PIDs
+  `971695/971697/971699/971701/971703`; all exited naturally within 28 seconds
+  without escalation. Pane PIDs and unrelated `misc:0.0` PID `434835` were
+  preserved. Final PIDs are `972601/972603/972605/972607/972609` for
+  Binance/KuCoin/GateIO/OKX/Hyperliquid respectively.
+- The settled three-minute smoke was `ok=true` with zero
+  hard/log/monitor/process failures, `483/486` remote and `49/50`
+  account-critical calls successful, seven successful fill refreshes, all
+  three observed HSL replays completed, five matching/config-valid processes,
+  and clean tracked `master`. One Binance `InvalidNonce` and two KuCoin candle
+  timeouts were recoverable non-hard failures; a report-time `D` sample cleared
+  on direct process inspection.
+- The real Binance timestamp incident naturally emitted a 203-character
+  clock-offset recovery line retaining action, source, recovery, bounded client
+  outcomes, and `InvalidNonce` class with no raw exception text. The exact new
+  startup logs then exposed `added to approved_coins` lines at 245-250 visible
+  characters on Binance, GateIO, and Hyperliquid; the next slice migrates that
+  family to one bounded structured console/text owner.
+
+## Previous Canonical Deployment (PR #1258)
 
 - PR #1258 merged to `master` as
   `a64159cf1d29c42113433c1990b38d9b8e1bd8fe` after exact-head Hermes approval
