@@ -2874,6 +2874,7 @@ def _staged_readiness_event(live_event: dict[str, Any]) -> bool:
         EventTypes.PLANNING_UNAVAILABLE,
         EventTypes.PLANNING_DEFER_SUMMARY,
         EventTypes.PLANNING_SYMBOL_STATE,
+        EventTypes.ENTRY_INITIAL_ELIGIBILITY,
     }
 
 
@@ -3014,8 +3015,13 @@ def _staged_readiness_group(
     event_type = live_event.get("event_type") or row.get("kind")
     defer_summary = event_type == EventTypes.PLANNING_DEFER_SUMMARY
     symbol_state = event_type == EventTypes.PLANNING_SYMBOL_STATE
+    initial_eligibility = event_type == EventTypes.ENTRY_INITIAL_ELIGIBILITY
     state_summary = payload.get("summary")
     state_summary = state_summary if isinstance(state_summary, dict) else {}
+    records_truncated = payload.get("records_truncated")
+    records_truncated = (
+        records_truncated if isinstance(records_truncated, bool) else None
+    )
     ids = _event_ids(live_event)
     invalid = detail_payload.get("invalid")
     missing_surfaces = _string_counts(detail_payload.get("missing"))
@@ -3105,6 +3111,29 @@ def _staged_readiness_group(
             else {}
         ),
         "latest_symbol_state_unavailable_symbols": latest_symbol_state_symbols,
+        "latest_initial_entry_evaluated_count": (
+            _non_negative_int(payload.get("evaluated_count"))
+            if initial_eligibility
+            else None
+        ),
+        "latest_initial_entry_records_total": (
+            _non_negative_int(payload.get("records_total"))
+            if initial_eligibility
+            else None
+        ),
+        "latest_initial_entry_outcome_counts": (
+            _staged_readiness_count_map(payload.get("outcome_counts"))
+            if initial_eligibility
+            else {}
+        ),
+        "latest_initial_entry_reason_counts": (
+            _staged_readiness_count_map(payload.get("reason_counts"))
+            if initial_eligibility
+            else {}
+        ),
+        "latest_initial_entry_records_truncated": (
+            records_truncated if initial_eligibility else None
+        ),
         "latest_completed_candle_mismatch_counts": _completed_candle_mismatch_counts(
             invalid
         ),
@@ -3112,7 +3141,13 @@ def _staged_readiness_group(
         "latest_invalid_surface_count": sum(invalid_surfaces.values()),
         "latest_ids": {
             key: ids.get(key)
-            for key in ("cycle_id", "snapshot_id", "plan_id", "action_id")
+            for key in (
+                "cycle_id",
+                "snapshot_id",
+                "plan_id",
+                "order_wave_id",
+                "action_id",
+            )
             if ids.get(key) is not None
         },
         "latest_data": _compact_problem_event_data(live_event),
@@ -3171,6 +3206,11 @@ def _merge_staged_readiness_group(
             "latest_symbol_state_unavailable_by_order_class",
             "latest_symbol_state_unavailable_by_surface",
             "latest_symbol_state_unavailable_symbols",
+            "latest_initial_entry_evaluated_count",
+            "latest_initial_entry_records_total",
+            "latest_initial_entry_outcome_counts",
+            "latest_initial_entry_reason_counts",
+            "latest_initial_entry_records_truncated",
             "latest_completed_candle_mismatch_counts",
             "latest_missing_surface_count",
             "latest_invalid_surface_count",
@@ -3178,6 +3218,32 @@ def _merge_staged_readiness_group(
             "latest_data",
         ):
             existing[field] = group.get(field)
+
+
+def _latest_staged_readiness_groups_by_bot(
+    groups: Iterable[dict[str, Any]],
+    *,
+    event_type: str,
+) -> list[dict[str, Any]]:
+    latest_by_bot: dict[str, dict[str, Any]] = {}
+    for group in groups:
+        if group.get("event_type") != event_type:
+            continue
+        bot = str(group.get("bot") or "unknown")
+        previous = latest_by_bot.get(bot)
+        if previous is None or _sort_event_position_key(
+            ts=group.get("latest_ts"),
+            seq=group.get("latest_seq"),
+            path=group.get("latest_path") or "",
+            line_no=int(group.get("latest_line") or 0),
+        ) > _sort_event_position_key(
+            ts=previous.get("latest_ts"),
+            seq=previous.get("latest_seq"),
+            path=previous.get("latest_path") or "",
+            line_no=int(previous.get("latest_line") or 0),
+        ):
+            latest_by_bot[bot] = group
+    return list(latest_by_bot.values())
 
 
 def _summarize_staged_readiness_health(
@@ -3296,25 +3362,10 @@ def _summarize_staged_readiness_health(
                 "sample": sample,
                 "truncated": max(0, symbol_count - len(sample)),
             }
-    symbol_state_groups_by_bot: dict[str, dict[str, Any]] = {}
-    for group in groups.values():
-        if group.get("event_type") != EventTypes.PLANNING_SYMBOL_STATE:
-            continue
-        bot = str(group.get("bot") or "unknown")
-        previous = symbol_state_groups_by_bot.get(bot)
-        if previous is None or _sort_event_position_key(
-            ts=group.get("latest_ts"),
-            seq=group.get("latest_seq"),
-            path=group.get("latest_path") or "",
-            line_no=int(group.get("latest_line") or 0),
-        ) > _sort_event_position_key(
-            ts=previous.get("latest_ts"),
-            seq=previous.get("latest_seq"),
-            path=previous.get("latest_path") or "",
-            line_no=int(previous.get("latest_line") or 0),
-        ):
-            symbol_state_groups_by_bot[bot] = group
-    symbol_state_groups = list(symbol_state_groups_by_bot.values())
+    symbol_state_groups = _latest_staged_readiness_groups_by_bot(
+        groups.values(),
+        event_type=EventTypes.PLANNING_SYMBOL_STATE,
+    )
     if symbol_state_groups:
         symbol_count = 0
         symbols: Counter[str] = Counter()
@@ -3391,6 +3442,51 @@ def _summarize_staged_readiness_health(
                 "sample": sample,
                 "truncated": max(0, symbol_count - len(sample)),
             }
+    initial_entry_groups = _latest_staged_readiness_groups_by_bot(
+        groups.values(),
+        event_type=EventTypes.ENTRY_INITIAL_ELIGIBILITY,
+    )
+    if initial_entry_groups:
+        summary.update(
+            {
+                "latest_initial_entry_eligibility_bots": len(initial_entry_groups),
+                "latest_initial_entry_evaluated_total": sum(
+                    int(
+                        _non_negative_int(
+                            group.get("latest_initial_entry_evaluated_count")
+                        )
+                        or 0
+                    )
+                    for group in initial_entry_groups
+                ),
+                "latest_initial_entry_records_total": sum(
+                    int(
+                        _non_negative_int(
+                            group.get("latest_initial_entry_records_total")
+                        )
+                        or 0
+                    )
+                    for group in initial_entry_groups
+                ),
+                "latest_initial_entry_outcome_counts": _staged_readiness_count_map(
+                    _sum_counter_maps(
+                        group.get("latest_initial_entry_outcome_counts")
+                        for group in initial_entry_groups
+                    )
+                ),
+                "latest_initial_entry_reason_counts": _staged_readiness_count_map(
+                    _sum_counter_maps(
+                        group.get("latest_initial_entry_reason_counts")
+                        for group in initial_entry_groups
+                    )
+                ),
+                "latest_initial_entry_records_truncated_bots": sum(
+                    1
+                    for group in initial_entry_groups
+                    if group.get("latest_initial_entry_records_truncated") is True
+                ),
+            }
+        )
     return summary
 
 
@@ -8280,6 +8376,12 @@ def _summary_staged_readiness_health(
         "latest_symbol_state_unavailable_by_surface",
         "latest_symbol_state_unavailable_symbol_count_total",
         "latest_symbol_state_unavailable_symbols",
+        "latest_initial_entry_eligibility_bots",
+        "latest_initial_entry_evaluated_total",
+        "latest_initial_entry_records_total",
+        "latest_initial_entry_outcome_counts",
+        "latest_initial_entry_reason_counts",
+        "latest_initial_entry_records_truncated_bots",
     ):
         value = summary.get(key)
         if value not in (None, {}, []):
@@ -9498,6 +9600,8 @@ def summarize_live_smoke_report_brief(report: dict[str, Any]) -> dict[str, Any]:
         "latest_symbol_state_unavailable_by_order_class",
         "latest_symbol_state_unavailable_by_surface",
         "latest_symbol_state_unavailable_symbols",
+        "latest_initial_entry_outcome_counts",
+        "latest_initial_entry_reason_counts",
     ):
         value = staged_readiness_health.get(key)
         if isinstance(value, dict) and value:
@@ -9510,6 +9614,10 @@ def summarize_live_smoke_report_brief(report: dict[str, Any]) -> dict[str, Any]:
         "latest_symbol_state_record_total",
         "latest_symbol_state_unavailable_total",
         "latest_symbol_state_unavailable_symbol_count_total",
+        "latest_initial_entry_eligibility_bots",
+        "latest_initial_entry_evaluated_total",
+        "latest_initial_entry_records_total",
+        "latest_initial_entry_records_truncated_bots",
     ):
         value = staged_readiness_health.get(key)
         if value is not None:
