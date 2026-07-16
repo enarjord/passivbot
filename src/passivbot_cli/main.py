@@ -139,6 +139,10 @@ TOOL_COMMANDS: dict[str, CommandSpec] = {
         "tools.live_restart_smoke_plan",
         "build a read-only dry-run live restart smoke plan",
     ),
+    "live-restart-target-report": CommandSpec(
+        "tools.live_restart_target_report",
+        "resolve exact local tmux restart targets without process control",
+    ),
     "inspect-ohlcvs": CommandSpec(
         "tools.inspect_ohlcvs",
         "inspect v2 OHLCV cache metadata and gaps (requires full install)",

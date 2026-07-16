@@ -9171,6 +9171,21 @@ active branch, PR, review gate, and rollout instructions.
   active `codex/compact-trailing-status-console` follow-up is formatter-only and
   targets the normal 240-character budget without changing payload or behavior.
 
+### 2026-07-16: Brief Process Report Deployed
+
+- PR #1286 merged to canonical `master` at `7a12430abf` after exact-head
+  Hermes approval and green Python/Rust CI. VPS5 fast-forwarded cleanly without
+  a restart or process signal; all five configured pane PIDs and unrelated
+  `misc:0.0` PID `434835` remained unchanged.
+- Immediate and settled four-sample brief reports were `ok=true` with all five
+  expected commands/configs matched, five stable PIDs, and zero missing,
+  duplicate, extra, config, or scan failures. The first naturally ended with
+  one active but non-persistent `D`; the settled repeat observed recovery and
+  ended `R=3,S=2` with zero active or persistent uninterruptible processes.
+- No exchange request, process action, or event was manufactured. Active
+  `codex/restart-target-preflight` adds the read-only exact tmux pane ownership
+  prerequisite for future restart execution.
+
 ### 2026-07-16: Local-Only Process Report Deployed
 
 - PR #1285 merged to canonical `master` at `175986fd9c` after exact-head

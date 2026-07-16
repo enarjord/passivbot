@@ -22,37 +22,43 @@ Estimated completion:
 
 ## Active Review Slice
 
-- Branch: `codex/process-report-brief`, based on canonical
-  `175986fd9cd9912402fadf14411abbbf966a088d` after PR #1285.
-- PR: #1286, `Add brief live process report projection`; semantic
-  implementation head `52022bf79f`. Slice: add a bounded aggregate-only
-  `--brief` projection to `passivbot tool live-process-report`.
-- Triggering evidence: both post-merge VPS5 process reports were hard-green,
-  but the full command/config/process/group rows made the otherwise useful
-  repeated operator check very large. The settled report naturally proved
-  GateIO recovery and ended with all five exact processes in `R`.
-- Scope: preserve verdict, expected/matched/running and anomaly counts,
-  config-check totals, resource/state totals, and sampling recovery counters
-  while omitting command, account, path, PID, and per-process rows.
-- Behavior boundary: output projection only. Process discovery, config checks,
-  sampling bounds, safety contract, exit verdict, local read boundaries, and
-  the absence of network/exchange/process-control/file-write paths are
-  unchanged.
-- Validation: focused brief shape/omission/verdict tests, full process/smoke
-  report regressions, compilation, and docs checks.
+- Branch: `codex/restart-target-preflight`, based on canonical
+  `7a12430abfc0edf36f0848d42d95c987024e55cc` after PR #1286.
+- PR: pending. Slice: add a bounded local-only exact tmux target preflight for
+  the existing non-executing restart/smoke plan.
+- Triggering evidence: process reports now prove exact configured command/PID
+  matches but correctly state that tmux pane ownership is unavailable. The
+  restart safety contract requires exact pane or PID targets and forbids broad
+  process-pattern signals, so target resolution must be explicit before any
+  executor can be reviewed.
+- Scope: require an explicit tmux session name, join supervisor window names
+  to bounded read-only pane metadata, prove ownership from matched-process PID
+  or PPID versus pane PID, retain the existing process/config verdict, and fail
+  on missing, duplicate, unconfigured, or mismatched panes.
+- Behavior boundary: preflight only. No signals, process starts/control, SSH,
+  git actions, network/exchange access, credential loading, file writes, or
+  restart execution.
+- Validation: focused target resolution/failure/verdict/CLI regressions plus
+  existing process and restart-plan tests, compilation, and docs checks.
 - Review gate: temporary maintainer-authorized exact-head Hermes plus green
   Python and Rust CI while Grok is halted.
-- Expected VPS action: pull and run the local-only process report with
-  `--brief`; no bot restart or process signal is expected.
+- Expected VPS action: pull and run the local-only target report; no bot
+  restart or process signal is expected.
 
 ## Deployed Baseline
 
 - Canonical `master` and VPS5 are
-  `175986fd9cd9912402fadf14411abbbf966a088d`, PR #1285. VPS5 fast-forwarded
-  from `9bcf6c24` with a tracked-clean checkout. Configured pane process IDs
+  `7a12430abfc0edf36f0848d42d95c987024e55cc`, PR #1286. VPS5 fast-forwarded
+  from `175986fd` with a tracked-clean checkout. Configured pane process IDs
   `856294/856332/856364/856398/856434`, exact bot PIDs
   `985592/985594/985596/985598/985600`, and unrelated `misc:0.0` PID `434835`
   remained unchanged; no restart or process signal occurred.
+- Immediate and settled four-sample `--brief` process reports were `ok=true`
+  with all five expected commands/configs matched, five stable PIDs, and zero
+  missing, duplicate, extra, config, or scan failures. The first naturally
+  ended with one active but non-persistent `D`; the settled repeat observed
+  recovery and ended `R=3,S=2` with zero active or persistent uninterruptible
+  processes. No exchange request, process action, or event was manufactured.
 - The immediate four-sample local-only process report was `ok=true`: all five
   expected commands/configs matched, with zero missing, duplicate, extra,
   config, or scan failures and five stable PIDs. It naturally observed one
@@ -66,7 +72,7 @@ Estimated completion:
   was not executed after the production-action approval layer rejected it as a
   possible authenticated exchange probe. The rejection was preserved: no retry,
   bypass, authenticated exchange request, process action, or manufactured event
-  occurred. The active local-only process-report slice separates the remaining
+  occurred. PR #1285's local-only process-report slice separated the remaining
   validation from monitor/log and exchange-adjacent command paths.
 - PR #1282 required no restart or process signal. Exact bot PIDs
   `985592/985594/985596/985598/985600`, all five pane parents, and unrelated
@@ -1112,8 +1118,10 @@ signal; its full VPS smoke remained intentionally unrun after the
 production-action rejection. PR #1285's dedicated local-only
 `live-process-report` path is also merged, deployed, and naturally validated
 with five stable exact processes and recovered uninterruptible observations.
-The active `codex/process-report-brief` follow-up adds aggregate-only output for
-repeated operator checks without changing collection or safety behavior.
+PR #1286's aggregate-only follow-up is merged, deployed, and naturally
+validated without changing collection or safety behavior. The active
+`codex/restart-target-preflight` slice resolves the exact tmux pane ownership
+gap without adding restart execution.
 
 Do not create progress-only PRs or resume unrelated logging work from stale
 worktrees.
