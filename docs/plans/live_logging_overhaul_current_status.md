@@ -24,10 +24,11 @@ Estimated completion:
 
 - Branch: `codex/compact-startup-lifecycle-console`, based on canonical
   `82a56bb15445a1effff8501aa9f66540009b8f3f` after PR #1262.
-- PR: not opened. Slice: consolidate startup console ownership: retain
-  structured `bot.started` visibility with its legacy-console fallback, use
-  startup timing as the human-ready signal, and keep durable `bot.ready` out
-  of console/text.
+- PR: #1263, `Compact startup lifecycle console logging`; semantic head
+  `6bee544c61ba381de56a9e6b7a138294c5ef14aa`. Slice: consolidate startup
+  console ownership: retain structured `bot.started` visibility with its
+  legacy-console fallback, use startup timing as the human-ready signal, and
+  keep durable `bot.ready` out of console/text.
 - Triggering evidence: a fresh five-file startup sample had 281 lines,
   including 78 `[boot]` lines, 10 decorative READY separators, a duplicate
   readiness path, and 8 random-jitter detail lines.
