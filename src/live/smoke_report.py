@@ -132,6 +132,8 @@ EMA_READINESS_GROUP_LIMIT = 20
 EMA_READINESS_REASON_SYMBOL_SAMPLE_LIMIT = 8
 FORAGER_FEATURE_HEALTH_GROUP_LIMIT = 20
 FORAGER_FEATURE_SYMBOL_SAMPLE_LIMIT = 8
+FORAGER_ELIGIBILITY_HEALTH_GROUP_LIMIT = 20
+FORAGER_ELIGIBILITY_SYMBOL_SAMPLE_LIMIT = 8
 STAGED_READINESS_GROUP_LIMIT = 20
 STAGED_READINESS_VALUE_LIMIT = 8
 STAGED_READINESS_SYMBOL_SAMPLE_LIMIT = 8
@@ -2512,6 +2514,182 @@ def _summarize_forager_feature_health(
             "truncated": max(
                 0,
                 latest_unavailable_count - len(symbol_sample.get("sample", [])),
+            ),
+        }
+    return summary
+
+
+def _forager_eligibility_health_group(
+    *,
+    bot_key: str,
+    row: dict[str, Any],
+    live_event: dict[str, Any],
+    path: Path,
+    line_no: int,
+) -> dict[str, Any]:
+    data = live_event.get("data")
+    payload = data if isinstance(data, dict) else {}
+    changes = []
+    raw_changes = payload.get("changes")
+    if isinstance(raw_changes, list):
+        for raw_change in raw_changes:
+            if not isinstance(raw_change, dict):
+                continue
+            count = int(_non_negative_int(raw_change.get("count")) or 0)
+            symbols = _summary_symbol_sample(
+                {
+                    "count": count,
+                    "sample": raw_change.get("symbols"),
+                },
+                limit=FORAGER_ELIGIBILITY_SYMBOL_SAMPLE_LIMIT,
+            )
+            count = max(count, _count_from_summary(symbols))
+            change = {
+                "pside": _redact_log_text(
+                    str(raw_change.get("pside") or "unknown"),
+                    max_len=20,
+                ),
+                "count": count,
+            }
+            if symbols:
+                change["symbols"] = symbols
+            changes.append(change)
+    return {
+        "bot": bot_key,
+        "source": _redact_log_text(
+            str(payload.get("source") or "unknown"),
+            max_len=40,
+        ),
+        "list_kind": _redact_log_text(
+            str(payload.get("list_kind") or "unknown"),
+            max_len=40,
+        ),
+        "operation": _redact_log_text(
+            str(payload.get("operation") or "unknown"),
+            max_len=20,
+        ),
+        "count": 1,
+        "latest_ts": row.get("ts"),
+        "latest_seq": row.get("seq"),
+        "latest_path": str(path),
+        "latest_line": int(line_no),
+        "latest_data": {"changes": changes} if changes else {},
+    }
+
+
+def _merge_forager_eligibility_health_group(
+    groups: dict[tuple[str, str, str, str], dict[str, Any]],
+    group: dict[str, Any],
+) -> None:
+    key = (
+        str(group["bot"]),
+        str(group["source"]),
+        str(group["list_kind"]),
+        str(group["operation"]),
+    )
+    existing = groups.get(key)
+    if existing is None:
+        groups[key] = group
+        return
+    existing["count"] = int(existing.get("count", 0)) + 1
+    current_key = _sort_event_position_key(
+        ts=group.get("latest_ts"),
+        seq=group.get("latest_seq"),
+        path=group.get("latest_path") or "",
+        line_no=int(group.get("latest_line") or 0),
+    )
+    existing_key = _sort_event_position_key(
+        ts=existing.get("latest_ts"),
+        seq=existing.get("latest_seq"),
+        path=existing.get("latest_path") or "",
+        line_no=int(existing.get("latest_line") or 0),
+    )
+    if current_key > existing_key:
+        for field in (
+            "latest_ts",
+            "latest_seq",
+            "latest_path",
+            "latest_line",
+            "latest_data",
+        ):
+            existing[field] = group.get(field)
+
+
+def _summarize_forager_eligibility_health(
+    groups: dict[tuple[str, str, str, str], dict[str, Any]],
+    event_type_counts: Counter[str],
+) -> dict[str, Any]:
+    ordered = sorted(
+        groups.values(),
+        key=lambda item: (
+            -int(_non_negative_int(item.get("latest_ts")) or 0),
+            -int(item.get("count") or 0),
+            str(item.get("bot") or ""),
+            str(item.get("list_kind") or ""),
+            str(item.get("operation") or ""),
+        ),
+    )
+    latest_changed_total = 0
+    latest_by_list_kind: Counter[str] = Counter()
+    latest_by_operation: Counter[str] = Counter()
+    latest_by_pside: Counter[str] = Counter()
+    latest_by_source: Counter[str] = Counter()
+    latest_symbols: Counter[str] = Counter()
+    for group in groups.values():
+        latest_data = group.get("latest_data")
+        changes = (
+            latest_data.get("changes")
+            if isinstance(latest_data, dict)
+            and isinstance(latest_data.get("changes"), list)
+            else []
+        )
+        group_changed = 0
+        for change in changes:
+            if not isinstance(change, dict):
+                continue
+            count = int(_non_negative_int(change.get("count")) or 0)
+            group_changed += count
+            latest_by_pside[str(change.get("pside") or "unknown")] += count
+            symbol_summary = change.get("symbols")
+            if isinstance(symbol_summary, dict):
+                for symbol in symbol_summary.get("sample") or []:
+                    latest_symbols[str(symbol)] += 1
+        latest_changed_total += group_changed
+        latest_by_list_kind[str(group.get("list_kind") or "unknown")] += group_changed
+        latest_by_operation[str(group.get("operation") or "unknown")] += group_changed
+        latest_by_source[str(group.get("source") or "unknown")] += group_changed
+    compact_groups = [
+        {
+            key: value
+            for key, value in group.items()
+            if key not in {"latest_path", "latest_line", "latest_seq"}
+            and value not in (None, {}, [])
+        }
+        for group in ordered[:FORAGER_ELIGIBILITY_HEALTH_GROUP_LIMIT]
+    ]
+    summary = {
+        "total": sum(int(group.get("count", 0)) for group in groups.values()),
+        "bots": len({group.get("bot") for group in groups.values()}),
+        "event_types": dict(event_type_counts.most_common()),
+        "latest_changed_total": latest_changed_total,
+        "latest_by_list_kind": dict(latest_by_list_kind.most_common()),
+        "latest_by_operation": dict(latest_by_operation.most_common()),
+        "latest_by_pside": dict(latest_by_pside.most_common()),
+        "latest_by_source": dict(latest_by_source.most_common()),
+        "groups_truncated": len(ordered) > FORAGER_ELIGIBILITY_HEALTH_GROUP_LIMIT,
+        "groups": compact_groups,
+    }
+    if latest_changed_total:
+        symbol_sample = _symbol_sample(
+            latest_symbols,
+            limit=FORAGER_ELIGIBILITY_SYMBOL_SAMPLE_LIMIT,
+        )
+        summary["latest_changed_symbols"] = {
+            "count": latest_changed_total,
+            "sample": symbol_sample.get("sample", []),
+            "truncated": max(
+                0,
+                latest_changed_total - len(symbol_sample.get("sample", [])),
             ),
         }
     return summary
@@ -6622,6 +6800,10 @@ def _scan_events(
     ema_readiness_event_type_counts: Counter[str] = Counter()
     forager_feature_health_groups: dict[tuple[str, str], dict[str, Any]] = {}
     forager_feature_health_event_type_counts: Counter[str] = Counter()
+    forager_eligibility_health_groups: dict[
+        tuple[str, str, str, str], dict[str, Any]
+    ] = {}
+    forager_eligibility_health_event_type_counts: Counter[str] = Counter()
     exchange_config_refresh_groups: dict[tuple[Any, ...], dict[str, Any]] = {}
     exchange_config_refresh_event_type_counts: Counter[str] = Counter()
     staged_readiness_groups: dict[tuple[Any, ...], dict[str, Any]] = {}
@@ -6868,6 +7050,20 @@ def _scan_events(
                                 line_no=line_no,
                             ),
                         )
+                    if event_type == EventTypes.FORAGER_ELIGIBILITY_CHANGED:
+                        forager_eligibility_health_event_type_counts[
+                            str(event_type)
+                        ] += 1
+                        _merge_forager_eligibility_health_group(
+                            forager_eligibility_health_groups,
+                            _forager_eligibility_health_group(
+                                bot_key=bot_key,
+                                row=row,
+                                live_event=live_event,
+                                path=path,
+                                line_no=line_no,
+                            ),
+                        )
                     if event_type == EventTypes.EXCHANGE_CONFIG_REFRESH:
                         exchange_config_refresh_event_type_counts[str(event_type)] += 1
                         _merge_exchange_config_refresh_group(
@@ -7100,6 +7296,10 @@ def _scan_events(
         "forager_feature_health": _summarize_forager_feature_health(
             forager_feature_health_groups,
             forager_feature_health_event_type_counts,
+        ),
+        "forager_eligibility_health": _summarize_forager_eligibility_health(
+            forager_eligibility_health_groups,
+            forager_eligibility_health_event_type_counts,
         ),
         "exchange_config_refresh_health": _summarize_exchange_config_refresh_health(
             exchange_config_refresh_groups,
@@ -7548,6 +7748,15 @@ def build_live_smoke_report(
             if int(event_scan["forager_feature_health"].get("total") or 0)
             else {}
         ),
+        **(
+            {
+                "forager_eligibility_health": event_scan[
+                    "forager_eligibility_health"
+                ]
+            }
+            if int(event_scan["forager_eligibility_health"].get("total") or 0)
+            else {}
+        ),
         "exchange_config_refresh_health": event_scan[
             "exchange_config_refresh_health"
         ],
@@ -7850,6 +8059,31 @@ def _summary_limited_groups(
     }
 
 
+def _summary_forager_eligibility_health(
+    summary: dict[str, Any],
+    *,
+    limit: int,
+) -> dict[str, Any]:
+    groups = summary.get("groups")
+    if not isinstance(groups, list):
+        groups = []
+    limit = max(0, int(limit))
+    return {
+        "total": _count_value(summary.get("total")),
+        "bots": _count_value(summary.get("bots")),
+        "event_types": summary.get("event_types") or {},
+        "latest_changed_total": _count_value(summary.get("latest_changed_total")),
+        "latest_by_list_kind": summary.get("latest_by_list_kind") or {},
+        "latest_by_operation": summary.get("latest_by_operation") or {},
+        "latest_by_pside": summary.get("latest_by_pside") or {},
+        "latest_by_source": summary.get("latest_by_source") or {},
+        "latest_changed_symbols": summary.get("latest_changed_symbols") or {},
+        "groups_truncated": bool(summary.get("groups_truncated"))
+        or len(groups) > limit,
+        "groups": groups[:limit],
+    }
+
+
 def _summary_staged_readiness_health(
     summary: dict[str, Any],
     *,
@@ -8066,6 +8300,11 @@ def summarize_live_smoke_report(
         if isinstance(report.get("forager_feature_health"), dict)
         else {}
     )
+    forager_eligibility_health = (
+        report.get("forager_eligibility_health")
+        if isinstance(report.get("forager_eligibility_health"), dict)
+        else {}
+    )
     fill_refresh_health = (
         report.get("fill_refresh_health")
         if isinstance(report.get("fill_refresh_health"), dict)
@@ -8277,6 +8516,16 @@ def summarize_live_smoke_report(
                 )
             }
             if forager_feature_health
+            else {}
+        ),
+        **(
+            {
+                "forager_eligibility_health": _summary_forager_eligibility_health(
+                    forager_eligibility_health,
+                    limit=max_groups,
+                )
+            }
+            if forager_eligibility_health
             else {}
         ),
         "exchange_config_refresh_health": _summary_limited_groups(
@@ -8971,6 +9220,11 @@ def summarize_live_smoke_report_brief(report: dict[str, Any]) -> dict[str, Any]:
         if isinstance(report.get("forager_feature_health"), dict)
         else {}
     )
+    forager_eligibility_health = (
+        report.get("forager_eligibility_health")
+        if isinstance(report.get("forager_eligibility_health"), dict)
+        else {}
+    )
     fill_refresh_health = (
         report.get("fill_refresh_health")
         if isinstance(report.get("fill_refresh_health"), dict)
@@ -9260,6 +9514,17 @@ def summarize_live_smoke_report_brief(report: dict[str, Any]) -> dict[str, Any]:
             if forager_feature_health
             else {}
         ),
+        **(
+            {
+                "forager_eligibility": {
+                    key: value
+                    for key, value in forager_eligibility_health.items()
+                    if key not in {"groups", "groups_truncated"}
+                }
+            }
+            if forager_eligibility_health
+            else {}
+        ),
         "exchange_config_refresh": {
             "total": _count_value(exchange_config_refresh_health.get("total")),
             "bots": _count_value(exchange_config_refresh_health.get("bots")),
@@ -9537,6 +9802,7 @@ SMOKE_REPORT_SECTION_ALIASES: dict[str, tuple[str, ...]] = {
     "event_pipeline": ("event_pipeline_health",),
     "exchange_config_refresh": ("exchange_config_refresh_health",),
     "fill_refresh": ("fill_refresh_health",),
+    "forager_eligibility": ("forager_eligibility_health",),
     "forager_features": ("forager_feature_health",),
     "hsl_replay": ("hsl_replay_health",),
     "remote_calls": ("remote_call_health", "remote_call_timings"),

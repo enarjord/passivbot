@@ -4,6 +4,12 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Live smoke reports now expose bounded existing
+  `forager.eligibility_changed` evidence across full, summary, brief, and
+  section-selective output, including approved/ignored add/remove counts,
+  source kind, position side, and redacted symbol samples. The projection does
+  not change smoke verdicts, console output, eligibility, or trading behavior.
+
 - Staged-readiness smoke summaries now include bounded existing
   `planning.defer_summary` evidence such as defer counts, windows, required
   surfaces, retry mode, and redacted symbol samples. Registered optional
