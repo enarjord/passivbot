@@ -418,23 +418,29 @@ Monitor commands are documented in detail in [monitor.md](monitor.md). The CLI s
   `relaunch_ready_targets == resolved_targets` in addition to the hard-green
   stable sampling verdict.
 - `passivbot tool live-restart-executor SUPERVISOR_CONFIG --session-name
-  SESSION --expected-supervisor-fingerprint SHA256 --execute` gracefully
+  SESSION --expected-repository-head COMMIT
+  --expected-supervisor-fingerprint SHA256 --execute` gracefully
   restarts only the exact local tmux targets proven by the same bounded target
-  contract. It repeats the sampled preflight, requires the caller-confirmed
+  contract. Before target sampling it requires the exact caller-confirmed
+  40-character Git commit, zero tracked changes while preserving untracked
+  artifacts, and a loaded Rust extension whose source stamp exactly matches the
+  checked-out Rust sources. It repeats that runtime contract immediately before
+  the first signal and before relaunch. It also requires the caller-confirmed
   full-command fingerprint, takes an immediate action snapshot, and sends one
   Ctrl-C round to exact pane IDs. After a bounded exact-PID exit wait, it scans
   for unexpected or duplicate live processes, verifies the complete session
   pane set, parent PIDs, window identities, and shell-ready exited panes, then
-  immediately re-reads the private supervisor snapshot and process set before
-  typing commands only into eligible panes. Final startup and multi-sample
-  target verification must retain the same fingerprint.
+  immediately re-reads the runtime contract, private supervisor snapshot, and
+  process set before typing commands only into eligible panes. Final startup
+  and multi-sample target verification must retain the same fingerprint.
   The executor does not SSH, pull code, contact exchanges directly, write files
   directly, use broad process-pattern signals, or apply SIGTERM/SIGKILL. A
-  timeout or changed process/pane contract is reported as manual recovery;
-  targets that did exit may be relaunched only when every post-stop check is
-  still exact. The relaunched live bots resume their configured exchange access
-  and normal runtime file writes. Run the read-only target report first and
-  pass its exact opaque fingerprint; command content is never emitted.
+  timeout or changed runtime/process/pane contract is reported as manual
+  recovery; targets that did exit may be relaunched only when every post-stop
+  check is still exact. The relaunched live bots resume their configured
+  exchange access and normal runtime file writes. Run the read-only target
+  report first and pass its exact opaque fingerprint; command content is never
+  emitted.
 - `passivbot tool live-performance-report` summarizes local live monitor event timings for
   operator performance analysis. It is read-only and does not contact exchanges. Use
   `--recent-minutes` for a time window, `--summary` for a bounded operator projection, and

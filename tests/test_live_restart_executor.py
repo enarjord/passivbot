@@ -20,6 +20,27 @@ from tools import live_restart_executor
 
 
 FINGERPRINT = "a" * 64
+REPOSITORY_HEAD = "b" * 40
+
+
+def _runtime_contract(*, ok: bool = True, issue: str | None = None) -> dict:
+    fingerprint = "c" * 64
+    return {
+        "ok": ok,
+        "expected_repository_head": REPOSITORY_HEAD,
+        "observed_repository_head": REPOSITORY_HEAD,
+        "tracked_clean": True,
+        "tracked_changes": 0,
+        "repository_snapshot_stable": True,
+        "rust_extension": {
+            "loaded": True,
+            "source_fingerprint": fingerprint,
+            "compiled_source_stamp": fingerprint,
+            "compiled_sha256": "d" * 64,
+            "source_matched": True,
+        },
+        "issues": [issue] if issue else [],
+    }
 
 
 def _target(
@@ -88,6 +109,11 @@ def _install_happy_dependencies(monkeypatch, targets: list[dict]) -> dict:
     monkeypatch.setattr(executor_module, "build_live_restart_target_report", build_report)
     monkeypatch.setattr(
         executor_module,
+        "_build_runtime_contract",
+        lambda _expected_head: _runtime_contract(),
+    )
+    monkeypatch.setattr(
+        executor_module,
         "_load_launch_snapshot",
         lambda _path: (
             {
@@ -138,20 +164,21 @@ def _install_happy_dependencies(monkeypatch, targets: list[dict]) -> dict:
 
 
 def _execute(**kwargs) -> dict:
-    return execute_live_restart(
-        "bots.yaml",
-        session_name="passivbot",
-        expected_supervisor_fingerprint=FINGERPRINT,
-        preflight_samples=2,
-        preflight_interval_s=0.1,
-        shutdown_timeout_s=1.0,
-        startup_timeout_s=1.0,
-        poll_interval_s=0.1,
-        verification_samples=2,
-        verification_interval_s=0.1,
-        execute=True,
-        **kwargs,
-    )
+    arguments = {
+        "session_name": "passivbot",
+        "expected_supervisor_fingerprint": FINGERPRINT,
+        "expected_repository_head": REPOSITORY_HEAD,
+        "preflight_samples": 2,
+        "preflight_interval_s": 0.1,
+        "shutdown_timeout_s": 1.0,
+        "startup_timeout_s": 1.0,
+        "poll_interval_s": 0.1,
+        "verification_samples": 2,
+        "verification_interval_s": 0.1,
+        "execute": True,
+    }
+    arguments.update(kwargs)
+    return execute_live_restart("bots.yaml", **arguments)
 
 
 def test_live_restart_executor_restarts_only_exact_verified_panes(monkeypatch):
@@ -164,6 +191,7 @@ def test_live_restart_executor_restarts_only_exact_verified_panes(monkeypatch):
     report = _execute()
 
     assert report["ok"] is True
+    assert report["schema_version"] == 2
     assert report["outcome"] == "completed"
     assert calls["stop"] == ["%10", "%11"]
     assert calls["start"] == [
@@ -179,6 +207,9 @@ def test_live_restart_executor_restarts_only_exact_verified_panes(monkeypatch):
     assert report["safety"]["direct_file_writes"] is False
     assert report["safety"]["configured_live_processes_may_write_files"] is True
     assert report["safety"]["configured_live_processes_may_contact_exchanges"] is True
+    assert report["safety"]["requires_expected_repository_head"] is True
+    assert report["safety"]["requires_tracked_clean_repository"] is True
+    assert report["safety"]["requires_source_matched_rust_extension"] is True
 
 
 def test_live_restart_executor_fails_closed_before_action_on_fingerprint_mismatch(
@@ -192,6 +223,7 @@ def test_live_restart_executor_fails_closed_before_action_on_fingerprint_mismatc
         "bots.yaml",
         session_name="passivbot",
         expected_supervisor_fingerprint="b" * 64,
+        expected_repository_head=REPOSITORY_HEAD,
         preflight_samples=2,
         preflight_interval_s=0.1,
         execute=True,
@@ -203,6 +235,97 @@ def test_live_restart_executor_fails_closed_before_action_on_fingerprint_mismatc
         "supervisor_fingerprint_mismatch"
     }
     assert calls["stop"] == []
+    assert calls["start"] == []
+
+
+def test_live_restart_executor_requires_full_lowercase_repository_head(monkeypatch):
+    calls = _install_happy_dependencies(
+        monkeypatch, [_target("binance_01", "%10", 100, 200)]
+    )
+
+    with pytest.raises(ValueError, match="40 lowercase hex"):
+        _execute(expected_repository_head="abc123")
+
+    assert calls["reports"] == []
+    assert calls["stop"] == []
+
+
+@pytest.mark.parametrize(
+    "issue",
+    [
+        "repository_head_mismatch",
+        "repository_tracked_dirty",
+        "rust_extension_source_mismatch",
+    ],
+)
+def test_live_restart_executor_fails_before_target_preflight_on_runtime_contract(
+    monkeypatch, issue
+):
+    calls = _install_happy_dependencies(
+        monkeypatch, [_target("binance_01", "%10", 100, 200)]
+    )
+    failed = _runtime_contract(ok=False, issue=issue)
+    if issue == "repository_head_mismatch":
+        failed["observed_repository_head"] = "e" * 40
+    elif issue == "repository_tracked_dirty":
+        failed["tracked_clean"] = False
+        failed["tracked_changes"] = 1
+    else:
+        failed["rust_extension"]["source_matched"] = False
+        failed["rust_extension"]["compiled_source_stamp"] = "e" * 64
+    monkeypatch.setattr(
+        executor_module, "_build_runtime_contract", lambda _head: failed
+    )
+
+    report = _execute()
+
+    assert report["action_started"] is False
+    assert {row["code"] for row in report["issues"]} == {issue}
+    assert calls["reports"] == []
+    assert calls["stop"] == []
+    assert calls["start"] == []
+
+
+def test_live_restart_executor_rechecks_runtime_before_first_signal(monkeypatch):
+    calls = _install_happy_dependencies(
+        monkeypatch, [_target("binance_01", "%10", 100, 200)]
+    )
+    changed = _runtime_contract(ok=False, issue="repository_tracked_dirty")
+    changed["tracked_clean"] = False
+    changed["tracked_changes"] = 1
+    contracts = iter([_runtime_contract(), changed])
+    monkeypatch.setattr(
+        executor_module, "_build_runtime_contract", lambda _head: next(contracts)
+    )
+
+    report = _execute()
+
+    assert report["action_started"] is False
+    assert {row["code"] for row in report["issues"]} == {
+        "runtime_contract_changed_after_preflight"
+    }
+    assert calls["stop"] == []
+
+
+def test_live_restart_executor_halts_relaunch_on_runtime_drift(monkeypatch):
+    calls = _install_happy_dependencies(
+        monkeypatch, [_target("binance_01", "%10", 100, 200)]
+    )
+    changed = _runtime_contract(ok=False, issue="rust_extension_source_mismatch")
+    changed["rust_extension"]["source_matched"] = False
+    changed["rust_extension"]["compiled_source_stamp"] = "e" * 64
+    contracts = iter([_runtime_contract(), _runtime_contract(), changed])
+    monkeypatch.setattr(
+        executor_module, "_build_runtime_contract", lambda _head: next(contracts)
+    )
+
+    report = _execute()
+
+    assert report["outcome"] == "manual_recovery_required"
+    assert {row["code"] for row in report["issues"]} == {
+        "runtime_contract_changed_before_relaunch"
+    }
+    assert calls["stop"] == ["%10"]
     assert calls["start"] == []
 
 
@@ -548,6 +671,77 @@ def test_private_launch_source_changes_fingerprint_without_public_exposure(tmp_p
     )
 
 
+def test_runtime_contract_binds_clean_head_and_exact_rust_source_stamp(monkeypatch):
+    fingerprint = "c" * 64
+
+    def git_output(arguments):
+        if arguments == ["rev-parse", "--show-toplevel"]:
+            return "/private/repository", None
+        if arguments == ["rev-parse", "HEAD"]:
+            return REPOSITORY_HEAD, None
+        if arguments == ["status", "--porcelain", "--untracked-files=no"]:
+            return "", None
+        raise AssertionError(arguments)
+
+    monkeypatch.setattr(executor_module, "_git_contract_output", git_output)
+    monkeypatch.setattr(
+        executor_module, "source_fingerprint", lambda _root: fingerprint
+    )
+    monkeypatch.setattr(
+        executor_module.importlib, "import_module", lambda _name: object()
+    )
+    monkeypatch.setattr(
+        executor_module,
+        "verify_loaded_runtime_extension",
+        lambda **_kwargs: {
+            "runtime_compiled_path": "/private/runtime.so",
+            "runtime_compiled_sha256": "d" * 64,
+            "runtime_compiled_source_stamp": fingerprint,
+        },
+    )
+
+    report = executor_module._build_runtime_contract(REPOSITORY_HEAD)
+
+    assert report["ok"] is True
+    assert report["tracked_clean"] is True
+    assert report["repository_snapshot_stable"] is True
+    assert report["rust_extension"]["source_matched"] is True
+    assert "/private/" not in json.dumps(report, sort_keys=True)
+
+
+def test_runtime_contract_rejects_unstamped_rust_extension(monkeypatch):
+    fingerprint = "c" * 64
+    monkeypatch.setattr(
+        executor_module,
+        "_git_contract_output",
+        lambda arguments: (
+            ("/repository" if arguments[-1] == "--show-toplevel" else REPOSITORY_HEAD)
+            if arguments[0] == "rev-parse"
+            else "",
+            None,
+        ),
+    )
+    monkeypatch.setattr(
+        executor_module, "source_fingerprint", lambda _root: fingerprint
+    )
+    monkeypatch.setattr(
+        executor_module.importlib, "import_module", lambda _name: object()
+    )
+    monkeypatch.setattr(
+        executor_module,
+        "verify_loaded_runtime_extension",
+        lambda **_kwargs: {
+            "runtime_compiled_sha256": "d" * 64,
+            "runtime_compiled_source_stamp": None,
+        },
+    )
+
+    report = executor_module._build_runtime_contract(REPOSITORY_HEAD)
+
+    assert report["ok"] is False
+    assert report["issues"] == ["rust_extension_source_mismatch"]
+
+
 def test_live_restart_executor_cli_requires_explicit_execute(capsys):
     with pytest.raises(SystemExit) as exc_info:
         live_restart_executor.main(
@@ -557,6 +751,8 @@ def test_live_restart_executor_cli_requires_explicit_execute(capsys):
                 "passivbot",
                 "--expected-supervisor-fingerprint",
                 FINGERPRINT,
+                "--expected-repository-head",
+                REPOSITORY_HEAD,
             ]
         )
     assert exc_info.value.code == 2
@@ -577,6 +773,8 @@ def test_live_restart_executor_cli_outputs_sanitized_report(monkeypatch, capsys)
             "passivbot",
             "--expected-supervisor-fingerprint",
             FINGERPRINT,
+            "--expected-repository-head",
+            REPOSITORY_HEAD,
             "--execute",
             "--compact",
         ]
@@ -611,6 +809,8 @@ def test_live_restart_executor_tool_dispatch_forwards_module(monkeypatch):
                 "passivbot",
                 "--expected-supervisor-fingerprint",
                 FINGERPRINT,
+                "--expected-repository-head",
+                REPOSITORY_HEAD,
                 "--execute",
             ]
         )
@@ -625,6 +825,8 @@ def test_live_restart_executor_tool_dispatch_forwards_module(monkeypatch):
             "passivbot",
             "--expected-supervisor-fingerprint",
             FINGERPRINT,
+            "--expected-repository-head",
+            REPOSITORY_HEAD,
             "--execute",
         ],
         "prog_env": "passivbot tool live-restart-executor",

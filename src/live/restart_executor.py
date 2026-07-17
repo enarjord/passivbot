@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib
 import math
 import os
 import subprocess
@@ -19,6 +20,7 @@ from live.smoke_report import (
     _running_live_processes,
     _supervisor_command_contract,
 )
+from rust_utils import source_fingerprint, verify_loaded_runtime_extension
 
 
 DEFAULT_PREFLIGHT_SAMPLES = 3
@@ -54,6 +56,9 @@ SAFETY_CONTRACT = {
     "broad_process_pattern_signals": False,
     "requires_execute_confirmation": True,
     "requires_expected_supervisor_fingerprint": True,
+    "requires_expected_repository_head": True,
+    "requires_tracked_clean_repository": True,
+    "requires_source_matched_rust_extension": True,
 }
 
 
@@ -98,8 +103,132 @@ def _valid_fingerprint(value: str) -> str:
     return fingerprint
 
 
+def _valid_repository_head(value: str) -> str:
+    head = str(value or "").strip()
+    if len(head) != 40 or any(
+        character not in "0123456789abcdef" for character in head
+    ):
+        raise ValueError(
+            "expected_repository_head must be 40 lowercase hex characters"
+        )
+    return head
+
+
 def _issue(code: str, **fields: Any) -> dict[str, Any]:
     return {"code": code, "severity": "error", **fields}
+
+
+def _git_contract_output(arguments: list[str]) -> tuple[str | None, str | None]:
+    try:
+        result = subprocess.run(
+            ["git", *arguments],
+            cwd=Path.cwd(),
+            capture_output=True,
+            text=True,
+            timeout=10.0,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        return None, f"git_failed:{exc.__class__.__name__}"
+    if result.returncode != 0:
+        return None, "git_failed"
+    return result.stdout.strip(), None
+
+
+def _build_runtime_contract(expected_repository_head: str) -> dict[str, Any]:
+    report: dict[str, Any] = {
+        "ok": False,
+        "expected_repository_head": expected_repository_head,
+        "observed_repository_head": None,
+        "tracked_clean": None,
+        "tracked_changes": None,
+        "repository_snapshot_stable": None,
+        "rust_extension": {
+            "loaded": False,
+            "source_fingerprint": None,
+            "compiled_source_stamp": None,
+            "compiled_sha256": None,
+            "source_matched": False,
+        },
+        "issues": [],
+    }
+    issues: list[str] = report["issues"]
+
+    root_output, error = _git_contract_output(["rev-parse", "--show-toplevel"])
+    if error is not None or not root_output:
+        issues.append("repository_unavailable")
+        return report
+    root = Path(root_output).resolve()
+
+    head, error = _git_contract_output(["rev-parse", "HEAD"])
+    if error is not None or head is None:
+        issues.append("repository_head_unavailable")
+        return report
+    report["observed_repository_head"] = head
+    if head != expected_repository_head:
+        issues.append("repository_head_mismatch")
+
+    status, error = _git_contract_output(
+        ["status", "--porcelain", "--untracked-files=no"]
+    )
+    if error is not None or status is None:
+        issues.append("repository_status_unavailable")
+        return report
+    changes = [line for line in status.splitlines() if line.strip()]
+    report["tracked_clean"] = not changes
+    report["tracked_changes"] = len(changes)
+    if changes:
+        issues.append("repository_tracked_dirty")
+
+    try:
+        fingerprint = source_fingerprint(root / "passivbot-rust")
+    except OSError as exc:
+        report["rust_extension"]["error_class"] = exc.__class__.__name__
+        issues.append("rust_source_fingerprint_unavailable")
+        return report
+    rust_report = report["rust_extension"]
+    rust_report["source_fingerprint"] = fingerprint
+    if fingerprint is None:
+        issues.append("rust_source_fingerprint_unavailable")
+        return report
+
+    try:
+        importlib.import_module("passivbot_rust")
+        runtime = verify_loaded_runtime_extension(fingerprint=fingerprint)
+    except (ImportError, OSError, RuntimeError, ValueError) as exc:
+        rust_report["error_class"] = exc.__class__.__name__
+        issues.append("rust_extension_verification_failed")
+        return report
+
+    compiled_stamp = runtime.get("runtime_compiled_source_stamp")
+    rust_report.update(
+        {
+            "loaded": True,
+            "compiled_source_stamp": compiled_stamp,
+            "compiled_sha256": runtime.get("runtime_compiled_sha256"),
+            "source_matched": compiled_stamp == fingerprint,
+        }
+    )
+    if compiled_stamp != fingerprint:
+        issues.append("rust_extension_source_mismatch")
+
+    final_head, head_error = _git_contract_output(["rev-parse", "HEAD"])
+    final_status, status_error = _git_contract_output(
+        ["status", "--porcelain", "--untracked-files=no"]
+    )
+    if head_error is not None or status_error is not None:
+        issues.append("repository_recheck_unavailable")
+    else:
+        final_changes = [
+            line for line in (final_status or "").splitlines() if line.strip()
+        ]
+        snapshot_stable = final_head == head and final_changes == changes
+        report["repository_snapshot_stable"] = snapshot_stable
+        if not snapshot_stable:
+            issues.append("repository_changed_during_runtime_check")
+
+    report["ok"] = not issues
+    return report
 
 
 def _preflight_summary(report: dict[str, Any]) -> dict[str, Any]:
@@ -346,6 +475,7 @@ def execute_live_restart(
     *,
     session_name: str,
     expected_supervisor_fingerprint: str,
+    expected_repository_head: str,
     config_base_dir: Path | None = None,
     preflight_samples: int = DEFAULT_PREFLIGHT_SAMPLES,
     preflight_interval_s: float = DEFAULT_PREFLIGHT_INTERVAL_S,
@@ -362,6 +492,7 @@ def execute_live_restart(
     if not confirmed_session:
         raise ValueError("session_name must be non-empty")
     expected_fingerprint = _valid_fingerprint(expected_supervisor_fingerprint)
+    expected_head = _valid_repository_head(expected_repository_head)
     preflight_samples = _bounded_samples(
         preflight_samples, field="preflight_samples"
     )
@@ -384,26 +515,35 @@ def execute_live_restart(
         poll_interval_s, field="poll_interval_s"
     )
 
-    preflight = build_live_restart_target_report(
-        supervisor_config,
-        session_name=confirmed_session,
-        config_base_dir=config_base_dir,
-        samples=preflight_samples,
-        sample_interval_s=preflight_interval_s,
-    )
+    runtime_contract = _build_runtime_contract(expected_head)
+    preflight: dict[str, Any] = {}
+    if runtime_contract["ok"]:
+        preflight = build_live_restart_target_report(
+            supervisor_config,
+            session_name=confirmed_session,
+            config_base_dir=config_base_dir,
+            samples=preflight_samples,
+            sample_interval_s=preflight_interval_s,
+        )
     report: dict[str, Any] = {
         "tool": "live-restart-executor",
-        "schema_version": 1,
+        "schema_version": 2,
         "ok": False,
         "outcome": "preflight_failed",
         "action_started": False,
         "session_name": confirmed_session,
         "safety": dict(SAFETY_CONTRACT),
+        "runtime_contract": runtime_contract,
         "preflight": _preflight_summary(preflight),
         "issues": [],
         "targets": [],
     }
     issues: list[dict[str, Any]] = report["issues"]
+    if not runtime_contract["ok"]:
+        issues.extend(_issue(code) for code in runtime_contract["issues"])
+        report["hard_failures"] = len(issues)
+        return report
+
     sampling = preflight.get("sampling") or {}
     resolved_targets = int(preflight.get("resolved_targets") or 0)
     if (
@@ -464,6 +604,16 @@ def execute_live_restart(
         report["hard_failures"] = len(issues)
         return report
     report["action_snapshot"] = _preflight_summary(action_snapshot)
+
+    action_runtime_contract = _build_runtime_contract(expected_head)
+    report["action_runtime_contract"] = action_runtime_contract
+    if (
+        not action_runtime_contract["ok"]
+        or action_runtime_contract != runtime_contract
+    ):
+        issues.append(_issue("runtime_contract_changed_after_preflight"))
+        report["hard_failures"] = len(issues)
+        return report
 
     target_results: list[dict[str, Any]] = []
     result_by_pid: dict[int, dict[str, Any]] = {}
@@ -591,6 +741,18 @@ def execute_live_restart(
         issues.append(
             _issue("process_changed_before_relaunch", reason=process_error)
         )
+        report["targets"] = target_results
+        report["hard_failures"] = len(issues)
+        report["outcome"] = "manual_recovery_required"
+        return report
+
+    relaunch_runtime_contract = _build_runtime_contract(expected_head)
+    report["pre_relaunch_runtime_contract"] = relaunch_runtime_contract
+    if (
+        not relaunch_runtime_contract["ok"]
+        or relaunch_runtime_contract != runtime_contract
+    ):
+        issues.append(_issue("runtime_contract_changed_before_relaunch"))
         report["targets"] = target_results
         report["hard_failures"] = len(issues)
         report["outcome"] = "manual_recovery_required"

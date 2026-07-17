@@ -22,38 +22,41 @@ Estimated completion:
 
 ## Active Review Slice
 
-- Branch: `codex/local-graceful-restart-executor`, integrated with canonical
-  `0f366b6f6e6b05ab0bd748b012c2c86ed85f978c` after PR #1293.
-- PR: #1297, `Add exact-target graceful restart executor`. Slice: execute the
-  already-reviewed exact-target restart contract locally without adding remote
-  deployment or force-escalation behavior.
-- Triggering evidence: PRs #1287-#1294 established exact pane/process ownership,
-  stable sampled identities, pane-parent relaunch readiness, and an opaque
-  fingerprint over complete private supervisor commands. VPS5 deployment of
-  PR #1293 then exercised the same manual contract successfully for all five
-  configured panes.
-- Scope: require explicit `--execute`, exact session name, expected supervisor
-  fingerprint, stable sampled preflight, and an immediate action snapshot;
-  send one Ctrl-C round only to exact panes; wait for exact PIDs; recheck the
-  process set, pane set, pane parents, and shell readiness; relaunch only exited
-  targets from private commands; and require stable final verification.
+- Branch: `codex/restart-executor-runtime-contract`, based on canonical
+  `7b833471c1e770ceb8650a4c3b395713b6a76dcb` after PR #1297.
+- PR: #1298, `Bind live restart execution to repository runtime`. Slice: bind
+  the local restart executor to the intended repository and compiled Rust
+  runtime before any process action.
+- Triggering evidence: PR #1297 proved exact local stop/relaunch mechanics but
+  did not verify that the executor was running from the intended clean commit
+  or that the importable Rust extension matched that checkout's Rust sources.
+- Scope: require an exact expected 40-character repository head, zero tracked
+  changes, and an exact Rust source-fingerprint stamp; repeat the contract
+  immediately before the first signal and before relaunch; preserve untracked
+  artifacts and keep paths and launch commands out of the report.
 - Behavior boundary: local restart/deploy behavior. The executor does not SSH,
   pull/build code, contact exchanges directly, write files directly, use broad
   process-pattern signals, or apply automatic SIGTERM/SIGKILL. Relaunched live
   bots resume their configured exchange access and normal runtime file writes.
-- Validation: focused executor, target-report, planner, smoke-report, CLI,
-  command secrecy, timeout, duplicate-process, TOCTOU, compilation, and docs
-  regressions.
+- Validation: focused runtime-contract, executor, target-report, planner,
+  smoke-report, CLI, secrecy, timeout, duplicate-process, TOCTOU, compilation,
+  and docs regressions.
 - Review gate: temporary maintainer-authorized exact-head Hermes plus green
   Python and Rust CI while Grok is halted.
-- Expected VPS action: pull, verify CLI/help plus a local-only target report,
-  and leave running bots unchanged. The new executor itself does not require a
-  restart to become available for a later authorized deployment.
+- Expected VPS action: pull and exercise only the executor's fail-closed
+  pre-action contract with a deliberately wrong expected head; leave running
+  bots unchanged.
 
 ## Deployed Baseline
 
 - Canonical `master` and VPS5 are
-  `0f366b6f6e6b05ab0bd748b012c2c86ed85f978c`, PR #1293. PR #1294 first
+  `7b833471c1e770ceb8650a4c3b395713b6a76dcb`, PR #1297. VPS5 fast-forwarded
+  cleanly from `0f366b6f` without a restart or process signal. The executor CLI
+  and help loaded successfully; a post-deploy 3/3 target report was hard-green
+  with all five exact targets relaunch-ready, zero issues, and the same private
+  command fingerprint. Bot PIDs `1015403/1015406/1015410/1015412/1015414`, pane
+  parents, and unrelated `misc:0.0` PID `434835` remained unchanged.
+- PR #1294 first
   fast-forwarded cleanly as `3de024c76d5c07bda2b4e64400c1a204d6be38a8`
   and produced a hard-green 3/3 stable target report with all five targets,
   zero issues, fingerprint
