@@ -24,7 +24,7 @@ Estimated completion:
 
 - Branch: `codex/restart-executor-artifact-fingerprint`, based on canonical
   `4a7a6753bff00f9b8749d9707f9bdccc4b3a5ffc` after PR #1298.
-- PR: pending. Slice: require the operator to confirm the exact Rust build-input
+- PR: #1300. Slice: require the operator to confirm the exact Rust build-input
   fingerprint authorized for restart execution.
 - Triggering evidence: PR #1298's VPS5 fail-closed probe proved the checked-out
   source and loaded extension stamp matched, but also showed that VPS5's
