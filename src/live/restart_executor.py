@@ -57,6 +57,7 @@ SAFETY_CONTRACT = {
     "requires_execute_confirmation": True,
     "requires_expected_supervisor_fingerprint": True,
     "requires_expected_repository_head": True,
+    "requires_expected_rust_source_fingerprint": True,
     "requires_tracked_clean_repository": True,
     "requires_source_matched_rust_extension": True,
 }
@@ -114,6 +115,17 @@ def _valid_repository_head(value: str) -> str:
     return head
 
 
+def _valid_rust_source_fingerprint(value: str) -> str:
+    fingerprint = str(value or "").strip()
+    if len(fingerprint) != 64 or any(
+        character not in "0123456789abcdef" for character in fingerprint
+    ):
+        raise ValueError(
+            "expected_rust_source_fingerprint must be 64 lowercase hex characters"
+        )
+    return fingerprint
+
+
 def _issue(code: str, **fields: Any) -> dict[str, Any]:
     return {"code": code, "severity": "error", **fields}
 
@@ -135,7 +147,10 @@ def _git_contract_output(arguments: list[str]) -> tuple[str | None, str | None]:
     return result.stdout.strip(), None
 
 
-def _build_runtime_contract(expected_repository_head: str) -> dict[str, Any]:
+def _build_runtime_contract(
+    expected_repository_head: str,
+    expected_rust_source_fingerprint: str,
+) -> dict[str, Any]:
     report: dict[str, Any] = {
         "ok": False,
         "expected_repository_head": expected_repository_head,
@@ -145,10 +160,13 @@ def _build_runtime_contract(expected_repository_head: str) -> dict[str, Any]:
         "repository_snapshot_stable": None,
         "rust_extension": {
             "loaded": False,
+            "expected_source_fingerprint": expected_rust_source_fingerprint,
             "source_fingerprint": None,
+            "final_source_fingerprint": None,
             "compiled_source_stamp": None,
             "compiled_sha256": None,
             "source_matched": False,
+            "source_snapshot_stable": None,
         },
         "issues": [],
     }
@@ -191,6 +209,9 @@ def _build_runtime_contract(expected_repository_head: str) -> dict[str, Any]:
     if fingerprint is None:
         issues.append("rust_source_fingerprint_unavailable")
         return report
+    if fingerprint != expected_rust_source_fingerprint:
+        issues.append("rust_source_fingerprint_mismatch")
+        return report
 
     try:
         importlib.import_module("passivbot_rust")
@@ -216,6 +237,28 @@ def _build_runtime_contract(expected_repository_head: str) -> dict[str, Any]:
     final_status, status_error = _git_contract_output(
         ["status", "--porcelain", "--untracked-files=no"]
     )
+    try:
+        final_fingerprint = source_fingerprint(root / "passivbot-rust")
+    except OSError as exc:
+        rust_report["recheck_error_class"] = exc.__class__.__name__
+        final_fingerprint = None
+        issues.append("rust_source_fingerprint_recheck_unavailable")
+    if (
+        final_fingerprint is None
+        and "rust_source_fingerprint_recheck_unavailable" not in issues
+    ):
+        issues.append("rust_source_fingerprint_recheck_unavailable")
+    rust_report["final_source_fingerprint"] = final_fingerprint
+    source_snapshot_stable = (
+        final_fingerprint is not None
+        and final_fingerprint == fingerprint
+        and final_fingerprint == expected_rust_source_fingerprint
+        and final_fingerprint == compiled_stamp
+    )
+    rust_report["source_snapshot_stable"] = source_snapshot_stable
+    if final_fingerprint is not None and final_fingerprint != fingerprint:
+        issues.append("rust_source_changed_during_runtime_check")
+
     if head_error is not None or status_error is not None:
         issues.append("repository_recheck_unavailable")
     else:
@@ -476,6 +519,7 @@ def execute_live_restart(
     session_name: str,
     expected_supervisor_fingerprint: str,
     expected_repository_head: str,
+    expected_rust_source_fingerprint: str,
     config_base_dir: Path | None = None,
     preflight_samples: int = DEFAULT_PREFLIGHT_SAMPLES,
     preflight_interval_s: float = DEFAULT_PREFLIGHT_INTERVAL_S,
@@ -493,6 +537,9 @@ def execute_live_restart(
         raise ValueError("session_name must be non-empty")
     expected_fingerprint = _valid_fingerprint(expected_supervisor_fingerprint)
     expected_head = _valid_repository_head(expected_repository_head)
+    expected_rust_fingerprint = _valid_rust_source_fingerprint(
+        expected_rust_source_fingerprint
+    )
     preflight_samples = _bounded_samples(
         preflight_samples, field="preflight_samples"
     )
@@ -515,7 +562,9 @@ def execute_live_restart(
         poll_interval_s, field="poll_interval_s"
     )
 
-    runtime_contract = _build_runtime_contract(expected_head)
+    runtime_contract = _build_runtime_contract(
+        expected_head, expected_rust_fingerprint
+    )
     preflight: dict[str, Any] = {}
     if runtime_contract["ok"]:
         preflight = build_live_restart_target_report(
@@ -527,7 +576,7 @@ def execute_live_restart(
         )
     report: dict[str, Any] = {
         "tool": "live-restart-executor",
-        "schema_version": 2,
+        "schema_version": 3,
         "ok": False,
         "outcome": "preflight_failed",
         "action_started": False,
@@ -605,7 +654,9 @@ def execute_live_restart(
         return report
     report["action_snapshot"] = _preflight_summary(action_snapshot)
 
-    action_runtime_contract = _build_runtime_contract(expected_head)
+    action_runtime_contract = _build_runtime_contract(
+        expected_head, expected_rust_fingerprint
+    )
     report["action_runtime_contract"] = action_runtime_contract
     if (
         not action_runtime_contract["ok"]
@@ -746,7 +797,9 @@ def execute_live_restart(
         report["outcome"] = "manual_recovery_required"
         return report
 
-    relaunch_runtime_contract = _build_runtime_contract(expected_head)
+    relaunch_runtime_contract = _build_runtime_contract(
+        expected_head, expected_rust_fingerprint
+    )
     report["pre_relaunch_runtime_contract"] = relaunch_runtime_contract
     if (
         not relaunch_runtime_contract["ok"]

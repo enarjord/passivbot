@@ -15,9 +15,11 @@ All notable user-facing changes will be documented in this file.
 
 - Added `passivbot tool live-restart-executor`, an explicit local executor for
   exact tmux targets that already pass the bounded stable target report. It
-  requires the expected Git commit, a tracked-clean checkout, a Rust extension
-  stamped for the current Rust sources, the expected full supervisor-command
-  fingerprint, and `--execute`,
+  requires the expected Git commit, a tracked-clean checkout, an
+  operator-confirmed Rust build-input fingerprint, a Rust extension stamped
+  with that same fingerprint, a final rehash that detects ignored build-input
+  drift during verification, the expected full supervisor-command fingerprint,
+  and `--execute`,
   sends one Ctrl-C round only to verified panes, waits a bounded time for exact
   process exits, rechecks repository/runtime artifacts plus the private
   supervisor snapshot and pane/process identity before typing launch commands,
