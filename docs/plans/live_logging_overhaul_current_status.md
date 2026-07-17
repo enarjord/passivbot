@@ -24,7 +24,7 @@ Estimated completion:
 
 - Branch: `codex/local-graceful-restart-executor`, integrated with canonical
   `0f366b6f6e6b05ab0bd748b012c2c86ed85f978c` after PR #1293.
-- PR: pending, `Add exact-target graceful restart executor`. Slice: execute the
+- PR: #1297, `Add exact-target graceful restart executor`. Slice: execute the
   already-reviewed exact-target restart contract locally without adding remote
   deployment or force-escalation behavior.
 - Triggering evidence: PRs #1287-#1294 established exact pane/process ownership,
