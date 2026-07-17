@@ -15,7 +15,28 @@ merge, live smoke evidence changes, or new gaps are discovered.
 - Do not use this file for design churn; unresolved design details belong in the
   plan or a focused handoff doc.
 
-## Latest Canonical Deployment (PR #1277)
+## Latest Canonical Deployment (PR #1291)
+
+- PR #1291 merged to `master` as
+  `393aec15a49d6b6cf4f6bda37ed8a2dab00b5f2c`. It binds bounded exact-target
+  sampling to an opaque parsed supervisor command-contract fingerprint without
+  exposing or executing configured commands.
+- VPS5 fast-forwarded cleanly from `04209762`. The five configured panes and
+  pane parents stayed stable while one exact-pane Ctrl-C round stopped old bot
+  PIDs `1003995/1003997/1003999/1004001/1004002`; replacements
+  `1013205/1013207/1013209/1013210/1013211` loaded already-merged PR #1292.
+  Unrelated `misc:0.0` remained `%8`, PID `434835`.
+- Immediate and settled bounded smokes were hard-green, with all five expected
+  processes matched and zero monitor/log/process, fill-refresh, or
+  account-critical failures. A final 3/3 sample target report retained stable
+  exact identities, the supervisor contract, and all five relaunch paths. One
+  ordinary OHLCV timeout recovered naturally. No direct exchange probe or event
+  was manufactured.
+- Post-merge inspection found the fingerprint used public redacted/truncated
+  command fields. The active follow-up moves hashing before report sanitization
+  and fails closed on an absent or malformed full-command contract.
+
+## Previous Canonical Deployment (PR #1277)
 
 - PR #1277 merged to `master` as
   `deee460a18f1f532a4c3a4c6e89a4befd5469d2a`. It projects existing

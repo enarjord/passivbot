@@ -8,6 +8,7 @@ from types import SimpleNamespace
 import pytest
 
 import live.restart_smoke_targets as target_module
+import live.smoke_report as smoke_report_module
 from live.restart_smoke_targets import build_live_restart_target_report
 from passivbot_cli import main as cli_main
 from tools import live_restart_target_report
@@ -33,6 +34,16 @@ def _process_report(*names: str) -> dict:
         "enabled": True,
         "ok": True,
         "hard_failures": 0,
+        "supervisor_contract": smoke_report_module._supervisor_command_contract(
+            [
+                {
+                    "name": row["name"],
+                    "_match_key": row["command"],
+                    "config_path": row["config_path"],
+                }
+                for row in expected
+            ]
+        ),
         "expected_total": len(expected),
         "matched_expected": len(expected),
         "running_live_total": len(expected),
@@ -181,13 +192,30 @@ def test_live_restart_target_report_resolves_exact_panes_and_ignores_other_sessi
     assert "private.json" not in json.dumps(report, sort_keys=True)
 
 
-def test_supervisor_contract_fingerprint_is_stable_and_content_free():
-    rows = _process_report("binance_01", "gateio_01")["expected"]
-    first = target_module._supervisor_contract(rows)
-    reordered = target_module._supervisor_contract(list(reversed(rows)))
+def test_supervisor_contract_fingerprint_uses_full_private_commands():
+    hidden_suffix = "S" * 600
+    rows = [
+        {
+            "name": "binance_01",
+            "_match_key": (
+                "passivbot live configs/private.json -u binance_01 "
+                f"--api-key FIRST-{hidden_suffix}"
+            ),
+            "config_path": "configs/private.json",
+        },
+        {
+            "name": "gateio_01",
+            "_match_key": "passivbot live configs/private.json -u gateio_01",
+            "config_path": "configs/private.json",
+        },
+    ]
+    first = smoke_report_module._supervisor_command_contract(rows)
+    reordered = smoke_report_module._supervisor_command_contract(list(reversed(rows)))
     changed_rows = [dict(row) for row in rows]
-    changed_rows[0]["command"] += " --debug"
-    changed = target_module._supervisor_contract(changed_rows)
+    changed_rows[0]["_match_key"] = changed_rows[0]["_match_key"].replace(
+        "FIRST-", "SECOND-"
+    )
+    changed = smoke_report_module._supervisor_command_contract(changed_rows)
 
     assert first == reordered
     assert first["fingerprint"] != changed["fingerprint"]
@@ -195,6 +223,87 @@ def test_supervisor_contract_fingerprint_is_stable_and_content_free():
     serialized = json.dumps(first, sort_keys=True)
     assert "passivbot live" not in serialized
     assert "private.json" not in serialized
+    assert "FIRST" not in serialized
+    assert hidden_suffix not in serialized
+
+
+@pytest.mark.parametrize(
+    "contract",
+    [
+        None,
+        {
+            "source": "parsed_supervisor_config",
+            "algorithm": "sha256",
+            "fingerprint": "not-a-digest",
+            "target_count": 1,
+            "command_content_exposed": False,
+        },
+        {
+            "source": "parsed_supervisor_config",
+            "algorithm": "sha256",
+            "fingerprint": "a" * 64,
+            "target_count": 2,
+            "command_content_exposed": False,
+        },
+        {
+            "source": "parsed_supervisor_config",
+            "algorithm": "sha256",
+            "fingerprint": "a" * 64,
+            "target_count": 1,
+            "command_content_exposed": True,
+        },
+    ],
+)
+def test_live_restart_target_report_fails_without_valid_full_supervisor_contract(
+    monkeypatch,
+    contract,
+):
+    processes = _process_report("binance_01")
+    if contract is None:
+        processes.pop("supervisor_contract")
+    else:
+        processes["supervisor_contract"] = contract
+    monkeypatch.setattr(
+        target_module,
+        "build_live_process_report",
+        lambda **_kwargs: processes,
+    )
+    monkeypatch.setattr(
+        target_module,
+        "_tmux_pane_inventory",
+        lambda: ([_pane("passivbot", "binance_01", 0, 20)], None),
+    )
+
+    report = build_live_restart_target_report(
+        "bots.yaml",
+        session_name="passivbot",
+    )
+
+    assert report["ok"] is False
+    assert report["hard_failures"] == 1
+    assert {issue["code"] for issue in report["issues"]} == {
+        "supervisor_contract_unavailable"
+    }
+
+
+@pytest.mark.parametrize(
+    ("target_count", "expected_targets"),
+    [(True, 1), (False, 0)],
+)
+def test_supervisor_contract_rejects_boolean_target_count(
+    target_count,
+    expected_targets,
+):
+    assert not target_module._valid_supervisor_contract(
+        {
+            "source": "parsed_supervisor_config",
+            "algorithm": "sha256",
+            "fingerprint": "a" * 64,
+            "target_count": target_count,
+            "command_content_exposed": False,
+        },
+        expected_targets=expected_targets,
+    )
 
 
 def test_tmux_pane_inventory_only_lists_and_bounds_metadata(monkeypatch):
