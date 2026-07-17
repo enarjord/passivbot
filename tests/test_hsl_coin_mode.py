@@ -985,6 +985,7 @@ async def test_recovered_red_episode_finalizes_from_check_path(caplog):
         is False
     )
     assert state["halted"] is False
+    assert state["pending_red_since_ms"] == 120_000
 
     # The position closes normally under tp-only. Flat exchange state without
     # its close fill is not enough to invent a cooldown anchor.
@@ -997,6 +998,7 @@ async def test_recovered_red_episode_finalizes_from_check_path(caplog):
     state = bot._hsl_coin_state("long", symbol)
     assert state["red_flat_confirmations"] == 0
     assert state["halted"] is False
+    assert state["pending_red_since_ms"] == 120_000
     assert "flatten-fill evidence is unavailable" in caplog.text
     bot._pnls_manager = make_fake_pnls_manager(
         [
@@ -1214,6 +1216,50 @@ def test_cooldown_anchor_uses_scope_flattening_fill():
         )
         is None
     )
+
+
+@pytest.mark.asyncio
+async def test_flatten_confirmation_refreshes_fills_and_rejects_pre_episode_anchor():
+    bot = make_coin_bot()
+    symbol = "A"
+    state = bot._hsl_coin_state("long", symbol)
+    state["pending_red_since_ms"] = 120_000
+    events = [
+        SimpleNamespace(
+            position_side="long",
+            symbol=symbol,
+            timestamp=90_000,
+            pb_order_type="close_manual_long",
+        )
+    ]
+    bot._pnls_manager = SimpleNamespace(get_events=lambda: events)
+    refresh_sources = []
+
+    async def update_pnls(*, source, since_ms=None):
+        refresh_sources.append(source)
+        assert since_ms == 120_000
+        events.append(
+            SimpleNamespace(
+                position_side="long",
+                symbol=symbol,
+                timestamp=170_000,
+                pb_order_type="close_grid_long",
+            )
+        )
+        return True
+
+    bot.update_pnls = update_pnls
+
+    stop_ts_ms = await bot._equity_hard_stop_flatten_fill_timestamp_with_refresh(
+        "long",
+        180_000,
+        symbol=symbol,
+        since_ms=state["pending_red_since_ms"],
+    )
+
+    assert stop_ts_ms == 170_000
+    assert refresh_sources == ["hsl_flatten_confirmation"]
+    assert state["last_missing_flatten_fill_refresh_ms"] == 0
 
 
 def test_red_paused_forced_modes_block_entries_without_panic():
@@ -1725,6 +1771,7 @@ def bind_hsl_methods(bot):
         "_equity_hard_stop_position_symbols",
         "_equity_hard_stop_latest_flatten_fill_timestamp_optional_ms",
         "_equity_hard_stop_defer_missing_flatten_fill",
+        "_equity_hard_stop_flatten_fill_timestamp_with_refresh",
         "_equity_hard_stop_signal_values",
         "_equity_hard_stop_refresh_halted_runtime_forced_modes",
         "_equity_hard_stop_infer_coin_replay_contract",
@@ -4770,6 +4817,49 @@ async def test_coin_hsl_replay_red_free_ordinary_flatten_resets_without_stop():
     assert state["cooldown_until_ms"] is None
     assert state["last_stop_event"] is None
     assert symbol not in bot._runtime_forced_modes["long"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("compact", [False, True])
+async def test_coin_hsl_replay_splits_same_minute_flatten_and_reentry(compact):
+    """A zero crossing is an episode boundary even when the minute ends held."""
+    symbol = "A"
+    flatten_ts = 150_000
+    reentry_ts = 160_000
+    history = _red_episode_history(
+        symbol,
+        flatten_pnl=-1.0,
+        # The large row-end UPnL belongs to the re-entry, not the episode that
+        # ended ten seconds earlier. It must not turn that old episode RED.
+        rows_upnl=[0.0, -80.0, 0.0],
+        flatten_ts=flatten_ts,
+    )
+    history["fill_events"].append(
+        {
+            "timestamp": reentry_ts,
+            "symbol": symbol,
+            "pside": "long",
+            "action": "increase",
+            "qty": 1.0,
+            "pnl": 0.0,
+        }
+    )
+    bot = _flat_position_bot(symbol)
+    bot.positions[symbol]["long"] = {"size": 1.0, "price": 100.0}
+    bot.get_exchange_time = lambda: 180_000
+
+    async def fake_history(current_balance=None, **kwargs):
+        return _coin_history_as_compact(history, symbol) if compact else history
+
+    bot.get_balance_equity_history = fake_history
+
+    await bot._equity_hard_stop_initialize_coin_from_history()
+
+    state = bot._hsl_coin_state("long", symbol)
+    assert state["halted"] is False
+    assert state["last_stop_event"] is None
+    assert state["pnl_reset_timestamp_ms"] == flatten_ts + 1
+    assert state["runtime"].red_seen_in_episode() is False
 
 
 @pytest.mark.asyncio

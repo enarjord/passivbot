@@ -5,10 +5,21 @@ All notable user-facing changes will be documented in this file.
 ## Unreleased
 
 - HSL replay now recognizes every fill-derived scope flatten as an episode
-  boundary even when compact coin replay omits historical unrealized PnL. RED
-  cooldowns anchor to the actual flattening fill regardless of close order
-  type; if that fill is temporarily unavailable, live finalization defers
-  instead of inventing the current time.
+  boundary, including close-and-reentry transitions within one replay minute
+  and compact coin replay without historical unrealized PnL. RED cooldowns
+  anchor to an episode-bounded flattening fill regardless of close order type;
+  when that fill is temporarily unavailable, live supervision performs a
+  rate-limited fill refresh and otherwise defers instead of using stale
+  pre-episode evidence or inventing the current time.
+
+- Live trailing restart reconciliation now preserves authoritative position-update
+  timestamps from CCXT and raw exchange payloads and no longer
+  treats position creation time as proof that fill history is current. Exchanges
+  without an update timestamp remain fail-closed until a successful fill refresh
+  after the position snapshot reports an after-state matching the live position.
+  Unchanged position snapshots no longer associate a prefetched fill with the old
+  position state, preventing a later real position change from waiting for an
+  additional fill.
 
 - Added `passivbot tool live-restart-executor`, an explicit local executor for
   exact tmux targets that already pass the bounded stable target report. It

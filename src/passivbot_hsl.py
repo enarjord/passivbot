@@ -60,6 +60,7 @@ _HSL_REPLAY_CACHE_FILL_HISTORY_SCOPES = ("unknown", "window", "all")
 _HSL_COIN_REPLAY_STARTUP_YIELD_ROWS = 1_000
 _HSL_COIN_REPLAY_BACKGROUND_YIELD_ROWS = 100
 _HSL_COIN_REPLAY_BACKGROUND_YIELD_SLEEP_S = 0.01
+_HSL_FLATTEN_FILL_REFRESH_INTERVAL_MS = 5_000
 
 
 def _hsl_flat_epsilon(qty_step: Any = 0.0) -> float:
@@ -2417,6 +2418,7 @@ def _equity_hard_stop_make_state(self) -> dict[str, Any]:
         "cooldown_repanic_reset_pending": False,
         "last_cooldown_intervention_log_ms": 0,
         "last_missing_flatten_fill_log_ms": 0,
+        "last_missing_flatten_fill_refresh_ms": 0,
         "cooldown_unresolved_residue": False,
         "pnl_reset_timestamp_ms": None,
     }
@@ -2916,6 +2918,8 @@ def _equity_hard_stop_reset_state(self) -> None:
         state["cooldown_intervention_active"] = False
         state["cooldown_repanic_reset_pending"] = False
         state["last_cooldown_intervention_log_ms"] = 0
+        state["last_missing_flatten_fill_log_ms"] = 0
+        state["last_missing_flatten_fill_refresh_ms"] = 0
         state["cooldown_unresolved_residue"] = False
     self._runtime_forced_modes = {"long": {}, "short": {}}
 
@@ -3040,6 +3044,81 @@ def _equity_hard_stop_defer_missing_flatten_fill(
         "episode finalization and cooldown anchoring deferred",
         scope,
     )
+
+
+async def _equity_hard_stop_flatten_fill_timestamp_with_refresh(
+    self,
+    pside: str,
+    now_ms: int,
+    *,
+    symbol: Optional[str] = None,
+    since_ms: Optional[int],
+) -> Optional[int]:
+    """Return episode-bounded flatten evidence, refreshing fills when absent.
+
+    RED supervision deliberately uses a small protective state refresh which
+    excludes fill history.  Once the exchange reports the scope flat, perform
+    a rate-limited refresh through the normal single-flight fill path so a
+    just-arrived closing fill cannot leave the awaited supervisor stuck.
+    """
+    if since_ms is None:
+        self._equity_hard_stop_defer_missing_flatten_fill(
+            pside, now_ms, symbol=symbol
+        )
+        return None
+    stop_ts_ms = self._equity_hard_stop_latest_flatten_fill_timestamp_optional_ms(
+        pside,
+        symbol=symbol,
+        since_ms=int(since_ms),
+    )
+    if stop_ts_ms is not None:
+        return int(stop_ts_ms)
+    state = (
+        self._hsl_coin_state(pside, symbol)
+        if symbol is not None
+        else self._hsl_state(pside)
+    )
+    refresh_clock_ms = int(time.monotonic() * 1000.0)
+    last_refresh_ms = int(
+        state.get("last_missing_flatten_fill_refresh_ms", 0) or 0
+    )
+    if last_refresh_ms == 0 or refresh_clock_ms - last_refresh_ms >= int(
+        _HSL_FLATTEN_FILL_REFRESH_INTERVAL_MS
+    ):
+        state["last_missing_flatten_fill_refresh_ms"] = refresh_clock_ms
+        refresh_ready = False
+        try:
+            refresh_ready = bool(
+                await self.update_pnls(
+                    source="hsl_flatten_confirmation",
+                    since_ms=int(since_ms),
+                )
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logging.warning(
+                "[risk] HSL[%s%s] flatten-fill refresh failed; keeping scope protective | "
+                "error=%s: %s",
+                pside,
+                f":{symbol}" if symbol is not None else "",
+                type(exc).__name__,
+                exc,
+            )
+        if refresh_ready:
+            stop_ts_ms = self._equity_hard_stop_latest_flatten_fill_timestamp_optional_ms(
+                pside,
+                symbol=symbol,
+                since_ms=int(since_ms),
+            )
+    if stop_ts_ms is None:
+        self._equity_hard_stop_defer_missing_flatten_fill(
+            pside, now_ms, symbol=symbol
+        )
+        return None
+    state["last_missing_flatten_fill_log_ms"] = 0
+    state["last_missing_flatten_fill_refresh_ms"] = 0
+    return int(stop_ts_ms)
 
 
 def _equity_hard_stop_latest_panic_fill_timestamp_optional_ms(
@@ -4241,6 +4320,8 @@ async def _equity_hard_stop_refresh_cooldown_after_repanic(
     state["cooldown_intervention_active"] = False
     state["cooldown_repanic_reset_pending"] = False
     state["last_cooldown_intervention_log_ms"] = 0
+    state["last_missing_flatten_fill_log_ms"] = 0
+    state["last_missing_flatten_fill_refresh_ms"] = 0
     state["cooldown_unresolved_residue"] = False
     latch_path = self._equity_hard_stop_write_latch(pside, payload)
     logging.critical(
@@ -4503,6 +4584,8 @@ def _equity_hard_stop_reset_after_restart(self, pside: str) -> None:
     state["cooldown_intervention_active"] = False
     state["cooldown_repanic_reset_pending"] = False
     state["last_cooldown_intervention_log_ms"] = 0
+    state["last_missing_flatten_fill_log_ms"] = 0
+    state["last_missing_flatten_fill_refresh_ms"] = 0
     state["cooldown_unresolved_residue"] = False
     self._equity_hard_stop_clear_runtime_forced_modes(pside)
 
@@ -5853,7 +5936,6 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
                     replay_flattened_this_row = (
                         not replay_ambiguous
                         and replay_was_nonflat
-                        and not replay_is_nonflat
                         and replay_flattened_at_ms is not None
                         and replay_flattened_at_ms < ts + 60_000
                     )
@@ -5924,6 +6006,11 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
                         current_upnl = float(unrealized_value)
                     self._equity_hard_stop_prime_coin_runtime_for_replay(pside, symbol, ts)
                     marker = latest_panic_by_coin_minute.get((pside, symbol, ts))
+                    episode_upnl = (
+                        0.0
+                        if replay_flattened_this_row and replay_is_nonflat
+                        else current_upnl
+                    )
                     metrics = self._equity_hard_stop_apply_coin_metrics_sample(
                         pside,
                         symbol,
@@ -5931,7 +6018,7 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
                         row_balance,
                         peak_realized,
                         window_last_realized,
-                        current_upnl,
+                        episode_upnl,
                         latch_red=False,
                     )
                     applied_rows += 1
@@ -5948,7 +6035,11 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
                             # markers; anchor the stop at the flatten fill.
                             stop_ts = int(replay_flattened_at_ms)
                             stop_source = "red_episode_flatten"
-                            replay_was_nonflat = False
+                            # A later increase in the same minute starts a new
+                            # episode. Preserve the row-end occupancy after
+                            # consuming this flatten boundary so a subsequent
+                            # close is also observable.
+                            replay_was_nonflat = replay_is_nonflat
                             replay_flattened_at_ms = None
                         else:
                             # Ordinary, non-panic flattening of a RED-free episode
@@ -5959,7 +6050,7 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
                             self._equity_hard_stop_reset_coin_after_restart(pside, symbol)
                             state = self._hsl_coin_state(pside, symbol)
                             reset_rolling_window()
-                            replay_was_nonflat = False
+                            replay_was_nonflat = replay_is_nonflat
                             logging.info(
                                 "[risk] HSL[%s:%s] replay reset current episode after flat fill | flat_ts=%s",
                                 pside,
@@ -6549,7 +6640,9 @@ async def _equity_hard_stop_check(self) -> Optional[dict]:
                 pside=pside,
                 ts=int(metrics["timestamp_ms"]),
             )
-        elif metrics["tier"] != "red":
+        elif metrics["tier"] != "red" and not self._equity_hard_stop_runtime_red_latched(
+            pside
+        ):
             state["pending_red_since_ms"] = None
             state["red_trigger_event_emitted"] = False
         self._equity_hard_stop_log_status(pside, metrics)
@@ -6825,7 +6918,7 @@ async def _equity_hard_stop_check_coin(self) -> Optional[dict]:
                     symbol=symbol,
                     ts=int(metrics["timestamp_ms"]),
                 )
-            elif metrics["tier"] != "red":
+            elif metrics["tier"] != "red" and not state["runtime"].red_latched():
                 state["pending_red_since_ms"] = None
                 state["red_trigger_event_emitted"] = False
                 if not state["halted"]:
@@ -6863,16 +6956,13 @@ async def _equity_hard_stop_check_coin(self) -> Optional[dict]:
                     )
                 )
                 if not has_position and entry_orders == 0 and nonpanic_close_orders == 0:
-                    stop_ts_ms = self._equity_hard_stop_latest_flatten_fill_timestamp_optional_ms(
+                    stop_ts_ms = await self._equity_hard_stop_flatten_fill_timestamp_with_refresh(
                         pside,
+                        ts_ms,
                         symbol=symbol,
+                        since_ms=state.get("pending_red_since_ms"),
                     )
-                    if stop_ts_ms is None:
-                        self._equity_hard_stop_defer_missing_flatten_fill(
-                            pside, ts_ms, symbol=symbol
-                        )
-                    else:
-                        state["last_missing_flatten_fill_log_ms"] = 0
+                    if stop_ts_ms is not None:
                         state["pending_stop_event"] = (
                             await self._equity_hard_stop_compute_coin_stop_event(
                                 pside, symbol, stop_ts_ms
@@ -7397,15 +7487,13 @@ async def _equity_hard_stop_run_red_supervisor(self) -> None:
                 n_positions = self._equity_hard_stop_count_open_positions(pside)
                 entry_orders, nonpanic_close_orders = self._equity_hard_stop_count_blocking_open_orders(pside)
                 if n_positions == 0 and entry_orders == 0 and nonpanic_close_orders == 0:
-                    stop_ts_ms = self._equity_hard_stop_latest_flatten_fill_timestamp_optional_ms(
+                    now_ms = int(self.get_exchange_time())
+                    stop_ts_ms = await self._equity_hard_stop_flatten_fill_timestamp_with_refresh(
                         pside,
+                        now_ms,
+                        since_ms=state.get("pending_red_since_ms"),
                     )
-                    if stop_ts_ms is None:
-                        self._equity_hard_stop_defer_missing_flatten_fill(
-                            pside, int(self.get_exchange_time())
-                        )
-                    else:
-                        state["last_missing_flatten_fill_log_ms"] = 0
+                    if stop_ts_ms is not None:
                         state["pending_stop_event"] = (
                             await self._equity_hard_stop_compute_stop_event(
                                 pside, stop_ts_ms
@@ -7530,16 +7618,14 @@ async def _equity_hard_stop_run_coin_red_supervisor(self) -> None:
                     self._equity_hard_stop_count_blocking_open_orders_symbol(pside, symbol)
                 )
                 if not has_position and entry_orders == 0 and nonpanic_close_orders == 0:
-                    stop_ts_ms = self._equity_hard_stop_latest_flatten_fill_timestamp_optional_ms(
+                    now_ms = int(self.get_exchange_time())
+                    stop_ts_ms = await self._equity_hard_stop_flatten_fill_timestamp_with_refresh(
                         pside,
+                        now_ms,
                         symbol=symbol,
+                        since_ms=state.get("pending_red_since_ms"),
                     )
-                    if stop_ts_ms is None:
-                        self._equity_hard_stop_defer_missing_flatten_fill(
-                            pside, int(self.get_exchange_time()), symbol=symbol
-                        )
-                    else:
-                        state["last_missing_flatten_fill_log_ms"] = 0
+                    if stop_ts_ms is not None:
                         state["pending_stop_event"] = (
                             await self._equity_hard_stop_compute_coin_stop_event(
                                 pside, symbol, stop_ts_ms

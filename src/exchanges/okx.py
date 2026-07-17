@@ -75,6 +75,7 @@ class OKXBot(CCXTBot):
                     "size": contracts,
                     "price": float(elm.get("entryPrice", 0)),
                 }
+                self._preserve_position_timing(elm, normalized)
                 margin_mode = self._extract_live_margin_mode(elm)
                 if margin_mode is not None:
                     normalized["margin_mode"] = margin_mode

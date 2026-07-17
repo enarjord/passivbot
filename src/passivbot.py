@@ -1117,6 +1117,8 @@ class Passivbot:
         self._authoritative_refresh_epoch_changed = set()
         self._authoritative_refresh_plan_surfaces = set()
         self._authoritative_pending_confirmations = {}
+        self._trailing_fill_refresh_started_generation = 0
+        self._trailing_fill_refresh_generation = 0
         self._authoritative_barrier_last_log_key = None
         self._authoritative_barrier_last_log_ms = 0
         self.freshness_ledger = FreshnessLedger(now_ms=utc_ms())
@@ -2020,6 +2022,9 @@ class Passivbot:
     )
     _equity_hard_stop_defer_missing_flatten_fill = (
         pb_hsl._equity_hard_stop_defer_missing_flatten_fill
+    )
+    _equity_hard_stop_flatten_fill_timestamp_with_refresh = (
+        pb_hsl._equity_hard_stop_flatten_fill_timestamp_with_refresh
     )
     _get_exchange_fee_rates = pb_hsl._get_exchange_fee_rates
     _orchestrator_exchange_params = pb_hsl._orchestrator_exchange_params
@@ -7762,10 +7767,15 @@ class Passivbot:
         return anchor_ts if anchor_ts > 0 else None
 
     def _position_anchor_timestamp_from_row(self, position: dict) -> int | None:
+        update_ts = self._position_update_timestamp_from_row(position)
+        if update_ts is not None:
+            return update_ts
         candidates = [
             position.get("open_time"),
             position.get("openTime"),
             position.get("createdTime"),
+            position.get("createTime"),
+            position.get("cTime"),
         ]
         info = position.get("info")
         if isinstance(info, dict):
@@ -7774,6 +7784,8 @@ class Passivbot:
                     info.get("open_time"),
                     info.get("openTime"),
                     info.get("createdTime"),
+                    info.get("createTime"),
+                    info.get("cTime"),
                 ]
             )
         candidates.extend(
@@ -7789,18 +7801,45 @@ class Passivbot:
                     info.get("timestamp_ms"),
                 ]
             )
-        candidates.append(position.get("updatedTime"))
-        if isinstance(info, dict):
-            candidates.append(info.get("updatedTime"))
         for candidate in candidates:
             anchor_ts = self._parse_position_anchor_timestamp_ms(candidate)
             if anchor_ts is not None:
                 return anchor_ts
         return None
 
+    def _position_update_timestamp_from_row(self, position: dict) -> int | None:
+        """Return an exchange-reported latest position update time, if available.
+
+        Open/creation time and CCXT's generic ``timestamp`` are intentionally
+        excluded: exchanges such as WEEX map that unified field to creation time.
+        Those fields remain valid candle-anchor fallbacks, but cannot prove that
+        cached fill history includes the latest position-changing fill.
+        """
+        update_keys = (
+            "lastUpdateTimestamp",
+            "updateTime",
+            "updatedTime",
+            "update_time",
+            "updated_at",
+            "uTime",
+        )
+        candidates = [position.get(key) for key in update_keys]
+        info = position.get("info")
+        if isinstance(info, dict):
+            candidates.extend(info.get(key) for key in update_keys)
+        for candidate in candidates:
+            update_ts = self._parse_position_anchor_timestamp_ms(candidate)
+            if update_ts is not None:
+                return update_ts
+        return None
+
     def _position_anchor_timestamp_ms(self, symbol: str, pside: str) -> int | None:
         position = self.positions.get(symbol, {}).get(pside, {})
         return self._position_anchor_timestamp_from_row(position)
+
+    def _position_update_timestamp_ms(self, symbol: str, pside: str) -> int | None:
+        position = self.positions.get(symbol, {}).get(pside, {})
+        return self._position_update_timestamp_from_row(position)
 
     @staticmethod
     def _fill_position_change_epoch(event, event_index: int) -> str:
@@ -7821,11 +7860,45 @@ class Passivbot:
             event = events[event_index]
             key = (str(event.symbol), str(event.position_side))
             if key not in anchors:
-                anchors[key] = {
+                anchor = {
                     "timestamp": int(event.timestamp),
                     "epoch": self._fill_position_change_epoch(event, event_index),
                 }
+                for field in ("psize", "pprice"):
+                    try:
+                        value = float(getattr(event, field))
+                    except (AttributeError, TypeError, ValueError, OverflowError):
+                        continue
+                    if math.isfinite(value):
+                        anchor[field] = value
+                anchors[key] = anchor
         return anchors
+
+    def _fill_anchor_matches_position_state(
+        self, symbol: str, state: tuple[float, float], anchor: dict | None
+    ) -> bool:
+        """Whether a fill's recorded after-state matches an exchange position."""
+        if anchor is None or "psize" not in anchor or "pprice" not in anchor:
+            return False
+        position_size, position_price = state
+        fill_size = abs(float(anchor["psize"]))
+        fill_price = float(anchor["pprice"])
+        if not all(
+            math.isfinite(value)
+            for value in (position_size, position_price, fill_size, fill_price)
+        ):
+            return False
+        qty_step = abs(float(getattr(self, "qty_steps", {}).get(symbol, 0.0) or 0.0))
+        price_step = abs(
+            float(getattr(self, "price_steps", {}).get(symbol, 0.0) or 0.0)
+        )
+        c_mult = abs(float(getattr(self, "c_mults", {}).get(symbol, 1.0) or 1.0))
+        position_size_in_fill_units = abs(position_size) * c_mult
+        qty_tolerance = max(qty_step * c_mult * 0.5, 1e-12)
+        price_tolerance = max(price_step * 0.5, abs(position_price) * 1e-9, 1e-12)
+        return abs(fill_size - position_size_in_fill_units) <= qty_tolerance and abs(
+            fill_price - position_price
+        ) <= price_tolerance
 
     def _latest_fill_position_change_epochs(self) -> dict[tuple[str, str], str]:
         """Return the newest known fill identity for each symbol and position side."""
@@ -7961,6 +8034,18 @@ class Passivbot:
         pending_fill_min_timestamps = dict(
             getattr(self, "_trailing_pending_fill_min_timestamps", {}) or {}
         )
+        pending_fill_min_generations = dict(
+            getattr(self, "_trailing_pending_fill_min_generations", {}) or {}
+        )
+        pending_position_states = dict(
+            getattr(self, "_trailing_pending_position_states", {}) or {}
+        )
+        associated_fill_epochs = dict(
+            getattr(self, "_trailing_position_snapshot_fill_epochs", {}) or {}
+        )
+        fill_refresh_generation = int(
+            getattr(self, "_trailing_fill_refresh_generation", 0) or 0
+        )
         current_epochs: dict[tuple[str, str], str] = {}
 
         for symbol, psides in required_trailing.items():
@@ -7974,6 +8059,10 @@ class Passivbot:
                         None if anchor is None else int(anchor["timestamp"])
                     )
                     minimum_timestamp = pending_fill_min_timestamps.get(epoch_key)
+                    minimum_fill_generation = pending_fill_min_generations.get(
+                        epoch_key
+                    )
+                    expected_position_state = pending_position_states.get(epoch_key)
                     if (
                         current_epoch is None
                         or not current_epoch.startswith("fill:")
@@ -7981,6 +8070,17 @@ class Passivbot:
                         or (
                             minimum_timestamp is not None
                             and current_timestamp < int(minimum_timestamp)
+                        )
+                        or (
+                            minimum_fill_generation is not None
+                            and fill_refresh_generation
+                            < int(minimum_fill_generation)
+                        )
+                        or (
+                            expected_position_state is not None
+                            and not self._fill_anchor_matches_position_state(
+                                symbol, expected_position_state, anchor
+                            )
                         )
                     ):
                         self.trailing_prices[symbol][pside] = (
@@ -7994,6 +8094,9 @@ class Passivbot:
                         continue
                     pending_fill_confirmations.pop(epoch_key, None)
                     pending_fill_min_timestamps.pop(epoch_key, None)
+                    pending_fill_min_generations.pop(epoch_key, None)
+                    pending_position_states.pop(epoch_key, None)
+                    associated_fill_epochs[epoch_key] = current_epoch
                 if anchor is None:
                     self.trailing_prices[symbol][pside] = _trailing_bundle_default_dict()
                     unavailable_reasons["missing_position_change_anchor"].add(symbol)
@@ -8006,6 +8109,9 @@ class Passivbot:
         self._trailing_position_change_epochs = current_epochs
         self._trailing_pending_fill_confirmations = pending_fill_confirmations
         self._trailing_pending_fill_min_timestamps = pending_fill_min_timestamps
+        self._trailing_pending_fill_min_generations = pending_fill_min_generations
+        self._trailing_pending_position_states = pending_position_states
+        self._trailing_position_snapshot_fill_epochs = associated_fill_epochs
 
         # Build concurrent fetches per symbol that has position changes
         fetch_plan = {}
@@ -10616,7 +10722,12 @@ class Passivbot:
             traceback.print_exc()
             raise
 
-    async def update_pnls(self, *, source: str = "direct"):
+    async def update_pnls(
+        self,
+        *,
+        source: str = "direct",
+        since_ms: Optional[int] = None,
+    ):
         """Fetch latest fills using FillEventsManager and update the cache."""
         if self.stop_signal_received:
             return False
@@ -10624,13 +10735,36 @@ class Passivbot:
         if not hasattr(self, "_pnls_refresh_lock"):
             self._pnls_refresh_lock = asyncio.Lock()
         async with self._pnls_refresh_lock:
-            return await self._update_pnls_locked(source=source)
+            return await self._update_pnls_locked(
+                source=source,
+                since_ms=since_ms,
+            )
 
-    async def _update_pnls_locked(self, *, source: str = "direct"):
+    async def _update_pnls_locked(
+        self,
+        *,
+        source: str = "direct",
+        since_ms: Optional[int] = None,
+    ):
         """Fetch latest fills while holding the fill-cache single-flight lock."""
         if self.stop_signal_received:
             return False
 
+        fill_refresh_attempt_generation = (
+            max(
+                int(
+                    getattr(
+                        self, "_trailing_fill_refresh_started_generation", 0
+                    )
+                    or 0
+                ),
+                int(getattr(self, "_trailing_fill_refresh_generation", 0) or 0),
+            )
+            + 1
+        )
+        self._trailing_fill_refresh_started_generation = (
+            fill_refresh_attempt_generation
+        )
         refresh_started_ms = utc_ms()
         refresh_mode = "unknown"
         overlap_minutes: Optional[float] = None
@@ -10781,23 +10915,30 @@ class Passivbot:
                     if confirmation_refresh
                     else "incremental_recent"
                 )
-                overlap_minutes_key = (
-                    "fills_confirmation_overlap_minutes"
-                    if confirmation_refresh
-                    else "fills_recent_overlap_minutes"
-                )
-                overlap_minutes = float(
-                    get_optional_live_value(
-                        self.config,
-                        overlap_minutes_key,
-                        60.0 if confirmation_refresh else 10.0,
+                if since_ms is not None:
+                    refresh_mode = "incremental_bounded"
+                    await self._pnls_manager.refresh(
+                        start_ms=max(0, int(since_ms)),
+                        end_ms=None,
                     )
-                )
-                overlap_minutes = max(0.0, overlap_minutes)
-                await self._pnls_manager.refresh_latest(
-                    overlap=20,
-                    last_refresh_overlap_ms=int(overlap_minutes * 60 * 1000),
-                )
+                else:
+                    overlap_minutes_key = (
+                        "fills_confirmation_overlap_minutes"
+                        if confirmation_refresh
+                        else "fills_recent_overlap_minutes"
+                    )
+                    overlap_minutes = float(
+                        get_optional_live_value(
+                            self.config,
+                            overlap_minutes_key,
+                            60.0 if confirmation_refresh else 10.0,
+                        )
+                    )
+                    overlap_minutes = max(0.0, overlap_minutes)
+                    await self._pnls_manager.refresh_latest(
+                        overlap=20,
+                        last_refresh_overlap_ms=int(overlap_minutes * 60 * 1000),
+                    )
 
             # Find and log new events (those not in cache before refresh)
             all_events = self._pnls_manager.get_events()
@@ -10849,6 +10990,9 @@ class Passivbot:
                 self._clear_fill_coverage_retry_defer()
                 self._record_authoritative_surface(
                     "fills", self._fill_events_signature(all_events)
+                )
+                self._trailing_fill_refresh_generation = (
+                    fill_refresh_attempt_generation
                 )
             elif pnls_complete and not coverage_ready_after:
                 self._record_fill_coverage_retry_defer(post_refresh_coverage_status)
@@ -13474,6 +13618,9 @@ class Passivbot:
             anchor_ts = self._position_anchor_timestamp_from_row(elm)
             if anchor_ts is not None:
                 normalized_position["timestamp"] = anchor_ts
+            update_ts = self._position_update_timestamp_from_row(elm)
+            if update_ts is not None:
+                normalized_position["lastUpdateTimestamp"] = update_ts
             positions_new[symbol][pside] = normalized_position
         self.positions = positions_new
         position_state = {
@@ -13495,7 +13642,6 @@ class Passivbot:
             key: str(anchor["epoch"]) for key, anchor in current_fill_anchors.items()
         }
         self._trailing_authoritative_position_state = position_state
-        self._trailing_position_snapshot_fill_epochs = current_fill_epochs
         if not hasattr(self, "trailing_prices"):
             self.trailing_prices = {}
         pending = dict(
@@ -13504,6 +13650,20 @@ class Passivbot:
         pending_min_timestamps = dict(
             getattr(self, "_trailing_pending_fill_min_timestamps", {}) or {}
         )
+        pending_min_fill_generations = dict(
+            getattr(self, "_trailing_pending_fill_min_generations", {}) or {}
+        )
+        pending_position_states = dict(
+            getattr(self, "_trailing_pending_position_states", {}) or {}
+        )
+        fill_refresh_started_generation = max(
+            int(
+                getattr(self, "_trailing_fill_refresh_started_generation", 0)
+                or 0
+            ),
+            int(getattr(self, "_trailing_fill_refresh_generation", 0) or 0),
+        )
+        request_post_position_fill_confirmation = False
         if previous_position_state is not None:
             for key in set(previous_position_state) | set(position_state):
                 if previous_position_state.get(key, (0.0, 0.0)) == position_state.get(
@@ -13516,34 +13676,69 @@ class Passivbot:
                 new_size = position_state.get(key, (0.0, 0.0))[0]
                 if new_size != 0.0 and self.is_trailing(symbol, pside):
                     pending[key] = previous_snapshot_fill_epochs.get(key)
-                    position_ts = self._position_anchor_timestamp_ms(symbol, pside)
+                    position_ts = self._position_update_timestamp_ms(symbol, pside)
                     if position_ts is None:
                         pending_min_timestamps.pop(key, None)
+                        pending_min_fill_generations[key] = (
+                            fill_refresh_started_generation + 1
+                        )
+                        pending_position_states[key] = position_state[key]
+                        request_post_position_fill_confirmation = True
                     else:
                         pending_min_timestamps[key] = position_ts
+                        pending_min_fill_generations.pop(key, None)
+                        pending_position_states.pop(key, None)
                 else:
                     pending.pop(key, None)
                     pending_min_timestamps.pop(key, None)
+                    pending_min_fill_generations.pop(key, None)
+                    pending_position_states.pop(key, None)
         else:
+            previous_snapshot_fill_epochs = dict(current_fill_epochs)
             for key, state in position_state.items():
                 symbol, pside = key
                 if state[0] == 0.0 or not self.is_trailing(symbol, pside):
                     continue
-                position_ts = self._position_anchor_timestamp_ms(symbol, pside)
+                position_ts = self._position_update_timestamp_ms(symbol, pside)
                 fill_anchor = current_fill_anchors.get(key)
-                if position_ts is None or (
-                    fill_anchor is not None
-                    and int(fill_anchor["timestamp"]) >= position_ts
-                ):
+                if position_ts is not None:
+                    fill_is_current = fill_anchor is not None and int(
+                        fill_anchor["timestamp"]
+                    ) >= position_ts
+                else:
+                    # A reconstructed same-state fill cannot prove freshness on
+                    # restart: unseen round-trip fills may return to the same
+                    # size and average price.  Require a successful fill refresh
+                    # that starts in a later authoritative cohort.
+                    fill_is_current = False
+                if fill_is_current:
+                    pending_min_fill_generations.pop(key, None)
+                    pending_position_states.pop(key, None)
                     continue
                 self.trailing_prices.setdefault(symbol, {})
                 self.trailing_prices[symbol][pside] = _trailing_bundle_default_dict()
-                pending[key] = (
-                    None if fill_anchor is None else str(fill_anchor["epoch"])
-                )
-                pending_min_timestamps[key] = position_ts
+                if position_ts is None:
+                    pending[key] = None
+                    pending_min_timestamps.pop(key, None)
+                    pending_min_fill_generations[key] = (
+                        fill_refresh_started_generation + 1
+                    )
+                    pending_position_states[key] = state
+                    request_post_position_fill_confirmation = True
+                else:
+                    pending[key] = (
+                        None if fill_anchor is None else str(fill_anchor["epoch"])
+                    )
+                    pending_min_timestamps[key] = position_ts
+                    pending_min_fill_generations.pop(key, None)
+                    pending_position_states.pop(key, None)
+        if request_post_position_fill_confirmation:
+            self._request_authoritative_confirmation({"fills"})
+        self._trailing_position_snapshot_fill_epochs = previous_snapshot_fill_epochs
         self._trailing_pending_fill_confirmations = pending
         self._trailing_pending_fill_min_timestamps = pending_min_timestamps
+        self._trailing_pending_fill_min_generations = pending_min_fill_generations
+        self._trailing_pending_position_states = pending_position_states
         return fetched_positions_old, self.fetched_positions
 
     def _apply_balance_snapshot(self, balance_raw) -> bool:
