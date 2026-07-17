@@ -473,8 +473,15 @@ Monitor commands are documented in detail in [monitor.md](monitor.md). The CLI s
   --until-ms MS` directly composes the existing exact target sampler, full
   bounded-window smoke report, and sanitized evidence evaluator in memory. The
   caller-confirmed head, private fingerprint, target count, and exact window are
-  never derived from the reports being checked. Rotated monitor segments are
-  included, process inspection is owned by the target report rather than
+  never derived from the reports being checked. Managed rotated event filenames
+  provide interval boundaries so the
+  collector reads only overlapping segments plus explicit coverage evidence;
+  malformed names, missing predecessor coverage, more than eight selected
+  segments per bot, more than 128 selected segments total, or more than 128 MiB
+  of selected event data fail closed before event content scanning. Its output
+  includes only aggregate selection completeness/count/scan-byte evidence and
+  code-owned issue counts, never segment paths. Process
+  inspection is owned by the target report rather than
   duplicated in smoke collection, and contextless log rows use the existing
   drop policy whose dropped hard-looking count must remain zero. The command
   emits no raw target or smoke report and writes no intermediate file. It may

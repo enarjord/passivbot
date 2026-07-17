@@ -57,6 +57,19 @@ def _target_report(*, targets: int = 2) -> dict:
 
 def _smoke_report(*, head: str = HEAD, attention: bool = False) -> dict:
     window = {"enabled": True, "since_ms": SINCE_MS, "until_ms": UNTIL_MS}
+    event_window = {
+        **window,
+        "segment_selection": {
+            "complete": True,
+            "groups": 2,
+            "files_before_selection": 40,
+            "candidate_files_selected": 4,
+            "candidate_scan_bytes": 12345,
+            "files_selected": 4,
+            "files_skipped": 36,
+            "issue_counts": {},
+        },
+    }
     return {
         "tool": "live-smoke-report",
         "schema_version": 1,
@@ -72,7 +85,7 @@ def _smoke_report(*, head: str = HEAD, attention: bool = False) -> dict:
             "error": None,
             "root": "/private/repository",
         },
-        "event_window": window,
+        "event_window": event_window,
         "monitor": {
             "root": "/private/monitor",
             "files_scanned": 2,
@@ -161,6 +174,10 @@ def test_collection_calls_producers_in_order_and_projects_sanitized_verdict(monk
         "include_processes": False,
         "since_ms": SINCE_MS,
         "until_ms": UNTIL_MS,
+        "select_event_segments_for_window": True,
+        "max_window_event_files_per_bot": 8,
+        "max_window_event_files_total": 128,
+        "max_window_event_bytes_total": 134217728,
         "log_window_unparsed_policy": "drop",
     }
     assert report["collection"] == {
@@ -168,6 +185,21 @@ def test_collection_calls_producers_in_order_and_projects_sanitized_verdict(monk
         "smoke_collection": {
             "include_rotated": True,
             "include_processes": False,
+            "event_segment_selection": "rotation_end_overlap_with_predecessor",
+            "max_window_event_files_per_bot": 8,
+            "max_window_event_files_total": 128,
+            "max_window_event_bytes_total": 134217728,
+            "event_segment_evidence": {
+                "complete": True,
+                "groups": 2,
+                "files_before_selection": 40,
+                "candidate_files_selected": 4,
+                "candidate_scan_bytes": 12345,
+                "files_selected": 4,
+                "files_skipped": 36,
+                "issue_counts": {},
+                "issue_codes_truncated": 0,
+            },
             "log_window_unparsed_policy": "drop",
             "logs_root_source": "caller",
             "event_window": {"since_ms": SINCE_MS, "until_ms": UNTIL_MS},
@@ -246,6 +278,44 @@ def test_collection_uses_monitor_default_logs_root_without_exposing_path(monkeyp
     assert captured["logs_root"] == "/private/default-logs"
     assert report["collection"]["smoke_collection"]["logs_root_source"] == "monitor_default"
     assert "/private/default-logs" not in json.dumps(report, sort_keys=True)
+
+
+def test_collection_bounds_and_whitelists_segment_selection_evidence(monkeypatch):
+    smoke = _smoke_report()
+    selection = smoke["event_window"]["segment_selection"]
+    selection.update(
+        {
+            "complete": False,
+            "groups": True,
+            "candidate_scan_bytes": 1_000_000_001,
+            "issue_counts": {
+                "event_window_segment_limit_exceeded": 2,
+                "private-secret-code": 1,
+            },
+        }
+    )
+    monkeypatch.setattr(
+        collection_module,
+        "build_live_restart_target_report",
+        lambda *_args, **_kwargs: _target_report(),
+    )
+    monkeypatch.setattr(
+        collection_module,
+        "build_live_smoke_report",
+        lambda *_args, **_kwargs: smoke,
+    )
+
+    report = build_live_restart_smoke_collection(**_kwargs())
+    evidence = report["collection"]["smoke_collection"]["event_segment_evidence"]
+
+    assert evidence["complete"] is False
+    assert evidence["groups"] is None
+    assert evidence["candidate_scan_bytes"] is None
+    assert evidence["issue_counts"] == {
+        "event_window_segment_limit_exceeded": 2
+    }
+    assert evidence["issue_codes_truncated"] == 1
+    assert "private-secret-code" not in json.dumps(report, sort_keys=True)
 
 
 def test_red_evidence_stays_red_and_attention_stays_non_hard(monkeypatch):

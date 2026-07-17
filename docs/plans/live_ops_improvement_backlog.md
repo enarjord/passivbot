@@ -377,6 +377,14 @@ Related detailed plans:
      dropped-hard in-memory variants failed as expected. The active follow-up
      composes target, smoke, and evaluation in memory without intermediate full
      report files or process control.
+   - 2026-07-17: PR #1303 merged and deployed the in-memory collector without a
+     bot restart or signal. Its first exact retained-window run discovered 1,012
+     event segments totaling about 801 MB and remained CPU-active beyond ten
+     minutes, so the exact collector PID was interrupted while all five bot panes
+     and `misc:0.0` stayed unchanged. A read-only prototype selected the 10
+     rotation intervals overlapping that window and returned the complete green
+     five-bot lifecycle verdict in 37.3 seconds. The active follow-up makes that
+     interval selection fail-closed and caps per-bot, global-file, and byte scope.
 
    Remaining refinements: safe pull/build and post-restart smoke orchestration
    remain open, as does any separately reviewed force-escalation policy.

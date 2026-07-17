@@ -16,7 +16,12 @@ All notable user-facing changes will be documented in this file.
   local target and bounded smoke reports in memory and immediately evaluate the
   sanitized restart evidence contract. It performs only local filesystem and
   bounded `tmux`/`ps`/`git` inventory reads; it does not write intermediate
-  reports, pull or build code, contact exchanges, or control processes.
+  reports, pull or build code, contact exchanges, or control processes. Exact
+  historical event windows select only managed rotation segments whose encoded
+  intervals overlap the requested bounds, require retained predecessor coverage,
+  and fail closed before content scanning when names, per-bot counts, global
+  counts, or selected bytes exceed the bounded policy. Sanitized output reports
+  aggregate selection completeness, counts, scan bytes, and code-owned issues.
 
 - Live trailing restart reconciliation now preserves authoritative position-update
   timestamps from CCXT and raw exchange payloads and no longer

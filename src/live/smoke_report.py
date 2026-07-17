@@ -9,7 +9,7 @@ import stat
 import subprocess
 import time
 from collections import Counter, defaultdict, deque
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -73,6 +73,11 @@ STARTUP_BUDGET_INCOMPLETE_STATUSES = frozenset(
 DEFAULT_PROCESS_MATCH = "passivbot live"
 LOG_WINDOW_UNPARSED_POLICIES = {"keep", "drop"}
 DEFAULT_LOG_WINDOW_UNPARSED_POLICY = "keep"
+EVENT_SEGMENT_END_PATTERN = re.compile(
+    r"^(?P<ts>\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2})"
+    r"(?:\.[0-9a-f]+)?\.ndjson(?:\.gz)?$"
+)
+EVENT_SEGMENT_END_GRANULARITY_MS = 999
 REMOTE_CALL_FAILURE_GROUP_LIMIT = 20
 REMOTE_CALL_HEALTH_GROUP_LIMIT = 20
 REMOTE_CALL_TIMING_GROUP_LIMIT = 20
@@ -8077,6 +8082,7 @@ def _event_window_report(
     event_file_limit_groups: int = 0,
     event_files_before_limit: int = 0,
     event_files_skipped_by_limit: int = 0,
+    segment_selection: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     report = {
         "enabled": since_ms is not None or until_ms is not None,
@@ -8102,6 +8108,8 @@ def _event_window_report(
         report["event_files_before_limit"] = int(event_files_before_limit)
         report["event_files_skipped_by_limit"] = int(event_files_skipped_by_limit)
         report["event_file_limit_order"] = "current_then_recent_mtime"
+    if segment_selection is not None:
+        report["segment_selection"] = dict(segment_selection)
     return report
 
 
@@ -8236,6 +8244,157 @@ def _monitor_issue(
     }
 
 
+def _event_segment_end_upper_ms(path: Path) -> int | None:
+    match = EVENT_SEGMENT_END_PATTERN.match(path.name)
+    if match is None:
+        return None
+    try:
+        parsed = datetime.strptime(match.group("ts"), "%Y-%m-%dT%H-%M-%S").replace(
+            tzinfo=timezone.utc
+        )
+    except ValueError:
+        return None
+    return int(parsed.timestamp() * 1000) + EVENT_SEGMENT_END_GRANULARITY_MS
+
+
+def _event_segment_scan_bytes(path: Path) -> int | None:
+    try:
+        file_size = int(path.stat().st_size)
+        if not path.name.endswith(".gz"):
+            return file_size
+        if file_size < 4:
+            return None
+        with path.open("rb") as stream:
+            stream.seek(-4, 2)
+            trailer = stream.read(4)
+    except OSError:
+        return None
+    if len(trailer) != 4:
+        return None
+    return int.from_bytes(trailer, byteorder="little", signed=False)
+
+
+def _select_event_segments_for_window(
+    files: list[Path],
+    *,
+    since_ms: int,
+    until_ms: int,
+    max_files_per_bot: int,
+    max_total_files: int,
+    max_total_bytes: int,
+) -> tuple[list[Path], dict[str, Any], list[dict[str, Any]]]:
+    if since_ms < 0 or until_ms <= since_ms:
+        raise ValueError("event segment window requires until_ms > since_ms >= 0")
+    if max_files_per_bot <= 0:
+        raise ValueError("max_window_event_files_per_bot must be positive")
+    if max_total_files <= 0:
+        raise ValueError("max_window_event_files_total must be positive")
+    if max_total_bytes <= 0:
+        raise ValueError("max_window_event_bytes_total must be positive")
+
+    grouped: dict[Path, list[Path]] = defaultdict(list)
+    for path in files:
+        grouped[path.parent].append(path)
+
+    selected: list[Path] = []
+    issue_counts: Counter[str] = Counter()
+    limit_exceeded_max = 0
+    for group_files in grouped.values():
+        current_files = [path for path in group_files if path.name == "current.ndjson"]
+        rotated_rows: list[tuple[int, Path]] = []
+        malformed = 0
+        for path in group_files:
+            if path.name == "current.ndjson":
+                continue
+            end_upper_ms = _event_segment_end_upper_ms(path)
+            if end_upper_ms is None:
+                malformed += 1
+                continue
+            rotated_rows.append((end_upper_ms, path))
+        if malformed:
+            issue_counts["event_segment_name_unparseable"] += malformed
+            continue
+        if len(current_files) != 1:
+            issue_counts[
+                "current_event_segment_missing"
+                if not current_files
+                else "current_event_segment_duplicated"
+            ] += 1
+            continue
+
+        rotated_rows.sort(key=lambda item: (item[0], item[1].name))
+        predecessor_indexes = [
+            index
+            for index, (end_upper_ms, _path) in enumerate(rotated_rows)
+            if end_upper_ms < since_ms
+        ]
+        if not predecessor_indexes:
+            issue_counts["event_window_start_coverage_unavailable"] += 1
+            continue
+
+        first_overlap_index = predecessor_indexes[-1] + 1
+        group_selected: list[Path] = []
+        end_covered = False
+        for end_upper_ms, path in rotated_rows[first_overlap_index:]:
+            group_selected.append(path)
+            if end_upper_ms >= until_ms:
+                end_covered = True
+                break
+        if not end_covered:
+            group_selected.append(current_files[0])
+        if len(group_selected) > max_files_per_bot:
+            issue_counts["event_window_segment_limit_exceeded"] += 1
+            limit_exceeded_max = max(limit_exceeded_max, len(group_selected))
+            continue
+        selected.extend(group_selected)
+
+    selected = sorted(set(selected), key=lambda path: (str(path.parent), path.name))
+    candidate_files_selected = len(selected)
+    selected_scan_bytes = 0
+    size_failed = False
+    for path in selected:
+        scan_bytes = _event_segment_scan_bytes(path)
+        if scan_bytes is None:
+            size_failed = True
+        else:
+            selected_scan_bytes += scan_bytes
+    if size_failed:
+        issue_counts["event_window_segment_size_failed"] += 1
+    if candidate_files_selected > max_total_files:
+        issue_counts["event_window_total_file_limit_exceeded"] += 1
+    if selected_scan_bytes > max_total_bytes:
+        issue_counts["event_window_total_byte_limit_exceeded"] += 1
+    if (
+        size_failed
+        or candidate_files_selected > max_total_files
+        or selected_scan_bytes > max_total_bytes
+    ):
+        selected = []
+
+    issues = [
+        {"code": code, "severity": "error", "count": int(count)}
+        for code, count in sorted(issue_counts.items())
+    ]
+    report = {
+        "enabled": True,
+        "complete": not issues and len(grouped) > 0,
+        "strategy": "rotation_end_overlap_with_predecessor",
+        "rotation_end_granularity_ms": EVENT_SEGMENT_END_GRANULARITY_MS + 1,
+        "groups": len(grouped),
+        "files_before_selection": len(files),
+        "candidate_files_selected": candidate_files_selected,
+        "candidate_scan_bytes": selected_scan_bytes,
+        "files_selected": len(selected),
+        "files_skipped": max(0, len(files) - len(selected)),
+        "max_files_per_bot": int(max_files_per_bot),
+        "max_total_files": int(max_total_files),
+        "max_total_bytes": int(max_total_bytes),
+        "limit_exceeded_max_files": int(limit_exceeded_max),
+        "issue_counts": dict(sorted(issue_counts.items())),
+    }
+    return selected, report, issues
+
+
 def _scan_events(
     root: str | Path,
     *,
@@ -8245,8 +8404,13 @@ def _scan_events(
     until_ms: int | None = None,
     event_tail_lines: int = 0,
     max_event_files_per_bot: int = 0,
+    select_segments_for_window: bool = False,
+    max_window_event_files_per_bot: int = 0,
+    max_window_event_files_total: int = 0,
+    max_window_event_bytes_total: int = 0,
 ) -> dict[str, Any]:
     issues: list[dict[str, Any]] = []
+    segment_selection: dict[str, Any] | None = None
     file_discovery: dict[str, Any] = {
         "candidate_files": 0,
         "event_segments": 0,
@@ -8265,6 +8429,35 @@ def _scan_events(
         files = []
         issues.append(
             _monitor_issue(str(root), None, "error", "path_not_found", str(exc))
+        )
+    if select_segments_for_window:
+        if not include_rotated:
+            raise ValueError(
+                "window-aware event segment selection requires include_rotated=True"
+            )
+        if type(since_ms) is not int or type(until_ms) is not int:
+            raise ValueError(
+                "window-aware event segment selection requires exact since_ms and until_ms"
+            )
+        files, segment_selection, selection_issues = (
+            _select_event_segments_for_window(
+                files,
+                since_ms=since_ms,
+                until_ms=until_ms,
+                max_files_per_bot=max_window_event_files_per_bot,
+                max_total_files=max_window_event_files_total,
+                max_total_bytes=max_window_event_bytes_total,
+            )
+        )
+        issues.extend(
+            _monitor_issue(
+                str(root),
+                None,
+                str(issue["severity"]),
+                str(issue["code"]),
+                f"affected_count={int(issue['count'])}",
+            )
+            for issue in selection_issues
         )
     if not files and not issues:
         issues.append(
@@ -8953,6 +9146,7 @@ def _scan_events(
             event_file_limit_groups=event_file_limit_groups,
             event_files_before_limit=event_files_before_limit or len(files),
             event_files_skipped_by_limit=event_files_skipped_by_limit,
+            segment_selection=segment_selection,
         ),
     }
 
@@ -9245,6 +9439,10 @@ def build_live_smoke_report(
     max_log_files: int = 8,
     event_tail_lines: int = 0,
     max_event_files_per_bot: int = 0,
+    select_event_segments_for_window: bool = False,
+    max_window_event_files_per_bot: int = 0,
+    max_window_event_files_total: int = 0,
+    max_window_event_bytes_total: int = 0,
     log_tail_lines: int = 300,
     max_log_matches: int = 50,
     log_window_unparsed_policy: str = DEFAULT_LOG_WINDOW_UNPARSED_POLICY,
@@ -9258,6 +9456,10 @@ def build_live_smoke_report(
         until_ms=until_ms,
         event_tail_lines=event_tail_lines,
         max_event_files_per_bot=max_event_files_per_bot,
+        select_segments_for_window=select_event_segments_for_window,
+        max_window_event_files_per_bot=max_window_event_files_per_bot,
+        max_window_event_files_total=max_window_event_files_total,
+        max_window_event_bytes_total=max_window_event_bytes_total,
     )
     event_report = event_scan["monitor"]
     log_scan = _scan_logs(

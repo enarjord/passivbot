@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import gzip
 import json
 import os
 from collections import Counter
@@ -310,6 +311,257 @@ def test_live_smoke_report_max_event_files_per_bot_is_fair(tmp_path):
     assert brief["event_window"]["max_event_files_per_bot"] == 2
     assert brief["event_window"]["event_file_limit_scope"] == "per_bot"
     assert brief["event_window"]["event_files_skipped_by_limit"] == 2
+
+
+def test_live_smoke_report_selects_only_segments_overlapping_exact_window(
+    tmp_path, monkeypatch
+):
+    events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    rows = [
+        ("1970-01-01T00-00-01.ndjson", 1500, "before"),
+        ("1970-01-01T00-00-02.ndjson", 2600, "inside_one"),
+        ("1970-01-01T00-00-03.abcdef12.ndjson.gz", 3400, "inside_two"),
+        ("1970-01-01T00-00-04.ndjson", 4500, "after"),
+        ("current.ndjson", 5000, "current"),
+    ]
+    for name, ts, cycle_id in rows:
+        _write_ndjson(
+            events_dir / name.removesuffix(".gz"),
+            [
+                _monitor_row(
+                    event_type="cycle.completed",
+                    seq=ts,
+                    ts=ts,
+                    ids={"cycle_id": cycle_id},
+                )
+            ],
+        )
+        if name.endswith(".gz"):
+            source = events_dir / name.removesuffix(".gz")
+            with source.open("rb") as src, gzip.open(events_dir / name, "wb") as dst:
+                dst.write(src.read())
+            source.unlink()
+
+    opened = []
+    original_open_text = event_file_rows_module._open_text
+
+    def spy_open_text(path):
+        opened.append(path.name)
+        return original_open_text(path)
+
+    monkeypatch.setattr(event_file_rows_module, "_open_text", spy_open_text)
+
+    report = build_live_smoke_report(
+        tmp_path / "monitor",
+        logs_root=None,
+        include_rotated=True,
+        since_ms=2500,
+        until_ms=3500,
+        select_event_segments_for_window=True,
+        max_window_event_files_per_bot=64,
+        max_window_event_files_total=128,
+        max_window_event_bytes_total=128 * 1024 * 1024,
+    )
+
+    assert report["ok"] is True
+    assert opened == [
+        "1970-01-01T00-00-02.ndjson",
+        "1970-01-01T00-00-03.abcdef12.ndjson.gz",
+    ]
+    assert report["monitor"]["files_scanned"] == 2
+    assert report["event_window"]["events_considered"] == 2
+    assert report["event_window"]["segment_selection"] == {
+        "enabled": True,
+        "complete": True,
+        "strategy": "rotation_end_overlap_with_predecessor",
+        "rotation_end_granularity_ms": 1000,
+        "groups": 1,
+        "files_before_selection": 5,
+        "candidate_files_selected": 2,
+        "candidate_scan_bytes": (
+            (events_dir / "1970-01-01T00-00-02.ndjson").stat().st_size
+            + len(
+                gzip.decompress(
+                    (
+                        events_dir
+                        / "1970-01-01T00-00-03.abcdef12.ndjson.gz"
+                    ).read_bytes()
+                )
+            )
+        ),
+        "files_selected": 2,
+        "files_skipped": 3,
+        "max_files_per_bot": 64,
+        "max_total_files": 128,
+        "max_total_bytes": 128 * 1024 * 1024,
+        "limit_exceeded_max_files": 0,
+        "issue_counts": {},
+    }
+
+
+@pytest.mark.parametrize(
+    ("rotated_names", "since_ms", "until_ms", "max_files", "issue_code"),
+    [
+        (
+            ["legacy.ndjson", "1970-01-01T00-00-02.ndjson"],
+            2500,
+            3500,
+            64,
+            "event_segment_name_unparseable",
+        ),
+        (
+            ["1970-01-01T00-00-03.ndjson"],
+            2500,
+            3500,
+            64,
+            "event_window_start_coverage_unavailable",
+        ),
+        (
+            [
+                "1970-01-01T00-00-01.ndjson",
+                "1970-01-01T00-00-02.ndjson",
+                "1970-01-01T00-00-03.ndjson",
+                "1970-01-01T00-00-04.ndjson",
+            ],
+            2500,
+            4500,
+            2,
+            "event_window_segment_limit_exceeded",
+        ),
+    ],
+)
+def test_live_smoke_report_window_segment_selection_fails_closed(
+    tmp_path, rotated_names, since_ms, until_ms, max_files, issue_code
+):
+    events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    for index, name in enumerate([*rotated_names, "current.ndjson"], start=1):
+        _write_ndjson(
+            events_dir / name,
+            [
+                _monitor_row(
+                    event_type="cycle.completed",
+                    seq=index,
+                    ts=index * 1000,
+                    ids={"cycle_id": f"cy_{index}"},
+                )
+            ],
+        )
+
+    report = build_live_smoke_report(
+        tmp_path / "monitor",
+        logs_root=None,
+        include_rotated=True,
+        since_ms=since_ms,
+        until_ms=until_ms,
+        select_event_segments_for_window=True,
+        max_window_event_files_per_bot=max_files,
+        max_window_event_files_total=128,
+        max_window_event_bytes_total=128 * 1024 * 1024,
+    )
+
+    assert report["ok"] is False
+    assert report["hard_failures"] >= 1
+    assert report["event_window"]["segment_selection"]["complete"] is False
+    assert report["event_window"]["segment_selection"]["issue_counts"][issue_code]
+    assert any(issue["code"] == issue_code for issue in report["monitor"]["issues"])
+
+
+@pytest.mark.parametrize(
+    ("max_total_files", "max_total_bytes", "issue_code"),
+    [
+        (1, 128 * 1024 * 1024, "event_window_total_file_limit_exceeded"),
+        (128, 1, "event_window_total_byte_limit_exceeded"),
+    ],
+)
+def test_live_smoke_report_window_segment_global_limits_fail_before_content_scan(
+    tmp_path, monkeypatch, max_total_files, max_total_bytes, issue_code
+):
+    events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    for index, name in enumerate(
+        [
+            "1970-01-01T00-00-01.ndjson",
+            "1970-01-01T00-00-02.ndjson",
+            "1970-01-01T00-00-03.ndjson",
+            "current.ndjson",
+        ],
+        start=1,
+    ):
+        _write_ndjson(
+            events_dir / name,
+            [
+                _monitor_row(
+                    event_type="cycle.completed",
+                    seq=index,
+                    ts=index * 1000,
+                    ids={"cycle_id": f"cy_{index}"},
+                )
+            ],
+        )
+    opened = []
+    monkeypatch.setattr(
+        event_file_rows_module,
+        "_open_text",
+        lambda path: opened.append(path) or path.open("rt", encoding="utf-8"),
+    )
+
+    report = build_live_smoke_report(
+        tmp_path / "monitor",
+        logs_root=None,
+        include_rotated=True,
+        since_ms=2500,
+        until_ms=3500,
+        select_event_segments_for_window=True,
+        max_window_event_files_per_bot=8,
+        max_window_event_files_total=max_total_files,
+        max_window_event_bytes_total=max_total_bytes,
+    )
+
+    assert report["ok"] is False
+    assert opened == []
+    selection = report["event_window"]["segment_selection"]
+    assert selection["complete"] is False
+    assert selection["files_selected"] == 0
+    assert selection["issue_counts"][issue_code] == 1
+
+
+def test_live_smoke_report_window_segment_rejects_unreadable_gzip_size(
+    tmp_path, monkeypatch
+):
+    events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    _write_ndjson(
+        events_dir / "1970-01-01T00-00-01.ndjson",
+        [_monitor_row(event_type="cycle.completed", seq=1, ts=1000)],
+    )
+    bad_gzip = events_dir / "1970-01-01T00-00-03.ndjson.gz"
+    bad_gzip.write_bytes(b"bad")
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [_monitor_row(event_type="cycle.completed", seq=2, ts=4000)],
+    )
+    opened = []
+    monkeypatch.setattr(
+        event_file_rows_module,
+        "_open_text",
+        lambda path: opened.append(path) or path.open("rt", encoding="utf-8"),
+    )
+
+    report = build_live_smoke_report(
+        tmp_path / "monitor",
+        logs_root=None,
+        include_rotated=True,
+        since_ms=2500,
+        until_ms=3500,
+        select_event_segments_for_window=True,
+        max_window_event_files_per_bot=8,
+        max_window_event_files_total=128,
+        max_window_event_bytes_total=128 * 1024 * 1024,
+    )
+
+    assert report["ok"] is False
+    assert opened == []
+    selection = report["event_window"]["segment_selection"]
+    assert selection["files_selected"] == 0
+    assert selection["issue_counts"] == {"event_window_segment_size_failed": 1}
 
 
 def test_live_smoke_report_summarizes_monitor_events_and_log_attention(tmp_path):
