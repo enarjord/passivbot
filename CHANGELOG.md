@@ -4,6 +4,13 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Added `passivbot tool live-restart-smoke-evidence`, a pure fail-closed
+  evaluator for already-generated full restart target and smoke JSON reports.
+  It binds stable exact-target evidence and bounded post-restart monitor/log,
+  shutdown, startup, and repository evidence to the expected head, supervisor
+  fingerprint, and target count without executing report producers or
+  controlling processes.
+
 - Live trailing restart reconciliation now preserves authoritative position-update
   timestamps from CCXT and raw exchange payloads and no longer
   treats position creation time as proof that fill history is current. Exchanges

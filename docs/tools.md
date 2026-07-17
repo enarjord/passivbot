@@ -448,6 +448,21 @@ Monitor commands are documented in detail in [monitor.md](monitor.md). The CLI s
   exchange access and normal runtime file writes. Run the read-only target
   report first, retain the Rust fingerprint from build verification, and pass
   both exact fingerprints; command content is never emitted.
+- `passivbot tool live-restart-smoke-evidence TARGET_REPORT_JSON
+  SMOKE_REPORT_JSON --expected-repository-head COMMIT
+  --expected-supervisor-fingerprint SHA256 --expected-targets N` evaluates two
+  already-generated full JSON reports against one bounded post-restart evidence
+  contract. It requires stable multi-sample exact targets, the caller-confirmed
+  private supervisor fingerprint, a clean exact repository head, bounded
+  monitor and text-log windows with no hard evidence, complete shutdown event
+  counts, and distinct startup timing coverage for the expected targets. The
+  result is bounded and sanitized: it does not copy paths, commands, bot names,
+  symbols, log samples, or arbitrary input payloads. The command only reads the
+  two named local files; it does not run report producers, SSH, signal or start
+  processes, contact a network or exchange, load credentials, or write files.
+  Use `--compact` for single-line JSON. Exit status is zero only when every hard
+  gate passes; non-hard attention evidence remains visible without making the
+  verdict red.
 - `passivbot tool live-performance-report` summarizes local live monitor event timings for
   operator performance analysis. It is read-only and does not contact exchanges. Use
   `--recent-minutes` for a time window, `--summary` for a bounded operator projection, and
