@@ -4,7 +4,10 @@ import json
 
 import pytest
 
-from live.restart_smoke_evidence import build_live_restart_smoke_evidence
+from live.restart_smoke_evidence import (
+    MAX_PROJECTED_COUNT,
+    build_live_restart_smoke_evidence,
+)
 from tools import live_restart_smoke_evidence
 
 
@@ -52,7 +55,11 @@ def _target_report(*, targets: int = 2) -> dict:
 
 
 def _window() -> dict:
-    return {"enabled": True, "since_ms": 1000, "until_ms": 2000}
+    return {
+        "enabled": True,
+        "since_ms": 1_752_789_600_123,
+        "until_ms": 1_752_789_660_456,
+    }
 
 
 def _smoke_report(*, targets: int = 2) -> dict:
@@ -76,6 +83,7 @@ def _smoke_report(*, targets: int = 2) -> dict:
             "files_scanned": 2,
             "hard_matches": 0,
             "attention_matches": 0,
+            "dropped_unparsed_hard_matches": 0,
             "window": _window(),
         },
         "shutdown_events": {
@@ -182,6 +190,53 @@ def test_evaluator_rejects_unbounded_or_inverted_event_window(window):
     assert "event_window_invalid" in _codes(report)
 
 
+def test_evaluator_preserves_exact_modern_window_bounds():
+    smoke = _smoke_report()
+
+    report = _evaluate(smoke_report=smoke)
+
+    assert report["ok"] is True
+    assert report["gates"]["event_window"] == {
+        "ok": True,
+        "since_ms": 1_752_789_600_123,
+        "until_ms": 1_752_789_660_456,
+    }
+    assert report["gates"]["logs"]["same_bounds_as_events"] is True
+
+
+def test_evaluator_rejects_different_modern_log_window_bounds():
+    smoke = _smoke_report()
+    smoke["logs"]["window"]["until_ms"] += 1
+
+    report = _evaluate(smoke_report=smoke)
+
+    assert report["ok"] is False
+    assert "log_scan_invalid" in _codes(report)
+    assert report["gates"]["logs"]["same_bounds_as_events"] is False
+
+
+@pytest.mark.parametrize(
+    "window",
+    [
+        {"enabled": True, "since_ms": True, "until_ms": 1_752_789_660_456},
+        {"enabled": True, "since_ms": -1, "until_ms": 1_752_789_660_456},
+        {
+            "enabled": True,
+            "since_ms": 1_752_789_600_123,
+            "until_ms": 253_402_300_800_000,
+        },
+    ],
+)
+def test_evaluator_rejects_invalid_epoch_window_bounds(window):
+    smoke = _smoke_report()
+    smoke["event_window"] = window
+
+    report = _evaluate(smoke_report=smoke)
+
+    assert report["ok"] is False
+    assert "event_window_invalid" in _codes(report)
+
+
 def test_evaluator_rejects_missing_monitor_and_log_scans():
     smoke = _smoke_report()
     smoke["monitor"].update({"files_scanned": 0, "error_count": 1})
@@ -191,6 +246,42 @@ def test_evaluator_rejects_missing_monitor_and_log_scans():
 
     assert report["ok"] is False
     assert {"monitor_scan_invalid", "log_scan_invalid"} <= _codes(report)
+
+
+@pytest.mark.parametrize(
+    ("dropped_hard_matches", "expected_projected_count"),
+    [
+        (1, 1),
+        (MAX_PROJECTED_COUNT + 1, MAX_PROJECTED_COUNT),
+        (True, 0),
+        ("1", 0),
+        (None, 0),
+    ],
+)
+def test_evaluator_rejects_nonzero_or_malformed_dropped_unparsed_hard_matches(
+    dropped_hard_matches,
+    expected_projected_count,
+):
+    smoke = _smoke_report()
+    smoke["logs"]["dropped_unparsed_hard_matches"] = dropped_hard_matches
+
+    report = _evaluate(smoke_report=smoke)
+
+    assert report["ok"] is False
+    assert "log_scan_invalid" in _codes(report)
+    assert (
+        report["gates"]["logs"]["dropped_unparsed_hard_matches"]
+        == expected_projected_count
+    )
+
+
+def test_evaluator_keeps_dropped_unparsed_attention_as_attention_only():
+    smoke = _smoke_report()
+    smoke["logs"]["dropped_unparsed_attention_matches"] = 3
+
+    report = _evaluate(smoke_report=smoke)
+
+    assert report["ok"] is True
 
 
 def test_evaluator_rejects_smoke_hard_failures_and_invalid_optional_schema():

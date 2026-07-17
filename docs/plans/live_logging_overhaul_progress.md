@@ -15,7 +15,23 @@ merge, live smoke evidence changes, or new gaps are discovered.
 - Do not use this file for design churn; unresolved design details belong in the
   plan or a focused handoff doc.
 
-## Latest Canonical Deployment (PR #1300)
+## Latest Canonical Deployment (PR #1301)
+
+- PR #1301 merged as canonical
+  `46a28795dec40acbee0dbaa3602be955bbecf23e` after exact-current-head Hermes
+  approval and green Python/Rust CI. It adds a pure, bounded evaluator for
+  already-generated full restart target and smoke JSON reports.
+- VPS5 fast-forwarded without a restart or signal. The real PR #1296
+  shutdown-through-startup window evaluated green with all five lifecycle and
+  startup cohorts, zero hard failures, stable exact targets, and a clean exact
+  repository head. A wider three-hour window correctly evaluated red on 30
+  existing hard events. Bot and pane PIDs plus `misc:0.0` remained unchanged.
+- The deploy exposed a fidelity defect: generic count projection clamped both
+  modern epoch-ms bounds to `1000000000` and the log-bound comparison reused
+  those lossy values. The active follow-up preserves exact bounded timestamps
+  and fails closed on dropped hard-looking log evidence.
+
+## Previous Canonical Deployment (PR #1300)
 
 - PR #1300 merged as canonical
   `e1a4837914c1e4768cd7963bba47212499d32937` after exact-current-head Hermes
@@ -28,7 +44,7 @@ merge, live smoke evidence changes, or new gaps are discovered.
   with `action_started=false`. The final 3/3 exact-target report retained the
   same five PIDs, zero extras or issues, and states `R=3,S=2`; tracked state and
   unrelated `misc:0.0` remained unchanged.
-- The active follow-up makes post-restart target and smoke evidence
+- The following slice made post-restart target and smoke evidence
   machine-evaluable from already generated full JSON reports. Automatic report
   collection, pull/build orchestration, and force escalation remain separate.
 

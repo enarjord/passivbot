@@ -9,7 +9,8 @@ All notable user-facing changes will be documented in this file.
   It binds stable exact-target evidence and bounded post-restart monitor/log,
   shutdown, startup, and repository evidence to the expected head, supervisor
   fingerprint, and target count without executing report producers or
-  controlling processes.
+  controlling processes. Event and log windows retain and compare exact bounded
+  epoch-millisecond values, and dropped hard-looking log evidence fails closed.
 
 - Live trailing restart reconciliation now preserves authoritative position-update
   timestamps from CCXT and raw exchange payloads and no longer

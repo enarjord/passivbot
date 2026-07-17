@@ -22,31 +22,43 @@ Estimated completion:
 
 ## Active Review Slice
 
-- Branch: `codex/restart-smoke-evidence-contract`, based on canonical
-  `e1a4837914c1e4768cd7963bba47212499d32937` after PR #1300.
-- PR: #1301. Slice: add a pure post-restart evidence evaluator over existing
-  full target-report and smoke-report JSON artifacts.
-- Triggering evidence: the executor now proves exact action boundaries, but the
-  subsequent operator smoke evidence still depends on manual interpretation of
-  two independently generated reports.
-- Scope: require an exact repository head, private supervisor fingerprint, and
-  target count; fail closed unless target sampling is stable and the full smoke
-  report proves a bounded monitor/log window, clean repository, complete
-  shutdown lifecycle counts, and distinct startup timing coverage.
+- Branch: `codex/restart-smoke-window-fidelity`, based on canonical
+  `46a28795dec40acbee0dbaa3602be955bbecf23e` after PR #1301.
+- PR: pending. Slice: preserve exact bounded smoke-window timestamps and reject
+  dropped hard-looking log evidence.
+- Triggering evidence: live PR #1301 validation projected both modern event
+  bounds as `1000000000` because epoch milliseconds reused a generic count
+  clamp. The same lossy values were used for event/log equality, so different
+  modern windows could compare equal. The log gate also ignored nonzero
+  `dropped_unparsed_hard_matches` from the opt-in drop policy.
+- Scope: validate epoch milliseconds against a fixed bounded range, compare and
+  project the exact values, and require both retained and dropped hard-log
+  counts to be well-formed zeroes.
 - Behavior boundary: read two local JSON files and emit bounded sanitized JSON.
   The evaluator does not execute report producers, SSH, signal or start
   processes, contact a network or exchange, load credentials, or write files.
-- Validation: focused evaluator, CLI dispatch/exit, malformed-input, redaction,
-  target-contract, smoke-contract, compilation, and docs regressions.
+- Validation: focused exact-window, mismatched-window, malformed timestamp,
+  dropped-hard-log, evaluator, compilation, and docs regressions.
 - Review gate: temporary maintainer-authorized exact-head Hermes plus green
   Python and Rust CI while Grok is halted.
-- Expected VPS action: pull and evaluate freshly generated bounded target and
-  smoke JSON artifacts. Do not restart or signal bots.
+- Expected VPS action: pull and re-evaluate the saved exact PR #1296 restart
+  window plus a deliberately mismatched-window copy. Do not restart or signal
+  bots.
 
 ## Deployed Baseline
 
 - Canonical `master` and VPS5 are
-  `e1a4837914c1e4768cd7963bba47212499d32937` after PR #1300. Exact-head Hermes
+  `46a28795dec40acbee0dbaa3602be955bbecf23e` after PR #1301. Exact-head Hermes
+  and Python/Rust CI were green. VPS5 fast-forwarded without a restart or
+  signal. The exact PR #1296 shutdown-through-startup window evaluated green
+  with 3/3 stable targets, five stopping/stopped lifecycles, startup timing for
+  five bots, 24 bounded monitor segments, eight text logs, and zero hard
+  failures. A wider three-hour report correctly evaluated red on 30 real hard
+  events. Final pane parents and bot PIDs were unchanged; the checkout remained
+  tracked-clean and `misc:0.0` remained `%8`, PID `434835`. Validation exposed
+  the lossy timestamp projection addressed by the active follow-up.
+- PR #1300 previously deployed at
+  `e1a4837914c1e4768cd7963bba47212499d32937`. Exact-head Hermes
   and Python/Rust CI were green. VPS5 fast-forwarded without a restart or
   signal; a deliberately wrong expected Rust fingerprint failed before target
   sampling with `action_started=false`, and the final 3/3 target report retained

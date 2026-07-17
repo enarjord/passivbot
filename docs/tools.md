@@ -456,6 +456,10 @@ Monitor commands are documented in detail in [monitor.md](monitor.md). The CLI s
   private supervisor fingerprint, a clean exact repository head, bounded
   monitor and text-log windows with no hard evidence, complete shutdown event
   counts, and distinct startup timing coverage for the expected targets. The
+  event and text-log bounds are compared as exact validated epoch-millisecond
+  values and projected without count clamping. Both retained hard log matches
+  and contextless hard-looking matches suppressed by the opt-in drop policy
+  must be well-formed zeroes.
   result is bounded and sanitized: it does not copy paths, commands, bot names,
   symbols, log samples, or arbitrary input payloads. The command only reads the
   two named local files; it does not run report producers, SSH, signal or start
