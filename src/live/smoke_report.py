@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import gzip
+import hashlib
 import json
 import math
 import re
@@ -6936,6 +6937,35 @@ def _parse_tmuxp_live_commands(config_path: str | Path | None) -> dict[str, Any]
     }
 
 
+def _supervisor_command_contract(
+    expected_rows: list[dict[str, Any]],
+) -> dict[str, Any]:
+    canonical_rows = sorted(
+        (
+            {
+                "window_name": str(row.get("name") or "").strip(),
+                "command": str(row.get("_match_key") or "").strip(),
+                "config_path": str(row.get("config_path") or "").strip(),
+            }
+            for row in expected_rows
+        ),
+        key=lambda row: (row["window_name"], row["command"], row["config_path"]),
+    )
+    payload = json.dumps(
+        canonical_rows,
+        ensure_ascii=True,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    return {
+        "source": "parsed_supervisor_config",
+        "algorithm": "sha256",
+        "fingerprint": hashlib.sha256(payload).hexdigest(),
+        "target_count": len(canonical_rows),
+        "command_content_exposed": False,
+    }
+
+
 def _ps_process_rows() -> tuple[list[str], str | None]:
     commands = [
         ["ps", "-eo", "pid=,ppid=,etimes=,stat=,pcpu=,pmem=,rss=,command="],
@@ -7552,6 +7582,7 @@ def _build_process_report(
         }
 
     config = _parse_tmuxp_live_commands(supervisor_config)
+    supervisor_contract = _supervisor_command_contract(config["expected"])
     running_scans: list[dict[str, Any]] = []
     for sample_index in range(process_samples):
         if sample_index > 0 and process_sample_interval_s > 0.0:
@@ -7625,6 +7656,11 @@ def _build_process_report(
             "exists": config.get("exists"),
             "error": config.get("error"),
         },
+        **(
+            {"supervisor_contract": supervisor_contract}
+            if supervisor_config is not None
+            else {}
+        ),
         "expected_total": len(expected),
         "running_live_total": len(running),
         "matched_expected": max(0, len(expected) - len(missing)),

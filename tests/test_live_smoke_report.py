@@ -8260,6 +8260,12 @@ def test_live_smoke_report_process_status_matches_supervisor_config(
     assert report["processes"]["enabled"] is True
     assert report["processes"]["ok"] is False
     assert report["processes"]["expected_total"] == 2
+    contract = report["processes"]["supervisor_contract"]
+    assert contract["target_count"] == 2
+    assert len(contract["fingerprint"]) == 64
+    assert contract["command_content_exposed"] is False
+    assert "passivbot live" not in json.dumps(contract, sort_keys=True)
+    assert "forager.json" not in json.dumps(contract, sort_keys=True)
     assert report["processes"]["matched_expected"] == 1
     assert report["processes"]["running_live_total"] == 1
     assert report["processes"]["missing_expected"] == [
@@ -8277,6 +8283,52 @@ def test_live_smoke_report_process_status_matches_supervisor_config(
     assert report["processes"]["running"][0]["age_s"] == 42
     assert report["processes"]["running"][0]["account"] == "binance_01"
     assert report["processes"]["running"][0]["config_path"] == "configs/forager.json"
+
+
+def test_live_process_report_fingerprints_commands_before_public_redaction(
+    tmp_path,
+    monkeypatch,
+):
+    hidden_suffix = "S" * 600
+
+    def write_supervisor(path, secret_prefix):
+        path.write_text(
+            "\n".join(
+                [
+                    "session_name: passivbot",
+                    "windows:",
+                    "  - window_name: binance_01",
+                    "    panes:",
+                    (
+                        "      - passivbot live configs/private.json "
+                        f"-u binance_01 api_key={secret_prefix}-{hidden_suffix}"
+                    ),
+                ]
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+    first_path = tmp_path / "first.yaml"
+    second_path = tmp_path / "second.yaml"
+    write_supervisor(first_path, "FIRST")
+    write_supervisor(second_path, "SECOND")
+    monkeypatch.setattr(smoke_report_module, "_ps_process_rows", lambda: ([], None))
+
+    first = smoke_report_module.build_live_process_report(
+        supervisor_config=first_path,
+    )
+    second = smoke_report_module.build_live_process_report(
+        supervisor_config=second_path,
+    )
+
+    assert first["supervisor_contract"]["fingerprint"] != second[
+        "supervisor_contract"
+    ]["fingerprint"]
+    serialized = json.dumps([first, second], sort_keys=True)
+    assert "FIRST" not in serialized
+    assert "SECOND" not in serialized
+    assert hidden_suffix not in serialized
 
 
 def test_live_smoke_report_process_status_parses_no_rss_etimes_passivbot_rows(

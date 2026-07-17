@@ -1,6 +1,6 @@
 # Live Logging Overhaul Current Status
 
-Updated: 2026-07-16.
+Updated: 2026-07-17.
 
 This is the compact operational source for the active logging-overhaul loop.
 Read it before the historical progress ledger. Update it whenever the active
@@ -22,19 +22,19 @@ Estimated completion:
 
 ## Active Review Slice
 
-- Branch: `codex/restart-target-contract-fingerprint`, based on canonical
-  `b490bd75bebd0228628c1b628b46d3f3ac52cee4` after PR #1290.
-- PR: #1291, `Bind restart target sampling to supervisor contract`; semantic
-  implementation head `9667698b6d`. Slice: bind exact pane/PID/relaunch
-  stability to the parsed supervisor command contract across the pre-action
-  sample window.
-- Triggering evidence: PR #1290 proves all five VPS5 bots have stable
-  pane-parent relaunch paths, but target sampling does not yet prove that the
-  parsed supervisor command source stayed unchanged while those targets were
-  sampled.
-- Scope: derive an opaque SHA-256 fingerprint from the parsed expected
-  window/command/config rows, expose no command content, include the contract in
-  bounded sampling stability, and make the planner require that stable verdict.
+- Branch: `codex/full-supervisor-fingerprint`, based on canonical
+  `393aec15a49d6b6cf4f6bda37ed8a2dab00b5f2c` after PR #1291.
+- PR: #1294, `Bind restart fingerprint to full supervisor commands`. Slice:
+  make the exact-target supervisor fingerprint cover complete private canonical
+  commands before report redaction or truncation.
+- Triggering evidence: direct post-merge inspection found PR #1291 derived its
+  fingerprint from public redacted/truncated process-report fields. Materially
+  different launch commands could therefore share a digest, which is not a
+  sufficient prerequisite for future execution.
+- Scope: derive the opaque SHA-256 fingerprint while the process report still
+  owns full private canonical commands, expose only the digest, validate its
+  complete value-safe shape in the target report, and fail closed when it is
+  absent or malformed.
 - Behavior boundary: read-only classification only. No configured command,
   tmux action, process control, restart execution, network/exchange access,
   credential access, SSH/git action, or file write is added.
@@ -43,10 +43,30 @@ Estimated completion:
 - Review gate: temporary maintainer-authorized exact-head Hermes plus green
   Python and Rust CI while Grok is halted.
 - Expected VPS action: pull and run the local-only three-sample target report,
-  confirm the supervisor contract is stable, and inspect the compact plan; no
-  bot restart, tmux action, or process signal is expected.
+  confirming that all five targets retain a stable full-command fingerprint;
+  no bot restart, tmux action, or process signal is expected.
 
 ## Deployed Baseline
+
+- Canonical `master` and VPS5 are
+  `393aec15a49d6b6cf4f6bda37ed8a2dab00b5f2c`, PR #1291. VPS5 fast-forwarded
+  cleanly from `04209762`; the five configured bot panes were then restarted so
+  the already-merged behavior-changing PR #1292 would be loaded. Exact panes
+  `%358/%359/%360/%361/%362` and pane parents
+  `856294/856332/856364/856398/856434` remained stable. Old bot PIDs
+  `1003995/1003997/1003999/1004001/1004002` exited after one exact-pane Ctrl-C
+  round, and replacement PIDs
+  `1013205/1013207/1013209/1013210/1013211` matched the same ownership contract.
+- Immediate and settled bounded smokes were `ok=true` with zero hard monitor,
+  log, process, fill-refresh, or account-critical failures and all five expected
+  processes matched. The settled target report collected 3/3 stable samples,
+  reported zero changed targets, and retained all five relaunch-ready paths.
+  Unrelated `misc:0.0` remained `%8`, PID `434835`. One ordinary OHLCV timeout
+  recovered naturally; no direct exchange probe or event was manufactured.
+- An initial host-alias mistake fast-forwarded the tracked-clean optimizer host
+  `vpsopt3` checkout to the same canonical master. No process there was
+  signalled, stopped, or restarted; subsequent deployment and all smoke
+  evidence used the correct `vps5` host.
 
 - Canonical `master` and VPS5 are
   `b490bd75bebd0228628c1b628b46d3f3ac52cee4`, PR #1290. VPS5 fast-forwarded

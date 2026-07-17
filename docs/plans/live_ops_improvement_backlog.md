@@ -343,6 +343,12 @@ Related detailed plans:
      command exposure or process control. The active follow-up binds sampled
      target stability to an opaque parsed supervisor command-contract
      fingerprint so configuration drift fails closed before future execution.
+   - 2026-07-17: PR #1291 merged and deployed the sampled supervisor-contract
+     fingerprint. Post-merge inspection found its source rows were already
+     redacted and truncated for public process output. The active follow-up
+     computes the digest from full private canonical commands before
+     sanitization and validates the value-safe contract shape before target
+     sampling can pass.
 
    Remaining refinements: safe pull/stop/start orchestration remains open.
    The concise and brief summaries are intentionally bounded; further changes

@@ -404,9 +404,10 @@ Monitor commands are documented in detail in [monitor.md](monitor.md). The CLI s
   and ownership proof across a bounded pre-action window; any hard-red sample
   or identity change makes the report fail.
   The sampled identity also includes an opaque SHA-256 fingerprint of the
-  parsed supervisor window/command/config contract. The report never emits the
-  command content, but fails closed when that contract changes during the
-  pre-action sample window.
+  complete parsed supervisor window/command/config contract, computed from
+  private canonical commands before public report redaction or truncation. The
+  report never emits the command content, and fails closed when the contract is
+  unavailable, malformed, or changes during the pre-action sample window.
   Each resolved target also classifies whether the matched bot is a child of
   the pane PID and therefore has a candidate relaunch path through that exact
   pane after the bot exits. The report exposes the bounded relaunch method,
