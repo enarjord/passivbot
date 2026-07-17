@@ -22,6 +22,8 @@ from live.restart_smoke_plan import (  # noqa: E402
     DEFAULT_SHUTDOWN_TIMEOUT_S,
     DEFAULT_SMOKE_WINDOW_MINUTES,
     DEFAULT_STARTUP_WAIT_S,
+    DEFAULT_TARGET_SAMPLE_INTERVAL_S,
+    DEFAULT_TARGET_SAMPLES,
     LOG_WINDOW_UNPARSED_POLICIES,
     build_live_restart_smoke_plan,
     summarize_live_restart_smoke_plan,
@@ -40,6 +42,28 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--repo-path",
         help="Repository path to include in planned git checks.",
+    )
+    parser.add_argument(
+        "--target-session-name",
+        help=(
+            "Exact tmux session to bind into the planned stable target preflight. "
+            "Omit to leave the target gate visibly unconfigured."
+        ),
+    )
+    parser.add_argument(
+        "--target-samples",
+        type=int,
+        default=DEFAULT_TARGET_SAMPLES,
+        help="Stable target samples to plan (default: 3; range: 2-5).",
+    )
+    parser.add_argument(
+        "--target-interval-s",
+        type=float,
+        default=DEFAULT_TARGET_SAMPLE_INTERVAL_S,
+        help=(
+            "Seconds between planned target samples "
+            "(default: 5; greater than 0; max: 30)."
+        ),
     )
     parser.add_argument(
         "--monitor-root",
@@ -220,6 +244,9 @@ def main(argv: list[str] | None = None) -> int:
             summary_smoke_report=bool(args.summary_smoke_report),
             smoke_sections=args.smoke_section,
             performance_sections=args.performance_section,
+            target_session_name=args.target_session_name,
+            target_samples=int(args.target_samples),
+            target_sample_interval_s=float(args.target_interval_s),
             execute=False,
         )
     except (NotImplementedError, ValueError) as exc:

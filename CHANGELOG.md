@@ -20,6 +20,82 @@ All notable user-facing changes will be documented in this file.
   scoped compatibility handler for its documented successful configuration
   response, which upstream CCXT 4.5.66 otherwise raises as an exchange error.
 
+- Live trailing restart reconciliation now preserves authoritative position-update
+  timestamps from CCXT and raw exchange payloads and no longer
+  treats position creation time as proof that fill history is current. Exchanges
+  without an update timestamp remain fail-closed until a successful fill refresh
+  after the position snapshot reports an after-state matching the live position.
+  Unchanged position snapshots no longer associate a prefetched fill with the old
+  position state, preventing a later real position change from waiting for an
+  additional fill.
+
+- Added `passivbot tool live-restart-executor`, an explicit local executor for
+  exact tmux targets that already pass the bounded stable target report. It
+  requires the expected Git commit, a tracked-clean checkout, a Rust extension
+  stamped for the current Rust sources, the expected full supervisor-command
+  fingerprint, and `--execute`,
+  sends one Ctrl-C round only to verified panes, waits a bounded time for exact
+  process exits, rechecks repository/runtime artifacts plus the private
+  supervisor snapshot and pane/process identity before typing launch commands,
+  and verifies stable replacements. It never pulls or builds code or applies
+  an automatic force signal; partial or changed state fails closed for manual
+  recovery.
+
+- Exact live restart target sampling now binds pane/PID stability to an opaque
+  fingerprint of the complete parsed supervisor command contract before
+  report redaction or truncation, failing closed when that contract changes or
+  is unavailable without exposing command content.
+
+- Live trailing extrema now latch an affected position side unavailable as soon
+  as an authoritative position change is observed, including the first
+  position snapshot after restart, and remain unavailable until a newer fill
+  identity at or after the authoritative position timestamp plus complete
+  finalized 1m coverage is present. Fill refreshes that arrive before the
+  matching position snapshot confirm against the prior snapshot's fill epoch.
+  Side-scoped trailing failures and panic plans no longer suppress valid
+  reconciliation on the unaffected hedge side.
+
+- Live trailing extrema now reset independently per symbol and position side
+  after every confirmed fill. Ordinary trailing closes are withheld and stale
+  trailing orders retired until post-fill candles establish fresh extrema,
+  while panic/HSL exits remain available. Trailing-martingale monitor
+  diagnostics now use the Rust close formula and report its exact wallet
+  exposure and volatility inputs.
+
+- Exact live restart targets now classify whether the bot is a child of its
+  tmux pane parent and therefore has a bounded candidate relaunch path after a
+  required post-stop pane recheck. The report exposes only method/proof
+  metadata, never the configured command, and restart plans require every
+  resolved target to be relaunch-ready.
+
+- `passivbot tool live-restart-smoke-plan` can now bind an explicitly
+  confirmed tmux session into its pre-restart readiness phase with
+  `--target-session-name`. The generated local-only target preflight requires
+  2-5 stable identity samples, remains non-executing, and makes the missing
+  target gate visible when no session is configured.
+
+- Added bounded `--samples` and `--interval-s` stability checks to
+  `passivbot tool live-restart-target-report`. Multi-sample reports fail if any
+  local preflight is hard-red or if a window's canonical pane ID, pane PID,
+  matched bot PID, or ownership proof changes during the sample window. Restart
+  execution and process control remain unavailable.
+
+- Added `passivbot tool live-restart-target-report`, a bounded local-only
+  preflight that joins supervisor-config window names with canonical tmux pane
+  IDs and proves ownership by matching each bot process PID or parent PID to
+  its pane PID. It fails on missing, duplicate, unconfigured, or mismatched
+  panes and never signals, starts, or controls a process, contacts a network
+  or exchange, loads credentials, or writes files.
+
+- Added `passivbot tool live-process-report`, a bounded local-only process
+  sampler that does not read monitor events or text logs, access credential
+  stores, contact networks or exchanges, control processes, or write files.
+  It can compare the local process table with an optional supervisor config
+  and sample process-state persistence/recovery using the existing smoke-report
+  process contract. Use `--brief` for aggregate-only process, config, resource,
+  state, and sampling counters without command, account, path, PID, or
+  per-process rows.
+
 - Live smoke reports can now opt into bounded repeated process-table sampling
   to distinguish observed, persistent, and recovered uninterruptible-sleep
   states while reporting stable PIDs, command/PID churn, and aggregate state
@@ -30,6 +106,13 @@ All notable user-facing changes will be documented in this file.
 - Added `passivbot tool trailing-inspect`, an offline one-shot explanation of effective
   `trailing_martingale` entry and close thresholds, retracements, and analytical prices from a
   config or explicit parameter overrides.
+
+- V7 trailing-grid migration now disables the v8 TWEL entry gate when a non-positive v7 TWEL
+  threshold disables its enforcer, collapses compatible v7 live/backtest warmup caps into the
+  shared v8 field, and validates the complete canonical result before writing. The CLI now writes
+  a durable JSON report by default while showing a concise action summary, and the new
+  `compare-backtests` tool reports dataset, metric, equity-path, and fill-event differences between
+  completed v7 and v8 artifacts without assigning a safety verdict.
 
 - Live smoke reports now expose bounded cycle terminal-outcome health from
   existing `cycle.completed` and `cycle.degraded` events. The projection shows

@@ -484,6 +484,69 @@ def build_trailing_close_diagnostic(inputs: Mapping[str, Any]) -> Optional[dict[
     }
 
 
+def build_trailing_martingale_close_diagnostic(
+    inputs: Mapping[str, Any],
+) -> Optional[dict[str, Any]]:
+    position = inputs.get("position")
+    if not isinstance(position, Mapping):
+        return None
+    position_size = _float(position.get("size"))
+    position_price = _float(position.get("price"))
+    current_price = _float(inputs.get("current_price"))
+    if position_size == 0.0 or position_price <= 0.0 or current_price <= 0.0:
+        return None
+
+    payload = json.loads(
+        pbr.calc_trailing_martingale_close_diagnostic_py(json.dumps(dict(inputs)))
+    )
+    if not isinstance(payload, dict):
+        raise TypeError("Rust trailing_martingale close diagnostic must return an object")
+    pside = str(inputs.get("pside") or "long")
+    threshold_pct = _float(payload.get("threshold_pct"))
+    retracement_pct = _float(payload.get("retracement_pct"))
+    extrema = normalize_trailing_extrema(payload.get("extrema", {}))
+    if pside == "long":
+        threshold_price = (
+            position_price * (1.0 + threshold_pct) if threshold_pct > 0.0 else None
+        )
+        retracement_price = (
+            extrema["max_since_open"] * (1.0 - retracement_pct)
+            if retracement_pct > 0.0
+            else None
+        )
+    else:
+        threshold_price = (
+            position_price * (1.0 - threshold_pct) if threshold_pct > 0.0 else None
+        )
+        retracement_price = (
+            extrema["min_since_open"] * (1.0 + retracement_pct)
+            if retracement_pct > 0.0
+            else None
+        )
+    payload.update(
+        {
+            "symbol": str(inputs.get("symbol") or ""),
+            "current_price": current_price,
+            "position_price": position_price,
+            "position_size": position_size,
+            "threshold_price": threshold_price,
+            "retracement_price": retracement_price,
+            "current_vs_threshold_ratio": (
+                current_price / threshold_price - 1.0
+                if threshold_price is not None and threshold_price > 0.0
+                else None
+            ),
+            "current_vs_retracement_ratio": (
+                current_price / retracement_price - 1.0
+                if retracement_price is not None and retracement_price > 0.0
+                else None
+            ),
+            "extrema": extrema,
+        }
+    )
+    return payload
+
+
 def build_trailing_grid_v7_diagnostic(inputs: Mapping[str, Any]) -> Optional[dict[str, Any]]:
     strategy_params = inputs.get("strategy_params")
     if not isinstance(strategy_params, Mapping):

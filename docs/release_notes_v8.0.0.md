@@ -42,6 +42,12 @@ command returns nonzero and does not write the output by default. The
 `--allow-manual-review-output` option writes a best-effort artifact for manual
 work; it is not an assertion that the result is ready for live trading.
 
+Migration preserves v7 strategy semantics, not complete v7 runtime identity.
+Risk, forager, unstuck, HSL, execution, and backtest-runtime changes may produce
+different fills and performance. Follow [Migrating v7 trailing-grid configs to
+v8](v7_to_v8_migration.md) to preserve a v7 benchmark, interpret the report,
+and compare completed v7 and v8 backtest artifacts.
+
 For new configs, copy:
 
 ```bash

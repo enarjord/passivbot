@@ -157,6 +157,7 @@ def test_tool_help_lists_supported_tools(capsys):
     assert "pareto-explorer" in out
     assert "streamline-json" in out
     assert "trailing-inspect" in out
+    assert "compare-backtests" in out
     assert "verify-hlcvs-data" in out
     assert "requires full install" in out
 
@@ -346,6 +347,29 @@ def test_live_smoke_report_tool_dispatch_forwards_module_and_prog(monkeypatch):
         "--compact",
     ]
     assert captured["prog_env"] == "passivbot tool live-smoke-report"
+
+
+def test_live_process_report_tool_dispatch_forwards_module_and_prog(monkeypatch):
+    captured = {}
+
+    def fake_invoke_module_main(module_name):
+        captured["module_name"] = module_name
+        captured["argv"] = sys.argv[:]
+        captured["prog_env"] = os.environ.get("PASSIVBOT_CLI_PROG")
+        return True, 0
+
+    monkeypatch.setattr(cli_main, "_invoke_module_main", fake_invoke_module_main)
+    monkeypatch.setattr(cli_main, "_missing_full_install_markers", lambda: [])
+
+    assert cli_main.main(["tool", "live-process-report", "--samples", "4"]) == 0
+
+    assert captured["module_name"] == "tools.live_process_report"
+    assert captured["argv"] == [
+        "passivbot tool live-process-report",
+        "--samples",
+        "4",
+    ]
+    assert captured["prog_env"] == "passivbot tool live-process-report"
 
 
 def test_live_incident_bundle_tool_dispatch_forwards_module_and_prog(monkeypatch):

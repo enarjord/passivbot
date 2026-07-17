@@ -308,6 +308,14 @@ Monitor commands are documented in detail in [monitor.md](monitor.md). The CLI s
   escalation ladder as policy only: graceful Ctrl+C/request stop, bounded wait, a second
   graceful signal when warranted, SIGTERM, then SIGKILL. The smoke report never sends those
   signals.
+- `passivbot tool live-process-report` runs the same bounded process-table and
+  optional supervisor-config checks without entering the smoke report's monitor-event or
+  text-log paths. It does not access credential stores, contact a network or exchange, control
+  processes, or write files. Use `--samples N --interval-s SECONDS` for bounded persistence and
+  recovery evidence; the existing maxima are enforced. The JSON `safety` object declares this
+  capability boundary, and the command exits nonzero when the process/config verdict has hard
+  failures. Use `--brief` for aggregate-only process/config/resource/state/sampling counters
+  without command, account, path, PID, or per-process rows.
 - `passivbot tool live-incident-bundle` writes a local `.tar.gz` evidence
   bundle with monitor event reports, problem-event reports, smoke evidence,
   redacted log excerpts, monitor snapshots, runtime metadata, and optional
@@ -371,9 +379,68 @@ Monitor commands are documented in detail in [monitor.md](monitor.md). The CLI s
   path to avoid overwriting prior evidence. The pre-restart readiness phase also
   includes one deduplicated `live-config-preflight` command for each configured
   live config path found in the supervisor config, plus a skip count for any
-  configured live command whose config path could not be derived. Use planner
+  configured live command whose config path could not be derived. Use
+  `--target-session-name SESSION` to append the exact local-only
+  `live-restart-target-report` gate to that phase. The planner defaults to
+  three samples five seconds apart; use `--target-samples N` (2-5) and
+  `--target-interval-s SECONDS` (greater than 0, at most 30) to change the
+  bounded stability window.
+  The command is only emitted, never run. Omitting the exact session keeps the
+  plan valid and explicitly marks the stable target gate unconfigured. Use
   `--summary` when you only need the bot count, phase names, preflight commands,
-  smoke command, and incident-bundle command without every per-bot phase detail.
+  target-preflight verdict requirement, smoke command, and incident-bundle
+  command without every per-bot phase detail.
+- `passivbot tool live-restart-target-report SUPERVISOR_CONFIG --session-name
+  SESSION` performs the local-only exact-target preflight required before any
+  future restart executor may signal a pane. It joins expected supervisor
+  window names with canonical tmux pane IDs and read-only pane metadata plus the
+  existing process/config verdict, proves ownership by requiring the matched bot
+  process PID or PPID to equal the pane PID, and fails on missing, duplicate, or
+  unconfigured panes and mismatched ownership in the exact confirmed session.
+  Other sessions such as `misc` are ignored. The report is bounded and never
+  signals, starts, or controls processes, contacts a network or exchange,
+  accesses credential stores, or writes files. Use `--samples N` with
+  `--interval-s SECONDS` to require the same pane ID, pane PID, matched bot PID,
+  and ownership proof across a bounded pre-action window; any hard-red sample
+  or identity change makes the report fail.
+  The sampled identity also includes an opaque SHA-256 fingerprint of the
+  complete parsed supervisor window/command/config contract, computed from
+  private canonical commands before public report redaction or truncation. The
+  report never emits the command content, and fails closed when the contract is
+  unavailable, malformed, or changes during the pre-action sample window.
+  Each resolved target also classifies whether the matched bot is a child of
+  the pane PID and therefore has a candidate relaunch path through that exact
+  pane after the bot exits. The report exposes the bounded relaunch method,
+  supervisor-config command source, and mandatory post-stop pane recheck, but
+  never emits the configured command or assumes the pane is ready before that
+  recheck. Direct pane-process targets remain valid ownership matches but are
+  explicitly relaunch-unready. The executor requires
+  `relaunch_ready_targets == resolved_targets` in addition to the hard-green
+  stable sampling verdict.
+- `passivbot tool live-restart-executor SUPERVISOR_CONFIG --session-name
+  SESSION --expected-repository-head COMMIT
+  --expected-supervisor-fingerprint SHA256 --execute` gracefully
+  restarts only the exact local tmux targets proven by the same bounded target
+  contract. Before target sampling it requires the exact caller-confirmed
+  40-character Git commit, zero tracked changes while preserving untracked
+  artifacts, and a loaded Rust extension whose source stamp exactly matches the
+  checked-out Rust sources. It repeats that runtime contract immediately before
+  the first signal and before relaunch. It also requires the caller-confirmed
+  full-command fingerprint, takes an immediate action snapshot, and sends one
+  Ctrl-C round to exact pane IDs. After a bounded exact-PID exit wait, it scans
+  for unexpected or duplicate live processes, verifies the complete session
+  pane set, parent PIDs, window identities, and shell-ready exited panes, then
+  immediately re-reads the runtime contract, private supervisor snapshot, and
+  process set before typing commands only into eligible panes. Final startup
+  and multi-sample target verification must retain the same fingerprint.
+  The executor does not SSH, pull code, contact exchanges directly, write files
+  directly, use broad process-pattern signals, or apply SIGTERM/SIGKILL. A
+  timeout or changed runtime/process/pane contract is reported as manual
+  recovery; targets that did exit may be relaunched only when every post-stop
+  check is still exact. The relaunched live bots resume their configured
+  exchange access and normal runtime file writes. Run the read-only target
+  report first and pass its exact opaque fingerprint; command content is never
+  emitted.
 - `passivbot tool live-performance-report` summarizes local live monitor event timings for
   operator performance analysis. It is read-only and does not contact exchanges. Use
   `--recent-minutes` for a time window, `--summary` for a bounded operator projection, and

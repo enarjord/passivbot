@@ -1315,6 +1315,44 @@ def _trailing_unavailable_reasons(bot, symbol: str) -> set[str]:
     return {str(reason) for reason in reasons if reason}
 
 
+def _trailing_unavailable_psides(bot, symbol: str) -> set[str]:
+    by_symbol = getattr(bot, "_orchestrator_trailing_unavailable_psides", {}) or {}
+    if isinstance(by_symbol, dict) and symbol in by_symbol:
+        psides = by_symbol.get(symbol, [])
+        if isinstance(psides, str):
+            return {psides}
+        return {str(pside).lower() for pside in psides if pside}
+    # Compatibility for callers/tests that only expose the older symbol-level state.
+    return {"long", "short"}
+
+
+def _order_is_unavailable_trailing_close(order: dict, unavailable_psides: set[str]) -> bool:
+    family = _reduce_only_order_family(order)
+    if family is None:
+        return False
+    pside, order_family = family
+    return order_family == "close_trailing" and (
+        not pside or pside in unavailable_psides
+    )
+
+
+def _order_position_side(order: dict) -> str:
+    pside = str(
+        order.get("position_side") or order.get("positionSide") or ""
+    ).lower()
+    if not pside:
+        family = _reduce_only_order_family(order)
+        pside = "" if family is None else family[0]
+    return pside
+
+
+def _order_targets_unavailable_pside(
+    order: dict, unavailable_psides: set[str]
+) -> bool:
+    pside = _order_position_side(order)
+    return not pside or pside in unavailable_psides
+
+
 def filter_trailing_unavailable_reconciliation(
     bot,
     symbol: str,
@@ -1324,27 +1362,45 @@ def filter_trailing_unavailable_reconciliation(
 ) -> tuple[list[dict], list[dict], int, bool]:
     """Constrain reconciliation when trailing data is unavailable.
 
-    Missing anchors/fetch failures can make regular trailing closes unsafe, so keep
-    preserving the symbol. The short post-fill window with no newer candle is softer:
-    block new entries, but allow entry cleanup and reduce-only/panic exits.
+    Ordinary trailing closes require post-fill extrema. Suppress their creation and
+    retire existing trailing orders while preserving independent reduce-only and panic
+    exits. Missing anchors/fetch failures otherwise preserve the symbol.
     """
     reasons = _trailing_unavailable_reasons(bot, symbol)
-    has_panic_plan = any(_order_is_panic(order) for order in ideal_orders) or any(
-        _order_is_panic(order) for order in to_create
-    )
+    unavailable_psides = _trailing_unavailable_psides(bot, symbol)
+    panic_psides = {
+        pside
+        for order in [*ideal_orders, *to_create]
+        if _order_is_panic(order) and (pside := _order_position_side(order))
+    }
     soft_missing_candles_only = reasons == {"missing_trailing_candles"}
-    if not soft_missing_candles_only and not has_panic_plan:
-        return [], [], len(to_cancel) + len(to_create), True
+    if not soft_missing_candles_only:
+        filtered_cancel = [
+            order
+            for order in to_cancel
+            if _order_position_side(order) in panic_psides
+            or not _order_targets_unavailable_pside(order, unavailable_psides)
+            or _order_is_unavailable_trailing_close(order, unavailable_psides)
+        ]
+        filtered_create = [
+            order
+            for order in to_create
+            if _order_is_panic(order)
+            or not _order_targets_unavailable_pside(order, unavailable_psides)
+        ]
+        dropped = (len(to_cancel) - len(filtered_cancel)) + (
+            len(to_create) - len(filtered_create)
+        )
+        fully_blocked = not filtered_cancel and not filtered_create
+        return filtered_cancel, filtered_create, dropped, fully_blocked
 
     filtered_create = [
         order
         for order in to_create
-        if _order_is_reduce_only(order) or _order_is_panic(order)
+        if (_order_is_reduce_only(order) or _order_is_panic(order))
+        and not _order_is_unavailable_trailing_close(order, unavailable_psides)
     ]
     dropped_create = len(to_create) - len(filtered_create)
-
-    if has_panic_plan:
-        return to_cancel, filtered_create, dropped_create, False
 
     ideal_reduce_only_families = {
         family
@@ -1354,7 +1410,13 @@ def filter_trailing_unavailable_reconciliation(
     filtered_cancel = []
     dropped_cancel = 0
     for order in to_cancel:
+        if _order_position_side(order) in panic_psides:
+            filtered_cancel.append(order)
+            continue
         if _order_is_reduce_only(order):
+            if _order_is_unavailable_trailing_close(order, unavailable_psides):
+                filtered_cancel.append(order)
+                continue
             family = _reduce_only_order_family(order)
             if family is None or family not in ideal_reduce_only_families:
                 dropped_cancel += 1

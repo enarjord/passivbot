@@ -239,8 +239,10 @@ Related detailed plans:
    smoke report now also redacts common user/home prefixes from
    `repository.root` for shareable reports and surfaces explicit
    dropped-unparsed attention/hard counters when the opt-in log-window drop
-   policy suppresses contextless hard-looking log fragments. The safe restart
-   orchestration contract is not implemented. A 2026-06-30 follow-up made the
+   policy suppresses contextless hard-looking log fragments. The safe local
+   exact-target restart executor is implemented; repository pull, Rust rebuild,
+   remote-host orchestration, automatic force escalation, and post-restart
+   monitor/log smoke orchestration remain outside it. A 2026-06-30 follow-up made the
    existing startup timing evidence visible in `live-smoke-report --summary`
    and `--brief`, so repeated smoke loops can see slow startup phases without
    opening the full report. Another 2026-06-30 follow-up made bounded text-log
@@ -321,8 +323,45 @@ Related detailed plans:
      three consecutive `R` samples. The active read-only follow-up makes this
      bounded process-state observation/recovery sequence reproducible in the
      smoke tool without adding restart execution.
+   - 2026-07-16: PR #1286 deployed aggregate-only process checks that retained
+     the complete process/config verdict and naturally proved transient `D`
+     recovery. The active exact-target preflight now joins supervisor window
+     names to read-only tmux pane metadata while keeping all restart execution
+     and process signals unavailable.
+   - 2026-07-16: PR #1287 deployed exact canonical pane-ID and PID/PPID
+     ownership proof for all five configured bots. Immediate and settled target
+     reports were hard-green without process action; the active follow-up adds
+     bounded identity stability across a pre-action sample window.
+   - 2026-07-16: PR #1288 deployed bounded target identity stability. Immediate
+     and settled three-sample reports retained all five exact targets with zero
+     changed identities or failed samples. The active follow-up binds this
+     local-only hard gate into the non-executing restart smoke plan.
+   - 2026-07-16: PR #1289 deployed the exact stable-target command and required
+     verdict in the non-executing restart plan. The active follow-up classifies
+     whether each bot has a pane-parent candidate relaunch path with a mandatory
+     post-stop recheck, without exposing its command or adding process control.
+   - 2026-07-16: PR #1290 deployed pane-parent relaunch classification for all
+     five exact VPS5 targets, with a mandatory post-stop pane recheck and no
+     command exposure or process control. The active follow-up binds sampled
+     target stability to an opaque parsed supervisor command-contract
+     fingerprint so configuration drift fails closed before future execution.
+   - 2026-07-17: PR #1291 merged and deployed the sampled supervisor-contract
+     fingerprint. Post-merge inspection found its source rows were already
+     redacted and truncated for public process output. The active follow-up
+     computes the digest from full private canonical commands before
+     sanitization and validates the value-safe contract shape before target
+     sampling can pass.
+   - 2026-07-17: PR #1294 merged and deployed full private-command fingerprint
+     derivation. Three stable VPS5 samples resolved all five configured targets
+     with the same opaque fingerprint and no command exposure. The active
+     follow-up adds the first explicit local executor: one exact-pane Ctrl-C
+     round, bounded exact-PID exit observation, process/pane TOCTOU rechecks,
+     private exact-pane relaunch, and stable final verification. It deliberately
+     omits SSH, git pull, Rust rebuild, direct exchange access, and automatic
+     force escalation.
 
-   Remaining refinements: safe pull/stop/start orchestration remains open.
+   Remaining refinements: safe pull/build and post-restart smoke orchestration
+   remain open, as does any separately reviewed force-escalation policy.
    The concise and brief summaries are intentionally bounded; further changes
    should target missing smoke fields rather than larger chat-facing payloads.
    2026-06-26 VPS5 deploy evidence: after PR #709, one Ctrl+C round stopped
@@ -1185,6 +1224,7 @@ Related detailed plans:
 | 2026-06-30 | #3/#4 Live restart/smoke automation and startup budget tracking | PR #886 / `60c79c3a` | Exposed existing startup timing evidence in `live-smoke-report --summary` and `--brief`; VPS5 5-minute smoke stayed hard-green and showed the new `startup_timings` brief key | Safe pull/stop/start orchestration and durable startup budget config/events remain open |
 | 2026-06-30 | #3 Live restart/smoke automation | PR #888 / `4b435d33` | Exposed bounded text-log window counters in `live-smoke-report --brief`; VPS5 5-minute smoke stayed hard-green and showed `logs.window.lines_skipped_before=1730` | Safe pull/stop/start orchestration remains open |
 | 2026-06-30 | #3 Live restart/smoke automation | PR #890 / `1498abc9` | Exposed `event_window.enabled` in `live-smoke-report --brief`; VPS5 5-minute smoke stayed hard-green and showed `event_window.enabled=true` | Safe pull/stop/start orchestration remains open |
+| 2026-07-16 | #3 Live restart/smoke automation | PR #1291 / `codex/restart-target-contract-fingerprint`, after PR #1290 / `b490bd75be` | PR #1290 deployed pane-parent relaunch classification for all five exact targets; active work binds the sampled target set to the parsed supervisor command contract without exposing command content | Review and validate contract-drift failure; safe pull/stop/start execution remains open |
 | 2026-06-30 | #2 Event query and timeline CLI extensions | PR #892 / `7e7ce16f` | Added `live-event-query --level` filtering for structured event severity; VPS5 query smoke matched 33 warning-level events with `ok=true` and all five bots still running | Cross-bot incident workflow remains open; Binance config-refresh traceback classification added as item #18 |
 | 2026-06-30 | #18 Binance hourly hedge-mode/config refresh classification | PR #894 / `796ceb38` | Added off-console/text `exchange.config_refresh` events for hourly maintenance refresh success/failure with sanitized bounded error fields and fail-loud behavior preserved | Live emission evidence after next bot restart; smoke/report classification remains open |
 | 2026-06-30 | #18 Binance hourly hedge-mode/config refresh classification | PR #896 / `53b8accb` | Added `live-smoke-report` full/summary/brief health projections for `exchange.config_refresh`, excluding raw error text; VPS5 no-restart smoke stayed hard-green and showed the new brief section | Live emission evidence after next bot restart; smoke/report classification remains open |

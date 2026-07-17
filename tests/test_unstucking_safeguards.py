@@ -797,6 +797,17 @@ def _make_candles(rows):
     return arr
 
 
+def _trailing_default():
+    import passivbot_rust as pbr
+
+    return dict(
+        zip(
+            ("min_since_open", "max_since_min", "max_since_open", "min_since_max"),
+            pbr.trailing_bundle_default_py(),
+        )
+    )
+
+
 def _set_basic_state(bot, symbol="TEST/USDT"):
     bot.active_symbols = [symbol]
     bot.open_orders = {symbol: []}
@@ -818,10 +829,25 @@ def _set_basic_state(bot, symbol="TEST/USDT"):
 
 
 class _DummyFillEvent:
-    def __init__(self, symbol: str, position_side: str, timestamp: int):
+    def __init__(
+        self,
+        symbol: str,
+        position_side: str,
+        timestamp: int,
+        event_id: str | None = None,
+        pb_order_type: str = "unknown",
+        psize: float | None = None,
+        pprice: float | None = None,
+    ):
         self.symbol = symbol
         self.position_side = position_side
         self.timestamp = timestamp
+        self.id = event_id
+        self.pb_order_type = pb_order_type
+        if psize is not None:
+            self.psize = psize
+        if pprice is not None:
+            self.pprice = pprice
 
 
 class _DummyPnlsManager:
@@ -1032,8 +1058,11 @@ async def test_trailing_fetch_failure_preserves_bundle_and_marks_symbol_unavaila
         }
     }
     bot._pnls_manager = _DummyPnlsManager(
-        [_DummyFillEvent(symbol, "long", 120_000)]
+        [_DummyFillEvent(symbol, "long", 120_000, "fill-1")]
     )
+    bot._trailing_position_change_epochs = {
+        (symbol, "long"): "fill:120000:fill-1"
+    }
     bot.is_trailing = lambda sym, pside=None: pside == "long"
 
     async def fail_get_candles(*args, **kwargs):
@@ -1051,13 +1080,175 @@ async def test_trailing_fetch_failure_preserves_bundle_and_marks_symbol_unavaila
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "latest_order_type",
+    ["entry_grid_long", "close_grid_long", "close_trailing_long"],
+)
+async def test_new_position_changing_fill_epoch_resets_stale_bundle_before_post_fill_candle(
+    latest_order_type,
+):
+    import passivbot_rust as pbr
+
+    cfg = _dummy_config()
+    bot = _make_dummy_bot(cfg)
+    symbol = _set_basic_state(bot)
+    stale_bundle = {
+        "min_since_open": 95.0,
+        "max_since_min": 105.0,
+        "max_since_open": 110.0,
+        "min_since_max": 102.0,
+    }
+    bot.trailing_prices = {
+        symbol: {
+            "long": dict(stale_bundle),
+            "short": dict(stale_bundle),
+        }
+    }
+    first_fill = _DummyFillEvent(
+        symbol,
+        "long",
+        120_000,
+        "partial-entry",
+        "entry_initial_normal_long",
+    )
+    latest_fill = _DummyFillEvent(
+        symbol,
+        "long",
+        180_000,
+        "latest-fill",
+        latest_order_type,
+    )
+    bot._pnls_manager = _DummyPnlsManager([first_fill, latest_fill])
+    bot._trailing_position_change_epochs = {
+        (symbol, "long"): "fill:120000:partial-entry"
+    }
+    bot.is_trailing = lambda sym, pside=None: pside == "long"
+    bot.get_exchange_time = lambda: 241_000
+
+    async def no_post_fill_candles(*args, **kwargs):
+        return _make_candles([(180_000, 100.0, 101.0, 99.0, 100.5, 1.0)])
+
+    bot.cm.get_candles = no_post_fill_candles
+
+    await bot.update_trailing_data()
+
+    assert bot.trailing_prices[symbol]["long"] == dict(
+        zip(
+            ("min_since_open", "max_since_min", "max_since_open", "min_since_max"),
+            pbr.trailing_bundle_default_py(),
+        )
+    )
+    assert bot._orchestrator_trailing_unavailable_psides == {symbol: ["long"]}
+    assert bot._trailing_position_change_epochs[(symbol, "long")] == (
+        "fill:180000:latest-fill"
+    )
+
+
+@pytest.mark.asyncio
+async def test_same_timestamp_fill_identity_advances_trailing_epoch():
+    cfg = _dummy_config()
+    bot = _make_dummy_bot(cfg)
+    symbol = _set_basic_state(bot)
+    bot.trailing_prices = {
+        symbol: {
+            "long": {
+                "min_since_open": 95.0,
+                "max_since_min": 105.0,
+                "max_since_open": 110.0,
+                "min_since_max": 102.0,
+            }
+        }
+    }
+    bot._pnls_manager = _DummyPnlsManager(
+        [
+            _DummyFillEvent(symbol, "long", 120_000, "fill-a"),
+            _DummyFillEvent(symbol, "long", 120_000, "fill-b"),
+        ]
+    )
+    bot._trailing_position_change_epochs = {(symbol, "long"): "fill:120000:fill-a"}
+    bot.is_trailing = lambda sym, pside=None: pside == "long"
+    bot.get_exchange_time = lambda: 181_000
+
+    async def no_newer_candles(*args, **kwargs):
+        return _make_candles([(120_000, 100.0, 101.0, 99.0, 100.5, 1.0)])
+
+    bot.cm.get_candles = no_newer_candles
+
+    await bot.update_trailing_data()
+
+    assert bot.trailing_prices[symbol]["long"]["max_since_open"] == 0.0
+    assert bot._trailing_position_change_epochs[(symbol, "long")] == (
+        "fill:120000:fill-b"
+    )
+
+
+@pytest.mark.asyncio
+async def test_fill_epoch_reset_is_isolated_by_symbol_and_position_side():
+    cfg = _dummy_config()
+    bot = _make_dummy_bot(cfg)
+    symbol_a = _set_basic_state(bot, "AAA/USDT")
+    symbol_b = "BBB/USDT"
+    bot.active_symbols.append(symbol_b)
+    bot.positions[symbol_a]["short"] = {"size": -1.0, "price": 100.0}
+    bot.positions[symbol_b] = {
+        "long": {"size": 1.0, "price": 200.0},
+        "short": {"size": 0.0, "price": 0.0},
+    }
+    old_bundle = {
+        "min_since_open": 90.0,
+        "max_since_min": 110.0,
+        "max_since_open": 115.0,
+        "min_since_max": 95.0,
+    }
+    bot.trailing_prices = {
+        symbol_a: {"long": dict(old_bundle), "short": dict(old_bundle)},
+        symbol_b: {"long": dict(old_bundle), "short": dict(old_bundle)},
+    }
+    bot._pnls_manager = _DummyPnlsManager(
+        [
+            _DummyFillEvent(symbol_a, "long", 100_000, "a-long-1"),
+            _DummyFillEvent(symbol_a, "short", 100_000, "a-short-1"),
+            _DummyFillEvent(symbol_b, "long", 100_000, "b-long-1"),
+            _DummyFillEvent(symbol_a, "long", 200_000, "a-long-2"),
+        ]
+    )
+    bot._trailing_position_change_epochs = {
+        (symbol_a, "long"): "fill:100000:a-long-1",
+        (symbol_a, "short"): "fill:100000:a-short-1",
+        (symbol_b, "long"): "fill:100000:b-long-1",
+    }
+    bot.is_trailing = lambda sym, pside=None: bool(
+        bot.positions.get(sym, {}).get(pside, {}).get("size", 0.0)
+    )
+    bot.get_exchange_time = lambda: 181_000
+
+    async def candles_after_old_epochs(sym, **kwargs):
+        base = 100.0 if sym == symbol_a else 200.0
+        return _make_candles(
+            [(120_000, base, base + 2.0, base - 2.0, base + 1.0, 1.0)]
+        )
+
+    bot.cm.get_candles = candles_after_old_epochs
+
+    await bot.update_trailing_data()
+
+    assert bot.trailing_prices[symbol_a]["long"]["max_since_open"] == 0.0
+    assert bot.trailing_prices[symbol_a]["short"]["max_since_open"] == pytest.approx(
+        102.0
+    )
+    assert bot.trailing_prices[symbol_b]["long"]["max_since_open"] == pytest.approx(
+        202.0
+    )
+    assert bot._orchestrator_trailing_unavailable_psides == {symbol_a: ["long"]}
+
+
+@pytest.mark.asyncio
 async def test_missing_trailing_fill_anchor_marks_symbol_unavailable(monkeypatch, caplog):
     cfg = _dummy_config()
     bot = _make_dummy_bot(cfg)
     symbol = _set_basic_state(bot)
     bot._pnls_manager = _DummyPnlsManager([])
     bot.is_trailing = lambda sym, pside=None: pside == "long"
-    bot.cm._now_ms = lambda: 240_000
     candle_calls = []
 
     async def fake_get_candles(*args, **kwargs):
@@ -1091,7 +1282,7 @@ def test_position_anchor_timestamp_skips_malformed_candidates():
     assert bot._position_anchor_timestamp_ms(symbol, "long") == 120_000
 
 
-def test_position_anchor_timestamp_prefers_open_fields_over_update_fields():
+def test_position_anchor_timestamp_prefers_update_fields_over_open_fields():
     cfg = _dummy_config()
     bot = _make_dummy_bot(cfg)
     symbol = _set_basic_state(bot)
@@ -1103,7 +1294,8 @@ def test_position_anchor_timestamp_prefers_open_fields_over_update_fields():
         }
     )
 
-    assert bot._position_anchor_timestamp_ms(symbol, "long") == 120_000
+    assert bot._position_anchor_timestamp_ms(symbol, "long") == 360_000
+    assert bot._position_update_timestamp_ms(symbol, "long") == 360_000
 
 
 @pytest.mark.asyncio
@@ -1116,7 +1308,7 @@ async def test_trailing_anchor_uses_position_timestamp_when_fill_history_is_out_
     bot.positions[symbol]["long"]["timestamp"] = 120_000
     bot._pnls_manager = _DummyPnlsManager([])
     bot.is_trailing = lambda sym, pside=None: pside == "long"
-    bot.cm._now_ms = lambda: 240_000
+    bot.get_exchange_time = lambda: 241_000
     candle_calls = []
 
     async def fake_get_candles(sym, *, start_ts, end_ts=None, strict=False):
@@ -1135,46 +1327,529 @@ async def test_trailing_anchor_uses_position_timestamp_when_fill_history_is_out_
 
 
 @pytest.mark.asyncio
-async def test_trailing_rejects_incomplete_candle_window_and_preserves_bundle(caplog):
+async def test_position_delta_waits_for_new_fill_identity_across_refresh_cohorts():
     cfg = _dummy_config()
     bot = _make_dummy_bot(cfg)
     symbol = _set_basic_state(bot)
-    bot.positions[symbol]["long"]["timestamp"] = 120_000
-    bot._pnls_manager = _DummyPnlsManager([])
+    old_fill = _DummyFillEvent(
+        symbol, "long", 120_000, "old-fill", psize=1.0, pprice=100.0
+    )
+    bot._pnls_manager = _DummyPnlsManager([old_fill])
+    bot._trailing_position_change_epochs = {
+        (symbol, "long"): "fill:120000:old-fill"
+    }
+    bot.trailing_prices[symbol] = {
+        "long": {
+            "min_since_open": 95.0,
+            "max_since_min": 105.0,
+            "max_since_open": 110.0,
+            "min_since_max": 102.0,
+        },
+        "short": _trailing_default(),
+    }
     bot.is_trailing = lambda sym, pside=None: pside == "long"
-    bot.cm._now_ms = lambda: 300_000
-    previous_bundle = {
-        "min_since_open": 95.0,
-        "max_since_min": 105.0,
-        "max_since_open": 110.0,
-        "min_since_max": 102.0,
-    }
-    bot.trailing_prices = {
-        symbol: {
-            "long": dict(previous_bundle),
-            "short": {
-                "min_since_open": 0.0,
-                "max_since_min": 0.0,
-                "max_since_open": 0.0,
-                "min_since_max": 0.0,
-            },
+    bot.get_exchange_time = lambda: 361_000
+
+    baseline = [
+        {
+            "symbol": symbol,
+            "position_side": "long",
+            "size": 1.0,
+            "price": 100.0,
+            "lastUpdateTimestamp": 120_000,
         }
+    ]
+    changed = [
+        {
+            "symbol": symbol,
+            "position_side": "long",
+            "size": 1.5,
+            "price": 101.0,
+            "lastUpdateTimestamp": 240_000,
+        }
+    ]
+    bot._apply_positions_snapshot(baseline)
+    bot._begin_authoritative_refresh_epoch()
+    bot._apply_positions_snapshot(changed)
+
+    assert bot.trailing_prices[symbol]["long"] == _trailing_default()
+    assert bot._trailing_pending_fill_confirmations == {
+        (symbol, "long"): "fill:120000:old-fill"
     }
 
-    async def fake_get_candles(*args, **kwargs):
-        return _make_candles([(240_000, 100.0, 101.0, 99.0, 100.5, 1.0)])
+    async def complete_old_epoch_candles(*args, **kwargs):
+        return _make_candles(
+            [
+                (180_000, 100.0, 101.0, 99.0, 100.0, 1.0),
+                (240_000, 100.0, 102.0, 98.0, 101.0, 1.0),
+                (300_000, 101.0, 103.0, 100.0, 102.0, 1.0),
+            ]
+        )
 
-    bot.cm.get_candles = fake_get_candles
-    caplog.set_level(logging.WARNING)
-
+    bot.cm.get_candles = complete_old_epoch_candles
+    await bot.update_trailing_data()
+    bot._begin_authoritative_refresh_epoch()
+    bot._apply_positions_snapshot(changed)
     await bot.update_trailing_data()
 
-    assert bot.trailing_prices[symbol]["long"] == previous_bundle
-    assert bot._orchestrator_trailing_unavailable_symbols == {symbol}
-    assert bot._orchestrator_trailing_unavailable_reasons[symbol] == [
-        "incomplete_trailing_candle_window"
+    assert bot.trailing_prices[symbol]["long"] == _trailing_default()
+    assert bot._orchestrator_trailing_unavailable_reasons == {
+        symbol: ["position_fill_confirmation_pending"]
+    }
+
+    bot._pnls_manager._events.append(
+        _DummyFillEvent(symbol, "long", 240_000, "new-fill")
+    )
+    await bot.update_trailing_data()
+
+    assert bot._trailing_pending_fill_confirmations == {}
+    assert bot._orchestrator_trailing_unavailable_symbols == set()
+    assert bot.trailing_prices[symbol]["long"]["max_since_open"] == pytest.approx(
+        103.0
+    )
+
+
+@pytest.mark.asyncio
+async def test_fill_prefetch_before_position_delta_confirms_new_position_epoch():
+    cfg = _dummy_config()
+    bot = _make_dummy_bot(cfg)
+    symbol = _set_basic_state(bot)
+    old_fill = _DummyFillEvent(
+        symbol, "long", 120_000, "old-fill", psize=1.0, pprice=100.0
+    )
+    bot._pnls_manager = _DummyPnlsManager([old_fill])
+    bot.is_trailing = lambda sym, pside=None: pside == "long"
+    bot.get_exchange_time = lambda: 361_000
+
+    baseline = [
+        {
+            "symbol": symbol,
+            "position_side": "long",
+            "size": 1.0,
+            "price": 100.0,
+            "lastUpdateTimestamp": 120_000,
+        }
     ]
-    assert "incomplete_trailing_candle_window" in caplog.text
+    changed = [
+        {
+            "symbol": symbol,
+            "position_side": "long",
+            "size": 1.5,
+            "price": 101.0,
+            "lastUpdateTimestamp": 240_000,
+        }
+    ]
+    bot._apply_positions_snapshot(baseline)
+    bot._pnls_manager._events.append(
+        _DummyFillEvent(symbol, "long", 240_000, "new-fill")
+    )
+    bot._begin_authoritative_refresh_epoch()
+    bot._apply_positions_snapshot(changed)
+
+    assert bot._trailing_pending_fill_confirmations == {
+        (symbol, "long"): "fill:120000:old-fill"
+    }
+
+    async def complete_new_epoch_candles(*args, **kwargs):
+        return _make_candles(
+            [(300_000, 101.0, 103.0, 100.0, 102.0, 1.0)]
+        )
+
+    bot.cm.get_candles = complete_new_epoch_candles
+    await bot.update_trailing_data()
+
+    assert bot._trailing_pending_fill_confirmations == {}
+    assert bot._orchestrator_trailing_unavailable_symbols == set()
+    assert bot.trailing_prices[symbol]["long"]["max_since_open"] == pytest.approx(
+        103.0
+    )
+
+
+@pytest.mark.asyncio
+async def test_unchanged_position_snapshot_does_not_associate_prefetched_fill():
+    cfg = _dummy_config()
+    bot = _make_dummy_bot(cfg)
+    symbol = _set_basic_state(bot)
+    old_fill = _DummyFillEvent(
+        symbol, "long", 120_000, "old-fill", psize=1.0, pprice=100.0
+    )
+    bot._pnls_manager = _DummyPnlsManager([old_fill])
+    bot.is_trailing = lambda sym, pside=None: pside == "long"
+    bot.get_exchange_time = lambda: 361_000
+
+    baseline = [
+        {
+            "symbol": symbol,
+            "position_side": "long",
+            "size": 1.0,
+            "price": 100.0,
+            "lastUpdateTimestamp": 120_000,
+        }
+    ]
+    changed = [
+        {
+            "symbol": symbol,
+            "position_side": "long",
+            "size": 1.5,
+            "price": 101.0,
+            "lastUpdateTimestamp": 240_000,
+        }
+    ]
+    bot._apply_positions_snapshot(baseline)
+    bot._pnls_manager._events.append(
+        _DummyFillEvent(
+            symbol, "long", 240_000, "new-fill", psize=1.5, pprice=101.0
+        )
+    )
+
+    bot._apply_positions_snapshot(baseline)
+    assert bot._trailing_position_snapshot_fill_epochs == {
+        (symbol, "long"): "fill:120000:old-fill"
+    }
+
+    bot._apply_positions_snapshot(changed)
+    assert bot._trailing_pending_fill_confirmations == {
+        (symbol, "long"): "fill:120000:old-fill"
+    }
+
+    async def complete_new_epoch_candles(*args, **kwargs):
+        return _make_candles(
+            [(300_000, 101.0, 103.0, 100.0, 102.0, 1.0)]
+        )
+
+    bot.cm.get_candles = complete_new_epoch_candles
+    await bot.update_trailing_data()
+
+    assert bot._trailing_pending_fill_confirmations == {}
+    assert bot._trailing_position_snapshot_fill_epochs == {
+        (symbol, "long"): "fill:240000:new-fill"
+    }
+    assert bot._orchestrator_trailing_unavailable_symbols == set()
+
+
+def test_restart_without_update_timestamp_requires_matching_fill_after_state():
+    cfg = _dummy_config()
+    bot = _make_dummy_bot(cfg)
+    symbol = _set_basic_state(bot)
+    bot._pnls_manager = _DummyPnlsManager(
+        [
+            _DummyFillEvent(
+                symbol, "long", 120_000, "stale-fill", psize=1.0, pprice=100.0
+            )
+        ]
+    )
+    bot.is_trailing = lambda sym, pside=None: pside == "long"
+
+    bot._apply_positions_snapshot(
+        [
+            {
+                "symbol": symbol,
+                "position_side": "long",
+                "size": 1.0,
+                "price": 101.0,
+                # CCXT may expose position creation time here; it is not recency proof.
+                "timestamp": 240_000,
+            }
+        ]
+    )
+
+    assert bot.positions[symbol]["long"]["timestamp"] == 240_000
+    assert bot._trailing_pending_fill_confirmations == {
+        (symbol, "long"): None
+    }
+    assert bot._trailing_pending_fill_min_generations == {(symbol, "long"): 1}
+    assert bot._trailing_pending_position_states == {
+        (symbol, "long"): (1.0, 101.0)
+    }
+    assert "fills" in bot._authoritative_pending_confirmations
+
+
+@pytest.mark.asyncio
+async def test_restart_same_state_waits_for_post_position_fill_refresh():
+    cfg = _dummy_config()
+    bot = _make_dummy_bot(cfg)
+    symbol = _set_basic_state(bot)
+    bot._pnls_manager = _DummyPnlsManager(
+        [
+            _DummyFillEvent(
+                symbol, "long", 120_000, "current-fill", psize=1.0, pprice=101.0
+            )
+        ]
+    )
+    bot.is_trailing = lambda sym, pside=None: pside == "long"
+    bot.get_exchange_time = lambda: 361_000
+    # A fill refresh already in flight before the position snapshot cannot
+    # satisfy the post-position watermark even if it completes later.
+    bot._trailing_fill_refresh_started_generation = 1
+    bot._trailing_fill_refresh_generation = 0
+
+    bot._apply_positions_snapshot(
+        [
+            {
+                "symbol": symbol,
+                "position_side": "long",
+                "size": 1.0,
+                "price": 101.0,
+                "timestamp": 60_000,
+            }
+        ]
+    )
+
+    assert bot._trailing_pending_fill_confirmations == {(symbol, "long"): None}
+    assert bot._trailing_pending_fill_min_generations == {(symbol, "long"): 2}
+    assert "fills" in bot._authoritative_pending_confirmations
+
+    async def complete_post_round_trip_candles(*args, **kwargs):
+        return _make_candles(
+            [(300_000, 101.0, 103.0, 100.0, 102.0, 1.0)]
+        )
+
+    bot.cm.get_candles = complete_post_round_trip_candles
+    await bot.update_trailing_data()
+
+    assert bot._trailing_pending_fill_confirmations == {(symbol, "long"): None}
+    assert bot._orchestrator_trailing_unavailable_reasons == {
+        symbol: ["position_fill_confirmation_pending"]
+    }
+
+    bot._trailing_fill_refresh_generation = 1
+    await bot.update_trailing_data()
+    assert bot._trailing_pending_fill_confirmations == {(symbol, "long"): None}
+
+    # Two fills unseen by the pre-snapshot cache return to the identical live
+    # size and average price.  Only the later fill refresh may confirm them.
+    bot._pnls_manager._events.extend(
+        [
+            _DummyFillEvent(
+                symbol, "long", 180_000, "round-trip-close", psize=0.0, pprice=0.0
+            ),
+            _DummyFillEvent(
+                symbol, "long", 240_000, "round-trip-reopen", psize=1.0, pprice=101.0
+            ),
+        ]
+    )
+    bot._trailing_fill_refresh_started_generation = 2
+    bot._trailing_fill_refresh_generation = 2
+    await bot.update_trailing_data()
+
+    assert bot._trailing_pending_fill_confirmations == {}
+    assert bot._trailing_position_snapshot_fill_epochs == {
+        (symbol, "long"): "fill:240000:round-trip-reopen"
+    }
+    assert bot._orchestrator_trailing_unavailable_symbols == set()
+
+
+@pytest.mark.asyncio
+async def test_runtime_delta_without_update_time_rejects_mismatched_prefetched_fill():
+    cfg = _dummy_config()
+    bot = _make_dummy_bot(cfg)
+    symbol = _set_basic_state(bot)
+    bot._pnls_manager = _DummyPnlsManager(
+        [
+            _DummyFillEvent(
+                symbol, "long", 120_000, "old-fill", psize=1.0, pprice=100.0
+            )
+        ]
+    )
+    bot.is_trailing = lambda sym, pside=None: pside == "long"
+    bot.get_exchange_time = lambda: 361_000
+    bot._trailing_fill_refresh_started_generation = 1
+    bot._trailing_fill_refresh_generation = 1
+
+    bot._apply_positions_snapshot(
+        [
+            {
+                "symbol": symbol,
+                "position_side": "long",
+                "size": 1.0,
+                "price": 100.0,
+                "lastUpdateTimestamp": 120_000,
+            }
+        ]
+    )
+    bot._pnls_manager._events.append(
+        _DummyFillEvent(
+            symbol, "long", 180_000, "mismatched-fill", psize=1.2, pprice=100.5
+        )
+    )
+    bot._trailing_fill_refresh_started_generation = 2
+    bot._trailing_fill_refresh_generation = 2
+    bot._apply_positions_snapshot(
+        [
+            {
+                "symbol": symbol,
+                "position_side": "long",
+                "size": 1.5,
+                "price": 101.0,
+            }
+        ]
+    )
+
+    assert bot._trailing_pending_fill_confirmations == {
+        (symbol, "long"): "fill:120000:old-fill"
+    }
+    assert bot._trailing_pending_fill_min_generations == {(symbol, "long"): 3}
+    assert bot._trailing_pending_position_states == {
+        (symbol, "long"): (1.5, 101.0)
+    }
+    assert "fills" in bot._authoritative_pending_confirmations
+
+    async def complete_matching_epoch_candles(*args, **kwargs):
+        return _make_candles(
+            [(300_000, 101.0, 103.0, 100.0, 102.0, 1.0)]
+        )
+
+    bot.cm.get_candles = complete_matching_epoch_candles
+    bot._trailing_fill_refresh_started_generation = 3
+    bot._trailing_fill_refresh_generation = 3
+    await bot.update_trailing_data()
+
+    assert bot._trailing_pending_fill_confirmations == {
+        (symbol, "long"): "fill:120000:old-fill"
+    }
+    assert bot._orchestrator_trailing_unavailable_reasons == {
+        symbol: ["position_fill_confirmation_pending"]
+    }
+
+    bot._pnls_manager._events.append(
+        _DummyFillEvent(
+            symbol, "long", 240_000, "matching-fill", psize=1.5, pprice=101.0
+        )
+    )
+    bot._trailing_fill_refresh_started_generation = 4
+    bot._trailing_fill_refresh_generation = 4
+    await bot.update_trailing_data()
+
+    assert bot._trailing_pending_fill_confirmations == {}
+    assert bot._trailing_position_snapshot_fill_epochs == {
+        (symbol, "long"): "fill:240000:matching-fill"
+    }
+    assert bot._orchestrator_trailing_unavailable_symbols == set()
+
+
+@pytest.mark.asyncio
+async def test_restart_blocks_trailing_when_position_is_newer_than_fill_history():
+    cfg = _dummy_config()
+    bot = _make_dummy_bot(cfg)
+    symbol = _set_basic_state(bot)
+    bot._pnls_manager = _DummyPnlsManager(
+        [_DummyFillEvent(symbol, "long", 120_000, "old-fill")]
+    )
+    bot.is_trailing = lambda sym, pside=None: pside == "long"
+    bot.get_exchange_time = lambda: 361_000
+
+    bot._apply_positions_snapshot(
+        [
+            {
+                "symbol": symbol,
+                "position_side": "long",
+                "size": 1.0,
+                "price": 101.0,
+                "lastUpdateTimestamp": 240_000,
+            }
+        ]
+    )
+
+    assert bot.positions[symbol]["long"]["timestamp"] == 240_000
+    assert bot._trailing_pending_fill_confirmations == {
+        (symbol, "long"): "fill:120000:old-fill"
+    }
+
+    async def old_epoch_candles(*args, **kwargs):
+        return _make_candles(
+            [
+                (180_000, 100.0, 110.0, 90.0, 100.0, 1.0),
+                (240_000, 100.0, 111.0, 89.0, 101.0, 1.0),
+                (300_000, 101.0, 112.0, 88.0, 102.0, 1.0),
+            ]
+        )
+
+    bot.cm.get_candles = old_epoch_candles
+    await bot.update_trailing_data()
+
+    assert bot.trailing_prices[symbol]["long"] == _trailing_default()
+    assert bot._orchestrator_trailing_unavailable_reasons == {
+        symbol: ["position_fill_confirmation_pending"]
+    }
+
+    bot._pnls_manager._events.append(
+        _DummyFillEvent(symbol, "long", 180_000, "late-older-fill")
+    )
+    await bot.update_trailing_data()
+
+    assert bot.trailing_prices[symbol]["long"] == _trailing_default()
+    assert bot._trailing_pending_fill_confirmations == {
+        (symbol, "long"): "fill:120000:old-fill"
+    }
+
+    bot._pnls_manager._events.append(
+        _DummyFillEvent(symbol, "long", 240_000, "matching-fill")
+    )
+    await bot.update_trailing_data()
+
+    assert bot._trailing_pending_fill_confirmations == {}
+    assert bot._orchestrator_trailing_unavailable_symbols == set()
+    assert bot.trailing_prices[symbol]["long"]["max_since_open"] == pytest.approx(
+        112.0
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "rows",
+    [
+        [(240_000, 100.0, 102.0, 98.0, 101.0, 1.0)],
+        [(180_000, 100.0, 101.0, 99.0, 100.0, 1.0)],
+    ],
+)
+async def test_trailing_extrema_reject_incomplete_post_fill_coverage(rows):
+    cfg = _dummy_config()
+    bot = _make_dummy_bot(cfg)
+    symbol = _set_basic_state(bot)
+    bot._pnls_manager = _DummyPnlsManager(
+        [_DummyFillEvent(symbol, "long", 120_000, "fill-1")]
+    )
+    bot.is_trailing = lambda sym, pside=None: pside == "long"
+    bot.get_exchange_time = lambda: 301_000
+
+    async def partial_candles(*args, **kwargs):
+        return _make_candles(rows)
+
+    bot.cm.get_candles = partial_candles
+    await bot.update_trailing_data()
+
+    assert bot.trailing_prices[symbol]["long"] == _trailing_default()
+    assert bot._orchestrator_trailing_unavailable_reasons == {
+        symbol: ["incomplete_trailing_candle_coverage"]
+    }
+
+
+@pytest.mark.asyncio
+async def test_trailing_extrema_accept_dense_zero_volume_gap_continuity():
+    cfg = _dummy_config()
+    bot = _make_dummy_bot(cfg)
+    symbol = _set_basic_state(bot)
+    bot._pnls_manager = _DummyPnlsManager(
+        [_DummyFillEvent(symbol, "long", 120_000, "fill-1")]
+    )
+    bot.is_trailing = lambda sym, pside=None: pside == "long"
+    bot.get_exchange_time = lambda: 301_000
+
+    async def dense_candles(*args, **kwargs):
+        return _make_candles(
+            [
+                (180_000, 100.0, 101.0, 99.0, 100.0, 1.0),
+                (240_000, 100.0, 100.0, 100.0, 100.0, 0.0),
+            ]
+        )
+
+    bot.cm.get_candles = dense_candles
+    await bot.update_trailing_data()
+
+    assert bot._orchestrator_trailing_unavailable_symbols == set()
+    assert bot.trailing_prices[symbol]["long"]["max_since_open"] == pytest.approx(
+        101.0
+    )
 
 
 @pytest.mark.asyncio

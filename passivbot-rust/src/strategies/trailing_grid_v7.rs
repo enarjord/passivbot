@@ -2775,6 +2775,111 @@ mod tests {
     }
 
     #[test]
+    fn pure_grid_and_pure_trailing_mode_vectors_remain_stable_for_both_sides() {
+        let exchange = exchange();
+        let state = state();
+        let bot = bot();
+        let runtime = runtime();
+        let position_long = Position {
+            size: 40.0,
+            price: 100.0,
+        };
+        let position_short = Position {
+            size: -40.0,
+            price: 100.0,
+        };
+        let trailing = TrailingPriceBundle {
+            min_since_open: 98.0,
+            max_since_min: 99.0,
+            max_since_open: 102.0,
+            min_since_max: 101.0,
+        };
+
+        for (ratio, expected_long, expected_short) in [
+            (
+                0.0,
+                OrderType::EntryGridNormalLong,
+                OrderType::EntryGridNormalShort,
+            ),
+            (
+                1.0,
+                OrderType::EntryTrailingNormalLong,
+                OrderType::EntryTrailingNormalShort,
+            ),
+        ] {
+            let mut entry = entry_params();
+            entry.trailing_grid_ratio = ratio;
+            let long = calc_next_entry_long(
+                &exchange,
+                &state,
+                &bot,
+                &runtime,
+                &entry,
+                &position_long,
+                &trailing,
+            );
+            let short = calc_next_entry_short(
+                &exchange,
+                &state,
+                &bot,
+                &runtime,
+                &entry,
+                &position_short,
+                &trailing,
+            );
+            assert_eq!(long.order_type, expected_long);
+            assert_eq!(short.order_type, expected_short);
+            assert!(long.qty >= 0.0);
+            assert!(short.qty <= 0.0);
+            if ratio == 0.0 {
+                assert!(long.qty > 0.0);
+                assert!(short.qty < 0.0);
+            }
+        }
+
+        for (ratio, expected_long, expected_short) in [
+            (0.0, OrderType::CloseGridLong, OrderType::CloseGridShort),
+            (
+                1.0,
+                OrderType::CloseTrailingLong,
+                OrderType::CloseTrailingShort,
+            ),
+        ] {
+            let close = TrailingGridV7CloseParams {
+                grid_markup_start: 0.01,
+                grid_markup_end: 0.005,
+                grid_qty_pct: 0.2,
+                trailing_grid_ratio: ratio,
+                trailing_qty_pct: 0.25,
+                trailing_retracement_pct: 0.005,
+                trailing_threshold_pct: 0.01,
+            };
+            let long = calc_next_close_long(
+                &exchange,
+                &state,
+                &bot,
+                &runtime,
+                &close,
+                &position_long,
+                &trailing,
+            );
+            let short = calc_next_close_short(
+                &exchange,
+                &state,
+                &bot,
+                &runtime,
+                &close,
+                &position_short,
+                &trailing,
+            );
+            assert_eq!(long.order_type, expected_long);
+            assert_eq!(short.order_type, expected_short);
+            assert!(long.qty < 0.0);
+            assert!(short.qty > 0.0);
+        }
+    }
+
+    #[test]
     fn close_grid_markup_start_end_interpolates_by_wallet_exposure() {
         let exchange = exchange();
         let mut state = state();

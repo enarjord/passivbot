@@ -20,6 +20,16 @@ from live.event_bus import (
 )
 
 
+@pytest.fixture
+def require_real_passivbot_rust_module():
+    import passivbot_rust as pbr
+
+    if getattr(pbr, "__is_stub__", False):
+        pytest.fail(
+            "trailing-martingale monitor tests require the real passivbot_rust extension"
+        )
+
+
 class RecorderPublisher:
     def __init__(self):
         self.events = []
@@ -5981,6 +5991,96 @@ def test_monitor_trailing_section_includes_trailing_grid_v7_diagnostics():
     assert close["status"] == "waiting_threshold"
     assert close["threshold_price"] == pytest.approx(102.0)
     assert close["projected_retracement_price"] == pytest.approx(102.0 * 0.99)
+
+
+def test_monitor_trailing_martingale_close_uses_exact_runtime_ema_spans(
+    require_real_passivbot_rust_module,
+):
+    import passivbot_monitor as monitor_mod
+
+    symbol = "HYPE/USDT:USDT"
+
+    class FakeBot:
+        config = {"live": {"strategy_kind": "trailing_martingale"}}
+        _monitor_runtime_m1_log_range_emas = {
+            symbol: {374.0: 0.99, 1323.0: 0.0014553489538740175}
+        }
+        _monitor_runtime_h1_log_range_emas = {
+            symbol: {24.0: 0.99, 668.0: 0.013108943219306139}
+        }
+
+        def _strategy_params_to_rust_dict(self, pside, requested_symbol):
+            assert pside == "long"
+            assert requested_symbol == symbol
+            return {
+                "volatility_ema_span_1m": 1323.0,
+                "volatility_ema_span_1h": 668.0,
+                "close": {
+                    "qty_pct": 0.23,
+                    "threshold_base_pct": -0.0143,
+                    "threshold_we_weight": -0.0278,
+                    "threshold_volatility_1h_weight": 0.19,
+                    "threshold_volatility_1m_weight": 7.93,
+                    "retracement_base_pct": 0.0001,
+                    "retracement_volatility_1h_weight": 12.11,
+                    "retracement_volatility_1m_weight": 4.49,
+                },
+            }
+
+        def _orchestrator_exchange_params(self, requested_symbol):
+            assert requested_symbol == symbol
+            return {
+                "qty_step": 0.1,
+                "price_step": 0.001,
+                "min_qty": 0.1,
+                "min_cost": 1.0,
+                "c_mult": 1.0,
+                "maker_fee": 0.0002,
+                "taker_fee": 0.00055,
+            }
+
+        def _bot_params_to_rust_dict(self, pside, requested_symbol):
+            assert pside == "long"
+            assert requested_symbol == symbol
+            return {
+                "wallet_exposure_limit": 0.5,
+                "total_wallet_exposure_limit": 1.5,
+                "n_positions": 3,
+                "risk_we_excess_allowance_pct": 0.66,
+                "risk_we_excess_allowance_mode": "bounded",
+                "risk_wel_enforcer_enabled": False,
+                "risk_wel_enforcer_threshold": 1.0,
+            }
+
+        def bp(self, pside, key, requested_symbol):
+            assert pside == "long"
+            assert requested_symbol == symbol
+            assert key == "wallet_exposure_limit"
+            return 0.5
+
+    payload = monitor_mod._build_monitor_trailing_close_payload(
+        FakeBot(),
+        symbol,
+        "long",
+        balance_raw=100.0,
+        balance_strategy=99.88140021,
+        current_price=60.6695,
+        position_size=0.1,
+        position_price=60.675,
+        trailing_bundle={
+            "min_since_open": 1.7976931348623157e308,
+            "max_since_min": 0.0,
+            "max_since_open": 0.0,
+            "min_since_max": 1.7976931348623157e308,
+        },
+    )
+
+    assert payload is not None
+    assert payload["volatility_ema_1m"] == pytest.approx(0.0014553489538740175)
+    assert payload["volatility_ema_1h"] == pytest.approx(0.013108943219306139)
+    assert payload["volatility_ema_1m"] != pytest.approx(0.99)
+    assert payload["volatility_ema_1h"] != pytest.approx(0.99)
+    assert payload["qty"] == pytest.approx(0.0)
 
 
 @pytest.mark.asyncio
