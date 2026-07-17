@@ -4,6 +4,18 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Added `passivbot tool live-repository-prepare`, an explicit local executor
+  that fetches only the pinned public canonical `origin/master`, requires exact
+  caller-confirmed
+  current and target commits, a tracked-clean `master` checkout with no Git
+  operation in progress, and a hook-disabled true fast-forward before moving
+  the worktree.
+  It then verifies or rebuilds the Rust extension in a fresh bounded child
+  process and requires an exact caller-confirmed source fingerprint before the
+  checkout is restart-ready. It preserves untracked files and never SSHes,
+  contacts exchanges, signals or starts live bots, force-checks out, or rolls
+  back a target whose Rust preparation failed.
+
 - Added `passivbot tool live-restart-smoke-evidence`, a pure fail-closed
   evaluator for already-generated full restart target and smoke JSON reports.
   It binds stable exact-target evidence and bounded post-restart monitor/log,

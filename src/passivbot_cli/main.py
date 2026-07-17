@@ -160,6 +160,10 @@ TOOL_COMMANDS: dict[str, CommandSpec] = {
         "tools.live_restart_executor",
         "gracefully restart exact verified local tmux targets",
     ),
+    "live-repository-prepare": CommandSpec(
+        "tools.live_repository_prepare",
+        "fast-forward canonical master and prove the Rust runtime",
+    ),
     "inspect-ohlcvs": CommandSpec(
         "tools.inspect_ohlcvs",
         "inspect v2 OHLCV cache metadata and gaps (requires full install)",

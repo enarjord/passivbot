@@ -15,7 +15,23 @@ merge, live smoke evidence changes, or new gaps are discovered.
 - Do not use this file for design churn; unresolved design details belong in the
   plan or a focused handoff doc.
 
-## Latest Canonical Deployment (PR #1303)
+## Latest Canonical Deployment (PR #1305)
+
+- PR #1305 merged as canonical
+  `300fdd703fee9e1ce0e9c54df43bb7b1dcb858d8` after exact-current-head Hermes
+  approval and green Python/Rust CI. It bounds exact historical restart-smoke
+  collection by managed rotation intervals with predecessor, per-bot,
+  global-file, and projected uncompressed-byte proof before event scanning.
+- VPS5 fast-forwarded without a restart or bot signal. The retained PR #1296
+  window selected 10/1,008 segments and `131834602` projected bytes, recovered
+  all five shutdown/startup cohorts, and returned `ok=true` with zero hard
+  failures. A malformed expected head rejected before producers with exit 2.
+- All five pane parents and `misc:0.0` retained their exact IDs/PIDs and the
+  checkout stayed tracked-clean. The active follow-up binds canonical
+  fetch/fast-forward and Rust runtime preparation before restart execution;
+  force escalation remains separate.
+
+## Previous Canonical Deployment (PR #1303)
 
 - PR #1303 merged as canonical
   `9e8d1343e0f1f43fc3207d611a8b06d88af8b6c0` after exact-current-head Hermes

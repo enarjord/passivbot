@@ -385,9 +385,17 @@ Related detailed plans:
      rotation intervals overlapping that window and returned the complete green
      five-bot lifecycle verdict in 37.3 seconds. The active follow-up makes that
      interval selection fail-closed and caps per-bot, global-file, and byte scope.
+   - 2026-07-17: PR #1305 merged and deployed fail-closed interval selection
+     without a bot restart or signal. The exact retained window selected
+     10/1,008 segments and `131834602` projected bytes under the 128 MiB cap,
+     recovered all five shutdown/startup cohorts, and returned zero hard
+     failures. The active follow-up binds canonical `origin/master`
+     fast-forward and Rust runtime preparation to caller-confirmed commits and
+     source inputs before the restart executor can act.
 
-   Remaining refinements: safe pull/build and post-restart smoke orchestration
-   remain open, as does any separately reviewed force-escalation policy.
+   Remaining refinements: review and deploy the active safe pull/build slice;
+   post-restart smoke orchestration remains open, as does any separately
+   reviewed force-escalation policy.
    The concise and brief summaries are intentionally bounded; further changes
    should target missing smoke fields rather than larger chat-facing payloads.
    2026-06-26 VPS5 deploy evidence: after PR #709, one Ctrl+C round stopped
