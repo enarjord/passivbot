@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import hashlib
-import json
 import math
 import subprocess
 import time
@@ -47,33 +45,20 @@ def _bounded_text(value: Any, *, max_len: int) -> str:
     return f"{text[:max_len]}...<truncated>"
 
 
-def _supervisor_contract(expected_rows: list[dict[str, Any]]) -> dict[str, Any]:
-    canonical_rows = sorted(
-        (
-            {
-                "window_name": str(row.get("name") or "").strip(),
-                "command": str(
-                    row.get("command") or row.get("command_key") or ""
-                ).strip(),
-                "config_path": str(row.get("config_path") or "").strip(),
-            }
-            for row in expected_rows
-        ),
-        key=lambda row: (row["window_name"], row["command"], row["config_path"]),
+def _valid_supervisor_contract(
+    contract: dict[str, Any],
+    *,
+    expected_targets: int,
+) -> bool:
+    fingerprint = str(contract.get("fingerprint") or "").strip()
+    return (
+        contract.get("source") == "parsed_supervisor_config"
+        and contract.get("algorithm") == "sha256"
+        and len(fingerprint) == 64
+        and all(character in "0123456789abcdef" for character in fingerprint)
+        and contract.get("target_count") == expected_targets
+        and contract.get("command_content_exposed") is False
     )
-    payload = json.dumps(
-        canonical_rows,
-        ensure_ascii=True,
-        separators=(",", ":"),
-        sort_keys=True,
-    ).encode("utf-8")
-    return {
-        "source": "parsed_supervisor_config",
-        "algorithm": "sha256",
-        "fingerprint": hashlib.sha256(payload).hexdigest(),
-        "target_count": len(canonical_rows),
-        "command_content_exposed": False,
-    }
 
 
 def _tmux_pane_inventory() -> tuple[list[dict[str, Any]], str | None]:
@@ -165,7 +150,12 @@ def _build_live_restart_target_snapshot(
     )
     expected = processes.get("expected")
     expected_rows = expected if isinstance(expected, list) else []
-    supervisor_contract = _supervisor_contract(expected_rows)
+    raw_supervisor_contract = processes.get("supervisor_contract")
+    supervisor_contract = (
+        raw_supervisor_contract
+        if isinstance(raw_supervisor_contract, dict)
+        else {}
+    )
     panes, scan_error = _tmux_pane_inventory()
     session_panes = [
         pane for pane in panes if pane.get("session_name") == confirmed_session
@@ -174,6 +164,16 @@ def _build_live_restart_target_snapshot(
     issues: list[dict[str, Any]] = []
     if scan_error is not None:
         issues.append({"code": scan_error, "severity": "error"})
+    if not _valid_supervisor_contract(
+        supervisor_contract,
+        expected_targets=len(expected_rows),
+    ):
+        issues.append(
+            {
+                "code": "supervisor_contract_unavailable",
+                "severity": "error",
+            }
+        )
     if len(expected_rows) > MAX_RESTART_TARGETS:
         issues.append(
             {
