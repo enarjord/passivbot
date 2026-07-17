@@ -24,7 +24,7 @@ Estimated completion:
 
 - Branch: `codex/restart-smoke-window-fidelity`, based on canonical
   `46a28795dec40acbee0dbaa3602be955bbecf23e` after PR #1301.
-- PR: pending. Slice: preserve exact bounded smoke-window timestamps and reject
+- PR: #1302. Slice: preserve exact bounded smoke-window timestamps and reject
   dropped hard-looking log evidence.
 - Triggering evidence: live PR #1301 validation projected both modern event
   bounds as `1000000000` because epoch milliseconds reused a generic count
