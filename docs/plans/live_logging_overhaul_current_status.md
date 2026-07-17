@@ -24,7 +24,7 @@ Estimated completion:
 
 - Branch: `codex/restart-repository-prepare`, based on canonical
   `300fdd703fee9e1ce0e9c54df43bb7b1dcb858d8` after PR #1305.
-- PR: pending. Slice: exact canonical repository preparation before the existing
+- PR: #1306. Slice: exact canonical repository preparation before the existing
   local restart executor can sample or signal any target.
 - Triggering evidence: reviewed deploys still require separate manual
   `origin/master` pull and Rust freshness commands before the executor can
