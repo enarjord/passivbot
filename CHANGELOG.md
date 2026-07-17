@@ -4,6 +4,12 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- HSL replay now recognizes every fill-derived scope flatten as an episode
+  boundary even when compact coin replay omits historical unrealized PnL. RED
+  cooldowns anchor to the actual flattening fill regardless of close order
+  type; if that fill is temporarily unavailable, live finalization defers
+  instead of inventing the current time.
+
 - Added `passivbot tool live-restart-executor`, an explicit local executor for
   exact tmux targets that already pass the bounded stable target report. It
   requires the expected Git commit, a tracked-clean checkout, a Rust extension

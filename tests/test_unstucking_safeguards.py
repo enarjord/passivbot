@@ -3429,7 +3429,8 @@ async def test_hard_stop_finalize_red_stop_terminal_latches_and_stops(monkeypatc
 
     monkeypatch.setattr(bot, "_equity_hard_stop_compute_stop_event", fake_compute)
     monkeypatch.setattr(bot, "_equity_hard_stop_write_latch", fake_write)
-    await bot._equity_hard_stop_finalize_red_stop("long")
+    stop_event = await bot._equity_hard_stop_compute_stop_event("long", 0)
+    await bot._equity_hard_stop_finalize_red_stop("long", stop_event)
 
     assert bot.stop_signal_received is False
     assert _hsl_state(bot)["halted"] is True
@@ -3470,7 +3471,8 @@ async def test_hard_stop_finalize_red_stop_equal_threshold_latches_terminal(
 
     monkeypatch.setattr(bot, "_equity_hard_stop_compute_stop_event", fake_compute)
     monkeypatch.setattr(bot, "_equity_hard_stop_write_latch", fake_write)
-    await bot._equity_hard_stop_finalize_red_stop("long")
+    stop_event = await bot._equity_hard_stop_compute_stop_event("long", 0)
+    await bot._equity_hard_stop_finalize_red_stop("long", stop_event)
 
     assert bot.stop_signal_received is False
     assert _hsl_state(bot)["halted"] is True
@@ -3521,7 +3523,8 @@ async def test_hard_stop_finalize_red_stop_autorestarts_after_cooldown(monkeypat
 
     monkeypatch.setattr(bot, "_equity_hard_stop_compute_stop_event", fake_compute)
     monkeypatch.setattr(bot, "_equity_hard_stop_write_latch", fake_write)
-    await bot._equity_hard_stop_finalize_red_stop("long")
+    stop_event = await bot._equity_hard_stop_compute_stop_event("long", 0)
+    await bot._equity_hard_stop_finalize_red_stop("long", stop_event)
 
     assert bot.stop_signal_received is False
     assert _hsl_state(bot)["halted"] is True
@@ -3546,7 +3549,7 @@ async def test_hard_stop_finalize_red_stop_autorestarts_after_cooldown(monkeypat
 
 
 @pytest.mark.asyncio
-async def test_hard_stop_finalize_red_stop_uses_latest_panic_fill_timestamp(monkeypatch):
+async def test_hard_stop_finalize_red_stop_uses_scope_flattening_fill_timestamp(monkeypatch):
     cfg = _dummy_config()
     bot = _make_dummy_bot(cfg)
     symbol = _set_basic_state(bot)
@@ -3586,7 +3589,12 @@ async def test_hard_stop_finalize_red_stop_uses_latest_panic_fill_timestamp(monk
     monkeypatch.setattr(bot, "_equity_hard_stop_compute_stop_event", fake_compute)
     monkeypatch.setattr(bot, "_equity_hard_stop_write_latch", fake_write)
 
-    await bot._equity_hard_stop_finalize_red_stop("long")
+    stop_ts_ms = bot._equity_hard_stop_latest_flatten_fill_timestamp_optional_ms(
+        "long", since_ms=state["pending_red_since_ms"]
+    )
+    assert stop_ts_ms == 170_000
+    stop_event = await bot._equity_hard_stop_compute_stop_event("long", stop_ts_ms)
+    await bot._equity_hard_stop_finalize_red_stop("long", stop_event)
 
     assert captured["compute"] == ("long", 170_000)
     assert state["last_stop_event"]["stop_event_timestamp_ms"] == 170_000
@@ -3644,7 +3652,8 @@ async def test_hard_stop_finalize_red_stop_uses_persistent_no_restart_peak(monke
     monkeypatch.setattr(bot, "_equity_hard_stop_compute_stop_event", fake_compute)
     monkeypatch.setattr(bot, "_equity_hard_stop_write_latch", fake_write)
 
-    await bot._equity_hard_stop_finalize_red_stop("long")
+    stop_event = await bot._equity_hard_stop_compute_stop_event("long", 0)
+    await bot._equity_hard_stop_finalize_red_stop("long", stop_event)
 
     assert _hsl_state(bot)["no_restart_latched"] is False
     assert _hsl_state(bot)["no_restart_peak_strategy_equity"] == pytest.approx(110.0)
@@ -3656,7 +3665,8 @@ async def test_hard_stop_finalize_red_stop_uses_persistent_no_restart_peak(monke
 
     bot._equity_hard_stop_reset_after_restart("long")
     assert _hsl_state(bot)["red_trigger_event_emitted"] is False
-    await bot._equity_hard_stop_finalize_red_stop("long")
+    stop_event = await bot._equity_hard_stop_compute_stop_event("long", 0)
+    await bot._equity_hard_stop_finalize_red_stop("long", stop_event)
 
     assert _hsl_state(bot)["halted"] is True
     assert _hsl_state(bot)["no_restart_latched"] is True

@@ -287,6 +287,9 @@ This stateless contract has important operational consequences:
    just parameter tuning.
 6. If HSL replay data is missing or incomplete, the bot should fail or defer
    visibly rather than substituting a safe-looking neutral drawdown.
+7. HSL episodes end when their configured scope becomes fully flat, by any
+   close type. The tracker resets after that fill, and a RED cooldown begins
+   there; current time is not a valid fallback for missing fill evidence.
 
 See the dedicated guide:
 
