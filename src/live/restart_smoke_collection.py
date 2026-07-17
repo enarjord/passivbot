@@ -21,6 +21,23 @@ from live.smoke_report import build_live_smoke_report, default_logs_root_for_mon
 
 DEFAULT_TARGET_SAMPLES = 3
 DEFAULT_TARGET_SAMPLE_INTERVAL_S = 1.0
+MAX_WINDOW_EVENT_FILES_PER_BOT = 8
+MAX_WINDOW_EVENT_FILES_TOTAL = 128
+MAX_WINDOW_EVENT_BYTES_TOTAL = 128 * 1024 * 1024
+MAX_SELECTION_ISSUE_CODES = 10
+MAX_PROJECTED_COUNT = 1_000_000_000
+SEGMENT_SELECTION_ISSUE_CODES = frozenset(
+    {
+        "current_event_segment_duplicated",
+        "current_event_segment_missing",
+        "event_segment_name_unparseable",
+        "event_window_segment_limit_exceeded",
+        "event_window_segment_size_failed",
+        "event_window_start_coverage_unavailable",
+        "event_window_total_byte_limit_exceeded",
+        "event_window_total_file_limit_exceeded",
+    }
+)
 
 SAFETY_CONTRACT = {
     "local_only": True,
@@ -79,7 +96,45 @@ def _collection_policy(
     since_ms: int,
     until_ms: int,
     logs_root_was_supplied: bool,
+    smoke_report: dict[str, Any],
 ) -> dict[str, Any]:
+    event_window = smoke_report.get("event_window")
+    event_window = event_window if isinstance(event_window, dict) else {}
+    selection = event_window.get("segment_selection")
+    selection = selection if isinstance(selection, dict) else {}
+
+    def projected_count(key: str) -> int | None:
+        value = selection.get(key)
+        if type(value) is not int or value < 0 or value > MAX_PROJECTED_COUNT:
+            return None
+        return value
+
+    issue_counts = selection.get("issue_counts")
+    issue_counts = issue_counts if isinstance(issue_counts, dict) else {}
+    known_issue_counts = [
+        (str(code), count)
+        for code, count in sorted(issue_counts.items())
+        if str(code) in SEGMENT_SELECTION_ISSUE_CODES
+    ]
+    projected_issue_counts = {
+        code: int(count)
+        for code, count in known_issue_counts[:MAX_SELECTION_ISSUE_CODES]
+        if type(count) is int and 0 < count <= MAX_PROJECTED_COUNT
+    }
+    selection_evidence = {
+        "complete": selection.get("complete") is True,
+        "groups": projected_count("groups"),
+        "files_before_selection": projected_count("files_before_selection"),
+        "candidate_files_selected": projected_count("candidate_files_selected"),
+        "candidate_scan_bytes": projected_count("candidate_scan_bytes"),
+        "files_selected": projected_count("files_selected"),
+        "files_skipped": projected_count("files_skipped"),
+        "issue_counts": projected_issue_counts,
+        "issue_codes_truncated": max(
+            0,
+            len(issue_counts) - len(projected_issue_counts),
+        ),
+    }
     return {
         "target_sampling": {
             "samples": target_samples,
@@ -88,6 +143,11 @@ def _collection_policy(
         "smoke_collection": {
             "include_rotated": True,
             "include_processes": False,
+            "event_segment_selection": "rotation_end_overlap_with_predecessor",
+            "max_window_event_files_per_bot": MAX_WINDOW_EVENT_FILES_PER_BOT,
+            "max_window_event_files_total": MAX_WINDOW_EVENT_FILES_TOTAL,
+            "max_window_event_bytes_total": MAX_WINDOW_EVENT_BYTES_TOTAL,
+            "event_segment_evidence": selection_evidence,
             "log_window_unparsed_policy": "drop",
             "logs_root_source": "caller" if logs_root_was_supplied else "monitor_default",
             "event_window": {"since_ms": since_ms, "until_ms": until_ms},
@@ -161,6 +221,10 @@ def build_live_restart_smoke_collection(
         include_processes=False,
         since_ms=since_ms,
         until_ms=until_ms,
+        select_event_segments_for_window=True,
+        max_window_event_files_per_bot=MAX_WINDOW_EVENT_FILES_PER_BOT,
+        max_window_event_files_total=MAX_WINDOW_EVENT_FILES_TOTAL,
+        max_window_event_bytes_total=MAX_WINDOW_EVENT_BYTES_TOTAL,
         log_window_unparsed_policy="drop",
     )
     evaluation = build_live_restart_smoke_evidence(
@@ -183,6 +247,7 @@ def build_live_restart_smoke_collection(
             since_ms=since_ms,
             until_ms=until_ms,
             logs_root_was_supplied=logs_root is not None,
+            smoke_report=smoke_report,
         ),
         "gates": evaluation["gates"],
         "evidence": evaluation["evidence"],

@@ -22,39 +22,53 @@ Estimated completion:
 
 ## Active Review Slice
 
-- Branch: `codex/restart-smoke-collection-contract`, based on canonical
-  `0b5503b2a9ee4817618b7aca25dab417af4292dd` after PR #1302.
-- PR: #1303. Slice: collect exact local restart target and bounded smoke
-  evidence in memory, then immediately apply the existing sanitized evaluator.
-- Triggering evidence: PR #1302 proved the evaluator on retained real artifacts,
-  but operators still have to run two producers, retain two full reports, and
-  manually bind them into a third command.
-- Scope: require caller-confirmed head, supervisor fingerprint, target count,
-  session, config, and exact window; compose the existing bounded target and
-  smoke producers without intermediate report files; emit only the sanitized
-  evaluator verdict plus bounded collection-policy metadata.
-- Behavior boundary: local filesystem reads and bounded local `tmux`/`ps`/`git`
-  inventory subprocesses are allowed. SSH, pull/build, network or exchange
-  access, credentials, process signals/starts, force escalation, and file writes
-  remain excluded.
-- Validation: focused collection ordering/input/negative/redaction/CLI tests plus
-  existing target, smoke, evaluator, CLI, compilation, and docs regressions.
+- Branch: `codex/restart-smoke-window-selection`, based on canonical
+  `9e8d1343e0f1f43fc3207d611a8b06d88af8b6c0` after PR #1303.
+- PR: pending. Slice: bound exact historical smoke collection by managed event
+  rotation intervals instead of decompressing the complete retained archive.
+- Triggering evidence: the first VPS5 #1303 collector run discovered 1,012 event
+  segments totaling about 801 MB and remained CPU-active beyond ten minutes.
+  The exact collector PID was interrupted without touching bot panes. A
+  two-recent-segment cap returned in 20.9 seconds but correctly failed closed
+  because it omitted the restart lifecycle. An in-memory interval prototype
+  selected 10 overlapping segments and returned the full green verdict in 37.3
+  seconds.
+- Scope: parse code-owned UTC rotation-close labels, require predecessor coverage
+  for every discovered bot event stream, read only overlapping segments, and
+  fail before content scanning on malformed names, missing coverage, more than
+  eight files per bot, more than 128 files total, or more than 128 MiB selected.
+- Behavior boundary: the selector is opt-in for the restart collector; general
+  smoke-report behavior is unchanged. Local reads and bounded `tmux`/`ps`/`git`
+  inventory remain allowed. SSH, pull/build, network or exchange access,
+  credentials, process signals/starts, force escalation, and file writes remain
+  excluded.
+- Validation: synthetic overlap, gzip/UUID, malformed-name, missing-coverage,
+  per-bot/global-file/byte-limit, collection wiring/redaction, existing smoke,
+  CLI, compilation, and docs regressions.
 - Review gate: temporary maintainer-authorized exact-head Hermes plus green
   Python and Rust CI while Grok is halted.
-- Expected VPS action: pull and run the collector against the retained exact PR
-  #1296 restart window, plus caller-expectation negative checks. Do not restart
-  or signal bots.
+- Expected VPS action: pull and rerun the collector against exact PR #1296 bounds
+  `1784316350000..1784317500000`, then verify malformed-expectation rejection.
+  Do not restart or signal bots.
 
 ## Deployed Baseline
 
 - Canonical `master` and VPS5 are
-  `0b5503b2a9ee4817618b7aca25dab417af4292dd` after PR #1302. Exact-head Hermes
-  and Python/Rust CI were green. VPS5 fast-forwarded without a restart or
-  signal. The retained PR #1296 window evaluated green while preserving exact
-  bounds `1784316350000..1784317500000`; a one-millisecond log-window mismatch
-  and one dropped hard-looking line each failed with `log_scan_invalid`. Pane
-  parents and bot PIDs remained unchanged, the checkout stayed tracked-clean,
-  and `misc:0.0` remained `%8`, PID `434835`.
+  `9e8d1343e0f1f43fc3207d611a8b06d88af8b6c0` after PR #1303. Exact-head Hermes
+  and Python/Rust CI were green. VPS5 fast-forwarded without a bot restart or
+  signal. The first complete-archive collector run was interrupted after more
+  than ten CPU-active minutes by exact collector PID only; all five bot panes
+  retained parent PIDs `856294/856332/856364/856398/856434`, tracked state
+  stayed clean, and `misc:0.0` remained `%8`, PID `434835`. A read-only in-memory
+  interval prototype selected 10/1,012 segments and recovered five stopping,
+  five stopped, and five startup cohorts with zero hard failures in 37.3
+  seconds. This is triggering evidence for the active bounded-selection slice,
+  not yet deployed collector behavior.
+- PR #1302 previously deployed at
+  `0b5503b2a9ee4817618b7aca25dab417af4292dd`. The retained PR #1296 window
+  evaluated green with exact bounds `1784316350000..1784317500000`; a
+  one-millisecond mismatch and one dropped hard-looking line each failed with
+  `log_scan_invalid` while panes and `misc:0.0` remained unchanged.
 - PR #1301 previously deployed at
   `46a28795dec40acbee0dbaa3602be955bbecf23e`. Exact-head Hermes
   and Python/Rust CI were green. VPS5 fast-forwarded without a restart or
