@@ -4,6 +4,15 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Live trailing restart reconciliation now preserves authoritative position-update
+  timestamps from CCXT and raw exchange payloads and no longer
+  treats position creation time as proof that fill history is current. Exchanges
+  without an update timestamp remain fail-closed until a successful fill refresh
+  after the position snapshot reports an after-state matching the live position.
+  Unchanged position snapshots no longer associate a prefetched fill with the old
+  position state, preventing a later real position change from waiting for an
+  additional fill.
+
 - Added `passivbot tool live-restart-executor`, an explicit local executor for
   exact tmux targets that already pass the bounded stable target report. It
   requires the expected Git commit, a tracked-clean checkout, an

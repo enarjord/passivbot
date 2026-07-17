@@ -392,7 +392,7 @@ class HyperliquidBot(CCXTBot):
         info_position = {}
         if isinstance(position.get("info"), dict):
             info_position = position["info"].get("position", {}) or {}
-        return {
+        normalized = {
             "symbol": position["symbol"],
             "position_side": side,
             "size": contracts,
@@ -405,6 +405,8 @@ class HyperliquidBot(CCXTBot):
                 or 0.0
             ),
         }
+        self._preserve_position_timing(position, normalized)
+        return normalized
 
     async def _fetch_hip3_positions(self, *, include_raw: bool = False):
         """Fetch HIP-3 positions via dex-scoped CCXT routes."""

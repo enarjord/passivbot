@@ -397,12 +397,41 @@ class CCXTBot(Passivbot):
                     "size": contracts,
                     "price": float(elm.get("entryPrice", 0)),
                 }
+                self._preserve_position_timing(elm, normalized)
                 margin_mode = self._extract_live_margin_mode(elm)
                 if margin_mode is not None:
                     normalized["margin_mode"] = margin_mode
                     self._record_live_margin_mode(normalized["symbol"], margin_mode)
                 positions.append(normalized)
         return positions
+
+    @staticmethod
+    def _preserve_position_timing(source: dict, normalized: dict) -> None:
+        """Preserve exchange position timing needed for trailing restart safety.
+
+        CCXT's unified ``timestamp`` is not consistently a last-update time.  In
+        particular, WEEX maps it to ``createdTime`` and exposes the authoritative
+        ``updatedTime`` separately as ``lastUpdateTimestamp``.  Keep both the
+        unified timing fields and the raw ``info`` payload so Passivbot can
+        distinguish a latest-update timestamp from an open-time fallback.
+        """
+        for key in (
+            "timestamp",
+            "timestamp_ms",
+            "lastUpdateTimestamp",
+            "updateTime",
+            "updatedTime",
+            "uTime",
+            "open_time",
+            "openTime",
+            "createdTime",
+            "createTime",
+            "cTime",
+        ):
+            if source.get(key) not in (None, ""):
+                normalized[key] = source[key]
+        if isinstance(source.get("info"), dict):
+            normalized["info"] = deepcopy(source["info"])
 
     def _get_position_side(self, elm: dict) -> str:
         """Hook: Derive position_side from position data.
