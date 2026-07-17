@@ -13,6 +13,16 @@ All notable user-facing changes will be documented in this file.
   position state, preventing a later real position change from waiting for an
   additional fill.
 
+- Added `passivbot tool live-restart-executor`, an explicit local executor for
+  exact tmux targets that already pass the bounded stable target report. It
+  requires the expected full supervisor-command fingerprint and `--execute`,
+  sends one Ctrl-C round only to verified panes, waits a bounded time for exact
+  process exits, rechecks the private supervisor snapshot plus pane/process
+  identity before typing launch commands, and verifies stable replacements. It
+  never pulls code or applies
+  an automatic force signal; partial or changed state fails closed for manual
+  recovery.
+
 - Exact live restart target sampling now binds pane/PID stability to an opaque
   fingerprint of the complete parsed supervisor command contract before
   report redaction or truncation, failing closed when that contract changes or
