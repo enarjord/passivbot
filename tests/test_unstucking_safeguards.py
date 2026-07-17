@@ -1351,10 +1351,22 @@ async def test_position_delta_waits_for_new_fill_identity_across_refresh_cohorts
     bot.get_exchange_time = lambda: 361_000
 
     baseline = [
-        {"symbol": symbol, "position_side": "long", "size": 1.0, "price": 100.0}
+        {
+            "symbol": symbol,
+            "position_side": "long",
+            "size": 1.0,
+            "price": 100.0,
+            "lastUpdateTimestamp": 120_000,
+        }
     ]
     changed = [
-        {"symbol": symbol, "position_side": "long", "size": 1.5, "price": 101.0}
+        {
+            "symbol": symbol,
+            "position_side": "long",
+            "size": 1.5,
+            "price": 101.0,
+            "lastUpdateTimestamp": 240_000,
+        }
     ]
     bot._apply_positions_snapshot(baseline)
     bot._begin_authoritative_refresh_epoch()
@@ -1410,10 +1422,22 @@ async def test_fill_prefetch_before_position_delta_confirms_new_position_epoch()
     bot.get_exchange_time = lambda: 361_000
 
     baseline = [
-        {"symbol": symbol, "position_side": "long", "size": 1.0, "price": 100.0}
+        {
+            "symbol": symbol,
+            "position_side": "long",
+            "size": 1.0,
+            "price": 100.0,
+            "lastUpdateTimestamp": 120_000,
+        }
     ]
     changed = [
-        {"symbol": symbol, "position_side": "long", "size": 1.5, "price": 101.0}
+        {
+            "symbol": symbol,
+            "position_side": "long",
+            "size": 1.5,
+            "price": 101.0,
+            "lastUpdateTimestamp": 240_000,
+        }
     ]
     bot._apply_positions_snapshot(baseline)
     bot._pnls_manager._events.append(
@@ -1454,10 +1478,22 @@ async def test_unchanged_position_snapshot_does_not_associate_prefetched_fill():
     bot.get_exchange_time = lambda: 361_000
 
     baseline = [
-        {"symbol": symbol, "position_side": "long", "size": 1.0, "price": 100.0}
+        {
+            "symbol": symbol,
+            "position_side": "long",
+            "size": 1.0,
+            "price": 100.0,
+            "lastUpdateTimestamp": 120_000,
+        }
     ]
     changed = [
-        {"symbol": symbol, "position_side": "long", "size": 1.5, "price": 101.0}
+        {
+            "symbol": symbol,
+            "position_side": "long",
+            "size": 1.5,
+            "price": 101.0,
+            "lastUpdateTimestamp": 240_000,
+        }
     ]
     bot._apply_positions_snapshot(baseline)
     bot._pnls_manager._events.append(
@@ -1519,14 +1555,17 @@ def test_restart_without_update_timestamp_requires_matching_fill_after_state():
 
     assert bot.positions[symbol]["long"]["timestamp"] == 240_000
     assert bot._trailing_pending_fill_confirmations == {
-        (symbol, "long"): "fill:120000:stale-fill"
+        (symbol, "long"): None
     }
+    assert bot._trailing_pending_fill_min_generations == {(symbol, "long"): 1}
     assert bot._trailing_pending_position_states == {
         (symbol, "long"): (1.0, 101.0)
     }
+    assert "fills" in bot._authoritative_pending_confirmations
 
 
-def test_restart_without_update_timestamp_accepts_matching_fill_after_state():
+@pytest.mark.asyncio
+async def test_restart_same_state_waits_for_post_position_fill_refresh():
     cfg = _dummy_config()
     bot = _make_dummy_bot(cfg)
     symbol = _set_basic_state(bot)
@@ -1538,6 +1577,11 @@ def test_restart_without_update_timestamp_accepts_matching_fill_after_state():
         ]
     )
     bot.is_trailing = lambda sym, pside=None: pside == "long"
+    bot.get_exchange_time = lambda: 361_000
+    # A fill refresh already in flight before the position snapshot cannot
+    # satisfy the post-position watermark even if it completes later.
+    bot._trailing_fill_refresh_started_generation = 1
+    bot._trailing_fill_refresh_generation = 0
 
     bot._apply_positions_snapshot(
         [
@@ -1551,10 +1595,136 @@ def test_restart_without_update_timestamp_accepts_matching_fill_after_state():
         ]
     )
 
+    assert bot._trailing_pending_fill_confirmations == {(symbol, "long"): None}
+    assert bot._trailing_pending_fill_min_generations == {(symbol, "long"): 2}
+    assert "fills" in bot._authoritative_pending_confirmations
+
+    async def complete_post_round_trip_candles(*args, **kwargs):
+        return _make_candles(
+            [(300_000, 101.0, 103.0, 100.0, 102.0, 1.0)]
+        )
+
+    bot.cm.get_candles = complete_post_round_trip_candles
+    await bot.update_trailing_data()
+
+    assert bot._trailing_pending_fill_confirmations == {(symbol, "long"): None}
+    assert bot._orchestrator_trailing_unavailable_reasons == {
+        symbol: ["position_fill_confirmation_pending"]
+    }
+
+    bot._trailing_fill_refresh_generation = 1
+    await bot.update_trailing_data()
+    assert bot._trailing_pending_fill_confirmations == {(symbol, "long"): None}
+
+    # Two fills unseen by the pre-snapshot cache return to the identical live
+    # size and average price.  Only the later fill refresh may confirm them.
+    bot._pnls_manager._events.extend(
+        [
+            _DummyFillEvent(
+                symbol, "long", 180_000, "round-trip-close", psize=0.0, pprice=0.0
+            ),
+            _DummyFillEvent(
+                symbol, "long", 240_000, "round-trip-reopen", psize=1.0, pprice=101.0
+            ),
+        ]
+    )
+    bot._trailing_fill_refresh_started_generation = 2
+    bot._trailing_fill_refresh_generation = 2
+    await bot.update_trailing_data()
+
     assert bot._trailing_pending_fill_confirmations == {}
     assert bot._trailing_position_snapshot_fill_epochs == {
-        (symbol, "long"): "fill:120000:current-fill"
+        (symbol, "long"): "fill:240000:round-trip-reopen"
     }
+    assert bot._orchestrator_trailing_unavailable_symbols == set()
+
+
+@pytest.mark.asyncio
+async def test_runtime_delta_without_update_time_rejects_mismatched_prefetched_fill():
+    cfg = _dummy_config()
+    bot = _make_dummy_bot(cfg)
+    symbol = _set_basic_state(bot)
+    bot._pnls_manager = _DummyPnlsManager(
+        [
+            _DummyFillEvent(
+                symbol, "long", 120_000, "old-fill", psize=1.0, pprice=100.0
+            )
+        ]
+    )
+    bot.is_trailing = lambda sym, pside=None: pside == "long"
+    bot.get_exchange_time = lambda: 361_000
+    bot._trailing_fill_refresh_started_generation = 1
+    bot._trailing_fill_refresh_generation = 1
+
+    bot._apply_positions_snapshot(
+        [
+            {
+                "symbol": symbol,
+                "position_side": "long",
+                "size": 1.0,
+                "price": 100.0,
+                "lastUpdateTimestamp": 120_000,
+            }
+        ]
+    )
+    bot._pnls_manager._events.append(
+        _DummyFillEvent(
+            symbol, "long", 180_000, "mismatched-fill", psize=1.2, pprice=100.5
+        )
+    )
+    bot._trailing_fill_refresh_started_generation = 2
+    bot._trailing_fill_refresh_generation = 2
+    bot._apply_positions_snapshot(
+        [
+            {
+                "symbol": symbol,
+                "position_side": "long",
+                "size": 1.5,
+                "price": 101.0,
+            }
+        ]
+    )
+
+    assert bot._trailing_pending_fill_confirmations == {
+        (symbol, "long"): "fill:120000:old-fill"
+    }
+    assert bot._trailing_pending_fill_min_generations == {(symbol, "long"): 3}
+    assert bot._trailing_pending_position_states == {
+        (symbol, "long"): (1.5, 101.0)
+    }
+    assert "fills" in bot._authoritative_pending_confirmations
+
+    async def complete_matching_epoch_candles(*args, **kwargs):
+        return _make_candles(
+            [(300_000, 101.0, 103.0, 100.0, 102.0, 1.0)]
+        )
+
+    bot.cm.get_candles = complete_matching_epoch_candles
+    bot._trailing_fill_refresh_started_generation = 3
+    bot._trailing_fill_refresh_generation = 3
+    await bot.update_trailing_data()
+
+    assert bot._trailing_pending_fill_confirmations == {
+        (symbol, "long"): "fill:120000:old-fill"
+    }
+    assert bot._orchestrator_trailing_unavailable_reasons == {
+        symbol: ["position_fill_confirmation_pending"]
+    }
+
+    bot._pnls_manager._events.append(
+        _DummyFillEvent(
+            symbol, "long", 240_000, "matching-fill", psize=1.5, pprice=101.0
+        )
+    )
+    bot._trailing_fill_refresh_started_generation = 4
+    bot._trailing_fill_refresh_generation = 4
+    await bot.update_trailing_data()
+
+    assert bot._trailing_pending_fill_confirmations == {}
+    assert bot._trailing_position_snapshot_fill_epochs == {
+        (symbol, "long"): "fill:240000:matching-fill"
+    }
+    assert bot._orchestrator_trailing_unavailable_symbols == set()
 
 
 @pytest.mark.asyncio

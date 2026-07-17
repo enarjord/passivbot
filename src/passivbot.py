@@ -1117,6 +1117,8 @@ class Passivbot:
         self._authoritative_refresh_epoch_changed = set()
         self._authoritative_refresh_plan_surfaces = set()
         self._authoritative_pending_confirmations = {}
+        self._trailing_fill_refresh_started_generation = 0
+        self._trailing_fill_refresh_generation = 0
         self._authoritative_barrier_last_log_key = None
         self._authoritative_barrier_last_log_ms = 0
         self.freshness_ledger = FreshnessLedger(now_ms=utc_ms())
@@ -8029,11 +8031,17 @@ class Passivbot:
         pending_fill_min_timestamps = dict(
             getattr(self, "_trailing_pending_fill_min_timestamps", {}) or {}
         )
+        pending_fill_min_generations = dict(
+            getattr(self, "_trailing_pending_fill_min_generations", {}) or {}
+        )
         pending_position_states = dict(
             getattr(self, "_trailing_pending_position_states", {}) or {}
         )
         associated_fill_epochs = dict(
             getattr(self, "_trailing_position_snapshot_fill_epochs", {}) or {}
+        )
+        fill_refresh_generation = int(
+            getattr(self, "_trailing_fill_refresh_generation", 0) or 0
         )
         current_epochs: dict[tuple[str, str], str] = {}
 
@@ -8048,6 +8056,9 @@ class Passivbot:
                         None if anchor is None else int(anchor["timestamp"])
                     )
                     minimum_timestamp = pending_fill_min_timestamps.get(epoch_key)
+                    minimum_fill_generation = pending_fill_min_generations.get(
+                        epoch_key
+                    )
                     expected_position_state = pending_position_states.get(epoch_key)
                     if (
                         current_epoch is None
@@ -8056,6 +8067,11 @@ class Passivbot:
                         or (
                             minimum_timestamp is not None
                             and current_timestamp < int(minimum_timestamp)
+                        )
+                        or (
+                            minimum_fill_generation is not None
+                            and fill_refresh_generation
+                            < int(minimum_fill_generation)
                         )
                         or (
                             expected_position_state is not None
@@ -8075,6 +8091,7 @@ class Passivbot:
                         continue
                     pending_fill_confirmations.pop(epoch_key, None)
                     pending_fill_min_timestamps.pop(epoch_key, None)
+                    pending_fill_min_generations.pop(epoch_key, None)
                     pending_position_states.pop(epoch_key, None)
                     associated_fill_epochs[epoch_key] = current_epoch
                 if anchor is None:
@@ -8089,6 +8106,7 @@ class Passivbot:
         self._trailing_position_change_epochs = current_epochs
         self._trailing_pending_fill_confirmations = pending_fill_confirmations
         self._trailing_pending_fill_min_timestamps = pending_fill_min_timestamps
+        self._trailing_pending_fill_min_generations = pending_fill_min_generations
         self._trailing_pending_position_states = pending_position_states
         self._trailing_position_snapshot_fill_epochs = associated_fill_epochs
 
@@ -10716,6 +10734,21 @@ class Passivbot:
         if self.stop_signal_received:
             return False
 
+        fill_refresh_attempt_generation = (
+            max(
+                int(
+                    getattr(
+                        self, "_trailing_fill_refresh_started_generation", 0
+                    )
+                    or 0
+                ),
+                int(getattr(self, "_trailing_fill_refresh_generation", 0) or 0),
+            )
+            + 1
+        )
+        self._trailing_fill_refresh_started_generation = (
+            fill_refresh_attempt_generation
+        )
         refresh_started_ms = utc_ms()
         refresh_mode = "unknown"
         overlap_minutes: Optional[float] = None
@@ -10934,6 +10967,9 @@ class Passivbot:
                 self._clear_fill_coverage_retry_defer()
                 self._record_authoritative_surface(
                     "fills", self._fill_events_signature(all_events)
+                )
+                self._trailing_fill_refresh_generation = (
+                    fill_refresh_attempt_generation
                 )
             elif pnls_complete and not coverage_ready_after:
                 self._record_fill_coverage_retry_defer(post_refresh_coverage_status)
@@ -13591,9 +13627,20 @@ class Passivbot:
         pending_min_timestamps = dict(
             getattr(self, "_trailing_pending_fill_min_timestamps", {}) or {}
         )
+        pending_min_fill_generations = dict(
+            getattr(self, "_trailing_pending_fill_min_generations", {}) or {}
+        )
         pending_position_states = dict(
             getattr(self, "_trailing_pending_position_states", {}) or {}
         )
+        fill_refresh_started_generation = max(
+            int(
+                getattr(self, "_trailing_fill_refresh_started_generation", 0)
+                or 0
+            ),
+            int(getattr(self, "_trailing_fill_refresh_generation", 0) or 0),
+        )
+        request_post_position_fill_confirmation = False
         if previous_position_state is not None:
             for key in set(previous_position_state) | set(position_state):
                 if previous_position_state.get(key, (0.0, 0.0)) == position_state.get(
@@ -13609,12 +13656,19 @@ class Passivbot:
                     position_ts = self._position_update_timestamp_ms(symbol, pside)
                     if position_ts is None:
                         pending_min_timestamps.pop(key, None)
+                        pending_min_fill_generations[key] = (
+                            fill_refresh_started_generation + 1
+                        )
+                        pending_position_states[key] = position_state[key]
+                        request_post_position_fill_confirmation = True
                     else:
                         pending_min_timestamps[key] = position_ts
-                    pending_position_states.pop(key, None)
+                        pending_min_fill_generations.pop(key, None)
+                        pending_position_states.pop(key, None)
                 else:
                     pending.pop(key, None)
                     pending_min_timestamps.pop(key, None)
+                    pending_min_fill_generations.pop(key, None)
                     pending_position_states.pop(key, None)
         else:
             previous_snapshot_fill_epochs = dict(current_fill_epochs)
@@ -13629,25 +13683,38 @@ class Passivbot:
                         fill_anchor["timestamp"]
                     ) >= position_ts
                 else:
-                    fill_is_current = self._fill_anchor_matches_position_state(
-                        symbol, state, fill_anchor
-                    )
+                    # A reconstructed same-state fill cannot prove freshness on
+                    # restart: unseen round-trip fills may return to the same
+                    # size and average price.  Require a successful fill refresh
+                    # that starts in a later authoritative cohort.
+                    fill_is_current = False
                 if fill_is_current:
+                    pending_min_fill_generations.pop(key, None)
+                    pending_position_states.pop(key, None)
                     continue
                 self.trailing_prices.setdefault(symbol, {})
                 self.trailing_prices[symbol][pside] = _trailing_bundle_default_dict()
-                pending[key] = (
-                    None if fill_anchor is None else str(fill_anchor["epoch"])
-                )
                 if position_ts is None:
+                    pending[key] = None
                     pending_min_timestamps.pop(key, None)
+                    pending_min_fill_generations[key] = (
+                        fill_refresh_started_generation + 1
+                    )
                     pending_position_states[key] = state
+                    request_post_position_fill_confirmation = True
                 else:
+                    pending[key] = (
+                        None if fill_anchor is None else str(fill_anchor["epoch"])
+                    )
                     pending_min_timestamps[key] = position_ts
+                    pending_min_fill_generations.pop(key, None)
                     pending_position_states.pop(key, None)
+        if request_post_position_fill_confirmation:
+            self._request_authoritative_confirmation({"fills"})
         self._trailing_position_snapshot_fill_epochs = previous_snapshot_fill_epochs
         self._trailing_pending_fill_confirmations = pending
         self._trailing_pending_fill_min_timestamps = pending_min_timestamps
+        self._trailing_pending_fill_min_generations = pending_min_fill_generations
         self._trailing_pending_position_states = pending_position_states
         return fetched_positions_old, self.fetched_positions
 

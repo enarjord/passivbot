@@ -4845,6 +4845,8 @@ async def test_update_pnls_all_lookback_uses_incremental_refresh_when_cache_is_f
     bot._monitor_record_error = lambda *args, **kwargs: None
     bot.logging_level = 0
     bot._health_rate_limits = 0
+    bot._trailing_fill_refresh_started_generation = 4
+    bot._trailing_fill_refresh_generation = 4
 
     result = await bot.update_pnls()
 
@@ -4855,6 +4857,7 @@ async def test_update_pnls_all_lookback_uses_incremental_refresh_when_cache_is_f
         last_refresh_overlap_ms=10 * 60 * 1000,
     )
     assert bot._pnls_manager.history_scope == "all"
+    assert bot._trailing_fill_refresh_generation == 5
 
 
 @pytest.mark.asyncio
@@ -7916,6 +7919,7 @@ async def test_planning_snapshot_freezes_data_packet_revisions_through_cycle(mon
             "position_side": "long",
             "size": 0.1,
             "price": 100.0,
+            "lastUpdateTimestamp": 120_000,
         }
     ]
     bot, _counts = _counted_staged_account_refresh_bot(
