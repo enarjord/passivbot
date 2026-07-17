@@ -114,7 +114,9 @@ class WeexBot(CCXTBot):
 
             position_mode = await self.cca.fetch_position_mode(symbol)
             current_margin = await self.cca.fetch_margin_mode(symbol)
-            is_separated = bool(position_mode.get("hedged"))
+            is_separated = self._require_explicit_position_mode(
+                position_mode, symbol
+            )
             current_margin_mode = str(
                 current_margin.get("marginMode") or ""
             ).lower()
@@ -146,6 +148,49 @@ class WeexBot(CCXTBot):
                 format_exchange_config_response(result),
                 (time.time() - started) * 1000.0,
             )
+
+    def _require_explicit_position_mode(
+        self, position_mode: dict, symbol: str
+    ) -> bool:
+        """Return whether WEEX explicitly reports SEPARATED mode.
+
+        CCXT maps an absent or unknown ``separatedType`` to ``hedged=False``.
+        That is not evidence of COMBINED mode, so inspect the raw symbol row and
+        reject missing, ambiguous, or internally inconsistent state.
+        """
+        if not isinstance(position_mode, dict):
+            raise ValueError(f"{symbol}: invalid WEEX position mode response")
+        raw = position_mode.get("info")
+        rows = raw if isinstance(raw, list) else [raw]
+        market_id = str((self.markets_dict.get(symbol) or {}).get("id") or "")
+        candidates = [row for row in rows if isinstance(row, dict)]
+        if market_id:
+            matching = [
+                row
+                for row in candidates
+                if str(row.get("symbol") or "") == market_id
+            ]
+            if len(matching) != 1:
+                raise ValueError(
+                    f"{symbol}: WEEX position mode response missing unique symbol row"
+                )
+            candidates = matching
+        if len(candidates) != 1:
+            raise ValueError(
+                f"{symbol}: WEEX position mode response did not contain exactly one symbol row"
+            )
+        separated_type = str(candidates[0].get("separatedType") or "").upper()
+        if separated_type not in {"COMBINED", "SEPARATED"}:
+            raise ValueError(
+                f"{symbol}: WEEX position mode missing explicit COMBINED/SEPARATED state"
+            )
+        is_separated = separated_type == "SEPARATED"
+        hedged = position_mode.get("hedged")
+        if not isinstance(hedged, bool) or hedged != is_separated:
+            raise ValueError(
+                f"{symbol}: WEEX normalized position mode disagrees with raw state"
+            )
+        return is_separated
 
     def _build_order_params(self, order: dict) -> dict:
         """Build the exact WEEX V3 hedge-order contract.
@@ -180,6 +225,18 @@ class WeexBot(CCXTBot):
         if position_side not in {"long", "short"}:
             raise ValueError(
                 "weex fill missing explicit LONG/SHORT positionSide"
+            )
+        return position_side
+
+    def _get_position_side_for_order(self, order: dict) -> str:
+        """Require WEEX's explicit hedge side on every futures order."""
+        info = order.get("info") or {}
+        if not isinstance(info, dict):
+            raise ValueError("weex order has invalid raw info payload")
+        position_side = str(info.get("positionSide") or "").lower()
+        if position_side not in {"long", "short"}:
+            raise ValueError(
+                "weex order missing explicit LONG/SHORT positionSide"
             )
         return position_side
 

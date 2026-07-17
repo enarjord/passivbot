@@ -178,6 +178,36 @@ def test_weex_order_params_survive_ccxt_request_construction(
     assert "postOnly" not in request
 
 
+@pytest.mark.parametrize(
+    ("raw_position_side", "expected"),
+    [("LONG", "long"), ("SHORT", "short")],
+)
+def test_weex_open_order_requires_explicit_position_side(
+    raw_position_side, expected
+):
+    bot = _bot()
+
+    assert (
+        bot._get_position_side_for_order(
+            {"info": {"positionSide": raw_position_side}}
+        )
+        == expected
+    )
+
+
+@pytest.mark.parametrize("raw_info", [{}, {"positionSide": "BOTH"}, "invalid"])
+def test_weex_open_order_rejects_missing_or_ambiguous_position_side(raw_info):
+    bot = _bot()
+
+    with pytest.raises(ValueError, match="positionSide|raw info"):
+        bot._get_position_side_for_order(
+            {
+                "clientOrderId": "entry_initial_normal_long",
+                "info": raw_info,
+            }
+        )
+
+
 def test_weex_signed_order_contains_required_auth_and_no_reduce_only():
     bot = _bot(time_in_force="gtc")
     exchange = _ccxt_exchange()
@@ -266,7 +296,12 @@ async def test_weex_symbol_config_sets_combined_margin_and_leverage():
 
         async def fetch_position_mode(self, symbol):
             self.calls.append(("fetch_position_mode", symbol))
-            return {"hedged": True}
+            return {
+                "hedged": True,
+                "info": [
+                    {"symbol": "BTCUSDT", "separatedType": "SEPARATED"}
+                ],
+            }
 
         async def fetch_margin_mode(self, symbol):
             self.calls.append(("fetch_margin_mode", symbol))
@@ -282,6 +317,7 @@ async def test_weex_symbol_config_sets_combined_margin_and_leverage():
 
     bot = _bot()
     bot.cca = _Api()
+    bot.markets_dict = {SYMBOL: _market()}
     bot.max_leverage = {SYMBOL: 400}
     bot._get_margin_mode_for_symbol = lambda symbol: "cross"
     bot._calc_leverage_for_symbol = lambda symbol: 10
@@ -299,7 +335,12 @@ async def test_weex_symbol_config_skips_unchanged_mode_but_sets_leverage():
             self.calls = []
 
         async def fetch_position_mode(self, symbol):
-            return {"hedged": False}
+            return {
+                "hedged": False,
+                "info": [
+                    {"symbol": "BTCUSDT", "separatedType": "COMBINED"}
+                ],
+            }
 
         async def fetch_margin_mode(self, symbol):
             return {"marginMode": "cross"}
@@ -313,6 +354,7 @@ async def test_weex_symbol_config_skips_unchanged_mode_but_sets_leverage():
 
     bot = _bot()
     bot.cca = _Api()
+    bot.markets_dict = {SYMBOL: _market()}
     bot._get_margin_mode_for_symbol = lambda symbol: "cross"
     bot._calc_leverage_for_symbol = lambda symbol: 7
 
@@ -321,9 +363,60 @@ async def test_weex_symbol_config_skips_unchanged_mode_but_sets_leverage():
     assert bot.cca.calls == [(7, SYMBOL, {"marginMode": "cross"})]
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "position_mode",
+    [
+        {"hedged": False, "info": []},
+        {
+            "hedged": False,
+            "info": [{"symbol": "BTCUSDT", "separatedType": "UNKNOWN"}],
+        },
+        {
+            "hedged": False,
+            "info": [{"symbol": "ETHUSDT", "separatedType": "COMBINED"}],
+        },
+        {
+            "hedged": False,
+            "info": [{"symbol": "BTCUSDT", "separatedType": "SEPARATED"}],
+        },
+    ],
+)
+async def test_weex_symbol_config_rejects_unproven_or_inconsistent_position_mode(
+    position_mode,
+):
+    class _Api:
+        def __init__(self):
+            self.leverage_calls = []
+
+        async def fetch_position_mode(self, symbol):
+            return position_mode
+
+        async def fetch_margin_mode(self, symbol):
+            return {"marginMode": "cross"}
+
+        async def set_position_mode(self, *args, **kwargs):
+            raise AssertionError("invalid mode state must fail before mutation")
+
+        async def set_leverage(self, *args, **kwargs):
+            self.leverage_calls.append((args, kwargs))
+
+    bot = _bot()
+    bot.cca = _Api()
+    bot.markets_dict = {SYMBOL: _market()}
+    bot._get_margin_mode_for_symbol = lambda symbol: "cross"
+    bot._calc_leverage_for_symbol = lambda symbol: 7
+
+    with pytest.raises(ValueError, match="position mode"):
+        await bot.update_exchange_config_by_symbols([SYMBOL])
+
+    assert bot.cca.leverage_calls == []
+
+
 class _FakeWeexApi:
-    def __init__(self, batches):
-        self.batches = list(batches)
+    def __init__(self, trades, *, newest_first=False):
+        self.trades = list(trades)
+        self.newest_first = bool(newest_first)
         self.trade_calls = []
         self.order_calls = []
 
@@ -331,7 +424,17 @@ class _FakeWeexApi:
         self.trade_calls.append(
             {"symbol": symbol, "since": since, "limit": limit, "params": dict(params or {})}
         )
-        return self.batches.pop(0) if self.batches else []
+        until = int((params or {})["until"])
+        eligible = [
+            trade
+            for trade in self.trades
+            if int(since) <= int(trade["timestamp"]) <= until
+        ]
+        eligible.sort(
+            key=lambda trade: int(trade["timestamp"]),
+            reverse=self.newest_first,
+        )
+        return eligible[: int(limit)]
 
     async def fetch_order(self, order_id, symbol):
         self.order_calls.append((order_id, symbol))
@@ -364,10 +467,12 @@ async def test_weex_fetcher_windows_paginates_normalizes_and_enriches():
     day = 24 * 60 * 60 * 1000
     api = _FakeWeexApi(
         [
-            [_trade("t1", "o1", day), _trade("t2", "o2", day + 1)],
-            [_trade("t3", "o3", day + 2)],
-            [_trade("t4", "o4", 8 * day)],
-        ]
+            _trade("t1", "o1", day),
+            _trade("t2", "o2", day + 1),
+            _trade("t3", "o3", day + 2),
+            _trade("t4", "o4", 8 * day),
+        ],
+        newest_first=True,
     )
     fetcher = WeexFetcher(api, trade_limit=2, now_func=lambda: 9 * day)
     detail_cache = {}
@@ -386,6 +491,17 @@ async def test_weex_fetcher_windows_paginates_normalizes_and_enriches():
         for call in api.trade_calls
     )
     assert set(detail_cache) == {"t1", "t2", "t3", "t4"}
+
+
+@pytest.mark.asyncio
+async def test_weex_fetcher_fails_closed_when_one_millisecond_is_saturated():
+    api = _FakeWeexApi(
+        [_trade("t1", "o1", 1_000), _trade("t2", "o2", 1_000)]
+    )
+    fetcher = WeexFetcher(api, trade_limit=2)
+
+    with pytest.raises(RuntimeError, match="saturated within one millisecond"):
+        await fetcher.fetch(1_000, 1_000, {})
 
 
 def test_weex_fetcher_rejects_ambiguous_position_side():
