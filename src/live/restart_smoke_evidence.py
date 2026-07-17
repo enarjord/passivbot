@@ -10,6 +10,7 @@ SCHEMA_VERSION = 1
 MAX_ISSUES = 16
 MAX_BOT_IDENTIFIER_CHARS = 160
 MAX_PROJECTED_COUNT = 1_000_000_000
+MAX_EPOCH_MS = 253_402_300_799_999
 _GIT_HEAD_PATTERN = re.compile(r"^[0-9a-f]{40}$")
 _SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 
@@ -31,6 +32,10 @@ def _is_int(value: Any) -> bool:
 
 def _is_non_negative_int(value: Any) -> bool:
     return _is_int(value) and value >= 0
+
+
+def _is_epoch_ms(value: Any) -> bool:
+    return _is_int(value) and 0 <= value <= MAX_EPOCH_MS
 
 
 def _count(value: Any) -> int:
@@ -220,18 +225,23 @@ def _repository_gate(
     }
 
 
-def _window_gate(window: Any) -> tuple[bool, int, int]:
+def _window_gate(window: Any) -> tuple[bool, int | None, int | None]:
     row = window if isinstance(window, dict) else {}
     since_ms = row.get("since_ms")
     until_ms = row.get("until_ms")
+    valid_since_ms = _is_epoch_ms(since_ms)
+    valid_until_ms = _is_epoch_ms(until_ms)
     ok = (
         row.get("enabled") is True
-        and _is_int(since_ms)
-        and _is_int(until_ms)
-        and since_ms >= 0
+        and valid_since_ms
+        and valid_until_ms
         and until_ms > since_ms
     )
-    return ok, _count(since_ms), _count(until_ms)
+    return (
+        ok,
+        since_ms if valid_since_ms else None,
+        until_ms if valid_until_ms else None,
+    )
 
 
 def _event_window_gate(report: dict[str, Any]) -> dict[str, Any]:
@@ -268,6 +278,7 @@ def _logs_gate(report: dict[str, Any], event_window: dict[str, Any]) -> dict[str
     )
     files_scanned = _count(logs.get("files_scanned"))
     hard_matches = _count(logs.get("hard_matches"))
+    dropped_unparsed_hard_matches = _count(logs.get("dropped_unparsed_hard_matches"))
     return {
         "ok": (
             window_ok
@@ -276,11 +287,14 @@ def _logs_gate(report: dict[str, Any], event_window: dict[str, Any]) -> dict[str
             and files_scanned > 0
             and logs.get("hard_matches") == 0
             and _is_non_negative_int(logs.get("hard_matches"))
+            and logs.get("dropped_unparsed_hard_matches") == 0
+            and _is_non_negative_int(logs.get("dropped_unparsed_hard_matches"))
         ),
         "window_ok": window_ok,
         "same_bounds_as_events": same_bounds,
         "files_scanned": files_scanned,
         "hard_matches": hard_matches,
+        "dropped_unparsed_hard_matches": dropped_unparsed_hard_matches,
         "attention_matches": _count(logs.get("attention_matches")),
     }
 

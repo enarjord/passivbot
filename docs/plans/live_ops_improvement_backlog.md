@@ -365,6 +365,12 @@ Related detailed plans:
      target sampling or action, and all five bot PIDs remained unchanged. The
      active follow-up adds a pure evaluator for already-generated full target
      and smoke JSON reports; automatic report collection remains later work.
+   - 2026-07-17: PR #1301 merged and deployed the pure target/smoke evidence
+     evaluator without restarting bots. A real shutdown-through-startup window
+     passed all gates and a wider window correctly failed on existing hard
+     events. Deployment also exposed lossy epoch-ms projection and comparison;
+     the active follow-up preserves exact bounded timestamps and rejects
+     dropped hard-looking log evidence. Automatic collection remains later.
 
    Remaining refinements: safe pull/build and post-restart smoke orchestration
    remain open, as does any separately reviewed force-escalation policy.
