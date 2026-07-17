@@ -4,6 +4,17 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Added `passivbot tool live-restart-smoke-run`, an explicit local orchestrator
+  that requires exact repository, Rust-source, supervisor-command, and target
+  contracts before invoking the existing exact-pane graceful restart executor.
+  After a successful restart it waits one caller-bounded observation interval
+  and runs the existing bounded in-memory smoke collector over the exact
+  restart-through-observation window. It emits aggregate restart counts and
+  sanitized smoke evidence only, never pulls or builds code, SSHes, applies
+  force escalation or broad process-pattern signals, or writes report files;
+  post-action smoke failures leave the relaunched bots running and fail red for
+  operator follow-up.
+
 - Added `passivbot tool live-repository-prepare`, an explicit local executor
   that fetches only the pinned public canonical `origin/master`, requires exact
   caller-confirmed

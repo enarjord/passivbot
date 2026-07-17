@@ -508,6 +508,31 @@ Monitor commands are documented in detail in [monitor.md](monitor.md). The CLI s
   run bounded local `tmux`, `ps`, and `git` inventory reads; it does not SSH,
   pull/build, contact a network or exchange, access credentials, signal/start
   processes, or perform force escalation. Use `--compact` for single-line JSON.
+- `passivbot tool live-restart-smoke-run SUPERVISOR_CONFIG MONITOR_ROOT
+  --session-name SESSION --expected-repository-head COMMIT
+  --expected-rust-source-fingerprint SHA256
+  --expected-supervisor-fingerprint SHA256 --expected-targets N --execute`
+  composes the existing exact-pane restart executor and bounded in-memory smoke
+  collector into one local operation. Before any signal it independently
+  requires a complete stable target sample with the exact caller-confirmed
+  target count and private supervisor-command fingerprint; the executor then
+  rechecks the clean repository head, Rust source and loaded-extension stamp,
+  supervisor contract, and exact pane/process identities at its own action
+  boundaries. A green restart must account for every expected target as stop
+  requested, exited, relaunch requested, relaunch succeeded, and stably
+  verified. The orchestrator then waits one bounded observation interval
+  (`--smoke-wait-s`, default 600 seconds, maximum 1,800) and evaluates the exact
+  restart-through-observation epoch-millisecond window. It performs no polling
+  retry loop and no automatic force escalation. A pre-action failure leaves
+  targets untouched; a post-action executor failure reports manual recovery;
+  and a red or unavailable smoke report leaves relaunched bots running while
+  returning `restart_completed_smoke_failed`. Output includes only aggregate
+  restart counts and the existing sanitized collector projection, never target
+  names, pane IDs, process IDs, commands, paths, fingerprints, or raw reports.
+  The tool does not SSH, pull/build, access credentials or exchanges directly,
+  use broad process-pattern signals, or write report files. The configured live
+  bots resume their normal exchange access and runtime file writes after
+  relaunch.
 - `passivbot tool live-performance-report` summarizes local live monitor event timings for
   operator performance analysis. It is read-only and does not contact exchanges. Use
   `--recent-minutes` for a time window, `--summary` for a bounded operator projection, and

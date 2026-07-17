@@ -22,38 +22,49 @@ Estimated completion:
 
 ## Active Review Slice
 
-- Branch: `codex/restart-repository-prepare`, based on canonical
-  `300fdd703fee9e1ce0e9c54df43bb7b1dcb858d8` after PR #1305.
-- PR: #1306. Slice: exact canonical repository preparation before the existing
-  local restart executor can sample or signal any target.
-- Triggering evidence: reviewed deploys still require separate manual
-  `origin/master` pull and Rust freshness commands before the executor can
-  consume its exact repository-head and Rust-source contracts. Those steps are
-  not yet machine-bound to the reviewed target commit.
-- Scope: require exact current/target heads, tracked-clean canonical `master`, no
-  in-progress Git operation, pinned public canonical `origin`, exact fetched
-  `origin/master`, and true ancestry; then fast-forward with hooks disabled and
-  without force, and verify/rebuild Rust in a fresh bounded child process
-  against an operator-confirmed source fingerprint.
-- Behavior boundary: the tool may fetch Git, update the tracked worktree, and
-  write Rust build artifacts only after `--execute`. It preserves untracked
-  files and emits no path, URL, Git stderr, build output, or command content.
-  SSH, exchange/credential access, supervisor parsing, live-process signals or
-  starts, force checkout/reset, and rollback remain excluded. A Rust failure
-  after fast-forward leaves the checkout at the target but not restart-ready.
-- Validation: real temporary-origin fast-forward, dirty/branch/operation/head/
-  target/ancestry failures, untracked preservation, child source-mismatch
-  rejection, CLI dispatch, existing restart tooling, compilation, and docs.
+- Branch: `codex/restart-smoke-orchestrator`, based on canonical
+  `0d1b06b82f3bab011e29a350b4a5276c2ebd5356` after PR #1306.
+- PR: pending. Slice: one bounded exact-pane graceful restart followed by one
+  exact restart-through-observation smoke collection.
+- Triggering evidence: repository preparation, exact target sampling, graceful
+  restart execution, retained-window collection, and sanitized evaluation are
+  individually available, but the production sequence still relies on manual
+  timestamp capture and command handoff between the restart and smoke tools.
+- Scope: independently require a complete stable target sample, invoke the
+  existing executor unchanged, require aggregate completion for every expected
+  target, wait one caller-bounded interval, and invoke the existing collector
+  with exact epoch-millisecond bounds. Malformed producer reports and bounded
+  collector exceptions fail closed without exposing private target details.
+- Behavior boundary: explicit `--execute` may gracefully signal and relaunch
+  only the configured exact tmux panes. The tool does not SSH, pull/build,
+  access credentials or exchanges directly, write reports, use broad process
+  patterns, poll/retry smoke collection, or apply automatic force escalation.
+  Configured bots resume normal exchange access and file writes. Post-action
+  smoke failure leaves them running and returns red for operator follow-up.
+- Validation: success/failure sequencing, strict target and executor contracts,
+  no-action preflight rejection, manual-recovery projection, exact clock bounds,
+  sanitized collector errors, CLI dispatch, existing restart tooling, complete
+  Python/Rust suites, compilation, and docs.
 - Review gate: temporary maintainer-authorized exact-head Hermes plus green
   Python and Rust CI while Grok is halted.
-- Expected VPS action: manual pull to make the new tool available, then an exact
-  same-head/no-build preparation smoke plus wrong-target rejection. Do not
-  restart or signal bots.
+- Expected VPS action: use the merged repository-preparation tool to reach the
+  reviewed merge commit, verify exact targets and private fingerprints, then
+  run one no-force five-target restart with bounded post-restart smoke. Preserve
+  `misc:0.0`; stop for manual recovery if graceful execution does not finish.
 
 ## Deployed Baseline
 
 - Canonical `master` and VPS5 are
-  `300fdd703fee9e1ce0e9c54df43bb7b1dcb858d8` after PR #1305. Exact-head Hermes
+  `0d1b06b82f3bab011e29a350b4a5276c2ebd5356` after PR #1306. Exact-head Hermes
+  and Python/Rust CI were green. VPS5 first fast-forwarded to make the
+  repository-preparation tool available, without a bot restart or signal. Its
+  same-head execution returned green with no repository move or Rust build and
+  exact source/stamp/final fingerprints; a valid but wrong target commit failed
+  with `fetched_target_head_mismatch` before any build. All five configured pane
+  parents and unrelated `misc:0.0` remained unchanged, and tracked state stayed
+  clean.
+- PR #1305 previously deployed at
+  `300fdd703fee9e1ce0e9c54df43bb7b1dcb858d8`. Exact-head Hermes
   and Python/Rust CI were green. VPS5 fast-forwarded without a bot restart or
   signal. The merged collector selected 10/1,008 managed event segments for the
   exact retained bounds `1784316350000..1784317500000`, projected

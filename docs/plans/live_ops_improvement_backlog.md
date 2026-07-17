@@ -240,9 +240,10 @@ Related detailed plans:
    `repository.root` for shareable reports and surfaces explicit
    dropped-unparsed attention/hard counters when the opt-in log-window drop
    policy suppresses contextless hard-looking log fragments. The safe local
-   exact-target restart executor is implemented; repository pull, Rust rebuild,
-   remote-host orchestration, automatic force escalation, and post-restart
-   monitor/log smoke orchestration remain outside it. A 2026-06-30 follow-up made the
+   exact-target restart executor and canonical repository preparation are
+   implemented; remote-host orchestration and automatic force escalation remain
+   outside them. The active slice composes the executor with one bounded
+   post-restart monitor/log smoke window. A 2026-06-30 follow-up made the
    existing startup timing evidence visible in `live-smoke-report --summary`
    and `--brief`, so repeated smoke loops can see slow startup phases without
    opening the full report. Another 2026-06-30 follow-up made bounded text-log
@@ -392,10 +393,16 @@ Related detailed plans:
      failures. The active follow-up binds canonical `origin/master`
      fast-forward and Rust runtime preparation to caller-confirmed commits and
      source inputs before the restart executor can act.
+   - 2026-07-17: PR #1306 merged and deployed exact canonical repository
+     preparation. A same-head VPS5 smoke proved the no-move/no-build path, and a
+     wrong target failed before build while all five panes and `misc:0.0`
+     remained unchanged. The active follow-up composes the existing exact-pane
+     executor and bounded collector over one exact restart-through-observation
+     window without force escalation or report files.
 
-   Remaining refinements: review and deploy the active safe pull/build slice;
-   post-restart smoke orchestration remains open, as does any separately
-   reviewed force-escalation policy.
+   Remaining refinements: review and deploy the active post-restart smoke
+   orchestration slice. Remote-host control and any force-escalation policy
+   remain separate review boundaries.
    The concise and brief summaries are intentionally bounded; further changes
    should target missing smoke fields rather than larger chat-facing payloads.
    2026-06-26 VPS5 deploy evidence: after PR #709, one Ctrl+C round stopped

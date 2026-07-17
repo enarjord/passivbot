@@ -15,7 +15,23 @@ merge, live smoke evidence changes, or new gaps are discovered.
 - Do not use this file for design churn; unresolved design details belong in the
   plan or a focused handoff doc.
 
-## Latest Canonical Deployment (PR #1305)
+## Latest Canonical Deployment (PR #1306)
+
+- PR #1306 merged as canonical
+  `0d1b06b82f3bab011e29a350b4a5276c2ebd5356` after exact-current-head Hermes
+  approval and green Python/Rust CI. It binds canonical `origin/master`
+  fast-forward and Rust runtime preparation to exact caller-confirmed current
+  and target commits plus a source fingerprint before restart execution.
+- VPS5 first fast-forwarded to make the tool available without a bot restart or
+  signal. A same-head execution returned green with no repository move or build;
+  a valid wrong target failed with `fetched_target_head_mismatch` before build.
+  Tracked state, all five configured pane parents, and `misc:0.0` stayed
+  unchanged.
+- The active follow-up composes the existing exact-pane graceful executor and
+  bounded retained-window collector over one restart-through-observation window.
+  Remote-host control and force escalation remain separate.
+
+## Previous Canonical Deployment (PR #1305)
 
 - PR #1305 merged as canonical
   `300fdd703fee9e1ce0e9c54df43bb7b1dcb858d8` after exact-current-head Hermes
@@ -27,7 +43,7 @@ merge, live smoke evidence changes, or new gaps are discovered.
   all five shutdown/startup cohorts, and returned `ok=true` with zero hard
   failures. A malformed expected head rejected before producers with exit 2.
 - All five pane parents and `misc:0.0` retained their exact IDs/PIDs and the
-  checkout stayed tracked-clean. The active follow-up binds canonical
+  checkout stayed tracked-clean. PR #1306 subsequently bound canonical
   fetch/fast-forward and Rust runtime preparation before restart execution;
   force escalation remains separate.
 
