@@ -4,12 +4,13 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
-- HSL replay now recognizes every fill-derived scope flatten as an episode
-  boundary, including close-and-reentry transitions within one replay minute
-  and compact coin replay without historical unrealized PnL. RED cooldowns
-  anchor to an episode-bounded flattening fill regardless of close order type;
-  when that fill is temporarily unavailable, live supervision performs a
-  rate-limited fill refresh and otherwise defers instead of using stale
+- HSL replay now recognizes every ordered, fill-derived scope flatten as an
+  episode boundary, including multiple close-and-reentry transitions within
+  one replay minute and compact coin replay without historical unrealized PnL.
+  RED cooldowns anchor to an episode-bounded flattening fill regardless of
+  close order type; when an initial or cooldown-repanic flatten fill is
+  temporarily unavailable, live supervision performs a rate-limited,
+  episode-bounded fill refresh and otherwise defers instead of using stale
   pre-episode evidence or inventing the current time.
 
 - Live trailing restart reconciliation now preserves authoritative position-update

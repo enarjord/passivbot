@@ -4863,6 +4863,63 @@ async def test_coin_hsl_replay_splits_same_minute_flatten_and_reentry(compact):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("compact", [False, True])
+async def test_coin_hsl_replay_uses_first_of_multiple_same_minute_flattens(compact):
+    """Later-episode PnL must not be attached to the first RED episode."""
+    symbol = "A"
+    first_flatten_ts = 150_000
+    history = _red_episode_history(
+        symbol,
+        flatten_pnl=-30.0,
+        rows_upnl=[0.0, 0.0],
+        flatten_ts=first_flatten_ts,
+    )
+    history["fill_events"].extend(
+        [
+            {
+                "timestamp": 160_000,
+                "symbol": symbol,
+                "pside": "long",
+                "action": "increase",
+                "qty": 1.0,
+                "pnl": 0.0,
+            },
+            {
+                "timestamp": 170_000,
+                "symbol": symbol,
+                "pside": "long",
+                "action": "decrease",
+                "qty": 1.0,
+                "pnl": -30.0,
+            },
+        ]
+    )
+    # The minute aggregate contains both losses. Only the first -30 belongs
+    # to the RED episode ending at 150_000; using -60 would cross the terminal
+    # no-restart threshold and demonstrate the attribution bug.
+    for row in history["timeline"]:
+        if row["timestamp"] == 120_000:
+            row["realized_pnl"] = -60.0
+            row["realized_pnl_by_coin_pside"][symbol]["long"] = -60.0
+    bot = _flat_position_bot(symbol)
+    bot.get_exchange_time = lambda: 180_000
+
+    async def fake_history(current_balance=None, **kwargs):
+        return _coin_history_as_compact(history, symbol) if compact else history
+
+    bot.get_balance_equity_history = fake_history
+
+    await bot._equity_hard_stop_initialize_coin_from_history()
+
+    state = bot._hsl_coin_state("long", symbol)
+    assert state["halted"] is True
+    assert state["no_restart_latched"] is False
+    assert state["last_stop_event"]["stop_event_timestamp_ms"] == first_flatten_ts
+    assert state["pnl_reset_timestamp_ms"] == first_flatten_ts + 1
+    assert state["cooldown_until_ms"] == first_flatten_ts + 300_000
+
+
+@pytest.mark.asyncio
 async def test_coin_hsl_history_replay_does_not_latch_recovered_red_without_panic_marker():
     bot = make_coin_bot()
     symbol = "A"
