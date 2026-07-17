@@ -110,6 +110,7 @@ class BybitBot(CCXTBot):
                 "size": float(elm["contracts"]),
                 "price": float(elm["entryPrice"]),
             }
+            self._preserve_position_timing(elm, normalized)
             margin_mode = self._extract_live_margin_mode(elm)
             if margin_mode is not None:
                 normalized["margin_mode"] = margin_mode

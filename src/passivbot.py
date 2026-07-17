@@ -7762,10 +7762,15 @@ class Passivbot:
         return anchor_ts if anchor_ts > 0 else None
 
     def _position_anchor_timestamp_from_row(self, position: dict) -> int | None:
+        update_ts = self._position_update_timestamp_from_row(position)
+        if update_ts is not None:
+            return update_ts
         candidates = [
             position.get("open_time"),
             position.get("openTime"),
             position.get("createdTime"),
+            position.get("createTime"),
+            position.get("cTime"),
         ]
         info = position.get("info")
         if isinstance(info, dict):
@@ -7774,6 +7779,8 @@ class Passivbot:
                     info.get("open_time"),
                     info.get("openTime"),
                     info.get("createdTime"),
+                    info.get("createTime"),
+                    info.get("cTime"),
                 ]
             )
         candidates.extend(
@@ -7789,18 +7796,45 @@ class Passivbot:
                     info.get("timestamp_ms"),
                 ]
             )
-        candidates.append(position.get("updatedTime"))
-        if isinstance(info, dict):
-            candidates.append(info.get("updatedTime"))
         for candidate in candidates:
             anchor_ts = self._parse_position_anchor_timestamp_ms(candidate)
             if anchor_ts is not None:
                 return anchor_ts
         return None
 
+    def _position_update_timestamp_from_row(self, position: dict) -> int | None:
+        """Return an exchange-reported latest position update time, if available.
+
+        Open/creation time and CCXT's generic ``timestamp`` are intentionally
+        excluded: exchanges such as WEEX map that unified field to creation time.
+        Those fields remain valid candle-anchor fallbacks, but cannot prove that
+        cached fill history includes the latest position-changing fill.
+        """
+        update_keys = (
+            "lastUpdateTimestamp",
+            "updateTime",
+            "updatedTime",
+            "update_time",
+            "updated_at",
+            "uTime",
+        )
+        candidates = [position.get(key) for key in update_keys]
+        info = position.get("info")
+        if isinstance(info, dict):
+            candidates.extend(info.get(key) for key in update_keys)
+        for candidate in candidates:
+            update_ts = self._parse_position_anchor_timestamp_ms(candidate)
+            if update_ts is not None:
+                return update_ts
+        return None
+
     def _position_anchor_timestamp_ms(self, symbol: str, pside: str) -> int | None:
         position = self.positions.get(symbol, {}).get(pside, {})
         return self._position_anchor_timestamp_from_row(position)
+
+    def _position_update_timestamp_ms(self, symbol: str, pside: str) -> int | None:
+        position = self.positions.get(symbol, {}).get(pside, {})
+        return self._position_update_timestamp_from_row(position)
 
     @staticmethod
     def _fill_position_change_epoch(event, event_index: int) -> str:
@@ -7821,11 +7855,45 @@ class Passivbot:
             event = events[event_index]
             key = (str(event.symbol), str(event.position_side))
             if key not in anchors:
-                anchors[key] = {
+                anchor = {
                     "timestamp": int(event.timestamp),
                     "epoch": self._fill_position_change_epoch(event, event_index),
                 }
+                for field in ("psize", "pprice"):
+                    try:
+                        value = float(getattr(event, field))
+                    except (AttributeError, TypeError, ValueError, OverflowError):
+                        continue
+                    if math.isfinite(value):
+                        anchor[field] = value
+                anchors[key] = anchor
         return anchors
+
+    def _fill_anchor_matches_position_state(
+        self, symbol: str, state: tuple[float, float], anchor: dict | None
+    ) -> bool:
+        """Whether a fill's recorded after-state matches an exchange position."""
+        if anchor is None or "psize" not in anchor or "pprice" not in anchor:
+            return False
+        position_size, position_price = state
+        fill_size = abs(float(anchor["psize"]))
+        fill_price = float(anchor["pprice"])
+        if not all(
+            math.isfinite(value)
+            for value in (position_size, position_price, fill_size, fill_price)
+        ):
+            return False
+        qty_step = abs(float(getattr(self, "qty_steps", {}).get(symbol, 0.0) or 0.0))
+        price_step = abs(
+            float(getattr(self, "price_steps", {}).get(symbol, 0.0) or 0.0)
+        )
+        c_mult = abs(float(getattr(self, "c_mults", {}).get(symbol, 1.0) or 1.0))
+        position_size_in_fill_units = abs(position_size) * c_mult
+        qty_tolerance = max(qty_step * c_mult * 0.5, 1e-12)
+        price_tolerance = max(price_step * 0.5, abs(position_price) * 1e-9, 1e-12)
+        return abs(fill_size - position_size_in_fill_units) <= qty_tolerance and abs(
+            fill_price - position_price
+        ) <= price_tolerance
 
     def _latest_fill_position_change_epochs(self) -> dict[tuple[str, str], str]:
         """Return the newest known fill identity for each symbol and position side."""
@@ -7961,6 +8029,12 @@ class Passivbot:
         pending_fill_min_timestamps = dict(
             getattr(self, "_trailing_pending_fill_min_timestamps", {}) or {}
         )
+        pending_position_states = dict(
+            getattr(self, "_trailing_pending_position_states", {}) or {}
+        )
+        associated_fill_epochs = dict(
+            getattr(self, "_trailing_position_snapshot_fill_epochs", {}) or {}
+        )
         current_epochs: dict[tuple[str, str], str] = {}
 
         for symbol, psides in required_trailing.items():
@@ -7974,6 +8048,7 @@ class Passivbot:
                         None if anchor is None else int(anchor["timestamp"])
                     )
                     minimum_timestamp = pending_fill_min_timestamps.get(epoch_key)
+                    expected_position_state = pending_position_states.get(epoch_key)
                     if (
                         current_epoch is None
                         or not current_epoch.startswith("fill:")
@@ -7981,6 +8056,12 @@ class Passivbot:
                         or (
                             minimum_timestamp is not None
                             and current_timestamp < int(minimum_timestamp)
+                        )
+                        or (
+                            expected_position_state is not None
+                            and not self._fill_anchor_matches_position_state(
+                                symbol, expected_position_state, anchor
+                            )
                         )
                     ):
                         self.trailing_prices[symbol][pside] = (
@@ -7994,6 +8075,8 @@ class Passivbot:
                         continue
                     pending_fill_confirmations.pop(epoch_key, None)
                     pending_fill_min_timestamps.pop(epoch_key, None)
+                    pending_position_states.pop(epoch_key, None)
+                    associated_fill_epochs[epoch_key] = current_epoch
                 if anchor is None:
                     self.trailing_prices[symbol][pside] = _trailing_bundle_default_dict()
                     unavailable_reasons["missing_position_change_anchor"].add(symbol)
@@ -8006,6 +8089,8 @@ class Passivbot:
         self._trailing_position_change_epochs = current_epochs
         self._trailing_pending_fill_confirmations = pending_fill_confirmations
         self._trailing_pending_fill_min_timestamps = pending_fill_min_timestamps
+        self._trailing_pending_position_states = pending_position_states
+        self._trailing_position_snapshot_fill_epochs = associated_fill_epochs
 
         # Build concurrent fetches per symbol that has position changes
         fetch_plan = {}
@@ -13474,6 +13559,9 @@ class Passivbot:
             anchor_ts = self._position_anchor_timestamp_from_row(elm)
             if anchor_ts is not None:
                 normalized_position["timestamp"] = anchor_ts
+            update_ts = self._position_update_timestamp_from_row(elm)
+            if update_ts is not None:
+                normalized_position["lastUpdateTimestamp"] = update_ts
             positions_new[symbol][pside] = normalized_position
         self.positions = positions_new
         position_state = {
@@ -13495,7 +13583,6 @@ class Passivbot:
             key: str(anchor["epoch"]) for key, anchor in current_fill_anchors.items()
         }
         self._trailing_authoritative_position_state = position_state
-        self._trailing_position_snapshot_fill_epochs = current_fill_epochs
         if not hasattr(self, "trailing_prices"):
             self.trailing_prices = {}
         pending = dict(
@@ -13503,6 +13590,9 @@ class Passivbot:
         )
         pending_min_timestamps = dict(
             getattr(self, "_trailing_pending_fill_min_timestamps", {}) or {}
+        )
+        pending_position_states = dict(
+            getattr(self, "_trailing_pending_position_states", {}) or {}
         )
         if previous_position_state is not None:
             for key in set(previous_position_state) | set(position_state):
@@ -13516,34 +13606,49 @@ class Passivbot:
                 new_size = position_state.get(key, (0.0, 0.0))[0]
                 if new_size != 0.0 and self.is_trailing(symbol, pside):
                     pending[key] = previous_snapshot_fill_epochs.get(key)
-                    position_ts = self._position_anchor_timestamp_ms(symbol, pside)
+                    position_ts = self._position_update_timestamp_ms(symbol, pside)
                     if position_ts is None:
                         pending_min_timestamps.pop(key, None)
                     else:
                         pending_min_timestamps[key] = position_ts
+                    pending_position_states.pop(key, None)
                 else:
                     pending.pop(key, None)
                     pending_min_timestamps.pop(key, None)
+                    pending_position_states.pop(key, None)
         else:
+            previous_snapshot_fill_epochs = dict(current_fill_epochs)
             for key, state in position_state.items():
                 symbol, pside = key
                 if state[0] == 0.0 or not self.is_trailing(symbol, pside):
                     continue
-                position_ts = self._position_anchor_timestamp_ms(symbol, pside)
+                position_ts = self._position_update_timestamp_ms(symbol, pside)
                 fill_anchor = current_fill_anchors.get(key)
-                if position_ts is None or (
-                    fill_anchor is not None
-                    and int(fill_anchor["timestamp"]) >= position_ts
-                ):
+                if position_ts is not None:
+                    fill_is_current = fill_anchor is not None and int(
+                        fill_anchor["timestamp"]
+                    ) >= position_ts
+                else:
+                    fill_is_current = self._fill_anchor_matches_position_state(
+                        symbol, state, fill_anchor
+                    )
+                if fill_is_current:
                     continue
                 self.trailing_prices.setdefault(symbol, {})
                 self.trailing_prices[symbol][pside] = _trailing_bundle_default_dict()
                 pending[key] = (
                     None if fill_anchor is None else str(fill_anchor["epoch"])
                 )
-                pending_min_timestamps[key] = position_ts
+                if position_ts is None:
+                    pending_min_timestamps.pop(key, None)
+                    pending_position_states[key] = state
+                else:
+                    pending_min_timestamps[key] = position_ts
+                    pending_position_states.pop(key, None)
+        self._trailing_position_snapshot_fill_epochs = previous_snapshot_fill_epochs
         self._trailing_pending_fill_confirmations = pending
         self._trailing_pending_fill_min_timestamps = pending_min_timestamps
+        self._trailing_pending_position_states = pending_position_states
         return fetched_positions_old, self.fetched_positions
 
     def _apply_balance_snapshot(self, balance_raw) -> bool:
