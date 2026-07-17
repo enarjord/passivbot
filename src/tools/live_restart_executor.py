@@ -34,6 +34,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Exact 40-character lowercase Git commit expected at execution.",
     )
     parser.add_argument(
+        "--expected-rust-source-fingerprint",
+        required=True,
+        help="Exact lowercase SHA-256 fingerprint of the deployed Rust build inputs.",
+    )
+    parser.add_argument(
         "--execute",
         action="store_true",
         help="Confirm exact-pane graceful stop and relaunch execution.",
@@ -60,6 +65,7 @@ def main(argv: list[str] | None = None) -> int:
             session_name=args.session_name,
             expected_supervisor_fingerprint=args.expected_supervisor_fingerprint,
             expected_repository_head=args.expected_repository_head,
+            expected_rust_source_fingerprint=args.expected_rust_source_fingerprint,
             config_base_dir=Path.cwd(),
             preflight_samples=args.preflight_samples,
             preflight_interval_s=args.preflight_interval_s,
