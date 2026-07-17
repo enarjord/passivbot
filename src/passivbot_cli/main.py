@@ -148,6 +148,10 @@ TOOL_COMMANDS: dict[str, CommandSpec] = {
         "tools.live_restart_target_report",
         "resolve exact local tmux restart targets without process control",
     ),
+    "live-restart-executor": CommandSpec(
+        "tools.live_restart_executor",
+        "gracefully restart exact verified local tmux targets",
+    ),
     "inspect-ohlcvs": CommandSpec(
         "tools.inspect_ohlcvs",
         "inspect v2 OHLCV cache metadata and gaps (requires full install)",

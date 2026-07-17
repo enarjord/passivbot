@@ -22,51 +22,61 @@ Estimated completion:
 
 ## Active Review Slice
 
-- Branch: `codex/full-supervisor-fingerprint`, based on canonical
-  `393aec15a49d6b6cf4f6bda37ed8a2dab00b5f2c` after PR #1291.
-- PR: #1294, `Bind restart fingerprint to full supervisor commands`. Slice:
-  make the exact-target supervisor fingerprint cover complete private canonical
-  commands before report redaction or truncation.
-- Triggering evidence: direct post-merge inspection found PR #1291 derived its
-  fingerprint from public redacted/truncated process-report fields. Materially
-  different launch commands could therefore share a digest, which is not a
-  sufficient prerequisite for future execution.
-- Scope: derive the opaque SHA-256 fingerprint while the process report still
-  owns full private canonical commands, expose only the digest, validate its
-  complete value-safe shape in the target report, and fail closed when it is
-  absent or malformed.
-- Behavior boundary: read-only classification only. No configured command,
-  tmux action, process control, restart execution, network/exchange access,
-  credential access, SSH/git action, or file write is added.
-- Validation: focused fingerprint ordering/change/content, target sampling,
-  planner shape, CLI, process, incident, compilation, and docs regressions.
+- Branch: `codex/local-graceful-restart-executor`, integrated with canonical
+  `0f366b6f6e6b05ab0bd748b012c2c86ed85f978c` after PR #1293.
+- PR: #1297, `Add exact-target graceful restart executor`. Slice: execute the
+  already-reviewed exact-target restart contract locally without adding remote
+  deployment or force-escalation behavior.
+- Triggering evidence: PRs #1287-#1294 established exact pane/process ownership,
+  stable sampled identities, pane-parent relaunch readiness, and an opaque
+  fingerprint over complete private supervisor commands. VPS5 deployment of
+  PR #1293 then exercised the same manual contract successfully for all five
+  configured panes.
+- Scope: require explicit `--execute`, exact session name, expected supervisor
+  fingerprint, stable sampled preflight, and an immediate action snapshot;
+  send one Ctrl-C round only to exact panes; wait for exact PIDs; recheck the
+  process set, pane set, pane parents, and shell readiness; relaunch only exited
+  targets from private commands; and require stable final verification.
+- Behavior boundary: local restart/deploy behavior. The executor does not SSH,
+  pull/build code, contact exchanges directly, write files directly, use broad
+  process-pattern signals, or apply automatic SIGTERM/SIGKILL. Relaunched live
+  bots resume their configured exchange access and normal runtime file writes.
+- Validation: focused executor, target-report, planner, smoke-report, CLI,
+  command secrecy, timeout, duplicate-process, TOCTOU, compilation, and docs
+  regressions.
 - Review gate: temporary maintainer-authorized exact-head Hermes plus green
   Python and Rust CI while Grok is halted.
-- Expected VPS action: pull and run the local-only three-sample target report,
-  confirming that all five targets retain a stable full-command fingerprint;
-  no bot restart, tmux action, or process signal is expected.
+- Expected VPS action: pull, verify CLI/help plus a local-only target report,
+  and leave running bots unchanged. The new executor itself does not require a
+  restart to become available for a later authorized deployment.
 
 ## Deployed Baseline
 
 - Canonical `master` and VPS5 are
-  `393aec15a49d6b6cf4f6bda37ed8a2dab00b5f2c`, PR #1291. VPS5 fast-forwarded
-  cleanly from `04209762`; the five configured bot panes were then restarted so
-  the already-merged behavior-changing PR #1292 would be loaded. Exact panes
+  `0f366b6f6e6b05ab0bd748b012c2c86ed85f978c`, PR #1293. PR #1294 first
+  fast-forwarded cleanly as `3de024c76d5c07bda2b4e64400c1a204d6be38a8`
+  and produced a hard-green 3/3 stable target report with all five targets,
+  zero issues, fingerprint
+  `01d200d4a38c5c85a2123b5210224a18cdef08d0a8be3efc48edb4a159fc5db4`,
+  and no command exposure. PR #1293 then fast-forwarded cleanly without a Rust
+  rebuild.
+- The five configured bot panes were restarted to load PR #1293. Exact panes
   `%358/%359/%360/%361/%362` and pane parents
   `856294/856332/856364/856398/856434` remained stable. Old bot PIDs
-  `1003995/1003997/1003999/1004001/1004002` exited after one exact-pane Ctrl-C
-  round, and replacement PIDs
-  `1013205/1013207/1013209/1013210/1013211` matched the same ownership contract.
-- Immediate and settled bounded smokes were `ok=true` with zero hard monitor,
-  log, process, fill-refresh, or account-critical failures and all five expected
-  processes matched. The settled target report collected 3/3 stable samples,
-  reported zero changed targets, and retained all five relaunch-ready paths.
-  Unrelated `misc:0.0` remained `%8`, PID `434835`. One ordinary OHLCV timeout
-  recovered naturally; no direct exchange probe or event was manufactured.
-- An initial host-alias mistake fast-forwarded the tracked-clean optimizer host
-  `vpsopt3` checkout to the same canonical master. No process there was
-  signalled, stopped, or restarted; subsequent deployment and all smoke
-  evidence used the correct `vps5` host.
+  `1013205/1013207/1013209/1013210/1013211` exited after one exact-pane Ctrl-C
+  round. Replacement PIDs `1015403/1015406/1015410/1015412/1015414` matched the
+  same exact ownership contract and retained the full-command fingerprint.
+  Unrelated `misc:0.0` remained `%8`, PID `434835`.
+- The immediate target report and smoke were `ok=true` with zero hard failures,
+  five stable exact processes, and successful natural account/fill activity. A
+  later bounded window correctly remained red after two real KuCoin
+  account-state `RequestTimeout` failures and one degraded cycle; process
+  sampling observed all temporary `D` states recover without PID churn. The
+  fresh recovery smoke was `ok=true` with zero hard failures, `326/326` remote
+  calls, `61/61` account-critical calls, and nine successful fill refreshes.
+  A quiet exact-PID sample reached `R=4,S=1`; the final target report retained
+  3/3 stable samples, five relaunch-ready targets, zero issues, and the same
+  fingerprint. No direct exchange probe or event was manufactured.
 
 - Canonical `master` and VPS5 are
   `b490bd75bebd0228628c1b628b46d3f3ac52cee4`, PR #1290. VPS5 fast-forwarded
