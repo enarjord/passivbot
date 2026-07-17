@@ -8,6 +8,13 @@ All notable user-facing changes will be documented in this file.
   fingerprint of the parsed supervisor command contract, failing closed when
   that contract changes without exposing command content.
 
+- Live trailing extrema now reset independently per symbol and position side
+  after every confirmed fill. Ordinary trailing closes are withheld and stale
+  trailing orders retired until post-fill candles establish fresh extrema,
+  while panic/HSL exits remain available. Trailing-martingale monitor
+  diagnostics now use the Rust close formula and report its exact wallet
+  exposure and volatility inputs.
+
 - Exact live restart targets now classify whether the bot is a child of its
   tmux pane parent and therefore has a bounded candidate relaunch path after a
   required post-stop pane recheck. The report exposes only method/proof

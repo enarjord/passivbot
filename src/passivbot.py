@@ -7799,9 +7799,9 @@ class Passivbot:
                 return anchor_ts
         return None
 
-    def get_last_position_changes(self, symbol=None):
-        """Return the most recent fill timestamp per symbol/side for trailing logic."""
-        last_position_changes = defaultdict(dict)
+    def _get_last_position_change_anchors(self, symbol=None):
+        """Return the latest fill timestamp and identity per trailing position side."""
+        anchors = defaultdict(dict)
         events = [] if self._pnls_manager is None else self._pnls_manager.get_events()
         symbols = [symbol] if symbol is not None else list(self.positions)
         for symbol in symbols:
@@ -7809,15 +7809,39 @@ class Passivbot:
                 continue
             for pside in ["long", "short"]:
                 if self.has_position(pside, symbol) and self.is_trailing(symbol, pside):
-                    for ev in reversed(events):
+                    for event_index in range(len(events) - 1, -1, -1):
+                        ev = events[event_index]
                         if ev.symbol == symbol and ev.position_side == pside:
-                            last_position_changes[symbol][pside] = int(ev.timestamp)
+                            timestamp = int(ev.timestamp)
+                            event_id = getattr(ev, "id", None) or getattr(
+                                ev, "client_order_id", None
+                            )
+                            if not event_id:
+                                event_id = f"event_index:{event_index}"
+                            anchors[symbol][pside] = {
+                                "timestamp": timestamp,
+                                "epoch": f"fill:{timestamp}:{event_id}",
+                            }
                             break
-                    if pside not in last_position_changes.get(symbol, {}):
+                    if pside not in anchors.get(symbol, {}):
                         anchor_ts = self._position_anchor_timestamp_ms(symbol, pside)
                         if anchor_ts is not None:
-                            last_position_changes[symbol][pside] = anchor_ts
-        return last_position_changes
+                            anchors[symbol][pside] = {
+                                "timestamp": anchor_ts,
+                                "epoch": f"position:{anchor_ts}",
+                            }
+        return anchors
+
+    def get_last_position_changes(self, symbol=None):
+        """Return the most recent fill timestamp per symbol/side for trailing logic."""
+        anchors = self._get_last_position_change_anchors(symbol)
+        return {
+            symbol: {
+                pside: int(anchor["timestamp"])
+                for pside, anchor in pside_anchors.items()
+            }
+            for symbol, pside_anchors in anchors.items()
+        }
 
     # Legacy: wait_for_ohlcvs_1m_to_update removed (CandlestickManager handles freshness)
 
@@ -7841,16 +7865,25 @@ class Passivbot:
         if not hasattr(self, "trailing_prices"):
             self.trailing_prices = {}
         unavailable_reasons: dict[str, set[str]] = defaultdict(set)
+        unavailable_psides: dict[str, set[str]] = defaultdict(set)
         self._orchestrator_trailing_unavailable_symbols = set()
         self._orchestrator_trailing_unavailable_reasons = {}
-        last_position_changes = self.get_last_position_changes()
+        self._orchestrator_trailing_unavailable_psides = {}
+        position_change_anchors = self._get_last_position_change_anchors()
+        last_position_changes = {
+            symbol: {
+                pside: int(anchor["timestamp"])
+                for pside, anchor in pside_anchors.items()
+            }
+            for symbol, pside_anchors in position_change_anchors.items()
+        }
         symbols = (
             set(self.trailing_prices)
             | set(last_position_changes)
             | set(self.active_symbols)
         )
 
-        # Initialize missing containers without erasing the last known trailing bundle.
+        # Initialize missing containers. Bundles are reset below when their fill epoch changes.
         for symbol in symbols:
             self.trailing_prices.setdefault(symbol, {})
             self.trailing_prices[symbol].setdefault(
@@ -7866,15 +7899,23 @@ class Passivbot:
                 if self.has_position(pside, symbol) and self.is_trailing(symbol, pside):
                     required_trailing[symbol].add(pside)
 
+        previous_epochs = getattr(self, "_trailing_position_change_epochs", {}) or {}
+        current_epochs: dict[tuple[str, str], str] = {}
+
         for symbol, psides in required_trailing.items():
-            pside_changes = (
-                last_position_changes[symbol]
-                if symbol in last_position_changes
-                else {}
-            )
             for pside in psides:
-                if pside not in pside_changes:
+                anchor = position_change_anchors.get(symbol, {}).get(pside)
+                if anchor is None:
+                    self.trailing_prices[symbol][pside] = _trailing_bundle_default_dict()
                     unavailable_reasons["missing_position_change_anchor"].add(symbol)
+                    unavailable_psides[symbol].add(pside)
+                    continue
+                epoch_key = (symbol, pside)
+                epoch = str(anchor["epoch"])
+                current_epochs[epoch_key] = epoch
+                if previous_epochs.get(epoch_key) != epoch:
+                    self.trailing_prices[symbol][pside] = _trailing_bundle_default_dict()
+        self._trailing_position_change_epochs = current_epochs
 
         # Build concurrent fetches per symbol that has position changes
         fetch_plan = {}
@@ -7905,6 +7946,7 @@ class Passivbot:
                 results[sym] = await task
             except Exception as e:
                 unavailable_reasons["candle_fetch_failed"].add(sym)
+                unavailable_psides[sym].update(required_trailing.get(sym, set()))
                 logging.debug("failed to fetch candles for trailing %s: %s", sym, e)
                 results[sym] = None
 
@@ -7914,6 +7956,7 @@ class Passivbot:
                 continue
             if arr.size == 0:
                 unavailable_reasons["missing_trailing_candles"].add(symbol)
+                unavailable_psides[symbol].update(required_trailing.get(symbol, set()))
                 continue
             if symbol not in last_position_changes:
                 continue
@@ -7924,6 +7967,7 @@ class Passivbot:
                 mask = arr["ts"] > int(changed_ts)
                 if not np.any(mask):
                     unavailable_reasons["missing_trailing_candles"].add(symbol)
+                    unavailable_psides[symbol].add(pside)
                     continue
                 subset = arr[mask]
                 try:
@@ -7933,6 +7977,7 @@ class Passivbot:
                     self.trailing_prices[symbol][pside] = bundle
                 except Exception as e:
                     unavailable_reasons["bundle_compute_failed"].add(symbol)
+                    unavailable_psides[symbol].add(pside)
                     logging.debug(
                         "failed to compute trailing bundle for %s %s: %s",
                         symbol,
@@ -7958,6 +8003,11 @@ class Passivbot:
         self._orchestrator_trailing_unavailable_reasons = {
             symbol: sorted(reasons)
             for symbol, reasons in sorted(unavailable_by_symbol.items())
+        }
+        self._orchestrator_trailing_unavailable_psides = {
+            symbol: sorted(psides)
+            for symbol, psides in sorted(unavailable_psides.items())
+            if psides
         }
 
     def symbol_is_eligible(self, symbol):
