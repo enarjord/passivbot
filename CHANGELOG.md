@@ -23,6 +23,8 @@ All notable user-facing changes will be documented in this file.
 - Updated the live CCXT dependency from 4.5.48 to 4.5.66. WEEX uses a narrowly
   scoped compatibility handler for its documented successful configuration
   response, which upstream CCXT 4.5.66 otherwise raises as an exchange error.
+  The Requests and aiohttp pins are aligned with CCXT 4.5.66's declared
+  dependencies.
 
 - Live trailing restart reconciliation now preserves authoritative position-update
   timestamps from CCXT and raw exchange payloads and no longer
