@@ -1,199 +1,80 @@
 # Pull Request Review Runbook
 
-Use this for repository-owned semantic review. Automation platforms own their scheduler and
-credential configuration; this runbook owns the durable polling, recovery, trigger, and review
-contract the scheduler must preserve.
+Use this for repository-owned semantic review. Read `AGENTS.md`, `../principles.md`,
+`../validation.md`, and the subsystem contracts routed by `../README.md`.
 
-## Authority
+Review is read-only unless the user explicitly asks for implementation. Follow the authority and
+network boundaries in `AGENTS.md` while gathering evidence.
 
-Review is read-only unless the user explicitly asks for implementation. Do not push, merge, deploy,
-SSH, signal processes, contact authenticated exchange endpoints, or run a live bot merely because
-those actions might strengthen a review.
+## Review Loop
 
-An approval applies only to the reviewed head SHA and merge base unless the proportional mechanical
-delta exception below is documented and satisfied.
+For a one-time review, make one complete pass. For continuous review, use a durable scheduler that
+can resume after restarts and retain only enough compact state to identify the PR and completed
+reviews. GitHub and fetched repository refs remain authoritative.
 
-## Durable Autonomous Loop
+The compact change detector includes PR and draft state, exact base, head, and effective merge-base
+identities, and digests of CI and review/comment metadata. Scope completed-review records by
+reviewer and those identities, preserving the decision. Do not persist credentials, full comments,
+diffs, test output, or exchange data.
 
-Continuous review requires a scheduler, heartbeat, or equivalent mechanism that survives idle
-terminals, transient disconnects, and agent restarts. If no durable mechanism exists, perform one
-complete pass and do not claim continuous monitoring.
+- Discover the current base and head from live PR metadata. Default-branch loops discover the
+  repository's current default branch rather than hardcoding a historical target.
+- Review ready PRs when they are new, their head, base, or effective merge base changes, re-review is
+  requested, or new evidence invalidates an earlier conclusion. Do not review drafts unless
+  requested.
+- A review applies to its exact base, head, and effective merge base. Do not duplicate reviews when
+  those identities are unchanged, and do not treat CI-only updates as a reason to repeat semantic
+  review.
+- After interruption or a transient failure, reconcile live PR metadata and continue with bounded
+  retry rather than relying on stale state.
 
-Persist only compact state outside the repository, such as:
+## Review
 
-- PR number and draft state
-- last observed target/head SHAs and merge-base identity
-- last fully reviewed head SHA
-- CI and review/comment metadata digests
-- retry count, next retry time, and bounded error classification
+1. Fetch the current base and PR head, compute their effective merge base, and review from a clean
+   checkout or worktree.
+2. Review the complete target-relative change, its relevant callers and consumers, and any material
+   restart or failure behavior.
+3. Apply the routed contracts and choose proportionate validation from `../validation.md`. Check CI
+   and mergeability, but do not treat CI as a substitute for review.
+4. Distinguish defects introduced by the PR from failures already present on the target branch or
+   caused by the environment.
+5. Report actionable findings first with exact locations, evidence, impact, and a credible fix.
+   Avoid style-only findings unless they affect correctness or maintainability.
 
-Do not persist credentials, full comments, diffs, test output, or exchange data. GitHub and fetched
-repository refs remain authoritative.
+When a new head only incorporates the target branch or resolves a mechanical conflict, prior
+semantic approval may be carried forward after a focused delta review only when:
 
-Scope review state by reviewer identity and head SHA. One reviewer's approval does not supersede
-another's request for changes, and old-head verdicts do not apply to a semantically changed head.
-The proportional mechanical-delta contract below is the only carry-forward exception. Preserve
-reviewer, head, decision, and submission time instead of collapsing review history. Ambiguity wakes
-semantic review rather than being resolved by the polling tier.
-
-### Target Selection And Branch Cutovers
-
-- Treat each PR's current base ref and base SHA as its authoritative review target. Do not infer the
-  target from the feature-branch name, an old prompt, or cached scheduler state.
-- Repository-default review loops resolve the current default branch from live GitHub metadata.
-  A loop intentionally scoped to a non-default branch records that exception explicitly rather than
-  hardcoding a historical default.
-- Persist the observed base ref and default branch in compact state. A PR base-ref change or a
-  default-branch change for a default-target loop materially changes review scope: invalidate the
-  cached merge base and gate digest, refetch exact refs, and perform a fresh integrated review.
-- After a default-branch cutover, update scheduler filters, protected-check configuration, and
-  compact cache. Before retiring the old target or compatibility routes, require a changed-head wake
-  to discover a PR against the new default and load this canonical runbook successfully.
-
-### Cost-Aware Polling
-
-Unchanged polls are deterministic metadata work, not semantic-review work:
-
-1. Fetch open-PR metadata including number, draft state, base ref/SHA, head SHA, update time, and CI
-   summary. Default-target loops also fetch the repository's current default branch.
-2. Compare it with compact saved state.
-3. Fetch reviews/comments and wake semantic review only for a new or materially changed PR.
-4. Do not fetch diffs, create worktrees, rerun tests, or invoke a reasoning model for an unchanged
-   head merely because CI remains pending.
-
-One-minute polling is appropriate only when the scheduler computes the digest without invoking a
-model. If every heartbeat wakes an agent, use at least ten minutes and add small jitter.
-
-Where model routing exists, use deterministic tooling for metadata, a lower-cost capable tier for
-changed-state triage, and the strongest available tier for trading-critical, architectural,
-security, conflicting-finding, and final-verdict work. Rate limits delay a high-risk review; they do
-not justify weakening it.
-
-### Retry And Recovery
-
-- Retry transient network, GitHub, checkout, authentication-refresh, subprocess, and rate-limit
-  failures with bounded backoff such as 1, 2, 5, then 10 minutes.
-- Reset backoff after a successful poll. Rate limits delay metadata polling without generating
-  repeated narration.
-- After reconnect or restart, reload compact state and reconcile live metadata by PR number and
-  exact SHAs before semantic work.
-- One failure is not a blocker. Escalate only after the same persistent condition repeats and no
-  read-only progress remains.
-
-### Semantic Review Triggers
-
-Review when a ready PR is new, its head or base ref changes, its effective merge base changes
-materially, a default-target loop observes a new repository default, a maintainer requests
-re-review, or new evidence invalidates the prior conclusion. A CI-only state change does not
-duplicate semantic review. Do not approve drafts unless explicitly requested.
-
-After a changed head, review the delta and then the integrated full PR. Post one current verdict;
-do not repeat unchanged approvals or status narration.
-
-### Proportional Mechanical Delta Review
-
-Do not require a redundant full semantic review when a changed head only integrates the current
-target branch or resolves a mechanical conflict without changing the already-reviewed behavior.
-The final adjudicator may carry the prior semantic verdict forward when all of these are true:
-
-1. The target-relative production, test, configuration, and contract diff is unchanged from the
-   semantically reviewed scope.
-2. The new commit delta is inspected directly and contains only mechanical integration work, such
-   as preserving both sides of a changelog/ledger conflict, formatting, or an equivalent no-op.
+1. The target-relative production, test, configuration, and contract diff is unchanged.
+2. Direct inspection confirms that the new commit delta is mechanical and does not change the
+   reviewed behavior.
 3. The integrated branch is mergeable and required CI is green.
-4. The PR records the old reviewed head, new head, target SHA, exact mechanical delta, validation,
-   and the reason a full re-review is unnecessary.
+4. The review records the old and new heads, target SHA, inspected delta, validation, and reason the
+   prior approval still applies.
 
-This exception does not apply to code, test-contract, configuration, dependency, generated
-contract, runtime, or substantive documentation changes, nor when the effective merge-base change
-alters integrated behavior. Those changes require a current-head semantic delta and integrated
-review. If an obsolete request-for-changes names only the resolved mechanical blocker, a maintainer
-may dismiss or supersede it with the recorded mechanical-delta evidence; that is not a degraded
-gate. Repository-enforced CI and protection still apply.
+Any substantive change to code, tests, configuration, dependencies, contracts, runtime behavior,
+or documentation requires a current-head review of the affected result.
 
-### Enforceable Review Gates
+Re-fetch the exact base and head and recompute the effective merge base immediately before posting.
+If any identity changed, review the changed integrated result instead of publishing a stale verdict.
 
-When repository policy makes semantic review mandatory, publish the result as a status or check
-bound to the exact head SHA and enforce that check with repository merge protection. Comments,
-polling cadence, and reviewer narration alone cannot prevent a new or unreviewed head from merging.
+## Sign-Off
 
-- A semantically changed head makes the semantic-review check pending until that head is reviewed.
-- A stale check, comment, or approval alone cannot satisfy the current-head gate. A current-head
-  mechanical-delta check may explicitly carry the prior semantic verdict under the contract above.
-- The posting path re-fetches the head immediately before publishing the verdict.
-- Merge readiness still requires every configured semantic review, carried mechanical-delta
-  adjudication where applicable, and CI gate to be green for the integrated current head.
-- A `COMMENT` review remains advisory even when its prose says `APPROVE`; it cannot satisfy a
-  required GitHub approval or substitute for a protected status/check.
+Every completed review records the reviewer identity, exact base, head, and effective merge-base
+SHAs, and decision, and ends with:
 
-If the automation cannot publish or enforce a SHA-bound check, describe it as advisory monitoring,
-not a mandatory merge gate.
+```text
+reviewed by <model/harness name>
+```
 
-## Fresh Isolated Checkout
+This marker records completion by that reviewer, not approval. When actionable findings remain,
+post them through the appropriate review mechanism, record a changes-requested decision, and do not
+approve. When no actionable findings remain, approve when available. A requested draft review
+remains advisory and uses `COMMENT` unless formal approval of the draft was explicitly requested.
+If self-approval is unavailable, a completed-review comment is not a formal GitHub approval.
 
-1. Fetch the current target branch and PR head immediately before review.
-2. Use a clean review worktree, not an implementer's dirty checkout.
-3. Record target SHA, head SHA, merge base, and mergeability.
-4. Re-check the remote head before posting. If it moved, discard or clearly scope stale results.
+If semantic review is intended to be an enforced merge gate, use repository protection or a
+head-bound check; comments alone are advisory.
 
-## Review Method
-
-1. Read `AGENTS.md`, `docs/ai/principles.yaml`, `docs/ai/validation.md`, and routed subsystem
-   contracts.
-2. Read the PR body and classify affected contracts: documentation/tooling, observability, live
-   orchestration, exchange, Rust/trading, backtest, optimizer, config, or data preparation.
-3. Review the complete diff against the current merge base. Verify that PR claims match the actual
-   code surface.
-4. Trace behavior through callers and consumers, including restart and failure paths.
-5. Validate according to `../validation.md`:
-   - observability: routing, boundedness, redaction, hot-path cost, sink isolation
-   - exchange: offline connector/request tests and documented payload contracts
-   - Rust/order/risk: Rust tests, verified extension, parity tests, bounded backtest/fake-live
-   - backtest/optimizer: bounded real CLI integration smoke
-6. Distinguish change regressions from failures reproduced on the current target branch.
-7. Check CI and mergeability without treating CI as a substitute for semantic review.
-
-Never contact an exchange without the authority required by `AGENTS.md`. The local fake-live
-harness is offline; a public-network probe is not.
-
-## Review Focus
-
-- Architecture and intended contract.
-- Trading safety, error handling, and degraded behavior.
-- Rust/Python ownership and live/backtest parity.
-- Stateless restart reproducibility.
-- Signed quantities, side semantics, EMA spans, and exchange contracts.
-- Concurrency, ambiguous exchange writes, retry/idempotency, and shutdown behavior.
-- Test quality: tests prove the claim rather than merely execute the path.
-- Documentation accuracy and operator impact.
-- Secrets, payload bounds, retention, event volume, and hot-path cost.
-
-Avoid style-only findings unless they affect correctness or maintainability.
-
-## Verdict
-
-Use a formal review when available:
-
-- `APPROVE` when no actionable findings remain
-- `REQUEST_CHANGES` for actionable defects
-- `COMMENT` for clarification or when self-approval is unavailable
-
-When self-approval is unavailable, a `COMMENT` may record the semantic verdict and exact reviewed
-SHAs, but it is not a formal approval. Describe the result as advisory unless a separate protected
-SHA-bound review check records it.
-
-Every verdict records:
-
-- reviewer identity and PR number
-- base, head, and merge-base SHAs
-- full-review or exact-delta scope
-- findings first, ordered by severity, with exact locations
-- commands and observed results
-- base-only failures and environmental limitations
-- residual risk and untested surfaces
-
-Never call a PR merge-ready unless required current-head review, or a documented proportional
-mechanical carry-forward, and CI are green for the integrated head SHA.
-
-After a new push, review the delta and re-check the integrated result before superseding the prior
-verdict. Do not post repeated unchanged approvals or polling narration.
+Call a PR merge-ready only when the current head has the required review sign-off and required CI is
+green. A draft is not merge-ready. After a new push, review the changed result and issue a new
+sign-off for that integrated state.
