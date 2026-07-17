@@ -24,8 +24,9 @@ Estimated completion:
 
 - Branch: `codex/restart-executor-runtime-contract`, based on canonical
   `7b833471c1e770ceb8650a4c3b395713b6a76dcb` after PR #1297.
-- PR: pending. Slice: bind the local restart executor to the intended repository
-  and compiled Rust runtime before any process action.
+- PR: #1298, `Bind live restart execution to repository runtime`. Slice: bind
+  the local restart executor to the intended repository and compiled Rust
+  runtime before any process action.
 - Triggering evidence: PR #1297 proved exact local stop/relaunch mechanics but
   did not verify that the executor was running from the intended clean commit
   or that the importable Rust extension matched that checkout's Rust sources.
