@@ -152,6 +152,10 @@ TOOL_COMMANDS: dict[str, CommandSpec] = {
         "tools.live_restart_smoke_evidence",
         "evaluate bounded local restart smoke evidence without live operations",
     ),
+    "live-restart-smoke-collect": CommandSpec(
+        "tools.live_restart_smoke_collection",
+        "collect and evaluate bounded local restart smoke evidence",
+    ),
     "live-restart-executor": CommandSpec(
         "tools.live_restart_executor",
         "gracefully restart exact verified local tmux targets",

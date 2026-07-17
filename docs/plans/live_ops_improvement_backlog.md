@@ -371,6 +371,12 @@ Related detailed plans:
      events. Deployment also exposed lossy epoch-ms projection and comparison;
      the active follow-up preserves exact bounded timestamps and rejects
      dropped hard-looking log evidence. Automatic collection remains later.
+   - 2026-07-17: PR #1302 merged and deployed exact epoch-ms fidelity plus the
+     dropped-hard fail-closed gate without restarting bots. The retained real
+     restart window passed with exact bounds; one-millisecond mismatch and
+     dropped-hard in-memory variants failed as expected. The active follow-up
+     composes target, smoke, and evaluation in memory without intermediate full
+     report files or process control.
 
    Remaining refinements: safe pull/build and post-restart smoke orchestration
    remain open, as does any separately reviewed force-escalation policy.
