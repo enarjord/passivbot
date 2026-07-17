@@ -850,6 +850,33 @@ class TestFetchPositionsHooks:
         assert len(result) == 1
         assert result[0]["symbol"] == "ETH/USDT:USDT"
 
+    def test_normalize_positions_preserves_ccxt_update_and_raw_timing(
+        self, bot_with_mock_cca
+    ):
+        """WEEX exposes creation and latest-update time through different fields."""
+        bot = bot_with_mock_cca
+        fetched = [
+            {
+                "symbol": "BTC/USDT:USDT",
+                "side": "long",
+                "contracts": 0.5,
+                "entryPrice": 50_000,
+                "timestamp": 120_000,
+                "lastUpdateTimestamp": 240_000,
+                "info": {"createdTime": "120000", "updatedTime": "240000"},
+            }
+        ]
+
+        result = bot._normalize_positions(fetched)
+
+        assert result[0]["timestamp"] == 120_000
+        assert result[0]["lastUpdateTimestamp"] == 240_000
+        assert result[0]["info"] == {
+            "createdTime": "120000",
+            "updatedTime": "240000",
+        }
+        assert result[0]["info"] is not fetched[0]["info"]
+
     @pytest.mark.asyncio
     async def test_fetch_positions_uses_hooks(self, bot_with_mock_cca):
         """fetch_positions should use _do_fetch_positions and _normalize_positions."""
