@@ -15,7 +15,25 @@ merge, live smoke evidence changes, or new gaps are discovered.
 - Do not use this file for design churn; unresolved design details belong in the
   plan or a focused handoff doc.
 
-## Latest Canonical Deployment (PR #1298)
+## Latest Canonical Deployment (PRs #1296 And #1295)
+
+- Docs-only PR #1295 and behavior-changing PR #1296 merged as canonical
+  `491f319251076b82799a5212efe2d797c56b1b31` after exact-current-head Hermes
+  approval and green Python/Rust CI. PR #1296 hardens trailing-fill association
+  across position snapshots and requires post-snapshot fill confirmation when
+  authoritative position-update timestamps are unavailable.
+- VPS5 fast-forwarded cleanly from `4a7a6753`. The exact local executor stopped
+  only old bot PIDs `1015403/1015406/1015410/1015412/1015414` in panes
+  `%358/%359/%360/%361/%362` and relaunched replacement PIDs
+  `1019670/1019679/1019673/1019681/1019676` under the same pane parents and
+  private supervisor fingerprint. Repository and Rust source/stamp checks
+  remained exact and tracked-clean at every action boundary.
+- Executor verification and the independent settled report were hard-green
+  with 3/3 stable samples, five relaunch-ready targets, no extras or duplicates,
+  and zero issues. Unrelated `misc:0.0` remained `%8`, PID `434835`. No direct
+  exchange probe or event was manufactured.
+
+## Previous Canonical Deployment (PR #1298)
 
 - PR #1298 merged as `4a7a6753bff00f9b8749d9707f9bdccc4b3a5ffc`
   after exact-head Hermes approval and green Python/Rust CI. It requires the

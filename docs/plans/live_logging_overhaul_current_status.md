@@ -22,8 +22,8 @@ Estimated completion:
 
 ## Active Review Slice
 
-- Branch: `codex/restart-executor-artifact-fingerprint`, based on canonical
-  `4a7a6753bff00f9b8749d9707f9bdccc4b3a5ffc` after PR #1298.
+- Branch: `codex/restart-executor-artifact-fingerprint`, integrated with
+  canonical `491f319251076b82799a5212efe2d797c56b1b31` after PR #1296.
 - PR: #1300. Slice: require the operator to confirm the exact Rust build-input
   fingerprint authorized for restart execution.
 - Triggering evidence: PR #1298's VPS5 fail-closed probe proved the checked-out
@@ -51,7 +51,19 @@ Estimated completion:
 ## Deployed Baseline
 
 - Canonical `master` and VPS5 are
-  `4a7a6753bff00f9b8749d9707f9bdccc4b3a5ffc`, PR #1298. Exact-head Hermes and
+  `491f319251076b82799a5212efe2d797c56b1b31` after docs-only PR #1295 and
+  behavior-changing PR #1296. Both merged with exact-current-head Hermes and
+  green Python/Rust CI. VPS5 fast-forwarded cleanly from `4a7a6753` and the
+  exact local executor gracefully restarted only panes
+  `%358/%359/%360/%361/%362`. Old PIDs
+  `1015403/1015406/1015410/1015412/1015414` exited; replacement PIDs
+  `1019670/1019679/1019673/1019681/1019676` retained the same pane parents and
+  private supervisor fingerprint. The executor and independent settled target
+  reports were hard-green with 3/3 stable samples, all five targets
+  relaunch-ready, zero extras or duplicates, and zero issues. VPS5 remained
+  tracked-clean; unrelated `misc:0.0` remained `%8`, PID `434835`. No direct
+  exchange probe or event was manufactured.
+- PR #1298 merged as `4a7a6753bff00f9b8749d9707f9bdccc4b3a5ffc`. Exact-head Hermes and
   both CI jobs were green. VPS5 fast-forwarded cleanly from `7b833471` without a
   restart or process signal. A deliberately wrong expected head returned exit
   1 with `action_started=false`, no target preflight, zero tracked changes, and
