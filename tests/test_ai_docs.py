@@ -23,3 +23,21 @@ def test_compatibility_routes_point_to_canonical_documents():
         compatibility_route = AI_DOCS_DIR / route_name
         assert compatibility_route.is_file()
         assert canonical_reference in compatibility_route.read_text(encoding="utf-8")
+
+
+def test_pr_review_contract_preserves_scheduler_and_verdict_semantics():
+    contract = " ".join(
+        (AI_DOCS_DIR / "runbooks" / "pr_review.md").read_text(encoding="utf-8").split()
+    )
+
+    required_contracts = [
+        "digests of CI and review/comment metadata",
+        "Scope completed-review records by reviewer and head",
+        "The target-relative production, test, configuration, and contract diff is unchanged",
+        "records the old and new heads, target SHA, inspected delta, validation",
+        "Every completed review records the reviewer identity, exact head SHA, and decision",
+        "This marker records completion by that reviewer, not approval",
+    ]
+
+    for required_contract in required_contracts:
+        assert required_contract in contract
