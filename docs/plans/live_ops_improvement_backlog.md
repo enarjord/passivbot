@@ -359,6 +359,12 @@ Related detailed plans:
      private exact-pane relaunch, and stable final verification. It deliberately
      omits SSH, git pull, Rust rebuild, direct exchange access, and automatic
      force escalation.
+   - 2026-07-17: PR #1300 merged and deployed operator-confirmed Rust
+     build-input fingerprints plus an in-check final rehash at every executor
+     runtime boundary. A deliberately wrong VPS5 fingerprint failed before
+     target sampling or action, and all five bot PIDs remained unchanged. The
+     active follow-up adds a pure evaluator for already-generated full target
+     and smoke JSON reports; automatic report collection remains later work.
 
    Remaining refinements: safe pull/build and post-restart smoke orchestration
    remain open, as does any separately reviewed force-escalation policy.

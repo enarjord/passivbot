@@ -22,38 +22,38 @@ Estimated completion:
 
 ## Active Review Slice
 
-- Branch: `codex/restart-executor-artifact-fingerprint`, integrated with
-  canonical `491f319251076b82799a5212efe2d797c56b1b31` after PR #1296.
-- PR: #1300. Slice: require the operator to confirm the exact Rust build-input
-  fingerprint authorized for restart execution.
-- Triggering evidence: PR #1298's VPS5 fail-closed probe proved the checked-out
-  source and loaded extension stamp matched, but also showed that VPS5's
-  fingerprint `7869bc3d...` differed from the clean local fingerprint
-  `d14a5363...` because the intentionally fingerprinted, ignored `Cargo.lock`
-  differs by host. The current executor accepts either self-consistent value
-  without an independent operator confirmation.
-- Scope: require an exact expected 64-character Rust source fingerprint and
-  prove `expected == observed build inputs == loaded extension stamp` before
-  target sampling, immediately before the first signal, and before relaunch.
-- Behavior boundary: local restart/deploy behavior. The executor does not SSH,
-  pull/build code, contact exchanges directly, write files directly, use broad
-  process-pattern signals, or apply automatic SIGTERM/SIGKILL. Relaunched live
-  bots resume their configured exchange access and normal runtime file writes.
-- Validation: focused runtime-contract, executor, target-report, planner,
-  smoke-report, CLI, secrecy, timeout, duplicate-process, TOCTOU, compilation,
-  and docs regressions.
+- Branch: `codex/restart-smoke-evidence-contract`, based on canonical
+  `e1a4837914c1e4768cd7963bba47212499d32937` after PR #1300.
+- PR: #1301. Slice: add a pure post-restart evidence evaluator over existing
+  full target-report and smoke-report JSON artifacts.
+- Triggering evidence: the executor now proves exact action boundaries, but the
+  subsequent operator smoke evidence still depends on manual interpretation of
+  two independently generated reports.
+- Scope: require an exact repository head, private supervisor fingerprint, and
+  target count; fail closed unless target sampling is stable and the full smoke
+  report proves a bounded monitor/log window, clean repository, complete
+  shutdown lifecycle counts, and distinct startup timing coverage.
+- Behavior boundary: read two local JSON files and emit bounded sanitized JSON.
+  The evaluator does not execute report producers, SSH, signal or start
+  processes, contact a network or exchange, load credentials, or write files.
+- Validation: focused evaluator, CLI dispatch/exit, malformed-input, redaction,
+  target-contract, smoke-contract, compilation, and docs regressions.
 - Review gate: temporary maintainer-authorized exact-head Hermes plus green
   Python and Rust CI while Grok is halted.
-- Expected VPS action: pull and exercise only the executor's fail-closed
-  pre-action contract with a deliberately wrong expected Rust fingerprint;
-  leave running bots unchanged.
+- Expected VPS action: pull and evaluate freshly generated bounded target and
+  smoke JSON artifacts. Do not restart or signal bots.
 
 ## Deployed Baseline
 
 - Canonical `master` and VPS5 are
-  `491f319251076b82799a5212efe2d797c56b1b31` after docs-only PR #1295 and
-  behavior-changing PR #1296. Both merged with exact-current-head Hermes and
-  green Python/Rust CI. VPS5 fast-forwarded cleanly from `4a7a6753` and the
+  `e1a4837914c1e4768cd7963bba47212499d32937` after PR #1300. Exact-head Hermes
+  and Python/Rust CI were green. VPS5 fast-forwarded without a restart or
+  signal; a deliberately wrong expected Rust fingerprint failed before target
+  sampling with `action_started=false`, and the final 3/3 target report retained
+  the same five PIDs, zero extras or issues, and exact states `R=3,S=2`.
+  Repository state stayed tracked-clean and unrelated `misc:0.0` remained `%8`,
+  PID `434835`.
+- PR #1296 previously fast-forwarded VPS5 cleanly from `4a7a6753` and the
   exact local executor gracefully restarted only panes
   `%358/%359/%360/%361/%362`. Old PIDs
   `1015403/1015406/1015410/1015412/1015414` exited; replacement PIDs
