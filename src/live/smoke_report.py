@@ -6925,6 +6925,7 @@ def _parse_tmuxp_live_commands(config_path: str | Path | None) -> dict[str, Any]
                 "name": current_window,
                 "command": _redact_live_command_for_report(command, max_len=400),
                 "command_key": _redact_live_command_for_report(command_key, max_len=400),
+                "_launch_command": command,
                 "_match_key": command_key,
                 **context,
             }
@@ -6944,7 +6945,9 @@ def _supervisor_command_contract(
         (
             {
                 "window_name": str(row.get("name") or "").strip(),
-                "command": str(row.get("_match_key") or "").strip(),
+                "command": str(
+                    row.get("_launch_command") or row.get("_match_key") or ""
+                ).strip(),
                 "config_path": str(row.get("config_path") or "").strip(),
             }
             for row in expected_rows
