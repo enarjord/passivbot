@@ -4,6 +4,10 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Hardened WEEX live reconciliation by requiring explicit combined/separated
+  position mode and long/short open-order sides, and by adaptively splitting
+  full fill-history windows so endpoint ordering cannot silently omit fills.
+
 - Added live WEEX USDT perpetual-futures support through CCXT, including
   authenticated account state, simultaneous long/short order placement and
   cancellation, per-symbol combined-position/margin/leverage setup, live

@@ -168,6 +168,9 @@ Handling in Passivbot:
    CCXT's generic `hedged` boolean calls this WEEX mode false.
 4. Treat missing or ambiguous `positionSide` on orders and fills as an error;
    do not infer it from buy/sell alone.
+5. Require the raw symbol configuration to explicitly report `COMBINED` or
+   `SEPARATED`; CCXT's normalized `hedged=false` is not sufficient evidence
+   because it also represents missing or unknown raw mode state.
 
 Primary reference: [WEEX V3 place-order API](https://www.weex.com/api-doc/contract/Transaction_API/PlaceOrder).
 
@@ -225,8 +228,10 @@ seven days per query, and retains up to 365 days.
 
 Handling:
 
-1. Split requested history into seven-day windows and page forward by fill
-   timestamp within each window.
+1. Split requested history into seven-day windows. Recursively bisect every
+   full 100-row response into disjoint time windows until each response proves
+   completeness below the limit; fail closed if one millisecond is saturated.
+   Do not assume the endpoint returns oldest-first rows.
 2. Preserve exchange trade and order IDs, explicit position side, realized PnL,
    and fees; enrich missing Passivbot client-order IDs from order detail.
 3. Keep WEEX historical 1m backtest-data downloading out of the live adapter;

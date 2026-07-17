@@ -36,6 +36,9 @@
 3. Historical retention limits can make old PnL records unavailable.
 4. WEEX trade-detail queries are limited to 100 rows and seven days per request,
    with up to 365 days of retention; its client order id may require an order-detail lookup.
+   Full responses are recursively split into disjoint time windows because the endpoint does not
+   guarantee row ordering or expose a stable cursor. Saturation within one millisecond is unavailable
+   rather than silently treated as complete.
 
 ## Failure Semantics And Risks
 

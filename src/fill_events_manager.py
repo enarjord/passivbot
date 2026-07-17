@@ -5732,36 +5732,39 @@ class WeexFetcher(BaseFetcher):
         window_start = start_ms
         while window_start <= end_ms:
             window_end = min(end_ms, window_start + self.WINDOW_MS - 1)
-            cursor = window_start
-            while cursor <= window_end:
+            pending_windows = [(window_start, window_end)]
+            while pending_windows:
+                query_start, query_end = pending_windows.pop()
                 trades = await self.api.fetch_my_trades(
                     symbol=None,
-                    since=cursor,
+                    since=query_start,
                     limit=self.trade_limit,
-                    params={"type": "swap", "until": window_end},
+                    params={"type": "swap", "until": query_end},
                 )
                 if not trades:
-                    break
-                timestamps = []
+                    continue
                 for trade in trades:
                     event = self._normalize_trade(trade)
-                    timestamps.append(event["timestamp"])
-                    if event["timestamp"] < start_ms or event["timestamp"] > end_ms:
-                        continue
+                    if (
+                        event["timestamp"] < query_start
+                        or event["timestamp"] > query_end
+                    ):
+                        raise RuntimeError(
+                            "WEEX fill endpoint returned a trade outside the requested window"
+                        )
                     collected[event["id"]] = event
                 if len(trades) < self.trade_limit:
-                    break
-                last_timestamp = max(timestamps) if timestamps else 0
-                if last_timestamp < cursor:
+                    continue
+                if query_start >= query_end:
                     raise RuntimeError(
-                        "WEEX fill pagination did not advance within the requested window"
+                        "WEEX fill history is saturated within one millisecond; "
+                        "completeness cannot be proven"
                     )
-                next_cursor = last_timestamp + 1
-                if next_cursor <= cursor:
-                    raise RuntimeError(
-                        "WEEX fill pagination cannot safely advance past a full page"
-                    )
-                cursor = next_cursor
+                midpoint = query_start + (query_end - query_start) // 2
+                # LIFO order keeps requests chronological while every split is
+                # disjoint, so response ordering cannot create skipped fills.
+                pending_windows.append((midpoint + 1, query_end))
+                pending_windows.append((query_start, midpoint))
             window_start = window_end + 1
 
         events = sorted(collected.values(), key=lambda event: event["timestamp"])
