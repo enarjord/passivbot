@@ -56,6 +56,7 @@ def _valid_supervisor_contract(
         and contract.get("algorithm") == "sha256"
         and len(fingerprint) == 64
         and all(character in "0123456789abcdef" for character in fingerprint)
+        and type(contract.get("target_count")) is int
         and contract.get("target_count") == expected_targets
         and contract.get("command_content_exposed") is False
     )

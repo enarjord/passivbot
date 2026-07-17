@@ -286,6 +286,26 @@ def test_live_restart_target_report_fails_without_valid_full_supervisor_contract
     }
 
 
+@pytest.mark.parametrize(
+    ("target_count", "expected_targets"),
+    [(True, 1), (False, 0)],
+)
+def test_supervisor_contract_rejects_boolean_target_count(
+    target_count,
+    expected_targets,
+):
+    assert not target_module._valid_supervisor_contract(
+        {
+            "source": "parsed_supervisor_config",
+            "algorithm": "sha256",
+            "fingerprint": "a" * 64,
+            "target_count": target_count,
+            "command_content_exposed": False,
+        },
+        expected_targets=expected_targets,
+    )
+
+
 def test_tmux_pane_inventory_only_lists_and_bounds_metadata(monkeypatch):
     captured = {}
 
