@@ -347,13 +347,23 @@ async def test_calc_orders_preserves_orders_when_trailing_anchor_unavailable():
 
 
 @pytest.mark.asyncio
-async def test_calc_orders_allows_panic_close_when_trailing_candles_pending():
+@pytest.mark.parametrize(
+    "unavailable_reason",
+    [
+        "missing_trailing_candles",
+        "missing_position_change_anchor",
+        "candle_fetch_failed",
+    ],
+)
+async def test_calc_orders_allows_panic_close_when_trailing_unavailable(
+    unavailable_reason,
+):
     symbol = "BTC/USDT"
     bot = OrchestrationBot({symbol: 100.0})
     bot.register_symbol(symbol)
     bot._orchestrator_trailing_unavailable_symbols = {symbol}
     bot._orchestrator_trailing_unavailable_reasons = {
-        symbol: ["missing_trailing_candles"]
+        symbol: [unavailable_reason]
     }
 
     bot.open_orders[symbol] = [
@@ -763,7 +773,7 @@ async def test_calc_orders_blocks_entry_creates_when_trailing_candles_pending():
 
 
 @pytest.mark.asyncio
-async def test_calc_orders_preserves_mismatched_reduce_only_cancel_when_trailing_candles_pending():
+async def test_calc_orders_retires_stale_trailing_close_when_trailing_candles_pending():
     symbol = "BTC/USDT"
     bot = OrchestrationBot({symbol: 100.0})
     bot.register_symbol(symbol)
@@ -803,8 +813,122 @@ async def test_calc_orders_preserves_mismatched_reduce_only_cancel_when_trailing
 
     to_cancel, to_create = await bot.calc_orders_to_cancel_and_create()
 
-    assert to_cancel == []
+    assert [bot._resolve_pb_order_type(order) for order in to_cancel] == [
+        "close_trailing_long"
+    ]
     assert [order["pb_order_type"] for order in to_create] == ["close_grid_long"]
+
+
+@pytest.mark.asyncio
+async def test_calc_orders_blocks_new_trailing_close_when_trailing_candles_pending():
+    symbol = "BTC/USDT"
+    bot = OrchestrationBot({symbol: 100.0})
+    bot.register_symbol(symbol)
+    bot._orchestrator_trailing_unavailable_symbols = {symbol}
+    bot._orchestrator_trailing_unavailable_reasons = {
+        symbol: ["missing_trailing_candles"]
+    }
+    bot._orchestrator_trailing_unavailable_psides = {symbol: ["long"]}
+
+    async def fake_calc_ideal_orders(self):
+        return {
+            symbol: [
+                _make_order(
+                    symbol,
+                    "sell",
+                    "long",
+                    1.0,
+                    99.0,
+                    "close_trailing_long",
+                    reduce_only=True,
+                )
+            ]
+        }
+
+    bot.calc_ideal_orders = types.MethodType(fake_calc_ideal_orders, bot)
+
+    to_cancel, to_create = await bot.calc_orders_to_cancel_and_create()
+
+    assert to_cancel == []
+    assert to_create == []
+
+
+@pytest.mark.asyncio
+async def test_calc_orders_trailing_unavailable_is_position_side_scoped():
+    symbol = "BTC/USDT"
+    bot = OrchestrationBot({symbol: 100.0})
+    bot.register_symbol(symbol)
+    bot._orchestrator_trailing_unavailable_symbols = {symbol}
+    bot._orchestrator_trailing_unavailable_reasons = {
+        symbol: ["missing_trailing_candles"]
+    }
+    bot._orchestrator_trailing_unavailable_psides = {symbol: ["long"]}
+
+    async def fake_calc_ideal_orders(self):
+        return {
+            symbol: [
+                _make_order(
+                    symbol,
+                    "sell",
+                    "long",
+                    1.0,
+                    99.0,
+                    "close_trailing_long",
+                    reduce_only=True,
+                ),
+                _make_order(
+                    symbol,
+                    "buy",
+                    "short",
+                    1.0,
+                    101.0,
+                    "close_trailing_short",
+                    reduce_only=True,
+                ),
+            ]
+        }
+
+    bot.calc_ideal_orders = types.MethodType(fake_calc_ideal_orders, bot)
+
+    to_cancel, to_create = await bot.calc_orders_to_cancel_and_create()
+
+    assert to_cancel == []
+    assert [order["pb_order_type"] for order in to_create] == ["close_trailing_short"]
+
+
+@pytest.mark.asyncio
+async def test_calc_orders_retires_trailing_close_during_fetch_failure():
+    symbol = "BTC/USDT"
+    bot = OrchestrationBot({symbol: 100.0})
+    bot.register_symbol(symbol)
+    bot._orchestrator_trailing_unavailable_symbols = {symbol}
+    bot._orchestrator_trailing_unavailable_reasons = {
+        symbol: ["candle_fetch_failed"]
+    }
+    bot._orchestrator_trailing_unavailable_psides = {symbol: ["long"]}
+    bot.open_orders[symbol] = [
+        _make_order(
+            symbol,
+            "sell",
+            "long",
+            1.0,
+            101.0,
+            "close_trailing_long",
+            reduce_only=True,
+        )
+    ]
+
+    async def fake_calc_ideal_orders(self):
+        return {symbol: []}
+
+    bot.calc_ideal_orders = types.MethodType(fake_calc_ideal_orders, bot)
+
+    to_cancel, to_create = await bot.calc_orders_to_cancel_and_create()
+
+    assert [bot._resolve_pb_order_type(order) for order in to_cancel] == [
+        "close_trailing_long"
+    ]
+    assert to_create == []
 
 
 @pytest.mark.asyncio

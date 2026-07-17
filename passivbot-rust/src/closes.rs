@@ -1,6 +1,6 @@
 use crate::dynamic::{calc_dynamic_distance_multiplier, DynamicDistanceInputs};
 use crate::entries::{calc_min_entry_qty, wallet_exposure_limit_with_allowance};
-use crate::strategies::TrailingMartingaleCloseParams;
+use crate::strategies::{StrategySide, TrailingMartingaleCloseParams};
 use crate::types::{
     BotParams, ExchangeParams, Order, OrderType, Position, RuntimeOrderContext, StateParams,
     TrailingPriceBundle,
@@ -9,6 +9,38 @@ use crate::utils::{
     calc_wallet_exposure, cost_to_qty, quantize_price, quantize_qty, round_, round_dn, round_up,
     RoundingMode,
 };
+use serde::Serialize;
+
+#[derive(Debug, Clone, Serialize)]
+pub struct TrailingMartingaleCloseThresholdTerms {
+    pub base: f64,
+    pub wallet_exposure: f64,
+    pub volatility_ema_1m: f64,
+    pub volatility_ema_1h: f64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct TrailingMartingaleCloseDiagnostic {
+    pub kind: &'static str,
+    pub pside: &'static str,
+    pub selected_mode: &'static str,
+    pub order_type: String,
+    pub qty: f64,
+    pub price: f64,
+    pub triggered: bool,
+    pub status: &'static str,
+    pub threshold_pct: f64,
+    pub threshold_met: bool,
+    pub threshold_terms: TrailingMartingaleCloseThresholdTerms,
+    pub retracement_pct: f64,
+    pub retracement_met: bool,
+    pub wallet_exposure: f64,
+    pub effective_wallet_exposure_limit: f64,
+    pub wallet_exposure_ratio: f64,
+    pub volatility_ema_1m: f64,
+    pub volatility_ema_1h: f64,
+    pub extrema: TrailingPriceBundle,
+}
 
 pub(crate) fn sort_closes_by_price(closes: &mut [Order], descending: bool, context: &str) {
     for order in closes.iter() {
@@ -686,6 +718,130 @@ pub fn calc_next_close_short(
             close_params,
             position,
         )
+    }
+}
+
+pub fn calc_trailing_martingale_close_diagnostic(
+    side: StrategySide,
+    exchange_params: &ExchangeParams,
+    state_params: &StateParams,
+    bot_params: &BotParams,
+    runtime_context: &RuntimeOrderContext,
+    close_params: &TrailingMartingaleCloseParams,
+    position: &Position,
+    trailing_price_bundle: &TrailingPriceBundle,
+) -> TrailingMartingaleCloseDiagnostic {
+    let effective_wallet_exposure_limit =
+        wallet_exposure_limit_with_allowance(bot_params, runtime_context);
+    let wallet_exposure = calc_wallet_exposure(
+        exchange_params.c_mult,
+        state_params.balance,
+        position.size,
+        position.price,
+    );
+    let wallet_exposure_ratio = if effective_wallet_exposure_limit > 0.0 {
+        wallet_exposure / effective_wallet_exposure_limit
+    } else {
+        0.0
+    };
+    let threshold_pct = calc_close_threshold_pct(
+        exchange_params,
+        state_params,
+        bot_params,
+        runtime_context,
+        close_params,
+        position,
+    );
+    let retracement_pct = close_params.retracement_base_pct.max(0.0)
+        * calc_close_retracement_multiplier(state_params, close_params);
+
+    let (pside, threshold_met, retracement_met, order) = match side {
+        StrategySide::Long => (
+            "long",
+            threshold_pct <= 0.0
+                || trailing_price_bundle.max_since_open > position.price * (1.0 + threshold_pct),
+            retracement_pct <= 0.0
+                || trailing_price_bundle.min_since_max
+                    < trailing_price_bundle.max_since_open * (1.0 - retracement_pct),
+            calc_next_close_long(
+                exchange_params,
+                state_params,
+                bot_params,
+                runtime_context,
+                close_params,
+                position,
+                trailing_price_bundle,
+            ),
+        ),
+        StrategySide::Short => (
+            "short",
+            threshold_pct <= 0.0
+                || trailing_price_bundle.min_since_open < position.price * (1.0 - threshold_pct),
+            retracement_pct <= 0.0
+                || trailing_price_bundle.max_since_min
+                    > trailing_price_bundle.min_since_open * (1.0 + retracement_pct),
+            calc_next_close_short(
+                exchange_params,
+                state_params,
+                bot_params,
+                runtime_context,
+                close_params,
+                position,
+                trailing_price_bundle,
+            ),
+        ),
+    };
+    let triggered = order.qty != 0.0
+        && matches!(
+            order.order_type,
+            OrderType::CloseTrailingLong | OrderType::CloseTrailingShort
+        );
+    let selected_mode = match order.order_type {
+        OrderType::CloseTrailingLong | OrderType::CloseTrailingShort => "trailing",
+        OrderType::CloseGridLong | OrderType::CloseGridShort => "grid",
+        OrderType::CloseUnstuckLong | OrderType::CloseUnstuckShort => "unstuck",
+        OrderType::CloseAutoReduceWelLong | OrderType::CloseAutoReduceWelShort => "auto_reduce",
+        OrderType::ClosePanicLong | OrderType::ClosePanicShort => "panic",
+        OrderType::Empty => "none",
+        _ => "other",
+    };
+    let status = if triggered {
+        "triggered"
+    } else if !threshold_met {
+        "waiting_threshold"
+    } else if !retracement_met {
+        "waiting_retracement"
+    } else {
+        "armed"
+    };
+
+    TrailingMartingaleCloseDiagnostic {
+        kind: "close",
+        pside,
+        selected_mode,
+        order_type: order.order_type.to_string(),
+        qty: order.qty,
+        price: order.price,
+        triggered,
+        status,
+        threshold_pct,
+        threshold_met,
+        threshold_terms: TrailingMartingaleCloseThresholdTerms {
+            base: close_params.threshold_base_pct,
+            wallet_exposure: wallet_exposure_ratio * close_params.threshold_we_weight,
+            volatility_ema_1m: state_params.volatility_ema_1m
+                * close_params.threshold_volatility_1m_weight,
+            volatility_ema_1h: state_params.volatility_ema_1h
+                * close_params.threshold_volatility_1h_weight,
+        },
+        retracement_pct,
+        retracement_met,
+        wallet_exposure,
+        effective_wallet_exposure_limit,
+        wallet_exposure_ratio,
+        volatility_ema_1m: state_params.volatility_ema_1m,
+        volatility_ema_1h: state_params.volatility_ema_1h,
+        extrema: trailing_price_bundle.clone(),
     }
 }
 

@@ -15,6 +15,7 @@ from trailing_diagnostics import (
     build_trailing_grid_v7_diagnostic,
     build_trailing_close_diagnostic,
     build_trailing_entry_diagnostic,
+    build_trailing_martingale_close_diagnostic,
     normalize_trailing_extrema,
 )
 from risk_limits import (
@@ -1127,6 +1128,19 @@ def _monitor_h1_logrange_for_span(self, symbol: str, span: float) -> float:
         return 0.0
 
 
+def _monitor_m1_logrange_for_span(self, symbol: str, span: float) -> float:
+    m1_log_range_emas = getattr(self, "_monitor_runtime_m1_log_range_emas", {})
+    if not isinstance(m1_log_range_emas, dict):
+        return 0.0
+    symbol_entry = m1_log_range_emas.get(symbol, {})
+    if not isinstance(symbol_entry, dict):
+        return 0.0
+    try:
+        return float(symbol_entry.get(float(span), 0.0) or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
 def _monitor_h1_entry_logrange(self, pside: str, symbol: str) -> float:
     try:
         span = _monitor_strategy_value(self, pside, "offset_volatility_ema_span_1h", symbol)
@@ -1139,20 +1153,11 @@ def _monitor_h1_entry_logrange(self, pside: str, symbol: str) -> float:
 
 
 def _monitor_m1_entry_logrange(self, pside: str, symbol: str) -> float:
-    m1_log_range_emas = getattr(self, "_monitor_runtime_m1_log_range_emas", {})
-    if not isinstance(m1_log_range_emas, dict):
-        return 0.0
-    symbol_entry = m1_log_range_emas.get(symbol, {})
-    if not isinstance(symbol_entry, dict):
-        return 0.0
     try:
         span = _monitor_strategy_value(self, pside, "entry_volatility_ema_span_1m", symbol)
     except Exception:
         return 0.0
-    try:
-        return float(symbol_entry.get(span, 0.0) or 0.0)
-    except (TypeError, ValueError):
-        return 0.0
+    return _monitor_m1_logrange_for_span(self, symbol, span)
 
 
 def _monitor_trailing_extrema(bundle: dict[str, Any]) -> dict[str, float]:
@@ -1249,11 +1254,58 @@ def _build_monitor_trailing_close_payload(
     pside: str,
     *,
     balance_raw: float,
+    balance_strategy: float,
     current_price: float,
     position_size: float,
     position_price: float,
     trailing_bundle: dict[str, float],
 ) -> Optional[dict[str, Any]]:
+    strategy_kind = str(
+        (getattr(self, "config", {}).get("live", {}) or {}).get("strategy_kind")
+        or ""
+    ).strip().lower()
+    if strategy_kind == "trailing_martingale":
+        strategy_params = self._strategy_params_to_rust_dict(pside, symbol)
+        volatility_ema_span_1m = float(strategy_params["volatility_ema_span_1m"])
+        volatility_ema_span_1h = float(strategy_params["volatility_ema_span_1h"])
+        inputs = {
+            "symbol": symbol,
+            "pside": pside,
+            "current_price": float(current_price),
+            "exchange": self._orchestrator_exchange_params(symbol),
+            "state": {
+                "balance": float(balance_strategy),
+                "order_book": {
+                    "bid": float(current_price),
+                    "ask": float(current_price),
+                },
+                "ema_bands": {"upper": 0.0, "lower": 0.0},
+                "volatility_ema_1m": float(
+                    _monitor_m1_logrange_for_span(
+                        self, symbol, volatility_ema_span_1m
+                    )
+                ),
+                "volatility_ema_1h": float(
+                    _monitor_h1_logrange_for_span(
+                        self, symbol, volatility_ema_span_1h
+                    )
+                ),
+            },
+            "bot_params": self._bot_params_to_rust_dict(pside, symbol),
+            "runtime": {
+                "effective_wallet_exposure_limit": float(
+                    self.bp(pside, "wallet_exposure_limit", symbol)
+                )
+            },
+            "close_params": dict(strategy_params["close"]),
+            "position": {
+                "size": float(position_size),
+                "price": float(position_price),
+            },
+            "trailing": dict(trailing_bundle),
+        }
+        return build_trailing_martingale_close_diagnostic(inputs)
+
     inputs = {
         "symbol": symbol,
         "pside": pside,
@@ -1381,7 +1433,10 @@ def _build_monitor_trailing_section(
     *,
     balance_raw: float,
     market: dict[str, dict[str, Any]],
+    balance_strategy: Optional[float] = None,
 ) -> dict[str, dict[str, Any]]:
+    if balance_strategy is None:
+        balance_strategy = balance_raw
     config = getattr(self, "config", {})
     live_cfg = config.get("live", {}) if isinstance(config, dict) else {}
     strategy_kind = str(live_cfg.get("strategy_kind") or "").strip().lower()
@@ -1439,6 +1494,7 @@ def _build_monitor_trailing_section(
                     symbol,
                     pside,
                     balance_raw=balance_raw,
+                    balance_strategy=balance_strategy,
                     current_price=current_price,
                     position_size=position_size,
                     position_price=position_price,
@@ -1625,7 +1681,11 @@ async def _build_monitor_snapshot(self, *, now_ms: Optional[int] = None) -> dict
         },
         "hsl": {pside: self._monitor_hsl_payload(pside) for pside in ("long", "short")},
         "market": market,
-        "trailing": self._build_monitor_trailing_section(balance_raw=balance_raw, market=market),
+        "trailing": self._build_monitor_trailing_section(
+            balance_raw=balance_raw,
+            balance_strategy=balance_snapped,
+            market=market,
+        ),
         "forager": await self._build_monitor_forager_section(),
         "unstuck": self._build_monitor_unstuck_section(),
         "recent": self._build_monitor_recent_section(),
