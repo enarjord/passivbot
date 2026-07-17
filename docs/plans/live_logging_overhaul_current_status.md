@@ -24,7 +24,7 @@ Estimated completion:
 
 - Branch: `codex/restart-smoke-window-selection`, based on canonical
   `9e8d1343e0f1f43fc3207d611a8b06d88af8b6c0` after PR #1303.
-- PR: pending. Slice: bound exact historical smoke collection by managed event
+- PR: #1305. Slice: bound exact historical smoke collection by managed event
   rotation intervals instead of decompressing the complete retained archive.
 - Triggering evidence: the first VPS5 #1303 collector run discovered 1,012 event
   segments totaling about 801 MB and remained CPU-active beyond ten minutes.
