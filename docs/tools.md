@@ -425,8 +425,9 @@ Monitor commands are documented in detail in [monitor.md](monitor.md). The CLI s
   Ctrl-C round to exact pane IDs. After a bounded exact-PID exit wait, it scans
   for unexpected or duplicate live processes, verifies the complete session
   pane set, parent PIDs, window identities, and shell-ready exited panes, then
-  types the private supervisor commands only into eligible panes. Final startup
-  and multi-sample target verification must retain the same fingerprint.
+  immediately re-reads the private supervisor snapshot and process set before
+  typing commands only into eligible panes. Final startup and multi-sample
+  target verification must retain the same fingerprint.
   The executor does not SSH, pull code, contact exchanges directly, write files
   directly, use broad process-pattern signals, or apply SIGTERM/SIGKILL. A
   timeout or changed process/pane contract is reported as manual recovery;

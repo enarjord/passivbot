@@ -560,6 +560,42 @@ def execute_live_restart(
         report["outcome"] = "manual_recovery_required"
         return report
 
+    relaunch_snapshot, relaunch_fingerprint, relaunch_snapshot_error = (
+        _load_launch_snapshot(supervisor_config)
+    )
+    supervisor_stable = (
+        relaunch_snapshot_error is None
+        and relaunch_fingerprint == expected_fingerprint
+        and relaunch_snapshot == launch_snapshot
+    )
+    report["pre_relaunch_supervisor_recheck"] = {
+        "ok": supervisor_stable,
+        "error": relaunch_snapshot_error,
+    }
+    if not supervisor_stable:
+        issues.append(_issue("supervisor_changed_before_relaunch"))
+        report["targets"] = target_results
+        report["hard_failures"] = len(issues)
+        report["outcome"] = "manual_recovery_required"
+        return report
+
+    processes_stable, process_error = _post_stop_process_recheck(
+        launch_snapshot,
+        relaunch_window_names=relaunch_window_names,
+    )
+    report["pre_relaunch_process_recheck"] = {
+        "ok": processes_stable,
+        "error": process_error,
+    }
+    if not processes_stable:
+        issues.append(
+            _issue("process_changed_before_relaunch", reason=process_error)
+        )
+        report["targets"] = target_results
+        report["hard_failures"] = len(issues)
+        report["outcome"] = "manual_recovery_required"
+        return report
+
     for target in targets:
         result = result_by_pid[int(target["process_pid"])]
         if not result["exited"]:

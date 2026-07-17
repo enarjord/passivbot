@@ -300,6 +300,75 @@ def test_live_restart_executor_halts_relaunch_when_process_reappears(monkeypatch
     assert calls["start"] == []
 
 
+def test_live_restart_executor_rechecks_processes_immediately_before_relaunch(
+    monkeypatch,
+):
+    calls = _install_happy_dependencies(
+        monkeypatch, [_target("binance_01", "%10", 100, 200)]
+    )
+    rechecks = iter(
+        [
+            (True, None),
+            (False, "configured_process_count_changed"),
+        ]
+    )
+    monkeypatch.setattr(
+        executor_module,
+        "_post_stop_process_recheck",
+        lambda *_args, **_kwargs: next(rechecks),
+    )
+
+    report = _execute()
+
+    assert report["outcome"] == "manual_recovery_required"
+    assert {issue["code"] for issue in report["issues"]} == {
+        "process_changed_before_relaunch"
+    }
+    assert calls["start"] == []
+
+
+def test_live_restart_executor_rechecks_supervisor_before_relaunch(monkeypatch):
+    targets = [_target("binance_01", "%10", 100, 200)]
+    calls = _install_happy_dependencies(monkeypatch, targets)
+    snapshots = iter(
+        [
+            (
+                {
+                    "binance_01": {
+                        "command": "private launch binance_01",
+                        "match_key": "passivbot live binance_01",
+                    }
+                },
+                FINGERPRINT,
+                None,
+            ),
+            (
+                {
+                    "binance_01": {
+                        "command": "changed private launch",
+                        "match_key": "passivbot live binance_01",
+                    }
+                },
+                "b" * 64,
+                None,
+            ),
+        ]
+    )
+    monkeypatch.setattr(
+        executor_module,
+        "_load_launch_snapshot",
+        lambda _path: next(snapshots),
+    )
+
+    report = _execute()
+
+    assert report["outcome"] == "manual_recovery_required"
+    assert {issue["code"] for issue in report["issues"]} == {
+        "supervisor_changed_before_relaunch"
+    }
+    assert calls["start"] == []
+
+
 def test_live_restart_executor_rejects_target_change_after_preflight(monkeypatch):
     targets = [_target("binance_01", "%10", 100, 200)]
     calls = _install_happy_dependencies(monkeypatch, targets)
