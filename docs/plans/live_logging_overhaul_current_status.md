@@ -24,7 +24,7 @@ Estimated completion:
 
 - Branch: `codex/full-supervisor-fingerprint`, based on canonical
   `393aec15a49d6b6cf4f6bda37ed8a2dab00b5f2c` after PR #1291.
-- PR: this PR, `Bind restart fingerprint to full supervisor commands`. Slice:
+- PR: #1294, `Bind restart fingerprint to full supervisor commands`. Slice:
   make the exact-target supervisor fingerprint cover complete private canonical
   commands before report redaction or truncation.
 - Triggering evidence: direct post-merge inspection found PR #1291 derived its
