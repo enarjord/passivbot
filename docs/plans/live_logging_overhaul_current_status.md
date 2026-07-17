@@ -22,48 +22,51 @@ Estimated completion:
 
 ## Active Review Slice
 
-- Branch: `codex/restart-smoke-window-selection`, based on canonical
-  `9e8d1343e0f1f43fc3207d611a8b06d88af8b6c0` after PR #1303.
-- PR: #1305. Slice: bound exact historical smoke collection by managed event
-  rotation intervals instead of decompressing the complete retained archive.
-- Triggering evidence: the first VPS5 #1303 collector run discovered 1,012 event
-  segments totaling about 801 MB and remained CPU-active beyond ten minutes.
-  The exact collector PID was interrupted without touching bot panes. A
-  two-recent-segment cap returned in 20.9 seconds but correctly failed closed
-  because it omitted the restart lifecycle. An in-memory interval prototype
-  selected 10 overlapping segments and returned the full green verdict in 37.3
-  seconds.
-- Scope: parse code-owned UTC rotation-close labels, require predecessor coverage
-  for every discovered bot event stream, read only overlapping segments, and
-  fail before content scanning on malformed names, missing coverage, more than
-  eight files per bot, more than 128 files total, or more than 128 MiB selected.
-- Behavior boundary: the selector is opt-in for the restart collector; general
-  smoke-report behavior is unchanged. Local reads and bounded `tmux`/`ps`/`git`
-  inventory remain allowed. SSH, pull/build, network or exchange access,
-  credentials, process signals/starts, force escalation, and file writes remain
-  excluded.
-- Validation: synthetic overlap, gzip/UUID, malformed-name, missing-coverage,
-  per-bot/global-file/byte-limit, collection wiring/redaction, existing smoke,
-  CLI, compilation, and docs regressions.
+- Branch: `codex/restart-repository-prepare`, based on canonical
+  `300fdd703fee9e1ce0e9c54df43bb7b1dcb858d8` after PR #1305.
+- PR: pending. Slice: exact canonical repository preparation before the existing
+  local restart executor can sample or signal any target.
+- Triggering evidence: reviewed deploys still require separate manual
+  `origin/master` pull and Rust freshness commands before the executor can
+  consume its exact repository-head and Rust-source contracts. Those steps are
+  not yet machine-bound to the reviewed target commit.
+- Scope: require exact current/target heads, tracked-clean canonical `master`, no
+  in-progress Git operation, pinned public canonical `origin`, exact fetched
+  `origin/master`, and true ancestry; then fast-forward with hooks disabled and
+  without force, and verify/rebuild Rust in a fresh bounded child process
+  against an operator-confirmed source fingerprint.
+- Behavior boundary: the tool may fetch Git, update the tracked worktree, and
+  write Rust build artifacts only after `--execute`. It preserves untracked
+  files and emits no path, URL, Git stderr, build output, or command content.
+  SSH, exchange/credential access, supervisor parsing, live-process signals or
+  starts, force checkout/reset, and rollback remain excluded. A Rust failure
+  after fast-forward leaves the checkout at the target but not restart-ready.
+- Validation: real temporary-origin fast-forward, dirty/branch/operation/head/
+  target/ancestry failures, untracked preservation, child source-mismatch
+  rejection, CLI dispatch, existing restart tooling, compilation, and docs.
 - Review gate: temporary maintainer-authorized exact-head Hermes plus green
   Python and Rust CI while Grok is halted.
-- Expected VPS action: pull and rerun the collector against exact PR #1296 bounds
-  `1784316350000..1784317500000`, then verify malformed-expectation rejection.
-  Do not restart or signal bots.
+- Expected VPS action: manual pull to make the new tool available, then an exact
+  same-head/no-build preparation smoke plus wrong-target rejection. Do not
+  restart or signal bots.
 
 ## Deployed Baseline
 
 - Canonical `master` and VPS5 are
-  `9e8d1343e0f1f43fc3207d611a8b06d88af8b6c0` after PR #1303. Exact-head Hermes
+  `300fdd703fee9e1ce0e9c54df43bb7b1dcb858d8` after PR #1305. Exact-head Hermes
   and Python/Rust CI were green. VPS5 fast-forwarded without a bot restart or
-  signal. The first complete-archive collector run was interrupted after more
-  than ten CPU-active minutes by exact collector PID only; all five bot panes
-  retained parent PIDs `856294/856332/856364/856398/856434`, tracked state
-  stayed clean, and `misc:0.0` remained `%8`, PID `434835`. A read-only in-memory
-  interval prototype selected 10/1,012 segments and recovered five stopping,
-  five stopped, and five startup cohorts with zero hard failures in 37.3
-  seconds. This is triggering evidence for the active bounded-selection slice,
-  not yet deployed collector behavior.
+  signal. The merged collector selected 10/1,008 managed event segments for the
+  exact retained bounds `1784316350000..1784317500000`, projected
+  `131834602` scan bytes under the 128 MiB cap, and recovered five stopping,
+  five stopped, and five startup cohorts with zero hard failures. A malformed
+  expected head exited 2 before collection. All five bot pane parents stayed
+  `856294/856332/856364/856398/856434`, tracked state stayed clean, and
+  `misc:0.0` remained `%8`, PID `434835`.
+- PR #1303 previously deployed at
+  `9e8d1343e0f1f43fc3207d611a8b06d88af8b6c0`. Its first complete-archive
+  collector run was interrupted after more than ten CPU-active minutes by
+  exact collector PID only. A read-only prototype selected 10/1,012 segments
+  and recovered the complete lifecycle in 37.3 seconds, triggering PR #1305.
 - PR #1302 previously deployed at
   `0b5503b2a9ee4817618b7aca25dab417af4292dd`. The retained PR #1296 window
   evaluated green with exact bounds `1784316350000..1784317500000`; a

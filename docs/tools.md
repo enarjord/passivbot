@@ -448,6 +448,26 @@ Monitor commands are documented in detail in [monitor.md](monitor.md). The CLI s
   exchange access and normal runtime file writes. Run the read-only target
   report first, retain the Rust fingerprint from build verification, and pass
   both exact fingerprints; command content is never emitted.
+- `passivbot tool live-repository-prepare --expected-current-head COMMIT
+  --expected-target-head COMMIT --expected-rust-source-fingerprint SHA256
+  --execute` prepares the local canonical checkout before target sampling or
+  restart execution. It runs only on tracked-clean `master` with no merge,
+  rebase, cherry-pick, revert, or bisect in progress; requires `origin` to be
+  the pinned public canonical HTTPS repository; fetches only `origin/master`;
+  requires the fetched commit to equal the caller-confirmed
+  target and descend from the caller-confirmed current head; and moves the
+  checkout only with a hook-disabled `git merge --ff-only`. It preserves
+  untracked files and
+  emits no remote URL, path, Git stderr, build output, or command content.
+  After the fast-forward it starts a fresh bounded Python child that rejects an
+  unexpected Rust source fingerprint before compiling, rebuilds only when the
+  repository helper reports the extension stale, and verifies the loaded
+  extension stamp plus a final source rehash. A build timeout targets only that
+  child process group. The tool does not SSH, access credentials or exchanges,
+  signal/start live bots, use force checkout/reset, or perform rollback. If
+  Rust preparation fails after a valid fast-forward, the report leaves the
+  checkout at the reviewed target but marks it not restart-ready; rerun after
+  correcting the build contract before invoking `live-restart-executor`.
 - `passivbot tool live-restart-smoke-evidence TARGET_REPORT_JSON
   SMOKE_REPORT_JSON --expected-repository-head COMMIT
   --expected-supervisor-fingerprint SHA256 --expected-targets N` evaluates two
