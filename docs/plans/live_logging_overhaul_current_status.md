@@ -22,38 +22,58 @@ Estimated completion:
 
 ## Active Review Slice
 
-- Branch: `codex/restart-executor-artifact-fingerprint`, integrated with
-  canonical `491f319251076b82799a5212efe2d797c56b1b31` after PR #1296.
-- PR: #1300. Slice: require the operator to confirm the exact Rust build-input
-  fingerprint authorized for restart execution.
-- Triggering evidence: PR #1298's VPS5 fail-closed probe proved the checked-out
-  source and loaded extension stamp matched, but also showed that VPS5's
-  fingerprint `7869bc3d...` differed from the clean local fingerprint
-  `d14a5363...` because the intentionally fingerprinted, ignored `Cargo.lock`
-  differs by host. The current executor accepts either self-consistent value
-  without an independent operator confirmation.
-- Scope: require an exact expected 64-character Rust source fingerprint and
-  prove `expected == observed build inputs == loaded extension stamp` before
-  target sampling, immediately before the first signal, and before relaunch.
-- Behavior boundary: local restart/deploy behavior. The executor does not SSH,
-  pull/build code, contact exchanges directly, write files directly, use broad
-  process-pattern signals, or apply automatic SIGTERM/SIGKILL. Relaunched live
-  bots resume their configured exchange access and normal runtime file writes.
-- Validation: focused runtime-contract, executor, target-report, planner,
-  smoke-report, CLI, secrecy, timeout, duplicate-process, TOCTOU, compilation,
-  and docs regressions.
+- Branch: `codex/restart-smoke-collection-contract`, based on canonical
+  `0b5503b2a9ee4817618b7aca25dab417af4292dd` after PR #1302.
+- PR: #1303. Slice: collect exact local restart target and bounded smoke
+  evidence in memory, then immediately apply the existing sanitized evaluator.
+- Triggering evidence: PR #1302 proved the evaluator on retained real artifacts,
+  but operators still have to run two producers, retain two full reports, and
+  manually bind them into a third command.
+- Scope: require caller-confirmed head, supervisor fingerprint, target count,
+  session, config, and exact window; compose the existing bounded target and
+  smoke producers without intermediate report files; emit only the sanitized
+  evaluator verdict plus bounded collection-policy metadata.
+- Behavior boundary: local filesystem reads and bounded local `tmux`/`ps`/`git`
+  inventory subprocesses are allowed. SSH, pull/build, network or exchange
+  access, credentials, process signals/starts, force escalation, and file writes
+  remain excluded.
+- Validation: focused collection ordering/input/negative/redaction/CLI tests plus
+  existing target, smoke, evaluator, CLI, compilation, and docs regressions.
 - Review gate: temporary maintainer-authorized exact-head Hermes plus green
   Python and Rust CI while Grok is halted.
-- Expected VPS action: pull and exercise only the executor's fail-closed
-  pre-action contract with a deliberately wrong expected Rust fingerprint;
-  leave running bots unchanged.
+- Expected VPS action: pull and run the collector against the retained exact PR
+  #1296 restart window, plus caller-expectation negative checks. Do not restart
+  or signal bots.
 
 ## Deployed Baseline
 
 - Canonical `master` and VPS5 are
-  `491f319251076b82799a5212efe2d797c56b1b31` after docs-only PR #1295 and
-  behavior-changing PR #1296. Both merged with exact-current-head Hermes and
-  green Python/Rust CI. VPS5 fast-forwarded cleanly from `4a7a6753` and the
+  `0b5503b2a9ee4817618b7aca25dab417af4292dd` after PR #1302. Exact-head Hermes
+  and Python/Rust CI were green. VPS5 fast-forwarded without a restart or
+  signal. The retained PR #1296 window evaluated green while preserving exact
+  bounds `1784316350000..1784317500000`; a one-millisecond log-window mismatch
+  and one dropped hard-looking line each failed with `log_scan_invalid`. Pane
+  parents and bot PIDs remained unchanged, the checkout stayed tracked-clean,
+  and `misc:0.0` remained `%8`, PID `434835`.
+- PR #1301 previously deployed at
+  `46a28795dec40acbee0dbaa3602be955bbecf23e`. Exact-head Hermes
+  and Python/Rust CI were green. VPS5 fast-forwarded without a restart or
+  signal. The exact PR #1296 shutdown-through-startup window evaluated green
+  with 3/3 stable targets, five stopping/stopped lifecycles, startup timing for
+  five bots, 24 bounded monitor segments, eight text logs, and zero hard
+  failures. A wider three-hour report correctly evaluated red on 30 real hard
+  events. Final pane parents and bot PIDs were unchanged; the checkout remained
+  tracked-clean and `misc:0.0` remained `%8`, PID `434835`. Validation exposed
+  the lossy timestamp projection addressed by the active follow-up.
+- PR #1300 previously deployed at
+  `e1a4837914c1e4768cd7963bba47212499d32937`. Exact-head Hermes
+  and Python/Rust CI were green. VPS5 fast-forwarded without a restart or
+  signal; a deliberately wrong expected Rust fingerprint failed before target
+  sampling with `action_started=false`, and the final 3/3 target report retained
+  the same five PIDs, zero extras or issues, and exact states `R=3,S=2`.
+  Repository state stayed tracked-clean and unrelated `misc:0.0` remained `%8`,
+  PID `434835`.
+- PR #1296 previously fast-forwarded VPS5 cleanly from `4a7a6753` and the
   exact local executor gracefully restarted only panes
   `%358/%359/%360/%361/%362`. Old PIDs
   `1015403/1015406/1015410/1015412/1015414` exited; replacement PIDs

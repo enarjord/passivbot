@@ -359,6 +359,24 @@ Related detailed plans:
      private exact-pane relaunch, and stable final verification. It deliberately
      omits SSH, git pull, Rust rebuild, direct exchange access, and automatic
      force escalation.
+   - 2026-07-17: PR #1300 merged and deployed operator-confirmed Rust
+     build-input fingerprints plus an in-check final rehash at every executor
+     runtime boundary. A deliberately wrong VPS5 fingerprint failed before
+     target sampling or action, and all five bot PIDs remained unchanged. The
+     active follow-up adds a pure evaluator for already-generated full target
+     and smoke JSON reports; automatic report collection remains later work.
+   - 2026-07-17: PR #1301 merged and deployed the pure target/smoke evidence
+     evaluator without restarting bots. A real shutdown-through-startup window
+     passed all gates and a wider window correctly failed on existing hard
+     events. Deployment also exposed lossy epoch-ms projection and comparison;
+     the active follow-up preserves exact bounded timestamps and rejects
+     dropped hard-looking log evidence. Automatic collection remains later.
+   - 2026-07-17: PR #1302 merged and deployed exact epoch-ms fidelity plus the
+     dropped-hard fail-closed gate without restarting bots. The retained real
+     restart window passed with exact bounds; one-millisecond mismatch and
+     dropped-hard in-memory variants failed as expected. The active follow-up
+     composes target, smoke, and evaluation in memory without intermediate full
+     report files or process control.
 
    Remaining refinements: safe pull/build and post-restart smoke orchestration
    remain open, as does any separately reviewed force-escalation policy.

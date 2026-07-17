@@ -15,7 +15,56 @@ merge, live smoke evidence changes, or new gaps are discovered.
 - Do not use this file for design churn; unresolved design details belong in the
   plan or a focused handoff doc.
 
-## Latest Canonical Deployment (PRs #1296 And #1295)
+## Latest Canonical Deployment (PR #1302)
+
+- PR #1302 merged as canonical
+  `0b5503b2a9ee4817618b7aca25dab417af4292dd` after exact-current-head Hermes
+  approval and green Python/Rust CI. It preserves and compares exact bounded
+  epoch-ms smoke windows and fails closed on dropped hard-looking log evidence.
+- VPS5 fast-forwarded without a restart or signal. The retained PR #1296 window
+  evaluated green with exact bounds `1784316350000..1784317500000`; an in-memory
+  one-millisecond mismatch and dropped-hard count each evaluated red with
+  `log_scan_invalid`. All five pane parents and bot PIDs plus `misc:0.0` remained
+  unchanged, and tracked state stayed clean.
+- The active follow-up directly composes the existing target, smoke, and evidence
+  builders in memory so operators no longer need intermediate full-report files.
+  Pull/build, SSH, process control, exchange access, and force escalation remain
+  separate.
+
+## Previous Canonical Deployment (PR #1301)
+
+- PR #1301 merged as canonical
+  `46a28795dec40acbee0dbaa3602be955bbecf23e` after exact-current-head Hermes
+  approval and green Python/Rust CI. It adds a pure, bounded evaluator for
+  already-generated full restart target and smoke JSON reports.
+- VPS5 fast-forwarded without a restart or signal. The real PR #1296
+  shutdown-through-startup window evaluated green with all five lifecycle and
+  startup cohorts, zero hard failures, stable exact targets, and a clean exact
+  repository head. A wider three-hour window correctly evaluated red on 30
+  existing hard events. Bot and pane PIDs plus `misc:0.0` remained unchanged.
+- The deploy exposed a fidelity defect: generic count projection clamped both
+  modern epoch-ms bounds to `1000000000` and the log-bound comparison reused
+  those lossy values. The active follow-up preserves exact bounded timestamps
+  and fails closed on dropped hard-looking log evidence.
+
+## Previous Canonical Deployment (PR #1300)
+
+- PR #1300 merged as canonical
+  `e1a4837914c1e4768cd7963bba47212499d32937` after exact-current-head Hermes
+  approval and green Python/Rust CI. It requires an operator-confirmed Rust
+  build-input fingerprint and rehashes the inputs after loaded-extension
+  verification at every runtime boundary, detecting ignored-input drift inside
+  the check.
+- VPS5 fast-forwarded cleanly from `491f3192` without restarting or signalling
+  bots. A deliberately wrong expected fingerprint failed before target sampling
+  with `action_started=false`. The final 3/3 exact-target report retained the
+  same five PIDs, zero extras or issues, and states `R=3,S=2`; tracked state and
+  unrelated `misc:0.0` remained unchanged.
+- The following slice made post-restart target and smoke evidence
+  machine-evaluable from already generated full JSON reports. Automatic report
+  collection, pull/build orchestration, and force escalation remain separate.
+
+## Previous Canonical Deployment (PRs #1296 And #1295)
 
 - Docs-only PR #1295 and behavior-changing PR #1296 merged as canonical
   `491f319251076b82799a5212efe2d797c56b1b31` after exact-current-head Hermes

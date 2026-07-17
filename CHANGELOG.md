@@ -13,6 +13,20 @@ All notable user-facing changes will be documented in this file.
   episode-bounded fill refresh and otherwise defers instead of using stale
   pre-episode evidence or inventing the current time.
 
+- Added `passivbot tool live-restart-smoke-evidence`, a pure fail-closed
+  evaluator for already-generated full restart target and smoke JSON reports.
+  It binds stable exact-target evidence and bounded post-restart monitor/log,
+  shutdown, startup, and repository evidence to the expected head, supervisor
+  fingerprint, and target count without executing report producers or
+  controlling processes. Event and log windows retain and compare exact bounded
+  epoch-millisecond values, and dropped hard-looking log evidence fails closed.
+
+- Added `passivbot tool live-restart-smoke-collect` to collect the existing exact
+  local target and bounded smoke reports in memory and immediately evaluate the
+  sanitized restart evidence contract. It performs only local filesystem and
+  bounded `tmux`/`ps`/`git` inventory reads; it does not write intermediate
+  reports, pull or build code, contact exchanges, or control processes.
+
 - Live trailing restart reconciliation now preserves authoritative position-update
   timestamps from CCXT and raw exchange payloads and no longer
   treats position creation time as proof that fill history is current. Exchanges
