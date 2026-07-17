@@ -15,26 +15,34 @@ merge, live smoke evidence changes, or new gaps are discovered.
 - Do not use this file for design churn; unresolved design details belong in the
   plan or a focused handoff doc.
 
-## Latest Canonical Deployment (PR #1291)
+## Latest Canonical Deployment (PRs #1294 And #1293)
 
-- PR #1291 merged to `master` as
-  `393aec15a49d6b6cf4f6bda37ed8a2dab00b5f2c`. It binds bounded exact-target
-  sampling to an opaque parsed supervisor command-contract fingerprint without
-  exposing or executing configured commands.
-- VPS5 fast-forwarded cleanly from `04209762`. The five configured panes and
-  pane parents stayed stable while one exact-pane Ctrl-C round stopped old bot
-  PIDs `1003995/1003997/1003999/1004001/1004002`; replacements
-  `1013205/1013207/1013209/1013210/1013211` loaded already-merged PR #1292.
-  Unrelated `misc:0.0` remained `%8`, PID `434835`.
-- Immediate and settled bounded smokes were hard-green, with all five expected
-  processes matched and zero monitor/log/process, fill-refresh, or
-  account-critical failures. A final 3/3 sample target report retained stable
-  exact identities, the supervisor contract, and all five relaunch paths. One
-  ordinary OHLCV timeout recovered naturally. No direct exchange probe or event
-  was manufactured.
-- Post-merge inspection found the fingerprint used public redacted/truncated
-  command fields. The active follow-up moves hashing before report sanitization
-  and fails closed on an absent or malformed full-command contract.
+- PR #1294 merged as `3de024c76d5c07bda2b4e64400c1a204d6be38a8`
+  and moved the restart supervisor fingerprint to complete private commands
+  before redaction. VPS5 produced 3/3 stable hard-green target samples for all
+  five configured bots with fingerprint
+  `01d200d4a38c5c85a2123b5210224a18cdef08d0a8be3efc48edb4a159fc5db4`
+  and no command exposure.
+- PR #1293 merged as `0f366b6f6e6b05ab0bd748b012c2c86ed85f978c`
+  and repaired live trailing-extrema position/fill/candle confirmation. VPS5
+  fast-forwarded cleanly and one exact-pane Ctrl-C round stopped old bot PIDs
+  `1013205/1013207/1013209/1013210/1013211`. Replacement PIDs
+  `1015403/1015406/1015410/1015412/1015414` retained exact panes
+  `%358/%359/%360/%361/%362`, pane parents
+  `856294/856332/856364/856398/856434`, and the same fingerprint. Unrelated
+  `misc:0.0` remained `%8`, PID `434835`.
+- The immediate target report and smoke were hard-green with all five exact
+  processes and no hard failures. A later bounded window correctly retained two
+  real KuCoin account-state timeouts and one hard degraded cycle while all
+  sampled `D` states recovered without PID churn. The fresh recovery smoke was
+  hard-green with `326/326` remote calls, `61/61` account-critical calls, nine
+  successful fill refreshes, and zero hard failures. A quiet exact-PID sample
+  reached `R=4,S=1`; the final target report retained 3/3 stable samples, all
+  five relaunch paths, zero issues, and the same fingerprint. No direct
+  exchange probe or event was manufactured.
+- The active follow-up implements the first local exact-target executor over
+  this proven contract. It excludes SSH, git pull/build, direct exchange access,
+  automatic force escalation, and integrated post-restart smoke orchestration.
 
 ## Previous Canonical Deployment (PR #1277)
 

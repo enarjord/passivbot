@@ -414,9 +414,26 @@ Monitor commands are documented in detail in [monitor.md](monitor.md). The CLI s
   supervisor-config command source, and mandatory post-stop pane recheck, but
   never emits the configured command or assumes the pane is ready before that
   recheck. Direct pane-process targets remain valid ownership matches but are
-  explicitly relaunch-unready. A future executor
-  must require `relaunch_ready_targets == resolved_targets` in addition to the
-  hard-green stable sampling verdict.
+  explicitly relaunch-unready. The executor requires
+  `relaunch_ready_targets == resolved_targets` in addition to the hard-green
+  stable sampling verdict.
+- `passivbot tool live-restart-executor SUPERVISOR_CONFIG --session-name
+  SESSION --expected-supervisor-fingerprint SHA256 --execute` gracefully
+  restarts only the exact local tmux targets proven by the same bounded target
+  contract. It repeats the sampled preflight, requires the caller-confirmed
+  full-command fingerprint, takes an immediate action snapshot, and sends one
+  Ctrl-C round to exact pane IDs. After a bounded exact-PID exit wait, it scans
+  for unexpected or duplicate live processes, verifies the complete session
+  pane set, parent PIDs, window identities, and shell-ready exited panes, then
+  types the private supervisor commands only into eligible panes. Final startup
+  and multi-sample target verification must retain the same fingerprint.
+  The executor does not SSH, pull code, contact exchanges directly, write files
+  directly, use broad process-pattern signals, or apply SIGTERM/SIGKILL. A
+  timeout or changed process/pane contract is reported as manual recovery;
+  targets that did exit may be relaunched only when every post-stop check is
+  still exact. The relaunched live bots resume their configured exchange access
+  and normal runtime file writes. Run the read-only target report first and
+  pass its exact opaque fingerprint; command content is never emitted.
 - `passivbot tool live-performance-report` summarizes local live monitor event timings for
   operator performance analysis. It is read-only and does not contact exchanges. Use
   `--recent-minutes` for a time window, `--summary` for a bounded operator projection, and

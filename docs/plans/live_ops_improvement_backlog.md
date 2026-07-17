@@ -239,8 +239,10 @@ Related detailed plans:
    smoke report now also redacts common user/home prefixes from
    `repository.root` for shareable reports and surfaces explicit
    dropped-unparsed attention/hard counters when the opt-in log-window drop
-   policy suppresses contextless hard-looking log fragments. The safe restart
-   orchestration contract is not implemented. A 2026-06-30 follow-up made the
+   policy suppresses contextless hard-looking log fragments. The safe local
+   exact-target restart executor is implemented; repository pull, Rust rebuild,
+   remote-host orchestration, automatic force escalation, and post-restart
+   monitor/log smoke orchestration remain outside it. A 2026-06-30 follow-up made the
    existing startup timing evidence visible in `live-smoke-report --summary`
    and `--brief`, so repeated smoke loops can see slow startup phases without
    opening the full report. Another 2026-06-30 follow-up made bounded text-log
@@ -349,8 +351,17 @@ Related detailed plans:
      computes the digest from full private canonical commands before
      sanitization and validates the value-safe contract shape before target
      sampling can pass.
+   - 2026-07-17: PR #1294 merged and deployed full private-command fingerprint
+     derivation. Three stable VPS5 samples resolved all five configured targets
+     with the same opaque fingerprint and no command exposure. The active
+     follow-up adds the first explicit local executor: one exact-pane Ctrl-C
+     round, bounded exact-PID exit observation, process/pane TOCTOU rechecks,
+     private exact-pane relaunch, and stable final verification. It deliberately
+     omits SSH, git pull, Rust rebuild, direct exchange access, and automatic
+     force escalation.
 
-   Remaining refinements: safe pull/stop/start orchestration remains open.
+   Remaining refinements: safe pull/build and post-restart smoke orchestration
+   remain open, as does any separately reviewed force-escalation policy.
    The concise and brief summaries are intentionally bounded; further changes
    should target missing smoke fields rather than larger chat-facing payloads.
    2026-06-26 VPS5 deploy evidence: after PR #709, one Ctrl+C round stopped
