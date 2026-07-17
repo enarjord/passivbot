@@ -24,7 +24,7 @@ Estimated completion:
 
 - Branch: `codex/restart-smoke-orchestrator`, based on canonical
   `0d1b06b82f3bab011e29a350b4a5276c2ebd5356` after PR #1306.
-- PR: pending. Slice: one bounded exact-pane graceful restart followed by one
+- PR: #1307. Slice: one bounded exact-pane graceful restart followed by one
   exact restart-through-observation smoke collection.
 - Triggering evidence: repository preparation, exact target sampling, graceful
   restart execution, retained-window collection, and sanitized evaluation are
