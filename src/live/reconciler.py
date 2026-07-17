@@ -1336,6 +1336,18 @@ def _order_is_unavailable_trailing_close(order: dict, unavailable_psides: set[st
     )
 
 
+def _order_targets_unavailable_pside(
+    order: dict, unavailable_psides: set[str]
+) -> bool:
+    pside = str(
+        order.get("position_side") or order.get("positionSide") or ""
+    ).lower()
+    if not pside:
+        family = _reduce_only_order_family(order)
+        pside = "" if family is None else family[0]
+    return not pside or pside in unavailable_psides
+
+
 def filter_trailing_unavailable_reconciliation(
     bot,
     symbol: str,
@@ -1356,20 +1368,21 @@ def filter_trailing_unavailable_reconciliation(
     )
     soft_missing_candles_only = reasons == {"missing_trailing_candles"}
     if not soft_missing_candles_only:
-        filtered_cancel = (
-            list(to_cancel)
-            if has_panic_plan
-            else [
+        if has_panic_plan:
+            filtered_cancel = list(to_cancel)
+            filtered_create = [order for order in to_create if _order_is_panic(order)]
+        else:
+            filtered_cancel = [
                 order
                 for order in to_cancel
-                if _order_is_unavailable_trailing_close(order, unavailable_psides)
+                if not _order_targets_unavailable_pside(order, unavailable_psides)
+                or _order_is_unavailable_trailing_close(order, unavailable_psides)
             ]
-        )
-        filtered_create = (
-            [order for order in to_create if _order_is_panic(order)]
-            if has_panic_plan
-            else []
-        )
+            filtered_create = [
+                order
+                for order in to_create
+                if not _order_targets_unavailable_pside(order, unavailable_psides)
+            ]
         dropped = (len(to_cancel) - len(filtered_cancel)) + (
             len(to_create) - len(filtered_create)
         )

@@ -4,6 +4,12 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Live trailing extrema now latch an affected position side unavailable as soon
+  as an authoritative position change is observed, and remain unavailable until
+  a newer fill identity plus complete finalized 1m coverage is present.
+  Side-scoped trailing failures no longer suppress valid reconciliation on the
+  unaffected hedge side.
+
 - Live trailing extrema now reset independently per symbol and position side
   after every confirmed fill. Ordinary trailing closes are withheld and stale
   trailing orders retired until post-fill candles establish fresh extrema,

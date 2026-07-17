@@ -932,6 +932,55 @@ async def test_calc_orders_retires_trailing_close_during_fetch_failure():
 
 
 @pytest.mark.asyncio
+async def test_calc_orders_hard_trailing_failure_preserves_unaffected_side_replace():
+    symbol = "BTC/USDT"
+    bot = OrchestrationBot({symbol: 100.0})
+    bot.register_symbol(symbol)
+    bot._orchestrator_trailing_unavailable_symbols = {symbol}
+    bot._orchestrator_trailing_unavailable_reasons = {
+        symbol: ["bundle_compute_failed"]
+    }
+    bot._orchestrator_trailing_unavailable_psides = {symbol: ["long"]}
+    bot.open_orders[symbol] = [
+        _make_order(
+            symbol,
+            "buy",
+            "short",
+            1.0,
+            101.0,
+            "close_trailing_short",
+            reduce_only=True,
+        )
+    ]
+
+    async def fake_calc_ideal_orders(self):
+        return {
+            symbol: [
+                _make_order(
+                    symbol,
+                    "buy",
+                    "short",
+                    1.0,
+                    102.0,
+                    "close_trailing_short",
+                    reduce_only=True,
+                )
+            ]
+        }
+
+    bot.calc_ideal_orders = types.MethodType(fake_calc_ideal_orders, bot)
+
+    to_cancel, to_create = await bot.calc_orders_to_cancel_and_create()
+
+    assert [(order["position_side"], order["price"]) for order in to_cancel] == [
+        ("short", 101.0)
+    ]
+    assert [(order["position_side"], order["price"]) for order in to_create] == [
+        ("short", 102.0)
+    ]
+
+
+@pytest.mark.asyncio
 async def test_calc_orders_allows_same_family_reduce_only_replace_when_trailing_candles_pending():
     symbol = "BTC/USDT"
     bot = OrchestrationBot({symbol: 100.0})

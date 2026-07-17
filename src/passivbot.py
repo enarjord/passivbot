@@ -7799,6 +7799,28 @@ class Passivbot:
                 return anchor_ts
         return None
 
+    @staticmethod
+    def _fill_position_change_epoch(event, event_index: int) -> str:
+        timestamp = int(event.timestamp)
+        event_id = getattr(event, "id", None) or getattr(
+            event, "client_order_id", None
+        )
+        if not event_id:
+            event_id = f"event_index:{event_index}"
+        return f"fill:{timestamp}:{event_id}"
+
+    def _latest_fill_position_change_epochs(self) -> dict[tuple[str, str], str]:
+        """Return the newest known fill identity for each symbol and position side."""
+        manager = getattr(self, "_pnls_manager", None)
+        events = [] if manager is None else manager.get_events()
+        epochs: dict[tuple[str, str], str] = {}
+        for event_index in range(len(events) - 1, -1, -1):
+            event = events[event_index]
+            key = (str(event.symbol), str(event.position_side))
+            if key not in epochs:
+                epochs[key] = self._fill_position_change_epoch(event, event_index)
+        return epochs
+
     def _get_last_position_change_anchors(self, symbol=None):
         """Return the latest fill timestamp and identity per trailing position side."""
         anchors = defaultdict(dict)
@@ -7813,14 +7835,11 @@ class Passivbot:
                         ev = events[event_index]
                         if ev.symbol == symbol and ev.position_side == pside:
                             timestamp = int(ev.timestamp)
-                            event_id = getattr(ev, "id", None) or getattr(
-                                ev, "client_order_id", None
-                            )
-                            if not event_id:
-                                event_id = f"event_index:{event_index}"
                             anchors[symbol][pside] = {
                                 "timestamp": timestamp,
-                                "epoch": f"fill:{timestamp}:{event_id}",
+                                "epoch": self._fill_position_change_epoch(
+                                    ev, event_index
+                                ),
                             }
                             break
                     if pside not in anchors.get(symbol, {}):
@@ -7831,6 +7850,37 @@ class Passivbot:
                                 "epoch": f"position:{anchor_ts}",
                             }
         return anchors
+
+    def _completed_trailing_candle_subset(
+        self, arr: np.ndarray, changed_ts: int
+    ) -> np.ndarray | None:
+        """Return dense finalized 1m candles after a fill, or None if incomplete.
+
+        CandlestickManager may synthesize only confirmed internal no-trade gaps as
+        zero-volume candles. Those dense rows match backtest continuity and are
+        accepted here; missing leading minutes or an open tail are not.
+        """
+        now_ms = self._completed_candle_health_now_ms()
+        latest_finalized = (now_ms // ONE_MIN_MS) * ONE_MIN_MS - ONE_MIN_MS
+        first_eligible = (int(changed_ts) // ONE_MIN_MS + 1) * ONE_MIN_MS
+        if latest_finalized < first_eligible:
+            return None
+        subset = arr[
+            (arr["ts"] >= first_eligible) & (arr["ts"] <= latest_finalized)
+        ]
+        if subset.size == 0:
+            return None
+        subset = np.sort(subset, order="ts")
+        timestamps = subset["ts"].astype(np.int64)
+        expected_count = (latest_finalized - first_eligible) // ONE_MIN_MS + 1
+        if (
+            timestamps.size != expected_count
+            or int(timestamps[0]) != first_eligible
+            or int(timestamps[-1]) != latest_finalized
+            or (timestamps.size > 1 and np.any(np.diff(timestamps) != ONE_MIN_MS))
+        ):
+            return None
+        return subset
 
     def get_last_position_changes(self, symbol=None):
         """Return the most recent fill timestamp per symbol/side for trailing logic."""
@@ -7900,22 +7950,44 @@ class Passivbot:
                     required_trailing[symbol].add(pside)
 
         previous_epochs = getattr(self, "_trailing_position_change_epochs", {}) or {}
+        pending_fill_confirmations = dict(
+            getattr(self, "_trailing_pending_fill_confirmations", {}) or {}
+        )
         current_epochs: dict[tuple[str, str], str] = {}
 
         for symbol, psides in required_trailing.items():
             for pside in psides:
                 anchor = position_change_anchors.get(symbol, {}).get(pside)
+                epoch_key = (symbol, pside)
+                if epoch_key in pending_fill_confirmations:
+                    baseline_epoch = pending_fill_confirmations[epoch_key]
+                    current_epoch = None if anchor is None else str(anchor["epoch"])
+                    if (
+                        current_epoch is None
+                        or not current_epoch.startswith("fill:")
+                        or current_epoch == baseline_epoch
+                    ):
+                        self.trailing_prices[symbol][pside] = (
+                            _trailing_bundle_default_dict()
+                        )
+                        unavailable_reasons[
+                            "position_fill_confirmation_pending"
+                        ].add(symbol)
+                        unavailable_psides[symbol].add(pside)
+                        last_position_changes.get(symbol, {}).pop(pside, None)
+                        continue
+                    pending_fill_confirmations.pop(epoch_key, None)
                 if anchor is None:
                     self.trailing_prices[symbol][pside] = _trailing_bundle_default_dict()
                     unavailable_reasons["missing_position_change_anchor"].add(symbol)
                     unavailable_psides[symbol].add(pside)
                     continue
-                epoch_key = (symbol, pside)
                 epoch = str(anchor["epoch"])
                 current_epochs[epoch_key] = epoch
                 if previous_epochs.get(epoch_key) != epoch:
                     self.trailing_prices[symbol][pside] = _trailing_bundle_default_dict()
         self._trailing_position_change_epochs = current_epochs
+        self._trailing_pending_fill_confirmations = pending_fill_confirmations
 
         # Build concurrent fetches per symbol that has position changes
         fetch_plan = {}
@@ -7964,12 +8036,13 @@ class Passivbot:
             for pside, changed_ts in last_position_changes[symbol].items():
                 if pside not in required_trailing.get(symbol, set()):
                     continue
-                mask = arr["ts"] > int(changed_ts)
-                if not np.any(mask):
-                    unavailable_reasons["missing_trailing_candles"].add(symbol)
+                subset = self._completed_trailing_candle_subset(arr, int(changed_ts))
+                if subset is None:
+                    unavailable_reasons[
+                        "incomplete_trailing_candle_coverage"
+                    ].add(symbol)
                     unavailable_psides[symbol].add(pside)
                     continue
-                subset = arr[mask]
                 try:
                     bundle = _trailing_bundle_from_arrays(
                         subset["h"], subset["l"], subset["c"]
@@ -8965,6 +9038,9 @@ class Passivbot:
 
     def _begin_authoritative_refresh_epoch(self) -> None:
         """Start a new authoritative state refresh cohort for execution gating."""
+        self._authoritative_refresh_start_fill_epochs = (
+            self._latest_fill_position_change_epochs()
+        )
         self._authoritative_refresh_epoch = (
             int(getattr(self, "_authoritative_refresh_epoch", 0) or 0) + 1
         )
@@ -13381,6 +13457,41 @@ class Passivbot:
                 }
             positions_new[symbol][pside] = {"size": psize, "price": pprice}
         self.positions = positions_new
+        position_state = {
+            (symbol, pside): (
+                round(float(position.get("size") or 0.0), 12),
+                round(float(position.get("price") or 0.0), 12),
+            )
+            for symbol, by_pside in positions_new.items()
+            for pside, position in by_pside.items()
+        }
+        previous_position_state = getattr(
+            self, "_trailing_authoritative_position_state", None
+        )
+        self._trailing_authoritative_position_state = position_state
+        if previous_position_state is not None:
+            if not hasattr(self, "trailing_prices"):
+                self.trailing_prices = {}
+            pending = dict(
+                getattr(self, "_trailing_pending_fill_confirmations", {}) or {}
+            )
+            refresh_start_fill_epochs = dict(
+                getattr(self, "_authoritative_refresh_start_fill_epochs", {}) or {}
+            )
+            for key in set(previous_position_state) | set(position_state):
+                if previous_position_state.get(key, (0.0, 0.0)) == position_state.get(
+                    key, (0.0, 0.0)
+                ):
+                    continue
+                symbol, pside = key
+                self.trailing_prices.setdefault(symbol, {})
+                self.trailing_prices[symbol][pside] = _trailing_bundle_default_dict()
+                new_size = position_state.get(key, (0.0, 0.0))[0]
+                if new_size != 0.0 and self.is_trailing(symbol, pside):
+                    pending[key] = refresh_start_fill_epochs.get(key)
+                else:
+                    pending.pop(key, None)
+            self._trailing_pending_fill_confirmations = pending
         return fetched_positions_old, self.fetched_positions
 
     def _apply_balance_snapshot(self, balance_raw) -> bool:
