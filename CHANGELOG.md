@@ -12,6 +12,12 @@ All notable user-facing changes will be documented in this file.
   controlling processes. Event and log windows retain and compare exact bounded
   epoch-millisecond values, and dropped hard-looking log evidence fails closed.
 
+- Added `passivbot tool live-restart-smoke-collect` to collect the existing exact
+  local target and bounded smoke reports in memory and immediately evaluate the
+  sanitized restart evidence contract. It performs only local filesystem and
+  bounded `tmux`/`ps`/`git` inventory reads; it does not write intermediate
+  reports, pull or build code, contact exchanges, or control processes.
+
 - Live trailing restart reconciliation now preserves authoritative position-update
   timestamps from CCXT and raw exchange payloads and no longer
   treats position creation time as proof that fill history is current. Exchanges

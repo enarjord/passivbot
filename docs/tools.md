@@ -467,6 +467,20 @@ Monitor commands are documented in detail in [monitor.md](monitor.md). The CLI s
   Use `--compact` for single-line JSON. Exit status is zero only when every hard
   gate passes; non-hard attention evidence remains visible without making the
   verdict red.
+- `passivbot tool live-restart-smoke-collect SUPERVISOR_CONFIG MONITOR_ROOT
+  --session-name SESSION --expected-repository-head COMMIT
+  --expected-supervisor-fingerprint SHA256 --expected-targets N --since-ms MS
+  --until-ms MS` directly composes the existing exact target sampler, full
+  bounded-window smoke report, and sanitized evidence evaluator in memory. The
+  caller-confirmed head, private fingerprint, target count, and exact window are
+  never derived from the reports being checked. Rotated monitor segments are
+  included, process inspection is owned by the target report rather than
+  duplicated in smoke collection, and contextless log rows use the existing
+  drop policy whose dropped hard-looking count must remain zero. The command
+  emits no raw target or smoke report and writes no intermediate file. It may
+  run bounded local `tmux`, `ps`, and `git` inventory reads; it does not SSH,
+  pull/build, contact a network or exchange, access credentials, signal/start
+  processes, or perform force escalation. Use `--compact` for single-line JSON.
 - `passivbot tool live-performance-report` summarizes local live monitor event timings for
   operator performance analysis. It is read-only and does not contact exchanges. Use
   `--recent-minutes` for a time window, `--summary` for a bounded operator projection, and

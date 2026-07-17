@@ -44,15 +44,15 @@ def _count(value: Any) -> int:
     return min(value, MAX_PROJECTED_COUNT)
 
 
-def _valid_head(value: str) -> bool:
-    return bool(_GIT_HEAD_PATTERN.fullmatch(value))
+def _valid_head(value: Any) -> bool:
+    return type(value) is str and bool(_GIT_HEAD_PATTERN.fullmatch(value))
 
 
-def _valid_fingerprint(value: str) -> bool:
-    return bool(_SHA256_PATTERN.fullmatch(value))
+def _valid_fingerprint(value: Any) -> bool:
+    return type(value) is str and bool(_SHA256_PATTERN.fullmatch(value))
 
 
-def _validate_expected_inputs(
+def validate_live_restart_smoke_expectations(
     *,
     expected_repository_head: str,
     expected_supervisor_fingerprint: str,
@@ -72,6 +72,17 @@ def _validate_expected_inputs(
         raise ValueError(
             f"expected_targets must be between 1 and {MAX_RESTART_TARGETS}"
         )
+
+
+def validate_live_restart_smoke_epoch_window(
+    *, since_ms: int, until_ms: int
+) -> None:
+    if not _is_epoch_ms(since_ms) or not _is_epoch_ms(until_ms):
+        raise ValueError(
+            f"since_ms and until_ms must be epoch-ms integers between 0 and {MAX_EPOCH_MS}"
+        )
+    if until_ms <= since_ms:
+        raise ValueError("until_ms must be greater than since_ms")
 
 
 def _issue(issues: list[dict[str, Any]], code: str) -> None:
@@ -357,7 +368,7 @@ def build_live_restart_smoke_evidence(
     expected_targets: int,
 ) -> dict[str, Any]:
     """Evaluate existing bounded reports without performing any live operation."""
-    _validate_expected_inputs(
+    validate_live_restart_smoke_expectations(
         expected_repository_head=expected_repository_head,
         expected_supervisor_fingerprint=expected_supervisor_fingerprint,
         expected_targets=expected_targets,

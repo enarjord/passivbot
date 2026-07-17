@@ -22,33 +22,41 @@ Estimated completion:
 
 ## Active Review Slice
 
-- Branch: `codex/restart-smoke-window-fidelity`, based on canonical
-  `46a28795dec40acbee0dbaa3602be955bbecf23e` after PR #1301.
-- PR: #1302. Slice: preserve exact bounded smoke-window timestamps and reject
-  dropped hard-looking log evidence.
-- Triggering evidence: live PR #1301 validation projected both modern event
-  bounds as `1000000000` because epoch milliseconds reused a generic count
-  clamp. The same lossy values were used for event/log equality, so different
-  modern windows could compare equal. The log gate also ignored nonzero
-  `dropped_unparsed_hard_matches` from the opt-in drop policy.
-- Scope: validate epoch milliseconds against a fixed bounded range, compare and
-  project the exact values, and require both retained and dropped hard-log
-  counts to be well-formed zeroes.
-- Behavior boundary: read two local JSON files and emit bounded sanitized JSON.
-  The evaluator does not execute report producers, SSH, signal or start
-  processes, contact a network or exchange, load credentials, or write files.
-- Validation: focused exact-window, mismatched-window, malformed timestamp,
-  dropped-hard-log, evaluator, compilation, and docs regressions.
+- Branch: `codex/restart-smoke-collection-contract`, based on canonical
+  `0b5503b2a9ee4817618b7aca25dab417af4292dd` after PR #1302.
+- PR: #1303. Slice: collect exact local restart target and bounded smoke
+  evidence in memory, then immediately apply the existing sanitized evaluator.
+- Triggering evidence: PR #1302 proved the evaluator on retained real artifacts,
+  but operators still have to run two producers, retain two full reports, and
+  manually bind them into a third command.
+- Scope: require caller-confirmed head, supervisor fingerprint, target count,
+  session, config, and exact window; compose the existing bounded target and
+  smoke producers without intermediate report files; emit only the sanitized
+  evaluator verdict plus bounded collection-policy metadata.
+- Behavior boundary: local filesystem reads and bounded local `tmux`/`ps`/`git`
+  inventory subprocesses are allowed. SSH, pull/build, network or exchange
+  access, credentials, process signals/starts, force escalation, and file writes
+  remain excluded.
+- Validation: focused collection ordering/input/negative/redaction/CLI tests plus
+  existing target, smoke, evaluator, CLI, compilation, and docs regressions.
 - Review gate: temporary maintainer-authorized exact-head Hermes plus green
   Python and Rust CI while Grok is halted.
-- Expected VPS action: pull and re-evaluate the saved exact PR #1296 restart
-  window plus a deliberately mismatched-window copy. Do not restart or signal
-  bots.
+- Expected VPS action: pull and run the collector against the retained exact PR
+  #1296 restart window, plus caller-expectation negative checks. Do not restart
+  or signal bots.
 
 ## Deployed Baseline
 
 - Canonical `master` and VPS5 are
-  `46a28795dec40acbee0dbaa3602be955bbecf23e` after PR #1301. Exact-head Hermes
+  `0b5503b2a9ee4817618b7aca25dab417af4292dd` after PR #1302. Exact-head Hermes
+  and Python/Rust CI were green. VPS5 fast-forwarded without a restart or
+  signal. The retained PR #1296 window evaluated green while preserving exact
+  bounds `1784316350000..1784317500000`; a one-millisecond log-window mismatch
+  and one dropped hard-looking line each failed with `log_scan_invalid`. Pane
+  parents and bot PIDs remained unchanged, the checkout stayed tracked-clean,
+  and `misc:0.0` remained `%8`, PID `434835`.
+- PR #1301 previously deployed at
+  `46a28795dec40acbee0dbaa3602be955bbecf23e`. Exact-head Hermes
   and Python/Rust CI were green. VPS5 fast-forwarded without a restart or
   signal. The exact PR #1296 shutdown-through-startup window evaluated green
   with 3/3 stable targets, five stopping/stopped lifecycles, startup timing for

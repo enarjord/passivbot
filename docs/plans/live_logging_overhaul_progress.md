@@ -15,7 +15,23 @@ merge, live smoke evidence changes, or new gaps are discovered.
 - Do not use this file for design churn; unresolved design details belong in the
   plan or a focused handoff doc.
 
-## Latest Canonical Deployment (PR #1301)
+## Latest Canonical Deployment (PR #1302)
+
+- PR #1302 merged as canonical
+  `0b5503b2a9ee4817618b7aca25dab417af4292dd` after exact-current-head Hermes
+  approval and green Python/Rust CI. It preserves and compares exact bounded
+  epoch-ms smoke windows and fails closed on dropped hard-looking log evidence.
+- VPS5 fast-forwarded without a restart or signal. The retained PR #1296 window
+  evaluated green with exact bounds `1784316350000..1784317500000`; an in-memory
+  one-millisecond mismatch and dropped-hard count each evaluated red with
+  `log_scan_invalid`. All five pane parents and bot PIDs plus `misc:0.0` remained
+  unchanged, and tracked state stayed clean.
+- The active follow-up directly composes the existing target, smoke, and evidence
+  builders in memory so operators no longer need intermediate full-report files.
+  Pull/build, SSH, process control, exchange access, and force escalation remain
+  separate.
+
+## Previous Canonical Deployment (PR #1301)
 
 - PR #1301 merged as canonical
   `46a28795dec40acbee0dbaa3602be955bbecf23e` after exact-current-head Hermes

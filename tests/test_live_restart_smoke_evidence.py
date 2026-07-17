@@ -7,12 +7,34 @@ import pytest
 from live.restart_smoke_evidence import (
     MAX_PROJECTED_COUNT,
     build_live_restart_smoke_evidence,
+    validate_live_restart_smoke_expectations,
 )
 from tools import live_restart_smoke_evidence
 
 
 HEAD = "a" * 40
 FINGERPRINT = "b" * 64
+
+
+@pytest.mark.parametrize(
+    ("head", "fingerprint", "targets"),
+    [
+        ("A" * 40, FINGERPRINT, 2),
+        (HEAD, "B" * 64, 2),
+        (True, FINGERPRINT, 2),
+        (HEAD, True, 2),
+        (HEAD, FINGERPRINT, True),
+    ],
+)
+def test_public_expectation_validator_rejects_malformed_values(
+    head, fingerprint, targets
+):
+    with pytest.raises(ValueError):
+        validate_live_restart_smoke_expectations(
+            expected_repository_head=head,
+            expected_supervisor_fingerprint=fingerprint,
+            expected_targets=targets,
+        )
 
 
 def _target_report(*, targets: int = 2) -> dict:

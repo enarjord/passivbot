@@ -394,6 +394,63 @@ def test_live_restart_smoke_evidence_tool_dispatch_forwards_module_and_prog(monk
     assert captured["prog_env"] == "passivbot tool live-restart-smoke-evidence"
 
 
+def test_live_restart_smoke_collect_tool_dispatch_forwards_module_and_prog(monkeypatch):
+    captured = {}
+
+    def fake_invoke_module_main(module_name):
+        captured["module_name"] = module_name
+        captured["argv"] = sys.argv[:]
+        captured["prog_env"] = os.environ.get("PASSIVBOT_CLI_PROG")
+        return True, 0
+
+    monkeypatch.setattr(cli_main, "_invoke_module_main", fake_invoke_module_main)
+    monkeypatch.setattr(cli_main, "_missing_full_install_markers", lambda: [])
+
+    assert (
+        cli_main.main(
+            [
+                "tool",
+                "live-restart-smoke-collect",
+                "supervisor.yaml",
+                "monitor",
+                "--session-name",
+                "passivbot",
+                "--expected-repository-head",
+                "a" * 40,
+                "--expected-supervisor-fingerprint",
+                "b" * 64,
+                "--expected-targets",
+                "2",
+                "--since-ms",
+                "1752789600123",
+                "--until-ms",
+                "1752789660456",
+            ]
+        )
+        == 0
+    )
+
+    assert captured["module_name"] == "tools.live_restart_smoke_collection"
+    assert captured["argv"] == [
+        "passivbot tool live-restart-smoke-collect",
+        "supervisor.yaml",
+        "monitor",
+        "--session-name",
+        "passivbot",
+        "--expected-repository-head",
+        "a" * 40,
+        "--expected-supervisor-fingerprint",
+        "b" * 64,
+        "--expected-targets",
+        "2",
+        "--since-ms",
+        "1752789600123",
+        "--until-ms",
+        "1752789660456",
+    ]
+    assert captured["prog_env"] == "passivbot tool live-restart-smoke-collect"
+
+
 def test_live_process_report_tool_dispatch_forwards_module_and_prog(monkeypatch):
     captured = {}
 
