@@ -24,7 +24,7 @@ Estimated completion:
 
 - Branch: `codex/restart-smoke-collection-contract`, based on canonical
   `0b5503b2a9ee4817618b7aca25dab417af4292dd` after PR #1302.
-- PR: pending. Slice: collect exact local restart target and bounded smoke
+- PR: #1303. Slice: collect exact local restart target and bounded smoke
   evidence in memory, then immediately apply the existing sanitized evaluator.
 - Triggering evidence: PR #1302 proved the evaluator on retained real artifacts,
   but operators still have to run two producers, retain two full reports, and
