@@ -32,11 +32,23 @@ def test_pr_review_contract_preserves_scheduler_and_verdict_semantics():
 
     required_contracts = [
         "digests of CI and review/comment metadata",
-        "Scope completed-review records by reviewer and head",
+        "exact base, head, and effective merge-base identities",
+        "Scope completed-review records by reviewer and those identities",
         "The target-relative production, test, configuration, and contract diff is unchanged",
         "records the old and new heads, target SHA, inspected delta, validation",
-        "Every completed review records the reviewer identity, exact head SHA, and decision",
+        (
+            "Re-fetch the exact base and head and recompute the effective merge base immediately "
+            "before posting"
+        ),
+        (
+            "Every completed review records the reviewer identity, exact base, head, and effective "
+            "merge-base SHAs"
+        ),
         "This marker records completion by that reviewer, not approval",
+        (
+            "A requested draft review remains advisory and uses `COMMENT` unless formal approval "
+            "of the draft was explicitly requested"
+        ),
     ]
 
     for required_contract in required_contracts:
