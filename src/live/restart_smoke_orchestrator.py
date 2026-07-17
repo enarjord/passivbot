@@ -143,11 +143,13 @@ def _epoch_ms() -> int:
 
 
 def _target_preflight_ok(
-    report: dict[str, Any],
+    report: Any,
     *,
     expected_targets: int,
     expected_supervisor_fingerprint: str,
 ) -> bool:
+    if not isinstance(report, dict):
+        return False
     issues = report.get("issues")
     extra_panes = report.get("extra_panes")
     targets = report.get("targets")
@@ -204,11 +206,26 @@ def _strict_nonnegative_int(value: Any) -> int | None:
 
 
 def _restart_summary(
-    report: dict[str, Any],
+    report: Any,
     *,
     expected_targets: int,
     expected_supervisor_fingerprint: str,
 ) -> dict[str, Any]:
+    if not isinstance(report, dict):
+        return {
+            "ok": False,
+            "contract_valid": False,
+            "outcome": None,
+            "action_started": True,
+            "hard_failures": None,
+            "targets": 0,
+            "stop_requested": 0,
+            "exited": 0,
+            "relaunch_requested": 0,
+            "relaunch_succeeded": 0,
+            "verified_targets": None,
+            "verification_ok": False,
+        }
     targets = report.get("targets")
     target_rows = targets if isinstance(targets, list) else []
     verification = report.get("verification")
@@ -220,6 +237,12 @@ def _restart_summary(
         else {}
     )
     hard_failures = _strict_nonnegative_int(report.get("hard_failures"))
+    action_started_value = report.get("action_started")
+    action_started = (
+        action_started_value
+        if type(action_started_value) is bool
+        else True
+    )
     verified_targets = _strict_nonnegative_int(
         verification.get("resolved_targets")
     )
@@ -295,7 +318,7 @@ def _restart_summary(
             if report.get("outcome") in _RESTART_OUTCOMES
             else None
         ),
-        "action_started": report.get("action_started") is True,
+        "action_started": action_started,
         "hard_failures": hard_failures,
         **target_counts,
         "verification_ok": verification.get("ok") is True,
@@ -313,7 +336,9 @@ def _finish_report(report: dict[str, Any]) -> dict[str, Any]:
     return report
 
 
-def _smoke_collection_contract_valid(report: dict[str, Any]) -> bool:
+def _smoke_collection_contract_valid(report: Any) -> bool:
+    if not isinstance(report, dict):
+        return False
     hard_failures = _strict_nonnegative_int(report.get("hard_failures"))
     issues = report.get("issues")
     return bool(

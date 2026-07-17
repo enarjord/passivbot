@@ -344,6 +344,29 @@ def test_malformed_executor_outcome_is_not_projected(monkeypatch):
     assert calls["smoke"] == []
 
 
+@pytest.mark.parametrize("malformed", [None, [], {"ok": True}])
+def test_malformed_executor_shape_requires_manual_recovery(
+    monkeypatch, malformed
+):
+    calls = _install_happy_dependencies(monkeypatch)
+    monkeypatch.setattr(
+        orchestrator_module,
+        "execute_live_restart",
+        lambda *_args, **_kwargs: malformed,
+    )
+
+    report = execute_live_restart_smoke(**_kwargs())
+
+    assert report["outcome"] == "manual_recovery_required"
+    assert report["action_started"] is True
+    assert report["restart"]["contract_valid"] is False
+    assert report["issues"] == [
+        {"code": "restart_contract_invalid", "severity": "error"}
+    ]
+    assert calls["sleep"] == []
+    assert calls["smoke"] == []
+
+
 def test_red_smoke_leaves_restart_complete_and_returns_red(monkeypatch):
     calls = _install_happy_dependencies(monkeypatch)
     monkeypatch.setattr(
@@ -379,6 +402,22 @@ def test_malformed_smoke_report_is_not_projected(monkeypatch):
     assert report["issues"] == [
         {"code": "smoke_contract_invalid", "severity": "error"}
     ]
+    assert "private-monitor-path" not in json.dumps(report, sort_keys=True)
+    assert calls["sleep"] == [10.0]
+
+
+def test_non_mapping_smoke_report_is_not_projected(monkeypatch):
+    calls = _install_happy_dependencies(monkeypatch)
+    monkeypatch.setattr(
+        orchestrator_module,
+        "build_live_restart_smoke_collection",
+        lambda *_args, **_kwargs: ["private-monitor-path"],
+    )
+
+    report = execute_live_restart_smoke(**_kwargs())
+
+    assert report["outcome"] == "restart_completed_smoke_failed"
+    assert report["smoke"] is None
     assert "private-monitor-path" not in json.dumps(report, sort_keys=True)
     assert calls["sleep"] == [10.0]
 
