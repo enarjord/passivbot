@@ -15,7 +15,24 @@ merge, live smoke evidence changes, or new gaps are discovered.
 - Do not use this file for design churn; unresolved design details belong in the
   plan or a focused handoff doc.
 
-## Latest Canonical Deployment (PRs #1294 And #1293)
+## Latest Canonical Deployment (PR #1297)
+
+- PR #1297 merged as `7b833471c1e770ceb8650a4c3b395713b6a76dcb`
+  after exact-head Hermes approval and green Python/Rust CI. It added the first
+  local exact-target graceful restart executor over the previously proven pane,
+  process, relaunch, and private supervisor-fingerprint contracts.
+- VPS5 fast-forwarded cleanly from `0f366b6f` without a restart or process
+  signal. The executor CLI/help loaded, and the post-deploy 3/3 target report
+  was hard-green with all five exact targets relaunch-ready, zero issues, and
+  the unchanged private command fingerprint. Bot PIDs
+  `1015403/1015406/1015410/1015412/1015414`, all pane parents, and unrelated
+  `misc:0.0` PID `434835` remained unchanged.
+- The active follow-up binds restart authorization to the intended clean Git
+  head and an exactly source-matched Rust extension before any signal and again
+  before relaunch. No exchange request, process action, or event was
+  manufactured during the PR #1297 deployment.
+
+## Previous Canonical Deployment (PRs #1294 And #1293)
 
 - PR #1294 merged as `3de024c76d5c07bda2b4e64400c1a204d6be38a8`
   and moved the restart supervisor fingerprint to complete private commands
@@ -40,9 +57,9 @@ merge, live smoke evidence changes, or new gaps are discovered.
   reached `R=4,S=1`; the final target report retained 3/3 stable samples, all
   five relaunch paths, zero issues, and the same fingerprint. No direct
   exchange probe or event was manufactured.
-- The active follow-up implements the first local exact-target executor over
-  this proven contract. It excludes SSH, git pull/build, direct exchange access,
-  automatic force escalation, and integrated post-restart smoke orchestration.
+- The local exact-target executor followed in PR #1297. It excludes SSH, git
+  pull/build, direct exchange access, automatic force escalation, and integrated
+  post-restart smoke orchestration.
 
 ## Previous Canonical Deployment (PR #1277)
 
