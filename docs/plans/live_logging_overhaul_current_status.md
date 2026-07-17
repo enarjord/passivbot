@@ -24,7 +24,7 @@ Estimated completion:
 
 - Branch: `codex/restart-smoke-evidence-contract`, based on canonical
   `e1a4837914c1e4768cd7963bba47212499d32937` after PR #1300.
-- PR: pending. Slice: add a pure post-restart evidence evaluator over existing
+- PR: #1301. Slice: add a pure post-restart evidence evaluator over existing
   full target-report and smoke-report JSON artifacts.
 - Triggering evidence: the executor now proves exact action boundaries, but the
   subsequent operator smoke evidence still depends on manual interpretation of
