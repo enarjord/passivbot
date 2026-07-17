@@ -419,13 +419,18 @@ Monitor commands are documented in detail in [monitor.md](monitor.md). The CLI s
   stable sampling verdict.
 - `passivbot tool live-restart-executor SUPERVISOR_CONFIG --session-name
   SESSION --expected-repository-head COMMIT
+  --expected-rust-source-fingerprint SHA256
   --expected-supervisor-fingerprint SHA256 --execute` gracefully
   restarts only the exact local tmux targets proven by the same bounded target
   contract. Before target sampling it requires the exact caller-confirmed
   40-character Git commit, zero tracked changes while preserving untracked
-  artifacts, and a loaded Rust extension whose source stamp exactly matches the
-  checked-out Rust sources. It repeats that runtime contract immediately before
-  the first signal and before relaunch. It also requires the caller-confirmed
+  artifacts, the expected fingerprint recorded by the repository-owned Rust
+  build verification, and a loaded Rust extension whose source stamp exactly
+  matches that fingerprint and the checked-out Rust build inputs. This explicit
+  fingerprint matters because the build inputs include the host-local ignored
+  `Cargo.lock`, so identical Git heads need not produce the same fingerprint.
+  It repeats that runtime contract immediately before the first signal and
+  before relaunch. It also requires the caller-confirmed
   full-command fingerprint, takes an immediate action snapshot, and sends one
   Ctrl-C round to exact pane IDs. After a bounded exact-PID exit wait, it scans
   for unexpected or duplicate live processes, verifies the complete session
@@ -439,8 +444,8 @@ Monitor commands are documented in detail in [monitor.md](monitor.md). The CLI s
   recovery; targets that did exit may be relaunched only when every post-stop
   check is still exact. The relaunched live bots resume their configured
   exchange access and normal runtime file writes. Run the read-only target
-  report first and pass its exact opaque fingerprint; command content is never
-  emitted.
+  report first, retain the Rust fingerprint from build verification, and pass
+  both exact fingerprints; command content is never emitted.
 - `passivbot tool live-performance-report` summarizes local live monitor event timings for
   operator performance analysis. It is read-only and does not contact exchanges. Use
   `--recent-minutes` for a time window, `--summary` for a bounded operator projection, and

@@ -15,7 +15,28 @@ merge, live smoke evidence changes, or new gaps are discovered.
 - Do not use this file for design churn; unresolved design details belong in the
   plan or a focused handoff doc.
 
-## Latest Canonical Deployment (PR #1297)
+## Latest Canonical Deployment (PR #1298)
+
+- PR #1298 merged as `4a7a6753bff00f9b8749d9707f9bdccc4b3a5ffc`
+  after exact-head Hermes approval and green Python/Rust CI. It requires the
+  local restart executor to prove an exact Git head, zero tracked changes, and
+  a source-matched loaded Rust extension before target sampling and again at
+  both process-action boundaries.
+- VPS5 fast-forwarded cleanly from `7b833471` without a restart or signal. A
+  deliberately wrong expected head returned exit 1 with
+  `action_started=false`, no target preflight, zero tracked changes, and a Rust
+  source/stamp match at `7869bc3d...`. The final 3/3 exact-target report was
+  hard-green with all five unchanged bot PIDs relaunch-ready, states `R=3,S=2`,
+  zero issues, and the unchanged private supervisor fingerprint. Unrelated
+  `misc:0.0` remained `%8`, PID `434835`.
+- The tracked Rust Git tree matched the clean local tree, but its local
+  fingerprint was `d14a5363...` because ignored `Cargo.lock` is intentionally
+  included and differs by host. The active follow-up requires the operator to
+  confirm the expected host-local Rust fingerprint rather than accepting any
+  internally self-consistent source/stamp pair. No exchange request, process
+  action, or event was manufactured.
+
+## Previous Canonical Deployment (PR #1297)
 
 - PR #1297 merged as `7b833471c1e770ceb8650a4c3b395713b6a76dcb`
   after exact-head Hermes approval and green Python/Rust CI. It added the first

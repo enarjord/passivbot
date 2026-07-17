@@ -22,18 +22,19 @@ Estimated completion:
 
 ## Active Review Slice
 
-- Branch: `codex/restart-executor-runtime-contract`, based on canonical
-  `7b833471c1e770ceb8650a4c3b395713b6a76dcb` after PR #1297.
-- PR: #1298, `Bind live restart execution to repository runtime`. Slice: bind
-  the local restart executor to the intended repository and compiled Rust
-  runtime before any process action.
-- Triggering evidence: PR #1297 proved exact local stop/relaunch mechanics but
-  did not verify that the executor was running from the intended clean commit
-  or that the importable Rust extension matched that checkout's Rust sources.
-- Scope: require an exact expected 40-character repository head, zero tracked
-  changes, and an exact Rust source-fingerprint stamp; repeat the contract
-  immediately before the first signal and before relaunch; preserve untracked
-  artifacts and keep paths and launch commands out of the report.
+- Branch: `codex/restart-executor-artifact-fingerprint`, based on canonical
+  `4a7a6753bff00f9b8749d9707f9bdccc4b3a5ffc` after PR #1298.
+- PR: pending. Slice: require the operator to confirm the exact Rust build-input
+  fingerprint authorized for restart execution.
+- Triggering evidence: PR #1298's VPS5 fail-closed probe proved the checked-out
+  source and loaded extension stamp matched, but also showed that VPS5's
+  fingerprint `7869bc3d...` differed from the clean local fingerprint
+  `d14a5363...` because the intentionally fingerprinted, ignored `Cargo.lock`
+  differs by host. The current executor accepts either self-consistent value
+  without an independent operator confirmation.
+- Scope: require an exact expected 64-character Rust source fingerprint and
+  prove `expected == observed build inputs == loaded extension stamp` before
+  target sampling, immediately before the first signal, and before relaunch.
 - Behavior boundary: local restart/deploy behavior. The executor does not SSH,
   pull/build code, contact exchanges directly, write files directly, use broad
   process-pattern signals, or apply automatic SIGTERM/SIGKILL. Relaunched live
@@ -44,18 +45,20 @@ Estimated completion:
 - Review gate: temporary maintainer-authorized exact-head Hermes plus green
   Python and Rust CI while Grok is halted.
 - Expected VPS action: pull and exercise only the executor's fail-closed
-  pre-action contract with a deliberately wrong expected head; leave running
-  bots unchanged.
+  pre-action contract with a deliberately wrong expected Rust fingerprint;
+  leave running bots unchanged.
 
 ## Deployed Baseline
 
 - Canonical `master` and VPS5 are
-  `7b833471c1e770ceb8650a4c3b395713b6a76dcb`, PR #1297. VPS5 fast-forwarded
-  cleanly from `0f366b6f` without a restart or process signal. The executor CLI
-  and help loaded successfully; a post-deploy 3/3 target report was hard-green
-  with all five exact targets relaunch-ready, zero issues, and the same private
-  command fingerprint. Bot PIDs `1015403/1015406/1015410/1015412/1015414`, pane
-  parents, and unrelated `misc:0.0` PID `434835` remained unchanged.
+  `4a7a6753bff00f9b8749d9707f9bdccc4b3a5ffc`, PR #1298. Exact-head Hermes and
+  both CI jobs were green. VPS5 fast-forwarded cleanly from `7b833471` without a
+  restart or process signal. A deliberately wrong expected head returned exit
+  1 with `action_started=false`, no target preflight, zero tracked changes, and
+  a source-matched Rust extension. The post-deploy 3/3 target report was
+  hard-green with all five unchanged bot PIDs relaunch-ready, exact states
+  `R=3,S=2`, zero issues, and the unchanged private command fingerprint.
+  Unrelated `misc:0.0` remained `%8`, PID `434835`.
 - PR #1294 first
   fast-forwarded cleanly as `3de024c76d5c07bda2b4e64400c1a204d6be38a8`
   and produced a hard-green 3/3 stable target report with all five targets,
