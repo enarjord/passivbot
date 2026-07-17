@@ -162,9 +162,11 @@ def _build_runtime_contract(
             "loaded": False,
             "expected_source_fingerprint": expected_rust_source_fingerprint,
             "source_fingerprint": None,
+            "final_source_fingerprint": None,
             "compiled_source_stamp": None,
             "compiled_sha256": None,
             "source_matched": False,
+            "source_snapshot_stable": None,
         },
         "issues": [],
     }
@@ -235,6 +237,28 @@ def _build_runtime_contract(
     final_status, status_error = _git_contract_output(
         ["status", "--porcelain", "--untracked-files=no"]
     )
+    try:
+        final_fingerprint = source_fingerprint(root / "passivbot-rust")
+    except OSError as exc:
+        rust_report["recheck_error_class"] = exc.__class__.__name__
+        final_fingerprint = None
+        issues.append("rust_source_fingerprint_recheck_unavailable")
+    if (
+        final_fingerprint is None
+        and "rust_source_fingerprint_recheck_unavailable" not in issues
+    ):
+        issues.append("rust_source_fingerprint_recheck_unavailable")
+    rust_report["final_source_fingerprint"] = final_fingerprint
+    source_snapshot_stable = (
+        final_fingerprint is not None
+        and final_fingerprint == fingerprint
+        and final_fingerprint == expected_rust_source_fingerprint
+        and final_fingerprint == compiled_stamp
+    )
+    rust_report["source_snapshot_stable"] = source_snapshot_stable
+    if final_fingerprint is not None and final_fingerprint != fingerprint:
+        issues.append("rust_source_changed_during_runtime_check")
+
     if head_error is not None or status_error is not None:
         issues.append("repository_recheck_unavailable")
     else:

@@ -429,8 +429,10 @@ Monitor commands are documented in detail in [monitor.md](monitor.md). The CLI s
   matches that fingerprint and the checked-out Rust build inputs. This explicit
   fingerprint matters because the build inputs include the host-local ignored
   `Cargo.lock`, so identical Git heads need not produce the same fingerprint.
-  It repeats that runtime contract immediately before the first signal and
-  before relaunch. It also requires the caller-confirmed
+  Each runtime check rehashes those inputs after extension verification so an
+  ignored input cannot change inside the check unnoticed. It repeats that
+  runtime contract immediately before the first signal and before relaunch. It
+  also requires the caller-confirmed
   full-command fingerprint, takes an immediate action snapshot, and sends one
   Ctrl-C round to exact pane IDs. After a bounded exact-PID exit wait, it scans
   for unexpected or duplicate live processes, verifies the complete session

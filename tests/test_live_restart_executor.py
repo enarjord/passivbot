@@ -36,9 +36,11 @@ def _runtime_contract(*, ok: bool = True, issue: str | None = None) -> dict:
             "loaded": True,
             "expected_source_fingerprint": RUST_SOURCE_FINGERPRINT,
             "source_fingerprint": RUST_SOURCE_FINGERPRINT,
+            "final_source_fingerprint": RUST_SOURCE_FINGERPRINT,
             "compiled_source_stamp": RUST_SOURCE_FINGERPRINT,
             "compiled_sha256": "d" * 64,
             "source_matched": True,
+            "source_snapshot_stable": True,
         },
         "issues": [issue] if issue else [],
     }
@@ -738,6 +740,7 @@ def test_runtime_contract_binds_clean_head_and_exact_rust_source_stamp(monkeypat
         == RUST_SOURCE_FINGERPRINT
     )
     assert report["rust_extension"]["source_matched"] is True
+    assert report["rust_extension"]["source_snapshot_stable"] is True
     assert "/private/" not in json.dumps(report, sort_keys=True)
 
 
@@ -804,6 +807,53 @@ def test_runtime_contract_rejects_unexpected_rust_source_before_import(monkeypat
     assert report["ok"] is False
     assert report["issues"] == ["rust_source_fingerprint_mismatch"]
     assert report["rust_extension"]["loaded"] is False
+
+
+@pytest.mark.parametrize(
+    ("final_fingerprint", "expected_issue"),
+    [
+        ("e" * 64, "rust_source_changed_during_runtime_check"),
+        (None, "rust_source_fingerprint_recheck_unavailable"),
+    ],
+)
+def test_runtime_contract_rejects_unstable_rust_source_recheck(
+    monkeypatch, final_fingerprint, expected_issue
+):
+    fingerprints = iter([RUST_SOURCE_FINGERPRINT, final_fingerprint])
+    monkeypatch.setattr(
+        executor_module,
+        "_git_contract_output",
+        lambda arguments: (
+            ("/repository" if arguments[-1] == "--show-toplevel" else REPOSITORY_HEAD)
+            if arguments[0] == "rev-parse"
+            else "",
+            None,
+        ),
+    )
+    monkeypatch.setattr(
+        executor_module, "source_fingerprint", lambda _root: next(fingerprints)
+    )
+    monkeypatch.setattr(
+        executor_module.importlib, "import_module", lambda _name: object()
+    )
+    monkeypatch.setattr(
+        executor_module,
+        "verify_loaded_runtime_extension",
+        lambda **_kwargs: {
+            "runtime_compiled_sha256": "d" * 64,
+            "runtime_compiled_source_stamp": RUST_SOURCE_FINGERPRINT,
+        },
+    )
+
+    report = executor_module._build_runtime_contract(
+        REPOSITORY_HEAD, RUST_SOURCE_FINGERPRINT
+    )
+
+    assert report["ok"] is False
+    assert report["issues"] == [expected_issue]
+    assert report["repository_snapshot_stable"] is True
+    assert report["rust_extension"]["source_snapshot_stable"] is False
+    assert report["rust_extension"]["final_source_fingerprint"] == final_fingerprint
 
 
 def test_live_restart_executor_cli_requires_explicit_execute(capsys):
