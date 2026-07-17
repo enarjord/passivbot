@@ -94,7 +94,8 @@ def test_live_restart_smoke_plan_builds_plan_from_supervisor_config(tmp_path):
         "execute": False,
         "required_for_future_execution": True,
         "required_verdict": (
-            "ok=true, sampling.stable=true, and "
+            "ok=true, sampling.stable=true, "
+            "sampling.supervisor_contract_stable=true, and "
             "relaunch_ready_targets=resolved_targets"
         ),
         "expected_fields": [
@@ -103,6 +104,7 @@ def test_live_restart_smoke_plan_builds_plan_from_supervisor_config(tmp_path):
             "exact pane ID and pane PID per configured bot",
             "matched bot PID and pane ownership proof",
             "multi-sample stable target identity verdict",
+            "stable opaque supervisor command contract fingerprint",
             "all resolved targets have a persistent pane-parent relaunch path",
         ],
     }
@@ -193,7 +195,8 @@ def test_live_restart_smoke_plan_binds_stable_target_preflight(tmp_path):
         "execute": False,
         "required_for_future_execution": True,
         "required_verdict": (
-            "ok=true, sampling.stable=true, and "
+            "ok=true, sampling.stable=true, "
+            "sampling.supervisor_contract_stable=true, and "
             "relaunch_ready_targets=resolved_targets"
         ),
         "expected_fields": [
@@ -202,6 +205,7 @@ def test_live_restart_smoke_plan_binds_stable_target_preflight(tmp_path):
             "exact pane ID and pane PID per configured bot",
             "matched bot PID and pane ownership proof",
             "multi-sample stable target identity verdict",
+            "stable opaque supervisor command contract fingerprint",
             "all resolved targets have a persistent pane-parent relaunch path",
         ],
     }
@@ -709,7 +713,8 @@ def test_live_restart_smoke_plan_summary_projects_concise_commands(tmp_path, cap
         "execute": False,
         "required_for_future_execution": True,
         "required_verdict": (
-            "ok=true, sampling.stable=true, and "
+            "ok=true, sampling.stable=true, "
+            "sampling.supervisor_contract_stable=true, and "
             "relaunch_ready_targets=resolved_targets"
         ),
     }

@@ -4,6 +4,10 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Exact live restart target sampling now binds pane/PID stability to an opaque
+  fingerprint of the parsed supervisor command contract, failing closed when
+  that contract changes without exposing command content.
+
 - Live trailing extrema now latch an affected position side unavailable as soon
   as an authoritative position change is observed, including the first
   position snapshot after restart, and remain unavailable until a newer fill
