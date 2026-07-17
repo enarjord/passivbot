@@ -4,6 +4,10 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Exact live restart target sampling now binds pane/PID stability to an opaque
+  fingerprint of the parsed supervisor command contract, failing closed when
+  that contract changes without exposing command content.
+
 - Live trailing extrema now reset independently per symbol and position side
   after every confirmed fill. Ordinary trailing closes are withheld and stale
   trailing orders retired until post-fill candles establish fresh extrema,

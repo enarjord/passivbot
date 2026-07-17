@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import math
 import subprocess
 import time
@@ -43,6 +45,35 @@ def _bounded_text(value: Any, *, max_len: int) -> str:
     if len(text) <= max_len:
         return text
     return f"{text[:max_len]}...<truncated>"
+
+
+def _supervisor_contract(expected_rows: list[dict[str, Any]]) -> dict[str, Any]:
+    canonical_rows = sorted(
+        (
+            {
+                "window_name": str(row.get("name") or "").strip(),
+                "command": str(
+                    row.get("command") or row.get("command_key") or ""
+                ).strip(),
+                "config_path": str(row.get("config_path") or "").strip(),
+            }
+            for row in expected_rows
+        ),
+        key=lambda row: (row["window_name"], row["command"], row["config_path"]),
+    )
+    payload = json.dumps(
+        canonical_rows,
+        ensure_ascii=True,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    return {
+        "source": "parsed_supervisor_config",
+        "algorithm": "sha256",
+        "fingerprint": hashlib.sha256(payload).hexdigest(),
+        "target_count": len(canonical_rows),
+        "command_content_exposed": False,
+    }
 
 
 def _tmux_pane_inventory() -> tuple[list[dict[str, Any]], str | None]:
@@ -134,6 +165,7 @@ def _build_live_restart_target_snapshot(
     )
     expected = processes.get("expected")
     expected_rows = expected if isinstance(expected, list) else []
+    supervisor_contract = _supervisor_contract(expected_rows)
     panes, scan_error = _tmux_pane_inventory()
     session_panes = [
         pane for pane in panes if pane.get("session_name") == confirmed_session
@@ -298,6 +330,7 @@ def _build_live_restart_target_snapshot(
         "hard_failures": hard_failures,
         "safety": SAFETY_CONTRACT,
         "session_name": confirmed_session,
+        "supervisor_contract": supervisor_contract,
         "expected_targets": len(expected_rows),
         "resolved_targets": len(targets),
         "relaunch_ready_targets": relaunch_ready_targets,
@@ -322,6 +355,13 @@ def _target_identity(target: dict[str, Any]) -> dict[str, Any]:
         "relaunch_ready": relaunch_row.get("ready"),
         "relaunch_method": relaunch_row.get("method"),
     }
+
+
+def _supervisor_contract_fingerprint(snapshot: dict[str, Any]) -> str | None:
+    contract = snapshot.get("supervisor_contract")
+    contract_row = contract if isinstance(contract, dict) else {}
+    fingerprint = str(contract_row.get("fingerprint") or "").strip()
+    return fingerprint or None
 
 
 def _summarize_target_sampling(
@@ -362,6 +402,25 @@ def _summarize_target_sampling(
         )
 
     failed_samples = sum(1 for snapshot in snapshots if not snapshot.get("ok"))
+    all_supervisor_contract_observations = [
+        {
+            "sample": sample_index,
+            "fingerprint": _supervisor_contract_fingerprint(snapshot),
+        }
+        for sample_index, snapshot in enumerate(snapshots, start=1)
+    ]
+    first_contract_fingerprint = all_supervisor_contract_observations[0][
+        "fingerprint"
+    ]
+    supervisor_contract_stable = first_contract_fingerprint is not None and all(
+        observation["fingerprint"] == first_contract_fingerprint
+        for observation in all_supervisor_contract_observations
+    )
+    supervisor_contract_observations = (
+        []
+        if supervisor_contract_stable
+        else all_supervisor_contract_observations
+    )
     failed_sample_issues = [
         {
             "sample": sample_index,
@@ -375,7 +434,11 @@ def _summarize_target_sampling(
         for sample_index, snapshot in enumerate(snapshots, start=1)
         if not snapshot.get("ok")
     ]
-    stable = failed_samples == 0 and not changed_target_rows
+    stable = (
+        failed_samples == 0
+        and not changed_target_rows
+        and supervisor_contract_stable
+    )
     return {
         "requested_samples": len(snapshots),
         "collected_samples": len(snapshots),
@@ -384,6 +447,9 @@ def _summarize_target_sampling(
         "successful_samples": len(snapshots) - failed_samples,
         "failed_samples": failed_samples,
         "failed_sample_issues": failed_sample_issues,
+        "supervisor_contract_stable": supervisor_contract_stable,
+        "supervisor_contract_changed": not supervisor_contract_stable,
+        "supervisor_contract_observations": supervisor_contract_observations,
         "stable_targets": stable_targets,
         "changed_target_count": len(changed_target_rows),
         "changed_targets_truncated": max(
@@ -445,6 +511,9 @@ def build_live_restart_target_report(
                 "severity": "error",
                 "failed_samples": sampling["failed_samples"],
                 "changed_target_count": sampling["changed_target_count"],
+                "supervisor_contract_changed": sampling[
+                    "supervisor_contract_changed"
+                ],
             },
         ]
         report["hard_failures"] = int(report["hard_failures"]) + 1
