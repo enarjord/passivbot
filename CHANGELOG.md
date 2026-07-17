@@ -5,10 +5,13 @@ All notable user-facing changes will be documented in this file.
 ## Unreleased
 
 - Live trailing extrema now latch an affected position side unavailable as soon
-  as an authoritative position change is observed, and remain unavailable until
-  a newer fill identity plus complete finalized 1m coverage is present.
-  Side-scoped trailing failures no longer suppress valid reconciliation on the
-  unaffected hedge side.
+  as an authoritative position change is observed, including the first
+  position snapshot after restart, and remain unavailable until a newer fill
+  identity at or after the authoritative position timestamp plus complete
+  finalized 1m coverage is present. Fill refreshes that arrive before the
+  matching position snapshot confirm against the prior snapshot's fill epoch.
+  Side-scoped trailing failures and panic plans no longer suppress valid
+  reconciliation on the unaffected hedge side.
 
 - Live trailing extrema now reset independently per symbol and position side
   after every confirmed fill. Ordinary trailing closes are withheld and stale
