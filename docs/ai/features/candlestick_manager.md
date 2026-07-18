@@ -35,6 +35,11 @@
    SHA-256 sidecar before parsing, and write only invalid v2 rows. Monthly archives are attempted
    only after Binance's first-Monday publication window plus a buffer; daily archives exclude the
    current day and two preceding complete UTC days.
+8. Live forager planning is cache-only for inactive candidates. Its background refresher must warm
+   every required native candle surface, including both 1m inputs and native 1h log-range inputs,
+   using the same per-symbol strategy requirements as startup warmup. Refresh budgets count
+   symbol/timeframe fetches, and incomplete surfaces remain queued fairly across cycle and
+   wall-time caps.
 
 Cache paths use `to_standard_exchange_name()` rather than raw CCXT identifiers such as
 `binanceusdm` or `kucoinfutures`.
