@@ -16,9 +16,21 @@ mod utils;
 
 use coin_selection::{select_coin_indices_py, select_forager_candidates_py};
 use pyo3::prelude::*;
+use pyo3::types::PyDict;
 use pyo3::wrap_pyfunction;
 use python::*;
 use utils::*;
+
+#[pyfunction]
+fn runtime_build_info(py: Python<'_>) -> PyResult<PyObject> {
+    let info = PyDict::new_bound(py);
+    info.set_item("crate_version", env!("CARGO_PKG_VERSION"))?;
+    info.set_item(
+        "source_fingerprint",
+        option_env!("PASSIVBOT_RUST_SOURCE_FINGERPRINT").unwrap_or("unknown"),
+    )?;
+    Ok(info.into())
+}
 
 /// A Python module implemented in Rust.
 #[pymodule]
@@ -26,6 +38,7 @@ fn passivbot_rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<HlcvsBundlePy>()?;
     m.add_class::<EquityHardStopRollingPeakPy>()?;
     m.add_class::<EquityHardStopRuntimePy>()?;
+    m.add_function(wrap_pyfunction!(runtime_build_info, m)?)?;
     m.add_function(wrap_pyfunction!(round_, m)?)?;
     m.add_function(wrap_pyfunction!(round_up, m)?)?;
     m.add_function(wrap_pyfunction!(round_dn, m)?)?;

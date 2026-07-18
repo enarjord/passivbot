@@ -378,6 +378,9 @@ def _monitor_fill_payload(self, event) -> dict:
         "client_order_id": getattr(event, "client_order_id", None),
         "source_ids": list(getattr(event, "source_ids", []) or []),
     }
+    provenance = getattr(event, "provenance", {}) or {}
+    if provenance:
+        payload["provenance"] = dict(provenance)
     return {k: v for k, v in payload.items() if v is not None}
 
 
@@ -1664,6 +1667,9 @@ async def _build_monitor_snapshot(self, *, now_ms: Optional[int] = None) -> dict
             "pid": os.getpid(),
             "bot_start_ts_ms": self.start_time_ms,
             "current_cycle_ts_ms": now_ms,
+            "runtime": getattr(self, "runtime_identity", None).to_dict()
+            if getattr(self, "runtime_identity", None) is not None
+            else {},
         },
         "account": account,
         "health": self._build_health_summary_payload(now_ms=now_ms),

@@ -385,6 +385,10 @@ def test_route_table_keeps_data_events_off_console_by_default():
     assert DEFAULT_ROUTES[EventTypes.HSL_TRANSITION].text is True
     assert DEFAULT_ROUTES[EventTypes.BOT_STARTED].console is True
     assert DEFAULT_ROUTES[EventTypes.BOT_STARTED].text is True
+    assert DEFAULT_ROUTES[EventTypes.RUNTIME_STARTED].structured is True
+    assert DEFAULT_ROUTES[EventTypes.RUNTIME_STARTED].monitor is True
+    assert DEFAULT_ROUTES[EventTypes.RUNTIME_STARTED].console is False
+    assert DEFAULT_ROUTES[EventTypes.RUNTIME_STARTED].text is False
     assert DEFAULT_ROUTES[EventTypes.BOT_READY].structured is True
     assert DEFAULT_ROUTES[EventTypes.BOT_READY].monitor is True
     assert DEFAULT_ROUTES[EventTypes.BOT_READY].console is False

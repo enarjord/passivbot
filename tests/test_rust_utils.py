@@ -271,6 +271,11 @@ def test_maturin_env_prefers_current_virtualenv(monkeypatch: pytest.MonkeyPatch)
     assert env["PATH"].startswith("/tmp/current-venv/bin")
 
 
+def test_maturin_env_embeds_source_fingerprint(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr("rust_utils.source_fingerprint", lambda: "abc123")
+    assert maturin_env()["PASSIVBOT_RUST_SOURCE_FINGERPRINT"] == "abc123"
+
+
 def test_latest_source_mtime_includes_root_level_rs_files(tmp_path: Path):
     """Test that latest_source_mtime detects root-level .rs files (PR #537 fix)."""
     src_dir = tmp_path / "passivbot-rust"

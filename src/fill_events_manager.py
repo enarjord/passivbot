@@ -24,7 +24,8 @@ import shutil
 import tempfile
 import time
 from collections import defaultdict, deque
-from dataclasses import dataclass, field
+from copy import deepcopy
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
 from importlib import import_module
 from pathlib import Path
@@ -1333,13 +1334,14 @@ class FillEvent:
     fee_conversion_source: str = "none"
     fee_notional: float = 0.0
     fee_ratio: float = 0.0
+    provenance: Dict[str, object] = field(default_factory=dict)
 
     @property
     def key(self) -> str:
         return self.id
 
     def to_dict(self) -> Dict[str, object]:
-        return {
+        payload = {
             "id": self.id,
             "source_ids": list(self.source_ids) if self.source_ids is not None else [],
             "timestamp": self.timestamp,
@@ -1369,6 +1371,9 @@ class FillEvent:
             "c_mult": self.c_mult,
             "raw": self.raw if self.raw is not None else [],
         }
+        if self.provenance:
+            payload["provenance"] = deepcopy(self.provenance)
+        return payload
 
     @classmethod
     def from_dict(cls, data: Dict[str, object]) -> "FillEvent":
@@ -1434,6 +1439,11 @@ class FillEvent:
             pprice=float(data.get("pprice", 0.0)),
             c_mult=_payload_contract_multiplier(data),
             raw=_normalize_raw_field(data.get("raw")),
+            provenance=(
+                deepcopy(data.get("provenance"))
+                if isinstance(data.get("provenance"), dict)
+                else {}
+            ),
         )
 
     @property
@@ -3174,6 +3184,7 @@ class FillEventsManager:
         fee_pct_fallback: float = DEFAULT_FEE_PCT_FALLBACK,
         fee_pct_sanity_abs_max: float = DEFAULT_FEE_PCT_SANITY_ABS_MAX,
         fee_conversion_max_age_ms: int = DEFAULT_FEE_CONVERSION_MAX_AGE_MS,
+        runtime_identity: Optional[Dict[str, object]] = None,
     ) -> None:
         self.exchange = exchange
         self.user = user
@@ -3183,6 +3194,16 @@ class FillEventsManager:
         self.fee_pct_fallback = float(fee_pct_fallback)
         self.fee_pct_sanity_abs_max = float(fee_pct_sanity_abs_max)
         self.fee_conversion_max_age_ms = int(fee_conversion_max_age_ms)
+        self.runtime_identity = deepcopy(runtime_identity) if runtime_identity else {}
+        self._fill_provenance = (
+            {
+                "schema_version": 1,
+                "attribution": "first_ingested_by_runtime",
+                "runtime": deepcopy(self.runtime_identity),
+            }
+            if self.runtime_identity
+            else {}
+        )
         self._fee_conversion_cache: Dict[Tuple[str, str], Optional[float]] = {}
         self._fee_warning_reported_ids: set[str] = set()
         self._events: List[FillEvent] = []
@@ -4036,6 +4057,7 @@ class FillEventsManager:
             pprice=float(best_event.pprice),
             c_mult=float(best_event.c_mult),
             raw=raw_payload,
+            provenance=deepcopy(best_event.provenance),
         )
 
     async def run_doctor(self, *, auto_repair: bool = False) -> Dict[str, object]:
@@ -4418,6 +4440,10 @@ class FillEventsManager:
             for _raw, event in parsed_events:
                 source_ids = {str(source_id) for source_id in event.source_ids or [] if source_id}
                 replaced_ids: set[str] = set()
+                existing_events: List[FillEvent] = []
+                same_id_event = updated_map.get(event.id)
+                if same_id_event is not None:
+                    existing_events.append(same_id_event)
                 if source_ids:
                     overlapping_ids: set[str] = set()
                     for source_id in source_ids:
@@ -4431,6 +4457,11 @@ class FillEventsManager:
                     if overlapping_ids and not existing_source_ids <= source_ids:
                         continue
                     replaced_ids = overlapping_ids
+                    existing_events.extend(
+                        updated_map[existing_id]
+                        for existing_id in sorted(replaced_ids)
+                        if existing_id in updated_map
+                    )
                     for replaced_id in replaced_ids:
                         replaced = _drop_indexed_event(replaced_id)
                         if replaced is not None:
@@ -4450,6 +4481,22 @@ class FillEventsManager:
                     merged["pnl_source"] = prev.pnl_source
                     merged["pnl_synthetic_reason"] = prev.pnl_synthetic_reason
                     event = FillEvent.from_dict(merged)
+                preserved_provenance = next(
+                    (
+                        deepcopy(existing.provenance)
+                        for existing in existing_events
+                        if existing.provenance
+                    ),
+                    {},
+                )
+                if existing_events:
+                    event = replace(event, provenance=preserved_provenance)
+                elif self._fill_provenance:
+                    first_ingested = deepcopy(self._fill_provenance)
+                    first_ingested["first_ingested_at_ms"] = int(
+                        datetime.now(tz=timezone.utc).timestamp() * 1000
+                    )
+                    event = replace(event, provenance=first_ingested)
                 if prev is not None:
                     for source_id in prev.source_ids or []:
                         indexed = source_id_index.get(str(source_id))
