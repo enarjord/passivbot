@@ -159,6 +159,19 @@ must not retain `latest_error`. These projections are observability-only: error 
 timestamp recovery, restart thresholds, backoff, and trading behavior remain owned by the existing
 execution-loop policy.
 
+## Cycle Degradation
+
+`cycle.degraded` retains the stable reason code, bounded exception type, cycle correlation, safe
+operational details, and phase timings needed to explain an incomplete live cycle. Exception text,
+request URLs, request/response payloads, and tracebacks are excluded from this event, including
+generic execution-loop failures and fill-history coverage deferrals. The existing execution-loop
+incident family remains the bounded source for safe status, code, endpoint, and action
+classifications.
+
+This payload boundary is observability-only. Exception propagation, retries, time-sync recovery,
+restart thresholds, fill-history refresh requests, cycle deferral, and trading behavior are
+unchanged.
+
 ## Trailing And Unstuck Status Materiality
 
 `trailing.status` and `unstuck.status` retain one complete observation every five minutes while the

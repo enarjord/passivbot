@@ -73,6 +73,20 @@ _EXCHANGE_TIME_SYNC_CLIENT_RE = re.compile(
 )
 _EXCHANGE_TIME_SYNC_ERROR_TYPE_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,79}")
 _EXCHANGE_TIME_SYNC_CLIENT_SAMPLE_LIMIT = 8
+_CYCLE_DEGRADED_OMITTED_DATA_KEYS = frozenset(
+    {
+        "error",
+        "exception",
+        "exception_text",
+        "raw_request",
+        "raw_response",
+        "request",
+        "request_url",
+        "response",
+        "traceback",
+        "url",
+    }
+)
 
 
 def _sanitize_remote_text(value: Any, *, max_len: int = 500) -> str:
@@ -100,6 +114,20 @@ def _sanitize_remote_fetch_payload(payload: dict[str, Any]) -> dict[str, Any]:
         if url_hash is not None:
             data["url_hash"] = url_hash
     return data
+
+
+def _sanitize_cycle_degraded_payload(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {
+            key: _sanitize_cycle_degraded_payload(item)
+            for key, item in value.items()
+            if str(key).strip().lower() not in _CYCLE_DEGRADED_OMITTED_DATA_KEYS
+        }
+    if isinstance(value, list):
+        return [_sanitize_cycle_degraded_payload(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_sanitize_cycle_degraded_payload(item) for item in value)
+    return value
 
 
 def _bounded_exchange_config_event_field(
@@ -843,7 +871,7 @@ def emit_live_cycle_degraded(
 ) -> None:
     if not cycle_id:
         return
-    payload = dict(data or {})
+    payload = _sanitize_cycle_degraded_payload(dict(data or {}))
     payload.setdefault(
         "authoritative_epoch", int(getattr(bot, "_authoritative_refresh_epoch", 0) or 0)
     )

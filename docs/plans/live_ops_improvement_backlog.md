@@ -399,10 +399,18 @@ Related detailed plans:
      remained unchanged. The active follow-up composes the existing exact-pane
      executor and bounded collector over one exact restart-through-observation
      window without force escalation or report files.
+   - 2026-07-17: PR #1307 merged and deployed the exact restart-through-smoke
+     orchestrator. Graceful execution stopped, exited, relaunched, and verified
+     all five configured targets without force; the bounded collector recovered
+     all five shutdown/startup cohorts. Smoke honestly remained red on a real
+     KuCoin positions-fetch timeout while every bot stayed running and
+     `misc:0.0` remained unchanged. The retained event exposed raw connector
+     exception text and a request URL; the active follow-up removes those fields
+     while preserving bounded classification and correlation.
 
-   Remaining refinements: review and deploy the active post-restart smoke
-   orchestration slice. Remote-host control and any force-escalation policy
-   remain separate review boundaries.
+   Remaining refinements: activate the bounded `cycle.degraded` redaction
+   follow-up and observe a fresh settled post-restart window. Remote-host control
+   and any force-escalation policy remain separate review boundaries.
    The concise and brief summaries are intentionally bounded; further changes
    should target missing smoke fields rather than larger chat-facing payloads.
    2026-06-26 VPS5 deploy evidence: after PR #709, one Ctrl+C round stopped

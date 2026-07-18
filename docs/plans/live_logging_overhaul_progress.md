@@ -15,7 +15,24 @@ merge, live smoke evidence changes, or new gaps are discovered.
 - Do not use this file for design churn; unresolved design details belong in the
   plan or a focused handoff doc.
 
-## Latest Canonical Deployment (PR #1306)
+## Latest Canonical Deployment (PR #1307)
+
+- PR #1307 merged as canonical
+  `8aefdbc82339b756ff642e726ae0924d5ca8774d` after exact-current-head Hermes
+  approval and green Python/Rust CI. It composes the exact local restart
+  executor with one bounded restart-through-observation smoke collection.
+- VPS5 prepared the exact merge cleanly, then stopped, exited, relaunched, and
+  verified all five configured targets without force. The exact window
+  `1784332307933..1784332994590` selected 6/1,012 retained segments and recovered
+  five stopping/stopped/startup cohorts. Smoke correctly remained red on one
+  real KuCoin positions-fetch `RequestTimeout`; a second later timeout meant
+  recovery was not yet proven, so every bot was left running.
+- Repository and target gates remained green, pane parents and `misc:0.0` stayed
+  unchanged, and no direct exchange request or event was manufactured. The raw
+  exception string retained by `cycle.degraded` exposed the active bounded
+  redaction follow-up; remote-host control and force escalation remain separate.
+
+## Previous Canonical Deployment (PR #1306)
 
 - PR #1306 merged as canonical
   `0d1b06b82f3bab011e29a350b4a5276c2ebd5356` after exact-current-head Hermes

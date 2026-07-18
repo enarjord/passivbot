@@ -22,38 +22,48 @@ Estimated completion:
 
 ## Active Review Slice
 
-- Branch: `codex/restart-smoke-orchestrator`, based on canonical
-  `0d1b06b82f3bab011e29a350b4a5276c2ebd5356` after PR #1306.
-- PR: #1307. Slice: one bounded exact-pane graceful restart followed by one
-  exact restart-through-observation smoke collection.
-- Triggering evidence: repository preparation, exact target sampling, graceful
-  restart execution, retained-window collection, and sanitized evaluation are
-  individually available, but the production sequence still relies on manual
-  timestamp capture and command handoff between the restart and smoke tools.
-- Scope: independently require a complete stable target sample, invoke the
-  existing executor unchanged, require aggregate completion for every expected
-  target, wait one caller-bounded interval, and invoke the existing collector
-  with exact epoch-millisecond bounds. Malformed producer reports and bounded
-  collector exceptions fail closed without exposing private target details.
-- Behavior boundary: explicit `--execute` may gracefully signal and relaunch
-  only the configured exact tmux panes. The tool does not SSH, pull/build,
-  access credentials or exchanges directly, write reports, use broad process
-  patterns, poll/retry smoke collection, or apply automatic force escalation.
-  Configured bots resume normal exchange access and file writes. Post-action
-  smoke failure leaves them running and returns red for operator follow-up.
-- Validation: success/failure sequencing, strict target and executor contracts,
-  no-action preflight rejection, manual-recovery projection, exact clock bounds,
-  sanitized collector errors, CLI dispatch, existing restart tooling, complete
-  Python/Rust suites, compilation, and docs.
+- Branch: `codex/cycle-degraded-redaction`, based on canonical
+  `8aefdbc82339b756ff642e726ae0924d5ca8774d` after PR #1307.
+- PR: pending publication. Slice: remove retained raw exception text and request
+  URLs from execution-loop `cycle.degraded` payloads.
+- Triggering evidence: the exact PR #1307 VPS5 restart smoke retained a real
+  KuCoin `RequestTimeout` degradation whose structured event included the raw
+  connector exception string and request URL even though bounded reason,
+  exception-type, cycle, and incident fields were already available.
+- Scope: generic execution-loop failures and fill-history coverage deferrals
+  retain `error_type`, reason code, cycle correlation, phase timings, and the
+  existing safe operational details, but omit `str(exception)` and defensively
+  remove exception, URL, request/response, and traceback fields from the durable
+  structured/monitor payload.
+- Behavior boundary: observability payload only. Exception propagation,
+  fill-history confirmation requests, retries, time-sync recovery, restart
+  thresholds, execution-loop control flow, and trading behavior are unchanged.
+- Validation: targeted caller regressions, live-event/smoke consumers, complete
+  Python and Rust suites, compilation, generated registry/docs, and diff checks.
 - Review gate: temporary maintainer-authorized exact-head Hermes plus green
   Python and Rust CI while Grok is halted.
-- Expected VPS action: use the merged repository-preparation tool to reach the
-  reviewed merge commit, verify exact targets and private fingerprints, then
-  run one no-force five-target restart with bounded post-restart smoke. Preserve
-  `misc:0.0`; stop for manual recovery if graceful execution does not finish.
+- Expected VPS action: prepare the reviewed merge commit, gracefully restart
+  the five exact configured bot panes to load the producer change, preserve
+  `misc:0.0`, and run bounded immediate plus settled smoke checks.
 
 ## Deployed Baseline
 
+- Canonical `master` and VPS5 are
+  `8aefdbc82339b756ff642e726ae0924d5ca8774d` after PR #1307. Exact-head Hermes
+  and Python/Rust CI were green. Exact repository preparation fast-forwarded
+  cleanly without a Rust rebuild; independent preflight resolved all five
+  targets with 3/3 stable samples and no extras or issues.
+- The merged orchestrator gracefully stopped, observed exit, relaunched, and
+  verified all five exact targets with no force signal. The bounded window
+  `1784332307933..1784332994590` selected 6/1,012 managed event segments
+  totaling `19335163` projected bytes and recovered five stopping, five stopped,
+  and five startup cohorts. Repository, target, monitor, and text-log gates were
+  green, but smoke correctly remained red on one real KuCoin positions-fetch
+  `RequestTimeout`; a second later timeout showed recovery was not yet proven.
+  All bots were left running. Pane parents stayed unchanged, tracked state
+  stayed clean, and `misc:0.0` remained `%8`, PID `434835`. No direct exchange
+  probe or event was manufactured. The retained raw exception string exposed
+  the active redaction follow-up.
 - Canonical `master` and VPS5 are
   `0d1b06b82f3bab011e29a350b4a5276c2ebd5356` after PR #1306. Exact-head Hermes
   and Python/Rust CI were green. VPS5 first fast-forwarded to make the

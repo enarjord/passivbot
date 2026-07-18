@@ -131,7 +131,16 @@ def test_live_event_cycle_helpers_emit_structured_events():
     bot._emit_live_cycle_degraded(
         cycle_id=cycle_id,
         reason_code="execution_barrier",
-        data={"missing": ["open_orders"]},
+        data={
+            "missing": ["open_orders"],
+            "error_type": "RequestTimeout",
+            "error": "GET https://example.invalid?api_key=SECRET",
+            "request_url": "https://example.invalid?api_key=SECRET",
+            "details": {
+                "missing": ["positions"],
+                "response": {"api_key": "SECRET"},
+            },
+        },
     )
     assert bot._current_live_event_cycle_id() is None
     cycle_id_2 = bot._begin_live_event_cycle(loop_start_ms=1000)
@@ -165,6 +174,14 @@ def test_live_event_cycle_helpers_emit_structured_events():
         None,
     ]
     assert events[1].reason_code == "execution_barrier"
+    assert events[1].data == {
+        "missing": ["open_orders"],
+        "error_type": "RequestTimeout",
+        "details": {"missing": ["positions"]},
+        "authoritative_epoch": "[redacted]",
+    }
+    assert "SECRET" not in str(events[1].data)
+    assert "https://" not in str(events[1].data)
     assert events[3].data["orders_changed"] is True
     assert bot._live_event_pipeline.close(timeout=2.0) is True
 
