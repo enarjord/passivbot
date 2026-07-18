@@ -11,7 +11,10 @@ All notable user-facing changes will be documented in this file.
   close order type; when an initial or cooldown-repanic flatten fill is
   temporarily unavailable, live supervision performs a rate-limited,
   episode-bounded fill refresh and otherwise defers instead of using stale
-  pre-episode evidence or inventing the current time.
+  pre-episode evidence, intervention entries, partial closes, or an invented
+  current-time timestamp. Intra-minute replay also reconstructs the account
+  balance at each ordered episode boundary so later fills cannot change an
+  earlier episode's drawdown or no-restart outcome.
 
 - Added `passivbot tool live-restart-smoke-evidence`, a pure fail-closed
   evaluator for already-generated full restart target and smoke JSON reports.

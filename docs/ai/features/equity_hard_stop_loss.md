@@ -17,11 +17,13 @@ HSL drawdown state is scoped by `live.hsl_signal_mode`:
 3. A RED-seen episode remains entry-blocked until its scope is confirmed flat. Its cooldown begins
    at the flattening fill, not at the RED sample, order submission, bot restart, or observation time.
 4. Compact replay derives non-flat/flat transitions from fill events independently of candle or
-   unrealized-PnL availability. Missing price replay may defer drawdown evaluation, but it must not
-   hide an episode boundary.
+   unrealized-PnL availability. Multiple boundaries inside one replay minute retain their exact
+   fill order, realized PnL, fees, and account balance at each boundary. Missing price replay may
+   defer drawdown evaluation, but it must not hide an episode boundary.
 5. Current flat state is not a timestamp. If the flattening fill is not yet available, live
    finalization and cooldown anchoring defer visibly while protective entry blocking remains active;
-   they never substitute the current time.
+   they never substitute the current time. Cooldown re-panic finalization must replay fills from a
+   proven non-flat intervention snapshot; an entry or partial-close fill is not flatten evidence.
 6. Restart reconstruction uses exchange state, fill/PnL history, candles where required, config, and
    current time. Local latch and replay-cache files are accelerators or diagnostics, not authority.
 

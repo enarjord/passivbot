@@ -839,7 +839,23 @@ async def test_red_supervisor_refreshes_late_flatten_fill_and_exits():
 @pytest.mark.asyncio
 async def test_coin_red_supervisor_refreshes_late_cooldown_repanic_fill():
     symbol = "BTC/USDT:USDT"
-    events = [{"timestamp": 90_000, "pside": "long", "symbol": symbol}]
+    events = [
+        {"timestamp": 90_000, "pside": "long", "symbol": symbol},
+        {
+            "timestamp": 150_000,
+            "pside": "long",
+            "symbol": symbol,
+            "action": "increase",
+            "qty": 1.0,
+        },
+        {
+            "timestamp": 165_000,
+            "pside": "long",
+            "symbol": symbol,
+            "action": "increase",
+            "qty": 1.0,
+        },
+    ]
 
     class FakeBot:
         _equity_hard_stop_supervisor_running = False
@@ -863,6 +879,8 @@ async def test_coin_red_supervisor_refreshes_late_cooldown_repanic_fill():
                 "pending_stop_event": None,
                 "last_stop_event": {"stop_event_timestamp_ms": 120_000},
                 "cooldown_repanic_reset_pending": True,
+                "cooldown_repanic_since_ms": 160_000,
+                "cooldown_repanic_start_sizes": {symbol: 1.0},
                 "last_missing_flatten_fill_log_ms": 0,
                 "last_missing_flatten_fill_refresh_ms": 0,
             }
@@ -888,7 +906,13 @@ async def test_coin_red_supervisor_refreshes_late_cooldown_repanic_fill():
         async def update_pnls(self, *, source, since_ms=None):
             self.refresh_sources.append((source, since_ms))
             events.append(
-                {"timestamp": 170_000, "pside": "long", "symbol": symbol}
+                {
+                    "timestamp": 170_000,
+                    "pside": "long",
+                    "symbol": symbol,
+                    "action": "decrease",
+                    "qty": 2.0,
+                }
             )
             return True
 
@@ -908,7 +932,10 @@ async def test_coin_red_supervisor_refreshes_late_cooldown_repanic_fill():
         ):
             assert (
                 self._equity_hard_stop_latest_flatten_fill_timestamp_optional_ms(
-                    pside, symbol=requested_symbol, since_ms=120_001
+                    pside,
+                    symbol=requested_symbol,
+                    since_ms=160_000,
+                    replay_start_sizes={symbol: 1.0},
                 )
                 == 170_000
             )
@@ -941,7 +968,7 @@ async def test_coin_red_supervisor_refreshes_late_cooldown_repanic_fill():
     await Passivbot._equity_hard_stop_run_coin_red_supervisor(bot)
 
     assert bot.state["cooldown_repanic_reset_pending"] is False
-    assert bot.refresh_sources == [("hsl_flatten_confirmation", 120_001)]
+    assert bot.refresh_sources == [("hsl_flatten_confirmation", 160_000)]
     assert bot._equity_hard_stop_supervisor_running is False
 
 

@@ -4864,8 +4864,11 @@ async def test_coin_hsl_replay_splits_same_minute_flatten_and_reentry(compact):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("compact", [False, True])
-async def test_coin_hsl_replay_uses_first_of_multiple_same_minute_flattens(compact):
-    """Later-episode PnL must not be attached to the first RED episode."""
+@pytest.mark.parametrize("later_pnl", [-30.0, 60.0])
+async def test_coin_hsl_replay_uses_first_of_multiple_same_minute_flattens(
+    compact, later_pnl
+):
+    """Later-episode PnL and balance must not alter the first RED episode."""
     symbol = "A"
     first_flatten_ts = 150_000
     history = _red_episode_history(
@@ -4890,17 +4893,21 @@ async def test_coin_hsl_replay_uses_first_of_multiple_same_minute_flattens(compa
                 "pside": "long",
                 "action": "decrease",
                 "qty": 1.0,
-                "pnl": -30.0,
+                "pnl": later_pnl,
             },
         ]
     )
-    # The minute aggregate contains both losses. Only the first -30 belongs
-    # to the RED episode ending at 150_000; using -60 would cross the terminal
-    # no-restart threshold and demonstrate the attribution bug.
+    # The row closes at account balance 100 - 30 + later_pnl. The first RED
+    # episode nevertheless ended with balance 70 at 150_000. Reusing the row's
+    # ending balance either hides RED after the later profit or falsely makes
+    # the earlier episode terminal after the later loss.
     for row in history["timeline"]:
         if row["timestamp"] == 120_000:
-            row["realized_pnl"] = -60.0
-            row["realized_pnl_by_coin_pside"][symbol]["long"] = -60.0
+            row["balance"] = 70.0 + later_pnl
+            row["realized_pnl"] = -30.0 + later_pnl
+            row["realized_pnl_by_coin_pside"][symbol]["long"] = (
+                -30.0 + later_pnl
+            )
     bot = _flat_position_bot(symbol)
     bot.get_exchange_time = lambda: 180_000
 
