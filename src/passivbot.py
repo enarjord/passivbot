@@ -51,6 +51,11 @@ from fill_events_manager import (
     signed_fee_paid_from_payload,
 )
 from live import executor, market_data, planning_gates, reconciler, state_refresh
+from live.balance_composition import (
+    balance_composition_signature,
+    format_balance_composition_sample,
+    unavailable_balance_composition,
+)
 from live.data_packets import (
     ACCOUNT_PACKET_KINDS,
     DataPacketMetadata,
@@ -10373,23 +10378,35 @@ class Passivbot:
             self._previous_balance_snapped = 0.0
         balance_raw = self.get_raw_balance()
         balance_snapped = self.get_hysteresis_snapped_balance()
-        if (
+        composition = getattr(self, "_balance_composition", None)
+        composition_signature = balance_composition_signature(composition)
+        previous_composition_signature = getattr(
+            self, "_previous_balance_composition_signature", None
+        )
+        composition_changed = (
+            composition_signature is not None
+            and composition_signature != previous_composition_signature
+        )
+        balance_changed = (
             balance_raw != self._previous_balance_raw
             or balance_snapped != self._previous_balance_snapped
-        ):
+        )
+        if balance_changed or composition_changed:
             snap_changed = balance_snapped != self._previous_balance_snapped
             try:
                 equity = balance_raw + (await self.calc_upnl_sum())
                 self._monitor_last_equity = float(equity)
                 if snap_changed and not Passivbot._live_event_console_available(self):
+                    composition_sample = format_balance_composition_sample(composition)
                     logging.info(
-                        "[balance] raw %.6f -> %.6f | snap %.6f -> %.6f | equity: %.4f source: %s",
+                        "[balance] raw %.6f -> %.6f | snap %.6f -> %.6f | equity: %.4f source: %s%s",
                         self._previous_balance_raw,
                         balance_raw,
                         self._previous_balance_snapped,
                         balance_snapped,
                         equity,
                         source,
+                        f" assets={composition_sample}" if composition_sample else "",
                     )
                 self._monitor_record_event(
                     "account.balance",
@@ -10416,6 +10433,7 @@ class Passivbot:
                         balance_snapped=float(balance_snapped),
                         equity=float(equity),
                         source=str(source),
+                        balance_composition=composition,
                     )
             except Exception as e:
                 if self._log_noncritical_market_snapshot_error(
@@ -10428,7 +10446,10 @@ class Passivbot:
             finally:
                 self._previous_balance_raw = balance_raw
                 self._previous_balance_snapped = balance_snapped
-                self.execution_scheduled = True
+                if composition_signature is not None:
+                    self._previous_balance_composition_signature = composition_signature
+                if balance_changed:
+                    self.execution_scheduled = True
 
     @staticmethod
     def _is_market_snapshot_error(exc: Exception) -> bool:
@@ -13739,11 +13760,20 @@ class Passivbot:
         self._trailing_pending_position_states = pending_position_states
         return fetched_positions_old, self.fetched_positions
 
-    def _apply_balance_snapshot(self, balance_raw) -> bool:
+    def _normalize_balance_diagnostics(self, _raw_balance) -> dict:
+        """Return the stable diagnostic state for connectors without a balance parser."""
+        return unavailable_balance_composition()
+
+    def _apply_balance_snapshot(self, balance_raw, balance_composition=None) -> bool:
         """Validate and apply a fetched balance snapshot to raw/snapped fields."""
         prepared = self._prepare_balance_snapshot(balance_raw)
         if prepared is None:
             return False
+        prepared["balance_composition"] = (
+            balance_composition
+            if balance_composition is not None
+            else unavailable_balance_composition(reason="raw_only_refresh")
+        )
         self._commit_balance_snapshot(prepared)
         return True
 
@@ -13836,6 +13866,8 @@ class Passivbot:
         self.previous_hysteresis_balance = prepared["previous_hysteresis_balance"]
         self.balance_raw = prepared["balance_raw"]
         self.balance = prepared["balance_snapped"]
+        if "balance_composition" in prepared:
+            self._balance_composition = prepared["balance_composition"]
 
     async def _apply_open_orders_snapshot(
         self,

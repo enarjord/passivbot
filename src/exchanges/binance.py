@@ -1,4 +1,5 @@
 from exchanges.ccxt_bot import CCXTBot, format_exchange_config_response
+from live.balance_composition import malformed_balance_composition
 from passivbot import logging
 from passivbot_exceptions import FatalBotException
 
@@ -251,8 +252,16 @@ class BinanceBot(CCXTBot):
                     except AttributeError:
                         pass
             if "balance" in tasks:
-                _raw_balance, balance = await tasks["balance"]
+                raw_balance, balance = await tasks["balance"]
                 out["balance"] = balance
+                try:
+                    out["balance_composition"] = self._normalize_balance_diagnostics(
+                        raw_balance
+                    )
+                except Exception:
+                    out["balance_composition"] = malformed_balance_composition(
+                        source="normalizer", reason="normalizer_error"
+                    )
             return out
         except Exception:
             for task in tasks.values():

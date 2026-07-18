@@ -10,6 +10,7 @@ from exchanges.binance import BinanceBot
 from exchanges.bybit import BybitBot
 from exchanges.defx import DefxBot
 from exchanges.gateio import GateIOBot
+from exchanges.hyperliquid import HyperliquidBot
 from exchanges.kucoin import KucoinBot
 from exchanges.okx import OKXBot
 from passivbot import custom_id_has_explicit_passivbot_marker, custom_id_to_snake
@@ -175,11 +176,35 @@ async def test_binance_staged_snapshot_uses_fresh_positions_for_open_order_symbo
 
     assert fetched_symbols == ["SOL/USDT:USDT", None]
     assert snapshot["balance"] == 100.0
+    assert snapshot["balance_composition"]["status"] == "unavailable"
+    assert "raw" not in snapshot["balance_composition"]
     assert snapshot["positions"][0]["symbol"] == "SOL/USDT:USDT"
     assert snapshot["open_orders"][0]["symbol"] == "SOL/USDT:USDT"
     assert snapshot["open_orders"][0]["position_side"] == "long"
     assert seen_fill_scope == [["SOL/USDT:USDT"]]
     assert not hasattr(bot, "_fill_symbol_scope")
+
+
+@pytest.mark.asyncio
+async def test_hyperliquid_staged_snapshot_carries_unavailable_diagnostics_not_raw_balance():
+    bot = HyperliquidBot.__new__(HyperliquidBot)
+
+    async def capture_positions_balance():
+        return {"balance": {"raw": "private-balance"}, "positions": []}, [], 100.0
+
+    async def timed(_surface, coro, _timings):
+        return await coro
+
+    bot._capture_positions_balance_staged_snapshot = capture_positions_balance
+    bot._timed_authoritative_fetch = timed
+
+    snapshot = await bot.capture_authoritative_state_staged_snapshot(
+        {"balance", "positions"}, {}
+    )
+
+    assert snapshot["balance"] == 100.0
+    assert snapshot["balance_composition"]["status"] == "unavailable"
+    assert "private-balance" not in str(snapshot["balance_composition"])
 
 
 @pytest.mark.asyncio

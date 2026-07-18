@@ -10,6 +10,7 @@ import passivbot_rust as pbr
 from ccxt.base.errors import RateLimitExceeded
 
 from exchanges.ccxt_bot import CCXTBot, format_exchange_config_response
+from live.balance_composition import malformed_balance_composition
 from passivbot import logging
 from passivbot_exceptions import FatalBotException
 from utils import symbol_to_coin, ts_to_date, utc_ms
@@ -922,6 +923,14 @@ class HyperliquidBot(CCXTBot):
                     out["positions"] = positions
                 if "balance" in plan:
                     out["balance"] = balance
+                    try:
+                        out["balance_composition"] = self._normalize_balance_diagnostics(
+                            _raw_snapshot["balance"]
+                        )
+                    except Exception:
+                        out["balance_composition"] = malformed_balance_composition(
+                            source="normalizer", reason="normalizer_error"
+                        )
             elif key == "open_orders":
                 out["open_orders"] = result
             elif key == "fills":
