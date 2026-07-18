@@ -24,7 +24,7 @@ Estimated completion:
 
 - Branch: `codex/cycle-degraded-redaction`, based on canonical
   `8aefdbc82339b756ff642e726ae0924d5ca8774d` after PR #1307.
-- PR: pending publication. Slice: remove retained raw exception text and request
+- PR: #1308. Slice: remove retained raw exception text and request
   URLs from execution-loop `cycle.degraded` payloads.
 - Triggering evidence: the exact PR #1307 VPS5 restart smoke retained a real
   KuCoin `RequestTimeout` degradation whose structured event included the raw
