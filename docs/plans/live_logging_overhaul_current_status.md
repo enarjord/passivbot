@@ -24,7 +24,7 @@ Estimated completion:
 
 - Branch: `codex/fake-live-post-panic-observability`, based on canonical
   `eb82e256c2dfeac29af158f389f93a7ddba8eae2` after PR #1317.
-- PR: not opened.
+- PR: #1318.
 - Scope: backlog item 15. Persist the already-emitted redacted structured
   events as a fake-live run artifact, then make the existing coin-mode RED
   scenario prove the post-panic data-packet/snapshot handoff stays available.
