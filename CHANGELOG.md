@@ -15,6 +15,14 @@ All notable user-facing changes will be documented in this file.
   calculation, API calls, refresh cadence, planning, orders, and risk are
   unchanged.
 
+- Added `passivbot tool runtime-attribution`, a bounded, read-only local report
+  that correlates fill caches and monitor fill history with immutable runtime
+  manifests, structured startup events, and legacy startup logs. It keeps
+  recorded first-ingestion identity separate from non-proving producer-window
+  candidates, leaves legacy fills unattributed, supports trailing-only and
+  account/symbol/time filters, and can fail when selected fills lack recorded
+  provenance without contacting exchanges or controlling bots.
+
 - Full live smoke reports now retain a separately bounded sample of hard
   structured problem events, with authoritative total, retained, and truncated
   counts. Later warning-level attention can no longer hide every classification

@@ -8,6 +8,7 @@ Open only the contract for the subsystem being changed.
 | Stock perpetuals (HIP-3) | `stock_perps.md` |
 | Candles, cache continuity, and projections | `candlestick_manager.md` |
 | Fill/PnL ingestion and coverage | `fill_events_manager.md` |
+| Historical runtime/fill attribution | `runtime_attribution.md` |
 | Equity Hard Stop Loss episodes and cooldown boundaries | `equity_hard_stop_loss.md` |
 | Raw versus snapped balance | `balance_routing.md` |
 | Monitor persistence, recovery, rotation, retention | `monitor_persistence.md` |
