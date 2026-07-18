@@ -9846,6 +9846,7 @@ async def test_run_execution_loop_retries_fill_history_coverage_without_restart(
     bot._maybe_log_unstuck_status = lambda: None
     bot._monitor_flush_snapshot = AsyncMock()
     bot.restart_bot_on_too_many_errors = AsyncMock()
+    bot._emit_live_cycle_degraded = MagicMock()
     bot._sleep_unless_shutdown = fake_sleep_unless_shutdown
     bot._log_settled_order_waves = lambda *args, **kwargs: None
     bot.live_value = lambda key: 0.0 if key == "execution_delay_seconds" else False
@@ -9896,6 +9897,17 @@ async def test_run_execution_loop_retries_fill_history_coverage_without_restart(
         ("market", 2),
         ("execute", False, 2),
     ]
+    coverage_event = next(
+        call.kwargs
+        for call in bot._emit_live_cycle_degraded.call_args_list
+        if call.kwargs["reason_code"] == "fill_history_coverage_unavailable"
+    )
+    assert coverage_event["level"] == "warning"
+    assert (
+        coverage_event["data"]["error_type"]
+        == "FillHistoryCoverageUnavailable"
+    )
+    assert "error" not in coverage_event["data"]
 
 
 @pytest.mark.asyncio
@@ -10333,6 +10345,7 @@ async def test_run_execution_loop_error_log_includes_type_status_and_action(capl
         (args, kwargs)
     )
     bot._monitor_record_error = MagicMock()
+    bot._emit_live_cycle_degraded = MagicMock()
     bot._maybe_recover_exchange_time_sync = AsyncMock(return_value=False)
     bot.restart_bot_on_too_many_errors = AsyncMock()
     bot.live_value = lambda key: 0.0 if key == "execution_delay_seconds" else False
@@ -10396,6 +10409,13 @@ async def test_run_execution_loop_error_log_includes_type_status_and_action(capl
     )
     assert all(raw_error not in message for message in messages)
     assert all("SECRET" not in message for message in messages)
+    degraded_event = bot._emit_live_cycle_degraded.call_args.kwargs
+    assert degraded_event["reason_code"] == "FakeExchangeError"
+    assert degraded_event["level"] == "error"
+    assert degraded_event["data"]["error_type"] == "FakeExchangeError"
+    assert "error" not in degraded_event["data"]
+    assert raw_error not in str(degraded_event)
+    assert "SECRET" not in str(degraded_event)
     debug_stack_messages = [
         record.message
         for record in caplog.records

@@ -73,6 +73,45 @@ _EXCHANGE_TIME_SYNC_CLIENT_RE = re.compile(
 )
 _EXCHANGE_TIME_SYNC_ERROR_TYPE_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,79}")
 _EXCHANGE_TIME_SYNC_CLIENT_SAMPLE_LIMIT = 8
+_CYCLE_DEGRADED_CODE_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_.:-]{0,95}")
+_CYCLE_DEGRADED_CONTEXT_RE = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_ .:-]{0,127}")
+_CYCLE_DEGRADED_SYMBOL_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,159}")
+_CYCLE_DEGRADED_READINESS_LIST_KEYS = (
+    "missing",
+    "changed",
+    "required",
+)
+_CYCLE_DEGRADED_INVALID_CODE_KEYS = (
+    "reason",
+    "mismatch_type",
+    "error_type",
+)
+_CYCLE_DEGRADED_INVALID_SYMBOL_KEYS = (
+    "symbol",
+)
+_CYCLE_DEGRADED_INVALID_SYMBOL_LIST_KEYS = (
+    "symbols",
+    "expected_symbols",
+    "stamped_symbols",
+    "missing_symbols",
+    "extra_symbols",
+    "changed_symbols",
+)
+_CYCLE_DEGRADED_INVALID_INT_KEYS = (
+    "latest_expected_ts",
+    "last_cached_ts",
+    "missing_candles",
+    "tail_gap_candles",
+    "tail_gap_age_ms",
+    "max_tail_gap_ms",
+    "expected_count",
+    "stamped_count",
+    "missing_count",
+    "extra_count",
+    "changed_count",
+    "age_ms",
+    "max_age_ms",
+)
 
 
 def _sanitize_remote_text(value: Any, *, max_len: int = 500) -> str:
@@ -100,6 +139,175 @@ def _sanitize_remote_fetch_payload(payload: dict[str, Any]) -> dict[str, Any]:
         if url_hash is not None:
             data["url_hash"] = url_hash
     return data
+
+
+def _cycle_degraded_bounded_text(value: Any, pattern: re.Pattern[str]) -> str | None:
+    if value is None:
+        return None
+    try:
+        text = str(value).strip()
+    except Exception:
+        return None
+    if "://" in text or not pattern.fullmatch(text):
+        return None
+    return text
+
+
+def _cycle_degraded_non_negative_int(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return None
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return parsed if parsed >= 0 else None
+
+
+def _cycle_degraded_non_negative_number(value: Any) -> int | float | None:
+    if isinstance(value, bool):
+        return None
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if not math.isfinite(parsed) or parsed < 0.0:
+        return None
+    return int(parsed) if parsed.is_integer() else parsed
+
+
+def _cycle_degraded_bounded_list(
+    value: Any,
+    pattern: re.Pattern[str],
+    *,
+    limit: int = 16,
+) -> list[str]:
+    if not isinstance(value, (list, tuple, set, frozenset)):
+        return []
+    out = []
+    for item in value:
+        text = _cycle_degraded_bounded_text(item, pattern)
+        if text is not None:
+            out.append(text)
+        if len(out) >= limit:
+            break
+    return out
+
+
+def _cycle_degraded_int_map(value: Any, *, limit: int = 32) -> dict[str, int]:
+    if not isinstance(value, dict):
+        return {}
+    out = {}
+    for raw_key, raw_value in value.items():
+        key = _cycle_degraded_bounded_text(raw_key, _CYCLE_DEGRADED_CODE_RE)
+        parsed = _cycle_degraded_non_negative_int(raw_value)
+        if key is not None and parsed is not None:
+            out[key] = parsed
+        if len(out) >= limit:
+            break
+    return out
+
+
+def _sanitize_cycle_degraded_invalid_item(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {}
+    out: dict[str, Any] = {}
+    for key in _CYCLE_DEGRADED_INVALID_CODE_KEYS:
+        text = _cycle_degraded_bounded_text(value.get(key), _CYCLE_DEGRADED_CODE_RE)
+        if text is not None:
+            out[key] = text
+    for key in _CYCLE_DEGRADED_INVALID_SYMBOL_KEYS:
+        text = _cycle_degraded_bounded_text(value.get(key), _CYCLE_DEGRADED_SYMBOL_RE)
+        if text is not None:
+            out[key] = text
+    for key in _CYCLE_DEGRADED_INVALID_SYMBOL_LIST_KEYS:
+        if key in value:
+            out[key] = _cycle_degraded_bounded_list(
+                value.get(key), _CYCLE_DEGRADED_SYMBOL_RE, limit=12
+            )
+    for key in _CYCLE_DEGRADED_INVALID_INT_KEYS:
+        parsed = _cycle_degraded_non_negative_int(value.get(key))
+        if parsed is not None:
+            out[key] = parsed
+    return out
+
+
+def _sanitize_cycle_degraded_invalid(value: Any) -> dict[str, list[dict[str, Any]]]:
+    if not isinstance(value, dict):
+        return {}
+    out: dict[str, list[dict[str, Any]]] = {}
+    for raw_surface, raw_items in value.items():
+        surface = _cycle_degraded_bounded_text(
+            raw_surface, _CYCLE_DEGRADED_CODE_RE
+        )
+        if surface is None or not isinstance(raw_items, list):
+            continue
+        items = []
+        for raw_item in raw_items[:12]:
+            item = _sanitize_cycle_degraded_invalid_item(raw_item)
+            if item:
+                items.append(item)
+        if items:
+            out[surface] = items
+        if len(out) >= 16:
+            break
+    return out
+
+
+def _sanitize_cycle_degraded_readiness(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {}
+    out: dict[str, Any] = {}
+    for key in _CYCLE_DEGRADED_READINESS_LIST_KEYS:
+        if key in value:
+            out[key] = _cycle_degraded_bounded_list(
+                value.get(key), _CYCLE_DEGRADED_CODE_RE
+            )
+    epoch = _cycle_degraded_non_negative_int(value.get("epoch"))
+    if epoch is not None:
+        out["epoch"] = epoch
+    if "min_epochs" in value:
+        out["min_epochs"] = _cycle_degraded_int_map(value.get("min_epochs"))
+    context = _cycle_degraded_bounded_text(
+        value.get("context"), _CYCLE_DEGRADED_CONTEXT_RE
+    )
+    if context is not None:
+        out["context"] = context
+    defer_reason = _cycle_degraded_bounded_text(
+        value.get("defer_reason"), _CYCLE_DEGRADED_CODE_RE
+    )
+    if defer_reason is not None:
+        out["defer_reason"] = defer_reason
+    if "invalid" in value:
+        out["invalid"] = _sanitize_cycle_degraded_invalid(value.get("invalid"))
+    return out
+
+
+def _sanitize_cycle_degraded_payload(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {}
+    out: dict[str, Any] = {}
+    if "timings_ms" in value:
+        out["timings_ms"] = _cycle_degraded_int_map(value.get("timings_ms"))
+    for key in ("retry_count", "failed_count"):
+        parsed = _cycle_degraded_non_negative_int(value.get(key))
+        if parsed is not None:
+            out[key] = parsed
+    retry_delay_seconds = _cycle_degraded_non_negative_number(
+        value.get("retry_delay_seconds")
+    )
+    if retry_delay_seconds is not None:
+        out["retry_delay_seconds"] = retry_delay_seconds
+    for key, pattern in (
+        ("last_block_reason", _CYCLE_DEGRADED_CODE_RE),
+        ("error_type", _EXCHANGE_TIME_SYNC_ERROR_TYPE_RE),
+    ):
+        text = _cycle_degraded_bounded_text(value.get(key), pattern)
+        if text is not None:
+            out[key] = text
+    for key in ("barrier", "details"):
+        if key in value:
+            out[key] = _sanitize_cycle_degraded_readiness(value.get(key))
+    return out
 
 
 def _bounded_exchange_config_event_field(
@@ -843,9 +1051,9 @@ def emit_live_cycle_degraded(
 ) -> None:
     if not cycle_id:
         return
-    payload = dict(data or {})
-    payload.setdefault(
-        "authoritative_epoch", int(getattr(bot, "_authoritative_refresh_epoch", 0) or 0)
+    payload = _sanitize_cycle_degraded_payload(dict(data or {}))
+    payload["authoritative_epoch"] = int(
+        getattr(bot, "_authoritative_refresh_epoch", 0) or 0
     )
     bot._emit_live_event(
         EventTypes.CYCLE_DEGRADED,

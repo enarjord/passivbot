@@ -4,6 +4,13 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- `cycle.degraded` structured events no longer retain raw exception text or
+  request URLs from generic execution-loop failures or fill-history coverage
+  deferrals. A strict payload allow-list also drops nested spelling variants and
+  unknown caller fields. Stable reason codes, bounded exception types, cycle
+  correlation, safe operational details, and phase timings remain available;
+  retry, recovery, restart, and trading behavior are unchanged.
+
 - Added `passivbot tool live-restart-smoke-run`, an explicit local orchestrator
   that requires exact repository, Rust-source, supervisor-command, and target
   contracts before invoking the existing exact-pane graceful restart executor.
