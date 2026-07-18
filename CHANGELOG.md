@@ -4,6 +4,11 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- `sink.degraded` events no longer retain raw sink exception text. They preserve
+  the stable sink-failure reason, sink name, exception type, health counters,
+  and pipeline timings while keeping request URLs, credentials, response data,
+  and other exception-message content out of degraded-event and monitor sinks.
+
 - `cycle.degraded` structured events no longer retain raw exception text or
   request URLs from generic execution-loop failures or fill-history coverage
   deferrals. A strict payload allow-list also drops nested spelling variants and

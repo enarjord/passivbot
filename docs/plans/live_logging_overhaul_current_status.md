@@ -22,26 +22,25 @@ Estimated completion:
 
 ## Active Review Slice
 
-- Branch: `codex/cycle-degraded-redaction`, based on canonical
-  `8aefdbc82339b756ff642e726ae0924d5ca8774d` after PR #1307.
-- PR: #1308. Slice: remove retained raw exception text and request
-  URLs from execution-loop `cycle.degraded` payloads.
-- Triggering evidence: the exact PR #1307 VPS5 restart smoke retained a real
-  KuCoin `RequestTimeout` degradation whose structured event included the raw
-  connector exception string and request URL even though bounded reason,
-  exception-type, cycle, and incident fields were already available.
-- Scope: generic execution-loop failures and fill-history coverage deferrals
-  retain `error_type`, reason code, cycle correlation, phase timings, and the
-  existing safe operational details. A strict event-family allow-list projects
-  only bounded counters, classifications, timings, authoritative barriers, and
-  staged-readiness diagnostics; it omits `str(exception)`, caller-supplied
-  epochs, unknown fields, and nested exception, URL, request/response, or
-  traceback aliases from the durable structured/monitor payload.
+- Branch: `codex/sink-degraded-redaction`, based on canonical
+  `9a5e3585d0c5641a14c2c359acd01e7f3e74bf7d` after PR #1308.
+- PR: pending. Slice: remove raw sink exception text from `sink.degraded`
+  payloads.
+- Triggering evidence: canonical `LiveEventPipeline._handle_sink_failure()`
+  still copied `str(exception)` into the in-memory degraded event and monitor
+  sink even though the message and reason code already retained the stable sink
+  and exception classifications. Sink exceptions may include request URLs,
+  credentials, response bodies, paths, or account data under the logging
+  policy's explicit exception-text threat model.
+- Scope: `sink.degraded` retains sink name, exception type, stable failure
+  reason, sink health counters, and pipeline timings. Raw exception text is no
+  longer copied into any degraded-event payload.
 - Behavior boundary: observability payload only. Exception propagation,
-  fill-history confirmation requests, retries, time-sync recovery, restart
-  thresholds, execution-loop control flow, and trading behavior are unchanged.
-- Validation: targeted caller regressions, live-event/smoke consumers, complete
-  Python and Rust suites, compilation, generated registry/docs, and diff checks.
+  sink isolation, routing, retries, counters, timing, queue behavior, and
+  trading behavior are unchanged.
+- Validation: event-pipeline sink-failure regressions with credential-like
+  exception text, live-event/smoke consumers, complete Python and Rust suites,
+  compilation, generated registry/docs, and diff checks.
 - Review gate: temporary maintainer-authorized exact-head Hermes plus green
   Python and Rust CI while Grok is halted.
 - Expected VPS action: prepare the reviewed merge commit, gracefully restart
@@ -50,6 +49,18 @@ Estimated completion:
 
 ## Deployed Baseline
 
+- Canonical `master` and VPS5 are
+  `9a5e3585d0c5641a14c2c359acd01e7f3e74bf7d` after PR #1308. Exact-head Hermes
+  and Python/Rust CI were green. Exact repository preparation fast-forwarded
+  cleanly without a Rust rebuild, and independent preflight resolved all five
+  targets with 3/3 stable samples and no extras or issues. The authorized
+  restart stopped, exited, relaunched, and verified all five exact panes without
+  force. Its bounded `1784335954292..1784336611652` window selected 6/1,012
+  managed segments totaling `21328854` bytes, recovered all five shutdown and
+  startup cohorts, and returned zero hard, monitor, text-log, or target
+  failures. All five bots remained stable, the checkout stayed exact and clean,
+  and `misc:0.0` retained its pre-restart pane/PID identity. No direct exchange
+  probe or event was manufactured.
 - Canonical `master` and VPS5 are
   `8aefdbc82339b756ff642e726ae0924d5ca8774d` after PR #1307. Exact-head Hermes
   and Python/Rust CI were green. Exact repository preparation fast-forwarded

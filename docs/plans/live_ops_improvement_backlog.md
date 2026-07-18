@@ -407,8 +407,15 @@ Related detailed plans:
      `misc:0.0` remained unchanged. The retained event exposed raw connector
      exception text and a request URL; the active follow-up removes those fields
      while preserving bounded classification and correlation.
+   - 2026-07-17: PR #1308 merged and deployed strict `cycle.degraded` payload
+     projection. The exact five-pane graceful restart completed without force;
+     its settled 600-second window recovered all five shutdown/startup cohorts
+     with zero hard, monitor, text-log, or target failures while `misc:0.0`
+     retained its pre-restart identity. Canonical sink-failure handling still
+     retained raw exception text in `sink.degraded`; the active follow-up removes
+     that field while preserving stable classification, counters, and timings.
 
-   Remaining refinements: activate the bounded `cycle.degraded` redaction
+   Remaining refinements: activate the bounded `sink.degraded` redaction
    follow-up and observe a fresh settled post-restart window. Remote-host control
    and any force-escalation policy remain separate review boundaries.
    The concise and brief summaries are intentionally bounded; further changes

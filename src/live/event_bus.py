@@ -3830,7 +3830,7 @@ class LiveEventPipeline:
         self._record_degraded(
             reason_code=sink_failed_reason_code(name),
             message=f"{name} sink failed: {type(exc).__name__}",
-            data={"sink": name, "error_type": type(exc).__name__, "error": str(exc)},
+            data={"sink": name, "error_type": type(exc).__name__},
             sink_write_timing=sink_write_timing,
         )
 
