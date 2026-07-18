@@ -4,6 +4,12 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Offline fake-live runs now retain the already-emitted redacted structured
+  event envelopes as a run artifact. The coin-mode HSL RED regression uses that
+  evidence to prove a panic fill is followed by an available planning snapshot
+  without a post-panic `planning.unavailable` handoff, while leaving live event
+  production, HSL behavior, exchange calls, orders, and risk unchanged.
+
 - Hyperliquid `balance.changed` composition diagnostics now parse only proven
   unified-account `info.balances` coin and signed total fields from the
   already-fetched balance response. Non-unified payloads remain explicitly
