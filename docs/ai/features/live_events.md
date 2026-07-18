@@ -20,14 +20,22 @@ orders, risk, readiness, or execution scheduling.
 The object contains a stable `status` (`available`, `unavailable`, or
 `malformed`), bounded source/reason classification, `count`, `retained`,
 `truncated`, and at most eight deterministic `asset_balances` rows. Rows retain
-only connector-proven asset, amount, USD value, unrealized PnL, explicit
-liability, collateral-enabled state, and bounded field provenance. Missing or
-non-finite values are absent; a connector must not infer debt, price, or a
-neutral zero. Raw account payloads, arbitrary response keys, addresses,
-credentials, and internal composition signatures are never emitted.
+only connector-proven asset, total/free/used amount, USD value, unrealized PnL,
+explicit liability, collateral-enabled state, and bounded field provenance.
+Missing or non-finite values are absent; a connector must not infer debt,
+price, or a neutral zero. Raw account payloads, arbitrary response keys,
+addresses, credentials, and internal composition signatures are never emitted.
 Any legacy raw-only balance apply replaces a previous composition with an
 explicit unavailable state; it must never pair stale asset rows with a fresh
 aggregate balance.
+
+Hyperliquid contributes rows only for proven unified responses with
+`info.balances` as a list. Each retained row uses only its `coin` asset and
+finite signed `total`, with field provenance; no hold/free/used, liability,
+price, USD value, collateral, or HIP-3 position inference is permitted.
+Non-unified responses are explicitly unavailable, while malformed unified
+shapes are malformed diagnostics. This parser uses the already-fetched balance
+response and does not alter scalar balance extraction or staged refresh calls.
 
 Balance publication occurs on the existing aggregate raw/snapped transition or
 on a changed full normalized composition signature, including a change in an

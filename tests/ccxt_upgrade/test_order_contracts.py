@@ -131,7 +131,7 @@ async def test_binance_staged_snapshot_uses_fresh_positions_for_open_order_symbo
     bot._record_live_margin_mode_from_payload = lambda payload: None
 
     async def capture_balance_snapshot():
-        return {"raw": "balance"}, 100.0
+        return {"total": {"USDT": 100.0}}, 100.0
 
     async def capture_positions_snapshot():
         return [{"raw": "position"}], [
@@ -176,8 +176,17 @@ async def test_binance_staged_snapshot_uses_fresh_positions_for_open_order_symbo
 
     assert fetched_symbols == ["SOL/USDT:USDT", None]
     assert snapshot["balance"] == 100.0
-    assert snapshot["balance_composition"]["status"] == "unavailable"
-    assert "raw" not in snapshot["balance_composition"]
+    assert snapshot["balance_composition"]["status"] == "available"
+    assert snapshot["balance_composition"]["asset_balances"] == [
+        {
+            "asset": "USDT",
+            "field_provenance": {
+                "asset": "currency_map_key",
+                "amount": "total",
+            },
+            "amount": 100.0,
+        }
+    ]
     assert snapshot["positions"][0]["symbol"] == "SOL/USDT:USDT"
     assert snapshot["open_orders"][0]["symbol"] == "SOL/USDT:USDT"
     assert snapshot["open_orders"][0]["position_side"] == "long"
@@ -186,7 +195,7 @@ async def test_binance_staged_snapshot_uses_fresh_positions_for_open_order_symbo
 
 
 @pytest.mark.asyncio
-async def test_hyperliquid_staged_snapshot_carries_unavailable_diagnostics_not_raw_balance():
+async def test_hyperliquid_staged_snapshot_carries_malformed_diagnostics_not_raw_balance():
     bot = HyperliquidBot.__new__(HyperliquidBot)
 
     async def capture_positions_balance():
@@ -203,7 +212,9 @@ async def test_hyperliquid_staged_snapshot_carries_unavailable_diagnostics_not_r
     )
 
     assert snapshot["balance"] == 100.0
-    assert snapshot["balance_composition"]["status"] == "unavailable"
+    assert snapshot["balance_composition"]["status"] == "malformed"
+    assert snapshot["balance_composition"]["source"] == "hyperliquid.info.balances"
+    assert snapshot["balance_composition"]["reason"] == "missing_info"
     assert "private-balance" not in str(snapshot["balance_composition"])
 
 

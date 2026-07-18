@@ -4,16 +4,34 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Offline fake-live runs now retain the already-emitted redacted structured
+  event envelopes as a run artifact. The coin-mode HSL RED regression uses that
+  evidence to prove a panic fill is followed by an available planning snapshot
+  without a post-panic `planning.unavailable` handoff, while leaving live event
+  production, HSL behavior, exchange calls, orders, and risk unchanged.
+
+- Hyperliquid `balance.changed` composition diagnostics now parse only proven
+  unified-account `info.balances` coin and signed total fields from the
+  already-fetched balance response. Non-unified payloads remain explicitly
+  unavailable; malformed unified shapes remain diagnostic failures. The bounded
+  rows add no exchange calls, valuation inference, scalar-balance changes,
+  planning, order, or risk behavior, and raw connector payloads remain excluded.
+
+- Binance `balance.changed` composition diagnostics now normalize only CCXT's
+  documented unified `total`, `free`, `used`, and explicit `debt` maps from the
+  already-fetched balance response. The bounded rows add no exchange calls,
+  valuation inference, scalar-balance changes, planning, order, or risk
+  behavior; raw connector payloads remain excluded.
+
 - `balance.changed` now carries a bounded optional asset-composition diagnostic
   from the same authoritative balance response. The first connector parser is
   OKX: it reports only documented account-detail amount, USD value, unrealized
   PnL, explicit liability, collateral state, and field provenance. Equal-total
   collateral substitutions are durable through a separate composition
   signature, while console admission remains snapped-balance based and shows at
-  most two sanitized assets. Generic, Binance, and Hyperliquid paths report a
-  stable unavailable diagnostic until their own parsers are added; balance
-  calculation, API calls, refresh cadence, planning, orders, and risk are
-  unchanged.
+  most two sanitized assets. Generic paths report a stable unavailable
+  diagnostic until their own parsers are added; balance calculation, API calls,
+  refresh cadence, planning, orders, and risk are unchanged.
 
 - Live startups now persist an immutable, non-secret runtime manifest and expose
   the same Python commit, config hash, embedded Rust source fingerprint, loaded
