@@ -66,9 +66,20 @@ Each run writes a timestamped directory containing:
 - `fills.json`
 - `positions.json`
 - `hsl_trace.json`
+- `live_events.json`: redacted structured `LiveEvent.to_dict()` envelopes, including graceful
+  shutdown
 - `snapshots/step_*.json` if `--snapshot-each-step` is enabled
 
 This makes it easy to inspect the exact replay state at each step.
+
+`live_events.json` is a bounded in-memory diagnostic capture of at most the latest 2,000 envelopes,
+attached to the existing live-event pipeline before bot startup.
+`run_metadata.json.live_event_capture` records the total, retained, truncated, and maximum retained
+counts so dropping older envelopes is explicit. If disabled console and monitor output leave no
+default pipeline, fake-live installs a capture-only pipeline with the same bot context; it does not
+re-enable either output. The capture closes with the bot before serialization and contains no raw
+exchange payloads. Event IDs and timestamps are runtime-specific, so this file is not part of
+deterministic cross-run artifact comparison.
 
 Regression philosophy:
 

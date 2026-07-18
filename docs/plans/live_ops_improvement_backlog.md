@@ -921,6 +921,13 @@ Related detailed plans:
       fake-live suite and seven pside HSL end-to-end scenarios remain green;
       add a dedicated coin-mode post-panic scenario and fix the epoch handoff
       separately from HSL episode-finalization math.
+    - 2026-07-18: Canonical master now completes that coin-mode post-panic
+      handoff: the panic close fills, authoritative account surfaces refresh,
+      cooldown ends, and normal selection resumes without the former missing
+      surface failure. The active regression slice persists the already-emitted
+      redacted live-event envelopes in fake-live artifacts and makes the
+      scenario prove a later available planning snapshot with no
+      `planning.unavailable` handoff event.
 
 16. [x] Websocket reconnect diagnostics.
     Status: completed by PR #1170.
