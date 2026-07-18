@@ -2883,12 +2883,24 @@ def test_live_smoke_report_summarizes_event_pipeline_health(tmp_path):
     assert health["groups"][0]["latest_sink_error_counts"] == {"monitor": 1}
     assert health["groups"][0]["latest_worker_alive"] is False
     assert health["groups"][0]["latest_pipeline_stopping"] is True
+    assert health["integrity"] == {
+        "ok": False,
+        "attention": True,
+        "attention_count": 3,
+        "source_counts": {
+            "drops": 2,
+            "sink_errors": 1,
+            "unexpectedly_dead_workers": 0,
+            "total": 3,
+        },
+    }
     assert report["ok"] is True
     assert report["hard_failures"] == 0
     assert summary["event_pipeline_health"]["total"] == 2
     assert summary["event_pipeline_health"]["groups"][0]["latest_ids"] == {
         "cycle_id": "cy_health_2"
     }
+    assert summary["event_pipeline_health"]["integrity"] == health["integrity"]
     assert brief["event_pipeline"] == {
         "total": 2,
         "bots": 1,
@@ -2899,6 +2911,7 @@ def test_live_smoke_report_summarizes_event_pipeline_health(tmp_path):
         "latest_degraded_total": 3,
         "latest_worker_not_alive_count": 1,
         "latest_stopping_count": 1,
+        "integrity": health["integrity"],
         "event_types": {"health.summary": 2},
     }
 
@@ -3187,11 +3200,23 @@ def test_live_smoke_report_event_pipeline_health_aggregates_multi_bot_queue_over
         "order.created": 5,
     }
     assert health["groups"][1]["latest_sink_error_counts"] == {"structured": 2}
+    assert health["integrity"] == {
+        "ok": False,
+        "attention": True,
+        "attention_count": 10,
+        "source_counts": {
+            "drops": 7,
+            "sink_errors": 3,
+            "unexpectedly_dead_workers": 0,
+            "total": 10,
+        },
+    }
     assert report["ok"] is True
     assert report["attention"] is False
     assert summary["event_pipeline_health"]["total"] == 3
     assert summary["event_pipeline_health"]["groups_truncated"] is True
     assert summary["event_pipeline_health"]["groups"][0]["bot"] == "okx/okx_01"
+    assert summary["event_pipeline_health"]["integrity"] == health["integrity"]
     assert brief["event_pipeline"] == {
         "total": 3,
         "bots": 2,
@@ -3202,7 +3227,116 @@ def test_live_smoke_report_event_pipeline_health_aggregates_multi_bot_queue_over
         "latest_degraded_total": 6,
         "latest_worker_not_alive_count": 1,
         "latest_stopping_count": 1,
+        "integrity": health["integrity"],
         "event_types": {"health.summary": 3},
+    }
+
+
+def test_live_smoke_report_event_pipeline_integrity_is_diagnostic_only(tmp_path):
+    events_dir = tmp_path / "monitor" / "okx" / "okx_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="health.summary",
+                seq=1,
+                ts=1000,
+                level="debug",
+                reason_code="periodic_health_summary",
+                data={
+                    "event_dropped_total": 4,
+                    "event_sink_error_total": 3,
+                    "event_degraded_count": 99,
+                    "event_pipeline_stopping": False,
+                    "event_pipeline_worker_alive": False,
+                },
+            )
+        ],
+    )
+
+    report = build_live_smoke_report(tmp_path / "monitor", logs_root=None)
+    summary = summarize_live_smoke_report(report)
+    brief = summarize_live_smoke_report_brief(report)
+    section = project_live_smoke_report_sections(report, ["event_pipeline"])
+
+    expected = {
+        "ok": False,
+        "attention": True,
+        "attention_count": 8,
+        "source_counts": {
+            "drops": 4,
+            "sink_errors": 3,
+            "unexpectedly_dead_workers": 1,
+            "total": 8,
+        },
+    }
+    assert report["event_pipeline_health"]["integrity"] == expected
+    assert summary["event_pipeline_health"]["integrity"] == expected
+    assert brief["event_pipeline"]["integrity"] == expected
+    assert section["event_pipeline_health"]["integrity"] == expected
+    assert report["ok"] is True
+    assert report["attention"] is False
+    assert report["attention_sources"] == {
+        "problem_events": 0,
+        "log_attention_matches": 0,
+        "dropped_unparsed_attention_matches": 0,
+        "total": 0,
+    }
+
+
+def test_live_smoke_report_event_pipeline_integrity_ignores_orderly_shutdown_worker(
+    tmp_path,
+):
+    events_dir = tmp_path / "monitor" / "okx" / "okx_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="health.summary",
+                seq=1,
+                ts=1000,
+                level="debug",
+                reason_code="periodic_health_summary",
+                data={
+                    "event_pipeline_stopping": True,
+                    "event_pipeline_worker_alive": False,
+                },
+            )
+        ],
+    )
+
+    report = build_live_smoke_report(tmp_path / "monitor", logs_root=None)
+
+    assert report["event_pipeline_health"]["integrity"] == {
+        "ok": True,
+        "attention": False,
+        "attention_count": 0,
+        "source_counts": {
+            "drops": 0,
+            "sink_errors": 0,
+            "unexpectedly_dead_workers": 0,
+            "total": 0,
+        },
+    }
+    assert report["ok"] is True
+    assert report["attention"] is False
+
+
+def test_live_smoke_report_event_pipeline_integrity_without_pipeline_evidence_is_neutral(
+    tmp_path,
+):
+    report = build_live_smoke_report(tmp_path / "monitor", logs_root=None)
+
+    assert report["event_pipeline_health"]["integrity"] == {
+        "ok": True,
+        "attention": False,
+        "attention_count": 0,
+        "source_counts": {
+            "drops": 0,
+            "sink_errors": 0,
+            "unexpectedly_dead_workers": 0,
+            "total": 0,
+        },
     }
 
 
