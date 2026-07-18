@@ -47,10 +47,25 @@ from planning_snapshot import (
     PlanningSnapshot,
     PlanningSurfaceStamp,
 )
+from runtime_identity import RuntimeIdentity
 from exchanges.binance import BinanceBot
 from live.balance_composition import (
     balance_composition_signature,
     normalize_okx_balance_composition,
+)
+
+
+TEST_RUNTIME_IDENTITY = RuntimeIdentity(
+    schema_version=1,
+    run_id="a" * 32,
+    started_at_ms=1_700_000_000_000,
+    passivbot_version="test",
+    python_git_commit="b" * 40,
+    python_git_dirty=False,
+    config_sha256="c" * 64,
+    rust_crate_version="test",
+    rust_source_sha256="d" * 64,
+    rust_artifact_sha256="e" * 64,
 )
 
 
@@ -199,6 +214,7 @@ async def test_init_pnls_quarantines_and_rebuilds_unsupported_legacy_cache(monke
             self.history_scope = scope
 
     bot = Passivbot.__new__(Passivbot)
+    bot.runtime_identity = TEST_RUNTIME_IDENTITY
     bot.exchange = "hyperliquid"
     bot.user = "vps_user"
     bot.config = {"live": {"pnls_max_lookback_days": 1.0}}
@@ -292,6 +308,7 @@ async def test_init_pnls_emits_quarantine_event_when_doctor_repairs_legacy_cache
             self.history_scope = scope
 
     bot = Passivbot.__new__(Passivbot)
+    bot.runtime_identity = TEST_RUNTIME_IDENTITY
     bot.exchange = "hyperliquid"
     bot.user = "vps_user"
     bot.config = {"live": {"pnls_max_lookback_days": 1.0}}
@@ -352,6 +369,7 @@ async def test_init_pnls_emits_cache_ready_event(monkeypatch):
 
     sink = ListEventSink()
     bot = Passivbot.__new__(Passivbot)
+    bot.runtime_identity = TEST_RUNTIME_IDENTITY
     bot.exchange = "binance"
     bot.user = "binance_01"
     bot.bot_id = "bot_1"
@@ -2494,6 +2512,8 @@ async def test_balance_equity_history_emits_zero_coin_upnl_for_flat_realized_sym
 @pytest.mark.asyncio
 async def test_start_bot_treats_shutdown_cancelled_warmup_as_clean_stop(monkeypatch):
     bot = Passivbot.__new__(Passivbot)
+    bot.runtime_identity = TEST_RUNTIME_IDENTITY
+    bot._runtime_manifest_written = True
     bot.exchange = "bybit"
     bot.user = "test_user"
     bot.quote = "USDT"
@@ -2537,6 +2557,8 @@ async def test_start_bot_treats_shutdown_cancelled_warmup_as_clean_stop(monkeypa
 @pytest.mark.asyncio
 async def test_start_bot_treats_hsl_value_error_as_terminal_startup_failure(monkeypatch):
     bot = Passivbot.__new__(Passivbot)
+    bot.runtime_identity = TEST_RUNTIME_IDENTITY
+    bot._runtime_manifest_written = True
     bot.exchange = "gateio"
     bot.user = "test_user"
     bot.quote = "USDT"
