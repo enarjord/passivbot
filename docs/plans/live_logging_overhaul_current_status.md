@@ -24,7 +24,7 @@ Estimated completion:
 
 - Branch: `codex/hard-problem-evidence`, based on canonical
   `f1ae7970393e8299d1b0a98c8ff68d42adddd2d0` after PR #1299.
-- PR: pending. Slice: retain bounded hard-event classifications independently
+- PR: #1310. Slice: retain bounded hard-event classifications independently
   of the mixed latest problem-event sample.
 - Triggering evidence: the PR #1309 restart smoke correctly reported two hard
   structured problem events, but its bounded mixed `problem_events` sample
