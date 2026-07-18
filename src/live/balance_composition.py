@@ -156,6 +156,67 @@ def normalize_okx_balance_composition(fetched: Any) -> dict[str, Any]:
     )
 
 
+def normalize_ccxt_balance_composition(fetched: Any) -> dict[str, Any]:
+    """Normalize only CCXT's documented unified per-currency balance maps."""
+    source = "ccxt.unified_balance"
+    if not isinstance(fetched, Mapping):
+        return malformed_balance_composition(source=source, reason="invalid_payload")
+    total = fetched.get("total")
+    if not isinstance(total, Mapping):
+        return malformed_balance_composition(source=source, reason="missing_total")
+
+    balance_maps = {
+        field: value
+        for field, key in (
+            ("amount", "total"),
+            ("free_amount", "free"),
+            ("used_amount", "used"),
+            ("liability", "debt"),
+        )
+        if isinstance((value := fetched.get(key)), Mapping)
+    }
+    rows_by_asset: dict[str, dict[str, Any]] = {}
+    seen_fields: set[tuple[str, str]] = set()
+    invalid_row_count = 0
+    for field, balance_map in balance_maps.items():
+        provenance = {
+            "amount": "total",
+            "free_amount": "free",
+            "used_amount": "used",
+            "liability": "debt",
+        }[field]
+        for raw_asset, raw_value in balance_map.items():
+            asset = _asset_name(raw_asset)
+            if asset is None:
+                invalid_row_count += 1
+                continue
+            row = rows_by_asset.setdefault(
+                asset,
+                {
+                    "asset": asset,
+                    "field_provenance": {"asset": "currency_map_key"},
+                },
+            )
+            field_key = (field, asset)
+            if field_key in seen_fields:
+                invalid_row_count += 1
+                row.pop(field, None)
+                row["field_provenance"].pop(field, None)
+                continue
+            seen_fields.add(field_key)
+            value = _finite_number(raw_value)
+            if value is not None:
+                row[field] = value
+                row["field_provenance"][field] = provenance
+
+    return _finalize_snapshot(
+        status="available",
+        source=source,
+        assets=list(rows_by_asset.values()),
+        invalid_row_count=invalid_row_count,
+    )
+
+
 def public_balance_composition(value: Any) -> dict[str, Any] | None:
     """Copy only the bounded event contract; never publish an internal signature."""
     if not isinstance(value, Mapping):
@@ -168,7 +229,13 @@ def public_balance_composition(value: Any) -> dict[str, Any] | None:
     truncated = value.get("truncated")
     if (
         status not in {"available", "unavailable", "malformed"}
-        or source not in {"unsupported", "normalizer", "okx.info.data[0].details"}
+        or source
+        not in {
+            "unsupported",
+            "normalizer",
+            "ccxt.unified_balance",
+            "okx.info.data[0].details",
+        }
         or not isinstance(assets, list)
         or not all(isinstance(item, int) and item >= 0 for item in (count, retained, truncated))
     ):
@@ -181,7 +248,14 @@ def public_balance_composition(value: Any) -> dict[str, Any] | None:
         if asset is None:
             return None
         row: dict[str, Any] = {"asset": asset}
-        for key in ("amount", "usd_value", "unrealized_pnl", "liability"):
+        for key in (
+            "amount",
+            "free_amount",
+            "used_amount",
+            "usd_value",
+            "unrealized_pnl",
+            "liability",
+        ):
             number = _finite_number(item.get(key))
             if number is not None:
                 row[key] = number
@@ -190,17 +264,24 @@ def public_balance_composition(value: Any) -> dict[str, Any] | None:
         provenance = item.get("field_provenance")
         if isinstance(provenance, Mapping):
             allowed_sources = {
-                "asset": "ccy",
-                "amount": "cashBal",
+                "asset": {"ccy", "currency_map_key"},
+                "amount": {"cashBal", "total"},
+                "free_amount": {"free"},
+                "used_amount": {"used"},
                 "usd_value": "eqUsd",
                 "unrealized_pnl": "upl",
-                "liability": "liab",
+                "liability": {"debt", "liab"},
                 "collateral_enabled": "collateralEnabled",
             }
             clean_provenance = {
-                key: expected
+                key: provenance.get(key)
                 for key, expected in allowed_sources.items()
-                if provenance.get(key) == expected and (key == "asset" or key in row)
+                if (
+                    provenance.get(key) in expected
+                    if isinstance(expected, set)
+                    else provenance.get(key) == expected
+                )
+                and (key == "asset" or key in row)
             }
             if clean_provenance:
                 row["field_provenance"] = clean_provenance
