@@ -24,7 +24,7 @@ Estimated completion:
 
 - Branch: `codex/fake-live-shutdown-monitor`, based on canonical
   `8ca7f034bce7ffaaa99800590c88651de4d267c5` after PR #1318.
-- PR: not open yet.
+- PR: #1319.
 - Scope: repair the offline fake-live scenario clock retained by PR #1318's
   graceful-shutdown event capture. The final monitor snapshot must remain able
   to read scenario time after shutdown releases `bot.cca`.
