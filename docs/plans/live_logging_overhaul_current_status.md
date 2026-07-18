@@ -24,7 +24,7 @@ Estimated completion:
 
 - Branch: `codex/binance-balance-composition`, based on canonical
   `a0db60f9ca97dbc5b9b37aa3230fce97eb0917ce` after PR #1313.
-- PR: pending.
+- PR: #1316.
 - Scope: second connector-specific implementation of backlog item 20. Parse
   only Binance's already-fetched CCXT unified `total`, `free`, `used`, and
   explicit `debt` maps into the existing bounded balance-composition contract.
