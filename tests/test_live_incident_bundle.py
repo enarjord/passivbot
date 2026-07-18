@@ -684,6 +684,11 @@ def test_live_incident_bundle_collects_hashes_snapshots_events_and_window(tmp_pa
     assert report["smoke_report"]["shutdown_events"] == {
         "total": 1,
         "event_types": {"bot.shutdown.stage": 1},
+        "lifecycle": {
+            "observed_bots": 0,
+            "complete_bots": 0,
+            "incomplete_bots": 0,
+        },
     }
     assert report["smoke_report"]["remote_calls"] == {
         "total": 1,

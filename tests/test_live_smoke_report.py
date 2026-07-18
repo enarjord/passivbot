@@ -5740,6 +5740,24 @@ def test_live_smoke_report_summarizes_shutdown_events(tmp_path):
         "bot.shutdown.stage": 1,
         "bot.stopped": 1,
     }
+    assert report["shutdown_events"]["lifecycle"] == {
+        "proof_scope": "distinct_observed_bots",
+        "coverage_complete": True,
+        "identity_complete": True,
+        "invalid_identity_events": 0,
+        "observed_bots": 1,
+        "complete_bots": 1,
+        "incomplete_bots": 0,
+        "rows_truncated": False,
+        "rows": [
+            {
+                "bot": "binance/binance_01",
+                "state": "complete",
+                "latest_boundary": "stopped",
+                "latest_ts": 3000,
+            }
+        ],
+    }
     assert [group["event_type"] for group in report["shutdown_events"]["groups"]] == [
         "bot.stopped",
         "bot.shutdown.stage",
@@ -5757,6 +5775,9 @@ def test_live_smoke_report_summarizes_shutdown_events(tmp_path):
     assert summary["shutdown_events"]["total"] == 3
     assert summary["shutdown_events"]["groups_truncated"] is True
     assert len(summary["shutdown_events"]["groups"]) == 2
+    assert summary["shutdown_events"]["lifecycle"] == report["shutdown_events"]["lifecycle"] | {
+        "rows_truncated": False
+    }
     assert brief["shutdown_events"] == {
         "total": 3,
         "event_types": {
@@ -5764,7 +5785,242 @@ def test_live_smoke_report_summarizes_shutdown_events(tmp_path):
             "bot.shutdown.stage": 1,
             "bot.stopped": 1,
         },
+        "lifecycle": {
+            "observed_bots": 1,
+            "complete_bots": 1,
+            "incomplete_bots": 0,
+        },
     }
+
+
+def test_live_smoke_report_shutdown_lifecycle_is_neutral_without_boundaries(tmp_path):
+    events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [_monitor_row(event_type="cycle.completed", seq=1, ts=1000)],
+    )
+
+    report = build_live_smoke_report(tmp_path / "monitor", logs_root=None)
+    brief = summarize_live_smoke_report_brief(report)
+
+    assert report["ok"] is True
+    assert report["attention"] is False
+    assert report["hard_failures"] == 0
+    assert report["shutdown_events"]["lifecycle"] == {
+        "proof_scope": "distinct_observed_bots",
+        "coverage_complete": True,
+        "identity_complete": True,
+        "invalid_identity_events": 0,
+        "observed_bots": 0,
+        "complete_bots": 0,
+        "incomplete_bots": 0,
+        "rows_truncated": False,
+        "rows": [],
+    }
+    assert brief["shutdown_events"]["lifecycle"] == {
+        "observed_bots": 0,
+        "complete_bots": 0,
+        "incomplete_bots": 0,
+    }
+
+
+def test_live_smoke_report_shutdown_lifecycle_excludes_unknown_identities(tmp_path):
+    events_dir = tmp_path / "monitor" / "unknown_exchange" / "unknown_user" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="bot.stopping",
+                seq=1,
+                ts=1000,
+                exchange="unknown_exchange",
+                user="unknown_user",
+            ),
+            _monitor_row(
+                event_type="bot.stopped",
+                seq=2,
+                ts=2000,
+                exchange="unknown_exchange",
+                user="unknown_user",
+            ),
+        ],
+    )
+
+    report = build_live_smoke_report(tmp_path / "monitor", logs_root=None)
+
+    assert report["ok"] is True
+    assert report["shutdown_events"]["lifecycle"] == {
+        "proof_scope": "distinct_observed_bots",
+        "coverage_complete": True,
+        "identity_complete": False,
+        "invalid_identity_events": 2,
+        "observed_bots": 0,
+        "complete_bots": 0,
+        "incomplete_bots": 0,
+        "rows_truncated": False,
+        "rows": [],
+    }
+
+
+def test_live_smoke_report_shutdown_lifecycle_excludes_inconsistent_identity(
+    tmp_path,
+):
+    events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    row = _monitor_row(event_type="bot.stopping", seq=1, ts=1000)
+    row["payload"]["_live_event"]["user"] = "other_user"
+    _write_ndjson(events_dir / "current.ndjson", [row])
+
+    report = build_live_smoke_report(tmp_path / "monitor", logs_root=None)
+
+    lifecycle = report["shutdown_events"]["lifecycle"]
+    assert lifecycle["identity_complete"] is False
+    assert lifecycle["invalid_identity_events"] == 1
+    assert lifecycle["observed_bots"] == 0
+
+
+def test_live_smoke_report_shutdown_lifecycle_rows_are_bounded(tmp_path):
+    monitor_root = tmp_path / "monitor"
+    for index in range(smoke_report_module.SHUTDOWN_EVENT_GROUP_LIMIT + 1):
+        events_dir = monitor_root / "binance" / f"bot_{index:02d}" / "events"
+        _write_ndjson(
+            events_dir / "current.ndjson",
+            [
+                _monitor_row(
+                    event_type="bot.stopping",
+                    seq=index + 1,
+                    ts=1000 + index,
+                    user=f"bot_{index:02d}",
+                )
+            ],
+        )
+
+    report = build_live_smoke_report(monitor_root, logs_root=None)
+    lifecycle = report["shutdown_events"]["lifecycle"]
+
+    assert lifecycle["observed_bots"] == smoke_report_module.SHUTDOWN_EVENT_GROUP_LIMIT + 1
+    assert lifecycle["rows_truncated"] is True
+    assert len(lifecycle["rows"]) == smoke_report_module.SHUTDOWN_EVENT_GROUP_LIMIT
+
+
+def test_live_smoke_report_shutdown_lifecycle_marks_tail_limited_coverage_incomplete(tmp_path):
+    events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(event_type="bot.stopping", seq=1, ts=1000),
+            _monitor_row(event_type="bot.stopped", seq=2, ts=2000),
+        ],
+    )
+
+    report = build_live_smoke_report(
+        tmp_path / "monitor",
+        logs_root=None,
+        event_tail_lines=1,
+    )
+
+    lifecycle = report["shutdown_events"]["lifecycle"]
+    assert lifecycle["coverage_complete"] is False
+    assert lifecycle["observed_bots"] == 1
+    assert lifecycle["complete_bots"] == 0
+
+
+def test_live_smoke_report_shutdown_lifecycle_uses_latest_event_position_across_files(tmp_path):
+    events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="bot.stopping",
+                seq=30,
+                ts=1000,
+                user="complete",
+            ),
+            _monitor_row(
+                event_type="bot.stopping",
+                seq=40,
+                ts=4000,
+                user="incomplete",
+            ),
+        ],
+    )
+    _write_ndjson(
+        events_dir / "2026-07-10T00-00-00.ndjson",
+        [
+            _monitor_row(
+                event_type="bot.stopped",
+                seq=20,
+                ts=2000,
+                user="complete",
+            ),
+            _monitor_row(
+                event_type="bot.stopped",
+                seq=10,
+                ts=3000,
+                user="incomplete",
+            ),
+        ],
+    )
+
+    report = build_live_smoke_report(
+        tmp_path / "monitor",
+        logs_root=None,
+        include_rotated=True,
+        max_event_files_per_bot=2,
+    )
+
+    assert report["shutdown_events"]["lifecycle"] == {
+        "proof_scope": "distinct_observed_bots",
+        "coverage_complete": True,
+        "identity_complete": True,
+        "invalid_identity_events": 0,
+        "observed_bots": 2,
+        "complete_bots": 1,
+        "incomplete_bots": 1,
+        "rows_truncated": False,
+        "rows": [
+            {
+                "bot": "binance/incomplete",
+                "state": "incomplete",
+                "latest_boundary": "stopping",
+                "latest_ts": 4000,
+            },
+            {
+                "bot": "binance/complete",
+                "state": "complete",
+                "latest_boundary": "stopped",
+                "latest_ts": 2000,
+            },
+        ],
+    }
+
+
+def test_live_smoke_report_shutdown_lifecycle_does_not_reuse_older_completion(
+    tmp_path,
+):
+    events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(event_type="bot.stopping", seq=1, ts=1000),
+            _monitor_row(event_type="bot.stopped", seq=2, ts=2000),
+            _monitor_row(event_type="bot.stopping", seq=3, ts=3000),
+        ],
+    )
+
+    report = build_live_smoke_report(tmp_path / "monitor", logs_root=None)
+
+    lifecycle = report["shutdown_events"]["lifecycle"]
+    assert lifecycle["observed_bots"] == 1
+    assert lifecycle["complete_bots"] == 0
+    assert lifecycle["incomplete_bots"] == 1
+    assert lifecycle["rows"] == [
+        {
+            "bot": "binance/binance_01",
+            "state": "incomplete",
+            "latest_boundary": "stopping",
+            "latest_ts": 3000,
+        }
+    ]
 
 
 def test_live_smoke_report_summarizes_recent_risk_events(tmp_path):

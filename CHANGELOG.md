@@ -4,6 +4,12 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Shutdown evidence in live smoke reports now distinguishes complete and
+  incomplete latest shutdown lifecycles per bot. Restart smoke validation uses
+  distinct complete bots instead of aggregate event counts, so duplicate
+  stopping or stopped events from one bot cannot satisfy a multi-bot restart
+  gate; general smoke verdicts and live runtime behavior remain unchanged.
+
 - Live smoke reports now include a bounded diagnostics-only event-pipeline
   integrity verdict from each bot's latest health snapshot. Cumulative drops,
   sink errors, and workers unexpectedly absent outside orderly pipeline shutdown

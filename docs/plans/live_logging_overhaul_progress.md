@@ -15,7 +15,26 @@ merge, live smoke evidence changes, or new gaps are discovered.
 - Do not use this file for design churn; unresolved design details belong in the
   plan or a focused handoff doc.
 
-## Latest Canonical Deployment (PR #1314; Through PR #1319)
+## Latest Canonical Deployment (PR #1320; Through PR #1319)
+
+- PR #1320 merged as canonical
+  `bc2c90267be418344ec883fcf17fae856bc568cd` after exact-head Hermes approval
+  and green Python/Rust CI. It exposes event-pipeline drops, sink errors, and
+  unexpectedly dead workers through a separate bounded diagnostic integrity
+  verdict while preserving general smoke and trading/process semantics.
+- VPS5 fast-forwarded tracked-clean from PR #1314 without a Rust build, bot
+  restart, or process signal. Exact five-bot target sampling remained 3/3
+  stable with unchanged PIDs and no extras or issues; protected `misc:0.0`
+  remained `%8`/PID `434835`.
+- All five latest pipeline snapshots were integrity-green with zero drops, sink
+  errors, unexpectedly dead workers, backlog, unfinished work, or degraded
+  counters. The wider report retained natural KuCoin `RequestTimeout` events;
+  the latest affected cycle subsequently completed successfully without
+  intervention. No direct exchange request, process action, or event was
+  manufactured. The active follow-up makes bounded shutdown evidence complete
+  per distinct bot rather than trusting aggregate lifecycle counts.
+
+## Previous Canonical Deployment (PR #1314; Through PR #1319)
 
 - PR #1319 merged as canonical `84c8e040334820ccc049787c82048358e18179c6`.
   Its offline fake-live shutdown-clock repair changes no live runtime, producer,
