@@ -24,7 +24,7 @@ Estimated completion:
 
 - Branch: `codex/balance-composition-observability`, based on canonical
   `32156cbc251d666902f20b8b000a9a1dfe05a0a2` after PR #1311.
-- PR: not yet opened.
+- PR: #1313.
 - Scope: first connector-specific implementation of backlog item 20. Carry a
   bounded normalized balance-composition diagnostic through staged refresh and
   attach it to `balance.changed`; parse only already-fetched OKX
