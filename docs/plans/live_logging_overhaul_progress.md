@@ -15,7 +15,29 @@ merge, live smoke evidence changes, or new gaps are discovered.
 - Do not use this file for design churn; unresolved design details belong in the
   plan or a focused handoff doc.
 
-## Latest Canonical Deployment (PR #1307)
+## Latest Canonical Deployment (PR #1309; Current Through PR #1299)
+
+- PR #1309 merged as canonical
+  `50c37db6049206634b62f45798a8b240a035e3b5` after exact-current-head Hermes
+  approval and green Python/Rust CI. It removes raw sink exception text while
+  retaining stable sink, reason, exception-type, counter, and timing evidence.
+- VPS5 prepared the exact merge without a Rust rebuild and gracefully stopped,
+  exited, relaunched, and verified all five configured panes without force. The
+  exact `1784339097380..1784339763543` window recovered complete shutdown and
+  startup cohorts and left every bot running, but correctly remained red on two
+  hard structured events, including a real KuCoin positions-fetch
+  `RequestTimeout`. Only one hard classification remained in the bounded mixed
+  problem-event sample, exposing the active hard-only retention follow-up.
+- Canonical master later advanced through behavior-changing PR #1299 to
+  `f1ae7970393e8299d1b0a98c8ff68d42adddd2d0`. VPS5 prepared that exact head,
+  restarted only the same five verified panes, and returned hard-green over
+  `1784392681320..1784393372572`: 10/1,011 managed segments and `66399577`
+  bytes, complete five-bot shutdown/startup evidence, and zero hard, monitor,
+  text-log, repository, or target failures. The checkout stayed tracked-clean,
+  all pane parents remained stable, and protected `misc:0.0` stayed `%8`, PID
+  `434835`. No direct exchange request or event was manufactured.
+
+## Previous Canonical Deployment (PR #1307)
 
 - PR #1307 merged as canonical
   `8aefdbc82339b756ff642e726ae0924d5ca8774d` after exact-current-head Hermes

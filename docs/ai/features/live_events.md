@@ -164,6 +164,17 @@ must not retain `latest_error`. These projections are observability-only: error 
 timestamp recovery, restart thresholds, backoff, and trading behavior remain owned by the existing
 execution-loop policy.
 
+## Smoke Hard-Problem Evidence
+
+Full live smoke reports keep the existing bounded latest mixed `problem_events` sample and expose
+an independent `hard_problem_events` object. Its `count` is the authoritative full-window hard
+count; `retained` and `truncated` describe the bounded chronological `sample`. Later non-hard
+attention therefore cannot remove every hard classification while the report remains red.
+
+The hard-only sample uses the caller's existing `max_problem_events` bound and the same compact,
+redacted event projection as the mixed sample. It is reporting evidence only and must not change
+problem classification, recovery matching, smoke verdicts, process control, or live behavior.
+
 ## Cycle Degradation
 
 `cycle.degraded` retains the stable reason code, bounded exception type, cycle correlation, safe

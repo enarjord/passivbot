@@ -7170,6 +7170,165 @@ def test_live_smoke_report_distinguishes_attention_and_hard_structured_events(
     assert report["problem_events"][0]["hard"] is False
 
 
+def test_live_smoke_report_retains_hard_problem_evidence_after_mixed_sample_eviction(
+    tmp_path,
+):
+    events_dir = tmp_path / "monitor" / "bybit" / "bybit_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="bot.stopped",
+                seq=1,
+                ts=1000,
+                status="failed",
+                level="critical",
+                reason_code="terminal_startup_failure",
+            ),
+            _monitor_row(
+                event_type="execution.create_failed",
+                seq=2,
+                ts=2000,
+                status="failed",
+                level="error",
+                reason_code="exchange_exception",
+            ),
+            *[
+                _monitor_row(
+                    event_type="ema.unavailable",
+                    seq=seq,
+                    ts=seq * 1000,
+                    status="degraded",
+                    level="warning",
+                    reason_code="required_ema_unavailable",
+                )
+                for seq in range(3, 6)
+            ],
+        ],
+    )
+
+    report = build_live_smoke_report(
+        tmp_path / "monitor",
+        logs_root=None,
+        max_problem_events=2,
+    )
+
+    assert report["hard_problem_event_count"] == 2
+    assert [event["seq"] for event in report["problem_events"]] == [4, 5]
+    assert [event["hard"] for event in report["problem_events"]] == [False, False]
+    assert report["hard_problem_events"] == {
+        "count": 2,
+        "retained": 2,
+        "truncated": 0,
+        "sample": [
+            {
+                "event_type": "bot.stopped",
+                "exchange": "binance",
+                "hard": True,
+                "level": "critical",
+                "line": 1,
+                "path": str(events_dir / "current.ndjson"),
+                "reason_code": "terminal_startup_failure",
+                "seq": 1,
+                "status": "failed",
+                "ts": 1000,
+                "user": "binance_01",
+            },
+            {
+                "event_type": "execution.create_failed",
+                "exchange": "binance",
+                "hard": True,
+                "level": "error",
+                "line": 2,
+                "path": str(events_dir / "current.ndjson"),
+                "reason_code": "exchange_exception",
+                "seq": 2,
+                "status": "failed",
+                "ts": 2000,
+                "user": "binance_01",
+            },
+        ],
+    }
+
+
+def test_live_smoke_report_hard_problem_evidence_respects_zero_sample_limit(tmp_path):
+    events_dir = tmp_path / "monitor" / "bybit" / "bybit_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="bot.stopped",
+                seq=1,
+                ts=1000,
+                status="failed",
+                level="critical",
+                reason_code="terminal_startup_failure",
+            ),
+            _monitor_row(
+                event_type="ema.unavailable",
+                seq=2,
+                ts=2000,
+                status="degraded",
+                level="warning",
+                reason_code="required_ema_unavailable",
+            ),
+        ],
+    )
+
+    report = build_live_smoke_report(
+        tmp_path / "monitor",
+        logs_root=None,
+        max_problem_events=0,
+    )
+
+    assert report["problem_events"] == []
+    assert report["hard_problem_event_count"] == 1
+    assert report["hard_problem_events"] == {
+        "count": 1,
+        "retained": 0,
+        "truncated": 1,
+        "sample": [],
+    }
+
+
+def test_live_smoke_report_hard_problem_evidence_retains_latest_bounded_sample(
+    tmp_path,
+):
+    events_dir = tmp_path / "monitor" / "bybit" / "bybit_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="bot.stopped",
+                seq=seq,
+                ts=seq * 1000,
+                status="failed",
+                level="critical",
+                reason_code=f"terminal_failure_{seq}",
+            )
+            for seq in range(1, 4)
+        ],
+    )
+
+    report = build_live_smoke_report(
+        tmp_path / "monitor",
+        logs_root=None,
+        max_problem_events=2,
+    )
+
+    assert report["hard_problem_event_count"] == 3
+    assert report["hard_problem_events"] == {
+        "count": 3,
+        "retained": 2,
+        "truncated": 1,
+        "sample": report["problem_events"],
+    }
+    assert [event["seq"] for event in report["hard_problem_events"]["sample"]] == [
+        2,
+        3,
+    ]
+
+
 def test_live_smoke_report_summarizes_problem_event_groups(tmp_path):
     events_dir = tmp_path / "monitor" / "okx" / "okx_faisal" / "events"
     _write_ndjson(

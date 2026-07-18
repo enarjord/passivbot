@@ -135,7 +135,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--max-problem-events",
         type=int,
         default=50,
-        help="Maximum recent problem events to include.",
+        help=(
+            "Maximum recent mixed and hard-only problem events to include "
+            "in each full-report sample."
+        ),
     )
     parser.add_argument(
         "--max-log-files",
