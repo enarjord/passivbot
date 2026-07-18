@@ -4,6 +4,13 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Hyperliquid `balance.changed` composition diagnostics now parse only proven
+  unified-account `info.balances` coin and signed total fields from the
+  already-fetched balance response. Non-unified payloads remain explicitly
+  unavailable; malformed unified shapes remain diagnostic failures. The bounded
+  rows add no exchange calls, valuation inference, scalar-balance changes,
+  planning, order, or risk behavior, and raw connector payloads remain excluded.
+
 - Binance `balance.changed` composition diagnostics now normalize only CCXT's
   documented unified `total`, `free`, `used`, and explicit `debt` maps from the
   already-fetched balance response. The bounded rows add no exchange calls,
@@ -16,10 +23,9 @@ All notable user-facing changes will be documented in this file.
   PnL, explicit liability, collateral state, and field provenance. Equal-total
   collateral substitutions are durable through a separate composition
   signature, while console admission remains snapped-balance based and shows at
-  most two sanitized assets. Generic, Binance, and Hyperliquid paths report a
-  stable unavailable diagnostic until their own parsers are added; balance
-  calculation, API calls, refresh cadence, planning, orders, and risk are
-  unchanged.
+  most two sanitized assets. Generic paths report a stable unavailable
+  diagnostic until their own parsers are added; balance calculation, API calls,
+  refresh cadence, planning, orders, and risk are unchanged.
 
 - Live forager background refresh now schedules the native 1h candle windows required by inactive
   candidates in addition to their 1m inputs. Candidate refresh budgeting operates per

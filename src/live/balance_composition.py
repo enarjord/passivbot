@@ -217,6 +217,59 @@ def normalize_ccxt_balance_composition(fetched: Any) -> dict[str, Any]:
     )
 
 
+def normalize_hyperliquid_unified_balance_composition(fetched: Any) -> dict[str, Any]:
+    """Normalize only proven unified Hyperliquid ``info.balances`` rows."""
+    source = "hyperliquid.info.balances"
+    if not isinstance(fetched, Mapping):
+        return malformed_balance_composition(source=source, reason="invalid_payload")
+    info = fetched.get("info")
+    if not isinstance(info, Mapping):
+        return malformed_balance_composition(source=source, reason="missing_info")
+    if "balances" not in info:
+        return unavailable_balance_composition(reason="non_unified_payload")
+    balances = info.get("balances")
+    if not isinstance(balances, list):
+        return malformed_balance_composition(source=source, reason="invalid_balances")
+    if not balances:
+        return malformed_balance_composition(source=source, reason="empty_balances")
+
+    rows_by_asset: dict[str, dict[str, Any]] = {}
+    collided_assets: set[str] = set()
+    invalid_row_count = 0
+    for balance in balances:
+        if not isinstance(balance, Mapping):
+            invalid_row_count += 1
+            continue
+        asset = _asset_name(balance.get("coin"))
+        amount = _finite_number(balance.get("total"))
+        if asset is None or amount is None:
+            invalid_row_count += 1
+            continue
+        if asset in collided_assets:
+            invalid_row_count += 1
+            continue
+        if asset in rows_by_asset:
+            # Case-normalized duplicate coins have no deterministic single total.
+            rows_by_asset.pop(asset)
+            collided_assets.add(asset)
+            invalid_row_count += 1
+            continue
+        rows_by_asset[asset] = {
+            "asset": asset,
+            "field_provenance": {"asset": "coin", "amount": "total"},
+            "amount": amount,
+        }
+
+    if not rows_by_asset:
+        return malformed_balance_composition(source=source, reason="no_valid_rows")
+    return _finalize_snapshot(
+        status="available",
+        source=source,
+        assets=list(rows_by_asset.values()),
+        invalid_row_count=invalid_row_count,
+    )
+
+
 def public_balance_composition(value: Any) -> dict[str, Any] | None:
     """Copy only the bounded event contract; never publish an internal signature."""
     if not isinstance(value, Mapping):
@@ -234,6 +287,7 @@ def public_balance_composition(value: Any) -> dict[str, Any] | None:
             "unsupported",
             "normalizer",
             "ccxt.unified_balance",
+            "hyperliquid.info.balances",
             "okx.info.data[0].details",
         }
         or not isinstance(assets, list)
@@ -264,7 +318,7 @@ def public_balance_composition(value: Any) -> dict[str, Any] | None:
         provenance = item.get("field_provenance")
         if isinstance(provenance, Mapping):
             allowed_sources = {
-                "asset": {"ccy", "currency_map_key"},
+                "asset": {"ccy", "coin", "currency_map_key"},
                 "amount": {"cashBal", "total"},
                 "free_amount": {"free"},
                 "used_amount": {"used"},

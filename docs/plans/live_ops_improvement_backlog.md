@@ -1081,13 +1081,16 @@ Related detailed plans:
     the live default branch before the cutover can be considered complete.
 
 20. [ ] Per-asset collateral, debt, and valuation balance events.
-    Status: partial, OKX plus Binance. Connector-specific slices normalize
-    OKX's already-fetched `info.data[0].details` and Binance's already-fetched
-    CCXT unified balance maps into bounded deterministic asset rows. Generic
-    and Hyperliquid staged paths remain explicitly unavailable. Neither slice
-    adds exchange calls or changes scalar balance, planning, orders, risk, or
-    console materiality. Other connector parsers and any broader asset contract
-    remain open. A 2026-07-14 evaluation confirmed that the existing
+    Status: partial, OKX plus Binance plus Hyperliquid unified-account totals.
+    Connector-specific slices normalize OKX's already-fetched
+    `info.data[0].details`, Binance's already-fetched CCXT unified balance maps,
+    and proven Hyperliquid unified `info.balances` coin/total rows into bounded
+    deterministic asset rows. Hyperliquid non-unified payloads remain explicitly
+    unavailable; HIP-3 position responses remain out of scope. Gate.io and
+    KuCoin remain fixture/contract work. These slices add no exchange calls or
+    changes to scalar balance, planning, orders, risk, or console materiality.
+    Other connector parsers and any broader asset contract remain open. A
+    2026-07-14 evaluation confirmed that the existing
     `balance.changed` event and console projection expose only aggregate raw
     balance, hysteresis-snapped balance, equity, deltas, and source. The
     authoritative refresh already receives the exact raw balance response

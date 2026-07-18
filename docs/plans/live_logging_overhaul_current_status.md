@@ -22,21 +22,20 @@ Estimated completion:
 
 ## Active Review Slice
 
-- Branch: `codex/binance-balance-composition`, based on canonical
-  `a0db60f9ca97dbc5b9b37aa3230fce97eb0917ce` after PR #1313.
-- PR: #1316.
-- Scope: second connector-specific implementation of backlog item 20. Parse
-  only Binance's already-fetched CCXT unified `total`, `free`, `used`, and
-  explicit `debt` maps into the existing bounded balance-composition contract.
-  OKX remains on its connector-specific parser; generic and Hyperliquid paths
-  remain explicitly unavailable until separately proven.
+- Branch: `codex/hyperliquid-balance-composition`, based on canonical
+  `e7fe7f796fb76a829003933dc7e5d937c6df8c64` after PR #1316.
+- PR: #1317.
+- Scope: third connector-specific implementation of backlog item 20. Parse
+  only proven Hyperliquid unified `info.balances` coin and finite signed total
+  rows from the already-fetched response. Non-unified payloads remain explicitly
+  unavailable; HIP-3 position responses remain out of scope.
 - Behavior boundary: no new exchange/ticker/API calls and no change to scalar
   balance calculation, refresh cadence, planning, execution scheduling,
   orders, risk, valuation, or console materiality. Composition-only changes
   remain durable and off the console.
-- Validation: focused unified-map, explicit-debt, missing/non-finite,
-  raw-leakage, public-provenance, Binance-hook, staged-carry, balance-state,
-  and event-pipeline regressions.
+- Validation: focused unified-row, missing/non-finite, zero, collision/bounds,
+  raw-leakage, Hyperliquid cache/hook, staged-carry, balance-state, and
+  event-pipeline regressions.
 - Review gate: temporary maintainer-authorized exact-head Hermes plus green
   Python and Rust CI while Grok is halted.
 - Expected VPS action: this behavior-changing diagnostic slice requires a
@@ -44,6 +43,22 @@ Estimated completion:
   it must not manufacture balance events or contact an exchange directly.
 
 ## Deployed Baseline
+
+- PR #1316 merged as canonical `e7fe7f796fb76a829003933dc7e5d937c6df8c64`.
+  It adds bounded Binance CCXT unified composition diagnostics while preserving
+  scalar balance, exchange-call, planning, order, risk, and console-admission
+  behavior.
+- VPS5 fast-forwarded tracked-clean from `a0db60f9` without a Rust rebuild.
+  The exact panes `%358`-`%362` gracefully restarted without force; old PIDs
+  `1038760/1038769/1038763/1038772/1038766` became
+  `1040903/1040911/1040905/1040914/1040908`.
+- The exact `1784404124757..1784404777859` window selected 7/1,012 event files
+  totaling `19420705` bytes, retained five stopping/stopped/startup cohorts, and
+  had zero hard, monitor, or text-log issues. Delayed target sampling was 3/3
+  with `R=4,S=1` and no extras; `misc:0.0` stayed `%8`/PID `434835`. No direct
+  exchange call or event was manufactured.
+
+## Previous Deployed Baseline
 
 - PR #1313 merged as canonical `a0db60f9ca97dbc5b9b37aa3230fce97eb0917ce`.
   It adds the bounded OKX-first balance-composition diagnostic and preserves

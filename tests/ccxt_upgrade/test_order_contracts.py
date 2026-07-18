@@ -195,7 +195,7 @@ async def test_binance_staged_snapshot_uses_fresh_positions_for_open_order_symbo
 
 
 @pytest.mark.asyncio
-async def test_hyperliquid_staged_snapshot_carries_unavailable_diagnostics_not_raw_balance():
+async def test_hyperliquid_staged_snapshot_carries_malformed_diagnostics_not_raw_balance():
     bot = HyperliquidBot.__new__(HyperliquidBot)
 
     async def capture_positions_balance():
@@ -212,7 +212,9 @@ async def test_hyperliquid_staged_snapshot_carries_unavailable_diagnostics_not_r
     )
 
     assert snapshot["balance"] == 100.0
-    assert snapshot["balance_composition"]["status"] == "unavailable"
+    assert snapshot["balance_composition"]["status"] == "malformed"
+    assert snapshot["balance_composition"]["source"] == "hyperliquid.info.balances"
+    assert snapshot["balance_composition"]["reason"] == "missing_info"
     assert "private-balance" not in str(snapshot["balance_composition"])
 
 
