@@ -7692,6 +7692,17 @@ class Passivbot:
                 no_basis = loaded_rows <= 0 or last_cached_ts is None
                 missing_candles = int(report.get("missing_candles", 0) or 0)
                 tail_gap_candles = int(report.get("tail_gap_candles", 0) or 0)
+                missing_spans = list(report.get("missing_spans", []) or [])
+                start_ts = report.get("start_ts")
+                leading_gap_only = bool(
+                    not report.get("open_tail_gap")
+                    and len(missing_spans) == 1
+                    and start_ts is not None
+                    and len(missing_spans[0]) >= 2
+                    and int(missing_spans[0][0]) <= int(start_ts)
+                    and last_cached_ts is not None
+                    and int(missing_spans[0][1]) < int(last_cached_ts)
+                )
                 return {
                     "coverage_ok": bool(report.get("coverage_ok")),
                     "age_ms": (
@@ -7704,6 +7715,7 @@ class Passivbot:
                     "tail_only": bool(report.get("open_tail_gap"))
                     and missing_candles > 0
                     and missing_candles == tail_gap_candles,
+                    "leading_gap_only": leading_gap_only,
                     "no_basis": no_basis,
                 }
         except Exception:
@@ -7716,6 +7728,7 @@ class Passivbot:
                     "missing_candles": max(1, int(required_candles)),
                     "tail_gap_candles": max(1, int(required_candles)),
                     "tail_only": False,
+                    "leading_gap_only": False,
                     "no_basis": True,
                 }
         age_ms = Passivbot._candle_staleness_ms(self, symbol, now_ms=now)
@@ -7725,6 +7738,7 @@ class Passivbot:
             "missing_candles": 0 if age_ms <= 0 else 1,
             "tail_gap_candles": 0 if age_ms <= 0 else 1,
             "tail_only": age_ms > 0,
+            "leading_gap_only": False,
             "no_basis": age_ms >= now,
         }
 
@@ -18014,6 +18028,32 @@ class Passivbot:
         if not all_candidates:
             return
 
+        cycle_cap = (
+            max(1, int(math.ceil(float(max_calls) / 4.0))) if max_calls > 0 else 0
+        )
+        budget: Optional[int] = None
+        if slots_open_any:
+            if max_calls > 0:
+                # Respect rate limit even with open slots; do not spend a full
+                # accumulated minute budget in one post-execution cleanup phase.
+                budget = self._forager_refresh_budget(
+                    max_calls,
+                    max_cycle_budget=cycle_cap,
+                    initial_tokens=cycle_cap,
+                )
+                if budget <= 0:
+                    return
+        else:
+            if max_calls <= 0:
+                return
+            budget = self._forager_refresh_budget(
+                max_calls,
+                max_cycle_budget=cycle_cap,
+                initial_tokens=cycle_cap,
+            )
+            if budget <= 0:
+                return
+
         try:
             warmup_ratio = float(
                 get_optional_live_value(self.config, "warmup_ratio", 0.0) or 0.0
@@ -18055,32 +18095,8 @@ class Passivbot:
             1 + (1 if int(per_symbol_h1_hours.get(sym, 0) or 0) > 0 else 0)
             for sym in all_candidates
         )
-        cycle_cap = (
-            max(1, int(math.ceil(float(max_calls) / 4.0))) if max_calls > 0 else 0
-        )
-        if slots_open_any:
-            if max_calls > 0:
-                # Respect rate limit even with open slots; do not spend a full
-                # accumulated minute budget in one post-execution cleanup phase.
-                budget = self._forager_refresh_budget(
-                    max_calls,
-                    max_cycle_budget=cycle_cap,
-                    initial_tokens=cycle_cap,
-                )
-                if budget <= 0:
-                    return
-            else:
-                budget = required_surface_count
-        else:
-            if max_calls <= 0:
-                return
-            budget = self._forager_refresh_budget(
-                max_calls,
-                max_cycle_budget=cycle_cap,
-                initial_tokens=cycle_cap,
-            )
-            if budget <= 0:
-                return
+        if budget is None:
+            budget = required_surface_count
 
         # Skip only the urgent per-cycle candle universe. The staged orchestrator
         # managed universe may include flat graceful-stop symbols; those still
@@ -18140,8 +18156,8 @@ class Passivbot:
         surface_specs.sort(
             key=lambda item: (
                 int(surface_checks.get((item[1], item[0]), 0) or 0),
+                str(item[1]),
                 0 if item[0] == "1m" else 1,
-                f"{item[1]}:{item[0]}",
             )
         )
         health_scan_budget = min(len(surface_specs), max(8, int(budget) * 4))
@@ -18174,6 +18190,17 @@ class Passivbot:
             ):
                 continue
             last_attempt_ms = int(surface_attempts.get(surface_key, 0) or 0)
+            if (
+                timeframe == "1h"
+                and bool(surface_health.get("leading_gap_only"))
+                and last_attempt_ms > 0
+                and now - last_attempt_ms < 24 * 60 * 60_000
+            ):
+                # A fresh native-1h tail with only a missing requested prefix is
+                # consistent with exchange history beginning after our warmup
+                # window. Keep the candidate unavailable, but do not spend REST
+                # budget retrying that unchanged prefix every refresh cycle.
+                continue
             priority = (
                 last_attempt_ms,
                 0 if no_basis else 1,
