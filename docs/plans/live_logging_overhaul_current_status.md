@@ -22,21 +22,21 @@ Estimated completion:
 
 ## Active Review Slice
 
-- Branch: `codex/balance-composition-observability`, based on canonical
-  `32156cbc251d666902f20b8b000a9a1dfe05a0a2` after PR #1311.
-- PR: #1313.
-- Scope: first connector-specific implementation of backlog item 20. Carry a
-  bounded normalized balance-composition diagnostic through staged refresh and
-  attach it to `balance.changed`; parse only already-fetched OKX
-  `info.data[0].details` fields, while generic, Binance, and Hyperliquid paths
-  carry an explicit unavailable state until their parsers exist.
+- Branch: `codex/binance-balance-composition`, based on canonical
+  `a0db60f9ca97dbc5b9b37aa3230fce97eb0917ce` after PR #1313.
+- PR: #1316.
+- Scope: second connector-specific implementation of backlog item 20. Parse
+  only Binance's already-fetched CCXT unified `total`, `free`, `used`, and
+  explicit `debt` maps into the existing bounded balance-composition contract.
+  OKX remains on its connector-specific parser; generic and Hyperliquid paths
+  remain explicitly unavailable until separately proven.
 - Behavior boundary: no new exchange/ticker/API calls and no change to scalar
   balance calculation, refresh cadence, planning, execution scheduling,
-  orders, risk, or console materiality. Composition-only changes are durable
-  but remain off the console.
-- Validation: focused parser, raw-leakage, truncation/signature, staged-carry,
-  composition-only emission, duplicate suppression, legacy-call, and console
-  bounds regressions, plus targeted existing balance/event tests.
+  orders, risk, valuation, or console materiality. Composition-only changes
+  remain durable and off the console.
+- Validation: focused unified-map, explicit-debt, missing/non-finite,
+  raw-leakage, public-provenance, Binance-hook, staged-carry, balance-state,
+  and event-pipeline regressions.
 - Review gate: temporary maintainer-authorized exact-head Hermes plus green
   Python and Rust CI while Grok is halted.
 - Expected VPS action: this behavior-changing diagnostic slice requires a
@@ -45,21 +45,40 @@ Estimated completion:
 
 ## Deployed Baseline
 
-- PR #1311 merged as canonical `32156cbc251d666902f20b8b000a9a1dfe05a0a2`.
-  It carries bounded hard-only problem evidence into smoke summary, brief, and
-  incident-bundle metadata without changing runtime event production or
-  trading behavior.
-- VPS5 prepared the exact clean merge without a Rust rebuild or bot restart.
-  The immediate bounded smoke retained one natural KuCoin positions timeout in
-  `hard_problem_events`; a settled five-minute smoke was hard-green with an
-  empty hard sample. A bounded incident bundle for the natural timeout carried
-  the same hard-only count, retention, truncation, and sanitized sample in its
-  command result and archived manifest. All five configured bot panes and
-  `misc:0.0` remained unchanged throughout.
+- PR #1313 merged as canonical `a0db60f9ca97dbc5b9b37aa3230fce97eb0917ce`.
+  It adds the bounded OKX-first balance-composition diagnostic and preserves
+  scalar balance, exchange-call, planning, order, risk, and console-admission
+  behavior.
+- VPS5 fast-forwarded cleanly from `32156cbc`. The first guarded preparation
+  failed closed after the repository move because the caller supplied a Rust
+  fingerprint from a different local untracked `Cargo.lock`; no bot was
+  signalled. A same-head target-derived proof then passed with no Rust rebuild
+  and exact source/stamp/runtime-artifact agreement.
+- The authorized exact-pane executor gracefully stopped, exited, relaunched,
+  and verified only `%358/%359/%360/%361/%362`; old bot PIDs
+  `1036076/1036085/1036080/1036088/1036082` became
+  `1038760/1038769/1038763/1038772/1038766` with no force signal. The exact
+  lifecycle window `1784401342000..1784402056447` selected 6/1,011 managed
+  segments totaling `39263703` bytes, retained all five stopping/stopped/startup
+  cohorts, and returned zero hard, monitor, text-log, repository, or target
+  failures. A wider pre-action window correctly retained one earlier natural
+  KuCoin `RequestTimeout` instead of hiding it.
+- A natural post-restart OKX `balance.changed` event carried two bounded
+  connector-proven asset rows with no raw payload. Final targets remained 3/3
+  stable and exact, the checkout remained tracked-clean, and protected
+  `misc:0.0` stayed `%8`/PID `434835`. No direct exchange request or event was
+  manufactured.
 - The merge is the exact base for this slice.
 
 ## Previous Deployed Baseline
 
+- PR #1311 merged as canonical `32156cbc251d666902f20b8b000a9a1dfe05a0a2`.
+  It carries bounded hard-only problem evidence into smoke summary, brief, and
+  incident-bundle metadata without changing runtime event production or
+  trading behavior. VPS5 prepared the exact clean merge without a Rust rebuild
+  or bot restart; one immediate natural KuCoin positions timeout was retained,
+  the settled smoke was hard-green, and all five bot panes plus `misc:0.0`
+  remained unchanged.
 - PR #1310 merged as canonical `5d06887b78c2790efd15e1bd67bae6b3f5d96636`.
   It added full-report `hard_problem_events` with authoritative `count`,
   bounded chronological `sample`, and explicit `retained`/`truncated` counts;

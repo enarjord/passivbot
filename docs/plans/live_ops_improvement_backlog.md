@@ -1081,13 +1081,13 @@ Related detailed plans:
     the live default branch before the cutover can be considered complete.
 
 20. [ ] Per-asset collateral, debt, and valuation balance events.
-    Status: partial, OKX-first. The first connector-specific slice normalizes
-    only OKX's already-fetched `info.data[0].details` into bounded deterministic
-    asset rows and carries an explicit unavailable/malformed diagnostic state
-    for generic, Binance, and Hyperliquid staged paths. It does not add exchange
-    calls or change scalar balance, planning, orders, risk, or console
-    materiality. Other connector parsers and any broader asset contract remain
-    open. A 2026-07-14 evaluation confirmed that the existing
+    Status: partial, OKX plus Binance. Connector-specific slices normalize
+    OKX's already-fetched `info.data[0].details` and Binance's already-fetched
+    CCXT unified balance maps into bounded deterministic asset rows. Generic
+    and Hyperliquid staged paths remain explicitly unavailable. Neither slice
+    adds exchange calls or changes scalar balance, planning, orders, risk, or
+    console materiality. Other connector parsers and any broader asset contract
+    remain open. A 2026-07-14 evaluation confirmed that the existing
     `balance.changed` event and console projection expose only aggregate raw
     balance, hysteresis-snapped balance, equity, deltas, and source. The
     authoritative refresh already receives the exact raw balance response
@@ -1147,6 +1147,10 @@ Related detailed plans:
     for unsupported or malformed breakdowns.
 
     Work log:
+    - 2026-07-18: Binance follow-up normalized only CCXT's documented unified
+      `total`, `free`, `used`, and explicit `debt` maps from the same fetched
+      response. It excludes raw `info`, arbitrary fields, non-finite values,
+      and valuation inference while reusing existing bounds and signatures.
     - 2026-07-18: OKX-first slice added bounded rows for `ccy`, `cashBal`,
       `eqUsd`, `upl`, `collateralEnabled`, and explicit `liab`, with per-field
       provenance, deterministic truncation, an omitted-row-sensitive internal
