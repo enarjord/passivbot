@@ -17,9 +17,10 @@ All notable user-facing changes will be documented in this file.
 
 - Live forager background refresh now schedules the native 1h candle windows required by inactive
   candidates in addition to their 1m inputs. Candidate refresh budgeting operates per
-  symbol/timeframe surface and rotates incomplete surfaces across cycles, preventing cache-only
-  planning from freezing the selection universe around incumbents whose 1h log-range cache alone
-  happened to remain fresh.
+  symbol/timeframe surface, bounds and rotates cache-health scans, honors configured warmup and
+  stale-tail limits, prioritizes cold 1m basis before 1h backfills, and makes forced native
+  higher-timeframe reads bypass partial range-cache hits. This prevents cache-only planning from
+  freezing the selection universe around incumbents whose 1h log-range cache alone remained fresh.
 
 - Full live smoke reports now retain a separately bounded sample of hard
   structured problem events, with authoritative total, retained, and truncated

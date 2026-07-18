@@ -37,9 +37,12 @@
    current day and two preceding complete UTC days.
 8. Live forager planning is cache-only for inactive candidates. Its background refresher must warm
    every required native candle surface, including both 1m inputs and native 1h log-range inputs,
-   using the same per-symbol strategy requirements as startup warmup. Refresh budgets count
-   symbol/timeframe fetches, and incomplete surfaces remain queued fairly across cycle and
-   wall-time caps.
+   using the same per-symbol strategy requirements and explicit warmup cap as startup warmup.
+   Tail-only gaps remain eligible within the configured candidate staleness window; missing basis
+   and internal gaps do not. Refresh budgets count symbol/timeframe fetches, health scans are
+   bounded and rotated across cycles, and never-attempted 1m surfaces precede native 1h backfills.
+   A forced native higher-timeframe refresh bypasses in-memory range and complete-disk
+   short-circuits so a partial cached range cannot consume budget without retrying the exchange.
 
 Cache paths use `to_standard_exchange_name()` rather than raw CCXT identifiers such as
 `binanceusdm` or `kucoinfutures`.

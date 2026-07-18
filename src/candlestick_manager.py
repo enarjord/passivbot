@@ -5695,13 +5695,15 @@ class CandlestickManager:
                         pass
                     if (
                         max_age_ms is None
-                        or max_age_ms == 0
-                        or (now - int(fetched_at)) <= int(max_age_ms)
+                        or (
+                            max_age_ms > 0
+                            and (now - int(fetched_at)) <= int(max_age_ms)
+                        )
                     ):
                         return arr_cached
 
                 # If disk has full coverage for this TF window, serve it without network
-                if isinstance(disk_arr, np.ndarray) and disk_arr.size:
+                if max_age_ms != 0 and isinstance(disk_arr, np.ndarray) and disk_arr.size:
                     out_disk = self._slice_ts_range(disk_arr, start_ts, end_ts)
                     if out_disk.size:
                         # verify full coverage with proper step
@@ -5744,7 +5746,7 @@ class CandlestickManager:
                     except Exception:
                         disk_arr = None
 
-                    if isinstance(disk_arr, np.ndarray) and disk_arr.size:
+                    if max_age_ms != 0 and isinstance(disk_arr, np.ndarray) and disk_arr.size:
                         out_disk = self._slice_ts_range(disk_arr, start_ts, end_ts)
                         if out_disk.size:
                             tsd = _ts_index(out_disk)

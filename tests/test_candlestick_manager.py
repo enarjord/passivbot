@@ -5,6 +5,7 @@ import time
 import math
 import json
 import zlib
+from collections import OrderedDict
 import pytest
 import numpy as np
 from pathlib import Path
@@ -1050,6 +1051,67 @@ async def test_concurrent_requests_share_fetch(tmp_path, monkeypatch):
     out1, out2 = await asyncio.gather(one_call(), one_call())
     assert out1.size > 0 and out2.size > 0
     assert calls["count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_tf_force_refresh_bypasses_partial_range_cache(monkeypatch, tmp_path):
+    fixed_now_ms = 1725590400000  # 2024-09-06 00:00:00 UTC
+    monkeypatch.setattr("time.time", lambda: fixed_now_ms / 1000.0)
+
+    class _Ex:
+        id = "okx"
+
+    cm = CandlestickManager(
+        exchange=_Ex(), exchange_name="okx", cache_dir=str(tmp_path / "caches")
+    )
+    timeframe = "1h"
+    period_ms = 60 * ONE_MIN_MS
+    end_ts = (fixed_now_ms // period_ms) * period_ms - period_ms
+    start_ts = end_ts - 4 * period_ms
+    symbol = "FORCE/USDT:USDT"
+
+    partial = np.zeros(1, dtype=CANDLE_DTYPE)
+    partial["ts"] = np.asarray([start_ts], dtype=np.int64)
+    partial["o"] = 1.0
+    partial["h"] = 2.0
+    partial["l"] = 0.5
+    partial["c"] = 1.5
+    partial["bv"] = 1.0
+    cache_key = (timeframe, start_ts, end_ts)
+    cm._tf_range_cache[symbol] = OrderedDict(
+        [(cache_key, (partial, fixed_now_ms))]
+    )
+
+    calls = {"fetch": 0}
+
+    async def fake_fetch(
+        symbol_, since_ms, end_exclusive_ms, *, timeframe=None, on_batch=None
+    ):
+        calls["fetch"] += 1
+        ts = list(range(int(since_ms), int(end_exclusive_ms), period_ms))
+        arr = np.zeros(len(ts), dtype=CANDLE_DTYPE)
+        arr["ts"] = np.asarray(ts, dtype=np.int64)
+        arr["o"] = 1.0
+        arr["h"] = 2.0
+        arr["l"] = 0.5
+        arr["c"] = 1.5
+        arr["bv"] = 1.0
+        return arr
+
+    monkeypatch.setattr(cm, "_fetch_ohlcv_paginated", fake_fetch)
+
+    out = await cm.get_candles(
+        symbol,
+        start_ts=start_ts,
+        end_ts=end_ts,
+        max_age_ms=0,
+        timeframe=timeframe,
+        max_lookback_candles=5,
+    )
+
+    assert calls["fetch"] == 1
+    assert out.size == 5
+    assert int(out["ts"][-1]) == end_ts
 
 
 # EOF

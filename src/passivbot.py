@@ -7690,6 +7690,8 @@ class Passivbot:
                 last_cached_ts = report.get("last_cached_ts")
                 loaded_rows = int(report.get("loaded_rows", 0) or 0)
                 no_basis = loaded_rows <= 0 or last_cached_ts is None
+                missing_candles = int(report.get("missing_candles", 0) or 0)
+                tail_gap_candles = int(report.get("tail_gap_candles", 0) or 0)
                 return {
                     "coverage_ok": bool(report.get("coverage_ok")),
                     "age_ms": (
@@ -7697,8 +7699,11 @@ class Passivbot:
                         if no_basis
                         else int(report.get("last_cached_age_ms") or 0)
                     ),
-                    "missing_candles": int(report.get("missing_candles", 0) or 0),
-                    "tail_gap_candles": int(report.get("tail_gap_candles", 0) or 0),
+                    "missing_candles": missing_candles,
+                    "tail_gap_candles": tail_gap_candles,
+                    "tail_only": bool(report.get("open_tail_gap"))
+                    and missing_candles > 0
+                    and missing_candles == tail_gap_candles,
                     "no_basis": no_basis,
                 }
         except Exception:
@@ -7710,6 +7715,7 @@ class Passivbot:
                     "age_ms": int(now),
                     "missing_candles": max(1, int(required_candles)),
                     "tail_gap_candles": max(1, int(required_candles)),
+                    "tail_only": False,
                     "no_basis": True,
                 }
         age_ms = Passivbot._candle_staleness_ms(self, symbol, now_ms=now)
@@ -7718,6 +7724,7 @@ class Passivbot:
             "age_ms": int(age_ms),
             "missing_candles": 0 if age_ms <= 0 else 1,
             "tail_gap_candles": 0 if age_ms <= 0 else 1,
+            "tail_only": age_ms > 0,
             "no_basis": age_ms >= now,
         }
 
@@ -18036,8 +18043,13 @@ class Passivbot:
             default_win = int(getattr(self.cm, "default_window_candles", 120) or 120)
         except Exception:
             default_win = 120
+        minimum_1m_window = (
+            min(default_win, max_warmup_minutes)
+            if max_warmup_minutes > 0
+            else default_win
+        )
         for sym in per_symbol_win:
-            per_symbol_win[sym] = max(default_win, int(per_symbol_win[sym]))
+            per_symbol_win[sym] = max(minimum_1m_window, int(per_symbol_win[sym]))
 
         required_surface_count = sum(
             1 + (1 if int(per_symbol_h1_hours.get(sym, 0) or 0) > 0 else 0)
@@ -18089,47 +18101,89 @@ class Passivbot:
                 required_surface_count, max_calls
             )
         now = utc_ms()
+        max_refresh_s_raw = get_optional_live_value(
+            self.config, "max_forager_candle_refresh_seconds", 45
+        )
+        try:
+            max_refresh_s = float(max_refresh_s_raw)
+        except Exception:
+            max_refresh_s = 45.0
+        max_refresh_ms = int(max(0.0, max_refresh_s) * 1000.0)
+        refresh_started_ms = utc_ms()
+
         surface_attempts = getattr(self, "_forager_surface_attempt_ms", None)
         if not isinstance(surface_attempts, dict):
             surface_attempts = {}
-        eligible_surface_keys: set[Tuple[str, str]] = set()
-        stale: List[
-            Tuple[Tuple[int, int, int, int, int, str], str, str, int, Dict[str, Any]]
-        ] = []
+        surface_checks = getattr(self, "_forager_surface_check_ms", None)
+        if not isinstance(surface_checks, dict):
+            surface_checks = {}
+
+        surface_specs: List[Tuple[str, str, int]] = []
         for sym in candidates:
-            surfaces = [("1m", max(1, int(per_symbol_win.get(sym, default_win))))]
+            surface_specs.append(
+                ("1m", sym, max(1, int(per_symbol_win.get(sym, default_win))))
+            )
             h1_hours = int(per_symbol_h1_hours.get(sym, 0) or 0)
             if h1_hours > 0:
-                surfaces.append(("1h", h1_hours))
-            for timeframe, required_candles in surfaces:
-                surface_key = (sym, timeframe)
-                eligible_surface_keys.add(surface_key)
-                surface_health = Passivbot._candidate_candle_surface_health(
-                    self,
-                    sym,
-                    timeframe,
-                    required_candles,
-                    now_ms=now,
-                )
-                age_ms = int(surface_health.get("age_ms", 0) or 0)
-                if bool(surface_health.get("coverage_ok")) and age_ms <= target_age_ms:
-                    continue
-                last_attempt_ms = int(surface_attempts.get(surface_key, 0) or 0)
-                priority = (
-                    last_attempt_ms,
-                    0 if bool(surface_health.get("no_basis")) else 1,
-                    -int(surface_health.get("tail_gap_candles", 0) or 0),
-                    -int(surface_health.get("missing_candles", 0) or 0),
-                    -age_ms,
-                    f"{sym}:{timeframe}",
-                )
-                stale.append((priority, sym, timeframe, required_candles, surface_health))
+                surface_specs.append(("1h", sym, h1_hours))
+        eligible_surface_keys = {(sym, timeframe) for timeframe, sym, _ in surface_specs}
         surface_attempts = {
             key: int(value)
             for key, value in surface_attempts.items()
             if key in eligible_surface_keys
         }
+        surface_checks = {
+            key: int(value)
+            for key, value in surface_checks.items()
+            if key in eligible_surface_keys
+        }
+        surface_specs.sort(
+            key=lambda item: (
+                int(surface_checks.get((item[1], item[0]), 0) or 0),
+                0 if item[0] == "1m" else 1,
+                f"{item[1]}:{item[0]}",
+            )
+        )
+        health_scan_budget = min(len(surface_specs), max(8, int(budget) * 4))
+        stale: List[
+            Tuple[Tuple[int, int, int, int, str], str, str, int, Dict[str, Any]]
+        ] = []
+        for scan_idx, (timeframe, sym, required_candles) in enumerate(
+            surface_specs[:health_scan_budget]
+        ):
+            if (
+                max_refresh_ms > 0
+                and scan_idx > 0
+                and utc_ms() - refresh_started_ms >= max_refresh_ms
+            ):
+                break
+            surface_key = (sym, timeframe)
+            surface_health = Passivbot._candidate_candle_surface_health(
+                self,
+                sym,
+                timeframe,
+                required_candles,
+                now_ms=now,
+            )
+            surface_checks[surface_key] = int(utc_ms())
+            age_ms = int(surface_health.get("age_ms", 0) or 0)
+            no_basis = bool(surface_health.get("no_basis"))
+            tail_only = bool(surface_health.get("tail_only")) and not no_basis
+            if age_ms <= target_age_ms and (
+                bool(surface_health.get("coverage_ok")) or tail_only
+            ):
+                continue
+            last_attempt_ms = int(surface_attempts.get(surface_key, 0) or 0)
+            priority = (
+                last_attempt_ms,
+                0 if no_basis else 1,
+                0 if timeframe == "1m" else 1,
+                -age_ms,
+                f"{sym}:{timeframe}",
+            )
+            stale.append((priority, sym, timeframe, required_candles, surface_health))
         self._forager_surface_attempt_ms = surface_attempts
+        self._forager_surface_check_ms = surface_checks
         if not stale:
             return
 
@@ -18141,15 +18195,6 @@ class Passivbot:
             (sym, timeframe): int(surface_health.get("age_ms", 0) or 0)
             for _priority, sym, timeframe, _required, surface_health in stale
         }
-
-        max_refresh_s_raw = get_optional_live_value(
-            self.config, "max_forager_candle_refresh_seconds", 45
-        )
-        try:
-            max_refresh_s = float(max_refresh_s_raw)
-        except Exception:
-            max_refresh_s = 45.0
-        max_refresh_ms = int(max(0.0, max_refresh_s) * 1000.0)
 
         # Throttled visibility into forager refresh behavior (debug only).
         try:
@@ -18181,7 +18226,6 @@ class Passivbot:
         }
 
         fetch_delay_s = self._get_fetch_delay_seconds()
-        refresh_started_ms = utc_ms()
         last_progress_ms = refresh_started_ms
         refreshed_count = 0
         paused_by_cap = False
