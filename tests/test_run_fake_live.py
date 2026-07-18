@@ -192,6 +192,7 @@ async def test_fake_live_persists_events_when_console_pipeline_is_disabled(tmp_p
             event.get("event_type") == EventTypes.BOT_STOPPED
             for event in artifacts["live_events"]
         )
+        assert "[monitor] failed building monitor snapshot" not in artifacts["log_text"]
         capture = artifacts["run_metadata"]["live_event_capture"]
         assert capture["total"] == capture["retained"] == len(artifacts["live_events"])
         assert capture["truncated"] == 0
@@ -608,11 +609,15 @@ def test_bot_params_to_rust_dict_ignores_removed_entry_grid_inflation_flag():
     assert out["unstuck_loss_allowance_pct"] == pytest.approx(0.025)
 
 
-def test_install_runtime_overrides_sets_exchange_time_override():
+def test_install_runtime_overrides_keep_scenario_time_after_client_shutdown():
     client = FakeCCXTClient(_scenario(), quote="USDT")
-    bot = type("Bot", (), {"cca": client})()
+    cm = type("CandlestickManager", (), {})()
+    bot = type("Bot", (), {"cca": client, "cm": cm})()
     _install_runtime_overrides(bot, {})
+    bot.cca = None
+
     assert bot.get_exchange_time() == client.now_ms
+    assert bot.cm._now_ms_callback() == client.now_ms
 
 
 def test_compare_run_artifacts_reports_no_diff_for_matching_payloads():

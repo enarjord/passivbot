@@ -22,26 +22,33 @@ Estimated completion:
 
 ## Active Review Slice
 
-- Branch: `codex/fake-live-post-panic-observability`, based on canonical
-  `eb82e256c2dfeac29af158f389f93a7ddba8eae2` after PR #1317.
-- PR: #1318.
-- Scope: backlog item 15. Persist the already-emitted redacted structured
-  events as a fake-live run artifact, then make the existing coin-mode RED
-  scenario prove the post-panic data-packet/snapshot handoff stays available.
-- Behavior boundary: offline fake-exchange harness and tests only. No live
-  producer, HSL math, readiness gate, exchange adapter, order, risk, config,
-  console, monitor-persistence, or runtime behavior changes.
-- Validation: focused artifact capture, redaction, pipeline-flush, and
-  coin-mode RED/panic-fill/post-panic availability regressions plus the fake-live
-  suite. The test must fail if the recovered handoff emits
-  `planning.unavailable` or lacks a later available `snapshot.built` event.
+- Branch: `codex/fake-live-shutdown-monitor`, based on canonical
+  `8ca7f034bce7ffaaa99800590c88651de4d267c5` after PR #1318.
+- PR: not open yet.
+- Scope: repair the offline fake-live scenario clock retained by PR #1318's
+  graceful-shutdown event capture. The final monitor snapshot must remain able
+  to read scenario time after shutdown releases `bot.cca`.
+- Behavior boundary: offline fake-exchange harness, tests, changelog, and
+  compact project state only. No live time source, shutdown ordering, monitor
+  producer, event payload, HSL math, readiness gate, exchange adapter, order,
+  risk, config, console, monitor-persistence, or runtime behavior changes.
+- Validation: unit coverage for both retained fake-time callbacks after
+  `bot.cca` is cleared, an artifact-level graceful-shutdown regression proving
+  the monitor snapshot error is absent while terminal lifecycle events remain,
+  then the fake-live and relevant monitor/event suites.
 - Review gate: temporary maintainer-authorized exact-head Hermes plus green
-  Python and Rust CI while Grok is halted.
+  Python and Rust CI while Grok is halted; additional Codex findings must still
+  be adjudicated.
 - Expected VPS action: none. The slice is offline tooling/tests/docs and must
   not contact an exchange, deploy code, or control live processes.
 
 ## Deployed Baseline
 
+- PR #1318 merged as canonical `8ca7f034bce7ffaaa99800590c88651de4d267c5`.
+  It adds bounded redacted structured-event artifacts and post-panic planning
+  availability proof to the offline fake-live harness. No VPS action was
+  warranted because it changes no live producer, runtime, exchange, order,
+  risk, or configuration behavior.
 - PR #1317 merged as canonical `eb82e256c2dfeac29af158f389f93a7ddba8eae2`.
   It adds bounded Hyperliquid unified-account composition diagnostics without
   changing scalar balance, exchange calls, planning, orders, risk, or console

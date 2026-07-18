@@ -4,6 +4,12 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Fake-live scenario-time callbacks now retain their original offline fake
+  client through graceful shutdown. The final monitor snapshot can therefore
+  complete after the bot releases its public-session reference, without a
+  spurious `NoneType.now_ms` error or any change to live timekeeping, exchange
+  sessions, trading behavior, or event payloads.
+
 - Offline fake-live runs now retain the already-emitted redacted structured
   event envelopes as a run artifact. The coin-mode HSL RED regression uses that
   evidence to prove a panic fill is followed by an available planning snapshot
