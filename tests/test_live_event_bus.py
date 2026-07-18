@@ -1229,7 +1229,9 @@ def test_sink_failure_degrades_observability_without_raising(monkeypatch):
     class FailingSink:
         def write(self, event):
             clock["ns"] += 3_000_000
-            raise OSError("disk full")
+            raise OSError(
+                "disk full https://example.invalid/private?api_key=do-not-retain"
+            )
 
     class ControlledMonitorSink(ListEventSink):
         def write(self, event):
@@ -1256,8 +1258,18 @@ def test_sink_failure_degrades_observability_without_raising(monkeypatch):
     assert timing["event_monitor_sink_service_ms_total"] == 5
     assert timing["event_monitor_sink_service_ms_max"] == 5
     assert pipeline.degraded_events[-1].reason_code == "structured_sink_failed"
+    assert pipeline.degraded_events[-1].data == {
+        "sink": "structured",
+        "error_type": "OSError",
+    }
     assert monitor.events[-1].event_type == EventTypes.SINK_DEGRADED
     assert monitor.events[-1].reason_code == "structured_sink_failed"
+    assert monitor.events[-1].data == {
+        "sink": "structured",
+        "error_type": "OSError",
+    }
+    assert "do-not-retain" not in repr(pipeline.degraded_events)
+    assert "do-not-retain" not in repr(monitor.events)
     assert pipeline.close(timeout=2.0) is True
 
 

@@ -10,6 +10,11 @@ Event emission and sink failures are observability-only unless a feature contrac
 requires durable publication. Diagnostic producers must not mutate order lists, execution results,
 eligibility, replay order, or runtime decisions.
 
+`sink.degraded` identifies the failed sink, stable failure reason, and exception type. It must not
+retain exception text, request URLs, credentials, response bodies, paths, or other arbitrary values
+from the sink exception. Sink counters and pipeline timings remain available through health
+snapshots independently of the exception payload.
+
 The generated value reference is `../generated/live_event_registry.md`.
 
 ## Startup Timing Budgets
