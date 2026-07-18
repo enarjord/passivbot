@@ -146,6 +146,7 @@ def startup_timing_phase(data: object) -> str | None:
 
 
 class EventTypes:
+    RUNTIME_STARTED = "runtime.started"
     BOT_STARTED = "bot.started"
     BOT_READY = "bot.ready"
     BOT_STARTUP_TIMING = "bot.startup_timing"
@@ -477,6 +478,7 @@ def resolve_live_event_console_enabled(
 
 
 PHASE1_EVENT_TYPES = {
+    EventTypes.RUNTIME_STARTED,
     EventTypes.BOT_STARTED,
     EventTypes.BOT_READY,
     EventTypes.BOT_STARTUP_TIMING,
@@ -780,6 +782,7 @@ class EventRoute:
 
 DEFAULT_ROUTE = EventRoute(structured=True, monitor=True, console=False, text=False)
 DEFAULT_ROUTES: dict[str, EventRoute] = {
+    EventTypes.RUNTIME_STARTED: EventRoute(console=False, text=False),
     EventTypes.BOT_STARTED: EventRoute(console=True, text=True),
     EventTypes.BOT_READY: EventRoute(),
     EventTypes.BOT_STARTUP_TIMING: EventRoute(console=True, text=True),

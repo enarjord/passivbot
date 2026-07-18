@@ -43,6 +43,25 @@ snapshots independently of the exception payload.
 
 The generated value reference is `../generated/live_event_registry.md`.
 
+## Runtime Identity
+
+Each live `Passivbot` instance creates one immutable runtime identity before its
+monitor and fill manager are initialized. Startup writes it once to
+`caches/runtime/<exchange>/<user>/<run_id>.json`, logs one bounded hash-only
+summary, emits `runtime.started`, and includes the same identity in `bot.started`,
+monitor manifests, and monitor snapshots.
+
+The identity binds a run id and start timestamp to the Passivbot version, Python
+Git commit and tracked-dirty state, canonical config SHA-256, embedded Rust
+source fingerprint, Rust crate version, and SHA-256 of the extension actually
+loaded by Python. It must not include raw config, commands, absolute paths,
+credentials, or exchange payloads. Manifest and event publication failures are
+observability-only and do not change trading behavior.
+
+The Rust artifact hash and embedded source fingerprint are distinct evidence:
+the artifact cannot embed its own final hash, while the build-time source
+fingerprint identifies the Rust input used to produce it.
+
 ## Startup Timing Budgets
 
 `live.startup_phase_budgets` may define optional diagnostic budgets for the canonical

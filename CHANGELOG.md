@@ -15,6 +15,13 @@ All notable user-facing changes will be documented in this file.
   calculation, API calls, refresh cadence, planning, orders, and risk are
   unchanged.
 
+- Live startups now persist an immutable, non-secret runtime manifest and expose
+  the same Python commit, config hash, embedded Rust source fingerprint, loaded
+  Rust artifact hash, version, and run id through bounded startup events and
+  monitor state. Newly discovered fill events retain which runtime first
+  ingested them without falsely claiming that runtime created the order;
+  refreshes preserve existing attribution and leave legacy fills unattributed.
+
 - Full live smoke reports now retain a separately bounded sample of hard
   structured problem events, with authoritative total, retained, and truncated
   counts. Later warning-level attention can no longer hide every classification
