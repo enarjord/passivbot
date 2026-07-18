@@ -18,6 +18,7 @@ from live.event_bus import (
     startup_phase_readiness_contract,
     utc_ms,
 )
+from live.balance_composition import public_balance_composition
 
 
 def current_live_event_cycle_id(bot: Any) -> str | None:
@@ -4754,10 +4755,24 @@ def emit_balance_changed_event(
     balance_snapped: float,
     equity: float,
     source: str,
+    balance_composition: Any = None,
 ) -> None:
     try:
         raw_delta = float(balance_raw) - float(previous_balance_raw)
         snapped_delta = float(balance_snapped) - float(previous_balance_snapped)
+        data = {
+            "previous_balance_raw": float(previous_balance_raw),
+            "balance_raw": float(balance_raw),
+            "balance_raw_delta": raw_delta,
+            "previous_balance_snapped": float(previous_balance_snapped),
+            "balance_snapped": float(balance_snapped),
+            "balance_snapped_delta": snapped_delta,
+            "equity": float(equity),
+            "source": str(source),
+        }
+        composition = public_balance_composition(balance_composition)
+        if composition is not None:
+            data["balance_composition"] = composition
         bot._emit_live_event(
             EventTypes.BALANCE_CHANGED,
             level="info",
@@ -4766,16 +4781,7 @@ def emit_balance_changed_event(
             cycle_id=bot._current_live_event_cycle_id(),
             status="succeeded",
             reason_code=ReasonCodes.BALANCE_CHANGED,
-            data={
-                "previous_balance_raw": float(previous_balance_raw),
-                "balance_raw": float(balance_raw),
-                "balance_raw_delta": raw_delta,
-                "previous_balance_snapped": float(previous_balance_snapped),
-                "balance_snapped": float(balance_snapped),
-                "balance_snapped_delta": snapped_delta,
-                "equity": float(equity),
-                "source": str(source),
-            },
+            data=data,
         )
     except Exception as exc:
         logging.debug("[event] failed to emit balance changed event: %s", exc)

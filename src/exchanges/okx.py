@@ -1,4 +1,5 @@
 from exchanges.ccxt_bot import CCXTBot, format_exchange_config_response
+from live.balance_composition import normalize_okx_balance_composition
 from passivbot import logging
 import passivbot_rust as pbr
 
@@ -128,6 +129,10 @@ class OKXBot(CCXTBot):
                 raise KeyError(f"okx: fetch_balance response missing total[{self.quote!r}]")
             return float(total[self.quote])
         return balance
+
+    def _normalize_balance_diagnostics(self, fetched: object) -> dict:
+        """Expose only bounded documented OKX account-detail diagnostics."""
+        return normalize_okx_balance_composition(fetched)
 
     async def fetch_pnls(self, start_time: int = None, end_time: int = None, limit=None):
         if limit is None:

@@ -15,6 +15,8 @@ from types import MappingProxyType
 import uuid
 from typing import Any, Iterable, Mapping, Protocol
 
+from live.balance_composition import format_balance_composition_sample
+
 
 SCHEMA_VERSION = 1
 REDACTED = "[redacted]"
@@ -1477,11 +1479,13 @@ def _format_console_balance_changed(event: LiveEvent) -> str:
     )
     equity = _format_console_number(_data_number(data, "equity"))
     source = _format_console_label(_data_str(data, "source"))
-    return (
+    rendered = (
         f"[balance] {'raw':<5}{raw_transition} | "
         f"{'snap':<5}{snapped_transition} | "
         f"equity={equity} source={source}"
     )
+    sample = format_balance_composition_sample(data.get("balance_composition"))
+    return f"{rendered} assets={sample}" if sample else rendered
 
 
 def format_memory_snapshot_console(data: Mapping[str, Any]) -> str:

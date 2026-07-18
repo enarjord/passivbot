@@ -4,6 +4,17 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- `balance.changed` now carries a bounded optional asset-composition diagnostic
+  from the same authoritative balance response. The first connector parser is
+  OKX: it reports only documented account-detail amount, USD value, unrealized
+  PnL, explicit liability, collateral state, and field provenance. Equal-total
+  collateral substitutions are durable through a separate composition
+  signature, while console admission remains snapped-balance based and shows at
+  most two sanitized assets. Generic, Binance, and Hyperliquid paths report a
+  stable unavailable diagnostic until their own parsers are added; balance
+  calculation, API calls, refresh cadence, planning, orders, and risk are
+  unchanged.
+
 - Full live smoke reports now retain a separately bounded sample of hard
   structured problem events, with authoritative total, retained, and truncated
   counts. Later warning-level attention can no longer hide every classification

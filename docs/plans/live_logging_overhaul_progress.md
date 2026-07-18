@@ -15,7 +15,21 @@ merge, live smoke evidence changes, or new gaps are discovered.
 - Do not use this file for design churn; unresolved design details belong in the
   plan or a focused handoff doc.
 
-## Latest Canonical Deployment (PR #1310)
+## Latest Canonical Deployment (PR #1311)
+
+- PR #1311 merged as canonical `32156cbc251d666902f20b8b000a9a1dfe05a0a2`.
+  It carries bounded hard-only problem-event evidence into concise smoke,
+  brief, and incident-bundle projections without changing runtime event
+  production or trading behavior.
+- VPS5 prepared the exact clean merge without a Rust rebuild or bot restart.
+  The immediate bounded smoke retained one natural KuCoin positions timeout;
+  the settled five-minute smoke was hard-green with an empty hard sample. A
+  bounded incident bundle for that natural timeout carried the same hard-only
+  evidence in the command result and archived manifest. The five configured
+  bot panes and `misc:0.0` remained unchanged.
+- The exact merge is the base for the following balance-composition slice.
+
+## Previous Canonical Deployment (PR #1310)
 
 - PR #1310 merged as canonical `5d06887b78c2790efd15e1bd67bae6b3f5d96636`.
   It added full-report `hard_problem_events` with authoritative `count`, a

@@ -48,6 +48,10 @@ from planning_snapshot import (
     PlanningSurfaceStamp,
 )
 from exchanges.binance import BinanceBot
+from live.balance_composition import (
+    balance_composition_signature,
+    normalize_okx_balance_composition,
+)
 
 
 class _SafeRiskCache:
@@ -11211,3 +11215,64 @@ async def test_run_execution_loop_propagates_fatal_bot_exception():
 
     with pytest.raises(FatalBotException, match="fatal"):
         await bot.run_execution_loop()
+
+
+def _balance_composition_fixture(amount: str) -> dict:
+    return normalize_okx_balance_composition(
+        {"info": {"data": [{"details": [{"ccy": "USDT", "cashBal": amount}]}]}}
+    )
+
+
+@pytest.mark.asyncio
+async def test_composition_only_balance_change_is_durable_but_does_not_schedule_execution():
+    bot = Passivbot.__new__(Passivbot)
+    bot.balance_raw = 100.0
+    bot.balance = 100.0
+    bot._previous_balance_raw = 100.0
+    bot._previous_balance_snapped = 100.0
+    bot._balance_composition = _balance_composition_fixture("2")
+    bot._previous_balance_composition_signature = balance_composition_signature(
+        _balance_composition_fixture("1")
+    )
+    bot.execution_scheduled = False
+    bot.live_event_console_enabled = False
+    bot._live_event_pipeline = None
+    bot._monitor_record_event = MagicMock()
+    bot._emit_balance_changed_event = MagicMock()
+    bot._log_noncritical_market_snapshot_error = lambda *_args: False
+
+    async def calc_upnl_sum():
+        return 0.0
+
+    bot.calc_upnl_sum = calc_upnl_sum
+
+    await bot.handle_balance_update(source="REST")
+
+    bot._emit_balance_changed_event.assert_called_once()
+    assert bot._emit_balance_changed_event.call_args.kwargs["balance_composition"][
+        "asset_balances"
+    ][0]["amount"] == pytest.approx(2.0)
+    assert bot.execution_scheduled is False
+
+    await bot.handle_balance_update(source="REST")
+
+    bot._emit_balance_changed_event.assert_called_once()
+
+
+def test_legacy_balance_apply_preserves_existing_composition_when_none_is_supplied():
+    bot = Passivbot.__new__(Passivbot)
+    composition = _balance_composition_fixture("1")
+    bot.quote = "USDT"
+    bot.balance = 100.0
+    bot.balance_raw = 100.0
+    bot._exchange_reported_balance_raw = 100.0
+    bot.balance_override = None
+    bot._balance_override_logged = False
+    bot.previous_hysteresis_balance = 100.0
+    bot.balance_hysteresis_snap_pct = 0.02
+    bot._balance_composition = composition
+
+    assert bot._apply_balance_snapshot(100.0) is True
+    assert bot.balance == pytest.approx(100.0)
+    assert bot.balance_raw == pytest.approx(100.0)
+    assert bot._balance_composition is composition

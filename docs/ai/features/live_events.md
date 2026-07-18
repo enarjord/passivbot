@@ -10,6 +10,29 @@ Event emission and sink failures are observability-only unless a feature contrac
 requires durable publication. Diagnostic producers must not mutate order lists, execution results,
 eligibility, replay order, or runtime decisions.
 
+## Balance Composition Diagnostics
+
+`balance.changed` may carry an optional `balance_composition` object from the
+same already-fetched authoritative balance response. It is diagnostic metadata
+only: it must not affect scalar balance calculation, refresh cadence, planning,
+orders, risk, readiness, or execution scheduling.
+
+The object contains a stable `status` (`available`, `unavailable`, or
+`malformed`), bounded source/reason classification, `count`, `retained`,
+`truncated`, and at most eight deterministic `asset_balances` rows. Rows retain
+only connector-proven asset, amount, USD value, unrealized PnL, explicit
+liability, collateral-enabled state, and bounded field provenance. Missing or
+non-finite values are absent; a connector must not infer debt, price, or a
+neutral zero. Raw account payloads, arbitrary response keys, addresses,
+credentials, and internal composition signatures are never emitted.
+
+Balance publication occurs on the existing aggregate raw/snapped transition or
+on a changed full normalized composition signature, including a change in an
+omitted row. Console admission remains based solely on snapped-balance
+materiality. Visible balance lines may append a sanitized sample of at most two
+retained assets; composition-only changes remain structured/text durable but
+stay off the console.
+
 `sink.degraded` identifies the failed sink, stable failure reason, and exception type. It must not
 retain exception text, request URLs, credentials, response bodies, paths, or other arbitrary values
 from the sink exception. Sink counters and pipeline timings remain available through health

@@ -22,44 +22,52 @@ Estimated completion:
 
 ## Active Review Slice
 
-- Branch: `codex/hard-problem-summary-evidence`, based on canonical
-  `5d06887b78c2790efd15e1bd67bae6b3f5d96636` after PR #1310.
-- PR: #1311.
-- Scope: carry bounded, value-safe `hard_problem_events` evidence into concise
-  summary, brief, and compact incident-bundle smoke metadata. Existing mixed
-  sample ordering, hard verdict/count semantics, recovery classification,
-  redaction, event production, and `max_problem_events` bounds remain
-  unchanged.
-- Triggering evidence: PR #1310 fixed the full report after the PR #1309
-  restart smoke exposed mixed-sample eviction, but concise and brief summaries
-  still project only hard counts and grouped types. Incident bundles consume
-  the brief projection, so those operator surfaces can remain red without the
-  separately retained hard classifications now available in the full report.
-- Behavior boundary: read-only report projection only. Event publication,
-  recovery, process control, exchange access, and trading behavior are
-  unchanged.
-- Validation: focused mixed-eviction, summary/brief truncation, zero-bound,
-  incident-bundle manifest, and CLI regressions; complete Python and Rust
-  suites; Rust check/format; AI-doc, registry, compile, and diff checks.
+- Branch: `codex/balance-composition-observability`, based on canonical
+  `32156cbc251d666902f20b8b000a9a1dfe05a0a2` after PR #1311.
+- PR: not yet opened.
+- Scope: first connector-specific implementation of backlog item 20. Carry a
+  bounded normalized balance-composition diagnostic through staged refresh and
+  attach it to `balance.changed`; parse only already-fetched OKX
+  `info.data[0].details` fields, while generic, Binance, and Hyperliquid paths
+  carry an explicit unavailable state until their parsers exist.
+- Behavior boundary: no new exchange/ticker/API calls and no change to scalar
+  balance calculation, refresh cadence, planning, execution scheduling,
+  orders, risk, or console materiality. Composition-only changes are durable
+  but remain off the console.
+- Validation: focused parser, raw-leakage, truncation/signature, staged-carry,
+  composition-only emission, duplicate suppression, legacy-call, and console
+  bounds regressions, plus targeted existing balance/event tests.
 - Review gate: temporary maintainer-authorized exact-head Hermes plus green
   Python and Rust CI while Grok is halted.
-- Expected VPS action: pull the reviewed merge and run bounded read-only smoke
-  verification. No Rust rebuild, bot restart, or process signal is required
-  for this offline reporting-tool change.
+- Expected VPS action: this behavior-changing diagnostic slice requires a
+  bounded prepare/restart/smoke decision only after exact-head review and CI;
+  it must not manufacture balance events or contact an exchange directly.
 
 ## Deployed Baseline
+
+- PR #1311 merged as canonical `32156cbc251d666902f20b8b000a9a1dfe05a0a2`.
+  It carries bounded hard-only problem evidence into smoke summary, brief, and
+  incident-bundle metadata without changing runtime event production or
+  trading behavior.
+- VPS5 prepared the exact clean merge without a Rust rebuild or bot restart.
+  The immediate bounded smoke retained one natural KuCoin positions timeout in
+  `hard_problem_events`; a settled five-minute smoke was hard-green with an
+  empty hard sample. A bounded incident bundle for the natural timeout carried
+  the same hard-only count, retention, truncation, and sanitized sample in its
+  command result and archived manifest. All five configured bot panes and
+  `misc:0.0` remained unchanged throughout.
+- The merge is the exact base for this slice.
+
+## Previous Deployed Baseline
 
 - PR #1310 merged as canonical `5d06887b78c2790efd15e1bd67bae6b3f5d96636`.
   It added full-report `hard_problem_events` with authoritative `count`,
   bounded chronological `sample`, and explicit `retained`/`truncated` counts;
-  the existing concise/brief and incident-bundle projections were unchanged.
-- VPS5 prepared the exact clean merge without a Rust rebuild or bot restart.
-  The bounded read-only smoke was hard-green and exposed
-  `hard_problem_events={count:0,retained:0,truncated:0,sample:[]}`. All five
+  the concise/brief and incident-bundle projections were unchanged. VPS5
+  prepared the exact clean merge without a Rust rebuild or bot restart, and a
+  bounded read-only smoke was hard-green with
+  `hard_problem_events={count:0,retained:0,truncated:0,sample:[]}`; all five
   pane parents and `misc:0.0` remained unchanged.
-
-## Previous Deployed Baseline
-
 - Canonical `master` and VPS5 are
   `f1ae7970393e8299d1b0a98c8ff68d42adddd2d0` after PR #1299. The clean
   checkout fast-forwarded from PR #1309 without a Rust rebuild after five

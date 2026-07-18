@@ -1081,7 +1081,13 @@ Related detailed plans:
     the live default branch before the cutover can be considered complete.
 
 20. [ ] Per-asset collateral, debt, and valuation balance events.
-    Status: open. A 2026-07-14 evaluation confirmed that the existing
+    Status: partial, OKX-first. The first connector-specific slice normalizes
+    only OKX's already-fetched `info.data[0].details` into bounded deterministic
+    asset rows and carries an explicit unavailable/malformed diagnostic state
+    for generic, Binance, and Hyperliquid staged paths. It does not add exchange
+    calls or change scalar balance, planning, orders, risk, or console
+    materiality. Other connector parsers and any broader asset contract remain
+    open. A 2026-07-14 evaluation confirmed that the existing
     `balance.changed` event and console projection expose only aggregate raw
     balance, hysteresis-snapped balance, equity, deltas, and source. The
     authoritative refresh already receives the exact raw balance response
@@ -1139,6 +1145,15 @@ Related detailed plans:
     balance; no duplicate event for an unchanged composition; bounded console
     formatting and sanitization; and explicit diagnostic-unavailable behavior
     for unsupported or malformed breakdowns.
+
+    Work log:
+    - 2026-07-18: OKX-first slice added bounded rows for `ccy`, `cashBal`,
+      `eqUsd`, `upl`, `collateralEnabled`, and explicit `liab`, with per-field
+      provenance, deterministic truncation, an omitted-row-sensitive internal
+      signature, and a two-row sanitized console sample. Generic, Binance, and
+      Hyperliquid staged refreshes carry normalized unavailable diagnostics
+      rather than raw balance payloads. No ticker/API call, scalar balance
+      calculation, refresh cadence, planning, order, or risk behavior changed.
 
 21. [ ] Historical secret-bearing text-log inventory and remediation.
     Status: partial. PR #1265 merged and deployed the bounded, value-free,
