@@ -2343,3 +2343,66 @@ def test_live_incident_bundle_redacts_git_remote_url_userinfo():
         _redact_url_userinfo("git@github.com:enarjord/passivbot.git")
         == "git@github.com:enarjord/passivbot.git"
     )
+
+
+@pytest.mark.parametrize(
+    ("max_problem_events", "expected_retained", "expected_truncated"),
+    [(1, 1, 1), (0, 0, 2)],
+)
+def test_live_incident_bundle_retains_bounded_hard_problem_evidence(
+    tmp_path,
+    max_problem_events,
+    expected_retained,
+    expected_truncated,
+):
+    events_dir = tmp_path / "monitor" / "bybit" / "bybit_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="bot.stopped",
+                seq=1,
+                ts=1000,
+                status="failed",
+                level="critical",
+                reason_code="terminal_startup_failure",
+            ),
+            _monitor_row(
+                event_type="execution.create_failed",
+                seq=2,
+                ts=2000,
+                status="failed",
+                level="error",
+                reason_code="exchange_exception",
+            ),
+            _monitor_row(
+                event_type="ema.unavailable",
+                seq=3,
+                ts=3000,
+                status="degraded",
+                level="warning",
+                reason_code="required_ema_unavailable",
+            ),
+        ],
+    )
+    output = tmp_path / f"incident-{max_problem_events}.tar.gz"
+
+    report = build_live_incident_bundle(
+        tmp_path / "monitor",
+        output_path=output,
+        logs_root="",
+        include_processes=False,
+        include_event_segments=False,
+        max_problem_events=max_problem_events,
+    )
+
+    hard_problem_events = report["smoke_report"]["hard_problem_events"]
+    assert hard_problem_events["count"] == 2
+    assert hard_problem_events["retained"] == expected_retained
+    assert hard_problem_events["truncated"] == expected_truncated
+    assert [event["seq"] for event in hard_problem_events["sample"]] == (
+        [2] if max_problem_events else []
+    )
+    with tarfile.open(output, "r:gz") as tar:
+        manifest = _read_tar_json(tar, "manifest.json")
+    assert manifest["smoke_report"]["hard_problem_events"] == hard_problem_events

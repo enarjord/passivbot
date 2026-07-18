@@ -15,7 +15,19 @@ merge, live smoke evidence changes, or new gaps are discovered.
 - Do not use this file for design churn; unresolved design details belong in the
   plan or a focused handoff doc.
 
-## Latest Canonical Deployment (PR #1309; Current Through PR #1299)
+## Latest Canonical Deployment (PR #1310)
+
+- PR #1310 merged as canonical `5d06887b78c2790efd15e1bd67bae6b3f5d96636`.
+  It added full-report `hard_problem_events` with authoritative `count`, a
+  bounded chronological `sample`, and explicit `retained`/`truncated` counts
+  while preserving the existing mixed sample, verdicts, recovery
+  classification, and runtime behavior.
+- VPS5 prepared that exact tracked-clean merge without a Rust rebuild or bot
+  restart. A bounded read-only smoke was hard-green and exposed
+  `hard_problem_events={count:0,retained:0,truncated:0,sample:[]}`; all five
+  pane parents and protected `misc:0.0` remained unchanged.
+
+## Previous Canonical Deployment (PR #1309; Current Through PR #1299)
 
 - PR #1309 merged as canonical
   `50c37db6049206634b62f45798a8b240a035e3b5` after exact-current-head Hermes
