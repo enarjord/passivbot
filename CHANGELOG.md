@@ -4,6 +4,18 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- HSL replay now recognizes every ordered, fill-derived scope flatten as an
+  episode boundary, including multiple close-and-reentry transitions within
+  one replay minute and compact coin replay without historical unrealized PnL.
+  RED cooldowns anchor to an episode-bounded flattening fill regardless of
+  close order type; when an initial or cooldown-repanic flatten fill is
+  temporarily unavailable, live supervision performs a rate-limited,
+  episode-bounded fill refresh and otherwise defers instead of using stale
+  pre-episode evidence, intervention entries, partial closes, or an invented
+  current-time timestamp. Intra-minute replay also reconstructs the account
+  balance at each ordered episode boundary so later fills cannot change an
+  earlier episode's drawdown or no-restart outcome.
+
 - `sink.degraded` events no longer retain raw sink exception text. They preserve
   the stable sink-failure reason, sink name, exception type, health counters,
   and pipeline timings while keeping request URLs, credentials, response data,

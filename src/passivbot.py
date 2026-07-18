@@ -2017,11 +2017,14 @@ class Passivbot:
     _equity_hard_stop_latest_panic_fill_timestamp_optional_ms = (
         pb_hsl._equity_hard_stop_latest_panic_fill_timestamp_optional_ms
     )
-    _equity_hard_stop_latest_flatten_fill_timestamp_ms = (
-        pb_hsl._equity_hard_stop_latest_flatten_fill_timestamp_ms
-    )
     _equity_hard_stop_latest_flatten_fill_timestamp_optional_ms = (
         pb_hsl._equity_hard_stop_latest_flatten_fill_timestamp_optional_ms
+    )
+    _equity_hard_stop_defer_missing_flatten_fill = (
+        pb_hsl._equity_hard_stop_defer_missing_flatten_fill
+    )
+    _equity_hard_stop_flatten_fill_timestamp_with_refresh = (
+        pb_hsl._equity_hard_stop_flatten_fill_timestamp_with_refresh
     )
     _get_exchange_fee_rates = pb_hsl._get_exchange_fee_rates
     _orchestrator_exchange_params = pb_hsl._orchestrator_exchange_params
@@ -10717,7 +10720,12 @@ class Passivbot:
             traceback.print_exc()
             raise
 
-    async def update_pnls(self, *, source: str = "direct"):
+    async def update_pnls(
+        self,
+        *,
+        source: str = "direct",
+        since_ms: Optional[int] = None,
+    ):
         """Fetch latest fills using FillEventsManager and update the cache."""
         if self.stop_signal_received:
             return False
@@ -10725,9 +10733,17 @@ class Passivbot:
         if not hasattr(self, "_pnls_refresh_lock"):
             self._pnls_refresh_lock = asyncio.Lock()
         async with self._pnls_refresh_lock:
-            return await self._update_pnls_locked(source=source)
+            return await self._update_pnls_locked(
+                source=source,
+                since_ms=since_ms,
+            )
 
-    async def _update_pnls_locked(self, *, source: str = "direct"):
+    async def _update_pnls_locked(
+        self,
+        *,
+        source: str = "direct",
+        since_ms: Optional[int] = None,
+    ):
         """Fetch latest fills while holding the fill-cache single-flight lock."""
         if self.stop_signal_received:
             return False
@@ -10897,23 +10913,30 @@ class Passivbot:
                     if confirmation_refresh
                     else "incremental_recent"
                 )
-                overlap_minutes_key = (
-                    "fills_confirmation_overlap_minutes"
-                    if confirmation_refresh
-                    else "fills_recent_overlap_minutes"
-                )
-                overlap_minutes = float(
-                    get_optional_live_value(
-                        self.config,
-                        overlap_minutes_key,
-                        60.0 if confirmation_refresh else 10.0,
+                if since_ms is not None:
+                    refresh_mode = "incremental_bounded"
+                    await self._pnls_manager.refresh(
+                        start_ms=max(0, int(since_ms)),
+                        end_ms=None,
                     )
-                )
-                overlap_minutes = max(0.0, overlap_minutes)
-                await self._pnls_manager.refresh_latest(
-                    overlap=20,
-                    last_refresh_overlap_ms=int(overlap_minutes * 60 * 1000),
-                )
+                else:
+                    overlap_minutes_key = (
+                        "fills_confirmation_overlap_minutes"
+                        if confirmation_refresh
+                        else "fills_recent_overlap_minutes"
+                    )
+                    overlap_minutes = float(
+                        get_optional_live_value(
+                            self.config,
+                            overlap_minutes_key,
+                            60.0 if confirmation_refresh else 10.0,
+                        )
+                    )
+                    overlap_minutes = max(0.0, overlap_minutes)
+                    await self._pnls_manager.refresh_latest(
+                        overlap=20,
+                        last_refresh_overlap_ms=int(overlap_minutes * 60 * 1000),
+                    )
 
             # Find and log new events (those not in cache before refresh)
             all_events = self._pnls_manager.get_events()
