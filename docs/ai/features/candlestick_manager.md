@@ -41,9 +41,12 @@
    Tail-only gaps remain eligible within the configured candidate staleness window; missing basis
    and internal gaps do not. Refresh budgets count symbol/timeframe fetches, health scans are
    bounded and rotated across cycles, interleave each candidate's 1m and native 1h health surfaces,
-   and prioritize never-attempted 1m fetches before native 1h backfills. A native 1h range with a
-   fresh tail and only an unavailable leading prefix remains nontradable and is retried at most
-   once per 24 hours instead of consuming refresh budget every cycle.
+   keep discovered-but-unfetched stale surfaces pending, and prioritize never-attempted 1m fetches
+   before native 1h backfills. Staleness targets count only surfaces handled by this background
+   refresher, excluding urgent active symbols. A native 1h range with a fresh tail and only an
+   unavailable leading prefix remains nontradable and is retried at most once per 24 hours after a
+   successful fetch; failed fetches remain eligible for normal retry. A zero OHLCV network budget
+   disables candidate fetches even when entry slots are open.
    A forced native higher-timeframe refresh bypasses in-memory range and complete-disk
    short-circuits so a partial cached range cannot consume budget without retrying the exchange.
 

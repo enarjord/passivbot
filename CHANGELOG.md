@@ -25,10 +25,12 @@ All notable user-facing changes will be documented in this file.
   candidates in addition to their 1m inputs. Candidate refresh budgeting operates per
   symbol/timeframe surface, bounds and rotates cache-health scans, honors configured warmup and
   stale-tail limits, interleaves 1m and 1h health checks while prioritizing cold 1m fetches, backs
-  off unavailable native-1h leading-prefix retries, and makes forced native higher-timeframe reads
-  bypass partial range-cache hits. Zero-budget cycles also skip per-symbol warmup computation. This
-  prevents cache-only planning from
-  freezing the selection universe around incumbents whose 1h log-range cache alone remained fresh.
+  off unavailable native-1h leading-prefix retries only after successful fetches, keeps known-stale
+  unfetched surfaces pending, and derives staleness from the actually refreshable universe. Forced
+  native higher-timeframe reads bypass partial range-cache hits, while zero-budget cycles perform no
+  fetches or per-symbol warmup computation even with open slots. This prevents cache-only planning
+  from freezing the selection universe around incumbents whose 1h log-range cache alone remained
+  fresh.
 
 - Full live smoke reports now retain a separately bounded sample of hard
   structured problem events, with authoritative total, retained, and truncated

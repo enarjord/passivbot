@@ -18000,6 +18000,8 @@ class Passivbot:
             max_calls = int(max_calls) if max_calls is not None else 0
         except Exception:
             max_calls = 0
+        if max_calls <= 0:
+            return
 
         candidates_by_side: Dict[str, set] = {}
         slots_open_any = False
@@ -18028,31 +18030,31 @@ class Passivbot:
         if not all_candidates:
             return
 
+        # Skip only the urgent per-cycle candle universe. The staged orchestrator
+        # managed universe may include flat graceful-stop symbols; those still
+        # need budgeted candidate refreshes for future forager readiness.
+        urgent = set(Passivbot._urgent_active_candle_symbols(self))
+        refreshable_by_side = {
+            pside: set(symbols) - urgent
+            for pside, symbols in candidates_by_side.items()
+            if set(symbols) - urgent
+        }
+        candidates = sorted(set().union(*refreshable_by_side.values()))
+        if not candidates:
+            return
+
         cycle_cap = (
             max(1, int(math.ceil(float(max_calls) / 4.0))) if max_calls > 0 else 0
         )
-        budget: Optional[int] = None
-        if slots_open_any:
-            if max_calls > 0:
-                # Respect rate limit even with open slots; do not spend a full
-                # accumulated minute budget in one post-execution cleanup phase.
-                budget = self._forager_refresh_budget(
-                    max_calls,
-                    max_cycle_budget=cycle_cap,
-                    initial_tokens=cycle_cap,
-                )
-                if budget <= 0:
-                    return
-        else:
-            if max_calls <= 0:
-                return
-            budget = self._forager_refresh_budget(
-                max_calls,
-                max_cycle_budget=cycle_cap,
-                initial_tokens=cycle_cap,
-            )
-            if budget <= 0:
-                return
+        # Respect the configured rate limit with or without open slots; do not
+        # spend a full accumulated minute budget in one cleanup phase.
+        budget = self._forager_refresh_budget(
+            max_calls,
+            max_cycle_budget=cycle_cap,
+            initial_tokens=cycle_cap,
+        )
+        if budget <= 0:
+            return
 
         try:
             warmup_ratio = float(
@@ -18067,9 +18069,9 @@ class Passivbot:
         except Exception:
             max_warmup_minutes = 0
         per_symbol_win, per_symbol_h1_hours, _ = compute_live_warmup_windows(
-            candidates_by_side,
+            refreshable_by_side,
             lambda pside, key, sym: self.bp(pside, key, sym),
-            forager_enabled={pside: True for pside in candidates_by_side},
+            forager_enabled={pside: True for pside in refreshable_by_side},
             strategy_lookup=lambda pside, key, sym: Passivbot._live_strategy_warmup_value(
                 self, pside, key, sym
             ),
@@ -18090,32 +18092,6 @@ class Passivbot:
         )
         for sym in per_symbol_win:
             per_symbol_win[sym] = max(minimum_1m_window, int(per_symbol_win[sym]))
-
-        required_surface_count = sum(
-            1 + (1 if int(per_symbol_h1_hours.get(sym, 0) or 0) > 0 else 0)
-            for sym in all_candidates
-        )
-        if budget is None:
-            budget = required_surface_count
-
-        # Skip only the urgent per-cycle candle universe. The staged orchestrator
-        # managed universe may include flat graceful-stop symbols; those still
-        # need budgeted candidate refreshes for future forager readiness.
-        urgent = set(Passivbot._urgent_active_candle_symbols(self))
-        candidates = sorted(all_candidates - urgent)
-        if not candidates:
-            return
-
-        if slots_open_any:
-            rate_limit_age_ms = self._forager_target_staleness_ms(
-                required_surface_count, max_calls
-            )
-            # Respect rate limit even with open slots; floor at 60s for responsiveness.
-            target_age_ms = max(60_000, rate_limit_age_ms) if max_calls > 0 else 60_000
-        else:
-            target_age_ms = self._forager_target_staleness_ms(
-                required_surface_count, max_calls
-            )
         now = utc_ms()
         max_refresh_s_raw = get_optional_live_value(
             self.config, "max_forager_candle_refresh_seconds", 45
@@ -18130,6 +18106,9 @@ class Passivbot:
         surface_attempts = getattr(self, "_forager_surface_attempt_ms", None)
         if not isinstance(surface_attempts, dict):
             surface_attempts = {}
+        surface_successes = getattr(self, "_forager_surface_success_ms", None)
+        if not isinstance(surface_successes, dict):
+            surface_successes = {}
         surface_checks = getattr(self, "_forager_surface_check_ms", None)
         if not isinstance(surface_checks, dict):
             surface_checks = {}
@@ -18142,10 +18121,19 @@ class Passivbot:
             h1_hours = int(per_symbol_h1_hours.get(sym, 0) or 0)
             if h1_hours > 0:
                 surface_specs.append(("1h", sym, h1_hours))
+        required_surface_count = len(surface_specs)
+        target_age_ms = self._forager_target_staleness_ms(
+            required_surface_count, max_calls
+        )
         eligible_surface_keys = {(sym, timeframe) for timeframe, sym, _ in surface_specs}
         surface_attempts = {
             key: int(value)
             for key, value in surface_attempts.items()
+            if key in eligible_surface_keys
+        }
+        surface_successes = {
+            key: int(value)
+            for key, value in surface_successes.items()
             if key in eligible_surface_keys
         }
         surface_checks = {
@@ -18181,25 +18169,28 @@ class Passivbot:
                 required_candles,
                 now_ms=now,
             )
-            surface_checks[surface_key] = int(utc_ms())
+            checked_ms = int(utc_ms())
             age_ms = int(surface_health.get("age_ms", 0) or 0)
             no_basis = bool(surface_health.get("no_basis"))
             tail_only = bool(surface_health.get("tail_only")) and not no_basis
             if age_ms <= target_age_ms and (
                 bool(surface_health.get("coverage_ok")) or tail_only
             ):
+                surface_checks[surface_key] = checked_ms
                 continue
             last_attempt_ms = int(surface_attempts.get(surface_key, 0) or 0)
+            last_success_ms = int(surface_successes.get(surface_key, 0) or 0)
             if (
                 timeframe == "1h"
                 and bool(surface_health.get("leading_gap_only"))
-                and last_attempt_ms > 0
-                and now - last_attempt_ms < 24 * 60 * 60_000
+                and last_success_ms > 0
+                and now - last_success_ms < 24 * 60 * 60_000
             ):
                 # A fresh native-1h tail with only a missing requested prefix is
                 # consistent with exchange history beginning after our warmup
                 # window. Keep the candidate unavailable, but do not spend REST
                 # budget retrying that unchanged prefix every refresh cycle.
+                surface_checks[surface_key] = checked_ms
                 continue
             priority = (
                 last_attempt_ms,
@@ -18210,6 +18201,7 @@ class Passivbot:
             )
             stale.append((priority, sym, timeframe, required_candles, surface_health))
         self._forager_surface_attempt_ms = surface_attempts
+        self._forager_surface_success_ms = surface_successes
         self._forager_surface_check_ms = surface_checks
         if not stale:
             return
@@ -18298,6 +18290,8 @@ class Passivbot:
                 period_ms = ONE_MIN_MS if timeframe == "1m" else 60 * ONE_MIN_MS
                 end_ts = int(end_ts_by_timeframe[timeframe])
                 start_ts = end_ts - period_ms * max(1, int(required_candles))
+                surface_checks[(sym, timeframe)] = int(utc_ms())
+                self._forager_surface_check_ms = surface_checks
                 surface_attempts[(sym, timeframe)] = int(utc_ms())
                 self._forager_surface_attempt_ms = surface_attempts
                 candle_task = self.cm.get_candles(
@@ -18317,6 +18311,8 @@ class Passivbot:
                     await asyncio.wait_for(candle_task, timeout=remaining_s)
                 else:
                     await candle_task
+                surface_successes[(sym, timeframe)] = int(utc_ms())
+                self._forager_surface_success_ms = surface_successes
                 refreshed_count += 1
                 if fetch_delay_s > 0:
                     sleep_s = fetch_delay_s

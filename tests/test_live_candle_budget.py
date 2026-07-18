@@ -2623,11 +2623,11 @@ async def test_forager_candidate_refresh_honors_warmup_cap_below_default(monkeyp
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("max_calls", "available_budget", "expected_budget_calls"),
-    [(0, 0, 0), (4, 0, 1)],
+    ("max_calls", "available_budget", "slots_open", "expected_budget_calls"),
+    [(0, 0, False, 0), (0, 0, True, 0), (4, 0, False, 1)],
 )
 async def test_forager_candidate_refresh_skips_warmup_when_budget_is_zero(
-    monkeypatch, max_calls, available_budget, expected_budget_calls
+    monkeypatch, max_calls, available_budget, slots_open, expected_budget_calls
 ):
     import passivbot as pb_mod
 
@@ -2658,7 +2658,7 @@ async def test_forager_candidate_refresh_skips_warmup_when_budget_is_zero(
             return 1 if pside == "long" else 0
 
         def get_current_n_positions(self, pside):
-            return 1 if pside == "long" else 0
+            return 0 if pside == "long" and slots_open else 1
 
         def _forager_refresh_budget(self, *args, **kwargs):
             self.budget_calls += 1
@@ -2828,6 +2828,169 @@ async def test_forager_candidate_refresh_bounds_and_rotates_health_scans(monkeyp
     second_symbols = {symbol for symbol, _ in bot.cm.health_calls[8:]}
     assert len(bot.cm.health_calls) == 16
     assert first_symbols.isdisjoint(second_symbols)
+
+
+@pytest.mark.asyncio
+async def test_forager_candidate_refresh_keeps_unfetched_stale_surfaces_pending(
+    monkeypatch,
+):
+    import passivbot as pb_mod
+
+    now_holder = {"ms": 12 * 60 * 60_000}
+    monkeypatch.setattr(pb_mod, "utc_ms", lambda: now_holder["ms"])
+    symbols = {f"S{idx:03d}/USDT:USDT" for idx in range(20)}
+
+    class FakeCM:
+        default_window_candles = 120
+
+        def __init__(self):
+            self.fetch_calls = []
+
+        def get_completed_candle_health(self, _symbol, windows, now_ms=None):
+            required = int(windows["1m"])
+            return {
+                "timeframes": {
+                    "1m": {
+                        "coverage_ok": False,
+                        "loaded_rows": 0,
+                        "last_cached_ts": None,
+                        "last_cached_age_ms": None,
+                        "missing_candles": required,
+                        "tail_gap_candles": required,
+                    }
+                }
+            }
+
+        async def get_candles(self, symbol, **kwargs):
+            self.fetch_calls.append((symbol, kwargs))
+            return []
+
+    class FakeBot:
+        config = {"live": {"max_ohlcv_fetches_per_minute": 1}}
+        approved_coins_minus_ignored_coins = {"long": symbols, "short": set()}
+        active_symbols = []
+        positions = {}
+        open_orders = {}
+        inactive_coin_candle_ttl_ms = 600_000
+        stop_signal_received = False
+        start_time_ms = 0
+        cm = FakeCM()
+
+        def is_forager_mode(self, pside=None):
+            return pside in (None, "long")
+
+        def get_max_n_positions(self, pside):
+            return 1 if pside == "long" else 0
+
+        def get_current_n_positions(self, pside):
+            return 1 if pside == "long" else 0
+
+        def _get_fetch_delay_seconds(self):
+            return 0.0
+
+        def bp(self, _pside, key, _symbol):
+            if key in {"forager_volume_ema_span_1m", "forager_volatility_ema_span_1m"}:
+                return 10.0
+            return 0.0
+
+        _forager_refresh_budget = pb_mod.Passivbot._forager_refresh_budget
+        _token_bucket_budget = pb_mod.Passivbot._token_bucket_budget
+        _forager_target_staleness_ms = pb_mod.Passivbot._forager_target_staleness_ms
+        _candle_staleness_ms = pb_mod.Passivbot._candle_staleness_ms
+
+    bot = FakeBot()
+    await pb_mod.Passivbot._refresh_forager_candidate_candles(bot)
+    now_holder["ms"] += 60_000
+    await pb_mod.Passivbot._refresh_forager_candidate_candles(bot)
+
+    assert [symbol for symbol, _ in bot.cm.fetch_calls] == [
+        "S000/USDT:USDT",
+        "S001/USDT:USDT",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_forager_candidate_staleness_counts_only_refreshable_surfaces(monkeypatch):
+    import passivbot as pb_mod
+
+    now_ms = 12 * 60 * 60_000
+    monkeypatch.setattr(pb_mod, "utc_ms", lambda: now_ms)
+    inactive = "IDLE/USDT:USDT"
+    urgent = {f"ACTIVE{idx}/USDT:USDT" for idx in range(5)}
+    warmup_inputs = []
+
+    def fake_compute_live_warmup_windows(candidates_by_side, *args, **kwargs):
+        warmup_inputs.append(candidates_by_side)
+        return ({inactive: 120}, {inactive: 10}, 120)
+
+    monkeypatch.setattr(
+        pb_mod, "compute_live_warmup_windows", fake_compute_live_warmup_windows
+    )
+
+    class FakeCM:
+        default_window_candles = 120
+
+        def get_completed_candle_health(self, _symbol, windows, now_ms=None):
+            timeframe = next(iter(windows))
+            required = int(windows[timeframe])
+            return {
+                "timeframes": {
+                    timeframe: {
+                        "coverage_ok": True,
+                        "loaded_rows": required,
+                        "last_cached_ts": now_ms - 60_000,
+                        "last_cached_age_ms": 0,
+                        "missing_candles": 0,
+                        "tail_gap_candles": 0,
+                    }
+                }
+            }
+
+    class FakeBot:
+        config = {"live": {"max_ohlcv_fetches_per_minute": 4}}
+        approved_coins_minus_ignored_coins = {
+            "long": urgent | {inactive},
+            "short": set(),
+        }
+        active_symbols = []
+        positions = {}
+        open_orders = {}
+        PB_modes = {
+            "long": {**{symbol: "normal" for symbol in urgent}, inactive: "graceful_stop"},
+            "short": {},
+        }
+        inactive_coin_candle_ttl_ms = 600_000
+        stop_signal_received = False
+        start_time_ms = 0
+        cm = FakeCM()
+
+        def __init__(self):
+            self.staleness_counts = []
+
+        def is_forager_mode(self, pside=None):
+            return pside in (None, "long")
+
+        def get_max_n_positions(self, pside):
+            return 1 if pside == "long" else 0
+
+        def get_current_n_positions(self, pside):
+            return 1 if pside == "long" else 0
+
+        def bp(self, _pside, _key, _symbol):
+            return 0.0
+
+        def _forager_refresh_budget(self, *args, **kwargs):
+            return 1
+
+        def _forager_target_staleness_ms(self, surface_count, max_calls):
+            self.staleness_counts.append((surface_count, max_calls))
+            return 60_000
+
+    bot = FakeBot()
+    await pb_mod.Passivbot._refresh_forager_candidate_candles(bot)
+
+    assert warmup_inputs == [{"long": {inactive}}]
+    assert bot.staleness_counts == [(2, 4)]
 
 
 @pytest.mark.asyncio
@@ -3012,6 +3175,7 @@ async def test_forager_candidate_refresh_backs_off_native_h1_leading_gap(monkeyp
 
         def __init__(self):
             self.has_partial_h1 = False
+            self.fail_next_h1 = False
             self.fetch_calls = []
 
         def get_completed_candle_health(self, _symbol, windows, now_ms=None):
@@ -3067,6 +3231,9 @@ async def test_forager_candidate_refresh_backs_off_native_h1_leading_gap(monkeyp
 
         async def get_candles(self, symbol, **kwargs):
             self.fetch_calls.append((symbol, kwargs))
+            if kwargs["timeframe"] == "1h" and self.fail_next_h1:
+                self.fail_next_h1 = False
+                raise RuntimeError("transient 1h fetch failure")
             if kwargs["timeframe"] == "1h":
                 self.has_partial_h1 = True
             return []
@@ -3114,9 +3281,19 @@ async def test_forager_candidate_refresh_backs_off_native_h1_leading_gap(monkeyp
     assert [kwargs["timeframe"] for _, kwargs in bot.cm.fetch_calls] == ["1h"]
 
     now_holder["ms"] += 24 * 60 * 60_000
+    bot.cm.fail_next_h1 = True
     await pb_mod.Passivbot._refresh_forager_candidate_candles(bot)
 
     assert [kwargs["timeframe"] for _, kwargs in bot.cm.fetch_calls] == ["1h", "1h"]
+
+    now_holder["ms"] += 60_000
+    await pb_mod.Passivbot._refresh_forager_candidate_candles(bot)
+
+    assert [kwargs["timeframe"] for _, kwargs in bot.cm.fetch_calls] == [
+        "1h",
+        "1h",
+        "1h",
+    ]
 
 
 @pytest.mark.asyncio
