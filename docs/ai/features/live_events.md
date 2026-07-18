@@ -25,6 +25,9 @@ liability, collateral-enabled state, and bounded field provenance. Missing or
 non-finite values are absent; a connector must not infer debt, price, or a
 neutral zero. Raw account payloads, arbitrary response keys, addresses,
 credentials, and internal composition signatures are never emitted.
+Any legacy raw-only balance apply replaces a previous composition with an
+explicit unavailable state; it must never pair stale asset rows with a fresh
+aggregate balance.
 
 Balance publication occurs on the existing aggregate raw/snapped transition or
 on a changed full normalized composition signature, including a change in an

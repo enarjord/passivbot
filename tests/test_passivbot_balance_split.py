@@ -11259,7 +11259,7 @@ async def test_composition_only_balance_change_is_durable_but_does_not_schedule_
     bot._emit_balance_changed_event.assert_called_once()
 
 
-def test_legacy_balance_apply_preserves_existing_composition_when_none_is_supplied():
+def test_raw_only_balance_apply_replaces_stale_composition_with_unavailable():
     bot = Passivbot.__new__(Passivbot)
     composition = _balance_composition_fixture("1")
     bot.quote = "USDT"
@@ -11275,4 +11275,7 @@ def test_legacy_balance_apply_preserves_existing_composition_when_none_is_suppli
     assert bot._apply_balance_snapshot(100.0) is True
     assert bot.balance == pytest.approx(100.0)
     assert bot.balance_raw == pytest.approx(100.0)
-    assert bot._balance_composition is composition
+    assert bot._balance_composition["status"] == "unavailable"
+    assert bot._balance_composition["reason"] == "raw_only_refresh"
+    assert bot._balance_composition["asset_balances"] == []
+    assert bot._balance_composition is not composition

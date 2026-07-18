@@ -13769,8 +13769,11 @@ class Passivbot:
         prepared = self._prepare_balance_snapshot(balance_raw)
         if prepared is None:
             return False
-        if balance_composition is not None:
-            prepared["balance_composition"] = balance_composition
+        prepared["balance_composition"] = (
+            balance_composition
+            if balance_composition is not None
+            else unavailable_balance_composition(reason="raw_only_refresh")
+        )
         self._commit_balance_snapshot(prepared)
         return True
 
