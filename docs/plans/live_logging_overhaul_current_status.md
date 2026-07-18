@@ -24,7 +24,7 @@ Estimated completion:
 
 - Branch: `codex/hyperliquid-balance-composition`, based on canonical
   `e7fe7f796fb76a829003933dc7e5d937c6df8c64` after PR #1316.
-- PR: not opened.
+- PR: #1317.
 - Scope: third connector-specific implementation of backlog item 20. Parse
   only proven Hyperliquid unified `info.balances` coin and finite signed total
   rows from the already-fetched response. Non-unified payloads remain explicitly
