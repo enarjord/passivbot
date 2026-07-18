@@ -15,7 +15,23 @@ merge, live smoke evidence changes, or new gaps are discovered.
 - Do not use this file for design churn; unresolved design details belong in the
   plan or a focused handoff doc.
 
-## Latest Canonical Deployment (PR #1313)
+## Latest Canonical Deployment (PR #1316)
+
+- PR #1316 merged as canonical `e7fe7f796fb76a829003933dc7e5d937c6df8c64`.
+  It adds bounded Binance CCXT unified composition diagnostics without changing
+  scalar balance, exchange calls, planning, orders, risk, or console admission.
+- VPS5 fast-forwarded tracked-clean from `a0db60f9` without a Rust rebuild and
+  gracefully restarted only exact panes `%358`-`%362` without force. Old PIDs
+  `1038760/1038769/1038763/1038772/1038766` became
+  `1040903/1040911/1040905/1040914/1040908`.
+- The exact `1784404124757..1784404777859` window selected 7/1,012 event files
+  totaling `19420705` bytes, retained five stopping/stopped/startup cohorts, and
+  had zero hard, monitor, or text-log issues. Delayed 3/3 target sampling was
+  `R=4,S=1` with no extras; `misc:0.0` remained `%8`/PID `434835`. No direct
+  exchange call or event was manufactured.
+- The exact merge is the base for the Hyperliquid unified-only composition slice.
+
+## Previous Canonical Deployment (PR #1313)
 
 - PR #1313 merged as canonical `a0db60f9ca97dbc5b9b37aa3230fce97eb0917ce`.
   It adds bounded OKX asset composition to `balance.changed` without changing
