@@ -24,7 +24,7 @@ Estimated completion:
 
 - Branch: `codex/shutdown-lifecycle-completeness`, based on canonical
   `bc2c90267be418344ec883fcf17fae856bc568cd` after PR #1320.
-- PR: pending.
+- PR: #1321.
 - Scope: derive the latest bounded shutdown lifecycle per observed bot and make
   restart evidence require distinct complete bot lifecycles instead of
   aggregate `bot.stopping` and `bot.stopped` counts.
