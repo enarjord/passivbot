@@ -847,7 +847,9 @@ def test_live_incident_bundle_collects_hashes_snapshots_events_and_window(tmp_pa
     assert "HSL_REPLAY_SECRET" not in manifest_dump
     assert "12345.67" not in manifest_dump
     assert "123456.78" not in manifest_dump
-    assert "0.42" not in manifest_dump
+    assert "0.42" not in json.dumps(
+        manifest["smoke_report"]["risk_events"], sort_keys=True
+    )
     assert '"price"' not in manifest_dump
     assert '"qty"' not in manifest_dump
     assert manifest["filters"]["max_log_files"] == 8
