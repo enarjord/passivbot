@@ -131,7 +131,7 @@ async def test_binance_staged_snapshot_uses_fresh_positions_for_open_order_symbo
     bot._record_live_margin_mode_from_payload = lambda payload: None
 
     async def capture_balance_snapshot():
-        return {"raw": "balance"}, 100.0
+        return {"total": {"USDT": 100.0}}, 100.0
 
     async def capture_positions_snapshot():
         return [{"raw": "position"}], [
@@ -176,8 +176,17 @@ async def test_binance_staged_snapshot_uses_fresh_positions_for_open_order_symbo
 
     assert fetched_symbols == ["SOL/USDT:USDT", None]
     assert snapshot["balance"] == 100.0
-    assert snapshot["balance_composition"]["status"] == "unavailable"
-    assert "raw" not in snapshot["balance_composition"]
+    assert snapshot["balance_composition"]["status"] == "available"
+    assert snapshot["balance_composition"]["asset_balances"] == [
+        {
+            "asset": "USDT",
+            "field_provenance": {
+                "asset": "currency_map_key",
+                "amount": "total",
+            },
+            "amount": 100.0,
+        }
+    ]
     assert snapshot["positions"][0]["symbol"] == "SOL/USDT:USDT"
     assert snapshot["open_orders"][0]["symbol"] == "SOL/USDT:USDT"
     assert snapshot["open_orders"][0]["position_side"] == "long"

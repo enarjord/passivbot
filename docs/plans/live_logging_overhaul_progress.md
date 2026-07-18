@@ -15,7 +15,30 @@ merge, live smoke evidence changes, or new gaps are discovered.
 - Do not use this file for design churn; unresolved design details belong in the
   plan or a focused handoff doc.
 
-## Latest Canonical Deployment (PR #1311)
+## Latest Canonical Deployment (PR #1313)
+
+- PR #1313 merged as canonical `a0db60f9ca97dbc5b9b37aa3230fce97eb0917ce`.
+  It adds bounded OKX asset composition to `balance.changed` without changing
+  scalar balance, exchange calls, planning, orders, risk, or console admission.
+- VPS5 fast-forwarded cleanly from `32156cbc`. A wrong caller-side Rust
+  fingerprint failed closed after the repository move and before any bot
+  signal; the same-head target-derived proof then passed without a Rust build
+  and matched the loaded extension stamp and artifact.
+- The guarded executor gracefully restarted only the five exact configured
+  panes without force. The exact `1784401342000..1784402056447` lifecycle
+  window selected 6/1,011 managed segments totaling `39263703` bytes, recovered
+  all five stopping/stopped/startup cohorts, and was hard-green across target,
+  repository, monitor, and text-log gates. A broader pre-action window retained
+  one earlier natural KuCoin `RequestTimeout`, correctly separating it from the
+  restart lifecycle rather than suppressing it.
+- Final targets were 3/3 stable with new exact bot PIDs
+  `1038760/1038769/1038763/1038772/1038766`; pane parents and protected
+  `misc:0.0` `%8`/PID `434835` were unchanged. Natural post-restart OKX balance
+  events carried the bounded two-asset composition. No direct exchange request
+  or event was manufactured.
+- The exact merge is the base for the Binance CCXT unified composition slice.
+
+## Previous Canonical Deployment (PR #1311)
 
 - PR #1311 merged as canonical `32156cbc251d666902f20b8b000a9a1dfe05a0a2`.
   It carries bounded hard-only problem-event evidence into concise smoke,

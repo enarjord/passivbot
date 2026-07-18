@@ -4,6 +4,12 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Binance `balance.changed` composition diagnostics now normalize only CCXT's
+  documented unified `total`, `free`, `used`, and explicit `debt` maps from the
+  already-fetched balance response. The bounded rows add no exchange calls,
+  valuation inference, scalar-balance changes, planning, order, or risk
+  behavior; raw connector payloads remain excluded.
+
 - `balance.changed` now carries a bounded optional asset-composition diagnostic
   from the same authoritative balance response. The first connector parser is
   OKX: it reports only documented account-detail amount, USD value, unrealized
