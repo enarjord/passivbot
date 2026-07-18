@@ -4,6 +4,12 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Live smoke reports now include a bounded diagnostics-only event-pipeline
+  integrity verdict from each bot's latest health snapshot. Cumulative drops,
+  sink errors, and workers unexpectedly absent outside orderly pipeline shutdown
+  are explicit attention evidence; existing smoke, process, trading, and
+  top-level attention verdicts remain unchanged.
+
 - Fake-live scenario-time callbacks now retain their original offline fake
   client through graceful shutdown. The final monitor snapshot can therefore
   complete after the bot releases its public-session reference, without a
