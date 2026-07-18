@@ -764,6 +764,14 @@ def _smoke_problem_events_result_summary(
     return _smoke_brief_section_result_summary(smoke_brief_summary, "problem_events")
 
 
+def _smoke_hard_problem_events_result_summary(
+    smoke_brief_summary: dict[str, Any],
+) -> dict[str, Any]:
+    return _smoke_brief_section_result_summary(
+        smoke_brief_summary, "hard_problem_events"
+    )
+
+
 def _smoke_process_result_summary(
     smoke_brief_summary: dict[str, Any],
 ) -> dict[str, Any]:
@@ -1247,6 +1255,9 @@ def build_live_incident_bundle(
     smoke_problem_events_summary = _smoke_problem_events_result_summary(
         smoke_brief_summary
     )
+    smoke_hard_problem_events_summary = _smoke_hard_problem_events_result_summary(
+        smoke_brief_summary
+    )
     smoke_process_summary = _smoke_process_result_summary(smoke_brief_summary)
     smoke_repository_summary = _smoke_repository_result_summary(smoke_brief_summary)
     smoke_monitor_summary = _smoke_monitor_result_summary(smoke_brief_summary)
@@ -1413,6 +1424,7 @@ def build_live_incident_bundle(
                 "monitor": smoke_monitor_summary,
                 **smoke_verdict_summary,
                 "problem_events": smoke_problem_events_summary,
+                "hard_problem_events": smoke_hard_problem_events_summary,
                 "execution": smoke_execution_summary,
                 "risk_events": smoke_risk_summary,
                 "ema_readiness": smoke_ema_readiness_summary,
@@ -1476,6 +1488,7 @@ def build_live_incident_bundle(
             "monitor": smoke_monitor_summary,
             **smoke_verdict_summary,
             "problem_events": smoke_problem_events_summary,
+            "hard_problem_events": smoke_hard_problem_events_summary,
             "execution": smoke_execution_summary,
             "risk_events": smoke_risk_summary,
             "ema_readiness": smoke_ema_readiness_summary,

@@ -22,32 +22,42 @@ Estimated completion:
 
 ## Active Review Slice
 
-- Branch: `codex/hard-problem-evidence`, based on canonical
-  `f1ae7970393e8299d1b0a98c8ff68d42adddd2d0` after PR #1299.
-- PR: #1310. Slice: retain bounded hard-event classifications independently
-  of the mixed latest problem-event sample.
-- Triggering evidence: the PR #1309 restart smoke correctly reported two hard
-  structured problem events, but its bounded mixed `problem_events` sample
-  exposed only one hard classification. The shared `deque(maxlen=N)` allows
-  later warning-level attention to evict hard evidence while the authoritative
-  hard count remains nonzero.
-- Scope: full smoke reports add `hard_problem_events` with authoritative
-  `count`, bounded chronological `sample`, and explicit `retained` and
-  `truncated` counts. Existing mixed sample ordering, recovery classification,
-  verdicts, event schemas, and command behavior remain unchanged.
+- Branch: `codex/hard-problem-summary-evidence`, based on canonical
+  `5d06887b78c2790efd15e1bd67bae6b3f5d96636` after PR #1310.
+- Scope: carry bounded, value-safe `hard_problem_events` evidence into concise
+  summary, brief, and compact incident-bundle smoke metadata. Existing mixed
+  sample ordering, hard verdict/count semantics, recovery classification,
+  redaction, event production, and `max_problem_events` bounds remain
+  unchanged.
+- Triggering evidence: PR #1310 fixed the full report after the PR #1309
+  restart smoke exposed mixed-sample eviction, but concise and brief summaries
+  still project only hard counts and grouped types. Incident bundles consume
+  the brief projection, so those operator surfaces can remain red without the
+  separately retained hard classifications now available in the full report.
 - Behavior boundary: read-only report projection only. Event publication,
   recovery, process control, exchange access, and trading behavior are
   unchanged.
-- Validation: focused mixed-eviction, positive truncation, and zero-bound
-  regressions; complete smoke-report tests; AI-doc, compile, and diff checks;
-  complete Python and Rust suites before publication.
+- Validation: focused mixed-eviction, summary/brief truncation, zero-bound,
+  incident-bundle manifest, and CLI regressions; complete Python and Rust
+  suites; Rust check/format; AI-doc, registry, compile, and diff checks.
 - Review gate: temporary maintainer-authorized exact-head Hermes plus green
   Python and Rust CI while Grok is halted.
-- Expected VPS action: prepare the reviewed merge commit and run bounded
-  read-only report verification. No bot restart or process signal is required
+- Expected VPS action: pull the reviewed merge and run bounded read-only smoke
+  verification. No Rust rebuild, bot restart, or process signal is required
   for this offline reporting-tool change.
 
 ## Deployed Baseline
+
+- PR #1310 merged as canonical `5d06887b78c2790efd15e1bd67bae6b3f5d96636`.
+  It added full-report `hard_problem_events` with authoritative `count`,
+  bounded chronological `sample`, and explicit `retained`/`truncated` counts;
+  the existing concise/brief and incident-bundle projections were unchanged.
+- VPS5 prepared the exact clean merge without a Rust rebuild or bot restart.
+  The bounded read-only smoke was hard-green and exposed
+  `hard_problem_events={count:0,retained:0,truncated:0,sample:[]}`. All five
+  pane parents and `misc:0.0` remained unchanged.
+
+## Previous Deployed Baseline
 
 - Canonical `master` and VPS5 are
   `f1ae7970393e8299d1b0a98c8ff68d42adddd2d0` after PR #1299. The clean

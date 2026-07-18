@@ -10400,6 +10400,11 @@ def summarize_live_smoke_report(
             or len(problem_group_rows) > max_groups,
             "groups": problem_group_rows[:max_groups],
         },
+        "hard_problem_events": _project_hard_problem_events(
+            report.get("hard_problem_events"),
+            fallback_count=hard_problem_event_count,
+            limit=max_groups,
+        ),
         "remote_calls": _summary_limited_groups(
             report.get("remote_call_health") or {},
             limit=max_groups,
@@ -10501,6 +10506,62 @@ def _count_value(value: Any) -> int:
         return int(value)
     except (TypeError, ValueError):
         return 0
+
+
+def _project_hard_problem_events(
+    value: Any,
+    *,
+    fallback_count: Any,
+    limit: int,
+) -> dict[str, Any]:
+    """Keep a bounded, compact hard-event sample in report projections."""
+
+    source = value if isinstance(value, dict) else {}
+    count = max(0, _count_value(source.get("count")))
+    if not count:
+        count = max(0, _count_value(fallback_count))
+    sample = source.get("sample")
+    rows = sample if isinstance(sample, list) else []
+    safe_keys = (
+        "path",
+        "line",
+        "ts",
+        "seq",
+        "event_type",
+        "level",
+        "status",
+        "reason_code",
+        "exchange",
+        "user",
+        "symbol",
+        "pside",
+        "ids",
+        "latest_data",
+        "hard",
+        "recovered",
+        "recovery",
+    )
+    compact_rows: list[dict[str, Any]] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        compact: dict[str, Any] = {}
+        for key in safe_keys:
+            if key not in row:
+                continue
+            safe_value = _compact_problem_event_data_value(row.get(key))
+            if safe_value not in (None, "", [], {}):
+                compact[key] = safe_value
+        if compact:
+            compact_rows.append(compact)
+    retained_sample = compact_rows[-max(0, int(limit)) :] if limit else []
+    retained = len(retained_sample)
+    return {
+        "count": count,
+        "retained": retained,
+        "truncated": max(0, count - retained),
+        "sample": retained_sample,
+    }
 
 
 def _brief_remote_call_slowest(summary: dict[str, Any]) -> list[dict[str, Any]]:
@@ -11421,6 +11482,11 @@ def summarize_live_smoke_report_brief(report: dict[str, Any]) -> dict[str, Any]:
             "non_hard": max(0, problem_event_count - hard_problem_event_count),
         }
         | _brief_problem_event_groups(report.get("problem_event_groups")),
+        "hard_problem_events": _project_hard_problem_events(
+            report.get("hard_problem_events"),
+            fallback_count=hard_problem_event_count,
+            limit=SMOKE_REPORT_BRIEF_PROBLEM_GROUP_LIMIT,
+        ),
         "remote_calls": _brief_remote_call_health(report.get("remote_call_health")),
         "account_critical_remote_calls": _brief_remote_call_health(
             report.get("account_critical_remote_call_health")

@@ -174,6 +174,9 @@ attention therefore cannot remove every hard classification while the report rem
 The hard-only sample uses the caller's existing `max_problem_events` bound and the same compact,
 redacted event projection as the mixed sample. It is reporting evidence only and must not change
 problem classification, recovery matching, smoke verdicts, process control, or live behavior.
+Concise summary, brief, and incident-bundle compact smoke metadata retain the same object shape,
+with an independently bounded value-safe sample and `retained`/`truncated` recalculated for that
+projection.
 
 ## Cycle Degradation
 

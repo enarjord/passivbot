@@ -7249,6 +7249,12 @@ def test_live_smoke_report_retains_hard_problem_evidence_after_mixed_sample_evic
             },
         ],
     }
+    assert summarize_live_smoke_report(report)["hard_problem_events"] == report[
+        "hard_problem_events"
+    ]
+    assert summarize_live_smoke_report_brief(report)["hard_problem_events"] == report[
+        "hard_problem_events"
+    ]
 
 
 def test_live_smoke_report_hard_problem_evidence_respects_zero_sample_limit(tmp_path):
@@ -7327,6 +7333,72 @@ def test_live_smoke_report_hard_problem_evidence_retains_latest_bounded_sample(
         2,
         3,
     ]
+
+
+def test_live_smoke_report_projects_bounded_hard_problem_evidence(tmp_path):
+    events_dir = tmp_path / "monitor" / "bybit" / "bybit_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="bot.stopped",
+                seq=seq,
+                ts=seq * 1000,
+                status="failed",
+                level="critical",
+                reason_code=f"terminal_failure_{seq}",
+            )
+            for seq in range(1, 8)
+        ],
+    )
+
+    report = build_live_smoke_report(
+        tmp_path / "monitor",
+        logs_root=None,
+        max_problem_events=7,
+    )
+    summary = summarize_live_smoke_report(report, max_groups=3)
+    brief = summarize_live_smoke_report_brief(report)
+
+    assert summary["hard_problem_events"] == {
+        "count": 7,
+        "retained": 3,
+        "truncated": 4,
+        "sample": report["hard_problem_events"]["sample"][-3:],
+    }
+    assert brief["hard_problem_events"] == {
+        "count": 7,
+        "retained": 5,
+        "truncated": 2,
+        "sample": report["hard_problem_events"]["sample"][-5:],
+    }
+
+
+def test_live_smoke_report_projects_zero_bound_hard_problem_evidence(tmp_path):
+    events_dir = tmp_path / "monitor" / "bybit" / "bybit_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="bot.stopped",
+                seq=1,
+                ts=1000,
+                status="failed",
+                level="critical",
+                reason_code="terminal_startup_failure",
+            )
+        ],
+    )
+
+    report = build_live_smoke_report(
+        tmp_path / "monitor",
+        logs_root=None,
+        max_problem_events=0,
+    )
+    expected = {"count": 1, "retained": 0, "truncated": 1, "sample": []}
+
+    assert summarize_live_smoke_report(report)["hard_problem_events"] == expected
+    assert summarize_live_smoke_report_brief(report)["hard_problem_events"] == expected
 
 
 def test_live_smoke_report_summarizes_problem_event_groups(tmp_path):
@@ -8160,6 +8232,12 @@ def test_live_smoke_report_cli_can_emit_concise_summary(tmp_path, capsys):
     assert "account_critical_remote_calls" in summary
     assert "bots" not in summary
     assert "problem_events" in summary
+    assert summary["hard_problem_events"] == {
+        "count": 0,
+        "retained": 0,
+        "truncated": 0,
+        "sample": [],
+    }
 
 
 def test_live_smoke_report_cli_can_emit_brief_summary(tmp_path, capsys):
@@ -8212,6 +8290,12 @@ def test_live_smoke_report_cli_can_emit_brief_summary(tmp_path, capsys):
     assert summary["problem_events"]["hard"] == 0
     assert summary["problem_events"]["total"] == 1
     assert summary["problem_events"]["non_hard"] == 1
+    assert summary["hard_problem_events"] == {
+        "count": 0,
+        "retained": 0,
+        "truncated": 0,
+        "sample": [],
+    }
     assert summary["problem_events"]["event_types"] == {"remote_call.failed": 1}
     assert summary["problem_events"]["event_types_truncated"] is False
     assert summary["problem_events"]["groups"] == [
