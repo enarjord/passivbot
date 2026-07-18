@@ -156,9 +156,17 @@ TOOL_COMMANDS: dict[str, CommandSpec] = {
         "tools.live_restart_smoke_collection",
         "collect and evaluate bounded local restart smoke evidence",
     ),
+    "live-restart-smoke-run": CommandSpec(
+        "tools.live_restart_smoke_run",
+        "restart exact local targets and collect bounded smoke evidence",
+    ),
     "live-restart-executor": CommandSpec(
         "tools.live_restart_executor",
         "gracefully restart exact verified local tmux targets",
+    ),
+    "live-repository-prepare": CommandSpec(
+        "tools.live_repository_prepare",
+        "fast-forward canonical master and prove the Rust runtime",
     ),
     "inspect-ohlcvs": CommandSpec(
         "tools.inspect_ohlcvs",

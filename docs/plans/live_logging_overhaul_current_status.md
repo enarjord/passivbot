@@ -22,39 +22,90 @@ Estimated completion:
 
 ## Active Review Slice
 
-- Branch: `codex/restart-smoke-collection-contract`, based on canonical
-  `0b5503b2a9ee4817618b7aca25dab417af4292dd` after PR #1302.
-- PR: #1303. Slice: collect exact local restart target and bounded smoke
-  evidence in memory, then immediately apply the existing sanitized evaluator.
-- Triggering evidence: PR #1302 proved the evaluator on retained real artifacts,
-  but operators still have to run two producers, retain two full reports, and
-  manually bind them into a third command.
-- Scope: require caller-confirmed head, supervisor fingerprint, target count,
-  session, config, and exact window; compose the existing bounded target and
-  smoke producers without intermediate report files; emit only the sanitized
-  evaluator verdict plus bounded collection-policy metadata.
-- Behavior boundary: local filesystem reads and bounded local `tmux`/`ps`/`git`
-  inventory subprocesses are allowed. SSH, pull/build, network or exchange
-  access, credentials, process signals/starts, force escalation, and file writes
-  remain excluded.
-- Validation: focused collection ordering/input/negative/redaction/CLI tests plus
-  existing target, smoke, evaluator, CLI, compilation, and docs regressions.
+- Branch: `codex/sink-degraded-redaction`, based on canonical
+  `9a5e3585d0c5641a14c2c359acd01e7f3e74bf7d` after PR #1308.
+- PR: #1309. Slice: remove raw sink exception text from `sink.degraded`
+  payloads.
+- Triggering evidence: canonical `LiveEventPipeline._handle_sink_failure()`
+  still copied `str(exception)` into the in-memory degraded event and monitor
+  sink even though the message and reason code already retained the stable sink
+  and exception classifications. Sink exceptions may include request URLs,
+  credentials, response bodies, paths, or account data under the logging
+  policy's explicit exception-text threat model.
+- Scope: `sink.degraded` retains sink name, exception type, stable failure
+  reason, sink health counters, and pipeline timings. Raw exception text is no
+  longer copied into any degraded-event payload.
+- Behavior boundary: observability payload only. Exception propagation,
+  sink isolation, routing, retries, counters, timing, queue behavior, and
+  trading behavior are unchanged.
+- Validation: event-pipeline sink-failure regressions with credential-like
+  exception text, live-event/smoke consumers, complete Python and Rust suites,
+  compilation, generated registry/docs, and diff checks.
 - Review gate: temporary maintainer-authorized exact-head Hermes plus green
   Python and Rust CI while Grok is halted.
-- Expected VPS action: pull and run the collector against the retained exact PR
-  #1296 restart window, plus caller-expectation negative checks. Do not restart
-  or signal bots.
+- Expected VPS action: prepare the reviewed merge commit, gracefully restart
+  the five exact configured bot panes to load the producer change, preserve
+  `misc:0.0`, and run bounded immediate plus settled smoke checks.
 
 ## Deployed Baseline
 
 - Canonical `master` and VPS5 are
-  `0b5503b2a9ee4817618b7aca25dab417af4292dd` after PR #1302. Exact-head Hermes
-  and Python/Rust CI were green. VPS5 fast-forwarded without a restart or
-  signal. The retained PR #1296 window evaluated green while preserving exact
-  bounds `1784316350000..1784317500000`; a one-millisecond log-window mismatch
-  and one dropped hard-looking line each failed with `log_scan_invalid`. Pane
-  parents and bot PIDs remained unchanged, the checkout stayed tracked-clean,
-  and `misc:0.0` remained `%8`, PID `434835`.
+  `9a5e3585d0c5641a14c2c359acd01e7f3e74bf7d` after PR #1308. Exact-head Hermes
+  and Python/Rust CI were green. Exact repository preparation fast-forwarded
+  cleanly without a Rust rebuild, and independent preflight resolved all five
+  targets with 3/3 stable samples and no extras or issues. The authorized
+  restart stopped, exited, relaunched, and verified all five exact panes without
+  force. Its bounded `1784335954292..1784336611652` window selected 6/1,012
+  managed segments totaling `21328854` bytes, recovered all five shutdown and
+  startup cohorts, and returned zero hard, monitor, text-log, or target
+  failures. All five bots remained stable, the checkout stayed exact and clean,
+  and `misc:0.0` retained its pre-restart pane/PID identity. No direct exchange
+  probe or event was manufactured.
+- Canonical `master` and VPS5 are
+  `8aefdbc82339b756ff642e726ae0924d5ca8774d` after PR #1307. Exact-head Hermes
+  and Python/Rust CI were green. Exact repository preparation fast-forwarded
+  cleanly without a Rust rebuild; independent preflight resolved all five
+  targets with 3/3 stable samples and no extras or issues.
+- The merged orchestrator gracefully stopped, observed exit, relaunched, and
+  verified all five exact targets with no force signal. The bounded window
+  `1784332307933..1784332994590` selected 6/1,012 managed event segments
+  totaling `19335163` projected bytes and recovered five stopping, five stopped,
+  and five startup cohorts. Repository, target, monitor, and text-log gates were
+  green, but smoke correctly remained red on one real KuCoin positions-fetch
+  `RequestTimeout`; a second later timeout showed recovery was not yet proven.
+  All bots were left running. Pane parents stayed unchanged, tracked state
+  stayed clean, and `misc:0.0` remained `%8`, PID `434835`. No direct exchange
+  probe or event was manufactured. The retained raw exception string exposed
+  the active redaction follow-up.
+- Canonical `master` and VPS5 are
+  `0d1b06b82f3bab011e29a350b4a5276c2ebd5356` after PR #1306. Exact-head Hermes
+  and Python/Rust CI were green. VPS5 first fast-forwarded to make the
+  repository-preparation tool available, without a bot restart or signal. Its
+  same-head execution returned green with no repository move or Rust build and
+  exact source/stamp/final fingerprints; a valid but wrong target commit failed
+  with `fetched_target_head_mismatch` before any build. All five configured pane
+  parents and unrelated `misc:0.0` remained unchanged, and tracked state stayed
+  clean.
+- PR #1305 previously deployed at
+  `300fdd703fee9e1ce0e9c54df43bb7b1dcb858d8`. Exact-head Hermes
+  and Python/Rust CI were green. VPS5 fast-forwarded without a bot restart or
+  signal. The merged collector selected 10/1,008 managed event segments for the
+  exact retained bounds `1784316350000..1784317500000`, projected
+  `131834602` scan bytes under the 128 MiB cap, and recovered five stopping,
+  five stopped, and five startup cohorts with zero hard failures. A malformed
+  expected head exited 2 before collection. All five bot pane parents stayed
+  `856294/856332/856364/856398/856434`, tracked state stayed clean, and
+  `misc:0.0` remained `%8`, PID `434835`.
+- PR #1303 previously deployed at
+  `9e8d1343e0f1f43fc3207d611a8b06d88af8b6c0`. Its first complete-archive
+  collector run was interrupted after more than ten CPU-active minutes by
+  exact collector PID only. A read-only prototype selected 10/1,012 segments
+  and recovered the complete lifecycle in 37.3 seconds, triggering PR #1305.
+- PR #1302 previously deployed at
+  `0b5503b2a9ee4817618b7aca25dab417af4292dd`. The retained PR #1296 window
+  evaluated green with exact bounds `1784316350000..1784317500000`; a
+  one-millisecond mismatch and one dropped hard-looking line each failed with
+  `log_scan_invalid` while panes and `misc:0.0` remained unchanged.
 - PR #1301 previously deployed at
   `46a28795dec40acbee0dbaa3602be955bbecf23e`. Exact-head Hermes
   and Python/Rust CI were green. VPS5 fast-forwarded without a restart or

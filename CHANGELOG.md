@@ -16,6 +16,41 @@ All notable user-facing changes will be documented in this file.
   balance at each ordered episode boundary so later fills cannot change an
   earlier episode's drawdown or no-restart outcome.
 
+- `sink.degraded` events no longer retain raw sink exception text. They preserve
+  the stable sink-failure reason, sink name, exception type, health counters,
+  and pipeline timings while keeping request URLs, credentials, response data,
+  and other exception-message content out of degraded-event and monitor sinks.
+
+- `cycle.degraded` structured events no longer retain raw exception text or
+  request URLs from generic execution-loop failures or fill-history coverage
+  deferrals. A strict payload allow-list also drops nested spelling variants and
+  unknown caller fields. Stable reason codes, bounded exception types, cycle
+  correlation, safe operational details, and phase timings remain available;
+  retry, recovery, restart, and trading behavior are unchanged.
+
+- Added `passivbot tool live-restart-smoke-run`, an explicit local orchestrator
+  that requires exact repository, Rust-source, supervisor-command, and target
+  contracts before invoking the existing exact-pane graceful restart executor.
+  After a successful restart it waits one caller-bounded observation interval
+  and runs the existing bounded in-memory smoke collector over the exact
+  restart-through-observation window. It emits aggregate restart counts and
+  sanitized smoke evidence only, never pulls or builds code, SSHes, applies
+  force escalation or broad process-pattern signals, or writes report files;
+  post-action smoke failures leave the relaunched bots running and fail red for
+  operator follow-up.
+
+- Added `passivbot tool live-repository-prepare`, an explicit local executor
+  that fetches only the pinned public canonical `origin/master`, requires exact
+  caller-confirmed
+  current and target commits, a tracked-clean `master` checkout with no Git
+  operation in progress, and a hook-disabled true fast-forward before moving
+  the worktree.
+  It then verifies or rebuilds the Rust extension in a fresh bounded child
+  process and requires an exact caller-confirmed source fingerprint before the
+  checkout is restart-ready. It preserves untracked files and never SSHes,
+  contacts exchanges, signals or starts live bots, force-checks out, or rolls
+  back a target whose Rust preparation failed.
+
 - Added `passivbot tool live-restart-smoke-evidence`, a pure fail-closed
   evaluator for already-generated full restart target and smoke JSON reports.
   It binds stable exact-target evidence and bounded post-restart monitor/log,
@@ -28,7 +63,12 @@ All notable user-facing changes will be documented in this file.
   local target and bounded smoke reports in memory and immediately evaluate the
   sanitized restart evidence contract. It performs only local filesystem and
   bounded `tmux`/`ps`/`git` inventory reads; it does not write intermediate
-  reports, pull or build code, contact exchanges, or control processes.
+  reports, pull or build code, contact exchanges, or control processes. Exact
+  historical event windows select only managed rotation segments whose encoded
+  intervals overlap the requested bounds, require retained predecessor coverage,
+  and fail closed before content scanning when names, per-bot counts, global
+  counts, or selected bytes exceed the bounded policy. Sanitized output reports
+  aggregate selection completeness, counts, scan bytes, and code-owned issues.
 
 - Live trailing restart reconciliation now preserves authoritative position-update
   timestamps from CCXT and raw exchange payloads and no longer

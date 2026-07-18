@@ -6177,7 +6177,6 @@ class Passivbot:
                     reason_code="fill_history_coverage_unavailable",
                     data={
                         "error_type": type(e).__name__,
-                        "error": str(e)[:500],
                         "timings_ms": dict(loop_timings_ms),
                     },
                     level="warning",
@@ -6191,7 +6190,6 @@ class Passivbot:
                     reason_code=type(e).__name__,
                     data={
                         "error_type": type(e).__name__,
-                        "error": str(e)[:500],
                         "timings_ms": dict(loop_timings_ms),
                     },
                     level="error",
