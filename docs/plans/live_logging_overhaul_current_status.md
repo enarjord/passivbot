@@ -24,6 +24,7 @@ Estimated completion:
 
 - Branch: `codex/hard-problem-summary-evidence`, based on canonical
   `5d06887b78c2790efd15e1bd67bae6b3f5d96636` after PR #1310.
+- PR: #1311.
 - Scope: carry bounded, value-safe `hard_problem_events` evidence into concise
   summary, brief, and compact incident-bundle smoke metadata. Existing mixed
   sample ordering, hard verdict/count semantics, recovery classification,
