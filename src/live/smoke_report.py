@@ -8488,7 +8488,11 @@ def _scan_events(
             "hard_problem_events": 0,
         }
     )
-    problem_events: deque[dict[str, Any]] = deque(maxlen=max(0, int(max_problem_events)))
+    problem_event_limit = max(0, int(max_problem_events))
+    problem_events: deque[dict[str, Any]] = deque(maxlen=problem_event_limit)
+    hard_problem_events: deque[dict[str, Any]] = deque(
+        maxlen=problem_event_limit
+    )
     problem_records: list[dict[str, Any]] = []
     time_sync_recoveries: list[dict[str, Any]] = []
     invalid_rows = 0
@@ -9006,9 +9010,14 @@ def _scan_events(
             problem_event["recovered"] = True
             problem_event["recovery"] = record.get("recovery")
         problem_events.append(problem_event)
+        if hard:
+            hard_problem_events.append(problem_event)
 
     error_count = sum(1 for issue in issues if issue.get("severity") == "error")
     warning_count = sum(1 for issue in issues if issue.get("severity") == "warning")
+    hard_problem_event_count = sum(
+        int(value["hard_problem_events"]) for value in bots.values()
+    )
     return {
         "monitor": {
             "root": str(Path(root).expanduser()),
@@ -9044,12 +9053,16 @@ def _scan_events(
             for key, value in sorted(bots.items())
         ],
         "problem_events": list(problem_events),
+        "hard_problem_events": {
+            "count": hard_problem_event_count,
+            "retained": len(hard_problem_events),
+            "truncated": max(0, hard_problem_event_count - len(hard_problem_events)),
+            "sample": list(hard_problem_events),
+        },
         "problem_event_groups": _summarize_problem_event_groups(problem_event_groups),
         "recovered_problem_events": recovered_problem_events,
         "problem_event_count": sum(int(value["problem_events"]) for value in bots.values()),
-        "hard_problem_event_count": sum(
-            int(value["hard_problem_events"]) for value in bots.values()
-        ),
+        "hard_problem_event_count": hard_problem_event_count,
         "startup_timings": _summarize_startup_timings(
             _startup_records_after_latest_started(
                 startup_timing_records,
@@ -9582,6 +9595,7 @@ def build_live_smoke_report(
         "shutdown_events": event_scan["shutdown_events"],
         "event_window": event_scan["event_window"],
         "problem_events": event_scan["problem_events"],
+        "hard_problem_events": event_scan["hard_problem_events"],
         "problem_event_groups": event_scan["problem_event_groups"],
         "recovered_problem_events": event_scan["recovered_problem_events"],
         "problem_event_count": event_scan["problem_event_count"],

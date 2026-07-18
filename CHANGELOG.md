@@ -4,6 +4,12 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Full live smoke reports now retain a separately bounded sample of hard
+  structured problem events, with authoritative total, retained, and truncated
+  counts. Later warning-level attention can no longer hide every classification
+  behind a nonzero hard-problem count; the existing mixed latest-event sample
+  and all runtime behavior remain unchanged.
+
 - HSL replay now recognizes every ordered, fill-derived scope flatten as an
   episode boundary, including multiple close-and-reentry transitions within
   one replay minute and compact coin replay without historical unrealized PnL.

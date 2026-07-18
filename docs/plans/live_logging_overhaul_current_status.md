@@ -1,6 +1,6 @@
 # Live Logging Overhaul Current Status
 
-Updated: 2026-07-17.
+Updated: 2026-07-18.
 
 This is the compact operational source for the active logging-overhaul loop.
 Read it before the historical progress ledger. Update it whenever the active
@@ -22,33 +22,58 @@ Estimated completion:
 
 ## Active Review Slice
 
-- Branch: `codex/sink-degraded-redaction`, based on canonical
-  `9a5e3585d0c5641a14c2c359acd01e7f3e74bf7d` after PR #1308.
-- PR: #1309. Slice: remove raw sink exception text from `sink.degraded`
-  payloads.
-- Triggering evidence: canonical `LiveEventPipeline._handle_sink_failure()`
-  still copied `str(exception)` into the in-memory degraded event and monitor
-  sink even though the message and reason code already retained the stable sink
-  and exception classifications. Sink exceptions may include request URLs,
-  credentials, response bodies, paths, or account data under the logging
-  policy's explicit exception-text threat model.
-- Scope: `sink.degraded` retains sink name, exception type, stable failure
-  reason, sink health counters, and pipeline timings. Raw exception text is no
-  longer copied into any degraded-event payload.
-- Behavior boundary: observability payload only. Exception propagation,
-  sink isolation, routing, retries, counters, timing, queue behavior, and
-  trading behavior are unchanged.
-- Validation: event-pipeline sink-failure regressions with credential-like
-  exception text, live-event/smoke consumers, complete Python and Rust suites,
-  compilation, generated registry/docs, and diff checks.
+- Branch: `codex/hard-problem-evidence`, based on canonical
+  `f1ae7970393e8299d1b0a98c8ff68d42adddd2d0` after PR #1299.
+- PR: #1310. Slice: retain bounded hard-event classifications independently
+  of the mixed latest problem-event sample.
+- Triggering evidence: the PR #1309 restart smoke correctly reported two hard
+  structured problem events, but its bounded mixed `problem_events` sample
+  exposed only one hard classification. The shared `deque(maxlen=N)` allows
+  later warning-level attention to evict hard evidence while the authoritative
+  hard count remains nonzero.
+- Scope: full smoke reports add `hard_problem_events` with authoritative
+  `count`, bounded chronological `sample`, and explicit `retained` and
+  `truncated` counts. Existing mixed sample ordering, recovery classification,
+  verdicts, event schemas, and command behavior remain unchanged.
+- Behavior boundary: read-only report projection only. Event publication,
+  recovery, process control, exchange access, and trading behavior are
+  unchanged.
+- Validation: focused mixed-eviction, positive truncation, and zero-bound
+  regressions; complete smoke-report tests; AI-doc, compile, and diff checks;
+  complete Python and Rust suites before publication.
 - Review gate: temporary maintainer-authorized exact-head Hermes plus green
   Python and Rust CI while Grok is halted.
-- Expected VPS action: prepare the reviewed merge commit, gracefully restart
-  the five exact configured bot panes to load the producer change, preserve
-  `misc:0.0`, and run bounded immediate plus settled smoke checks.
+- Expected VPS action: prepare the reviewed merge commit and run bounded
+  read-only report verification. No bot restart or process signal is required
+  for this offline reporting-tool change.
 
 ## Deployed Baseline
 
+- Canonical `master` and VPS5 are
+  `f1ae7970393e8299d1b0a98c8ff68d42adddd2d0` after PR #1299. The clean
+  checkout fast-forwarded from PR #1309 without a Rust rebuild after five
+  targets passed 3/3 stable preflight samples with no extras or issues. The
+  authorized exact-pane restart stopped, exited, relaunched, and verified all
+  five targets without force. Its bounded
+  `1784392681320..1784393372572` window selected 10/1,011 managed segments
+  totaling `66399577` bytes, recovered all five stopping, stopped, and startup
+  cohorts, and returned zero hard, monitor, text-log, repository, or target
+  failures. The checkout remained exact and tracked-clean; all five pane
+  parents and protected `misc:0.0` `%8`/PID `434835` remained stable. No direct
+  exchange probe or event was manufactured.
+- PR #1309 merged as
+  `50c37db6049206634b62f45798a8b240a035e3b5` after exact-current-head Hermes
+  approval and green Python/Rust CI. It removed raw exception text from
+  `sink.degraded` while preserving stable sink and exception classifications.
+  VPS5 prepared the exact merge without a Rust rebuild and gracefully restarted
+  all five exact panes. The bounded `1784339097380..1784339763543` window
+  recovered complete shutdown/startup cohorts and left every bot running, but
+  correctly remained red on two hard structured problem events including a
+  real KuCoin positions-fetch `RequestTimeout`. Only one hard classification
+  remained visible in the bounded mixed sample, exposing the active
+  hard-evidence-retention follow-up. Repository, target, monitor, and text-log
+  gates stayed green, tracked state stayed clean, and `misc:0.0` remained
+  unchanged.
 - Canonical `master` and VPS5 are
   `9a5e3585d0c5641a14c2c359acd01e7f3e74bf7d` after PR #1308. Exact-head Hermes
   and Python/Rust CI were green. Exact repository preparation fast-forwarded
@@ -1278,9 +1303,11 @@ with five stable exact processes and recovered uninterruptible observations.
 PR #1286's aggregate-only follow-up, PR #1287's exact tmux target preflight,
 PR #1288's bounded target-identity stability, and PR #1289's plan binding are
 merged, deployed, and naturally validated without process control. PR #1290's
-pane-parent relaunch classification is also merged and deployed. The active
-`codex/restart-target-contract-fingerprint` slice binds target stability to the
-parsed supervisor command contract without exposing or executing commands.
+pane-parent relaunch classification and the restart preparation/orchestration
+slices through PR #1309 are also merged and deployed. Current VPS5 is hard-green
+at canonical `f1ae7970393e8299d1b0a98c8ff68d42adddd2d0`. The active
+`codex/hard-problem-evidence` slice makes every nonzero hard smoke verdict
+diagnosable from a separately bounded hard-only sample.
 
 Do not create progress-only PRs or resume unrelated logging work from stale
 worktrees.
