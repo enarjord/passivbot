@@ -24,7 +24,7 @@ Estimated completion:
 
 - Branch: `codex/sink-degraded-redaction`, based on canonical
   `9a5e3585d0c5641a14c2c359acd01e7f3e74bf7d` after PR #1308.
-- PR: pending. Slice: remove raw sink exception text from `sink.degraded`
+- PR: #1309. Slice: remove raw sink exception text from `sink.degraded`
   payloads.
 - Triggering evidence: canonical `LiveEventPipeline._handle_sink_failure()`
   still copied `str(exception)` into the in-memory degraded event and monitor
