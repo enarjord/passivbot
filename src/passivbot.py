@@ -18134,7 +18134,9 @@ class Passivbot:
         surface_successes = {
             key: int(value)
             for key, value in surface_successes.items()
-            if key in eligible_surface_keys
+            if isinstance(key, tuple)
+            and len(key) == 3
+            and (key[0], key[1]) in eligible_surface_keys
         }
         surface_checks = {
             key: int(value)
@@ -18179,7 +18181,8 @@ class Passivbot:
                 surface_checks[surface_key] = checked_ms
                 continue
             last_attempt_ms = int(surface_attempts.get(surface_key, 0) or 0)
-            last_success_ms = int(surface_successes.get(surface_key, 0) or 0)
+            surface_success_key = (sym, timeframe, int(required_candles))
+            last_success_ms = int(surface_successes.get(surface_success_key, 0) or 0)
             if (
                 timeframe == "1h"
                 and bool(surface_health.get("leading_gap_only"))
@@ -18311,7 +18314,9 @@ class Passivbot:
                     await asyncio.wait_for(candle_task, timeout=remaining_s)
                 else:
                     await candle_task
-                surface_successes[(sym, timeframe)] = int(utc_ms())
+                surface_successes[(sym, timeframe, int(required_candles))] = int(
+                    utc_ms()
+                )
                 self._forager_surface_success_ms = surface_successes
                 refreshed_count += 1
                 if fetch_delay_s > 0:

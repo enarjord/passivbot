@@ -45,10 +45,13 @@
    before native 1h backfills. Staleness targets count only surfaces handled by this background
    refresher, excluding urgent active symbols. A native 1h range with a fresh tail and only an
    unavailable leading prefix remains nontradable and is retried at most once per 24 hours after a
-   successful fetch; failed fetches remain eligible for normal retry. A zero OHLCV network budget
-   disables candidate fetches even when entry slots are open.
+   successful fetch of the same requested window size; changed requirements and failed fetches
+   remain eligible for normal retry. A zero OHLCV network budget disables candidate fetches even
+   when entry slots are open.
    A forced native higher-timeframe refresh bypasses in-memory range and complete-disk
    short-circuits so a partial cached range cannot consume budget without retrying the exchange.
+   Fresh remote rows overwrite matching disk rows, but partial remote results retain any existing
+   disk coverage, and affected higher-timeframe EMA cache entries are invalidated.
 
 Cache paths use `to_standard_exchange_name()` rather than raw CCXT identifiers such as
 `binanceusdm` or `kucoinfutures`.

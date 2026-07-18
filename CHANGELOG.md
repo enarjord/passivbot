@@ -33,10 +33,11 @@ All notable user-facing changes will be documented in this file.
   stale-tail limits, interleaves 1m and 1h health checks while prioritizing cold 1m fetches, backs
   off unavailable native-1h leading-prefix retries only after successful fetches, keeps known-stale
   unfetched surfaces pending, and derives staleness from the actually refreshable universe. Forced
-  native higher-timeframe reads bypass partial range-cache hits, while zero-budget cycles perform no
-  fetches or per-symbol warmup computation even with open slots. This prevents cache-only planning
-  from freezing the selection universe around incumbents whose 1h log-range cache alone remained
-  fresh.
+  native higher-timeframe reads bypass partial range-cache hits, preserve complete disk coverage
+  when a retry returns only a partial range, and invalidate the refreshed timeframe's EMA cache.
+  Backoff is scoped to the requested window size, while zero-budget cycles perform no fetches or
+  per-symbol warmup computation even with open slots. This prevents cache-only planning from
+  freezing the selection universe around incumbents whose 1h log-range cache alone remained fresh.
 
 - Full live smoke reports now retain a separately bounded sample of hard
   structured problem events, with authoritative total, retained, and truncated

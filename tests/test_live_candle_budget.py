@@ -3248,6 +3248,7 @@ async def test_forager_candidate_refresh_backs_off_native_h1_leading_gap(monkeyp
         stop_signal_received = False
         start_time_ms = 0
         cm = FakeCM()
+        h1_required = 10.0
 
         def is_forager_mode(self, pside=None):
             return pside in (None, "long")
@@ -3263,7 +3264,7 @@ async def test_forager_candidate_refresh_backs_off_native_h1_leading_gap(monkeyp
 
         def bp(self, _pside, key, _symbol):
             if key == "volatility_ema_span_1h":
-                return 10.0
+                return self.h1_required
             if key in {"forager_volume_ema_span_1m", "forager_volatility_ema_span_1m"}:
                 return 10.0
             return 0.0
@@ -3280,16 +3281,28 @@ async def test_forager_candidate_refresh_backs_off_native_h1_leading_gap(monkeyp
 
     assert [kwargs["timeframe"] for _, kwargs in bot.cm.fetch_calls] == ["1h"]
 
+    bot.h1_required = 20.0
+    now_holder["ms"] += 60_000
+    await pb_mod.Passivbot._refresh_forager_candidate_candles(bot)
+
+    assert [kwargs["timeframe"] for _, kwargs in bot.cm.fetch_calls] == ["1h", "1h"]
+    assert bot.cm.fetch_calls[-1][1]["max_lookback_candles"] == 20
+
     now_holder["ms"] += 24 * 60 * 60_000
     bot.cm.fail_next_h1 = True
     await pb_mod.Passivbot._refresh_forager_candidate_candles(bot)
 
-    assert [kwargs["timeframe"] for _, kwargs in bot.cm.fetch_calls] == ["1h", "1h"]
+    assert [kwargs["timeframe"] for _, kwargs in bot.cm.fetch_calls] == [
+        "1h",
+        "1h",
+        "1h",
+    ]
 
     now_holder["ms"] += 60_000
     await pb_mod.Passivbot._refresh_forager_candidate_candles(bot)
 
     assert [kwargs["timeframe"] for _, kwargs in bot.cm.fetch_calls] == [
+        "1h",
         "1h",
         "1h",
         "1h",

@@ -2584,9 +2584,24 @@ class CandlestickManager:
         )
         return 0
 
-    def _invalidate_ema_cache(self, symbol: str) -> None:
-        """Invalidate all cached EMA values for a symbol, forcing recomputation."""
-        if symbol in self._ema_cache:
+    def _invalidate_ema_cache(
+        self, symbol: str, *, timeframe: Optional[str] = None
+    ) -> None:
+        """Invalidate cached EMA values for a symbol, optionally for one timeframe."""
+        if symbol not in self._ema_cache:
+            return
+        if timeframe is None:
+            del self._ema_cache[symbol]
+            return
+        tf_key = str(_tf_to_ms(timeframe))
+        retained = {
+            key: value
+            for key, value in self._ema_cache[symbol].items()
+            if len(key) < 3 or str(key[2]) != tf_key
+        }
+        if retained:
+            self._ema_cache[symbol] = retained
+        else:
             del self._ema_cache[symbol]
 
     def needs_ema_recompute(self, symbol: str) -> bool:
@@ -5808,9 +5823,19 @@ class CandlestickManager:
                             self._tf_range_cache[symbol] = sym_cache
                             return out
                         return fetched
-                    out = self._slice_ts_range(fetched, start_ts, end_ts)
-                    if out.size and not persisted_batches:
-                        self._persist_batch(symbol, out, timeframe=out_tf)
+                    fetched_out = self._slice_ts_range(fetched, start_ts, end_ts)
+                    if fetched_out.size and not persisted_batches:
+                        self._persist_batch(symbol, fetched_out, timeframe=out_tf)
+                    if isinstance(disk_arr, np.ndarray) and disk_arr.size:
+                        disk_out = self._slice_ts_range(disk_arr, start_ts, end_ts)
+                        out = self._slice_ts_range(
+                            self._merge_overwrite(disk_out, fetched_out),
+                            start_ts,
+                            end_ts,
+                        )
+                    else:
+                        out = fetched_out
+                    self._invalidate_ema_cache(symbol, timeframe=out_tf)
                     sym_cache[cache_key] = (out, int(now))
                     try:
                         sym_cache.move_to_end(cache_key)

@@ -1114,6 +1114,88 @@ async def test_tf_force_refresh_bypasses_partial_range_cache(monkeypatch, tmp_pa
     assert int(out["ts"][-1]) == end_ts
 
 
+@pytest.mark.asyncio
+async def test_tf_force_refresh_retains_disk_coverage_and_invalidates_tf_ema(
+    monkeypatch, tmp_path
+):
+    fixed_now_ms = 1725590400000  # 2024-09-06 00:00:00 UTC
+    monkeypatch.setattr("time.time", lambda: fixed_now_ms / 1000.0)
+
+    class _Ex:
+        id = "okx"
+
+    cm = CandlestickManager(
+        exchange=_Ex(), exchange_name="okx", cache_dir=str(tmp_path / "caches")
+    )
+    symbol = "PARTIAL/USDT:USDT"
+    timeframe = "1h"
+    period_ms = 60 * ONE_MIN_MS
+    end_ts = (fixed_now_ms // period_ms) * period_ms - period_ms
+    start_ts = end_ts - 4 * period_ms
+
+    full = np.zeros(5, dtype=CANDLE_DTYPE)
+    full["ts"] = np.arange(start_ts, end_ts + period_ms, period_ms, dtype=np.int64)
+    full["o"] = 1.0
+    full["h"] = 2.0
+    full["l"] = 0.5
+    full["c"] = 1.5
+    full["bv"] = 1.0
+    cm._persist_batch(symbol, full, timeframe=timeframe)
+
+    h1_ema_key = ("log_range", 10.0, str(period_ms))
+    m1_ema_key = ("close", 10.0, str(ONE_MIN_MS))
+    cm._ema_cache[symbol] = {
+        h1_ema_key: (0.5, end_ts, fixed_now_ms),
+        m1_ema_key: (1.5, end_ts, fixed_now_ms),
+    }
+    calls = {"fetch": 0}
+
+    async def fake_fetch(
+        symbol_, since_ms, end_exclusive_ms, *, timeframe=None, on_batch=None
+    ):
+        calls["fetch"] += 1
+        partial = np.zeros(1, dtype=CANDLE_DTYPE)
+        partial["ts"] = np.asarray([end_ts], dtype=np.int64)
+        partial["o"] = 8.0
+        partial["h"] = 10.0
+        partial["l"] = 7.0
+        partial["c"] = 9.0
+        partial["bv"] = 2.0
+        if on_batch is not None:
+            on_batch(partial)
+        return partial
+
+    monkeypatch.setattr(cm, "_fetch_ohlcv_paginated", fake_fetch)
+
+    refreshed = await cm.get_candles(
+        symbol,
+        start_ts=start_ts,
+        end_ts=end_ts,
+        max_age_ms=0,
+        timeframe=timeframe,
+        max_lookback_candles=5,
+    )
+
+    assert calls["fetch"] == 1
+    assert refreshed.size == 5
+    assert float(refreshed["c"][-1]) == pytest.approx(9.0)
+    assert h1_ema_key not in cm._ema_cache[symbol]
+    assert m1_ema_key in cm._ema_cache[symbol]
+
+    cached = await cm.get_candles(
+        symbol,
+        start_ts=start_ts,
+        end_ts=end_ts,
+        max_age_ms=600_000,
+        timeframe=timeframe,
+        max_lookback_candles=5,
+    )
+
+    assert calls["fetch"] == 1
+    assert cached.size == 5
+    assert float(cached["c"][-1]) == pytest.approx(9.0)
+
+
 # EOF
 @pytest.mark.asyncio
 async def test_tf_range_cache_reuse_within_ttl(monkeypatch, tmp_path):
