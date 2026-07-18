@@ -163,10 +163,11 @@ execution-loop policy.
 
 `cycle.degraded` retains the stable reason code, bounded exception type, cycle correlation, safe
 operational details, and phase timings needed to explain an incomplete live cycle. Exception text,
-request URLs, request/response payloads, and tracebacks are excluded from this event, including
-generic execution-loop failures and fill-history coverage deferrals. The existing execution-loop
-incident family remains the bounded source for safe status, code, endpoint, and action
-classifications.
+request URLs, request/response payloads, tracebacks, and unknown caller fields are excluded from
+this event, including nested spelling variants and generic execution-loop failures or fill-history
+coverage deferrals. Only the event family's bounded classification, timing, counter, authoritative
+barrier, and staged-readiness fields are retained. The existing execution-loop incident family
+remains the bounded source for safe status, code, endpoint, and action classifications.
 
 This payload boundary is observability-only. Exception propagation, retries, time-sync recovery,
 restart thresholds, fill-history refresh requests, cycle deferral, and trading behavior are

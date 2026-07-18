@@ -32,9 +32,11 @@ Estimated completion:
   exception-type, cycle, and incident fields were already available.
 - Scope: generic execution-loop failures and fill-history coverage deferrals
   retain `error_type`, reason code, cycle correlation, phase timings, and the
-  existing safe operational details, but omit `str(exception)` and defensively
-  remove exception, URL, request/response, and traceback fields from the durable
-  structured/monitor payload.
+  existing safe operational details. A strict event-family allow-list projects
+  only bounded counters, classifications, timings, authoritative barriers, and
+  staged-readiness diagnostics; it omits `str(exception)`, caller-supplied
+  epochs, unknown fields, and nested exception, URL, request/response, or
+  traceback aliases from the durable structured/monitor payload.
 - Behavior boundary: observability payload only. Exception propagation,
   fill-history confirmation requests, retries, time-sync recovery, restart
   thresholds, execution-loop control flow, and trading behavior are unchanged.

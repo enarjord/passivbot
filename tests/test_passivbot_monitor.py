@@ -132,14 +132,37 @@ def test_live_event_cycle_helpers_emit_structured_events():
         cycle_id=cycle_id,
         reason_code="execution_barrier",
         data={
-            "missing": ["open_orders"],
+            "barrier": {
+                "missing": ["open_orders"],
+                "requestURL": "https://example.invalid?api_key=SECRET",
+                "arbitrary": "api_key=SECRET",
+            },
             "error_type": "RequestTimeout",
             "error": "GET https://example.invalid?api_key=SECRET",
             "request_url": "https://example.invalid?api_key=SECRET",
+            "requestURL": "https://example.invalid?api_key=SECRET",
+            "exception-message": "api_key=SECRET",
+            "arbitrary": "api_key=SECRET",
             "details": {
                 "missing": ["positions"],
                 "response": {"api_key": "SECRET"},
+                "responseBody": "api_key=SECRET",
+                "exceptionMessage": "api_key=SECRET",
+                "arbitrary": "api_key=SECRET",
+                "invalid": {
+                    "completed_candles": [
+                        {
+                            "reason": "signature_mismatch",
+                            "mismatch_type": "completed_candle_target_changed",
+                            "changed_count": 1,
+                            "changed_symbols": ["BTC/USDT:USDT"],
+                            "responseBody": "api_key=SECRET",
+                            "arbitrary": "api_key=SECRET",
+                        }
+                    ]
+                },
             },
+            "authoritative_epoch": 999999,
         },
     )
     assert bot._current_live_event_cycle_id() is None
@@ -175,9 +198,21 @@ def test_live_event_cycle_helpers_emit_structured_events():
     ]
     assert events[1].reason_code == "execution_barrier"
     assert events[1].data == {
-        "missing": ["open_orders"],
+        "barrier": {"missing": ["open_orders"]},
         "error_type": "RequestTimeout",
-        "details": {"missing": ["positions"]},
+        "details": {
+            "missing": ["positions"],
+            "invalid": {
+                "completed_candles": [
+                    {
+                        "reason": "signature_mismatch",
+                        "mismatch_type": "completed_candle_target_changed",
+                        "changed_symbols": ["BTC/USDT:USDT"],
+                        "changed_count": 1,
+                    }
+                ]
+            },
+        },
         "authoritative_epoch": "[redacted]",
     }
     assert "SECRET" not in str(events[1].data)
