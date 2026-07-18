@@ -4,6 +4,18 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Fake-live scenario-time callbacks now retain their original offline fake
+  client through graceful shutdown. The final monitor snapshot can therefore
+  complete after the bot releases its public-session reference, without a
+  spurious `NoneType.now_ms` error or any change to live timekeeping, exchange
+  sessions, trading behavior, or event payloads.
+
+- Offline fake-live runs now retain the already-emitted redacted structured
+  event envelopes as a run artifact. The coin-mode HSL RED regression uses that
+  evidence to prove a panic fill is followed by an available planning snapshot
+  without a post-panic `planning.unavailable` handoff, while leaving live event
+  production, HSL behavior, exchange calls, orders, and risk unchanged.
+
 - Hyperliquid `balance.changed` composition diagnostics now parse only proven
   unified-account `info.balances` coin and signed total fields from the
   already-fetched balance response. Non-unified payloads remain explicitly
@@ -38,6 +50,13 @@ All notable user-facing changes will be documented in this file.
   Backoff is scoped to the requested window size, while zero-budget cycles perform no fetches or
   per-symbol warmup computation even with open slots. This prevents cache-only planning from
   freezing the selection universe around incumbents whose 1h log-range cache alone remained fresh.
+
+- Live startups now persist an immutable, non-secret runtime manifest and expose
+  the same Python commit, config hash, embedded Rust source fingerprint, loaded
+  Rust artifact hash, version, and run id through bounded startup events and
+  monitor state. Newly discovered fill events retain which runtime first
+  ingested them without falsely claiming that runtime created the order;
+  refreshes preserve existing attribution and leave legacy fills unattributed.
 
 - Full live smoke reports now retain a separately bounded sample of hard
   structured problem events, with authoritative total, retained, and truncated

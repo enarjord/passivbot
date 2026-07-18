@@ -15,7 +15,26 @@ merge, live smoke evidence changes, or new gaps are discovered.
 - Do not use this file for design churn; unresolved design details belong in the
   plan or a focused handoff doc.
 
-## Latest Canonical Deployment (PR #1316)
+## Latest Canonical Deployment (PR #1317)
+
+- PR #1317 merged as canonical `eb82e256c2dfeac29af158f389f93a7ddba8eae2`.
+  It adds bounded Hyperliquid unified-account composition diagnostics without
+  changing scalar balance, exchange calls, planning, orders, risk, or console
+  admission.
+- VPS5 fast-forwarded tracked-clean from `e7fe7f79` without a Rust rebuild and
+  gracefully restarted only exact panes `%358`-`%362` without force. Old PIDs
+  `1040903/1040911/1040905/1040914/1040908` became
+  `1042130/1042139/1042133/1042142/1042136`.
+- The exact `1784407239491..1784407888217` window selected 10/1,011 event
+  segments totaling `72553076` bytes, retained all five shutdown/startup
+  cohorts, and was hard-green across monitor, text-log, repository, and target
+  gates. Delayed 3/3 sampling recovered one transient GateIO `D` observation to
+  final `R=4,S=1`, with five stable PIDs and no extras. Protected `misc:0.0`
+  remained `%8`/PID `434835`. No direct exchange call or event was manufactured.
+- The exact merge is the base for the offline fake-live post-panic
+  observability regression slice.
+
+## Previous Canonical Deployment (PR #1316)
 
 - PR #1316 merged as canonical `e7fe7f796fb76a829003933dc7e5d937c6df8c64`.
   It adds bounded Binance CCXT unified composition diagnostics without changing
@@ -29,7 +48,7 @@ merge, live smoke evidence changes, or new gaps are discovered.
   had zero hard, monitor, or text-log issues. Delayed 3/3 target sampling was
   `R=4,S=1` with no extras; `misc:0.0` remained `%8`/PID `434835`. No direct
   exchange call or event was manufactured.
-- The exact merge is the base for the Hyperliquid unified-only composition slice.
+- The exact merge was the base for the Hyperliquid unified-only composition slice.
 
 ## Previous Canonical Deployment (PR #1313)
 

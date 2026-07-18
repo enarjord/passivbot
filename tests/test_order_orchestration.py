@@ -5,6 +5,21 @@ import pytest
 import passivbot_rust as pbr
 from passivbot import Passivbot
 from exchanges.ccxt_bot import CCXTBot
+from runtime_identity import RuntimeIdentity
+
+
+TEST_RUNTIME_IDENTITY = RuntimeIdentity(
+    schema_version=1,
+    run_id="a" * 32,
+    started_at_ms=1_700_000_000_000,
+    passivbot_version="test",
+    python_git_commit="b" * 40,
+    python_git_dirty=False,
+    config_sha256="c" * 64,
+    rust_crate_version="test",
+    rust_source_sha256="d" * 64,
+    rust_artifact_sha256="e" * 64,
+)
 
 
 class OrchestrationBot(Passivbot):
@@ -163,6 +178,7 @@ def test_ema_anchor_limit_orders_route_to_ccxt_post_only_params(
 
 def test_startup_banner_warns_when_market_orders_allowed(caplog):
     bot = Passivbot.__new__(Passivbot)
+    bot.runtime_identity = TEST_RUNTIME_IDENTITY
     bot.user = "hyperliquid_pf1"
     bot.exchange = "hyperliquid"
     live_values = {

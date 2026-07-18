@@ -22,27 +22,50 @@ Estimated completion:
 
 ## Active Review Slice
 
-- Branch: `codex/hyperliquid-balance-composition`, based on canonical
-  `e7fe7f796fb76a829003933dc7e5d937c6df8c64` after PR #1316.
-- PR: #1317.
-- Scope: third connector-specific implementation of backlog item 20. Parse
-  only proven Hyperliquid unified `info.balances` coin and finite signed total
-  rows from the already-fetched response. Non-unified payloads remain explicitly
-  unavailable; HIP-3 position responses remain out of scope.
-- Behavior boundary: no new exchange/ticker/API calls and no change to scalar
-  balance calculation, refresh cadence, planning, execution scheduling,
-  orders, risk, valuation, or console materiality. Composition-only changes
-  remain durable and off the console.
-- Validation: focused unified-row, missing/non-finite, zero, collision/bounds,
-  raw-leakage, Hyperliquid cache/hook, staged-carry, balance-state, and
-  event-pipeline regressions.
+- Branch: `codex/fake-live-shutdown-monitor`, based on canonical
+  `8ca7f034bce7ffaaa99800590c88651de4d267c5` after PR #1318.
+- PR: #1319.
+- Scope: repair the offline fake-live scenario clock retained by PR #1318's
+  graceful-shutdown event capture. The final monitor snapshot must remain able
+  to read scenario time after shutdown releases `bot.cca`.
+- Behavior boundary: offline fake-exchange harness, tests, changelog, and
+  compact project state only. No live time source, shutdown ordering, monitor
+  producer, event payload, HSL math, readiness gate, exchange adapter, order,
+  risk, config, console, monitor-persistence, or runtime behavior changes.
+- Validation: unit coverage for both retained fake-time callbacks after
+  `bot.cca` is cleared, an artifact-level graceful-shutdown regression proving
+  the monitor snapshot error is absent while terminal lifecycle events remain,
+  then the fake-live and relevant monitor/event suites.
 - Review gate: temporary maintainer-authorized exact-head Hermes plus green
-  Python and Rust CI while Grok is halted.
-- Expected VPS action: this behavior-changing diagnostic slice requires a
-  bounded prepare/restart/smoke decision only after exact-head review and CI;
-  it must not manufacture balance events or contact an exchange directly.
+  Python and Rust CI while Grok is halted; additional Codex findings must still
+  be adjudicated.
+- Expected VPS action: none. The slice is offline tooling/tests/docs and must
+  not contact an exchange, deploy code, or control live processes.
 
 ## Deployed Baseline
+
+- PR #1318 merged as canonical `8ca7f034bce7ffaaa99800590c88651de4d267c5`.
+  It adds bounded redacted structured-event artifacts and post-panic planning
+  availability proof to the offline fake-live harness. No VPS action was
+  warranted because it changes no live producer, runtime, exchange, order,
+  risk, or configuration behavior.
+- PR #1317 merged as canonical `eb82e256c2dfeac29af158f389f93a7ddba8eae2`.
+  It adds bounded Hyperliquid unified-account composition diagnostics without
+  changing scalar balance, exchange calls, planning, orders, risk, or console
+  admission.
+- VPS5 fast-forwarded tracked-clean from `e7fe7f79` without a Rust rebuild.
+  The exact panes `%358`-`%362` gracefully restarted without force; old PIDs
+  `1040903/1040911/1040905/1040914/1040908` became
+  `1042130/1042139/1042133/1042142/1042136`.
+- The exact `1784407239491..1784407888217` window selected 10/1,011 event
+  segments totaling `72553076` bytes, retained all five
+  stopping/stopped/startup cohorts, and had zero hard, monitor, text-log,
+  repository, or target failures. Delayed 3/3 sampling recovered one transient
+  GateIO `D` observation to final `R=4,S=1`, with five stable PIDs and no extras
+  or issues. Protected `misc:0.0` stayed `%8`/PID `434835`. No direct exchange
+  call or event was manufactured.
+
+## Previous Deployed Baseline (PR #1316)
 
 - PR #1316 merged as canonical `e7fe7f796fb76a829003933dc7e5d937c6df8c64`.
   It adds bounded Binance CCXT unified composition diagnostics while preserving
@@ -58,7 +81,7 @@ Estimated completion:
   with `R=4,S=1` and no extras; `misc:0.0` stayed `%8`/PID `434835`. No direct
   exchange call or event was manufactured.
 
-## Previous Deployed Baseline
+## Previous Deployed Baseline (PR #1313)
 
 - PR #1313 merged as canonical `a0db60f9ca97dbc5b9b37aa3230fce97eb0917ce`.
   It adds the bounded OKX-first balance-composition diagnostic and preserves

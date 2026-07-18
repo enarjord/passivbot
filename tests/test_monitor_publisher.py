@@ -34,7 +34,8 @@ def _make_publisher(tmp_path, **overrides):
 
 
 def test_monitor_publisher_writes_manifest_events_and_snapshot(tmp_path):
-    publisher = _make_publisher(tmp_path)
+    runtime = {"schema_version": 1, "run_id": "run-123"}
+    publisher = _make_publisher(tmp_path, runtime_identity=runtime)
 
     event = publisher.record_event("bot.start", ("bot", "lifecycle"), {"status": "starting"}, ts=1000)
     assert event["seq"] == 1
@@ -46,6 +47,7 @@ def test_monitor_publisher_writes_manifest_events_and_snapshot(tmp_path):
     assert manifest["last_seq"] == 2
     assert manifest["capabilities"]["history"] is True
     assert manifest["capabilities"]["history_streams"]["fills"] is True
+    assert manifest["runtime"] == runtime
 
     events = [json.loads(line) for line in (root / "events" / "current.ndjson").read_text().splitlines()]
     assert [event["kind"] for event in events] == ["bot.start", "error.bot"]
@@ -61,6 +63,7 @@ def test_monitor_publisher_writes_manifest_events_and_snapshot(tmp_path):
     snapshot = json.loads((root / "state.latest.json").read_text())
     assert snapshot["meta"]["custom"] == "value"
     assert snapshot["meta"]["seq"] == 2
+    assert snapshot["meta"]["runtime"] == runtime
     assert snapshot["account"]["balance_raw"] == 123.0
 
 
