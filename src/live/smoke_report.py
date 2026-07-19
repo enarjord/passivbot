@@ -4869,6 +4869,23 @@ def _summarize_event_pipeline_health(
         }
         for group in ordered[:EVENT_PIPELINE_HEALTH_GROUP_LIMIT]
     ]
+    integrity_sources = {
+        "drops": sum(
+            int(group.get("latest_dropped_total") or 0) for group in groups.values()
+        ),
+        "sink_errors": sum(
+            int(group.get("latest_sink_error_total") or 0)
+            for group in groups.values()
+        ),
+        "unexpectedly_dead_workers": sum(
+            1
+            for group in groups.values()
+            if group.get("latest_worker_alive") is False
+            and group.get("latest_pipeline_stopping") is not True
+        ),
+    }
+    integrity_sources["total"] = sum(integrity_sources.values())
+    integrity_attention_count = int(integrity_sources["total"])
     out = {
         "total": sum(int(group.get("count", 0)) for group in groups.values()),
         "groups_truncated": len(ordered) > EVENT_PIPELINE_HEALTH_GROUP_LIMIT,
@@ -4897,6 +4914,12 @@ def _summarize_event_pipeline_health(
         "latest_stopping_count": sum(
             1 for group in groups.values() if group.get("latest_pipeline_stopping") is True
         ),
+        "integrity": {
+            "ok": integrity_attention_count == 0,
+            "attention": integrity_attention_count > 0,
+            "attention_count": integrity_attention_count,
+            "source_counts": integrity_sources,
+        },
         "groups": compact_groups,
     }
     processed_counts = [
@@ -9838,6 +9861,7 @@ def _summary_limited_groups(
                 "latest_worker_not_alive_count"
             ),
             "latest_stopping_count": summary.get("latest_stopping_count"),
+            "integrity": summary.get("integrity"),
             "latest_cpu_percent_max": summary.get("latest_cpu_percent_max"),
             "latest_cpu_reporting_bots": summary.get("latest_cpu_reporting_bots"),
             "latest_memory_percent_max": summary.get("latest_memory_percent_max"),
@@ -11725,6 +11749,7 @@ def summarize_live_smoke_report_brief(report: dict[str, Any]) -> dict[str, Any]:
                 "latest_stopping_count": _count_value(
                     event_pipeline_health.get("latest_stopping_count")
                 ),
+                "integrity": event_pipeline_health.get("integrity"),
                 "event_types": event_pipeline_health.get("event_types") or {},
             }.items()
             if value is not None

@@ -22,27 +22,56 @@ Estimated completion:
 
 ## Active Review Slice
 
-- Branch: `codex/fake-live-shutdown-monitor`, based on canonical
-  `8ca7f034bce7ffaaa99800590c88651de4d267c5` after PR #1318.
-- PR: #1319.
-- Scope: repair the offline fake-live scenario clock retained by PR #1318's
-  graceful-shutdown event capture. The final monitor snapshot must remain able
-  to read scenario time after shutdown releases `bot.cca`.
-- Behavior boundary: offline fake-exchange harness, tests, changelog, and
-  compact project state only. No live time source, shutdown ordering, monitor
-  producer, event payload, HSL math, readiness gate, exchange adapter, order,
-  risk, config, console, monitor-persistence, or runtime behavior changes.
-- Validation: unit coverage for both retained fake-time callbacks after
-  `bot.cca` is cleared, an artifact-level graceful-shutdown regression proving
-  the monitor snapshot error is absent while terminal lifecycle events remain,
-  then the fake-live and relevant monitor/event suites.
+- Branch: `codex/event-pipeline-integrity-smoke`, based on canonical
+  `0dbfbca74b029353a0e11888e71077fa711835ff` after PR #1314.
+- PR: #1320.
+- Scope: add a separate bounded diagnostic integrity verdict for the latest
+  structured-event pipeline snapshots. Event drops, sink errors, and a worker
+  that is dead outside orderly pipeline shutdown must be visible without
+  changing the existing trading/process smoke verdict.
+- Behavior boundary: read-only smoke report, concise/brief projections, tests,
+  changelog, and project state only. No event producer, queue, sink, monitor
+  persistence, console, exchange, order, risk, readiness, configuration, or
+  process-control behavior changes.
+- Validation: focused report/projection tests must prove loss is visible while
+  top-level `ok`, `attention`, and `hard_failures` retain their current
+  semantics; orderly shutdown must not create a false dead-worker incident.
 - Review gate: temporary maintainer-authorized exact-head Hermes plus green
   Python and Rust CI while Grok is halted; additional Codex findings must still
   be adjudicated.
-- Expected VPS action: none. The slice is offline tooling/tests/docs and must
-  not contact an exchange, deploy code, or control live processes.
+- Expected VPS action: pull and bounded read-only report only after merge. The
+  slice is diagnostics-only and does not warrant a bot restart.
 
 ## Deployed Baseline
+
+- PR #1314 merged as canonical `0dbfbca74b029353a0e11888e71077fa711835ff`.
+  It records immutable runtime/Rust/config provenance and fill-to-runtime
+  attribution without changing strategy, order, risk, or exchange behavior.
+  PR #1319 had already merged as `84c8e040334820ccc049787c82048358e18179c6`
+  with its offline fake-live shutdown-clock repair and required no VPS action.
+- VPS5 fast-forwarded tracked-clean from `eb82e256c2` to the exact PR #1314
+  merge. A deliberately wrong Rust fingerprint failed closed before build or
+  signal. The exact target-derived fingerprint
+  `691bff9683deec9382a4e96ab6a107c14145f88edd6ae2f8e2380b8ba6824449`
+  then rebuilt and verified the loaded extension after restoring the explicit
+  `/root/.cargo/bin` non-login PATH.
+- The guarded runner stopped, exited, relaunched, and verified all five exact
+  panes without force. Bot PIDs
+  `1042130/1042139/1042133/1042142/1042136` became
+  `1044483/1044492/1044486/1044495/1044489`. The exact
+  `1784414260464..1784414921350` window selected 10/1,011 event segments and
+  `73414648` bytes with complete lifecycle, repository, target, monitor, and
+  text-log evidence, but correctly remained red on one natural KuCoin
+  authoritative-refresh `RequestTimeout` at `1784414448511`.
+- KuCoin subsequently emitted readiness evidence and successful authoritative
+  calls without intervention. The exact settled
+  `1784414681768..1784415199226` report was hard-green with zero hard problem
+  events, log matches, monitor errors, or process failures. Final target
+  sampling was 3/3 stable with states `R=3,S=2`, no extras or issues, and
+  protected `misc:0.0` remained `%8`/PID `434835`. No direct exchange request
+  or event was manufactured.
+
+## Previous Deployed Baseline (PRs #1318 And #1317)
 
 - PR #1318 merged as canonical `8ca7f034bce7ffaaa99800590c88651de4d267c5`.
   It adds bounded redacted structured-event artifacts and post-panic planning

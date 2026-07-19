@@ -668,6 +668,17 @@ def test_live_incident_bundle_collects_hashes_snapshots_events_and_window(tmp_pa
         "latest_degraded_total": 3,
         "latest_worker_not_alive_count": 1,
         "latest_stopping_count": 1,
+        "integrity": {
+            "ok": False,
+            "attention": True,
+            "attention_count": 3,
+            "source_counts": {
+                "drops": 2,
+                "sink_errors": 1,
+                "unexpectedly_dead_workers": 0,
+                "total": 3,
+            },
+        },
         "event_types": {"health.summary": 1},
     }
     assert report["smoke_report"]["shutdown_events"] == {
