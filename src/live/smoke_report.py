@@ -6189,6 +6189,7 @@ def _merge_shutdown_event_group(
             "latest_message",
             "latest_data",
             "latest_ids",
+            "_identity_valid",
         ):
             existing[field] = group.get(field)
 
@@ -6198,6 +6199,7 @@ def _summarize_shutdown_events(
     event_type_counts: Counter[str],
     *,
     coverage_complete: bool,
+    invalid_identity_events: int,
 ) -> dict[str, Any]:
     ordered = sorted(
         groups.values(),
@@ -6222,6 +6224,7 @@ def _summarize_shutdown_events(
     lifecycle = _summarize_shutdown_lifecycle(
         groups,
         coverage_complete=coverage_complete,
+        invalid_identity_events=invalid_identity_events,
     )
     return {
         "total": sum(int(group.get("count", 0)) for group in groups.values()),
@@ -6245,16 +6248,15 @@ def _summarize_shutdown_lifecycle(
     groups: dict[tuple[Any, ...], dict[str, Any]],
     *,
     coverage_complete: bool,
+    invalid_identity_events: int,
 ) -> dict[str, Any]:
     """Project the latest in-window stop boundary for each observed bot."""
     boundaries_by_bot: dict[str, dict[str, dict[str, Any]]] = {}
-    invalid_identity_events = 0
     for group in groups.values():
         event_type = group.get("event_type")
         if event_type not in {EventTypes.BOT_STOPPING, EventTypes.BOT_STOPPED}:
             continue
         if group.get("_identity_valid") is not True:
-            invalid_identity_events += int(group.get("count") or 0)
             continue
         bot = str(group.get("bot") or "unknown")
         boundaries = boundaries_by_bot.setdefault(bot, {})
@@ -8680,6 +8682,7 @@ def _scan_events(
     risk_event_type_counts: Counter[str] = Counter()
     shutdown_event_groups: dict[tuple[Any, ...], dict[str, Any]] = {}
     shutdown_event_type_counts: Counter[str] = Counter()
+    shutdown_invalid_identity_events = 0
     problem_event_groups: dict[tuple[Any, ...], dict[str, Any]] = {}
     if max_event_file_count_per_bot and files:
         event_files_before_limit = len(files)
@@ -9055,15 +9058,22 @@ def _scan_events(
                         )
                     if event_type in SHUTDOWN_EVENT_TYPES:
                         shutdown_event_type_counts[str(event_type)] += 1
+                        shutdown_group = _shutdown_event_group(
+                            bot_key=bot_key,
+                            row=row,
+                            live_event=live_event,
+                            path=path,
+                            line_no=line_no,
+                        )
+                        if (
+                            event_type
+                            in {EventTypes.BOT_STOPPING, EventTypes.BOT_STOPPED}
+                            and shutdown_group.get("_identity_valid") is not True
+                        ):
+                            shutdown_invalid_identity_events += 1
                         _merge_shutdown_event_group(
                             shutdown_event_groups,
-                            _shutdown_event_group(
-                                bot_key=bot_key,
-                                row=row,
-                                live_event=live_event,
-                                path=path,
-                                line_no=line_no,
-                            ),
+                            shutdown_group,
                         )
                     level = live_event.get("level")
                     if level:
@@ -9271,6 +9281,7 @@ def _scan_events(
         "shutdown_events": _summarize_shutdown_events(
             shutdown_event_groups,
             shutdown_event_type_counts,
+            invalid_identity_events=shutdown_invalid_identity_events,
             coverage_complete=(
                 event_tail_limited_files == 0
                 and event_files_skipped_by_limit == 0

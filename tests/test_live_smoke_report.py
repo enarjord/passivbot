@@ -5878,6 +5878,23 @@ def test_live_smoke_report_shutdown_lifecycle_excludes_inconsistent_identity(
     assert lifecycle["observed_bots"] == 0
 
 
+def test_live_smoke_report_shutdown_lifecycle_refreshes_merged_identity_validity(
+    tmp_path,
+):
+    events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    valid = _monitor_row(event_type="bot.stopping", seq=1, ts=1000)
+    invalid = _monitor_row(event_type="bot.stopping", seq=2, ts=2000)
+    invalid["user"] = "other_user"
+    _write_ndjson(events_dir / "current.ndjson", [valid, invalid])
+
+    report = build_live_smoke_report(tmp_path / "monitor", logs_root=None)
+
+    lifecycle = report["shutdown_events"]["lifecycle"]
+    assert lifecycle["identity_complete"] is False
+    assert lifecycle["invalid_identity_events"] == 1
+    assert lifecycle["observed_bots"] == 0
+
+
 def test_live_smoke_report_shutdown_lifecycle_rows_are_bounded(tmp_path):
     monitor_root = tmp_path / "monitor"
     for index in range(smoke_report_module.SHUTDOWN_EVENT_GROUP_LIMIT + 1):
