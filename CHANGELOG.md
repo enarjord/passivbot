@@ -59,7 +59,8 @@ All notable user-facing changes will be documented in this file.
   unfetched surfaces pending, and derives staleness from the actually refreshable universe. Forced
   native higher-timeframe reads bypass partial range-cache hits, preserve complete disk coverage
   when a retry returns only a partial range, keep incomplete ranges out of reusable EMA state, and
-  invalidate the refreshed timeframe's EMA cache. Backoff is scoped to the requested window and
+  invalidate the refreshed timeframe's EMA cache and overlapping range-cache entries. Backoff is
+  scoped to the requested window and
   begins only after a nonempty fetch still proves its leading gap. Health-only scans do not consume
   fetch tokens, and native 1h work is scheduled only for nonzero strategy weights. Zero-budget
   cycles perform no fetches or per-symbol warmup computation even with open slots. This prevents

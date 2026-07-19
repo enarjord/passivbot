@@ -2604,6 +2604,30 @@ class CandlestickManager:
         else:
             del self._ema_cache[symbol]
 
+    def _invalidate_tf_range_cache(
+        self,
+        symbol: str,
+        *,
+        timeframe: str,
+        start_ts: int,
+        end_ts: int,
+    ) -> None:
+        """Invalidate cached ranges overlapping persisted candles for one timeframe."""
+        sym_cache = self._tf_range_cache.get(symbol)
+        if not sym_cache:
+            return
+        overlapping = [
+            key
+            for key in sym_cache
+            if str(key[0]) == str(timeframe)
+            and int(key[1]) <= int(end_ts)
+            and int(key[2]) >= int(start_ts)
+        ]
+        for key in overlapping:
+            sym_cache.pop(key, None)
+        if not sym_cache:
+            self._tf_range_cache.pop(symbol, None)
+
     def needs_ema_recompute(self, symbol: str) -> bool:
         """Check if EMAs for a symbol should be recomputed due to synthetic data replacement.
 
@@ -5847,6 +5871,14 @@ class CandlestickManager:
                     else:
                         out = fetched_out
                     self._invalidate_ema_cache(symbol, timeframe=out_tf)
+                    if fetched_out.size:
+                        self._invalidate_tf_range_cache(
+                            symbol,
+                            timeframe=out_tf,
+                            start_ts=int(_ts_index(fetched_out)[0]),
+                            end_ts=int(_ts_index(fetched_out)[-1]),
+                        )
+                        sym_cache = self._tf_range_cache.setdefault(symbol, OrderedDict())
                     if self._candle_range_has_full_coverage(
                         out, int(start_ts), int(end_ts), int(period_ms)
                     ):

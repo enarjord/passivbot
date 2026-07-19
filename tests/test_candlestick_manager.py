@@ -1148,6 +1148,13 @@ async def test_tf_force_refresh_retains_disk_coverage_and_invalidates_tf_ema(
         h1_ema_key: (0.5, end_ts, fixed_now_ms),
         m1_ema_key: (1.5, end_ts, fixed_now_ms),
     }
+    shorter_start_ts = end_ts - 2 * period_ms
+    shorter_cache_key = (timeframe, shorter_start_ts, end_ts)
+    stale_shorter = full[-3:].copy()
+    stale_shorter["c"] = 1.5
+    cm._tf_range_cache[symbol] = OrderedDict(
+        [(shorter_cache_key, (stale_shorter, fixed_now_ms))]
+    )
     calls = {"fetch": 0}
 
     async def fake_fetch(
@@ -1181,6 +1188,7 @@ async def test_tf_force_refresh_retains_disk_coverage_and_invalidates_tf_ema(
     assert float(refreshed["c"][-1]) == pytest.approx(9.0)
     assert h1_ema_key not in cm._ema_cache[symbol]
     assert m1_ema_key in cm._ema_cache[symbol]
+    assert shorter_cache_key not in cm._tf_range_cache[symbol]
 
     cached = await cm.get_candles(
         symbol,
@@ -1194,6 +1202,19 @@ async def test_tf_force_refresh_retains_disk_coverage_and_invalidates_tf_ema(
     assert calls["fetch"] == 1
     assert cached.size == 5
     assert float(cached["c"][-1]) == pytest.approx(9.0)
+
+    shorter_cached = await cm.get_candles(
+        symbol,
+        start_ts=shorter_start_ts,
+        end_ts=end_ts,
+        max_age_ms=600_000,
+        timeframe=timeframe,
+        max_lookback_candles=3,
+    )
+
+    assert calls["fetch"] == 1
+    assert shorter_cached.size == 3
+    assert float(shorter_cached["c"][-1]) == pytest.approx(9.0)
 
 
 @pytest.mark.asyncio
