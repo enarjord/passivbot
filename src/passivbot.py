@@ -4275,6 +4275,117 @@ class Passivbot:
             error_label="live warmup",
         )
 
+    @staticmethod
+    def _required_h1_log_range_span_for_strategy(
+        strategy_params: dict,
+        *,
+        pside: str,
+        symbol: str,
+        strategy_kind: str,
+    ) -> float:
+        """Return the native-1h span only when live strategy logic consumes it."""
+        requirements = strategy_warmup_requirements(
+            strategy_params,
+            pside=pside,
+            symbol=symbol,
+            error_label="live warmup",
+        )
+        h1_span = float(requirements.max_h1_span_hours)
+        if h1_span <= 0.0:
+            return 0.0
+        h1_weight = max(
+            strategy_abs_max_weight(
+                strategy_params,
+                context=f"strategy {pside}.entry_volatility_1h_weight",
+                symbol=symbol,
+                pside=pside,
+                error_label="live warmup",
+                optional=False,
+                paths=(
+                    ("entry", "threshold_volatility_1h_weight"),
+                    ("entry", "retracement_volatility_1h_weight"),
+                    ("entry", "grid_spacing_volatility_weight"),
+                    ("entry", "trailing_threshold_volatility_weight"),
+                    ("entry", "trailing_retracement_volatility_weight"),
+                    ("entry_weight_volatility_1h",),
+                    ("offset_volatility_1h_weight",),
+                ),
+            ),
+            strategy_abs_max_weight(
+                strategy_params,
+                context=f"strategy {pside}.close_volatility_1h_weight",
+                symbol=symbol,
+                pside=pside,
+                error_label="live warmup",
+                optional=strategy_kind == "trailing_grid_v7",
+                paths=(
+                    ("close", "threshold_volatility_1h_weight"),
+                    ("close", "retracement_volatility_1h_weight"),
+                    ("close_weight_volatility_1h",),
+                    ("offset_volatility_1h_weight",),
+                ),
+            ),
+        )
+        return h1_span if h1_weight > 0.0 else 0.0
+
+    def _live_required_h1_log_range_span(
+        self, pside: str, symbol: str
+    ) -> float:
+        """Return the native-1h span required by this live side and symbol."""
+        strategy_getter = getattr(self, "_strategy_params_to_rust_dict", None)
+        if callable(strategy_getter):
+            strategy_params = strategy_getter(pside, symbol)
+        else:
+            def legacy_value(key: str) -> float:
+                try:
+                    raw = self.bp(pside, key, symbol)
+                except KeyError:
+                    return 0.0
+                return Passivbot._positive_finite_warmup_value(
+                    raw,
+                    context=f"legacy strategy {pside}.{key}",
+                    symbol=symbol,
+                )
+
+            h1_span = legacy_value("entry_volatility_ema_span_1h")
+            if h1_span <= 0.0:
+                h1_span = legacy_value("entry_volatility_ema_span_hours")
+            if h1_span <= 0.0:
+                h1_span = legacy_value("volatility_ema_span_1h")
+            strategy_params = {
+                "ema_span_0": legacy_value("ema_span_0"),
+                "ema_span_1": legacy_value("ema_span_1"),
+                "volatility_ema_span_1m": legacy_value(
+                    "entry_volatility_ema_span_1m"
+                ),
+                "volatility_ema_span_1h": h1_span,
+                "entry": {
+                    "threshold_volatility_1m_weight": legacy_value(
+                        "entry_weight_volatility_1m"
+                    ),
+                    "threshold_volatility_1h_weight": legacy_value(
+                        "entry_weight_volatility_1h"
+                    ),
+                },
+                "close": {
+                    "threshold_volatility_1m_weight": legacy_value(
+                        "close_weight_volatility_1m"
+                    ),
+                    "threshold_volatility_1h_weight": legacy_value(
+                        "close_weight_volatility_1h"
+                    ),
+                },
+            }
+        strategy_kind = normalize_strategy_kind(
+            self.config.get("live", {}).get("strategy_kind")
+        )
+        return Passivbot._required_h1_log_range_span_for_strategy(
+            strategy_params,
+            pside=pside,
+            symbol=symbol,
+            strategy_kind=strategy_kind,
+        )
+
     def _live_forager_warmup_value(self, pside: str, key: str, symbol: str) -> float:
         """Return grouped forager indicator spans for live candle warmup."""
         bot_value = getattr(self, "bot_value", None)
@@ -7706,6 +7817,80 @@ class Passivbot:
         if last_refresh > 0:
             return max(0, int(now - last_refresh))
         return int(now)
+
+    def _candidate_candle_surface_health(
+        self,
+        symbol: str,
+        timeframe: str,
+        required_candles: int,
+        *,
+        now_ms: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """Return cache-only readiness for one background forager candle surface."""
+        now = utc_ms() if now_ms is None else int(now_ms)
+        tf = str(timeframe)
+        try:
+            health = self.cm.get_completed_candle_health(
+                symbol,
+                {tf: max(1, int(required_candles))},
+                now_ms=now,
+            )
+            report = (health.get("timeframes", {}) or {}).get(tf, {})
+            if report:
+                last_cached_ts = report.get("last_cached_ts")
+                loaded_rows = int(report.get("loaded_rows", 0) or 0)
+                no_basis = loaded_rows <= 0 or last_cached_ts is None
+                missing_candles = int(report.get("missing_candles", 0) or 0)
+                tail_gap_candles = int(report.get("tail_gap_candles", 0) or 0)
+                missing_spans = list(report.get("missing_spans", []) or [])
+                start_ts = report.get("start_ts")
+                leading_gap_only = bool(
+                    not report.get("open_tail_gap")
+                    and len(missing_spans) == 1
+                    and start_ts is not None
+                    and len(missing_spans[0]) >= 2
+                    and int(missing_spans[0][0]) <= int(start_ts)
+                    and last_cached_ts is not None
+                    and int(missing_spans[0][1]) < int(last_cached_ts)
+                )
+                return {
+                    "coverage_ok": bool(report.get("coverage_ok")),
+                    "age_ms": (
+                        int(now)
+                        if no_basis
+                        else int(report.get("last_cached_age_ms") or 0)
+                    ),
+                    "missing_candles": missing_candles,
+                    "tail_gap_candles": tail_gap_candles,
+                    "tail_only": bool(report.get("open_tail_gap"))
+                    and missing_candles > 0
+                    and missing_candles == tail_gap_candles,
+                    "leading_gap_only": leading_gap_only,
+                    "no_basis": no_basis,
+                }
+        except Exception:
+            # Compatibility fallback for lightweight candle-manager doubles and
+            # old cache layouts. The live manager supplies the detailed report.
+            if tf != "1m":
+                return {
+                    "coverage_ok": False,
+                    "age_ms": int(now),
+                    "missing_candles": max(1, int(required_candles)),
+                    "tail_gap_candles": max(1, int(required_candles)),
+                    "tail_only": False,
+                    "leading_gap_only": False,
+                    "no_basis": True,
+                }
+        age_ms = Passivbot._candle_staleness_ms(self, symbol, now_ms=now)
+        return {
+            "coverage_ok": age_ms <= 0,
+            "age_ms": int(age_ms),
+            "missing_candles": 0 if age_ms <= 0 else 1,
+            "tail_gap_candles": 0 if age_ms <= 0 else 1,
+            "tail_only": age_ms > 0,
+            "leading_gap_only": False,
+            "no_basis": age_ms >= now,
+        }
 
     def _rank_symbols_by_candle_staleness(
         self, symbols: Iterable[str], *, now_ms: Optional[int] = None
@@ -15306,43 +15491,13 @@ class Passivbot:
                     )
                 if m1_lr_weight > 0.0 and m1_lr_span > 0.0 and math.isfinite(m1_lr_span):
                     need_m1_lr_spans[symbol].add(m1_lr_span)
-                h1_span = requirements.max_h1_span_hours
-                h1_lr_weight = 0.0
-                if h1_span > 0.0:
-                    h1_lr_weight = max(
-                        strategy_abs_max_weight(
-                            strategy_params,
-                            context=f"strategy {pside}.entry_volatility_1h_weight",
-                            symbol=symbol,
-                            pside=pside,
-                            error_label="live warmup",
-                            optional=False,
-                            paths=(
-                                ("entry", "threshold_volatility_1h_weight"),
-                                ("entry", "retracement_volatility_1h_weight"),
-                                ("entry", "grid_spacing_volatility_weight"),
-                                ("entry", "trailing_threshold_volatility_weight"),
-                                ("entry", "trailing_retracement_volatility_weight"),
-                                ("entry_weight_volatility_1h",),
-                                ("offset_volatility_1h_weight",),
-                            ),
-                        ),
-                        strategy_abs_max_weight(
-                            strategy_params,
-                            context=f"strategy {pside}.close_volatility_1h_weight",
-                            symbol=symbol,
-                            pside=pside,
-                            error_label="live warmup",
-                            optional=strategy_kind == "trailing_grid_v7",
-                            paths=(
-                                ("close", "threshold_volatility_1h_weight"),
-                                ("close", "retracement_volatility_1h_weight"),
-                                ("close_weight_volatility_1h",),
-                                ("offset_volatility_1h_weight",),
-                            ),
-                        ),
-                    )
-                if h1_lr_weight > 0.0 and h1_span > 0.0 and math.isfinite(h1_span):
+                h1_span = Passivbot._required_h1_log_range_span_for_strategy(
+                    strategy_params,
+                    pside=pside,
+                    symbol=symbol,
+                    strategy_kind=strategy_kind,
+                )
+                if h1_span > 0.0 and math.isfinite(h1_span):
                     need_h1_lr_spans[symbol].add(h1_span)
 
         # Forager metrics use global spans (per side); include them for all symbols.
@@ -17723,6 +17878,7 @@ class Passivbot:
         *,
         max_cycle_budget: Optional[int] = None,
         initial_tokens: Optional[float] = None,
+        consume: bool = True,
     ) -> int:
         """Token bucket budget for forager candle refreshes."""
         if initial_tokens is None:
@@ -17732,6 +17888,7 @@ class Passivbot:
             max_calls_per_minute,
             max_cycle_budget=max_cycle_budget,
             initial_tokens=initial_tokens,
+            consume=consume,
         )
 
     def _token_bucket_budget(
@@ -17741,8 +17898,9 @@ class Passivbot:
         *,
         max_cycle_budget: Optional[int] = None,
         initial_tokens: Optional[float] = None,
+        consume: bool = True,
     ) -> int:
-        """Return a bounded token-bucket budget for best-effort candle refreshes."""
+        """Return available token budget, optionally consuming the returned amount."""
         try:
             max_calls = int(max_calls_per_minute)
         except Exception:
@@ -17765,7 +17923,7 @@ class Passivbot:
         budget = int(tokens)
         if max_cycle_budget is not None:
             budget = min(budget, max(0, int(max_cycle_budget)))
-        state["tokens"] = float(tokens - budget)
+        state["tokens"] = float(tokens - budget if consume else tokens)
         state["last_ms"] = int(now)
         setattr(self, state_attr, state)
         return max(0, budget)
@@ -17956,7 +18114,7 @@ class Passivbot:
             )
 
     async def _refresh_forager_candidate_candles(self) -> None:
-        """Best-effort refresh for forager candidate symbols to avoid large bursts."""
+        """Best-effort refresh for required forager candidate candle surfaces."""
         if not self.is_forager_mode():
             return
         max_calls = get_optional_live_value(
@@ -17966,6 +18124,8 @@ class Passivbot:
             max_calls = int(max_calls) if max_calls is not None else 0
         except Exception:
             max_calls = 0
+        if max_calls <= 0:
+            return
 
         candidates_by_side: Dict[str, set] = {}
         slots_open_any = False
@@ -17994,66 +18154,70 @@ class Passivbot:
         if not all_candidates:
             return
 
-        cycle_cap = (
-            max(1, int(math.ceil(float(max_calls) / 4.0))) if max_calls > 0 else 0
-        )
-        if slots_open_any:
-            if max_calls > 0:
-                # Respect rate limit even with open slots; do not spend a full
-                # accumulated minute budget in one post-execution cleanup phase.
-                budget = self._forager_refresh_budget(
-                    max_calls,
-                    max_cycle_budget=cycle_cap,
-                    initial_tokens=cycle_cap,
-                )
-                if budget <= 0:
-                    return
-            else:
-                budget = len(all_candidates)
-        else:
-            if max_calls <= 0:
-                return
-            budget = self._forager_refresh_budget(
-                max_calls,
-                max_cycle_budget=cycle_cap,
-                initial_tokens=cycle_cap,
-            )
-            if budget <= 0:
-                return
-
         # Skip only the urgent per-cycle candle universe. The staged orchestrator
         # managed universe may include flat graceful-stop symbols; those still
         # need budgeted candidate refreshes for future forager readiness.
         urgent = set(Passivbot._urgent_active_candle_symbols(self))
-        candidates = sorted(all_candidates - urgent)
+        refreshable_by_side = {
+            pside: set(symbols) - urgent
+            for pside, symbols in candidates_by_side.items()
+            if set(symbols) - urgent
+        }
+        candidates = sorted(set().union(*refreshable_by_side.values()))
         if not candidates:
             return
 
-        if slots_open_any:
-            rate_limit_age_ms = self._forager_target_staleness_ms(
-                len(all_candidates), max_calls
+        cycle_cap = (
+            max(1, int(math.ceil(float(max_calls) / 4.0))) if max_calls > 0 else 0
+        )
+        # Respect the configured rate limit with or without open slots; do not
+        # spend a full accumulated minute budget in one cleanup phase.
+        budget = self._forager_refresh_budget(
+            max_calls,
+            max_cycle_budget=cycle_cap,
+            initial_tokens=cycle_cap,
+            consume=False,
+        )
+        if budget <= 0:
+            return
+
+        try:
+            warmup_ratio = float(
+                get_optional_live_value(self.config, "warmup_ratio", 0.0) or 0.0
             )
-            # Respect rate limit even with open slots; floor at 60s for responsiveness.
-            target_age_ms = max(60_000, rate_limit_age_ms) if max_calls > 0 else 60_000
-        else:
-            target_age_ms = self._forager_target_staleness_ms(
-                len(all_candidates), max_calls
+        except Exception:
+            warmup_ratio = 0.0
+        try:
+            max_warmup_minutes = int(
+                get_optional_live_value(self.config, "max_warmup_minutes", 0) or 0
             )
+        except Exception:
+            max_warmup_minutes = 0
+        per_symbol_win, per_symbol_h1_hours, _ = compute_live_warmup_windows(
+            refreshable_by_side,
+            lambda pside, key, sym: self.bp(pside, key, sym),
+            forager_enabled={pside: True for pside in refreshable_by_side},
+            strategy_lookup=lambda pside, key, sym: Passivbot._live_strategy_warmup_value(
+                self, pside, key, sym
+            ),
+            forager_lookup=lambda pside, key, sym: Passivbot._live_forager_warmup_value(
+                self, pside, key, sym
+            ),
+            warmup_ratio=warmup_ratio,
+            max_warmup_minutes=max_warmup_minutes,
+        )
+        try:
+            default_win = int(getattr(self.cm, "default_window_candles", 120) or 120)
+        except Exception:
+            default_win = 120
+        minimum_1m_window = (
+            min(default_win, max_warmup_minutes)
+            if max_warmup_minutes > 0
+            else default_win
+        )
+        for sym in per_symbol_win:
+            per_symbol_win[sym] = max(minimum_1m_window, int(per_symbol_win[sym]))
         now = utc_ms()
-        stale: List[Tuple[int, str]] = []
-        for sym in candidates:
-            age_ms = self._candle_staleness_ms(sym, now_ms=now)
-            if age_ms > target_age_ms:
-                stale.append((age_ms, sym))
-        if not stale:
-            return
-
-        stale.sort(key=lambda item: (-int(item[0]), item[1]))
-        to_refresh = [sym for _, sym in stale[:budget]]
-        if not to_refresh:
-            return
-        stale_by_symbol = {sym: int(age_ms) for age_ms, sym in stale}
-
         max_refresh_s_raw = get_optional_live_value(
             self.config, "max_forager_candle_refresh_seconds", 45
         )
@@ -18062,6 +18226,146 @@ class Passivbot:
         except Exception:
             max_refresh_s = 45.0
         max_refresh_ms = int(max(0.0, max_refresh_s) * 1000.0)
+        refresh_started_ms = utc_ms()
+
+        surface_attempts = getattr(self, "_forager_surface_attempt_ms", None)
+        if not isinstance(surface_attempts, dict):
+            surface_attempts = {}
+        surface_successes = getattr(self, "_forager_surface_success_ms", None)
+        if not isinstance(surface_successes, dict):
+            surface_successes = {}
+        surface_checks = getattr(self, "_forager_surface_check_ms", None)
+        if not isinstance(surface_checks, dict):
+            surface_checks = {}
+
+        required_h1_symbols: set[str] = set()
+        for pside, symbols in refreshable_by_side.items():
+            for sym in symbols:
+                if int(per_symbol_h1_hours.get(sym, 0) or 0) <= 0:
+                    continue
+                if (
+                    Passivbot._live_required_h1_log_range_span(self, pside, sym)
+                    > 0.0
+                ):
+                    required_h1_symbols.add(sym)
+
+        surface_specs: List[Tuple[str, str, int]] = []
+        for sym in candidates:
+            surface_specs.append(
+                ("1m", sym, max(1, int(per_symbol_win.get(sym, default_win))))
+            )
+            h1_hours = int(per_symbol_h1_hours.get(sym, 0) or 0)
+            if h1_hours > 0 and sym in required_h1_symbols:
+                surface_specs.append(("1h", sym, h1_hours))
+        required_surface_count = len(surface_specs)
+        target_age_ms = self._forager_target_staleness_ms(
+            required_surface_count, max_calls
+        )
+        eligible_surface_keys = {(sym, timeframe) for timeframe, sym, _ in surface_specs}
+        surface_attempts = {
+            key: int(value)
+            for key, value in surface_attempts.items()
+            if key in eligible_surface_keys
+        }
+        surface_successes = {
+            key: int(value)
+            for key, value in surface_successes.items()
+            if isinstance(key, tuple)
+            and len(key) == 3
+            and (key[0], key[1]) in eligible_surface_keys
+        }
+        surface_checks = {
+            key: int(value)
+            for key, value in surface_checks.items()
+            if key in eligible_surface_keys
+        }
+        surface_specs.sort(
+            key=lambda item: (
+                int(surface_checks.get((item[1], item[0]), 0) or 0),
+                str(item[1]),
+                0 if item[0] == "1m" else 1,
+            )
+        )
+        health_scan_budget = min(len(surface_specs), max(8, int(budget) * 4))
+        stale: List[
+            Tuple[Tuple[int, int, int, int, str], str, str, int, Dict[str, Any]]
+        ] = []
+        for scan_idx, (timeframe, sym, required_candles) in enumerate(
+            surface_specs[:health_scan_budget]
+        ):
+            if (
+                max_refresh_ms > 0
+                and scan_idx > 0
+                and utc_ms() - refresh_started_ms >= max_refresh_ms
+            ):
+                break
+            surface_key = (sym, timeframe)
+            surface_health = Passivbot._candidate_candle_surface_health(
+                self,
+                sym,
+                timeframe,
+                required_candles,
+                now_ms=now,
+            )
+            checked_ms = int(utc_ms())
+            age_ms = int(surface_health.get("age_ms", 0) or 0)
+            no_basis = bool(surface_health.get("no_basis"))
+            tail_only = bool(surface_health.get("tail_only")) and not no_basis
+            if age_ms <= target_age_ms and (
+                bool(surface_health.get("coverage_ok")) or tail_only
+            ):
+                surface_checks[surface_key] = checked_ms
+                continue
+            last_attempt_ms = int(surface_attempts.get(surface_key, 0) or 0)
+            surface_success_key = (sym, timeframe, int(required_candles))
+            last_success_ms = int(surface_successes.get(surface_success_key, 0) or 0)
+            if (
+                timeframe == "1h"
+                and bool(surface_health.get("leading_gap_only"))
+                and last_success_ms > 0
+                and now - last_success_ms < 24 * 60 * 60_000
+            ):
+                # A fresh native-1h tail with only a missing requested prefix is
+                # consistent with exchange history beginning after our warmup
+                # window. Keep the candidate unavailable, but do not spend REST
+                # budget retrying that unchanged prefix every refresh cycle.
+                surface_checks[surface_key] = checked_ms
+                continue
+            priority = (
+                last_attempt_ms,
+                0 if no_basis else 1,
+                0 if timeframe == "1m" else 1,
+                -age_ms,
+                f"{sym}:{timeframe}",
+            )
+            stale.append((priority, sym, timeframe, required_candles, surface_health))
+        self._forager_surface_attempt_ms = surface_attempts
+        self._forager_surface_success_ms = surface_successes
+        self._forager_surface_check_ms = surface_checks
+        if not stale:
+            return
+
+        stale.sort(key=lambda item: item[0])
+        if (
+            max_refresh_ms > 0
+            and utc_ms() - refresh_started_ms >= max_refresh_ms
+        ):
+            return
+        budget = self._forager_refresh_budget(
+            max_calls,
+            max_cycle_budget=min(cycle_cap, len(stale)),
+            initial_tokens=cycle_cap,
+            consume=True,
+        )
+        if budget <= 0:
+            return
+        to_refresh = stale[:budget]
+        if not to_refresh:
+            return
+        stale_by_surface = {
+            (sym, timeframe): int(surface_health.get("age_ms", 0) or 0)
+            for _priority, sym, timeframe, _required, surface_health in stale
+        }
 
         # Throttled visibility into forager refresh behavior (debug only).
         try:
@@ -18073,11 +18377,11 @@ class Passivbot:
             if boot_elapsed >= boot_delay_ms:
                 last_log = int(getattr(self, "_forager_refresh_log_last_ms", 0) or 0)
                 if (now - last_log) >= 90_000:
-                    oldest_ms = int(stale[0][0]) if stale else 0
+                    oldest_ms = max(stale_by_surface.values(), default=0)
                     logging.debug(
-                        "[candle] forager refresh slots_open=%s candidates=%d stale=%d budget=%d oldest=%ds target=%ds",
+                        "[candle] forager refresh slots_open=%s surfaces=%d stale=%d budget=%d oldest=%ds target=%ds",
                         "yes" if slots_open_any else "no",
-                        len(all_candidates),
+                        required_surface_count,
                         len(stale),
                         len(to_refresh),
                         int(oldest_ms / 1000),
@@ -18087,27 +18391,12 @@ class Passivbot:
         except Exception:
             pass
 
-        end_ts = (now // ONE_MIN_MS) * ONE_MIN_MS - ONE_MIN_MS
-        try:
-            default_win = int(getattr(self.cm, "default_window_candles", 120) or 120)
-        except Exception:
-            default_win = 120
-        try:
-            warmup_ratio = float(
-                get_optional_live_value(self.config, "warmup_ratio", 0.0)
-            )
-        except Exception:
-            warmup_ratio = 0.0
-        try:
-            max_warmup_minutes = int(
-                get_optional_live_value(self.config, "max_warmup_minutes", 0) or 0
-            )
-        except Exception:
-            max_warmup_minutes = 0
-        span_buffer = 1.0 + max(0.0, warmup_ratio)
+        end_ts_by_timeframe = {
+            "1m": (now // ONE_MIN_MS) * ONE_MIN_MS - ONE_MIN_MS,
+            "1h": (now // (60 * ONE_MIN_MS)) * (60 * ONE_MIN_MS) - 60 * ONE_MIN_MS,
+        }
 
         fetch_delay_s = self._get_fetch_delay_seconds()
-        refresh_started_ms = utc_ms()
         last_progress_ms = refresh_started_ms
         refreshed_count = 0
         paused_by_cap = False
@@ -18116,11 +18405,11 @@ class Passivbot:
                 getattr(self, "_forager_refresh_start_log_last_ms", 0) or 0
             )
             if refresh_started_ms - last_start_log >= 60_000:
-                oldest_ms = int(stale[0][0]) if stale else 0
+                oldest_ms = max(stale_by_surface.values(), default=0)
                 logging.debug(
-                    "[candle] forager refresh starting slots_open=%s candidates=%d stale=%d refreshing=%d oldest=%ds target=%ds",
+                    "[candle] forager refresh starting slots_open=%s surfaces=%d stale=%d refreshing=%d oldest=%ds target=%ds",
                     "yes" if slots_open_any else "no",
-                    len(all_candidates),
+                    required_surface_count,
                     len(stale),
                     len(to_refresh),
                     int(oldest_ms / 1000),
@@ -18130,7 +18419,9 @@ class Passivbot:
         except Exception:
             pass
 
-        for idx, sym in enumerate(to_refresh, start=1):
+        for idx, (_priority, sym, timeframe, required_candles, _health) in enumerate(
+            to_refresh, start=1
+        ):
             if Passivbot._shutdown_requested(self):
                 logging.debug("[shutdown] aborting forager candle refresh")
                 return
@@ -18141,64 +18432,62 @@ class Passivbot:
                     self,
                     symbol=sym,
                     max_refresh_ms=int(max_refresh_ms),
-                    stale_age_ms=int(stale_by_symbol.get(sym, 0)),
+                    stale_age_ms=int(stale_by_surface.get((sym, timeframe), 0)),
                     target_age_ms=int(target_age_ms),
                     refreshed_count=int(refreshed_count),
                     total_count=len(to_refresh),
                 )
                 break
             try:
-                max_span = 0.0
-                for pside, syms in candidates_by_side.items():
-                    if sym not in syms:
-                        continue
-                    for key in (
-                        "ema_span_0",
-                        "ema_span_1",
-                        "volatility_ema_span_1m",
-                        "offset_volatility_ema_span_1m",
-                        "entry_volatility_ema_span_1m",
-                    ):
-                        max_span = max(
-                            max_span,
-                            Passivbot._live_strategy_warmup_value(
-                                self, pside, key, sym
-                            ),
-                        )
-                    for key in (
-                        "forager_volume_ema_span_1m",
-                        "forager_volatility_ema_span_1m",
-                    ):
-                        max_span = max(
-                            max_span,
-                            Passivbot._live_forager_warmup_value(
-                                self, pside, key, sym
-                            ),
-                        )
-                win = (
-                    max(default_win, int(math.ceil(max_span * span_buffer)))
-                    if max_span > 0.0
-                    else default_win
-                )
-                if max_warmup_minutes > 0:
-                    win = min(int(win), int(max_warmup_minutes))
-                start_ts = end_ts - ONE_MIN_MS * max(1, win)
+                period_ms = ONE_MIN_MS if timeframe == "1m" else 60 * ONE_MIN_MS
+                end_ts = int(end_ts_by_timeframe[timeframe])
+                start_ts = end_ts - period_ms * max(1, int(required_candles))
+                surface_checks[(sym, timeframe)] = int(utc_ms())
+                self._forager_surface_check_ms = surface_checks
+                surface_attempts[(sym, timeframe)] = int(utc_ms())
+                self._forager_surface_attempt_ms = surface_attempts
                 candle_task = self.cm.get_candles(
                     sym,
                     start_ts=start_ts,
                     end_ts=end_ts,
                     max_age_ms=0,
+                    timeframe=timeframe,
                     strict=False,
-                    max_lookback_candles=win,
+                    max_lookback_candles=int(required_candles),
                 )
                 if max_refresh_ms > 0:
                     remaining_s = max(
                         0.001,
                         float(max_refresh_ms - elapsed_ms) / 1000.0,
                     )
-                    await asyncio.wait_for(candle_task, timeout=remaining_s)
+                    refreshed = await asyncio.wait_for(
+                        candle_task, timeout=remaining_s
+                    )
                 else:
-                    await candle_task
+                    refreshed = await candle_task
+                if timeframe == "1h":
+                    try:
+                        refreshed_rows = int(refreshed.size)
+                    except (AttributeError, TypeError, ValueError):
+                        try:
+                            refreshed_rows = len(refreshed)
+                        except (TypeError, ValueError):
+                            refreshed_rows = 0
+                    post_health = Passivbot._candidate_candle_surface_health(
+                        self,
+                        sym,
+                        timeframe,
+                        required_candles,
+                        now_ms=utc_ms(),
+                    )
+                    success_key = (sym, timeframe, int(required_candles))
+                    if refreshed_rows > 0 and bool(
+                        post_health.get("leading_gap_only")
+                    ):
+                        surface_successes[success_key] = int(utc_ms())
+                    else:
+                        surface_successes.pop(success_key, None)
+                self._forager_surface_success_ms = surface_successes
                 refreshed_count += 1
                 if fetch_delay_s > 0:
                     sleep_s = fetch_delay_s
@@ -18224,7 +18513,7 @@ class Passivbot:
                         "[candle] forager refresh progress %d/%d last=%s elapsed=%ds",
                         idx,
                         len(to_refresh),
-                        Passivbot._log_symbol(sym),
+                        f"{Passivbot._log_symbol(sym)}:{timeframe}",
                         elapsed_s,
                     )
                     last_progress_ms = now_ms
@@ -18238,7 +18527,7 @@ class Passivbot:
                         self,
                         symbol=sym,
                         max_refresh_ms=int(max_refresh_ms),
-                        stale_age_ms=int(stale_by_symbol.get(sym, 0)),
+                        stale_age_ms=int(stale_by_surface.get((sym, timeframe), 0)),
                         target_age_ms=int(target_age_ms),
                         refreshed_count=int(refreshed_count),
                         total_count=len(to_refresh),
