@@ -5628,6 +5628,24 @@ async def test_build_monitor_snapshot_includes_market_forager_unstuck_and_recent
                 "BTC/USDT:USDT": {"active": True},
                 "ETH/USDT:USDT": {"active": True},
             }
+            self._orchestrator_ema_unavailable_symbols = set()
+            self._orchestrator_trailing_unavailable_symbols = {"BTC/USDT:USDT"}
+            self._orchestrator_trailing_unavailable_reasons = {
+                "BTC/USDT:USDT": ["position_fill_confirmation_pending"]
+            }
+            self._orchestrator_trailing_unavailable_psides = {
+                "BTC/USDT:USDT": ["long"]
+            }
+            self._trailing_fill_confirmation_diagnostics = {
+                ("BTC/USDT:USDT", "long"): {
+                    "failed_predicates": ["post_snapshot_fill_refresh_pending"],
+                    "fill_timestamp_ms": 123000,
+                    "position_update_timestamp_ms": 123100,
+                    "fill_refresh_generation": 2,
+                    "minimum_fill_refresh_generation": 3,
+                    "fill_precedes_position_update": True,
+                }
+            }
             self.recent_order_executions = [
                 {
                         "symbol": "BTC/USDT:USDT",
@@ -5902,6 +5920,17 @@ async def test_build_monitor_snapshot_includes_market_forager_unstuck_and_recent
     )
     assert snapshot["positions"]["BTC/USDT:USDT"]["long"]["upnl"] == pytest.approx(0.5)
     assert snapshot["market"]["BTC/USDT:USDT"]["last_price"] == pytest.approx(100500.0)
+    assert snapshot["market"]["BTC/USDT:USDT"]["tradable"] is False
+    assert snapshot["market"]["BTC/USDT:USDT"]["tradability_reasons"] == [
+        "position_fill_confirmation_pending"
+    ]
+    assert snapshot["market"]["BTC/USDT:USDT"]["trailing_unavailable_psides"] == [
+        "long"
+    ]
+    assert snapshot["market"]["BTC/USDT:USDT"]["trailing_fill_confirmation"][
+        "long"
+    ]["minimum_fill_refresh_generation"] == 3
+    assert snapshot["market"]["ETH/USDT:USDT"]["tradable"] is True
     assert snapshot["market"]["BTC/USDT:USDT"]["c_mult"] == pytest.approx(1.0)
     assert snapshot["market"]["BTC/USDT:USDT"]["entry_volatility_logrange_ema"]["long"] == pytest.approx(
         0.0
