@@ -1124,6 +1124,7 @@ class Passivbot:
         self._authoritative_refresh_plan_surfaces = set()
         self._authoritative_pending_confirmations = {}
         self._trailing_fill_refresh_started_generation = 0
+        self._trailing_fill_fetch_generation = 0
         self._trailing_fill_refresh_generation = 0
         self._authoritative_barrier_last_log_key = None
         self._authoritative_barrier_last_log_ms = 0
@@ -8270,8 +8271,8 @@ class Passivbot:
         associated_fill_epochs = dict(
             getattr(self, "_trailing_position_snapshot_fill_epochs", {}) or {}
         )
-        fill_refresh_generation = int(
-            getattr(self, "_trailing_fill_refresh_generation", 0) or 0
+        fill_fetch_generation = int(
+            getattr(self, "_trailing_fill_fetch_generation", 0) or 0
         )
         current_epochs: dict[tuple[str, str], str] = {}
         confirmation_diagnostics: dict[tuple[str, str], dict] = {}
@@ -8299,7 +8300,7 @@ class Passivbot:
                         failed_predicates.append("fill_identity_unchanged")
                     if (
                         minimum_fill_generation is not None
-                        and fill_refresh_generation < int(minimum_fill_generation)
+                        and fill_fetch_generation < int(minimum_fill_generation)
                     ):
                         failed_predicates.append("post_snapshot_fill_refresh_pending")
                     if (
@@ -8321,7 +8322,7 @@ class Passivbot:
                             "current_fill_epoch": current_epoch,
                             "fill_timestamp_ms": current_timestamp,
                             "position_update_timestamp_ms": position_update_timestamp,
-                            "fill_refresh_generation": fill_refresh_generation,
+                            "fill_refresh_generation": fill_fetch_generation,
                             "minimum_fill_refresh_generation": minimum_fill_generation,
                             "fill_precedes_position_update": bool(
                                 current_timestamp is not None
@@ -11092,6 +11093,7 @@ class Passivbot:
                     )
                     or 0
                 ),
+                int(getattr(self, "_trailing_fill_fetch_generation", 0) or 0),
                 int(getattr(self, "_trailing_fill_refresh_generation", 0) or 0),
             )
             + 1
@@ -11276,6 +11278,11 @@ class Passivbot:
 
             # Find and log new events (those not in cache before refresh)
             all_events = self._pnls_manager.get_events()
+            # Trailing fill confirmation only needs proof that a fill-cache
+            # refresh completed after the position snapshot. Keep this
+            # separate from the risk-authoritative fills generation below,
+            # which must still wait for PnL enrichment and history coverage.
+            self._trailing_fill_fetch_generation = fill_refresh_attempt_generation
             new_events = []
             enriched_events = []
             seen_new_source_ids: set[str] = set()
@@ -13992,7 +13999,7 @@ class Passivbot:
                 getattr(self, "_trailing_fill_refresh_started_generation", 0)
                 or 0
             ),
-            int(getattr(self, "_trailing_fill_refresh_generation", 0) or 0),
+            int(getattr(self, "_trailing_fill_fetch_generation", 0) or 0),
         )
         request_post_position_fill_confirmation = False
         if previous_position_state is not None:

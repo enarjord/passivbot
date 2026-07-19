@@ -4872,6 +4872,7 @@ async def test_update_pnls_all_lookback_uses_incremental_refresh_when_cache_is_f
     bot.logging_level = 0
     bot._health_rate_limits = 0
     bot._trailing_fill_refresh_started_generation = 4
+    bot._trailing_fill_fetch_generation = 4
     bot._trailing_fill_refresh_generation = 4
 
     result = await bot.update_pnls()
@@ -4883,7 +4884,66 @@ async def test_update_pnls_all_lookback_uses_incremental_refresh_when_cache_is_f
         last_refresh_overlap_ms=10 * 60 * 1000,
     )
     assert bot._pnls_manager.history_scope == "all"
+    assert bot._trailing_fill_fetch_generation == 5
     assert bot._trailing_fill_refresh_generation == 5
+
+
+@pytest.mark.asyncio
+async def test_update_pnls_pending_enrichment_advances_only_trailing_fetch_generation():
+    bot = Passivbot.__new__(Passivbot)
+    cached_events = [
+        SimpleNamespace(
+            timestamp=1_700_000_000_000,
+            id="unrelated-close-fill",
+            source_ids=["unrelated-close-fill"],
+            pnl_status="pending",
+        )
+    ]
+
+    class _Manager:
+        def __init__(self, events):
+            self._events = list(events)
+            self.refresh = AsyncMock()
+            self.refresh_latest = AsyncMock()
+
+        def get_events(self):
+            return list(self._events)
+
+        def get_history_scope(self):
+            return "all"
+
+        def set_history_scope(self, scope):
+            pass
+
+    bot.stop_signal_received = False
+    bot.config = {
+        "live": {
+            "fills_recent_overlap_minutes": 10.0,
+            "pnls_max_lookback_days": "all",
+        }
+    }
+    bot._pnls_manager = _Manager(cached_events)
+    bot.init_pnls = AsyncMock()
+    bot.live_value = lambda key: bot.config["live"][key]
+    bot.get_exchange_time = lambda: 1_700_000_060_000
+    bot._log_new_fill_events = lambda new_events: None
+    bot._monitor_record_event = lambda *args, **kwargs: None
+    bot._monitor_record_error = lambda *args, **kwargs: None
+    bot.logging_level = 0
+    bot._health_rate_limits = 0
+    bot._trailing_fill_refresh_started_generation = 4
+    bot._trailing_fill_fetch_generation = 4
+    bot._trailing_fill_refresh_generation = 4
+
+    result = await bot.update_pnls()
+
+    assert result is False
+    bot._pnls_manager.refresh_latest.assert_awaited_once_with(
+        overlap=20,
+        last_refresh_overlap_ms=10 * 60 * 1000,
+    )
+    assert bot._trailing_fill_fetch_generation == 5
+    assert bot._trailing_fill_refresh_generation == 4
 
 
 @pytest.mark.asyncio
@@ -7957,6 +8017,7 @@ async def test_planning_snapshot_freezes_data_packet_revisions_through_cycle(mon
     bot.exchange = "fake"
     bot.coin_overrides = {}
     _disable_entry_cooldown_delta_guard_for_staged_refresh_test(bot)
+    bot.is_trailing = lambda symbol, pside=None: False
     bot.active_symbols = [symbol]
     bot.PB_modes = {"long": {}, "short": {}}
     bot.cm = SimpleNamespace(
