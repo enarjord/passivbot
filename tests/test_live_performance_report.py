@@ -1036,7 +1036,7 @@ def test_live_performance_report_completed_candle_freshness_summary(tmp_path):
     valid_summary = {
         "required": True,
         "timeframe": "1m",
-        "signature_row_count": 2,
+        "source_row_count": 2,
         "valid_row_count": 2,
         "invalid_row_count": 0,
         "tail_gap_fallback_count": 1,
@@ -1074,7 +1074,7 @@ def test_live_performance_report_completed_candle_freshness_summary(tmp_path):
                     "required_surfaces": ["completed_candles"],
                     "completed_candle_summary": {
                         **valid_summary,
-                        "signature_row_count": "2",
+                        "source_row_count": "2",
                     },
                 },
             ),
@@ -1099,7 +1099,7 @@ def test_live_performance_report_completed_candle_freshness_summary(tmp_path):
                     "completed_candle_summary": {
                         "required": True,
                         "timeframe": "1m",
-                        "signature_row_count": 2,
+                        "source_row_count": 2,
                         "valid_row_count": 0,
                         "invalid_row_count": 2,
                         "tail_gap_fallback_count": 0,
@@ -1132,7 +1132,7 @@ def test_live_performance_report_completed_candle_freshness_summary(tmp_path):
     assert completed["malformed_proof_count"] == 3
     assert completed["no_valid_rows_count"] == 0
     assert completed["metric_observations"] == 1
-    assert completed["signature_rows"]["max"] == 2
+    assert completed["source_rows"]["max"] == 2
     assert completed["valid_rows"]["max"] == 2
     assert completed["invalid_rows"]["max"] == 2
     assert completed["tail_gap_fallback_count"]["max"] == 1
