@@ -8103,7 +8103,7 @@ def test_completed_candle_snapshot_summary_is_bounded_and_signature_only():
     assert summary == {
         "required": True,
         "timeframe": "1m",
-        "signature_row_count": 14,
+        "source_row_count": 14,
         "valid_row_count": 11,
         "invalid_row_count": 3,
         "tail_gap_fallback_count": 10,
@@ -8116,6 +8116,11 @@ def test_completed_candle_snapshot_summary_is_bounded_and_signature_only():
         "configured_max_tail_gap_ms": 120_000,
     }
     assert "api_key" not in json.dumps(summary, sort_keys=True)
+    serialized = LiveEvent(
+        event_type="snapshot.built", data={"completed_candle_summary": summary}
+    )
+    assert serialized.data["completed_candle_summary"]["source_row_count"] == 14
+    assert "[redacted]" not in json.dumps(serialized.data, sort_keys=True)
 
 
 def test_completed_candle_snapshot_summary_is_omitted_when_not_required():
@@ -8169,7 +8174,7 @@ def test_completed_candle_snapshot_summary_rejects_coerced_timestamps():
 
     summary = bot._completed_candle_summary_from_snapshot(snapshot)
 
-    assert summary["signature_row_count"] == 2
+    assert summary["source_row_count"] == 2
     assert summary["valid_row_count"] == 0
     assert summary["invalid_row_count"] == 2
     assert "expected_close_age" not in summary

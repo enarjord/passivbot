@@ -894,7 +894,7 @@ class _InputStalenessAccumulator:
         self.completed_candle_summary_malformed_proof_count = 0
         self.completed_candle_summary_no_valid_rows_count = 0
         self.completed_candle_metric_observations = 0
-        self.completed_candle_signature_row_values: list[int] = []
+        self.completed_candle_source_row_values: list[int] = []
         self.completed_candle_valid_row_values: list[int] = []
         self.completed_candle_invalid_row_values: list[int] = []
         self.completed_candle_fallback_count_values: list[int] = []
@@ -962,7 +962,7 @@ class _InputStalenessAccumulator:
         def count(name: str) -> int | None:
             return _strict_non_negative_int(summary.get(name))
 
-        signature_rows = count("signature_row_count")
+        source_rows = count("source_row_count")
         valid_rows = count("valid_row_count")
         invalid_rows = count("invalid_row_count")
         fallback_count = count("tail_gap_fallback_count")
@@ -970,12 +970,12 @@ class _InputStalenessAccumulator:
         if (
             summary.get("required") is not True
             or summary.get("timeframe") != "1m"
-            or signature_rows is None
+            or source_rows is None
             or valid_rows is None
             or invalid_rows is None
             or fallback_count is None
             or fallback_symbol_count is None
-            or signature_rows != valid_rows + invalid_rows
+            or source_rows != valid_rows + invalid_rows
             or fallback_count > valid_rows
             or fallback_symbol_count > fallback_count
         ):
@@ -995,7 +995,7 @@ class _InputStalenessAccumulator:
         ):
             self.completed_candle_summary_malformed_proof_count += 1
             return
-        self.completed_candle_signature_row_values.append(signature_rows)
+        self.completed_candle_source_row_values.append(source_rows)
         self.completed_candle_valid_row_values.append(valid_rows)
         self.completed_candle_invalid_row_values.append(invalid_rows)
         self.completed_candle_fallback_count_values.append(fallback_count)
@@ -1326,8 +1326,8 @@ class _InputStalenessAccumulator:
                     self.completed_candle_summary_no_valid_rows_count
                 ),
                 "metric_observations": int(self.completed_candle_metric_observations),
-                "signature_rows": _number_summary(
-                    self.completed_candle_signature_row_values
+                "source_rows": _number_summary(
+                    self.completed_candle_source_row_values
                 ),
                 "valid_rows": _number_summary(self.completed_candle_valid_row_values),
                 "invalid_rows": _number_summary(
