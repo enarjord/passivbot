@@ -419,13 +419,20 @@ Monitor commands are documented in detail in [monitor.md](monitor.md). The CLI s
   stable sampling verdict.
 - `passivbot tool live-restart-executor SUPERVISOR_CONFIG --session-name
   SESSION --expected-repository-head COMMIT
+  --expected-rust-source-fingerprint SHA256
   --expected-supervisor-fingerprint SHA256 --execute` gracefully
   restarts only the exact local tmux targets proven by the same bounded target
   contract. Before target sampling it requires the exact caller-confirmed
   40-character Git commit, zero tracked changes while preserving untracked
-  artifacts, and a loaded Rust extension whose source stamp exactly matches the
-  checked-out Rust sources. It repeats that runtime contract immediately before
-  the first signal and before relaunch. It also requires the caller-confirmed
+  artifacts, the expected fingerprint recorded by the repository-owned Rust
+  build verification, and a loaded Rust extension whose source stamp exactly
+  matches that fingerprint and the checked-out Rust build inputs. This explicit
+  fingerprint matters because the build inputs include the host-local ignored
+  `Cargo.lock`, so identical Git heads need not produce the same fingerprint.
+  Each runtime check rehashes those inputs after extension verification so an
+  ignored input cannot change inside the check unnoticed. It repeats that
+  runtime contract immediately before the first signal and before relaunch. It
+  also requires the caller-confirmed
   full-command fingerprint, takes an immediate action snapshot, and sends one
   Ctrl-C round to exact pane IDs. After a bounded exact-PID exit wait, it scans
   for unexpected or duplicate live processes, verifies the complete session
@@ -439,8 +446,93 @@ Monitor commands are documented in detail in [monitor.md](monitor.md). The CLI s
   recovery; targets that did exit may be relaunched only when every post-stop
   check is still exact. The relaunched live bots resume their configured
   exchange access and normal runtime file writes. Run the read-only target
-  report first and pass its exact opaque fingerprint; command content is never
-  emitted.
+  report first, retain the Rust fingerprint from build verification, and pass
+  both exact fingerprints; command content is never emitted.
+- `passivbot tool live-repository-prepare --expected-current-head COMMIT
+  --expected-target-head COMMIT --expected-rust-source-fingerprint SHA256
+  --execute` prepares the local canonical checkout before target sampling or
+  restart execution. It runs only on tracked-clean `master` with no merge,
+  rebase, cherry-pick, revert, or bisect in progress; requires `origin` to be
+  the pinned public canonical HTTPS repository; fetches only `origin/master`;
+  requires the fetched commit to equal the caller-confirmed
+  target and descend from the caller-confirmed current head; and moves the
+  checkout only with a hook-disabled `git merge --ff-only`. It preserves
+  untracked files and
+  emits no remote URL, path, Git stderr, build output, or command content.
+  After the fast-forward it starts a fresh bounded Python child that rejects an
+  unexpected Rust source fingerprint before compiling, rebuilds only when the
+  repository helper reports the extension stale, and verifies the loaded
+  extension stamp plus a final source rehash. A build timeout targets only that
+  child process group. The tool does not SSH, access credentials or exchanges,
+  signal/start live bots, use force checkout/reset, or perform rollback. If
+  Rust preparation fails after a valid fast-forward, the report leaves the
+  checkout at the reviewed target but marks it not restart-ready; rerun after
+  correcting the build contract before invoking `live-restart-executor`.
+- `passivbot tool live-restart-smoke-evidence TARGET_REPORT_JSON
+  SMOKE_REPORT_JSON --expected-repository-head COMMIT
+  --expected-supervisor-fingerprint SHA256 --expected-targets N` evaluates two
+  already-generated full JSON reports against one bounded post-restart evidence
+  contract. It requires stable multi-sample exact targets, the caller-confirmed
+  private supervisor fingerprint, a clean exact repository head, bounded
+  monitor and text-log windows with no hard evidence, complete shutdown event
+  counts, and distinct startup timing coverage for the expected targets. The
+  event and text-log bounds are compared as exact validated epoch-millisecond
+  values and projected without count clamping. Both retained hard log matches
+  and contextless hard-looking matches suppressed by the opt-in drop policy
+  must be well-formed zeroes.
+  result is bounded and sanitized: it does not copy paths, commands, bot names,
+  symbols, log samples, or arbitrary input payloads. The command only reads the
+  two named local files; it does not run report producers, SSH, signal or start
+  processes, contact a network or exchange, load credentials, or write files.
+  Use `--compact` for single-line JSON. Exit status is zero only when every hard
+  gate passes; non-hard attention evidence remains visible without making the
+  verdict red.
+- `passivbot tool live-restart-smoke-collect SUPERVISOR_CONFIG MONITOR_ROOT
+  --session-name SESSION --expected-repository-head COMMIT
+  --expected-supervisor-fingerprint SHA256 --expected-targets N --since-ms MS
+  --until-ms MS` directly composes the existing exact target sampler, full
+  bounded-window smoke report, and sanitized evidence evaluator in memory. The
+  caller-confirmed head, private fingerprint, target count, and exact window are
+  never derived from the reports being checked. Managed rotated event filenames
+  provide interval boundaries so the
+  collector reads only overlapping segments plus explicit coverage evidence;
+  malformed names, missing predecessor coverage, more than eight selected
+  segments per bot, more than 128 selected segments total, or more than 128 MiB
+  of selected event data fail closed before event content scanning. Its output
+  includes only aggregate selection completeness/count/scan-byte evidence and
+  code-owned issue counts, never segment paths. Process
+  inspection is owned by the target report rather than
+  duplicated in smoke collection, and contextless log rows use the existing
+  drop policy whose dropped hard-looking count must remain zero. The command
+  emits no raw target or smoke report and writes no intermediate file. It may
+  run bounded local `tmux`, `ps`, and `git` inventory reads; it does not SSH,
+  pull/build, contact a network or exchange, access credentials, signal/start
+  processes, or perform force escalation. Use `--compact` for single-line JSON.
+- `passivbot tool live-restart-smoke-run SUPERVISOR_CONFIG MONITOR_ROOT
+  --session-name SESSION --expected-repository-head COMMIT
+  --expected-rust-source-fingerprint SHA256
+  --expected-supervisor-fingerprint SHA256 --expected-targets N --execute`
+  composes the existing exact-pane restart executor and bounded in-memory smoke
+  collector into one local operation. Before any signal it independently
+  requires a complete stable target sample with the exact caller-confirmed
+  target count and private supervisor-command fingerprint; the executor then
+  rechecks the clean repository head, Rust source and loaded-extension stamp,
+  supervisor contract, and exact pane/process identities at its own action
+  boundaries. A green restart must account for every expected target as stop
+  requested, exited, relaunch requested, relaunch succeeded, and stably
+  verified. The orchestrator then waits one bounded observation interval
+  (`--smoke-wait-s`, default 600 seconds, maximum 1,800) and evaluates the exact
+  restart-through-observation epoch-millisecond window. It performs no polling
+  retry loop and no automatic force escalation. A pre-action failure leaves
+  targets untouched; a post-action executor failure reports manual recovery;
+  and a red or unavailable smoke report leaves relaunched bots running while
+  returning `restart_completed_smoke_failed`. Output includes only aggregate
+  restart counts and the existing sanitized collector projection, never target
+  names, pane IDs, process IDs, commands, paths, fingerprints, or raw reports.
+  The tool does not SSH, pull/build, access credentials or exchanges directly,
+  use broad process-pattern signals, or write report files. The configured live
+  bots resume their normal exchange access and runtime file writes after
+  relaunch.
 - `passivbot tool live-performance-report` summarizes local live monitor event timings for
   operator performance analysis. It is read-only and does not contact exchanges. Use
   `--recent-minutes` for a time window, `--summary` for a bounded operator projection, and

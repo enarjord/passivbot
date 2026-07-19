@@ -152,7 +152,7 @@ Each `pside` has the same parameter set:
 - **hsl_cooldown_minutes_after_red**:
   - Minutes to wait before auto-restart after a RED halt on that `pside`.
   - `0.0` means halt without auto-restart.
-  - Restart-time HSL replay treats a historical RED panic close that fully closed all positions on that `pside` as a completed RED stop and resets tracking from after that panic before evaluating later cooldown/restart behavior.
+  - HSL resets tracking after every fill that fully flattens the configured signal scope, regardless of order type. A RED-seen episode's cooldown begins at that flattening fill; restart replay reconstructs the same boundary before evaluating later behavior.
 - **hsl_no_restart_drawdown_threshold**:
   - Terminal no-restart threshold for that `pside`.
   - Evaluated from persistent cross-restart HSL drawdown.
@@ -423,7 +423,7 @@ See [docs/forager.md](forager.md) for a full description of motivation, ranking 
 - **execution_delay_seconds**: Wait `x` seconds after executing to exchange.
 - **hedge_mode**: Requests simultaneous long and short positions on the same coin when the exchange supports it. Effective behavior is `config.live.hedge_mode AND exchange_capability`; on one-way-only venues the live bot will still run one-way even if this is `true`.
 - **hsl_position_during_cooldown_policy**: Live-only policy for a position that appears on a halted `pside` during HSL RED cooldown.
-  - `panic`: panic-close it again and restart the cooldown after all positions on that `pside` are fully closed.
+  - `panic`: panic-close it again and restart the cooldown from the fill that fully flattens the configured HSL scope.
   - `normal`: treat it as an explicit operator override once a real open position appears during cooldown; while there are no open positions the bot still blocks fresh initials on that `pside`, and only after the position appears does it clear the halt and restart HSL drawdown tracking from the current state.
   - `manual`: leave that position in `manual` mode while keeping the original cooldown running and blocking fresh initials.
   - `tp_only`: keep the original cooldown running, block new entries, and allow only close management on that `pside`.

@@ -10,7 +10,70 @@ Event emission and sink failures are observability-only unless a feature contrac
 requires durable publication. Diagnostic producers must not mutate order lists, execution results,
 eligibility, replay order, or runtime decisions.
 
+## Balance Composition Diagnostics
+
+`balance.changed` may carry an optional `balance_composition` object from the
+same already-fetched authoritative balance response. It is diagnostic metadata
+only: it must not affect scalar balance calculation, refresh cadence, planning,
+orders, risk, readiness, or execution scheduling.
+
+The object contains a stable `status` (`available`, `unavailable`, or
+`malformed`), bounded source/reason classification, `count`, `retained`,
+`truncated`, and at most eight deterministic `asset_balances` rows. Rows retain
+only connector-proven asset, total/free/used amount, USD value, unrealized PnL,
+explicit liability, collateral-enabled state, and bounded field provenance.
+Missing or non-finite values are absent; a connector must not infer debt,
+price, or a neutral zero. Raw account payloads, arbitrary response keys,
+addresses, credentials, and internal composition signatures are never emitted.
+Any legacy raw-only balance apply replaces a previous composition with an
+explicit unavailable state; it must never pair stale asset rows with a fresh
+aggregate balance.
+
+Generic staged refresh retains the already-fetched raw balance response only
+long enough to derive data-packet provenance metadata, separately from the
+bounded composition object and normalized scalar balance. Events may expose
+the resulting hash/reference but never the raw response itself.
+
+Hyperliquid contributes rows only for proven unified responses with
+`info.balances` as a list. Each retained row uses only its `coin` asset and
+finite signed `total`, with field provenance; no hold/free/used, liability,
+price, USD value, collateral, or HIP-3 position inference is permitted.
+Non-unified responses are explicitly unavailable, while malformed unified
+shapes are malformed diagnostics. This parser uses the already-fetched balance
+response and does not alter scalar balance extraction or staged refresh calls.
+
+Balance publication occurs on the existing aggregate raw/snapped transition or
+on a changed full normalized composition signature, including a change in an
+omitted row. Console admission remains based solely on snapped-balance
+materiality. Visible balance lines may append a sanitized sample of at most two
+retained assets; composition-only changes remain structured/text durable but
+stay off the console.
+
+`sink.degraded` identifies the failed sink, stable failure reason, and exception type. It must not
+retain exception text, request URLs, credentials, response bodies, paths, or other arbitrary values
+from the sink exception. Sink counters and pipeline timings remain available through health
+snapshots independently of the exception payload.
+
 The generated value reference is `../generated/live_event_registry.md`.
+
+## Runtime Identity
+
+Each live `Passivbot` instance creates one immutable runtime identity before its
+monitor and fill manager are initialized. Startup writes it once to
+`caches/runtime/<exchange>/<user>/<run_id>.json`, logs one bounded hash-only
+summary, emits `runtime.started`, and includes the same identity in `bot.started`,
+monitor manifests, and monitor snapshots.
+
+The identity binds a run id and start timestamp to the Passivbot version, Python
+Git commit and tracked-dirty state, canonical config SHA-256, embedded Rust
+source fingerprint, Rust crate version, and SHA-256 of the extension actually
+loaded by Python. It must not include raw config, commands, absolute paths,
+credentials, or exchange payloads. Manifest and event publication failures are
+observability-only and do not change trading behavior.
+
+The Rust artifact hash and embedded source fingerprint are distinct evidence:
+the artifact cannot embed its own final hash, while the build-time source
+fingerprint identifies the Rust input used to produce it.
 
 ## Startup Timing Budgets
 
@@ -158,6 +221,34 @@ fields are `latest_error_type`, optional `latest_status`, `latest_code`, and `la
 must not retain `latest_error`. These projections are observability-only: error counting,
 timestamp recovery, restart thresholds, backoff, and trading behavior remain owned by the existing
 execution-loop policy.
+
+## Smoke Hard-Problem Evidence
+
+Full live smoke reports keep the existing bounded latest mixed `problem_events` sample and expose
+an independent `hard_problem_events` object. Its `count` is the authoritative full-window hard
+count; `retained` and `truncated` describe the bounded chronological `sample`. Later non-hard
+attention therefore cannot remove every hard classification while the report remains red.
+
+The hard-only sample uses the caller's existing `max_problem_events` bound and the same compact,
+redacted event projection as the mixed sample. It is reporting evidence only and must not change
+problem classification, recovery matching, smoke verdicts, process control, or live behavior.
+Concise summary, brief, and incident-bundle compact smoke metadata retain the same object shape,
+with an independently bounded value-safe sample and `retained`/`truncated` recalculated for that
+projection.
+
+## Cycle Degradation
+
+`cycle.degraded` retains the stable reason code, bounded exception type, cycle correlation, safe
+operational details, and phase timings needed to explain an incomplete live cycle. Exception text,
+request URLs, request/response payloads, tracebacks, and unknown caller fields are excluded from
+this event, including nested spelling variants and generic execution-loop failures or fill-history
+coverage deferrals. Only the event family's bounded classification, timing, counter, authoritative
+barrier, and staged-readiness fields are retained. The existing execution-loop incident family
+remains the bounded source for safe status, code, endpoint, and action classifications.
+
+This payload boundary is observability-only. Exception propagation, retries, time-sync recovery,
+restart thresholds, fill-history refresh requests, cycle deferral, and trading behavior are
+unchanged.
 
 ## Trailing And Unstuck Status Materiality
 

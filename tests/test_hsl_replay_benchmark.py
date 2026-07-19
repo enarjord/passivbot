@@ -17,15 +17,15 @@ if bool(getattr(pbr, "__is_stub__", False)):
     pytest.skip("passivbot_rust extension not available", allow_module_level=True)
 
 
-def _without_elapsed_ns(value):
+def _without_timing(value):
     if isinstance(value, dict):
         return {
-            key: _without_elapsed_ns(item)
+            key: _without_timing(item)
             for key, item in value.items()
-            if key not in {"elapsed_ns", "throughput"}
+            if key not in {"timings", "throughput", "stage_profile", "pipeline_profile"}
         }
     if isinstance(value, list):
-        return [_without_elapsed_ns(item) for item in value]
+        return [_without_timing(item) for item in value]
     return value
 
 
@@ -38,6 +38,7 @@ def test_hsl_replay_benchmark_is_deterministic_and_has_no_side_effects():
     )
 
     assert first["offline"] is True
+    assert first["schema_version"] == 3
     assert first["fixture"]["compact_rows"] == 4
     assert first["fixture"]["fill_events"] == 1
     assert first["counters"] == {
@@ -55,11 +56,19 @@ def test_hsl_replay_benchmark_is_deterministic_and_has_no_side_effects():
         "held_replay_samples": 8,
         "background_replay_samples": 0,
     }
-    assert first["timings"]["history_load"]["calls"] == 2
-    assert first["timings"]["coin_metrics_sample"]["calls"] == 10
-    assert first["timings"]["current_upnl"]["calls"] == 2
-    assert first["timings"]["cache_reuse_skipped"]["calls"] == 2
-    assert first["timings"]["cache_persist_skipped"]["calls"] == 2
+    assert {stage: first["timings"][stage]["calls"] for stage in first["timings"]} == {
+        "fixture_construction": 1,
+        "history_load": 2,
+        "cache_reuse_skipped": 2,
+        "coin_metrics_sample": 10,
+        "held_coin_metrics_sample": 10,
+        "background_coin_metrics_sample": 0,
+        "current_upnl": 2,
+        "cache_persist_skipped": 2,
+        "final_state_projection": 2,
+        "full_replay": 2,
+    }
+    assert all(values["elapsed_ns"] >= 0 for values in first["timings"].values())
     assert first["throughput"]["timeline_rows_per_second"] > 0.0
     assert first["throughput"]["pair_rows_per_second"] == pytest.approx(
         first["throughput"]["timeline_rows_per_second"]
@@ -76,7 +85,7 @@ def test_hsl_replay_benchmark_is_deterministic_and_has_no_side_effects():
     assert first["equivalence"]["matches"] is True
     assert first["equivalence"]["sample_counts"]["matches"] is True
     assert first["equivalence"]["output_state"]["matches"] is True
-    assert _without_elapsed_ns(first) == _without_elapsed_ns(second)
+    assert _without_timing(first) == _without_timing(second)
 
 
 def test_hsl_replay_benchmark_separates_held_and_background_work():
@@ -104,6 +113,98 @@ def test_hsl_replay_benchmark_separates_held_and_background_work():
         "held_replay_samples": 1_400,
         "background_replay_samples": 34,
     }
+    timings = report["timings"]
+    assert timings["held_coin_metrics_sample"]["calls"] == 1_402
+    assert timings["background_coin_metrics_sample"]["calls"] == 36
+    assert (
+        timings["held_coin_metrics_sample"]["calls"]
+        + timings["background_coin_metrics_sample"]["calls"]
+        == timings["coin_metrics_sample"]["calls"]
+    )
+    assert (
+        timings["held_coin_metrics_sample"]["elapsed_ns"]
+        + timings["background_coin_metrics_sample"]["elapsed_ns"]
+        == timings["coin_metrics_sample"]["elapsed_ns"]
+    )
+
+
+def test_hsl_replay_benchmark_stage_profile_is_exclusive_and_bounded():
+    report = asyncio.run(
+        hsl_replay_benchmark.run_hsl_replay_benchmark(
+            minutes=700, symbols=4, held_symbols=1, iterations=2
+        )
+    )
+
+    profile = report["stage_profile"]
+    full_replay = profile["full_replay"]
+    assert profile["taxonomy"] == "exclusive_full_replay_leaf_stages_v1"
+    assert list(full_replay["stages"]) == list(
+        hsl_replay_benchmark.FULL_REPLAY_LEAF_STAGE_NAMES
+    )
+    assert full_replay["accounted_elapsed_ns"] == sum(
+        stage["elapsed_ns"] for stage in full_replay["stages"].values()
+    )
+    assert full_replay["elapsed_ns"] == (
+        full_replay["accounted_elapsed_ns"]
+        + full_replay["residual_orchestration"]["elapsed_ns"]
+    )
+    for stage in list(full_replay["stages"].values()) + [
+        full_replay["residual_orchestration"]
+    ]:
+        assert stage["elapsed_ns"] >= 0
+        assert 0.0 <= stage["percent_of_full_replay"] <= 100.0
+    assert profile["outside_full_replay"]["fixture_construction"]["calls"] == 1
+    assert profile["outside_full_replay"]["final_state_projection"]["calls"] == 2
+
+
+def _assert_exact_profile_accounting(profile, percent_key):
+    assert profile["accounted_elapsed_ns"] == sum(
+        stage["elapsed_ns"] for stage in profile["stages"].values()
+    )
+    assert profile["elapsed_ns"] == (
+        profile["accounted_elapsed_ns"]
+        + profile["residual_orchestration"]["elapsed_ns"]
+    )
+    for stage in list(profile["stages"].values()) + [
+        profile["residual_orchestration"]
+    ]:
+        assert stage["elapsed_ns"] >= 0
+        assert 0.0 <= stage[percent_key] <= 100.0
+
+
+def test_hsl_replay_benchmark_pipeline_profiles_distinct_runs_without_overlap():
+    report = asyncio.run(
+        hsl_replay_benchmark.run_hsl_replay_benchmark(
+            minutes=700, symbols=4, held_symbols=1, iterations=2
+        )
+    )
+
+    reference = report["dense_reference"]
+    assert reference["same_run_as_candidate"] is False
+    assert reference["fixture"]["history_format"] == "timeline"
+    assert reference["stage_profile"]["run"]["calls"] == 1
+    assert reference["stage_profile"]["full_replay"]["calls"] == 2
+    assert reference["stage_profile"]["outside_full_replay"][
+        "final_state_projection"
+    ]["calls"] == 2
+    assert reference["throughput"]["timeline_rows_per_second"] > 0.0
+    assert list(report["pipeline_profile"]["stages"]) == [
+        "candidate_run",
+        "dense_reference_run",
+        "equivalence_comparison",
+    ]
+
+    _assert_exact_profile_accounting(
+        report["stage_profile"]["full_replay"], "percent_of_full_replay"
+    )
+    _assert_exact_profile_accounting(report["stage_profile"]["run"], "percent_of_run")
+    _assert_exact_profile_accounting(
+        reference["stage_profile"]["full_replay"], "percent_of_full_replay"
+    )
+    _assert_exact_profile_accounting(
+        reference["stage_profile"]["run"], "percent_of_run"
+    )
+    _assert_exact_profile_accounting(report["pipeline_profile"], "percent_of_pipeline")
 
 
 def test_hsl_replay_benchmark_memory_profile_is_opt_in():
@@ -212,6 +313,14 @@ def test_hsl_replay_benchmark_compact_and_timeline_reach_identical_state():
     assert timeline["side_effects"] == compact["side_effects"]
     assert timeline["fixture"]["scenario_sha256"] == compact["fixture"]["scenario_sha256"]
     assert compact["dense_reference"]["history_format"] == "timeline"
+    assert compact["dense_reference"]["same_run_as_candidate"] is False
+    assert timeline["dense_reference"]["same_run_as_candidate"] is True
+    assert "stage_profile" not in timeline["dense_reference"]
+    assert "throughput" not in timeline["dense_reference"]
+    assert list(timeline["pipeline_profile"]["stages"]) == [
+        "candidate_run",
+        "equivalence_comparison",
+    ]
     assert compact["equivalence"]["matches"] is True
     assert compact["equivalence"]["output_state"]["matches"] is True
     assert compact["equivalence"]["sample_counts"]["matches"] is True
@@ -235,6 +344,25 @@ def test_hsl_replay_benchmark_dense_reference_comparison_detects_mismatch():
     assert comparison["sample_counts"]["matches"] is False
     assert comparison["output_state"]["matches"] is True
     assert comparison["matches"] is False
+
+
+def test_hsl_replay_benchmark_dense_reference_comparison_excludes_timing():
+    reference = asyncio.run(
+        hsl_replay_benchmark.run_hsl_replay_benchmark(minutes=8, symbols=3, held_symbols=1)
+    )
+    candidate = copy.deepcopy(reference)
+    candidate["timings"]["full_replay"]["elapsed_ns"] += 1
+    candidate["stage_profile"]["full_replay"]["residual_orchestration"]["elapsed_ns"] += 1
+    candidate["stage_profile"]["run"]["residual_orchestration"]["elapsed_ns"] += 1
+    candidate["stage_profile"]["full_replay"]["accounted_percent_of_full_replay"] = 0.0
+    candidate["pipeline_profile"]["elapsed_ns"] += 1
+    candidate["dense_reference"]["timings"]["full_replay"]["elapsed_ns"] += 1
+
+    comparison = hsl_replay_benchmark.compare_dense_reference_output(reference, candidate)
+
+    assert comparison["sample_counts"]["matches"] is True
+    assert comparison["output_state"]["matches"] is True
+    assert comparison["matches"] is True
 
 
 @pytest.mark.parametrize(

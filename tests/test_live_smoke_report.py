@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import gzip
 import json
 import os
 from collections import Counter
@@ -310,6 +311,312 @@ def test_live_smoke_report_max_event_files_per_bot_is_fair(tmp_path):
     assert brief["event_window"]["max_event_files_per_bot"] == 2
     assert brief["event_window"]["event_file_limit_scope"] == "per_bot"
     assert brief["event_window"]["event_files_skipped_by_limit"] == 2
+
+
+def test_live_smoke_report_selects_only_segments_overlapping_exact_window(
+    tmp_path, monkeypatch
+):
+    events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    rows = [
+        ("1970-01-01T00-00-01.ndjson", 1500, "before"),
+        ("1970-01-01T00-00-02.ndjson", 2600, "inside_one"),
+        ("1970-01-01T00-00-03.abcdef12.ndjson.gz", 3400, "inside_two"),
+        ("1970-01-01T00-00-04.ndjson", 4500, "after"),
+        ("current.ndjson", 5000, "current"),
+    ]
+    for name, ts, cycle_id in rows:
+        _write_ndjson(
+            events_dir / name.removesuffix(".gz"),
+            [
+                _monitor_row(
+                    event_type="cycle.completed",
+                    seq=ts,
+                    ts=ts,
+                    ids={"cycle_id": cycle_id},
+                )
+            ],
+        )
+        if name.endswith(".gz"):
+            source = events_dir / name.removesuffix(".gz")
+            with source.open("rb") as src, gzip.open(events_dir / name, "wb") as dst:
+                dst.write(src.read())
+            source.unlink()
+
+    opened = []
+    original_open_text = event_file_rows_module._open_text
+
+    def spy_open_text(path):
+        opened.append(path.name)
+        return original_open_text(path)
+
+    monkeypatch.setattr(event_file_rows_module, "_open_text", spy_open_text)
+
+    report = build_live_smoke_report(
+        tmp_path / "monitor",
+        logs_root=None,
+        include_rotated=True,
+        since_ms=2500,
+        until_ms=3500,
+        select_event_segments_for_window=True,
+        max_window_event_files_per_bot=64,
+        max_window_event_files_total=128,
+        max_window_event_bytes_total=128 * 1024 * 1024,
+    )
+
+    assert report["ok"] is True
+    assert opened == [
+        "1970-01-01T00-00-02.ndjson",
+        "1970-01-01T00-00-03.abcdef12.ndjson.gz",
+    ]
+    assert report["monitor"]["files_scanned"] == 2
+    assert report["event_window"]["events_considered"] == 2
+    assert report["event_window"]["segment_selection"] == {
+        "enabled": True,
+        "complete": True,
+        "strategy": "rotation_end_overlap_with_predecessor",
+        "rotation_end_granularity_ms": 1000,
+        "groups": 1,
+        "files_before_selection": 5,
+        "candidate_files_selected": 2,
+        "candidate_scan_bytes": (
+            (events_dir / "1970-01-01T00-00-02.ndjson").stat().st_size
+            + len(
+                gzip.decompress(
+                    (
+                        events_dir
+                        / "1970-01-01T00-00-03.abcdef12.ndjson.gz"
+                    ).read_bytes()
+                )
+            )
+        ),
+        "files_selected": 2,
+        "files_skipped": 3,
+        "max_files_per_bot": 64,
+        "max_total_files": 128,
+        "max_total_bytes": 128 * 1024 * 1024,
+        "limit_exceeded_max_files": 0,
+        "issue_counts": {},
+    }
+
+
+def test_live_smoke_report_window_segment_selection_accepts_manifest_proven_current_only(
+    tmp_path, monkeypatch
+):
+    events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    current_path = events_dir / "current.ndjson"
+    _write_ndjson(
+        current_path,
+        [
+            _monitor_row(
+                event_type="cycle.completed",
+                seq=1,
+                ts=3_000,
+                ids={"cycle_id": "current"},
+            )
+        ],
+    )
+    (events_dir.parent / "manifest.json").write_text(
+        json.dumps({"current_segment_started_ms": 2_000}), encoding="utf-8"
+    )
+    opened = []
+    original_open_text = event_file_rows_module._open_text
+
+    def spy_open_text(path):
+        opened.append(path.name)
+        return original_open_text(path)
+
+    monkeypatch.setattr(event_file_rows_module, "_open_text", spy_open_text)
+
+    report = build_live_smoke_report(
+        tmp_path / "monitor",
+        logs_root=None,
+        include_rotated=True,
+        since_ms=2_500,
+        until_ms=3_500,
+        select_event_segments_for_window=True,
+        max_window_event_files_per_bot=8,
+        max_window_event_files_total=128,
+        max_window_event_bytes_total=128 * 1024 * 1024,
+    )
+
+    assert report["ok"] is True
+    assert opened == ["current.ndjson"]
+    selection = report["event_window"]["segment_selection"]
+    assert selection["complete"] is True
+    assert selection["files_selected"] == 1
+    assert selection["issue_counts"] == {}
+
+
+@pytest.mark.parametrize(
+    ("rotated_names", "since_ms", "until_ms", "max_files", "issue_code"),
+    [
+        (
+            ["legacy.ndjson", "1970-01-01T00-00-02.ndjson"],
+            2500,
+            3500,
+            64,
+            "event_segment_name_unparseable",
+        ),
+        (
+            ["1970-01-01T00-00-03.ndjson"],
+            2500,
+            3500,
+            64,
+            "event_window_start_coverage_unavailable",
+        ),
+        (
+            [],
+            2500,
+            3500,
+            64,
+            "event_window_start_coverage_unavailable",
+        ),
+        (
+            [
+                "1970-01-01T00-00-01.ndjson",
+                "1970-01-01T00-00-02.ndjson",
+                "1970-01-01T00-00-03.ndjson",
+                "1970-01-01T00-00-04.ndjson",
+            ],
+            2500,
+            4500,
+            2,
+            "event_window_segment_limit_exceeded",
+        ),
+    ],
+)
+def test_live_smoke_report_window_segment_selection_fails_closed(
+    tmp_path, rotated_names, since_ms, until_ms, max_files, issue_code
+):
+    events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    for index, name in enumerate([*rotated_names, "current.ndjson"], start=1):
+        _write_ndjson(
+            events_dir / name,
+            [
+                _monitor_row(
+                    event_type="cycle.completed",
+                    seq=index,
+                    ts=index * 1000,
+                    ids={"cycle_id": f"cy_{index}"},
+                )
+            ],
+        )
+
+    report = build_live_smoke_report(
+        tmp_path / "monitor",
+        logs_root=None,
+        include_rotated=True,
+        since_ms=since_ms,
+        until_ms=until_ms,
+        select_event_segments_for_window=True,
+        max_window_event_files_per_bot=max_files,
+        max_window_event_files_total=128,
+        max_window_event_bytes_total=128 * 1024 * 1024,
+    )
+
+    assert report["ok"] is False
+    assert report["hard_failures"] >= 1
+    assert report["event_window"]["segment_selection"]["complete"] is False
+    assert report["event_window"]["segment_selection"]["issue_counts"][issue_code]
+    assert any(issue["code"] == issue_code for issue in report["monitor"]["issues"])
+
+
+@pytest.mark.parametrize(
+    ("max_total_files", "max_total_bytes", "issue_code"),
+    [
+        (1, 128 * 1024 * 1024, "event_window_total_file_limit_exceeded"),
+        (128, 1, "event_window_total_byte_limit_exceeded"),
+    ],
+)
+def test_live_smoke_report_window_segment_global_limits_fail_before_content_scan(
+    tmp_path, monkeypatch, max_total_files, max_total_bytes, issue_code
+):
+    events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    for index, name in enumerate(
+        [
+            "1970-01-01T00-00-01.ndjson",
+            "1970-01-01T00-00-02.ndjson",
+            "1970-01-01T00-00-03.ndjson",
+            "current.ndjson",
+        ],
+        start=1,
+    ):
+        _write_ndjson(
+            events_dir / name,
+            [
+                _monitor_row(
+                    event_type="cycle.completed",
+                    seq=index,
+                    ts=index * 1000,
+                    ids={"cycle_id": f"cy_{index}"},
+                )
+            ],
+        )
+    opened = []
+    monkeypatch.setattr(
+        event_file_rows_module,
+        "_open_text",
+        lambda path: opened.append(path) or path.open("rt", encoding="utf-8"),
+    )
+
+    report = build_live_smoke_report(
+        tmp_path / "monitor",
+        logs_root=None,
+        include_rotated=True,
+        since_ms=2500,
+        until_ms=3500,
+        select_event_segments_for_window=True,
+        max_window_event_files_per_bot=8,
+        max_window_event_files_total=max_total_files,
+        max_window_event_bytes_total=max_total_bytes,
+    )
+
+    assert report["ok"] is False
+    assert opened == []
+    selection = report["event_window"]["segment_selection"]
+    assert selection["complete"] is False
+    assert selection["files_selected"] == 0
+    assert selection["issue_counts"][issue_code] == 1
+
+
+def test_live_smoke_report_window_segment_rejects_unreadable_gzip_size(
+    tmp_path, monkeypatch
+):
+    events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    _write_ndjson(
+        events_dir / "1970-01-01T00-00-01.ndjson",
+        [_monitor_row(event_type="cycle.completed", seq=1, ts=1000)],
+    )
+    bad_gzip = events_dir / "1970-01-01T00-00-03.ndjson.gz"
+    bad_gzip.write_bytes(b"bad")
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [_monitor_row(event_type="cycle.completed", seq=2, ts=4000)],
+    )
+    opened = []
+    monkeypatch.setattr(
+        event_file_rows_module,
+        "_open_text",
+        lambda path: opened.append(path) or path.open("rt", encoding="utf-8"),
+    )
+
+    report = build_live_smoke_report(
+        tmp_path / "monitor",
+        logs_root=None,
+        include_rotated=True,
+        since_ms=2500,
+        until_ms=3500,
+        select_event_segments_for_window=True,
+        max_window_event_files_per_bot=8,
+        max_window_event_files_total=128,
+        max_window_event_bytes_total=128 * 1024 * 1024,
+    )
+
+    assert report["ok"] is False
+    assert opened == []
+    selection = report["event_window"]["segment_selection"]
+    assert selection["files_selected"] == 0
+    assert selection["issue_counts"] == {"event_window_segment_size_failed": 1}
 
 
 def test_live_smoke_report_summarizes_monitor_events_and_log_attention(tmp_path):
@@ -2631,12 +2938,24 @@ def test_live_smoke_report_summarizes_event_pipeline_health(tmp_path):
     assert health["groups"][0]["latest_sink_error_counts"] == {"monitor": 1}
     assert health["groups"][0]["latest_worker_alive"] is False
     assert health["groups"][0]["latest_pipeline_stopping"] is True
+    assert health["integrity"] == {
+        "ok": False,
+        "attention": True,
+        "attention_count": 3,
+        "source_counts": {
+            "drops": 2,
+            "sink_errors": 1,
+            "unexpectedly_dead_workers": 0,
+            "total": 3,
+        },
+    }
     assert report["ok"] is True
     assert report["hard_failures"] == 0
     assert summary["event_pipeline_health"]["total"] == 2
     assert summary["event_pipeline_health"]["groups"][0]["latest_ids"] == {
         "cycle_id": "cy_health_2"
     }
+    assert summary["event_pipeline_health"]["integrity"] == health["integrity"]
     assert brief["event_pipeline"] == {
         "total": 2,
         "bots": 1,
@@ -2647,6 +2966,7 @@ def test_live_smoke_report_summarizes_event_pipeline_health(tmp_path):
         "latest_degraded_total": 3,
         "latest_worker_not_alive_count": 1,
         "latest_stopping_count": 1,
+        "integrity": health["integrity"],
         "event_types": {"health.summary": 2},
     }
 
@@ -2935,11 +3255,23 @@ def test_live_smoke_report_event_pipeline_health_aggregates_multi_bot_queue_over
         "order.created": 5,
     }
     assert health["groups"][1]["latest_sink_error_counts"] == {"structured": 2}
+    assert health["integrity"] == {
+        "ok": False,
+        "attention": True,
+        "attention_count": 10,
+        "source_counts": {
+            "drops": 7,
+            "sink_errors": 3,
+            "unexpectedly_dead_workers": 0,
+            "total": 10,
+        },
+    }
     assert report["ok"] is True
     assert report["attention"] is False
     assert summary["event_pipeline_health"]["total"] == 3
     assert summary["event_pipeline_health"]["groups_truncated"] is True
     assert summary["event_pipeline_health"]["groups"][0]["bot"] == "okx/okx_01"
+    assert summary["event_pipeline_health"]["integrity"] == health["integrity"]
     assert brief["event_pipeline"] == {
         "total": 3,
         "bots": 2,
@@ -2950,7 +3282,116 @@ def test_live_smoke_report_event_pipeline_health_aggregates_multi_bot_queue_over
         "latest_degraded_total": 6,
         "latest_worker_not_alive_count": 1,
         "latest_stopping_count": 1,
+        "integrity": health["integrity"],
         "event_types": {"health.summary": 3},
+    }
+
+
+def test_live_smoke_report_event_pipeline_integrity_is_diagnostic_only(tmp_path):
+    events_dir = tmp_path / "monitor" / "okx" / "okx_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="health.summary",
+                seq=1,
+                ts=1000,
+                level="debug",
+                reason_code="periodic_health_summary",
+                data={
+                    "event_dropped_total": 4,
+                    "event_sink_error_total": 3,
+                    "event_degraded_count": 99,
+                    "event_pipeline_stopping": False,
+                    "event_pipeline_worker_alive": False,
+                },
+            )
+        ],
+    )
+
+    report = build_live_smoke_report(tmp_path / "monitor", logs_root=None)
+    summary = summarize_live_smoke_report(report)
+    brief = summarize_live_smoke_report_brief(report)
+    section = project_live_smoke_report_sections(report, ["event_pipeline"])
+
+    expected = {
+        "ok": False,
+        "attention": True,
+        "attention_count": 8,
+        "source_counts": {
+            "drops": 4,
+            "sink_errors": 3,
+            "unexpectedly_dead_workers": 1,
+            "total": 8,
+        },
+    }
+    assert report["event_pipeline_health"]["integrity"] == expected
+    assert summary["event_pipeline_health"]["integrity"] == expected
+    assert brief["event_pipeline"]["integrity"] == expected
+    assert section["event_pipeline_health"]["integrity"] == expected
+    assert report["ok"] is True
+    assert report["attention"] is False
+    assert report["attention_sources"] == {
+        "problem_events": 0,
+        "log_attention_matches": 0,
+        "dropped_unparsed_attention_matches": 0,
+        "total": 0,
+    }
+
+
+def test_live_smoke_report_event_pipeline_integrity_ignores_orderly_shutdown_worker(
+    tmp_path,
+):
+    events_dir = tmp_path / "monitor" / "okx" / "okx_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="health.summary",
+                seq=1,
+                ts=1000,
+                level="debug",
+                reason_code="periodic_health_summary",
+                data={
+                    "event_pipeline_stopping": True,
+                    "event_pipeline_worker_alive": False,
+                },
+            )
+        ],
+    )
+
+    report = build_live_smoke_report(tmp_path / "monitor", logs_root=None)
+
+    assert report["event_pipeline_health"]["integrity"] == {
+        "ok": True,
+        "attention": False,
+        "attention_count": 0,
+        "source_counts": {
+            "drops": 0,
+            "sink_errors": 0,
+            "unexpectedly_dead_workers": 0,
+            "total": 0,
+        },
+    }
+    assert report["ok"] is True
+    assert report["attention"] is False
+
+
+def test_live_smoke_report_event_pipeline_integrity_without_pipeline_evidence_is_neutral(
+    tmp_path,
+):
+    report = build_live_smoke_report(tmp_path / "monitor", logs_root=None)
+
+    assert report["event_pipeline_health"]["integrity"] == {
+        "ok": True,
+        "attention": False,
+        "attention_count": 0,
+        "source_counts": {
+            "drops": 0,
+            "sink_errors": 0,
+            "unexpectedly_dead_workers": 0,
+            "total": 0,
+        },
     }
 
 
@@ -5354,6 +5795,24 @@ def test_live_smoke_report_summarizes_shutdown_events(tmp_path):
         "bot.shutdown.stage": 1,
         "bot.stopped": 1,
     }
+    assert report["shutdown_events"]["lifecycle"] == {
+        "proof_scope": "distinct_observed_bots",
+        "coverage_complete": True,
+        "identity_complete": True,
+        "invalid_identity_events": 0,
+        "observed_bots": 1,
+        "complete_bots": 1,
+        "incomplete_bots": 0,
+        "rows_truncated": False,
+        "rows": [
+            {
+                "bot": "binance/binance_01",
+                "state": "complete",
+                "latest_boundary": "stopped",
+                "latest_ts": 3000,
+            }
+        ],
+    }
     assert [group["event_type"] for group in report["shutdown_events"]["groups"]] == [
         "bot.stopped",
         "bot.shutdown.stage",
@@ -5371,6 +5830,9 @@ def test_live_smoke_report_summarizes_shutdown_events(tmp_path):
     assert summary["shutdown_events"]["total"] == 3
     assert summary["shutdown_events"]["groups_truncated"] is True
     assert len(summary["shutdown_events"]["groups"]) == 2
+    assert summary["shutdown_events"]["lifecycle"] == report["shutdown_events"]["lifecycle"] | {
+        "rows_truncated": False
+    }
     assert brief["shutdown_events"] == {
         "total": 3,
         "event_types": {
@@ -5378,7 +5840,259 @@ def test_live_smoke_report_summarizes_shutdown_events(tmp_path):
             "bot.shutdown.stage": 1,
             "bot.stopped": 1,
         },
+        "lifecycle": {
+            "observed_bots": 1,
+            "complete_bots": 1,
+            "incomplete_bots": 0,
+        },
     }
+
+
+def test_live_smoke_report_shutdown_lifecycle_is_neutral_without_boundaries(tmp_path):
+    events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [_monitor_row(event_type="cycle.completed", seq=1, ts=1000)],
+    )
+
+    report = build_live_smoke_report(tmp_path / "monitor", logs_root=None)
+    brief = summarize_live_smoke_report_brief(report)
+
+    assert report["ok"] is True
+    assert report["attention"] is False
+    assert report["hard_failures"] == 0
+    assert report["shutdown_events"]["lifecycle"] == {
+        "proof_scope": "distinct_observed_bots",
+        "coverage_complete": True,
+        "identity_complete": True,
+        "invalid_identity_events": 0,
+        "observed_bots": 0,
+        "complete_bots": 0,
+        "incomplete_bots": 0,
+        "rows_truncated": False,
+        "rows": [],
+    }
+    assert brief["shutdown_events"]["lifecycle"] == {
+        "observed_bots": 0,
+        "complete_bots": 0,
+        "incomplete_bots": 0,
+    }
+
+
+def test_live_smoke_report_shutdown_lifecycle_excludes_unknown_identities(tmp_path):
+    events_dir = tmp_path / "monitor" / "unknown_exchange" / "unknown_user" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="bot.stopping",
+                seq=1,
+                ts=1000,
+                exchange="unknown_exchange",
+                user="unknown_user",
+            ),
+            _monitor_row(
+                event_type="bot.stopped",
+                seq=2,
+                ts=2000,
+                exchange="unknown_exchange",
+                user="unknown_user",
+            ),
+        ],
+    )
+
+    report = build_live_smoke_report(tmp_path / "monitor", logs_root=None)
+
+    assert report["ok"] is True
+    assert report["shutdown_events"]["lifecycle"] == {
+        "proof_scope": "distinct_observed_bots",
+        "coverage_complete": True,
+        "identity_complete": False,
+        "invalid_identity_events": 2,
+        "observed_bots": 0,
+        "complete_bots": 0,
+        "incomplete_bots": 0,
+        "rows_truncated": False,
+        "rows": [],
+    }
+
+
+def test_live_smoke_report_shutdown_lifecycle_excludes_inconsistent_identity(
+    tmp_path,
+):
+    events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    row = _monitor_row(event_type="bot.stopping", seq=1, ts=1000)
+    row["payload"]["_live_event"]["user"] = "other_user"
+    _write_ndjson(events_dir / "current.ndjson", [row])
+
+    report = build_live_smoke_report(tmp_path / "monitor", logs_root=None)
+
+    lifecycle = report["shutdown_events"]["lifecycle"]
+    assert lifecycle["identity_complete"] is False
+    assert lifecycle["invalid_identity_events"] == 1
+    assert lifecycle["observed_bots"] == 0
+
+
+def test_live_smoke_report_shutdown_lifecycle_refreshes_merged_identity_validity(
+    tmp_path,
+):
+    events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    valid = _monitor_row(event_type="bot.stopping", seq=1, ts=1000)
+    invalid = _monitor_row(event_type="bot.stopping", seq=2, ts=2000)
+    invalid["user"] = "other_user"
+    _write_ndjson(events_dir / "current.ndjson", [valid, invalid])
+
+    report = build_live_smoke_report(tmp_path / "monitor", logs_root=None)
+
+    lifecycle = report["shutdown_events"]["lifecycle"]
+    assert lifecycle["identity_complete"] is False
+    assert lifecycle["invalid_identity_events"] == 1
+    assert lifecycle["observed_bots"] == 0
+
+
+def test_live_smoke_report_shutdown_lifecycle_rows_are_bounded(tmp_path):
+    monitor_root = tmp_path / "monitor"
+    for index in range(smoke_report_module.SHUTDOWN_EVENT_GROUP_LIMIT + 1):
+        events_dir = monitor_root / "binance" / f"bot_{index:02d}" / "events"
+        _write_ndjson(
+            events_dir / "current.ndjson",
+            [
+                _monitor_row(
+                    event_type="bot.stopping",
+                    seq=index + 1,
+                    ts=1000 + index,
+                    user=f"bot_{index:02d}",
+                )
+            ],
+        )
+
+    report = build_live_smoke_report(monitor_root, logs_root=None)
+    lifecycle = report["shutdown_events"]["lifecycle"]
+
+    assert lifecycle["observed_bots"] == smoke_report_module.SHUTDOWN_EVENT_GROUP_LIMIT + 1
+    assert lifecycle["rows_truncated"] is True
+    assert len(lifecycle["rows"]) == smoke_report_module.SHUTDOWN_EVENT_GROUP_LIMIT
+
+
+def test_live_smoke_report_shutdown_lifecycle_marks_tail_limited_coverage_incomplete(tmp_path):
+    events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(event_type="bot.stopping", seq=1, ts=1000),
+            _monitor_row(event_type="bot.stopped", seq=2, ts=2000),
+        ],
+    )
+
+    report = build_live_smoke_report(
+        tmp_path / "monitor",
+        logs_root=None,
+        event_tail_lines=1,
+    )
+
+    lifecycle = report["shutdown_events"]["lifecycle"]
+    assert lifecycle["coverage_complete"] is False
+    assert lifecycle["observed_bots"] == 1
+    assert lifecycle["complete_bots"] == 0
+
+
+def test_live_smoke_report_shutdown_lifecycle_uses_latest_event_position_across_files(tmp_path):
+    events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="bot.stopping",
+                seq=30,
+                ts=1000,
+                user="complete",
+            ),
+            _monitor_row(
+                event_type="bot.stopping",
+                seq=40,
+                ts=4000,
+                user="incomplete",
+            ),
+        ],
+    )
+    _write_ndjson(
+        events_dir / "2026-07-10T00-00-00.ndjson",
+        [
+            _monitor_row(
+                event_type="bot.stopped",
+                seq=20,
+                ts=2000,
+                user="complete",
+            ),
+            _monitor_row(
+                event_type="bot.stopped",
+                seq=10,
+                ts=3000,
+                user="incomplete",
+            ),
+        ],
+    )
+
+    report = build_live_smoke_report(
+        tmp_path / "monitor",
+        logs_root=None,
+        include_rotated=True,
+        max_event_files_per_bot=2,
+    )
+
+    assert report["shutdown_events"]["lifecycle"] == {
+        "proof_scope": "distinct_observed_bots",
+        "coverage_complete": True,
+        "identity_complete": True,
+        "invalid_identity_events": 0,
+        "observed_bots": 2,
+        "complete_bots": 1,
+        "incomplete_bots": 1,
+        "rows_truncated": False,
+        "rows": [
+            {
+                "bot": "binance/incomplete",
+                "state": "incomplete",
+                "latest_boundary": "stopping",
+                "latest_ts": 4000,
+            },
+            {
+                "bot": "binance/complete",
+                "state": "complete",
+                "latest_boundary": "stopped",
+                "latest_ts": 2000,
+            },
+        ],
+    }
+
+
+def test_live_smoke_report_shutdown_lifecycle_does_not_reuse_older_completion(
+    tmp_path,
+):
+    events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(event_type="bot.stopping", seq=1, ts=1000),
+            _monitor_row(event_type="bot.stopped", seq=2, ts=2000),
+            _monitor_row(event_type="bot.stopping", seq=3, ts=3000),
+        ],
+    )
+
+    report = build_live_smoke_report(tmp_path / "monitor", logs_root=None)
+
+    lifecycle = report["shutdown_events"]["lifecycle"]
+    assert lifecycle["observed_bots"] == 1
+    assert lifecycle["complete_bots"] == 0
+    assert lifecycle["incomplete_bots"] == 1
+    assert lifecycle["rows"] == [
+        {
+            "bot": "binance/binance_01",
+            "state": "incomplete",
+            "latest_boundary": "stopping",
+            "latest_ts": 3000,
+        }
+    ]
 
 
 def test_live_smoke_report_summarizes_recent_risk_events(tmp_path):
@@ -6918,6 +7632,237 @@ def test_live_smoke_report_distinguishes_attention_and_hard_structured_events(
     assert report["problem_events"][0]["hard"] is False
 
 
+def test_live_smoke_report_retains_hard_problem_evidence_after_mixed_sample_eviction(
+    tmp_path,
+):
+    events_dir = tmp_path / "monitor" / "bybit" / "bybit_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="bot.stopped",
+                seq=1,
+                ts=1000,
+                status="failed",
+                level="critical",
+                reason_code="terminal_startup_failure",
+            ),
+            _monitor_row(
+                event_type="execution.create_failed",
+                seq=2,
+                ts=2000,
+                status="failed",
+                level="error",
+                reason_code="exchange_exception",
+            ),
+            *[
+                _monitor_row(
+                    event_type="ema.unavailable",
+                    seq=seq,
+                    ts=seq * 1000,
+                    status="degraded",
+                    level="warning",
+                    reason_code="required_ema_unavailable",
+                )
+                for seq in range(3, 6)
+            ],
+        ],
+    )
+
+    report = build_live_smoke_report(
+        tmp_path / "monitor",
+        logs_root=None,
+        max_problem_events=2,
+    )
+
+    assert report["hard_problem_event_count"] == 2
+    assert [event["seq"] for event in report["problem_events"]] == [4, 5]
+    assert [event["hard"] for event in report["problem_events"]] == [False, False]
+    assert report["hard_problem_events"] == {
+        "count": 2,
+        "retained": 2,
+        "truncated": 0,
+        "sample": [
+            {
+                "event_type": "bot.stopped",
+                "exchange": "binance",
+                "hard": True,
+                "level": "critical",
+                "line": 1,
+                "path": str(events_dir / "current.ndjson"),
+                "reason_code": "terminal_startup_failure",
+                "seq": 1,
+                "status": "failed",
+                "ts": 1000,
+                "user": "binance_01",
+            },
+            {
+                "event_type": "execution.create_failed",
+                "exchange": "binance",
+                "hard": True,
+                "level": "error",
+                "line": 2,
+                "path": str(events_dir / "current.ndjson"),
+                "reason_code": "exchange_exception",
+                "seq": 2,
+                "status": "failed",
+                "ts": 2000,
+                "user": "binance_01",
+            },
+        ],
+    }
+    assert summarize_live_smoke_report(report)["hard_problem_events"] == report[
+        "hard_problem_events"
+    ]
+    assert summarize_live_smoke_report_brief(report)["hard_problem_events"] == report[
+        "hard_problem_events"
+    ]
+
+
+def test_live_smoke_report_hard_problem_evidence_respects_zero_sample_limit(tmp_path):
+    events_dir = tmp_path / "monitor" / "bybit" / "bybit_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="bot.stopped",
+                seq=1,
+                ts=1000,
+                status="failed",
+                level="critical",
+                reason_code="terminal_startup_failure",
+            ),
+            _monitor_row(
+                event_type="ema.unavailable",
+                seq=2,
+                ts=2000,
+                status="degraded",
+                level="warning",
+                reason_code="required_ema_unavailable",
+            ),
+        ],
+    )
+
+    report = build_live_smoke_report(
+        tmp_path / "monitor",
+        logs_root=None,
+        max_problem_events=0,
+    )
+
+    assert report["problem_events"] == []
+    assert report["hard_problem_event_count"] == 1
+    assert report["hard_problem_events"] == {
+        "count": 1,
+        "retained": 0,
+        "truncated": 1,
+        "sample": [],
+    }
+
+
+def test_live_smoke_report_hard_problem_evidence_retains_latest_bounded_sample(
+    tmp_path,
+):
+    events_dir = tmp_path / "monitor" / "bybit" / "bybit_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="bot.stopped",
+                seq=seq,
+                ts=seq * 1000,
+                status="failed",
+                level="critical",
+                reason_code=f"terminal_failure_{seq}",
+            )
+            for seq in range(1, 4)
+        ],
+    )
+
+    report = build_live_smoke_report(
+        tmp_path / "monitor",
+        logs_root=None,
+        max_problem_events=2,
+    )
+
+    assert report["hard_problem_event_count"] == 3
+    assert report["hard_problem_events"] == {
+        "count": 3,
+        "retained": 2,
+        "truncated": 1,
+        "sample": report["problem_events"],
+    }
+    assert [event["seq"] for event in report["hard_problem_events"]["sample"]] == [
+        2,
+        3,
+    ]
+
+
+def test_live_smoke_report_projects_bounded_hard_problem_evidence(tmp_path):
+    events_dir = tmp_path / "monitor" / "bybit" / "bybit_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="bot.stopped",
+                seq=seq,
+                ts=seq * 1000,
+                status="failed",
+                level="critical",
+                reason_code=f"terminal_failure_{seq}",
+            )
+            for seq in range(1, 8)
+        ],
+    )
+
+    report = build_live_smoke_report(
+        tmp_path / "monitor",
+        logs_root=None,
+        max_problem_events=7,
+    )
+    summary = summarize_live_smoke_report(report, max_groups=3)
+    brief = summarize_live_smoke_report_brief(report)
+
+    assert summary["hard_problem_events"] == {
+        "count": 7,
+        "retained": 3,
+        "truncated": 4,
+        "sample": report["hard_problem_events"]["sample"][-3:],
+    }
+    assert brief["hard_problem_events"] == {
+        "count": 7,
+        "retained": 5,
+        "truncated": 2,
+        "sample": report["hard_problem_events"]["sample"][-5:],
+    }
+
+
+def test_live_smoke_report_projects_zero_bound_hard_problem_evidence(tmp_path):
+    events_dir = tmp_path / "monitor" / "bybit" / "bybit_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="bot.stopped",
+                seq=1,
+                ts=1000,
+                status="failed",
+                level="critical",
+                reason_code="terminal_startup_failure",
+            )
+        ],
+    )
+
+    report = build_live_smoke_report(
+        tmp_path / "monitor",
+        logs_root=None,
+        max_problem_events=0,
+    )
+    expected = {"count": 1, "retained": 0, "truncated": 1, "sample": []}
+
+    assert summarize_live_smoke_report(report)["hard_problem_events"] == expected
+    assert summarize_live_smoke_report_brief(report)["hard_problem_events"] == expected
+
+
 def test_live_smoke_report_summarizes_problem_event_groups(tmp_path):
     events_dir = tmp_path / "monitor" / "okx" / "okx_faisal" / "events"
     _write_ndjson(
@@ -7749,6 +8694,12 @@ def test_live_smoke_report_cli_can_emit_concise_summary(tmp_path, capsys):
     assert "account_critical_remote_calls" in summary
     assert "bots" not in summary
     assert "problem_events" in summary
+    assert summary["hard_problem_events"] == {
+        "count": 0,
+        "retained": 0,
+        "truncated": 0,
+        "sample": [],
+    }
 
 
 def test_live_smoke_report_cli_can_emit_brief_summary(tmp_path, capsys):
@@ -7801,6 +8752,12 @@ def test_live_smoke_report_cli_can_emit_brief_summary(tmp_path, capsys):
     assert summary["problem_events"]["hard"] == 0
     assert summary["problem_events"]["total"] == 1
     assert summary["problem_events"]["non_hard"] == 1
+    assert summary["hard_problem_events"] == {
+        "count": 0,
+        "retained": 0,
+        "truncated": 0,
+        "sample": [],
+    }
     assert summary["problem_events"]["event_types"] == {"remote_call.failed": 1}
     assert summary["problem_events"]["event_types_truncated"] is False
     assert summary["problem_events"]["groups"] == [

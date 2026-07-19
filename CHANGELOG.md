@@ -4,6 +4,24 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Window-bounded live smoke collection now accepts a monitor with only
+  `current.ndjson` when the bounded monitor manifest proves that segment covers
+  the requested window start; missing or invalid coverage evidence still fails
+  closed.
+
+- Generic staged balance refreshes now retain the actual exchange response for
+  account data-packet provenance while carrying bounded balance composition as
+  a separate diagnostic, including Binance's sequenced account cohort and
+  legacy raw/normalized balance pairs. Packet hashes therefore reflect raw
+  response changes without exposing raw payloads.
+
+- HSL cooldown re-panic confirmation now remains protective after the original
+  cooldown deadline until the exact scope-flattening fill is available. The
+  confirmation path refreshes the fill cache and reconstructs durable fills
+  from unambiguous order side and position side when no transient action field
+  is present, including flattening fills stamped in the same exchange
+  millisecond as the non-flat intervention snapshot.
+
 - Hardened WEEX live reconciliation by requiring explicit combined/separated
   position mode and long/short open-order sides, and by adaptively splitting
   full fill-history windows so endpoint ordering cannot silently omit fills.
@@ -26,6 +44,188 @@ All notable user-facing changes will be documented in this file.
   The Requests and aiohttp pins are aligned with CCXT 4.5.66's declared
   dependencies.
 
+- Planning snapshot diagnostics now include a bounded completed-1m-candle
+  freshness summary when that surface is required. The summary is derived only
+  from the frozen planning signature and reports expected/real close ages plus
+  bounded tail-gap fallback counts; `live-performance-report` validates and
+  aggregates the same proof. It does not reread candles or change planning,
+  exchange access, orders, strategy, or risk behavior.
+
+- `passivbot tool hsl-replay-benchmark` now reports exclusive timing profiles
+  for fixture construction, replay internals, final-state projection, candidate
+  and dense-reference runs, equivalence comparison, and residual orchestration.
+  Compact-history benchmarks retain the dense-reference timing evidence they
+  use for equivalence, while timeline-reference runs avoid double-counting the
+  same execution. This is offline diagnostic output only; HSL state, replay
+  behavior, exchange access, orders, and risk are unchanged.
+
+- Trailing-position fill confirmation now treats exchange position-update
+  timestamps as advisory and proves readiness with a successful post-position
+  fill refresh, a new fill identity for runtime changes, and matching fill
+  after-state. This prevents Bybit's later `updatedTime` from leaving valid
+  trailing positions permanently nontradable. Repeated unavailable warnings are
+  bounded, and monitor market state now exposes the actual planner tradability
+  plus fill-confirmation predicates and watermarks.
+
+- `passivbot tool runtime-attribution` now reconciles the producer's exact
+  12-character lowercase-hex startup-log run-id prefix with one complete
+  manifest or startup-event identity when exchange, user, prefix, and start time
+  agree within two seconds. Ambiguous, incomplete, malformed, or out-of-bound
+  observations remain separate. Monitor ingestion reads the canonical
+  `_live_event` envelope while retaining legacy input compatibility; the
+  read-only tool still does not contact exchanges or control bots.
+
+- Shutdown evidence in live smoke reports now distinguishes complete and
+  incomplete latest shutdown lifecycles per bot. Restart smoke validation uses
+  distinct complete bots instead of aggregate event counts, so duplicate
+  stopping or stopped events from one bot cannot satisfy a multi-bot restart
+  gate; general smoke verdicts and live runtime behavior remain unchanged.
+
+- Live smoke reports now include a bounded diagnostics-only event-pipeline
+  integrity verdict from each bot's latest health snapshot. Cumulative drops,
+  sink errors, and workers unexpectedly absent outside orderly pipeline shutdown
+  are explicit attention evidence; existing smoke, process, trading, and
+  top-level attention verdicts remain unchanged.
+
+- Fake-live scenario-time callbacks now retain their original offline fake
+  client through graceful shutdown. The final monitor snapshot can therefore
+  complete after the bot releases its public-session reference, without a
+  spurious `NoneType.now_ms` error or any change to live timekeeping, exchange
+  sessions, trading behavior, or event payloads.
+
+- Offline fake-live runs now retain the already-emitted redacted structured
+  event envelopes as a run artifact. The coin-mode HSL RED regression uses that
+  evidence to prove a panic fill is followed by an available planning snapshot
+  without a post-panic `planning.unavailable` handoff, while leaving live event
+  production, HSL behavior, exchange calls, orders, and risk unchanged.
+
+- Hyperliquid `balance.changed` composition diagnostics now parse only proven
+  unified-account `info.balances` coin and signed total fields from the
+  already-fetched balance response. Non-unified payloads remain explicitly
+  unavailable; malformed unified shapes remain diagnostic failures. The bounded
+  rows add no exchange calls, valuation inference, scalar-balance changes,
+  planning, order, or risk behavior, and raw connector payloads remain excluded.
+
+- Binance `balance.changed` composition diagnostics now normalize only CCXT's
+  documented unified `total`, `free`, `used`, and explicit `debt` maps from the
+  already-fetched balance response. The bounded rows add no exchange calls,
+  valuation inference, scalar-balance changes, planning, order, or risk
+  behavior; raw connector payloads remain excluded.
+
+- `balance.changed` now carries a bounded optional asset-composition diagnostic
+  from the same authoritative balance response. The first connector parser is
+  OKX: it reports only documented account-detail amount, USD value, unrealized
+  PnL, explicit liability, collateral state, and field provenance. Equal-total
+  collateral substitutions are durable through a separate composition
+  signature, while console admission remains snapped-balance based and shows at
+  most two sanitized assets. Generic paths report a stable unavailable
+  diagnostic until their own parsers are added; balance calculation, API calls,
+  refresh cadence, planning, orders, and risk are unchanged.
+
+- Live forager background refresh now schedules the native 1h candle windows required by inactive
+  candidates in addition to their 1m inputs. Candidate refresh budgeting operates per
+  symbol/timeframe surface, bounds and rotates cache-health scans, honors configured warmup and
+  stale-tail limits, interleaves 1m and 1h health checks while prioritizing cold 1m fetches, backs
+  off unavailable native-1h leading-prefix retries only after successful fetches, keeps known-stale
+  unfetched surfaces pending, and derives staleness from the actually refreshable universe. Forced
+  native higher-timeframe reads bypass partial range-cache hits, preserve complete disk coverage
+  when a retry returns only a partial range, keep incomplete ranges out of reusable EMA state, and
+  invalidate the refreshed timeframe's EMA cache and overlapping range-cache entries. Backoff is
+  scoped to the requested window and
+  begins only after a nonempty fetch still proves its leading gap. Health-only scans do not consume
+  fetch tokens, and native 1h work is scheduled only for nonzero strategy weights. Zero-budget
+  cycles perform no fetches or per-symbol warmup computation even with open slots. This prevents
+  cache-only planning from freezing the selection universe around incumbents whose 1h log-range
+  cache alone remained fresh.
+
+- Live startups now persist an immutable, non-secret runtime manifest and expose
+  the same Python commit, config hash, embedded Rust source fingerprint, loaded
+  Rust artifact hash, version, and run id through bounded startup events and
+  monitor state. Newly discovered fill events retain which runtime first
+  ingested them without falsely claiming that runtime created the order;
+  refreshes preserve existing attribution and leave legacy fills unattributed.
+
+- Added `passivbot tool runtime-attribution`, a bounded, read-only local report
+  that correlates fill caches and monitor fill history with immutable runtime
+  manifests, structured startup events, and legacy startup logs. It keeps
+  recorded first-ingestion identity separate from non-proving producer-window
+  candidates, leaves legacy fills unattributed, supports trailing-only and
+  account/symbol/time filters, and can fail when selected fills lack recorded
+  provenance without contacting exchanges or controlling bots.
+
+- Full live smoke reports now retain a separately bounded sample of hard
+  structured problem events, with authoritative total, retained, and truncated
+  counts. Later warning-level attention can no longer hide every classification
+  behind a nonzero hard-problem count. Concise summary, brief, and incident
+  bundle smoke metadata now retain the same bounded hard-only evidence; the
+  existing mixed latest-event sample and all runtime behavior remain unchanged.
+
+- HSL replay now recognizes every ordered, fill-derived scope flatten as an
+  episode boundary, including multiple close-and-reentry transitions within
+  one replay minute and compact coin replay without historical unrealized PnL.
+  RED cooldowns anchor to an episode-bounded flattening fill regardless of
+  close order type; when an initial or cooldown-repanic flatten fill is
+  temporarily unavailable, live supervision performs a rate-limited,
+  episode-bounded fill refresh and otherwise defers instead of using stale
+  pre-episode evidence, intervention entries, partial closes, or an invented
+  current-time timestamp. Intra-minute replay also reconstructs the account
+  balance at each ordered episode boundary so later fills cannot change an
+  earlier episode's drawdown or no-restart outcome.
+
+- `sink.degraded` events no longer retain raw sink exception text. They preserve
+  the stable sink-failure reason, sink name, exception type, health counters,
+  and pipeline timings while keeping request URLs, credentials, response data,
+  and other exception-message content out of degraded-event and monitor sinks.
+
+- `cycle.degraded` structured events no longer retain raw exception text or
+  request URLs from generic execution-loop failures or fill-history coverage
+  deferrals. A strict payload allow-list also drops nested spelling variants and
+  unknown caller fields. Stable reason codes, bounded exception types, cycle
+  correlation, safe operational details, and phase timings remain available;
+  retry, recovery, restart, and trading behavior are unchanged.
+
+- Added `passivbot tool live-restart-smoke-run`, an explicit local orchestrator
+  that requires exact repository, Rust-source, supervisor-command, and target
+  contracts before invoking the existing exact-pane graceful restart executor.
+  After a successful restart it waits one caller-bounded observation interval
+  and runs the existing bounded in-memory smoke collector over the exact
+  restart-through-observation window. It emits aggregate restart counts and
+  sanitized smoke evidence only, never pulls or builds code, SSHes, applies
+  force escalation or broad process-pattern signals, or writes report files;
+  post-action smoke failures leave the relaunched bots running and fail red for
+  operator follow-up.
+
+- Added `passivbot tool live-repository-prepare`, an explicit local executor
+  that fetches only the pinned public canonical `origin/master`, requires exact
+  caller-confirmed
+  current and target commits, a tracked-clean `master` checkout with no Git
+  operation in progress, and a hook-disabled true fast-forward before moving
+  the worktree.
+  It then verifies or rebuilds the Rust extension in a fresh bounded child
+  process and requires an exact caller-confirmed source fingerprint before the
+  checkout is restart-ready. It preserves untracked files and never SSHes,
+  contacts exchanges, signals or starts live bots, force-checks out, or rolls
+  back a target whose Rust preparation failed.
+
+- Added `passivbot tool live-restart-smoke-evidence`, a pure fail-closed
+  evaluator for already-generated full restart target and smoke JSON reports.
+  It binds stable exact-target evidence and bounded post-restart monitor/log,
+  shutdown, startup, and repository evidence to the expected head, supervisor
+  fingerprint, and target count without executing report producers or
+  controlling processes. Event and log windows retain and compare exact bounded
+  epoch-millisecond values, and dropped hard-looking log evidence fails closed.
+
+- Added `passivbot tool live-restart-smoke-collect` to collect the existing exact
+  local target and bounded smoke reports in memory and immediately evaluate the
+  sanitized restart evidence contract. It performs only local filesystem and
+  bounded `tmux`/`ps`/`git` inventory reads; it does not write intermediate
+  reports, pull or build code, contact exchanges, or control processes. Exact
+  historical event windows select only managed rotation segments whose encoded
+  intervals overlap the requested bounds, require retained predecessor coverage,
+  and fail closed before content scanning when names, per-bot counts, global
+  counts, or selected bytes exceed the bounded policy. Sanitized output reports
+  aggregate selection completeness, counts, scan bytes, and code-owned issues.
+
 - Live trailing restart reconciliation now preserves authoritative position-update
   timestamps from CCXT and raw exchange payloads and no longer
   treats position creation time as proof that fill history is current. Exchanges
@@ -37,9 +237,11 @@ All notable user-facing changes will be documented in this file.
 
 - Added `passivbot tool live-restart-executor`, an explicit local executor for
   exact tmux targets that already pass the bounded stable target report. It
-  requires the expected Git commit, a tracked-clean checkout, a Rust extension
-  stamped for the current Rust sources, the expected full supervisor-command
-  fingerprint, and `--execute`,
+  requires the expected Git commit, a tracked-clean checkout, an
+  operator-confirmed Rust build-input fingerprint, a Rust extension stamped
+  with that same fingerprint, a final rehash that detects ignored build-input
+  drift during verification, the expected full supervisor-command fingerprint,
+  and `--execute`,
   sends one Ctrl-C round only to verified panes, waits a bounded time for exact
   process exits, rechecks repository/runtime artifacts plus the private
   supervisor snapshot and pane/process identity before typing launch commands,

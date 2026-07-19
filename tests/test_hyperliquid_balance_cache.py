@@ -475,7 +475,10 @@ async def test_hyperliquid_combined_fetch_handles_unified_balance_payload(stubbe
     HIP3_UPNL = -0.456789  # HIP-3 dex uPNL, surfaced at the CCXT top level
 
     class _UnifiedCCA:
+        balance_calls = 0
+
         async def fetch_balance(self):
+            self.balance_calls += 1
             return {
                 "total": {"USDC": UNIFIED_TOTAL},
                 "info": {
@@ -539,6 +542,55 @@ async def test_hyperliquid_combined_fetch_handles_unified_balance_payload(stubbe
     assert {p["symbol"] for p in positions} == {"BTC/USDC:USDC", "XYZ-SP500/USDC:USDC"}
     assert any(p["symbol"] == "BTC/USDC:USDC" and p["margin_used"] == pytest.approx(1.039948) for p in positions)
     assert any(p["symbol"] == "XYZ-SP500/USDC:USDC" and p["margin_used"] == pytest.approx(0.69617) for p in positions)
+    assert bot.cca.balance_calls == 1
+
+    composition = bot._normalize_balance_diagnostics(raw_snapshot["balance"])
+
+    assert composition["asset_balances"] == [
+        {
+            "asset": "USDC",
+            "field_provenance": {"asset": "coin", "amount": "total"},
+            "amount": UNIFIED_TOTAL,
+        }
+    ]
+    assert balance == pytest.approx(50.14595463)
+    assert bot.cca.balance_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_hyperliquid_staged_balance_capture_reuses_unified_response(stubbed_modules):
+    HyperliquidBot = importlib.import_module("exchanges.hyperliquid").HyperliquidBot
+    bot = HyperliquidBot.__new__(HyperliquidBot)
+    calls = {"capture": 0, "balance": 0}
+    raw_balance = {"info": {"balances": [{"coin": "USDC", "total": "42.5"}]}}
+
+    class _NoBalanceFetchCCA:
+        async def fetch_balance(self):
+            calls["balance"] += 1
+            raise AssertionError("staged diagnostics must reuse the captured balance response")
+
+    async def fake_capture_positions_balance_staged_snapshot():
+        calls["capture"] += 1
+        return {"balance": raw_balance}, [], 17.25
+
+    async def passthrough_timed_fetch(_label, coro, _timings_ms):
+        return await coro
+
+    bot._capture_positions_balance_staged_snapshot = fake_capture_positions_balance_staged_snapshot
+    bot._timed_authoritative_fetch = passthrough_timed_fetch
+    bot.cca = _NoBalanceFetchCCA()
+
+    snapshot = await bot.capture_authoritative_state_staged_snapshot({"balance"}, {})
+
+    assert calls == {"capture": 1, "balance": 0}
+    assert snapshot["balance"] == pytest.approx(17.25)
+    assert snapshot["balance_composition"]["asset_balances"] == [
+        {
+            "asset": "USDC",
+            "field_provenance": {"asset": "coin", "amount": "total"},
+            "amount": 42.5,
+        }
+    ]
 
 
 def test_hyperliquid_position_unrealized_pnl_fails_loud(stubbed_modules):

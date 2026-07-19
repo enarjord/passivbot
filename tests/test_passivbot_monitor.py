@@ -131,7 +131,39 @@ def test_live_event_cycle_helpers_emit_structured_events():
     bot._emit_live_cycle_degraded(
         cycle_id=cycle_id,
         reason_code="execution_barrier",
-        data={"missing": ["open_orders"]},
+        data={
+            "barrier": {
+                "missing": ["open_orders"],
+                "requestURL": "https://example.invalid?api_key=SECRET",
+                "arbitrary": "api_key=SECRET",
+            },
+            "error_type": "RequestTimeout",
+            "error": "GET https://example.invalid?api_key=SECRET",
+            "request_url": "https://example.invalid?api_key=SECRET",
+            "requestURL": "https://example.invalid?api_key=SECRET",
+            "exception-message": "api_key=SECRET",
+            "arbitrary": "api_key=SECRET",
+            "details": {
+                "missing": ["positions"],
+                "response": {"api_key": "SECRET"},
+                "responseBody": "api_key=SECRET",
+                "exceptionMessage": "api_key=SECRET",
+                "arbitrary": "api_key=SECRET",
+                "invalid": {
+                    "completed_candles": [
+                        {
+                            "reason": "signature_mismatch",
+                            "mismatch_type": "completed_candle_target_changed",
+                            "changed_count": 1,
+                            "changed_symbols": ["BTC/USDT:USDT"],
+                            "responseBody": "api_key=SECRET",
+                            "arbitrary": "api_key=SECRET",
+                        }
+                    ]
+                },
+            },
+            "authoritative_epoch": 999999,
+        },
     )
     assert bot._current_live_event_cycle_id() is None
     cycle_id_2 = bot._begin_live_event_cycle(loop_start_ms=1000)
@@ -165,6 +197,26 @@ def test_live_event_cycle_helpers_emit_structured_events():
         None,
     ]
     assert events[1].reason_code == "execution_barrier"
+    assert events[1].data == {
+        "barrier": {"missing": ["open_orders"]},
+        "error_type": "RequestTimeout",
+        "details": {
+            "missing": ["positions"],
+            "invalid": {
+                "completed_candles": [
+                    {
+                        "reason": "signature_mismatch",
+                        "mismatch_type": "completed_candle_target_changed",
+                        "changed_symbols": ["BTC/USDT:USDT"],
+                        "changed_count": 1,
+                    }
+                ]
+            },
+        },
+        "authoritative_epoch": "[redacted]",
+    }
+    assert "SECRET" not in str(events[1].data)
+    assert "https://" not in str(events[1].data)
     assert events[3].data["orders_changed"] is True
     assert bot._live_event_pipeline.close(timeout=2.0) is True
 
@@ -3253,6 +3305,17 @@ def test_remote_fetch_correlation_map_is_bounded():
     assert bot._live_event_remote_call_seq == 5
 
 
+def test_authoritative_balance_result_summary_accepts_staged_raw_composition_tuple():
+    from live.event_emitters import _authoritative_result_summary
+
+    summary = _authoritative_result_summary(
+        "balance",
+        ({"total": {"USDT": 12.34}}, {"status": "unavailable"}, 12.34),
+    )
+
+    assert summary == {"has_raw_payload": True, "balance": 12.34}
+
+
 @pytest.mark.asyncio
 async def test_authoritative_timed_fetch_emits_correlated_remote_call_events():
     import passivbot as pb_mod
@@ -5067,6 +5130,10 @@ async def test_start_bot_records_startup_error_stop_and_early_snapshot(
             self.user = "bitget_01"
             self.quote = "USDT"
             self.start_time_ms = 1234567890
+            self.runtime_identity = SimpleNamespace(
+                to_dict=lambda: {"schema_version": 1, "run_id": "test-run"}
+            )
+            self._runtime_manifest_written = True
             self.debug_mode = False
             self.stop_signal_received = False
             self.snapshot_flushes = []
@@ -5188,6 +5255,11 @@ def test_log_new_fill_events_records_fill_history():
         pb_order_type="entry_grid_normal_long",
         client_order_id="cid-1",
         source_ids=["src-1"],
+        provenance={
+            "schema_version": 1,
+            "attribution": "first_ingested_by_runtime",
+            "runtime": {"run_id": "run-1"},
+        },
         raw={"exchange_fill_id": "ex-1"},
     )
 
@@ -5195,6 +5267,10 @@ def test_log_new_fill_events_records_fill_history():
 
     assert bot.monitor_publisher.fills[-1]["symbol"] == "BTC/USDT:USDT"
     assert bot.monitor_publisher.fills[-1]["payload"]["id"] == "fill-1"
+    assert (
+        bot.monitor_publisher.fills[-1]["payload"]["provenance"]["runtime"]["run_id"]
+        == "run-1"
+    )
     assert bot.monitor_publisher.events[-1]["kind"] == "order.filled"
     assert bot._health_fills == 1
     assert bot._health_pnl == pytest.approx(1.25)
@@ -5563,6 +5639,24 @@ async def test_build_monitor_snapshot_includes_market_forager_unstuck_and_recent
                 "BTC/USDT:USDT": {"active": True},
                 "ETH/USDT:USDT": {"active": True},
             }
+            self._orchestrator_ema_unavailable_symbols = set()
+            self._orchestrator_trailing_unavailable_symbols = {"BTC/USDT:USDT"}
+            self._orchestrator_trailing_unavailable_reasons = {
+                "BTC/USDT:USDT": ["position_fill_confirmation_pending"]
+            }
+            self._orchestrator_trailing_unavailable_psides = {
+                "BTC/USDT:USDT": ["long"]
+            }
+            self._trailing_fill_confirmation_diagnostics = {
+                ("BTC/USDT:USDT", "long"): {
+                    "failed_predicates": ["post_snapshot_fill_refresh_pending"],
+                    "fill_timestamp_ms": 123000,
+                    "position_update_timestamp_ms": 123100,
+                    "fill_refresh_generation": 2,
+                    "minimum_fill_refresh_generation": 3,
+                    "fill_precedes_position_update": True,
+                }
+            }
             self.recent_order_executions = [
                 {
                         "symbol": "BTC/USDT:USDT",
@@ -5837,6 +5931,17 @@ async def test_build_monitor_snapshot_includes_market_forager_unstuck_and_recent
     )
     assert snapshot["positions"]["BTC/USDT:USDT"]["long"]["upnl"] == pytest.approx(0.5)
     assert snapshot["market"]["BTC/USDT:USDT"]["last_price"] == pytest.approx(100500.0)
+    assert snapshot["market"]["BTC/USDT:USDT"]["tradable"] is False
+    assert snapshot["market"]["BTC/USDT:USDT"]["tradability_reasons"] == [
+        "position_fill_confirmation_pending"
+    ]
+    assert snapshot["market"]["BTC/USDT:USDT"]["trailing_unavailable_psides"] == [
+        "long"
+    ]
+    assert snapshot["market"]["BTC/USDT:USDT"]["trailing_fill_confirmation"][
+        "long"
+    ]["minimum_fill_refresh_generation"] == 3
+    assert snapshot["market"]["ETH/USDT:USDT"]["tradable"] is True
     assert snapshot["market"]["BTC/USDT:USDT"]["c_mult"] == pytest.approx(1.0)
     assert snapshot["market"]["BTC/USDT:USDT"]["entry_volatility_logrange_ema"]["long"] == pytest.approx(
         0.0

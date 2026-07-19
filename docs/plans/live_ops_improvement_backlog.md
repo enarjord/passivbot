@@ -240,9 +240,10 @@ Related detailed plans:
    `repository.root` for shareable reports and surfaces explicit
    dropped-unparsed attention/hard counters when the opt-in log-window drop
    policy suppresses contextless hard-looking log fragments. The safe local
-   exact-target restart executor is implemented; repository pull, Rust rebuild,
-   remote-host orchestration, automatic force escalation, and post-restart
-   monitor/log smoke orchestration remain outside it. A 2026-06-30 follow-up made the
+   exact-target restart executor and canonical repository preparation are
+   implemented; remote-host orchestration and automatic force escalation remain
+   outside them. The active slice composes the executor with one bounded
+   post-restart monitor/log smoke window. A 2026-06-30 follow-up made the
    existing startup timing evidence visible in `live-smoke-report --summary`
    and `--brief`, so repeated smoke loops can see slow startup phases without
    opening the full report. Another 2026-06-30 follow-up made bounded text-log
@@ -359,9 +360,64 @@ Related detailed plans:
      private exact-pane relaunch, and stable final verification. It deliberately
      omits SSH, git pull, Rust rebuild, direct exchange access, and automatic
      force escalation.
+   - 2026-07-17: PR #1300 merged and deployed operator-confirmed Rust
+     build-input fingerprints plus an in-check final rehash at every executor
+     runtime boundary. A deliberately wrong VPS5 fingerprint failed before
+     target sampling or action, and all five bot PIDs remained unchanged. The
+     active follow-up adds a pure evaluator for already-generated full target
+     and smoke JSON reports; automatic report collection remains later work.
+   - 2026-07-17: PR #1301 merged and deployed the pure target/smoke evidence
+     evaluator without restarting bots. A real shutdown-through-startup window
+     passed all gates and a wider window correctly failed on existing hard
+     events. Deployment also exposed lossy epoch-ms projection and comparison;
+     the active follow-up preserves exact bounded timestamps and rejects
+     dropped hard-looking log evidence. Automatic collection remains later.
+   - 2026-07-17: PR #1302 merged and deployed exact epoch-ms fidelity plus the
+     dropped-hard fail-closed gate without restarting bots. The retained real
+     restart window passed with exact bounds; one-millisecond mismatch and
+     dropped-hard in-memory variants failed as expected. The active follow-up
+     composes target, smoke, and evaluation in memory without intermediate full
+     report files or process control.
+   - 2026-07-17: PR #1303 merged and deployed the in-memory collector without a
+     bot restart or signal. Its first exact retained-window run discovered 1,012
+     event segments totaling about 801 MB and remained CPU-active beyond ten
+     minutes, so the exact collector PID was interrupted while all five bot panes
+     and `misc:0.0` stayed unchanged. A read-only prototype selected the 10
+     rotation intervals overlapping that window and returned the complete green
+     five-bot lifecycle verdict in 37.3 seconds. The active follow-up makes that
+     interval selection fail-closed and caps per-bot, global-file, and byte scope.
+   - 2026-07-17: PR #1305 merged and deployed fail-closed interval selection
+     without a bot restart or signal. The exact retained window selected
+     10/1,008 segments and `131834602` projected bytes under the 128 MiB cap,
+     recovered all five shutdown/startup cohorts, and returned zero hard
+     failures. The active follow-up binds canonical `origin/master`
+     fast-forward and Rust runtime preparation to caller-confirmed commits and
+     source inputs before the restart executor can act.
+   - 2026-07-17: PR #1306 merged and deployed exact canonical repository
+     preparation. A same-head VPS5 smoke proved the no-move/no-build path, and a
+     wrong target failed before build while all five panes and `misc:0.0`
+     remained unchanged. The active follow-up composes the existing exact-pane
+     executor and bounded collector over one exact restart-through-observation
+     window without force escalation or report files.
+   - 2026-07-17: PR #1307 merged and deployed the exact restart-through-smoke
+     orchestrator. Graceful execution stopped, exited, relaunched, and verified
+     all five configured targets without force; the bounded collector recovered
+     all five shutdown/startup cohorts. Smoke honestly remained red on a real
+     KuCoin positions-fetch timeout while every bot stayed running and
+     `misc:0.0` remained unchanged. The retained event exposed raw connector
+     exception text and a request URL; the active follow-up removes those fields
+     while preserving bounded classification and correlation.
+   - 2026-07-17: PR #1308 merged and deployed strict `cycle.degraded` payload
+     projection. The exact five-pane graceful restart completed without force;
+     its settled 600-second window recovered all five shutdown/startup cohorts
+     with zero hard, monitor, text-log, or target failures while `misc:0.0`
+     retained its pre-restart identity. Canonical sink-failure handling still
+     retained raw exception text in `sink.degraded`; the active follow-up removes
+     that field while preserving stable classification, counters, and timings.
 
-   Remaining refinements: safe pull/build and post-restart smoke orchestration
-   remain open, as does any separately reviewed force-escalation policy.
+   Remaining refinements: activate the bounded `sink.degraded` redaction
+   follow-up and observe a fresh settled post-restart window. Remote-host control
+   and any force-escalation policy remain separate review boundaries.
    The concise and brief summaries are intentionally bounded; further changes
    should target missing smoke fields rather than larger chat-facing payloads.
    2026-06-26 VPS5 deploy evidence: after PR #709, one Ctrl+C round stopped
@@ -865,6 +921,13 @@ Related detailed plans:
       fake-live suite and seven pside HSL end-to-end scenarios remain green;
       add a dedicated coin-mode post-panic scenario and fix the epoch handoff
       separately from HSL episode-finalization math.
+    - 2026-07-18: Canonical master now completes that coin-mode post-panic
+      handoff: the panic close fills, authoritative account surfaces refresh,
+      cooldown ends, and normal selection resumes without the former missing
+      surface failure. The active regression slice persists the already-emitted
+      redacted live-event envelopes in fake-live artifacts and makes the
+      scenario prove a later available planning snapshot with no
+      `planning.unavailable` handoff event.
 
 16. [x] Websocket reconnect diagnostics.
     Status: completed by PR #1170.
@@ -1025,7 +1088,16 @@ Related detailed plans:
     the live default branch before the cutover can be considered complete.
 
 20. [ ] Per-asset collateral, debt, and valuation balance events.
-    Status: open. A 2026-07-14 evaluation confirmed that the existing
+    Status: partial, OKX plus Binance plus Hyperliquid unified-account totals.
+    Connector-specific slices normalize OKX's already-fetched
+    `info.data[0].details`, Binance's already-fetched CCXT unified balance maps,
+    and proven Hyperliquid unified `info.balances` coin/total rows into bounded
+    deterministic asset rows. Hyperliquid non-unified payloads remain explicitly
+    unavailable; HIP-3 position responses remain out of scope. Gate.io and
+    KuCoin remain fixture/contract work. These slices add no exchange calls or
+    changes to scalar balance, planning, orders, risk, or console materiality.
+    Other connector parsers and any broader asset contract remain open. A
+    2026-07-14 evaluation confirmed that the existing
     `balance.changed` event and console projection expose only aggregate raw
     balance, hysteresis-snapped balance, equity, deltas, and source. The
     authoritative refresh already receives the exact raw balance response
@@ -1083,6 +1155,19 @@ Related detailed plans:
     balance; no duplicate event for an unchanged composition; bounded console
     formatting and sanitization; and explicit diagnostic-unavailable behavior
     for unsupported or malformed breakdowns.
+
+    Work log:
+    - 2026-07-18: Binance follow-up normalized only CCXT's documented unified
+      `total`, `free`, `used`, and explicit `debt` maps from the same fetched
+      response. It excludes raw `info`, arbitrary fields, non-finite values,
+      and valuation inference while reusing existing bounds and signatures.
+    - 2026-07-18: OKX-first slice added bounded rows for `ccy`, `cashBal`,
+      `eqUsd`, `upl`, `collateralEnabled`, and explicit `liab`, with per-field
+      provenance, deterministic truncation, an omitted-row-sensitive internal
+      signature, and a two-row sanitized console sample. Generic, Binance, and
+      Hyperliquid staged refreshes carry normalized unavailable diagnostics
+      rather than raw balance payloads. No ticker/API call, scalar balance
+      calculation, refresh cadence, planning, order, or risk behavior changed.
 
 21. [ ] Historical secret-bearing text-log inventory and remediation.
     Status: partial. PR #1265 merged and deployed the bounded, value-free,

@@ -7177,3 +7177,78 @@ def test_hyperliquid_raw_start_position_overrides_wrong_reconstructed_psize():
 
     assert events[0]["psize"] == 0.0
     assert events[0]["pprice"] == 0.0
+
+
+def _provenance_test_fill() -> Dict[str, object]:
+    return {
+        "id": "fill-provenance-1",
+        "timestamp": 1_700_000_000_000,
+        "datetime": "",
+        "symbol": "BTC/USDT:USDT",
+        "side": "buy",
+        "qty": 0.1,
+        "price": 10_000.0,
+        "pnl": 0.0,
+        "fee_paid": -0.01,
+        "pb_order_type": "entry_trailing_normal_long",
+        "position_side": "long",
+        "client_order_id": "cid-provenance",
+    }
+
+
+def test_fill_event_provenance_round_trips_defensively():
+    payload = _provenance_test_fill()
+    payload["provenance"] = {
+        "schema_version": 1,
+        "attribution": "first_ingested_by_runtime",
+        "runtime": {"run_id": "run-1"},
+    }
+    event = FillEvent.from_dict(payload)
+    serialized = event.to_dict()
+    serialized["provenance"]["runtime"]["run_id"] = "mutated"
+    assert event.provenance["runtime"]["run_id"] == "run-1"
+    assert FillEvent.from_dict(event.to_dict()).provenance == event.provenance
+
+
+@pytest.mark.asyncio
+async def test_new_fill_records_first_ingesting_runtime(tmp_path: Path):
+    runtime = {"schema_version": 1, "run_id": "run-current"}
+    manager = FillEventsManager(
+        exchange="hyperliquid",
+        user="user",
+        fetcher=_StaticFetcher([_provenance_test_fill()]),
+        cache_path=tmp_path,
+        runtime_identity=runtime,
+    )
+
+    await manager.refresh()
+
+    event = manager.get_events()[0]
+    assert event.provenance["schema_version"] == 1
+    assert event.provenance["attribution"] == "first_ingested_by_runtime"
+    assert event.provenance["runtime"] == runtime
+    assert event.provenance["first_ingested_at_ms"] >= event.timestamp
+    assert FillEventCache(tmp_path).load()[0].provenance == event.provenance
+
+
+@pytest.mark.asyncio
+async def test_refresh_does_not_reattribute_legacy_cached_fill(tmp_path: Path):
+    cached = FillEvent.from_dict(_provenance_test_fill())
+    FillEventCache(tmp_path).save([cached])
+    manager = FillEventsManager(
+        exchange="hyperliquid",
+        user="user",
+        fetcher=_StaticFetcher([_provenance_test_fill()]),
+        cache_path=tmp_path,
+        runtime_identity={"schema_version": 1, "run_id": "run-later"},
+    )
+
+    await manager.ensure_loaded()
+    assert manager.get_events()[0].provenance == {}
+    await manager.refresh()
+
+    assert manager.get_events()[0].provenance == {}
+    assert FillEventCache(tmp_path).load()[0].provenance == {}
+    data_files = [path for path in tmp_path.glob("*.json") if path.name != "metadata.json"]
+    persisted = json.loads(data_files[0].read_text())
+    assert "provenance" not in persisted[0]
