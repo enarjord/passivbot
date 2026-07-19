@@ -5704,18 +5704,23 @@ class CandlestickManager:
                 sym_cache = self._tf_range_cache.setdefault(symbol, OrderedDict())
                 if cache_key in sym_cache:
                     arr_cached, fetched_at = sym_cache[cache_key]
-                    try:
-                        sym_cache.move_to_end(cache_key)
-                    except Exception:
-                        pass
-                    if (
-                        max_age_ms is None
-                        or (
-                            max_age_ms > 0
-                            and (now - int(fetched_at)) <= int(max_age_ms)
-                        )
+                    if self._candle_range_has_full_coverage(
+                        arr_cached, int(start_ts), int(end_ts), int(period_ms)
                     ):
-                        return arr_cached
+                        try:
+                            sym_cache.move_to_end(cache_key)
+                        except Exception:
+                            pass
+                        if (
+                            max_age_ms is None
+                            or (
+                                max_age_ms > 0
+                                and (now - int(fetched_at)) <= int(max_age_ms)
+                            )
+                        ):
+                            return arr_cached
+                    else:
+                        sym_cache.pop(cache_key, None)
 
                 # If disk has full coverage for this TF window, serve it without network
                 if max_age_ms != 0 and isinstance(disk_arr, np.ndarray) and disk_arr.size:
@@ -5794,6 +5799,7 @@ class CandlestickManager:
                         nonlocal persisted_batches
                         persisted_batches = True
                         self._persist_batch(symbol, batch, timeframe=out_tf)
+                        self._invalidate_ema_cache(symbol, timeframe=out_tf)
 
                     try:
                         fetched = await self._fetch_ohlcv_paginated(
@@ -5802,6 +5808,7 @@ class CandlestickManager:
                             int(end_excl),
                             timeframe=out_tf,
                             on_batch=_persist_tf_batch,
+                            raise_on_partial_empty_page=max_age_ms == 0,
                         )
                     except TypeError:
                         fetched = await self._fetch_ohlcv_paginated(
@@ -5811,6 +5818,10 @@ class CandlestickManager:
                             timeframe=out_tf,
                         )
                     if fetched.size == 0:
+                        if max_age_ms == 0:
+                            sym_cache.pop(cache_key, None)
+                            self._tf_range_cache[symbol] = sym_cache
+                            return fetched
                         if isinstance(disk_arr, np.ndarray) and disk_arr.size:
                             out = self._slice_ts_range(disk_arr, start_ts, end_ts)
                             sym_cache[cache_key] = (out, int(now))
@@ -5836,13 +5847,18 @@ class CandlestickManager:
                     else:
                         out = fetched_out
                     self._invalidate_ema_cache(symbol, timeframe=out_tf)
-                    sym_cache[cache_key] = (out, int(now))
-                    try:
-                        sym_cache.move_to_end(cache_key)
-                    except Exception:
-                        pass
-                    while len(sym_cache) > self._tf_range_cache_cap:
-                        sym_cache.popitem(last=False)
+                    if self._candle_range_has_full_coverage(
+                        out, int(start_ts), int(end_ts), int(period_ms)
+                    ):
+                        sym_cache[cache_key] = (out, int(now))
+                        try:
+                            sym_cache.move_to_end(cache_key)
+                        except Exception:
+                            pass
+                        while len(sym_cache) > self._tf_range_cache_cap:
+                            sym_cache.popitem(last=False)
+                    else:
+                        sym_cache.pop(cache_key, None)
                     self._tf_range_cache[symbol] = sym_cache
                     return out
 
@@ -7025,6 +7041,33 @@ class CandlestickManager:
             return False
         return bool(np.any(timestamps == int(end_ts)))
 
+    def _candle_range_has_full_coverage(
+        self,
+        arr: np.ndarray,
+        start_ts: int,
+        end_ts: int,
+        period_ms: int,
+    ) -> bool:
+        """Return whether candles cover every requested bucket exactly once."""
+        if not isinstance(arr, np.ndarray) or arr.size == 0 or period_ms <= 0:
+            return False
+        try:
+            timestamps = np.unique(np.asarray(arr["ts"], dtype=np.int64))
+        except (KeyError, TypeError, ValueError):
+            return False
+        expected_len = int((int(end_ts) - int(start_ts)) // int(period_ms)) + 1
+        if (
+            expected_len <= 0
+            or timestamps.size != expected_len
+            or int(timestamps[0]) != int(start_ts)
+            or int(timestamps[-1]) != int(end_ts)
+        ):
+            return False
+        return bool(
+            expected_len == 1
+            or np.all(np.diff(timestamps) == int(period_ms))
+        )
+
     async def get_latest_ema_close(
         self,
         symbol: str,
@@ -7301,6 +7344,10 @@ class CandlestickManager:
             return float("nan")
         if not self._ema_window_has_expected_tail(arr, end_ts):
             return float("nan")
+        if period_ms > ONE_MIN_MS and not self._candle_range_has_full_coverage(
+            arr, start_ts, end_ts, period_ms
+        ):
+            return float("nan")
         series = series_fn(arr)
         res = float(self._ema(series, span))
         cache[key] = (res, int(end_ts), int(now))
@@ -7374,6 +7421,12 @@ class CandlestickManager:
                 out[metric_key] = float("nan")
             return out
         if not self._ema_window_has_expected_tail(raw, end_ts):
+            for metric_key in missing:
+                out[metric_key] = float("nan")
+            return out
+        if period_ms > ONE_MIN_MS and not self._candle_range_has_full_coverage(
+            raw, start_ts, end_ts, period_ms
+        ):
             for metric_key in missing:
                 out[metric_key] = float("nan")
             return out

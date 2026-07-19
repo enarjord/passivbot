@@ -46,10 +46,13 @@ All notable user-facing changes will be documented in this file.
   off unavailable native-1h leading-prefix retries only after successful fetches, keeps known-stale
   unfetched surfaces pending, and derives staleness from the actually refreshable universe. Forced
   native higher-timeframe reads bypass partial range-cache hits, preserve complete disk coverage
-  when a retry returns only a partial range, and invalidate the refreshed timeframe's EMA cache.
-  Backoff is scoped to the requested window size, while zero-budget cycles perform no fetches or
-  per-symbol warmup computation even with open slots. This prevents cache-only planning from
-  freezing the selection universe around incumbents whose 1h log-range cache alone remained fresh.
+  when a retry returns only a partial range, keep incomplete ranges out of reusable EMA state, and
+  invalidate the refreshed timeframe's EMA cache. Backoff is scoped to the requested window and
+  begins only after a nonempty fetch still proves its leading gap. Health-only scans do not consume
+  fetch tokens, and native 1h work is scheduled only for nonzero strategy weights. Zero-budget
+  cycles perform no fetches or per-symbol warmup computation even with open slots. This prevents
+  cache-only planning from freezing the selection universe around incumbents whose 1h log-range
+  cache alone remained fresh.
 
 - Live startups now persist an immutable, non-secret runtime manifest and expose
   the same Python commit, config hash, embedded Rust source fingerprint, loaded
