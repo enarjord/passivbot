@@ -372,6 +372,7 @@ from pure_funcs import (
 )
 
 ONE_MIN_MS = 60_000
+_COMPLETED_CANDLE_SYMBOL_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9:/._-]{0,159}")
 bot = None
 
 
@@ -9750,7 +9751,11 @@ class Passivbot:
                 continue
             symbol = row[0]
             expected_open_ms = _timestamp(row[1])
-            if not isinstance(symbol, str) or not symbol or expected_open_ms is None:
+            if (
+                not isinstance(symbol, str)
+                or _COMPLETED_CANDLE_SYMBOL_RE.fullmatch(symbol) is None
+                or expected_open_ms is None
+            ):
                 invalid_row_count += 1
                 continue
             real_open_ms = expected_open_ms

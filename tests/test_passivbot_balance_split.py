@@ -7956,7 +7956,20 @@ def test_completed_candle_snapshot_summary_is_bounded_and_signature_only():
                 (symbol, 180_000, "tail_gap_fallback", 60_000, 120_000)
                 for symbol in fallback_symbols
             ),
-            ("api_key=must_not_escape", "not-a-timestamp"),
+            (
+                "api_key=must_not_escape",
+                180_000,
+                "tail_gap_fallback",
+                60_000,
+                120_000,
+            ),
+            (
+                f"LONG{'X' * 160}/USDT:USDT",
+                180_000,
+                "tail_gap_fallback",
+                60_000,
+                120_000,
+            ),
             ("malformed", 180_000, "wrong_fallback", 60_000, 120_000),
         ),
     )
@@ -7966,9 +7979,9 @@ def test_completed_candle_snapshot_summary_is_bounded_and_signature_only():
     assert summary == {
         "required": True,
         "timeframe": "1m",
-        "signature_row_count": 13,
+        "signature_row_count": 14,
         "valid_row_count": 11,
-        "invalid_row_count": 2,
+        "invalid_row_count": 3,
         "tail_gap_fallback_count": 10,
         "tail_gap_fallback_symbol_count": 10,
         "tail_gap_fallback_symbol_samples": fallback_symbols[:8],
