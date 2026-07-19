@@ -4,6 +4,13 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- `live-event-query` and `live-performance-report` now include bounded
+  `scan_cost` metadata for elapsed artifact-scan time, successfully read files
+  and records, read methods, and physical versus decoded byte totals. Explicit
+  known flags prevent failed or unmeasurable reads from appearing complete;
+  query selection, results, monitor data, exchange access, and live behavior
+  are unchanged.
+
 - EMA Anchor live monitor snapshots now mark trailing diagnostics as not
   applicable instead of requesting unrelated trailing-martingale parameters
   and repeatedly failing snapshot publication. The trailing diagnostics tool
