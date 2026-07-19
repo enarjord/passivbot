@@ -399,6 +399,54 @@ def test_live_smoke_report_selects_only_segments_overlapping_exact_window(
     }
 
 
+def test_live_smoke_report_window_segment_selection_accepts_manifest_proven_current_only(
+    tmp_path, monkeypatch
+):
+    events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    current_path = events_dir / "current.ndjson"
+    _write_ndjson(
+        current_path,
+        [
+            _monitor_row(
+                event_type="cycle.completed",
+                seq=1,
+                ts=3_000,
+                ids={"cycle_id": "current"},
+            )
+        ],
+    )
+    (events_dir.parent / "manifest.json").write_text(
+        json.dumps({"current_segment_started_ms": 2_000}), encoding="utf-8"
+    )
+    opened = []
+    original_open_text = event_file_rows_module._open_text
+
+    def spy_open_text(path):
+        opened.append(path.name)
+        return original_open_text(path)
+
+    monkeypatch.setattr(event_file_rows_module, "_open_text", spy_open_text)
+
+    report = build_live_smoke_report(
+        tmp_path / "monitor",
+        logs_root=None,
+        include_rotated=True,
+        since_ms=2_500,
+        until_ms=3_500,
+        select_event_segments_for_window=True,
+        max_window_event_files_per_bot=8,
+        max_window_event_files_total=128,
+        max_window_event_bytes_total=128 * 1024 * 1024,
+    )
+
+    assert report["ok"] is True
+    assert opened == ["current.ndjson"]
+    selection = report["event_window"]["segment_selection"]
+    assert selection["complete"] is True
+    assert selection["files_selected"] == 1
+    assert selection["issue_counts"] == {}
+
+
 @pytest.mark.parametrize(
     ("rotated_names", "since_ms", "until_ms", "max_files", "issue_code"),
     [
@@ -411,6 +459,13 @@ def test_live_smoke_report_selects_only_segments_overlapping_exact_window(
         ),
         (
             ["1970-01-01T00-00-03.ndjson"],
+            2500,
+            3500,
+            64,
+            "event_window_start_coverage_unavailable",
+        ),
+        (
+            [],
             2500,
             3500,
             64,

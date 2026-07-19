@@ -11,6 +11,18 @@ from utils import symbol_to_coin, ts_to_date, utc_ms
 from pure_funcs import calc_hash
 
 
+EXCHANGE_MAP = {
+    "bybit": ("bybit", "USDT"),
+    "binance": ("binanceusdm", "USDT"),
+    "bitget": ("bitget", "USDT"),
+    "kucoin": ("kucoinfutures", "USDT"),
+    "hyperliquid": ("hyperliquid", "USDC"),
+    "gateio": ("gateio", "USDT"),
+    "okx": ("okx", "USDT"),
+    "weex": ("weex", "USDT"),
+}
+
+
 def is_stablecoin(elm):
     try:
         if elm["symbol"] in ["tether", "usdb", "usdy", "tusd", "usd0", "usde"]:
@@ -51,25 +63,17 @@ def get_top_market_caps(n_coins, minimum_market_cap_millions, exchange=None):
         exchanges = exchange.split(",")
         import ccxt
 
-        exchange_map = {
-            "bybit": ("bybit", "USDT"),
-            "binance": ("binanceusdm", "USDT"),
-            "bitget": ("bitget", "USDT"),
-            "hyperliquid": ("hyperliquid", "USDC"),
-            "gateio": ("gateio", "USDT"),
-            "okx": ("okx", "USDT"),
-        }
         exchange_approved_coins = set()
         for exchange in exchanges:
             try:
-                cc = getattr(ccxt, exchange_map[exchange][0])()
+                cc = getattr(ccxt, EXCHANGE_MAP[exchange][0])()
                 cc.options["defaultType"] = "swap"
                 markets = cc.fetch_markets()
                 for elm in markets:
                     if (
                         elm["swap"]
                         and elm["active"]
-                        and elm["symbol"].endswith(f":{exchange_map[exchange][1]}")
+                        and elm["symbol"].endswith(f":{EXCHANGE_MAP[exchange][1]}")
                     ):
                         exchange_approved_coins.add(symbol_to_coin(elm["symbol"]))
                 print(f"Added coin filter for {exchange}")

@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+from live.event_bus import LIVE_EVENT_MONITOR_PAYLOAD_KEY
 from live.runtime_attribution import (
     AttributionScanLimitError,
     build_runtime_attribution_report,
@@ -402,6 +403,41 @@ def test_monitor_runtime_event_is_accepted_without_runtime_manifest(tmp_path: Pa
 
     assert report["runtimes"][0]["run_id"] == "run-monitor"
     assert report["runtimes"][0]["sources"][0]["kind"] == "monitor_event"
+
+
+def test_monitor_runtime_event_prefers_canonical_live_event_envelope(tmp_path: Path):
+    roots = _roots(tmp_path)
+    canonical = _identity("run-canonical", 4_000, "c")
+    legacy = _identity("run-legacy", 5_000, "l")
+    path = tmp_path / "monitor" / "bybit" / "alice" / "events" / "current.ndjson"
+    path.parent.mkdir(parents=True)
+    path.write_text(
+        json.dumps(
+            {
+                "kind": "runtime.started",
+                "payload": {
+                    LIVE_EVENT_MONITOR_PAYLOAD_KEY: {
+                        "exchange": "bybit",
+                        "user": "alice",
+                        "data": canonical,
+                    },
+                    "live_event": {
+                        "exchange": "gateio",
+                        "user": "legacy-user",
+                        "data": legacy,
+                    },
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    report = build_runtime_attribution_report(**roots)
+
+    assert [runtime["run_id"] for runtime in report["runtimes"]] == ["run-canonical"]
+    assert report["runtimes"][0]["exchange"] == "bybit"
+    assert report["runtimes"][0]["user"] == "alice"
 
 
 def test_scan_limits_fail_closed(tmp_path: Path):
