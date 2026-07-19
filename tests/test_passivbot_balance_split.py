@@ -53,6 +53,7 @@ from live.balance_composition import (
     balance_composition_signature,
     normalize_okx_balance_composition,
 )
+from live.data_packets import stable_hash
 
 
 TEST_RUNTIME_IDENTITY = RuntimeIdentity(
@@ -525,6 +526,12 @@ async def test_staged_account_refresh_emits_data_packet_diagnostics():
         ],
     )
     _disable_entry_cooldown_delta_guard_for_staged_refresh_test(bot)
+    raw_balance = {"total": {"USDT": 123.45}, "exchange_revision": "raw-1"}
+
+    async def capture_balance_snapshot():
+        return raw_balance, 123.45
+
+    bot.capture_balance_snapshot = capture_balance_snapshot
     events = []
     bot._monitor_record_event = (
         lambda kind, tags, payload=None, **kwargs: events.append(
@@ -547,6 +554,7 @@ async def test_staged_account_refresh_emits_data_packet_diagnostics():
     assert by_kind["balance"]["scope"] == "global"
     assert by_kind["balance"]["freshness"]["status"] == "fresh"
     assert by_kind["balance"]["quality"] == "ok"
+    assert by_kind["balance"]["raw_hash"] == stable_hash(raw_balance)
     assert by_kind["balance"]["response_received_ts_ms"] >= by_kind["balance"][
         "call_started_ts_ms"
     ]

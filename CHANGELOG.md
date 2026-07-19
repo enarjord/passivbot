@@ -4,6 +4,16 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Window-bounded live smoke collection now accepts a monitor with only
+  `current.ndjson` when the bounded monitor manifest proves that segment covers
+  the requested window start; missing or invalid coverage evidence still fails
+  closed.
+
+- Generic staged balance refreshes now retain the actual exchange response for
+  account data-packet provenance while carrying bounded balance composition as
+  a separate diagnostic. Packet hashes therefore reflect raw response changes
+  without exposing raw payloads.
+
 - HSL cooldown re-panic confirmation now remains protective after the original
   cooldown deadline until the exact scope-flattening fill is available. The
   confirmation path refreshes the fill cache and reconstructs durable fills

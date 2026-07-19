@@ -159,21 +159,25 @@ async def refresh_authoritative_state_staged(bot) -> bool:
     return True
 
 
-async def capture_balance_staged_snapshot(bot) -> tuple[dict, float]:
-    """Fetch one balance response and retain only bounded diagnostics for staging."""
+async def capture_balance_staged_snapshot(bot) -> tuple[object, dict, float]:
+    """Fetch one raw balance response plus bounded diagnostics and normalized value."""
     if hasattr(bot, "capture_balance_snapshot"):
         raw_balance, balance = await bot.capture_balance_snapshot()
         normalizer = getattr(bot, "_normalize_balance_diagnostics", None)
         if not callable(normalizer):
-            return unavailable_balance_composition(), balance
+            return raw_balance, unavailable_balance_composition(), balance
         try:
-            return normalizer(raw_balance), balance
+            return raw_balance, normalizer(raw_balance), balance
         except Exception:
-            return malformed_balance_composition(
-                source="normalizer", reason="normalizer_error"
-            ), balance
+            return (
+                raw_balance,
+                malformed_balance_composition(
+                    source="normalizer", reason="normalizer_error"
+                ),
+                balance,
+            )
     balance = await bot.fetch_balance()
-    return unavailable_balance_composition(), balance
+    return None, unavailable_balance_composition(), balance
 
 
 async def capture_positions_staged_snapshot(bot) -> tuple[object, list[dict]]:
@@ -688,7 +692,7 @@ async def fetch_authoritative_state_staged_snapshot(bot, plan: set[str]) -> dict
     out = {"plan": set(plan), "pnls_ok": True}
     for key, result in zip(keys, results):
         if key == "balance":
-            balance_composition, fetched_balance = result
+            _raw_balance, balance_composition, fetched_balance = result
             out["balance"] = fetched_balance
             out["balance_composition"] = balance_composition
         elif key == "positions":
