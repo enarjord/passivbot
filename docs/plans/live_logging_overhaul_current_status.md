@@ -22,8 +22,9 @@ Estimated completion:
 
 ## Active Review Slice
 
-- Branch: `codex/runtime-attribution-log-dedup`, based exactly on PR #1315's
-  canonical merge `308702523760ae7a0b309419ae1616b0a4938721`.
+- Branch: `codex/runtime-attribution-log-dedup`, integrated with canonical
+  `8b433cc22b087b0efab51ba2bcf003f1e2b31806` after the semantic slice was
+  based on PR #1315's merge `308702523760ae7a0b309419ae1616b0a4938721`.
 - Scope: reconcile the producer's exact 12-character lowercase-hex startup-log
   `uuid4().hex[:12]` prefix with one complete runtime manifest/event identity
   when exchange, user, prefix, and a two-second maximum start-time skew agree.
@@ -44,7 +45,31 @@ Estimated completion:
 - Expected VPS action: after merge, a bounded read-only attribution smoke only;
   no bot restart is required.
 
-## Deployed Baseline (PR #1315)
+## Deployed Baseline (PR #1312)
+
+- PR #1312 merged as canonical
+  `8b433cc22b087b0efab51ba2bcf003f1e2b31806`. The guarded tracked-clean
+  fast-forward from `30870252` required no Rust build; source fingerprint and
+  compiled stamp remained
+  `691bff9683deec9382a4e96ab6a107c14145f88edd6ae2f8e2380b8ba6824449`,
+  with artifact SHA-256
+  `7611f3eff1d8702ff29d90490a1aba490db5c816e7e3f09a2c33e5c4085da023`.
+- The guarded runner gracefully restarted only exact panes `%358`-`%362`
+  without force. Old bot PIDs
+  `1044483/1044492/1044486/1044495/1044489` became
+  `1048663/1048672/1048666/1048675/1048669`; pane parents and protected
+  `misc:0.0` `%8`/PID `434835` were unchanged.
+- The exact `1784426343279..1784426527215` lifecycle window retained complete
+  five-bot shutdown/startup proof and one naturally emitted hard event rather
+  than hiding it. A fresh `1784426762780..1784426882865` window had zero smoke
+  hard failures, log errors, or monitor errors. The subsequent ordinary
+  two-minute report was hard-green with `46/46` account-critical calls
+  successful, successful latest observed cycles, and no latest degraded cycle.
+- Final target sampling was 3/3 stable with five exact processes, no missing,
+  duplicate, or extra targets, and a tracked-clean repository. No direct
+  exchange request or event was manufactured.
+
+## Previous Deployed Baseline (PR #1315)
 
 - PR #1315 merged as canonical
   `308702523760ae7a0b309419ae1616b0a4938721`. The guarded tracked-clean

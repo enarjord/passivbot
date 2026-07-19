@@ -15,7 +15,23 @@ merge, live smoke evidence changes, or new gaps are discovered.
 - Do not use this file for design churn; unresolved design details belong in the
   plan or a focused handoff doc.
 
-## Latest Canonical Deployment (PR #1315)
+## Latest Canonical Deployment (PR #1312)
+
+- PR #1312 merged as canonical `8b433cc22b087b0efab51ba2bcf003f1e2b31806`.
+  Guarded tracked-clean fast-forwarded `30870252` to that exact merge without a
+  Rust build; source fingerprint/stamp remained `691bff9683deec9382a4e96ab6a107c14145f88edd6ae2f8e2380b8ba6824449`.
+- The guarded runner gracefully restarted only panes `%358`-`%362` without
+  force. Bot PIDs `1044483/1044492/1044486/1044495/1044489` became
+  `1048663/1048672/1048666/1048675/1048669`; pane parents and protected
+  `misc:0.0` `%8`/PID `434835` were unchanged.
+- The complete five-bot lifecycle window retained one natural hard event. A
+  fresh settled window had zero smoke hard failures, log errors, or monitor
+  errors, and the ordinary two-minute report was hard-green with `46/46`
+  account-critical calls successful and no latest degraded cycle. Final exact
+  target sampling was 3/3 stable with no extras or issues. No direct exchange
+  request or event was manufactured.
+
+## Previous Canonical Deployment (PR #1315)
 
 - PR #1315 merged as canonical `308702523760ae7a0b309419ae1616b0a4938721`.
   Guarded tracked-clean fast-forwarded `fc9dad83` to that exact merge after the
