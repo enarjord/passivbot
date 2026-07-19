@@ -7936,6 +7936,109 @@ def test_build_staged_planning_snapshot_captures_exact_surface_contract():
     assert planning_snapshot.invalid_details(now_ms=passivbot_module.utc_ms()) == []
 
 
+def test_completed_candle_snapshot_summary_is_bounded_and_signature_only():
+    bot = Passivbot.__new__(Passivbot)
+    bot.config = {"live": {"max_active_candle_tail_gap_minutes": 2}}
+    bot.cm = SimpleNamespace(
+        get_completed_candle_health=lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("snapshot summary must not read candles")
+        )
+    )
+    ordinary = "BTC/USDT:USDT"
+    fallback_symbols = [f"COIN{i:02d}/USDT:USDT" for i in range(10)]
+    snapshot = _availability_test_snapshot(
+        now_ms=300_000,
+        symbols=(ordinary,),
+        surfaces={"completed_candles": (7, 7, tuple())},
+        completed_candle_signature=(
+            (ordinary, 180_000),
+            *(
+                (symbol, 180_000, "tail_gap_fallback", 60_000, 120_000)
+                for symbol in fallback_symbols
+            ),
+            ("api_key=must_not_escape", "not-a-timestamp"),
+            ("malformed", 180_000, "wrong_fallback", 60_000, 120_000),
+        ),
+    )
+
+    summary = bot._completed_candle_summary_from_snapshot(snapshot)
+
+    assert summary == {
+        "required": True,
+        "timeframe": "1m",
+        "signature_row_count": 13,
+        "valid_row_count": 11,
+        "invalid_row_count": 2,
+        "tail_gap_fallback_count": 10,
+        "tail_gap_fallback_symbol_count": 10,
+        "tail_gap_fallback_symbol_samples": fallback_symbols[:8],
+        "tail_gap_fallback_symbols_truncated": True,
+        "expected_close_age": {"min_ms": 60_000, "mean_ms": 60_000, "max_ms": 60_000},
+        "last_real_close_age": {"min_ms": 60_000, "mean_ms": 169_091, "max_ms": 180_000},
+        "max_tail_gap_age_ms": 120_000,
+        "configured_max_tail_gap_ms": 120_000,
+    }
+    assert "api_key" not in json.dumps(summary, sort_keys=True)
+
+
+def test_completed_candle_snapshot_summary_is_omitted_when_not_required():
+    bot = Passivbot.__new__(Passivbot)
+    bot.config = {"live": {}}
+    snapshot = _availability_test_snapshot(
+        now_ms=300_000,
+        symbols=("BTC/USDT:USDT",),
+        surfaces={"balance": (7, 7, ("balance", "fresh"))},
+        completed_candle_signature=(("BTC/USDT:USDT", 180_000),),
+    )
+
+    assert bot._completed_candle_summary_from_snapshot(snapshot) is None
+
+
+def test_snapshot_built_omits_completed_candle_summary_when_not_required():
+    bot = Passivbot.__new__(Passivbot)
+    bot.config = {"live": {}}
+    bot._current_live_event_cycle_id = lambda: "cy_protective"
+    bot._emit_planning_symbol_state_event = lambda *_args, **_kwargs: None
+    events = []
+    bot._monitor_record_event = (
+        lambda kind, tags, payload=None, **kwargs: events.append(
+            {"kind": kind, "payload": dict(payload or {}), **kwargs}
+        )
+    )
+    snapshot = _availability_test_snapshot(
+        now_ms=300_000,
+        symbols=("BTC/USDT:USDT",),
+        surfaces={"balance": (7, 7, ("balance", "fresh"))},
+        completed_candle_signature=(("BTC/USDT:USDT", 180_000),),
+    )
+
+    bot._emit_snapshot_built_diagnostic(snapshot, context="protective")
+
+    assert "completed_candle_summary" not in events[-1]["payload"]
+
+
+def test_completed_candle_snapshot_summary_rejects_coerced_timestamps():
+    bot = Passivbot.__new__(Passivbot)
+    bot.config = {"live": {}}
+    snapshot = _availability_test_snapshot(
+        now_ms="300000",
+        symbols=("BTC/USDT:USDT",),
+        surfaces={"completed_candles": (7, 7, tuple())},
+        completed_candle_signature=(
+            ("BTC/USDT:USDT", "180000"),
+            ("ETH/USDT:USDT", 180_000.0),
+        ),
+    )
+
+    summary = bot._completed_candle_summary_from_snapshot(snapshot)
+
+    assert summary["signature_row_count"] == 2
+    assert summary["valid_row_count"] == 0
+    assert summary["invalid_row_count"] == 2
+    assert "expected_close_age" not in summary
+    assert "last_real_close_age" not in summary
+
+
 @pytest.mark.asyncio
 async def test_planning_snapshot_freezes_data_packet_revisions_through_cycle(monkeypatch):
     symbol = "BTC/USDT:USDT"
