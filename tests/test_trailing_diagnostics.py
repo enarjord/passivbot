@@ -137,6 +137,46 @@ def test_ema_anchor_snapshot_requires_explicit_trailing_wizard(tmp_path):
         )
 
 
+def test_ema_anchor_wizard_state_cannot_reload_unsupported_snapshot(
+    tmp_path, monkeypatch
+):
+    snapshot = _sample_snapshot()
+    snapshot["payload"]["trailing"] = {
+        "_meta": {
+            "diagnostics_supported": False,
+            "strategy_kind": "ema_anchor",
+            "reason": "strategy_has_no_trailing_diagnostics",
+        }
+    }
+    snapshot_path = tmp_path / "snapshot.json"
+    snapshot_path.write_text(json.dumps(snapshot), encoding="utf-8")
+    config_path = Path(__file__).parents[1] / "configs" / "examples" / "ema_anchor.json"
+    monkeypatch.setattr(
+        "trailing_diagnostics_tool.prompt_manual_wizard", lambda defaults: defaults
+    )
+
+    state = create_state_from_sources(
+        config_path=str(config_path),
+        monitor_root=None,
+        exchange=None,
+        user=None,
+        snapshot_path=str(snapshot_path),
+        symbol=None,
+        pside="long",
+        wizard=True,
+    )
+
+    assert state.can_reload_from_snapshot() is False
+    assert execute_command(state, "side short") is False
+    assert state.pside == "short"
+    assert state.status_lines == ["Updated side to short in manual mode."]
+    assert execute_command(state, "symbol BTC") is False
+    assert state.symbol == "BTC/USDT:USDT"
+    assert state.status_lines == [
+        "symbol switching requires a supported snapshot + config source"
+    ]
+
+
 def _hype_trailing_martingale_close_inputs():
     return {
         "symbol": "HYPE/USDT:USDT",

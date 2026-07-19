@@ -238,6 +238,16 @@ def _resolve_symbol_alias(query: str, snapshot: dict[str, Any]) -> tuple[Optiona
     return matches[0], None
 
 
+def _unsupported_trailing_diagnostics(snapshot: dict[str, Any]) -> Optional[dict[str, Any]]:
+    trailing = snapshot_payload(snapshot).get("trailing", {})
+    if not isinstance(trailing, dict):
+        return None
+    metadata = trailing.get("_meta", {})
+    if isinstance(metadata, dict) and metadata.get("diagnostics_supported") is False:
+        return metadata
+    return None
+
+
 def _load_snapshot_from_path(path: Path) -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
 
@@ -409,7 +419,11 @@ class TrailingDiagnosticsState:
         return changed
 
     def can_reload_from_snapshot(self) -> bool:
-        return self.config is not None and self.snapshot is not None
+        return (
+            self.config is not None
+            and self.snapshot is not None
+            and _unsupported_trailing_diagnostics(self.snapshot) is None
+        )
 
     def reload_symbol_pside(self, symbol: str, pside: str) -> None:
         if not self.can_reload_from_snapshot():
@@ -452,12 +466,8 @@ def create_state_from_sources(
     if snapshot is not None:
         snap = snapshot_payload(snapshot)
         trailing = snap.get("trailing", {})
-        trailing_meta = trailing.get("_meta", {}) if isinstance(trailing, dict) else {}
-        if (
-            not wizard
-            and isinstance(trailing_meta, dict)
-            and trailing_meta.get("diagnostics_supported") is False
-        ):
+        trailing_meta = _unsupported_trailing_diagnostics(snapshot)
+        if not wizard and trailing_meta is not None:
             strategy_kind = str(trailing_meta.get("strategy_kind") or "unknown")
             reason = str(trailing_meta.get("reason") or "not_supported")
             raise ValueError(
@@ -738,8 +748,8 @@ def execute_command(state: TrailingDiagnosticsState, command: str) -> bool:
         if not args:
             state.status_lines = ["symbol requires a coin or full symbol"]
             return False
-        if state.snapshot is None or state.config is None:
-            state.status_lines = ["symbol switching requires snapshot + config source"]
+        if not state.can_reload_from_snapshot():
+            state.status_lines = ["symbol switching requires a supported snapshot + config source"]
             return False
         resolved, error = _resolve_symbol_alias(" ".join(args), state.snapshot)
         if error:
@@ -753,7 +763,7 @@ def execute_command(state: TrailingDiagnosticsState, command: str) -> bool:
             state.status_lines = ["side requires 'long' or 'short'"]
             return False
         new_pside = args[0].lower()
-        if state.snapshot is None or state.config is None:
+        if not state.can_reload_from_snapshot():
             state.inputs["pside"] = new_pside
             state.pside = new_pside
             state.status_lines = [f"Updated side to {new_pside} in manual mode."]
