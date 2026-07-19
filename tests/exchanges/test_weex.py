@@ -10,6 +10,7 @@ import pytest
 from ccxt_contracts import build_contract_bot, get_bot_class
 from exchanges.weex import AsyncWeex, WeexBot
 from fill_events_manager import WeexFetcher, _build_fetcher_for_bot
+from market_snapshot import MarketSnapshotProvider
 
 
 SYMBOL = "BTC/USDT:USDT"
@@ -265,6 +266,7 @@ def test_weex_book_ticker_normalization_is_fresh_and_strict():
             "ask": 60000.2,
             "last": pytest.approx(60000.15),
             "timestamp": 1234,
+            "source": "weex_book_ticker_mid",
         }
     }
     assert bot._normalize_tickers(
@@ -273,6 +275,38 @@ def test_weex_book_ticker_normalization_is_fresh_and_strict():
     assert bot._normalize_tickers(
         [{"symbol": "BTCUSDT", "bidPrice": "1", "askPrice": "2", "time": 0}]
     ) == {}
+
+
+@pytest.mark.asyncio
+async def test_weex_book_ticker_mid_source_survives_market_snapshot_provider():
+    bot = _bot()
+    bot.markets_dict = {SYMBOL: _market()}
+    bot.symbol_ids_inv = {"BTCUSDT": SYMBOL}
+
+    async def fetch_tickers():
+        return bot._normalize_tickers(
+            [
+                {
+                    "symbol": "BTCUSDT",
+                    "bidPrice": "99",
+                    "askPrice": "101",
+                    "time": 1234,
+                }
+            ]
+        )
+
+    provider = MarketSnapshotProvider(
+        exchange_name="weex",
+        fetch_tickers=fetch_tickers,
+        ticker_strategy="bulk",
+    )
+
+    snapshot = (await provider.get_snapshots([SYMBOL], max_age_ms=10_000))[SYMBOL]
+
+    assert snapshot.bid == pytest.approx(99.0)
+    assert snapshot.ask == pytest.approx(101.0)
+    assert snapshot.last == pytest.approx(100.0)
+    assert snapshot.source == "weex_book_ticker_mid"
 
 
 def test_weex_market_sizing_uses_base_quantity_not_contract_val():

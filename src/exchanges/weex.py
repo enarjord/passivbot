@@ -273,6 +273,10 @@ class WeexBot(CCXTBot):
                 "ask": ask,
                 "last": (bid + ask) / 2.0,
                 "timestamp": timestamp,
+                # WEEX's V3 book-ticker endpoint has no last-trade field.  Keep
+                # the bounded midpoint derivation explicit for downstream
+                # trading inputs and incident reconstruction.
+                "source": "weex_book_ticker_mid",
             }
         return tickers
 

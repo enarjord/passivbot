@@ -178,7 +178,8 @@ Primary reference: [WEEX V3 place-order API](https://www.weex.com/api-doc/contra
 
 Problem:
 
-1. WEEX's 24-hour futures ticker payload does not provide a live bid and ask.
+1. WEEX's 24-hour futures ticker payload does not provide a live bid and ask,
+   while its V3 book-ticker payload provides bid and ask but no last-trade price.
 2. WEEX configuration mutations return the documented envelope
    `code=200, msg=success`, which CCXT 4.5.66 incorrectly classifies as an
    exchange error merely because `msg` is present.
@@ -186,7 +187,10 @@ Problem:
 Handling in Passivbot:
 
 1. Fetch live quotes from the V3 contract book-ticker endpoint and reject
-   missing, non-finite, non-positive, or crossed quotes.
+   missing, non-finite, non-positive, or crossed quotes. Derive `last` as the
+   top-of-book midpoint and label the resulting market snapshot source
+   `weex_book_ticker_mid`; downstream price consumers must not report it as a
+   generic ticker or authoritative last trade.
 2. Accept only the exact documented success envelope in the WEEX adapter;
    delegate every other response to CCXT's normal error mapping.
 

@@ -29,8 +29,10 @@ All notable user-facing changes will be documented in this file.
 - Added live WEEX USDT perpetual-futures support through CCXT, including
   authenticated account state, simultaneous long/short order placement and
   cancellation, per-symbol combined-position/margin/leverage setup, live
-  bid/ask pricing, positions, open orders, and fill/PnL ingestion. WEEX
-  historical 1m backtest-data downloading is not included.
+  bid/ask pricing, positions, open orders, and fill/PnL ingestion. Because the
+  V3 book ticker has no last-trade field, live last-price consumers use its
+  top-of-book midpoint with the explicit `weex_book_ticker_mid` source label.
+  WEEX historical 1m backtest-data downloading is not included.
 
 - WEEX live 1m and 1h candle warmups now page through bounded historical
   windows before using the recent tail, so long EMA windows, trailing extrema,
