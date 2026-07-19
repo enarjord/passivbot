@@ -137,24 +137,31 @@ The opposite `pside` can continue running if its own HSL remains green/orange/ye
 
 In both live and backtests, `hsl_no_restart_drawdown_threshold` is evaluated against persistent cross-restart HSL drawdown for that `pside`, not just the local RED-halt snapshot. Values below `hsl_red_threshold` are treated as `hsl_red_threshold`.
 
-### Restart Replay Contract
+### Episode And Restart Replay Contract
 
-The intended HSL contract after a valid RED panic is:
+An HSL episode ends when its configured scope becomes fully flat:
 
-1. once a `pside` panic-close has finalized and all positions on that `pside` are fully closed, that RED stop is considered complete
-2. that `pside`'s HSL equity tracker is then reset from after that panic
-3. any later cooldown, restart, and future RED decisions for that `pside` are measured from the post-panic state, not from pre-panic peaks
+1. `coin`: the affected `coin+pside` position is fully closed
+2. `pside`: all positions on that `pside` are fully closed
+3. `unified`: all account positions are fully closed
+
+Every episode end resets the scope's drawdown tracker after the flattening fill. The close may be a
+panic, take-profit, grid close, manual close, or other exchange fill. A panic order type is not
+required. If the episode saw RED, its cooldown begins at that same flattening fill.
 
 This contract applies both to live runtime and to restart-time history replay.
 
-In practical terms, restart replay must treat a historical RED panic close that fully closed all
-positions on that `pside` as a completed RED stop even if:
+In practical terms, restart replay must recognize any historical fill that fully flattened the
+configured scope as an episode boundary even if:
 
-1. the panic-close was split across multiple fills
+1. the close was split across multiple fills
 2. re-entry happened later in the same minute
 3. the old pre-panic drawdown would otherwise still be above the RED threshold
 
-Without this reset, a restarted bot could incorrectly inherit stale pre-panic peaks and repanic immediately after cooldown or after restart. `hsl_no_restart_drawdown_threshold` is the intended protection against repeated unfavorable restart cycles, not stale pre-panic equity tracking.
+Without this reset, a restarted bot could incorrectly inherit stale prior-episode peaks and enter a
+new cooldown after restart. Missing flatten-fill evidence defers finalization; current time is never
+used as a substitute episode boundary. `hsl_no_restart_drawdown_threshold` is the intended
+protection against repeated unfavorable restart cycles, not stale prior-episode equity tracking.
 
 ### Live Cooldown Intervention Policy
 
@@ -165,7 +172,7 @@ that is currently halted in RED cooldown.
 
 1. `panic`
    - panic-close that position immediately
-   - once all positions on that `pside` are fully closed, restart the cooldown timer from that new panic-close
+   - once the configured scope is fully closed, restart the cooldown timer from its flattening fill
    - this is the safest default
 2. `normal`
    - treat the position as an explicit operator override

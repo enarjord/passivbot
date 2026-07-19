@@ -1,4 +1,8 @@
 from exchanges.ccxt_bot import CCXTBot, format_exchange_config_response
+from live.balance_composition import (
+    malformed_balance_composition,
+    normalize_ccxt_balance_composition,
+)
 from passivbot import logging
 from passivbot_exceptions import FatalBotException
 
@@ -251,8 +255,16 @@ class BinanceBot(CCXTBot):
                     except AttributeError:
                         pass
             if "balance" in tasks:
-                _raw_balance, balance = await tasks["balance"]
+                raw_balance, balance = await tasks["balance"]
                 out["balance"] = balance
+                try:
+                    out["balance_composition"] = self._normalize_balance_diagnostics(
+                        raw_balance
+                    )
+                except Exception:
+                    out["balance_composition"] = malformed_balance_composition(
+                        source="normalizer", reason="normalizer_error"
+                    )
             return out
         except Exception:
             for task in tasks.values():
@@ -260,6 +272,10 @@ class BinanceBot(CCXTBot):
                     task.cancel()
             await asyncio.gather(*tasks.values(), return_exceptions=True)
             raise
+
+    def _normalize_balance_diagnostics(self, fetched: object) -> dict:
+        """Expose only CCXT's bounded unified Binance balance maps."""
+        return normalize_ccxt_balance_composition(fetched)
 
     async def _fetch_open_orders_for_staged_symbols(self, symbols: set[str]) -> list:
         scoped = await self._do_fetch_open_orders_for_symbols(symbols)

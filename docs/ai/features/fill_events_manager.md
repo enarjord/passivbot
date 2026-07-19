@@ -15,6 +15,25 @@
    against `live.fee_pct_sanity_abs_max`; outliers use the fallback percentage.
 6. Do not mix legacy/missing-contract cache rows with current rows. Repair or
    rebuild legacy fill-event caches before using trading-critical accounting.
+7. Newly discovered fills may carry immutable `provenance` with attribution
+   `first_ingested_by_runtime`. This identifies the Passivbot runtime that first
+   persisted the fill locally; it does not claim that runtime created the order
+   or caused the exchange fill. Refresh and deduplication preserve an existing
+   provenance record, including the absence of provenance on legacy cache rows.
+   Historical rows are never retroactively attributed.
+
+## Runtime Provenance
+
+The optional fill provenance record contains the runtime run id, Passivbot
+version, Python Git commit and tracked-dirty state, canonical config hash, Rust
+crate version, embedded Rust source fingerprint, loaded extension artifact hash,
+runtime start timestamp, and the local first-ingestion timestamp. It contains
+hashes rather than raw config, paths, commands, API payloads, or credentials.
+
+The runtime identity proves which local runtime first ingested a fill after this
+contract was introduced. Determining which historical runtime submitted an
+order remains a separate attribution exercise using client-order identifiers,
+logs, runtime windows, and immutable manifests.
 
 ## Exchange Endpoint Map (Quick Lookup)
 
@@ -55,6 +74,8 @@ merely because an auxiliary endpoint failed.
 1. Deduplication correctness.
 2. Pagination completeness for high-activity windows.
 3. PnL attachment behavior when auxiliary endpoints fail.
+4. Provenance round-trip, preservation during refresh/deduplication, and legacy
+   rows remaining unattributed.
 
 ## Key Code
 

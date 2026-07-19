@@ -937,7 +937,7 @@ def test_coin_panic_supervision_requires_red_active_now():
 
 
 @pytest.mark.asyncio
-async def test_recovered_red_episode_finalizes_from_check_path():
+async def test_recovered_red_episode_finalizes_from_check_path(caplog):
     # Codex blocker regression on the red split: RED latches, the sample
     # recovers while the position is open (panic pauses, tp-only holds), the
     # position later flattens normally, and the episode MUST still be
@@ -985,9 +985,10 @@ async def test_recovered_red_episode_finalizes_from_check_path():
         is False
     )
     assert state["halted"] is False
+    assert state["pending_red_since_ms"] == 120_000
 
-    # The position closes normally under tp-only; two check cycles confirm
-    # flat and finalize the episode: halt + cooldown, no RED re-activation.
+    # The position closes normally under tp-only. Flat exchange state without
+    # its close fill is not enough to invent a cooldown anchor.
     bot.positions = {
         symbol: {"long": {"size": 0.0, "price": 0.0}, "short": {"size": 0.0}}
     }
@@ -995,13 +996,33 @@ async def test_recovered_red_episode_finalizes_from_check_path():
     now_box["ts"] = 240_000
     await bot._equity_hard_stop_check_coin()
     state = bot._hsl_coin_state("long", symbol)
+    assert state["red_flat_confirmations"] == 0
+    assert state["halted"] is False
+    assert state["pending_red_since_ms"] == 120_000
+    assert "flatten-fill evidence is unavailable" in caplog.text
+    bot._pnls_manager = make_fake_pnls_manager(
+        [
+            {
+                "timestamp": 230_000,
+                "symbol": symbol,
+                "pside": "long",
+                "pb_order_type": "close_grid_long",
+                "pnl": 0.0,
+                "fee_paid": 0.0,
+            }
+        ]
+    )
+    now_box["ts"] = 300_000
+    await bot._equity_hard_stop_check_coin()
+    state = bot._hsl_coin_state("long", symbol)
     assert state["red_flat_confirmations"] == 1
     assert state["halted"] is False
-    now_box["ts"] = 300_000
+    now_box["ts"] = 360_000
     await bot._equity_hard_stop_check_coin()
     state = bot._hsl_coin_state("long", symbol)
     assert state["halted"] is True
     assert state["cooldown_until_ms"] is not None
+    assert state["last_stop_event"]["stop_event_timestamp_ms"] == 230_000
 
 
 def test_forced_mode_refresher_preserves_paused_red(monkeypatch):
@@ -1161,8 +1182,8 @@ def test_coin_episode_start_covered_reconstruction():
 
 def test_cooldown_anchor_uses_scope_flattening_fill():
     # B2.1: cooldown anchors at the fill that flattened the scope, by any
-    # means. A manual close after the last panic fill must win; with no fills
-    # in the window the panic-fill fallback and then the caller fallback hold.
+    # means. A manual close after the last panic fill must win; with no fill
+    # evidence the anchor remains unavailable rather than becoming "now".
     bot = make_coin_bot()
     events = [
         SimpleNamespace(
@@ -1176,25 +1197,69 @@ def test_cooldown_anchor_uses_scope_flattening_fill():
     ]
     bot._pnls_manager = SimpleNamespace(get_events=lambda: events)
     assert (
-        bot._equity_hard_stop_latest_flatten_fill_timestamp_ms(
-            "long", symbol="A", since_ms=60_000, fallback_ms=999_000
+        bot._equity_hard_stop_latest_flatten_fill_timestamp_optional_ms(
+            "long", symbol="A", since_ms=60_000
         )
         == 150_000
     )
-    # Window that excludes both fills: caller fallback.
+    # Window that excludes both fills: anchor unavailable.
     assert (
-        bot._equity_hard_stop_latest_flatten_fill_timestamp_ms(
-            "long", symbol="A", since_ms=200_000, fallback_ms=999_000
+        bot._equity_hard_stop_latest_flatten_fill_timestamp_optional_ms(
+            "long", symbol="A", since_ms=200_000
         )
-        == 999_000
+        is None
     )
     # Other-pair fills never leak into the anchor.
     assert (
-        bot._equity_hard_stop_latest_flatten_fill_timestamp_ms(
-            "long", symbol="B", since_ms=60_000, fallback_ms=999_000
+        bot._equity_hard_stop_latest_flatten_fill_timestamp_optional_ms(
+            "long", symbol="B", since_ms=60_000
         )
-        == 999_000
+        is None
     )
+
+
+@pytest.mark.asyncio
+async def test_flatten_confirmation_refreshes_fills_and_rejects_pre_episode_anchor():
+    bot = make_coin_bot()
+    symbol = "A"
+    state = bot._hsl_coin_state("long", symbol)
+    state["pending_red_since_ms"] = 120_000
+    events = [
+        SimpleNamespace(
+            position_side="long",
+            symbol=symbol,
+            timestamp=90_000,
+            pb_order_type="close_manual_long",
+        )
+    ]
+    bot._pnls_manager = SimpleNamespace(get_events=lambda: events)
+    refresh_sources = []
+
+    async def update_pnls(*, source, since_ms=None):
+        refresh_sources.append(source)
+        assert since_ms == 120_000
+        events.append(
+            SimpleNamespace(
+                position_side="long",
+                symbol=symbol,
+                timestamp=170_000,
+                pb_order_type="close_grid_long",
+            )
+        )
+        return True
+
+    bot.update_pnls = update_pnls
+
+    stop_ts_ms = await bot._equity_hard_stop_flatten_fill_timestamp_with_refresh(
+        "long",
+        180_000,
+        symbol=symbol,
+        since_ms=state["pending_red_since_ms"],
+    )
+
+    assert stop_ts_ms == 170_000
+    assert refresh_sources == ["hsl_flatten_confirmation"]
+    assert state["last_missing_flatten_fill_refresh_ms"] == 0
 
 
 def test_red_paused_forced_modes_block_entries_without_panic():
@@ -1704,7 +1769,9 @@ def bind_hsl_methods(bot):
         "_equity_hard_stop_validate_balance_source_for_history_replay",
         "_equity_hard_stop_balance_override_active",
         "_equity_hard_stop_position_symbols",
-        "_equity_hard_stop_latest_flatten_fill_timestamp_ms",
+        "_equity_hard_stop_latest_flatten_fill_timestamp_optional_ms",
+        "_equity_hard_stop_defer_missing_flatten_fill",
+        "_equity_hard_stop_flatten_fill_timestamp_with_refresh",
         "_equity_hard_stop_signal_values",
         "_equity_hard_stop_refresh_halted_runtime_forced_modes",
         "_equity_hard_stop_infer_coin_replay_contract",
@@ -1723,7 +1790,7 @@ def bind_hsl_methods(bot):
         "_hsl_replay_load_extend_and_reconcile_cache",
         "_hsl_reuse_assemble_history",
         "_equity_hard_stop_set_red_paused_runtime_forced_modes",
-        "_equity_hard_stop_latest_flatten_fill_timestamp_ms",
+        "_equity_hard_stop_latest_flatten_fill_timestamp_optional_ms",
         "_equity_hard_stop_coverage_allow_incomplete",
         "_equity_hard_stop_coin_episode_start_covered",
         "_equity_hard_stop_refresh_halted_runtime_forced_modes",
@@ -4449,6 +4516,86 @@ async def test_compact_sparse_replay_matches_dense_state_across_flat_gaps():
 
 
 @pytest.mark.asyncio
+async def test_compact_replay_resets_flat_episode_when_historical_upnl_is_omitted():
+    """Regression for queen_bee XLM: a flat historical pair has no candle replay.
+
+    Fill-derived non-flat/flat transitions still own the episode boundary. The
+    RED episode ended on July 1, so after its 36-hour cooldown expires its
+    realized loss must not leak into the empty current episode.
+    """
+    import numpy as np
+
+    symbol = "XLM/USDC:USDC"
+    entry_ts = 1_782_900_182_624
+    flatten_ts = 1_782_903_432_626
+    now_ms = flatten_ts + 2_160 * 60_000 + 120_000
+    first_minute = entry_ts // 60_000 * 60_000
+    last_minute = now_ms // 60_000 * 60_000
+    timestamps = np.arange(
+        first_minute,
+        last_minute + 60_000,
+        60_000,
+        dtype=np.int64,
+    )
+    flatten_minute = flatten_ts // 60_000 * 60_000
+    realized = np.where(timestamps < flatten_minute, 0.0, -30.0)
+    unrealized = np.where(timestamps < flatten_minute, np.nan, 0.0)
+    history = {
+        "hsl_coin_compact_replay": {
+            "timestamps": timestamps,
+            "balances": np.full(len(timestamps), 100.0, dtype=np.float64),
+            "realized_pnl": realized.copy(),
+            "pair_values": {
+                ("long", symbol): {
+                    "realized_pnl": realized,
+                    # Coin replay omits prices/UPnL while a historical pair is
+                    # open when it is flat now and has no panic marker.
+                    "unrealized_pnl": unrealized,
+                }
+            },
+        },
+        "panic_flatten_events": [],
+        "fill_events": [
+            {
+                "timestamp": entry_ts,
+                "symbol": symbol,
+                "pside": "long",
+                "action": "increase",
+                "qty": 62.0,
+                "pnl": 0.0,
+            },
+            {
+                "timestamp": flatten_ts,
+                "symbol": symbol,
+                "pside": "long",
+                "action": "decrease",
+                "qty": 62.0,
+                "pnl": -30.0,
+                "pb_order_type": "close_grid_long",
+            },
+        ],
+    }
+    bot = _flat_position_bot(symbol)
+    bot.hsl["long"]["cooldown_minutes_after_red"] = 2_160.0
+    bot.get_exchange_time = lambda: now_ms
+
+    async def fake_history(current_balance=None, **kwargs):
+        return history
+
+    bot.get_balance_equity_history = fake_history
+
+    await bot._equity_hard_stop_initialize_coin_from_history()
+
+    state = bot._hsl_coin_state("long", symbol)
+    assert state["halted"] is False
+    assert state["cooldown_until_ms"] is None
+    assert state["pnl_reset_timestamp_ms"] == flatten_ts + 1
+    assert state["last_metrics"]["tier"] == "green"
+    assert state["last_metrics"]["realized_pnl"] == pytest.approx(0.0)
+    assert symbol not in bot._runtime_forced_modes["long"]
+
+
+@pytest.mark.asyncio
 async def test_compact_replay_keeps_held_and_ambiguous_pairs_dense():
     import numpy as np
 
@@ -4695,6 +4842,113 @@ async def test_coin_hsl_replay_red_free_ordinary_flatten_resets_without_stop():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("compact", [False, True])
+async def test_coin_hsl_replay_splits_same_minute_flatten_and_reentry(compact):
+    """A zero crossing is an episode boundary even when the minute ends held."""
+    symbol = "A"
+    flatten_ts = 150_000
+    reentry_ts = 160_000
+    history = _red_episode_history(
+        symbol,
+        flatten_pnl=-1.0,
+        # The large row-end UPnL belongs to the re-entry, not the episode that
+        # ended ten seconds earlier. It must not turn that old episode RED.
+        rows_upnl=[0.0, -80.0, 0.0],
+        flatten_ts=flatten_ts,
+    )
+    history["fill_events"].append(
+        {
+            "timestamp": reentry_ts,
+            "symbol": symbol,
+            "pside": "long",
+            "action": "increase",
+            "qty": 1.0,
+            "pnl": 0.0,
+        }
+    )
+    bot = _flat_position_bot(symbol)
+    bot.positions[symbol]["long"] = {"size": 1.0, "price": 100.0}
+    bot.get_exchange_time = lambda: 180_000
+
+    async def fake_history(current_balance=None, **kwargs):
+        return _coin_history_as_compact(history, symbol) if compact else history
+
+    bot.get_balance_equity_history = fake_history
+
+    await bot._equity_hard_stop_initialize_coin_from_history()
+
+    state = bot._hsl_coin_state("long", symbol)
+    assert state["halted"] is False
+    assert state["last_stop_event"] is None
+    assert state["pnl_reset_timestamp_ms"] == flatten_ts + 1
+    assert state["runtime"].red_seen_in_episode() is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("compact", [False, True])
+@pytest.mark.parametrize("later_pnl", [-30.0, 60.0])
+async def test_coin_hsl_replay_uses_first_of_multiple_same_minute_flattens(
+    compact, later_pnl
+):
+    """Later-episode PnL and balance must not alter the first RED episode."""
+    symbol = "A"
+    first_flatten_ts = 150_000
+    history = _red_episode_history(
+        symbol,
+        flatten_pnl=-30.0,
+        rows_upnl=[0.0, 0.0],
+        flatten_ts=first_flatten_ts,
+    )
+    history["fill_events"].extend(
+        [
+            {
+                "timestamp": 160_000,
+                "symbol": symbol,
+                "pside": "long",
+                "action": "increase",
+                "qty": 1.0,
+                "pnl": 0.0,
+            },
+            {
+                "timestamp": 170_000,
+                "symbol": symbol,
+                "pside": "long",
+                "action": "decrease",
+                "qty": 1.0,
+                "pnl": later_pnl,
+            },
+        ]
+    )
+    # The row closes at account balance 100 - 30 + later_pnl. The first RED
+    # episode nevertheless ended with balance 70 at 150_000. Reusing the row's
+    # ending balance either hides RED after the later profit or falsely makes
+    # the earlier episode terminal after the later loss.
+    for row in history["timeline"]:
+        if row["timestamp"] == 120_000:
+            row["balance"] = 70.0 + later_pnl
+            row["realized_pnl"] = -30.0 + later_pnl
+            row["realized_pnl_by_coin_pside"][symbol]["long"] = (
+                -30.0 + later_pnl
+            )
+    bot = _flat_position_bot(symbol)
+    bot.get_exchange_time = lambda: 180_000
+
+    async def fake_history(current_balance=None, **kwargs):
+        return _coin_history_as_compact(history, symbol) if compact else history
+
+    bot.get_balance_equity_history = fake_history
+
+    await bot._equity_hard_stop_initialize_coin_from_history()
+
+    state = bot._hsl_coin_state("long", symbol)
+    assert state["halted"] is True
+    assert state["no_restart_latched"] is False
+    assert state["last_stop_event"]["stop_event_timestamp_ms"] == first_flatten_ts
+    assert state["pnl_reset_timestamp_ms"] == first_flatten_ts + 1
+    assert state["cooldown_until_ms"] == first_flatten_ts + 300_000
+
+
+@pytest.mark.asyncio
 async def test_coin_hsl_history_replay_does_not_latch_recovered_red_without_panic_marker():
     bot = make_coin_bot()
     symbol = "A"
@@ -4779,7 +5033,7 @@ async def test_coin_hsl_check_defers_stop_event_until_flat_confirmation():
 
 
 @pytest.mark.asyncio
-async def test_coin_hsl_finalize_uses_latest_panic_fill_for_reset_boundary():
+async def test_coin_hsl_finalize_uses_latest_flatten_fill_for_reset_boundary():
     from live.event_bus import EventTypes, ListEventSink, LiveEventPipeline
 
     bot = make_coin_bot()
@@ -4808,7 +5062,14 @@ async def test_coin_hsl_finalize_uses_latest_panic_fill_for_reset_boundary():
         ]
     )
 
-    await bot._equity_hard_stop_finalize_coin_red_stop("long", symbol)
+    stop_ts_ms = bot._equity_hard_stop_latest_flatten_fill_timestamp_optional_ms(
+        "long", symbol=symbol, since_ms=state["pending_red_since_ms"]
+    )
+    assert stop_ts_ms == 170_000
+    stop_event = await bot._equity_hard_stop_compute_coin_stop_event(
+        "long", symbol, stop_ts_ms
+    )
+    await bot._equity_hard_stop_finalize_coin_red_stop("long", symbol, stop_event)
 
     assert state["last_stop_event"]["stop_event_timestamp_ms"] == 170_000
     assert state["pnl_reset_timestamp_ms"] == 170_001
@@ -4849,9 +5110,13 @@ async def test_coin_hsl_finalize_emits_flat_without_order_event():
     state = bot._hsl_coin_state("long", symbol)
     state["pending_red_since_ms"] = 120_000
 
+    stop_event = await bot._equity_hard_stop_compute_coin_stop_event(
+        "long", symbol, 180_000
+    )
     await bot._equity_hard_stop_finalize_coin_red_stop(
         "long",
         symbol,
+        stop_event,
         finalized_without_order=True,
         flat_confirmations=2,
         entry_orders=0,
@@ -4880,9 +5145,9 @@ async def test_coin_hsl_finalize_emits_flat_without_order_event():
     assert event.data["nonpanic_close_orders"] == 0
     assert event.data["flat_confirmations"] == 2
     assert event.data["stop_event_timestamp_ms"] == 180_000
-    assert event.data["stop_event_anchor_source"] == "current_time_fallback"
+    assert event.data["stop_event_anchor_source"] == "provided_stop_event"
     assert event.data["stop_event_anchor_timestamp_ms"] == 180_000
-    assert event.data["stop_event_anchor_fallback_used"] is True
+    assert event.data["stop_event_anchor_fallback_used"] is False
     assert event.data["cooldown_until_ms"] == 480_000
     assert event.data["drawdown_raw"] == 0.0
     red_events = [
@@ -4904,7 +5169,7 @@ async def test_coin_hsl_finalize_emits_flat_without_order_event():
 
 
 @pytest.mark.asyncio
-async def test_coin_hsl_finalize_flat_without_order_event_records_panic_fill_anchor():
+async def test_coin_hsl_finalize_flat_without_order_event_records_flatten_fill_anchor():
     from live.event_bus import EventTypes, ListEventSink, LiveEventPipeline
 
     bot = make_coin_bot()
@@ -4933,9 +5198,17 @@ async def test_coin_hsl_finalize_flat_without_order_event_records_panic_fill_anc
         ]
     )
 
+    stop_ts_ms = bot._equity_hard_stop_latest_flatten_fill_timestamp_optional_ms(
+        "long", symbol=symbol, since_ms=state["pending_red_since_ms"]
+    )
+    assert stop_ts_ms == 170_000
+    stop_event = await bot._equity_hard_stop_compute_coin_stop_event(
+        "long", symbol, stop_ts_ms
+    )
     await bot._equity_hard_stop_finalize_coin_red_stop(
         "long",
         symbol,
+        stop_event,
         finalized_without_order=True,
         flat_confirmations=2,
         entry_orders=0,
@@ -4952,7 +5225,7 @@ async def test_coin_hsl_finalize_flat_without_order_event_records_panic_fill_anc
     event = events[0]
     assert event.cycle_id == "cy_coin_flat_fill_anchor"
     assert event.data["stop_event_timestamp_ms"] == 170_000
-    assert event.data["stop_event_anchor_source"] == "panic_fill"
+    assert event.data["stop_event_anchor_source"] == "provided_stop_event"
     assert event.data["stop_event_anchor_timestamp_ms"] == 170_000
     assert event.data["stop_event_anchor_fallback_used"] is False
     assert event.data["cooldown_until_ms"] == 470_000
@@ -4978,7 +5251,10 @@ async def test_coin_hsl_finalize_does_not_duplicate_prior_red_trigger_event():
     state["pending_red_since_ms"] = 120_000
     state["red_trigger_event_emitted"] = True
 
-    await bot._equity_hard_stop_finalize_coin_red_stop("long", symbol)
+    stop_event = await bot._equity_hard_stop_compute_coin_stop_event(
+        "long", symbol, 170_000
+    )
+    await bot._equity_hard_stop_finalize_coin_red_stop("long", symbol, stop_event)
 
     assert bot._live_event_pipeline.flush(timeout=2.0) is True
     red_events = [event for event in sink.events if event.event_type == EventTypes.HSL_RED_TRIGGERED]

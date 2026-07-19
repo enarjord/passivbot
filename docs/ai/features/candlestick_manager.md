@@ -35,16 +35,37 @@
    SHA-256 sidecar before parsing, and write only invalid v2 rows. Monthly archives are attempted
    only after Binance's first-Monday publication window plus a buffer; daily archives exclude the
    current day and two preceding complete UTC days.
-8. WEEX live warmups use exchange-specific hybrid pagination: bounded 100-row historical windows
+8. Live forager planning is cache-only for inactive candidates. Its background refresher must warm
+   every consumed native candle surface, including 1m inputs and native 1h log-range inputs with a
+   nonzero strategy weight, using the same per-symbol requirements and explicit warmup cap as the
+   live EMA bundle.
+   Tail-only gaps remain eligible within the configured candidate staleness window; missing basis
+   and internal gaps do not. Refresh budgets count symbol/timeframe fetches, health scans are
+   bounded and rotated across cycles, interleave each candidate's 1m and native 1h health surfaces,
+   keep discovered-but-unfetched stale surfaces pending, charge tokens only for selected fetches,
+   and prioritize never-attempted 1m fetches before native 1h backfills. Staleness targets count
+   only surfaces handled by this background
+   refresher, excluding urgent active symbols. A native 1h range with a fresh tail and only an
+   unavailable leading prefix remains nontradable and is retried at most once per 24 hours after a
+   successful nonempty fetch which still proves the same requested leading-prefix gap; changed
+   requirements, empty results, partial pagination failures, and other failed fetches remain
+   eligible for normal retry. A zero OHLCV network budget disables candidate fetches even when
+   entry slots are open.
+   A forced native higher-timeframe refresh bypasses in-memory range and complete-disk
+   short-circuits so a partial cached range cannot consume budget without retrying the exchange.
+   Fresh remote rows overwrite matching disk rows, but partial remote results retain any existing
+   disk coverage without entering the reusable range or EMA caches. Affected higher-timeframe EMA
+   cache entries are invalidated, and higher-timeframe EMAs require full requested coverage.
+9. WEEX live warmups use exchange-specific hybrid pagination: bounded 100-row historical windows
    followed by the recent endpoint only when its 999 finalized-row tail covers the remainder. This
    supports deep-enough 1m and 1h live EMA, trailing, and HSL restart windows without enabling WEEX
    bulk backtest-data download.
-9. WEEX EMA windows, plus exchange-independent trailing-extrema and HSL replay-cache extension
-   consumers, require exact aligned candle coverage. A short WEEX tail or interior hole returns
-   unavailable/NaN state; incomplete trailing/HSL windows become unavailable or fall back to
-   authoritative replay. Other exchanges retain their established sparse leading-history EMA
-   contract.
-10. Quote-volume EMA is derived from normalized CCXT base volume and typical price
+10. Native higher-timeframe EMA windows require full requested coverage on every exchange. WEEX
+    additionally requires exact aligned coverage for 1m EMA windows because its recent endpoint
+    silently tail-anchors responses. Exchange-independent trailing-extrema and HSL replay-cache
+    extension consumers also require exact aligned coverage; incomplete windows become unavailable
+    or fall back to authoritative replay.
+11. Quote-volume EMA is derived from normalized CCXT base volume and typical price
     (`base_volume * (high + low + close) / 3`). It is an approximation when an exchange, including
     WEEX, does not expose raw quote turnover through unified OHLCV.
 

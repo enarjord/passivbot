@@ -6,6 +6,7 @@ import sys
 
 from config.access import get_optional_config_value
 from live import event_emitters
+from live.balance_composition import malformed_balance_composition, unavailable_balance_composition
 from utils import ts_to_date, utc_ms
 
 
@@ -45,12 +46,15 @@ async def refresh_protective_authoritative_state(bot) -> bool:
     bot._authoritative_refresh_plan_surfaces = set(plan)
     snapshot = await bot._fetch_authoritative_state_staged_snapshot(plan)
     fetched_balance = snapshot.get("balance")
+    balance_composition = snapshot.get("balance_composition")
     fetched_positions = snapshot.get("positions")
     fetched_open_orders = snapshot.get("open_orders")
 
     prepared_balance_snapshot = bot._prepare_balance_snapshot(fetched_balance)
     if prepared_balance_snapshot is None:
         return False
+    if balance_composition is not None:
+        prepared_balance_snapshot["balance_composition"] = balance_composition
     if fetched_positions in [None, False]:
         return False
     if fetched_open_orders in [None, False]:
@@ -86,6 +90,7 @@ async def refresh_authoritative_state_staged(bot) -> bool:
     plan = bot._authoritative_staged_refresh_plan()
     snapshot = await bot._fetch_authoritative_state_staged_snapshot(plan)
     fetched_balance = snapshot.get("balance")
+    balance_composition = snapshot.get("balance_composition")
     fetched_positions = snapshot.get("positions")
     fetched_open_orders = snapshot.get("open_orders")
     pnls_ok = snapshot.get("pnls_ok", True)
@@ -105,6 +110,8 @@ async def refresh_authoritative_state_staged(bot) -> bool:
         prepared_balance_snapshot = bot._prepare_balance_snapshot(fetched_balance)
         if prepared_balance_snapshot is None:
             return False
+        if balance_composition is not None:
+            prepared_balance_snapshot["balance_composition"] = balance_composition
 
     fetched_positions_old = None
     fetched_positions_new = None
@@ -152,12 +159,21 @@ async def refresh_authoritative_state_staged(bot) -> bool:
     return True
 
 
-async def capture_balance_staged_snapshot(bot) -> tuple[object, float]:
-    """Fetch a single balance payload and its normalized value for staged refresh."""
+async def capture_balance_staged_snapshot(bot) -> tuple[dict, float]:
+    """Fetch one balance response and retain only bounded diagnostics for staging."""
     if hasattr(bot, "capture_balance_snapshot"):
-        return await bot.capture_balance_snapshot()
+        raw_balance, balance = await bot.capture_balance_snapshot()
+        normalizer = getattr(bot, "_normalize_balance_diagnostics", None)
+        if not callable(normalizer):
+            return unavailable_balance_composition(), balance
+        try:
+            return normalizer(raw_balance), balance
+        except Exception:
+            return malformed_balance_composition(
+                source="normalizer", reason="normalizer_error"
+            ), balance
     balance = await bot.fetch_balance()
-    return None, balance
+    return unavailable_balance_composition(), balance
 
 
 async def capture_positions_staged_snapshot(bot) -> tuple[object, list[dict]]:
@@ -672,8 +688,9 @@ async def fetch_authoritative_state_staged_snapshot(bot, plan: set[str]) -> dict
     out = {"plan": set(plan), "pnls_ok": True}
     for key, result in zip(keys, results):
         if key == "balance":
-            _raw_balance, fetched_balance = result
+            balance_composition, fetched_balance = result
             out["balance"] = fetched_balance
+            out["balance_composition"] = balance_composition
         elif key == "positions":
             _raw_positions, fetched_positions = result
             out["positions"] = fetched_positions

@@ -47,7 +47,26 @@ from planning_snapshot import (
     PlanningSnapshot,
     PlanningSurfaceStamp,
 )
+from runtime_identity import RuntimeIdentity
 from exchanges.binance import BinanceBot
+from live.balance_composition import (
+    balance_composition_signature,
+    normalize_okx_balance_composition,
+)
+
+
+TEST_RUNTIME_IDENTITY = RuntimeIdentity(
+    schema_version=1,
+    run_id="a" * 32,
+    started_at_ms=1_700_000_000_000,
+    passivbot_version="test",
+    python_git_commit="b" * 40,
+    python_git_dirty=False,
+    config_sha256="c" * 64,
+    rust_crate_version="test",
+    rust_source_sha256="d" * 64,
+    rust_artifact_sha256="e" * 64,
+)
 
 
 class _SafeRiskCache:
@@ -195,6 +214,7 @@ async def test_init_pnls_quarantines_and_rebuilds_unsupported_legacy_cache(monke
             self.history_scope = scope
 
     bot = Passivbot.__new__(Passivbot)
+    bot.runtime_identity = TEST_RUNTIME_IDENTITY
     bot.exchange = "hyperliquid"
     bot.user = "vps_user"
     bot.config = {"live": {"pnls_max_lookback_days": 1.0}}
@@ -288,6 +308,7 @@ async def test_init_pnls_emits_quarantine_event_when_doctor_repairs_legacy_cache
             self.history_scope = scope
 
     bot = Passivbot.__new__(Passivbot)
+    bot.runtime_identity = TEST_RUNTIME_IDENTITY
     bot.exchange = "hyperliquid"
     bot.user = "vps_user"
     bot.config = {"live": {"pnls_max_lookback_days": 1.0}}
@@ -348,6 +369,7 @@ async def test_init_pnls_emits_cache_ready_event(monkeypatch):
 
     sink = ListEventSink()
     bot = Passivbot.__new__(Passivbot)
+    bot.runtime_identity = TEST_RUNTIME_IDENTITY
     bot.exchange = "binance"
     bot.user = "binance_01"
     bot.bot_id = "bot_1"
@@ -2490,6 +2512,8 @@ async def test_balance_equity_history_emits_zero_coin_upnl_for_flat_realized_sym
 @pytest.mark.asyncio
 async def test_start_bot_treats_shutdown_cancelled_warmup_as_clean_stop(monkeypatch):
     bot = Passivbot.__new__(Passivbot)
+    bot.runtime_identity = TEST_RUNTIME_IDENTITY
+    bot._runtime_manifest_written = True
     bot.exchange = "bybit"
     bot.user = "test_user"
     bot.quote = "USDT"
@@ -2533,6 +2557,8 @@ async def test_start_bot_treats_shutdown_cancelled_warmup_as_clean_stop(monkeypa
 @pytest.mark.asyncio
 async def test_start_bot_treats_hsl_value_error_as_terminal_startup_failure(monkeypatch):
     bot = Passivbot.__new__(Passivbot)
+    bot.runtime_identity = TEST_RUNTIME_IDENTITY
+    bot._runtime_manifest_written = True
     bot.exchange = "gateio"
     bot.user = "test_user"
     bot.quote = "USDT"
@@ -9846,6 +9872,7 @@ async def test_run_execution_loop_retries_fill_history_coverage_without_restart(
     bot._maybe_log_unstuck_status = lambda: None
     bot._monitor_flush_snapshot = AsyncMock()
     bot.restart_bot_on_too_many_errors = AsyncMock()
+    bot._emit_live_cycle_degraded = MagicMock()
     bot._sleep_unless_shutdown = fake_sleep_unless_shutdown
     bot._log_settled_order_waves = lambda *args, **kwargs: None
     bot.live_value = lambda key: 0.0 if key == "execution_delay_seconds" else False
@@ -9896,6 +9923,17 @@ async def test_run_execution_loop_retries_fill_history_coverage_without_restart(
         ("market", 2),
         ("execute", False, 2),
     ]
+    coverage_event = next(
+        call.kwargs
+        for call in bot._emit_live_cycle_degraded.call_args_list
+        if call.kwargs["reason_code"] == "fill_history_coverage_unavailable"
+    )
+    assert coverage_event["level"] == "warning"
+    assert (
+        coverage_event["data"]["error_type"]
+        == "FillHistoryCoverageUnavailable"
+    )
+    assert "error" not in coverage_event["data"]
 
 
 @pytest.mark.asyncio
@@ -10333,6 +10371,7 @@ async def test_run_execution_loop_error_log_includes_type_status_and_action(capl
         (args, kwargs)
     )
     bot._monitor_record_error = MagicMock()
+    bot._emit_live_cycle_degraded = MagicMock()
     bot._maybe_recover_exchange_time_sync = AsyncMock(return_value=False)
     bot.restart_bot_on_too_many_errors = AsyncMock()
     bot.live_value = lambda key: 0.0 if key == "execution_delay_seconds" else False
@@ -10396,6 +10435,13 @@ async def test_run_execution_loop_error_log_includes_type_status_and_action(capl
     )
     assert all(raw_error not in message for message in messages)
     assert all("SECRET" not in message for message in messages)
+    degraded_event = bot._emit_live_cycle_degraded.call_args.kwargs
+    assert degraded_event["reason_code"] == "FakeExchangeError"
+    assert degraded_event["level"] == "error"
+    assert degraded_event["data"]["error_type"] == "FakeExchangeError"
+    assert "error" not in degraded_event["data"]
+    assert raw_error not in str(degraded_event)
+    assert "SECRET" not in str(degraded_event)
     debug_stack_messages = [
         record.message
         for record in caplog.records
@@ -11191,3 +11237,67 @@ async def test_run_execution_loop_propagates_fatal_bot_exception():
 
     with pytest.raises(FatalBotException, match="fatal"):
         await bot.run_execution_loop()
+
+
+def _balance_composition_fixture(amount: str) -> dict:
+    return normalize_okx_balance_composition(
+        {"info": {"data": [{"details": [{"ccy": "USDT", "cashBal": amount}]}]}}
+    )
+
+
+@pytest.mark.asyncio
+async def test_composition_only_balance_change_is_durable_but_does_not_schedule_execution():
+    bot = Passivbot.__new__(Passivbot)
+    bot.balance_raw = 100.0
+    bot.balance = 100.0
+    bot._previous_balance_raw = 100.0
+    bot._previous_balance_snapped = 100.0
+    bot._balance_composition = _balance_composition_fixture("2")
+    bot._previous_balance_composition_signature = balance_composition_signature(
+        _balance_composition_fixture("1")
+    )
+    bot.execution_scheduled = False
+    bot.live_event_console_enabled = False
+    bot._live_event_pipeline = None
+    bot._monitor_record_event = MagicMock()
+    bot._emit_balance_changed_event = MagicMock()
+    bot._log_noncritical_market_snapshot_error = lambda *_args: False
+
+    async def calc_upnl_sum():
+        return 0.0
+
+    bot.calc_upnl_sum = calc_upnl_sum
+
+    await bot.handle_balance_update(source="REST")
+
+    bot._emit_balance_changed_event.assert_called_once()
+    assert bot._emit_balance_changed_event.call_args.kwargs["balance_composition"][
+        "asset_balances"
+    ][0]["amount"] == pytest.approx(2.0)
+    assert bot.execution_scheduled is False
+
+    await bot.handle_balance_update(source="REST")
+
+    bot._emit_balance_changed_event.assert_called_once()
+
+
+def test_raw_only_balance_apply_replaces_stale_composition_with_unavailable():
+    bot = Passivbot.__new__(Passivbot)
+    composition = _balance_composition_fixture("1")
+    bot.quote = "USDT"
+    bot.balance = 100.0
+    bot.balance_raw = 100.0
+    bot._exchange_reported_balance_raw = 100.0
+    bot.balance_override = None
+    bot._balance_override_logged = False
+    bot.previous_hysteresis_balance = 100.0
+    bot.balance_hysteresis_snap_pct = 0.02
+    bot._balance_composition = composition
+
+    assert bot._apply_balance_snapshot(100.0) is True
+    assert bot.balance == pytest.approx(100.0)
+    assert bot.balance_raw == pytest.approx(100.0)
+    assert bot._balance_composition["status"] == "unavailable"
+    assert bot._balance_composition["reason"] == "raw_only_refresh"
+    assert bot._balance_composition["asset_balances"] == []
+    assert bot._balance_composition is not composition

@@ -1,10 +1,9 @@
 # Equity Hard Stop Loss Cooldown Contracts
 
-This file defines the intended target contract for
+This file defines the contract for
 `live.hsl_position_during_cooldown_policy`.
 
-It is the normative spec for future implementation and regression tests. It may
-be stricter or cleaner than the current implementation at any given moment.
+It is the normative contract for implementation and regression tests.
 
 See also:
 
@@ -14,7 +13,7 @@ See also:
 
 ## Goal
 
-After a valid RED panic on one `pside`, restart behavior must be derivable from:
+After a RED-seen episode ends, restart behavior must be derivable from:
 
 1. current exchange state
 2. fill history
@@ -25,18 +24,22 @@ No local persistent marker may be required.
 
 ## Core Definitions
 
-For one `pside`, define:
+For the configured HSL scope, define:
 
-1. `P`
-   - latest `close_panic_{pside}` fill timestamp
+1. `F`
+   - the fill timestamp that made the scope fully flat
+   - the order type is irrelevant
 2. `cooldown_end`
-   - `P + hsl_cooldown_minutes_after_red`
+   - `F + hsl_cooldown_minutes_after_red`
 3. `E`
-   - first non-panic entry fill on that `pside` after `P`
-4. `all_positions_closed_now`
-   - exchange currently reports no open positions for that `pside`
+   - first entry fill in that scope after `F`
+4. `scope_flat_now`
+   - exchange currently reports no open positions in that scope
 5. `open_position_now`
-   - exchange currently reports an open position for that `pside`
+   - exchange currently reports an open position in that scope
+
+The scope is one `coin+pside` in `coin` mode, all positions on one `pside` in
+`pside` mode, and all account positions in `unified` mode.
 
 Important distinction:
 
@@ -52,18 +55,18 @@ These must not be confused.
 
 ## Global Rules
 
-Apply in order for one `pside`:
+Apply in order for the configured scope:
 
-1. If no `P` exists:
-   - ordinary HSL replay
-   - no reconstructed cooldown
+1. If a RED-seen scope is flat but no `F` is available:
+   - defer finalization and cooldown anchoring
+   - keep the scope protective; never substitute the current time
 2. If `now >= cooldown_end`:
    - cooldown is over
    - restart normal operation
-   - HSL drawdown baseline is post-panic
+   - HSL drawdown baseline is post-flatten
 3. If `now < cooldown_end` and no `E` exists:
    - cooldown episode is still active
-   - if `all_positions_closed_now`: wait
+   - if `scope_flat_now`: wait
    - if `open_position_now`: unresolved panic residue, not operator intervention
 4. If `now < cooldown_end` and `E` exists:
    - cooldown intervention happened
@@ -71,9 +74,10 @@ Apply in order for one `pside`:
 
 Shared invariants:
 
-1. after a valid panic close fully closes all positions on that `pside`, HSL drawdown tracking resets from after the panic
-2. while cooldown is active and the side has no open positions, the bot must not open fresh initials on that `pside`
-3. unresolved panic residue must still allow the bot to continue panic-close handling
+1. HSL drawdown tracking resets after every fill that fully flattens the configured scope, regardless of order type
+2. cooldown after a RED-seen episode begins at that flattening fill
+3. while cooldown is active and the scope has no open positions, the bot must not open fresh initials in that scope
+4. unresolved panic residue must still allow the bot to continue panic-close handling
 
 ## Supported Policies
 
@@ -115,7 +119,7 @@ Contract:
 Important:
 
 1. while the side still has no open positions and no `E` exists, do not open fresh initials
-2. reset boundary is the first post-panic non-panic entry `E`
+2. reset boundary is the first post-flatten entry `E`
 3. not the latest DCA add
 4. not a local marker
 
@@ -130,8 +134,8 @@ Intent:
 Contract:
 
 1. if intervention exists, panic-close it again
-2. once all positions on that `pside` are fully closed, reset drawdown baseline from after the new panic
-3. restart cooldown from the new panic timestamp
+2. once the configured scope is fully closed, reset drawdown baseline from after its flattening fill
+3. restart cooldown from that flattening fill timestamp
 
 Note:
 

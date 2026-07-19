@@ -15,7 +15,329 @@ merge, live smoke evidence changes, or new gaps are discovered.
 - Do not use this file for design churn; unresolved design details belong in the
   plan or a focused handoff doc.
 
-## Latest Canonical Deployment (PR #1297)
+## Latest Canonical Deployment (PR #1321)
+
+- PR #1321 merged as canonical
+  `fc9dad83cd3ecf51cae15e8dda66afb7cfb895a1`. It completes bounded latest
+  shutdown lifecycle diagnostics without changing producers, trading, or
+  process behavior.
+- VPS5 fast-forwarded tracked-clean at that head. Bot PIDs
+  `1044483/1044492/1044486/1044495/1044489` were unchanged, and `misc:0.0`
+  remained pane `%8`/PID `434835`.
+- The initial smoke retained four natural KuCoin degraded cycles/timeouts. The
+  settled two-minute smoke was `ok=true`, `hard_failures=0`, with `44/44`
+  account-critical and `243/243` remote calls successful and five configured
+  processes stable. No Rust build, bot restart, signal, direct exchange call,
+  or event was manufactured.
+
+## Previous Canonical Deployment (PR #1320; Through PR #1319)
+
+- PR #1320 merged as canonical
+  `bc2c90267be418344ec883fcf17fae856bc568cd` after exact-head Hermes approval
+  and green Python/Rust CI. It exposes event-pipeline drops, sink errors, and
+  unexpectedly dead workers through a separate bounded diagnostic integrity
+  verdict while preserving general smoke and trading/process semantics.
+- VPS5 fast-forwarded tracked-clean from PR #1314 without a Rust build, bot
+  restart, or process signal. Exact five-bot target sampling remained 3/3
+  stable with unchanged PIDs and no extras or issues; protected `misc:0.0`
+  remained `%8`/PID `434835`.
+- All five latest pipeline snapshots were integrity-green with zero drops, sink
+  errors, unexpectedly dead workers, backlog, unfinished work, or degraded
+  counters. The wider report retained natural KuCoin `RequestTimeout` events;
+  the latest affected cycle subsequently completed successfully without
+  intervention. No direct exchange request, process action, or event was
+  manufactured. The active follow-up makes bounded shutdown evidence complete
+  per distinct bot rather than trusting aggregate lifecycle counts.
+
+## Previous Canonical Deployment (PR #1314; Through PR #1319)
+
+- PR #1319 merged as canonical `84c8e040334820ccc049787c82048358e18179c6`.
+  Its offline fake-live shutdown-clock repair changes no live runtime, producer,
+  exchange, strategy, or process behavior, so no VPS action was warranted.
+- PR #1314 then merged as canonical
+  `0dbfbca74b029353a0e11888e71077fa711835ff`. It records immutable runtime,
+  Rust, config, and fill-attribution provenance without changing strategy,
+  order, risk, or exchange behavior.
+- VPS5 fast-forwarded tracked-clean from `eb82e256c2`. A deliberately wrong
+  Rust fingerprint failed closed before build or signal. The exact
+  target-derived `691bff9683deec9382a4e96ab6a107c14145f88edd6ae2f8e2380b8ba6824449`
+  fingerprint rebuilt and verified the loaded extension after the non-login
+  shell PATH was explicitly bound to `/root/.cargo/bin`.
+- The guarded runner gracefully restarted only exact panes `%358`-`%362`
+  without force. Old PIDs `1042130/1042139/1042133/1042142/1042136` became
+  `1044483/1044492/1044486/1044495/1044489`. The bounded
+  `1784414260464..1784414921350` window selected 10/1,011 segments totaling
+  `73414648` bytes and retained complete lifecycle evidence, but correctly
+  remained red on one natural KuCoin authoritative-refresh `RequestTimeout`.
+- KuCoin recovered without intervention. The settled
+  `1784414681768..1784415199226` report was hard-green with zero hard problem
+  events, log matches, monitor errors, or process failures. Final target
+  sampling was 3/3 stable with no extras or issues; protected `misc:0.0`
+  remained `%8`/PID `434835`. No direct exchange request or event was
+  manufactured. The active follow-up exposes event-pipeline loss as a separate
+  diagnostics-only integrity verdict while preserving top-level smoke
+  semantics.
+
+## Previous Canonical Deployment (PR #1317)
+
+- PR #1317 merged as canonical `eb82e256c2dfeac29af158f389f93a7ddba8eae2`.
+  It adds bounded Hyperliquid unified-account composition diagnostics without
+  changing scalar balance, exchange calls, planning, orders, risk, or console
+  admission.
+- VPS5 fast-forwarded tracked-clean from `e7fe7f79` without a Rust rebuild and
+  gracefully restarted only exact panes `%358`-`%362` without force. Old PIDs
+  `1040903/1040911/1040905/1040914/1040908` became
+  `1042130/1042139/1042133/1042142/1042136`.
+- The exact `1784407239491..1784407888217` window selected 10/1,011 event
+  segments totaling `72553076` bytes, retained all five shutdown/startup
+  cohorts, and was hard-green across monitor, text-log, repository, and target
+  gates. Delayed 3/3 sampling recovered one transient GateIO `D` observation to
+  final `R=4,S=1`, with five stable PIDs and no extras. Protected `misc:0.0`
+  remained `%8`/PID `434835`. No direct exchange call or event was manufactured.
+- The exact merge is the base for the offline fake-live post-panic
+  observability regression slice.
+
+## Previous Canonical Deployment (PR #1316)
+
+- PR #1316 merged as canonical `e7fe7f796fb76a829003933dc7e5d937c6df8c64`.
+  It adds bounded Binance CCXT unified composition diagnostics without changing
+  scalar balance, exchange calls, planning, orders, risk, or console admission.
+- VPS5 fast-forwarded tracked-clean from `a0db60f9` without a Rust rebuild and
+  gracefully restarted only exact panes `%358`-`%362` without force. Old PIDs
+  `1038760/1038769/1038763/1038772/1038766` became
+  `1040903/1040911/1040905/1040914/1040908`.
+- The exact `1784404124757..1784404777859` window selected 7/1,012 event files
+  totaling `19420705` bytes, retained five stopping/stopped/startup cohorts, and
+  had zero hard, monitor, or text-log issues. Delayed 3/3 target sampling was
+  `R=4,S=1` with no extras; `misc:0.0` remained `%8`/PID `434835`. No direct
+  exchange call or event was manufactured.
+- The exact merge was the base for the Hyperliquid unified-only composition slice.
+
+## Previous Canonical Deployment (PR #1313)
+
+- PR #1313 merged as canonical `a0db60f9ca97dbc5b9b37aa3230fce97eb0917ce`.
+  It adds bounded OKX asset composition to `balance.changed` without changing
+  scalar balance, exchange calls, planning, orders, risk, or console admission.
+- VPS5 fast-forwarded cleanly from `32156cbc`. A wrong caller-side Rust
+  fingerprint failed closed after the repository move and before any bot
+  signal; the same-head target-derived proof then passed without a Rust build
+  and matched the loaded extension stamp and artifact.
+- The guarded executor gracefully restarted only the five exact configured
+  panes without force. The exact `1784401342000..1784402056447` lifecycle
+  window selected 6/1,011 managed segments totaling `39263703` bytes, recovered
+  all five stopping/stopped/startup cohorts, and was hard-green across target,
+  repository, monitor, and text-log gates. A broader pre-action window retained
+  one earlier natural KuCoin `RequestTimeout`, correctly separating it from the
+  restart lifecycle rather than suppressing it.
+- Final targets were 3/3 stable with new exact bot PIDs
+  `1038760/1038769/1038763/1038772/1038766`; pane parents and protected
+  `misc:0.0` `%8`/PID `434835` were unchanged. Natural post-restart OKX balance
+  events carried the bounded two-asset composition. No direct exchange request
+  or event was manufactured.
+- The exact merge is the base for the Binance CCXT unified composition slice.
+
+## Previous Canonical Deployment (PR #1311)
+
+- PR #1311 merged as canonical `32156cbc251d666902f20b8b000a9a1dfe05a0a2`.
+  It carries bounded hard-only problem-event evidence into concise smoke,
+  brief, and incident-bundle projections without changing runtime event
+  production or trading behavior.
+- VPS5 prepared the exact clean merge without a Rust rebuild or bot restart.
+  The immediate bounded smoke retained one natural KuCoin positions timeout;
+  the settled five-minute smoke was hard-green with an empty hard sample. A
+  bounded incident bundle for that natural timeout carried the same hard-only
+  evidence in the command result and archived manifest. The five configured
+  bot panes and `misc:0.0` remained unchanged.
+- The exact merge is the base for the following balance-composition slice.
+
+## Previous Canonical Deployment (PR #1310)
+
+- PR #1310 merged as canonical `5d06887b78c2790efd15e1bd67bae6b3f5d96636`.
+  It added full-report `hard_problem_events` with authoritative `count`, a
+  bounded chronological `sample`, and explicit `retained`/`truncated` counts
+  while preserving the existing mixed sample, verdicts, recovery
+  classification, and runtime behavior.
+- VPS5 prepared that exact tracked-clean merge without a Rust rebuild or bot
+  restart. A bounded read-only smoke was hard-green and exposed
+  `hard_problem_events={count:0,retained:0,truncated:0,sample:[]}`; all five
+  pane parents and protected `misc:0.0` remained unchanged.
+
+## Previous Canonical Deployment (PR #1309; Current Through PR #1299)
+
+- PR #1309 merged as canonical
+  `50c37db6049206634b62f45798a8b240a035e3b5` after exact-current-head Hermes
+  approval and green Python/Rust CI. It removes raw sink exception text while
+  retaining stable sink, reason, exception-type, counter, and timing evidence.
+- VPS5 prepared the exact merge without a Rust rebuild and gracefully stopped,
+  exited, relaunched, and verified all five configured panes without force. The
+  exact `1784339097380..1784339763543` window recovered complete shutdown and
+  startup cohorts and left every bot running, but correctly remained red on two
+  hard structured events, including a real KuCoin positions-fetch
+  `RequestTimeout`. Only one hard classification remained in the bounded mixed
+  problem-event sample, exposing the active hard-only retention follow-up.
+- Canonical master later advanced through behavior-changing PR #1299 to
+  `f1ae7970393e8299d1b0a98c8ff68d42adddd2d0`. VPS5 prepared that exact head,
+  restarted only the same five verified panes, and returned hard-green over
+  `1784392681320..1784393372572`: 10/1,011 managed segments and `66399577`
+  bytes, complete five-bot shutdown/startup evidence, and zero hard, monitor,
+  text-log, repository, or target failures. The checkout stayed tracked-clean,
+  all pane parents remained stable, and protected `misc:0.0` stayed `%8`, PID
+  `434835`. No direct exchange request or event was manufactured.
+
+## Previous Canonical Deployment (PR #1307)
+
+- PR #1307 merged as canonical
+  `8aefdbc82339b756ff642e726ae0924d5ca8774d` after exact-current-head Hermes
+  approval and green Python/Rust CI. It composes the exact local restart
+  executor with one bounded restart-through-observation smoke collection.
+- VPS5 prepared the exact merge cleanly, then stopped, exited, relaunched, and
+  verified all five configured targets without force. The exact window
+  `1784332307933..1784332994590` selected 6/1,012 retained segments and recovered
+  five stopping/stopped/startup cohorts. Smoke correctly remained red on one
+  real KuCoin positions-fetch `RequestTimeout`; a second later timeout meant
+  recovery was not yet proven, so every bot was left running.
+- Repository and target gates remained green, pane parents and `misc:0.0` stayed
+  unchanged, and no direct exchange request or event was manufactured. The raw
+  exception string retained by `cycle.degraded` exposed the active bounded
+  redaction follow-up; remote-host control and force escalation remain separate.
+
+## Previous Canonical Deployment (PR #1306)
+
+- PR #1306 merged as canonical
+  `0d1b06b82f3bab011e29a350b4a5276c2ebd5356` after exact-current-head Hermes
+  approval and green Python/Rust CI. It binds canonical `origin/master`
+  fast-forward and Rust runtime preparation to exact caller-confirmed current
+  and target commits plus a source fingerprint before restart execution.
+- VPS5 first fast-forwarded to make the tool available without a bot restart or
+  signal. A same-head execution returned green with no repository move or build;
+  a valid wrong target failed with `fetched_target_head_mismatch` before build.
+  Tracked state, all five configured pane parents, and `misc:0.0` stayed
+  unchanged.
+- The active follow-up composes the existing exact-pane graceful executor and
+  bounded retained-window collector over one restart-through-observation window.
+  Remote-host control and force escalation remain separate.
+
+## Previous Canonical Deployment (PR #1305)
+
+- PR #1305 merged as canonical
+  `300fdd703fee9e1ce0e9c54df43bb7b1dcb858d8` after exact-current-head Hermes
+  approval and green Python/Rust CI. It bounds exact historical restart-smoke
+  collection by managed rotation intervals with predecessor, per-bot,
+  global-file, and projected uncompressed-byte proof before event scanning.
+- VPS5 fast-forwarded without a restart or bot signal. The retained PR #1296
+  window selected 10/1,008 segments and `131834602` projected bytes, recovered
+  all five shutdown/startup cohorts, and returned `ok=true` with zero hard
+  failures. A malformed expected head rejected before producers with exit 2.
+- All five pane parents and `misc:0.0` retained their exact IDs/PIDs and the
+  checkout stayed tracked-clean. PR #1306 subsequently bound canonical
+  fetch/fast-forward and Rust runtime preparation before restart execution;
+  force escalation remains separate.
+
+## Previous Canonical Deployment (PR #1303)
+
+- PR #1303 merged as canonical
+  `9e8d1343e0f1f43fc3207d611a8b06d88af8b6c0` after exact-current-head Hermes
+  approval and green Python/Rust CI. It composes stable target sampling, exact
+  smoke-window collection, and sanitized evidence evaluation in memory without
+  intermediate reports or process control.
+- VPS5 fast-forwarded without a bot restart or signal. The first real collector
+  run discovered 1,012 retained event segments totaling about 801 MB and stayed
+  CPU-active beyond ten minutes. Only the exact collector PID was interrupted;
+  all five bot panes, `misc:0.0`, and tracked checkout state remained unchanged.
+- A two-recent-segment cap returned in 20.9 seconds but correctly failed closed
+  because it omitted the restart lifecycle. A read-only interval-selection
+  prototype then selected 10 overlapping segments and returned the complete
+  five-bot green lifecycle verdict in 37.3 seconds. The active follow-up makes
+  that selection fail closed under explicit per-bot, global-file, and byte caps.
+
+## Previous Canonical Deployment (PR #1302)
+
+- PR #1302 merged as canonical
+  `0b5503b2a9ee4817618b7aca25dab417af4292dd` after exact-current-head Hermes
+  approval and green Python/Rust CI. It preserves and compares exact bounded
+  epoch-ms smoke windows and fails closed on dropped hard-looking log evidence.
+- VPS5 fast-forwarded without a restart or signal. The retained PR #1296 window
+  evaluated green with exact bounds `1784316350000..1784317500000`; an in-memory
+  one-millisecond mismatch and dropped-hard count each evaluated red with
+  `log_scan_invalid`. All five pane parents and bot PIDs plus `misc:0.0` remained
+  unchanged, and tracked state stayed clean.
+- PR #1303 directly composed the existing target, smoke, and evidence builders
+  in memory. Pull/build, SSH, process control, exchange access, and force
+  escalation remain separate.
+
+## Previous Canonical Deployment (PR #1301)
+
+- PR #1301 merged as canonical
+  `46a28795dec40acbee0dbaa3602be955bbecf23e` after exact-current-head Hermes
+  approval and green Python/Rust CI. It adds a pure, bounded evaluator for
+  already-generated full restart target and smoke JSON reports.
+- VPS5 fast-forwarded without a restart or signal. The real PR #1296
+  shutdown-through-startup window evaluated green with all five lifecycle and
+  startup cohorts, zero hard failures, stable exact targets, and a clean exact
+  repository head. A wider three-hour window correctly evaluated red on 30
+  existing hard events. Bot and pane PIDs plus `misc:0.0` remained unchanged.
+- The deploy exposed a fidelity defect: generic count projection clamped both
+  modern epoch-ms bounds to `1000000000` and the log-bound comparison reused
+  those lossy values. The active follow-up preserves exact bounded timestamps
+  and fails closed on dropped hard-looking log evidence.
+
+## Previous Canonical Deployment (PR #1300)
+
+- PR #1300 merged as canonical
+  `e1a4837914c1e4768cd7963bba47212499d32937` after exact-current-head Hermes
+  approval and green Python/Rust CI. It requires an operator-confirmed Rust
+  build-input fingerprint and rehashes the inputs after loaded-extension
+  verification at every runtime boundary, detecting ignored-input drift inside
+  the check.
+- VPS5 fast-forwarded cleanly from `491f3192` without restarting or signalling
+  bots. A deliberately wrong expected fingerprint failed before target sampling
+  with `action_started=false`. The final 3/3 exact-target report retained the
+  same five PIDs, zero extras or issues, and states `R=3,S=2`; tracked state and
+  unrelated `misc:0.0` remained unchanged.
+- The following slice made post-restart target and smoke evidence
+  machine-evaluable from already generated full JSON reports. Automatic report
+  collection, pull/build orchestration, and force escalation remain separate.
+
+## Previous Canonical Deployment (PRs #1296 And #1295)
+
+- Docs-only PR #1295 and behavior-changing PR #1296 merged as canonical
+  `491f319251076b82799a5212efe2d797c56b1b31` after exact-current-head Hermes
+  approval and green Python/Rust CI. PR #1296 hardens trailing-fill association
+  across position snapshots and requires post-snapshot fill confirmation when
+  authoritative position-update timestamps are unavailable.
+- VPS5 fast-forwarded cleanly from `4a7a6753`. The exact local executor stopped
+  only old bot PIDs `1015403/1015406/1015410/1015412/1015414` in panes
+  `%358/%359/%360/%361/%362` and relaunched replacement PIDs
+  `1019670/1019679/1019673/1019681/1019676` under the same pane parents and
+  private supervisor fingerprint. Repository and Rust source/stamp checks
+  remained exact and tracked-clean at every action boundary.
+- Executor verification and the independent settled report were hard-green
+  with 3/3 stable samples, five relaunch-ready targets, no extras or duplicates,
+  and zero issues. Unrelated `misc:0.0` remained `%8`, PID `434835`. No direct
+  exchange probe or event was manufactured.
+
+## Previous Canonical Deployment (PR #1298)
+
+- PR #1298 merged as `4a7a6753bff00f9b8749d9707f9bdccc4b3a5ffc`
+  after exact-head Hermes approval and green Python/Rust CI. It requires the
+  local restart executor to prove an exact Git head, zero tracked changes, and
+  a source-matched loaded Rust extension before target sampling and again at
+  both process-action boundaries.
+- VPS5 fast-forwarded cleanly from `7b833471` without a restart or signal. A
+  deliberately wrong expected head returned exit 1 with
+  `action_started=false`, no target preflight, zero tracked changes, and a Rust
+  source/stamp match at `7869bc3d...`. The final 3/3 exact-target report was
+  hard-green with all five unchanged bot PIDs relaunch-ready, states `R=3,S=2`,
+  zero issues, and the unchanged private supervisor fingerprint. Unrelated
+  `misc:0.0` remained `%8`, PID `434835`.
+- The tracked Rust Git tree matched the clean local tree, but its local
+  fingerprint was `d14a5363...` because ignored `Cargo.lock` is intentionally
+  included and differs by host. The active follow-up requires the operator to
+  confirm the expected host-local Rust fingerprint rather than accepting any
+  internally self-consistent source/stamp pair. No exchange request, process
+  action, or event was manufactured.
+
+## Previous Canonical Deployment (PR #1297)
 
 - PR #1297 merged as `7b833471c1e770ceb8650a4c3b395713b6a76dcb`
   after exact-head Hermes approval and green Python/Rust CI. It added the first

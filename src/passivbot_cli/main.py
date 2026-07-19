@@ -112,6 +112,10 @@ TOOL_COMMANDS: dict[str, CommandSpec] = {
         "tools.log_secret_inventory",
         "read-only value-free inventory of secret-like local log material",
     ),
+    "runtime-attribution": CommandSpec(
+        "tools.runtime_attribution",
+        "attribute local fills to recorded ingestion and candidate runtime windows",
+    ),
     "live-incident-bundle": CommandSpec(
         "tools.live_incident_bundle",
         "collect local live incident evidence into a tarball",
@@ -148,9 +152,25 @@ TOOL_COMMANDS: dict[str, CommandSpec] = {
         "tools.live_restart_target_report",
         "resolve exact local tmux restart targets without process control",
     ),
+    "live-restart-smoke-evidence": CommandSpec(
+        "tools.live_restart_smoke_evidence",
+        "evaluate bounded local restart smoke evidence without live operations",
+    ),
+    "live-restart-smoke-collect": CommandSpec(
+        "tools.live_restart_smoke_collection",
+        "collect and evaluate bounded local restart smoke evidence",
+    ),
+    "live-restart-smoke-run": CommandSpec(
+        "tools.live_restart_smoke_run",
+        "restart exact local targets and collect bounded smoke evidence",
+    ),
     "live-restart-executor": CommandSpec(
         "tools.live_restart_executor",
         "gracefully restart exact verified local tmux targets",
+    ),
+    "live-repository-prepare": CommandSpec(
+        "tools.live_repository_prepare",
+        "fast-forward canonical master and prove the Rust runtime",
     ),
     "inspect-ohlcvs": CommandSpec(
         "tools.inspect_ohlcvs",

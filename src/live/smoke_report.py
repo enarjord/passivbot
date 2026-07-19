@@ -9,7 +9,7 @@ import stat
 import subprocess
 import time
 from collections import Counter, defaultdict, deque
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -73,6 +73,11 @@ STARTUP_BUDGET_INCOMPLETE_STATUSES = frozenset(
 DEFAULT_PROCESS_MATCH = "passivbot live"
 LOG_WINDOW_UNPARSED_POLICIES = {"keep", "drop"}
 DEFAULT_LOG_WINDOW_UNPARSED_POLICY = "keep"
+EVENT_SEGMENT_END_PATTERN = re.compile(
+    r"^(?P<ts>\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2})"
+    r"(?:\.[0-9a-f]+)?\.ndjson(?:\.gz)?$"
+)
+EVENT_SEGMENT_END_GRANULARITY_MS = 999
 REMOTE_CALL_FAILURE_GROUP_LIMIT = 20
 REMOTE_CALL_HEALTH_GROUP_LIMIT = 20
 REMOTE_CALL_TIMING_GROUP_LIMIT = 20
@@ -4864,6 +4869,23 @@ def _summarize_event_pipeline_health(
         }
         for group in ordered[:EVENT_PIPELINE_HEALTH_GROUP_LIMIT]
     ]
+    integrity_sources = {
+        "drops": sum(
+            int(group.get("latest_dropped_total") or 0) for group in groups.values()
+        ),
+        "sink_errors": sum(
+            int(group.get("latest_sink_error_total") or 0)
+            for group in groups.values()
+        ),
+        "unexpectedly_dead_workers": sum(
+            1
+            for group in groups.values()
+            if group.get("latest_worker_alive") is False
+            and group.get("latest_pipeline_stopping") is not True
+        ),
+    }
+    integrity_sources["total"] = sum(integrity_sources.values())
+    integrity_attention_count = int(integrity_sources["total"])
     out = {
         "total": sum(int(group.get("count", 0)) for group in groups.values()),
         "groups_truncated": len(ordered) > EVENT_PIPELINE_HEALTH_GROUP_LIMIT,
@@ -4892,6 +4914,12 @@ def _summarize_event_pipeline_health(
         "latest_stopping_count": sum(
             1 for group in groups.values() if group.get("latest_pipeline_stopping") is True
         ),
+        "integrity": {
+            "ok": integrity_attention_count == 0,
+            "attention": integrity_attention_count > 0,
+            "attention_count": integrity_attention_count,
+            "source_counts": integrity_sources,
+        },
         "groups": compact_groups,
     }
     processed_counts = [
@@ -6092,7 +6120,35 @@ def _shutdown_event_group(
             for key in ("cycle_id", "snapshot_id", "plan_id", "action_id")
             if ids.get(key) is not None
         },
+        "_identity_valid": _shutdown_event_identity_valid(live_event, row),
     }
+
+
+def _shutdown_event_identity_valid(
+    live_event: dict[str, Any], row: dict[str, Any]
+) -> bool:
+    live_exchange = live_event.get("exchange")
+    live_user = live_event.get("user")
+    row_exchange = row.get("exchange")
+    row_user = row.get("user")
+    if live_exchange not in (None, "") and row_exchange not in (None, ""):
+        if live_exchange != row_exchange:
+            return False
+    if live_user not in (None, "") and row_user not in (None, ""):
+        if live_user != row_user:
+            return False
+    exchange = live_exchange or row_exchange
+    user = live_user or row_user
+    return (
+        type(exchange) is str
+        and type(user) is str
+        and bool(exchange.strip())
+        and bool(user.strip())
+        and len(exchange) <= 120
+        and len(user) <= 120
+        and exchange not in {"unknown_exchange", "unknown"}
+        and user not in {"unknown_user", "unknown"}
+    )
 
 
 def _merge_shutdown_event_group(
@@ -6133,6 +6189,7 @@ def _merge_shutdown_event_group(
             "latest_message",
             "latest_data",
             "latest_ids",
+            "_identity_valid",
         ):
             existing[field] = group.get(field)
 
@@ -6140,6 +6197,9 @@ def _merge_shutdown_event_group(
 def _summarize_shutdown_events(
     groups: dict[tuple[Any, ...], dict[str, Any]],
     event_type_counts: Counter[str],
+    *,
+    coverage_complete: bool,
+    invalid_identity_events: int,
 ) -> dict[str, Any]:
     ordered = sorted(
         groups.values(),
@@ -6155,16 +6215,94 @@ def _summarize_shutdown_events(
         {
             key: value
             for key, value in group.items()
-            if key not in {"latest_path", "latest_line", "latest_seq"}
+            if key
+            not in {"latest_path", "latest_line", "latest_seq", "_identity_valid"}
             and value not in (None, {}, [])
         }
         for group in ordered[:SHUTDOWN_EVENT_GROUP_LIMIT]
     ]
+    lifecycle = _summarize_shutdown_lifecycle(
+        groups,
+        coverage_complete=coverage_complete,
+        invalid_identity_events=invalid_identity_events,
+    )
     return {
         "total": sum(int(group.get("count", 0)) for group in groups.values()),
         "groups_truncated": len(ordered) > SHUTDOWN_EVENT_GROUP_LIMIT,
         "event_types": dict(event_type_counts.most_common()),
         "groups": compact_groups,
+        "lifecycle": lifecycle,
+    }
+
+
+def _shutdown_event_position(group: dict[str, Any]) -> tuple[int, int, str, int]:
+    return _sort_event_position_key(
+        ts=group.get("latest_ts"),
+        seq=group.get("latest_seq"),
+        path=group.get("latest_path") or "",
+        line_no=int(group.get("latest_line") or 0),
+    )
+
+
+def _summarize_shutdown_lifecycle(
+    groups: dict[tuple[Any, ...], dict[str, Any]],
+    *,
+    coverage_complete: bool,
+    invalid_identity_events: int,
+) -> dict[str, Any]:
+    """Project the latest in-window stop boundary for each observed bot."""
+    boundaries_by_bot: dict[str, dict[str, dict[str, Any]]] = {}
+    for group in groups.values():
+        event_type = group.get("event_type")
+        if event_type not in {EventTypes.BOT_STOPPING, EventTypes.BOT_STOPPED}:
+            continue
+        if group.get("_identity_valid") is not True:
+            continue
+        bot = str(group.get("bot") or "unknown")
+        boundaries = boundaries_by_bot.setdefault(bot, {})
+        previous = boundaries.get(str(event_type))
+        if previous is None or _shutdown_event_position(group) > _shutdown_event_position(
+            previous
+        ):
+            boundaries[str(event_type)] = group
+
+    rows: list[dict[str, Any]] = []
+    for bot, boundaries in boundaries_by_bot.items():
+        stopping = boundaries.get(EventTypes.BOT_STOPPING)
+        stopped = boundaries.get(EventTypes.BOT_STOPPED)
+        stopping_position = _shutdown_event_position(stopping or {})
+        stopped_position = _shutdown_event_position(stopped or {})
+        complete = (
+            stopping is not None
+            and stopped is not None
+            and stopped_position > stopping_position
+        )
+        latest = stopped if stopped_position > stopping_position else stopping
+        row = {
+            "bot": _redact_log_text(bot, max_len=120),
+            "state": "complete" if complete else "incomplete",
+            "latest_boundary": "stopped" if latest is stopped else "stopping",
+            "latest_ts": latest.get("latest_ts") if isinstance(latest, dict) else None,
+        }
+        rows.append({key: value for key, value in row.items() if value is not None})
+    rows.sort(
+        key=lambda row: (
+            -int(_non_negative_int(row.get("latest_ts")) or 0),
+            str(row.get("bot") or ""),
+        )
+    )
+    complete_bots = sum(1 for row in rows if row.get("state") == "complete")
+    retained_rows = rows[:SHUTDOWN_EVENT_GROUP_LIMIT]
+    return {
+        "proof_scope": "distinct_observed_bots",
+        "coverage_complete": bool(coverage_complete),
+        "identity_complete": invalid_identity_events == 0,
+        "invalid_identity_events": invalid_identity_events,
+        "observed_bots": len(rows),
+        "complete_bots": complete_bots,
+        "incomplete_bots": len(rows) - complete_bots,
+        "rows_truncated": len(rows) > SHUTDOWN_EVENT_GROUP_LIMIT,
+        "rows": retained_rows,
     }
 
 
@@ -8077,6 +8215,7 @@ def _event_window_report(
     event_file_limit_groups: int = 0,
     event_files_before_limit: int = 0,
     event_files_skipped_by_limit: int = 0,
+    segment_selection: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     report = {
         "enabled": since_ms is not None or until_ms is not None,
@@ -8102,6 +8241,8 @@ def _event_window_report(
         report["event_files_before_limit"] = int(event_files_before_limit)
         report["event_files_skipped_by_limit"] = int(event_files_skipped_by_limit)
         report["event_file_limit_order"] = "current_then_recent_mtime"
+    if segment_selection is not None:
+        report["segment_selection"] = dict(segment_selection)
     return report
 
 
@@ -8236,6 +8377,157 @@ def _monitor_issue(
     }
 
 
+def _event_segment_end_upper_ms(path: Path) -> int | None:
+    match = EVENT_SEGMENT_END_PATTERN.match(path.name)
+    if match is None:
+        return None
+    try:
+        parsed = datetime.strptime(match.group("ts"), "%Y-%m-%dT%H-%M-%S").replace(
+            tzinfo=timezone.utc
+        )
+    except ValueError:
+        return None
+    return int(parsed.timestamp() * 1000) + EVENT_SEGMENT_END_GRANULARITY_MS
+
+
+def _event_segment_scan_bytes(path: Path) -> int | None:
+    try:
+        file_size = int(path.stat().st_size)
+        if not path.name.endswith(".gz"):
+            return file_size
+        if file_size < 4:
+            return None
+        with path.open("rb") as stream:
+            stream.seek(-4, 2)
+            trailer = stream.read(4)
+    except OSError:
+        return None
+    if len(trailer) != 4:
+        return None
+    return int.from_bytes(trailer, byteorder="little", signed=False)
+
+
+def _select_event_segments_for_window(
+    files: list[Path],
+    *,
+    since_ms: int,
+    until_ms: int,
+    max_files_per_bot: int,
+    max_total_files: int,
+    max_total_bytes: int,
+) -> tuple[list[Path], dict[str, Any], list[dict[str, Any]]]:
+    if since_ms < 0 or until_ms <= since_ms:
+        raise ValueError("event segment window requires until_ms > since_ms >= 0")
+    if max_files_per_bot <= 0:
+        raise ValueError("max_window_event_files_per_bot must be positive")
+    if max_total_files <= 0:
+        raise ValueError("max_window_event_files_total must be positive")
+    if max_total_bytes <= 0:
+        raise ValueError("max_window_event_bytes_total must be positive")
+
+    grouped: dict[Path, list[Path]] = defaultdict(list)
+    for path in files:
+        grouped[path.parent].append(path)
+
+    selected: list[Path] = []
+    issue_counts: Counter[str] = Counter()
+    limit_exceeded_max = 0
+    for group_files in grouped.values():
+        current_files = [path for path in group_files if path.name == "current.ndjson"]
+        rotated_rows: list[tuple[int, Path]] = []
+        malformed = 0
+        for path in group_files:
+            if path.name == "current.ndjson":
+                continue
+            end_upper_ms = _event_segment_end_upper_ms(path)
+            if end_upper_ms is None:
+                malformed += 1
+                continue
+            rotated_rows.append((end_upper_ms, path))
+        if malformed:
+            issue_counts["event_segment_name_unparseable"] += malformed
+            continue
+        if len(current_files) != 1:
+            issue_counts[
+                "current_event_segment_missing"
+                if not current_files
+                else "current_event_segment_duplicated"
+            ] += 1
+            continue
+
+        rotated_rows.sort(key=lambda item: (item[0], item[1].name))
+        predecessor_indexes = [
+            index
+            for index, (end_upper_ms, _path) in enumerate(rotated_rows)
+            if end_upper_ms < since_ms
+        ]
+        if not predecessor_indexes:
+            issue_counts["event_window_start_coverage_unavailable"] += 1
+            continue
+
+        first_overlap_index = predecessor_indexes[-1] + 1
+        group_selected: list[Path] = []
+        end_covered = False
+        for end_upper_ms, path in rotated_rows[first_overlap_index:]:
+            group_selected.append(path)
+            if end_upper_ms >= until_ms:
+                end_covered = True
+                break
+        if not end_covered:
+            group_selected.append(current_files[0])
+        if len(group_selected) > max_files_per_bot:
+            issue_counts["event_window_segment_limit_exceeded"] += 1
+            limit_exceeded_max = max(limit_exceeded_max, len(group_selected))
+            continue
+        selected.extend(group_selected)
+
+    selected = sorted(set(selected), key=lambda path: (str(path.parent), path.name))
+    candidate_files_selected = len(selected)
+    selected_scan_bytes = 0
+    size_failed = False
+    for path in selected:
+        scan_bytes = _event_segment_scan_bytes(path)
+        if scan_bytes is None:
+            size_failed = True
+        else:
+            selected_scan_bytes += scan_bytes
+    if size_failed:
+        issue_counts["event_window_segment_size_failed"] += 1
+    if candidate_files_selected > max_total_files:
+        issue_counts["event_window_total_file_limit_exceeded"] += 1
+    if selected_scan_bytes > max_total_bytes:
+        issue_counts["event_window_total_byte_limit_exceeded"] += 1
+    if (
+        size_failed
+        or candidate_files_selected > max_total_files
+        or selected_scan_bytes > max_total_bytes
+    ):
+        selected = []
+
+    issues = [
+        {"code": code, "severity": "error", "count": int(count)}
+        for code, count in sorted(issue_counts.items())
+    ]
+    report = {
+        "enabled": True,
+        "complete": not issues and len(grouped) > 0,
+        "strategy": "rotation_end_overlap_with_predecessor",
+        "rotation_end_granularity_ms": EVENT_SEGMENT_END_GRANULARITY_MS + 1,
+        "groups": len(grouped),
+        "files_before_selection": len(files),
+        "candidate_files_selected": candidate_files_selected,
+        "candidate_scan_bytes": selected_scan_bytes,
+        "files_selected": len(selected),
+        "files_skipped": max(0, len(files) - len(selected)),
+        "max_files_per_bot": int(max_files_per_bot),
+        "max_total_files": int(max_total_files),
+        "max_total_bytes": int(max_total_bytes),
+        "limit_exceeded_max_files": int(limit_exceeded_max),
+        "issue_counts": dict(sorted(issue_counts.items())),
+    }
+    return selected, report, issues
+
+
 def _scan_events(
     root: str | Path,
     *,
@@ -8245,8 +8537,13 @@ def _scan_events(
     until_ms: int | None = None,
     event_tail_lines: int = 0,
     max_event_files_per_bot: int = 0,
+    select_segments_for_window: bool = False,
+    max_window_event_files_per_bot: int = 0,
+    max_window_event_files_total: int = 0,
+    max_window_event_bytes_total: int = 0,
 ) -> dict[str, Any]:
     issues: list[dict[str, Any]] = []
+    segment_selection: dict[str, Any] | None = None
     file_discovery: dict[str, Any] = {
         "candidate_files": 0,
         "event_segments": 0,
@@ -8265,6 +8562,35 @@ def _scan_events(
         files = []
         issues.append(
             _monitor_issue(str(root), None, "error", "path_not_found", str(exc))
+        )
+    if select_segments_for_window:
+        if not include_rotated:
+            raise ValueError(
+                "window-aware event segment selection requires include_rotated=True"
+            )
+        if type(since_ms) is not int or type(until_ms) is not int:
+            raise ValueError(
+                "window-aware event segment selection requires exact since_ms and until_ms"
+            )
+        files, segment_selection, selection_issues = (
+            _select_event_segments_for_window(
+                files,
+                since_ms=since_ms,
+                until_ms=until_ms,
+                max_files_per_bot=max_window_event_files_per_bot,
+                max_total_files=max_window_event_files_total,
+                max_total_bytes=max_window_event_bytes_total,
+            )
+        )
+        issues.extend(
+            _monitor_issue(
+                str(root),
+                None,
+                str(issue["severity"]),
+                str(issue["code"]),
+                f"affected_count={int(issue['count'])}",
+            )
+            for issue in selection_issues
         )
     if not files and not issues:
         issues.append(
@@ -8295,7 +8621,11 @@ def _scan_events(
             "hard_problem_events": 0,
         }
     )
-    problem_events: deque[dict[str, Any]] = deque(maxlen=max(0, int(max_problem_events)))
+    problem_event_limit = max(0, int(max_problem_events))
+    problem_events: deque[dict[str, Any]] = deque(maxlen=problem_event_limit)
+    hard_problem_events: deque[dict[str, Any]] = deque(
+        maxlen=problem_event_limit
+    )
     problem_records: list[dict[str, Any]] = []
     time_sync_recoveries: list[dict[str, Any]] = []
     invalid_rows = 0
@@ -8352,6 +8682,7 @@ def _scan_events(
     risk_event_type_counts: Counter[str] = Counter()
     shutdown_event_groups: dict[tuple[Any, ...], dict[str, Any]] = {}
     shutdown_event_type_counts: Counter[str] = Counter()
+    shutdown_invalid_identity_events = 0
     problem_event_groups: dict[tuple[Any, ...], dict[str, Any]] = {}
     if max_event_file_count_per_bot and files:
         event_files_before_limit = len(files)
@@ -8727,15 +9058,22 @@ def _scan_events(
                         )
                     if event_type in SHUTDOWN_EVENT_TYPES:
                         shutdown_event_type_counts[str(event_type)] += 1
+                        shutdown_group = _shutdown_event_group(
+                            bot_key=bot_key,
+                            row=row,
+                            live_event=live_event,
+                            path=path,
+                            line_no=line_no,
+                        )
+                        if (
+                            event_type
+                            in {EventTypes.BOT_STOPPING, EventTypes.BOT_STOPPED}
+                            and shutdown_group.get("_identity_valid") is not True
+                        ):
+                            shutdown_invalid_identity_events += 1
                         _merge_shutdown_event_group(
                             shutdown_event_groups,
-                            _shutdown_event_group(
-                                bot_key=bot_key,
-                                row=row,
-                                live_event=live_event,
-                                path=path,
-                                line_no=line_no,
-                            ),
+                            shutdown_group,
                         )
                     level = live_event.get("level")
                     if level:
@@ -8813,9 +9151,14 @@ def _scan_events(
             problem_event["recovered"] = True
             problem_event["recovery"] = record.get("recovery")
         problem_events.append(problem_event)
+        if hard:
+            hard_problem_events.append(problem_event)
 
     error_count = sum(1 for issue in issues if issue.get("severity") == "error")
     warning_count = sum(1 for issue in issues if issue.get("severity") == "warning")
+    hard_problem_event_count = sum(
+        int(value["hard_problem_events"]) for value in bots.values()
+    )
     return {
         "monitor": {
             "root": str(Path(root).expanduser()),
@@ -8851,12 +9194,16 @@ def _scan_events(
             for key, value in sorted(bots.items())
         ],
         "problem_events": list(problem_events),
+        "hard_problem_events": {
+            "count": hard_problem_event_count,
+            "retained": len(hard_problem_events),
+            "truncated": max(0, hard_problem_event_count - len(hard_problem_events)),
+            "sample": list(hard_problem_events),
+        },
         "problem_event_groups": _summarize_problem_event_groups(problem_event_groups),
         "recovered_problem_events": recovered_problem_events,
         "problem_event_count": sum(int(value["problem_events"]) for value in bots.values()),
-        "hard_problem_event_count": sum(
-            int(value["hard_problem_events"]) for value in bots.values()
-        ),
+        "hard_problem_event_count": hard_problem_event_count,
         "startup_timings": _summarize_startup_timings(
             _startup_records_after_latest_started(
                 startup_timing_records,
@@ -8934,6 +9281,16 @@ def _scan_events(
         "shutdown_events": _summarize_shutdown_events(
             shutdown_event_groups,
             shutdown_event_type_counts,
+            invalid_identity_events=shutdown_invalid_identity_events,
+            coverage_complete=(
+                event_tail_limited_files == 0
+                and event_files_skipped_by_limit == 0
+                and invalid_window_ts == 0
+                and (
+                    segment_selection is None
+                    or segment_selection.get("complete") is True
+                )
+            ),
         ),
         "event_window": _event_window_report(
             since_ms=since_ms,
@@ -8953,6 +9310,7 @@ def _scan_events(
             event_file_limit_groups=event_file_limit_groups,
             event_files_before_limit=event_files_before_limit or len(files),
             event_files_skipped_by_limit=event_files_skipped_by_limit,
+            segment_selection=segment_selection,
         ),
     }
 
@@ -9245,6 +9603,10 @@ def build_live_smoke_report(
     max_log_files: int = 8,
     event_tail_lines: int = 0,
     max_event_files_per_bot: int = 0,
+    select_event_segments_for_window: bool = False,
+    max_window_event_files_per_bot: int = 0,
+    max_window_event_files_total: int = 0,
+    max_window_event_bytes_total: int = 0,
     log_tail_lines: int = 300,
     max_log_matches: int = 50,
     log_window_unparsed_policy: str = DEFAULT_LOG_WINDOW_UNPARSED_POLICY,
@@ -9258,6 +9620,10 @@ def build_live_smoke_report(
         until_ms=until_ms,
         event_tail_lines=event_tail_lines,
         max_event_files_per_bot=max_event_files_per_bot,
+        select_segments_for_window=select_event_segments_for_window,
+        max_window_event_files_per_bot=max_window_event_files_per_bot,
+        max_window_event_files_total=max_window_event_files_total,
+        max_window_event_bytes_total=max_window_event_bytes_total,
     )
     event_report = event_scan["monitor"]
     log_scan = _scan_logs(
@@ -9380,6 +9746,7 @@ def build_live_smoke_report(
         "shutdown_events": event_scan["shutdown_events"],
         "event_window": event_scan["event_window"],
         "problem_events": event_scan["problem_events"],
+        "hard_problem_events": event_scan["hard_problem_events"],
         "problem_event_groups": event_scan["problem_event_groups"],
         "recovered_problem_events": event_scan["recovered_problem_events"],
         "problem_event_count": event_scan["problem_event_count"],
@@ -9622,6 +9989,7 @@ def _summary_limited_groups(
                 "latest_worker_not_alive_count"
             ),
             "latest_stopping_count": summary.get("latest_stopping_count"),
+            "integrity": summary.get("integrity"),
             "latest_cpu_percent_max": summary.get("latest_cpu_percent_max"),
             "latest_cpu_reporting_bots": summary.get("latest_cpu_reporting_bots"),
             "latest_memory_percent_max": summary.get("latest_memory_percent_max"),
@@ -10184,6 +10552,11 @@ def summarize_live_smoke_report(
             or len(problem_group_rows) > max_groups,
             "groups": problem_group_rows[:max_groups],
         },
+        "hard_problem_events": _project_hard_problem_events(
+            report.get("hard_problem_events"),
+            fallback_count=hard_problem_event_count,
+            limit=max_groups,
+        ),
         "remote_calls": _summary_limited_groups(
             report.get("remote_call_health") or {},
             limit=max_groups,
@@ -10276,7 +10649,44 @@ def summarize_live_smoke_report(
         "shutdown_events": _summary_limited_groups(
             shutdown_events,
             limit=max_groups,
-        ),
+        )
+        | {
+            "lifecycle": {
+                "proof_scope": (shutdown_events.get("lifecycle") or {}).get(
+                    "proof_scope"
+                ),
+                "coverage_complete": (shutdown_events.get("lifecycle") or {}).get(
+                    "coverage_complete"
+                ),
+                "identity_complete": (shutdown_events.get("lifecycle") or {}).get(
+                    "identity_complete"
+                ),
+                "invalid_identity_events": _count_value(
+                    (shutdown_events.get("lifecycle") or {}).get(
+                        "invalid_identity_events"
+                    )
+                ),
+                "observed_bots": _count_value(
+                    (shutdown_events.get("lifecycle") or {}).get("observed_bots")
+                ),
+                "complete_bots": _count_value(
+                    (shutdown_events.get("lifecycle") or {}).get("complete_bots")
+                ),
+                "incomplete_bots": _count_value(
+                    (shutdown_events.get("lifecycle") or {}).get("incomplete_bots")
+                ),
+                "rows": ((shutdown_events.get("lifecycle") or {}).get("rows") or [])[
+                    :max_groups
+                ],
+                "rows_truncated": len(
+                    (shutdown_events.get("lifecycle") or {}).get("rows") or []
+                )
+                > max_groups
+                or bool(
+                    (shutdown_events.get("lifecycle") or {}).get("rows_truncated")
+                ),
+            }
+        },
     }
 
 
@@ -10285,6 +10695,62 @@ def _count_value(value: Any) -> int:
         return int(value)
     except (TypeError, ValueError):
         return 0
+
+
+def _project_hard_problem_events(
+    value: Any,
+    *,
+    fallback_count: Any,
+    limit: int,
+) -> dict[str, Any]:
+    """Keep a bounded, compact hard-event sample in report projections."""
+
+    source = value if isinstance(value, dict) else {}
+    count = max(0, _count_value(source.get("count")))
+    if not count:
+        count = max(0, _count_value(fallback_count))
+    sample = source.get("sample")
+    rows = sample if isinstance(sample, list) else []
+    safe_keys = (
+        "path",
+        "line",
+        "ts",
+        "seq",
+        "event_type",
+        "level",
+        "status",
+        "reason_code",
+        "exchange",
+        "user",
+        "symbol",
+        "pside",
+        "ids",
+        "latest_data",
+        "hard",
+        "recovered",
+        "recovery",
+    )
+    compact_rows: list[dict[str, Any]] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        compact: dict[str, Any] = {}
+        for key in safe_keys:
+            if key not in row:
+                continue
+            safe_value = _compact_problem_event_data_value(row.get(key))
+            if safe_value not in (None, "", [], {}):
+                compact[key] = safe_value
+        if compact:
+            compact_rows.append(compact)
+    retained_sample = compact_rows[-max(0, int(limit)) :] if limit else []
+    retained = len(retained_sample)
+    return {
+        "count": count,
+        "retained": retained,
+        "truncated": max(0, count - retained),
+        "sample": retained_sample,
+    }
 
 
 def _brief_remote_call_slowest(summary: dict[str, Any]) -> list[dict[str, Any]]:
@@ -11205,6 +11671,11 @@ def summarize_live_smoke_report_brief(report: dict[str, Any]) -> dict[str, Any]:
             "non_hard": max(0, problem_event_count - hard_problem_event_count),
         }
         | _brief_problem_event_groups(report.get("problem_event_groups")),
+        "hard_problem_events": _project_hard_problem_events(
+            report.get("hard_problem_events"),
+            fallback_count=hard_problem_event_count,
+            limit=SMOKE_REPORT_BRIEF_PROBLEM_GROUP_LIMIT,
+        ),
         "remote_calls": _brief_remote_call_health(report.get("remote_call_health")),
         "account_critical_remote_calls": _brief_remote_call_health(
             report.get("account_critical_remote_call_health")
@@ -11443,6 +11914,7 @@ def summarize_live_smoke_report_brief(report: dict[str, Any]) -> dict[str, Any]:
                 "latest_stopping_count": _count_value(
                     event_pipeline_health.get("latest_stopping_count")
                 ),
+                "integrity": event_pipeline_health.get("integrity"),
                 "event_types": event_pipeline_health.get("event_types") or {},
             }.items()
             if value is not None
@@ -11505,6 +11977,10 @@ def summarize_live_smoke_report_brief(report: dict[str, Any]) -> dict[str, Any]:
         "shutdown_events": {
             "total": _count_value(shutdown_events.get("total")),
             "event_types": shutdown_events.get("event_types") or {},
+            "lifecycle": {
+                key: _count_value((shutdown_events.get("lifecycle") or {}).get(key))
+                for key in ("observed_bots", "complete_bots", "incomplete_bots")
+            },
         },
     }
 

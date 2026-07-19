@@ -1,6 +1,6 @@
 # Live Logging Overhaul Current Status
 
-Updated: 2026-07-17.
+Updated: 2026-07-18.
 
 This is the compact operational source for the active logging-overhaul loop.
 Read it before the historical progress ledger. Update it whenever the active
@@ -22,40 +22,270 @@ Estimated completion:
 
 ## Active Review Slice
 
-- Branch: `codex/restart-executor-runtime-contract`, based on canonical
-  `7b833471c1e770ceb8650a4c3b395713b6a76dcb` after PR #1297.
-- PR: #1298, `Bind live restart execution to repository runtime`. Slice: bind
-  the local restart executor to the intended repository and compiled Rust
-  runtime before any process action.
-- Triggering evidence: PR #1297 proved exact local stop/relaunch mechanics but
-  did not verify that the executor was running from the intended clean commit
-  or that the importable Rust extension matched that checkout's Rust sources.
-- Scope: require an exact expected 40-character repository head, zero tracked
-  changes, and an exact Rust source-fingerprint stamp; repeat the contract
-  immediately before the first signal and before relaunch; preserve untracked
-  artifacts and keep paths and launch commands out of the report.
-- Behavior boundary: local restart/deploy behavior. The executor does not SSH,
-  pull/build code, contact exchanges directly, write files directly, use broad
-  process-pattern signals, or apply automatic SIGTERM/SIGKILL. Relaunched live
-  bots resume their configured exchange access and normal runtime file writes.
-- Validation: focused runtime-contract, executor, target-report, planner,
-  smoke-report, CLI, secrecy, timeout, duplicate-process, TOCTOU, compilation,
-  and docs regressions.
-- Review gate: temporary maintainer-authorized exact-head Hermes plus green
-  Python and Rust CI while Grok is halted.
-- Expected VPS action: pull and exercise only the executor's fail-closed
-  pre-action contract with a deliberately wrong expected head; leave running
-  bots unchanged.
+- Branch: `codex/historical-runtime-attribution`, merged with canonical
+  `fc9dad83cd3ecf51cae15e8dda66afb7cfb895a1` at
+  `d351cd2c7f489ff56edaf2679e16aff6a57e5bb6`.
+- PR: #1315.
+- Scope: bounded, read-only local attribution of fill caches and monitor fill
+  history to recorded first-ingestion provenance and non-proving runtime-window
+  candidates.
+- Behavior boundary: offline attribution tool, CLI wiring, docs, and tests only.
+  No trading, exchange, runtime producer, order, risk, config, restart, or
+  process behavior changes.
+- Validation: focused attribution and CLI tests must preserve legacy fills as
+  unattributed, recognize canonical `first_ingested_by_runtime` provenance, and
+  retain bounded, fail-closed scans.
+- Review gate: current-head review is pending on the final integrated branch
+  after its documentation evidence is committed.
+- Expected VPS action: tracked-clean pull plus a bounded read-only attribution
+  smoke after merge. The tool is local-only and does not require a bot restart.
 
 ## Deployed Baseline
 
+- PR #1321 deployed as canonical
+  `fc9dad83cd3ecf51cae15e8dda66afb7cfb895a1`. It completes distinct latest
+  shutdown lifecycle diagnostics without changing event producers, trading, or
+  process behavior.
+- VPS5 fast-forwarded tracked-clean at `fc9dad83`; bot PIDs
+  `1044483/1044492/1044486/1044495/1044489` were unchanged, and protected
+  `misc:0.0` remained pane `%8`/PID `434835`.
+- The initial smoke retained four natural KuCoin degraded cycles/timeouts rather
+  than hiding them. The settled two-minute smoke was `ok=true` with
+  `hard_failures=0`, `44/44` account-critical calls and `243/243` remote calls
+  successful, and five configured processes stable.
+- This was diagnostics-only: no Rust build, bot restart, signal, direct exchange
+  call, or event was manufactured.
+
+## Previous Deployed Baseline (PR #1314)
+
+- PR #1314 merged as canonical `0dbfbca74b029353a0e11888e71077fa711835ff`.
+  It records immutable runtime/Rust/config provenance and fill-to-runtime
+  attribution without changing strategy, order, risk, or exchange behavior.
+  PR #1319 had already merged as `84c8e040334820ccc049787c82048358e18179c6`
+  with its offline fake-live shutdown-clock repair and required no VPS action.
+- VPS5 fast-forwarded tracked-clean from `eb82e256c2` to the exact PR #1314
+  merge. A deliberately wrong Rust fingerprint failed closed before build or
+  signal. The exact target-derived fingerprint
+  `691bff9683deec9382a4e96ab6a107c14145f88edd6ae2f8e2380b8ba6824449`
+  then rebuilt and verified the loaded extension after restoring the explicit
+  `/root/.cargo/bin` non-login PATH.
+- The guarded runner stopped, exited, relaunched, and verified all five exact
+  panes without force. Bot PIDs
+  `1042130/1042139/1042133/1042142/1042136` became
+  `1044483/1044492/1044486/1044495/1044489`. The exact
+  `1784414260464..1784414921350` window selected 10/1,011 event segments and
+  `73414648` bytes with complete lifecycle, repository, target, monitor, and
+  text-log evidence, but correctly remained red on one natural KuCoin
+  authoritative-refresh `RequestTimeout` at `1784414448511`.
+- KuCoin subsequently emitted readiness evidence and successful authoritative
+  calls without intervention. The exact settled
+  `1784414681768..1784415199226` report was hard-green with zero hard problem
+  events, log matches, monitor errors, or process failures. Final target
+  sampling was 3/3 stable with states `R=3,S=2`, no extras or issues, and
+  protected `misc:0.0` remained `%8`/PID `434835`. No direct exchange request
+  or event was manufactured.
+
+## Previous Deployed Baseline (PRs #1318 And #1317)
+
+- PR #1318 merged as canonical `8ca7f034bce7ffaaa99800590c88651de4d267c5`.
+  It adds bounded redacted structured-event artifacts and post-panic planning
+  availability proof to the offline fake-live harness. No VPS action was
+  warranted because it changes no live producer, runtime, exchange, order,
+  risk, or configuration behavior.
+- PR #1317 merged as canonical `eb82e256c2dfeac29af158f389f93a7ddba8eae2`.
+  It adds bounded Hyperliquid unified-account composition diagnostics without
+  changing scalar balance, exchange calls, planning, orders, risk, or console
+  admission.
+- VPS5 fast-forwarded tracked-clean from `e7fe7f79` without a Rust rebuild.
+  The exact panes `%358`-`%362` gracefully restarted without force; old PIDs
+  `1040903/1040911/1040905/1040914/1040908` became
+  `1042130/1042139/1042133/1042142/1042136`.
+- The exact `1784407239491..1784407888217` window selected 10/1,011 event
+  segments totaling `72553076` bytes, retained all five
+  stopping/stopped/startup cohorts, and had zero hard, monitor, text-log,
+  repository, or target failures. Delayed 3/3 sampling recovered one transient
+  GateIO `D` observation to final `R=4,S=1`, with five stable PIDs and no extras
+  or issues. Protected `misc:0.0` stayed `%8`/PID `434835`. No direct exchange
+  call or event was manufactured.
+
+## Previous Deployed Baseline (PR #1316)
+
+- PR #1316 merged as canonical `e7fe7f796fb76a829003933dc7e5d937c6df8c64`.
+  It adds bounded Binance CCXT unified composition diagnostics while preserving
+  scalar balance, exchange-call, planning, order, risk, and console-admission
+  behavior.
+- VPS5 fast-forwarded tracked-clean from `a0db60f9` without a Rust rebuild.
+  The exact panes `%358`-`%362` gracefully restarted without force; old PIDs
+  `1038760/1038769/1038763/1038772/1038766` became
+  `1040903/1040911/1040905/1040914/1040908`.
+- The exact `1784404124757..1784404777859` window selected 7/1,012 event files
+  totaling `19420705` bytes, retained five stopping/stopped/startup cohorts, and
+  had zero hard, monitor, or text-log issues. Delayed target sampling was 3/3
+  with `R=4,S=1` and no extras; `misc:0.0` stayed `%8`/PID `434835`. No direct
+  exchange call or event was manufactured.
+
+## Previous Deployed Baseline (PR #1313)
+
+- PR #1313 merged as canonical `a0db60f9ca97dbc5b9b37aa3230fce97eb0917ce`.
+  It adds the bounded OKX-first balance-composition diagnostic and preserves
+  scalar balance, exchange-call, planning, order, risk, and console-admission
+  behavior.
+- VPS5 fast-forwarded cleanly from `32156cbc`. The first guarded preparation
+  failed closed after the repository move because the caller supplied a Rust
+  fingerprint from a different local untracked `Cargo.lock`; no bot was
+  signalled. A same-head target-derived proof then passed with no Rust rebuild
+  and exact source/stamp/runtime-artifact agreement.
+- The authorized exact-pane executor gracefully stopped, exited, relaunched,
+  and verified only `%358/%359/%360/%361/%362`; old bot PIDs
+  `1036076/1036085/1036080/1036088/1036082` became
+  `1038760/1038769/1038763/1038772/1038766` with no force signal. The exact
+  lifecycle window `1784401342000..1784402056447` selected 6/1,011 managed
+  segments totaling `39263703` bytes, retained all five stopping/stopped/startup
+  cohorts, and returned zero hard, monitor, text-log, repository, or target
+  failures. A wider pre-action window correctly retained one earlier natural
+  KuCoin `RequestTimeout` instead of hiding it.
+- A natural post-restart OKX `balance.changed` event carried two bounded
+  connector-proven asset rows with no raw payload. Final targets remained 3/3
+  stable and exact, the checkout remained tracked-clean, and protected
+  `misc:0.0` stayed `%8`/PID `434835`. No direct exchange request or event was
+  manufactured.
+- The merge is the exact base for this slice.
+
+## Previous Deployed Baseline
+
+- PR #1311 merged as canonical `32156cbc251d666902f20b8b000a9a1dfe05a0a2`.
+  It carries bounded hard-only problem evidence into smoke summary, brief, and
+  incident-bundle metadata without changing runtime event production or
+  trading behavior. VPS5 prepared the exact clean merge without a Rust rebuild
+  or bot restart; one immediate natural KuCoin positions timeout was retained,
+  the settled smoke was hard-green, and all five bot panes plus `misc:0.0`
+  remained unchanged.
+- PR #1310 merged as canonical `5d06887b78c2790efd15e1bd67bae6b3f5d96636`.
+  It added full-report `hard_problem_events` with authoritative `count`,
+  bounded chronological `sample`, and explicit `retained`/`truncated` counts;
+  the concise/brief and incident-bundle projections were unchanged. VPS5
+  prepared the exact clean merge without a Rust rebuild or bot restart, and a
+  bounded read-only smoke was hard-green with
+  `hard_problem_events={count:0,retained:0,truncated:0,sample:[]}`; all five
+  pane parents and `misc:0.0` remained unchanged.
 - Canonical `master` and VPS5 are
-  `7b833471c1e770ceb8650a4c3b395713b6a76dcb`, PR #1297. VPS5 fast-forwarded
-  cleanly from `0f366b6f` without a restart or process signal. The executor CLI
-  and help loaded successfully; a post-deploy 3/3 target report was hard-green
-  with all five exact targets relaunch-ready, zero issues, and the same private
-  command fingerprint. Bot PIDs `1015403/1015406/1015410/1015412/1015414`, pane
-  parents, and unrelated `misc:0.0` PID `434835` remained unchanged.
+  `f1ae7970393e8299d1b0a98c8ff68d42adddd2d0` after PR #1299. The clean
+  checkout fast-forwarded from PR #1309 without a Rust rebuild after five
+  targets passed 3/3 stable preflight samples with no extras or issues. The
+  authorized exact-pane restart stopped, exited, relaunched, and verified all
+  five targets without force. Its bounded
+  `1784392681320..1784393372572` window selected 10/1,011 managed segments
+  totaling `66399577` bytes, recovered all five stopping, stopped, and startup
+  cohorts, and returned zero hard, monitor, text-log, repository, or target
+  failures. The checkout remained exact and tracked-clean; all five pane
+  parents and protected `misc:0.0` `%8`/PID `434835` remained stable. No direct
+  exchange probe or event was manufactured.
+- PR #1309 merged as
+  `50c37db6049206634b62f45798a8b240a035e3b5` after exact-current-head Hermes
+  approval and green Python/Rust CI. It removed raw exception text from
+  `sink.degraded` while preserving stable sink and exception classifications.
+  VPS5 prepared the exact merge without a Rust rebuild and gracefully restarted
+  all five exact panes. The bounded `1784339097380..1784339763543` window
+  recovered complete shutdown/startup cohorts and left every bot running, but
+  correctly remained red on two hard structured problem events including a
+  real KuCoin positions-fetch `RequestTimeout`. Only one hard classification
+  remained visible in the bounded mixed sample, exposing the active
+  hard-evidence-retention follow-up. Repository, target, monitor, and text-log
+  gates stayed green, tracked state stayed clean, and `misc:0.0` remained
+  unchanged.
+- Canonical `master` and VPS5 are
+  `9a5e3585d0c5641a14c2c359acd01e7f3e74bf7d` after PR #1308. Exact-head Hermes
+  and Python/Rust CI were green. Exact repository preparation fast-forwarded
+  cleanly without a Rust rebuild, and independent preflight resolved all five
+  targets with 3/3 stable samples and no extras or issues. The authorized
+  restart stopped, exited, relaunched, and verified all five exact panes without
+  force. Its bounded `1784335954292..1784336611652` window selected 6/1,012
+  managed segments totaling `21328854` bytes, recovered all five shutdown and
+  startup cohorts, and returned zero hard, monitor, text-log, or target
+  failures. All five bots remained stable, the checkout stayed exact and clean,
+  and `misc:0.0` retained its pre-restart pane/PID identity. No direct exchange
+  probe or event was manufactured.
+- Canonical `master` and VPS5 are
+  `8aefdbc82339b756ff642e726ae0924d5ca8774d` after PR #1307. Exact-head Hermes
+  and Python/Rust CI were green. Exact repository preparation fast-forwarded
+  cleanly without a Rust rebuild; independent preflight resolved all five
+  targets with 3/3 stable samples and no extras or issues.
+- The merged orchestrator gracefully stopped, observed exit, relaunched, and
+  verified all five exact targets with no force signal. The bounded window
+  `1784332307933..1784332994590` selected 6/1,012 managed event segments
+  totaling `19335163` projected bytes and recovered five stopping, five stopped,
+  and five startup cohorts. Repository, target, monitor, and text-log gates were
+  green, but smoke correctly remained red on one real KuCoin positions-fetch
+  `RequestTimeout`; a second later timeout showed recovery was not yet proven.
+  All bots were left running. Pane parents stayed unchanged, tracked state
+  stayed clean, and `misc:0.0` remained `%8`, PID `434835`. No direct exchange
+  probe or event was manufactured. The retained raw exception string exposed
+  the active redaction follow-up.
+- Canonical `master` and VPS5 are
+  `0d1b06b82f3bab011e29a350b4a5276c2ebd5356` after PR #1306. Exact-head Hermes
+  and Python/Rust CI were green. VPS5 first fast-forwarded to make the
+  repository-preparation tool available, without a bot restart or signal. Its
+  same-head execution returned green with no repository move or Rust build and
+  exact source/stamp/final fingerprints; a valid but wrong target commit failed
+  with `fetched_target_head_mismatch` before any build. All five configured pane
+  parents and unrelated `misc:0.0` remained unchanged, and tracked state stayed
+  clean.
+- PR #1305 previously deployed at
+  `300fdd703fee9e1ce0e9c54df43bb7b1dcb858d8`. Exact-head Hermes
+  and Python/Rust CI were green. VPS5 fast-forwarded without a bot restart or
+  signal. The merged collector selected 10/1,008 managed event segments for the
+  exact retained bounds `1784316350000..1784317500000`, projected
+  `131834602` scan bytes under the 128 MiB cap, and recovered five stopping,
+  five stopped, and five startup cohorts with zero hard failures. A malformed
+  expected head exited 2 before collection. All five bot pane parents stayed
+  `856294/856332/856364/856398/856434`, tracked state stayed clean, and
+  `misc:0.0` remained `%8`, PID `434835`.
+- PR #1303 previously deployed at
+  `9e8d1343e0f1f43fc3207d611a8b06d88af8b6c0`. Its first complete-archive
+  collector run was interrupted after more than ten CPU-active minutes by
+  exact collector PID only. A read-only prototype selected 10/1,012 segments
+  and recovered the complete lifecycle in 37.3 seconds, triggering PR #1305.
+- PR #1302 previously deployed at
+  `0b5503b2a9ee4817618b7aca25dab417af4292dd`. The retained PR #1296 window
+  evaluated green with exact bounds `1784316350000..1784317500000`; a
+  one-millisecond mismatch and one dropped hard-looking line each failed with
+  `log_scan_invalid` while panes and `misc:0.0` remained unchanged.
+- PR #1301 previously deployed at
+  `46a28795dec40acbee0dbaa3602be955bbecf23e`. Exact-head Hermes
+  and Python/Rust CI were green. VPS5 fast-forwarded without a restart or
+  signal. The exact PR #1296 shutdown-through-startup window evaluated green
+  with 3/3 stable targets, five stopping/stopped lifecycles, startup timing for
+  five bots, 24 bounded monitor segments, eight text logs, and zero hard
+  failures. A wider three-hour report correctly evaluated red on 30 real hard
+  events. Final pane parents and bot PIDs were unchanged; the checkout remained
+  tracked-clean and `misc:0.0` remained `%8`, PID `434835`. Validation exposed
+  the lossy timestamp projection addressed by the active follow-up.
+- PR #1300 previously deployed at
+  `e1a4837914c1e4768cd7963bba47212499d32937`. Exact-head Hermes
+  and Python/Rust CI were green. VPS5 fast-forwarded without a restart or
+  signal; a deliberately wrong expected Rust fingerprint failed before target
+  sampling with `action_started=false`, and the final 3/3 target report retained
+  the same five PIDs, zero extras or issues, and exact states `R=3,S=2`.
+  Repository state stayed tracked-clean and unrelated `misc:0.0` remained `%8`,
+  PID `434835`.
+- PR #1296 previously fast-forwarded VPS5 cleanly from `4a7a6753` and the
+  exact local executor gracefully restarted only panes
+  `%358/%359/%360/%361/%362`. Old PIDs
+  `1015403/1015406/1015410/1015412/1015414` exited; replacement PIDs
+  `1019670/1019679/1019673/1019681/1019676` retained the same pane parents and
+  private supervisor fingerprint. The executor and independent settled target
+  reports were hard-green with 3/3 stable samples, all five targets
+  relaunch-ready, zero extras or duplicates, and zero issues. VPS5 remained
+  tracked-clean; unrelated `misc:0.0` remained `%8`, PID `434835`. No direct
+  exchange probe or event was manufactured.
+- PR #1298 merged as `4a7a6753bff00f9b8749d9707f9bdccc4b3a5ffc`. Exact-head Hermes and
+  both CI jobs were green. VPS5 fast-forwarded cleanly from `7b833471` without a
+  restart or process signal. A deliberately wrong expected head returned exit
+  1 with `action_started=false`, no target preflight, zero tracked changes, and
+  a source-matched Rust extension. The post-deploy 3/3 target report was
+  hard-green with all five unchanged bot PIDs relaunch-ready, exact states
+  `R=3,S=2`, zero issues, and the unchanged private command fingerprint.
+  Unrelated `misc:0.0` remained `%8`, PID `434835`.
 - PR #1294 first
   fast-forwarded cleanly as `3de024c76d5c07bda2b4e64400c1a204d6be38a8`
   and produced a hard-green 3/3 stable target report with all five targets,
@@ -1192,9 +1422,11 @@ with five stable exact processes and recovered uninterruptible observations.
 PR #1286's aggregate-only follow-up, PR #1287's exact tmux target preflight,
 PR #1288's bounded target-identity stability, and PR #1289's plan binding are
 merged, deployed, and naturally validated without process control. PR #1290's
-pane-parent relaunch classification is also merged and deployed. The active
-`codex/restart-target-contract-fingerprint` slice binds target stability to the
-parsed supervisor command contract without exposing or executing commands.
+pane-parent relaunch classification and the restart preparation/orchestration
+slices through PR #1309 are also merged and deployed. Current VPS5 is hard-green
+at canonical `f1ae7970393e8299d1b0a98c8ff68d42adddd2d0`. The active
+`codex/hard-problem-evidence` slice makes every nonzero hard smoke verdict
+diagnosable from a separately bounded hard-only sample.
 
 Do not create progress-only PRs or resume unrelated logging work from stale
 worktrees.

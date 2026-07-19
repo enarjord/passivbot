@@ -10,6 +10,10 @@ import passivbot_rust as pbr
 from ccxt.base.errors import RateLimitExceeded
 
 from exchanges.ccxt_bot import CCXTBot, format_exchange_config_response
+from live.balance_composition import (
+    malformed_balance_composition,
+    normalize_hyperliquid_unified_balance_composition,
+)
 from passivbot import logging
 from passivbot_exceptions import FatalBotException
 from utils import symbol_to_coin, ts_to_date, utc_ms
@@ -677,6 +681,10 @@ class HyperliquidBot(CCXTBot):
                 return _validate_total(row.get("total"))
         raise KeyError(f"unified Hyperliquid balance payload missing total for {self.quote}")
 
+    def _normalize_balance_diagnostics(self, fetched: object) -> dict:
+        """Expose only bounded totals from a proven unified balance payload."""
+        return normalize_hyperliquid_unified_balance_composition(fetched)
+
     def _hl_position_unrealized_pnl(self, position: dict) -> float:
         """Exchange-reported unrealized PnL for a CCXT Hyperliquid position payload.
 
@@ -922,6 +930,14 @@ class HyperliquidBot(CCXTBot):
                     out["positions"] = positions
                 if "balance" in plan:
                     out["balance"] = balance
+                    try:
+                        out["balance_composition"] = self._normalize_balance_diagnostics(
+                            _raw_snapshot["balance"]
+                        )
+                    except Exception:
+                        out["balance_composition"] = malformed_balance_composition(
+                            source="normalizer", reason="normalizer_error"
+                        )
             elif key == "open_orders":
                 out["open_orders"] = result
             elif key == "fills":
