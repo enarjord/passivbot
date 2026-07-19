@@ -552,6 +552,7 @@ def to_ccxt_exchange_id(exchange: str) -> str:
 
     Examples:
     - "binance" -> "binanceusdm"
+    - "gateio"  -> "gate"
     - "kucoin"  -> "kucoinfutures"
     - "kraken"  -> "krakenfutures"
 
@@ -562,9 +563,10 @@ def to_ccxt_exchange_id(exchange: str) -> str:
     ex = (exchange or "").lower()
     valid = set(getattr(ccxt, "exchanges", []))
 
-    # Explicit mapping for known special case
-    if ex == "binance":
-        return "binanceusdm"
+    # Explicit mappings for canonical names whose CCXT ids differ.
+    explicit_ids = {"binance": "binanceusdm", "gateio": "gate"}
+    if ex in explicit_ids:
+        return explicit_ids[ex]
 
     # If already a futures/perp id, keep as-is
     if ex.endswith("usdm") or ex.endswith("futures"):
@@ -585,12 +587,16 @@ def to_standard_exchange_name(exchange: str) -> str:
 
     Examples:
     - "binanceusdm" -> "binance"
+    - "gate" -> "gateio"
     - "kucoinfutures" -> "kucoin"
     - "krakenfutures" -> "kraken"
 
     If the exchange doesn't have a known suffix, returns it unchanged.
     """
     ex = (exchange or "").lower()
+
+    if ex == "gate":
+        return "gateio"
 
     # Remove known futures suffixes
     for suffix in ("usdm", "futures"):

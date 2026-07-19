@@ -4,6 +4,10 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Gate.io live startup now resolves the canonical `gateio` name to CCXT
+  4.5.66's `gate` REST and WebSocket client id while retaining `gateio` for
+  user-facing configuration, caches, and logs.
+
 - Window-bounded live smoke collection now accepts a monitor with only
   `current.ndjson` when the bounded monitor manifest proves that segment covers
   the requested window start; missing or invalid coverage evidence still fails
