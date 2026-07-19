@@ -4,6 +4,14 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Trailing-position fill confirmation now treats exchange position-update
+  timestamps as advisory and proves readiness with a successful post-position
+  fill refresh, a new fill identity for runtime changes, and matching fill
+  after-state. This prevents Bybit's later `updatedTime` from leaving valid
+  trailing positions permanently nontradable. Repeated unavailable warnings are
+  bounded, and monitor market state now exposes the actual planner tradability
+  plus fill-confirmation predicates and watermarks.
+
 - `passivbot tool runtime-attribution` now reconciles the producer's exact
   12-character lowercase-hex startup-log run-id prefix with one complete
   manifest or startup-event identity when exchange, user, prefix, and start time
