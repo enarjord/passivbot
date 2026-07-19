@@ -48,8 +48,10 @@ All notable user-facing changes will be documented in this file.
   freshness summary when that surface is required. The summary is derived only
   from the frozen planning signature and reports expected/real close ages plus
   bounded tail-gap fallback counts; `live-performance-report` validates and
-  aggregates the same proof. It does not reread candles or change planning,
-  exchange access, orders, strategy, or risk behavior.
+  aggregates the same proof. Public row-count fields avoid secret-key redaction
+  so the persisted evidence remains machine-readable. It does not reread
+  candles or change planning, exchange access, orders, strategy, or risk
+  behavior.
 
 - `passivbot tool hsl-replay-benchmark` now reports exclusive timing profiles
   for fixture construction, replay internals, final-state projection, candidate

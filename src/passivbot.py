@@ -9824,7 +9824,7 @@ class Passivbot:
 
         signature = snapshot.completed_candle_signature
         rows = list(signature) if isinstance(signature, (list, tuple)) else []
-        signature_row_count = len(rows)
+        source_row_count = len(rows)
         invalid_row_count = 0 if isinstance(signature, (list, tuple)) else 1
         expected_close_ages = []
         real_close_ages = []
@@ -9896,7 +9896,7 @@ class Passivbot:
         result = {
             "required": True,
             "timeframe": "1m",
-            "signature_row_count": signature_row_count,
+            "source_row_count": source_row_count,
             "valid_row_count": len(expected_close_ages),
             "invalid_row_count": int(invalid_row_count),
             "tail_gap_fallback_count": int(fallback_count),
