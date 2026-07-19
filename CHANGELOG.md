@@ -4,6 +4,13 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- `live-smoke-report` now includes bounded monitor `scan_cost` metadata in
+  full, summary, and brief output, matching the elapsed time, successfully
+  read files and records, read methods, and physical-versus-decoded byte
+  semantics exposed by the event query and performance report. This is
+  diagnostic-only and does not change smoke verdicts, event selection,
+  parsing, logs, process inspection, exchange access, or live behavior.
+
 - `live-event-query` and `live-performance-report` now include bounded
   `scan_cost` metadata for elapsed artifact-scan time, successfully read files
   and records, read methods, and physical versus decoded byte totals. Explicit

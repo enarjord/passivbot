@@ -15,7 +15,28 @@ merge, live smoke evidence changes, or new gaps are discovered.
 - Do not use this file for design churn; unresolved design details belong in the
   plan or a focused handoff doc.
 
-## Latest Canonical Deployment (PR #1335)
+## Latest Canonical Deployment (PR #1333)
+
+- PR #1333 merged exact reviewed head
+  `ce5a24d72ea811c6b04a376bbd9fcd228ab4c9af` as canonical
+  `e0927ed86f0b10ed8187d8e6a523017baefb98b3` after exact-head Hermes and
+  built-in Codex reviews plus green Python/Rust CI. VPS5 fast-forwarded
+  tracked-clean from `02fb43f639` without a Rust build; the Rust source
+  fingerprint/stamp remained unchanged.
+- The bounded five-minute event query reported five files, 8,133 records,
+  13,926,420 known physical/decoded bytes, and 4,793.586 ms. The matching
+  performance report reported six files, 8,661 records, 14,740,828 known
+  physical/decoded bytes, and 4,781.454 ms with zero errors/warnings. Both
+  reports were `ok=true` and used only bounded `seek_tail` reads.
+- No bot restart or signal was required. Bot PIDs
+  `1066081/1066091/1066084/1066093/1066087`, pane parents `%358`-`%362`, and
+  protected `misc:0.0` `%8`/PID `434835` remained unchanged; all five bots
+  were `Rl+` and the checkout remained tracked-clean. A bounded smoke-report
+  baseline took 4.29 seconds but exposed no byte/read-method cost, motivating
+  the active diagnostic-only `codex/live-smoke-scan-cost` slice. No direct
+  exchange call or event was manufactured.
+
+## Previous Canonical Deployment (PR #1335)
 
 - PR #1335 merged exact reviewed head
   `c4d5b8e55f6fd453fd707999ae74ec2dd127e55d` as canonical
