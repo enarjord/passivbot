@@ -20,6 +20,7 @@ import bisect
 import pprint
 import numpy as np
 import inspect
+from numbers import Integral
 import passivbot_rust as pbr
 import logging
 import math
@@ -371,6 +372,7 @@ from pure_funcs import (
 )
 
 ONE_MIN_MS = 60_000
+_COMPLETED_CANDLE_SYMBOL_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9:/._-]{0,159}")
 bot = None
 
 
@@ -7175,8 +7177,8 @@ class Passivbot:
         """Refresh live account state through the staged authoritative cohort."""
         return await state_refresh.refresh_authoritative_state_staged(self)
 
-    async def _capture_balance_staged_snapshot(self) -> tuple[object, float]:
-        """Fetch a single balance payload and its normalized value for staged refresh."""
+    async def _capture_balance_staged_snapshot(self) -> tuple[object, dict, float]:
+        """Fetch raw balance, bounded diagnostics, and its normalized value."""
         return await state_refresh.capture_balance_staged_snapshot(self)
 
     async def _capture_positions_staged_snapshot(self) -> tuple[object, list[dict]]:
@@ -9658,7 +9660,14 @@ class Passivbot:
             stage("positions", positions, raw_positions)
             stage("balance", balance, raw_balance)
         elif surface == "balance":
-            raw_balance, balance = result
+            if isinstance(result, (tuple, list)) and len(result) == 3:
+                raw_balance, _balance_composition, balance = result
+            elif isinstance(result, (tuple, list)) and len(result) == 2:
+                # Compatibility for exchange cohort hooks which still return
+                # the established raw/normalized balance pair.
+                raw_balance, balance = result
+            else:
+                return
             stage("balance", balance, raw_balance)
         elif surface == "positions":
             raw_positions, positions = result
@@ -9763,6 +9772,7 @@ class Passivbot:
             "sources": sorted(market_snapshot_sources)[:8],
             "sources_count": len(market_snapshot_sources),
         }
+        completed_candle_summary = self._completed_candle_summary_from_snapshot(snapshot)
         emit_diagnostic_event(
             self,
             DiagnosticEvent.build(
@@ -9780,6 +9790,11 @@ class Passivbot:
                         for key, value in market_snapshot_summary.items()
                         if value is not None
                     },
+                    **(
+                        {"completed_candle_summary": completed_candle_summary}
+                        if completed_candle_summary is not None
+                        else {}
+                    ),
                     "data_packets": [
                         {
                             "kind": packet.kind,
@@ -9799,6 +9814,112 @@ class Passivbot:
             ),
         )
         self._emit_planning_symbol_state_event(availability, context=context)
+
+    def _completed_candle_summary_from_snapshot(
+        self, snapshot: PlanningSnapshot
+    ) -> dict | None:
+        """Project frozen 1m candle signature freshness into bounded diagnostics only."""
+        if "completed_candles" not in set(snapshot.required_surfaces):
+            return None
+
+        signature = snapshot.completed_candle_signature
+        rows = list(signature) if isinstance(signature, (list, tuple)) else []
+        source_row_count = len(rows)
+        invalid_row_count = 0 if isinstance(signature, (list, tuple)) else 1
+        expected_close_ages = []
+        real_close_ages = []
+        fallback_symbols = set()
+        fallback_count = 0
+        tail_gap_ages = []
+
+        def _timestamp(value) -> int | None:
+            if isinstance(value, bool) or not isinstance(value, Integral):
+                return None
+            parsed = int(value)
+            return parsed if parsed >= 0 else None
+
+        snapshot_ts_ms = _timestamp(snapshot.ts_ms)
+        if snapshot_ts_ms is None:
+            snapshot_ts_ms = 0
+            invalid_row_count += len(rows)
+            rows = []
+        for row in rows:
+            if not isinstance(row, (list, tuple)) or len(row) not in (2, 5):
+                invalid_row_count += 1
+                continue
+            symbol = row[0]
+            expected_open_ms = _timestamp(row[1])
+            if (
+                not isinstance(symbol, str)
+                or _COMPLETED_CANDLE_SYMBOL_RE.fullmatch(symbol) is None
+                or expected_open_ms is None
+            ):
+                invalid_row_count += 1
+                continue
+            real_open_ms = expected_open_ms
+            tail_gap_age_ms = None
+            if len(row) == 5:
+                if row[2] != "tail_gap_fallback":
+                    invalid_row_count += 1
+                    continue
+                real_open_ms = _timestamp(row[3])
+                tail_gap_age_ms = _timestamp(row[4])
+                if (
+                    real_open_ms is None
+                    or tail_gap_age_ms is None
+                    or expected_open_ms < real_open_ms
+                    or tail_gap_age_ms != expected_open_ms - real_open_ms
+                ):
+                    invalid_row_count += 1
+                    continue
+            expected_close_ages.append(
+                max(0, int(snapshot_ts_ms) - int(expected_open_ms + ONE_MIN_MS))
+            )
+            real_close_ages.append(
+                max(0, int(snapshot_ts_ms) - int(real_open_ms + ONE_MIN_MS))
+            )
+            if tail_gap_age_ms is not None:
+                fallback_count += 1
+                fallback_symbols.add(symbol)
+                tail_gap_ages.append(int(tail_gap_age_ms))
+
+        def _age_summary(values: list[int]) -> dict | None:
+            if not values:
+                return None
+            return {
+                "min_ms": int(min(values)),
+                "mean_ms": int(round(sum(values) / len(values))),
+                "max_ms": int(max(values)),
+            }
+
+        fallback_samples = sorted(fallback_symbols)[:8]
+        result = {
+            "required": True,
+            "timeframe": "1m",
+            "source_row_count": source_row_count,
+            "valid_row_count": len(expected_close_ages),
+            "invalid_row_count": int(invalid_row_count),
+            "tail_gap_fallback_count": int(fallback_count),
+            "tail_gap_fallback_symbol_count": len(fallback_symbols),
+            "tail_gap_fallback_symbol_samples": fallback_samples,
+            "tail_gap_fallback_symbols_truncated": len(fallback_symbols)
+            > len(fallback_samples),
+        }
+        expected_summary = _age_summary(expected_close_ages)
+        real_summary = _age_summary(real_close_ages)
+        if expected_summary is not None:
+            result["expected_close_age"] = expected_summary
+        if real_summary is not None:
+            result["last_real_close_age"] = real_summary
+        if tail_gap_ages:
+            result["max_tail_gap_age_ms"] = int(max(tail_gap_ages))
+        try:
+            result["configured_max_tail_gap_ms"] = int(
+                self._active_candle_tail_gap_max_ms()
+            )
+        except (AttributeError, TypeError, ValueError):
+            pass
+        return result
 
     def _emit_planning_unavailable_diagnostic(self, details: dict) -> None:
         emit_diagnostic_event(
@@ -11152,6 +11273,7 @@ class Passivbot:
             coverage_ready = bool(coverage_status.get("ready", False))
             needs_full_refresh = lookback.is_all and not coverage_ready
             needs_lookback_refresh = (not lookback.is_all) and not coverage_ready
+            fill_fetch_completed = False
             history_scope = str(coverage_status.get("history_scope", "unknown"))
             if not coverage_ready:
                 now_ms = utc_ms()
@@ -11208,6 +11330,7 @@ class Passivbot:
                     start_ms=None if age_limit is None else int(age_limit),
                     end_ms=None,
                 )
+                fill_fetch_completed = True
                 cache = getattr(self._pnls_manager, "cache", None)
                 mark_covered_start = getattr(cache, "mark_covered_start", None)
                 if age_limit is not None and callable(mark_covered_start):
@@ -11229,12 +11352,15 @@ class Passivbot:
                     self._pnls_manager, "refresh_for_lookback", None
                 )
                 if age_limit is not None and callable(refresh_for_lookback):
-                    await refresh_for_lookback(start_ms=int(age_limit))
+                    fill_fetch_completed = bool(
+                        await refresh_for_lookback(start_ms=int(age_limit))
+                    )
                 else:
                     await self._pnls_manager.refresh(
                         start_ms=None if age_limit is None else int(age_limit),
                         end_ms=None,
                     )
+                    fill_fetch_completed = True
                     cache = getattr(self._pnls_manager, "cache", None)
                     mark_covered_start = getattr(cache, "mark_covered_start", None)
                     if age_limit is not None and callable(mark_covered_start):
@@ -11275,6 +11401,7 @@ class Passivbot:
                         overlap=20,
                         last_refresh_overlap_ms=int(overlap_minutes * 60 * 1000),
                     )
+                fill_fetch_completed = True
 
             # Find and log new events (those not in cache before refresh)
             all_events = self._pnls_manager.get_events()
@@ -11282,7 +11409,8 @@ class Passivbot:
             # refresh completed after the position snapshot. Keep this
             # separate from the risk-authoritative fills generation below,
             # which must still wait for PnL enrichment and history coverage.
-            self._trailing_fill_fetch_generation = fill_refresh_attempt_generation
+            if fill_fetch_completed:
+                self._trailing_fill_fetch_generation = fill_refresh_attempt_generation
             new_events = []
             enriched_events = []
             seen_new_source_ids: set[str] = set()
@@ -19496,6 +19624,10 @@ def setup_bot(config):
         from exchanges.kucoin import KucoinBot
 
         bot = KucoinBot(config)
+    elif user_info["exchange"] == "weex":
+        from exchanges.weex import WeexBot
+
+        bot = WeexBot(config)
     elif user_info["exchange"] == "paradex":
         from exchanges.paradex import ParadexBot
 

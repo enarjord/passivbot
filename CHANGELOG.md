@@ -4,6 +4,57 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Window-bounded live smoke collection now accepts a monitor with only
+  `current.ndjson` when the bounded monitor manifest proves that segment covers
+  the requested window start; missing or invalid coverage evidence still fails
+  closed.
+
+- Generic staged balance refreshes now retain the actual exchange response for
+  account data-packet provenance while carrying bounded balance composition as
+  a separate diagnostic, including Binance's sequenced account cohort and
+  legacy raw/normalized balance pairs. Packet hashes therefore reflect raw
+  response changes without exposing raw payloads.
+
+- HSL cooldown re-panic confirmation now remains protective after the original
+  cooldown deadline until the exact scope-flattening fill is available. The
+  confirmation path refreshes the fill cache and reconstructs durable fills
+  from unambiguous order side and position side when no transient action field
+  is present, including flattening fills stamped in the same exchange
+  millisecond as the non-flat intervention snapshot.
+
+- Hardened WEEX live reconciliation by requiring explicit combined/separated
+  position mode and long/short open-order sides, and by adaptively splitting
+  full fill-history windows so endpoint ordering cannot silently omit fills.
+
+- Added live WEEX USDT perpetual-futures support through CCXT, including
+  authenticated account state, simultaneous long/short order placement and
+  cancellation, per-symbol combined-position/margin/leverage setup, live
+  bid/ask pricing, positions, open orders, and fill/PnL ingestion. Because the
+  V3 book ticker has no last-trade field, live last-price consumers use its
+  top-of-book midpoint with the explicit `weex_book_ticker_mid` source label.
+  WEEX historical 1m backtest-data downloading is not included.
+
+- WEEX live 1m and 1h candle warmups now page through bounded historical
+  windows before using the recent tail, so long EMA windows, trailing extrema,
+  and HSL restart reconstruction are not silently truncated at 999 finalized
+  candles. Indicator/trailing/HSL consumers fail closed on incomplete windows;
+  WEEX bulk historical backtest downloading remains intentionally unsupported.
+
+- Updated the live CCXT dependency from 4.5.48 to 4.5.66. WEEX uses a narrowly
+  scoped compatibility handler for its documented successful configuration
+  response, which upstream CCXT 4.5.66 otherwise raises as an exchange error.
+  The Requests and aiohttp pins are aligned with CCXT 4.5.66's declared
+  dependencies.
+
+- Planning snapshot diagnostics now include a bounded completed-1m-candle
+  freshness summary when that surface is required. The summary is derived only
+  from the frozen planning signature and reports expected/real close ages plus
+  bounded tail-gap fallback counts; `live-performance-report` validates and
+  aggregates the same proof. Public row-count fields avoid secret-key redaction
+  so the persisted evidence remains machine-readable. It does not reread
+  candles or change planning, exchange access, orders, strategy, or risk
+  behavior.
+
 - `passivbot tool hsl-replay-benchmark` now reports exclusive timing profiles
   for fixture construction, replay internals, final-state projection, candidate
   and dense-reference runs, equivalence comparison, and residual orchestration.
@@ -11,6 +62,11 @@ All notable user-facing changes will be documented in this file.
   use for equivalence, while timeline-reference runs avoid double-counting the
   same execution. This is offline diagnostic output only; HSL state, replay
   behavior, exchange access, orders, and risk are unchanged.
+
+- Trailing fill-confirmation watermarks now advance only when a fill fetch
+  actually completes. Exhausted historical fill-gap retries still perform a
+  recent-fill refresh, keeping trailing confirmation live while historical PnL
+  coverage remains independently fail-closed.
 
 - Trailing-position fill confirmation now treats exchange position-update
   timestamps as advisory and proves readiness with a successful post-position
@@ -24,8 +80,9 @@ All notable user-facing changes will be documented in this file.
   12-character lowercase-hex startup-log run-id prefix with one complete
   manifest or startup-event identity when exchange, user, prefix, and start time
   agree within two seconds. Ambiguous, incomplete, malformed, or out-of-bound
-  observations remain separate; the read-only tool still does not contact
-  exchanges or control bots.
+  observations remain separate. Monitor ingestion reads the canonical
+  `_live_event` envelope while retaining legacy input compatibility; the
+  read-only tool still does not contact exchanges or control bots.
 
 - Shutdown evidence in live smoke reports now distinguishes complete and
   incomplete latest shutdown lifecycles per bot. Restart smoke validation uses

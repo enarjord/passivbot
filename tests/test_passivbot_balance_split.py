@@ -53,6 +53,7 @@ from live.balance_composition import (
     balance_composition_signature,
     normalize_okx_balance_composition,
 )
+from live.data_packets import stable_hash
 
 
 TEST_RUNTIME_IDENTITY = RuntimeIdentity(
@@ -525,6 +526,12 @@ async def test_staged_account_refresh_emits_data_packet_diagnostics():
         ],
     )
     _disable_entry_cooldown_delta_guard_for_staged_refresh_test(bot)
+    raw_balance = {"total": {"USDT": 123.45}, "exchange_revision": "raw-1"}
+
+    async def capture_balance_snapshot():
+        return raw_balance, 123.45
+
+    bot.capture_balance_snapshot = capture_balance_snapshot
     events = []
     bot._monitor_record_event = (
         lambda kind, tags, payload=None, **kwargs: events.append(
@@ -547,6 +554,7 @@ async def test_staged_account_refresh_emits_data_packet_diagnostics():
     assert by_kind["balance"]["scope"] == "global"
     assert by_kind["balance"]["freshness"]["status"] == "fresh"
     assert by_kind["balance"]["quality"] == "ok"
+    assert by_kind["balance"]["raw_hash"] == stable_hash(raw_balance)
     assert by_kind["balance"]["response_received_ts_ms"] >= by_kind["balance"][
         "call_started_ts_ms"
     ]
@@ -574,6 +582,26 @@ async def test_data_packet_capture_failure_does_not_block_authoritative_fetch():
 
     assert result == ("raw-balance", 123.45)
     assert timings_ms["balance"] >= 0
+
+
+def test_balance_data_packet_capture_accepts_legacy_raw_normalized_pair():
+    bot = Passivbot.__new__(Passivbot)
+    bot.exchange = "legacy"
+    bot._authoritative_refresh_epoch = 7
+    raw_balance = {"total": {"USDT": 123.45}, "raw_revision": "legacy-pair"}
+
+    bot._capture_live_data_packet_fetch_metadata(
+        "balance",
+        (raw_balance, 123.45),
+        call_started_ts_ms=100,
+        response_received_ts_ms=125,
+    )
+
+    packet = bot._pending_live_data_packet_metadata["balance"]
+    assert packet.coverage == {"value_present": True}
+    assert packet.raw_hash == stable_hash(raw_balance)
+    assert packet.call_started_ts_ms == 100
+    assert packet.response_received_ts_ms == 125
 
 
 def test_diagnostic_event_emit_failure_is_noncritical():
@@ -5000,6 +5028,7 @@ async def test_update_pnls_window_lookback_bootstraps_when_coverage_unproven():
 
         async def _refresh_for_lookback(self, *, start_ms):
             self.cache.mark_covered_start(start_ms)
+            return True
 
         def get_events(self, start_ms=None):
             if start_ms is None:
@@ -5105,6 +5134,7 @@ async def test_update_pnls_window_lookback_stays_blocked_when_known_gap_persists
 
         async def _refresh_for_lookback(self, *, start_ms):
             self.cache.mark_covered_start(start_ms)
+            return False
 
         def get_events(self, start_ms=None):
             if start_ms is None:
@@ -5149,7 +5179,7 @@ async def test_update_pnls_window_lookback_stays_blocked_when_known_gap_persists
     bot._pnls_manager.refresh_latest.assert_not_awaited()
     assert bot._last_fill_refresh_pending_pnl_count == 0
     assert "fills" not in getattr(bot, "_authoritative_surface_signatures", {})
-    assert bot._trailing_fill_fetch_generation == 8
+    assert bot._trailing_fill_fetch_generation == 7
     retry_state = getattr(bot, "_fill_coverage_retry_state", {})
     assert retry_state["next_retry_ms"] > wall_ms["value"]
 
@@ -5157,14 +5187,14 @@ async def test_update_pnls_window_lookback_stays_blocked_when_known_gap_persists
 
     assert result is False
     bot._pnls_manager.refresh_for_lookback.assert_awaited_once_with(start_ms=start_ms)
-    assert bot._trailing_fill_fetch_generation == 8
+    assert bot._trailing_fill_fetch_generation == 7
 
     wall_ms["value"] = int(retry_state["next_retry_ms"]) + 1
     result = await bot.update_pnls(source="staged_blocking")
 
     assert result is False
     assert bot._pnls_manager.refresh_for_lookback.await_count == 2
-    assert bot._trailing_fill_fetch_generation == 10
+    assert bot._trailing_fill_fetch_generation == 7
 
 
 @pytest.mark.asyncio
@@ -5230,6 +5260,7 @@ async def test_update_pnls_window_lookback_records_fills_after_known_gap_repair(
         async def _refresh_for_lookback(self, *, start_ms):
             self.cache.known_gaps = []
             self.cache.mark_covered_start(start_ms)
+            return True
 
         def get_events(self, start_ms=None):
             if start_ms is None:
@@ -8058,6 +8089,127 @@ def test_build_staged_planning_snapshot_captures_exact_surface_contract():
     assert planning_snapshot.completed_candle_signature == candle_signature
     assert set(planning_snapshot.required_surfaces) == set(LIVE_STATE_SURFACES)
     assert planning_snapshot.invalid_details(now_ms=passivbot_module.utc_ms()) == []
+
+
+def test_completed_candle_snapshot_summary_is_bounded_and_signature_only():
+    bot = Passivbot.__new__(Passivbot)
+    bot.config = {"live": {"max_active_candle_tail_gap_minutes": 2}}
+    bot.cm = SimpleNamespace(
+        get_completed_candle_health=lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("snapshot summary must not read candles")
+        )
+    )
+    ordinary = "BTC/USDT:USDT"
+    fallback_symbols = [f"COIN{i:02d}/USDT:USDT" for i in range(10)]
+    snapshot = _availability_test_snapshot(
+        now_ms=300_000,
+        symbols=(ordinary,),
+        surfaces={"completed_candles": (7, 7, tuple())},
+        completed_candle_signature=(
+            (ordinary, 180_000),
+            *(
+                (symbol, 180_000, "tail_gap_fallback", 60_000, 120_000)
+                for symbol in fallback_symbols
+            ),
+            (
+                "api_key=must_not_escape",
+                180_000,
+                "tail_gap_fallback",
+                60_000,
+                120_000,
+            ),
+            (
+                f"LONG{'X' * 160}/USDT:USDT",
+                180_000,
+                "tail_gap_fallback",
+                60_000,
+                120_000,
+            ),
+            ("malformed", 180_000, "wrong_fallback", 60_000, 120_000),
+        ),
+    )
+
+    summary = bot._completed_candle_summary_from_snapshot(snapshot)
+
+    assert summary == {
+        "required": True,
+        "timeframe": "1m",
+        "source_row_count": 14,
+        "valid_row_count": 11,
+        "invalid_row_count": 3,
+        "tail_gap_fallback_count": 10,
+        "tail_gap_fallback_symbol_count": 10,
+        "tail_gap_fallback_symbol_samples": fallback_symbols[:8],
+        "tail_gap_fallback_symbols_truncated": True,
+        "expected_close_age": {"min_ms": 60_000, "mean_ms": 60_000, "max_ms": 60_000},
+        "last_real_close_age": {"min_ms": 60_000, "mean_ms": 169_091, "max_ms": 180_000},
+        "max_tail_gap_age_ms": 120_000,
+        "configured_max_tail_gap_ms": 120_000,
+    }
+    assert "api_key" not in json.dumps(summary, sort_keys=True)
+    serialized = LiveEvent(
+        event_type="snapshot.built", data={"completed_candle_summary": summary}
+    )
+    assert serialized.data["completed_candle_summary"]["source_row_count"] == 14
+    assert "[redacted]" not in json.dumps(serialized.data, sort_keys=True)
+
+
+def test_completed_candle_snapshot_summary_is_omitted_when_not_required():
+    bot = Passivbot.__new__(Passivbot)
+    bot.config = {"live": {}}
+    snapshot = _availability_test_snapshot(
+        now_ms=300_000,
+        symbols=("BTC/USDT:USDT",),
+        surfaces={"balance": (7, 7, ("balance", "fresh"))},
+        completed_candle_signature=(("BTC/USDT:USDT", 180_000),),
+    )
+
+    assert bot._completed_candle_summary_from_snapshot(snapshot) is None
+
+
+def test_snapshot_built_omits_completed_candle_summary_when_not_required():
+    bot = Passivbot.__new__(Passivbot)
+    bot.config = {"live": {}}
+    bot._current_live_event_cycle_id = lambda: "cy_protective"
+    bot._emit_planning_symbol_state_event = lambda *_args, **_kwargs: None
+    events = []
+    bot._monitor_record_event = (
+        lambda kind, tags, payload=None, **kwargs: events.append(
+            {"kind": kind, "payload": dict(payload or {}), **kwargs}
+        )
+    )
+    snapshot = _availability_test_snapshot(
+        now_ms=300_000,
+        symbols=("BTC/USDT:USDT",),
+        surfaces={"balance": (7, 7, ("balance", "fresh"))},
+        completed_candle_signature=(("BTC/USDT:USDT", 180_000),),
+    )
+
+    bot._emit_snapshot_built_diagnostic(snapshot, context="protective")
+
+    assert "completed_candle_summary" not in events[-1]["payload"]
+
+
+def test_completed_candle_snapshot_summary_rejects_coerced_timestamps():
+    bot = Passivbot.__new__(Passivbot)
+    bot.config = {"live": {}}
+    snapshot = _availability_test_snapshot(
+        now_ms="300000",
+        symbols=("BTC/USDT:USDT",),
+        surfaces={"completed_candles": (7, 7, tuple())},
+        completed_candle_signature=(
+            ("BTC/USDT:USDT", "180000"),
+            ("ETH/USDT:USDT", 180_000.0),
+        ),
+    )
+
+    summary = bot._completed_candle_summary_from_snapshot(snapshot)
+
+    assert summary["source_row_count"] == 2
+    assert summary["valid_row_count"] == 0
+    assert summary["invalid_row_count"] == 2
+    assert "expected_close_age" not in summary
+    assert "last_real_close_age" not in summary
 
 
 @pytest.mark.asyncio

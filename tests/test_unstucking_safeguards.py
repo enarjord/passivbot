@@ -2730,7 +2730,7 @@ async def test_hsl_cooldown_panic_refreshes_anchor(monkeypatch):
     bot.config["live"]["hsl_position_during_cooldown_policy"] = "panic"
     state = _hsl_state(bot)
     state["halted"] = True
-    state["cooldown_until_ms"] = 200_000
+    state["cooldown_until_ms"] = 160_000
     bot.positions[symbol]["long"]["size"] = 1.0
 
     changed = await bot._equity_hard_stop_handle_position_during_cooldown(
@@ -2739,7 +2739,7 @@ async def test_hsl_cooldown_panic_refreshes_anchor(monkeypatch):
     assert changed is False
     assert state["cooldown_intervention_active"] is True
     assert state["cooldown_repanic_reset_pending"] is True
-    assert state["cooldown_repanic_since_ms"] == 150_001
+    assert state["cooldown_repanic_since_ms"] == 150_000
     assert state["cooldown_repanic_start_sizes"] == {symbol: 1.0}
     assert bot._equity_hard_stop_halted_mode("long", symbol) == "panic"
 
@@ -2747,7 +2747,7 @@ async def test_hsl_cooldown_panic_refreshes_anchor(monkeypatch):
     bot._pnls_manager = types.SimpleNamespace(
         get_events=lambda: [
             {
-                "timestamp": 170_000,
+                "timestamp": 150_000,
                 "symbol": symbol,
                 "pside": "long",
                 "pb_order_type": "close_panic_long",
@@ -2786,13 +2786,58 @@ async def test_hsl_cooldown_panic_refreshes_anchor(monkeypatch):
         "long", 180_000
     )
     assert changed is True
-    assert captured["compute"] == ("long", 170_000)
-    assert state["cooldown_until_ms"] == 230_000
+    assert captured["compute"] == ("long", 150_000)
+    assert state["cooldown_until_ms"] == 210_000
     assert state["cooldown_intervention_active"] is False
     assert state["cooldown_repanic_reset_pending"] is False
     assert state["cooldown_repanic_since_ms"] is None
     assert state["cooldown_repanic_start_sizes"] is None
-    assert captured["write"][1]["cooldown_until_ms"] == 230_000
+    assert captured["write"][1]["cooldown_until_ms"] == 210_000
+
+
+@pytest.mark.asyncio
+async def test_hsl_cooldown_repanic_fill_confirmation_blocks_past_old_deadline(
+    monkeypatch,
+):
+    cfg = _dummy_config()
+    bot = _make_dummy_bot(cfg)
+    symbol = _set_basic_state(bot)
+    _hsl_cfg(bot)["enabled"] = True
+    _hsl_cfg(bot, "short")["enabled"] = False
+    bot.config["live"]["hsl_signal_mode"] = "pside"
+    bot.config["live"]["hsl_position_during_cooldown_policy"] = "panic"
+    state = _hsl_state(bot)
+    state["runtime"]._initialized = True
+    state["halted"] = True
+    state["cooldown_until_ms"] = 200_000
+    state["cooldown_intervention_active"] = True
+    state["cooldown_repanic_reset_pending"] = True
+    state["cooldown_repanic_since_ms"] = 150_001
+    state["cooldown_repanic_start_sizes"] = {symbol: 1.0}
+    bot.positions[symbol]["long"]["size"] = 0.0
+    bot._pnls_manager = types.SimpleNamespace(get_events=lambda: [])
+    refreshes = []
+
+    async def update_pnls(*, source, since_ms=None):
+        refreshes.append((source, since_ms))
+        return False
+
+    async def calc_upnl(pside=None, symbol=None):
+        return 0.0
+
+    monkeypatch.setattr(bot, "update_pnls", update_pnls)
+    monkeypatch.setattr(bot, "get_exchange_time", lambda: 210_000)
+    monkeypatch.setattr(bot, "get_raw_balance", lambda: 100.0)
+    monkeypatch.setattr(bot, "_equity_hard_stop_realized_pnl_now", lambda pside=None: 0.0)
+    monkeypatch.setattr(bot, "_calc_upnl_sum_strict", calc_upnl)
+
+    await bot._equity_hard_stop_check()
+
+    assert refreshes == [("hsl_flatten_confirmation", 150_001)]
+    assert state["halted"] is True
+    assert state["cooldown_until_ms"] == 200_000
+    assert state["cooldown_repanic_reset_pending"] is True
+    assert state["cooldown_repanic_start_sizes"] == {symbol: 1.0}
 
 
 @pytest.mark.asyncio

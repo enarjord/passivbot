@@ -11,6 +11,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Optional, Sequence
 
+from live.event_bus import LIVE_EVENT_MONITOR_PAYLOAD_KEY
+
 
 SCHEMA_VERSION = 1
 DEFAULT_MAX_FILES = 20_000
@@ -284,7 +286,9 @@ def _runtime_from_monitor_record(
     kind = str(value.get("kind") or "")
     payload = value.get("payload")
     payload = payload if isinstance(payload, Mapping) else {}
-    live_event = payload.get("live_event")
+    live_event = payload.get(LIVE_EVENT_MONITOR_PAYLOAD_KEY)
+    if not isinstance(live_event, Mapping):
+        live_event = payload.get("live_event")
     live_event = live_event if isinstance(live_event, Mapping) else {}
     data = live_event.get("data")
     data = data if isinstance(data, Mapping) else {}

@@ -1031,6 +1031,123 @@ def test_live_performance_report_market_snapshot_summary_counts_missing_sources(
     assert market["sources"] == {"ticker": 2, "websocket": 1}
 
 
+def test_live_performance_report_completed_candle_freshness_summary(tmp_path):
+    events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    valid_summary = {
+        "required": True,
+        "timeframe": "1m",
+        "source_row_count": 2,
+        "valid_row_count": 2,
+        "invalid_row_count": 0,
+        "tail_gap_fallback_count": 1,
+        "tail_gap_fallback_symbol_count": 1,
+        "tail_gap_fallback_symbol_samples": ["ETH/USDT:USDT"],
+        "tail_gap_fallback_symbols_truncated": False,
+        "expected_close_age": {"min_ms": 10, "mean_ms": 20, "max_ms": 30},
+        "last_real_close_age": {"min_ms": 10, "mean_ms": 40, "max_ms": 70},
+        "max_tail_gap_age_ms": 60,
+        "configured_max_tail_gap_ms": 120,
+    }
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="snapshot.built",
+                seq=1,
+                ts=1_000,
+                data={
+                    "required_surfaces": ["balance", "completed_candles"],
+                    "completed_candle_summary": valid_summary,
+                },
+            ),
+            _monitor_row(
+                event_type="snapshot.built",
+                seq=2,
+                ts=2_000,
+                data={"required_surfaces": ["completed_candles"]},
+            ),
+            _monitor_row(
+                event_type="snapshot.built",
+                seq=3,
+                ts=3_000,
+                data={
+                    "required_surfaces": ["completed_candles"],
+                    "completed_candle_summary": {
+                        **valid_summary,
+                        "source_row_count": "2",
+                    },
+                },
+            ),
+            _monitor_row(
+                event_type="snapshot.built",
+                seq=4,
+                ts=4_000,
+                data={
+                    "required_surfaces": ["completed_candles"],
+                    "completed_candle_summary": {
+                        **valid_summary,
+                        "tail_gap_fallback_count": 1.5,
+                    },
+                },
+            ),
+            _monitor_row(
+                event_type="snapshot.built",
+                seq=5,
+                ts=5_000,
+                data={
+                    "required_surfaces": ["completed_candles"],
+                    "completed_candle_summary": {
+                        "required": True,
+                        "timeframe": "1m",
+                        "source_row_count": 2,
+                        "valid_row_count": 0,
+                        "invalid_row_count": 2,
+                        "tail_gap_fallback_count": 0,
+                        "tail_gap_fallback_symbol_count": 0,
+                        "tail_gap_fallback_symbol_samples": [],
+                        "tail_gap_fallback_symbols_truncated": False,
+                    },
+                },
+            ),
+            _monitor_row(
+                event_type="snapshot.built",
+                seq=6,
+                ts=6_000,
+                data={},
+            ),
+        ],
+    )
+
+    report = build_live_performance_report(tmp_path / "monitor")
+    completed = report["input_staleness"]["completed_candles"]
+    groups = {
+        group["operation"]: group for group in report["input_staleness"]["groups"]
+    }
+    summary = summarize_live_performance_report(report, group_limit=1)
+
+    assert completed["required_snapshots"] == 5
+    assert completed["required_surface_unknown_snapshots"] == 1
+    assert completed["summary_observations"] == 4
+    assert completed["missing_proof_count"] == 1
+    assert completed["malformed_proof_count"] == 3
+    assert completed["no_valid_rows_count"] == 0
+    assert completed["metric_observations"] == 1
+    assert completed["source_rows"]["max"] == 2
+    assert completed["valid_rows"]["max"] == 2
+    assert completed["invalid_rows"]["max"] == 2
+    assert completed["tail_gap_fallback_count"]["max"] == 1
+    assert completed["expected_close_age_ms"]["max"]["max"] == 30
+    assert completed["last_real_close_age_ms"]["max"]["max"] == 70
+    assert completed["max_tail_gap_age_ms"]["max"] == 60
+    assert completed["configured_max_tail_gap_ms"]["max"] == 120
+    assert groups["input_staleness.completed_candles.expected_close.max"][
+        "trading_impact"
+    ] == "blocks_indicator_readiness"
+    assert groups["input_staleness.completed_candles.last_real_close.max"]["max_ms"] == 70
+    assert groups["input_staleness.completed_candles.tail_gap.max"]["max_ms"] == 60
+    assert summary["input_staleness"]["completed_candles"] == completed
+
+
 def test_live_performance_report_input_staleness_handles_cycle_id_reuse(tmp_path):
     events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
     _write_ndjson(
