@@ -22,43 +22,39 @@ Estimated completion:
 
 ## Active Review Slice
 
-- Branch: `codex/shutdown-lifecycle-completeness`, based on canonical
-  `bc2c90267be418344ec883fcf17fae856bc568cd` after PR #1320.
-- PR: #1321.
-- Scope: derive the latest bounded shutdown lifecycle per observed bot and make
-  restart evidence require distinct complete bot lifecycles instead of
-  aggregate `bot.stopping` and `bot.stopped` counts.
-- Behavior boundary: read-only smoke report, restart-evidence evaluation,
-  concise/brief projections, tests, changelog, and project state only. No event
-  producer, monitor persistence, console, exchange, order, risk, readiness,
-  configuration, restart execution, or process-control behavior changes.
-- Validation: focused report/projection tests must prove duplicate events from
-  one bot cannot satisfy a multi-bot restart gate, incomplete latest lifecycles
-  remain visible, out-of-order input is handled by canonical event ordering,
-  and top-level smoke verdicts retain their current semantics.
-- Review gate: temporary maintainer-authorized exact-head Hermes plus green
-  Python and Rust CI while Grok is halted. Repository automatic Codex review is
-  additional; any findings it posts must still be adjudicated.
-- Expected VPS action: pull and bounded read-only report only after merge. The
-  slice is diagnostics-only and does not warrant a bot restart.
+- Branch: `codex/historical-runtime-attribution`, merged with canonical
+  `fc9dad83cd3ecf51cae15e8dda66afb7cfb895a1` at
+  `d351cd2c7f489ff56edaf2679e16aff6a57e5bb6`.
+- PR: #1315.
+- Scope: bounded, read-only local attribution of fill caches and monitor fill
+  history to recorded first-ingestion provenance and non-proving runtime-window
+  candidates.
+- Behavior boundary: offline attribution tool, CLI wiring, docs, and tests only.
+  No trading, exchange, runtime producer, order, risk, config, restart, or
+  process behavior changes.
+- Validation: focused attribution and CLI tests must preserve legacy fills as
+  unattributed, recognize canonical `first_ingested_by_runtime` provenance, and
+  retain bounded, fail-closed scans.
+- Review gate: current-head review is pending on the final integrated branch
+  after its documentation evidence is committed.
+- Expected VPS action: tracked-clean pull plus a bounded read-only attribution
+  smoke after merge. The tool is local-only and does not require a bot restart.
 
 ## Deployed Baseline
 
-- PR #1320 merged as canonical
-  `bc2c90267be418344ec883fcf17fae856bc568cd`. It adds a separate bounded
-  event-pipeline integrity diagnostic for cumulative drops, sink errors, and
-  workers unexpectedly dead outside orderly shutdown, without changing the
-  general smoke or trading/process verdicts.
-- VPS5 fast-forwarded tracked-clean from PR #1314 without a Rust build, bot
-  restart, or process signal. The exact five target PIDs and pane parents were
-  unchanged, target sampling remained 3/3 stable with no extras or issues, and
-  protected `misc:0.0` remained `%8`/PID `434835`.
-- The merged report showed integrity green for all five bots with zero drops,
-  sink errors, unexpectedly dead workers, queue backlog, unfinished work, or
-  degraded pipeline counters. The wider smoke retained natural KuCoin
-  `RequestTimeout` events instead of hiding them; the latest affected cycle
-  subsequently completed successfully without intervention. No direct exchange
-  request, process action, or event was manufactured.
+- PR #1321 deployed as canonical
+  `fc9dad83cd3ecf51cae15e8dda66afb7cfb895a1`. It completes distinct latest
+  shutdown lifecycle diagnostics without changing event producers, trading, or
+  process behavior.
+- VPS5 fast-forwarded tracked-clean at `fc9dad83`; bot PIDs
+  `1044483/1044492/1044486/1044495/1044489` were unchanged, and protected
+  `misc:0.0` remained pane `%8`/PID `434835`.
+- The initial smoke retained four natural KuCoin degraded cycles/timeouts rather
+  than hiding them. The settled two-minute smoke was `ok=true` with
+  `hard_failures=0`, `44/44` account-critical calls and `243/243` remote calls
+  successful, and five configured processes stable.
+- This was diagnostics-only: no Rust build, bot restart, signal, direct exchange
+  call, or event was manufactured.
 
 ## Previous Deployed Baseline (PR #1314)
 

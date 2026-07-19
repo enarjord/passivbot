@@ -112,6 +112,10 @@ TOOL_COMMANDS: dict[str, CommandSpec] = {
         "tools.log_secret_inventory",
         "read-only value-free inventory of secret-like local log material",
     ),
+    "runtime-attribution": CommandSpec(
+        "tools.runtime_attribution",
+        "attribute local fills to recorded ingestion and candidate runtime windows",
+    ),
     "live-incident-bundle": CommandSpec(
         "tools.live_incident_bundle",
         "collect local live incident evidence into a tarball",

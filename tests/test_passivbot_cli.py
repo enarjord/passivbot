@@ -147,6 +147,7 @@ def test_tool_help_lists_supported_tools(capsys):
     assert "inspect-ohlcvs" in out
     assert "live-event-query" in out
     assert "log-secret-inventory" in out
+    assert "runtime-attribution" in out
     assert "merge-paretos" in out
     assert "monitor-dev" in out
     assert "monitor-relay" in out
@@ -324,6 +325,25 @@ def test_live_event_query_tool_dispatch_forwards_module_and_prog(monkeypatch):
         "cy_1",
     ]
     assert captured["prog_env"] == "passivbot tool live-event-query"
+
+
+def test_runtime_attribution_tool_dispatch_forwards_module_and_prog(monkeypatch):
+    captured = {}
+
+    def fake_invoke_module_main(module_name):
+        captured["module_name"] = module_name
+        captured["argv"] = sys.argv[:]
+        captured["prog_env"] = os.environ.get("PASSIVBOT_CLI_PROG")
+        return True, 0
+
+    monkeypatch.setattr(cli_main, "_invoke_module_main", fake_invoke_module_main)
+
+    assert cli_main.main(["tool", "runtime-attribution", "--trailing-only"]) == 0
+    assert captured == {
+        "module_name": "tools.runtime_attribution",
+        "argv": ["passivbot tool runtime-attribution", "--trailing-only"],
+        "prog_env": "passivbot tool runtime-attribution",
+    }
 
 
 def test_live_smoke_report_tool_dispatch_forwards_module_and_prog(monkeypatch):
