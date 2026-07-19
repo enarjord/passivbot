@@ -4869,6 +4869,23 @@ def _summarize_event_pipeline_health(
         }
         for group in ordered[:EVENT_PIPELINE_HEALTH_GROUP_LIMIT]
     ]
+    integrity_sources = {
+        "drops": sum(
+            int(group.get("latest_dropped_total") or 0) for group in groups.values()
+        ),
+        "sink_errors": sum(
+            int(group.get("latest_sink_error_total") or 0)
+            for group in groups.values()
+        ),
+        "unexpectedly_dead_workers": sum(
+            1
+            for group in groups.values()
+            if group.get("latest_worker_alive") is False
+            and group.get("latest_pipeline_stopping") is not True
+        ),
+    }
+    integrity_sources["total"] = sum(integrity_sources.values())
+    integrity_attention_count = int(integrity_sources["total"])
     out = {
         "total": sum(int(group.get("count", 0)) for group in groups.values()),
         "groups_truncated": len(ordered) > EVENT_PIPELINE_HEALTH_GROUP_LIMIT,
@@ -4897,6 +4914,12 @@ def _summarize_event_pipeline_health(
         "latest_stopping_count": sum(
             1 for group in groups.values() if group.get("latest_pipeline_stopping") is True
         ),
+        "integrity": {
+            "ok": integrity_attention_count == 0,
+            "attention": integrity_attention_count > 0,
+            "attention_count": integrity_attention_count,
+            "source_counts": integrity_sources,
+        },
         "groups": compact_groups,
     }
     processed_counts = [
@@ -6097,7 +6120,35 @@ def _shutdown_event_group(
             for key in ("cycle_id", "snapshot_id", "plan_id", "action_id")
             if ids.get(key) is not None
         },
+        "_identity_valid": _shutdown_event_identity_valid(live_event, row),
     }
+
+
+def _shutdown_event_identity_valid(
+    live_event: dict[str, Any], row: dict[str, Any]
+) -> bool:
+    live_exchange = live_event.get("exchange")
+    live_user = live_event.get("user")
+    row_exchange = row.get("exchange")
+    row_user = row.get("user")
+    if live_exchange not in (None, "") and row_exchange not in (None, ""):
+        if live_exchange != row_exchange:
+            return False
+    if live_user not in (None, "") and row_user not in (None, ""):
+        if live_user != row_user:
+            return False
+    exchange = live_exchange or row_exchange
+    user = live_user or row_user
+    return (
+        type(exchange) is str
+        and type(user) is str
+        and bool(exchange.strip())
+        and bool(user.strip())
+        and len(exchange) <= 120
+        and len(user) <= 120
+        and exchange not in {"unknown_exchange", "unknown"}
+        and user not in {"unknown_user", "unknown"}
+    )
 
 
 def _merge_shutdown_event_group(
@@ -6138,6 +6189,7 @@ def _merge_shutdown_event_group(
             "latest_message",
             "latest_data",
             "latest_ids",
+            "_identity_valid",
         ):
             existing[field] = group.get(field)
 
@@ -6145,6 +6197,9 @@ def _merge_shutdown_event_group(
 def _summarize_shutdown_events(
     groups: dict[tuple[Any, ...], dict[str, Any]],
     event_type_counts: Counter[str],
+    *,
+    coverage_complete: bool,
+    invalid_identity_events: int,
 ) -> dict[str, Any]:
     ordered = sorted(
         groups.values(),
@@ -6160,16 +6215,94 @@ def _summarize_shutdown_events(
         {
             key: value
             for key, value in group.items()
-            if key not in {"latest_path", "latest_line", "latest_seq"}
+            if key
+            not in {"latest_path", "latest_line", "latest_seq", "_identity_valid"}
             and value not in (None, {}, [])
         }
         for group in ordered[:SHUTDOWN_EVENT_GROUP_LIMIT]
     ]
+    lifecycle = _summarize_shutdown_lifecycle(
+        groups,
+        coverage_complete=coverage_complete,
+        invalid_identity_events=invalid_identity_events,
+    )
     return {
         "total": sum(int(group.get("count", 0)) for group in groups.values()),
         "groups_truncated": len(ordered) > SHUTDOWN_EVENT_GROUP_LIMIT,
         "event_types": dict(event_type_counts.most_common()),
         "groups": compact_groups,
+        "lifecycle": lifecycle,
+    }
+
+
+def _shutdown_event_position(group: dict[str, Any]) -> tuple[int, int, str, int]:
+    return _sort_event_position_key(
+        ts=group.get("latest_ts"),
+        seq=group.get("latest_seq"),
+        path=group.get("latest_path") or "",
+        line_no=int(group.get("latest_line") or 0),
+    )
+
+
+def _summarize_shutdown_lifecycle(
+    groups: dict[tuple[Any, ...], dict[str, Any]],
+    *,
+    coverage_complete: bool,
+    invalid_identity_events: int,
+) -> dict[str, Any]:
+    """Project the latest in-window stop boundary for each observed bot."""
+    boundaries_by_bot: dict[str, dict[str, dict[str, Any]]] = {}
+    for group in groups.values():
+        event_type = group.get("event_type")
+        if event_type not in {EventTypes.BOT_STOPPING, EventTypes.BOT_STOPPED}:
+            continue
+        if group.get("_identity_valid") is not True:
+            continue
+        bot = str(group.get("bot") or "unknown")
+        boundaries = boundaries_by_bot.setdefault(bot, {})
+        previous = boundaries.get(str(event_type))
+        if previous is None or _shutdown_event_position(group) > _shutdown_event_position(
+            previous
+        ):
+            boundaries[str(event_type)] = group
+
+    rows: list[dict[str, Any]] = []
+    for bot, boundaries in boundaries_by_bot.items():
+        stopping = boundaries.get(EventTypes.BOT_STOPPING)
+        stopped = boundaries.get(EventTypes.BOT_STOPPED)
+        stopping_position = _shutdown_event_position(stopping or {})
+        stopped_position = _shutdown_event_position(stopped or {})
+        complete = (
+            stopping is not None
+            and stopped is not None
+            and stopped_position > stopping_position
+        )
+        latest = stopped if stopped_position > stopping_position else stopping
+        row = {
+            "bot": _redact_log_text(bot, max_len=120),
+            "state": "complete" if complete else "incomplete",
+            "latest_boundary": "stopped" if latest is stopped else "stopping",
+            "latest_ts": latest.get("latest_ts") if isinstance(latest, dict) else None,
+        }
+        rows.append({key: value for key, value in row.items() if value is not None})
+    rows.sort(
+        key=lambda row: (
+            -int(_non_negative_int(row.get("latest_ts")) or 0),
+            str(row.get("bot") or ""),
+        )
+    )
+    complete_bots = sum(1 for row in rows if row.get("state") == "complete")
+    retained_rows = rows[:SHUTDOWN_EVENT_GROUP_LIMIT]
+    return {
+        "proof_scope": "distinct_observed_bots",
+        "coverage_complete": bool(coverage_complete),
+        "identity_complete": invalid_identity_events == 0,
+        "invalid_identity_events": invalid_identity_events,
+        "observed_bots": len(rows),
+        "complete_bots": complete_bots,
+        "incomplete_bots": len(rows) - complete_bots,
+        "rows_truncated": len(rows) > SHUTDOWN_EVENT_GROUP_LIMIT,
+        "rows": retained_rows,
     }
 
 
@@ -8549,6 +8682,7 @@ def _scan_events(
     risk_event_type_counts: Counter[str] = Counter()
     shutdown_event_groups: dict[tuple[Any, ...], dict[str, Any]] = {}
     shutdown_event_type_counts: Counter[str] = Counter()
+    shutdown_invalid_identity_events = 0
     problem_event_groups: dict[tuple[Any, ...], dict[str, Any]] = {}
     if max_event_file_count_per_bot and files:
         event_files_before_limit = len(files)
@@ -8924,15 +9058,22 @@ def _scan_events(
                         )
                     if event_type in SHUTDOWN_EVENT_TYPES:
                         shutdown_event_type_counts[str(event_type)] += 1
+                        shutdown_group = _shutdown_event_group(
+                            bot_key=bot_key,
+                            row=row,
+                            live_event=live_event,
+                            path=path,
+                            line_no=line_no,
+                        )
+                        if (
+                            event_type
+                            in {EventTypes.BOT_STOPPING, EventTypes.BOT_STOPPED}
+                            and shutdown_group.get("_identity_valid") is not True
+                        ):
+                            shutdown_invalid_identity_events += 1
                         _merge_shutdown_event_group(
                             shutdown_event_groups,
-                            _shutdown_event_group(
-                                bot_key=bot_key,
-                                row=row,
-                                live_event=live_event,
-                                path=path,
-                                line_no=line_no,
-                            ),
+                            shutdown_group,
                         )
                     level = live_event.get("level")
                     if level:
@@ -9140,6 +9281,16 @@ def _scan_events(
         "shutdown_events": _summarize_shutdown_events(
             shutdown_event_groups,
             shutdown_event_type_counts,
+            invalid_identity_events=shutdown_invalid_identity_events,
+            coverage_complete=(
+                event_tail_limited_files == 0
+                and event_files_skipped_by_limit == 0
+                and invalid_window_ts == 0
+                and (
+                    segment_selection is None
+                    or segment_selection.get("complete") is True
+                )
+            ),
         ),
         "event_window": _event_window_report(
             since_ms=since_ms,
@@ -9838,6 +9989,7 @@ def _summary_limited_groups(
                 "latest_worker_not_alive_count"
             ),
             "latest_stopping_count": summary.get("latest_stopping_count"),
+            "integrity": summary.get("integrity"),
             "latest_cpu_percent_max": summary.get("latest_cpu_percent_max"),
             "latest_cpu_reporting_bots": summary.get("latest_cpu_reporting_bots"),
             "latest_memory_percent_max": summary.get("latest_memory_percent_max"),
@@ -10497,7 +10649,44 @@ def summarize_live_smoke_report(
         "shutdown_events": _summary_limited_groups(
             shutdown_events,
             limit=max_groups,
-        ),
+        )
+        | {
+            "lifecycle": {
+                "proof_scope": (shutdown_events.get("lifecycle") or {}).get(
+                    "proof_scope"
+                ),
+                "coverage_complete": (shutdown_events.get("lifecycle") or {}).get(
+                    "coverage_complete"
+                ),
+                "identity_complete": (shutdown_events.get("lifecycle") or {}).get(
+                    "identity_complete"
+                ),
+                "invalid_identity_events": _count_value(
+                    (shutdown_events.get("lifecycle") or {}).get(
+                        "invalid_identity_events"
+                    )
+                ),
+                "observed_bots": _count_value(
+                    (shutdown_events.get("lifecycle") or {}).get("observed_bots")
+                ),
+                "complete_bots": _count_value(
+                    (shutdown_events.get("lifecycle") or {}).get("complete_bots")
+                ),
+                "incomplete_bots": _count_value(
+                    (shutdown_events.get("lifecycle") or {}).get("incomplete_bots")
+                ),
+                "rows": ((shutdown_events.get("lifecycle") or {}).get("rows") or [])[
+                    :max_groups
+                ],
+                "rows_truncated": len(
+                    (shutdown_events.get("lifecycle") or {}).get("rows") or []
+                )
+                > max_groups
+                or bool(
+                    (shutdown_events.get("lifecycle") or {}).get("rows_truncated")
+                ),
+            }
+        },
     }
 
 
@@ -11725,6 +11914,7 @@ def summarize_live_smoke_report_brief(report: dict[str, Any]) -> dict[str, Any]:
                 "latest_stopping_count": _count_value(
                     event_pipeline_health.get("latest_stopping_count")
                 ),
+                "integrity": event_pipeline_health.get("integrity"),
                 "event_types": event_pipeline_health.get("event_types") or {},
             }.items()
             if value is not None
@@ -11787,6 +11977,10 @@ def summarize_live_smoke_report_brief(report: dict[str, Any]) -> dict[str, Any]:
         "shutdown_events": {
             "total": _count_value(shutdown_events.get("total")),
             "event_types": shutdown_events.get("event_types") or {},
+            "lifecycle": {
+                key: _count_value((shutdown_events.get("lifecycle") or {}).get(key))
+                for key in ("observed_bots", "complete_bots", "incomplete_bots")
+            },
         },
     }
 

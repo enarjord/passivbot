@@ -6,9 +6,10 @@ import json
 import logging
 import os
 import sys
+from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Callable, Dict, List
 
 import numpy as np
 
@@ -19,10 +20,26 @@ from config import load_prepared_config
 from config.pnl_lookback import parse_pnls_max_lookback_days
 from exchanges.fake import FakeCCXTClient, load_fake_scenario
 from fill_events_manager import FillEvent, FillEventCache
+from live.event_bus import LiveEvent, LiveEventContext, LiveEventPipeline
 from logging_setup import configure_logging
 import passivbot as passivbot_mod
 from passivbot import setup_bot, shutdown_bot
 from procedures import ensure_parent_directory
+
+
+MAX_CAPTURED_LIVE_EVENTS = 2_000
+
+
+class _BoundedLiveEventSink:
+    def __init__(self, max_retained: int = MAX_CAPTURED_LIVE_EVENTS) -> None:
+        self.max_retained = max(1, int(max_retained))
+        self.events: deque[LiveEvent] = deque(maxlen=self.max_retained)
+        self.total = 0
+
+    def write(self, event: LiveEvent) -> LiveEvent:
+        self.total += 1
+        self.events.append(event)
+        return event
 
 
 def _build_output_dir(root: str | None, scenario: dict) -> Path:
@@ -141,6 +158,54 @@ def _attach_file_logging(path: Path) -> logging.Handler:
         handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
     root.addHandler(handler)
     return handler
+
+
+def _install_live_event_capture(
+    bot,
+) -> tuple[_BoundedLiveEventSink, Callable[[], None]]:
+    """Attach a fake-live artifact sink without replacing normal event sinks."""
+    pipeline = getattr(bot, "_live_event_pipeline", None)
+    capture_sink = _BoundedLiveEventSink()
+    owns_pipeline = pipeline is None
+    if owns_pipeline:
+        pipeline = LiveEventPipeline(
+            context=LiveEventContext(
+                exchange=getattr(bot, "exchange", None),
+                user=getattr(bot, "user", None),
+                bot_id=getattr(bot, "bot_id", None),
+            ),
+            structured_sinks=(capture_sink,),
+        )
+        bot._live_event_pipeline = pipeline
+        existing_sinks = ()
+    else:
+        if not callable(getattr(pipeline, "flush", None)):
+            raise RuntimeError("fake-live event pipeline does not support capture flushing")
+        existing_sinks = tuple(getattr(pipeline, "structured_sinks", ()))
+        pipeline.structured_sinks = (*existing_sinks, capture_sink)
+
+    def restore() -> None:
+        if getattr(bot, "_live_event_pipeline", None) is not pipeline:
+            return
+        if owns_pipeline:
+            pipeline.close(timeout=2.0)
+            bot._live_event_pipeline = None
+        else:
+            pipeline.structured_sinks = existing_sinks
+
+    return capture_sink, restore
+
+
+def _serialize_live_event_capture(
+    capture_sink: _BoundedLiveEventSink,
+) -> tuple[list[dict], dict]:
+    retained = len(capture_sink.events)
+    return [event.to_dict() for event in capture_sink.events], {
+        "total": capture_sink.total,
+        "retained": retained,
+        "truncated": capture_sink.total - retained,
+        "max_retained": capture_sink.max_retained,
+    }
 
 
 def _extract_hsl_trace(bot) -> Dict[str, dict]:
@@ -397,9 +462,10 @@ def _prime_fake_candles(bot, fake_client: FakeCCXTClient) -> None:
 
 def _install_runtime_overrides(bot, scenario: dict) -> None:
     if hasattr(bot, "cca") and isinstance(bot.cca, FakeCCXTClient):
-        bot.get_exchange_time = lambda: int(bot.cca.now_ms)
+        fake_client = bot.cca
+        bot.get_exchange_time = lambda: int(fake_client.now_ms)
         if hasattr(bot, "cm"):
-            bot.cm._now_ms_callback = lambda: int(bot.cca.now_ms)
+            bot.cm._now_ms_callback = lambda: int(fake_client.now_ms)
 
 
 def _fake_active_red_psides(bot) -> List[str]:
@@ -670,6 +736,7 @@ def _load_run_artifacts(output_dir: Path) -> dict[str, Any]:
         "remote_calls": _load("remote_calls.json", []),
         "remote_call_summary": _load("remote_call_summary.json", {}),
         "candle_remote_fetches": _load("candle_remote_fetches.json", []),
+        "live_events": _load("live_events.json", []),
         "log_text": log_path.read_text(encoding="utf-8") if log_path.exists() else "",
     }
 
@@ -822,7 +889,9 @@ async def _run_fake_case(
     log_handler = _attach_file_logging(log_path)
     _, restore_user_override = _install_fake_user_override(config, scenario_path, user)
     bot = None
+    bot_shutdown = False
     restore_candle_trace = lambda: None
+    restore_live_event_capture = lambda: None
 
     try:
         bot = setup_bot(config)
@@ -833,6 +902,7 @@ async def _run_fake_case(
         bot.debug_mode = True
         if not isinstance(bot.cca, FakeCCXTClient):
             raise TypeError("Fake harness expected bot.cca to be FakeCCXTClient")
+        live_event_sink, restore_live_event_capture = _install_live_event_capture(bot)
         candle_remote_fetches, restore_candle_trace = _install_candle_remote_fetch_trace(bot)
         _prime_fake_fill_cache(bot, bot.cca)
         _prime_fake_candles(bot, bot.cca)
@@ -849,6 +919,9 @@ async def _run_fake_case(
             snapshot_dir=snapshot_dir,
             run_initial_cycle=bool(scenario.get("run_initial_cycle", True)),
         )
+        pipeline = getattr(bot, "_live_event_pipeline", None)
+        if pipeline is None or not pipeline.flush(timeout=2.0):
+            raise RuntimeError("fake-live structured-event capture did not flush")
         log_text = log_path.read_text(encoding="utf-8") if log_path.exists() else ""
         remote_calls = bot.cca.export_request_log()
         remote_call_summary = _summarize_remote_calls(remote_calls)
@@ -864,30 +937,44 @@ async def _run_fake_case(
                 candle_remote_fetches=candle_remote_fetches,
             )
 
+        fake_exchange_state = bot.cca.export_state()
+        fills = list(bot.cca.fills)
+        positions = bot.cca.export_positions()
+        hsl_trace = _extract_hsl_trace(bot)
+        await bot.shutdown_gracefully()
+        bot_shutdown = True
+        live_events, live_event_capture = _serialize_live_event_capture(live_event_sink)
+
         _dump_json(output_dir / "step_summaries.json", step_summaries)
-        _dump_json(output_dir / "fake_exchange_state.json", bot.cca.export_state())
-        _dump_json(output_dir / "fills.json", bot.cca.fills)
-        _dump_json(output_dir / "positions.json", bot.cca.export_positions())
-        _dump_json(output_dir / "hsl_trace.json", _extract_hsl_trace(bot))
+        _dump_json(output_dir / "fake_exchange_state.json", fake_exchange_state)
+        _dump_json(output_dir / "fills.json", fills)
+        _dump_json(output_dir / "positions.json", positions)
+        _dump_json(output_dir / "hsl_trace.json", hsl_trace)
         _dump_json(
             output_dir / "run_metadata.json",
             {
                 "assertions_enforced": bool(enforce_assertions),
                 "user": str(config.get("live", {}).get("user") or ""),
                 "scenario_path": str(scenario_path),
+                "live_event_capture": live_event_capture,
             },
         )
         _dump_json(output_dir / "remote_calls.json", remote_calls)
         _dump_json(output_dir / "remote_call_summary.json", remote_call_summary)
         _dump_json(output_dir / "candle_remote_fetches.json", candle_remote_fetches)
+        _dump_json(output_dir / "live_events.json", live_events)
         return output_dir
     finally:
         try:
-            if bot is not None:
+            if bot is not None and not bot_shutdown:
                 await shutdown_bot(bot)
         finally:
             try:
                 restore_candle_trace()
+            except Exception:
+                pass
+            try:
+                restore_live_event_capture()
             except Exception:
                 pass
             restore_user_override()

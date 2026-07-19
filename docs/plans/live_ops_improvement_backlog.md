@@ -921,6 +921,13 @@ Related detailed plans:
       fake-live suite and seven pside HSL end-to-end scenarios remain green;
       add a dedicated coin-mode post-panic scenario and fix the epoch handoff
       separately from HSL episode-finalization math.
+    - 2026-07-18: Canonical master now completes that coin-mode post-panic
+      handoff: the panic close fills, authoritative account surfaces refresh,
+      cooldown ends, and normal selection resumes without the former missing
+      surface failure. The active regression slice persists the already-emitted
+      redacted live-event envelopes in fake-live artifacts and makes the
+      scenario prove a later available planning snapshot with no
+      `planning.unavailable` handoff event.
 
 16. [x] Websocket reconnect diagnostics.
     Status: completed by PR #1170.
@@ -1081,13 +1088,16 @@ Related detailed plans:
     the live default branch before the cutover can be considered complete.
 
 20. [ ] Per-asset collateral, debt, and valuation balance events.
-    Status: partial, OKX-first. The first connector-specific slice normalizes
-    only OKX's already-fetched `info.data[0].details` into bounded deterministic
-    asset rows and carries an explicit unavailable/malformed diagnostic state
-    for generic, Binance, and Hyperliquid staged paths. It does not add exchange
-    calls or change scalar balance, planning, orders, risk, or console
-    materiality. Other connector parsers and any broader asset contract remain
-    open. A 2026-07-14 evaluation confirmed that the existing
+    Status: partial, OKX plus Binance plus Hyperliquid unified-account totals.
+    Connector-specific slices normalize OKX's already-fetched
+    `info.data[0].details`, Binance's already-fetched CCXT unified balance maps,
+    and proven Hyperliquid unified `info.balances` coin/total rows into bounded
+    deterministic asset rows. Hyperliquid non-unified payloads remain explicitly
+    unavailable; HIP-3 position responses remain out of scope. Gate.io and
+    KuCoin remain fixture/contract work. These slices add no exchange calls or
+    changes to scalar balance, planning, orders, risk, or console materiality.
+    Other connector parsers and any broader asset contract remain open. A
+    2026-07-14 evaluation confirmed that the existing
     `balance.changed` event and console projection expose only aggregate raw
     balance, hysteresis-snapped balance, equity, deltas, and source. The
     authoritative refresh already receives the exact raw balance response
@@ -1147,6 +1157,10 @@ Related detailed plans:
     for unsupported or malformed breakdowns.
 
     Work log:
+    - 2026-07-18: Binance follow-up normalized only CCXT's documented unified
+      `total`, `free`, `used`, and explicit `debt` maps from the same fetched
+      response. It excludes raw `info`, arbitrary fields, non-finite values,
+      and valuation inference while reusing existing bounds and signatures.
     - 2026-07-18: OKX-first slice added bounded rows for `ccy`, `cashBal`,
       `eqUsd`, `upl`, `collateralEnabled`, and explicit `liab`, with per-field
       provenance, deterministic truncation, an omitted-row-sensitive internal

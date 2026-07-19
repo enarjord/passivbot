@@ -81,6 +81,7 @@ from live.event_bus import (
 )
 import live.event_emitters as live_event_emitters
 from monitor_publisher import MonitorPublisher
+from runtime_identity import build_runtime_identity, write_runtime_manifest
 from live.market_snapshot import MarketSnapshot, MarketSnapshotProvider
 from live.planning_availability import PlanningAvailability
 from live.planning_snapshot import PlanningSnapshot
@@ -1144,6 +1145,11 @@ class Passivbot:
         self._live_event_remote_call_ids = {}
         self._active_candle_incomplete_last_log_ms = {}
         self.start_time_ms = utc_ms()
+        self.runtime_identity = build_runtime_identity(
+            self.config,
+            started_at_ms=self.start_time_ms,
+        )
+        self._runtime_manifest_written = False
         self.bot_start_exchange_ts = int(self.get_exchange_time())
         self.orders_emitted_to_exchange: list[dict] = []
         self.foreign_passivbot_seen: dict[str, int] = {}
@@ -1162,6 +1168,7 @@ class Passivbot:
                     exchange=self.exchange,
                     user=self.user,
                     config=require_config_value(config, "monitor"),
+                    runtime_identity=self.runtime_identity.to_dict(),
                 )
             except Exception as exc:
                 logging.error(
@@ -2415,6 +2422,18 @@ class Passivbot:
         logging.info("╠%s╣", border)
         logging.info("║%s║", line2)
         logging.info("╚%s╝", border)
+        runtime = self.runtime_identity
+        dirty_suffix = "+dirty" if runtime.python_git_dirty else ""
+        logging.info(
+            "[runtime] run=%s pb=%s python=%s%s config=%s rust_source=%s rust_artifact=%s",
+            runtime.run_id[:12],
+            runtime.passivbot_version,
+            runtime.python_git_commit[:12],
+            dirty_suffix,
+            runtime.config_sha256[:12],
+            runtime.rust_source_sha256[:12],
+            runtime.rust_artifact_sha256[:12],
+        )
         if self._live_market_orders_allowed():
             logging.warning(
                 "[order] live market order execution is enabled | "
@@ -3111,6 +3130,16 @@ class Passivbot:
         Passivbot._install_asyncio_runtime_exception_handler(self)
         Passivbot._startup_timing_begin(self)
         self._log_startup_banner()
+        runtime_data = self.runtime_identity.to_dict()
+        if not self._runtime_manifest_written:
+            try:
+                write_runtime_manifest(
+                    self.runtime_identity,
+                    root=Path("caches/runtime") / self.exchange / self.user,
+                )
+                self._runtime_manifest_written = True
+            except Exception as exc:
+                logging.warning("[runtime] failed to persist immutable runtime manifest: %s", exc)
         self._bot_ready = False
         if not Passivbot._live_event_console_available(self):
             logging.info("[boot] starting bot %s...", self.exchange)
@@ -3123,6 +3152,7 @@ class Passivbot:
                 "pid": os.getpid(),
                 "quote": self.quote,
                 "start_time_ms": int(self.start_time_ms),
+                "runtime": runtime_data,
             }
             if live_event_debug_profiles:
                 bot_started_data["live_event_debug_profiles"] = live_event_debug_profiles
@@ -3135,6 +3165,7 @@ class Passivbot:
                     "pid": os.getpid(),
                     "quote": self.quote,
                     "start_time_ms": int(self.start_time_ms),
+                    "runtime": runtime_data,
                     **(
                         {"live_event_debug_profiles": live_event_debug_profiles}
                         if live_event_debug_profiles
@@ -3142,6 +3173,14 @@ class Passivbot:
                     ),
                 },
                 ts=int(self.start_time_ms),
+            )
+            self._emit_live_event(
+                EventTypes.RUNTIME_STARTED,
+                level="info",
+                component="lifecycle",
+                tags=("runtime", "lifecycle", "start"),
+                status="started",
+                data=runtime_data,
             )
             self._emit_live_event(
                 EventTypes.BOT_STARTED,
@@ -10522,6 +10561,7 @@ class Passivbot:
                 user=self.user,
                 fetcher=fetcher,
                 cache_path=cache_path,
+                runtime_identity=self.runtime_identity.to_dict(),
                 **fee_policy_kwargs_from_config(self.config),
             )
 

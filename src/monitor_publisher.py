@@ -11,6 +11,7 @@ import threading
 import time
 import uuid
 from collections import deque
+from copy import deepcopy
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterable, Optional
@@ -139,6 +140,7 @@ class MonitorPublisher:
         price_tick_min_interval_ms: int,
         emit_completed_candles: bool,
         include_raw_fill_payloads: bool,
+        runtime_identity: Optional[dict] = None,
     ):
         self.exchange = str(exchange)
         self.user = str(user)
@@ -163,6 +165,7 @@ class MonitorPublisher:
         self.price_tick_min_interval_ms = max(0, int(price_tick_min_interval_ms))
         self.emit_completed_candles = bool(emit_completed_candles)
         self.include_raw_fill_payloads = bool(include_raw_fill_payloads)
+        self.runtime_identity = deepcopy(runtime_identity) if runtime_identity else {}
         self.pid = os.getpid()
         self.created_ts_ms = self._now_ms()
         self.last_snapshot_ms = 0
@@ -190,7 +193,14 @@ class MonitorPublisher:
         self._write_manifest()
 
     @classmethod
-    def from_config(cls, *, exchange: str, user: str, config: dict) -> "MonitorPublisher":
+    def from_config(
+        cls,
+        *,
+        exchange: str,
+        user: str,
+        config: dict,
+        runtime_identity: Optional[dict] = None,
+    ) -> "MonitorPublisher":
         return cls(
             exchange=exchange,
             user=user,
@@ -208,6 +218,7 @@ class MonitorPublisher:
             price_tick_min_interval_ms=int(config["price_tick_min_interval_ms"]),
             emit_completed_candles=bool(config["emit_completed_candles"]),
             include_raw_fill_payloads=bool(config["include_raw_fill_payloads"]),
+            runtime_identity=runtime_identity,
         )
 
     def _now_ms(self) -> int:
@@ -385,6 +396,7 @@ class MonitorPublisher:
             "updated_ts_ms": now_ms,
             "last_seq": self.seq,
             "current_segment_started_ms": self.current_segment_started_ms,
+            "runtime": deepcopy(self.runtime_identity),
             "history_current_segment_started_ms": dict(self.history_segment_started_ms),
             "paths": {
                 "root": str(self.root),
@@ -1188,6 +1200,7 @@ class MonitorPublisher:
                 meta = dict(payload.get("meta") or {})
                 meta.setdefault("exchange", self.exchange)
                 meta.setdefault("user", self.user)
+                meta.setdefault("runtime", deepcopy(self.runtime_identity))
                 meta["snapshot_ts_ms"] = now_ms
                 meta["seq"] = self.seq
                 payload["meta"] = meta

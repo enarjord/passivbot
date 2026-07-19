@@ -13,6 +13,7 @@ import tools.run_fake_live as run_fake_live_module
 from fill_events_manager import FillEvent, FillEventCache
 from config_utils import load_config
 from exchanges.fake import FakeCCXTClient
+from live.event_bus import EventTypes, LiveEvent
 from passivbot import setup_bot
 from tools.run_fake_live import (
     _async_main,
@@ -100,6 +101,104 @@ async def test_run_fake_bot_advances_until_timeline_end():
     summaries = await _run_fake_bot(bot, client, max_steps=None)
     assert bot.loop_calls == 3
     assert [row["step_index"] for row in summaries] == [0, 1, 2]
+
+
+@pytest.mark.fake_live
+def test_live_event_capture_uses_isolated_pipeline_without_default_pipeline():
+    class _NoDefaultPipelineBot:
+        exchange = "fake"
+        user = "fake_capture"
+        bot_id = "fake_capture_bot"
+        _live_event_pipeline = None
+
+    bot = _NoDefaultPipelineBot()
+    sink, restore = run_fake_live_module._install_live_event_capture(bot)
+    pipeline = bot._live_event_pipeline
+    try:
+        assert pipeline.console_sink is None
+        assert pipeline.monitor_sinks == ()
+        assert pipeline.structured_sinks == (sink,)
+        assert pipeline.emit(LiveEvent(EventTypes.BOT_STARTED)) is not None
+        assert pipeline.flush(timeout=2.0) is True
+        assert [event.event_type for event in sink.events] == [EventTypes.BOT_STARTED]
+    finally:
+        restore()
+    assert bot._live_event_pipeline is None
+
+
+@pytest.mark.fake_live
+def test_live_event_capture_serialization_reports_truncation():
+    sink = run_fake_live_module._BoundedLiveEventSink(max_retained=2)
+    for event_type in (
+        EventTypes.BOT_STARTED,
+        EventTypes.BOT_READY,
+        EventTypes.CYCLE_COMPLETED,
+    ):
+        sink.write(LiveEvent(event_type, data={"token": "secret-token"}))
+
+    events, metadata = run_fake_live_module._serialize_live_event_capture(sink)
+
+    assert [event["event_type"] for event in events] == [
+        EventTypes.BOT_READY,
+        EventTypes.CYCLE_COMPLETED,
+    ]
+    assert all(event["data"]["token"] == "[redacted]" for event in events)
+    assert metadata == {"total": 3, "retained": 2, "truncated": 1, "max_retained": 2}
+
+
+@pytest.mark.asyncio
+@pytest.mark.fake_live
+async def test_fake_live_persists_events_when_console_pipeline_is_disabled(tmp_path, monkeypatch):
+    import passivbot_rust as pbr
+
+    if getattr(pbr, "__is_stub__", False):
+        pytest.skip("requires real passivbot_rust extension")
+
+    monkeypatch.setenv("PASSIVBOT_LIVE_EVENT_CONSOLE", "0")
+    user = f"fake_capture_only_{tmp_path.name}"
+    _cleanup_fake_user_state(user)
+    scenario = hjson.loads(
+        (REPO_ROOT / "scenarios" / "fake_live" / "hsl_long_red_restart.hjson").read_text(
+            encoding="utf-8"
+        )
+    )
+    scenario.pop("assertions", None)
+    scenario["run_initial_cycle"] = False
+    scenario_path = tmp_path / "capture_only.hjson"
+    scenario_path.write_text(hjson.dumps(scenario), encoding="utf-8")
+
+    try:
+        args = argparse.Namespace(
+            config=str(REPO_ROOT / "configs" / "fake_live_hsl_btc.hjson"),
+            scenario=str(scenario_path),
+            user=user,
+            max_steps=0,
+            output_dir=str(tmp_path),
+            log_level=1,
+            snapshot_each_step=False,
+        )
+        assert await _async_main(args) == 0
+        run_dir = next(path for path in tmp_path.iterdir() if path.is_dir())
+        artifacts = _load_run_artifacts(run_dir)
+        assert any(
+            event.get("event_type") == EventTypes.BOT_STARTED
+            for event in artifacts["live_events"]
+        )
+        assert any(
+            event.get("event_type") == EventTypes.BOT_STOPPING
+            for event in artifacts["live_events"]
+        )
+        assert any(
+            event.get("event_type") == EventTypes.BOT_STOPPED
+            for event in artifacts["live_events"]
+        )
+        assert "[monitor] failed building monitor snapshot" not in artifacts["log_text"]
+        capture = artifacts["run_metadata"]["live_event_capture"]
+        assert capture["total"] == capture["retained"] == len(artifacts["live_events"])
+        assert capture["truncated"] == 0
+        assert capture["max_retained"] == run_fake_live_module.MAX_CAPTURED_LIVE_EVENTS
+    finally:
+        _cleanup_fake_user_state(user)
 
 
 @pytest.mark.fake_live
@@ -510,11 +609,15 @@ def test_bot_params_to_rust_dict_ignores_removed_entry_grid_inflation_flag():
     assert out["unstuck_loss_allowance_pct"] == pytest.approx(0.025)
 
 
-def test_install_runtime_overrides_sets_exchange_time_override():
+def test_install_runtime_overrides_keep_scenario_time_after_client_shutdown():
     client = FakeCCXTClient(_scenario(), quote="USDT")
-    bot = type("Bot", (), {"cca": client})()
+    cm = type("CandlestickManager", (), {})()
+    bot = type("Bot", (), {"cca": client, "cm": cm})()
     _install_runtime_overrides(bot, {})
+    bot.cca = None
+
     assert bot.get_exchange_time() == client.now_ms
+    assert bot.cm._now_ms_callback() == client.now_ms
 
 
 def test_compare_run_artifacts_reports_no_diff_for_matching_payloads():
@@ -654,6 +757,9 @@ def test_load_run_artifacts_reads_expected_files(tmp_path):
     (tmp_path / "candle_remote_fetches.json").write_text(
         json.dumps([{"kind": "ccxt_fetch_ohlcv"}]), encoding="utf-8"
     )
+    (tmp_path / "live_events.json").write_text(
+        json.dumps([{"event_type": "snapshot.built"}]), encoding="utf-8"
+    )
     (tmp_path / "fake_live.log").write_text("hello\n", encoding="utf-8")
 
     loaded = _load_run_artifacts(tmp_path)
@@ -663,6 +769,7 @@ def test_load_run_artifacts_reads_expected_files(tmp_path):
     assert loaded["remote_calls"][0]["method"] == "fetch_balance"
     assert loaded["remote_call_summary"]["total_calls"] == 1
     assert loaded["candle_remote_fetches"][0]["kind"] == "ccxt_fetch_ohlcv"
+    assert loaded["live_events"][0]["event_type"] == "snapshot.built"
     assert loaded["log_text"] == "hello\n"
 
 
@@ -970,12 +1077,63 @@ async def test_coin_hsl_restart_scenario_uses_protective_supervisor(tmp_path):
         assert len(run_dirs) == 1
         artifacts = _load_run_artifacts(run_dirs[0])
         assert artifacts["positions"] == []
-        assert any(
-            fill.get("symbol") == "BTC/USDT:USDT"
+        events = artifacts["live_events"]
+        panic_close_idx = next(
+            idx
+            for idx, event in enumerate(events)
+            if event.get("event_type") == "execution.create_succeeded"
+            and event.get("symbol") == "BTC/USDT:USDT"
+            and event.get("pside") == "long"
+            and event.get("data", {}).get("pb_order_type") == "close_panic_long"
+            and event.get("data", {}).get("reduce_only") is True
+            and event.get("data", {}).get("result_status") == "closed"
+        )
+        panic_close = events[panic_close_idx]
+        panic_client_order_id = panic_close.get("client_order_id")
+        assert panic_client_order_id
+        panic_fill = next(
+            fill
+            for fill in artifacts["fills"]
+            if fill.get("clientOrderId") == panic_client_order_id
+            and fill.get("symbol") == "BTC/USDT:USDT"
             and fill.get("position_side") == "long"
             and fill.get("side") == "sell"
             and fill.get("reduceOnly") is True
-            for fill in artifacts["fills"]
+        )
+        assert panic_fill["id"] not in {"10", "11", "12"}
+        post_panic_positions_packet_idx = next(
+            idx
+            for idx, event in enumerate(events[panic_close_idx + 1 :], panic_close_idx + 1)
+            if event.get("event_type") == "data_packet.updated"
+            and event.get("data", {}).get("kind") == "positions"
+            and event.get("data", {}).get("coverage", {}).get("row_count") == 0
+        )
+        post_panic_positions_packet = events[post_panic_positions_packet_idx]["data"]
+        healthy_snapshot = next(
+            event
+            for event in events[post_panic_positions_packet_idx + 1 :]
+            if event.get("event_type") == "snapshot.built"
+            and event.get("data", {}).get("planning_availability", {}).get("status_counts", {}).get(
+                "unavailable", 0
+            )
+            == 0
+            and event.get("data", {}).get("planning_availability", {}).get(
+                "record_count", 0
+            )
+            > 0
+            and event.get("data", {}).get("planning_availability", {}).get(
+                "status_counts", {}
+            ).get("available", 0)
+            == event.get("data", {}).get("planning_availability", {}).get("record_count", 0)
+        )
+        assert any(
+            packet.get("kind") == "positions"
+            and packet.get("revision", 0) >= post_panic_positions_packet["revision"]
+            for packet in healthy_snapshot["data"]["data_packets"]
+        )
+        assert all(
+            event.get("event_type") != EventTypes.PLANNING_UNAVAILABLE
+            for event in events[panic_close_idx + 1 :]
         )
     finally:
         _cleanup_fake_user_state(user)

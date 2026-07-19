@@ -84,6 +84,7 @@ The code-owned registries live in `src/live/event_bus.py`. Payload and emission 
 - `risk.entry_cooldown_delta_anchored`
 - `risk.mode_changed`
 - `risk.realized_loss_gate_blocked`
+- `runtime.started`
 - `rust_orchestrator.called`
 - `rust_orchestrator.returned`
 - `sink.degraded`

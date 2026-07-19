@@ -478,6 +478,9 @@ def maturin_develop_command() -> list[str]:
 
 def maturin_env() -> dict[str, str]:
     env = os.environ.copy()
+    fingerprint = source_fingerprint()
+    if fingerprint is not None:
+        env["PASSIVBOT_RUST_SOURCE_FINGERPRINT"] = fingerprint
     prefix = Path(sys.prefix)
     base_prefix = Path(getattr(sys, "base_prefix", sys.prefix))
     if prefix != base_prefix:
