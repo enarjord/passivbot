@@ -1,6 +1,5 @@
 from exchanges.ccxt_bot import CCXTBot, format_exchange_config_response
 from live.balance_composition import (
-    malformed_balance_composition,
     normalize_ccxt_balance_composition,
 )
 from passivbot import logging
@@ -221,7 +220,7 @@ class BinanceBot(CCXTBot):
         if "balance" in plan:
             tasks["balance"] = asyncio.create_task(
                 self._timed_authoritative_fetch(
-                    "balance", self.capture_balance_snapshot(), timings_ms
+                    "balance", self._capture_balance_staged_snapshot(), timings_ms
                 )
             )
         tasks["positions"] = asyncio.create_task(
@@ -255,16 +254,9 @@ class BinanceBot(CCXTBot):
                     except AttributeError:
                         pass
             if "balance" in tasks:
-                raw_balance, balance = await tasks["balance"]
+                _raw_balance, balance_composition, balance = await tasks["balance"]
                 out["balance"] = balance
-                try:
-                    out["balance_composition"] = self._normalize_balance_diagnostics(
-                        raw_balance
-                    )
-                except Exception:
-                    out["balance_composition"] = malformed_balance_composition(
-                        source="normalizer", reason="normalizer_error"
-                    )
+                out["balance_composition"] = balance_composition
             return out
         except Exception:
             for task in tasks.values():

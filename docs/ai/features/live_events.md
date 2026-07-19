@@ -29,6 +29,11 @@ Any legacy raw-only balance apply replaces a previous composition with an
 explicit unavailable state; it must never pair stale asset rows with a fresh
 aggregate balance.
 
+Generic staged refresh retains the already-fetched raw balance response only
+long enough to derive data-packet provenance metadata, separately from the
+bounded composition object and normalized scalar balance. Events may expose
+the resulting hash/reference but never the raw response itself.
+
 Hyperliquid contributes rows only for proven unified responses with
 `info.balances` as a list. Each retained row uses only its `coin` asset and
 finite signed `total`, with field provenance; no hold/free/used, liability,

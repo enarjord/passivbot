@@ -56,6 +56,18 @@
    Fresh remote rows overwrite matching disk rows, but partial remote results retain any existing
    disk coverage without entering the reusable range or EMA caches. Affected higher-timeframe EMA
    cache entries are invalidated, and higher-timeframe EMAs require full requested coverage.
+9. WEEX live warmups use exchange-specific hybrid pagination: bounded 100-row historical windows
+   followed by the recent endpoint only when its 999 finalized-row tail covers the remainder. This
+   supports deep-enough 1m and 1h live EMA, trailing, and HSL restart windows without enabling WEEX
+   bulk backtest-data download.
+10. Native higher-timeframe EMA windows require full requested coverage on every exchange. WEEX
+    additionally requires exact aligned coverage for 1m EMA windows because its recent endpoint
+    silently tail-anchors responses. Exchange-independent trailing-extrema and HSL replay-cache
+    extension consumers also require exact aligned coverage; incomplete windows become unavailable
+    or fall back to authoritative replay.
+11. Quote-volume EMA is derived from normalized CCXT base volume and typical price
+    (`base_volume * (high + low + close) / 3`). It is an approximation when an exchange, including
+    WEEX, does not expose raw quote turnover through unified OHLCV.
 
 Cache paths use `to_standard_exchange_name()` rather than raw CCXT identifiers such as
 `binanceusdm` or `kucoinfutures`.
@@ -76,6 +88,8 @@ Cache paths use `to_standard_exchange_name()` rather than raw CCXT identifiers s
 1. Gap fill behavior and continuity.
 2. Replacement/invalidation behavior when real data arrives.
 3. Pagination boundary correctness per exchange.
+   WEEX validation must cover both 1m and 1h ranges that cross the recent/history boundary and
+   assert that every historical request spans no more than 100 aligned candles.
 4. Backtest/live parity for live tail-gap EMA projection behavior.
 5. Binance archive threshold, publication-lag, checksum, source-order, non-overwrite, and CCXT
    fallback behavior, including public unauthenticated download smokes.

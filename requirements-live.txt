@@ -5,7 +5,7 @@ pandas==2.2.2; python_version < "3.14"
 pandas==2.3.3; python_version >= "3.14"
 numpy==1.26.4; python_version < "3.14"
 numpy==2.3.5; python_version >= "3.14"
-ccxt==4.5.48
+ccxt==4.5.66
 hjson==3.0.2
 prettytable==3.11.0
 sortedcontainers==2.4.0

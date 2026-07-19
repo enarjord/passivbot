@@ -36,6 +36,11 @@ Retention protects current files, counts regular files in managed roots, and del
 non-current candidates using strict age and oldest-first cap pruning. Races must not broaden the
 deletion domain.
 
+Window-bounded smoke selection may use `current_segment_started_ms` from the
+bounded manifest as coverage proof when no rotated predecessor exists. Missing,
+oversized, malformed, or later-than-window evidence remains unavailable rather
+than treating `current.ndjson` as complete by assumption.
+
 ## Validation
 
 - manifest/row/trailer corruption and oversized rows

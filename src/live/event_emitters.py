@@ -677,7 +677,7 @@ def emit_candle_remote_fetch_event(bot: Any, payload: dict[str, Any]) -> Any:
 def _authoritative_result_summary(surface: str, result: Any) -> dict[str, Any]:
     if surface == "balance":
         try:
-            raw, normalized = result
+            raw, _composition, normalized = result
             return {
                 "has_raw_payload": raw is not None,
                 "balance": round(float(normalized), 12),

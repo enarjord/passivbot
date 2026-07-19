@@ -5,6 +5,7 @@ from types import MethodType, SimpleNamespace
 
 import pytest
 
+from fill_events_manager import FillEvent
 from passivbot import Passivbot
 from passivbot_exceptions import RestartBotException
 from live.event_bus import ReasonCodes
@@ -1218,6 +1219,62 @@ def test_cooldown_anchor_uses_scope_flattening_fill():
     )
 
 
+@pytest.mark.parametrize(
+    ("pside", "side"),
+    [("long", "sell"), ("short", "buy")],
+)
+def test_repanic_replay_infers_decrease_from_durable_fill_fields(pside, side):
+    bot = make_coin_bot()
+    event = FillEvent.from_dict(
+        {
+            "id": f"{pside}-close",
+            "timestamp": 150_000,
+            "symbol": "A",
+            "side": side,
+            "qty": 1.0,
+            "price": 100.0,
+            "pnl": 0.0,
+            "pb_order_type": f"close_panic_{pside}",
+            "position_side": pside,
+            "client_order_id": "",
+        }
+    )
+    bot._pnls_manager = make_fake_pnls_manager([event])
+
+    assert (
+        bot._equity_hard_stop_latest_flatten_fill_timestamp_optional_ms(
+            pside,
+            symbol="A",
+            since_ms=150_000,
+            replay_start_sizes={"A": 1.0},
+        )
+        == 150_000
+    )
+
+
+@pytest.mark.asyncio
+async def test_coin_repanic_replay_includes_intervention_millisecond():
+    bot = make_coin_bot(policy="panic")
+    symbol = "A"
+    state = bot._hsl_coin_state("long", symbol)
+    state["halted"] = True
+    state["cooldown_until_ms"] = 200_000
+    bot.positions = {
+        symbol: {
+            "long": {"size": 1.0, "price": 100.0},
+            "short": {"size": 0.0, "price": 0.0},
+        }
+    }
+
+    changed = await bot._equity_hard_stop_handle_coin_position_during_cooldown(
+        "long", symbol, 150_000
+    )
+
+    assert changed is False
+    assert state["cooldown_repanic_since_ms"] == 150_000
+    assert state["cooldown_repanic_start_sizes"] == {symbol: 1.0}
+
+
 @pytest.mark.asyncio
 async def test_flatten_confirmation_refreshes_fills_and_rejects_pre_episode_anchor():
     bot = make_coin_bot()
@@ -1755,6 +1812,7 @@ def bind_hsl_methods(bot):
         "_equity_hard_stop_coin_red_active",
         "_equity_hard_stop_coin_symbols",
         "_equity_hard_stop_handle_coin_position_during_cooldown",
+        "_equity_hard_stop_refresh_coin_cooldown_after_repanic",
         "_equity_hard_stop_has_open_position_symbol",
         "_equity_hard_stop_count_blocking_open_orders_symbol",
         "_equity_hard_stop_history_coin_value",
@@ -1917,6 +1975,42 @@ def test_coin_hsl_restart_reset_preserves_persistent_no_restart_peak():
     assert state["no_restart_peak_strategy_equity"] == pytest.approx(1.25)
     assert state["pnl_reset_timestamp_ms"] == 123_456
     assert state["halted"] is False
+
+
+@pytest.mark.asyncio
+async def test_coin_hsl_repanic_fill_confirmation_blocks_past_old_deadline():
+    bot = make_coin_bot()
+    symbol = "A"
+    state = bot._hsl_coin_state("long", symbol)
+    state["halted"] = True
+    state["cooldown_until_ms"] = 200_000
+    state["cooldown_intervention_active"] = True
+    state["cooldown_repanic_reset_pending"] = True
+    state["cooldown_repanic_since_ms"] = 150_001
+    state["cooldown_repanic_start_sizes"] = {symbol: 1.0}
+    bot.positions = {
+        symbol: {
+            "long": {"size": 0.0, "price": 0.0},
+            "short": {"size": 0.0, "price": 0.0},
+        }
+    }
+    bot._pnls_manager = make_fake_pnls_manager([])
+    bot.get_exchange_time = lambda: 210_000
+    refreshes = []
+
+    async def update_pnls(*, source, since_ms=None):
+        refreshes.append((source, since_ms))
+        return False
+
+    bot.update_pnls = update_pnls
+
+    await bot._equity_hard_stop_check_coin()
+
+    assert refreshes == [("hsl_flatten_confirmation", 150_001)]
+    assert state["halted"] is True
+    assert state["cooldown_until_ms"] == 200_000
+    assert state["cooldown_repanic_reset_pending"] is True
+    assert state["cooldown_repanic_start_sizes"] == {symbol: 1.0}
 
 
 @pytest.mark.asyncio
@@ -3636,6 +3730,28 @@ async def test_hsl_cache_reuse_falls_back_on_missing_or_incompatible_cache(
     assert (
         await bot._equity_hard_stop_try_reuse_replay_cache(exchange_now) is not None
     )
+
+    # A candle hole inside the cache-extension gap must reject reuse. Carrying
+    # the last cached close across an unproven minute would understate HSL risk.
+    bot = _make_reuse_bot(
+        tmp_path,
+        monkeypatch,
+        fills=all_fills,
+        exchange_now=exchange_now,
+        positions=final_positions,
+    )
+
+    async def incomplete_gap_candles(*args, **kwargs):
+        import numpy as np
+        import passivbot as passivbot_module
+
+        return np.array(
+            [row for row in _REUSE_CANDLES if row[0] != _REUSE_BASE_TS + 180_000],
+            dtype=passivbot_module.CANDLE_DTYPE,
+        )
+
+    bot.cm.get_candles = incomplete_gap_candles
+    assert await bot._equity_hard_stop_try_reuse_replay_cache(exchange_now) is None
 
     # HSL config change rotates the digest: rejected.
     bot = _make_reuse_bot(

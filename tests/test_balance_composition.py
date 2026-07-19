@@ -437,7 +437,7 @@ def test_public_composition_drops_unknown_raw_fields_and_console_sample_is_bound
 
 
 @pytest.mark.asyncio
-async def test_generic_staged_capture_carries_normalized_diagnostics_not_raw_payload():
+async def test_generic_staged_capture_carries_raw_payload_and_normalized_diagnostics():
     raw_payload = {"info": {"data": [{"details": [{"ccy": "USDT", "cashBal": "1"}]}]}}
 
     class Bot:
@@ -452,10 +452,11 @@ async def test_generic_staged_capture_carries_normalized_diagnostics_not_raw_pay
             return normalize_okx_balance_composition(payload)
 
     bot = Bot()
-    composition, balance = await state_refresh.capture_balance_staged_snapshot(bot)
+    raw, composition, balance = await state_refresh.capture_balance_staged_snapshot(bot)
 
     assert bot.capture_calls == 1
     assert balance == 10.0
+    assert raw is raw_payload
     assert composition["asset_balances"][0]["asset"] == "USDT"
     assert raw_payload is not composition
     assert "info" not in composition
@@ -470,9 +471,10 @@ async def test_diagnostic_normalizer_failure_is_explicit_without_losing_scalar_b
         def _normalize_balance_diagnostics(self, _payload):
             raise RuntimeError("secret parser failure")
 
-    composition, balance = await state_refresh.capture_balance_staged_snapshot(Bot())
+    raw, composition, balance = await state_refresh.capture_balance_staged_snapshot(Bot())
 
     assert balance == 10.0
+    assert raw == {"api_key": "secret"}
     assert composition == malformed_balance_composition(
         source="normalizer", reason="normalizer_error"
     )

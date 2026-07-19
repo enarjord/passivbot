@@ -53,6 +53,7 @@ from live.balance_composition import (
     balance_composition_signature,
     normalize_okx_balance_composition,
 )
+from live.data_packets import stable_hash
 
 
 TEST_RUNTIME_IDENTITY = RuntimeIdentity(
@@ -525,6 +526,12 @@ async def test_staged_account_refresh_emits_data_packet_diagnostics():
         ],
     )
     _disable_entry_cooldown_delta_guard_for_staged_refresh_test(bot)
+    raw_balance = {"total": {"USDT": 123.45}, "exchange_revision": "raw-1"}
+
+    async def capture_balance_snapshot():
+        return raw_balance, 123.45
+
+    bot.capture_balance_snapshot = capture_balance_snapshot
     events = []
     bot._monitor_record_event = (
         lambda kind, tags, payload=None, **kwargs: events.append(
@@ -547,6 +554,7 @@ async def test_staged_account_refresh_emits_data_packet_diagnostics():
     assert by_kind["balance"]["scope"] == "global"
     assert by_kind["balance"]["freshness"]["status"] == "fresh"
     assert by_kind["balance"]["quality"] == "ok"
+    assert by_kind["balance"]["raw_hash"] == stable_hash(raw_balance)
     assert by_kind["balance"]["response_received_ts_ms"] >= by_kind["balance"][
         "call_started_ts_ms"
     ]
@@ -574,6 +582,26 @@ async def test_data_packet_capture_failure_does_not_block_authoritative_fetch():
 
     assert result == ("raw-balance", 123.45)
     assert timings_ms["balance"] >= 0
+
+
+def test_balance_data_packet_capture_accepts_legacy_raw_normalized_pair():
+    bot = Passivbot.__new__(Passivbot)
+    bot.exchange = "legacy"
+    bot._authoritative_refresh_epoch = 7
+    raw_balance = {"total": {"USDT": 123.45}, "raw_revision": "legacy-pair"}
+
+    bot._capture_live_data_packet_fetch_metadata(
+        "balance",
+        (raw_balance, 123.45),
+        call_started_ts_ms=100,
+        response_received_ts_ms=125,
+    )
+
+    packet = bot._pending_live_data_packet_metadata["balance"]
+    assert packet.coverage == {"value_present": True}
+    assert packet.raw_hash == stable_hash(raw_balance)
+    assert packet.call_started_ts_ms == 100
+    assert packet.response_received_ts_ms == 125
 
 
 def test_diagnostic_event_emit_failure_is_noncritical():
@@ -8106,7 +8134,7 @@ def test_completed_candle_snapshot_summary_is_bounded_and_signature_only():
     assert summary == {
         "required": True,
         "timeframe": "1m",
-        "signature_row_count": 14,
+        "source_row_count": 14,
         "valid_row_count": 11,
         "invalid_row_count": 3,
         "tail_gap_fallback_count": 10,
@@ -8119,6 +8147,11 @@ def test_completed_candle_snapshot_summary_is_bounded_and_signature_only():
         "configured_max_tail_gap_ms": 120_000,
     }
     assert "api_key" not in json.dumps(summary, sort_keys=True)
+    serialized = LiveEvent(
+        event_type="snapshot.built", data={"completed_candle_summary": summary}
+    )
+    assert serialized.data["completed_candle_summary"]["source_row_count"] == 14
+    assert "[redacted]" not in json.dumps(serialized.data, sort_keys=True)
 
 
 def test_completed_candle_snapshot_summary_is_omitted_when_not_required():
@@ -8172,7 +8205,7 @@ def test_completed_candle_snapshot_summary_rejects_coerced_timestamps():
 
     summary = bot._completed_candle_summary_from_snapshot(snapshot)
 
-    assert summary["signature_row_count"] == 2
+    assert summary["source_row_count"] == 2
     assert summary["valid_row_count"] == 0
     assert summary["invalid_row_count"] == 2
     assert "expected_close_age" not in summary
