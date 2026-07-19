@@ -20,7 +20,14 @@ class GateIOBot(CCXTBot):
 
     def create_ccxt_sessions(self):
         """GateIO: Add broker header to CCXT config."""
-        super().create_ccxt_sessions()
+        # CCXT 4.5.66 exposes Gate.io clients under ``gate``. Keep Passivbot's
+        # exchange identity canonical everywhere outside client construction.
+        canonical_ccxt_id = self.exchange_ccxt_id
+        try:
+            self.exchange_ccxt_id = "gate"
+            super().create_ccxt_sessions()
+        finally:
+            self.exchange_ccxt_id = canonical_ccxt_id
         # Add broker header to both clients
         headers = {"X-Gate-Channel-Id": self.broker_code} if self.broker_code else {}
         for client in [self.cca, self.ccp]:
