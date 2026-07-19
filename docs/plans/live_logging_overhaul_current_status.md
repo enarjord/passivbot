@@ -1584,8 +1584,8 @@ PR #1288's bounded target-identity stability, and PR #1289's plan binding are
 merged, deployed, and naturally validated without process control. PR #1290's
 pane-parent relaunch classification and the restart preparation/orchestration
 slices through PR #1309 are also merged and deployed. Later slices through PR
-#1331 are merged and deployed at canonical
-`0a6be3ed00261c6d6a2cdbe0f2588e5709e670f1`; their current evidence is recorded
+#1334 are merged and deployed at canonical
+`97aa36da4c9a9885c840ea48590837e28e5b8069`; their current evidence is recorded
 above. The active artifact-scan cost slice measures read-only query/report work
 without changing scan behavior.
 
