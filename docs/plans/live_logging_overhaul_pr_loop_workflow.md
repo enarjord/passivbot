@@ -91,9 +91,11 @@ before push or merge.
 - Keep dependent work serial. Use parallel PRs only when they are truly
   orthogonal and merge-order independent.
 
-Use a draft PR while implementation or author validation is incomplete. Mark it
-ready only after the branch is clean, the PR body is accurate, and required
-author tests pass.
+Regular ready-for-review PRs are the default and preferred publication state.
+Finish implementation and author validation before publishing: the branch must
+be clean, the PR body accurate, and required author tests passing. Do not
+publish known-premature work merely to create a PR. Use a draft only when the
+user or maintainer explicitly requests early collaboration on incomplete work.
 
 ## PR Body Contract
 
@@ -150,8 +152,9 @@ State:
    artifacts in the main checkout and on VPS5.
 5. Implement and validate proportionally. Use real fake-live, backtest, or
    optimize smokes when touched behavior warrants them.
-6. Open a draft PR if work remains; otherwise open ready with the PR body
-   contract.
+6. Finish the selected slice and author validation, then open a regular
+   ready-for-review PR with the PR body contract. Use a draft only after an
+   explicit request for early collaboration on incomplete work.
 7. Let Luna/deterministic polling monitor GitHub. Sol does not wait in a
    high-cost semantic loop.
 8. Verify every finding against the current branch. Apply the narrow fix,
