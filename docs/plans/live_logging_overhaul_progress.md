@@ -15,7 +15,29 @@ merge, live smoke evidence changes, or new gaps are discovered.
 - Do not use this file for design churn; unresolved design details belong in the
   plan or a focused handoff doc.
 
-## Latest Canonical Deployment (PR #1334)
+## Latest Canonical Deployment (PR #1335)
+
+- PR #1335 merged exact reviewed head
+  `c4d5b8e55f6fd453fd707999ae74ec2dd127e55d` as canonical
+  `02fb43f6398fc9edba64849cf2ed0bf0f7a6af09`. VPS5 fast-forwarded
+  tracked-clean from `97aa36da4c` without a Rust build; the Rust source
+  fingerprint/stamp remained unchanged.
+- The guarded restart replaced bot PIDs
+  `1063302/1063311/1064329/1063314/1063308` with
+  `1066081/1066091/1066084/1066093/1066087` under unchanged pane parents. A
+  post-action three-sample target report confirmed all five targets stable,
+  with no missing, duplicate, or extra process; protected `misc:0.0` remained
+  `%8`/PID `434835`.
+- The immediate smoke retained a natural KuCoin authoritative-refresh
+  `RequestTimeout` and remained red. The fresh settled two-minute smoke was
+  hard-green with `47/47` account-critical and `184/185` remote calls,
+  successful latest cycles, a clean event pipeline, and five stable processes.
+  The only retained remote failure was a non-hard OHLCV `RequestTimeout`. No
+  direct exchange call or event was manufactured. Active
+  `codex/live-artifact-scan-cost` remains read-only tooling and requires no bot
+  restart.
+
+## Previous Canonical Deployment (PR #1334)
 
 - Emergency PR #1334 merged exact reviewed head
   `1fb218a61999ed1cf06ba1974407dbfe350ed0ea` as canonical

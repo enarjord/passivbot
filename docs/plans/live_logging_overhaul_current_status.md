@@ -24,7 +24,7 @@ Estimated completion:
 
 - PR #1333, `Report live artifact scan cost`; branch:
   `codex/live-artifact-scan-cost`, based on canonical
-  `97aa36da4c9a9885c840ea48590837e28e5b8069`.
+  `02fb43f6398fc9edba64849cf2ed0bf0f7a6af09`.
 - Scope: expose bounded elapsed-time, byte, file, record, and read-method cost
   metadata for `live-event-query` and `live-performance-report` artifact scans.
 - Behavior boundary: read-only local tooling only. The slice changes no event
@@ -36,7 +36,28 @@ Estimated completion:
 - Expected VPS action: tracked-clean pull plus bounded read-only report smokes;
   no bot restart or process signal.
 
-## Deployed Baseline (PR #1334)
+## Deployed Baseline (PR #1335)
+
+- PR #1335 merged exact reviewed head
+  `c4d5b8e55f6fd453fd707999ae74ec2dd127e55d` as canonical
+  `02fb43f6398fc9edba64849cf2ed0bf0f7a6af09`. VPS5 fast-forwarded
+  tracked-clean from `97aa36da4c9a9885c840ea48590837e28e5b8069` without a
+  Rust build; the source fingerprint/stamp remained
+  `691bff9683deec9382a4e96ab6a107c14145f88edd6ae2f8e2380b8ba6824449`.
+- The guarded restart replaced bot PIDs
+  `1063302/1063311/1064329/1063314/1063308` with
+  `1066081/1066091/1066084/1066093/1066087` under unchanged pane parents.
+  A post-action three-sample target report confirmed all five configured
+  processes stable with no missing, duplicate, or extra target; protected
+  `misc:0.0` remained `%8`/PID `434835`.
+- The immediate smoke retained one natural KuCoin authoritative-refresh
+  `RequestTimeout` and was not mislabeled green. The fresh settled two-minute
+  smoke was `ok=true` with zero hard failures, `47/47` account-critical calls,
+  `184/185` remote calls, successful latest cycles, a clean event pipeline,
+  and five stable processes. The sole retained remote failure was a non-hard
+  OHLCV `RequestTimeout`. No direct exchange call or event was manufactured.
+
+## Previous Deployed Baseline (PR #1334)
 
 - Emergency PR #1334 merged exact reviewed head
   `1fb218a61999ed1cf06ba1974407dbfe350ed0ea` as canonical
@@ -1584,8 +1605,8 @@ PR #1288's bounded target-identity stability, and PR #1289's plan binding are
 merged, deployed, and naturally validated without process control. PR #1290's
 pane-parent relaunch classification and the restart preparation/orchestration
 slices through PR #1309 are also merged and deployed. Later slices through PR
-#1334 are merged and deployed at canonical
-`97aa36da4c9a9885c840ea48590837e28e5b8069`; their current evidence is recorded
+#1335 are merged and deployed at canonical
+`02fb43f6398fc9edba64849cf2ed0bf0f7a6af09`; their current evidence is recorded
 above. The active artifact-scan cost slice measures read-only query/report work
 without changing scan behavior.
 
