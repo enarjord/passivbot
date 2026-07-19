@@ -1,4 +1,5 @@
 from pathlib import Path
+import json
 import os
 import subprocess
 import sys
@@ -104,7 +105,7 @@ def _sample_snapshot():
     }
 
 
-def test_snapshot_symbol_inference_ignores_trailing_metadata(tmp_path, monkeypatch):
+def test_ema_anchor_snapshot_requires_explicit_trailing_wizard(tmp_path):
     snapshot = _sample_snapshot()
     snapshot["payload"]["trailing"] = {
         "_meta": {
@@ -114,38 +115,26 @@ def test_snapshot_symbol_inference_ignores_trailing_metadata(tmp_path, monkeypat
         }
     }
     snapshot_path = tmp_path / "snapshot.json"
-    snapshot_path.write_text("{}", encoding="utf-8")
-    monkeypatch.setattr(
-        "trailing_diagnostics_tool.load_prepared_config",
-        lambda *args, **kwargs: _sample_config(),
-    )
-    monkeypatch.setattr(
-        "trailing_diagnostics_tool._load_snapshot_from_path", lambda path: snapshot
-    )
-    captured = {}
+    snapshot_path.write_text(json.dumps(snapshot), encoding="utf-8")
+    config_path = Path(__file__).parents[1] / "configs" / "examples" / "ema_anchor.json"
 
-    def fake_build_inputs(config, loaded_snapshot, *, symbol, pside):
-        captured.update(symbol=symbol, pside=pside)
-        return {"symbol": symbol, "pside": pside}
-
-    monkeypatch.setattr(
-        "trailing_diagnostics_tool.build_trailing_inputs_from_snapshot",
-        fake_build_inputs,
-    )
-
-    state = create_state_from_sources(
-        config_path="config.json",
-        monitor_root=None,
-        exchange=None,
-        user=None,
-        snapshot_path=str(snapshot_path),
-        symbol=None,
-        pside="long",
-        wizard=False,
-    )
-
-    assert captured == {"symbol": "BTC/USDT:USDT", "pside": "long"}
-    assert state.symbol == "BTC/USDT:USDT"
+    with pytest.raises(
+        ValueError,
+        match=(
+            "snapshot trailing diagnostics are not supported for strategy "
+            "'ema_anchor'.*use --wizard"
+        ),
+    ):
+        create_state_from_sources(
+            config_path=str(config_path),
+            monitor_root=None,
+            exchange=None,
+            user=None,
+            snapshot_path=str(snapshot_path),
+            symbol=None,
+            pside="long",
+            wizard=False,
+        )
 
 
 def _hype_trailing_martingale_close_inputs():

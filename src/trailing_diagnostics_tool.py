@@ -450,14 +450,26 @@ def create_state_from_sources(
     )
     snapshot = _load_snapshot_from_path(resolved_snapshot) if resolved_snapshot and resolved_snapshot.exists() else None
     if snapshot is not None:
+        snap = snapshot_payload(snapshot)
+        trailing = snap.get("trailing", {})
+        trailing_meta = trailing.get("_meta", {}) if isinstance(trailing, dict) else {}
+        if (
+            not wizard
+            and isinstance(trailing_meta, dict)
+            and trailing_meta.get("diagnostics_supported") is False
+        ):
+            strategy_kind = str(trailing_meta.get("strategy_kind") or "unknown")
+            reason = str(trailing_meta.get("reason") or "not_supported")
+            raise ValueError(
+                "snapshot trailing diagnostics are not supported for strategy "
+                f"'{strategy_kind}' ({reason}); use --wizard for explicit manual inputs"
+            )
         if symbol:
             resolved_symbol, error = _resolve_symbol_alias(symbol, snapshot)
             if error:
                 raise ValueError(error)
             symbol = resolved_symbol
         else:
-            snap = snapshot_payload(snapshot)
-            trailing = snap.get("trailing", {})
             trailing_symbols = (
                 sorted(key for key in trailing if not str(key).startswith("_"))
                 if isinstance(trailing, dict)
