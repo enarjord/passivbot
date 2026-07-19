@@ -498,9 +498,9 @@ async def load_markets(
     Note: Uses the exchange name as-is (e.g., "binance" not "binanceusdm") for
     consistency with other cache paths (pnls, ohlcv, fill_events).
     """
-    # Prefer cc.id when a ccxt instance is supplied, otherwise use the provided exchange string.
-    # Denormalize to use canonical form for cache paths (e.g., "binance" not "binanceusdm")
-    ex = to_standard_exchange_name(getattr(cc, "id", None) or exchange or "")
+    # The explicit exchange name is the canonical cache identity. A supplied
+    # client's library id may differ (for example Gate.io is ``gate`` in CCXT).
+    ex = to_standard_exchange_name(exchange or getattr(cc, "id", None) or "")
     markets_path = os.path.join("caches", ex, "markets.json")
 
     # Try cache first
@@ -577,6 +577,12 @@ def to_ccxt_exchange_id(exchange: str) -> str:
             return cand
 
     return ex
+
+
+def to_ccxt_client_id(exchange: str) -> str:
+    """Return the CCXT class id used only when constructing a client session."""
+    exchange_id = to_ccxt_exchange_id(exchange)
+    return "gate" if exchange_id == "gateio" else exchange_id
 
 
 def to_standard_exchange_name(exchange: str) -> str:
