@@ -24,7 +24,7 @@ Estimated completion:
 
 - PR #1333, `Report live artifact scan cost`; branch:
   `codex/live-artifact-scan-cost`, based on canonical
-  `0a6be3ed00261c6d6a2cdbe0f2588e5709e670f1`.
+  `419839fb494388266bf0b3a54563ac8e24123f0b`.
 - Scope: expose bounded elapsed-time, byte, file, record, and read-method cost
   metadata for `live-event-query` and `live-performance-report` artifact scans.
 - Behavior boundary: read-only local tooling only. The slice changes no event
