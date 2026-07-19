@@ -3305,6 +3305,17 @@ def test_remote_fetch_correlation_map_is_bounded():
     assert bot._live_event_remote_call_seq == 5
 
 
+def test_authoritative_balance_result_summary_accepts_staged_raw_composition_tuple():
+    from live.event_emitters import _authoritative_result_summary
+
+    summary = _authoritative_result_summary(
+        "balance",
+        ({"total": {"USDT": 12.34}}, {"status": "unavailable"}, 12.34),
+    )
+
+    assert summary == {"has_raw_payload": True, "balance": 12.34}
+
+
 @pytest.mark.asyncio
 async def test_authoritative_timed_fetch_emits_correlated_remote_call_events():
     import passivbot as pb_mod

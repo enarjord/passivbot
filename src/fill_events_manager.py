@@ -4,8 +4,8 @@ Provides a reusable manager that keeps local cache of canonicalised fill events,
 fetches fresh data from the exchange when requested, and exposes convenient query
 APIs (PnL summaries, cumulative PnL, last fill timestamps, etc.).
 
-Currently implements a Bitget fetcher; the design is extensible to other
-exchanges.
+Includes exchange-specific fetchers for supported canonical fill-ingestion
+connectors and a shared fill-event interface.
 """
 
 from __future__ import annotations
@@ -17,6 +17,7 @@ import fcntl
 import inspect
 import json
 import logging
+import math
 import os
 import random
 import re
@@ -118,6 +119,7 @@ _DEFAULT_RATE_LIMITS: Dict[str, Dict[str, int]] = {
     "bybit": {"fetch_my_trades": 120, "fetch_positions_history": 120, "default": 120},
     "bitget": {"fill_history": 120, "fetch_order": 60, "default": 120},
     "hyperliquid": {"fetch_my_trades": 120, "default": 120},
+    "weex": {"fetch_my_trades": 120, "fetch_order": 60, "default": 120},
     "gateio": {"fetch_closed_orders": 120, "default": 120},
     "kucoin": {
         "fetch_my_trades": 120,
@@ -5734,6 +5736,210 @@ class HyperliquidFetcher(BaseFetcher):
         }
 
 
+class WeexFetcher(BaseFetcher):
+    """Fetch canonical WEEX V3 futures fills through CCXT.
+
+    WEEX limits fill queries to seven-day windows and 100 rows per request.
+    Client order ids are not included in fill rows, so they are enriched from
+    order details on a best-effort basis without discarding exchange-truth fills.
+    """
+
+    WINDOW_MS = 7 * 24 * 60 * 60 * 1000
+
+    def __init__(
+        self,
+        api,
+        *,
+        trade_limit: int = 100,
+        now_func: Optional[Callable[[], int]] = None,
+    ) -> None:
+        self.api = api
+        self.trade_limit = max(1, min(100, int(trade_limit)))
+        self._now_func = now_func or (
+            lambda: int(datetime.now(tz=timezone.utc).timestamp() * 1000)
+        )
+
+    async def fetch(
+        self,
+        since_ms: Optional[int],
+        until_ms: Optional[int],
+        detail_cache: Dict[str, Tuple[str, str]],
+        on_batch: Optional[Callable[[List[Dict[str, object]]], None]] = None,
+    ) -> List[Dict[str, object]]:
+        end_ms = int(until_ms) if until_ms is not None else self._now_func()
+        start_ms = (
+            int(since_ms)
+            if since_ms is not None
+            else max(0, end_ms - self.WINDOW_MS + 1)
+        )
+        if start_ms > end_ms:
+            return []
+
+        collected: Dict[str, Dict[str, object]] = {}
+        window_start = start_ms
+        while window_start <= end_ms:
+            window_end = min(end_ms, window_start + self.WINDOW_MS - 1)
+            pending_windows = [(window_start, window_end)]
+            while pending_windows:
+                query_start, query_end = pending_windows.pop()
+                trades = await self.api.fetch_my_trades(
+                    symbol=None,
+                    since=query_start,
+                    limit=self.trade_limit,
+                    params={"type": "swap", "until": query_end},
+                )
+                if not trades:
+                    continue
+                for trade in trades:
+                    event = self._normalize_trade(trade)
+                    if (
+                        event["timestamp"] < query_start
+                        or event["timestamp"] > query_end
+                    ):
+                        raise RuntimeError(
+                            "WEEX fill endpoint returned a trade outside the requested window"
+                        )
+                    collected[event["id"]] = event
+                if len(trades) < self.trade_limit:
+                    continue
+                if query_start >= query_end:
+                    raise RuntimeError(
+                        "WEEX fill history is saturated within one millisecond; "
+                        "completeness cannot be proven"
+                    )
+                midpoint = query_start + (query_end - query_start) // 2
+                # LIFO order keeps requests chronological while every split is
+                # disjoint, so response ordering cannot create skipped fills.
+                pending_windows.append((midpoint + 1, query_end))
+                pending_windows.append((query_start, midpoint))
+            window_start = window_end + 1
+
+        events = sorted(collected.values(), key=lambda event: event["timestamp"])
+        await self._enrich_client_order_ids(events, detail_cache)
+        if on_batch and events:
+            on_batch(events)
+        return events
+
+    @staticmethod
+    def _normalize_trade(trade: Dict[str, object]) -> Dict[str, object]:
+        info = trade.get("info") or {}
+        trade_id = str(trade.get("id") or info.get("id") or "")
+        order_id = str(trade.get("order") or info.get("orderId") or "")
+        timestamp = int(trade.get("timestamp") or info.get("time") or 0)
+        symbol = str(trade.get("symbol") or "")
+        side = str(trade.get("side") or info.get("side") or "").lower()
+        position_side = str(info.get("positionSide") or "").lower()
+        if not trade_id or not order_id or timestamp <= 0 or not symbol:
+            raise ValueError("WEEX fill is missing id, order id, timestamp, or symbol")
+        if side not in {"buy", "sell"}:
+            raise ValueError(f"WEEX fill has invalid side: {side!r}")
+        if position_side not in {"long", "short"}:
+            raise ValueError(
+                f"WEEX fill has invalid positionSide: {position_side!r}"
+            )
+        client_order_id = str(
+            trade.get("clientOrderId") or info.get("clientOrderId") or ""
+        )
+        qty = abs(float(trade.get("amount") or info.get("qty") or 0.0))
+        price = float(trade.get("price") or info.get("price") or 0.0)
+        if "realizedPnl" not in info:
+            raise ValueError("WEEX fill is missing realizedPnl")
+        pnl = float(info["realizedPnl"])
+        if not all(math.isfinite(value) for value in (qty, price, pnl)):
+            raise ValueError("WEEX fill has non-finite qty, price, or realizedPnl")
+        if qty <= 0.0 or price <= 0.0:
+            raise ValueError("WEEX fill has non-positive qty or price")
+        return {
+            "id": trade_id,
+            "order_id": order_id,
+            "timestamp": timestamp,
+            "datetime": ts_to_date(timestamp),
+            "symbol": symbol,
+            "side": side,
+            "qty": qty,
+            "price": price,
+            "pnl": pnl,
+            "fees": trade.get("fees") or trade.get("fee"),
+            "pb_order_type": (
+                custom_id_to_snake(client_order_id) if client_order_id else ""
+            ),
+            "position_side": position_side,
+            "client_order_id": client_order_id,
+            "raw": [{"source": "fetch_my_trades", "data": dict(trade)}],
+            "c_mult": 1.0,
+        }
+
+    async def _enrich_client_order_ids(
+        self,
+        events: List[Dict[str, object]],
+        detail_cache: Dict[str, Tuple[str, str]],
+    ) -> None:
+        missing_by_order: Dict[Tuple[str, str], List[Dict[str, object]]] = defaultdict(list)
+        for event in events:
+            cached = detail_cache.get(str(event["id"]))
+            if cached:
+                event["client_order_id"], event["pb_order_type"] = cached
+            elif event.get("client_order_id"):
+                event["pb_order_type"] = custom_id_to_snake(
+                    str(event["client_order_id"])
+                )
+            else:
+                missing_by_order[(str(event["order_id"]), str(event["symbol"]))].append(
+                    event
+                )
+
+        semaphore = asyncio.Semaphore(4)
+
+        async def fetch_detail(key: Tuple[str, str]):
+            order_id, symbol = key
+            async with semaphore:
+                try:
+                    order = await self.api.fetch_order(order_id, symbol)
+                except Exception as exc:  # pragma: no cover - live endpoint dependent
+                    logger.debug(
+                        "WeexFetcher: fetch_order failed order=%s error_type=%s",
+                        order_id,
+                        type(exc).__name__,
+                    )
+                    return key, ""
+                info = order.get("info") if isinstance(order, dict) else {}
+                client_order_id = ""
+                if isinstance(order, dict):
+                    client_order_id = str(order.get("clientOrderId") or "")
+                if not client_order_id and isinstance(info, dict):
+                    client_order_id = str(
+                        info.get("clientOrderId") or info.get("origClientOrderId") or ""
+                    )
+                return key, client_order_id
+
+        if missing_by_order:
+            results = await asyncio.gather(
+                *(fetch_detail(key) for key in missing_by_order),
+                return_exceptions=False,
+            )
+            for key, client_order_id in results:
+                pb_order_type = (
+                    custom_id_to_snake(client_order_id)
+                    if client_order_id
+                    else "unknown"
+                )
+                for event in missing_by_order[key]:
+                    event["client_order_id"] = client_order_id
+                    event["pb_order_type"] = pb_order_type
+                    detail_cache[str(event["id"])] = (
+                        client_order_id,
+                        pb_order_type,
+                    )
+
+        for event in events:
+            if not event.get("pb_order_type"):
+                event["pb_order_type"] = "unknown"
+            detail_cache[str(event["id"])] = (
+                str(event.get("client_order_id") or ""),
+                str(event["pb_order_type"]),
+            )
+
+
 class GateioFetcher(BaseFetcher):
     """Fetches fill events for Gate.io using trades + order PnL.
 
@@ -7103,6 +7309,7 @@ EXCHANGE_BOT_CLASSES: Dict[str, Tuple[str, str]] = {
     "gateio": ("exchanges.gateio", "GateIOBot"),
     "kucoin": ("exchanges.kucoin", "KucoinBot"),
     "okx": ("exchanges.okx", "OKXBot"),
+    "weex": ("exchanges.weex", "WeexBot"),
 }
 
 
@@ -7262,7 +7469,9 @@ def _build_fetcher_for_bot(bot, symbols: List[str]) -> BaseFetcher:
         return KucoinFetcher(api=bot.cca)
     if exchange == "okx":
         return OkxFetcher(api=bot.cca)
-    supported = "binance, bitget, bybit, fake, gateio, hyperliquid, kucoin, okx"
+    if exchange == "weex":
+        return WeexFetcher(api=bot.cca)
+    supported = "binance, bitget, bybit, fake, gateio, hyperliquid, kucoin, okx, weex"
     raise ValueError(
         f"Unsupported exchange '{exchange}' for live fill events; realized PnL, "
         f"unstuck accounting, and HSL replay require an exchange-specific fetcher. "

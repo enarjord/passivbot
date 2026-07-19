@@ -144,6 +144,12 @@ async def test_binance_staged_snapshot_uses_fresh_positions_for_open_order_symbo
         ]
 
     seen_fill_scope = []
+    timed_results = {}
+
+    async def timed(surface, coro, _timings):
+        result = await coro
+        timed_results[surface] = result
+        return result
 
     async def update_pnls(**_kwargs):
         seen_fill_scope.append(list(bot._fill_symbol_scope))
@@ -168,6 +174,7 @@ async def test_binance_staged_snapshot_uses_fresh_positions_for_open_order_symbo
     bot.capture_balance_snapshot = capture_balance_snapshot
     bot.capture_positions_snapshot = capture_positions_snapshot
     bot.update_pnls = update_pnls
+    bot._timed_authoritative_fetch = timed
     bot.cca = SimpleNamespace(fetch_open_orders=fetch_open_orders)
 
     snapshot = await bot.capture_authoritative_state_staged_snapshot(
@@ -176,6 +183,11 @@ async def test_binance_staged_snapshot_uses_fresh_positions_for_open_order_symbo
 
     assert fetched_symbols == ["SOL/USDT:USDT", None]
     assert snapshot["balance"] == 100.0
+    assert timed_results["balance"] == (
+        {"total": {"USDT": 100.0}},
+        snapshot["balance_composition"],
+        100.0,
+    )
     assert snapshot["balance_composition"]["status"] == "available"
     assert snapshot["balance_composition"]["asset_balances"] == [
         {

@@ -78,6 +78,7 @@ EVENT_SEGMENT_END_PATTERN = re.compile(
     r"(?:\.[0-9a-f]+)?\.ndjson(?:\.gz)?$"
 )
 EVENT_SEGMENT_END_GRANULARITY_MS = 999
+EVENT_SEGMENT_MANIFEST_MAX_BYTES = 1024 * 1024
 REMOTE_CALL_FAILURE_GROUP_LIMIT = 20
 REMOTE_CALL_HEALTH_GROUP_LIMIT = 20
 REMOTE_CALL_TIMING_GROUP_LIMIT = 20
@@ -8407,6 +8408,27 @@ def _event_segment_scan_bytes(path: Path) -> int | None:
     return int.from_bytes(trailer, byteorder="little", signed=False)
 
 
+def _current_event_segment_started_ms(path: Path) -> int | None:
+    manifest_path = path.parent.parent / "manifest.json"
+    try:
+        with manifest_path.open("rb") as stream:
+            raw = stream.read(EVENT_SEGMENT_MANIFEST_MAX_BYTES + 1)
+    except OSError:
+        return None
+    if len(raw) > EVENT_SEGMENT_MANIFEST_MAX_BYTES:
+        return None
+    try:
+        manifest = json.loads(raw)
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(manifest, dict):
+        return None
+    started_ms = manifest.get("current_segment_started_ms")
+    if type(started_ms) is not int or started_ms < 0:
+        return None
+    return started_ms
+
+
 def _select_event_segments_for_window(
     files: list[Path],
     *,
@@ -8461,20 +8483,23 @@ def _select_event_segments_for_window(
             for index, (end_upper_ms, _path) in enumerate(rotated_rows)
             if end_upper_ms < since_ms
         ]
-        if not predecessor_indexes:
-            issue_counts["event_window_start_coverage_unavailable"] += 1
-            continue
-
-        first_overlap_index = predecessor_indexes[-1] + 1
-        group_selected: list[Path] = []
-        end_covered = False
-        for end_upper_ms, path in rotated_rows[first_overlap_index:]:
-            group_selected.append(path)
-            if end_upper_ms >= until_ms:
-                end_covered = True
-                break
-        if not end_covered:
-            group_selected.append(current_files[0])
+        if predecessor_indexes:
+            first_overlap_index = predecessor_indexes[-1] + 1
+            group_selected: list[Path] = []
+            end_covered = False
+            for end_upper_ms, path in rotated_rows[first_overlap_index:]:
+                group_selected.append(path)
+                if end_upper_ms >= until_ms:
+                    end_covered = True
+                    break
+            if not end_covered:
+                group_selected.append(current_files[0])
+        else:
+            current_started_ms = _current_event_segment_started_ms(current_files[0])
+            if current_started_ms is None or current_started_ms > since_ms:
+                issue_counts["event_window_start_coverage_unavailable"] += 1
+                continue
+            group_selected = [current_files[0]]
         if len(group_selected) > max_files_per_bot:
             issue_counts["event_window_segment_limit_exceeded"] += 1
             limit_exceeded_max = max(limit_exceeded_max, len(group_selected))

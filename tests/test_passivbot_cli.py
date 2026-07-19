@@ -937,6 +937,12 @@ def test_generate_mcap_list_tool_uses_main_without_runpy(monkeypatch, tmp_path):
     ]["symbol"] == "btc"
 
 
+def test_generate_mcap_list_supports_weex_filter():
+    from tools.generate_mcap_list import EXCHANGE_MAP
+
+    assert EXCHANGE_MAP["weex"] == ("weex", "USDT")
+
+
 def test_invoke_module_main_runs_async_entrypoint(monkeypatch):
     class AsyncModule:
         async def main(self):

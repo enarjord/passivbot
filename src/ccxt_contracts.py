@@ -121,6 +121,10 @@ def get_bot_class(exchange: str):
         from exchanges.okx import OKXBot
 
         return OKXBot
+    if exchange == "weex":
+        from exchanges.weex import WeexBot
+
+        return WeexBot
     if exchange == "paradex":
         from exchanges.paradex import ParadexBot
 
