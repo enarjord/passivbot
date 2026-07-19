@@ -1734,6 +1734,88 @@ def test_event_file_rows_seek_tail_skips_plain_ndjson_prefix(tmp_path):
     assert [json.loads(raw_line)["seq"] for _, raw_line in kept_rows] == [2, 3]
 
 
+def test_event_query_scan_cost_tracks_plain_full_and_seek_tail_reads(tmp_path):
+    path = tmp_path / "monitor" / "binance" / "binance_01" / "events" / "current.ndjson"
+    _write_ndjson(
+        path,
+        [
+            _monitor_row(
+                event_type="cycle.completed",
+                cycle_id="cy_1",
+                seq=1,
+                ts=1000,
+                data={"payload": "x" * 70_000},
+            ),
+            _monitor_row(
+                event_type="cycle.completed",
+                cycle_id="cy_2",
+                seq=2,
+                ts=2000,
+                data={"payload": "x" * 130_000},
+            ),
+            _monitor_row(event_type="cycle.completed", cycle_id="cy_3", seq=3, ts=3000),
+        ],
+    )
+    expected_bytes = path.stat().st_size
+
+    full_report = build_event_report(tmp_path / "monitor")
+    full_scan_cost = full_report["scan_cost"]
+
+    assert full_scan_cost["elapsed_ms"] >= 0
+    assert full_scan_cost["physical_bytes_read"] == expected_bytes
+    assert full_scan_cost["physical_bytes_known"] is True
+    assert full_scan_cost["decoded_bytes_read"] == expected_bytes
+    assert full_scan_cost["decoded_bytes_known"] is True
+    assert full_scan_cost["files_read"] == 1
+    assert full_scan_cost["records_read"] == 3
+    assert full_scan_cost["read_methods"] == {"full_scan": 1}
+
+    tail_report = build_event_report(tmp_path / "monitor", event_tail_lines=1)
+    tail_scan_cost = tail_report["scan_cost"]
+
+    assert tail_scan_cost["physical_bytes_read"] < expected_bytes
+    assert tail_scan_cost["physical_bytes_known"] is True
+    assert tail_scan_cost["decoded_bytes_read"] == tail_scan_cost["physical_bytes_read"]
+    assert tail_scan_cost["decoded_bytes_known"] is True
+    assert tail_scan_cost["files_read"] == 1
+    assert tail_scan_cost["records_read"] == 1
+    assert tail_scan_cost["read_methods"] == {"seek_tail": 1}
+
+
+def test_event_query_scan_cost_distinguishes_gzip_physical_and_decoded_bytes(tmp_path):
+    path = (
+        tmp_path
+        / "monitor"
+        / "binance"
+        / "binance_01"
+        / "events"
+        / "2026-07-19T00-00-00.ndjson.gz"
+    )
+    _write_gz_ndjson(
+        path,
+        [
+            _monitor_row(event_type="cycle.completed", cycle_id="cy_1", seq=1, ts=1000),
+            _monitor_row(event_type="cycle.completed", cycle_id="cy_2", seq=2, ts=2000),
+        ],
+    )
+    with gzip.open(path, "rb") as stream:
+        expected_decoded_bytes = len(stream.read())
+
+    report = build_event_report(
+        tmp_path / "monitor",
+        include_rotated=True,
+        event_tail_lines=1,
+    )
+
+    assert report["scan_cost"]["physical_bytes_read"] == path.stat().st_size
+    assert report["scan_cost"]["physical_bytes_known"] is True
+    assert report["scan_cost"]["decoded_bytes_read"] == expected_decoded_bytes
+    assert report["scan_cost"]["decoded_bytes_known"] is True
+    assert report["scan_cost"]["files_read"] == 1
+    assert report["scan_cost"]["records_read"] == 1
+    assert report["scan_cost"]["read_methods"] == {"sequential_gzip_tail": 1}
+
+
 def test_event_query_timeline_renders_cycle_and_query_matches(tmp_path):
     events_dir = tmp_path / "monitor" / "okx" / "okx_faisal" / "events"
     _write_ndjson(

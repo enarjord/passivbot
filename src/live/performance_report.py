@@ -4,6 +4,7 @@ import gzip
 import json
 import math
 import statistics
+import time
 from collections import Counter
 from numbers import Integral
 from pathlib import Path
@@ -50,6 +51,7 @@ _PERFORMANCE_REPORT_SECTION_BASE_KEYS = (
     "root",
     "include_rotated",
     "files_scanned",
+    "scan_cost",
     "file_discovery",
     "records_total",
     "live_events",
@@ -5687,6 +5689,12 @@ def build_live_performance_report(
     event_types: Counter[str] = Counter()
     bots: Counter[str] = Counter()
     event_tail_methods: Counter[str] = Counter()
+    scan_physical_bytes_read = 0
+    scan_physical_bytes_known = True
+    scan_decoded_bytes_read = 0
+    scan_decoded_bytes_known = True
+    scan_files_read = 0
+    scan_read_methods: Counter[str] = Counter()
 
     def process_event_row(
         path: Path,
@@ -5802,43 +5810,53 @@ def build_live_performance_report(
         account_state_changes.add(row=row, live_event=live_event)
         risk_activity.add(row=row, live_event=live_event)
 
+    scan_started_at = time.perf_counter()
     for path in files:
         try:
-            if max_event_tail_lines:
-                with event_file_rows(
-                    path, max_tail_lines=max_event_tail_lines
-                ) as (row_iter, row_window):
-                    if row_window.limited:
-                        event_window["event_tail_limited_files"] += 1
-                        if row_window.skipped_lines is None:
-                            event_window["event_tail_skipped_lines_exact"] = False
-                        else:
-                            event_window["event_tail_skipped_lines"] += int(
-                                row_window.skipped_lines
-                            )
-                        event_window["event_tail_skipped_bytes"] += int(
-                            row_window.skipped_bytes
+            with event_file_rows(
+                path,
+                max_tail_lines=max_event_tail_lines,
+                text_opener=_open_text,
+            ) as (row_iter, row_window):
+                if max_event_tail_lines and row_window.limited:
+                    event_window["event_tail_limited_files"] += 1
+                    if row_window.skipped_lines is None:
+                        event_window["event_tail_skipped_lines_exact"] = False
+                    else:
+                        event_window["event_tail_skipped_lines"] += int(
+                            row_window.skipped_lines
                         )
-                        event_window["event_tail_line_numbers_exact"] = bool(
-                            event_window["event_tail_line_numbers_exact"]
-                            and row_window.line_numbers_exact
-                        )
-                        event_tail_methods[str(row_window.method)] += 1
-                    source_complete = (
-                        not row_window.limited or row_window.skipped_lines == 0
+                    event_window["event_tail_skipped_bytes"] += int(
+                        row_window.skipped_bytes
                     )
-                    for line_no, raw_line in row_iter:
-                        process_event_row(
-                            path,
-                            int(line_no),
-                            raw_line,
-                            source_complete=source_complete,
-                        )
+                    event_window["event_tail_line_numbers_exact"] = bool(
+                        event_window["event_tail_line_numbers_exact"]
+                        and row_window.line_numbers_exact
+                    )
+                    event_tail_methods[str(row_window.method)] += 1
+                source_complete = (
+                    not row_window.limited or row_window.skipped_lines == 0
+                )
+                for line_no, raw_line in row_iter:
+                    process_event_row(
+                        path,
+                        int(line_no),
+                        raw_line,
+                        source_complete=source_complete,
+                    )
+            scan_files_read += 1
+            if row_window.physical_bytes_read is None:
+                scan_physical_bytes_known = False
             else:
-                with _open_text(path) as stream:
-                    for line_no, raw_line in enumerate(stream, start=1):
-                        process_event_row(path, int(line_no), raw_line)
+                scan_physical_bytes_read += int(row_window.physical_bytes_read)
+            if row_window.decoded_bytes_read is None:
+                scan_decoded_bytes_known = False
+            else:
+                scan_decoded_bytes_read += int(row_window.decoded_bytes_read)
+            scan_read_methods[str(row_window.method)] += 1
         except OSError as exc:
+            scan_physical_bytes_known = False
+            scan_decoded_bytes_known = False
             issues.append(
                 {
                     "path": _user_safe_display_path(path),
@@ -5853,6 +5871,7 @@ def build_live_performance_report(
     warning_count = sum(1 for issue in issues if issue.get("severity") == "warning")
     if max_event_tail_lines:
         event_window["event_tail_methods"] = dict(sorted(event_tail_methods.items()))
+    scan_elapsed_ms = round((time.perf_counter() - scan_started_at) * 1000, 3)
     performance_groups = accumulator.groups_list()
     decision_boundary_groups = decision_boundary.groups_list()
     input_staleness_groups = input_staleness.groups_list()
@@ -5864,6 +5883,20 @@ def build_live_performance_report(
         "include_rotated": bool(include_rotated),
         "files": [_user_safe_display_path(path) for path in files],
         "files_scanned": len(files),
+        "scan_cost": {
+            "elapsed_ms": scan_elapsed_ms,
+            "physical_bytes_read": (
+                scan_physical_bytes_read if scan_physical_bytes_known else None
+            ),
+            "physical_bytes_known": scan_physical_bytes_known,
+            "decoded_bytes_read": (
+                scan_decoded_bytes_read if scan_decoded_bytes_known else None
+            ),
+            "decoded_bytes_known": scan_decoded_bytes_known,
+            "files_read": scan_files_read,
+            "records_read": int(records_total),
+            "read_methods": dict(sorted(scan_read_methods.items())),
+        },
         "file_discovery": file_discovery,
         "records_total": int(records_total),
         "live_events": int(live_events),
@@ -5945,6 +5978,7 @@ def summarize_live_performance_report(
         "root": report.get("root"),
         "include_rotated": bool(report.get("include_rotated")),
         "files_scanned": int(report.get("files_scanned") or 0),
+        "scan_cost": report.get("scan_cost") or {},
         "file_discovery": report.get("file_discovery") or {},
         "records_total": int(report.get("records_total") or 0),
         "live_events": int(report.get("live_events") or 0),
