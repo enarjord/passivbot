@@ -1433,6 +1433,9 @@ class Passivbot:
         self._trailing_unchanged_info_log_interval_ms = self.STATUS_OPERATOR_HEARTBEAT_INTERVAL_MS
         self._trailing_operator_visible_baseline_by_key = {}
         self._trailing_operator_visible_ms_by_key = {}
+        self._trailing_unavailable_warning_signature = ()
+        self._trailing_unavailable_warning_last_ms = 0
+        self._trailing_unavailable_warning_interval_ms = 5 * 60 * 1000
 
         # Realized-loss gate logging throttle
         self._loss_gate_last_log_ms = {}
@@ -8258,9 +8261,6 @@ class Passivbot:
         pending_fill_confirmations = dict(
             getattr(self, "_trailing_pending_fill_confirmations", {}) or {}
         )
-        pending_fill_min_timestamps = dict(
-            getattr(self, "_trailing_pending_fill_min_timestamps", {}) or {}
-        )
         pending_fill_min_generations = dict(
             getattr(self, "_trailing_pending_fill_min_generations", {}) or {}
         )
@@ -8274,6 +8274,7 @@ class Passivbot:
             getattr(self, "_trailing_fill_refresh_generation", 0) or 0
         )
         current_epochs: dict[tuple[str, str], str] = {}
+        confirmation_diagnostics: dict[tuple[str, str], dict] = {}
 
         for symbol, psides in required_trailing.items():
             for pside in psides:
@@ -8285,31 +8286,56 @@ class Passivbot:
                     current_timestamp = (
                         None if anchor is None else int(anchor["timestamp"])
                     )
-                    minimum_timestamp = pending_fill_min_timestamps.get(epoch_key)
                     minimum_fill_generation = pending_fill_min_generations.get(
                         epoch_key
                     )
                     expected_position_state = pending_position_states.get(epoch_key)
+                    failed_predicates = []
+                    if current_epoch is None:
+                        failed_predicates.append("missing_fill_anchor")
+                    elif not current_epoch.startswith("fill:"):
+                        failed_predicates.append("non_fill_anchor")
+                    elif current_epoch == baseline_epoch:
+                        failed_predicates.append("fill_identity_unchanged")
                     if (
-                        current_epoch is None
-                        or not current_epoch.startswith("fill:")
-                        or current_epoch == baseline_epoch
-                        or (
-                            minimum_timestamp is not None
-                            and current_timestamp < int(minimum_timestamp)
-                        )
-                        or (
-                            minimum_fill_generation is not None
-                            and fill_refresh_generation
-                            < int(minimum_fill_generation)
-                        )
-                        or (
-                            expected_position_state is not None
-                            and not self._fill_anchor_matches_position_state(
-                                symbol, expected_position_state, anchor
-                            )
+                        minimum_fill_generation is not None
+                        and fill_refresh_generation < int(minimum_fill_generation)
+                    ):
+                        failed_predicates.append("post_snapshot_fill_refresh_pending")
+                    if (
+                        current_epoch is not None
+                        and current_epoch.startswith("fill:")
+                        and expected_position_state is not None
+                        and not self._fill_anchor_matches_position_state(
+                            symbol, expected_position_state, anchor
                         )
                     ):
+                        failed_predicates.append("fill_after_state_mismatch")
+                    if failed_predicates:
+                        position_update_timestamp = self._position_update_timestamp_ms(
+                            symbol, pside
+                        )
+                        detail = {
+                            "failed_predicates": failed_predicates,
+                            "baseline_fill_epoch": baseline_epoch,
+                            "current_fill_epoch": current_epoch,
+                            "fill_timestamp_ms": current_timestamp,
+                            "position_update_timestamp_ms": position_update_timestamp,
+                            "fill_refresh_generation": fill_refresh_generation,
+                            "minimum_fill_refresh_generation": minimum_fill_generation,
+                            "fill_precedes_position_update": bool(
+                                current_timestamp is not None
+                                and position_update_timestamp is not None
+                                and current_timestamp < position_update_timestamp
+                            ),
+                        }
+                        if expected_position_state is not None:
+                            detail["expected_position_size"] = expected_position_state[0]
+                            detail["expected_position_price"] = expected_position_state[1]
+                        if anchor is not None:
+                            detail["fill_after_position_size"] = anchor.get("psize")
+                            detail["fill_after_position_price"] = anchor.get("pprice")
+                        confirmation_diagnostics[epoch_key] = detail
                         self.trailing_prices[symbol][pside] = (
                             _trailing_bundle_default_dict()
                         )
@@ -8320,7 +8346,6 @@ class Passivbot:
                         last_position_changes.get(symbol, {}).pop(pside, None)
                         continue
                     pending_fill_confirmations.pop(epoch_key, None)
-                    pending_fill_min_timestamps.pop(epoch_key, None)
                     pending_fill_min_generations.pop(epoch_key, None)
                     pending_position_states.pop(epoch_key, None)
                     associated_fill_epochs[epoch_key] = current_epoch
@@ -8335,10 +8360,10 @@ class Passivbot:
                     self.trailing_prices[symbol][pside] = _trailing_bundle_default_dict()
         self._trailing_position_change_epochs = current_epochs
         self._trailing_pending_fill_confirmations = pending_fill_confirmations
-        self._trailing_pending_fill_min_timestamps = pending_fill_min_timestamps
         self._trailing_pending_fill_min_generations = pending_fill_min_generations
         self._trailing_pending_position_states = pending_position_states
         self._trailing_position_snapshot_fill_epochs = associated_fill_epochs
+        self._trailing_fill_confirmation_diagnostics = confirmation_diagnostics
 
         # Build concurrent fetches per symbol that has position changes
         fetch_plan = {}
@@ -8411,18 +8436,83 @@ class Passivbot:
 
         unavailable_symbols = set()
         unavailable_by_symbol: dict[str, list[str]] = defaultdict(list)
+        warning_signature_parts = [
+            (reason, tuple(sorted(reason_symbols)))
+            for reason, reason_symbols in sorted(unavailable_reasons.items())
+            if reason_symbols
+        ]
+        confirmation_predicate_signature = tuple(
+            (
+                symbol,
+                pside,
+                tuple(detail.get("failed_predicates", [])),
+            )
+            for (symbol, pside), detail in sorted(confirmation_diagnostics.items())
+        )
+        warning_signature = tuple(warning_signature_parts)
+        if confirmation_predicate_signature:
+            warning_signature += (
+                ("confirmation_predicates", confirmation_predicate_signature),
+            )
+        now_ms = utc_ms()
+        previous_warning_signature = tuple(
+            getattr(self, "_trailing_unavailable_warning_signature", ()) or ()
+        )
+        last_warning_ms = int(
+            getattr(self, "_trailing_unavailable_warning_last_ms", 0) or 0
+        )
+        warning_interval_ms = int(
+            getattr(
+                self,
+                "_trailing_unavailable_warning_interval_ms",
+                5 * 60 * 1000,
+            )
+            or 5 * 60 * 1000
+        )
+        operator_warning_due = bool(warning_signature) and (
+            warning_signature != previous_warning_signature
+            or now_ms - last_warning_ms >= warning_interval_ms
+        )
         for reason, reason_symbols in sorted(unavailable_reasons.items()):
             if not reason_symbols:
                 continue
             unavailable_symbols.update(reason_symbols)
             for symbol in sorted(reason_symbols):
                 unavailable_by_symbol[symbol].append(reason)
-            logging.warning(
-                "[trailing] trailing state unavailable reason=%s symbols=%s "
-                "action=mark_nontradable_until_fresh",
-                reason,
-                Passivbot._log_symbols(sorted(reason_symbols), limit=12),
-            )
+            if operator_warning_due:
+                confirmation_detail = ""
+                if reason == "position_fill_confirmation_pending":
+                    samples = []
+                    for (symbol, pside), detail in sorted(
+                        confirmation_diagnostics.items()
+                    )[:2]:
+                        samples.append(
+                            "%s:%s(failed=%s,fill_ts=%s,position_update_ts=%s,"
+                            "fill_generation=%s,min_fill_generation=%s)"
+                            % (
+                                symbol,
+                                pside,
+                                "|".join(detail["failed_predicates"]),
+                                detail.get("fill_timestamp_ms"),
+                                detail.get("position_update_timestamp_ms"),
+                                detail.get("fill_refresh_generation"),
+                                detail.get("minimum_fill_refresh_generation"),
+                            )
+                        )
+                    if samples:
+                        confirmation_detail = " confirmation_details=" + ";".join(
+                            samples
+                        )
+                logging.warning(
+                    "[trailing] trailing state unavailable reason=%s symbols=%s "
+                    "action=mark_nontradable_until_fresh%s",
+                    reason,
+                    Passivbot._log_symbols(sorted(reason_symbols), limit=12),
+                    confirmation_detail,
+                )
+        self._trailing_unavailable_warning_signature = warning_signature
+        if operator_warning_due:
+            self._trailing_unavailable_warning_last_ms = now_ms
         self._orchestrator_trailing_unavailable_symbols = unavailable_symbols
         self._orchestrator_trailing_unavailable_reasons = {
             symbol: sorted(reasons)
@@ -13891,9 +13981,6 @@ class Passivbot:
         pending = dict(
             getattr(self, "_trailing_pending_fill_confirmations", {}) or {}
         )
-        pending_min_timestamps = dict(
-            getattr(self, "_trailing_pending_fill_min_timestamps", {}) or {}
-        )
         pending_min_fill_generations = dict(
             getattr(self, "_trailing_pending_fill_min_generations", {}) or {}
         )
@@ -13920,21 +14007,13 @@ class Passivbot:
                 new_size = position_state.get(key, (0.0, 0.0))[0]
                 if new_size != 0.0 and self.is_trailing(symbol, pside):
                     pending[key] = previous_snapshot_fill_epochs.get(key)
-                    position_ts = self._position_update_timestamp_ms(symbol, pside)
-                    if position_ts is None:
-                        pending_min_timestamps.pop(key, None)
-                        pending_min_fill_generations[key] = (
-                            fill_refresh_started_generation + 1
-                        )
-                        pending_position_states[key] = position_state[key]
-                        request_post_position_fill_confirmation = True
-                    else:
-                        pending_min_timestamps[key] = position_ts
-                        pending_min_fill_generations.pop(key, None)
-                        pending_position_states.pop(key, None)
+                    pending_min_fill_generations[key] = (
+                        fill_refresh_started_generation + 1
+                    )
+                    pending_position_states[key] = position_state[key]
+                    request_post_position_fill_confirmation = True
                 else:
                     pending.pop(key, None)
-                    pending_min_timestamps.pop(key, None)
                     pending_min_fill_generations.pop(key, None)
                     pending_position_states.pop(key, None)
         else:
@@ -13943,44 +14022,23 @@ class Passivbot:
                 symbol, pside = key
                 if state[0] == 0.0 or not self.is_trailing(symbol, pside):
                     continue
-                position_ts = self._position_update_timestamp_ms(symbol, pside)
-                fill_anchor = current_fill_anchors.get(key)
-                if position_ts is not None:
-                    fill_is_current = fill_anchor is not None and int(
-                        fill_anchor["timestamp"]
-                    ) >= position_ts
-                else:
-                    # A reconstructed same-state fill cannot prove freshness on
-                    # restart: unseen round-trip fills may return to the same
-                    # size and average price.  Require a successful fill refresh
-                    # that starts in a later authoritative cohort.
-                    fill_is_current = False
-                if fill_is_current:
-                    pending_min_fill_generations.pop(key, None)
-                    pending_position_states.pop(key, None)
-                    continue
                 self.trailing_prices.setdefault(symbol, {})
                 self.trailing_prices[symbol][pside] = _trailing_bundle_default_dict()
-                if position_ts is None:
-                    pending[key] = None
-                    pending_min_timestamps.pop(key, None)
-                    pending_min_fill_generations[key] = (
-                        fill_refresh_started_generation + 1
-                    )
-                    pending_position_states[key] = state
-                    request_post_position_fill_confirmation = True
-                else:
-                    pending[key] = (
-                        None if fill_anchor is None else str(fill_anchor["epoch"])
-                    )
-                    pending_min_timestamps[key] = position_ts
-                    pending_min_fill_generations.pop(key, None)
-                    pending_position_states.pop(key, None)
+                # Exchange position update timestamps describe the position
+                # record, not the corresponding trade.  In particular, Bybit's
+                # updatedTime may follow the confirming fill's execTime.  Treat
+                # that timestamp as diagnostic only and prove readiness through
+                # a post-snapshot fill refresh plus matching fill after-state.
+                pending[key] = None
+                pending_min_fill_generations[key] = (
+                    fill_refresh_started_generation + 1
+                )
+                pending_position_states[key] = state
+                request_post_position_fill_confirmation = True
         if request_post_position_fill_confirmation:
             self._request_authoritative_confirmation({"fills"})
         self._trailing_position_snapshot_fill_epochs = previous_snapshot_fill_epochs
         self._trailing_pending_fill_confirmations = pending
-        self._trailing_pending_fill_min_timestamps = pending_min_timestamps
         self._trailing_pending_fill_min_generations = pending_min_fill_generations
         self._trailing_pending_position_states = pending_position_states
         return fetched_positions_old, self.fetched_positions

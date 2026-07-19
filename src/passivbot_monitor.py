@@ -585,11 +585,45 @@ def _build_monitor_market_section(self) -> dict[str, dict]:
         symbols |= set(ignored.get(pside, set()) or set())
     market_snapshot_cache = getattr(getattr(self, "market_snapshot_provider", None), "_cache", {})
     runtime_hints = getattr(self, "_monitor_runtime_market_hints", {})
+    ema_unavailable_symbols = set(
+        getattr(self, "_orchestrator_ema_unavailable_symbols", set()) or set()
+    )
+    trailing_unavailable_symbols = set(
+        getattr(self, "_orchestrator_trailing_unavailable_symbols", set()) or set()
+    )
+    trailing_unavailable_reasons = getattr(
+        self, "_orchestrator_trailing_unavailable_reasons", {}
+    ) or {}
+    trailing_unavailable_psides = getattr(
+        self, "_orchestrator_trailing_unavailable_psides", {}
+    ) or {}
+    fill_confirmation_diagnostics = getattr(
+        self, "_trailing_fill_confirmation_diagnostics", {}
+    ) or {}
     out: dict[str, dict] = {}
     for symbol in sorted(symbols):
+        market_active = bool(
+            getattr(self, "markets_dict", {}).get(symbol, {}).get("active", True)
+        )
+        tradability_reasons = []
+        if not market_active:
+            tradability_reasons.append("market_inactive")
+        if symbol in ema_unavailable_symbols:
+            tradability_reasons.append("required_ema_unavailable")
+        symbol_trailing_reasons = trailing_unavailable_reasons.get(symbol, [])
+        if isinstance(symbol_trailing_reasons, str):
+            symbol_trailing_reasons = [symbol_trailing_reasons]
+        tradability_reasons.extend(
+            str(reason) for reason in symbol_trailing_reasons if reason
+        )
         entry: dict[str, Any] = {
             "active_symbol": symbol in set(getattr(self, "active_symbols", []) or []),
-            "tradable": bool(getattr(self, "markets_dict", {}).get(symbol, {}).get("active", True)),
+            "tradable": bool(
+                market_active
+                and symbol not in ema_unavailable_symbols
+                and symbol not in trailing_unavailable_symbols
+            ),
+            "tradability_reasons": sorted(set(tradability_reasons)),
             "approved": {
                 "long": symbol in set(approved_minus_ignored.get("long", set()) or set()),
                 "short": symbol in set(approved_minus_ignored.get("short", set()) or set()),
@@ -609,6 +643,19 @@ def _build_monitor_market_section(self) -> dict[str, dict]:
             "has_open_orders": bool(getattr(self, "open_orders", {}).get(symbol)),
             "has_position": bool(self.has_position(symbol=symbol)),
         }
+        if symbol in trailing_unavailable_symbols:
+            entry["trailing_unavailable_psides"] = sorted(
+                str(pside)
+                for pside in trailing_unavailable_psides.get(symbol, [])
+                if pside
+            )
+        confirmation_by_pside = {
+            pside: dict(fill_confirmation_diagnostics[(symbol, pside)])
+            for pside in ("long", "short")
+            if (symbol, pside) in fill_confirmation_diagnostics
+        }
+        if confirmation_by_pside:
+            entry["trailing_fill_confirmation"] = confirmation_by_pside
         cached = market_snapshot_cache.get(symbol)
         if cached is not None:
             try:
