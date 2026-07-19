@@ -3,6 +3,7 @@ from passivbot import logging
 
 from utils import ts_to_date, utc_ms
 from config.access import require_live_value
+from custom_endpoint_overrides import get_custom_endpoint_source, resolve_custom_endpoint_override
 
 
 class GateIOBot(CCXTBot):
@@ -20,6 +21,16 @@ class GateIOBot(CCXTBot):
 
     def create_ccxt_sessions(self):
         """GateIO: Add broker header to CCXT config."""
+        if self.endpoint_override is None:
+            self.endpoint_override = resolve_custom_endpoint_override("gate")
+            if self.endpoint_override is not None:
+                self.ws_enabled = not self.endpoint_override.disable_ws
+                logging.info(
+                    "Custom endpoint override active for gate "
+                    "(disable_ws=%s, source=%s)",
+                    self.endpoint_override.disable_ws,
+                    get_custom_endpoint_source() or "auto-discovered",
+                )
         # CCXT 4.5.66 exposes Gate.io clients under ``gate``. Keep Passivbot's
         # exchange identity canonical everywhere outside client construction.
         canonical_ccxt_id = self.exchange_ccxt_id
