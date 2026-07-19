@@ -19,8 +19,11 @@ The report keeps two claims separate:
 Legacy fills without embedded provenance remain explicitly unattributed. The
 tool never assigns them to the runtime that happened to read or re-save them.
 Legacy startup banners can establish a runtime window without establishing a
-version. Bounded startup hash prefixes merge with a full manifest/event identity
-only when account, start timestamp, and run-id prefix agree uniquely.
+version. A bounded startup-log run-id prefix merges with a complete
+manifest/event identity only when it is the producer's exact 12-character,
+lowercase-hex `uuid4().hex[:12]` form; exchange, user, and prefix agree
+uniquely; and their start timestamps differ by at most two seconds. Ambiguous,
+incomplete, malformed, or out-of-bound identities remain separate observations.
 
 ## Inputs And Output
 
