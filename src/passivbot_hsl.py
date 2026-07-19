@@ -2998,6 +2998,27 @@ def _equity_hard_stop_event_value(fill: Any, key: str, default: Any = None) -> A
     return getattr(fill, key, default)
 
 
+def _equity_hard_stop_fill_action(fill: Any) -> str:
+    """Return an explicit or unambiguously inferred position-size action."""
+    explicit = _equity_hard_stop_event_value(fill, "action")
+    if explicit is not None and str(explicit).strip():
+        action = str(explicit).lower()
+        return action if action in {"increase", "decrease"} else ""
+
+    raw_pside = _equity_hard_stop_event_value(
+        fill,
+        "position_side",
+        _equity_hard_stop_event_value(fill, "pside"),
+    )
+    pside = str(raw_pside or "").lower()
+    side = str(_equity_hard_stop_event_value(fill, "side", "") or "").lower()
+    if pside not in {"long", "short"} or side not in {"buy", "sell"}:
+        return ""
+    if pside == "long":
+        return "increase" if side == "buy" else "decrease"
+    return "increase" if side == "sell" else "decrease"
+
+
 def _equity_hard_stop_latest_panic_fill_timestamp_ms(
     self,
     pside: str,
@@ -3067,9 +3088,7 @@ def _equity_hard_stop_latest_flatten_fill_timestamp_optional_ms(
         return None
     for event in sorted(candidates, key=_equity_hard_stop_fill_timestamp_ms):
         event_symbol = _equity_hard_stop_fill_symbol(event)
-        action = str(
-            _equity_hard_stop_event_value(event, "action", "") or ""
-        ).lower()
+        action = _equity_hard_stop_fill_action(event)
         qty = _equity_hard_stop_fill_replay_qty(event)
         if not event_symbol or action not in {"increase", "decrease"}:
             return None
@@ -3917,7 +3936,7 @@ def _equity_hard_stop_coin_replay_events(
             continue
         if _equity_hard_stop_fill_symbol(event) != symbol:
             continue
-        action = str(_equity_hard_stop_event_value(event, "action", "") or "").lower()
+        action = _equity_hard_stop_fill_action(event)
         qty = _equity_hard_stop_fill_replay_qty(event)
         if action not in {"increase", "decrease"} or qty is None or qty <= 0.0:
             ambiguous = True
@@ -4375,13 +4394,13 @@ async def _equity_hard_stop_refresh_cooldown_after_repanic(
     cooldown_minutes = float(self.hsl[pside]["cooldown_minutes_after_red"])
     cooldown_ms = max(0, int(round(cooldown_minutes * 60_000.0))) if cooldown_minutes > 0.0 else 0
     repanic_since_ms = state.get("cooldown_repanic_since_ms")
-    stop_ts_ms = self._equity_hard_stop_latest_flatten_fill_timestamp_optional_ms(
+    stop_ts_ms = await self._equity_hard_stop_flatten_fill_timestamp_with_refresh(
         pside,
+        now_ms,
         since_ms=repanic_since_ms,
         replay_start_sizes=state.get("cooldown_repanic_start_sizes") or {},
     )
     if stop_ts_ms is None:
-        self._equity_hard_stop_defer_missing_flatten_fill(pside, now_ms)
         return False
     state["last_missing_flatten_fill_log_ms"] = 0
     cooldown_until_ms = stop_ts_ms + cooldown_ms if cooldown_ms > 0 else None
@@ -4447,16 +4466,14 @@ async def _equity_hard_stop_refresh_coin_cooldown_after_repanic(
     cooldown_minutes = float(self.hsl[pside]["cooldown_minutes_after_red"])
     cooldown_ms = max(0, int(round(cooldown_minutes * 60_000.0))) if cooldown_minutes > 0.0 else 0
     repanic_since_ms = state.get("cooldown_repanic_since_ms")
-    stop_ts_ms = self._equity_hard_stop_latest_flatten_fill_timestamp_optional_ms(
+    stop_ts_ms = await self._equity_hard_stop_flatten_fill_timestamp_with_refresh(
         pside,
+        now_ms,
         symbol=symbol,
         since_ms=repanic_since_ms,
         replay_start_sizes=state.get("cooldown_repanic_start_sizes") or {},
     )
     if stop_ts_ms is None:
-        self._equity_hard_stop_defer_missing_flatten_fill(
-            pside, now_ms, symbol=symbol
-        )
         return False
     state["last_missing_flatten_fill_log_ms"] = 0
     cooldown_until_ms = stop_ts_ms + cooldown_ms if cooldown_ms > 0 else None
@@ -4529,7 +4546,10 @@ async def _equity_hard_stop_handle_position_during_cooldown(self, pside: str, no
     if not state["halted"] or state["no_restart_latched"]:
         return False
     cooldown_until_ms = state["cooldown_until_ms"]
-    if cooldown_until_ms is None or now_ms >= cooldown_until_ms:
+    repanic_pending = bool(state["cooldown_repanic_reset_pending"])
+    if (
+        cooldown_until_ms is None or now_ms >= cooldown_until_ms
+    ) and not repanic_pending:
         return False
 
     symbols = self._equity_hard_stop_position_symbols(pside)
@@ -4606,7 +4626,10 @@ async def _equity_hard_stop_handle_coin_position_during_cooldown(
     if not state["halted"] or state["no_restart_latched"]:
         return False
     cooldown_until_ms = state["cooldown_until_ms"]
-    if cooldown_until_ms is None or now_ms >= cooldown_until_ms:
+    repanic_pending = bool(state["cooldown_repanic_reset_pending"])
+    if (
+        cooldown_until_ms is None or now_ms >= cooldown_until_ms
+    ) and not repanic_pending:
         return False
 
     has_position = self._equity_hard_stop_has_open_position_symbol(pside, symbol)
@@ -6794,6 +6817,7 @@ async def _equity_hard_stop_check(self) -> Optional[dict]:
                 cooldown_until_ms = state["cooldown_until_ms"]
                 if (
                     not state["no_restart_latched"]
+                    and not state["cooldown_repanic_reset_pending"]
                     and cooldown_until_ms is not None
                     and ts_ms >= cooldown_until_ms
                 ):
@@ -7055,6 +7079,7 @@ async def _equity_hard_stop_check_coin(self) -> Optional[dict]:
                     cooldown_until_ms = state["cooldown_until_ms"]
                     if (
                         not state["no_restart_latched"]
+                        and not state["cooldown_repanic_reset_pending"]
                         and cooldown_until_ms is not None
                         and ts_ms >= cooldown_until_ms
                     ):

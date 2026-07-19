@@ -4,6 +4,12 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- HSL cooldown re-panic confirmation now remains protective after the original
+  cooldown deadline until the exact scope-flattening fill is available. The
+  confirmation path refreshes the fill cache and reconstructs durable fills
+  from unambiguous order side and position side when no transient action field
+  is present.
+
 - Hardened WEEX live reconciliation by requiring explicit combined/separated
   position mode and long/short open-order sides, and by adaptively splitting
   full fill-history windows so endpoint ordering cannot silently omit fills.
@@ -30,8 +36,9 @@ All notable user-facing changes will be documented in this file.
   12-character lowercase-hex startup-log run-id prefix with one complete
   manifest or startup-event identity when exchange, user, prefix, and start time
   agree within two seconds. Ambiguous, incomplete, malformed, or out-of-bound
-  observations remain separate; the read-only tool still does not contact
-  exchanges or control bots.
+  observations remain separate. Monitor ingestion reads the canonical
+  `_live_event` envelope while retaining legacy input compatibility; the
+  read-only tool still does not contact exchanges or control bots.
 
 - Shutdown evidence in live smoke reports now distinguishes complete and
   incomplete latest shutdown lifecycles per bot. Restart smoke validation uses
