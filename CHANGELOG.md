@@ -4,6 +4,13 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- `passivbot tool runtime-attribution` now reconciles the producer's exact
+  12-character lowercase-hex startup-log run-id prefix with one complete
+  manifest or startup-event identity when exchange, user, prefix, and start time
+  agree within two seconds. Ambiguous, incomplete, malformed, or out-of-bound
+  observations remain separate; the read-only tool still does not contact
+  exchanges or control bots.
+
 - Shutdown evidence in live smoke reports now distinguishes complete and
   incomplete latest shutdown lifecycles per bot. Restart smoke validation uses
   distinct complete bots instead of aggregate event counts, so duplicate

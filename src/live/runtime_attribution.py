@@ -19,6 +19,7 @@ DEFAULT_MAX_TOTAL_BYTES = 2 * 1024 * 1024 * 1024
 DEFAULT_MAX_FILLS = 250_000
 MAX_REPORTED_WARNINGS = 200
 MAX_SOURCES_PER_RECORD = 32
+MAX_RUNTIME_LOG_START_SKEW_MS = 2_000
 
 _RUNTIME_KEYS = (
     "schema_version",
@@ -40,6 +41,10 @@ _RUNTIME_LINE_RE = re.compile(
     r"\[runtime\]\s+run=(?P<run_id>\S+)\s+pb=(?P<version>\S+)\s+"
     r"python=(?P<python>\S+)\s+config=(?P<config>\S+)\s+"
     r"rust_source=(?P<rust_source>\S+)\s+rust_artifact=(?P<rust_artifact>\S+)"
+)
+_RUNTIME_LOG_RUN_ID_PREFIX_RE = re.compile(r"^[0-9a-f]{12}$")
+_FULL_RUNTIME_IDENTITY_SOURCE_KINDS = frozenset(
+    {"runtime_manifest", "monitor_manifest", "monitor_event"}
 )
 
 
@@ -507,6 +512,30 @@ def _collect_logs(roots: Sequence[Path], budget: ScanBudget) -> list[dict[str, A
     return records
 
 
+def _is_full_manifest_or_event_identity(record: Mapping[str, Any]) -> bool:
+    identity = record.get("identity")
+    if not isinstance(identity, Mapping) or any(
+        identity.get(key) in (None, "", "unknown") for key in _RUNTIME_KEYS
+    ):
+        return False
+    sources = record.get("sources")
+    return isinstance(sources, list) and any(
+        isinstance(source, Mapping)
+        and source.get("kind") in _FULL_RUNTIME_IDENTITY_SOURCE_KINDS
+        for source in sources
+    )
+
+
+def _has_bounded_runtime_log_identity(record: Mapping[str, Any]) -> bool:
+    if _RUNTIME_LOG_RUN_ID_PREFIX_RE.fullmatch(str(record.get("run_id") or "")) is None:
+        return False
+    sources = record.get("sources")
+    return isinstance(sources, list) and any(
+        isinstance(source, Mapping) and source.get("kind") == "runtime_log"
+        for source in sources
+    )
+
+
 def _merge_runtimes(records: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
     ordered = sorted(
         records,
@@ -552,22 +581,23 @@ def _merge_runtimes(records: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
                 _append_source(target, source)
             merged.remove(legacy)
 
-    # Bounded startup log lines carry hash/run-id prefixes; merge them into the
-    # full manifest/event identity when the scope and start timestamp agree.
+    # Producer logs uuid4().hex[:12] at second resolution. Join that prefix only
+    # to one complete manifest/event identity in the same scope.
     for partial in list(merged):
         partial_id = str(partial["run_id"])
+        if not _has_bounded_runtime_log_identity(partial):
+            continue
         candidates = [
             item
             for item in merged
             if item is not partial
             and item["exchange"] == partial["exchange"]
             and item["user"] == partial["user"]
-            and abs(item["started_at_ms"] - partial["started_at_ms"]) <= 1_000
-            and (
-                str(item["run_id"]).startswith(partial_id)
-                or partial_id.startswith(str(item["run_id"]))
-            )
+            and abs(item["started_at_ms"] - partial["started_at_ms"])
+            <= MAX_RUNTIME_LOG_START_SKEW_MS
+            and str(item["run_id"]).startswith(partial_id)
             and len(str(item["run_id"])) > len(partial_id)
+            and _is_full_manifest_or_event_identity(item)
         ]
         if len(candidates) != 1:
             continue

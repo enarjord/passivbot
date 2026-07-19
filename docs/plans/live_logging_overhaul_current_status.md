@@ -22,25 +22,49 @@ Estimated completion:
 
 ## Active Review Slice
 
-- Branch: `codex/historical-runtime-attribution`, merged with canonical
-  `fc9dad83cd3ecf51cae15e8dda66afb7cfb895a1` at
-  `d351cd2c7f489ff56edaf2679e16aff6a57e5bb6`.
-- PR: #1315.
-- Scope: bounded, read-only local attribution of fill caches and monitor fill
-  history to recorded first-ingestion provenance and non-proving runtime-window
-  candidates.
-- Behavior boundary: offline attribution tool, CLI wiring, docs, and tests only.
-  No trading, exchange, runtime producer, order, risk, config, restart, or
-  process behavior changes.
-- Validation: focused attribution and CLI tests must preserve legacy fills as
-  unattributed, recognize canonical `first_ingested_by_runtime` provenance, and
-  retain bounded, fail-closed scans.
-- Review gate: current-head review is pending on the final integrated branch
-  after its documentation evidence is committed.
-- Expected VPS action: tracked-clean pull plus a bounded read-only attribution
-  smoke after merge. The tool is local-only and does not require a bot restart.
+- Branch: `codex/runtime-attribution-log-dedup`, based exactly on PR #1315's
+  canonical merge `308702523760ae7a0b309419ae1616b0a4938721`.
+- Scope: reconcile the producer's exact 12-character lowercase-hex startup-log
+  `uuid4().hex[:12]` prefix with one complete runtime manifest/event identity
+  when exchange, user, prefix, and a two-second maximum start-time skew agree.
+  Ambiguous, incomplete, malformed, out-of-scope, and out-of-bound records
+  remain separate.
+- Triggering PR #1315 deployment/smoke evidence: the full manifest started at
+  `1784414326269` ms while its matching bounded startup log used
+  `1784414328000` ms with the same run-id prefix, a `1731` ms skew that produced
+  duplicate runtime observations.
+- Behavior boundary: offline attribution parsing, docs, and tests only. No
+  trading, exchange, runtime producer, order, risk, config, restart, or process
+  behavior changes.
+- Validation: focused attribution tests cover the observed `1731` ms pair, the
+  inclusive two-second limit, short/uppercase prefixes, incomplete identities,
+  scope isolation, and ambiguity.
+- Review gate: final exact-head Hermes approval plus green Python/Rust CI.
+  Built-in Codex automatic review is additional, not a replacement for either.
+- Expected VPS action: after merge, a bounded read-only attribution smoke only;
+  no bot restart is required.
 
-## Deployed Baseline
+## Deployed Baseline (PR #1315)
+
+- PR #1315 merged as canonical
+  `308702523760ae7a0b309419ae1616b0a4938721`. The guarded tracked-clean
+  fast-forward was `fc9dad83` to the exact merge; the exact target-derived Rust
+  fingerprint/stamp
+  `691bff9683deec9382a4e96ab6a107c14145f88edd6ae2f8e2380b8ba6824449` matched
+  without a Rust build, bot restart, or signal.
+- The bounded Hyperliquid attribution smoke selected 13 files totaling
+  `3695111` bytes, scanned 50 fills with 37 trailing, and reported zero warnings.
+  All 37 legacy first-ingestion and 37 producer-attribution records correctly
+  remained unattributed.
+- The same smoke observed the full manifest start `1784414326269` ms and its
+  matching startup-log prefix at `1784414328000` ms, exposing the `1731` ms
+  second-resolution duplicate-runtime condition addressed by the active slice.
+- Bot PIDs `1044483/1044492/1044486/1044495/1044489` remained unchanged;
+  protected `misc:0.0` remained pane `%8`/PID `434835`. Final exact target
+  sampling retained those PIDs in normal `R/S` states with a tracked-clean
+  checkout. No direct exchange call or event was manufactured.
+
+## Previous Deployed Baseline (PR #1321)
 
 - PR #1321 deployed as canonical
   `fc9dad83cd3ecf51cae15e8dda66afb7cfb895a1`. It completes distinct latest

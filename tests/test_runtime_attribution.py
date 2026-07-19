@@ -1,4 +1,5 @@
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -37,6 +38,32 @@ def _roots(tmp_path: Path) -> dict:
         "monitor_roots": [tmp_path / "monitor"],
         "log_roots": [tmp_path / "logs"],
     }
+
+
+def _log_timestamp(timestamp_ms: int) -> str:
+    return datetime.fromtimestamp(timestamp_ms / 1000, tz=timezone.utc).strftime(
+        "%Y-%m-%dT%H:%M:%SZ"
+    )
+
+
+def _write_runtime_log(
+    path: Path,
+    *,
+    timestamp_ms: int,
+    exchange: str,
+    user: str,
+    run_id_prefix: str,
+    marker: str,
+) -> None:
+    timestamp = _log_timestamp(timestamp_ms)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        f"{timestamp} INFO     ║  PASSIVBOT  │  {exchange}:{user}  │  now  ║\n"
+        f"{timestamp} INFO     [runtime] run={run_id_prefix} pb=8.0.0 "
+        f"python={marker * 12} config={marker * 12} rust_source={marker * 12} "
+        f"rust_artifact={marker * 12}\n",
+        encoding="utf-8",
+    )
 
 
 def test_report_separates_recorded_ingestion_from_producer_candidate(tmp_path: Path):
@@ -136,18 +163,17 @@ def test_trailing_filter_and_monitor_fill_deduplication(tmp_path: Path):
     }
 
 
-def test_runtime_log_prefix_merges_with_full_manifest_identity(tmp_path: Path):
+def test_runtime_log_prefix_merges_with_full_manifest_identity_at_live_skew(tmp_path: Path):
     roots = _roots(tmp_path)
-    identity = _identity("1234567890abcdef", 1_000, "c")
+    identity = _identity("1234567890abcdef", 1_784_414_326_269, "c")
     _write_json(tmp_path / "runtime" / "bybit" / "alice" / "run.json", identity)
-    log_path = tmp_path / "logs" / "alice.log"
-    log_path.parent.mkdir(parents=True)
-    log_path.write_text(
-        "1970-01-01T00:00:01Z INFO     ║  PASSIVBOT  │  bybit:alice  │  now  ║\n"
-        "1970-01-01T00:00:01Z INFO     [runtime] run=1234567890ab pb=8.0.0 "
-        "python=cccccccccccc config=cccccccccccc rust_source=cccccccccccc "
-        "rust_artifact=cccccccccccc\n",
-        encoding="utf-8",
+    _write_runtime_log(
+        tmp_path / "logs" / "alice.log",
+        timestamp_ms=1_784_414_328_000,
+        exchange="bybit",
+        user="alice",
+        run_id_prefix="1234567890ab",
+        marker="c",
     )
 
     report = build_runtime_attribution_report(**roots)
@@ -160,6 +186,156 @@ def test_runtime_log_prefix_merges_with_full_manifest_identity(tmp_path: Path):
         "runtime_manifest",
         "legacy_startup_log",
     }
+
+
+@pytest.mark.parametrize(
+    ("manifest_started_at_ms", "expected_runtime_count"),
+    [(1_000, 1), (999, 2)],
+    ids=["exact_two_second_limit_merges", "one_ms_over_limit_stays_separate"],
+)
+def test_runtime_log_prefix_start_skew_boundary(
+    tmp_path: Path, manifest_started_at_ms: int, expected_runtime_count: int
+):
+    roots = _roots(tmp_path)
+    identity = _identity("abcdef0123456789", manifest_started_at_ms, "e")
+    _write_json(tmp_path / "runtime" / "bybit" / "alice" / "run.json", identity)
+    _write_runtime_log(
+        tmp_path / "logs" / "alice.log",
+        timestamp_ms=3_000,
+        exchange="bybit",
+        user="alice",
+        run_id_prefix="abcdef012345",
+        marker="e",
+    )
+
+    report = build_runtime_attribution_report(**roots)
+
+    assert report["summary"]["runtime_count"] == expected_runtime_count
+
+
+def test_runtime_log_prefix_does_not_merge_ambiguous_full_identities(tmp_path: Path):
+    roots = _roots(tmp_path)
+    _write_json(
+        tmp_path / "runtime" / "bybit" / "alice" / "run-1.json",
+        _identity("abcdef0123456789", 5_000, "f"),
+    )
+    _write_json(
+        tmp_path / "runtime" / "bybit" / "alice" / "run-2.json",
+        _identity("abcdef012345fedc", 6_000, "g"),
+    )
+    _write_runtime_log(
+        tmp_path / "logs" / "alice.log",
+        timestamp_ms=7_000,
+        exchange="bybit",
+        user="alice",
+        run_id_prefix="abcdef012345",
+        marker="f",
+    )
+
+    report = build_runtime_attribution_report(**roots)
+
+    assert report["summary"]["runtime_count"] == 3
+    assert {runtime["run_id"] for runtime in report["runtimes"]} == {
+        "abcdef0123456789",
+        "abcdef012345fedc",
+        "abcdef012345",
+    }
+
+
+@pytest.mark.parametrize(
+    ("run_id", "run_id_prefix"),
+    [
+        ("abcdef0123456789", "abcdef01234"),
+        ("ABCDEF0123456789", "ABCDEF012345"),
+    ],
+    ids=["short_prefix", "uppercase_prefix"],
+)
+def test_runtime_log_prefix_requires_producer_shape(
+    tmp_path: Path, run_id: str, run_id_prefix: str
+):
+    roots = _roots(tmp_path)
+    _write_json(
+        tmp_path / "runtime" / "bybit" / "alice" / "run.json",
+        _identity(run_id, 5_000, "i"),
+    )
+    _write_runtime_log(
+        tmp_path / "logs" / "alice.log",
+        timestamp_ms=7_000,
+        exchange="bybit",
+        user="alice",
+        run_id_prefix=run_id_prefix,
+        marker="i",
+    )
+
+    report = build_runtime_attribution_report(**roots)
+
+    assert report["summary"]["runtime_count"] == 2
+    assert {runtime["run_id"] for runtime in report["runtimes"]} == {run_id, run_id_prefix}
+
+
+@pytest.mark.parametrize("source_kind", ["manifest", "monitor_event"])
+def test_runtime_log_prefix_does_not_merge_incomplete_canonical_identity(
+    tmp_path: Path, source_kind: str
+):
+    roots = _roots(tmp_path)
+    identity = _identity("abcdef0123456789", 5_000, "j")
+    identity.pop("rust_artifact_sha256")
+    if source_kind == "manifest":
+        _write_json(tmp_path / "runtime" / "bybit" / "alice" / "run.json", identity)
+    else:
+        path = tmp_path / "monitor" / "bybit" / "alice" / "events" / "current.ndjson"
+        path.parent.mkdir(parents=True)
+        path.write_text(
+            json.dumps(
+                {
+                    "kind": "runtime.started",
+                    "payload": {
+                        "live_event": {"exchange": "bybit", "user": "alice", "data": identity}
+                    },
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+    _write_runtime_log(
+        tmp_path / "logs" / "alice.log",
+        timestamp_ms=7_000,
+        exchange="bybit",
+        user="alice",
+        run_id_prefix="abcdef012345",
+        marker="j",
+    )
+
+    report = build_runtime_attribution_report(**roots)
+
+    assert report["summary"]["runtime_count"] == 2
+
+
+@pytest.mark.parametrize(
+    ("manifest_exchange", "manifest_user"),
+    [("binance", "alice"), ("bybit", "bob")],
+    ids=["different_exchange", "different_user"],
+)
+def test_runtime_log_prefix_does_not_merge_different_scope(
+    tmp_path: Path, manifest_exchange: str, manifest_user: str
+):
+    roots = _roots(tmp_path)
+    _write_json(
+        tmp_path / "runtime" / manifest_exchange / manifest_user / "run.json",
+        _identity("abcdef0123456789", 5_000, "h"),
+    )
+    _write_runtime_log(
+        tmp_path / "logs" / "alice.log",
+        timestamp_ms=7_000,
+        exchange="bybit",
+        user="alice",
+        run_id_prefix="abcdef012345",
+        marker="h",
+    )
+
+    report = build_runtime_attribution_report(**roots)
+
+    assert report["summary"]["runtime_count"] == 2
 
 
 def test_monitor_runtime_event_is_accepted_without_runtime_manifest(tmp_path: Path):

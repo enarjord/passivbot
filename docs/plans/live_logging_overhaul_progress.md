@@ -15,7 +15,24 @@ merge, live smoke evidence changes, or new gaps are discovered.
 - Do not use this file for design churn; unresolved design details belong in the
   plan or a focused handoff doc.
 
-## Latest Canonical Deployment (PR #1321)
+## Latest Canonical Deployment (PR #1315)
+
+- PR #1315 merged as canonical `308702523760ae7a0b309419ae1616b0a4938721`.
+  Guarded tracked-clean fast-forwarded `fc9dad83` to that exact merge after the
+  target Rust fingerprint/stamp
+  `691bff9683deec9382a4e96ab6a107c14145f88edd6ae2f8e2380b8ba6824449` matched;
+  no Rust build, bot restart, or signal was needed.
+- The bounded Hyperliquid attribution smoke selected 13 files/`3695111` bytes,
+  scanned 50 fills (37 trailing), and had zero warnings. All 37 legacy
+  first-ingestion and 37 producer-attribution records remained correctly
+  unattributed; the full manifest `1784414326269` ms and matching prefix log
+  `1784414328000` ms exposed the `1731` ms duplicate-runtime condition.
+- Bot PIDs `1044483/1044492/1044486/1044495/1044489` and protected `misc:0.0`
+  `%8`/PID `434835` were unchanged. Final exact sampling retained normal `R/S`
+  states and a tracked-clean checkout; no direct exchange call or event was
+  manufactured.
+
+## Previous Canonical Deployment (PR #1321)
 
 - PR #1321 merged as canonical
   `fc9dad83cd3ecf51cae15e8dda66afb7cfb895a1`. It completes bounded latest
