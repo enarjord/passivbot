@@ -61,6 +61,40 @@ def test_load_custom_endpoint_config_parses_binance_override(tmp_path):
     assert config.get_override("unknown") is None
 
 
+def test_alias_override_merges_between_defaults_and_canonical():
+    config = CustomEndpointConfig(
+        source_path=None,
+        defaults={
+            "disable_ws": False,
+            "rest": {"extra_headers": {"X-Default": "1", "X-Precedence": "default"}},
+        },
+        exchanges={
+            "gate": {
+                "disable_ws": True,
+                "rest": {
+                    "extra_headers": {"X-Alias": "1", "X-Precedence": "alias"},
+                    "url_overrides": {"public": "https://gate-alias.example"},
+                },
+            },
+            "gateio": {
+                "rest": {"extra_headers": {"X-Precedence": "canonical"}},
+            },
+        },
+    )
+
+    override = config.get_override_with_aliases("gateio", ("gate",))
+
+    assert override is not None
+    assert override.exchange_id == "gateio"
+    assert override.disable_ws is True
+    assert override.rest_url_overrides["public"] == "https://gate-alias.example"
+    assert override.rest_extra_headers == {
+        "X-Default": "1",
+        "X-Alias": "1",
+        "X-Precedence": "canonical",
+    }
+
+
 def test_apply_rest_overrides_to_ccxt_updates_urls_and_headers():
     override = ResolvedEndpointOverride(
         exchange_id="binanceusdm",

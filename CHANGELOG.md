@@ -11,6 +11,10 @@ All notable user-facing changes will be documented in this file.
   query selection, results, monitor data, exchange access, and live behavior
   are unchanged.
 
+- Gate.io live startup now selects CCXT 4.5.66's `gate` REST and WebSocket
+  clients at session construction while retaining canonical `gateio` identity
+  for user-facing configuration, market settings, caches, and logs.
+
 - Window-bounded live smoke collection now accepts a monitor with only
   `current.ndjson` when the bounded monitor manifest proves that segment covers
   the requested window start; missing or invalid coverage evidence still fails
@@ -69,6 +73,11 @@ All notable user-facing changes will be documented in this file.
   use for equivalence, while timeline-reference runs avoid double-counting the
   same execution. This is offline diagnostic output only; HSL state, replay
   behavior, exchange access, orders, and risk are unchanged.
+
+- Trailing fill-confirmation watermarks now advance only when a fill fetch
+  actually completes. Exhausted historical fill-gap retries still perform a
+  recent-fill refresh, keeping trailing confirmation live while historical PnL
+  coverage remains independently fail-closed.
 
 - Trailing-position fill confirmation now treats exchange position-update
   timestamps as advisory and proves readiness with a successful post-position

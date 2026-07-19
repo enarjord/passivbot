@@ -5028,6 +5028,7 @@ async def test_update_pnls_window_lookback_bootstraps_when_coverage_unproven():
 
         async def _refresh_for_lookback(self, *, start_ms):
             self.cache.mark_covered_start(start_ms)
+            return True
 
         def get_events(self, start_ms=None):
             if start_ms is None:
@@ -5133,6 +5134,7 @@ async def test_update_pnls_window_lookback_stays_blocked_when_known_gap_persists
 
         async def _refresh_for_lookback(self, *, start_ms):
             self.cache.mark_covered_start(start_ms)
+            return False
 
         def get_events(self, start_ms=None):
             if start_ms is None:
@@ -5177,7 +5179,7 @@ async def test_update_pnls_window_lookback_stays_blocked_when_known_gap_persists
     bot._pnls_manager.refresh_latest.assert_not_awaited()
     assert bot._last_fill_refresh_pending_pnl_count == 0
     assert "fills" not in getattr(bot, "_authoritative_surface_signatures", {})
-    assert bot._trailing_fill_fetch_generation == 8
+    assert bot._trailing_fill_fetch_generation == 7
     retry_state = getattr(bot, "_fill_coverage_retry_state", {})
     assert retry_state["next_retry_ms"] > wall_ms["value"]
 
@@ -5185,14 +5187,14 @@ async def test_update_pnls_window_lookback_stays_blocked_when_known_gap_persists
 
     assert result is False
     bot._pnls_manager.refresh_for_lookback.assert_awaited_once_with(start_ms=start_ms)
-    assert bot._trailing_fill_fetch_generation == 8
+    assert bot._trailing_fill_fetch_generation == 7
 
     wall_ms["value"] = int(retry_state["next_retry_ms"]) + 1
     result = await bot.update_pnls(source="staged_blocking")
 
     assert result is False
     assert bot._pnls_manager.refresh_for_lookback.await_count == 2
-    assert bot._trailing_fill_fetch_generation == 10
+    assert bot._trailing_fill_fetch_generation == 7
 
 
 @pytest.mark.asyncio
@@ -5258,6 +5260,7 @@ async def test_update_pnls_window_lookback_records_fills_after_known_gap_repair(
         async def _refresh_for_lookback(self, *, start_ms):
             self.cache.known_gaps = []
             self.cache.mark_covered_start(start_ms)
+            return True
 
         def get_events(self, start_ms=None):
             if start_ms is None:

@@ -24,7 +24,7 @@ Estimated completion:
 
 - PR #1333, `Report live artifact scan cost`; branch:
   `codex/live-artifact-scan-cost`, based on canonical
-  `419839fb494388266bf0b3a54563ac8e24123f0b`.
+  `97aa36da4c9a9885c840ea48590837e28e5b8069`.
 - Scope: expose bounded elapsed-time, byte, file, record, and read-method cost
   metadata for `live-event-query` and `live-performance-report` artifact scans.
 - Behavior boundary: read-only local tooling only. The slice changes no event
@@ -36,7 +36,29 @@ Estimated completion:
 - Expected VPS action: tracked-clean pull plus bounded read-only report smokes;
   no bot restart or process signal.
 
-## Deployed Baseline (PR #1331)
+## Deployed Baseline (PR #1334)
+
+- Emergency PR #1334 merged exact reviewed head
+  `1fb218a61999ed1cf06ba1974407dbfe350ed0ea` as canonical
+  `97aa36da4c9a9885c840ea48590837e28e5b8069`. VPS5 fast-forwarded
+  tracked-clean from `77b97ab8c7b7c4e6ba70025c3ca53e828aa0a321` without a
+  Rust build; the source fingerprint/stamp remained
+  `691bff9683deec9382a4e96ab6a107c14145f88edd6ae2f8e2380b8ba6824449`
+  and the artifact SHA-256 remained
+  `7611f3eff1d8702ff29d90490a1aba490db5c816e7e3f09a2c33e5c4085da023`.
+- The recovery relaunched only the stopped Gate.io pane `%360`, producing bot
+  PID `1064329` under unchanged pane parent PID `856364`. The other four bot
+  PIDs remained `1063302/1063311/1063314/1063308`, and protected
+  `misc:0.0` remained `%8`/PID `434835`.
+- Stable three-sample exact-target validation retained all five configured
+  processes with no missing, duplicate, or extra target. The final fresh
+  two-minute smoke was `ok=true` with zero hard failures, five stable
+  processes, and a tracked-clean checkout. An earlier wider smoke retained an
+  unrelated natural KuCoin `RequestTimeout` and was not mislabeled green; the
+  final window observed one non-hard recovered KuCoin `InvalidNonce`. No direct
+  exchange call or event was manufactured.
+
+## Previous Deployed Baseline (PR #1331)
 
 - PR #1331 merged as canonical
   `0a6be3ed00261c6d6a2cdbe0f2588e5709e670f1` after exact-head Hermes

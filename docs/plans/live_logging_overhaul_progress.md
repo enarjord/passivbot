@@ -15,7 +15,27 @@ merge, live smoke evidence changes, or new gaps are discovered.
 - Do not use this file for design churn; unresolved design details belong in the
   plan or a focused handoff doc.
 
-## Latest Canonical Deployment (PR #1331)
+## Latest Canonical Deployment (PR #1334)
+
+- Emergency PR #1334 merged exact reviewed head
+  `1fb218a61999ed1cf06ba1974407dbfe350ed0ea` as canonical
+  `97aa36da4c9a9885c840ea48590837e28e5b8069`. VPS5 fast-forwarded
+  tracked-clean from `77b97ab8c7` without a Rust build; the Rust source
+  fingerprint/stamp and artifact SHA-256 remained unchanged.
+- The recovery relaunched only stopped Gate.io pane `%360`; its bot became PID
+  `1064329` under unchanged pane parent `856364`. The other four bot PIDs
+  remained `1063302/1063311/1063314/1063308`, and protected `misc:0.0`
+  remained `%8`/PID `434835`.
+- Stable three-sample exact-target validation retained five configured
+  processes with no missing, duplicate, or extra target. The final fresh
+  two-minute smoke was `ok=true` with zero hard failures and five stable
+  processes. An earlier wider smoke retained an unrelated natural KuCoin
+  `RequestTimeout` and was not mislabeled green; the final window observed one
+  non-hard recovered KuCoin `InvalidNonce`. No direct exchange call or event
+  was manufactured. Active `codex/live-artifact-scan-cost` remains read-only
+  tooling and requires no bot restart.
+
+## Previous Canonical Deployment (PR #1331)
 
 - PR #1331 merged as canonical
   `0a6be3ed00261c6d6a2cdbe0f2588e5709e670f1` after exact-head Hermes and
