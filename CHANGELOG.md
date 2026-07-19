@@ -4,6 +4,14 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- `passivbot tool hsl-replay-benchmark` now reports exclusive timing profiles
+  for fixture construction, replay internals, final-state projection, candidate
+  and dense-reference runs, equivalence comparison, and residual orchestration.
+  Compact-history benchmarks retain the dense-reference timing evidence they
+  use for equivalence, while timeline-reference runs avoid double-counting the
+  same execution. This is offline diagnostic output only; HSL state, replay
+  behavior, exchange access, orders, and risk are unchanged.
+
 - `passivbot tool runtime-attribution` now reconciles the producer's exact
   12-character lowercase-hex startup-log run-id prefix with one complete
   manifest or startup-event identity when exchange, user, prefix, and start time

@@ -102,7 +102,16 @@ slices.
     slice extends this to a 43,201-minute, 30-pair fixture with held and
     historical-flat pairs, cooldown/panic transitions, same-timestamp fills,
     account-balance changes, EMA smoothing, and exact dense-reference state and
-    sample-count comparison. Deeper internal-stage profiling remains open.
+    sample-count comparison. The stage-profile slice adds exclusive candidate,
+    dense-reference, equivalence-comparison, fixture, history-load,
+    held/background sample, current-UPnL, projection, and residual-orchestration
+    timings. Production cache discovery/decode, exchange backfill, and event
+    emission remain outside this in-memory benchmark and still require separate
+    evidence. On the exact 43,201-minute/30-symbol fixture, the compact
+    candidate run took `2.899s` and the dense-reference run took `156.390s`;
+    `147.403s` of reference full-replay time was residual orchestration after
+    `5.873s` of measured held/background metric sampling. Candidate and
+    reference fixture contract, sample counts, and final state all matched.
 - [ ] Acceptance: before optimizing, the report identifies the dominant cost
   category and provides a repeatable local benchmark.
 
@@ -649,8 +658,10 @@ Trading-impact labels:
   - Active candidate: the benchmark distinguishes held/background pairs and
     samples, reports expected cooperative yields, supports an explicit
     43,201-minute local-scale mode, includes cooldown/panic and account-balance
-    transitions, and compares candidate and dense-reference final state plus
-    sample counts. It can also report tracemalloc current/peak bytes.
+    transitions, compares candidate and dense-reference final state plus
+    sample counts, and reports exclusive per-run and whole-pipeline stage
+    profiles without counting reference execution as candidate replay time. It
+    can also report tracemalloc current/peak bytes.
 
 - [ ] Index fill events once by `(pside, symbol)`.
   - Reuse that index for replay contracts, panic detection, position-size
