@@ -22,7 +22,7 @@ Estimated completion:
 
 ## Active Review Slice
 
-- Branch: `codex/decision-freshness-report`, based on canonical
+- PR #1328; branch: `codex/decision-freshness-report`, based on canonical
   `0a57187ff9f0def7eb4976721f5b04d17f03fb74`.
 - Scope: project completed-1m-candle freshness from each frozen planning
   snapshot into bounded `snapshot.built` diagnostics, then validate and
@@ -1524,10 +1524,10 @@ PR #1286's aggregate-only follow-up, PR #1287's exact tmux target preflight,
 PR #1288's bounded target-identity stability, and PR #1289's plan binding are
 merged, deployed, and naturally validated without process control. PR #1290's
 pane-parent relaunch classification and the restart preparation/orchestration
-slices through PR #1309 are also merged and deployed. Current VPS5 is hard-green
-at canonical `f1ae7970393e8299d1b0a98c8ff68d42adddd2d0`. The active
-`codex/hard-problem-evidence` slice makes every nonzero hard smoke verdict
-diagnosable from a separately bounded hard-only sample.
+slices through PR #1309 are also merged and deployed. Later slices through PR
+#1326 are merged and deployed at canonical
+`0a57187ff9f0def7eb4976721f5b04d17f03fb74`; their current evidence is recorded
+above. PR #1328 is the active completed-candle decision-freshness slice.
 
 Do not create progress-only PRs or resume unrelated logging work from stale
 worktrees.
