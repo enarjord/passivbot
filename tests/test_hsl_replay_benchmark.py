@@ -22,7 +22,7 @@ def _without_timing(value):
         return {
             key: _without_timing(item)
             for key, item in value.items()
-            if key not in {"timings", "throughput", "stage_profile"}
+            if key not in {"timings", "throughput", "stage_profile", "pipeline_profile"}
         }
     if isinstance(value, list):
         return [_without_timing(item) for item in value]
@@ -157,6 +157,56 @@ def test_hsl_replay_benchmark_stage_profile_is_exclusive_and_bounded():
     assert profile["outside_full_replay"]["final_state_projection"]["calls"] == 2
 
 
+def _assert_exact_profile_accounting(profile, percent_key):
+    assert profile["accounted_elapsed_ns"] == sum(
+        stage["elapsed_ns"] for stage in profile["stages"].values()
+    )
+    assert profile["elapsed_ns"] == (
+        profile["accounted_elapsed_ns"]
+        + profile["residual_orchestration"]["elapsed_ns"]
+    )
+    for stage in list(profile["stages"].values()) + [
+        profile["residual_orchestration"]
+    ]:
+        assert stage["elapsed_ns"] >= 0
+        assert 0.0 <= stage[percent_key] <= 100.0
+
+
+def test_hsl_replay_benchmark_pipeline_profiles_distinct_runs_without_overlap():
+    report = asyncio.run(
+        hsl_replay_benchmark.run_hsl_replay_benchmark(
+            minutes=700, symbols=4, held_symbols=1, iterations=2
+        )
+    )
+
+    reference = report["dense_reference"]
+    assert reference["same_run_as_candidate"] is False
+    assert reference["fixture"]["history_format"] == "timeline"
+    assert reference["stage_profile"]["run"]["calls"] == 1
+    assert reference["stage_profile"]["full_replay"]["calls"] == 2
+    assert reference["stage_profile"]["outside_full_replay"][
+        "final_state_projection"
+    ]["calls"] == 2
+    assert reference["throughput"]["timeline_rows_per_second"] > 0.0
+    assert list(report["pipeline_profile"]["stages"]) == [
+        "candidate_run",
+        "dense_reference_run",
+        "equivalence_comparison",
+    ]
+
+    _assert_exact_profile_accounting(
+        report["stage_profile"]["full_replay"], "percent_of_full_replay"
+    )
+    _assert_exact_profile_accounting(report["stage_profile"]["run"], "percent_of_run")
+    _assert_exact_profile_accounting(
+        reference["stage_profile"]["full_replay"], "percent_of_full_replay"
+    )
+    _assert_exact_profile_accounting(
+        reference["stage_profile"]["run"], "percent_of_run"
+    )
+    _assert_exact_profile_accounting(report["pipeline_profile"], "percent_of_pipeline")
+
+
 def test_hsl_replay_benchmark_memory_profile_is_opt_in():
     report = asyncio.run(
         hsl_replay_benchmark.run_hsl_replay_benchmark(
@@ -263,6 +313,14 @@ def test_hsl_replay_benchmark_compact_and_timeline_reach_identical_state():
     assert timeline["side_effects"] == compact["side_effects"]
     assert timeline["fixture"]["scenario_sha256"] == compact["fixture"]["scenario_sha256"]
     assert compact["dense_reference"]["history_format"] == "timeline"
+    assert compact["dense_reference"]["same_run_as_candidate"] is False
+    assert timeline["dense_reference"]["same_run_as_candidate"] is True
+    assert "stage_profile" not in timeline["dense_reference"]
+    assert "throughput" not in timeline["dense_reference"]
+    assert list(timeline["pipeline_profile"]["stages"]) == [
+        "candidate_run",
+        "equivalence_comparison",
+    ]
     assert compact["equivalence"]["matches"] is True
     assert compact["equivalence"]["output_state"]["matches"] is True
     assert compact["equivalence"]["sample_counts"]["matches"] is True
@@ -295,7 +353,10 @@ def test_hsl_replay_benchmark_dense_reference_comparison_excludes_timing():
     candidate = copy.deepcopy(reference)
     candidate["timings"]["full_replay"]["elapsed_ns"] += 1
     candidate["stage_profile"]["full_replay"]["residual_orchestration"]["elapsed_ns"] += 1
+    candidate["stage_profile"]["run"]["residual_orchestration"]["elapsed_ns"] += 1
     candidate["stage_profile"]["full_replay"]["accounted_percent_of_full_replay"] = 0.0
+    candidate["pipeline_profile"]["elapsed_ns"] += 1
+    candidate["dense_reference"]["timings"]["full_replay"]["elapsed_ns"] += 1
 
     comparison = hsl_replay_benchmark.compare_dense_reference_output(reference, candidate)
 

@@ -91,44 +91,53 @@ def _timing_value(
     return {"calls": int(values["calls"]), "elapsed_ns": int(values["elapsed_ns"])}
 
 
+def _exclusive_elapsed_profile(
+    *, total_elapsed_ns: int, stages: dict[str, dict[str, int]], scope: str
+) -> dict[str, Any]:
+    accounted_elapsed_ns = sum(values["elapsed_ns"] for values in stages.values())
+    if accounted_elapsed_ns > total_elapsed_ns:
+        raise RuntimeError(
+            f"offline HSL benchmark {scope} stages exceed total elapsed time"
+        )
+    residual_elapsed_ns = total_elapsed_ns - accounted_elapsed_ns
+
+    def percent_of_total(elapsed_ns: int) -> float:
+        if total_elapsed_ns <= 0:
+            return 0.0
+        return min(100.0, max(0.0, elapsed_ns / total_elapsed_ns * 100.0))
+
+    percent_key = f"percent_of_{scope}"
+    return {
+        "elapsed_ns": total_elapsed_ns,
+        "accounted_elapsed_ns": accounted_elapsed_ns,
+        f"accounted_{percent_key}": percent_of_total(accounted_elapsed_ns),
+        "stages": {
+            stage: {**values, percent_key: percent_of_total(values["elapsed_ns"])}
+            for stage, values in stages.items()
+        },
+        "residual_orchestration": {
+            "elapsed_ns": residual_elapsed_ns,
+            percent_key: percent_of_total(residual_elapsed_ns),
+        },
+    }
+
+
 def _stage_profile(timings: dict[str, dict[str, int]]) -> dict[str, Any]:
     """Return exclusive replay timing shares plus uninstrumented orchestration."""
     full_replay = _timing_value(timings, "full_replay")
-    full_replay_elapsed_ns = full_replay["elapsed_ns"]
     stages = {
         stage: _timing_value(timings, stage) for stage in FULL_REPLAY_LEAF_STAGE_NAMES
     }
-    accounted_elapsed_ns = sum(values["elapsed_ns"] for values in stages.values())
-    if accounted_elapsed_ns > full_replay_elapsed_ns:
-        raise RuntimeError("offline HSL replay timing stages exceed full replay elapsed time")
-    residual_elapsed_ns = full_replay_elapsed_ns - accounted_elapsed_ns
-
-    def percent_of_full_replay(elapsed_ns: int) -> float:
-        if full_replay_elapsed_ns <= 0:
-            return 0.0
-        return min(100.0, max(0.0, elapsed_ns / full_replay_elapsed_ns * 100.0))
 
     return {
         "taxonomy": "exclusive_full_replay_leaf_stages_v1",
         "full_replay": {
-            **full_replay,
-            "accounted_elapsed_ns": accounted_elapsed_ns,
-            "accounted_percent_of_full_replay": percent_of_full_replay(
-                accounted_elapsed_ns
+            "calls": full_replay["calls"],
+            **_exclusive_elapsed_profile(
+                total_elapsed_ns=full_replay["elapsed_ns"],
+                stages=stages,
+                scope="full_replay",
             ),
-            "stages": {
-                stage: {
-                    **values,
-                    "percent_of_full_replay": percent_of_full_replay(
-                        values["elapsed_ns"]
-                    ),
-                }
-                for stage, values in stages.items()
-            },
-            "residual_orchestration": {
-                "elapsed_ns": residual_elapsed_ns,
-                "percent_of_full_replay": percent_of_full_replay(residual_elapsed_ns),
-            },
         },
         "outside_full_replay": {
             stage: _timing_value(timings, stage)
@@ -752,6 +761,7 @@ async def _run_hsl_replay_benchmark(
     if not 1 <= int(iterations) <= MAX_ITERATIONS:
         raise ValueError(f"iterations must be between 1 and {MAX_ITERATIONS}")
 
+    run_started_ns = time.perf_counter_ns()
     minutes, symbols, held_symbols = _validate_fixture_shape(
         minutes, symbols, held_symbols, local_scale=local_scale
     )
@@ -832,7 +842,8 @@ async def _run_hsl_replay_benchmark(
     full_replay_elapsed_ns = int(timing_totals["full_replay"]["elapsed_ns"])
     elapsed_seconds = max(full_replay_elapsed_ns, 1) / 1_000_000_000.0
     replay_rows = minutes * int(iterations)
-    return {
+    stage_profile = _stage_profile(timing_totals)
+    report = {
         "schema_version": BENCHMARK_SCHEMA_VERSION,
         "kind": "hsl_replay_benchmark",
         "offline": True,
@@ -885,7 +896,7 @@ async def _run_hsl_replay_benchmark(
         "timings": {
             stage: _timing_value(timing_totals, stage) for stage in TIMING_STAGE_NAMES
         },
-        "stage_profile": _stage_profile(timing_totals),
+        "stage_profile": stage_profile,
         "throughput": {
             "timeline_rows_per_second": replay_rows / elapsed_seconds,
             "pair_rows_per_second": expected_replay_samples / elapsed_seconds,
@@ -898,6 +909,20 @@ async def _run_hsl_replay_benchmark(
         },
         "side_effects": dict(sorted(side_effect_totals.items())),
     }
+    run_elapsed_ns = time.perf_counter_ns() - run_started_ns
+    run_stages = {
+        stage: _timing_value(timing_totals, stage)
+        for stage in ("fixture_construction", "full_replay", "final_state_projection")
+    }
+    stage_profile["run"] = {
+        "calls": 1,
+        **_exclusive_elapsed_profile(
+            total_elapsed_ns=run_elapsed_ns,
+            stages=run_stages,
+            scope="run",
+        ),
+    }
+    return report
 
 
 async def run_hsl_replay_benchmark(
@@ -917,6 +942,7 @@ async def run_hsl_replay_benchmark(
         raise ValueError(f"iterations must be between 1 and {MAX_ITERATIONS}")
     _validate_fixture_shape(minutes, symbols, held_symbols, local_scale=local_scale)
 
+    pipeline_started_ns = time.perf_counter_ns()
     tracing_started_here = False
     if profile_memory:
         if not tracemalloc.is_tracing():
@@ -932,8 +958,9 @@ async def run_hsl_replay_benchmark(
             local_scale=local_scale,
             history_format=history_format,
         )
+        reference_is_candidate = history_format == DENSE_REFERENCE_HISTORY_FORMAT
         reference_report = report
-        if history_format != DENSE_REFERENCE_HISTORY_FORMAT:
+        if not reference_is_candidate:
             reference_report = await _run_hsl_replay_benchmark(
                 minutes=minutes,
                 symbols=symbols,
@@ -942,13 +969,26 @@ async def run_hsl_replay_benchmark(
                 local_scale=local_scale,
                 history_format=DENSE_REFERENCE_HISTORY_FORMAT,
             )
-        report["dense_reference"] = {
+        dense_reference = {
             "history_format": DENSE_REFERENCE_HISTORY_FORMAT,
+            "same_run_as_candidate": reference_is_candidate,
             "fixture_scenario_sha256": reference_report["fixture"]["scenario_sha256"],
             "sample_counts": _sample_count_projection(reference_report),
             "output_state": reference_report["output_state"],
         }
+        if not reference_is_candidate:
+            dense_reference.update(
+                {
+                    "fixture": reference_report["fixture"],
+                    "timings": reference_report["timings"],
+                    "stage_profile": reference_report["stage_profile"],
+                    "throughput": reference_report["throughput"],
+                }
+            )
+        report["dense_reference"] = dense_reference
+        comparison_started_ns = time.perf_counter_ns()
         report["equivalence"] = compare_dense_reference_output(reference_report, report)
+        comparison_elapsed_ns = time.perf_counter_ns() - comparison_started_ns
         if profile_memory:
             current_bytes, peak_bytes = tracemalloc.get_traced_memory()
             report["memory"] = {
@@ -956,6 +996,31 @@ async def run_hsl_replay_benchmark(
                 "current_bytes": int(current_bytes),
                 "peak_bytes": int(peak_bytes),
             }
+        pipeline_stages = {
+            "candidate_run": {
+                "calls": 1,
+                "elapsed_ns": int(report["stage_profile"]["run"]["elapsed_ns"]),
+            }
+        }
+        if not reference_is_candidate:
+            pipeline_stages["dense_reference_run"] = {
+                "calls": 1,
+                "elapsed_ns": int(reference_report["stage_profile"]["run"]["elapsed_ns"]),
+            }
+        pipeline_stages["equivalence_comparison"] = {
+            "calls": 1,
+            "elapsed_ns": comparison_elapsed_ns,
+        }
+        pipeline_elapsed_ns = time.perf_counter_ns() - pipeline_started_ns
+        report["pipeline_profile"] = {
+            "taxonomy": "exclusive_benchmark_pipeline_stages_v1",
+            "calls": 1,
+            **_exclusive_elapsed_profile(
+                total_elapsed_ns=pipeline_elapsed_ns,
+                stages=pipeline_stages,
+                scope="pipeline",
+            ),
+        }
         return report
     finally:
         if tracing_started_here:
