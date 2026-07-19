@@ -4711,12 +4711,14 @@ class FillEventsManager:
         overlap: int = 20,
         gap_hours: float = 12.0,
         force_refetch_gaps: bool = False,
-    ) -> None:
+    ) -> bool:
         """Refresh fills for a requested lookback window using cache-derived coverage.
 
         Open-ended lookbacks are tracked in cache metadata so bots can avoid
         re-running the same expensive history bootstrap after restart when the
         early portion of the lookback legitimately contains no fills.
+
+        Returns True only after at least one exchange fill fetch completes.
         """
         await self.ensure_loaded()
         start_ms = int(start_ms)
@@ -4728,7 +4730,7 @@ class FillEventsManager:
                 overlap=overlap,
                 force_refetch_gaps=force_refetch_gaps,
             )
-            return
+            return True
 
         coverage_end_ms = int(datetime.now(tz=timezone.utc).timestamp() * 1000)
 
@@ -4789,6 +4791,12 @@ class FillEventsManager:
                 await self.refresh_latest(overlap=overlap)
                 blocking_gaps = blocking_known_gaps()
             if blocking_gaps:
+                if not retried_ranges:
+                    # Historical coverage may remain blocked after its bounded
+                    # retry budget is exhausted. A recent refresh is still
+                    # required so trailing confirmation can prove its fill
+                    # cache current without weakening the PnL coverage gate.
+                    await self.refresh_latest(overlap=overlap)
                 gap = blocking_gaps[0]
                 bounds = gap_bounds(gap)
                 range_label = (
@@ -4804,7 +4812,7 @@ class FillEventsManager:
                     str(gap.get("retry_count", "unknown")),
                     str(gap.get("confidence", "unknown")),
                 )
-                return
+                return True
 
         metadata = self.cache.load_metadata()
         covered_start_ms = int(metadata.get("covered_start_ms", 0) or 0)
@@ -4836,7 +4844,7 @@ class FillEventsManager:
                 _format_ms(oldest_event_ts) if oldest_event_ts else "None",
             )
             await self.refresh_latest(overlap=overlap)
-            return
+            return True
 
         if metadata_claims_history_without_events:
             logger.warning(
@@ -4870,6 +4878,7 @@ class FillEventsManager:
             await self.refresh(start_ms=start_ms, end_ms=None)
 
         self.cache.mark_covered_start(start_ms)
+        return True
 
     async def refresh_range(
         self,
