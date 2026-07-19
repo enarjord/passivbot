@@ -12,6 +12,11 @@ All notable user-facing changes will be documented in this file.
   same execution. This is offline diagnostic output only; HSL state, replay
   behavior, exchange access, orders, and risk are unchanged.
 
+- Trailing fill-confirmation watermarks now advance only when a fill fetch
+  actually completes. Exhausted historical fill-gap retries still perform a
+  recent-fill refresh, keeping trailing confirmation live while historical PnL
+  coverage remains independently fail-closed.
+
 - Trailing-position fill confirmation now treats exchange position-update
   timestamps as advisory and proves readiness with a successful post-position
   fill refresh, a new fill identity for runtime changes, and matching fill

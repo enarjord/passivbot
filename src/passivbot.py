@@ -11152,6 +11152,7 @@ class Passivbot:
             coverage_ready = bool(coverage_status.get("ready", False))
             needs_full_refresh = lookback.is_all and not coverage_ready
             needs_lookback_refresh = (not lookback.is_all) and not coverage_ready
+            fill_fetch_completed = False
             history_scope = str(coverage_status.get("history_scope", "unknown"))
             if not coverage_ready:
                 now_ms = utc_ms()
@@ -11208,6 +11209,7 @@ class Passivbot:
                     start_ms=None if age_limit is None else int(age_limit),
                     end_ms=None,
                 )
+                fill_fetch_completed = True
                 cache = getattr(self._pnls_manager, "cache", None)
                 mark_covered_start = getattr(cache, "mark_covered_start", None)
                 if age_limit is not None and callable(mark_covered_start):
@@ -11229,12 +11231,15 @@ class Passivbot:
                     self._pnls_manager, "refresh_for_lookback", None
                 )
                 if age_limit is not None and callable(refresh_for_lookback):
-                    await refresh_for_lookback(start_ms=int(age_limit))
+                    fill_fetch_completed = bool(
+                        await refresh_for_lookback(start_ms=int(age_limit))
+                    )
                 else:
                     await self._pnls_manager.refresh(
                         start_ms=None if age_limit is None else int(age_limit),
                         end_ms=None,
                     )
+                    fill_fetch_completed = True
                     cache = getattr(self._pnls_manager, "cache", None)
                     mark_covered_start = getattr(cache, "mark_covered_start", None)
                     if age_limit is not None and callable(mark_covered_start):
@@ -11275,6 +11280,7 @@ class Passivbot:
                         overlap=20,
                         last_refresh_overlap_ms=int(overlap_minutes * 60 * 1000),
                     )
+                fill_fetch_completed = True
 
             # Find and log new events (those not in cache before refresh)
             all_events = self._pnls_manager.get_events()
@@ -11282,7 +11288,8 @@ class Passivbot:
             # refresh completed after the position snapshot. Keep this
             # separate from the risk-authoritative fills generation below,
             # which must still wait for PnL enrichment and history coverage.
-            self._trailing_fill_fetch_generation = fill_refresh_attempt_generation
+            if fill_fetch_completed:
+                self._trailing_fill_fetch_generation = fill_refresh_attempt_generation
             new_events = []
             enriched_events = []
             seen_new_source_ids: set[str] = set()
