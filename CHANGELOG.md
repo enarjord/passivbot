@@ -4,6 +4,10 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- EMA Anchor live monitor snapshots now mark trailing diagnostics as not
+  applicable instead of requesting unrelated trailing-martingale parameters
+  and repeatedly failing snapshot publication.
+
 - Window-bounded live smoke collection now accepts a monitor with only
   `current.ndjson` when the bounded monitor manifest proves that segment covers
   the requested window start; missing or invalid coverage evidence still fails
