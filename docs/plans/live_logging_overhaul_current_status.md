@@ -22,28 +22,45 @@ Estimated completion:
 
 ## Active Review Slice
 
-- PR #1331, `Preserve completed candle freshness row counts`; branch:
-  `codex/completed-candle-summary-redaction-fix`, based on canonical
-  `c0386ff5673d93b732786cf12c4cd48f6a381767`.
-- Scope: rename the public completed-candle source-row count so the live-event
-  secret-key sanitizer preserves its numeric value, then consume and project
-  that non-sensitive key in `live-performance-report`.
-- Behavior boundary: observability producer and read-only reporting only. The
-  fix changes no sanitizer exception, candle read, exchange access, planning
-  readiness, strategy, order, risk, cache, or process-control behavior.
-- Validation: 362 focused performance-report and planning-snapshot tests passed
-  on exact head `ff6c5606c621acd7fba689ad81b7b8a7755f162a`. A runtime
-  redaction probe preserved the numeric source-row count while redacting genuine
-  signature, API-key, and token fields. Python compilation and diff checks
-  passed.
-- Review gate: final exact-head Hermes approval plus green Python/Rust CI.
+- PR pending, `Report live artifact scan cost`; branch:
+  `codex/live-artifact-scan-cost`, based on canonical
+  `0a6be3ed00261c6d6a2cdbe0f2588e5709e670f1`.
+- Scope: expose bounded elapsed-time, byte, file, record, and read-method cost
+  metadata for `live-event-query` and `live-performance-report` artifact scans.
+- Behavior boundary: read-only local tooling only. The slice changes no event
+  producer, file selection, query result, monitor persistence, exchange access,
+  planning, strategy, order, risk, or process-control behavior.
+- Review gate: exact-current-head Hermes approval plus green Python/Rust CI.
   Built-in Codex automatic review is additional and every finding must be
   verified and resolved.
-- Expected VPS action: tracked-clean pull, guarded exact-pane restart, and
-  immediate plus settled smoke, followed by a natural performance report that
-  proves corrected numeric freshness evidence.
+- Expected VPS action: tracked-clean pull plus bounded read-only report smokes;
+  no bot restart or process signal.
 
-## Deployed Baseline (PR #1328)
+## Deployed Baseline (PR #1331)
+
+- PR #1331 merged as canonical
+  `0a6be3ed00261c6d6a2cdbe0f2588e5709e670f1` after exact-head Hermes
+  approval, a green built-in Codex review, and green Python/Rust CI. VPS5
+  fast-forwarded tracked-clean from
+  `c0386ff5673d93b732786cf12c4cd48f6a381767` without a Rust build; the source
+  fingerprint/stamp remained
+  `691bff9683deec9382a4e96ab6a107c14145f88edd6ae2f8e2380b8ba6824449`.
+- The guarded runner gracefully restarted only exact panes `%358`-`%362`.
+  Bot PIDs `1057982/1057991/1057985/1057994/1057988` became
+  `1059196/1059205/1059199/1059208/1059202`; pane parents were unchanged and
+  protected `misc:0.0` remained `%8`/PID `434835`.
+- The immediate bounded smoke was hard-green with complete five-bot lifecycle
+  evidence, zero hard/monitor/text-log failures, `81/81` account-critical
+  calls, `436/436` remote calls, and five stable processes. The settled smoke
+  remained hard-green with `65/65` account-critical and `345/345` remote calls,
+  zero latest degraded cycles, both remaining HSL replays complete, and five
+  stable processes.
+- Natural post-restart snapshots persisted numeric `source_row_count` values
+  `36` and `1`. The exact-window performance report produced two summary and
+  metric observations with zero malformed or missing proofs. No direct exchange
+  call or event was manufactured.
+
+## Previous Deployed Baseline (PR #1328)
 
 - PR #1328 merged as canonical
   `c0386ff5673d93b732786cf12c4cd48f6a381767` after exact-head Hermes
@@ -61,7 +78,7 @@ Estimated completion:
   natural post-restart performance report then classified all seven observed
   completed-candle summaries as malformed because the sanitizer had replaced
   `signature_row_count` with `[redacted]`. No direct exchange call or event was
-  manufactured; active PR #1331 corrects only this public diagnostic contract.
+  manufactured; merged PR #1331 corrected only this public diagnostic contract.
 
 ## Deployed Baseline (PR #1326)
 
@@ -1545,9 +1562,10 @@ PR #1288's bounded target-identity stability, and PR #1289's plan binding are
 merged, deployed, and naturally validated without process control. PR #1290's
 pane-parent relaunch classification and the restart preparation/orchestration
 slices through PR #1309 are also merged and deployed. Later slices through PR
-#1328 are merged and deployed at canonical
-`c0386ff5673d93b732786cf12c4cd48f6a381767`; their current evidence is recorded
-above. PR #1331 is the active completed-candle row-count redaction fix.
+#1331 are merged and deployed at canonical
+`0a6be3ed00261c6d6a2cdbe0f2588e5709e670f1`; their current evidence is recorded
+above. The active artifact-scan cost slice measures read-only query/report work
+without changing scan behavior.
 
 Do not create progress-only PRs or resume unrelated logging work from stale
 worktrees.

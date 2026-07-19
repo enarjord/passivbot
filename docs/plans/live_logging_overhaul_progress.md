@@ -15,7 +15,31 @@ merge, live smoke evidence changes, or new gaps are discovered.
 - Do not use this file for design churn; unresolved design details belong in the
   plan or a focused handoff doc.
 
-## Latest Canonical Deployment (PR #1328)
+## Latest Canonical Deployment (PR #1331)
+
+- PR #1331 merged as canonical
+  `0a6be3ed00261c6d6a2cdbe0f2588e5709e670f1` after exact-head Hermes and
+  built-in Codex reviews plus green Python/Rust CI. VPS5 fast-forwarded
+  tracked-clean from `c0386ff567` without a Rust build; the Rust source
+  fingerprint/stamp remained
+  `691bff9683deec9382a4e96ab6a107c14145f88edd6ae2f8e2380b8ba6824449`.
+- The guarded runner gracefully restarted only exact panes `%358`-`%362`.
+  Bot PIDs `1057982/1057991/1057985/1057994/1057988` became
+  `1059196/1059205/1059199/1059208/1059202`; pane parents were unchanged and
+  protected `misc:0.0` stayed `%8`/PID `434835`.
+- The immediate smoke was hard-green with complete five-bot lifecycle evidence,
+  zero hard/monitor/text-log failures, `81/81` account-critical calls,
+  `436/436` remote calls, and five stable processes. The settled smoke remained
+  hard-green with `65/65` account-critical and `345/345` remote calls, zero
+  latest degraded cycles, both remaining HSL replays complete, and five stable
+  processes.
+- Natural post-restart snapshots persisted numeric `source_row_count` values
+  `36` and `1`; the exact-window performance report produced two summary and
+  metric observations with zero malformed or missing proofs. No direct exchange
+  call or event was manufactured. Active `codex/live-artifact-scan-cost` adds
+  bounded read-only artifact scan-cost evidence without changing scan results.
+
+## Previous Canonical Deployment (PR #1328)
 
 - PR #1328 merged as canonical
   `c0386ff5673d93b732786cf12c4cd48f6a381767` after exact-head Hermes and
@@ -31,7 +55,7 @@ merge, live smoke evidence changes, or new gaps are discovered.
   replaced `signature_row_count` with `[redacted]`. The performance report
   therefore classified all seven observed summaries as malformed and produced
   zero freshness metrics. No direct exchange call or event was manufactured.
-  Active PR #1331 renames only the public diagnostic/report count fields so the
+  Merged PR #1331 renamed only the public diagnostic/report count fields so the
   values remain numeric without weakening secret redaction.
 
 ## Previous Canonical Deployment (PR #1326)

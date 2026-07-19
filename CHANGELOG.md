@@ -4,6 +4,13 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- `live-event-query` and `live-performance-report` now include bounded
+  `scan_cost` metadata for elapsed artifact-scan time, successfully read files
+  and records, read methods, and physical versus decoded byte totals. Explicit
+  known flags prevent failed or unmeasurable reads from appearing complete;
+  query selection, results, monitor data, exchange access, and live behavior
+  are unchanged.
+
 - Planning snapshot diagnostics now include a bounded completed-1m-candle
   freshness summary when that surface is required. The summary is derived only
   from the frozen planning signature and reports expected/real close ages plus
