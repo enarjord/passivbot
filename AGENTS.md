@@ -59,6 +59,12 @@ or order-construction work; it is not mandatory for unrelated documentation or t
 Before broad edits, inspect the branch, recent commits, worktree status, and relevant callers/tests.
 For reviews against a moving branch, refresh the target ref and record the reviewed SHAs.
 
+Publish completed, validated work as a regular ready-for-review pull request by default. Before
+publication, make the branch clean, make the PR body accurate, and run the required author checks.
+Do not use a draft PR as a holding area for work the agent knows is incomplete; continue locally or
+report the blocker instead. Use a draft only when the user explicitly requests early collaboration
+on incomplete work. A regular PR still requires current-head review and CI before merge.
+
 Run validation proportional to the changed contract. Bug fixes require regression coverage. Rust
 changes require Rust tests, a rebuilt and verified Python extension where applicable, and parity or
 integration checks for affected Python callers. See `docs/ai/validation.md` and
