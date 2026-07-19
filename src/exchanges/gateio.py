@@ -1,9 +1,12 @@
 from exchanges.ccxt_bot import CCXTBot
 from passivbot import logging
 
-from utils import ts_to_date, utc_ms
+from utils import to_ccxt_client_id, ts_to_date, utc_ms
 from config.access import require_live_value
-from custom_endpoint_overrides import get_custom_endpoint_source, resolve_custom_endpoint_override
+from custom_endpoint_overrides import (
+    get_custom_endpoint_source,
+    resolve_custom_endpoint_override_with_aliases,
+)
 
 
 class GateIOBot(CCXTBot):
@@ -21,21 +24,22 @@ class GateIOBot(CCXTBot):
 
     def create_ccxt_sessions(self):
         """GateIO: Add broker header to CCXT config."""
-        if self.endpoint_override is None:
-            self.endpoint_override = resolve_custom_endpoint_override("gate")
-            if self.endpoint_override is not None:
-                self.ws_enabled = not self.endpoint_override.disable_ws
+        endpoint_override = resolve_custom_endpoint_override_with_aliases("gateio", ("gate",))
+        if endpoint_override != self.endpoint_override:
+            self.endpoint_override = endpoint_override
+            self.ws_enabled = endpoint_override is None or not endpoint_override.disable_ws
+            if endpoint_override is not None:
                 logging.info(
-                    "Custom endpoint override active for gate "
+                    "Custom endpoint override active for gateio/gate "
                     "(disable_ws=%s, source=%s)",
-                    self.endpoint_override.disable_ws,
+                    endpoint_override.disable_ws,
                     get_custom_endpoint_source() or "auto-discovered",
                 )
         # CCXT 4.5.66 exposes Gate.io clients under ``gate``. Keep Passivbot's
         # exchange identity canonical everywhere outside client construction.
         canonical_ccxt_id = self.exchange_ccxt_id
         try:
-            self.exchange_ccxt_id = "gate"
+            self.exchange_ccxt_id = to_ccxt_client_id(canonical_ccxt_id)
             super().create_ccxt_sessions()
         finally:
             self.exchange_ccxt_id = canonical_ccxt_id

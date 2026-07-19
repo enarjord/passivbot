@@ -579,6 +579,12 @@ def to_ccxt_exchange_id(exchange: str) -> str:
     return ex
 
 
+def to_ccxt_client_id(exchange: str) -> str:
+    """Return the CCXT class id used only when constructing a client session."""
+    exchange_id = to_ccxt_exchange_id(exchange)
+    return "gate" if exchange_id == "gateio" else exchange_id
+
+
 def to_standard_exchange_name(exchange: str) -> str:
     """
     Convert a ccxt exchange id to the canonical short form used in configs, caches, and logs.

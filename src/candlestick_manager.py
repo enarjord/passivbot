@@ -851,7 +851,7 @@ class CandlestickManager:
         # Base timeframe for storage/fetching is always 1m; higher TFs are per-call
         self._ccxt_timeframe = "1m"
         # Determine exchange id and adjust defaults per exchange quirks
-        self._ex_id = getattr(self.exchange, "id", self.exchange_name) or self.exchange_name
+        self._ex_id = self.exchange_name or getattr(self.exchange, "id", "")
         self._ccxt_limit_default = 1000
         self._ccxt_page_overlap_candles = 0
         self._record_payload_gaps_as_known = False

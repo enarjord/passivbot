@@ -9,6 +9,7 @@ from typing import Any
 import ccxt.async_support as ccxt_async
 
 from procedures import load_user_info
+from utils import to_ccxt_client_id
 
 
 PRICE_FIELDS = ("last", "bid", "ask")
@@ -40,9 +41,13 @@ def build_ccxt_config(user_info: dict[str, Any]) -> dict[str, Any]:
 
 
 def create_exchange(exchange_id: str, user_info: dict[str, Any] | None = None):
-    exchange_class = getattr(ccxt_async, exchange_id, None)
+    client_id = to_ccxt_client_id(exchange_id)
+    exchange_class = getattr(ccxt_async, client_id, None)
     if exchange_class is None:
-        raise ValueError(f"exchange {exchange_id!r} not found in ccxt.async_support")
+        raise ValueError(
+            f"exchange {exchange_id!r} (CCXT client id {client_id!r}) "
+            "not found in ccxt.async_support"
+        )
     user_info = user_info or {}
     options = dict(user_info.get("options", {}) if isinstance(user_info.get("options"), dict) else {})
     options["defaultType"] = "swap"
@@ -51,7 +56,7 @@ def create_exchange(exchange_id: str, user_info: dict[str, Any] | None = None):
     session = exchange_class(config)
     session.options.update(options)
     session.options["defaultType"] = "swap"
-    if exchange_id == "hyperliquid":
+    if client_id == "hyperliquid":
         session.options.setdefault(
             "fetchMarkets",
             {"types": ["swap", "hip3"], "hip3": {"dex": ["xyz"]}},

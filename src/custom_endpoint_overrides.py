@@ -168,7 +168,7 @@ class CustomEndpointConfig:
         self._source_path = source_path
         self._defaults = _ensure_exchange_shape(defaults)
         self._exchanges = {
-            key.lower(): _ensure_exchange_shape(value) for key, value in exchanges.items()
+            key.lower(): _ensure_explicit_exchange_shape(value) for key, value in exchanges.items()
         }
 
     @property
@@ -187,6 +187,22 @@ class CustomEndpointConfig:
             return None
         key = exchange_id.lower()
         merged = _deep_merge_dicts(self._defaults, self._exchanges.get(key))
+        resolved = _build_resolved(exchange_id=key, payload=merged)
+        return None if resolved.is_noop() else resolved
+
+    def get_override_with_aliases(
+        self, exchange_id: str, aliases: Iterable[str]
+    ) -> Optional[ResolvedEndpointOverride]:
+        """Resolve defaults, then aliases, then the canonical exchange id."""
+        if not exchange_id:
+            return None
+        key = exchange_id.lower()
+        merged = dict(self._defaults)
+        for alias in aliases:
+            alias_key = str(alias or "").lower()
+            if alias_key and alias_key != key:
+                merged = _deep_merge_dicts(merged, self._exchanges.get(alias_key))
+        merged = _deep_merge_dicts(merged, self._exchanges.get(key))
         resolved = _build_resolved(exchange_id=key, payload=merged)
         return None if resolved.is_noop() else resolved
 
@@ -279,6 +295,25 @@ def _ensure_exchange_shape(data: Optional[Mapping[str, object]]) -> Dict[str, ob
     payload["disable_ws"] = bool(payload.get("disable_ws", False))
     payload["rest"] = dict(rest)
     return dict(payload)
+
+
+def _ensure_explicit_exchange_shape(data: Mapping[str, object]) -> Dict[str, object]:
+    """Validate an exchange override without materializing unspecified defaults."""
+    normalized = _ensure_exchange_shape(data)
+    explicit: Dict[str, object] = {}
+    if "disable_ws" in data:
+        explicit["disable_ws"] = normalized["disable_ws"]
+    if "rest" in data:
+        raw_rest = data["rest"]
+        assert isinstance(raw_rest, Mapping)
+        normalized_rest = normalized["rest"]
+        explicit_rest = {
+            key: normalized_rest[key]
+            for key in ("rewrite_domains", "url_overrides", "extra_headers")
+            if key in raw_rest
+        }
+        explicit["rest"] = explicit_rest
+    return explicit
 
 
 def _deep_merge_dicts(
@@ -379,6 +414,14 @@ def resolve_custom_endpoint_override(exchange_id: str) -> Optional[ResolvedEndpo
     return config.get_override(exchange_id) if config else None
 
 
+def resolve_custom_endpoint_override_with_aliases(
+    exchange_id: str, aliases: Iterable[str]
+) -> Optional[ResolvedEndpointOverride]:
+    """Resolve an exchange override with lower-precedence library id aliases."""
+    config = get_cached_custom_endpoint_config()
+    return config.get_override_with_aliases(exchange_id, aliases) if config else None
+
+
 def get_custom_endpoint_source() -> Optional[Path]:
     """Return the filesystem path the current overrides were loaded from."""
     return _CONFIG_SOURCE_PATH
@@ -448,4 +491,5 @@ __all__ = [
     "get_custom_endpoint_source",
     "load_custom_endpoint_config",
     "resolve_custom_endpoint_override",
+    "resolve_custom_endpoint_override_with_aliases",
 ]

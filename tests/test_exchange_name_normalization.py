@@ -7,6 +7,7 @@ import pytest
 
 import exchanges.gateio as gateio_module
 import utils
+from candlestick_manager import CandlestickManager, ONE_MIN_MS
 from exchanges.ccxt_bot import CCXTBot
 from exchanges.gateio import GateIOBot
 from hlcv_preparation import HLCVManager
@@ -33,6 +34,7 @@ def test_gateio_session_boundary_resolves_current_rest_and_pro_clients(monkeypat
     assert bot.exchange_ccxt_id == "gateio"
     assert getattr(ccxt_async, resolved_ids[0]).__name__ == "gate"
     assert getattr(ccxt_pro, resolved_ids[0]).__name__ == "gate"
+    assert utils.to_ccxt_client_id("gateio") == "gate"
     assert utils.to_ccxt_exchange_id("gateio") == "gateio"
     assert utils.to_standard_exchange_name("gateio") == "gateio"
 
@@ -43,8 +45,10 @@ def test_gateio_session_boundary_accepts_gate_endpoint_override(monkeypatch):
 
     monkeypatch.setattr(
         gateio_module,
-        "resolve_custom_endpoint_override",
-        lambda exchange_id: alias_override if exchange_id == "gate" else None,
+        "resolve_custom_endpoint_override_with_aliases",
+        lambda exchange_id, aliases: (
+            alias_override if exchange_id == "gateio" and aliases == ("gate",) else None
+        ),
     )
     monkeypatch.setattr(gateio_module, "get_custom_endpoint_source", lambda: None)
 
@@ -69,10 +73,11 @@ def test_gateio_session_boundary_accepts_gate_endpoint_override(monkeypatch):
 def test_gateio_session_boundary_prefers_canonical_endpoint_override(monkeypatch):
     canonical_override = SimpleNamespace(disable_ws=False)
 
-    def fail_alias_lookup(_exchange_id):
-        raise AssertionError("gate alias must not replace a canonical override")
-
-    monkeypatch.setattr(gateio_module, "resolve_custom_endpoint_override", fail_alias_lookup)
+    monkeypatch.setattr(
+        gateio_module,
+        "resolve_custom_endpoint_override_with_aliases",
+        lambda _exchange_id, _aliases: canonical_override,
+    )
 
     def create_sessions(bot):
         assert bot.endpoint_override is canonical_override
@@ -89,6 +94,23 @@ def test_gateio_session_boundary_prefers_canonical_endpoint_override(monkeypatch
     bot.create_ccxt_sessions()
 
     assert bot.exchange_ccxt_id == "gateio"
+
+
+def test_gateio_candle_manager_uses_canonical_identity(tmp_path):
+    class GateClient:
+        id = "gate"
+
+    manager = CandlestickManager(
+        exchange=GateClient(),
+        exchange_name="gateio",
+        cache_dir=str(tmp_path / "caches"),
+    )
+    rows = [[ONE_MIN_MS, 100.0, 101.0, 99.0, 100.0, 1_000.0]]
+
+    normalized = manager._normalize_ccxt_ohlcv(rows)
+
+    assert manager._ex_id == "gateio"
+    assert float(normalized[0]["bv"]) == pytest.approx(10.0)
 
 
 @pytest.mark.asyncio
