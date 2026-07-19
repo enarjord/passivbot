@@ -5989,6 +5989,148 @@ async def test_build_monitor_snapshot_includes_market_forager_unstuck_and_recent
     assert snapshot["recent"]["order_cancellations"][0]["pb_order_type"] == "close_unstuck_long"
 
 
+def test_monitor_trailing_section_marks_ema_anchor_diagnostics_not_applicable():
+    import passivbot as pb_mod
+
+    class FakeBot:
+        _build_monitor_trailing_section = pb_mod.Passivbot._build_monitor_trailing_section
+
+        def __init__(self):
+            self.config = {"live": {"strategy_kind": "ema_anchor"}}
+            self.positions = {
+                "BTC/USDT:USDT": {
+                    "long": {"size": 0.1, "price": 100.0},
+                    "short": {"size": 0.0, "price": 0.0},
+                },
+                "ETH/USDT:USDT": {
+                    "long": {"size": 0.0, "price": 0.0},
+                    "short": {"size": -0.2, "price": 50.0},
+                },
+            }
+
+        def _strategy_params_to_rust_dict(self, pside, symbol=None):
+            raise AssertionError(
+                f"EMA Anchor {pside} monitor path must not request trailing strategy params"
+            )
+
+        def bp(self, pside, key, symbol=None):
+            raise AssertionError(
+                f"EMA Anchor {pside} monitor path must not request legacy key {key}"
+            )
+
+    payload = FakeBot()._build_monitor_trailing_section(
+        balance_raw=100.0,
+        market={
+            "BTC/USDT:USDT": {
+                "last_price": 101.0,
+                "trailing": {"long": {"max_since_open": 102.0}},
+            },
+            "ETH/USDT:USDT": {
+                "last_price": 49.0,
+                "trailing": {"short": {"min_since_open": 48.0}},
+            },
+        },
+    )
+
+    assert payload == {
+        "_meta": {
+            "diagnostics_supported": False,
+            "strategy_kind": "ema_anchor",
+            "reason": "strategy_has_no_trailing_diagnostics",
+        }
+    }
+
+
+@pytest.mark.asyncio
+async def test_ema_anchor_monitor_snapshot_flush_skips_legacy_trailing_params():
+    import passivbot as pb_mod
+
+    class FakePublisher:
+        def __init__(self):
+            self.snapshot = None
+
+        def write_snapshot(self, snapshot, *, ts=None, force=False):
+            self.snapshot = snapshot
+            return True
+
+    class FakeBot:
+        _build_monitor_snapshot = pb_mod.Passivbot._build_monitor_snapshot
+        _build_monitor_trailing_section = pb_mod.Passivbot._build_monitor_trailing_section
+        _monitor_flush_snapshot = pb_mod.Passivbot._monitor_flush_snapshot
+
+        def __init__(self):
+            self.config = {"live": {"strategy_kind": "ema_anchor"}}
+            self.exchange = "fake"
+            self.user = "ema_anchor_monitor_test"
+            self.quote = "USDT"
+            self.start_time_ms = 1
+            self.open_orders = {}
+            self.PB_modes = {"long": {}, "short": {}}
+            self._runtime_forced_modes = {"long": {}, "short": {}}
+            self.positions = {
+                "BTC/USDT:USDT": {
+                    "long": {"size": 0.1, "price": 100.0},
+                    "short": {"size": 0.0, "price": 0.0},
+                },
+                "ETH/USDT:USDT": {
+                    "long": {"size": 0.0, "price": 0.0},
+                    "short": {"size": -0.2, "price": 50.0},
+                },
+            }
+            self.monitor_publisher = FakePublisher()
+
+        def get_raw_balance(self):
+            return 100.0
+
+        def get_hysteresis_snapped_balance(self):
+            return 100.0
+
+        def _build_monitor_market_section(self):
+            return {
+                "BTC/USDT:USDT": {"last_price": 101.0},
+                "ETH/USDT:USDT": {"last_price": 49.0},
+            }
+
+        def _build_monitor_positions_section(self, *, balance_raw, market):
+            return self.positions
+
+        def _build_health_summary_payload(self, *, now_ms):
+            return {}
+
+        def _monitor_hsl_payload(self, pside):
+            return {}
+
+        async def _build_monitor_forager_section(self):
+            return {}
+
+        def _build_monitor_unstuck_section(self):
+            return {}
+
+        def _build_monitor_recent_section(self):
+            return {}
+
+        def _strategy_params_to_rust_dict(self, pside, symbol=None):
+            raise AssertionError(
+                f"EMA Anchor {pside} snapshot must not request trailing strategy params"
+            )
+
+        def bp(self, pside, key, symbol=None):
+            raise AssertionError(
+                f"EMA Anchor {pside} snapshot must not request legacy key {key}"
+            )
+
+    bot = FakeBot()
+
+    assert await bot._monitor_flush_snapshot(force=True, ts=300_000) is True
+    assert bot.monitor_publisher.snapshot["trailing"] == {
+        "_meta": {
+            "diagnostics_supported": False,
+            "strategy_kind": "ema_anchor",
+            "reason": "strategy_has_no_trailing_diagnostics",
+        }
+    }
+
+
 def test_monitor_trailing_section_includes_trailing_grid_v7_diagnostics():
     import passivbot as pb_mod
 
