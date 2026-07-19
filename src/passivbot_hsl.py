@@ -4602,7 +4602,10 @@ async def _equity_hard_stop_handle_position_during_cooldown(self, pside: str, no
 
     if policy == "panic":
         if not state["cooldown_repanic_reset_pending"]:
-            state["cooldown_repanic_since_ms"] = int(now_ms) + 1
+            # Exchange fills may share the millisecond of the authoritative
+            # non-flat snapshot. Include that boundary and let position-size
+            # replay prove which fill actually flattened the scope.
+            state["cooldown_repanic_since_ms"] = int(now_ms)
             state["cooldown_repanic_start_sizes"] = {
                 position_symbol: abs(
                     float(position.get(pside, {}).get("size", 0.0) or 0.0)
@@ -4687,7 +4690,9 @@ async def _equity_hard_stop_handle_coin_position_during_cooldown(
 
     if policy == "panic":
         if not state["cooldown_repanic_reset_pending"]:
-            state["cooldown_repanic_since_ms"] = int(now_ms) + 1
+            # See the pside path above: the flattening fill may carry the same
+            # exchange timestamp as this intervention check.
+            state["cooldown_repanic_since_ms"] = int(now_ms)
             state["cooldown_repanic_start_sizes"] = {
                 symbol: abs(
                     float(

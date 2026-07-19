@@ -11,14 +11,16 @@ All notable user-facing changes will be documented in this file.
 
 - Generic staged balance refreshes now retain the actual exchange response for
   account data-packet provenance while carrying bounded balance composition as
-  a separate diagnostic. Packet hashes therefore reflect raw response changes
-  without exposing raw payloads.
+  a separate diagnostic, including Binance's sequenced account cohort and
+  legacy raw/normalized balance pairs. Packet hashes therefore reflect raw
+  response changes without exposing raw payloads.
 
 - HSL cooldown re-panic confirmation now remains protective after the original
   cooldown deadline until the exact scope-flattening fill is available. The
   confirmation path refreshes the fill cache and reconstructs durable fills
   from unambiguous order side and position side when no transient action field
-  is present.
+  is present, including flattening fills stamped in the same exchange
+  millisecond as the non-flat intervention snapshot.
 
 - Hardened WEEX live reconciliation by requiring explicit combined/separated
   position mode and long/short open-order sides, and by adaptively splitting

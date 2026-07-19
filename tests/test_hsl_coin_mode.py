@@ -1228,7 +1228,7 @@ def test_repanic_replay_infers_decrease_from_durable_fill_fields(pside, side):
     event = FillEvent.from_dict(
         {
             "id": f"{pside}-close",
-            "timestamp": 170_000,
+            "timestamp": 150_000,
             "symbol": "A",
             "side": side,
             "qty": 1.0,
@@ -1245,11 +1245,34 @@ def test_repanic_replay_infers_decrease_from_durable_fill_fields(pside, side):
         bot._equity_hard_stop_latest_flatten_fill_timestamp_optional_ms(
             pside,
             symbol="A",
-            since_ms=150_001,
+            since_ms=150_000,
             replay_start_sizes={"A": 1.0},
         )
-        == 170_000
+        == 150_000
     )
+
+
+@pytest.mark.asyncio
+async def test_coin_repanic_replay_includes_intervention_millisecond():
+    bot = make_coin_bot(policy="panic")
+    symbol = "A"
+    state = bot._hsl_coin_state("long", symbol)
+    state["halted"] = True
+    state["cooldown_until_ms"] = 200_000
+    bot.positions = {
+        symbol: {
+            "long": {"size": 1.0, "price": 100.0},
+            "short": {"size": 0.0, "price": 0.0},
+        }
+    }
+
+    changed = await bot._equity_hard_stop_handle_coin_position_during_cooldown(
+        "long", symbol, 150_000
+    )
+
+    assert changed is False
+    assert state["cooldown_repanic_since_ms"] == 150_000
+    assert state["cooldown_repanic_start_sizes"] == {symbol: 1.0}
 
 
 @pytest.mark.asyncio

@@ -9658,7 +9658,14 @@ class Passivbot:
             stage("positions", positions, raw_positions)
             stage("balance", balance, raw_balance)
         elif surface == "balance":
-            raw_balance, _balance_composition, balance = result
+            if isinstance(result, (tuple, list)) and len(result) == 3:
+                raw_balance, _balance_composition, balance = result
+            elif isinstance(result, (tuple, list)) and len(result) == 2:
+                # Compatibility for exchange cohort hooks which still return
+                # the established raw/normalized balance pair.
+                raw_balance, balance = result
+            else:
+                return
             stage("balance", balance, raw_balance)
         elif surface == "positions":
             raw_positions, positions = result

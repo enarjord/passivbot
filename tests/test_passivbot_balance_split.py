@@ -584,6 +584,26 @@ async def test_data_packet_capture_failure_does_not_block_authoritative_fetch():
     assert timings_ms["balance"] >= 0
 
 
+def test_balance_data_packet_capture_accepts_legacy_raw_normalized_pair():
+    bot = Passivbot.__new__(Passivbot)
+    bot.exchange = "legacy"
+    bot._authoritative_refresh_epoch = 7
+    raw_balance = {"total": {"USDT": 123.45}, "raw_revision": "legacy-pair"}
+
+    bot._capture_live_data_packet_fetch_metadata(
+        "balance",
+        (raw_balance, 123.45),
+        call_started_ts_ms=100,
+        response_received_ts_ms=125,
+    )
+
+    packet = bot._pending_live_data_packet_metadata["balance"]
+    assert packet.coverage == {"value_present": True}
+    assert packet.raw_hash == stable_hash(raw_balance)
+    assert packet.call_started_ts_ms == 100
+    assert packet.response_received_ts_ms == 125
+
+
 def test_diagnostic_event_emit_failure_is_noncritical():
     from live.events import DiagnosticEvent, emit_diagnostic_event
 
