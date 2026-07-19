@@ -5,6 +5,7 @@ import json
 import math
 import statistics
 from collections import Counter
+from numbers import Integral
 from pathlib import Path
 from typing import Any
 
@@ -453,6 +454,13 @@ def _non_negative_ms(value: Any) -> int | None:
     return int(round(number))
 
 
+def _strict_non_negative_int(value: Any) -> int | None:
+    if isinstance(value, bool) or not isinstance(value, Integral):
+        return None
+    parsed = int(value)
+    return parsed if parsed >= 0 else None
+
+
 def _non_negative_number(value: Any) -> float | int | None:
     number = _finite_float(value)
     if number is None or number < 0:
@@ -879,6 +887,26 @@ class _InputStalenessAccumulator:
         self.market_snapshot_configured_max_age_values: list[int] = []
         self.market_snapshot_configured_excess_values: list[int] = []
         self.market_snapshot_source_counts: Counter[str] = Counter()
+        self.completed_candle_required_snapshots = 0
+        self.completed_candle_required_surface_unknown_snapshots = 0
+        self.completed_candle_summary_observations = 0
+        self.completed_candle_summary_missing_proof_count = 0
+        self.completed_candle_summary_malformed_proof_count = 0
+        self.completed_candle_summary_no_valid_rows_count = 0
+        self.completed_candle_metric_observations = 0
+        self.completed_candle_signature_row_values: list[int] = []
+        self.completed_candle_valid_row_values: list[int] = []
+        self.completed_candle_invalid_row_values: list[int] = []
+        self.completed_candle_fallback_count_values: list[int] = []
+        self.completed_candle_fallback_symbol_count_values: list[int] = []
+        self.completed_candle_expected_age_values: dict[str, list[int]] = {
+            label: [] for label in ("min", "mean", "max")
+        }
+        self.completed_candle_real_age_values: dict[str, list[int]] = {
+            label: [] for label in ("min", "mean", "max")
+        }
+        self.completed_candle_max_tail_gap_age_values: list[int] = []
+        self.completed_candle_configured_max_tail_gap_values: list[int] = []
         self.rust_calls_seen = 0
         self.packet_refs_missing = 0
         self.snapshot_to_rust_exact_matches = 0
@@ -911,6 +939,148 @@ class _InputStalenessAccumulator:
             self.groups[group_key] = group
         group.add(value_ms, row=row, live_event=live_event)
 
+    def _consume_completed_candle_summary(
+        self,
+        *,
+        row: dict[str, Any],
+        live_event: dict[str, Any],
+        data: dict[str, Any],
+    ) -> None:
+        required_surfaces = data.get("required_surfaces")
+        if not isinstance(required_surfaces, list):
+            self.completed_candle_required_surface_unknown_snapshots += 1
+            return
+        if "completed_candles" not in {str(surface) for surface in required_surfaces}:
+            return
+        self.completed_candle_required_snapshots += 1
+        summary = data.get("completed_candle_summary")
+        if not isinstance(summary, dict):
+            self.completed_candle_summary_missing_proof_count += 1
+            return
+        self.completed_candle_summary_observations += 1
+
+        def count(name: str) -> int | None:
+            return _strict_non_negative_int(summary.get(name))
+
+        signature_rows = count("signature_row_count")
+        valid_rows = count("valid_row_count")
+        invalid_rows = count("invalid_row_count")
+        fallback_count = count("tail_gap_fallback_count")
+        fallback_symbol_count = count("tail_gap_fallback_symbol_count")
+        if (
+            summary.get("required") is not True
+            or summary.get("timeframe") != "1m"
+            or signature_rows is None
+            or valid_rows is None
+            or invalid_rows is None
+            or fallback_count is None
+            or fallback_symbol_count is None
+            or signature_rows != valid_rows + invalid_rows
+            or fallback_count > valid_rows
+            or fallback_symbol_count > fallback_count
+        ):
+            self.completed_candle_summary_malformed_proof_count += 1
+            return
+        samples = summary.get("tail_gap_fallback_symbol_samples")
+        symbols_truncated = summary.get("tail_gap_fallback_symbols_truncated")
+        if (
+            not isinstance(samples, list)
+            or len(samples) > 8
+            or any(not isinstance(symbol, str) or not symbol for symbol in samples)
+            or len(set(samples)) != len(samples)
+            or samples != sorted(samples)
+            or not isinstance(symbols_truncated, bool)
+            or (symbols_truncated and (len(samples) != 8 or fallback_symbol_count <= len(samples)))
+            or (not symbols_truncated and len(samples) != fallback_symbol_count)
+        ):
+            self.completed_candle_summary_malformed_proof_count += 1
+            return
+        self.completed_candle_signature_row_values.append(signature_rows)
+        self.completed_candle_valid_row_values.append(valid_rows)
+        self.completed_candle_invalid_row_values.append(invalid_rows)
+        self.completed_candle_fallback_count_values.append(fallback_count)
+        self.completed_candle_fallback_symbol_count_values.append(fallback_symbol_count)
+        configured_max_tail_gap_ms = _strict_non_negative_int(
+            summary.get("configured_max_tail_gap_ms")
+        )
+        if configured_max_tail_gap_ms is not None:
+            self.completed_candle_configured_max_tail_gap_values.append(
+                configured_max_tail_gap_ms
+            )
+        if invalid_rows:
+            self.completed_candle_summary_malformed_proof_count += 1
+            return
+        if valid_rows == 0:
+            self.completed_candle_summary_no_valid_rows_count += 1
+            return
+
+        def ages(name: str) -> dict[str, int] | None:
+            value = summary.get(name)
+            if not isinstance(value, dict):
+                return None
+            parsed = {
+                label: _strict_non_negative_int(value.get(f"{label}_ms"))
+                for label in ("min", "mean", "max")
+            }
+            if any(item is None for item in parsed.values()):
+                return None
+            if not (parsed["min"] <= parsed["mean"] <= parsed["max"]):
+                return None
+            return {label: int(item) for label, item in parsed.items()}
+
+        expected_ages = ages("expected_close_age")
+        real_ages = ages("last_real_close_age")
+        if expected_ages is None or real_ages is None:
+            self.completed_candle_summary_malformed_proof_count += 1
+            return
+        if any(real_ages[label] < expected_ages[label] for label in expected_ages):
+            self.completed_candle_summary_malformed_proof_count += 1
+            return
+        max_tail_gap_age_ms = _strict_non_negative_int(summary.get("max_tail_gap_age_ms"))
+        if fallback_count == 0 and max_tail_gap_age_ms is not None:
+            self.completed_candle_summary_malformed_proof_count += 1
+            return
+        if fallback_count > 0 and max_tail_gap_age_ms is None:
+            self.completed_candle_summary_malformed_proof_count += 1
+            return
+        if (
+            max_tail_gap_age_ms is not None
+            and configured_max_tail_gap_ms is not None
+            and max_tail_gap_age_ms > configured_max_tail_gap_ms
+        ):
+            self.completed_candle_summary_malformed_proof_count += 1
+            return
+        self.completed_candle_metric_observations += 1
+        for source, values in (
+            ("expected_close", expected_ages),
+            ("last_real_close", real_ages),
+        ):
+            target = (
+                self.completed_candle_expected_age_values
+                if source == "expected_close"
+                else self.completed_candle_real_age_values
+            )
+            for label, value_ms in values.items():
+                target[label].append(value_ms)
+                self._add_group(
+                    row=row,
+                    live_event=live_event,
+                    operation=f"input_staleness.completed_candles.{source}.{label}",
+                    value_ms=value_ms,
+                    timing_kind="close_age_at_snapshot",
+                    trading_impact="blocks_indicator_readiness",
+                )
+        if max_tail_gap_age_ms is not None:
+            self.completed_candle_max_tail_gap_age_values.append(max_tail_gap_age_ms)
+            self._add_group(
+                row=row,
+                live_event=live_event,
+                operation="input_staleness.completed_candles.tail_gap.max",
+                value_ms=max_tail_gap_age_ms,
+                timing_kind="tail_gap_age_at_snapshot",
+                trading_impact="blocks_indicator_readiness",
+            )
+
     def add(
         self,
         *,
@@ -941,6 +1111,9 @@ class _InputStalenessAccumulator:
             cycle_id = _event_cycle_id(live_event)
             if cycle_id:
                 self.snapshot_ts_by_cycle[(bot, int(cycle_scope), cycle_id)] = int(timestamp_ms)
+            self._consume_completed_candle_summary(
+                row=row, live_event=live_event, data=data
+            )
             surface_ages = data.get("surface_ages")
             if isinstance(surface_ages, list):
                 for surface in surface_ages:
@@ -1138,6 +1311,48 @@ class _InputStalenessAccumulator:
                     self.market_snapshot_configured_excess_values
                 ),
                 "sources": dict(self.market_snapshot_source_counts.most_common(12)),
+            },
+            "completed_candles": {
+                "required_snapshots": int(self.completed_candle_required_snapshots),
+                "required_surface_unknown_snapshots": int(
+                    self.completed_candle_required_surface_unknown_snapshots
+                ),
+                "summary_observations": int(self.completed_candle_summary_observations),
+                "missing_proof_count": int(self.completed_candle_summary_missing_proof_count),
+                "malformed_proof_count": int(
+                    self.completed_candle_summary_malformed_proof_count
+                ),
+                "no_valid_rows_count": int(
+                    self.completed_candle_summary_no_valid_rows_count
+                ),
+                "metric_observations": int(self.completed_candle_metric_observations),
+                "signature_rows": _number_summary(
+                    self.completed_candle_signature_row_values
+                ),
+                "valid_rows": _number_summary(self.completed_candle_valid_row_values),
+                "invalid_rows": _number_summary(
+                    self.completed_candle_invalid_row_values
+                ),
+                "tail_gap_fallback_count": _number_summary(
+                    self.completed_candle_fallback_count_values
+                ),
+                "tail_gap_fallback_symbol_count": _number_summary(
+                    self.completed_candle_fallback_symbol_count_values
+                ),
+                "expected_close_age_ms": {
+                    label: _number_summary(values)
+                    for label, values in self.completed_candle_expected_age_values.items()
+                },
+                "last_real_close_age_ms": {
+                    label: _number_summary(values)
+                    for label, values in self.completed_candle_real_age_values.items()
+                },
+                "max_tail_gap_age_ms": _number_summary(
+                    self.completed_candle_max_tail_gap_age_values
+                ),
+                "configured_max_tail_gap_ms": _number_summary(
+                    self.completed_candle_configured_max_tail_gap_values
+                ),
             },
             "rust_calls_seen": int(self.rust_calls_seen),
             "packet_refs_missing": int(self.packet_refs_missing),
@@ -5777,6 +5992,7 @@ def summarize_live_performance_report(
                 input_staleness.get("snapshot_market_stale_count") or 0
             ),
             "market_snapshot": input_staleness.get("market_snapshot") or {},
+            "completed_candles": input_staleness.get("completed_candles") or {},
             "rust_calls_seen": int(input_staleness.get("rust_calls_seen") or 0),
             "packet_refs_missing": int(input_staleness.get("packet_refs_missing") or 0),
             "snapshot_to_rust_exact_matches": int(

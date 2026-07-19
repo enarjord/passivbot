@@ -15,7 +15,38 @@ merge, live smoke evidence changes, or new gaps are discovered.
 - Do not use this file for design churn; unresolved design details belong in the
   plan or a focused handoff doc.
 
-## Latest Canonical Deployment (PR #1322)
+## Latest Canonical Deployment (PR #1326)
+
+- PR #1326 merged as canonical
+  `0a57187ff9f0def7eb4976721f5b04d17f03fb74` after exact-head Hermes and
+  built-in Codex reviews plus green Python/Rust CI. VPS5 fast-forwarded
+  tracked-clean from `ac9ff15029` without a Rust build, bot restart, or signal.
+- A bounded offline 240-minute/eight-symbol HSL benchmark matched compact and
+  dense-reference final state and all 240 replay samples, emitted both exclusive
+  stage taxonomies, and reported zero network/cache/latch/monitor side effects.
+- Exact bot PIDs `1056607/1056616/1056610/1056619/1056613` and protected
+  `misc:0.0` `%8`/PID `434835` remained unchanged. No direct exchange call or
+  event was manufactured. The active freshness slice projects completed-candle
+  readiness from frozen planning signatures into bounded diagnostics.
+
+## Previous Canonical Deployment (PR #1325)
+
+- PR #1325 merged as canonical
+  `ac9ff15029cb728eeb33563c134f196df3e3a49e` after exact-head Hermes and
+  built-in Codex reviews plus green Python/Rust CI. It separates successful
+  trailing fill-fetch confirmation from the risk-authoritative refresh
+  generation while preserving fail-closed risk behavior.
+- VPS5 fast-forwarded tracked-clean from `881978dec5` without a Rust build and
+  gracefully restarted only exact panes `%358`-`%362`. The five bot PIDs became
+  `1056607/1056616/1056610/1056619/1056613`; protected `misc:0.0` remained
+  `%8`/PID `434835`.
+- Immediate and settled smokes were hard-green. The immediate window had
+  `58/58` account-critical and `224/224` remote calls successful; the settled
+  window had `17/17` and `328/328`, zero hard/monitor/text-log failures, three
+  completed HSL replays, and no latest degraded cycle. No direct exchange call
+  or event was manufactured.
+
+## Previous Canonical Deployment (PR #1322)
 
 - PR #1322 merged as canonical
   `881978dec502296c4ab990c34bf06fdf74f024b2`. VPS5 fast-forwarded

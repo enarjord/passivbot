@@ -44,6 +44,13 @@ All notable user-facing changes will be documented in this file.
   The Requests and aiohttp pins are aligned with CCXT 4.5.66's declared
   dependencies.
 
+- Planning snapshot diagnostics now include a bounded completed-1m-candle
+  freshness summary when that surface is required. The summary is derived only
+  from the frozen planning signature and reports expected/real close ages plus
+  bounded tail-gap fallback counts; `live-performance-report` validates and
+  aggregates the same proof. It does not reread candles or change planning,
+  exchange access, orders, strategy, or risk behavior.
+
 - `passivbot tool hsl-replay-benchmark` now reports exclusive timing profiles
   for fixture construction, replay internals, final-state projection, candidate
   and dense-reference runs, equivalence comparison, and residual orchestration.

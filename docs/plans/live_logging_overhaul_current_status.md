@@ -22,32 +22,62 @@ Estimated completion:
 
 ## Active Review Slice
 
-- Branch: `codex/hsl-replay-stage-profile`, based on canonical
-  `881978dec502296c4ab990c34bf06fdf74f024b2`.
-- Scope: make the existing deterministic offline coin-HSL replay benchmark
-  attribute elapsed work to bounded stages, including held/background replay
-  samples and the residual replay orchestration that is currently hidden by
-  the aggregate elapsed value.
-- Behavior boundary: offline benchmark tooling and tests only. No live HSL,
-  trading, exchange, runtime producer, order, risk, config, restart, cache, or
-  process behavior changes.
-- Validation: focused benchmark tests must prove stable stage taxonomy, exact
-  call/sample accounting, nonnegative elapsed/residual math, unchanged dense
-  reference equivalence, distinct compact candidate/reference accounting,
-  timeline self-reference without double-counting, and zero
-  network/cache/latch/monitor side effects.
-- Review gate: implementation is complete in commits `a08f5f8dc6` and
-  `1414702a8d`; 18 focused tests, Python compilation, documentation checks,
-  and diff checks passed. The exact 43,201-minute/30-symbol compact run was
-  equivalent to its dense reference and completed in `163.56s` wall time. Its
-  candidate run took `2.899s`; the dense-reference run took `156.390s`, with
-  `147.403s` now attributed to residual replay orchestration. The final
-  exact head requires Hermes approval plus green Python/Rust CI; built-in Codex
-  review is additional and every finding must be resolved.
-- Expected VPS action: after merge, tracked-clean pull plus a bounded offline
-  benchmark smoke only; no bot restart or signal is required.
+- PR #1328, `Report completed candle decision freshness`; branch:
+  `codex/decision-freshness-report`, based on canonical
+  `0a57187ff9f0def7eb4976721f5b04d17f03fb74`.
+- Scope: project completed-1m-candle freshness from each frozen planning
+  snapshot into bounded `snapshot.built` diagnostics, then validate and
+  aggregate expected-close age, last-real-close age, and allowed tail-gap
+  fallback evidence in `live-performance-report`.
+- Behavior boundary: observability producer and read-only reporting only. The
+  producer reads the immutable planning signature and configured tail-gap bound;
+  it does not reread candles or change exchange access, planning readiness,
+  strategy, orders, risk, cache state, or process control.
+- Validation: 362 focused performance-report and planning-snapshot tests passed
+  after current-master integration. Regression coverage proves signature-only
+  derivation, strict timestamp and row validation, bounded/sorted symbol samples,
+  malformed/missing proof accounting, report aggregation, and omission when the
+  candle surface is not required. Python compilation and diff checks passed.
+- Review gate: final exact-head Hermes approval plus green Python/Rust CI.
+  Built-in Codex automatic review is additional and every finding must be
+  verified and resolved.
+- Expected VPS action: tracked-clean pull, guarded exact-pane restart, and
+  immediate plus settled smoke because the structured event payload changes.
 
-## Deployed Baseline (PR #1322)
+## Deployed Baseline (PR #1326)
+
+- PR #1326 merged as canonical
+  `0a57187ff9f0def7eb4976721f5b04d17f03fb74` after exact-head Hermes
+  approval, a green built-in Codex review, and green Python/Rust CI. VPS5
+  fast-forwarded tracked-clean from `ac9ff15029cb728eeb33563c134f196df3e3a49e`.
+- Rust source fingerprint and compiled stamp remained
+  `691bff9683deec9382a4e96ab6a107c14145f88edd6ae2f8e2380b8ba6824449`;
+  no Rust build, bot restart, or process signal was required.
+- The bounded offline 240-minute/eight-symbol benchmark matched compact and
+  dense-reference final state and all 240 replay samples. It emitted both
+  exclusive stage taxonomies and reported zero network, cache, latch, and
+  monitor side effects.
+- Exact bot PIDs `1056607/1056616/1056610/1056619/1056613` remained running,
+  the checkout stayed tracked-clean, and protected `misc:0.0` remained
+  `%8`/PID `434835`. No direct exchange call or event was manufactured.
+
+## Previous Deployed Baseline (PR #1325)
+
+- PR #1325 merged as canonical
+  `ac9ff15029cb728eeb33563c134f196df3e3a49e`. Its successful fill-fetch
+  generation confirms trailing readiness independently of unrelated pending
+  PnL while the risk-authoritative generation remains fail-closed.
+- VPS5 fast-forwarded tracked-clean from `881978dec502296c4ab990c34bf06fdf74f024b2`
+  without a Rust build. The guarded runner gracefully restarted only exact panes
+  `%358`-`%362` without force; the five bot PIDs became
+  `1056607/1056616/1056610/1056619/1056613` and `misc:0.0` remained unchanged.
+- The immediate smoke was hard-green with `58/58` account-critical and
+  `224/224` remote calls successful. The settled smoke was also hard-green with
+  `17/17` account-critical and `328/328` remote calls successful, zero hard,
+  monitor, or text-log failures, three completed HSL replays, and no latest
+  degraded cycle. No direct exchange call or event was manufactured.
+
+## Previous Deployed Baseline (PR #1322)
 
 - PR #1322 merged as canonical
   `881978dec502296c4ab990c34bf06fdf74f024b2`. VPS5 fast-forwarded
@@ -1495,10 +1525,10 @@ PR #1286's aggregate-only follow-up, PR #1287's exact tmux target preflight,
 PR #1288's bounded target-identity stability, and PR #1289's plan binding are
 merged, deployed, and naturally validated without process control. PR #1290's
 pane-parent relaunch classification and the restart preparation/orchestration
-slices through PR #1309 are also merged and deployed. Current VPS5 is hard-green
-at canonical `f1ae7970393e8299d1b0a98c8ff68d42adddd2d0`. The active
-`codex/hard-problem-evidence` slice makes every nonzero hard smoke verdict
-diagnosable from a separately bounded hard-only sample.
+slices through PR #1309 are also merged and deployed. Later slices through PR
+#1326 are merged and deployed at canonical
+`0a57187ff9f0def7eb4976721f5b04d17f03fb74`; their current evidence is recorded
+above. PR #1328 is the active completed-candle decision-freshness slice.
 
 Do not create progress-only PRs or resume unrelated logging work from stale
 worktrees.
