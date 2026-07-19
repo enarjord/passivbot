@@ -1545,9 +1545,9 @@ PR #1288's bounded target-identity stability, and PR #1289's plan binding are
 merged, deployed, and naturally validated without process control. PR #1290's
 pane-parent relaunch classification and the restart preparation/orchestration
 slices through PR #1309 are also merged and deployed. Later slices through PR
-#1326 are merged and deployed at canonical
-`0a57187ff9f0def7eb4976721f5b04d17f03fb74`; their current evidence is recorded
-above. PR #1328 is the active completed-candle decision-freshness slice.
+#1328 are merged and deployed at canonical
+`c0386ff5673d93b732786cf12c4cd48f6a381767`; their current evidence is recorded
+above. PR #1331 is the active completed-candle row-count redaction fix.
 
 Do not create progress-only PRs or resume unrelated logging work from stale
 worktrees.
