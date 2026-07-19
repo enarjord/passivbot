@@ -22,7 +22,7 @@ Estimated completion:
 
 ## Active Review Slice
 
-- PR pending, `Report live artifact scan cost`; branch:
+- PR #1333, `Report live artifact scan cost`; branch:
   `codex/live-artifact-scan-cost`, based on canonical
   `0a6be3ed00261c6d6a2cdbe0f2588e5709e670f1`.
 - Scope: expose bounded elapsed-time, byte, file, record, and read-method cost
