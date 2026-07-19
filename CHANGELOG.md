@@ -6,7 +6,8 @@ All notable user-facing changes will be documented in this file.
 
 - EMA Anchor live monitor snapshots now mark trailing diagnostics as not
   applicable instead of requesting unrelated trailing-martingale parameters
-  and repeatedly failing snapshot publication.
+  and repeatedly failing snapshot publication. The trailing diagnostics tool
+  ignores metadata-only entries when inferring a snapshot symbol.
 
 - Gate.io live startup now selects CCXT 4.5.66's `gate` REST and WebSocket
   clients at session construction while retaining canonical `gateio` identity

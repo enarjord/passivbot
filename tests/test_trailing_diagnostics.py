@@ -14,6 +14,7 @@ from trailing_diagnostics import (
 from trailing_diagnostics_tool import (
     TrailingDiagnosticsState,
     WIZARD_CORE_KEYS,
+    create_state_from_sources,
     execute_command,
     render_screen,
 )
@@ -101,6 +102,50 @@ def _sample_snapshot():
             },
         }
     }
+
+
+def test_snapshot_symbol_inference_ignores_trailing_metadata(tmp_path, monkeypatch):
+    snapshot = _sample_snapshot()
+    snapshot["payload"]["trailing"] = {
+        "_meta": {
+            "diagnostics_supported": False,
+            "strategy_kind": "ema_anchor",
+            "reason": "strategy_has_no_trailing_diagnostics",
+        }
+    }
+    snapshot_path = tmp_path / "snapshot.json"
+    snapshot_path.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(
+        "trailing_diagnostics_tool.load_prepared_config",
+        lambda *args, **kwargs: _sample_config(),
+    )
+    monkeypatch.setattr(
+        "trailing_diagnostics_tool._load_snapshot_from_path", lambda path: snapshot
+    )
+    captured = {}
+
+    def fake_build_inputs(config, loaded_snapshot, *, symbol, pside):
+        captured.update(symbol=symbol, pside=pside)
+        return {"symbol": symbol, "pside": pside}
+
+    monkeypatch.setattr(
+        "trailing_diagnostics_tool.build_trailing_inputs_from_snapshot",
+        fake_build_inputs,
+    )
+
+    state = create_state_from_sources(
+        config_path="config.json",
+        monitor_root=None,
+        exchange=None,
+        user=None,
+        snapshot_path=str(snapshot_path),
+        symbol=None,
+        pside="long",
+        wizard=False,
+    )
+
+    assert captured == {"symbol": "BTC/USDT:USDT", "pside": "long"}
+    assert state.symbol == "BTC/USDT:USDT"
 
 
 def _hype_trailing_martingale_close_inputs():

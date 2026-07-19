@@ -458,8 +458,13 @@ def create_state_from_sources(
         else:
             snap = snapshot_payload(snapshot)
             trailing = snap.get("trailing", {})
-            if isinstance(trailing, dict) and trailing:
-                symbol = sorted(trailing)[0]
+            trailing_symbols = (
+                sorted(key for key in trailing if not str(key).startswith("_"))
+                if isinstance(trailing, dict)
+                else []
+            )
+            if trailing_symbols:
+                symbol = trailing_symbols[0]
             else:
                 market = snap.get("market", {})
                 if isinstance(market, dict) and market:
