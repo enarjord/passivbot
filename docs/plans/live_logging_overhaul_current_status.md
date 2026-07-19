@@ -22,27 +22,46 @@ Estimated completion:
 
 ## Active Review Slice
 
-- PR #1328, `Report completed candle decision freshness`; branch:
-  `codex/decision-freshness-report`, based on canonical
-  `0a57187ff9f0def7eb4976721f5b04d17f03fb74`.
-- Scope: project completed-1m-candle freshness from each frozen planning
-  snapshot into bounded `snapshot.built` diagnostics, then validate and
-  aggregate expected-close age, last-real-close age, and allowed tail-gap
-  fallback evidence in `live-performance-report`.
+- PR #1331, `Preserve completed candle freshness row counts`; branch:
+  `codex/completed-candle-summary-redaction-fix`, based on canonical
+  `c0386ff5673d93b732786cf12c4cd48f6a381767`.
+- Scope: rename the public completed-candle source-row count so the live-event
+  secret-key sanitizer preserves its numeric value, then consume and project
+  that non-sensitive key in `live-performance-report`.
 - Behavior boundary: observability producer and read-only reporting only. The
-  producer reads the immutable planning signature and configured tail-gap bound;
-  it does not reread candles or change exchange access, planning readiness,
-  strategy, orders, risk, cache state, or process control.
+  fix changes no sanitizer exception, candle read, exchange access, planning
+  readiness, strategy, order, risk, cache, or process-control behavior.
 - Validation: 362 focused performance-report and planning-snapshot tests passed
-  after current-master integration. Regression coverage proves signature-only
-  derivation, strict timestamp and row validation, bounded/sorted symbol samples,
-  malformed/missing proof accounting, report aggregation, and omission when the
-  candle surface is not required. Python compilation and diff checks passed.
+  on exact head `ff6c5606c621acd7fba689ad81b7b8a7755f162a`. A runtime
+  redaction probe preserved the numeric source-row count while redacting genuine
+  signature, API-key, and token fields. Python compilation and diff checks
+  passed.
 - Review gate: final exact-head Hermes approval plus green Python/Rust CI.
   Built-in Codex automatic review is additional and every finding must be
   verified and resolved.
 - Expected VPS action: tracked-clean pull, guarded exact-pane restart, and
-  immediate plus settled smoke because the structured event payload changes.
+  immediate plus settled smoke, followed by a natural performance report that
+  proves corrected numeric freshness evidence.
+
+## Deployed Baseline (PR #1328)
+
+- PR #1328 merged as canonical
+  `c0386ff5673d93b732786cf12c4cd48f6a381767` after exact-head Hermes
+  approval, a green built-in Codex review, and green Python/Rust CI. VPS5
+  fast-forwarded tracked-clean from `0a57187ff9f0def7eb4976721f5b04d17f03fb74`.
+- Rust source fingerprint and compiled stamp remained
+  `691bff9683deec9382a4e96ab6a107c14145f88edd6ae2f8e2380b8ba6824449`;
+  no Rust build was required. The guarded runner gracefully restarted only exact
+  panes `%358`-`%362` without force. Bot PIDs
+  `1056607/1056616/1056610/1056619/1056613` became
+  `1057982/1057991/1057985/1057994/1057988`, while protected `misc:0.0`
+  remained `%8`/PID `434835`.
+- The bounded two-minute restart smoke was hard-green with complete five-bot
+  shutdown/startup evidence and zero hard, monitor, or text-log failures. A
+  natural post-restart performance report then classified all seven observed
+  completed-candle summaries as malformed because the sanitizer had replaced
+  `signature_row_count` with `[redacted]`. No direct exchange call or event was
+  manufactured; active PR #1331 corrects only this public diagnostic contract.
 
 ## Deployed Baseline (PR #1326)
 

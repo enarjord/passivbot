@@ -15,7 +15,26 @@ merge, live smoke evidence changes, or new gaps are discovered.
 - Do not use this file for design churn; unresolved design details belong in the
   plan or a focused handoff doc.
 
-## Latest Canonical Deployment (PR #1326)
+## Latest Canonical Deployment (PR #1328)
+
+- PR #1328 merged as canonical
+  `c0386ff5673d93b732786cf12c4cd48f6a381767` after exact-head Hermes and
+  built-in Codex reviews plus green Python/Rust CI. VPS5 fast-forwarded
+  tracked-clean from `0a57187ff9f0def7eb4976721f5b04d17f03fb74` without a
+  Rust build.
+- The guarded runner gracefully restarted only exact panes `%358`-`%362`.
+  Old bot PIDs `1056607/1056616/1056610/1056619/1056613` became
+  `1057982/1057991/1057985/1057994/1057988`; protected `misc:0.0` stayed
+  `%8`/PID `434835`. The two-minute smoke was hard-green with complete five-bot
+  lifecycle evidence and zero hard, monitor, or text-log failures.
+- Natural `snapshot.built` evidence exposed that the secret-key sanitizer
+  replaced `signature_row_count` with `[redacted]`. The performance report
+  therefore classified all seven observed summaries as malformed and produced
+  zero freshness metrics. No direct exchange call or event was manufactured.
+  Active PR #1331 renames only the public diagnostic/report count fields so the
+  values remain numeric without weakening secret redaction.
+
+## Previous Canonical Deployment (PR #1326)
 
 - PR #1326 merged as canonical
   `0a57187ff9f0def7eb4976721f5b04d17f03fb74` after exact-head Hermes and
