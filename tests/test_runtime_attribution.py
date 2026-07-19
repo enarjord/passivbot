@@ -165,7 +165,9 @@ def test_trailing_filter_and_monitor_fill_deduplication(tmp_path: Path):
 
 def test_runtime_log_prefix_merges_with_full_manifest_identity_at_live_skew(tmp_path: Path):
     roots = _roots(tmp_path)
-    identity = _identity("1234567890abcdef", 1_784_414_326_269, "c")
+    identity = _identity(
+        "1234567890abcdef1234567890abcdef", 1_784_414_326_269, "c"
+    )
     _write_json(tmp_path / "runtime" / "bybit" / "alice" / "run.json", identity)
     _write_runtime_log(
         tmp_path / "logs" / "alice.log",
@@ -197,7 +199,9 @@ def test_runtime_log_prefix_start_skew_boundary(
     tmp_path: Path, manifest_started_at_ms: int, expected_runtime_count: int
 ):
     roots = _roots(tmp_path)
-    identity = _identity("abcdef0123456789", manifest_started_at_ms, "e")
+    identity = _identity(
+        "abcdef0123456789abcdef0123456789", manifest_started_at_ms, "e"
+    )
     _write_json(tmp_path / "runtime" / "bybit" / "alice" / "run.json", identity)
     _write_runtime_log(
         tmp_path / "logs" / "alice.log",
@@ -217,11 +221,11 @@ def test_runtime_log_prefix_does_not_merge_ambiguous_full_identities(tmp_path: P
     roots = _roots(tmp_path)
     _write_json(
         tmp_path / "runtime" / "bybit" / "alice" / "run-1.json",
-        _identity("abcdef0123456789", 5_000, "f"),
+        _identity("abcdef0123456789abcdef0123456789", 5_000, "f"),
     )
     _write_json(
         tmp_path / "runtime" / "bybit" / "alice" / "run-2.json",
-        _identity("abcdef012345fedc", 6_000, "g"),
+        _identity("abcdef012345fedcabcdef012345fedc", 6_000, "g"),
     )
     _write_runtime_log(
         tmp_path / "logs" / "alice.log",
@@ -236,8 +240,8 @@ def test_runtime_log_prefix_does_not_merge_ambiguous_full_identities(tmp_path: P
 
     assert report["summary"]["runtime_count"] == 3
     assert {runtime["run_id"] for runtime in report["runtimes"]} == {
-        "abcdef0123456789",
-        "abcdef012345fedc",
+        "abcdef0123456789abcdef0123456789",
+        "abcdef012345fedcabcdef012345fedc",
         "abcdef012345",
     }
 
@@ -245,8 +249,8 @@ def test_runtime_log_prefix_does_not_merge_ambiguous_full_identities(tmp_path: P
 @pytest.mark.parametrize(
     ("run_id", "run_id_prefix"),
     [
-        ("abcdef0123456789", "abcdef01234"),
-        ("ABCDEF0123456789", "ABCDEF012345"),
+        ("abcdef0123456789abcdef0123456789", "abcdef01234"),
+        ("abcdef0123456789abcdef0123456789", "ABCDEF012345"),
     ],
     ids=["short_prefix", "uppercase_prefix"],
 )
@@ -273,12 +277,46 @@ def test_runtime_log_prefix_requires_producer_shape(
     assert {runtime["run_id"] for runtime in report["runtimes"]} == {run_id, run_id_prefix}
 
 
+@pytest.mark.parametrize(
+    "run_id",
+    [
+        "abcdef012345-not-a-uuid",
+        "abcdef012345zzzzzzzzzzzzzzzzzzzz",
+    ],
+    ids=["non_uuid_shape", "non_hex_full_id"],
+)
+def test_runtime_log_prefix_does_not_merge_malformed_full_identity(
+    tmp_path: Path, run_id: str
+):
+    roots = _roots(tmp_path)
+    _write_json(
+        tmp_path / "runtime" / "bybit" / "alice" / "run.json",
+        _identity(run_id, 5_000, "k"),
+    )
+    _write_runtime_log(
+        tmp_path / "logs" / "alice.log",
+        timestamp_ms=7_000,
+        exchange="bybit",
+        user="alice",
+        run_id_prefix="abcdef012345",
+        marker="k",
+    )
+
+    report = build_runtime_attribution_report(**roots)
+
+    assert report["summary"]["runtime_count"] == 2
+    assert {runtime["run_id"] for runtime in report["runtimes"]} == {
+        run_id,
+        "abcdef012345",
+    }
+
+
 @pytest.mark.parametrize("source_kind", ["manifest", "monitor_event"])
 def test_runtime_log_prefix_does_not_merge_incomplete_canonical_identity(
     tmp_path: Path, source_kind: str
 ):
     roots = _roots(tmp_path)
-    identity = _identity("abcdef0123456789", 5_000, "j")
+    identity = _identity("abcdef0123456789abcdef0123456789", 5_000, "j")
     identity.pop("rust_artifact_sha256")
     if source_kind == "manifest":
         _write_json(tmp_path / "runtime" / "bybit" / "alice" / "run.json", identity)
@@ -322,7 +360,7 @@ def test_runtime_log_prefix_does_not_merge_different_scope(
     roots = _roots(tmp_path)
     _write_json(
         tmp_path / "runtime" / manifest_exchange / manifest_user / "run.json",
-        _identity("abcdef0123456789", 5_000, "h"),
+        _identity("abcdef0123456789abcdef0123456789", 5_000, "h"),
     )
     _write_runtime_log(
         tmp_path / "logs" / "alice.log",

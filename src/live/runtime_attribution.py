@@ -43,6 +43,7 @@ _RUNTIME_LINE_RE = re.compile(
     r"rust_source=(?P<rust_source>\S+)\s+rust_artifact=(?P<rust_artifact>\S+)"
 )
 _RUNTIME_LOG_RUN_ID_PREFIX_RE = re.compile(r"^[0-9a-f]{12}$")
+_FULL_RUNTIME_RUN_ID_RE = re.compile(r"^[0-9a-f]{32}$")
 _FULL_RUNTIME_IDENTITY_SOURCE_KINDS = frozenset(
     {"runtime_manifest", "monitor_manifest", "monitor_event"}
 )
@@ -518,6 +519,12 @@ def _is_full_manifest_or_event_identity(record: Mapping[str, Any]) -> bool:
         identity.get(key) in (None, "", "unknown") for key in _RUNTIME_KEYS
     ):
         return False
+    run_id = str(record.get("run_id") or "")
+    if (
+        _FULL_RUNTIME_RUN_ID_RE.fullmatch(run_id) is None
+        or identity.get("run_id") != run_id
+    ):
+        return False
     sources = record.get("sources")
     return isinstance(sources, list) and any(
         isinstance(source, Mapping)
@@ -527,7 +534,10 @@ def _is_full_manifest_or_event_identity(record: Mapping[str, Any]) -> bool:
 
 
 def _has_bounded_runtime_log_identity(record: Mapping[str, Any]) -> bool:
-    if _RUNTIME_LOG_RUN_ID_PREFIX_RE.fullmatch(str(record.get("run_id") or "")) is None:
+    if (
+        _RUNTIME_LOG_RUN_ID_PREFIX_RE.fullmatch(str(record.get("run_id") or ""))
+        is None
+    ):
         return False
     sources = record.get("sources")
     return isinstance(sources, list) and any(
