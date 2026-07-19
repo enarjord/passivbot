@@ -42,6 +42,22 @@ All notable user-facing changes will be documented in this file.
   The Requests and aiohttp pins are aligned with CCXT 4.5.66's declared
   dependencies.
 
+- `passivbot tool hsl-replay-benchmark` now reports exclusive timing profiles
+  for fixture construction, replay internals, final-state projection, candidate
+  and dense-reference runs, equivalence comparison, and residual orchestration.
+  Compact-history benchmarks retain the dense-reference timing evidence they
+  use for equivalence, while timeline-reference runs avoid double-counting the
+  same execution. This is offline diagnostic output only; HSL state, replay
+  behavior, exchange access, orders, and risk are unchanged.
+
+- Trailing-position fill confirmation now treats exchange position-update
+  timestamps as advisory and proves readiness with a successful post-position
+  fill refresh, a new fill identity for runtime changes, and matching fill
+  after-state. This prevents Bybit's later `updatedTime` from leaving valid
+  trailing positions permanently nontradable. Repeated unavailable warnings are
+  bounded, and monitor market state now exposes the actual planner tradability
+  plus fill-confirmation predicates and watermarks.
+
 - `passivbot tool runtime-attribution` now reconciles the producer's exact
   12-character lowercase-hex startup-log run-id prefix with one complete
   manifest or startup-event identity when exchange, user, prefix, and start time

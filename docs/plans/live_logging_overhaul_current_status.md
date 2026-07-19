@@ -1,6 +1,6 @@
 # Live Logging Overhaul Current Status
 
-Updated: 2026-07-18.
+Updated: 2026-07-19.
 
 This is the compact operational source for the active logging-overhaul loop.
 Read it before the historical progress ledger. Update it whenever the active
@@ -22,30 +22,53 @@ Estimated completion:
 
 ## Active Review Slice
 
-- Branch: `codex/runtime-attribution-log-dedup`, integrated with canonical
-  `8b433cc22b087b0efab51ba2bcf003f1e2b31806` after the semantic slice was
-  based on PR #1315's merge `308702523760ae7a0b309419ae1616b0a4938721`.
-- Scope: reconcile the producer's exact 12-character lowercase-hex startup-log
-  `uuid4().hex[:12]` prefix with one complete runtime manifest/event identity
-  when exchange, user, prefix, and a two-second maximum start-time skew agree.
-  Ambiguous, incomplete, malformed, out-of-scope, and out-of-bound records
-  remain separate.
-- Triggering PR #1315 deployment/smoke evidence: the full manifest started at
-  `1784414326269` ms while its matching bounded startup log used
-  `1784414328000` ms with the same run-id prefix, a `1731` ms skew that produced
-  duplicate runtime observations.
-- Behavior boundary: offline attribution parsing, docs, and tests only. No
-  trading, exchange, runtime producer, order, risk, config, restart, or process
-  behavior changes.
-- Validation: focused attribution tests cover the observed `1731` ms pair, the
-  inclusive two-second limit, short/uppercase prefixes, incomplete identities,
-  scope isolation, and ambiguity.
-- Review gate: final exact-head Hermes approval plus green Python/Rust CI.
-  Built-in Codex automatic review is additional, not a replacement for either.
-- Expected VPS action: after merge, a bounded read-only attribution smoke only;
-  no bot restart is required.
+- Branch: `codex/hsl-replay-stage-profile`, based on canonical
+  `881978dec502296c4ab990c34bf06fdf74f024b2`.
+- Scope: make the existing deterministic offline coin-HSL replay benchmark
+  attribute elapsed work to bounded stages, including held/background replay
+  samples and the residual replay orchestration that is currently hidden by
+  the aggregate elapsed value.
+- Behavior boundary: offline benchmark tooling and tests only. No live HSL,
+  trading, exchange, runtime producer, order, risk, config, restart, cache, or
+  process behavior changes.
+- Validation: focused benchmark tests must prove stable stage taxonomy, exact
+  call/sample accounting, nonnegative elapsed/residual math, unchanged dense
+  reference equivalence, distinct compact candidate/reference accounting,
+  timeline self-reference without double-counting, and zero
+  network/cache/latch/monitor side effects.
+- Review gate: implementation is complete in commits `a08f5f8dc6` and
+  `1414702a8d`; 18 focused tests, Python compilation, documentation checks,
+  and diff checks passed. The exact 43,201-minute/30-symbol compact run was
+  equivalent to its dense reference and completed in `163.56s` wall time. Its
+  candidate run took `2.899s`; the dense-reference run took `156.390s`, with
+  `147.403s` now attributed to residual replay orchestration. The final
+  exact head requires Hermes approval plus green Python/Rust CI; built-in Codex
+  review is additional and every finding must be resolved.
+- Expected VPS action: after merge, tracked-clean pull plus a bounded offline
+  benchmark smoke only; no bot restart or signal is required.
 
-## Deployed Baseline (PR #1312)
+## Deployed Baseline (PR #1322)
+
+- PR #1322 merged as canonical
+  `881978dec502296c4ab990c34bf06fdf74f024b2`. VPS5 fast-forwarded
+  tracked-clean from `8b433cc22b087b0efab51ba2bcf003f1e2b31806` without a Rust
+  build, bot restart, or process signal.
+- The exact Hyperliquid attribution smoke scanned 26 selected artifacts and
+  `15763500` bytes, read 51 fill records, returned 37 trailing fills and zero
+  warnings, and reduced the previously duplicated `1784414326269` runtime to
+  one cohort carrying `runtime_manifest`, `monitor_event`,
+  `legacy_startup_log`, and `runtime_log` sources.
+- Smaller explicit scan caps failed closed before the successful exact-file
+  smoke. Temporary over-broad scanner PIDs created by interrupted local-only
+  commands were identity-checked and terminated exactly; no bot or tmux pane
+  was signalled.
+- Final local-only target sampling was hard-green with five expected and stable
+  bot PIDs, no missing, duplicate, or extra process, and natural recovery from
+  one transient `D` observation to `R=5`. The checkout remained tracked-clean,
+  no scanner remained, and protected `misc:0.0` stayed `%8`/PID `434835`. No
+  direct exchange call or event was manufactured.
+
+## Previous Deployed Baseline (PR #1312)
 
 - PR #1312 merged as canonical
   `8b433cc22b087b0efab51ba2bcf003f1e2b31806`. The guarded tracked-clean
