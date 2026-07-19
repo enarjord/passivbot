@@ -22,7 +22,7 @@ Estimated completion:
 
 ## Active Review Slice
 
-- Pending PR, `Report live smoke scan cost`; branch:
+- PR #1337, `Report live smoke scan cost`; branch:
   `codex/live-smoke-scan-cost`, based on canonical
   `e0927ed86f0b10ed8187d8e6a523017baefb98b3`.
 - Scope: expose the same bounded elapsed-time, byte, file, record, and
