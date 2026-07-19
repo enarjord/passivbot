@@ -22,7 +22,8 @@ Estimated completion:
 
 ## Active Review Slice
 
-- PR #1328; branch: `codex/decision-freshness-report`, based on canonical
+- PR #1328, `Report completed candle decision freshness`; branch:
+  `codex/decision-freshness-report`, based on canonical
   `0a57187ff9f0def7eb4976721f5b04d17f03fb74`.
 - Scope: project completed-1m-candle freshness from each frozen planning
   snapshot into bounded `snapshot.built` diagnostics, then validate and
