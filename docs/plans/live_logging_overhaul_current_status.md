@@ -22,21 +22,47 @@ Estimated completion:
 
 ## Active Review Slice
 
-- PR #1333, `Report live artifact scan cost`; branch:
-  `codex/live-artifact-scan-cost`, based on canonical
-  `02fb43f6398fc9edba64849cf2ed0bf0f7a6af09`.
-- Scope: expose bounded elapsed-time, byte, file, record, and read-method cost
-  metadata for `live-event-query` and `live-performance-report` artifact scans.
+- Pending PR, `Report live smoke scan cost`; branch:
+  `codex/live-smoke-scan-cost`, based on canonical
+  `e0927ed86f0b10ed8187d8e6a523017baefb98b3`.
+- Scope: expose the same bounded elapsed-time, byte, file, record, and
+  read-method cost metadata for the monitor scan used by
+  `live-smoke-report`, including its full, summary, and brief projections.
 - Behavior boundary: read-only local tooling only. The slice changes no event
-  producer, file selection, query result, monitor persistence, exchange access,
-  planning, strategy, order, risk, or process-control behavior.
+  producer, file selection, parsed result, smoke verdict, monitor persistence,
+  exchange access, logs, process inspection/control, planning, strategy,
+  order, or risk behavior.
+- Baseline: a bounded five-minute VPS5 brief smoke scanned six current event
+  files and 7,515 records in 4.29 seconds wall time but could not report exact
+  bytes or read methods. The active slice closes only that diagnostic gap.
 - Review gate: exact-current-head Hermes approval plus green Python/Rust CI.
   Built-in Codex automatic review is additional and every finding must be
   verified and resolved.
 - Expected VPS action: tracked-clean pull plus bounded read-only report smokes;
   no bot restart or process signal.
 
-## Deployed Baseline (PR #1335)
+## Deployed Baseline (PR #1333)
+
+- PR #1333 merged exact reviewed head
+  `ce5a24d72ea811c6b04a376bbd9fcd228ab4c9af` as canonical
+  `e0927ed86f0b10ed8187d8e6a523017baefb98b3` after exact-head Hermes
+  approval, a green built-in Codex review, and green Python/Rust CI. VPS5
+  fast-forwarded tracked-clean from
+  `02fb43f6398fc9edba64849cf2ed0bf0f7a6af09` without a Rust build; the
+  source fingerprint/stamp remained
+  `691bff9683deec9382a4e96ab6a107c14145f88edd6ae2f8e2380b8ba6824449`.
+- The bounded five-minute event query was `ok=true` and reported five files,
+  8,133 records, 13,926,420 known physical/decoded bytes, and 4,793.586 ms.
+  The matching performance report was `ok=true` with zero errors/warnings and
+  reported six files, 8,661 records, 14,740,828 known physical/decoded bytes,
+  and 4,781.454 ms. Both used only `seek_tail` reads.
+- No bot was restarted or signalled. Bot PIDs
+  `1066081/1066091/1066084/1066093/1066087`, pane parents `%358`-`%362`, and
+  protected `misc:0.0` `%8`/PID `434835` remained unchanged. Final process
+  states were all `Rl+`; the checkout remained tracked-clean. No direct
+  exchange call or event was manufactured.
+
+## Previous Deployed Baseline (PR #1335)
 
 - PR #1335 merged exact reviewed head
   `c4d5b8e55f6fd453fd707999ae74ec2dd127e55d` as canonical
@@ -1605,10 +1631,10 @@ PR #1288's bounded target-identity stability, and PR #1289's plan binding are
 merged, deployed, and naturally validated without process control. PR #1290's
 pane-parent relaunch classification and the restart preparation/orchestration
 slices through PR #1309 are also merged and deployed. Later slices through PR
-#1335 are merged and deployed at canonical
-`02fb43f6398fc9edba64849cf2ed0bf0f7a6af09`; their current evidence is recorded
-above. The active artifact-scan cost slice measures read-only query/report work
-without changing scan behavior.
+#1335, including subsequently merged PR #1333, are deployed at canonical
+`e0927ed86f0b10ed8187d8e6a523017baefb98b3`; their current evidence is recorded
+above. The active smoke-scan cost slice measures the remaining read-only smoke
+artifact work without changing scan or verdict behavior.
 
 Do not create progress-only PRs or resume unrelated logging work from stale
 worktrees.
