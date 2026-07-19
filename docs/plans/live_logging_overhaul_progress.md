@@ -15,7 +15,25 @@ merge, live smoke evidence changes, or new gaps are discovered.
 - Do not use this file for design churn; unresolved design details belong in the
   plan or a focused handoff doc.
 
-## Latest Canonical Deployment (PR #1312)
+## Latest Canonical Deployment (PR #1322)
+
+- PR #1322 merged as canonical
+  `881978dec502296c4ab990c34bf06fdf74f024b2`. VPS5 fast-forwarded
+  tracked-clean from `8b433cc22` without a Rust build, bot restart, or process
+  signal.
+- The exact-file Hyperliquid attribution smoke scanned 26 artifacts and
+  `15763500` bytes, read 51 fill records, returned 37 trailing fills and zero
+  warnings, and reconciled the previous `1731` ms manifest/log skew into one
+  four-source runtime cohort. Smaller explicit bounds failed closed before the
+  successful run; temporary scanner PIDs from interrupted commands were
+  identity-checked and terminated exactly without touching bots or panes.
+- Final local-only target sampling was hard-green with five expected/stable
+  processes and no missing, duplicate, extra, or temporary scanner process.
+  One transient `D` observation recovered naturally to `R=5`; protected
+  `misc:0.0` remained `%8`/PID `434835`. No direct exchange call or event was
+  manufactured.
+
+## Previous Canonical Deployment (PR #1312)
 
 - PR #1312 merged as canonical `8b433cc22b087b0efab51ba2bcf003f1e2b31806`.
   Guarded tracked-clean fast-forwarded `30870252` to that exact merge without a

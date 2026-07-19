@@ -16,7 +16,7 @@ import passivbot_rust as pbr
 from passivbot import Passivbot
 
 
-BENCHMARK_SCHEMA_VERSION = 2
+BENCHMARK_SCHEMA_VERSION = 3
 DEFAULT_MINUTES = 240
 DEFAULT_SYMBOLS = 8
 DEFAULT_ITERATIONS = 1
@@ -38,10 +38,112 @@ REFERENCE_SAMPLE_COUNT_KEYS = (
     "held_replay_samples",
     "background_replay_samples",
 )
+TIMING_STAGE_NAMES = (
+    "fixture_construction",
+    "history_load",
+    "cache_reuse_skipped",
+    "coin_metrics_sample",
+    "held_coin_metrics_sample",
+    "background_coin_metrics_sample",
+    "current_upnl",
+    "cache_persist_skipped",
+    "final_state_projection",
+    "full_replay",
+)
+FULL_REPLAY_LEAF_STAGE_NAMES = (
+    "history_load",
+    "cache_reuse_skipped",
+    "held_coin_metrics_sample",
+    "background_coin_metrics_sample",
+    "current_upnl",
+    "cache_persist_skipped",
+)
 
 
 def _fixture_symbol(index: int) -> str:
     return f"HSLBENCH{index:02d}/USDT:USDT"
+
+
+def _new_timing_totals() -> dict[str, dict[str, int]]:
+    return {
+        stage: {"calls": 0, "elapsed_ns": 0} for stage in TIMING_STAGE_NAMES
+    }
+
+
+def _record_elapsed(
+    timings: dict[str, dict[str, int]], stage: str, elapsed_ns: int
+) -> None:
+    values = timings[stage]
+    values["calls"] += 1
+    values["elapsed_ns"] += elapsed_ns
+
+
+def _record_timing(
+    timings: dict[str, dict[str, int]], stage: str, started_ns: int
+) -> None:
+    _record_elapsed(timings, stage, time.perf_counter_ns() - started_ns)
+
+
+def _timing_value(
+    timings: dict[str, dict[str, int]], stage: str
+) -> dict[str, int]:
+    values = timings[stage]
+    return {"calls": int(values["calls"]), "elapsed_ns": int(values["elapsed_ns"])}
+
+
+def _exclusive_elapsed_profile(
+    *, total_elapsed_ns: int, stages: dict[str, dict[str, int]], scope: str
+) -> dict[str, Any]:
+    accounted_elapsed_ns = sum(values["elapsed_ns"] for values in stages.values())
+    if accounted_elapsed_ns > total_elapsed_ns:
+        raise RuntimeError(
+            f"offline HSL benchmark {scope} stages exceed total elapsed time"
+        )
+    residual_elapsed_ns = total_elapsed_ns - accounted_elapsed_ns
+
+    def percent_of_total(elapsed_ns: int) -> float:
+        if total_elapsed_ns <= 0:
+            return 0.0
+        return min(100.0, max(0.0, elapsed_ns / total_elapsed_ns * 100.0))
+
+    percent_key = f"percent_of_{scope}"
+    return {
+        "elapsed_ns": total_elapsed_ns,
+        "accounted_elapsed_ns": accounted_elapsed_ns,
+        f"accounted_{percent_key}": percent_of_total(accounted_elapsed_ns),
+        "stages": {
+            stage: {**values, percent_key: percent_of_total(values["elapsed_ns"])}
+            for stage, values in stages.items()
+        },
+        "residual_orchestration": {
+            "elapsed_ns": residual_elapsed_ns,
+            percent_key: percent_of_total(residual_elapsed_ns),
+        },
+    }
+
+
+def _stage_profile(timings: dict[str, dict[str, int]]) -> dict[str, Any]:
+    """Return exclusive replay timing shares plus uninstrumented orchestration."""
+    full_replay = _timing_value(timings, "full_replay")
+    stages = {
+        stage: _timing_value(timings, stage) for stage in FULL_REPLAY_LEAF_STAGE_NAMES
+    }
+
+    return {
+        "taxonomy": "exclusive_full_replay_leaf_stages_v1",
+        "full_replay": {
+            "calls": full_replay["calls"],
+            **_exclusive_elapsed_profile(
+                total_elapsed_ns=full_replay["elapsed_ns"],
+                stages=stages,
+                scope="full_replay",
+            ),
+        },
+        "outside_full_replay": {
+            stage: _timing_value(timings, stage)
+            for stage in ("fixture_construction", "final_state_projection")
+        },
+    }
 
 
 def _validate_fixture_shape(
@@ -456,24 +558,28 @@ def _make_offline_replay_bot(
         try:
             return history
         finally:
-            timings["history_load"]["calls"] += 1
-            timings["history_load"]["elapsed_ns"] += time.perf_counter_ns() - started_ns
+            _record_timing(timings, "history_load", started_ns)
 
     async def no_cache_reuse(*_args, **_kwargs):
-        timings["cache_reuse_skipped"]["calls"] += 1
-        return None
+        started_ns = time.perf_counter_ns()
+        try:
+            return None
+        finally:
+            _record_timing(timings, "cache_reuse_skipped", started_ns)
 
     async def current_upnl(*_args, **_kwargs):
         started_ns = time.perf_counter_ns()
         try:
             return 0.0
         finally:
-            timings["current_upnl"]["calls"] += 1
-            timings["current_upnl"]["elapsed_ns"] += time.perf_counter_ns() - started_ns
+            _record_timing(timings, "current_upnl", started_ns)
 
     def skip_cache_persist(*_args, **_kwargs):
-        timings["cache_persist_skipped"]["calls"] += 1
-        return 0
+        started_ns = time.perf_counter_ns()
+        try:
+            return 0
+        finally:
+            _record_timing(timings, "cache_persist_skipped", started_ns)
 
     def skip_latch_write(*_args, **_kwargs):
         side_effects["latch_writes"] += 1
@@ -486,12 +592,18 @@ def _make_offline_replay_bot(
 
     def profile_coin_metrics_sample(*args, **kwargs):
         started_ns = time.perf_counter_ns()
+        symbol = args[1] if len(args) > 1 else kwargs["symbol"]
+        sample_stage = (
+            "held_coin_metrics_sample"
+            if symbol in held_symbols
+            else "background_coin_metrics_sample"
+        )
         try:
             return original_apply_metrics(*args, **kwargs)
         finally:
-            timings["coin_metrics_sample"]["calls"] += 1
-            timings["coin_metrics_sample"]["elapsed_ns"] += time.perf_counter_ns() - started_ns
-            symbol = args[1] if len(args) > 1 else kwargs["symbol"]
+            elapsed_ns = time.perf_counter_ns() - started_ns
+            _record_elapsed(timings, "coin_metrics_sample", elapsed_ns)
+            _record_elapsed(timings, sample_stage, elapsed_ns)
             sample_counts[
                 "held_replay_samples" if symbol in held_symbols else "background_replay_samples"
             ] += 1
@@ -649,28 +761,34 @@ async def _run_hsl_replay_benchmark(
     if not 1 <= int(iterations) <= MAX_ITERATIONS:
         raise ValueError(f"iterations must be between 1 and {MAX_ITERATIONS}")
 
+    run_started_ns = time.perf_counter_ns()
     minutes, symbols, held_symbols = _validate_fixture_shape(
         minutes, symbols, held_symbols, local_scale=local_scale
     )
-    if history_format == "timeline":
-        history = build_coin_hsl_history_fixture(
-            minutes=minutes,
-            symbols=symbols,
-            held_symbols=held_symbols,
-            local_scale=local_scale,
-        )
-    elif history_format == "compact":
-        history = build_coin_hsl_compact_fixture(
-            minutes=minutes,
-            symbols=symbols,
-            held_symbols=held_symbols,
-            local_scale=local_scale,
-        )
-    else:
-        raise ValueError(
-            "history_format must be one of timeline or compact, "
-            f"got {history_format!r}"
-        )
+    timing_totals = _new_timing_totals()
+    fixture_started_ns = time.perf_counter_ns()
+    try:
+        if history_format == "timeline":
+            history = build_coin_hsl_history_fixture(
+                minutes=minutes,
+                symbols=symbols,
+                held_symbols=held_symbols,
+                local_scale=local_scale,
+            )
+        elif history_format == "compact":
+            history = build_coin_hsl_compact_fixture(
+                minutes=minutes,
+                symbols=symbols,
+                held_symbols=held_symbols,
+                local_scale=local_scale,
+            )
+        else:
+            raise ValueError(
+                "history_format must be one of timeline or compact, "
+                f"got {history_format!r}"
+            )
+    finally:
+        _record_timing(timing_totals, "fixture_construction", fixture_started_ns)
     held_names = {_fixture_symbol(index) for index in range(held_symbols)}
     active_names = set(held_names)
     active_names.update(
@@ -679,12 +797,10 @@ async def _run_hsl_replay_benchmark(
         if event.get("symbol")
     )
     active_symbols = len(active_names)
-    timing_totals: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
     sample_counts: dict[str, int] = defaultdict(int)
     state_digests: list[str] = []
     state_projections: list[list[dict[str, Any]]] = []
     side_effect_totals: dict[str, int] = defaultdict(int)
-    full_replay_elapsed_ns = 0
     for _ in range(int(iterations)):
         bot = _make_offline_replay_bot(history, timing_totals, held_names, sample_counts)
         started_ns = time.perf_counter_ns()
@@ -694,8 +810,12 @@ async def _run_hsl_replay_benchmark(
             await bot._equity_hard_stop_initialize_coin_from_history()
         finally:
             logging.disable(previous_logging_disable)
-        full_replay_elapsed_ns += time.perf_counter_ns() - started_ns
-        state_projection = _state_projection(bot)
+            _record_timing(timing_totals, "full_replay", started_ns)
+        projection_started_ns = time.perf_counter_ns()
+        try:
+            state_projection = _state_projection(bot)
+        finally:
+            _record_timing(timing_totals, "final_state_projection", projection_started_ns)
         state_projections.append(state_projection)
         state_digests.append(_state_digest_from_projection(state_projection))
         for key, value in bot._offline_hsl_benchmark_side_effects.items():
@@ -719,9 +839,11 @@ async def _run_hsl_replay_benchmark(
     held_current_samples = held_symbols * int(iterations)
     background_current_samples = background_symbols * int(iterations)
     actual_sample_calls = int(timing_totals["coin_metrics_sample"]["calls"])
+    full_replay_elapsed_ns = int(timing_totals["full_replay"]["elapsed_ns"])
     elapsed_seconds = max(full_replay_elapsed_ns, 1) / 1_000_000_000.0
     replay_rows = minutes * int(iterations)
-    return {
+    stage_profile = _stage_profile(timing_totals)
+    report = {
         "schema_version": BENCHMARK_SCHEMA_VERSION,
         "kind": "hsl_replay_benchmark",
         "offline": True,
@@ -772,15 +894,9 @@ async def _run_hsl_replay_benchmark(
             ),
         },
         "timings": {
-            stage: {"calls": int(values["calls"]), "elapsed_ns": int(values["elapsed_ns"])}
-            for stage, values in sorted(timing_totals.items())
-        }
-        | {
-            "full_replay": {
-                "calls": int(iterations),
-                "elapsed_ns": int(full_replay_elapsed_ns),
-            }
+            stage: _timing_value(timing_totals, stage) for stage in TIMING_STAGE_NAMES
         },
+        "stage_profile": stage_profile,
         "throughput": {
             "timeline_rows_per_second": replay_rows / elapsed_seconds,
             "pair_rows_per_second": expected_replay_samples / elapsed_seconds,
@@ -793,6 +909,20 @@ async def _run_hsl_replay_benchmark(
         },
         "side_effects": dict(sorted(side_effect_totals.items())),
     }
+    run_elapsed_ns = time.perf_counter_ns() - run_started_ns
+    run_stages = {
+        stage: _timing_value(timing_totals, stage)
+        for stage in ("fixture_construction", "full_replay", "final_state_projection")
+    }
+    stage_profile["run"] = {
+        "calls": 1,
+        **_exclusive_elapsed_profile(
+            total_elapsed_ns=run_elapsed_ns,
+            stages=run_stages,
+            scope="run",
+        ),
+    }
+    return report
 
 
 async def run_hsl_replay_benchmark(
@@ -812,6 +942,7 @@ async def run_hsl_replay_benchmark(
         raise ValueError(f"iterations must be between 1 and {MAX_ITERATIONS}")
     _validate_fixture_shape(minutes, symbols, held_symbols, local_scale=local_scale)
 
+    pipeline_started_ns = time.perf_counter_ns()
     tracing_started_here = False
     if profile_memory:
         if not tracemalloc.is_tracing():
@@ -827,8 +958,9 @@ async def run_hsl_replay_benchmark(
             local_scale=local_scale,
             history_format=history_format,
         )
+        reference_is_candidate = history_format == DENSE_REFERENCE_HISTORY_FORMAT
         reference_report = report
-        if history_format != DENSE_REFERENCE_HISTORY_FORMAT:
+        if not reference_is_candidate:
             reference_report = await _run_hsl_replay_benchmark(
                 minutes=minutes,
                 symbols=symbols,
@@ -837,13 +969,26 @@ async def run_hsl_replay_benchmark(
                 local_scale=local_scale,
                 history_format=DENSE_REFERENCE_HISTORY_FORMAT,
             )
-        report["dense_reference"] = {
+        dense_reference = {
             "history_format": DENSE_REFERENCE_HISTORY_FORMAT,
+            "same_run_as_candidate": reference_is_candidate,
             "fixture_scenario_sha256": reference_report["fixture"]["scenario_sha256"],
             "sample_counts": _sample_count_projection(reference_report),
             "output_state": reference_report["output_state"],
         }
+        if not reference_is_candidate:
+            dense_reference.update(
+                {
+                    "fixture": reference_report["fixture"],
+                    "timings": reference_report["timings"],
+                    "stage_profile": reference_report["stage_profile"],
+                    "throughput": reference_report["throughput"],
+                }
+            )
+        report["dense_reference"] = dense_reference
+        comparison_started_ns = time.perf_counter_ns()
         report["equivalence"] = compare_dense_reference_output(reference_report, report)
+        comparison_elapsed_ns = time.perf_counter_ns() - comparison_started_ns
         if profile_memory:
             current_bytes, peak_bytes = tracemalloc.get_traced_memory()
             report["memory"] = {
@@ -851,6 +996,31 @@ async def run_hsl_replay_benchmark(
                 "current_bytes": int(current_bytes),
                 "peak_bytes": int(peak_bytes),
             }
+        pipeline_stages = {
+            "candidate_run": {
+                "calls": 1,
+                "elapsed_ns": int(report["stage_profile"]["run"]["elapsed_ns"]),
+            }
+        }
+        if not reference_is_candidate:
+            pipeline_stages["dense_reference_run"] = {
+                "calls": 1,
+                "elapsed_ns": int(reference_report["stage_profile"]["run"]["elapsed_ns"]),
+            }
+        pipeline_stages["equivalence_comparison"] = {
+            "calls": 1,
+            "elapsed_ns": comparison_elapsed_ns,
+        }
+        pipeline_elapsed_ns = time.perf_counter_ns() - pipeline_started_ns
+        report["pipeline_profile"] = {
+            "taxonomy": "exclusive_benchmark_pipeline_stages_v1",
+            "calls": 1,
+            **_exclusive_elapsed_profile(
+                total_elapsed_ns=pipeline_elapsed_ns,
+                stages=pipeline_stages,
+                scope="pipeline",
+            ),
+        }
         return report
     finally:
         if tracing_started_here:
