@@ -1734,6 +1734,46 @@ def test_event_file_rows_seek_tail_skips_plain_ndjson_prefix(tmp_path):
     assert [json.loads(raw_line)["seq"] for _, raw_line in kept_rows] == [2, 3]
 
 
+def test_event_file_rows_full_scan_uses_post_read_plain_stream_position(tmp_path):
+    path = tmp_path / "current.ndjson"
+    initial_line = json.dumps({"payload": "x" * 20_000}) + "\n"
+    appended_line = json.dumps({"seq": 2}) + "\n"
+    path.write_text(initial_line, encoding="utf-8")
+
+    class _AppendAfterFirstLine:
+        def __init__(self, stream):
+            self._stream = stream
+            self.buffer = stream.buffer
+            self._appended = False
+
+        def __enter__(self):
+            self._stream.__enter__()
+            return self
+
+        def __exit__(self, *args):
+            return self._stream.__exit__(*args)
+
+        def __iter__(self):
+            return self
+
+        def __next__(self):
+            line = next(self._stream)
+            if not self._appended:
+                with open(path, "a", encoding="utf-8") as output:
+                    output.write(appended_line)
+                self._appended = True
+            return line
+
+    def open_and_append(_path):
+        return _AppendAfterFirstLine(open(path, "r", encoding="utf-8"))
+
+    with event_file_rows(path, text_opener=open_and_append) as (rows, window):
+        assert list(rows) == [(1, initial_line), (2, appended_line)]
+
+    assert window.physical_bytes_read == path.stat().st_size
+    assert window.decoded_bytes_read == path.stat().st_size
+
+
 def test_event_query_scan_cost_tracks_plain_full_and_seek_tail_reads(tmp_path):
     path = tmp_path / "monitor" / "binance" / "binance_01" / "events" / "current.ndjson"
     _write_ndjson(

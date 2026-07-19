@@ -25,6 +25,28 @@ def _open_text(path: Path):
     return open(path, "r", encoding="utf-8", errors="replace")
 
 
+def _stream_position(stream) -> int | None:
+    tell = getattr(stream, "tell", None)
+    if not callable(tell):
+        return None
+    try:
+        position = int(tell())
+    except (OSError, TypeError, ValueError):
+        return None
+    return position if position >= 0 else None
+
+
+def _full_scan_read_positions(path: Path, stream) -> tuple[int | None, int | None]:
+    buffer = getattr(stream, "buffer", None)
+    if path.name.endswith(".gz"):
+        return (
+            _stream_position(getattr(buffer, "fileobj", None)),
+            _stream_position(buffer),
+        )
+    position = _stream_position(buffer)
+    return position, position
+
+
 def _plain_tail_rows(path: Path, *, max_lines: int) -> tuple[list[tuple[int, str]], EventRowWindow]:
     if max_lines <= 0:
         return [], EventRowWindow()
@@ -87,22 +109,12 @@ def event_file_rows(path: Path, *, max_tail_lines: int = 0, text_opener=None):
     tail_lines = max(0, int(max_tail_lines))
     opener = _open_text if text_opener is None else text_opener
     if tail_lines <= 0:
-        try:
-            physical_bytes_read = int(path.stat().st_size)
-        except OSError:
-            physical_bytes_read = None
-        window = EventRowWindow(
-            physical_bytes_read=physical_bytes_read,
-            decoded_bytes_read=(
-                None if path.name.endswith(".gz") else physical_bytes_read
-            ),
-        )
+        window = EventRowWindow()
         with opener(path) as stream:
             yield enumerate(stream, start=1), window
-            if path.name.endswith(".gz"):
-                buffer = getattr(stream, "buffer", None)
-                if buffer is not None:
-                    window.decoded_bytes_read = int(buffer.tell())
+            window.physical_bytes_read, window.decoded_bytes_read = _full_scan_read_positions(
+                path, stream
+            )
         return
     if not path.name.endswith(".gz"):
         rows, window = _plain_tail_rows(path, max_lines=tail_lines)
