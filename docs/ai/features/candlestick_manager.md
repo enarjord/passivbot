@@ -35,6 +35,27 @@
    SHA-256 sidecar before parsing, and write only invalid v2 rows. Monthly archives are attempted
    only after Binance's first-Monday publication window plus a buffer; daily archives exclude the
    current day and two preceding complete UTC days.
+8. Live forager planning is cache-only for inactive candidates. Its background refresher must warm
+   every consumed native candle surface, including 1m inputs and native 1h log-range inputs with a
+   nonzero strategy weight, using the same per-symbol requirements and explicit warmup cap as the
+   live EMA bundle.
+   Tail-only gaps remain eligible within the configured candidate staleness window; missing basis
+   and internal gaps do not. Refresh budgets count symbol/timeframe fetches, health scans are
+   bounded and rotated across cycles, interleave each candidate's 1m and native 1h health surfaces,
+   keep discovered-but-unfetched stale surfaces pending, charge tokens only for selected fetches,
+   and prioritize never-attempted 1m fetches before native 1h backfills. Staleness targets count
+   only surfaces handled by this background
+   refresher, excluding urgent active symbols. A native 1h range with a fresh tail and only an
+   unavailable leading prefix remains nontradable and is retried at most once per 24 hours after a
+   successful nonempty fetch which still proves the same requested leading-prefix gap; changed
+   requirements, empty results, partial pagination failures, and other failed fetches remain
+   eligible for normal retry. A zero OHLCV network budget disables candidate fetches even when
+   entry slots are open.
+   A forced native higher-timeframe refresh bypasses in-memory range and complete-disk
+   short-circuits so a partial cached range cannot consume budget without retrying the exchange.
+   Fresh remote rows overwrite matching disk rows, but partial remote results retain any existing
+   disk coverage without entering the reusable range or EMA caches. Affected higher-timeframe EMA
+   cache entries are invalidated, and higher-timeframe EMAs require full requested coverage.
 
 Cache paths use `to_standard_exchange_name()` rather than raw CCXT identifiers such as
 `binanceusdm` or `kucoinfutures`.
