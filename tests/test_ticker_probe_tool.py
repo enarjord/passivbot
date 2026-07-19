@@ -240,6 +240,23 @@ def test_create_exchange_sets_default_type_swap_before_load_markets(monkeypatch)
     assert session.options["defaultType"] == "swap"
 
 
+def test_create_exchange_resolves_gateio_client_id(monkeypatch):
+    class GateSession:
+        def __init__(self, config):
+            self.config = config
+            self.options = {}
+
+    monkeypatch.setattr(
+        "tools.probe_ticker_capabilities.ccxt_async.gate",
+        GateSession,
+    )
+
+    session = create_exchange("gateio")
+
+    assert isinstance(session, GateSession)
+    assert session.options["defaultType"] == "swap"
+
+
 @pytest.mark.asyncio
 async def test_probe_exchange_ticker_endpoints_records_all_endpoint_shapes():
     class FakeExchange:
