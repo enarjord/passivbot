@@ -315,17 +315,42 @@ def _shutdown_gate(report: dict[str, Any], *, expected_targets: int) -> dict[str
     shutdown = shutdown if isinstance(shutdown, dict) else {}
     event_types = shutdown.get("event_types")
     event_types = event_types if isinstance(event_types, dict) else {}
+    lifecycle = shutdown.get("lifecycle")
+    lifecycle = lifecycle if isinstance(lifecycle, dict) else {}
     stopping_count = _count(event_types.get("bot.stopping"))
     stopped_count = _count(event_types.get("bot.stopped"))
+    observed_bots = _count(lifecycle.get("observed_bots"))
+    complete_bots = _count(lifecycle.get("complete_bots"))
+    incomplete_bots = _count(lifecycle.get("incomplete_bots"))
+    lifecycle_counts_valid = (
+        lifecycle.get("proof_scope") == "distinct_observed_bots"
+        and lifecycle.get("coverage_complete") is True
+        and lifecycle.get("identity_complete") is True
+        and _is_non_negative_int(lifecycle.get("invalid_identity_events"))
+        and _count(lifecycle.get("invalid_identity_events")) == 0
+        and _is_non_negative_int(lifecycle.get("observed_bots"))
+        and _is_non_negative_int(lifecycle.get("complete_bots"))
+        and _is_non_negative_int(lifecycle.get("incomplete_bots"))
+        and observed_bots == complete_bots + incomplete_bots
+    )
     return {
         "ok": (
             _is_non_negative_int(event_types.get("bot.stopping"))
             and _is_non_negative_int(event_types.get("bot.stopped"))
             and stopping_count >= expected_targets
             and stopped_count >= expected_targets
+            and lifecycle_counts_valid
+            and complete_bots >= expected_targets
         ),
         "stopping_count": stopping_count,
         "stopped_count": stopped_count,
+        "observed_bots": observed_bots,
+        "complete_bots": complete_bots,
+        "incomplete_bots": incomplete_bots,
+        "proof_scope": lifecycle.get("proof_scope"),
+        "coverage_complete": lifecycle.get("coverage_complete"),
+        "identity_complete": lifecycle.get("identity_complete"),
+        "invalid_identity_events": _count(lifecycle.get("invalid_identity_events")),
     }
 
 

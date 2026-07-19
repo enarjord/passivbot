@@ -22,27 +22,45 @@ Estimated completion:
 
 ## Active Review Slice
 
-- Branch: `codex/event-pipeline-integrity-smoke`, based on canonical
-  `0dbfbca74b029353a0e11888e71077fa711835ff` after PR #1314.
-- PR: #1320.
-- Scope: add a separate bounded diagnostic integrity verdict for the latest
-  structured-event pipeline snapshots. Event drops, sink errors, and a worker
-  that is dead outside orderly pipeline shutdown must be visible without
-  changing the existing trading/process smoke verdict.
-- Behavior boundary: read-only smoke report, concise/brief projections, tests,
-  changelog, and project state only. No event producer, queue, sink, monitor
-  persistence, console, exchange, order, risk, readiness, configuration, or
-  process-control behavior changes.
-- Validation: focused report/projection tests must prove loss is visible while
-  top-level `ok`, `attention`, and `hard_failures` retain their current
-  semantics; orderly shutdown must not create a false dead-worker incident.
+- Branch: `codex/shutdown-lifecycle-completeness`, based on canonical
+  `bc2c90267be418344ec883fcf17fae856bc568cd` after PR #1320.
+- PR: #1321.
+- Scope: derive the latest bounded shutdown lifecycle per observed bot and make
+  restart evidence require distinct complete bot lifecycles instead of
+  aggregate `bot.stopping` and `bot.stopped` counts.
+- Behavior boundary: read-only smoke report, restart-evidence evaluation,
+  concise/brief projections, tests, changelog, and project state only. No event
+  producer, monitor persistence, console, exchange, order, risk, readiness,
+  configuration, restart execution, or process-control behavior changes.
+- Validation: focused report/projection tests must prove duplicate events from
+  one bot cannot satisfy a multi-bot restart gate, incomplete latest lifecycles
+  remain visible, out-of-order input is handled by canonical event ordering,
+  and top-level smoke verdicts retain their current semantics.
 - Review gate: temporary maintainer-authorized exact-head Hermes plus green
-  Python and Rust CI while Grok is halted; additional Codex findings must still
-  be adjudicated.
+  Python and Rust CI while Grok is halted. Repository automatic Codex review is
+  additional; any findings it posts must still be adjudicated.
 - Expected VPS action: pull and bounded read-only report only after merge. The
   slice is diagnostics-only and does not warrant a bot restart.
 
 ## Deployed Baseline
+
+- PR #1320 merged as canonical
+  `bc2c90267be418344ec883fcf17fae856bc568cd`. It adds a separate bounded
+  event-pipeline integrity diagnostic for cumulative drops, sink errors, and
+  workers unexpectedly dead outside orderly shutdown, without changing the
+  general smoke or trading/process verdicts.
+- VPS5 fast-forwarded tracked-clean from PR #1314 without a Rust build, bot
+  restart, or process signal. The exact five target PIDs and pane parents were
+  unchanged, target sampling remained 3/3 stable with no extras or issues, and
+  protected `misc:0.0` remained `%8`/PID `434835`.
+- The merged report showed integrity green for all five bots with zero drops,
+  sink errors, unexpectedly dead workers, queue backlog, unfinished work, or
+  degraded pipeline counters. The wider smoke retained natural KuCoin
+  `RequestTimeout` events instead of hiding them; the latest affected cycle
+  subsequently completed successfully without intervention. No direct exchange
+  request, process action, or event was manufactured.
+
+## Previous Deployed Baseline (PR #1314)
 
 - PR #1314 merged as canonical `0dbfbca74b029353a0e11888e71077fa711835ff`.
   It records immutable runtime/Rust/config provenance and fill-to-runtime
