@@ -15,7 +15,41 @@ merge, live smoke evidence changes, or new gaps are discovered.
 - Do not use this file for design churn; unresolved design details belong in the
   plan or a focused handoff doc.
 
-## Latest Canonical Deployment (PR #1314; Through PR #1319)
+## Latest Canonical Deployment (PR #1321)
+
+- PR #1321 merged as canonical
+  `fc9dad83cd3ecf51cae15e8dda66afb7cfb895a1`. It completes bounded latest
+  shutdown lifecycle diagnostics without changing producers, trading, or
+  process behavior.
+- VPS5 fast-forwarded tracked-clean at that head. Bot PIDs
+  `1044483/1044492/1044486/1044495/1044489` were unchanged, and `misc:0.0`
+  remained pane `%8`/PID `434835`.
+- The initial smoke retained four natural KuCoin degraded cycles/timeouts. The
+  settled two-minute smoke was `ok=true`, `hard_failures=0`, with `44/44`
+  account-critical and `243/243` remote calls successful and five configured
+  processes stable. No Rust build, bot restart, signal, direct exchange call,
+  or event was manufactured.
+
+## Previous Canonical Deployment (PR #1320; Through PR #1319)
+
+- PR #1320 merged as canonical
+  `bc2c90267be418344ec883fcf17fae856bc568cd` after exact-head Hermes approval
+  and green Python/Rust CI. It exposes event-pipeline drops, sink errors, and
+  unexpectedly dead workers through a separate bounded diagnostic integrity
+  verdict while preserving general smoke and trading/process semantics.
+- VPS5 fast-forwarded tracked-clean from PR #1314 without a Rust build, bot
+  restart, or process signal. Exact five-bot target sampling remained 3/3
+  stable with unchanged PIDs and no extras or issues; protected `misc:0.0`
+  remained `%8`/PID `434835`.
+- All five latest pipeline snapshots were integrity-green with zero drops, sink
+  errors, unexpectedly dead workers, backlog, unfinished work, or degraded
+  counters. The wider report retained natural KuCoin `RequestTimeout` events;
+  the latest affected cycle subsequently completed successfully without
+  intervention. No direct exchange request, process action, or event was
+  manufactured. The active follow-up makes bounded shutdown evidence complete
+  per distinct bot rather than trusting aggregate lifecycle counts.
+
+## Previous Canonical Deployment (PR #1314; Through PR #1319)
 
 - PR #1319 merged as canonical `84c8e040334820ccc049787c82048358e18179c6`.
   Its offline fake-live shutdown-clock repair changes no live runtime, producer,

@@ -102,7 +102,17 @@ def _smoke_report(*, head: str = HEAD, attention: bool = False) -> dict:
             "samples": ["secret log line"],
         },
         "shutdown_events": {
-            "event_types": {"bot.stopping": 2, "bot.stopped": 2}
+            "event_types": {"bot.stopping": 2, "bot.stopped": 2},
+            "lifecycle": {
+                "proof_scope": "distinct_observed_bots",
+                "coverage_complete": True,
+                "identity_complete": True,
+                "invalid_identity_events": 0,
+                "observed_bots": 2,
+                "complete_bots": 2,
+                "incomplete_bots": 0,
+                "rows": [],
+            },
         },
         "startup_timings": [
             {"bot": "private/bot-one", "phases": {"startup": {}}},

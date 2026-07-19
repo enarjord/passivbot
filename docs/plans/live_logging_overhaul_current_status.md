@@ -22,27 +22,41 @@ Estimated completion:
 
 ## Active Review Slice
 
-- Branch: `codex/event-pipeline-integrity-smoke`, based on canonical
-  `0dbfbca74b029353a0e11888e71077fa711835ff` after PR #1314.
-- PR: #1320.
-- Scope: add a separate bounded diagnostic integrity verdict for the latest
-  structured-event pipeline snapshots. Event drops, sink errors, and a worker
-  that is dead outside orderly pipeline shutdown must be visible without
-  changing the existing trading/process smoke verdict.
-- Behavior boundary: read-only smoke report, concise/brief projections, tests,
-  changelog, and project state only. No event producer, queue, sink, monitor
-  persistence, console, exchange, order, risk, readiness, configuration, or
-  process-control behavior changes.
-- Validation: focused report/projection tests must prove loss is visible while
-  top-level `ok`, `attention`, and `hard_failures` retain their current
-  semantics; orderly shutdown must not create a false dead-worker incident.
-- Review gate: temporary maintainer-authorized exact-head Hermes plus green
-  Python and Rust CI while Grok is halted; additional Codex findings must still
-  be adjudicated.
-- Expected VPS action: pull and bounded read-only report only after merge. The
-  slice is diagnostics-only and does not warrant a bot restart.
+- Branch: `codex/historical-runtime-attribution`, merged with canonical
+  `fc9dad83cd3ecf51cae15e8dda66afb7cfb895a1` at
+  `d351cd2c7f489ff56edaf2679e16aff6a57e5bb6`.
+- PR: #1315.
+- Scope: bounded, read-only local attribution of fill caches and monitor fill
+  history to recorded first-ingestion provenance and non-proving runtime-window
+  candidates.
+- Behavior boundary: offline attribution tool, CLI wiring, docs, and tests only.
+  No trading, exchange, runtime producer, order, risk, config, restart, or
+  process behavior changes.
+- Validation: focused attribution and CLI tests must preserve legacy fills as
+  unattributed, recognize canonical `first_ingested_by_runtime` provenance, and
+  retain bounded, fail-closed scans.
+- Review gate: current-head review is pending on the final integrated branch
+  after its documentation evidence is committed.
+- Expected VPS action: tracked-clean pull plus a bounded read-only attribution
+  smoke after merge. The tool is local-only and does not require a bot restart.
 
 ## Deployed Baseline
+
+- PR #1321 deployed as canonical
+  `fc9dad83cd3ecf51cae15e8dda66afb7cfb895a1`. It completes distinct latest
+  shutdown lifecycle diagnostics without changing event producers, trading, or
+  process behavior.
+- VPS5 fast-forwarded tracked-clean at `fc9dad83`; bot PIDs
+  `1044483/1044492/1044486/1044495/1044489` were unchanged, and protected
+  `misc:0.0` remained pane `%8`/PID `434835`.
+- The initial smoke retained four natural KuCoin degraded cycles/timeouts rather
+  than hiding them. The settled two-minute smoke was `ok=true` with
+  `hard_failures=0`, `44/44` account-critical calls and `243/243` remote calls
+  successful, and five configured processes stable.
+- This was diagnostics-only: no Rust build, bot restart, signal, direct exchange
+  call, or event was manufactured.
+
+## Previous Deployed Baseline (PR #1314)
 
 - PR #1314 merged as canonical `0dbfbca74b029353a0e11888e71077fa711835ff`.
   It records immutable runtime/Rust/config provenance and fill-to-runtime

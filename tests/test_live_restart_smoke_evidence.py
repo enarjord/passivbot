@@ -109,7 +109,17 @@ def _smoke_report(*, targets: int = 2) -> dict:
             "window": _window(),
         },
         "shutdown_events": {
-            "event_types": {"bot.stopping": targets, "bot.stopped": targets}
+            "event_types": {"bot.stopping": targets, "bot.stopped": targets},
+            "lifecycle": {
+                "proof_scope": "distinct_observed_bots",
+                "coverage_complete": True,
+                "identity_complete": True,
+                "invalid_identity_events": 0,
+                "observed_bots": targets,
+                "complete_bots": targets,
+                "incomplete_bots": 0,
+                "rows": [],
+            },
         },
         "startup_timings": [
             {"bot": f"venue/bot_{index}", "phases": {"startup": {}}}
@@ -404,6 +414,59 @@ def test_evaluator_rejects_missing_shutdown_and_startup_evidence():
 
     assert report["ok"] is False
     assert {"shutdown_evidence_missing", "startup_evidence_missing"} <= _codes(report)
+
+
+def test_evaluator_rejects_duplicate_shutdown_events_from_one_bot():
+    smoke = _smoke_report()
+    smoke["shutdown_events"] = {
+        "event_types": {"bot.stopping": 2, "bot.stopped": 2},
+        "lifecycle": {
+            "proof_scope": "distinct_observed_bots",
+            "coverage_complete": True,
+            "identity_complete": True,
+            "invalid_identity_events": 0,
+            "observed_bots": 1,
+            "complete_bots": 1,
+            "incomplete_bots": 0,
+            "rows": [],
+        },
+    }
+
+    report = _evaluate(smoke_report=smoke)
+
+    assert report["ok"] is False
+    assert report["gates"]["shutdown"] == {
+        "ok": False,
+        "stopping_count": 2,
+        "stopped_count": 2,
+        "observed_bots": 1,
+        "complete_bots": 1,
+        "incomplete_bots": 0,
+        "proof_scope": "distinct_observed_bots",
+        "coverage_complete": True,
+        "identity_complete": True,
+        "invalid_identity_events": 0,
+    }
+    assert "shutdown_evidence_missing" in _codes(report)
+
+
+@pytest.mark.parametrize(
+    ("key", "value"),
+    [
+        ("coverage_complete", False),
+        ("identity_complete", False),
+        ("invalid_identity_events", 1),
+        ("proof_scope", "expected_bot_identities"),
+    ],
+)
+def test_evaluator_rejects_incomplete_or_invalid_shutdown_lifecycle(key, value):
+    smoke = _smoke_report()
+    smoke["shutdown_events"]["lifecycle"][key] = value
+
+    report = _evaluate(smoke_report=smoke)
+
+    assert report["ok"] is False
+    assert "shutdown_evidence_missing" in _codes(report)
 
 
 def test_attention_evidence_remains_green():

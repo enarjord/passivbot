@@ -4,6 +4,12 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Shutdown evidence in live smoke reports now distinguishes complete and
+  incomplete latest shutdown lifecycles per bot. Restart smoke validation uses
+  distinct complete bots instead of aggregate event counts, so duplicate
+  stopping or stopped events from one bot cannot satisfy a multi-bot restart
+  gate; general smoke verdicts and live runtime behavior remain unchanged.
+
 - Live smoke reports now include a bounded diagnostics-only event-pipeline
   integrity verdict from each bot's latest health snapshot. Cumulative drops,
   sink errors, and workers unexpectedly absent outside orderly pipeline shutdown
@@ -66,6 +72,14 @@ All notable user-facing changes will be documented in this file.
   monitor state. Newly discovered fill events retain which runtime first
   ingested them without falsely claiming that runtime created the order;
   refreshes preserve existing attribution and leave legacy fills unattributed.
+
+- Added `passivbot tool runtime-attribution`, a bounded, read-only local report
+  that correlates fill caches and monitor fill history with immutable runtime
+  manifests, structured startup events, and legacy startup logs. It keeps
+  recorded first-ingestion identity separate from non-proving producer-window
+  candidates, leaves legacy fills unattributed, supports trailing-only and
+  account/symbol/time filters, and can fail when selected fills lack recorded
+  provenance without contacting exchanges or controlling bots.
 
 - Full live smoke reports now retain a separately bounded sample of hard
   structured problem events, with authoritative total, retained, and truncated
