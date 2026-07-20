@@ -22,7 +22,7 @@ Estimated completion:
 
 ## Active Review Slice
 
-- Pending PR, `Retain smoke log scan cost in incident summaries`; branch:
+- PR #1340, `Retain smoke log scan cost in incident summaries`; branch:
   `codex/live-incident-log-scan-cost`, based on canonical
   `3311085dce8b7540f5a26e809229180d5f784c25`.
 - Scope: propagate the already-computed live smoke text-log `scan_cost`
