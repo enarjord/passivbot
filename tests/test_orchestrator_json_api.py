@@ -111,6 +111,41 @@ def adaptive_strategy_params(**overrides):
     return base
 
 
+def trailing_grid_v7_strategy_params(**entry_overrides):
+    entry = {
+        "grid_double_down_factor": 1.0,
+        "grid_spacing_pct": 0.02,
+        "grid_spacing_we_weight": 0.0,
+        "grid_spacing_volatility_weight": 0.0,
+        "initial_ema_dist": 0.0,
+        "initial_qty_pct": 0.1,
+        "trailing_double_down_factor": 1.0,
+        "trailing_grid_ratio": -0.072114,
+        "trailing_retracement_pct": 0.037427,
+        "trailing_retracement_we_weight": 0.0,
+        "trailing_retracement_volatility_weight": 0.0,
+        "trailing_threshold_pct": 0.01,
+        "trailing_threshold_we_weight": 0.0,
+        "trailing_threshold_volatility_weight": 0.0,
+        "volatility_ema_span_hours": 1.0,
+    }
+    entry.update(entry_overrides)
+    return {
+        "ema_span_0": 10.0,
+        "ema_span_1": 20.0,
+        "entry": entry,
+        "close": {
+            "grid_markup_start": 0.01,
+            "grid_markup_end": 0.01,
+            "grid_qty_pct": 1.0,
+            "trailing_grid_ratio": 0.0,
+            "trailing_qty_pct": 1.0,
+            "trailing_retracement_pct": 0.0,
+            "trailing_threshold_pct": 0.0,
+        },
+    }
+
+
 def _split_bot_and_adaptive_strategy_overrides(overrides):
     raw = dict(overrides or {})
     bot_overrides = {k: v for k, v in raw.items() if k not in ADAPTIVE_STRATEGY_KEYS}
@@ -784,6 +819,56 @@ def test_entry_retracement_throttles_ladder_even_with_zero_cooldown():
 
     assert len(long_add_orders) == 1
     assert long_add_orders[0]["order_type"] == "entry_initial_normal_long"
+
+
+@pytest.mark.parametrize(
+    ("cooldown_minutes", "expected_order_count"),
+    [(0.0, None), (0.05, 1)],
+)
+def test_trailing_grid_v7_preserves_zero_cooldown_grid_ladder_but_not_positive_cooldown(
+    cooldown_minutes, expected_order_count
+):
+    import passivbot_rust as pbr
+
+    inp = make_input(
+        balance=1_000.0,
+        strategy_kind="trailing_grid_v7",
+        global_bp=bot_params_pair(
+            long_overrides={"risk_entry_cooldown_minutes": cooldown_minutes}
+        ),
+        symbols=[
+            make_symbol(
+                0,
+                bid=100.0,
+                ask=100.0,
+                long_pos_size=1.0,
+                long_pos_price=100.0,
+                long_bp={"risk_entry_cooldown_minutes": cooldown_minutes},
+                long_strategy=trailing_grid_v7_strategy_params(),
+                short_strategy=trailing_grid_v7_strategy_params(),
+            )
+        ],
+    )
+    inp["timestamp_ms"] = 120_000
+    inp["peek_hints"] = {
+        "expand_grid_long": [0],
+        "expand_grid_short": [],
+        "expand_close_long": [],
+        "expand_close_short": [],
+    }
+
+    out = compute(pbr, inp)
+    long_add_orders = [
+        order
+        for order in out["orders"]
+        if order["pside"] == "long" and order["qty"] > 0.0
+    ]
+
+    if expected_order_count is None:
+        assert len(long_add_orders) >= 2
+        assert all(order["order_type"].startswith("entry_grid_") for order in long_add_orders)
+    else:
+        assert len(long_add_orders) == expected_order_count
 
 
 def test_entry_cooldown_blocks_position_adding_orders_until_exact_window_expires():
