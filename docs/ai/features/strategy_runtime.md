@@ -12,6 +12,11 @@ deprecated from introduction, and exists only for configs converted by
 `bot.<side>.strategy.trailing_grid_v7`; do not add them to `trailing_martingale` or shared
 `BotParams` unless a shared runtime function truly requires it.
 
+With `entry_cooldown_minutes = 0.0`, `trailing_grid_v7` preserves v7's simultaneous grid-entry
+ladder even when a later trailing leg uses retracement. Its recursive generator stops expansion
+before stacking retracement-dependent trailing orders. Positive entry cooldowns still stage at
+most one position-adding order and apply their configured post-fill delay.
+
 Removed v7 trailing-grid concepts:
 
 - `entry_trailing_grid_ratio`

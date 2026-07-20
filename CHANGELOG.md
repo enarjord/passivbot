@@ -4,6 +4,10 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- `trailing_grid_v7` with zero entry cooldown now preserves v7's simultaneous grid-entry ladder
+  when a later trailing leg uses retracement. Positive entry cooldowns and canonical
+  `trailing_martingale` retracement staging remain unchanged.
+
 - Shutdown-stage failure diagnostics now retain bounded exception types alongside existing stage,
   task-count, timeout, and elapsed-time context without arbitrary exception messages, request URLs,
   response text, or credentials. Event-delivery and event-pipeline-close fallback logs use the

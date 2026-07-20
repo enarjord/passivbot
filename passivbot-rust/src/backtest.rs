@@ -6092,8 +6092,8 @@ fn calc_ema_alphas(
 mod tests {
     use super::*;
     use crate::strategies::{
-        TrailingGridV7EntryParams, TrailingGridV7Params, TrailingMartingaleCloseParams,
-        TrailingMartingaleEntryParams, TrailingMartingaleParams,
+        TrailingGridV7CloseParams, TrailingGridV7EntryParams, TrailingGridV7Params,
+        TrailingMartingaleCloseParams, TrailingMartingaleEntryParams, TrailingMartingaleParams,
     };
     use crate::types::EquityHardStopLossConfig;
     use ndarray::{Array1, Array3};
@@ -6995,6 +6995,129 @@ mod tests {
         assert_eq!(bt.fills[0].liquidity, "maker");
         assert_eq!(bt.fills[0].fill_price, 100.0);
         assert!((bt.fills[0].fee_paid + 100.0 * 0.0002).abs() < 1e-12);
+    }
+
+    #[test]
+    fn trailing_grid_v7_zero_cooldown_fills_multiple_grid_entries_in_one_candle() {
+        let hlcvs = Array3::from_shape_vec(
+            (2, 1, 4),
+            vec![
+                101.0, 99.0, 100.0, 1.0, //
+                101.0, 80.0, 90.0, 1.0,
+            ],
+        )
+        .unwrap();
+        let btc_usd_prices = Array1::from_vec(vec![20_000.0, 20_000.0]);
+
+        let mut bp_pair = BotParamsPair::default();
+        bp_pair.long.n_positions = 1;
+        bp_pair.long.total_wallet_exposure_limit = 1.0;
+        bp_pair.long.wallet_exposure_limit = 1.0;
+        bp_pair.long.risk_entry_cooldown_minutes = 0.0;
+        bp_pair.short.n_positions = 0;
+        bp_pair.short.total_wallet_exposure_limit = 0.0;
+        bp_pair.short.wallet_exposure_limit = 0.0;
+
+        let strategy = TrailingGridV7Params {
+            ema_span_0: 1.0,
+            ema_span_1: 1.0,
+            entry: TrailingGridV7EntryParams {
+                grid_double_down_factor: 1.0,
+                grid_spacing_pct: 0.02,
+                initial_qty_pct: 0.1,
+                trailing_double_down_factor: 1.0,
+                trailing_grid_ratio: -0.072114,
+                trailing_retracement_pct: 0.037427,
+                trailing_threshold_pct: 0.01,
+                volatility_ema_span_hours: 1.0,
+                ..Default::default()
+            },
+            close: TrailingGridV7CloseParams::default(),
+        };
+        let strategy_params = StrategyParamsPairValue {
+            long: serde_json::to_value(strategy).unwrap(),
+            short: serde_json::to_value(strategy).unwrap(),
+        };
+        let backtest_params = BacktestParams {
+            starting_balance: 1_000.0,
+            maker_fee: 0.0,
+            taker_fee: 0.00055,
+            coins: vec!["TEST".to_string()],
+            active_coin_indices: None,
+            first_timestamp_ms: 0,
+            requested_start_timestamp_ms: 0,
+            first_valid_indices: vec![0],
+            last_valid_indices: vec![1],
+            warmup_minutes: vec![0],
+            trade_start_indices: vec![0],
+            global_warmup_bars: 0,
+            btc_collateral_cap: 0.0,
+            btc_collateral_ltv_cap: None,
+            metrics_only: true,
+            skip_btc_analysis: false,
+            filter_by_min_effective_cost: false,
+            dynamic_wel_by_tradability: false,
+            hedge_mode: true,
+            max_realized_loss_pct: 1.0,
+            pnls_max_lookback_days: 30.0,
+            liquidation_threshold: 0.05,
+            equity_hard_stop_loss: EquityHardStopLossConfig::default(),
+            market_orders_allowed: false,
+            market_order_near_touch_threshold: 0.001,
+            market_order_slippage_pct: 0.0005,
+            forager_score_hysteresis_pct: 0.0,
+            candle_interval_minutes: 1,
+        };
+        let exchange = ExchangeParams {
+            qty_step: 0.01,
+            price_step: 0.01,
+            min_qty: 0.0,
+            min_cost: 0.0,
+            c_mult: 1.0,
+            maker_fee: 0.0,
+            taker_fee: 0.00055,
+        };
+
+        let mut bt = Backtest::new_with_strategy_params(
+            hlcvs.view(),
+            btc_usd_prices.view(),
+            crate::strategies::StrategyKind::TrailingGridV7,
+            vec![bp_pair],
+            vec![strategy_params],
+            vec![exchange],
+            &backtest_params,
+        );
+
+        bt.bot_params[0].long.risk_entry_cooldown_minutes = 0.05;
+        bt.orchestrator_input_cache = None;
+        bt.update_open_orders_all(0);
+        assert_eq!(
+            bt.open_orders.long[0].entries.len(),
+            1,
+            "positive cooldown must still stage only one v7 add order"
+        );
+
+        bt.bot_params[0].long.risk_entry_cooldown_minutes = 0.0;
+        bt.orchestrator_input_cache = None;
+        bt.update_open_orders_all(0);
+        let staged_entry_count = bt.open_orders.long[0].entries.len();
+        assert!(
+            staged_entry_count >= 2,
+            "expected the v7 grid leg to stage multiple entries, got {staged_entry_count}"
+        );
+
+        bt.check_for_fills(1);
+
+        let same_candle_entries: Vec<&Fill> = bt
+            .fills
+            .iter()
+            .filter(|fill| fill.index == 1 && fill.fill_qty > 0.0)
+            .collect();
+        assert_eq!(same_candle_entries.len(), staged_entry_count);
+        assert!(same_candle_entries.len() >= 2);
+        assert!(same_candle_entries
+            .iter()
+            .all(|fill| fill.timestamp_ms == 60_000));
     }
 
     #[test]

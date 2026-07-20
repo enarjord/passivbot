@@ -304,6 +304,16 @@ pub fn strategy_entry_retracement_enabled(params: &StrategyParams) -> bool {
     }
 }
 
+pub fn strategy_requires_sequential_entry_staging(params: &StrategyParams) -> bool {
+    match params {
+        // The v7 generator emits only its deterministic grid leg and stops before it would stack
+        // a retracement-dependent trailing order, so an outer throttle would discard valid v7
+        // grid orders rather than protect trailing-state sequencing.
+        StrategyParams::TrailingGridV7(_) => false,
+        _ => strategy_entry_retracement_enabled(params),
+    }
+}
+
 pub fn strategy_needs_log_range_1m(params: &StrategyParams) -> bool {
     match params {
         StrategyParams::TrailingMartingale(params) => {
