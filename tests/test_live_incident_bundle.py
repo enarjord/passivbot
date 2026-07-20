@@ -679,7 +679,10 @@ def test_live_incident_bundle_collects_hashes_snapshots_events_and_window(tmp_pa
         "events_skipped_after": 0,
         "invalid_window_ts": 0,
     }
-    assert report["smoke_report"]["logs"] == {
+    smoke_log_summary = report["smoke_report"]["logs"]
+    assert {
+        key: value for key, value in smoke_log_summary.items() if key != "scan_cost"
+    } == {
         "max_files": 8,
         "tail_lines": 500,
         "max_matches": 100,
@@ -706,6 +709,18 @@ def test_live_incident_bundle_collects_hashes_snapshots_events_and_window(tmp_pa
             "dropped_unparsed_hard_matches": 0,
         },
     }
+    _assert_nonnegative_elapsed_scan_cost(
+        smoke_log_summary["scan_cost"],
+        {
+            "physical_bytes_read": (logs_dir / "bot.log").stat().st_size,
+            "physical_bytes_known": True,
+            "decoded_bytes_read": (logs_dir / "bot.log").stat().st_size,
+            "decoded_bytes_known": True,
+            "files_read": 1,
+            "records_read": 1,
+            "read_methods": {"full_scan": 1},
+        },
+    )
     assert report["smoke_report"]["hard_failure_sources"] == {
         "monitor_errors": 0,
         "invalid_event_rows": 0,
@@ -1155,6 +1170,9 @@ def test_live_incident_bundle_collects_hashes_snapshots_events_and_window(tmp_pa
     assert smoke_report["logs"]["max_matches"] == report["smoke_report"]["logs"][
         "max_matches"
     ]
+    scan_cost = smoke_report["logs"]["scan_cost"]
+    assert report["smoke_report"]["logs"]["scan_cost"] == scan_cost
+    assert manifest["smoke_report"]["logs"]["scan_cost"] == scan_cost
     assert smoke_report["logs"]["window"] == report["smoke_report"]["logs"]["window"]
     assert smoke_report["remote_call_failures"]["total"] == 1
     assert smoke_report["execution_health"]["total"] == 1

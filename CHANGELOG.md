@@ -4,6 +4,11 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Incident bundle manifest and command-result summaries now retain the
+  embedded live smoke report's text-log `scan_cost` metadata. The archive's
+  full smoke report, log reads, matching, redaction, filtering, verdicts,
+  exchange access, and live behavior are unchanged.
+
 - `live-smoke-report` log scans now include bounded `scan_cost` metadata in
   full, summary, and brief output. The metadata reports elapsed time,
   successfully read files and selected tail lines, read methods, and known
