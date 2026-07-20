@@ -22,9 +22,11 @@ Estimated completion:
 
 ## Active Review Slice
 
-- Pre-create slice `Redact EMA diagnostic payloads`; branch
+- PR #1344 `Redact EMA diagnostics at the producer boundary`; branch
   `codex/ema-diagnostic-redaction`, based on canonical
-  `7e26a9062a88ecf211729d7d718fb4530630c4ba`.
+  `7e26a9062a88ecf211729d7d718fb4530630c4ba`. The pushed semantic head
+  `f442e4a66e0f78fd628b6e5724fd5865f9ec395c` received a finding-free
+  independent Sol review after two exact-head finding/fix rounds.
 - Scope: remove arbitrary exception and fallback-reason text from
   `ema.unavailable` and `ema.fallback_used` structured, monitor, console, text,
   debug-profile, and legacy fallback paths while retaining code-owned reason
@@ -43,7 +45,8 @@ Estimated completion:
   console derives EMA identity by parsing the candidate exception message.
 - Review gate: exact-current-head Hermes approval plus green Python/Rust CI.
   Built-in Codex automatic review is additional and every finding must be
-  verified and resolved.
+  verified and resolved. The final handoff/status head requires fresh review
+  and CI before merge.
 - Expected VPS action: tracked-clean pull plus one exact-five graceful restart
   and bounded settled smoke because live event and fallback payloads change;
   preserve `misc:0.0`.
