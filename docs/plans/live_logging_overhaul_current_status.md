@@ -22,34 +22,52 @@ Estimated completion:
 
 ## Active Review Slice
 
-- PR #1345 `Redact legacy diagnostic exception text`; branch
-  `codex/diagnostic-exception-redaction`, based on canonical
-  `986e5d52f88692d1b6531bc38c307352c08e9cb9`. Its semantic predecessor is
-  `2087466167c59389ebf797bf2b9f2f732aaf96cb`; resolve the active review head
-  from live PR metadata because this status update is the final handoff delta.
-- Scope: remove arbitrary exception text from legacy
-  `MonitorPublisher.record_error` payloads and WebSocket reconnect human
-  diagnostics. Monitor error events retain known code-owned source/stage
-  classifications and a bounded exception type; reconnect diagnostics retain
-  bounded reason/error type, cadence, retry delay, and count-only stack depth
-  without frame labels, line values, or the exception value.
-- Behavior boundary: observability payload and projection only. Monitor event
-  framing, sequence, rotation, retention, and sink isolation remain unchanged,
-  as do reconnect cadence, retry/backoff, connector calls, exception
-  propagation, planning, orders, risk, and trading behavior.
-- Baseline: `MonitorPublisher.record_error` unconditionally persists
-  `str(error)` as `payload.message`; a value-free scan of the latest 4 MB from
-  each of six VPS5 current event segments parsed 9,396 rows and found one
-  natural `error.bot` message field. `_log_ws_reconnect` also writes the raw
-  exception and a formatted traceback containing the exception value, while
-  the existing structured reconnect event is already bounded.
+- Open PR #1346, `Redact live event emitter failure diagnostics`, on branch
+  `codex/event-emitter-exception-redaction`, based on canonical
+  `49cb68e56b20d71fbe42d33f31906d3a9c793e90`. Resolve its active head from
+  live metadata; the commit containing this handoff is a moving review head.
+- Scope: replace arbitrary caught exception values in best-effort live event
+  emitter failure diagnostics with bounded exception types, including HSL
+  event emitters and the event-adjacent HSL coin-status human projection.
+  Preserve existing code-owned event/action context. Other non-event HSL
+  diagnostics remain follow-up work.
+- Behavior boundary: developer DEBUG projection only. Event payloads, routing,
+  sink isolation, emitter return values, retries, planning, orders, HSL, risk,
+  and trading behavior remain unchanged.
+- Baseline: the central event-bus failure diagnostic and recent EMA emitters
+  already retain exception type only, while many adjacent event-emitter catch
+  paths still interpolate the raw exception value into the developer text log.
 - Review gate: exact-current-head Hermes approval plus green Python/Rust CI.
   Built-in Codex automatic review is additional and every finding must be
-  verified and resolved. The final handoff/status head requires fresh review
-  and CI before merge.
+  verified and resolved.
 - Expected VPS action: tracked-clean pull plus one exact-five graceful restart
-  and bounded settled smoke because live monitor and reconnect diagnostics
-  change; preserve `misc:0.0`.
+  and bounded settled smoke because live event failure projection changes;
+  preserve `misc:0.0`.
+
+## Deployed Baseline (PR #1345)
+
+- PR #1345 merged exact approved head
+  `e9322f9b50de46fc054f0424751f6f0bea802c7f` as canonical
+  `49cb68e56b20d71fbe42d33f31906d3a9c793e90` after exact-head Hermes
+  approval, green Python/Rust CI, and finding-free built-in Codex and
+  independent Sol reviews.
+- VPS5 guarded-prepared tracked-clean from
+  `986e5d52f88692d1b6531bc38c307352c08e9cb9` without a Rust build. The source
+  fingerprint/stamp remained
+  `691bff9683deec9382a4e96ab6a107c14145f88edd6ae2f8e2380b8ba6824449`, and the
+  compiled artifact SHA remained
+  `7611f3eff1d8702ff29d90490a1aba490db5c816e7e3f09a2c33e5c4085da023`.
+- The bounded exact-target orchestrator gracefully restarted only panes
+  `%358`-`%362` as PIDs `1077958/1077967/1077961/1077970/1077964`. All five
+  prior processes exited and all five exact targets relaunched and verified
+  without force or broad-pattern signals.
+- The integrated 120-second smoke was hard-green with complete shutdown and
+  startup identity, zero hard failures, zero hard text-log or attention
+  matches, and zero monitor warnings or errors. Final three-sample target
+  verification found all five replacement processes stable with no missing,
+  duplicate, or extra live process. The checkout remained exact and
+  tracked-clean, and protected `misc:0.0` stayed `%8`/PID `434835`. No direct
+  authenticated exchange call or event was manufactured.
 
 ## Deployed Baseline (PR #1344)
 
@@ -1849,11 +1867,15 @@ slices through PR #1309 are also merged and deployed. Later logging slices
 through PR #1343, including adjacent PR #1329, are deployed at canonical
 `7e26a9062a88ecf211729d7d718fb4530630c4ba`; their current evidence is recorded
 above. PR #1344's EMA diagnostic redaction is merged and deployed at canonical
-`986e5d52f88692d1b6531bc38c307352c08e9cb9`. Active PR #1345 on
-`codex/diagnostic-exception-redaction` removes arbitrary exception text from
-legacy monitor errors and WebSocket reconnect diagnostics without changing
-reconnect cadence, retry behavior, monitor persistence, or trading behavior.
-Resolve its exact current head from live PR metadata.
+`986e5d52f88692d1b6531bc38c307352c08e9cb9`. PR #1345's legacy monitor and
+WebSocket diagnostic redaction is merged and deployed at canonical
+`49cb68e56b20d71fbe42d33f31906d3a9c793e90`. Open PR #1346, `Redact live
+event emitter failure diagnostics`, on
+`codex/event-emitter-exception-redaction` removes arbitrary caught exception
+values from best-effort live event emitter diagnostics and the event-adjacent
+HSL coin-status human projection without changing emitter isolation, event
+payloads, HSL, risk, or trading behavior. Resolve its exact head from live
+metadata.
 
 Do not create progress-only PRs or resume unrelated logging work from stale
 worktrees.

@@ -54,6 +54,20 @@ retain exception text, request URLs, credentials, response bodies, paths, or oth
 from the sink exception. Sink counters and pipeline timings remain available through health
 snapshots independently of the exception payload.
 
+## Emitter Failure Diagnostics
+
+Best-effort live event emitters remain isolated from their callers. If event construction,
+sanitization, or publication fails, the developer DEBUG diagnostic may retain bounded code-owned
+event, action, stage, symbol, or position-side context and a bounded exception type. It must not
+retain the caught exception value, traceback, request URL, response body, credential, or arbitrary
+payload fragment. Non-built-in string metadata, invalid type names, and identifier-shaped names
+containing credential markers normalize to `Error` before the safe type is bounded. Redacting the
+diagnostic must not change the emitter's return value, exception isolation, event routing, retries,
+scheduling, HSL/risk behavior, or trading behavior.
+The same redaction applies when the event-adjacent HSL coin-status human projection fails; the
+structured `hsl.status` event must still be attempted independently. Other non-event HSL
+diagnostics are outside this contract.
+
 ## Market Snapshot Diagnostic Skips
 
 `market.snapshot_diagnostic_skipped` records noncritical position-change and balance diagnostics

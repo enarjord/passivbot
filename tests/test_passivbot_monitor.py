@@ -100,6 +100,159 @@ class RecorderPublisher:
         self.closed = True
 
 
+def test_event_emitter_failure_logs_bounded_exception_type_without_secret(caplog):
+    secret = "api_key=event-emitter-secret"
+    url = "https://private.example.invalid/v1/orders?token=event-emitter-token"
+    error_type = type("EventEmitterFailure" + "X" * 120, (RuntimeError,), {})
+
+    class FakeBot:
+        def _emit_live_event(self, *_args, **_kwargs):
+            raise error_type(f"request failed {secret} {url}")
+
+    with caplog.at_level(logging.DEBUG):
+        emitted = live_event_emitters._safe_emit(FakeBot(), EventTypes.HEALTH_SUMMARY)
+
+    bounded_type = error_type.__name__[:80]
+    assert emitted is None
+    assert len(bounded_type) == 80
+    assert f"error_type={bounded_type}" in caplog.text
+    assert error_type.__name__ not in caplog.text
+    assert secret not in caplog.text
+    assert url not in caplog.text
+
+    invalid_type = type("Invalid\napi_key=class-name-secret", (RuntimeError,), {})
+
+    class InvalidTypeBot:
+        def _emit_live_event(self, *_args, **_kwargs):
+            raise invalid_type("safe")
+
+    caplog.clear()
+    with caplog.at_level(logging.DEBUG):
+        assert (
+            live_event_emitters._safe_emit(
+                InvalidTypeBot(), EventTypes.HEALTH_SUMMARY
+            )
+            is None
+        )
+
+    assert "error_type=Error" in caplog.text
+    assert "class-name-secret" not in caplog.text
+
+    sensitive_identifier = "ApiKey_prod_super_secret_ABC123"
+    sensitive_identifier_type = type(sensitive_identifier, (RuntimeError,), {})
+
+    class SensitiveIdentifierTypeBot:
+        def _emit_live_event(self, *_args, **_kwargs):
+            raise sensitive_identifier_type("safe")
+
+    caplog.clear()
+    with caplog.at_level(logging.DEBUG):
+        assert (
+            live_event_emitters._safe_emit(
+                SensitiveIdentifierTypeBot(), EventTypes.HEALTH_SUMMARY
+            )
+            is None
+        )
+
+    assert "error_type=Error" in caplog.text
+    assert sensitive_identifier not in caplog.text
+
+    camelcase_sensitive_identifier = "ApiKeyProdSecretABC123"
+    camelcase_sensitive_type = type(
+        camelcase_sensitive_identifier, (RuntimeError,), {}
+    )
+
+    class CamelcaseSensitiveTypeBot:
+        def _emit_live_event(self, *_args, **_kwargs):
+            raise camelcase_sensitive_type("safe")
+
+    caplog.clear()
+    with caplog.at_level(logging.DEBUG):
+        assert (
+            live_event_emitters._safe_emit(
+                CamelcaseSensitiveTypeBot(), EventTypes.HEALTH_SUMMARY
+            )
+            is None
+        )
+
+    assert "error_type=Error" in caplog.text
+    assert camelcase_sensitive_identifier not in caplog.text
+
+    class HostileName(str):
+        def __getitem__(self, _key):
+            return "api_key=hostile-slice-secret"
+
+    class HostileSliceMeta(type):
+        @property
+        def __name__(cls):
+            return HostileName("SafeLookingEventFailure")
+
+    hostile_slice_type = HostileSliceMeta(
+        "HostileSliceEventFailure", (RuntimeError,), {}
+    )
+
+    class HostileSliceTypeBot:
+        def _emit_live_event(self, *_args, **_kwargs):
+            raise hostile_slice_type("safe")
+
+    caplog.clear()
+    with caplog.at_level(logging.DEBUG):
+        assert (
+            live_event_emitters._safe_emit(
+                HostileSliceTypeBot(), EventTypes.HEALTH_SUMMARY
+            )
+            is None
+        )
+
+    assert "error_type=Error" in caplog.text
+    assert "hostile-slice-secret" not in caplog.text
+
+    invalid_suffix = "V" * 80 + "\napi_key=tail-class-name-secret"
+    invalid_suffix_type = type(invalid_suffix, (RuntimeError,), {})
+
+    class InvalidSuffixTypeBot:
+        def _emit_live_event(self, *_args, **_kwargs):
+            raise invalid_suffix_type("safe")
+
+    caplog.clear()
+    with caplog.at_level(logging.DEBUG):
+        assert (
+            live_event_emitters._safe_emit(
+                InvalidSuffixTypeBot(), EventTypes.HEALTH_SUMMARY
+            )
+            is None
+        )
+
+    assert "error_type=Error" in caplog.text
+    assert "tail-class-name-secret" not in caplog.text
+
+    class HostileExceptionMeta(type):
+        @property
+        def __name__(cls):
+            raise KeyboardInterrupt("api_key=hostile-metadata-property-secret")
+
+    hostile_type = HostileExceptionMeta(
+        "HostileEventEmitterFailure", (RuntimeError,), {}
+    )
+
+    class HostileTypeBot:
+        def _emit_live_event(self, *_args, **_kwargs):
+            raise hostile_type("api_key=hostile-metadata-secret")
+
+    caplog.clear()
+    with caplog.at_level(logging.DEBUG):
+        assert (
+            live_event_emitters._safe_emit(
+                HostileTypeBot(), EventTypes.HEALTH_SUMMARY
+            )
+            is None
+        )
+
+    assert "error_type=Error" in caplog.text
+    assert "hostile-metadata-secret" not in caplog.text
+    assert "hostile-metadata-property-secret" not in caplog.text
+
+
 def test_live_event_cycle_helpers_emit_structured_events():
     import passivbot as pb_mod
 
