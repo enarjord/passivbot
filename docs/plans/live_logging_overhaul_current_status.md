@@ -27,7 +27,9 @@ Estimated completion:
   from live metadata after publication.
 - Scope: replace arbitrary caught exception values in best-effort live event
   emitter failure diagnostics with bounded exception types, including HSL
-  event emitters. Preserve existing code-owned event/action context.
+  event emitters and the event-adjacent HSL coin-status human projection.
+  Preserve existing code-owned event/action context. Other non-event HSL
+  diagnostics remain follow-up work.
 - Behavior boundary: developer DEBUG projection only. Event payloads, routing,
   sink isolation, emitter return values, retries, planning, orders, HSL, risk,
   and trading behavior remain unchanged.
@@ -1868,8 +1870,9 @@ above. PR #1344's EMA diagnostic redaction is merged and deployed at canonical
 WebSocket diagnostic redaction is merged and deployed at canonical
 `49cb68e56b20d71fbe42d33f31906d3a9c793e90`. The active
 `codex/event-emitter-exception-redaction` slice removes arbitrary caught
-exception values from best-effort live event emitter diagnostics without
-changing emitter isolation, event payloads, HSL, risk, or trading behavior.
+exception values from best-effort live event emitter diagnostics and the
+event-adjacent HSL coin-status human projection without changing emitter
+isolation, event payloads, HSL, risk, or trading behavior.
 
 Do not create progress-only PRs or resume unrelated logging work from stale
 worktrees.

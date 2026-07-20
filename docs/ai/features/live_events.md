@@ -62,6 +62,9 @@ event, action, stage, symbol, or position-side context and a bounded exception t
 retain the caught exception value, traceback, request URL, response body, credential, or arbitrary
 payload fragment. Redacting the diagnostic must not change the emitter's return value, exception
 isolation, event routing, retries, scheduling, HSL/risk behavior, or trading behavior.
+The same redaction applies when the event-adjacent HSL coin-status human projection fails; the
+structured `hsl.status` event must still be attempted independently. Other non-event HSL
+diagnostics are outside this contract.
 
 ## Market Snapshot Diagnostic Skips
 

@@ -52,10 +52,34 @@ def test_hsl_event_emitter_failure_logs_type_without_secret(caplog):
     assert secret not in caplog.text
     assert url not in caplog.text
 
+    invalid_suffix = "H" * 80 + "\napi_secret=tail-hsl-class-name-secret"
+    invalid_suffix_type = type(invalid_suffix, (RuntimeError,), {})
+
+    def fail_with_invalid_suffix(*_args, **_kwargs):
+        raise invalid_suffix_type("safe")
+
+    bot._emit_live_event = fail_with_invalid_suffix
+    caplog.clear()
+    with caplog.at_level(logging.DEBUG):
+        assert (
+            hsl._emit_hsl_event(
+                bot,
+                "hsl.status",
+                ("hsl", "risk"),
+                {},
+                pside="long",
+                symbol="BTC/USDT:USDT",
+            )
+            is None
+        )
+
+    assert "Error" in caplog.text
+    assert "tail-hsl-class-name-secret" not in caplog.text
+
     class HostileExceptionMeta(type):
         @property
         def __name__(cls):
-            return None
+            raise KeyboardInterrupt("api_secret=hostile-hsl-property-secret")
 
     hostile_type = HostileExceptionMeta(
         "HostileHslEventEmitterFailure", (RuntimeError,), {}
@@ -81,6 +105,7 @@ def test_hsl_event_emitter_failure_logs_type_without_secret(caplog):
 
     assert "Error" in caplog.text
     assert "hostile-hsl-metadata-secret" not in caplog.text
+    assert "hostile-hsl-property-secret" not in caplog.text
 
 
 class FakeRiskCache:

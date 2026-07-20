@@ -116,11 +116,10 @@ def _bounded_exception_type(exc: BaseException) -> str:
         name = type(exc).__name__
         if not isinstance(name, str):
             return "Error"
-        bounded = name[:_EXCEPTION_TYPE_MAX_LEN]
-        if not bounded or not bounded.isascii() or not bounded.isidentifier():
+        if not name or not name.isascii() or not name.isidentifier():
             return "Error"
-        return bounded
-    except Exception:
+        return name[:_EXCEPTION_TYPE_MAX_LEN]
+    except BaseException:
         return "Error"
 
 

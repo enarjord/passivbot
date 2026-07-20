@@ -2803,22 +2803,30 @@ def test_coin_hsl_status_logs_distance_only_for_open_position(caplog, monkeypatc
 
     import passivbot_hsl as hsl_mod
 
+    secret = "api_key=hsl-log-projection-secret"
+    url = "https://private.example.invalid/v1/hsl?token=hsl-log-token"
+
     def fail_info(*args, **kwargs):
-        raise RuntimeError("logging failed")
+        raise RuntimeError(f"logging failed {secret} {url}")
 
     caplog.clear()
     sink.events.clear()
     monkeypatch.setattr(hsl_mod.logging, "info", fail_info)
     failing_log_bot = FakeBot(has_position=True)
-    failing_log_bot._equity_hard_stop_emit_coin_status(
-        "long",
-        "NEAR/USDT:USDT",
-        metrics | {"timestamp_ms": 30_000},
-    )
+    with caplog.at_level(logging.DEBUG):
+        failing_log_bot._equity_hard_stop_emit_coin_status(
+            "long",
+            "NEAR/USDT:USDT",
+            metrics | {"timestamp_ms": 30_000},
+        )
 
     assert failing_log_bot._live_event_pipeline.flush(timeout=2.0) is True
     assert sink.events[-1].event_type == EventTypes.HSL_STATUS
     assert sink.events[-1].data["dist_to_red"] == pytest.approx(0.04)
+    assert "failed to log HSL coin status" in caplog.text
+    assert "RuntimeError" in caplog.text
+    assert secret not in caplog.text
+    assert url not in caplog.text
 
 
 def test_startup_timing_marks_log_once(monkeypatch, caplog):
