@@ -6078,6 +6078,7 @@ def _compact_shutdown_event_data(live_event: dict[str, Any]) -> dict[str, Any]:
         "threshold_s",
         "closed",
         "inline",
+        "error_type",
         "error",
     ):
         if key not in data or data.get(key) is None:
