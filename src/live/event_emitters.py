@@ -2229,11 +2229,32 @@ def _ema_map_summary(values: dict[str, dict[float, float]] | None) -> dict[str, 
 _EMA_DIAGNOSTIC_TYPES = frozenset(
     ("m1_close", "m1_volume", "m1_log_range", "h1_log_range")
 )
+_EMA_DIAGNOSTIC_REASON_CODES = frozenset(
+    (
+        "cache_only_fetch_failed",
+        "candidate_required_ema_unavailable",
+        "exception",
+        "flat_active_required_ema_unavailable",
+        "incomplete",
+        "missing_log_range",
+        "missing_required_forager_log_range",
+        "missing_required_forager_volume",
+        "missing_required_forager_volume+missing_required_forager_log_range",
+        "missing_volume",
+        "missing_volume+missing_log_range",
+        "never_fetched_cache_only",
+        "non_finite_value",
+        "projected_metric_missing",
+        "projected_metric_non_finite",
+        "required_missing",
+        "unknown_failure",
+    )
+)
 
 
 def _safe_ema_reason_code(value: Any, *, default: str = "unknown_failure") -> str:
     candidate = str(value or "")
-    return candidate if re.fullmatch(r"[a-z][a-z0-9_]{0,63}", candidate) else default
+    return candidate if candidate in _EMA_DIAGNOSTIC_REASON_CODES else default
 
 
 def _safe_ema_error_type(value: Any) -> str:
@@ -2384,7 +2405,7 @@ def _ema_unavailable_debug_summary(
             ema_type_counts.update(ema_types)
             spans.extend(item_spans)
         group: dict[str, Any] = {
-            "reason": str(reason),
+            "reason": _safe_ema_reason_code(reason),
             "symbols": _symbol_sample(symbols),
             "error_types": sorted(error_types)[:4],
         }
@@ -2399,7 +2420,7 @@ def _ema_unavailable_debug_summary(
 
     unavailable_groups = [
         {
-            "reason": str(reason),
+            "reason": _safe_ema_reason_code(reason),
             "symbols": _symbol_sample(symbols or ()),
         }
         for reason, symbols in sorted((ema_unavailable_reasons or {}).items())[:limit]
@@ -2417,7 +2438,12 @@ def _reason_symbol_summary(
 ) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     for reason, symbols in sorted((values or {}).items())[:limit]:
-        out.append({"reason": str(reason), "symbols": _symbol_sample(symbols)})
+        out.append(
+            {
+                "reason": _safe_ema_reason_code(reason),
+                "symbols": _symbol_sample(symbols),
+            }
+        )
     return out
 
 

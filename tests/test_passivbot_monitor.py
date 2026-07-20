@@ -2697,19 +2697,22 @@ def test_ema_event_payloads_keep_safe_diagnostics_across_all_sinks():
     bot._emit_ema_fallback_used_event(
         close_ema_fallbacks={
             "BTC/USDT:USDT": [
-                (60.0, 1_000, 2, "exception", "RequestTimeout", secret)
+                (60.0, 1_000, 2, "secret_marker", "RequestTimeout", secret)
             ]
         }
     )
     bot._emit_ema_unavailable_event(
         optional_ema_drops={
-            ("m1_volume", "exception", "RequestTimeout"): [("ETH/USDT:USDT", 60.0)]
+            ("m1_volume", "secret_marker", "RequestTimeout"): [
+                ("ETH/USDT:USDT", 60.0)
+            ]
         },
         candidate_ema_unavailable_details={
-            "cache_only_fetch_failed": [
+            "secret_marker": [
                 ("ETH/USDT:USDT", "RequestTimeout", ("m1_volume",), (60.0,), secret)
             ]
         },
+        ema_unavailable_reasons={"secret_marker": ["ETH/USDT:USDT"]},
     )
 
     assert bot._live_event_pipeline.flush(timeout=2.0) is True
@@ -2718,23 +2721,27 @@ def test_ema_event_payloads_keep_safe_diagnostics_across_all_sinks():
     serialized = json.dumps([event.to_dict() for event in emitted], sort_keys=True)
     assert secret not in serialized
     assert "secret-token" not in serialized
+    assert "secret_marker" not in serialized
     unavailable = next(
         event for event in structured.events if event.event_type == EventTypes.EMA_UNAVAILABLE
     )
     candidate_group = unavailable.data["candidate_unavailable_groups"][0]
     assert candidate_group["ema_types"] == [{"ema_type": "m1_volume", "count": 1}]
     assert candidate_group["spans"] == [60.0]
+    assert candidate_group["reason"] == "unknown_failure"
     assert "example_error" not in candidate_group
     assert "inner_reasons" not in unavailable.data["debug"]["candidate_groups"][0]
     optional_group = unavailable.data["optional_drop_groups"][0]
-    assert optional_group["reason_code"] == "exception"
+    assert optional_group["reason_code"] == "unknown_failure"
     assert optional_group["error_type"] == "RequestTimeout"
+    assert unavailable.data["unavailable_reasons"][0]["reason"] == "unknown_failure"
+    assert unavailable.data["debug"]["unavailable_groups"][0]["reason"] == "unknown_failure"
     fallback = next(
         event for event in structured.events if event.event_type == EventTypes.EMA_FALLBACK_USED
     )
     fallback_example = fallback.data["examples"]["close_fallback"][0]
     assert fallback_example["ema_type"] == "m1_close"
-    assert fallback_example["reason_code"] == "exception"
+    assert fallback_example["reason_code"] == "unknown_failure"
     assert fallback_example["error_type"] == "RequestTimeout"
     assert "reason" not in fallback_example
     assert bot._live_event_pipeline.close(timeout=2.0) is True

@@ -22,28 +22,50 @@ Estimated completion:
 
 ## Active Review Slice
 
-- PR #1343, `Consolidate market-snapshot diagnostic warnings`; branch
-  `codex/market-snapshot-diagnostic-projection`, based on canonical
-  `644d058f3975a2772f96bf10281f3873dca7112c`.
-- Scope: make the existing `market.snapshot_diagnostic_skipped` event the sole
-  normal console/text warning for noncritical position-change and balance
-  diagnostics when the structured console is available, while retaining one
-  bounded legacy fallback when no event console owner exists.
-- Behavior boundary: logging projection only. The existing planning/market
-  snapshot lookup, position/balance refresh, state mutation, and caller
-  continuation are unchanged. The event and fallback retain only stable
-  context and exception type, not arbitrary exception text.
-- Baseline: the helper already emits the durable bounded event, but its route is
-  console/text disabled and it always writes a second stdlib warning containing
-  raw exception text. The public emitter also swallows failures without
-  returning ownership status, so the fallback cannot currently distinguish a
-  successful event from a failed emission.
+- Pre-create slice `Redact EMA diagnostic payloads`; branch
+  `codex/ema-diagnostic-redaction`, based on canonical
+  `7e26a9062a88ecf211729d7d718fb4530630c4ba`.
+- Scope: remove arbitrary exception and fallback-reason text from
+  `ema.unavailable` and `ema.fallback_used` structured, monitor, console, text,
+  debug-profile, and legacy fallback paths while retaining code-owned reason
+  classifications, bounded EMA/error types, symbols, spans, ages, and counts.
+- Behavior boundary: observability payload and projection only. EMA
+  calculation, prior-value and cached fallback selection, candidate
+  availability, scheduling, retries, planning, orders, risk, and caller control
+  flow remain unchanged.
+- Baseline: structured payloads still retain candidate `example_error`, debug
+  `inner_reasons`, optional-drop reason text, and close-fallback reason text.
+  Human fallbacks also project raw reason or exception values, while the normal
+  console derives EMA identity by parsing the candidate exception message.
 - Review gate: exact-current-head Hermes approval plus green Python/Rust CI.
   Built-in Codex automatic review is additional and every finding must be
   verified and resolved.
 - Expected VPS action: tracked-clean pull plus one exact-five graceful restart
-  and bounded settled smoke because live console ownership changes; preserve
-  `misc:0.0`.
+  and bounded settled smoke because live event and fallback payloads change;
+  preserve `misc:0.0`.
+
+## Deployed Baseline (PR #1343)
+
+- PR #1343 merged exact approved head
+  `2ee1382781e28e8e1d3341a43e22ef527b86f283` as canonical
+  `7e26a9062a88ecf211729d7d718fb4530630c4ba` after exact-head Hermes approval,
+  green Python/Rust CI, and a finding-free built-in Codex review.
+- VPS5 guarded-prepared tracked-clean from
+  `644d058f3975a2772f96bf10281f3873dca7112c` without a Rust build. The source
+  fingerprint/stamp remained
+  `691bff9683deec9382a4e96ab6a107c14145f88edd6ae2f8e2380b8ba6824449`.
+- The bounded exact-target orchestrator gracefully restarted only panes
+  `%358`-`%362` as PIDs `1075081/1075090/1075084/1075093/1075087`. All five
+  shutdown and startup identities completed without force or broad-pattern
+  signals.
+- The integrated 120-second smoke was hard-green with zero hard failures, log
+  attention matches, monitor warnings, or monitor errors. Its repository,
+  shutdown, startup, target, and smoke-contract gates all passed. Final
+  three-sample verification found the exact five processes stable with no
+  missing, duplicate, or extra process; the tracked checkout remained clean and
+  protected `misc:0.0` stayed `%8`/PID `434835`. The target diagnostic event did
+  not need to occur naturally for this ownership rollout. No direct
+  authenticated exchange call or event was manufactured.
 
 ## Deployed Baseline (PR #1342)
 
@@ -1784,11 +1806,12 @@ PR #1288's bounded target-identity stability, and PR #1289's plan binding are
 merged, deployed, and naturally validated without process control. PR #1290's
 pane-parent relaunch classification and the restart preparation/orchestration
 slices through PR #1309 are also merged and deployed. Later logging slices
-through PR #1342, including adjacent PR #1329, are deployed at canonical
-`644d058f3975a2772f96bf10281f3873dca7112c`; their current evidence is recorded
-above. Active PR #1343 consolidates noncritical market-snapshot diagnostic
-warning ownership and redaction without changing position/balance refresh or
-caller continuation behavior.
+through PR #1343, including adjacent PR #1329, are deployed at canonical
+`7e26a9062a88ecf211729d7d718fb4530630c4ba`; their current evidence is recorded
+above. Active pre-create `codex/ema-diagnostic-redaction` removes arbitrary
+exception and fallback-reason text from EMA event and human fallback payloads
+without changing EMA calculation, fallback selection, candidate availability,
+or trading behavior.
 
 Do not create progress-only PRs or resume unrelated logging work from stale
 worktrees.
