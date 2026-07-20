@@ -5961,6 +5961,31 @@ def test_close_live_event_pipeline_is_best_effort_and_clears_reference():
     assert bot._live_event_pipeline is None
 
 
+def test_close_live_event_pipeline_redacts_failure_text_and_clears_reference(caplog):
+    import passivbot as pb_mod
+
+    class FakePipeline:
+        def close(self, timeout):
+            raise RuntimeError("token=pipeline-secret https://private.invalid/close")
+
+    class FakeBot:
+        _close_live_event_pipeline = pb_mod.Passivbot._close_live_event_pipeline
+
+        def __init__(self):
+            self._live_event_pipeline = FakePipeline()
+
+    bot = FakeBot()
+
+    with caplog.at_level(logging.WARNING):
+        assert bot._close_live_event_pipeline(timeout=1.25) is False
+
+    assert bot._live_event_pipeline is None
+    messages = [record.getMessage() for record in caplog.records]
+    assert "[monitor] live event pipeline close failed (RuntimeError)" in messages
+    assert all("pipeline-secret" not in message for message in messages)
+    assert all("private.invalid" not in message for message in messages)
+
+
 @pytest.mark.asyncio
 async def test_shutdown_gracefully_closes_event_pipeline_before_monitor_publisher():
     import passivbot as pb_mod

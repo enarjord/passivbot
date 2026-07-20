@@ -1175,6 +1175,166 @@ async def test_shutdown_gracefully_emits_stage_events():
     )
 
 
+def test_emit_shutdown_stage_redacts_event_delivery_exception_text(caplog):
+    bot = Passivbot.__new__(Passivbot)
+    bot._shutdown_started_monotonic = None
+
+    def fail_event(*args, **kwargs):
+        raise RuntimeError("token=shutdown-secret https://private.invalid/request")
+
+    bot._emit_live_event = fail_event
+
+    with caplog.at_level(logging.DEBUG):
+        bot._emit_shutdown_stage("event_delivery_failed", status="failed", level="error")
+
+    messages = [record.getMessage() for record in caplog.records]
+    assert any(
+        "failed emitting shutdown stage event_delivery_failed (RuntimeError)" in message
+        for message in messages
+    )
+    assert all("shutdown-secret" not in message for message in messages)
+    assert all("private.invalid" not in message for message in messages)
+
+
+@pytest.mark.asyncio
+async def test_shutdown_gracefully_redacts_maintainer_and_session_failure_text(caplog):
+    bot = Passivbot.__new__(Passivbot)
+    bot._shutdown_in_progress = False
+    bot.stop_signal_received = False
+    events = []
+
+    def emit_event(event_type, *args, **kwargs):
+        events.append((event_type, kwargs))
+        return object()
+
+    def fail_maintainer_stop(*args, **kwargs):
+        raise RuntimeError("token=maintainer-secret https://private.invalid/stop")
+
+    class _FailingCloser:
+        def __init__(self, label):
+            self.label = label
+
+        async def close(self):
+            raise RuntimeError(
+                f"authorization={self.label}-secret https://private.invalid/close"
+            )
+
+    bot._emit_live_event = emit_event
+    bot._monitor_emit_stop = lambda *args, **kwargs: None
+    bot._monitor_flush_snapshot = AsyncMock()
+    bot.monitor_publisher = None
+    bot.stop_data_maintainers = fail_maintainer_stop
+    bot.maintainers = {}
+    bot.WS_ohlcvs_1m_tasks = {}
+    bot._execution_loop_task = None
+    bot._execution_loop_stopped = None
+    bot.ccp = _FailingCloser("private")
+    bot.cca = _FailingCloser("public")
+    bot._live_event_pipeline = None
+
+    with caplog.at_level(logging.DEBUG):
+        await bot.shutdown_gracefully()
+
+    failed_stages = {
+        kwargs["reason_code"]: kwargs["data"]
+        for event_type, kwargs in events
+        if event_type == EventTypes.BOT_SHUTDOWN_STAGE
+        and kwargs["status"] == "failed"
+    }
+    assert failed_stages == {
+        "maintainers_stop_failed": {
+            "error_type": "RuntimeError",
+            "stage": "maintainers_stop_failed",
+            "elapsed_s": failed_stages["maintainers_stop_failed"]["elapsed_s"],
+        },
+        "private_session_close_failed": {
+            "error_type": "RuntimeError",
+            "stage": "private_session_close_failed",
+            "elapsed_s": failed_stages["private_session_close_failed"]["elapsed_s"],
+        },
+        "public_session_close_failed": {
+            "error_type": "RuntimeError",
+            "stage": "public_session_close_failed",
+            "elapsed_s": failed_stages["public_session_close_failed"]["elapsed_s"],
+        },
+    }
+    retained = repr(events) + "\n" + "\n".join(
+        record.getMessage() for record in caplog.records
+    )
+    assert "maintainer-secret" not in retained
+    assert "private-secret" not in retained
+    assert "public-secret" not in retained
+    assert "private.invalid" not in retained
+
+
+@pytest.mark.asyncio
+async def test_shutdown_gracefully_redacts_await_failure_text(caplog):
+    bot = Passivbot.__new__(Passivbot)
+    bot._shutdown_in_progress = False
+    bot.stop_signal_received = False
+    events = []
+
+    def emit_event(event_type, *args, **kwargs):
+        events.append((event_type, kwargs))
+        return object()
+
+    class _InvalidMaintainer:
+        def __repr__(self):
+            return "<password=maintainer-await-secret>"
+
+    class _FailingStopEvent:
+        def __init__(self):
+            self.was_set = False
+
+        async def wait(self):
+            raise RuntimeError("signature=execution-wait-secret")
+
+        def set(self):
+            self.was_set = True
+
+    async def active_execution_loop():
+        await asyncio.sleep(3600)
+
+    execution_task = asyncio.create_task(active_execution_loop())
+    execution_stopped = _FailingStopEvent()
+
+    bot._emit_live_event = emit_event
+    bot._monitor_emit_stop = lambda *args, **kwargs: None
+    bot._monitor_flush_snapshot = AsyncMock()
+    bot.monitor_publisher = None
+    bot.stop_data_maintainers = lambda *args, **kwargs: None
+    bot.maintainers = {"invalid": _InvalidMaintainer()}
+    bot.WS_ohlcvs_1m_tasks = {}
+    bot._execution_loop_task = execution_task
+    bot._execution_loop_stopped = execution_stopped
+    bot.ccp = None
+    bot.cca = None
+    bot._live_event_pipeline = None
+
+    with caplog.at_level(logging.DEBUG):
+        await bot.shutdown_gracefully()
+
+    failed_stages = {
+        kwargs["reason_code"]: kwargs["data"]
+        for event_type, kwargs in events
+        if event_type == EventTypes.BOT_SHUTDOWN_STAGE
+        and kwargs["status"] == "failed"
+    }
+    assert failed_stages["maintainers_await_failed"]["error_type"] == "TypeError"
+    assert failed_stages["maintainers_await_failed"]["task_count"] == 1
+    assert failed_stages["execution_loop_wait_failed"]["error_type"] == "RuntimeError"
+    assert execution_stopped.was_set is True
+    retained = repr(events) + "\n" + "\n".join(
+        record.getMessage() for record in caplog.records
+    )
+    assert "maintainer-await-secret" not in retained
+    assert "execution-wait-secret" not in retained
+
+    execution_task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await execution_task
+
+
 @pytest.mark.asyncio
 async def test_shutdown_gracefully_emits_slow_stage_after_threshold():
     bot = Passivbot.__new__(Passivbot)
