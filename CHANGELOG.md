@@ -4,6 +4,11 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Large open-order snapshot deltas now emit one bounded `open_orders.snapshot_delta` INFO event per
+  added or removed direction, with only the direction and order count. The event reaches structured,
+  monitor, console, and text sinks with the `[order]` tag; reconciliation and order behavior are
+  unchanged, and a bounded legacy INFO fallback remains when the structured console is unavailable.
+
 - Incident bundle manifest and command-result summaries now retain the
   embedded live smoke report's text-log `scan_cost` metadata. The archive's
   full smoke report, log reads, matching, redaction, filtering, verdicts,

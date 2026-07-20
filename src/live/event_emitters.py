@@ -2427,6 +2427,33 @@ def _safe_emit(bot: Any, event_type: str, **kwargs: Any) -> Any:
         return None
 
 
+def emit_open_orders_snapshot_delta_event(
+    bot: Any,
+    *,
+    direction: str,
+    order_count: int,
+) -> Any:
+    """Emit the bounded aggregate path for large open-orders snapshot deltas."""
+    if direction not in {"added", "removed"}:
+        return None
+    try:
+        count = int(order_count)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if count <= 20:
+        return None
+    return _safe_emit(
+        bot,
+        EventTypes.OPEN_ORDERS_SNAPSHOT_DELTA,
+        level="info",
+        component="orders.snapshot",
+        tags=(EventTags.ORDER, EventTags.SNAPSHOT),
+        cycle_id=current_live_event_cycle_id(bot),
+        reason_code=ReasonCodes.OPEN_ORDERS_SNAPSHOT_DELTA,
+        data={"direction": direction, "order_count": count},
+    )
+
+
 def _emit_rust_orchestrator_called_event_unchecked(
     bot: Any,
     *,

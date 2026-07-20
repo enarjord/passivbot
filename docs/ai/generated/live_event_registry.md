@@ -70,6 +70,7 @@ The code-owned registries live in `src/live/event_bus.py`. Payload and emission 
 - `hsl.status`
 - `hsl.transition`
 - `market.snapshot_diagnostic_skipped`
+- `open_orders.snapshot_delta`
 - `order_wave.completed`
 - `order_wave.started`
 - `planning.defer_summary`
@@ -205,6 +206,7 @@ The code-owned registries live in `src/live/event_bus.py`. Payload and emission 
 - `min_effective_cost_blocked`
 - `new_fill`
 - `new_fill_batch`
+- `open_orders_snapshot_delta`
 - `open_tail_projection`
 - `optional_ema_dropped`
 - `pending_exchange_config`
