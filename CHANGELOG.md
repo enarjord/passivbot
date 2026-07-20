@@ -4,6 +4,13 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Incident bundles now include bounded `scan_cost` metadata for their
+  independent time-window event scan in the full report, manifest, and command
+  result. The metadata uses the same elapsed-time, successful file/record,
+  read-method, and physical-versus-decoded byte contract as the other live
+  artifact reports; event matching, truncation, archive contents, verdicts,
+  exchange access, and live behavior are unchanged.
+
 - `live-smoke-report` now includes bounded monitor `scan_cost` metadata in
   full, summary, and brief output, matching the elapsed time, successfully
   read files and records, read methods, and physical-versus-decoded byte

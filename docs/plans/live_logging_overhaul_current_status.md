@@ -1,6 +1,6 @@
 # Live Logging Overhaul Current Status
 
-Updated: 2026-07-19.
+Updated: 2026-07-20.
 
 This is the compact operational source for the active logging-overhaul loop.
 Read it before the historical progress ledger. Update it whenever the active
@@ -22,26 +22,57 @@ Estimated completion:
 
 ## Active Review Slice
 
-- PR #1337, `Report live smoke scan cost`; branch:
-  `codex/live-smoke-scan-cost`, based on canonical
-  `e0927ed86f0b10ed8187d8e6a523017baefb98b3`.
-- Scope: expose the same bounded elapsed-time, byte, file, record, and
-  read-method cost metadata for the monitor scan used by
-  `live-smoke-report`, including its full, summary, and brief projections.
+- PR #1338, `Report incident time-window scan cost`; branch:
+  `codex/live-incident-scan-cost`, based on canonical
+  `848eb60c502b7af21dd7aa52f50f86aece552bd9`.
+- Scope: expose bounded elapsed-time, byte, successful-file, record, and
+  read-method cost metadata for the independent event scan used by incident
+  bundle time-window reports, including the full report, manifest summary, and
+  command result.
 - Behavior boundary: read-only local tooling only. The slice changes no event
-  producer, file selection, parsed result, smoke verdict, monitor persistence,
-  exchange access, logs, process inspection/control, planning, strategy,
-  order, or risk behavior.
-- Baseline: a bounded five-minute VPS5 brief smoke scanned six current event
-  files and 7,515 records in 4.29 seconds wall time but could not report exact
-  bytes or read methods. The active slice closes only that diagnostic gap.
+  producer, file selection, matching, truncation, bundle payload selection,
+  verdict, monitor persistence, exchange access, logs, process
+  inspection/control, planning, strategy, order, or risk behavior.
+- Baseline: incident time-window reports expose discovered/scanned files and
+  matched events but cannot identify actual records/bytes read, read methods,
+  or scan elapsed time. The active slice closes only that diagnostic gap using
+  the contract now shared by event query, performance report, and smoke report.
 - Review gate: exact-current-head Hermes approval plus green Python/Rust CI.
   Built-in Codex automatic review is additional and every finding must be
   verified and resolved.
-- Expected VPS action: tracked-clean pull plus bounded read-only report smokes;
-  no bot restart or process signal.
+- Expected VPS action: tracked-clean pull plus one bounded read-only incident
+  bundle smoke; no bot restart or process signal.
 
-## Deployed Baseline (PR #1333)
+## Deployed Baseline (PR #1329 After PR #1337)
+
+- PR #1337 merged exact reviewed head
+  `51a82c23230daf4aea5ec68784ef7168293b408e` as canonical
+  `7d463dca56e1b29840954876a25a3f4d0e5df961` after exact-head Hermes and
+  built-in Codex approval plus green Python/Rust CI. VPS5 fast-forwarded
+  tracked-clean from `e0927ed86f0b10ed8187d8e6a523017baefb98b3`
+  without a Rust build. A settled bounded smoke was `ok=true`, found all five
+  exact processes, and reported six `seek_tail` files, 10,388 records,
+  18,777,444 known physical/decoded bytes, and 5,751.099 ms through the new
+  smoke `scan_cost` projection.
+- External PR #1329 then merged exact mechanical-integration head
+  `6bd2eb0a0a49d21107a2c45ff9784e737d5c4d1c` as canonical
+  `848eb60c502b7af21dd7aa52f50f86aece552bd9`. The maintainer explicitly
+  approved its contributor CI; exact-head Hermes review and Python/Rust CI
+  were green. The target-relative result remained the previously reviewed
+  one-line aware-UTC timestamp fix. VPS5 fast-forwarded tracked-clean again
+  without a Rust build or restart because the changed Gate.io quarantine
+  timestamp path is startup-only and did not warrant disrupting running bots.
+- Immediate smokes retained natural KuCoin authoritative-state timeouts and
+  were not mislabeled green. The final settled five-minute smoke was `ok=true`
+  with zero hard failures, zero failed remote calls, all five exact processes,
+  and a tracked-clean repository at `848eb60c`; its monitor scan reported six
+  `seek_tail` files, 9,471 records, 17,038,544 known physical/decoded bytes,
+  and 4,021.646 ms. Throughout both pulls, bot PIDs
+  `1066081/1066091/1066084/1066093/1066087`, pane parents `%358`-`%362`, and
+  protected `misc:0.0` `%8`/PID `434835` remained unchanged. No direct
+  exchange call, event manufacture, restart, or process signal occurred.
+
+## Previous Deployed Baseline (PR #1333)
 
 - PR #1333 merged exact reviewed head
   `ce5a24d72ea811c6b04a376bbd9fcd228ab4c9af` as canonical
@@ -1630,11 +1661,12 @@ PR #1286's aggregate-only follow-up, PR #1287's exact tmux target preflight,
 PR #1288's bounded target-identity stability, and PR #1289's plan binding are
 merged, deployed, and naturally validated without process control. PR #1290's
 pane-parent relaunch classification and the restart preparation/orchestration
-slices through PR #1309 are also merged and deployed. Later slices through PR
-#1335, including subsequently merged PR #1333, are deployed at canonical
-`e0927ed86f0b10ed8187d8e6a523017baefb98b3`; their current evidence is recorded
-above. The active smoke-scan cost slice measures the remaining read-only smoke
-artifact work without changing scan or verdict behavior.
+slices through PR #1309 are also merged and deployed. Later logging slices
+through PR #1337, followed by adjacent PR #1329, are deployed at canonical
+`848eb60c502b7af21dd7aa52f50f86aece552bd9`; their current evidence is recorded
+above. The active incident time-window scan-cost slice measures the remaining
+read-only bundle artifact work without changing scan selection or verdict
+behavior.
 
 Do not create progress-only PRs or resume unrelated logging work from stale
 worktrees.
