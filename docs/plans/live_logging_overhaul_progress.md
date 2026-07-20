@@ -15,7 +15,27 @@ merge, live smoke evidence changes, or new gaps are discovered.
 - Do not use this file for design churn; unresolved design details belong in the
   plan or a focused handoff doc.
 
-## Latest Canonical Deployment (PR #1340)
+## Latest Canonical Deployment (PR #1341)
+
+- PR #1341 merged exact approved head
+  `d56ffc3617d9ebed4e0ebb3b98d4b6a80fb2b89c` as canonical
+  `524a6d2795015afee7cc1dd916880e4e48a6e13b` after exact-head Hermes approval,
+  green Python/Rust CI, and a finding-free built-in Codex semantic review.
+- VPS5 guarded-prepared tracked-clean from `bc31fafdbdf` without a Rust build;
+  the Rust source fingerprint/stamp stayed
+  `691bff9683deec9382a4e96ab6a107c14145f88edd6ae2f8e2380b8ba6824449`.
+- The exact-target orchestrator gracefully stopped all five old bot PIDs and
+  relaunched only panes `%358`-`%362` as PIDs
+  `1072420/1072429/1072423/1072432/1072426`. Shutdown, startup, and stable target
+  coverage were complete, with no force or broad-pattern signal.
+- The 120-second settled smoke was hard-green with zero hard failures, log
+  attention matches, monitor warnings, or monitor errors. Final passive states
+  were `R/R/R/R/S`; the checkout remained clean, pane parents remained stable,
+  and protected `misc:0.0` stayed `%8`/PID `434835`. No direct authenticated
+  exchange call or event was manufactured. The next logging migration removes
+  duplicate legacy warnings from existing pre-create snapshot skip events.
+
+## Previous Canonical Deployment (PR #1340)
 
 - PR #1340 merged exact reviewed head
   `d9e88d6da9282bc53a355dc3ce18a9cba6de45eb` as canonical

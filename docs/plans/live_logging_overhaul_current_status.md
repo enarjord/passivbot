@@ -22,30 +22,53 @@ Estimated completion:
 
 ## Active Review Slice
 
-- PR #1341, `Structure bulk open-order snapshot deltas`; branch
-  `codex/open-orders-snapshot-delta-event`, based on canonical
-  `bc31fafdbdf045f9c003e49fa6877b721c834600`.
-- Scope: replace the two legacy aggregate INFO lines emitted when an
-  authoritative open-order snapshot adds or removes more than 20 orders with
-  one bounded structured `open_orders.snapshot_delta` event per direction.
-- Behavior boundary: logging migration only. The event retains operator-visible
-  INFO/text projection and persists only the direction and count. It changes no
-  order rows, snapshot application, reconciliation classification, guardrail,
-  confirmation, balance handling, exchange access, planning, strategy, order,
-  or risk behavior.
-- Baseline: smaller deltas already retain per-order developer logs while the
-  bulk path emits only uncorrelated stdlib count lines. Config-age reporting was
-  considered but deferred because runtime currently has no canonical config
-  freshness timestamp or reload contract.
+- PR #1342, `Consolidate pre-create snapshot skip warnings`; branch
+  `codex/pre-create-market-snapshot-projection`, based on canonical
+  `524a6d2795015afee7cc1dd916880e4e48a6e13b`.
+- Scope: make the existing `execution.create_skipped` event the sole normal
+  warning for pre-create planning-snapshot and market-snapshot failures when
+  the structured console is available, while retaining one bounded legacy
+  fallback when no event console owner exists.
+- Behavior boundary: logging projection only. The existing planning/market
+  snapshot gate, refresh attempts, reason codes, entry-block attribution, and
+  returned create list are unchanged. Raw exception text remains excluded from
+  structured/monitor/console/text data.
+- Baseline: all three fail-closed skip branches already emit the bounded event,
+  but also write an unconditional stdlib warning. The failed-refresh legacy
+  line additionally includes raw exception text even though the event retains
+  only its safe exception type.
 - Review gate: exact-current-head Hermes approval plus green Python/Rust CI.
   Built-in Codex automatic review is additional and every finding must be
   verified and resolved.
-- Expected VPS action: tracked-clean pull and bounded passive event/process
-  validation. Because the producer path changes, restart only the exact five
-  configured panes if the merged diff and guarded preflight warrant activation;
-  preserve `misc:0.0`.
+- Expected VPS action: tracked-clean pull plus one exact-five graceful restart
+  and bounded settled smoke because live console ownership changes; preserve
+  `misc:0.0`.
 
-## Deployed Baseline (PR #1340)
+## Deployed Baseline (PR #1341)
+
+- PR #1341 merged exact approved head
+  `d56ffc3617d9ebed4e0ebb3b98d4b6a80fb2b89c` as canonical
+  `524a6d2795015afee7cc1dd916880e4e48a6e13b` after exact-head Hermes approval,
+  green Python/Rust CI, and a finding-free built-in Codex review of the semantic
+  head; the final delta only corrected the active operator handoff.
+- VPS5 guarded-prepared tracked-clean from
+  `bc31fafdbdf045f9c003e49fa6877b721c834600` without a Rust build. The source
+  fingerprint/stamp remained
+  `691bff9683deec9382a4e96ab6a107c14145f88edd6ae2f8e2380b8ba6824449`, and the
+  compiled artifact SHA remained
+  `7611f3eff1d8702ff29d90490a1aba490db5c816e7e3f09a2c33e5c4085da023`.
+- The bounded exact-target orchestrator gracefully stopped all five old bot
+  PIDs `1066081/1066091/1066084/1066093/1066087` and relaunched only the same
+  panes with PIDs `1072420/1072429/1072423/1072432/1072426`; all five shutdown
+  and startup cohorts were complete, with no force or broad-pattern signal.
+- The 120-second settled smoke was hard-green with zero hard failures, log
+  attention matches, monitor warnings, or monitor errors. Its exact-target and
+  repository gates were green, and a final passive sample settled the five bots
+  to normal `R/R/R/R/S` states. Pane parents `%358`-`%362` remained unchanged,
+  and protected `misc:0.0` stayed `%8`/PID `434835`. No direct authenticated
+  exchange call or event was manufactured.
+
+## Previous Deployed Baseline (PR #1340)
 
 - PR #1340 merged exact reviewed head
   `d9e88d6da9282bc53a355dc3ce18a9cba6de45eb` as canonical
@@ -1734,11 +1757,10 @@ PR #1288's bounded target-identity stability, and PR #1289's plan binding are
 merged, deployed, and naturally validated without process control. PR #1290's
 pane-parent relaunch classification and the restart preparation/orchestration
 slices through PR #1309 are also merged and deployed. Later logging slices
-through PR #1340, including adjacent PR #1329, are deployed at canonical
-`bc31fafdbdf045f9c003e49fa6877b721c834600`; their current evidence is recorded
-above. Active PR #1341 migrates only the remaining bulk open-order snapshot
-count lines into the bounded structured event contract while preserving the
-existing threshold, legacy fallback, reconciliation, and trading behavior.
+through PR #1341, including adjacent PR #1329, are deployed at canonical
+`524a6d2795015afee7cc1dd916880e4e48a6e13b`; their current evidence is recorded
+above. The active pre-create snapshot slice consolidates duplicate warning
+projection without changing the existing fail-closed gate or refresh behavior.
 
 Do not create progress-only PRs or resume unrelated logging work from stale
 worktrees.

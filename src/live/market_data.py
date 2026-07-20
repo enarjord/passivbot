@@ -51,6 +51,16 @@ def _bounded_pre_create_skip_details(details: list[dict] | None) -> list[dict]:
     return bounded
 
 
+def _pre_create_skip_structured_console_available(bot) -> bool:
+    pipeline = getattr(bot, "_live_event_pipeline", None)
+    return bool(
+        callable(getattr(bot, "_emit_execution_create_filter_event", None))
+        and getattr(bot, "live_event_console_enabled", False)
+        and callable(getattr(pipeline, "emit", None))
+        and getattr(pipeline, "console_sink", None) is not None
+    )
+
+
 def _emit_pre_create_skip_event(
     bot,
     *,
@@ -61,27 +71,37 @@ def _emit_pre_create_skip_event(
     message: str,
     details: list[dict] | None = None,
     error_type: str | None = None,
-) -> None:
+) -> bool:
     emit_filter_event = getattr(bot, "_emit_execution_create_filter_event", None)
     if not callable(emit_filter_event):
-        return
+        return False
+    structured_console_available = _pre_create_skip_structured_console_available(bot)
     details_count = len(details or [])
-    emit_filter_event(
-        event_type=EventTypes.EXECUTION_CREATE_SKIPPED,
-        status="skipped",
-        reason_code=reason_code,
-        order_count=len(orders),
-        symbols=symbols,
-        level="warning",
-        message=message,
-        data={
-            "stage": stage,
-            "details": _bounded_pre_create_skip_details(details),
-            "details_count": details_count,
-            "details_truncated": details_count > 8,
-            "error_type": error_type,
-        },
-    )
+    try:
+        emitted = emit_filter_event(
+            event_type=EventTypes.EXECUTION_CREATE_SKIPPED,
+            status="skipped",
+            reason_code=reason_code,
+            order_count=len(orders),
+            symbols=symbols,
+            level="warning",
+            message=message,
+            data={
+                "stage": stage,
+                "details": _bounded_pre_create_skip_details(details),
+                "details_count": details_count,
+                "details_truncated": details_count > 8,
+                "error_type": error_type,
+            },
+        )
+    except Exception as exc:
+        logging.debug(
+            "[event] failed to emit pre-create skip event stage=%s error_type=%s",
+            stage,
+            type(exc).__name__,
+        )
+        return False
+    return structured_console_available and bool(emitted)
 
 
 def _record_fresh_entry_blocks(bot, orders: list[dict], reason: str) -> None:
@@ -149,12 +169,7 @@ async def filter_fresh_market_snapshot_creations(
             in refreshable_reasons
             for item in planning_snapshot_invalid
         ):
-            logging.warning(
-                "[market] skipping order creation; planning snapshot invalid before create | symbols=%s details=%s",
-                bot._log_symbols(symbols, limit=12),
-                bot._log_compact_symbol_payload(planning_snapshot_invalid[:8]),
-            )
-            _emit_pre_create_skip_event(
+            structured_console_owned = _emit_pre_create_skip_event(
                 bot,
                 reason_code=ReasonCodes.PRE_CREATE_PLANNING_SNAPSHOT_INVALID,
                 orders=orders,
@@ -163,6 +178,12 @@ async def filter_fresh_market_snapshot_creations(
                 message="create orders skipped because planning snapshot is invalid before create",
                 details=planning_snapshot_invalid,
             )
+            if not structured_console_owned:
+                logging.warning(
+                    "[market] skipping order creation; planning snapshot invalid before create | symbols=%s details=%s",
+                    bot._log_symbols(symbols, limit=12),
+                    bot._log_compact_symbol_payload(planning_snapshot_invalid[:8]),
+                )
             _record_fresh_entry_blocks(
                 bot, orders, "pre_create_planning_snapshot_invalid"
             )
@@ -182,13 +203,7 @@ async def filter_fresh_market_snapshot_creations(
         bot._record_market_snapshot_surface(symbols, snapshots)
         invalid = bot._market_snapshot_signature_invalid(symbols)
     except Exception as exc:
-        logging.warning(
-            "[market] skipping order creation; failed pre-create market snapshot refresh | symbols=%s error_type=%s error=%s",
-            bot._log_symbols(symbols, limit=12),
-            type(exc).__name__,
-            exc,
-        )
-        _emit_pre_create_skip_event(
+        structured_console_owned = _emit_pre_create_skip_event(
             bot,
             reason_code=ReasonCodes.PRE_CREATE_MARKET_SNAPSHOT_UNAVAILABLE,
             orders=orders,
@@ -197,17 +212,18 @@ async def filter_fresh_market_snapshot_creations(
             message="create orders skipped because pre-create market snapshot refresh failed",
             error_type=type(exc).__name__,
         )
+        if not structured_console_owned:
+            logging.warning(
+                "[market] skipping order creation; failed pre-create market snapshot refresh | symbols=%s error_type=%s",
+                bot._log_symbols(symbols, limit=12),
+                type(exc).__name__,
+            )
         _record_fresh_entry_blocks(
             bot, orders, "pre_create_market_snapshot_unavailable"
         )
         return []
     if invalid:
-        logging.warning(
-            "[market] skipping order creation; stale pre-create market snapshots | symbols=%s details=%s",
-            bot._log_symbols(symbols, limit=12),
-            bot._log_compact_symbol_payload(invalid[:8]),
-        )
-        _emit_pre_create_skip_event(
+        structured_console_owned = _emit_pre_create_skip_event(
             bot,
             reason_code=ReasonCodes.PRE_CREATE_MARKET_SNAPSHOT_UNAVAILABLE,
             orders=orders,
@@ -216,6 +232,12 @@ async def filter_fresh_market_snapshot_creations(
             message="create orders skipped because pre-create market snapshots are stale",
             details=invalid,
         )
+        if not structured_console_owned:
+            logging.warning(
+                "[market] skipping order creation; stale pre-create market snapshots | symbols=%s details=%s",
+                bot._log_symbols(symbols, limit=12),
+                bot._log_compact_symbol_payload(invalid[:8]),
+            )
         _record_fresh_entry_blocks(
             bot, orders, "pre_create_market_snapshot_unavailable"
         )

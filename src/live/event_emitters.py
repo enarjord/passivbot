@@ -4031,7 +4031,7 @@ def emit_execution_create_filter_event(
     level: str = "debug",
     message: str | None = None,
     data: dict | None = None,
-) -> None:
+) -> bool:
     """Emit a bounded event for create orders filtered before exchange write."""
     try:
         order_wave_id, _action_id = _execution_event_ids(
@@ -4058,7 +4058,7 @@ def emit_execution_create_filter_event(
             extra=data,
             wave=wave,
         )
-        bot._emit_live_event(
+        emitted = bot._emit_live_event(
             event_type,
             level=level,
             component="execution.create_filter",
@@ -4070,14 +4070,16 @@ def emit_execution_create_filter_event(
             message=message,
             data={key: value for key, value in payload.items() if value is not None},
         )
+        return emitted is not None
     except Exception as exc:
         logging.debug(
-            "[event] failed to emit execution create filter event type=%s status=%s reason=%s: %s",
+            "[event] failed to emit execution create filter event type=%s status=%s reason=%s error_type=%s",
             event_type,
             status,
             reason_code,
-            exc,
+            type(exc).__name__,
         )
+        return False
 
 
 def emit_initial_entry_eligibility_event(
