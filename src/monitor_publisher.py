@@ -57,22 +57,24 @@ _EVENT_RECOVERY_MARKER = b',"_recovery":{"checksum":"'
 _EVENT_RECOVERY_SEQ_SEPARATOR = b'","seq":'
 _EVENT_RECOVERY_TRAILER_MAX_BYTES = 160
 _MONITOR_ERROR_TYPE_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,79}")
-_MONITOR_ERROR_CONTEXT_RE = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.:-]{0,159}")
-_MONITOR_ERROR_SENSITIVE_RE = re.compile(
-    r"(?:api[_-]?key|secret|token|signature|authorization|auth|password|cookie|"
-    r"credential|bearer|basic|sk[_-]?live)",
-    re.IGNORECASE,
-)
 _MONITOR_ERROR_CONTEXT_MAX_INT = (1 << 63) - 1
-_MONITOR_ERROR_CONTEXT_TOKEN_KEYS = (
-    "source",
-    "stage",
-    "operation",
-    "action",
-    "status",
-    "code",
-    "cycle_id",
-)
+_MONITOR_ERROR_CONTEXT_VALUES = {
+    "source": frozenset(("start_bot", "run_execution_loop", "update_pnls")),
+    "stage": frozenset(
+        (
+            "start",
+            "boot_stagger",
+            "format_approved_ignored_coins",
+            "init_markets",
+            "warmup_trading_ready_candles",
+            "equity_hard_stop_initialize_from_history",
+            "equity_hard_stop_initialize_coin_from_history",
+            "post_init_sleep",
+            "start_data_maintainers",
+            "start_background_candle_warmup",
+        )
+    ),
+}
 _MONITOR_ERROR_CONTEXT_COUNT_KEYS = (
     "attempt",
     "count",
@@ -87,15 +89,9 @@ def _safe_monitor_error_context(payload: Any) -> dict[str, Any]:
     if not isinstance(payload, dict):
         return {}
     context: dict[str, Any] = {}
-    for key in _MONITOR_ERROR_CONTEXT_TOKEN_KEYS:
+    for key, allowed_values in _MONITOR_ERROR_CONTEXT_VALUES.items():
         value = payload.get(key)
-        if value is None:
-            continue
-        if not isinstance(value, str):
-            continue
-        if _MONITOR_ERROR_SENSITIVE_RE.search(value):
-            continue
-        if _MONITOR_ERROR_CONTEXT_RE.fullmatch(value):
+        if isinstance(value, str) and value in allowed_values:
             context[key] = value
     for key in _MONITOR_ERROR_CONTEXT_COUNT_KEYS:
         value = payload.get(key)

@@ -6632,7 +6632,11 @@ class Passivbot:
                             if char.isascii() and (char.isalnum() or char in "._-")
                         )[:48]
                     raw_function_name = str(frame.name)
-                    if _WS_STACK_COMPONENT_SENSITIVE_RE.search(raw_function_name):
+                    if (
+                        "://" in raw_function_name
+                        or any(char in raw_function_name for char in "?=#&/")
+                        or _WS_STACK_COMPONENT_SENSITIVE_RE.search(raw_function_name)
+                    ):
                         function_name = "redacted"
                     else:
                         function_name = "".join(

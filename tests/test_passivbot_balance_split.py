@@ -2999,22 +2999,20 @@ def test_ws_reconnect_redacts_sensitive_traceback_frame_components(monkeypatch, 
         monitor_sinks=[],
     )
     monkeypatch.setattr(passivbot_module, "utc_ms", lambda: 1_000_000)
-    source = (
-        "def api_key_SECRET_TOKEN():\n"
-        "    raise TimeoutError('safe')\n"
-        "api_key_SECRET_TOKEN()\n"
+    def raise_timeout():
+        raise TimeoutError("safe")
+
+    sensitive_function = types.FunctionType(
+        raise_timeout.__code__.replace(
+            co_name="wss://ws.example/private?id=opaque123",
+            co_filename="wss://ws.example/private?api_key=SECRET_TOKEN",
+        ),
+        globals(),
     )
 
     with caplog.at_level(logging.DEBUG):
         try:
-            exec(
-                compile(
-                    source,
-                    "wss://ws.example/private?api_key=SECRET_TOKEN",
-                    "exec",
-                ),
-                {},
-            )
+            sensitive_function()
         except TimeoutError as exc:
             Passivbot._log_ws_reconnect(
                 bot,
@@ -3024,6 +3022,7 @@ def test_ws_reconnect_redacts_sensitive_traceback_frame_components(monkeypatch, 
                 exc=exc,
             )
 
+    assert "opaque123" not in caplog.text
     assert "SECRET_TOKEN" not in caplog.text
     assert "api_key" not in caplog.text
     assert "wss://" not in caplog.text
