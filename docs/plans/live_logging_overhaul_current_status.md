@@ -22,7 +22,7 @@ Estimated completion:
 
 ## Active Review Slice
 
-- Branch `codex/open-orders-snapshot-delta-event`, based on canonical
+- PR #1341; branch `codex/open-orders-snapshot-delta-event`, based on canonical
   `bc31fafdbdf045f9c003e49fa6877b721c834600`.
 - Scope: replace the two legacy aggregate INFO lines emitted when an
   authoritative open-order snapshot adds or removes more than 20 orders with
