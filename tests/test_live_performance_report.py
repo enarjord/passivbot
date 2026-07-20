@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import gzip
 import io
 import json
 import os
@@ -6256,6 +6257,75 @@ def test_live_performance_report_event_tail_lines_bounds_monitor_scan(tmp_path):
     assert report["performance"]["groups"][0]["count"] == 2
 
 
+def test_live_performance_report_scan_cost_aggregates_plain_and_gzip_reads(tmp_path):
+    events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    plain_path = events_dir / "current.ndjson"
+    gzip_path = events_dir / "2026-07-19T00-00-00.ndjson.gz"
+    _write_ndjson(
+        plain_path,
+        [
+            _monitor_row(
+                event_type="cycle.completed",
+                seq=1,
+                ts=1000,
+                data={"elapsed_ms": 1000},
+            )
+        ],
+    )
+    gzip_rows = [
+        _monitor_row(
+            event_type="cycle.completed",
+            seq=2,
+            ts=2000,
+            data={"elapsed_ms": 2000},
+        )
+    ]
+    gzip_path.parent.mkdir(parents=True, exist_ok=True)
+    with gzip.open(gzip_path, "wt", encoding="utf-8") as stream:
+        for row in gzip_rows:
+            stream.write(json.dumps(row, sort_keys=True) + "\n")
+    with gzip.open(gzip_path, "rb") as stream:
+        gzip_decoded_bytes = len(stream.read())
+
+    report = build_live_performance_report(tmp_path / "monitor", include_rotated=True)
+    scan_cost = report["scan_cost"]
+
+    assert scan_cost["elapsed_ms"] >= 0
+    assert scan_cost["physical_bytes_read"] == (
+        plain_path.stat().st_size + gzip_path.stat().st_size
+    )
+    assert scan_cost["physical_bytes_known"] is True
+    assert scan_cost["decoded_bytes_read"] == plain_path.stat().st_size + gzip_decoded_bytes
+    assert scan_cost["decoded_bytes_known"] is True
+    assert scan_cost["files_read"] == 2
+    assert scan_cost["records_read"] == 2
+    assert scan_cost["read_methods"] == {"full_scan": 2}
+
+
+def test_live_performance_report_scan_cost_survives_summary_and_section_projection(tmp_path):
+    events_path = (
+        tmp_path / "monitor" / "binance" / "binance_01" / "events" / "current.ndjson"
+    )
+    _write_ndjson(
+        events_path,
+        [
+            _monitor_row(
+                event_type="cycle.completed",
+                seq=1,
+                ts=1000,
+                data={"elapsed_ms": 1000},
+            )
+        ],
+    )
+
+    report = build_live_performance_report(tmp_path / "monitor")
+    summary = summarize_live_performance_report(report)
+    projected = project_live_performance_report_sections(report, ["performance"])
+
+    assert summary["scan_cost"] == report["scan_cost"]
+    assert projected["scan_cost"] == report["scan_cost"]
+
+
 def test_live_performance_report_cli_event_tail_lines(tmp_path, capsys):
     events_path = (
         tmp_path / "monitor" / "binance" / "binance_01" / "events" / "current.ndjson"
@@ -6566,6 +6636,13 @@ def test_live_performance_report_redacts_file_paths_and_oserror_messages(monkeyp
         "~/passivbot/monitor/binance/binance_01/events/current.ndjson"
     )
     assert report["issues"][0]["message"] == "Permission denied"
+    assert report["scan_cost"]["physical_bytes_read"] is None
+    assert report["scan_cost"]["physical_bytes_known"] is False
+    assert report["scan_cost"]["decoded_bytes_read"] is None
+    assert report["scan_cost"]["decoded_bytes_known"] is False
+    assert report["scan_cost"]["files_read"] == 0
+    assert report["scan_cost"]["records_read"] == 0
+    assert report["scan_cost"]["read_methods"] == {}
     assert "/root/passivbot" not in rendered
 
 

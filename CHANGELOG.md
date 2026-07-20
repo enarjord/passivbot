@@ -4,6 +4,26 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- `live-smoke-report` now includes bounded monitor `scan_cost` metadata in
+  full, summary, and brief output, matching the elapsed time, successfully
+  read files and records, read methods, and physical-versus-decoded byte
+  semantics exposed by the event query and performance report. This is
+  diagnostic-only and does not change smoke verdicts, event selection,
+  parsing, logs, process inspection, exchange access, or live behavior.
+
+- `live-event-query` and `live-performance-report` now include bounded
+  `scan_cost` metadata for elapsed artifact-scan time, successfully read files
+  and records, read methods, and physical versus decoded byte totals. Explicit
+  known flags prevent failed or unmeasurable reads from appearing complete;
+  query selection, results, monitor data, exchange access, and live behavior
+  are unchanged.
+
+- EMA Anchor live monitor snapshots now mark trailing diagnostics as not
+  applicable instead of requesting unrelated trailing-martingale parameters
+  and repeatedly failing snapshot publication. The trailing diagnostics tool
+  rejects snapshots that explicitly mark those diagnostics unsupported unless
+  the operator selects explicit wizard mode.
+
 - Gate.io live startup now selects CCXT 4.5.66's `gate` REST and WebSocket
   clients at session construction while retaining canonical `gateio` identity
   for user-facing configuration, market settings, caches, and logs.

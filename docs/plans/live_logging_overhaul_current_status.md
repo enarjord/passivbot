@@ -22,28 +22,114 @@ Estimated completion:
 
 ## Active Review Slice
 
-- PR #1331, `Preserve completed candle freshness row counts`; branch:
-  `codex/completed-candle-summary-redaction-fix`, based on canonical
-  `c0386ff5673d93b732786cf12c4cd48f6a381767`.
-- Scope: rename the public completed-candle source-row count so the live-event
-  secret-key sanitizer preserves its numeric value, then consume and project
-  that non-sensitive key in `live-performance-report`.
-- Behavior boundary: observability producer and read-only reporting only. The
-  fix changes no sanitizer exception, candle read, exchange access, planning
-  readiness, strategy, order, risk, cache, or process-control behavior.
-- Validation: 362 focused performance-report and planning-snapshot tests passed
-  on exact head `ff6c5606c621acd7fba689ad81b7b8a7755f162a`. A runtime
-  redaction probe preserved the numeric source-row count while redacting genuine
-  signature, API-key, and token fields. Python compilation and diff checks
-  passed.
-- Review gate: final exact-head Hermes approval plus green Python/Rust CI.
+- PR #1337, `Report live smoke scan cost`; branch:
+  `codex/live-smoke-scan-cost`, based on canonical
+  `e0927ed86f0b10ed8187d8e6a523017baefb98b3`.
+- Scope: expose the same bounded elapsed-time, byte, file, record, and
+  read-method cost metadata for the monitor scan used by
+  `live-smoke-report`, including its full, summary, and brief projections.
+- Behavior boundary: read-only local tooling only. The slice changes no event
+  producer, file selection, parsed result, smoke verdict, monitor persistence,
+  exchange access, logs, process inspection/control, planning, strategy,
+  order, or risk behavior.
+- Baseline: a bounded five-minute VPS5 brief smoke scanned six current event
+  files and 7,515 records in 4.29 seconds wall time but could not report exact
+  bytes or read methods. The active slice closes only that diagnostic gap.
+- Review gate: exact-current-head Hermes approval plus green Python/Rust CI.
   Built-in Codex automatic review is additional and every finding must be
   verified and resolved.
-- Expected VPS action: tracked-clean pull, guarded exact-pane restart, and
-  immediate plus settled smoke, followed by a natural performance report that
-  proves corrected numeric freshness evidence.
+- Expected VPS action: tracked-clean pull plus bounded read-only report smokes;
+  no bot restart or process signal.
 
-## Deployed Baseline (PR #1328)
+## Deployed Baseline (PR #1333)
+
+- PR #1333 merged exact reviewed head
+  `ce5a24d72ea811c6b04a376bbd9fcd228ab4c9af` as canonical
+  `e0927ed86f0b10ed8187d8e6a523017baefb98b3` after exact-head Hermes
+  approval, a green built-in Codex review, and green Python/Rust CI. VPS5
+  fast-forwarded tracked-clean from
+  `02fb43f6398fc9edba64849cf2ed0bf0f7a6af09` without a Rust build; the
+  source fingerprint/stamp remained
+  `691bff9683deec9382a4e96ab6a107c14145f88edd6ae2f8e2380b8ba6824449`.
+- The bounded five-minute event query was `ok=true` and reported five files,
+  8,133 records, 13,926,420 known physical/decoded bytes, and 4,793.586 ms.
+  The matching performance report was `ok=true` with zero errors/warnings and
+  reported six files, 8,661 records, 14,740,828 known physical/decoded bytes,
+  and 4,781.454 ms. Both used only `seek_tail` reads.
+- No bot was restarted or signalled. Bot PIDs
+  `1066081/1066091/1066084/1066093/1066087`, pane parents `%358`-`%362`, and
+  protected `misc:0.0` `%8`/PID `434835` remained unchanged. Final process
+  states were all `Rl+`; the checkout remained tracked-clean. No direct
+  exchange call or event was manufactured.
+
+## Previous Deployed Baseline (PR #1335)
+
+- PR #1335 merged exact reviewed head
+  `c4d5b8e55f6fd453fd707999ae74ec2dd127e55d` as canonical
+  `02fb43f6398fc9edba64849cf2ed0bf0f7a6af09`. VPS5 fast-forwarded
+  tracked-clean from `97aa36da4c9a9885c840ea48590837e28e5b8069` without a
+  Rust build; the source fingerprint/stamp remained
+  `691bff9683deec9382a4e96ab6a107c14145f88edd6ae2f8e2380b8ba6824449`.
+- The guarded restart replaced bot PIDs
+  `1063302/1063311/1064329/1063314/1063308` with
+  `1066081/1066091/1066084/1066093/1066087` under unchanged pane parents.
+  A post-action three-sample target report confirmed all five configured
+  processes stable with no missing, duplicate, or extra target; protected
+  `misc:0.0` remained `%8`/PID `434835`.
+- The immediate smoke retained one natural KuCoin authoritative-refresh
+  `RequestTimeout` and was not mislabeled green. The fresh settled two-minute
+  smoke was `ok=true` with zero hard failures, `47/47` account-critical calls,
+  `184/185` remote calls, successful latest cycles, a clean event pipeline,
+  and five stable processes. The sole retained remote failure was a non-hard
+  OHLCV `RequestTimeout`. No direct exchange call or event was manufactured.
+
+## Previous Deployed Baseline (PR #1334)
+
+- Emergency PR #1334 merged exact reviewed head
+  `1fb218a61999ed1cf06ba1974407dbfe350ed0ea` as canonical
+  `97aa36da4c9a9885c840ea48590837e28e5b8069`. VPS5 fast-forwarded
+  tracked-clean from `77b97ab8c7b7c4e6ba70025c3ca53e828aa0a321` without a
+  Rust build; the source fingerprint/stamp remained
+  `691bff9683deec9382a4e96ab6a107c14145f88edd6ae2f8e2380b8ba6824449`
+  and the artifact SHA-256 remained
+  `7611f3eff1d8702ff29d90490a1aba490db5c816e7e3f09a2c33e5c4085da023`.
+- The recovery relaunched only the stopped Gate.io pane `%360`, producing bot
+  PID `1064329` under unchanged pane parent PID `856364`. The other four bot
+  PIDs remained `1063302/1063311/1063314/1063308`, and protected
+  `misc:0.0` remained `%8`/PID `434835`.
+- Stable three-sample exact-target validation retained all five configured
+  processes with no missing, duplicate, or extra target. The final fresh
+  two-minute smoke was `ok=true` with zero hard failures, five stable
+  processes, and a tracked-clean checkout. An earlier wider smoke retained an
+  unrelated natural KuCoin `RequestTimeout` and was not mislabeled green; the
+  final window observed one non-hard recovered KuCoin `InvalidNonce`. No direct
+  exchange call or event was manufactured.
+
+## Previous Deployed Baseline (PR #1331)
+
+- PR #1331 merged as canonical
+  `0a6be3ed00261c6d6a2cdbe0f2588e5709e670f1` after exact-head Hermes
+  approval, a green built-in Codex review, and green Python/Rust CI. VPS5
+  fast-forwarded tracked-clean from
+  `c0386ff5673d93b732786cf12c4cd48f6a381767` without a Rust build; the source
+  fingerprint/stamp remained
+  `691bff9683deec9382a4e96ab6a107c14145f88edd6ae2f8e2380b8ba6824449`.
+- The guarded runner gracefully restarted only exact panes `%358`-`%362`.
+  Bot PIDs `1057982/1057991/1057985/1057994/1057988` became
+  `1059196/1059205/1059199/1059208/1059202`; pane parents were unchanged and
+  protected `misc:0.0` remained `%8`/PID `434835`.
+- The immediate bounded smoke was hard-green with complete five-bot lifecycle
+  evidence, zero hard/monitor/text-log failures, `81/81` account-critical
+  calls, `436/436` remote calls, and five stable processes. The settled smoke
+  remained hard-green with `65/65` account-critical and `345/345` remote calls,
+  zero latest degraded cycles, both remaining HSL replays complete, and five
+  stable processes.
+- Natural post-restart snapshots persisted numeric `source_row_count` values
+  `36` and `1`. The exact-window performance report produced two summary and
+  metric observations with zero malformed or missing proofs. No direct exchange
+  call or event was manufactured.
+
+## Previous Deployed Baseline (PR #1328)
 
 - PR #1328 merged as canonical
   `c0386ff5673d93b732786cf12c4cd48f6a381767` after exact-head Hermes
@@ -61,7 +147,7 @@ Estimated completion:
   natural post-restart performance report then classified all seven observed
   completed-candle summaries as malformed because the sanitizer had replaced
   `signature_row_count` with `[redacted]`. No direct exchange call or event was
-  manufactured; active PR #1331 corrects only this public diagnostic contract.
+  manufactured; merged PR #1331 corrected only this public diagnostic contract.
 
 ## Deployed Baseline (PR #1326)
 
@@ -1545,9 +1631,10 @@ PR #1288's bounded target-identity stability, and PR #1289's plan binding are
 merged, deployed, and naturally validated without process control. PR #1290's
 pane-parent relaunch classification and the restart preparation/orchestration
 slices through PR #1309 are also merged and deployed. Later slices through PR
-#1328 are merged and deployed at canonical
-`c0386ff5673d93b732786cf12c4cd48f6a381767`; their current evidence is recorded
-above. PR #1331 is the active completed-candle row-count redaction fix.
+#1335, including subsequently merged PR #1333, are deployed at canonical
+`e0927ed86f0b10ed8187d8e6a523017baefb98b3`; their current evidence is recorded
+above. The active smoke-scan cost slice measures the remaining read-only smoke
+artifact work without changing scan or verdict behavior.
 
 Do not create progress-only PRs or resume unrelated logging work from stale
 worktrees.

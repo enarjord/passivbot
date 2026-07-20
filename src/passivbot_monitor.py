@@ -1489,7 +1489,22 @@ def _build_monitor_trailing_section(
         balance_strategy = balance_raw
     config = getattr(self, "config", {})
     live_cfg = config.get("live", {}) if isinstance(config, dict) else {}
-    strategy_kind = str(live_cfg.get("strategy_kind") or "").strip().lower()
+    strategy_kind = str(
+        live_cfg.get("strategy_kind") or "trailing_martingale"
+    ).strip().lower()
+    if strategy_kind not in {"trailing_martingale", "trailing_grid_v7"}:
+        reason = (
+            "strategy_has_no_trailing_diagnostics"
+            if strategy_kind == "ema_anchor"
+            else "strategy_not_supported_by_trailing_monitor"
+        )
+        return {
+            "_meta": {
+                "diagnostics_supported": False,
+                "strategy_kind": strategy_kind,
+                "reason": reason,
+            }
+        }
     out: dict[str, dict[str, Any]] = {}
     for symbol, market_entry in sorted(market.items()):
         if not isinstance(market_entry, dict):

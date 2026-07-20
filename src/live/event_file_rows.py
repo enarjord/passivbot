@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
-@dataclass(frozen=True)
+@dataclass
 class EventRowWindow:
     limited: bool = False
     skipped_lines: int | None = None
@@ -15,12 +15,36 @@ class EventRowWindow:
     skipped_bytes: int = 0
     line_numbers_exact: bool = True
     method: str = "full_scan"
+    physical_bytes_read: int | None = None
+    decoded_bytes_read: int | None = None
 
 
 def _open_text(path: Path):
     if path.name.endswith(".gz"):
         return gzip.open(path, "rt", encoding="utf-8", errors="replace")
     return open(path, "r", encoding="utf-8", errors="replace")
+
+
+def _stream_position(stream) -> int | None:
+    tell = getattr(stream, "tell", None)
+    if not callable(tell):
+        return None
+    try:
+        position = int(tell())
+    except (OSError, TypeError, ValueError):
+        return None
+    return position if position >= 0 else None
+
+
+def _full_scan_read_positions(path: Path, stream) -> tuple[int | None, int | None]:
+    buffer = getattr(stream, "buffer", None)
+    if path.name.endswith(".gz"):
+        return (
+            _stream_position(getattr(buffer, "fileobj", None)),
+            _stream_position(buffer),
+        )
+    position = _stream_position(buffer)
+    return position, position
 
 
 def _plain_tail_rows(path: Path, *, max_lines: int) -> tuple[list[tuple[int, str]], EventRowWindow]:
@@ -35,6 +59,8 @@ def _plain_tail_rows(path: Path, *, max_lines: int) -> tuple[list[tuple[int, str
             skipped_bytes=0,
             line_numbers_exact=True,
             method="seek_tail",
+            physical_bytes_read=0,
+            decoded_bytes_read=0,
         )
 
     chunk_size = 64 * 1024
@@ -73,22 +99,31 @@ def _plain_tail_rows(path: Path, *, max_lines: int) -> tuple[list[tuple[int, str
         skipped_bytes=skipped_bytes,
         line_numbers_exact=line_numbers_exact,
         method="seek_tail",
+        physical_bytes_read=len(data),
+        decoded_bytes_read=len(data),
     )
 
 
 @contextmanager
-def event_file_rows(path: Path, *, max_tail_lines: int = 0):
+def event_file_rows(path: Path, *, max_tail_lines: int = 0, text_opener=None):
     tail_lines = max(0, int(max_tail_lines))
+    opener = _open_text if text_opener is None else text_opener
     if tail_lines <= 0:
-        with _open_text(path) as stream:
-            yield enumerate(stream, start=1), EventRowWindow()
+        window = EventRowWindow()
+        with opener(path) as stream:
+            yield enumerate(stream, start=1), window
+            window.physical_bytes_read, window.decoded_bytes_read = _full_scan_read_positions(
+                path, stream
+            )
         return
     if not path.name.endswith(".gz"):
         rows, window = _plain_tail_rows(path, max_lines=tail_lines)
         yield rows, window
         return
+    physical_bytes_read = int(path.stat().st_size)
     with _open_text(path) as stream:
         rows = deque(enumerate(stream, start=1), maxlen=tail_lines)
+        decoded_bytes_read = int(stream.buffer.tell())
     skipped_lines = max(0, int(rows[0][0]) - 1) if rows else 0
     yield rows, EventRowWindow(
         limited=True,
@@ -97,4 +132,6 @@ def event_file_rows(path: Path, *, max_tail_lines: int = 0):
         skipped_bytes=0,
         line_numbers_exact=True,
         method="sequential_gzip_tail",
+        physical_bytes_read=physical_bytes_read,
+        decoded_bytes_read=decoded_bytes_read,
     )
