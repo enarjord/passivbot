@@ -417,6 +417,37 @@ async def test_binance_fetch_symbol_trades_uses_now_bound_and_one_percent_margin
 
 
 @pytest.mark.asyncio
+async def test_binance_trade_fetch_redacts_secret_error_but_preserves_cause(caplog):
+    secret = "authorization=binance-fill-fetch-secret"
+
+    class _FailingAPI:
+        async def fetch_my_trades(self, *_args, **_kwargs):
+            raise RuntimeError(secret)
+
+    fetcher = BinanceFetcher(
+        api=_FailingAPI(),
+        symbol_resolver=lambda symbol: symbol or "",
+        now_func=lambda: 1_700_000_000_000,
+    )
+
+    with caplog.at_level(logging.ERROR, logger=fem.logger.name):
+        with pytest.raises(RuntimeError) as captured:
+            await fetcher._fetch_symbol_trades(
+                "BTC/USDT:USDT",
+                since_ms=1_699_999_000_000,
+                until_ms=1_700_000_000_000,
+            )
+
+    assert secret not in str(captured.value)
+    assert "BTC/USDT:USDT" in str(captured.value)
+    assert "error_type=RuntimeError" in str(captured.value)
+    assert isinstance(captured.value.__cause__, RuntimeError)
+    assert str(captured.value.__cause__) == secret
+    assert "error_type=RuntimeError" in caplog.text
+    assert secret not in caplog.text
+
+
+@pytest.mark.asyncio
 async def test_binance_fetcher_enriches_missing_client_ids(monkeypatch):
     income_events = [
         {
@@ -652,12 +683,16 @@ async def test_binance_fetcher_trade_history_errors_are_not_income_only_events(m
         types.MethodType(fake_fetch_income, fetcher),
     )
 
-    with pytest.raises(RuntimeError, match="simulated trade-history outage"):
+    with pytest.raises(RuntimeError) as captured:
         await fetcher.fetch(
             since_ms=ts - 1,
             until_ms=ts + 1,
             detail_cache={},
         )
+
+    assert "simulated trade-history outage" not in str(captured.value)
+    assert isinstance(captured.value.__cause__, RuntimeError)
+    assert str(captured.value.__cause__) == "simulated trade-history outage"
 
 
 @pytest.mark.asyncio
@@ -4695,11 +4730,12 @@ async def test_manager_refresh_logs_bounded_fetcher_error_type_without_secret(
     tmp_path: Path, caplog
 ):
     cache_dir = tmp_path / "fills_request_error_timing"
-    secret = "api_key=super-secret-value"
+    secret = "api_key=fill-fetch-secret"
+    secret_error_type = type("ApiKeyFetchSecretError", (RuntimeError,), {})
 
     class _Api:
         async def fetch_a(self):
-            raise RuntimeError(f"remote timeout detail {secret}")
+            raise secret_error_type(secret)
 
     class _ApiFetcher(BaseFetcher):
         def __init__(self):
@@ -4728,9 +4764,10 @@ async def test_manager_refresh_logs_bounded_fetcher_error_type_without_secret(
     assert len(timing_records) == 1
     assert timing_records[0].levelno == logging.INFO
     assert "fetch_a:n=1" in timing_records[0].message
-    assert "err_type=RuntimeError" in timing_records[0].message
+    assert "err_type=Error" in timing_records[0].message
     assert "err_msg=" not in timing_records[0].message
-    assert secret not in timing_records[0].message
+    assert secret_error_type.__name__ not in timing_records[0].message
+    assert secret not in caplog.text
 
 
 def test_fill_fetch_request_timing_error_type_rejects_sensitive_and_hostile_metadata():

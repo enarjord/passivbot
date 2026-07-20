@@ -2398,8 +2398,8 @@ class BitgetFetcher(BaseFetcher):
         for res in results:
             if isinstance(res, Exception):
                 logger.error(
-                    "BitgetFetcher._flush_detail_tasks: detail fetch failed: %s",
-                    res,
+                    "BitgetFetcher._flush_detail_tasks: detail fetch failed error_type=%s",
+                    bounded_exception_type(res),
                 )
                 continue
             total += res or 0
@@ -2534,9 +2534,9 @@ class BitgetFetcher(BaseFetcher):
             resolved = self._symbol_resolver(market_symbol)
         except Exception as exc:
             logger.warning(
-                "BitgetFetcher._resolve_symbol: resolver failed for %s (%s); using fallback",
+                "BitgetFetcher._resolve_symbol: resolver failed for %s error_type=%s; using fallback",
                 market_symbol,
-                exc,
+                bounded_exception_type(exc),
             )
             resolved = None
         if resolved:
@@ -2662,7 +2662,11 @@ class BinanceFetcher(BaseFetcher):
                     if pending is not task and not pending.done():
                         pending.cancel()
                 await asyncio.gather(*trade_tasks.values(), return_exceptions=True)
-                logger.error("BinanceFetcher.fetch: error fetching trades for %s (%s)", symbol, exc)
+                logger.error(
+                    "BinanceFetcher.fetch: error fetching trades for %s error_type=%s",
+                    symbol,
+                    bounded_exception_type(exc),
+                )
                 raise
             for trade in trades:
                 event = self._normalize_trade(trade)
@@ -2820,8 +2824,8 @@ class BinanceFetcher(BaseFetcher):
                     event, event_id, res = await task
                 except Exception as exc:
                     logger.debug(
-                        "BinanceFetcher.fetch: order-detail enrichment failed (%s)",
-                        exc,
+                        "BinanceFetcher.fetch: order-detail enrichment failed error_type=%s",
+                        bounded_exception_type(exc),
                     )
                     continue
                 if res:
@@ -2879,9 +2883,9 @@ class BinanceFetcher(BaseFetcher):
             detail = await self.api.fetch_order(order_id, symbol)
         except Exception as exc:  # pragma: no cover - live API dependent
             logger.debug(
-                "BinanceFetcher._enrich_with_order_details: fetch_order failed for %s (%s)",
+                "BinanceFetcher._enrich_with_order_details: fetch_order failed for %s error_type=%s",
                 order_id,
-                exc,
+                bounded_exception_type(exc),
             )
             return None
         info = detail.get("info") if isinstance(detail, dict) else detail
@@ -3050,18 +3054,23 @@ class BinanceFetcher(BaseFetcher):
         except Exception as exc:  # pragma: no cover - depends on live API
             if self._stop_requested():
                 logger.debug(
-                    "BinanceFetcher._fetch_symbol_trades: stopped during shutdown for %s (%s)",
+                    "BinanceFetcher._fetch_symbol_trades: stopped during shutdown for %s error_type=%s",
                     ccxt_symbol,
-                    exc,
+                    bounded_exception_type(exc),
                 )
                 return []
             msg = str(exc).lower() if exc else ""
             if "does not have market symbol" in msg or "market symbol" in msg:
                 self._note_unsupported_symbol(ccxt_symbol)
                 return []
-            logger.error("BinanceFetcher._fetch_symbol_trades: error %s (%s)", ccxt_symbol, exc)
+            logger.error(
+                "BinanceFetcher._fetch_symbol_trades: error %s error_type=%s",
+                ccxt_symbol,
+                bounded_exception_type(exc),
+            )
             raise RuntimeError(
-                f"Binance trade-history fetch failed for {ccxt_symbol}: {exc}"
+                "Binance trade-history fetch failed for "
+                f"{ccxt_symbol} error_type={bounded_exception_type(exc)}"
             ) from exc
 
     def _normalize_income(
@@ -3141,7 +3150,10 @@ class BinanceFetcher(BaseFetcher):
         try:
             items = provider() or []
         except Exception as exc:
-            logger.warning("BinanceFetcher._collect_symbols: provider failed (%s)", exc)
+            logger.warning(
+                "BinanceFetcher._collect_symbols: provider failed error_type=%s",
+                bounded_exception_type(exc),
+            )
             return []
         symbols: List[str] = []
         for raw in items:
@@ -3158,7 +3170,11 @@ class BinanceFetcher(BaseFetcher):
             if resolved:
                 return resolved
         except Exception as exc:
-            logger.warning("BinanceFetcher._resolve_symbol: resolver failed for %s (%s)", value, exc)
+            logger.warning(
+                "BinanceFetcher._resolve_symbol: resolver failed for %s error_type=%s",
+                value,
+                bounded_exception_type(exc),
+            )
         return str(value)
 
 
@@ -3266,13 +3282,13 @@ class FillEventsManager:
                 ticker = await fetch_ticker(symbol)
             except Exception as exc:
                 logger.debug(
-                    "[fills] fee conversion ticker unavailable | exchange=%s user=%s pair=%s/%s symbol=%s error=%s",
+                    "[fills] fee conversion ticker unavailable | exchange=%s user=%s pair=%s/%s symbol=%s error_type=%s",
                     self.exchange,
                     self.user,
                     fee_currency,
                     quote_currency,
                     symbol,
-                    exc,
+                    bounded_exception_type(exc),
                 )
                 continue
             if not isinstance(ticker, dict):
@@ -4428,7 +4444,9 @@ class FillEventsManager:
                 parsed_events.append((raw, event))
             if malformed_events:
                 preview = ", ".join(
-                    f"id={raw.get('id')!r} error={exc}" for raw, exc in malformed_events[:3]
+                    "id="
+                    f"{raw.get('id')!r} error_type={bounded_exception_type(exc)}"
+                    for raw, exc in malformed_events[:3]
                 )
                 extra = "" if len(malformed_events) <= 3 else f", +{len(malformed_events) - 3} more"
                 raise ValueError(
@@ -5288,7 +5306,10 @@ class BybitFetcher(BaseFetcher):
             try:
                 response = await self.api.private_get_v5_position_closed_pnl(params)
             except Exception as exc:
-                logger.warning("BybitFetcher._fetch_positions_history: API error: %s", exc)
+                logger.warning(
+                    "BybitFetcher._fetch_positions_history: API error_type=%s",
+                    bounded_exception_type(exc),
+                )
                 break
 
             batch = response.get("result", {}).get("list", [])
@@ -5329,7 +5350,10 @@ class BybitFetcher(BaseFetcher):
                 try:
                     response = await self.api.private_get_v5_position_closed_pnl(params)
                 except Exception as exc:
-                    logger.warning("BybitFetcher._fetch_positions_history: API error: %s", exc)
+                    logger.warning(
+                        "BybitFetcher._fetch_positions_history: API error_type=%s",
+                        bounded_exception_type(exc),
+                    )
                     break
 
                 batch = response.get("result", {}).get("list", [])
@@ -5619,10 +5643,10 @@ class HyperliquidFetcher(BaseFetcher):
                     logger.warning("%s", msg)
                     raise RateLimitExceeded(msg) from exc
                 logger.debug(
-                    "HyperliquidFetcher.fetch: rate limit exceeded (retry %d/%d), sleeping (%s)",
+                    "HyperliquidFetcher.fetch: rate limit exceeded (retry %d/%d), sleeping error_type=%s",
                     rate_limit_retries,
                     max_rate_limit_retries,
-                    exc,
+                    bounded_exception_type(exc),
                 )
                 await asyncio.sleep(min(30.0, 2.0 ** rate_limit_retries))
                 # Reset prev_params so the retry is not flagged as repeated
@@ -5903,7 +5927,7 @@ class WeexFetcher(BaseFetcher):
                     logger.debug(
                         "WeexFetcher: fetch_order failed order=%s error_type=%s",
                         order_id,
-                        type(exc).__name__,
+                        bounded_exception_type(exc),
                     )
                     return key, ""
                 info = order.get("info") if isinstance(order, dict) else {}
@@ -6054,7 +6078,9 @@ class GateioFetcher(BaseFetcher):
                 consecutive_rate_limits += 1
                 sleep_time = min(2**consecutive_rate_limits, 30)
                 logger.debug(
-                    "GateioFetcher._fetch_trades: rate-limited (%s); sleeping %.1fs", exc, sleep_time
+                    "GateioFetcher._fetch_trades: rate-limited error_type=%s; sleeping %.1fs",
+                    bounded_exception_type(exc),
+                    sleep_time,
                 )
                 await asyncio.sleep(sleep_time)
                 continue
@@ -6064,8 +6090,8 @@ class GateioFetcher(BaseFetcher):
                     consecutive_rate_limits += 1
                     sleep_time = min(2**consecutive_rate_limits, 30)
                     logger.debug(
-                        "GateioFetcher._fetch_trades: rate-limited (%s); sleeping %.1fs",
-                        exc,
+                        "GateioFetcher._fetch_trades: rate-limited error_type=%s; sleeping %.1fs",
+                        bounded_exception_type(exc),
                         sleep_time,
                     )
                     await asyncio.sleep(sleep_time)
@@ -6160,7 +6186,10 @@ class GateioFetcher(BaseFetcher):
             try:
                 batch = await self.api.fetch_closed_orders(params=params)
             except RateLimitExceeded as exc:
-                logger.debug("GateioFetcher._fetch_orders_for_pnl: rate-limited (%s); sleeping", exc)
+                logger.debug(
+                    "GateioFetcher._fetch_orders_for_pnl: rate-limited error_type=%s; sleeping",
+                    bounded_exception_type(exc),
+                )
                 await asyncio.sleep(1.0)
                 continue
 
@@ -6918,9 +6947,9 @@ class KucoinFetcher(BaseFetcher):
             detail = await self.api.fetch_order(order_id, symbol)
         except Exception as exc:  # pragma: no cover - live API dependent
             logger.debug(
-                "KucoinFetcher._enrich_with_order_details: fetch_order failed for %s (%s)",
+                "KucoinFetcher._enrich_with_order_details: fetch_order failed for %s error_type=%s",
                 order_id,
-                exc,
+                bounded_exception_type(exc),
             )
             return None
         info = detail.get("info") if isinstance(detail, dict) else detail
@@ -7103,7 +7132,10 @@ class OkxFetcher(BaseFetcher):
                 else:
                     response = await self.api.private_get_trade_fills_history(params)
             except RateLimitExceeded as exc:
-                logger.debug("OkxFetcher: rate limit hit, sleeping (%s)", exc)
+                logger.debug(
+                    "OkxFetcher: rate limit hit, sleeping error_type=%s",
+                    bounded_exception_type(exc),
+                )
                 await asyncio.sleep(2.0)
                 continue
 
