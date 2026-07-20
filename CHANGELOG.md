@@ -6,7 +6,9 @@ All notable user-facing changes will be documented in this file.
 
 - The `ema.unavailable` and `ema.fallback_used` events and their dedicated legacy summaries now
   retain only code-owned reason classifications, bounded EMA/error types, symbols, spans, ages,
-  and counts. These paths no longer retain arbitrary exception or fallback-reason text; EMA
+  and counts. Malformed typed values are normalized or omitted, adjacent EMA failure logs retain
+  only exception type, and a bounded legacy warning remains when the structured event was not
+  emitted. These paths no longer retain arbitrary exception or fallback-reason text; EMA
   calculation, fallback selection, candidate availability, and trading behavior are unchanged.
 
 - Noncritical market-snapshot diagnostic skips now use the existing

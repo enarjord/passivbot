@@ -2229,6 +2229,11 @@ def _ema_map_summary(values: dict[str, dict[float, float]] | None) -> dict[str, 
 _EMA_DIAGNOSTIC_TYPES = frozenset(
     ("m1_close", "m1_volume", "m1_log_range", "h1_log_range")
 )
+_EMA_FALLBACK_METRICS = frozenset(("qv", "log_range"))
+_EMA_SYMBOL_RE = re.compile(
+    r"[A-Za-z0-9._-]+(?::[A-Za-z0-9._-]+)?/"
+    r"[A-Za-z0-9._-]+(?::[A-Za-z0-9._-]+)?"
+)
 _EMA_DIAGNOSTIC_REASON_CODES = frozenset(
     (
         "cache_only_fetch_failed",
@@ -2268,6 +2273,32 @@ def _safe_ema_types(value: Any) -> tuple[str, ...]:
     return tuple(sorted({str(item) for item in value if str(item) in _EMA_DIAGNOSTIC_TYPES}))
 
 
+def _safe_ema_symbol(value: Any) -> str:
+    candidate = str(value or "")
+    if len(candidate) <= 96 and _EMA_SYMBOL_RE.fullmatch(candidate):
+        return candidate
+    return "unknown"
+
+
+def _ema_symbol_sample(symbols: Any, *, limit: int = 12) -> dict[str, Any]:
+    if symbols is None:
+        return _symbol_sample((), limit=limit)
+    try:
+        values = (_safe_ema_symbol(symbol) for symbol in symbols)
+    except TypeError:
+        values = (_safe_ema_symbol(symbols),)
+    return _symbol_sample(values, limit=limit)
+
+
+def _ema_span_sample(spans: Any, *, limit: int = 8) -> list[float]:
+    finite = []
+    for value in spans or ():
+        span = _safe_finite_float(value)
+        if span is not None:
+            finite.append(span)
+    return _span_sample(finite, limit=limit)
+
+
 def _fallback_examples(
     values: dict[str, list[tuple[Any, ...]]] | None,
     *,
@@ -2286,9 +2317,10 @@ def _fallback_examples(
             if not isinstance(item, (list, tuple)):
                 continue
             if len(item) >= 1 and isinstance(item[0], str):
-                metrics.add(str(item[0]))
+                if str(item[0]) in _EMA_FALLBACK_METRICS:
+                    metrics.add(str(item[0]))
                 if len(item) >= 2:
-                    span = _safe_float(item[1])
+                    span = _safe_finite_float(item[1])
                     if span is not None:
                         spans.append(span)
                 if len(item) >= 3:
@@ -2297,7 +2329,7 @@ def _fallback_examples(
                         ages.append(age)
             else:
                 if len(item) >= 1:
-                    span = _safe_float(item[0])
+                    span = _safe_finite_float(item[0])
                     if span is not None:
                         spans.append(span)
                 if len(item) >= 2:
@@ -2314,9 +2346,9 @@ def _fallback_examples(
                     error_type = _safe_ema_error_type(item[4])
                 ema_type = "m1_close"
         example: dict[str, Any] = {
-            "symbol": str(symbol),
+            "symbol": _safe_ema_symbol(symbol),
             "count": len(items or []),
-            "spans": _span_sample(spans),
+            "spans": _ema_span_sample(spans),
         }
         if metrics:
             example["metrics"] = sorted(metrics)
@@ -2337,12 +2369,14 @@ def _fallback_examples(
 def _candidate_detail_tuple(item: Any) -> tuple[str, str, tuple[str, ...], tuple[float, ...]]:
     if not isinstance(item, (list, tuple)):
         return str(item), "Error", (), ()
-    symbol = str(item[0]) if len(item) >= 1 else ""
+    symbol = _safe_ema_symbol(item[0]) if len(item) >= 1 else "unknown"
     error_type = _safe_ema_error_type(item[1]) if len(item) >= 2 else "Error"
     ema_types = _safe_ema_types(item[2]) if len(item) >= 3 else ()
     raw_spans = item[3] if len(item) >= 4 and isinstance(item[3], (list, tuple)) else ()
     spans = tuple(
-        span for value in raw_spans if (span := _safe_float(value)) is not None
+        span
+        for value in raw_spans
+        if (span := _safe_finite_float(value)) is not None
     )
     return symbol, error_type, ema_types, spans
 
@@ -2372,13 +2406,13 @@ def _candidate_unavailable_summary(
         out.append(
             {
                 "reason": _safe_ema_reason_code(reason),
-                "symbols": _symbol_sample(symbols),
+                "symbols": _ema_symbol_sample(symbols),
                 "error_types": error_types[:4],
                 "ema_types": [
                     {"ema_type": key, "count": int(count)}
                     for key, count in sorted(ema_type_counts.items())
                 ][:limit],
-                "spans": _span_sample(spans),
+                "spans": _ema_span_sample(spans),
             }
         )
     return out
@@ -2406,7 +2440,7 @@ def _ema_unavailable_debug_summary(
             spans.extend(item_spans)
         group: dict[str, Any] = {
             "reason": _safe_ema_reason_code(reason),
-            "symbols": _symbol_sample(symbols),
+            "symbols": _ema_symbol_sample(symbols),
             "error_types": sorted(error_types)[:4],
         }
         if ema_type_counts:
@@ -2415,13 +2449,13 @@ def _ema_unavailable_debug_summary(
                 for key, count in sorted(ema_type_counts.items())
             ][:limit]
         if spans:
-            group["spans"] = _span_sample(spans)
+            group["spans"] = _ema_span_sample(spans)
         candidate_groups.append(group)
 
     unavailable_groups = [
         {
             "reason": _safe_ema_reason_code(reason),
-            "symbols": _symbol_sample(symbols or ()),
+            "symbols": _ema_symbol_sample(symbols or ()),
         }
         for reason, symbols in sorted((ema_unavailable_reasons or {}).items())[:limit]
     ]
@@ -2441,7 +2475,7 @@ def _reason_symbol_summary(
         out.append(
             {
                 "reason": _safe_ema_reason_code(reason),
-                "symbols": _symbol_sample(symbols),
+                "symbols": _ema_symbol_sample(symbols),
             }
         )
     return out
@@ -2479,7 +2513,11 @@ def _safe_emit(bot: Any, event_type: str, **kwargs: Any) -> Any:
     try:
         return bot._emit_live_event(event_type, **kwargs)
     except Exception as exc:
-        logging.debug("[event] failed to emit %s: %s", event_type, exc)
+        logging.debug(
+            "[event] failed to emit %s error_type=%s",
+            event_type,
+            type(exc).__name__,
+        )
         return None
 
 
@@ -3599,15 +3637,14 @@ def _emit_ema_fallback_used_event_unchecked(
     close_ema_recoveries: dict[str, list[tuple[float, int]]] | None = None,
     close_ema_fallbacks: dict[str, list[tuple[float, int, int, str, str]]] | None = None,
     forager_cached_ema_fallbacks: dict[str, list[tuple[str, float, int]]] | None = None,
-) -> None:
+) -> bool:
     recovered_count = sum(len(items) for items in (close_ema_recoveries or {}).values())
     close_fallback_count = sum(len(items) for items in (close_ema_fallbacks or {}).values())
     forager_count = sum(len(items) for items in (forager_cached_ema_fallbacks or {}).values())
     if not (recovered_count or close_fallback_count or forager_count):
-        return
+        return False
     level = "warning" if close_fallback_count else "debug"
-    _safe_emit(
-        bot,
+    emitted = bot._emit_live_event(
         EventTypes.EMA_FALLBACK_USED,
         level=level,
         component="ema.bundle",
@@ -3617,11 +3654,15 @@ def _emit_ema_fallback_used_event_unchecked(
         reason_code=ReasonCodes.EMA_FALLBACK_USED,
         data={
             "close_recovered_count": int(recovered_count),
-            "close_recovered_symbols": _symbol_sample((close_ema_recoveries or {}).keys()),
+            "close_recovered_symbols": _ema_symbol_sample(
+                (close_ema_recoveries or {}).keys()
+            ),
             "close_fallback_count": int(close_fallback_count),
-            "close_fallback_symbols": _symbol_sample((close_ema_fallbacks or {}).keys()),
+            "close_fallback_symbols": _ema_symbol_sample(
+                (close_ema_fallbacks or {}).keys()
+            ),
             "forager_cached_fallback_count": int(forager_count),
-            "forager_cached_fallback_symbols": _symbol_sample(
+            "forager_cached_fallback_symbols": _ema_symbol_sample(
                 (forager_cached_ema_fallbacks or {}).keys()
             ),
             "examples": {
@@ -3631,17 +3672,19 @@ def _emit_ema_fallback_used_event_unchecked(
             },
         },
     )
+    return emitted is not None
 
 
-def emit_ema_fallback_used_event(bot: Any, *args: Any, **kwargs: Any) -> None:
+def emit_ema_fallback_used_event(bot: Any, *args: Any, **kwargs: Any) -> bool:
     try:
-        _emit_ema_fallback_used_event_unchecked(bot, *args, **kwargs)
+        return _emit_ema_fallback_used_event_unchecked(bot, *args, **kwargs)
     except Exception as exc:
         logging.debug(
-            "[event] failed to emit %s: %s",
+            "[event] failed to emit %s error_type=%s",
             EventTypes.EMA_FALLBACK_USED,
-            exc,
+            type(exc).__name__,
         )
+        return False
 
 
 def _emit_ema_unavailable_event_unchecked(
@@ -3650,22 +3693,22 @@ def _emit_ema_unavailable_event_unchecked(
     optional_ema_drops: dict[tuple[str, str, str], list[tuple[str, float]]] | None = None,
     candidate_ema_unavailable_details: dict[str, list[tuple]] | None = None,
     ema_unavailable_reasons: dict[str, list[str]] | None = None,
-) -> None:
+) -> bool:
     optional_count = sum(len(items) for items in (optional_ema_drops or {}).values())
     candidate_symbols = {
-        str(symbol)
+        _safe_ema_symbol(symbol)
         for items in (candidate_ema_unavailable_details or {}).values()
         for symbol, _error_type, _ema_types, _spans in (
             _candidate_detail_tuple(item) for item in items
         )
     }
     unavailable_symbols = {
-        str(symbol)
+        _safe_ema_symbol(symbol)
         for items in (ema_unavailable_reasons or {}).values()
         for symbol in items
     }
     if not (optional_count or candidate_symbols or unavailable_symbols):
-        return
+        return False
     level = "warning" if candidate_symbols else "debug"
     status = "degraded" if candidate_symbols or unavailable_symbols else "skipped"
     reason_code = (
@@ -3684,18 +3727,18 @@ def _emit_ema_unavailable_event_unchecked(
                 else "unknown",
                 "reason_code": _safe_ema_reason_code(drop_reason_code),
                 "error_type": _safe_ema_error_type(error_type),
-                "symbols": _symbol_sample(symbol for symbol, _span in items),
-                "spans": _span_sample(span for _symbol, span in items),
+                "symbols": _ema_symbol_sample(symbol for symbol, _span in items),
+                "spans": _ema_span_sample(span for _symbol, span in items),
             }
         )
     data = {
         "optional_drop_count": int(optional_count),
         "optional_drop_groups": optional_summary,
-        "candidate_unavailable": _symbol_sample(candidate_symbols),
+        "candidate_unavailable": _ema_symbol_sample(candidate_symbols),
         "candidate_unavailable_groups": _candidate_unavailable_summary(
             candidate_ema_unavailable_details
         ),
-        "unavailable": _symbol_sample(unavailable_symbols),
+        "unavailable": _ema_symbol_sample(unavailable_symbols),
         "unavailable_reasons": _reason_symbol_summary(ema_unavailable_reasons),
     }
     if live_event_debug_profile_enabled(bot, "ema"):
@@ -3704,8 +3747,7 @@ def _emit_ema_unavailable_event_unchecked(
             candidate_ema_unavailable_details,
             ema_unavailable_reasons,
         )
-    _safe_emit(
-        bot,
+    emitted = bot._emit_live_event(
         EventTypes.EMA_UNAVAILABLE,
         level=level,
         component="ema.bundle",
@@ -3715,17 +3757,19 @@ def _emit_ema_unavailable_event_unchecked(
         reason_code=reason_code,
         data=data,
     )
+    return emitted is not None
 
 
-def emit_ema_unavailable_event(bot: Any, *args: Any, **kwargs: Any) -> None:
+def emit_ema_unavailable_event(bot: Any, *args: Any, **kwargs: Any) -> bool:
     try:
-        _emit_ema_unavailable_event_unchecked(bot, *args, **kwargs)
+        return _emit_ema_unavailable_event_unchecked(bot, *args, **kwargs)
     except Exception as exc:
         logging.debug(
-            "[event] failed to emit %s: %s",
+            "[event] failed to emit %s error_type=%s",
             EventTypes.EMA_UNAVAILABLE,
-            exc,
+            type(exc).__name__,
         )
+        return False
 
 
 def _short_order_id(value: Any, *, max_len: int = 32) -> str | None:

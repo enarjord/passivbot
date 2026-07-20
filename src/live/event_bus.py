@@ -4073,8 +4073,8 @@ def emit_event(
         return pipeline.emit(event, require_enqueue=require_enqueue, **overrides)
     except Exception as exc:
         logging.debug(
-            "[event] failed to emit %s: %s",
+            "[event] failed to emit %s error_type=%s",
             getattr(event, "event_type", event),
-            exc,
+            type(exc).__name__,
         )
         return None

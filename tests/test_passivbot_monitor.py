@@ -2747,6 +2747,127 @@ def test_ema_event_payloads_keep_safe_diagnostics_across_all_sinks():
     assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 
+def test_ema_event_payloads_reject_malformed_typed_values():
+    import passivbot as pb_mod
+
+    structured = ListEventSink()
+    monitor = ListEventSink()
+
+    class FakeBot:
+        _current_live_event_cycle_id = pb_mod.Passivbot._current_live_event_cycle_id
+        _emit_ema_fallback_used_event = pb_mod.Passivbot._emit_ema_fallback_used_event
+        _emit_ema_unavailable_event = pb_mod.Passivbot._emit_ema_unavailable_event
+        _emit_live_event = pb_mod.Passivbot._emit_live_event
+
+        def __init__(self):
+            self.exchange = "binance"
+            self.user = "binance_01"
+            self.bot_id = "bot_1"
+            self.live_event_debug_profiles = ("ema",)
+            self._live_event_current_cycle_id = "cy_ema_malformed"
+            self._live_event_pipeline = LiveEventPipeline(
+                structured_sinks=[structured],
+                monitor_sinks=[monitor],
+            )
+
+    secret = "https://private.example/path?api_key=typed-secret"
+    bot = FakeBot()
+    assert bot._emit_ema_fallback_used_event(
+        close_ema_fallbacks={
+            secret: [(float("inf"), 1_000, 2, secret, secret, secret)]
+        },
+        forager_cached_ema_fallbacks={
+            secret: [(secret, float("nan"), 1_000)]
+        },
+    )
+    assert bot._emit_ema_unavailable_event(
+        optional_ema_drops={
+            (secret, secret, secret): [(secret, float("inf"))]
+        },
+        candidate_ema_unavailable_details={
+            secret: [
+                (
+                    secret,
+                    secret,
+                    (secret,),
+                    (float("inf"), float("nan")),
+                    secret,
+                )
+            ]
+        },
+        ema_unavailable_reasons={secret: [secret]},
+    )
+
+    assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    emitted = [*structured.events, *monitor.events]
+    assert len(emitted) == 4
+    serialized = json.dumps([event.to_dict() for event in emitted], sort_keys=True)
+    assert secret not in serialized
+    assert "typed-secret" not in serialized
+    assert "Infinity" not in serialized
+    assert "NaN" not in serialized
+
+    fallback = next(
+        event for event in structured.events if event.event_type == EventTypes.EMA_FALLBACK_USED
+    )
+    for examples in fallback.data["examples"].values():
+        for example in examples:
+            assert example["symbol"] == "unknown"
+            assert example["spans"] == []
+            assert secret not in json.dumps(example, sort_keys=True)
+
+    unavailable = next(
+        event for event in structured.events if event.event_type == EventTypes.EMA_UNAVAILABLE
+    )
+    optional = unavailable.data["optional_drop_groups"][0]
+    assert optional["ema_type"] == "unknown"
+    assert optional["reason_code"] == "unknown_failure"
+    assert optional["error_type"] == "Error"
+    assert optional["symbols"]["sample"] == ["unknown"]
+    assert optional["spans"] == []
+    candidate = unavailable.data["candidate_unavailable_groups"][0]
+    assert candidate["reason"] == "unknown_failure"
+    assert candidate["symbols"]["sample"] == ["unknown"]
+    assert candidate["error_types"] == ["Error"]
+    assert candidate["ema_types"] == []
+    assert candidate["spans"] == []
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
+
+
+def test_ema_event_emission_failure_logs_type_only(caplog):
+    secret = "https://private.example/path?api_key=emit-secret"
+
+    class FailingBot:
+        exchange = "binance"
+        user = "binance_01"
+        bot_id = "bot_1"
+        _live_event_current_cycle_id = "cy_ema_emit_failure"
+
+        def _emit_live_event(self, *_args, **_kwargs):
+            raise RuntimeError(secret)
+
+    with caplog.at_level(logging.DEBUG):
+        assert (
+            live_event_emitters.emit_ema_fallback_used_event(
+                FailingBot(),
+                close_ema_fallbacks={
+                    "BTC/USDT:USDT": [
+                        (60.0, 1_000, 2, "exception", "RuntimeError")
+                    ]
+                },
+            )
+            is False
+        )
+
+    messages = [record.message for record in caplog.records]
+    assert any(
+        "failed to emit ema.fallback_used error_type=RuntimeError" in message
+        for message in messages
+    )
+    assert all(secret not in message for message in messages)
+    assert all("emit-secret" not in message for message in messages)
+
+
 @pytest.mark.asyncio
 async def test_candle_disk_coverage_audit_emits_structured_events(monkeypatch):
     import passivbot as pb_mod

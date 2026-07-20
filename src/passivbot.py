@@ -16202,10 +16202,9 @@ class Passivbot:
                 ctx = Passivbot._active_tail_gap_projection_context(self, sym)
             except Exception as exc:
                 logging.debug(
-                    "[candle] open-tail EMA projection context failed %s | error_type=%s error=%s",
+                    "[candle] open-tail EMA projection context failed %s | error_type=%s",
                     Passivbot._log_symbol(sym),
                     type(exc).__name__,
-                    exc,
                 )
                 ctx = None
             if ctx is None and sym in forager_projection_max_age_by_symbol:
@@ -16227,10 +16226,9 @@ class Passivbot:
                         }
                 except Exception as exc:
                     logging.debug(
-                        "[candle] forager tail projection context failed %s | error_type=%s error=%s",
+                        "[candle] forager tail projection context failed %s | error_type=%s",
                         Passivbot._log_symbol(sym),
                         type(exc).__name__,
-                        exc,
                     )
             if ctx is not None:
                 projection_contexts[sym] = ctx
@@ -16658,13 +16656,12 @@ class Passivbot:
                 log_ema_issue(
                     ("open_tail_projection_failed", sym),
                     logging.WARNING,
-                    "[candle] open-tail EMA projection failed %s tail_gap_age_ms=%s latest_expected_ts=%s last_cached_ts=%s error_type=%s error=%s",
+                    "[candle] open-tail EMA projection failed %s tail_gap_age_ms=%s latest_expected_ts=%s last_cached_ts=%s error_type=%s",
                     Passivbot._log_symbol(sym),
                     projection_ctx.get("tail_gap_age_ms"),
                     projection_ctx.get("latest_expected_ts"),
                     projection_ctx.get("last_cached_ts"),
                     type(exc).__name__,
-                    exc,
                     interval_ms=15 * 60 * 1000,
                 )
                 raise
@@ -16715,10 +16712,9 @@ class Passivbot:
                 ctx = Passivbot._active_tail_gap_projection_context(self, sym)
             except Exception as exc:
                 logging.debug(
-                    "[candle] late open-tail EMA projection context failed %s | error_type=%s error=%s",
+                    "[candle] late open-tail EMA projection context failed %s | error_type=%s",
                     Passivbot._log_symbol(sym),
                     type(exc).__name__,
-                    exc,
                 )
                 return None
             if ctx is not None:
@@ -17015,10 +17011,18 @@ class Passivbot:
                 max_fallbacks,
                 "; ".join(examples),
             )
-        close_fallback_structured_console = (
-            Passivbot._ema_fallback_structured_console_available(self)
-            if close_ema_fallbacks
-            else False
+        ema_fallback_event_emitted = bool(
+            Passivbot._emit_ema_fallback_used_event(
+                self,
+                close_ema_recoveries=close_ema_recoveries,
+                close_ema_fallbacks=close_ema_fallbacks,
+                forager_cached_ema_fallbacks=forager_cached_ema_fallbacks,
+            )
+        )
+        close_fallback_structured_console = bool(
+            close_ema_fallbacks
+            and ema_fallback_event_emitted
+            and Passivbot._ema_fallback_structured_console_available(self)
         )
         if close_ema_fallbacks and not close_fallback_structured_console:
             fallback_count = sum(len(items) for items in close_ema_fallbacks.values())
@@ -17088,10 +17092,18 @@ class Passivbot:
                 "; ".join(examples),
                 interval_ms=15 * 60 * 1000,
             )
-        required_ema_unavailable_structured_console = (
-            Passivbot._ema_unavailable_structured_console_available(self)
-            if candidate_ema_unavailable_details
-            else False
+        ema_unavailable_event_emitted = bool(
+            Passivbot._emit_ema_unavailable_event(
+                self,
+                optional_ema_drops=optional_ema_drops,
+                candidate_ema_unavailable_details=candidate_ema_unavailable_details,
+                ema_unavailable_reasons=ema_unavailable_reasons,
+            )
+        )
+        required_ema_unavailable_structured_console = bool(
+            candidate_ema_unavailable_details
+            and ema_unavailable_event_emitted
+            and Passivbot._ema_unavailable_structured_console_available(self)
         )
         if candidate_ema_unavailable_details and not required_ema_unavailable_structured_console:
             parts = []
@@ -17133,12 +17145,6 @@ class Passivbot:
                 "; ".join(parts[:4]),
                 interval_ms=15 * 60 * 1000,
             )
-        Passivbot._emit_ema_fallback_used_event(
-            self,
-            close_ema_recoveries=close_ema_recoveries,
-            close_ema_fallbacks=close_ema_fallbacks,
-            forager_cached_ema_fallbacks=forager_cached_ema_fallbacks,
-        )
         if errors:
             fatal = next(
                 (err for _sym, err in errors if not isinstance(err, Exception)), None
@@ -17147,10 +17153,9 @@ class Passivbot:
                 raise fatal
             for sym, err in errors[1:]:
                 logging.debug(
-                    "[ema] additional symbol EMA bundle failure %s: %s: %s",
+                    "[ema] additional symbol EMA bundle failure %s error_type=%s",
                     Passivbot._log_symbol(sym),
                     type(err).__name__,
-                    err,
                 )
             raise errors[0][1]
         if ema_unavailable_reasons:
@@ -17168,13 +17173,6 @@ class Passivbot:
                 len(ema_unavailable_reasons),
                 "; ".join(parts[:4]),
             )
-        Passivbot._emit_ema_unavailable_event(
-            self,
-            optional_ema_drops=optional_ema_drops,
-            candidate_ema_unavailable_details=candidate_ema_unavailable_details,
-            ema_unavailable_reasons=ema_unavailable_reasons,
-        )
-
         # Convenience: compute the single-span values used by legacy forager logging.
         volumes_long = {
             s: m1_volume_emas[s][vol_span_long]
@@ -17682,11 +17680,10 @@ class Passivbot:
             )
         except Exception as exc:
             logging.debug(
-                "[ema] forager cached EMA unavailable %s metrics=%s error_type=%s error=%s",
+                "[ema] forager cached EMA unavailable %s metrics=%s error_type=%s",
                 Passivbot._log_symbol(symbol),
                 ",".join(sorted(str(k) for k in spans_by_metric)),
                 type(exc).__name__,
-                exc,
             )
             return {}
         if not isinstance(out, dict):

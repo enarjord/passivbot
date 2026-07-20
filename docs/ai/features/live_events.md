@@ -74,10 +74,13 @@ EMA types (`m1_close`, `m1_volume`, `m1_log_range`, or `h1_log_range`), exceptio
 spans, ages, fallback counts, and cycle correlation. Their normal and debug payloads never retain
 arbitrary exception messages, URLs, credentials, raw fallback reasons, or reason fragments parsed
 from exception text. Console formatting derives EMA identity from an explicit safe field rather
-than inspecting an exception message.
+than inspecting an exception message. Malformed symbols and classifications normalize to bounded
+sentinels, unsupported metric names are omitted, and non-finite spans are omitted. Adjacent EMA
+failure logs retain only code-owned context and exception type.
 
-When structured console ownership is unavailable, the bounded legacy warning follows the same
-redaction boundary. Event or sink failure must not alter EMA calculation, cached fallback
+The structured event owns the normal warning only after its emitter reports success and the
+structured console owner is available. Otherwise, the bounded legacy warning remains and follows
+the same redaction boundary. Event or sink failure must not alter EMA calculation, cached fallback
 selection, candidate availability, scheduling, retries, planning, orders, risk, or caller control
 flow. Downstream smoke and incident redaction remains defense in depth, not the primary payload
 boundary.

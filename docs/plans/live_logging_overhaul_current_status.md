@@ -29,6 +29,9 @@ Estimated completion:
   `ema.unavailable` and `ema.fallback_used` structured, monitor, console, text,
   debug-profile, and legacy fallback paths while retaining code-owned reason
   classifications, bounded EMA/error types, symbols, spans, ages, and counts.
+  Malformed typed values normalize or drop at the producer boundary, adjacent
+  EMA failure logs retain only exception type, and legacy warnings remain when
+  the structured event was not emitted successfully.
 - Behavior boundary: observability payload and projection only. EMA
   calculation, prior-value and cached fallback selection, candidate
   availability, scheduling, retries, planning, orders, risk, and caller control

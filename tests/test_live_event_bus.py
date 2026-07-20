@@ -1858,6 +1858,28 @@ def test_ema_fallback_console_formatter_uses_safe_fields_without_raw_reason():
     assert "private.example" not in message
 
 
+def test_emit_event_failure_log_omits_exception_text(caplog):
+    secret = "https://private.example/path?api_key=pipeline-secret"
+
+    class FailingPipeline:
+        def emit(self, *_args, **_kwargs):
+            raise RuntimeError(secret)
+
+    bot = type("Bot", (), {"_live_event_pipeline": FailingPipeline()})()
+    event = LiveEvent("ema.fallback_used", data={"safe": True})
+
+    with caplog.at_level(logging.DEBUG):
+        assert live_event_bus_module.emit_event(bot, event) is None
+
+    messages = [record.message for record in caplog.records]
+    assert any(
+        "failed to emit ema.fallback_used error_type=RuntimeError" in message
+        for message in messages
+    )
+    assert all(secret not in message for message in messages)
+    assert all("pipeline-secret" not in message for message in messages)
+
+
 def test_ema_fallback_console_formatter_is_bounded_without_mutating_payload():
     maximum = (1 << 63) - 1
     data = {
