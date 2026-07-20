@@ -22,28 +22,51 @@ Estimated completion:
 
 ## Active Review Slice
 
-- PR #1338, `Report incident time-window scan cost`; branch:
-  `codex/live-incident-scan-cost`, based on canonical
-  `848eb60c502b7af21dd7aa52f50f86aece552bd9`.
-- Scope: expose bounded elapsed-time, byte, successful-file, record, and
-  read-method cost metadata for the independent event scan used by incident
-  bundle time-window reports, including the full report, manifest summary, and
-  command result.
+- Pending PR, `Report live smoke log scan cost`; branch:
+  `codex/live-log-scan-cost`, based on canonical
+  `f9ceb9678448201af0c0cc5f40f889b661d3021c`.
+- Scope: expose bounded elapsed-time, byte, successful-file, selected-line,
+  and read-method cost metadata for the text-log scan used by
+  `live-smoke-report`, including full, summary, and brief projections.
 - Behavior boundary: read-only local tooling only. The slice changes no event
-  producer, file selection, matching, truncation, bundle payload selection,
-  verdict, monitor persistence, exchange access, logs, process
-  inspection/control, planning, strategy, order, or risk behavior.
-- Baseline: incident time-window reports expose discovered/scanned files and
-  matched events but cannot identify actual records/bytes read, read methods,
-  or scan elapsed time. The active slice closes only that diagnostic gap using
-  the contract now shared by event query, performance report, and smoke report.
+  producer, log discovery, sequential read strategy, tail selection, line
+  numbering, matching, redaction, time-window filtering, verdict, monitor
+  persistence, exchange access, process inspection/control, planning,
+  strategy, order, or risk behavior.
+- Baseline: PR #1338's bounded VPS5 incident bundle scanned eight selected log
+  files and considered 321 in-window lines after skipping 2,943 older lines,
+  but the log report could not identify successful reads, physical/decoded
+  bytes, read methods, or elapsed scan time. The active slice closes only that
+  diagnostic gap using the established `scan_cost` schema.
 - Review gate: exact-current-head Hermes approval plus green Python/Rust CI.
   Built-in Codex automatic review is additional and every finding must be
   verified and resolved.
-- Expected VPS action: tracked-clean pull plus one bounded read-only incident
-  bundle smoke; no bot restart or process signal.
+- Expected VPS action: tracked-clean pull plus bounded read-only smoke and
+  incident-bundle reports; no bot restart or process signal.
 
-## Deployed Baseline (PR #1329 After PR #1337)
+## Deployed Baseline (PR #1338)
+
+- PR #1338 merged exact reviewed head
+  `8924c4ff30f96b8ea3dbf58fc6a97d1faa54514d` as canonical
+  `f9ceb9678448201af0c0cc5f40f889b661d3021c` after exact-head Hermes approval
+  and green Python/Rust CI. Built-in Codex was additionally requested and had
+  posted no finding when the proportional temporary gate merged the PR.
+- VPS5 guarded-prepared tracked-clean from
+  `848eb60c502b7af21dd7aa52f50f86aece552bd9` without a Rust build, bot
+  restart, or process signal. The source fingerprint and compiled stamp stayed
+  `691bff9683deec9382a4e96ab6a107c14145f88edd6ae2f8e2380b8ba6824449`.
+- The bounded five-minute incident bundle was `ok=true`, found all five exact
+  processes, and projected identical time-window `scan_cost` through the full
+  report, manifest, and command result: six `seek_tail` files, 8,848 records,
+  15,501,809 known physical/decoded bytes, and 3,515.111 ms. Its repository
+  evidence was tracked-clean at `f9ceb967`.
+- An immediate post-bundle identity snapshot observed four bot processes in
+  transient `D` state. After 30 seconds the unchanged exact PIDs were
+  `R/R/S/R/R`; pane parents `%358`-`%362` and protected `misc:0.0`
+  `%8`/PID `434835` were unchanged. No direct exchange call, manufactured
+  event, build, restart, or process signal occurred.
+
+## Previous Deployed Baseline (PR #1329 After PR #1337)
 
 - PR #1337 merged exact reviewed head
   `51a82c23230daf4aea5ec68784ef7168293b408e` as canonical
@@ -1662,11 +1685,10 @@ PR #1288's bounded target-identity stability, and PR #1289's plan binding are
 merged, deployed, and naturally validated without process control. PR #1290's
 pane-parent relaunch classification and the restart preparation/orchestration
 slices through PR #1309 are also merged and deployed. Later logging slices
-through PR #1337, followed by adjacent PR #1329, are deployed at canonical
-`848eb60c502b7af21dd7aa52f50f86aece552bd9`; their current evidence is recorded
-above. The active incident time-window scan-cost slice measures the remaining
-read-only bundle artifact work without changing scan selection or verdict
-behavior.
+through PR #1338, including adjacent PR #1329, are deployed at canonical
+`f9ceb9678448201af0c0cc5f40f889b661d3021c`; their current evidence is recorded
+above. The active log scan-cost slice measures the remaining read-only text-log
+artifact work without changing discovery, matching, or verdict behavior.
 
 Do not create progress-only PRs or resume unrelated logging work from stale
 worktrees.

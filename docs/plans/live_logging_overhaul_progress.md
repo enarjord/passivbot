@@ -15,7 +15,30 @@ merge, live smoke evidence changes, or new gaps are discovered.
 - Do not use this file for design churn; unresolved design details belong in the
   plan or a focused handoff doc.
 
-## Latest Canonical Deployment (PR #1329 After PR #1337)
+## Latest Canonical Deployment (PR #1338)
+
+- PR #1338 merged exact reviewed head
+  `8924c4ff30f96b8ea3dbf58fc6a97d1faa54514d` as canonical
+  `f9ceb9678448201af0c0cc5f40f889b661d3021c` after exact-head Hermes approval
+  and green Python/Rust CI. Built-in Codex was additionally requested and had
+  posted no finding when the proportional temporary gate merged the PR.
+- VPS5 guarded-prepared tracked-clean from `848eb60c50` without a Rust build,
+  bot restart, or signal; the Rust source fingerprint/stamp remained
+  `691bff9683deec9382a4e96ab6a107c14145f88edd6ae2f8e2380b8ba6824449`.
+- The bounded five-minute incident bundle was `ok=true`, found all five exact
+  processes, retained a clean `f9ceb967` repository, and projected identical
+  time-window scan cost through the full report, manifest, and command result:
+  six `seek_tail` files, 8,848 records, 15,501,809 known physical/decoded bytes,
+  and 3,515.111 ms.
+- The immediate post-bundle identity sample observed four unchanged bot PIDs
+  in transient `D` state. Thirty seconds later those same PIDs were
+  `R/R/S/R/R`; pane parents `%358`-`%362` and protected `misc:0.0`
+  `%8`/PID `434835` remained unchanged. No direct exchange call, manufactured
+  event, build, restart, or process signal occurred. The same bundle scanned
+  eight selected text logs but exposed no byte/read-method cost, motivating the
+  active `codex/live-log-scan-cost` slice.
+
+## Previous Canonical Deployment (PR #1329 After PR #1337)
 
 - PR #1337 merged exact reviewed head
   `51a82c23230daf4aea5ec68784ef7168293b408e` as canonical
