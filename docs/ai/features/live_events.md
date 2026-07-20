@@ -67,6 +67,26 @@ only when the event emitter or structured console owner is unavailable. Event or
 not alter position/balance refresh, state mutation, scheduling, retries, planning, orders, risk, or
 the caller's existing decision to continue after this noncritical diagnostic failure.
 
+## EMA Diagnostic Redaction
+
+`ema.unavailable` and `ema.fallback_used` retain only code-owned reason classifications, bounded
+EMA types (`m1_close`, `m1_volume`, `m1_log_range`, or `h1_log_range`), exception types, symbols,
+spans, ages, fallback counts, and cycle correlation. Their normal and debug payloads never retain
+arbitrary exception messages, URLs, credentials, raw fallback reasons, or reason fragments parsed
+from exception text. Console formatting derives EMA identity from an explicit safe field rather
+than inspecting an exception message. Malformed symbols and classifications normalize to bounded
+sentinels, unsupported metric names are omitted, and non-finite spans are omitted. Adjacent EMA
+failure logs retain only code-owned context and exception type.
+
+The structured event owns the normal warning only after its emitter reports success and the
+structured console owner is available. Success requires queue admission and no synchronous console
+sink failure; these owner events defer console/text projection until after queue admission so a
+rejected event cannot produce both projections. Otherwise, the bounded legacy warning remains and
+follows the same redaction boundary. Event or sink failure must not alter EMA calculation, cached
+fallback selection, candidate availability, scheduling, retries, planning, orders, risk, or caller
+control flow. Downstream smoke and incident redaction remains defense in depth, not the primary
+payload boundary.
+
 The generated value reference is `../generated/live_event_registry.md`.
 
 ## Runtime Identity
