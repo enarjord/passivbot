@@ -13,8 +13,9 @@ All notable user-facing changes will be documented in this file.
   refresh failure through hostile exception metadata, and wrapped timestamp failures remain
   recoverable through a bounded cause/context graph check. Code-owned recovery markers are scanned
   across complete exception text using bounded temporary chunks, preserving existing retry
-  classification and caller-specific marker case rules without retaining that text. Exception propagation, fill accounting, refresh cadence,
-  planning, risk, and trading behavior are unchanged.
+  classification and caller-specific marker case rules without retaining that text. Legacy
+  class-name recovery markers are inspected without projecting untrusted names. Exception
+  propagation, fill accounting, refresh cadence, planning, risk, and trading behavior are unchanged.
 
 - Best-effort live event emitter failure diagnostics, including HSL event emitters and the
   event-adjacent HSL coin-status human-log fallback, now retain bounded exception types instead of

@@ -68,6 +68,7 @@ from live.diagnostic_safety import (
     bounded_exception_status,
     bounded_exception_type,
     exception_text_contains,
+    exception_type_name_contains,
 )
 from live.freshness import ACCOUNT_SURFACES, LIVE_STATE_SURFACES, FreshnessLedger
 from live.events import DiagnosticEvent, emit_diagnostic_event, run_diagnostic_step
@@ -2360,7 +2361,7 @@ class Passivbot:
                     return True
             except BaseException:
                 pass
-            if "invalidnonce" in bounded_exception_type(current).lower():
+            if exception_type_name_contains(current, ("invalidnonce",)):
                 return True
             if exception_text_contains(current, needles):
                 return True

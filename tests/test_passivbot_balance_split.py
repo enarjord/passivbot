@@ -11296,6 +11296,15 @@ def test_exchange_time_sync_detection_scans_late_marker():
     assert bot._is_exchange_time_sync_error(error) is True
 
 
+def test_exchange_time_sync_detection_preserves_class_name_marker():
+    bot = Passivbot.__new__(Passivbot)
+
+    class WrappedInvalidNonceFailure(RuntimeError):
+        pass
+
+    assert bot._is_exchange_time_sync_error(WrappedInvalidNonceFailure("opaque"))
+
+
 def test_exchange_time_sync_detection_contains_hostile_exception_text():
     bot = Passivbot.__new__(Passivbot)
     secret = "api_key=time-sync-hostile-string"

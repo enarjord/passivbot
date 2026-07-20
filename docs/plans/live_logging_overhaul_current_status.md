@@ -33,7 +33,8 @@ Estimated completion:
   type, validated numeric status/code, and existing source, coverage, retry, timing, count,
   and code-owned endpoint context. Complete chunked text inspection plus a bounded
   cause/context graph preserves caller-specific retry marker case rules and timestamp recovery for
-  redacted wrappers. Adjacent
+  redacted wrappers, including the legacy class-name marker heuristic without projecting that name.
+  Adjacent
   monitor, metadata-capture, and HSL progress
   diagnostics use the same safe type boundary.
 - Behavior boundary: diagnostic retention and projection only. Exception

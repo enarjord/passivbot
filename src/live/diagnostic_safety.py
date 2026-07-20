@@ -77,6 +77,32 @@ def bounded_exception_type(exc: BaseException) -> str:
         return "Error"
 
 
+def _text_contains(
+    text: str,
+    needles: tuple[str, ...],
+    *,
+    case_sensitive: bool = False,
+    chunk_chars: int = 4096,
+) -> bool:
+    if type(text) is not str or type(case_sensitive) is not bool:
+        return False
+    search_needles = tuple(
+        needle if case_sensitive else needle.lower()
+        for needle in needles
+        if type(needle) is str and needle
+    )
+    if not search_needles or type(chunk_chars) is not int or chunk_chars <= 0:
+        return False
+    overlap = max(len(needle) for needle in search_needles) - 1
+    for start in range(0, len(text), chunk_chars):
+        chunk_start = max(0, start - overlap)
+        chunk = text[chunk_start : start + chunk_chars]
+        searchable_chunk = chunk if case_sensitive else chunk.lower()
+        if any(needle in searchable_chunk for needle in search_needles):
+            return True
+    return False
+
+
 def exception_text_contains(
     exc: BaseException,
     needles: tuple[str, ...],
@@ -86,24 +112,27 @@ def exception_text_contains(
 ) -> bool:
     """Inspect exception text in bounded temporary chunks without returning it."""
     try:
-        text = str(exc)
-        if type(text) is not str or type(case_sensitive) is not bool:
-            return False
-        search_needles = tuple(
-            needle if case_sensitive else needle.lower()
-            for needle in needles
-            if type(needle) is str and needle
+        return _text_contains(
+            str(exc),
+            needles,
+            case_sensitive=case_sensitive,
+            chunk_chars=chunk_chars,
         )
-        if not search_needles or type(chunk_chars) is not int or chunk_chars <= 0:
-            return False
-        overlap = max(len(needle) for needle in search_needles) - 1
-        for start in range(0, len(text), chunk_chars):
-            chunk_start = max(0, start - overlap)
-            chunk = text[chunk_start : start + chunk_chars]
-            searchable_chunk = chunk if case_sensitive else chunk.lower()
-            if any(needle in searchable_chunk for needle in search_needles):
-                return True
+    except BaseException:
         return False
+
+
+def exception_type_name_contains(
+    exc: BaseException,
+    needles: tuple[str, ...],
+    *,
+    case_sensitive: bool = False,
+) -> bool:
+    """Inspect the real class name for control flow without projecting that name."""
+    try:
+        cls = type(exc)
+        name = type.__getattribute__(cls, "__name__")
+        return _text_contains(name, needles, case_sensitive=case_sensitive)
     except BaseException:
         return False
 

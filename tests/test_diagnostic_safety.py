@@ -3,6 +3,7 @@ from live.diagnostic_safety import (
     bounded_exception_status,
     bounded_exception_type,
     exception_text_contains,
+    exception_type_name_contains,
 )
 
 
@@ -75,6 +76,26 @@ def test_exception_text_contains_preserves_case_sensitive_matching():
     )
     assert not exception_text_contains(
         lower, ("TOO_MANY_REQUESTS",), case_sensitive=True
+    )
+
+
+def test_exception_type_name_contains_is_hostile_metadata_safe_and_non_projecting():
+    secret = "api_key=hostile-type-metadata"
+
+    class HostileMeta(type):
+        def __getattribute__(cls, name):
+            if name == "__name__":
+                raise KeyboardInterrupt(secret)
+            return super().__getattribute__(name)
+
+    class WrappedInvalidNonceFailure(RuntimeError, metaclass=HostileMeta):
+        pass
+
+    assert exception_type_name_contains(
+        WrappedInvalidNonceFailure(), ("invalidnonce",)
+    )
+    assert not exception_type_name_contains(
+        WrappedInvalidNonceFailure(), ("unrelated",)
     )
 
 

@@ -167,7 +167,8 @@ failure line may also retain validated numeric status/code and a code-owned endp
 Time-sync and exchange recovery classification may inspect complete exception text in bounded
 temporary chunks and traverse both cause/context edges within a fixed node budget, but that
 inspection must not retain the text, broaden caller-specific marker case rules, or replace the
-original failure.
+original failure. Control-flow-only class-name inspection follows the same non-retaining rule so
+legacy recovery heuristics do not require projecting untrusted class names.
 Monitor error events use the same hostile-metadata-safe exception-type boundary; diagnostic
 publication must not replace the original refresh exception.
 
