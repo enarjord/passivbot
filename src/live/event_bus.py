@@ -3657,8 +3657,10 @@ class LiveEventPipeline:
         event: LiveEvent | Mapping[str, Any],
         *,
         require_enqueue: bool = False,
+        defer_sync_sinks_until_enqueued: bool = False,
         **overrides: Any,
     ) -> LiveEvent | None:
+        require_enqueue = bool(require_enqueue or defer_sync_sinks_until_enqueued)
         if isinstance(event, LiveEvent):
             live_event = event
         else:
@@ -3667,20 +3669,8 @@ class LiveEventPipeline:
             live_event = replace(live_event, **overrides)
         live_event = live_event.with_context(self.context)
         route = self.route_for(live_event)
-        if (
-            route.console
-            and self.console_sink is not None
-            and _console_sink_event_visible(live_event)
-            and self._should_emit_throttled_sink("console", live_event, route)
-        ):
-            self._write_sink("console", self.console_sink, live_event)
-        if (
-            route.text
-            and self.text_sink is not None
-            and _operator_sink_event_visible(live_event)
-            and self._should_emit_throttled_sink("text", live_event, route)
-        ):
-            self._write_sink("text", self.text_sink, live_event)
+        if not defer_sync_sinks_until_enqueued:
+            self._emit_sync_sinks(live_event, route)
         enqueued = True
         if route.structured or route.monitor:
             with self._enqueue_lock:
@@ -3712,7 +3702,25 @@ class LiveEventPipeline:
                         )
         if require_enqueue and not enqueued:
             return None
+        if defer_sync_sinks_until_enqueued:
+            self._emit_sync_sinks(live_event, route)
         return live_event
+
+    def _emit_sync_sinks(self, live_event: LiveEvent, route: EventRoute) -> None:
+        if (
+            route.console
+            and self.console_sink is not None
+            and _console_sink_event_visible(live_event)
+            and self._should_emit_throttled_sink("console", live_event, route)
+        ):
+            self._write_sink("console", self.console_sink, live_event)
+        if (
+            route.text
+            and self.text_sink is not None
+            and _operator_sink_event_visible(live_event)
+            and self._should_emit_throttled_sink("text", live_event, route)
+        ):
+            self._write_sink("text", self.text_sink, live_event)
 
     def _should_emit_throttled_sink(
         self, sink_name: str, event: LiveEvent, route: EventRoute
@@ -4062,6 +4070,7 @@ def emit_event(
     event: LiveEvent | Mapping[str, Any],
     *,
     require_enqueue: bool = False,
+    defer_sync_sinks_until_enqueued: bool = False,
     **overrides: Any,
 ) -> Any:
     pipeline = getattr(bot, "_live_event_pipeline", None)
@@ -4070,7 +4079,10 @@ def emit_event(
     if pipeline is None or not callable(getattr(pipeline, "emit", None)):
         return None
     try:
-        return pipeline.emit(event, require_enqueue=require_enqueue, **overrides)
+        emit_kwargs = {"require_enqueue": require_enqueue, **overrides}
+        if defer_sync_sinks_until_enqueued:
+            emit_kwargs["defer_sync_sinks_until_enqueued"] = True
+        return pipeline.emit(event, **emit_kwargs)
     except Exception as exc:
         logging.debug(
             "[event] failed to emit %s error_type=%s",

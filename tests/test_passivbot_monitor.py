@@ -2948,6 +2948,9 @@ def test_ema_warning_event_reports_closed_pipeline_enqueue_failure():
     assert not any(
         event.event_type == EventTypes.EMA_UNAVAILABLE for event in structured.events
     )
+    assert not any(
+        event.event_type == EventTypes.EMA_UNAVAILABLE for event in console.events
+    )
     assert bot._live_event_pipeline.drop_counters[EventTypes.EMA_UNAVAILABLE] == 1
 
 

@@ -1103,6 +1103,7 @@ def emit_live_event(
     raw_ref: str | None = None,
     raw_hash: str | None = None,
     require_enqueue: bool = False,
+    defer_sync_sinks_until_enqueued: bool = False,
 ):
     return emit_event(
         bot,
@@ -1135,6 +1136,7 @@ def emit_live_event(
             raw_hash=raw_hash,
         ),
         require_enqueue=require_enqueue,
+        defer_sync_sinks_until_enqueued=defer_sync_sinks_until_enqueued,
     )
 
 
@@ -3648,6 +3650,7 @@ def _emit_ema_warning_event(bot: Any, event_type: str, **kwargs: Any) -> bool:
     emitted = bot._emit_live_event(
         event_type,
         require_enqueue=True,
+        defer_sync_sinks_until_enqueued=True,
         **kwargs,
     )
     console_errors_after = _console_sink_error_count(bot)
