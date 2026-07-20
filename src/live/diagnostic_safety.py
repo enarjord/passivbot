@@ -29,11 +29,16 @@ def bounded_exception_type(exc: BaseException) -> str:
 
 
 def _exact_scalar_text(value: object) -> str | None:
-    if type(value) is str:
-        return value
-    if type(value) is int:
-        return str(value)
-    return None
+    try:
+        if type(value) is str:
+            return value
+        if type(value) is int:
+            if int.bit_length(value) > 160:
+                return None
+            return str(value)
+        return None
+    except BaseException:
+        return None
 
 
 def _bounded_exception_attribute(
@@ -41,26 +46,12 @@ def _bounded_exception_attribute(
     names: tuple[str, ...],
     pattern: re.Pattern[str],
 ) -> str | None:
-    for name in names:
-        try:
-            value = getattr(exc, name, None)
-        except BaseException:
-            continue
-        text = _exact_scalar_text(value)
-        if (
-            text is not None
-            and text.isascii()
-            and pattern.fullmatch(text)
-            and not _SENSITIVE_EXCEPTION_TYPE_RE.search(text)
-        ):
-            return text
     try:
-        info = getattr(exc, "info", None)
-    except BaseException:
-        info = None
-    if type(info) is dict:
         for name in names:
-            value = info.get(name)
+            try:
+                value = getattr(exc, name, None)
+            except BaseException:
+                continue
             text = _exact_scalar_text(value)
             if (
                 text is not None
@@ -69,7 +60,24 @@ def _bounded_exception_attribute(
                 and not _SENSITIVE_EXCEPTION_TYPE_RE.search(text)
             ):
                 return text
-    return None
+        try:
+            info = getattr(exc, "info", None)
+        except BaseException:
+            info = None
+        if type(info) is dict:
+            for name in names:
+                value = info.get(name)
+                text = _exact_scalar_text(value)
+                if (
+                    text is not None
+                    and text.isascii()
+                    and pattern.fullmatch(text)
+                    and not _SENSITIVE_EXCEPTION_TYPE_RE.search(text)
+                ):
+                    return text
+        return None
+    except BaseException:
+        return None
 
 
 def bounded_exception_status(exc: BaseException) -> str | None:

@@ -5686,6 +5686,18 @@ async def test_update_pnls_propagates_unexpected_refresh_errors_without_retainin
 ):
     bot = Passivbot.__new__(Passivbot)
     secret = "api_key=fill-refresh-secret https://private.example.invalid/fills"
+
+    class HostileKey:
+        def __hash__(self):
+            return hash("status")
+
+        def __eq__(self, other):
+            raise KeyboardInterrupt(secret)
+
+    refresh_error = RuntimeError(secret)
+    refresh_error.status = 10**10_000
+    refresh_error.code = -(10**10_000)
+    refresh_error.info = {HostileKey(): "429"}
     cached_events = [
         SimpleNamespace(timestamp=1_700_000_000_000, id="fill-1", source_ids=["fill-1"])
     ]
@@ -5694,7 +5706,7 @@ async def test_update_pnls_propagates_unexpected_refresh_errors_without_retainin
         def __init__(self, events, *, history_scope="unknown"):
             self._events = list(events)
             self.refresh = AsyncMock()
-            self.refresh_latest = AsyncMock(side_effect=RuntimeError(secret))
+            self.refresh_latest = AsyncMock(side_effect=refresh_error)
             self.history_scope = history_scope
 
         def get_events(self):
@@ -5738,8 +5750,9 @@ async def test_update_pnls_propagates_unexpected_refresh_errors_without_retainin
         if shutdown_requested:
             assert await bot.update_pnls() is False
         else:
-            with pytest.raises(RuntimeError, match="fill-refresh-secret"):
+            with pytest.raises(RuntimeError) as exc_info:
                 await bot.update_pnls()
+            assert exc_info.value is refresh_error
     assert bot._trailing_fill_fetch_generation == 7
     assert bot._live_event_pipeline.flush(timeout=2.0) is True
     events = [
@@ -5759,6 +5772,8 @@ async def test_update_pnls_propagates_unexpected_refresh_errors_without_retainin
         assert "error" not in event.data
         assert event.data["coverage_ready_before"] is True
     assert "error_type=RuntimeError" in caplog.text
+    if not shutdown_requested:
+        assert "status=- code=-" in caplog.text
     assert secret not in caplog.text
     assert secret not in capsys.readouterr().err
     assert bot._live_event_pipeline.close(timeout=2.0) is True
