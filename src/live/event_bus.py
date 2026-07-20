@@ -1180,6 +1180,9 @@ def _console_create_filter_summary(event: LiveEvent) -> list[str]:
     allowed_protective_create = _data_int(data, "allowed_protective_create")
     if allowed_protective_create is not None:
         parts.append(f"allow_protective_create={allowed_protective_create}")
+    error_type = _data_str(data, "error_type")
+    if error_type:
+        parts.append(f"error_type={error_type[:64]}")
     return parts
 
 

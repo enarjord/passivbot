@@ -4,6 +4,12 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Pre-create planning and market-snapshot skips now use the existing
+  `execution.create_skipped` event as the sole normal warning when the structured console is
+  available. The bounded event retains the stable reason, stage, count, symbols, and exception
+  type without raw exception text; the legacy warning remains a fallback, and create filtering is
+  unchanged.
+
 - Large open-order snapshot deltas now emit one bounded `open_orders.snapshot_delta` INFO event per
   added or removed direction, with only the direction and order count. The event reaches structured,
   monitor, console, and text sinks with the `[order]` tag; reconciliation and order behavior are

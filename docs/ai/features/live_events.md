@@ -162,6 +162,14 @@ are deterministic and bounded; payloads contain no order price, quantity, raw pa
 secret, or exception text. Planning failure, deferral, shutdown interruption, or diagnostic failure
 omits the event rather than publishing a misleading candidate-free result.
 
+Pre-create planning-snapshot and market-snapshot gate failures use
+`execution.create_skipped` as the sole normal console/text warning when the structured console is
+available. The event retains the code-owned reason and message plus bounded order/symbol counts,
+stage, safe detail fields, and exception type; it excludes raw exception text and arbitrary
+payloads. The legacy warning remains only when the event emitter or structured console owner is
+unavailable. Event or sink failure must not change refresh attempts, entry-block attribution, the
+returned create list, or any planning, execution, order, and risk decision.
+
 ## Connector Call Boundary
 
 `execution.create_connector_call_started` and `execution.cancel_connector_call_started` are

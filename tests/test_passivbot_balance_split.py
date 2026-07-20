@@ -8788,16 +8788,23 @@ def test_staged_execution_defer_survives_planning_unavailable_emit_failure():
 
 
 @pytest.mark.asyncio
-async def test_pre_create_snapshot_filter_blocks_stale_market_snapshots():
+async def test_pre_create_snapshot_filter_blocks_stale_market_snapshots(caplog):
     bot = Passivbot.__new__(Passivbot)
     bot.config = {"live": {}}
     bot.exchange = "bybit"
     bot.freshness_ledger = FreshnessLedger(now_ms=0)
     bot._authoritative_refresh_epoch = 1
     sink = ListEventSink()
+    monitor_sink = ListEventSink()
+    console_sink = ListEventSink()
+    text_sink = ListEventSink()
+    bot.live_event_console_enabled = True
     bot._live_event_current_cycle_id = "cy_stale_pre_create_market_snapshot"
     bot._live_event_pipeline = LiveEventPipeline(
-        structured_sinks=[sink], monitor_sinks=[]
+        structured_sinks=[sink],
+        monitor_sinks=[monitor_sink],
+        console_sink=console_sink,
+        text_sink=text_sink,
     )
     symbol = "BTC/USDT:USDT"
 
@@ -8847,7 +8854,8 @@ async def test_pre_create_snapshot_filter_blocks_stale_market_snapshots():
         }
     ]
 
-    assert await bot._filter_fresh_market_snapshot_creations(orders) == []
+    with caplog.at_level(logging.WARNING):
+        assert await bot._filter_fresh_market_snapshot_creations(orders) == []
     assert bot._live_event_pipeline.flush(timeout=2.0) is True
     events = [
         event
@@ -8868,20 +8876,40 @@ async def test_pre_create_snapshot_filter_blocks_stale_market_snapshots():
     assert event.data["details"][0]["reason"] == "stale"
     assert event.data["details"][0]["age_ms"] >= 20_000
     assert event.data["details"][0]["max_age_ms"] == 10_000
+    assert monitor_sink.events == [event]
+    assert console_sink.events == [event]
+    assert text_sink.events == [event]
+    console_message = format_console_event(event)
+    assert "reason=pre_create_market_snapshot_unavailable" in console_message
+    assert "create orders skipped because pre-create market snapshots are stale" in (
+        console_message
+    )
+    assert len(console_message) <= 240
+    assert not any(
+        "stale pre-create market snapshots" in record.getMessage()
+        for record in caplog.records
+    )
     assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 
 @pytest.mark.asyncio
-async def test_pre_create_snapshot_filter_emits_failed_refresh_skip_event():
+async def test_pre_create_snapshot_filter_emits_failed_refresh_skip_event(caplog):
     bot = Passivbot.__new__(Passivbot)
     bot.config = {"live": {}}
     bot.exchange = "bybit"
     bot.freshness_ledger = FreshnessLedger(now_ms=0)
     bot._authoritative_refresh_epoch = 1
     sink = ListEventSink()
+    monitor_sink = ListEventSink()
+    console_sink = ListEventSink()
+    text_sink = ListEventSink()
+    bot.live_event_console_enabled = True
     bot._live_event_current_cycle_id = "cy_failed_pre_create_market_snapshot"
     bot._live_event_pipeline = LiveEventPipeline(
-        structured_sinks=[sink], monitor_sinks=[]
+        structured_sinks=[sink],
+        monitor_sinks=[monitor_sink],
+        console_sink=console_sink,
+        text_sink=text_sink,
     )
     symbol = "BTC/USDT:USDT"
     now_ms = passivbot_module.utc_ms()
@@ -8921,7 +8949,8 @@ async def test_pre_create_snapshot_filter_emits_failed_refresh_skip_event():
         }
     ]
 
-    assert await bot._filter_fresh_market_snapshot_creations(orders) == []
+    with caplog.at_level(logging.WARNING):
+        assert await bot._filter_fresh_market_snapshot_creations(orders) == []
     assert bot._live_event_pipeline.flush(timeout=2.0) is True
     events = [
         event
@@ -8939,6 +8968,18 @@ async def test_pre_create_snapshot_filter_emits_failed_refresh_skip_event():
     assert event.data["stage"] == "market_snapshot_refresh"
     assert event.data["error_type"] == "RuntimeError"
     assert "exchange unavailable" not in json.dumps(event.data)
+    assert monitor_sink.events == [event]
+    assert console_sink.events == [event]
+    assert text_sink.events == [event]
+    console_message = format_console_event(event)
+    assert "error_type=RuntimeError" in console_message
+    assert "reason=pre_create_market_snapshot_unavailable" in console_message
+    assert "exchange unavailable" not in console_message
+    assert len(console_message) <= 240
+    assert not any(
+        "failed pre-create market snapshot refresh" in record.getMessage()
+        for record in caplog.records
+    )
     assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 
@@ -9215,14 +9256,23 @@ async def test_pre_create_snapshot_filter_disables_limit_order_distance_guard(
 
 
 @pytest.mark.asyncio
-async def test_pre_create_snapshot_filter_blocks_non_market_planning_invalidation():
+async def test_pre_create_snapshot_filter_blocks_non_market_planning_invalidation(
+    caplog,
+):
     bot = Passivbot.__new__(Passivbot)
     bot.config = {"live": {}}
     bot.exchange = "bybit"
     sink = ListEventSink()
+    monitor_sink = ListEventSink()
+    console_sink = ListEventSink()
+    text_sink = ListEventSink()
+    bot.live_event_console_enabled = True
     bot._live_event_current_cycle_id = "cy_invalid_pre_create_planning_snapshot"
     bot._live_event_pipeline = LiveEventPipeline(
-        structured_sinks=[sink], monitor_sinks=[]
+        structured_sinks=[sink],
+        monitor_sinks=[monitor_sink],
+        console_sink=console_sink,
+        text_sink=text_sink,
     )
     symbol = "BTC/USDT:USDT"
     now_ms = passivbot_module.utc_ms()
@@ -9272,7 +9322,8 @@ async def test_pre_create_snapshot_filter_blocks_non_market_planning_invalidatio
         }
     ]
 
-    assert await bot._filter_fresh_market_snapshot_creations(orders) == []
+    with caplog.at_level(logging.WARNING):
+        assert await bot._filter_fresh_market_snapshot_creations(orders) == []
     assert bot._live_event_pipeline.flush(timeout=2.0) is True
     events = [
         event
@@ -9291,7 +9342,109 @@ async def test_pre_create_snapshot_filter_blocks_non_market_planning_invalidatio
     assert event.data["details_count"] == 1
     assert event.data["details"][0]["surface"] == "positions"
     assert event.data["details"][0]["reason"] == "surface_epoch_too_old"
+    assert monitor_sink.events == [event]
+    assert console_sink.events == [event]
+    assert text_sink.events == [event]
+    console_message = format_console_event(event)
+    assert "reason=pre_create_planning_snapshot_invalid" in console_message
+    assert "create orders skipped because planning snapshot is invalid" in console_message
+    assert len(console_message) <= 240
+    assert not any(
+        "planning snapshot invalid before create" in record.getMessage()
+        for record in caplog.records
+    )
     assert bot._live_event_pipeline.close(timeout=2.0) is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("emitter_mode", ["missing", "raises"])
+async def test_pre_create_snapshot_filter_keeps_legacy_warning_without_event_owner(
+    caplog, emitter_mode
+):
+    def invalid_for_creations(_symbols):
+        return [
+            {
+                "surface": "positions",
+                "reason": "surface_epoch_too_old",
+                "epoch": 1,
+                "min_epoch": 2,
+            }
+        ]
+
+    def raising_emitter(**_kwargs):
+        raise RuntimeError("event pipeline unavailable with raw detail")
+
+    bot = SimpleNamespace(
+        _current_planning_snapshot_invalid_for_creations=invalid_for_creations,
+        _emit_execution_create_filter_event=(
+            None if emitter_mode == "missing" else raising_emitter
+        ),
+        _fresh_entry_eligibility_trace=None,
+        _live_event_pipeline=(
+            None
+            if emitter_mode == "missing"
+            else SimpleNamespace(emit=lambda _event: None, console_sink=object())
+        ),
+        live_event_console_enabled=emitter_mode == "raises",
+        _log_symbols=lambda symbols, limit=12: ",".join(symbols[:limit]),
+        _log_compact_symbol_payload=lambda _details: "positions:surface_epoch_too_old",
+    )
+    orders = [
+        {
+            "symbol": "BTC/USDT:USDT",
+            "side": "buy",
+            "position_side": "long",
+            "qty": 1.0,
+            "price": 99.0,
+        }
+    ]
+
+    with caplog.at_level(logging.WARNING):
+        assert await Passivbot._filter_fresh_market_snapshot_creations(bot, orders) == []
+
+    legacy_messages = [
+        record.getMessage()
+        for record in caplog.records
+        if "planning snapshot invalid before create" in record.getMessage()
+    ]
+    assert legacy_messages == [
+        "[market] skipping order creation; planning snapshot invalid before create | "
+        "symbols=BTC/USDT:USDT details=positions:surface_epoch_too_old"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_pre_create_snapshot_refresh_legacy_fallback_excludes_raw_error(caplog):
+    async def failing_snapshots(*_args, **_kwargs):
+        raise RuntimeError("exchange unavailable with raw account detail")
+
+    bot = SimpleNamespace(
+        _current_planning_snapshot_invalid_for_creations=lambda _symbols: [],
+        _emit_execution_create_filter_event=None,
+        _fresh_entry_eligibility_trace=None,
+        _get_live_market_snapshots=failing_snapshots,
+        _live_market_snapshot_max_age_ms=lambda: 10_000,
+        _log_symbols=lambda symbols, limit=12: ",".join(symbols[:limit]),
+    )
+    orders = [
+        {
+            "symbol": "BTC/USDT:USDT",
+            "side": "buy",
+            "position_side": "long",
+            "qty": 1.0,
+            "price": 99.0,
+        }
+    ]
+
+    with caplog.at_level(logging.WARNING):
+        assert await Passivbot._filter_fresh_market_snapshot_creations(bot, orders) == []
+
+    messages = [record.getMessage() for record in caplog.records]
+    assert messages == [
+        "[market] skipping order creation; failed pre-create market snapshot refresh | "
+        "symbols=BTC/USDT:USDT error_type=RuntimeError"
+    ]
+    assert "raw account detail" not in "\n".join(messages)
 
 
 def _make_open_order_guardrail_bot(*, epoch: int = 3):
