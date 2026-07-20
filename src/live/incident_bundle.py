@@ -732,6 +732,7 @@ def _smoke_log_result_summary(smoke_report: dict[str, Any]) -> dict[str, Any]:
         "tail_lines": logs.get("tail_lines"),
         "max_matches": logs.get("max_matches"),
         "files_scanned": logs.get("files_scanned"),
+        "scan_cost": logs.get("scan_cost"),
         "hard_matches": logs.get("hard_matches"),
         "attention_matches": logs.get("attention_matches"),
         "risk_attention_matches": logs.get("risk_attention_matches"),

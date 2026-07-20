@@ -22,29 +22,53 @@ Estimated completion:
 
 ## Active Review Slice
 
-- PR #1339, `Report live smoke log scan cost`; branch:
-  `codex/live-log-scan-cost`, based on canonical
-  `f9ceb9678448201af0c0cc5f40f889b661d3021c`.
-- Scope: expose bounded elapsed-time, byte, successful-file, selected-line,
-  and read-method cost metadata for the text-log scan used by
-  `live-smoke-report`, including full, summary, and brief projections.
+- PR #1340, `Retain smoke log scan cost in incident summaries`; branch:
+  `codex/live-incident-log-scan-cost`, based on canonical
+  `3311085dce8b7540f5a26e809229180d5f784c25`.
+- Scope: propagate the already-computed live smoke text-log `scan_cost`
+  unchanged through the incident bundle manifest summary and command result.
 - Behavior boundary: read-only local tooling only. The slice changes no event
-  producer, log discovery, sequential read strategy, tail selection, line
-  numbering, matching, redaction, time-window filtering, verdict, monitor
-  persistence, exchange access, process inspection/control, planning,
-  strategy, order, or risk behavior.
-- Baseline: PR #1338's bounded VPS5 incident bundle scanned eight selected log
-  files and considered 321 in-window lines after skipping 2,943 older lines,
-  but the log report could not identify successful reads, physical/decoded
-  bytes, read methods, or elapsed scan time. The active slice closes only that
-  diagnostic gap using the established `scan_cost` schema.
+  producer, archive content, log discovery or reads, matching, redaction,
+  filtering, verdict, monitor persistence, exchange access, process
+  inspection/control, planning, strategy, order, or risk behavior.
+- Baseline: PR #1339's deployed incident archive contains exact log
+  `scan_cost` in `smoke_report.json`, but the bundle manifest summary and
+  command result omit it because their dedicated log-summary projector does
+  not retain the field. The active slice closes only that projection gap.
 - Review gate: exact-current-head Hermes approval plus green Python/Rust CI.
   Built-in Codex automatic review is additional and every finding must be
   verified and resolved.
-- Expected VPS action: tracked-clean pull plus bounded read-only smoke and
-  incident-bundle reports; no bot restart or process signal.
+- Expected VPS action: tracked-clean pull plus one bounded read-only incident
+  bundle; no bot restart or process signal.
 
-## Deployed Baseline (PR #1338)
+## Deployed Baseline (PR #1339)
+
+- PR #1339 merged exact reviewed head
+  `c66a306a4b20485d31e3806913c1f2d90279ecb7` as canonical
+  `3311085dce8b7540f5a26e809229180d5f784c25` after exact-head Hermes approval
+  and green Python/Rust CI. Built-in Codex was additionally requested and had
+  posted no finding when the proportional temporary gate merged the PR.
+- VPS5 guarded-prepared tracked-clean from
+  `f9ceb9678448201af0c0cc5f40f889b661d3021c` without a Rust build, bot
+  restart, or process signal. The source fingerprint and compiled stamp stayed
+  `691bff9683deec9382a4e96ab6a107c14145f88edd6ae2f8e2380b8ba6824449`.
+- The bounded direct smoke proved the new log `scan_cost`: eight `full_scan`
+  files, 3,442 selected records, 512,497 known physical/decoded bytes, and
+  742.868 ms. It found all five exact processes and a tracked-clean repository
+  at `3311085d`; its non-green verdict correctly retained two natural KuCoin
+  authoritative-balance `RequestTimeout` events.
+- The matching incident archive retained its exact log `scan_cost` in
+  `smoke_report.json`: eight `full_scan` files, 3,446 selected records,
+  513,283 known physical/decoded bytes, and 642.116 ms. Live inspection proved
+  that only the manifest and command-result summaries omitted that field,
+  motivating the active projection-only slice.
+- Incident collection briefly observed unchanged bots in `D` state. Repeated
+  passive samples settled the same exact PIDs to `R/R/R/S/R`; pane parents
+  `%358`-`%362` and protected `misc:0.0` `%8`/PID `434835` were unchanged. No
+  direct exchange call, manufactured event, build, restart, or process signal
+  occurred.
+
+## Previous Deployed Baseline (PR #1338)
 
 - PR #1338 merged exact reviewed head
   `8924c4ff30f96b8ea3dbf58fc6a97d1faa54514d` as canonical
@@ -1685,10 +1709,11 @@ PR #1288's bounded target-identity stability, and PR #1289's plan binding are
 merged, deployed, and naturally validated without process control. PR #1290's
 pane-parent relaunch classification and the restart preparation/orchestration
 slices through PR #1309 are also merged and deployed. Later logging slices
-through PR #1338, including adjacent PR #1329, are deployed at canonical
-`f9ceb9678448201af0c0cc5f40f889b661d3021c`; their current evidence is recorded
-above. The active log scan-cost slice measures the remaining read-only text-log
-artifact work without changing discovery, matching, or verdict behavior.
+through PR #1339, including adjacent PR #1329, are deployed at canonical
+`3311085dce8b7540f5a26e809229180d5f784c25`; their current evidence is recorded
+above. The active incident-summary slice closes the observed log scan-cost
+projection gap without changing archive content, reads, matching, or verdict
+behavior.
 
 Do not create progress-only PRs or resume unrelated logging work from stale
 worktrees.

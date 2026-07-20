@@ -15,7 +15,31 @@ merge, live smoke evidence changes, or new gaps are discovered.
 - Do not use this file for design churn; unresolved design details belong in the
   plan or a focused handoff doc.
 
-## Latest Canonical Deployment (PR #1338)
+## Latest Canonical Deployment (PR #1339)
+
+- PR #1339 merged exact reviewed head
+  `c66a306a4b20485d31e3806913c1f2d90279ecb7` as canonical
+  `3311085dce8b7540f5a26e809229180d5f784c25` after exact-head Hermes approval
+  and green Python/Rust CI. Built-in Codex was additionally requested and had
+  posted no finding when the proportional temporary gate merged the PR.
+- VPS5 guarded-prepared tracked-clean from `f9ceb96784` without a Rust build,
+  restart, or signal; the Rust source fingerprint/stamp remained
+  `691bff9683deec9382a4e96ab6a107c14145f88edd6ae2f8e2380b8ba6824449`.
+- The bounded direct smoke reported eight `full_scan` log files, 3,442 selected
+  records, 512,497 known physical/decoded bytes, and 742.868 ms. Its non-green
+  verdict correctly retained two natural KuCoin authoritative-balance
+  `RequestTimeout` events rather than masking them.
+- The incident archive retained exact log scan cost in `smoke_report.json`:
+  eight `full_scan` files, 3,446 selected records, 513,283 known
+  physical/decoded bytes, and 642.116 ms. The manifest and command-result
+  summaries omitted the same field, motivating the active
+  `codex/live-incident-log-scan-cost` projection-only slice.
+- All five unchanged bot PIDs settled to `R/R/R/S/R`; pane parents
+  `%358`-`%362` and protected `misc:0.0` `%8`/PID `434835` remained unchanged.
+  No direct exchange call, manufactured event, build, restart, or process
+  signal occurred.
+
+## Previous Canonical Deployment (PR #1338)
 
 - PR #1338 merged exact reviewed head
   `8924c4ff30f96b8ea3dbf58fc6a97d1faa54514d` as canonical
