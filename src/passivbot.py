@@ -6611,7 +6611,11 @@ class Passivbot:
                 reconnect_no <= 1
                 or now_ms - last_traceback_ms >= 15 * 60 * 1000
             ):
-                stack_depth = len(traceback.extract_tb(exc.__traceback__)[-4:])
+                stack_depth = 0
+                current_tb = exc.__traceback__
+                while current_tb is not None and stack_depth < 4:
+                    stack_depth += 1
+                    current_tb = current_tb.tb_next
                 if stack_depth:
                     traceback_emitted = True
                     self._ws_reconnect_traceback_last_ms = now_ms

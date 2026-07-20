@@ -29,10 +29,10 @@ Estimated completion:
   from live PR metadata because this status update is the final handoff delta.
 - Scope: remove arbitrary exception text from legacy
   `MonitorPublisher.record_error` payloads and WebSocket reconnect human
-  diagnostics. Monitor error events retain safe caller context and a bounded
-  exception type; reconnect diagnostics retain bounded reason/error type,
-  cadence, retry delay, and sanitized stack-frame evidence without rendering
-  the exception value.
+  diagnostics. Monitor error events retain known code-owned source/stage
+  classifications and a bounded exception type; reconnect diagnostics retain
+  bounded reason/error type, cadence, retry delay, and count-only stack depth
+  without frame labels, line values, or the exception value.
 - Behavior boundary: observability payload and projection only. Monitor event
   framing, sequence, rotation, retention, and sink isolation remain unchanged,
   as do reconnect cadence, retry/backoff, connector calls, exception

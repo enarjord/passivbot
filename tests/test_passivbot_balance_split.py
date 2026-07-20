@@ -3032,6 +3032,46 @@ def test_ws_reconnect_redacts_sensitive_traceback_frame_components(monkeypatch, 
     assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 
+def test_ws_reconnect_bounds_stack_depth_without_extracting_traceback(
+    monkeypatch, caplog
+):
+    sink = ListEventSink()
+    bot = Passivbot.__new__(Passivbot)
+    bot.exchange = "kucoin"
+    bot._live_event_pipeline = LiveEventPipeline(
+        structured_sinks=[sink],
+        monitor_sinks=[],
+    )
+    monkeypatch.setattr(passivbot_module, "utc_ms", lambda: 1_000_000)
+    monkeypatch.setattr(
+        passivbot_module.traceback,
+        "extract_tb",
+        lambda *_args, **_kwargs: pytest.fail("traceback extraction must stay unused"),
+    )
+
+    def raise_deep(depth):
+        if depth:
+            return raise_deep(depth - 1)
+        raise TimeoutError("safe")
+
+    with caplog.at_level(logging.DEBUG):
+        try:
+            raise_deep(12)
+        except TimeoutError as exc:
+            Passivbot._log_ws_reconnect(
+                bot,
+                reconnect_no=1,
+                retry_delay_s=1.0,
+                reason="connection_lost",
+                exc=exc,
+            )
+
+    assert "stack_frames=4" in caplog.text
+    assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    assert sink.events[-1].data["traceback_emitted"] is True
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
+
+
 def test_ws_reconnect_does_not_consume_traceback_cadence_when_debug_disabled(
     monkeypatch, caplog
 ):
