@@ -11280,6 +11280,22 @@ def test_exchange_time_sync_detection_traverses_cause_without_rendering_wrapper(
         assert bot._is_exchange_time_sync_error(outer) is True
 
 
+def test_exchange_time_sync_detection_traverses_cause_and_context_branches():
+    bot = Passivbot.__new__(Passivbot)
+    outer = RuntimeError("classification-only wrapper")
+    outer.__cause__ = RuntimeError("unrelated explicit cause")
+    outer.__context__ = RuntimeError("timestamp outside recvWindow code=-1021")
+
+    assert bot._is_exchange_time_sync_error(outer) is True
+
+
+def test_exchange_time_sync_detection_scans_late_marker():
+    bot = Passivbot.__new__(Passivbot)
+    error = RuntimeError(("x" * 5000) + " timestamp outside recvWindow")
+
+    assert bot._is_exchange_time_sync_error(error) is True
+
+
 def test_exchange_time_sync_detection_contains_hostile_exception_text():
     bot = Passivbot.__new__(Passivbot)
     secret = "api_key=time-sync-hostile-string"
@@ -11334,6 +11350,78 @@ async def test_exchange_time_sync_no_hook_emits_unavailable_event(caplog):
     assert event.data["error_type"] == "RuntimeError"
     assert "error" not in event.data
     assert "supersecret" not in str(event.data)
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
+
+
+@pytest.mark.asyncio
+async def test_exchange_time_sync_redacts_forged_original_exception_type(caplog):
+    bot = Passivbot.__new__(Passivbot)
+    bot.exchange = "kucoin"
+    bot.user = "kucoin_01"
+    bot.bot_id = "bot_1"
+    sink = ListEventSink()
+    bot._live_event_pipeline = LiveEventPipeline(
+        structured_sinks=[sink],
+        monitor_sinks=[],
+    )
+    bot.cca = SimpleNamespace(options={})
+    bot.ccp = None
+    secret = "sk_live_7E4v93kR2mN6pQ8t"
+    forged_error = type(secret, (RuntimeError,), {"__module__": "ccxt"})
+
+    with caplog.at_level(logging.WARNING):
+        recovered = await bot._maybe_recover_exchange_time_sync(
+            forged_error("timestamp outside recvWindow"), source="fetch_balance"
+        )
+
+    assert recovered is False
+    assert secret not in caplog.text
+    assert "error_type=RuntimeError" in caplog.text
+    assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    assert sink.events[0].data["error_type"] == "RuntimeError"
+    assert secret not in str(sink.events[0].data)
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
+
+
+@pytest.mark.asyncio
+async def test_exchange_time_sync_contains_hostile_hook_type_metadata(caplog):
+    secret = "api_key=hostile-hook-type"
+
+    class HostileMeta(type):
+        def __getattribute__(cls, name):
+            if name == "__name__":
+                raise KeyboardInterrupt(secret)
+            return super().__getattribute__(name)
+
+    class HostileHookError(RuntimeError, metaclass=HostileMeta):
+        pass
+
+    bot = Passivbot.__new__(Passivbot)
+    bot.exchange = "binance"
+    bot.user = "binance_01"
+    bot.bot_id = "bot_1"
+    sink = ListEventSink()
+    bot._live_event_pipeline = LiveEventPipeline(
+        structured_sinks=[sink],
+        monitor_sinks=[],
+    )
+    bot.cca = SimpleNamespace(
+        options={},
+        load_time_difference=AsyncMock(side_effect=HostileHookError()),
+    )
+    bot.ccp = None
+
+    with caplog.at_level(logging.WARNING):
+        recovered = await bot._maybe_recover_exchange_time_sync(
+            RuntimeError("timestamp outside recvWindow"), source="fetch_balance"
+        )
+
+    assert recovered is False
+    assert secret not in caplog.text
+    assert "failed=1[cca:Runti...]" in caplog.text
+    assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    assert sink.events[0].data["failed_clients"] == ["cca:RuntimeError"]
+    assert secret not in str(sink.events[0].data)
     assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 

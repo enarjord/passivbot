@@ -164,7 +164,8 @@ remain unchanged.
 Cache-read/doctor failures and the outer process failure projection follow the same rule so a
 preserved exception cause cannot be exposed by an unsanitized startup traceback. The blocking
 failure line may also retain validated numeric status/code and a code-owned endpoint label.
-Time-sync classification may inspect bounded exception text and a bounded cause chain, but that
+Time-sync and exchange recovery classification may inspect complete exception text in bounded
+temporary chunks and traverse both cause/context edges within a fixed node budget, but that
 inspection must not retain the text or replace the original failure.
 Monitor error events use the same hostile-metadata-safe exception-type boundary; diagnostic
 publication must not replace the original refresh exception.

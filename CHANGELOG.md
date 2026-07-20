@@ -11,8 +11,10 @@ All notable user-facing changes will be documented in this file.
   confirmation, and direct refresh callers. Validated numeric status/code and code-owned endpoint
   labels remain available. Publication and time-sync classification cannot replace the original
   refresh failure through hostile exception metadata, and wrapped timestamp failures remain
-  recoverable through a bounded cause-chain check. Exception propagation, fill accounting, refresh
-  cadence, planning, risk, and trading behavior are unchanged.
+  recoverable through a bounded cause/context graph check. Code-owned recovery markers are scanned
+  across complete exception text using bounded temporary chunks, preserving existing retry
+  classification without retaining that text. Exception propagation, fill accounting, refresh cadence,
+  planning, risk, and trading behavior are unchanged.
 
 - Best-effort live event emitter failure diagnostics, including HSL event emitters and the
   event-adjacent HSL coin-status human-log fallback, now retain bounded exception types instead of

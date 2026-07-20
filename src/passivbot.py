@@ -981,7 +981,8 @@ class Passivbot:
             f"status={status} recovered={str(recovered).lower()} "
             f"synced={len(synced_clients)}[{client_summary(synced_clients)}] "
             f"failed={len(failed_clients)}[{client_summary(failed_clients)}] "
-            f"error_type={token(type(error).__name__, Passivbot._EXCHANGE_TIME_SYNC_CONSOLE_ERROR_TYPE_MAX_LEN)}"
+            "error_type="
+            f"{token(bounded_exception_type(error), Passivbot._EXCHANGE_TIME_SYNC_CONSOLE_ERROR_TYPE_MAX_LEN)}"
         )
 
     async def _handle_order_write_failures(
@@ -2342,12 +2343,18 @@ class Passivbot:
             "'code': -1021",
             "code=-1021",
         )
-        current: BaseException | None = exc
+        pending: list[BaseException] = [exc]
+        queued: set[int] = {id(exc)}
         seen: set[int] = set()
         for _ in range(8):
-            if current is None or id(current) in seen:
+            if not pending:
                 break
-            seen.add(id(current))
+            current = pending.pop(0)
+            current_id = id(current)
+            queued.discard(current_id)
+            if current_id in seen:
+                continue
+            seen.add(current_id)
             try:
                 if isinstance(current, getattr(ccxt_errors, "InvalidNonce", tuple())):
                     return True
@@ -2357,16 +2364,22 @@ class Passivbot:
                 return True
             if exception_text_contains(current, needles):
                 return True
-            next_exc = None
             for attr in ("__cause__", "__context__"):
                 try:
                     candidate = BaseException.__getattribute__(current, attr)
                 except BaseException:
                     continue
-                if isinstance(candidate, BaseException):
-                    next_exc = candidate
-                    break
-            current = next_exc
+                try:
+                    candidate_id = id(candidate)
+                    if (
+                        isinstance(candidate, BaseException)
+                        and candidate_id not in seen
+                        and candidate_id not in queued
+                    ):
+                        pending.append(candidate)
+                        queued.add(candidate_id)
+                except BaseException:
+                    continue
         return False
 
     async def _maybe_recover_exchange_time_sync(
@@ -2396,7 +2409,9 @@ class Passivbot:
                     f"->{Passivbot._format_exchange_time_sync_offset(after)}"
                 )
             except Exception as sync_exc:
-                failed_clients.append(f"{client_name}:{type(sync_exc).__name__}")
+                failed_clients.append(
+                    f"{client_name}:{bounded_exception_type(sync_exc)}"
+                )
         if not synced_clients and not failed_clients:
             logging.warning(
                 "%s",

@@ -864,7 +864,7 @@ def _emit_exchange_time_sync_event_unchecked(
                 source, _EXCHANGE_TIME_SYNC_SOURCE_RE
             ),
             "error_type": _bounded_exchange_time_sync_field(
-                type(error).__name__, _EXCHANGE_TIME_SYNC_ERROR_TYPE_RE
+                _bounded_exception_type(error), _EXCHANGE_TIME_SYNC_ERROR_TYPE_RE
             ),
             "hook_available": bool(hook_available),
             "recovered": recovered,

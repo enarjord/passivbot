@@ -60,6 +60,12 @@ def test_exception_text_contains_catches_hostile_string_conversion():
     assert exception_text_contains(HostileError(), ("recvwindow",)) is False
 
 
+def test_exception_text_contains_scans_late_markers_across_bounded_chunks():
+    error = RuntimeError(("x" * 5000) + " TOO_MANY_REQUESTS")
+
+    assert exception_text_contains(error, ("too_many_requests",)) is True
+
+
 def test_bounded_exception_status_and_code_contain_hostile_metadata():
     secret = "api_key=attribute-secret"
 

@@ -7,6 +7,7 @@ import types
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+from unittest.mock import AsyncMock
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -721,6 +722,23 @@ async def test_binance_fetcher_hostile_error_text_preserves_original_failure():
 
     assert captured.value.__cause__ is original
     assert secret not in str(captured.value)
+
+
+@pytest.mark.asyncio
+async def test_binance_fetcher_classifies_late_unsupported_symbol_marker():
+    class UnsupportedTradeAPI:
+        async def fetch_my_trades(self, *_args, **_kwargs):
+            raise RuntimeError(("x" * 5000) + " does not have market symbol")
+
+    fetcher = BinanceFetcher(
+        api=UnsupportedTradeAPI(),
+        symbol_resolver=lambda sym: sym or "",
+        positions_provider=lambda: [],
+        open_orders_provider=lambda: [],
+    )
+
+    assert await fetcher._fetch_symbol_trades("BTC/USDT:USDT", None, None) == []
+    assert fetcher._unsupported_symbols == {"BTC/USDT:USDT"}
 
 
 @pytest.mark.asyncio
@@ -6754,6 +6772,28 @@ async def test_gateio_fetcher_hostile_error_text_preserves_original_failure():
         await fetcher._fetch_trades(1_700_000_000_000, 1_700_000_060_000)
 
     assert captured.value is original
+
+
+@pytest.mark.asyncio
+async def test_gateio_fetcher_classifies_late_rate_limit_marker(monkeypatch):
+    class LateRateLimitAPI:
+        def __init__(self):
+            self.calls = 0
+
+        async def private_futures_get_settle_my_trades_timerange(self, _params):
+            self.calls += 1
+            if self.calls == 1:
+                raise RuntimeError(("x" * 5000) + " TOO_MANY_REQUESTS")
+            return []
+
+    api = LateRateLimitAPI()
+    sleep = AsyncMock()
+    monkeypatch.setattr(fem.asyncio, "sleep", sleep)
+    fetcher = GateioFetcher(api, trade_limit=100)
+
+    assert await fetcher._fetch_trades(1_700_000_000_000, 1_700_000_060_000) == []
+    assert api.calls == 2
+    sleep.assert_awaited_once_with(2)
 
 
 def _make_gateio_trade(
