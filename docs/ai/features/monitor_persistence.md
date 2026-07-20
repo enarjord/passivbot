@@ -5,6 +5,11 @@
 `src/monitor_publisher.py` owns monitor appends, snapshots, manifest checkpoints, rotation,
 retention, and startup recovery. Persistence failures stay visible but never alter trading behavior.
 
+`record_error` retains the event kind, tags, safe caller context, and a bounded exception type. It
+must not persist exception messages, request URLs, responses, tracebacks, or caller-supplied raw
+diagnostic aliases. More detailed incident context belongs in an explicitly sanitized event or
+protected developer path; persistence behavior and caller control flow remain unchanged.
+
 Event sequences are monotonic within a monitor root, including across unclean restart. The startup
 watermark is the maximum of the manifest and checksummed segment recovery metadata. Never infer an
 envelope sequence from payload bytes or an invalid row.

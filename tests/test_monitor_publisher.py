@@ -67,6 +67,73 @@ def test_monitor_publisher_writes_manifest_events_and_snapshot(tmp_path):
     assert snapshot["account"]["balance_raw"] == 123.0
 
 
+def test_monitor_publisher_record_error_redacts_diagnostic_fields_and_keeps_safe_context(
+    tmp_path,
+):
+    publisher = _make_publisher(tmp_path)
+    secret = "https://api.example.test/private?api_key=top-secret Authorization: Bearer top-secret"
+
+    class Unrenderable:
+        def __str__(self):
+            raise RuntimeError(secret)
+
+    event = publisher.record_error(
+        "error.bot",
+        RuntimeError(secret),
+        tags=("error", "bot"),
+        payload={
+            "source": "startup",
+            "attempt": 2,
+            "status": Unrenderable(),
+            "count": 1 << 80,
+            "stage": secret,
+            "message": secret,
+            "error": secret,
+            "error_repr": secret,
+            "exception": secret,
+            "traceback": secret,
+            "url": secret,
+            "raw_response": secret,
+            "authorization": secret,
+            "context": {
+                "operation": "load_account",
+                "response_body": secret,
+                "nested": {"request_headers": secret, "safe": "kept"},
+            },
+        },
+        ts=1_234,
+        symbol="BTC/USDT:USDT",
+        pside="long",
+    )
+
+    assert event["ts"] == 1_234
+    assert event["seq"] == 1
+    assert event["kind"] == "error.bot"
+    assert event["tags"] == ["error", "bot"]
+    assert event["symbol"] == "BTC/USDT:USDT"
+    assert event["pside"] == "long"
+    assert event["payload"] == {
+        "source": "startup",
+        "attempt": 2,
+        "error_type": "RuntimeError",
+    }
+
+    serialized = publisher.current_events_path.read_text()
+    assert secret not in serialized
+    assert publisher.record_event("bot.stop", ("bot",), ts=1_235)["seq"] == 2
+    assert len(publisher.current_events_path.read_text().splitlines()) == 2
+
+
+def test_monitor_publisher_record_error_bounds_pathological_exception_type(tmp_path):
+    publisher = _make_publisher(tmp_path)
+    pathological_error = type("Error" + "X" * 512, (Exception,), {})
+
+    event = publisher.record_error("error.bot", pathological_error("safe"))
+
+    assert event["payload"]["error_type"] == "unknown"
+    assert len(event["payload"]["error_type"]) <= 80
+
+
 def test_monitor_publisher_records_fills_ticks_and_completed_candles(tmp_path):
     publisher = _make_publisher(tmp_path, price_tick_min_interval_ms=500)
 

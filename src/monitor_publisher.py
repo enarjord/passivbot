@@ -5,7 +5,9 @@ import hashlib
 import errno
 import json
 import logging
+import math
 import os
+import re
 import stat
 import threading
 import time
@@ -55,10 +57,55 @@ _EVENT_RECOVERY_CHECKSUM_BYTES = 16
 _EVENT_RECOVERY_MARKER = b',"_recovery":{"checksum":"'
 _EVENT_RECOVERY_SEQ_SEPARATOR = b'","seq":'
 _EVENT_RECOVERY_TRAILER_MAX_BYTES = 160
+_MONITOR_ERROR_TYPE_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,79}")
+_MONITOR_ERROR_CONTEXT_RE = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_./:-]{0,159}")
+_MONITOR_ERROR_CONTEXT_MAX_INT = (1 << 63) - 1
+_MONITOR_ERROR_CONTEXT_KEYS = (
+    "source",
+    "stage",
+    "operation",
+    "action",
+    "status",
+    "code",
+    "endpoint",
+    "cycle_id",
+    "attempt",
+    "count",
+)
 
 
 def _empty_monitor_event_phase_timing() -> dict[str, int]:
     return {key: 0 for key in _MONITOR_EVENT_PHASE_TIMING_KEYS}
+
+
+def _safe_monitor_error_context(payload: Any) -> dict[str, Any]:
+    if not isinstance(payload, dict):
+        return {}
+    context: dict[str, Any] = {}
+    for key in _MONITOR_ERROR_CONTEXT_KEYS:
+        value = payload.get(key)
+        if value is None:
+            continue
+        if isinstance(value, bool):
+            context[key] = value
+        elif isinstance(value, int):
+            if (
+                -_MONITOR_ERROR_CONTEXT_MAX_INT
+                <= value
+                <= _MONITOR_ERROR_CONTEXT_MAX_INT
+            ):
+                context[key] = value
+        elif isinstance(value, float):
+            if math.isfinite(value):
+                context[key] = value
+        else:
+            try:
+                text = str(value)
+            except Exception:
+                continue
+            if "://" not in text and _MONITOR_ERROR_CONTEXT_RE.fullmatch(text):
+                context[key] = text
+    return context
 
 
 def _merge_retention_timing(target: dict[str, int], source: dict[str, int]) -> None:
@@ -1173,9 +1220,11 @@ class MonitorPublisher:
         symbol: Optional[str] = None,
         pside: Optional[str] = None,
     ) -> Optional[dict]:
-        error_payload = dict(payload or {})
-        error_payload["error_type"] = type(error).__name__
-        error_payload["message"] = str(error)
+        error_payload = _safe_monitor_error_context(payload)
+        error_type = type(error).__name__
+        error_payload["error_type"] = (
+            error_type if _MONITOR_ERROR_TYPE_RE.fullmatch(error_type) else "unknown"
+        )
         return self.record_event(
             kind,
             tags or ("error",),

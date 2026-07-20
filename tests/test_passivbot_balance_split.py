@@ -2899,15 +2899,27 @@ def test_ws_reconnect_emits_bounded_structured_event(monkeypatch, caplog):
     )
     now_ms = [1_000]
     monkeypatch.setattr(passivbot_module, "utc_ms", lambda: now_ms[0])
+    exception_value = "wss://ws.example.test/reconnect?api_key=SECRET_TOKEN"
 
     with caplog.at_level(logging.DEBUG):
-        Passivbot._log_ws_reconnect(
-            bot,
-            reconnect_no=1,
-            retry_delay_s=1.25,
-            reason="time_sync",
-            exc=TimeoutError("api_key=SECRET ping timeout"),
-        )
+        try:
+            raise TimeoutError(exception_value)
+        except TimeoutError as exc:
+            Passivbot._log_ws_reconnect(
+                bot,
+                reconnect_no=1,
+                retry_delay_s=1.25,
+                reason="time_sync",
+                exc=exc,
+            )
+
+    assert exception_value not in caplog.text
+    assert "SECRET_TOKEN" not in caplog.text
+    assert "wss://" not in caplog.text
+    assert "error_type=TimeoutError" in caplog.text
+    assert "reconnect #1" in caplog.text
+    assert "stack_frames=" in caplog.text
+    assert "Traceback" not in caplog.text
 
     assert bot._live_event_pipeline.flush(timeout=2.0) is True
     events = [
@@ -2958,6 +2970,23 @@ def test_ws_reconnect_emits_bounded_structured_event(monkeypatch, caplog):
         "warning_visible": False,
         "traceback_emitted": False,
     }
+
+    pathological_error = type("Error" + "X" * 512, (Exception,), {})
+    with caplog.at_level(logging.DEBUG):
+        Passivbot._log_ws_reconnect(
+            bot,
+            reconnect_no=5,
+            retry_delay_s=3.0,
+            reason="private reason wss://SECRET",
+            exc=pathological_error("wss://SECRET?api_key=SECRET"),
+        )
+    assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    pathological_event = sink.events[-1]
+    assert pathological_event.data["reason"] == "other"
+    assert pathological_event.data["error_type"] == "unknown"
+    assert pathological_event.data["traceback_emitted"] is False
+    assert "error_type=unknown" in caplog.text
+    assert "wss://SECRET" not in caplog.text
     assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 

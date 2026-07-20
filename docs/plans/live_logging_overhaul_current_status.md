@@ -22,37 +22,65 @@ Estimated completion:
 
 ## Active Review Slice
 
-- PR #1344 `Redact EMA diagnostics at the producer boundary`; branch
-  `codex/ema-diagnostic-redaction`, based on canonical
-  `7e26a9062a88ecf211729d7d718fb4530630c4ba`. The active review head is the
-  commit containing this status update; resolve its exact SHA from live PR
-  #1344 metadata. Its reviewed predecessor is
-  `d67cbffc415ba6b54eb6d44385c7d0f0f91d0638`. The pushed semantic head
-  `f442e4a66e0f78fd628b6e5724fd5865f9ec395c` received a finding-free
-  independent Sol review after two exact-head finding/fix rounds.
-- Scope: remove arbitrary exception and fallback-reason text from
-  `ema.unavailable` and `ema.fallback_used` structured, monitor, console, text,
-  debug-profile, and legacy fallback paths while retaining code-owned reason
-  classifications, bounded EMA/error types, symbols, spans, ages, and counts.
-  Malformed typed values normalize or drop at the producer boundary, adjacent
-  EMA failure logs retain only exception type, and legacy warnings remain when
-  the structured event was not admitted to the queue or its synchronous console
-  projection failed.
-- Behavior boundary: observability payload and projection only. EMA
-  calculation, prior-value and cached fallback selection, candidate
-  availability, scheduling, retries, planning, orders, risk, and caller control
-  flow remain unchanged.
-- Baseline: structured payloads still retain candidate `example_error`, debug
-  `inner_reasons`, optional-drop reason text, and close-fallback reason text.
-  Human fallbacks also project raw reason or exception values, while the normal
-  console derives EMA identity by parsing the candidate exception message.
+- Branch `codex/diagnostic-exception-redaction`, based on canonical
+  `986e5d52f88692d1b6531bc38c307352c08e9cb9`; the pull request is pending
+  publication. Resolve the active review head from live branch/PR metadata.
+- Scope: remove arbitrary exception text from legacy
+  `MonitorPublisher.record_error` payloads and WebSocket reconnect human
+  diagnostics. Monitor error events retain safe caller context and a bounded
+  exception type; reconnect diagnostics retain bounded reason/error type,
+  cadence, retry delay, and sanitized stack-frame evidence without rendering
+  the exception value.
+- Behavior boundary: observability payload and projection only. Monitor event
+  framing, sequence, rotation, retention, and sink isolation remain unchanged,
+  as do reconnect cadence, retry/backoff, connector calls, exception
+  propagation, planning, orders, risk, and trading behavior.
+- Baseline: `MonitorPublisher.record_error` unconditionally persists
+  `str(error)` as `payload.message`; a value-free scan of the latest 4 MB from
+  each of six VPS5 current event segments parsed 9,396 rows and found one
+  natural `error.bot` message field. `_log_ws_reconnect` also writes the raw
+  exception and a formatted traceback containing the exception value, while
+  the existing structured reconnect event is already bounded.
 - Review gate: exact-current-head Hermes approval plus green Python/Rust CI.
   Built-in Codex automatic review is additional and every finding must be
   verified and resolved. The final handoff/status head requires fresh review
   and CI before merge.
 - Expected VPS action: tracked-clean pull plus one exact-five graceful restart
-  and bounded settled smoke because live event and fallback payloads change;
-  preserve `misc:0.0`.
+  and bounded settled smoke because live monitor and reconnect diagnostics
+  change; preserve `misc:0.0`.
+
+## Deployed Baseline (PR #1344)
+
+- PR #1344 merged exact approved head
+  `6a4fe26f90e8cb25f0dc09ecc39a067658addfa8` as canonical
+  `986e5d52f88692d1b6531bc38c307352c08e9cb9` after exact-head Hermes approval,
+  green Python/Rust CI, and a finding-free built-in Codex review. Independent
+  Sol review approved the semantic predecessor
+  `f442e4a66e0f78fd628b6e5724fd5865f9ec395c`; the final delta only corrected
+  the active handoff.
+- VPS5 guarded-prepared tracked-clean from
+  `7e26a9062a88ecf211729d7d718fb4530630c4ba` without a Rust build. The source
+  fingerprint/stamp remained
+  `691bff9683deec9382a4e96ab6a107c14145f88edd6ae2f8e2380b8ba6824449`, and the
+  compiled artifact SHA remained
+  `7611f3eff1d8702ff29d90490a1aba490db5c816e7e3f09a2c33e5c4085da023`.
+- The bounded exact-target orchestrator gracefully restarted only panes
+  `%358`-`%362` as PIDs `1076279/1076288/1076282/1076291/1076285`. All five
+  targets stopped, exited, relaunched, and verified without force or
+  broad-pattern signals.
+- The integrated 120-second smoke correctly remained non-green on one natural
+  KuCoin authoritative-balance `RequestTimeout`, represented by one hard
+  `cycle.degraded` event. It had zero hard text-log matches, monitor warnings,
+  or monitor errors. A strictly post-incident settled window then had a green
+  internal smoke contract with zero hard problem events, hard log matches,
+  monitor warnings, or monitor errors; its outer collector omitted the earlier
+  shutdown/startup cohorts by construction and therefore was not itself a
+  restart-evidence verdict.
+- Final three-sample verification found all five replacement processes stable
+  in state `R`, with no missing, duplicate, or extra live process. The checkout
+  was exact and tracked-clean, pre-existing untracked configs/probes were
+  preserved, and protected `misc:0.0` stayed `%8`/PID `434835`. No direct
+  authenticated exchange call or event was manufactured.
 
 ## Deployed Baseline (PR #1343)
 

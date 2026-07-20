@@ -904,7 +904,9 @@ def _emit_websocket_reconnect_event_unchecked(
         "traceback_emitted": bool(traceback_emitted),
     }
     if exc is not None:
-        data["error_type"] = type(exc).__name__
+        data["error_type"] = _bounded_exchange_time_sync_field(
+            type(exc).__name__, _EXCHANGE_TIME_SYNC_ERROR_TYPE_RE
+        )
     _safe_emit(
         bot,
         EventTypes.WEBSOCKET_RECONNECT,
