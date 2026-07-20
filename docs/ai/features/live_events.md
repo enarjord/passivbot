@@ -79,11 +79,11 @@ sentinels, unsupported metric names are omitted, and non-finite spans are omitte
 failure logs retain only code-owned context and exception type.
 
 The structured event owns the normal warning only after its emitter reports success and the
-structured console owner is available. Otherwise, the bounded legacy warning remains and follows
-the same redaction boundary. Event or sink failure must not alter EMA calculation, cached fallback
-selection, candidate availability, scheduling, retries, planning, orders, risk, or caller control
-flow. Downstream smoke and incident redaction remains defense in depth, not the primary payload
-boundary.
+structured console owner is available. Success requires queue admission and no synchronous console
+sink failure. Otherwise, the bounded legacy warning remains and follows the same redaction
+boundary. Event or sink failure must not alter EMA calculation, cached fallback selection,
+candidate availability, scheduling, retries, planning, orders, risk, or caller control flow.
+Downstream smoke and incident redaction remains defense in depth, not the primary payload boundary.
 
 The generated value reference is `../generated/live_event_registry.md`.
 

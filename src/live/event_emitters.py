@@ -5,6 +5,7 @@ import hashlib
 import math
 import re
 from collections import Counter
+from collections.abc import Mapping
 from typing import Any
 
 from live.event_bus import (
@@ -3583,9 +3584,9 @@ def emit_ema_bundle_started_event(bot: Any, *args: Any, **kwargs: Any) -> None:
         _emit_ema_bundle_started_event_unchecked(bot, *args, **kwargs)
     except Exception as exc:
         logging.debug(
-            "[event] failed to emit %s: %s",
+            "[event] failed to emit %s error_type=%s",
             EventTypes.EMA_BUNDLE_STARTED,
-            exc,
+            type(exc).__name__,
         )
 
 
@@ -3625,10 +3626,37 @@ def emit_ema_bundle_completed_event(bot: Any, *args: Any, **kwargs: Any) -> None
         _emit_ema_bundle_completed_event_unchecked(bot, *args, **kwargs)
     except Exception as exc:
         logging.debug(
-            "[event] failed to emit %s: %s",
+            "[event] failed to emit %s error_type=%s",
             EventTypes.EMA_BUNDLE_COMPLETED,
-            exc,
+            type(exc).__name__,
         )
+
+
+def _console_sink_error_count(bot: Any) -> int | None:
+    pipeline = getattr(bot, "_live_event_pipeline", None)
+    counters = getattr(pipeline, "sink_error_counters", None)
+    if not isinstance(counters, Mapping):
+        return None
+    try:
+        return int(counters.get("console", 0) or 0)
+    except (TypeError, ValueError):
+        return None
+
+
+def _emit_ema_warning_event(bot: Any, event_type: str, **kwargs: Any) -> bool:
+    console_errors_before = _console_sink_error_count(bot)
+    emitted = bot._emit_live_event(
+        event_type,
+        require_enqueue=True,
+        **kwargs,
+    )
+    console_errors_after = _console_sink_error_count(bot)
+    console_ok = (
+        console_errors_before is None
+        or console_errors_after is None
+        or console_errors_after == console_errors_before
+    )
+    return emitted is not None and console_ok
 
 
 def _emit_ema_fallback_used_event_unchecked(
@@ -3644,7 +3672,8 @@ def _emit_ema_fallback_used_event_unchecked(
     if not (recovered_count or close_fallback_count or forager_count):
         return False
     level = "warning" if close_fallback_count else "debug"
-    emitted = bot._emit_live_event(
+    return _emit_ema_warning_event(
+        bot,
         EventTypes.EMA_FALLBACK_USED,
         level=level,
         component="ema.bundle",
@@ -3672,7 +3701,6 @@ def _emit_ema_fallback_used_event_unchecked(
             },
         },
     )
-    return emitted is not None
 
 
 def emit_ema_fallback_used_event(bot: Any, *args: Any, **kwargs: Any) -> bool:
@@ -3747,7 +3775,8 @@ def _emit_ema_unavailable_event_unchecked(
             candidate_ema_unavailable_details,
             ema_unavailable_reasons,
         )
-    emitted = bot._emit_live_event(
+    return _emit_ema_warning_event(
+        bot,
         EventTypes.EMA_UNAVAILABLE,
         level=level,
         component="ema.bundle",
@@ -3757,7 +3786,6 @@ def _emit_ema_unavailable_event_unchecked(
         reason_code=reason_code,
         data=data,
     )
-    return emitted is not None
 
 
 def emit_ema_unavailable_event(bot: Any, *args: Any, **kwargs: Any) -> bool:

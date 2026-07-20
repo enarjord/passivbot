@@ -31,7 +31,8 @@ Estimated completion:
   classifications, bounded EMA/error types, symbols, spans, ages, and counts.
   Malformed typed values normalize or drop at the producer boundary, adjacent
   EMA failure logs retain only exception type, and legacy warnings remain when
-  the structured event was not emitted successfully.
+  the structured event was not admitted to the queue or its synchronous console
+  projection failed.
 - Behavior boundary: observability payload and projection only. EMA
   calculation, prior-value and cached fallback selection, candidate
   availability, scheduling, retries, planning, orders, risk, and caller control

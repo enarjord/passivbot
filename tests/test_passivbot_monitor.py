@@ -2834,6 +2834,123 @@ def test_ema_event_payloads_reject_malformed_typed_values():
     assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 
+def test_ema_bundle_emitter_failure_logs_omit_exception_text(caplog):
+    secret = "https://private.example/path?api_key=bundle-secret"
+
+    class FailingSymbols:
+        def __bool__(self):
+            raise RuntimeError(secret)
+
+    with caplog.at_level(logging.DEBUG):
+        live_event_emitters.emit_ema_bundle_started_event(
+            object(),
+            symbols=FailingSymbols(),
+            modes={},
+        )
+        live_event_emitters.emit_ema_bundle_completed_event(
+            object(),
+            symbols=FailingSymbols(),
+            m1_close_emas={},
+            m1_volume_emas={},
+            m1_log_range_emas={},
+            h1_log_range_emas={},
+        )
+
+    messages = [record.message for record in caplog.records]
+    assert any(
+        "failed to emit ema.bundle.started error_type=RuntimeError" in message
+        for message in messages
+    )
+    assert any(
+        "failed to emit ema.bundle.completed error_type=RuntimeError" in message
+        for message in messages
+    )
+    assert all(secret not in message for message in messages)
+    assert all("bundle-secret" not in message for message in messages)
+
+
+def test_ema_warning_event_reports_console_sink_failure():
+    import passivbot as pb_mod
+
+    class FailingConsoleSink:
+        def write(self, _event):
+            raise RuntimeError("console unavailable")
+
+    structured = ListEventSink()
+
+    class FakeBot:
+        _current_live_event_cycle_id = pb_mod.Passivbot._current_live_event_cycle_id
+        _emit_ema_fallback_used_event = pb_mod.Passivbot._emit_ema_fallback_used_event
+        _emit_live_event = pb_mod.Passivbot._emit_live_event
+        exchange = "binance"
+        user = "binance_01"
+        bot_id = "bot_1"
+        _live_event_current_cycle_id = "cy_console_failure"
+
+        def __init__(self):
+            self._live_event_pipeline = LiveEventPipeline(
+                structured_sinks=[structured],
+                console_sink=FailingConsoleSink(),
+            )
+
+    bot = FakeBot()
+    assert (
+        bot._emit_ema_fallback_used_event(
+            close_ema_fallbacks={
+                "BTC/USDT:USDT": [
+                    (60.0, 1_000, 2, "exception", "RuntimeError")
+                ]
+            }
+        )
+        is False
+    )
+    assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    assert any(
+        event.event_type == EventTypes.EMA_FALLBACK_USED for event in structured.events
+    )
+    assert bot._live_event_pipeline.sink_error_counters["console"] >= 1
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
+
+
+def test_ema_warning_event_reports_closed_pipeline_enqueue_failure():
+    import passivbot as pb_mod
+
+    structured = ListEventSink()
+    console = ListEventSink()
+
+    class FakeBot:
+        _current_live_event_cycle_id = pb_mod.Passivbot._current_live_event_cycle_id
+        _emit_ema_unavailable_event = pb_mod.Passivbot._emit_ema_unavailable_event
+        _emit_live_event = pb_mod.Passivbot._emit_live_event
+        exchange = "binance"
+        user = "binance_01"
+        bot_id = "bot_1"
+        _live_event_current_cycle_id = "cy_closed_pipeline"
+
+        def __init__(self):
+            self._live_event_pipeline = LiveEventPipeline(
+                structured_sinks=[structured],
+                console_sink=console,
+            )
+
+    bot = FakeBot()
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
+    assert (
+        bot._emit_ema_unavailable_event(
+            candidate_ema_unavailable_details={
+                "required_missing": [
+                    ("BTC/USDT:USDT", "RuntimeError", ("m1_close",), (60.0,))
+                ]
+            }
+        )
+        is False
+    )
+    assert not any(
+        event.event_type == EventTypes.EMA_UNAVAILABLE for event in structured.events
+    )
+    assert bot._live_event_pipeline.drop_counters[EventTypes.EMA_UNAVAILABLE] == 1
+
+
 def test_ema_event_emission_failure_logs_type_only(caplog):
     secret = "https://private.example/path?api_key=emit-secret"
 
