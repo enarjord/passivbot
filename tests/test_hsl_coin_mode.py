@@ -102,6 +102,40 @@ def test_hsl_event_emitter_failure_logs_type_without_secret(caplog):
     assert "Error" in caplog.text
     assert camelcase_sensitive_identifier not in caplog.text
 
+    class HostileName(str):
+        def __getitem__(self, _key):
+            return "api_secret=hostile-hsl-slice-secret"
+
+    class HostileSliceMeta(type):
+        @property
+        def __name__(cls):
+            return HostileName("SafeLookingHslFailure")
+
+    hostile_slice_type = HostileSliceMeta(
+        "HostileSliceHslFailure", (RuntimeError,), {}
+    )
+
+    def fail_with_hostile_slice(*_args, **_kwargs):
+        raise hostile_slice_type("safe")
+
+    bot._emit_live_event = fail_with_hostile_slice
+    caplog.clear()
+    with caplog.at_level(logging.DEBUG):
+        assert (
+            hsl._emit_hsl_event(
+                bot,
+                "hsl.status",
+                ("hsl", "risk"),
+                {},
+                pside="long",
+                symbol="BTC/USDT:USDT",
+            )
+            is None
+        )
+
+    assert "Error" in caplog.text
+    assert "hostile-hsl-slice-secret" not in caplog.text
+
     invalid_suffix = "H" * 80 + "\napi_secret=tail-hsl-class-name-secret"
     invalid_suffix_type = type(invalid_suffix, (RuntimeError,), {})
 

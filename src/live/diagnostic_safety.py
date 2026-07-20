@@ -12,7 +12,7 @@ _SENSITIVE_EXCEPTION_TYPE_RE = re.compile(
 def bounded_exception_type(exc: BaseException) -> str:
     try:
         name = type(exc).__name__
-        if not isinstance(name, str):
+        if type(name) is not str:
             return "Error"
         if (
             not name
