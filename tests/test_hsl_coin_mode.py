@@ -1490,6 +1490,40 @@ async def test_flatten_confirmation_refreshes_fills_and_rejects_pre_episode_anch
     assert state["last_missing_flatten_fill_refresh_ms"] == 0
 
 
+@pytest.mark.asyncio
+async def test_flatten_confirmation_refresh_failure_keeps_scope_protective_without_secret(
+    caplog,
+):
+    bot = make_coin_bot()
+    symbol = "A"
+    state = bot._hsl_coin_state("long", symbol)
+    state["pending_red_since_ms"] = 120_000
+    bot._pnls_manager = make_fake_pnls_manager([])
+    secret = "api_key=flatten-refresh-secret"
+
+    async def update_pnls(*, source, since_ms=None):
+        assert source == "hsl_flatten_confirmation"
+        assert since_ms == 120_000
+        raise RuntimeError(secret)
+
+    bot.update_pnls = update_pnls
+
+    with caplog.at_level(logging.WARNING):
+        stop_ts_ms = await bot._equity_hard_stop_flatten_fill_timestamp_with_refresh(
+            "long",
+            180_000,
+            symbol=symbol,
+            since_ms=state["pending_red_since_ms"],
+        )
+
+    assert stop_ts_ms is None
+    assert state["pending_stop_event"] is None
+    assert state["red_flat_confirmations"] == 0
+    assert state["last_missing_flatten_fill_log_ms"] == 180_000
+    assert "error_type=RuntimeError" in caplog.text
+    assert secret not in caplog.text
+
+
 def test_red_paused_forced_modes_block_entries_without_panic():
     bot = make_coin_bot()
     bot.positions = {"A": {"long": {"size": 1.0, "price": 100.0}, "short": {"size": 0.0}}}

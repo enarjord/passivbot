@@ -5890,8 +5890,8 @@ class Passivbot:
         """Record a runtime loop failure and apply the existing restart budget policy."""
         if self._shutdown_requested():
             logging.debug(
-                "[shutdown] execution loop stopped during in-flight refresh: %s",
-                exc,
+                "[shutdown] execution loop stopped during in-flight refresh | error_type=%s",
+                bounded_exception_type(exc),
             )
             return False
         if allow_time_sync_recovery and await self._maybe_recover_exchange_time_sync(
@@ -6344,15 +6344,16 @@ class Passivbot:
                         data={"timings_ms": dict(loop_timings_ms)},
                     )
                     logging.debug(
-                        "[shutdown] execution loop stopped during fill-history coverage retry: %s",
-                        e,
+                        "[shutdown] execution loop stopped during fill-history coverage retry | "
+                        "error_type=%s",
+                        bounded_exception_type(e),
                     )
                     break
                 self._request_authoritative_confirmation({"fills"})
                 logging.warning(
                     "[fills] live planning deferred pending fill-history coverage | "
-                    "action=refresh_lookback_before_retry error=%s",
-                    e,
+                    "action=refresh_lookback_before_retry error_type=%s",
+                    bounded_exception_type(e),
                 )
                 self._emit_live_cycle_degraded(
                     cycle_id=cycle_id,
@@ -11244,7 +11245,10 @@ class Passivbot:
                 if callable(get_history_scope):
                     history_scope = get_history_scope()
             except Exception as exc:
-                logging.debug("[event] failed to read fill-cache history scope: %s", exc)
+                logging.debug(
+                    "[event] failed to read fill-cache history scope | error_type=%s",
+                    bounded_exception_type(exc),
+                )
             self._emit_fills_refresh_summary_event(
                 source="startup",
                 refresh_mode="cache_load",
@@ -11259,8 +11263,12 @@ class Passivbot:
             self._pnls_initialized = True
 
         except Exception as e:
-            logging.error("Failed to initialize FillEventsManager: %s", e)
-            traceback.print_exc()
+            logging.error(
+                "Failed to initialize FillEventsManager | error_type=%s status=%s code=%s",
+                bounded_exception_type(e),
+                bounded_exception_status(e) or "-",
+                bounded_exception_code(e) or "-",
+            )
             raise
 
     async def update_pnls(
@@ -12874,9 +12882,9 @@ class Passivbot:
                 )
             except Exception as exc:
                 logging.debug(
-                    "[event] failed to emit HSL history progress stage=%s: %s",
+                    "[event] failed to emit HSL history progress stage=%s error_type=%s",
                     stage,
-                    exc,
+                    bounded_exception_type(exc),
                 )
 
         _safe_float = Passivbot._hsl_fill_safe_float

@@ -3905,7 +3905,7 @@ async def test_remote_call_debug_profile_adds_authoritative_payload_shape():
 
 
 @pytest.mark.asyncio
-async def test_authoritative_timed_fetch_failure_emits_sanitized_remote_call_event():
+async def test_authoritative_timed_fetch_failure_emits_classification_only():
     import passivbot as pb_mod
 
     sink = ListEventSink()
@@ -3928,26 +3928,27 @@ async def test_authoritative_timed_fetch_failure_emits_sanitized_remote_call_eve
                 monitor_sinks=[],
             )
 
-    async def fetch_positions():
+    async def fetch_fills():
         raise RuntimeError("apiKey=SECRET token SECRET Bearer abc123")
 
     bot = FakeBot()
     timings_ms = {}
     with pytest.raises(RuntimeError, match="apiKey=SECRET"):
-        await bot._timed_authoritative_fetch("positions", fetch_positions(), timings_ms)
+        await bot._timed_authoritative_fetch("fills", fetch_fills(), timings_ms)
 
-    assert "positions" in timings_ms
+    assert "fills" in timings_ms
     assert bot._live_event_pipeline.flush(timeout=2.0) is True
     assert bot._live_event_pipeline.close(timeout=2.0) is True
     started, failed = sink.events
     assert failed.event_type == EventTypes.REMOTE_CALL_FAILED
     assert failed.remote_call_id == started.remote_call_id
     assert failed.remote_call_group_id == "auth_19:authoritative"
-    assert failed.data["surface"] == "positions"
+    assert failed.data["surface"] == "fills"
     assert failed.data["error_type"] == "RuntimeError"
-    assert "SECRET" not in failed.data["error"]
-    assert "abc123" not in failed.data["error"]
-    assert "SECRET" not in failed.data["error_repr"]
+    assert "error" not in failed.data
+    assert "error_repr" not in failed.data
+    assert "SECRET" not in str(failed.data)
+    assert "abc123" not in str(failed.data)
 
 
 @pytest.mark.asyncio

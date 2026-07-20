@@ -152,11 +152,14 @@ fallback only when the structured live-event console is disabled or its pipeline
 sink degradation remains isolated by the event pipeline and must not activate dual writing.
 
 Fill refresh failures retain code-owned source, refresh mode, coverage, retry, timing, and count
-context plus a bounded exception type. The structured `fills.refresh_summary`, manager request
-timing line, blocking refresh failure line, and routine-prefetch fallback must not retain exception
-text, request URLs, response bodies, credentials, or exception-value tracebacks. Redaction is
-diagnostic-only: exception propagation, retry and coverage behavior, fill accounting, planning,
-risk, and trading behavior remain unchanged.
+context plus a bounded exception type. The structured `fills.refresh_summary`, exchange-specific
+fetcher and manager request-timing lines, staged authoritative remote-call failure, blocking and
+routine-prefetch fallbacks, startup initialization boundary, fill-coverage retry, and HSL flatten
+confirmation must not retain exception text, request URLs, response bodies, credentials, or
+exception-value tracebacks. Metadata-capture and HSL progress-emitter failures at the same caller
+boundary follow the same classification-only rule. Redaction is diagnostic-only: exception
+propagation, retry and coverage behavior, fill accounting, planning, risk, and trading behavior
+remain unchanged.
 
 The blocking failure line may also retain a validated numeric status and bounded exchange code.
 Monitor error events use the same hostile-metadata-safe exception-type boundary; diagnostic

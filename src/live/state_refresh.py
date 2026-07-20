@@ -323,9 +323,9 @@ async def timed_authoritative_fetch(bot, surface: str, coro, timings_ms: dict[st
                 )
             except Exception as exc:
                 logging.debug(
-                    "[diagnostic] failed to capture %s data packet metadata: %s",
+                    "[diagnostic] failed to capture %s data packet metadata | error_type=%s",
                     surface,
-                    exc,
+                    bounded_exception_type(exc),
                 )
         return result
     except Exception as exc:

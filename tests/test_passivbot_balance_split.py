@@ -461,6 +461,84 @@ async def test_init_pnls_emits_cache_ready_event(monkeypatch):
     assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 
+@pytest.mark.asyncio
+async def test_init_pnls_failure_logs_bounded_classification_and_reraises(monkeypatch, caplog):
+    secret = "api_key=startup-fill-secret"
+
+    class _StartupFillError(RuntimeError):
+        pass
+
+    failure = _StartupFillError(secret)
+    failure.status = "503"
+    failure.code = "TEMP_UNAVAILABLE"
+
+    class _Manager:
+        def __init__(self, **_kwargs):
+            self._events = []
+
+        async def ensure_loaded(self):
+            raise failure
+
+    bot = Passivbot.__new__(Passivbot)
+    bot.runtime_identity = TEST_RUNTIME_IDENTITY
+    bot.exchange = "binance"
+    bot.user = "binance_01"
+    bot.config = {"live": {"pnls_max_lookback_days": "all"}}
+    bot._pnls_initialized = False
+
+    monkeypatch.delenv("PASSIVBOT_FILL_EVENTS_DOCTOR", raising=False)
+    monkeypatch.setattr(passivbot_module, "_extract_symbol_pool", lambda *_args: [])
+    monkeypatch.setattr(passivbot_module, "_build_fetcher_for_bot", lambda *_args: object())
+    monkeypatch.setattr(passivbot_module, "FillEventsManager", _Manager)
+
+    with caplog.at_level(logging.ERROR):
+        with pytest.raises(_StartupFillError) as exc_info:
+            await Passivbot.init_pnls(bot)
+
+    assert exc_info.value is failure
+    assert "error_type=_StartupFillError" in caplog.text
+    assert "status=503" in caplog.text
+    assert "code=TEMP_UNAVAILABLE" in caplog.text
+    assert secret not in caplog.text
+    assert "Traceback" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_init_pnls_history_scope_failure_is_bounded_and_cache_remains_ready(
+    monkeypatch, caplog
+):
+    secret = "api_key=history-scope-secret"
+
+    class _Manager:
+        def __init__(self, **_kwargs):
+            self._events = [object()]
+
+        async def ensure_loaded(self):
+            return None
+
+        def get_history_scope(self):
+            raise RuntimeError(secret)
+
+    bot = Passivbot.__new__(Passivbot)
+    bot.runtime_identity = TEST_RUNTIME_IDENTITY
+    bot.exchange = "binance"
+    bot.user = "binance_01"
+    bot.config = {"live": {"pnls_max_lookback_days": "all"}}
+    bot._pnls_initialized = False
+
+    monkeypatch.delenv("PASSIVBOT_FILL_EVENTS_DOCTOR", raising=False)
+    monkeypatch.setattr(passivbot_module, "_extract_symbol_pool", lambda *_args: [])
+    monkeypatch.setattr(passivbot_module, "_build_fetcher_for_bot", lambda *_args: object())
+    monkeypatch.setattr(passivbot_module, "FillEventsManager", _Manager)
+
+    with caplog.at_level(logging.DEBUG):
+        await Passivbot.init_pnls(bot)
+
+    assert bot._pnls_initialized is True
+    assert "error_type=RuntimeError" in caplog.text
+    assert secret not in caplog.text
+
+
 def _counted_staged_account_refresh_bot(
     *,
     balance: float = 100.0,
@@ -612,24 +690,29 @@ async def test_staged_account_refresh_emits_data_packet_diagnostics():
 
 
 @pytest.mark.asyncio
-async def test_data_packet_capture_failure_does_not_block_authoritative_fetch():
+async def test_data_packet_capture_failure_does_not_block_authoritative_fetch(caplog):
     from live import state_refresh
 
+    secret = "api_key=data-packet-recorder-secret"
+
     def failing_recorder(*_args, **_kwargs):
-        raise RuntimeError("metadata recorder failed")
+        raise RuntimeError(secret)
 
     async def fetched_payload():
-        return ("raw-balance", 123.45)
+        return True
 
     bot = SimpleNamespace(_capture_live_data_packet_fetch_metadata=failing_recorder)
     timings_ms = {}
 
-    result = await state_refresh.timed_authoritative_fetch(
-        bot, "balance", fetched_payload(), timings_ms
-    )
+    with caplog.at_level(logging.DEBUG):
+        result = await state_refresh.timed_authoritative_fetch(
+            bot, "fills", fetched_payload(), timings_ms
+        )
 
-    assert result == ("raw-balance", 123.45)
-    assert timings_ms["balance"] >= 0
+    assert result is True
+    assert timings_ms["fills"] >= 0
+    assert "error_type=RuntimeError" in caplog.text
+    assert secret not in caplog.text
 
 
 def test_balance_data_packet_capture_accepts_legacy_raw_normalized_pair():
@@ -10788,7 +10871,9 @@ async def test_run_execution_loop_waits_on_pending_pnl_without_restart(monkeypat
 
 
 @pytest.mark.asyncio
-async def test_run_execution_loop_retries_fill_history_coverage_without_restart(monkeypatch):
+async def test_run_execution_loop_retries_fill_history_coverage_without_restart(
+    monkeypatch, caplog
+):
     bot = Passivbot.__new__(Passivbot)
     cycle = {"n": 0}
     executes = []
@@ -10846,7 +10931,7 @@ async def test_run_execution_loop_retries_fill_history_coverage_without_restart(
         executes.append(("execute", prepare_cycle, cycle["n"]))
         if cycle["n"] == 1:
             raise passivbot_module.FillHistoryCoverageUnavailable(
-                "fill history coverage unknown for risk lookback"
+                "fill history coverage unknown api_key=coverage-secret"
             )
         return {"executed_cycle": cycle["n"]}
 
@@ -10855,7 +10940,8 @@ async def test_run_execution_loop_retries_fill_history_coverage_without_restart(
     bot.prepare_planning_universe = fake_prepare_planning_universe
     bot.execute_to_exchange = fake_execute_to_exchange
 
-    result = await bot.run_execution_loop()
+    with caplog.at_level(logging.WARNING):
+        result = await bot.run_execution_loop()
 
     assert result == {"executed_cycle": 2}
     bot.restart_bot_on_too_many_errors.assert_not_awaited()
@@ -10879,6 +10965,8 @@ async def test_run_execution_loop_retries_fill_history_coverage_without_restart(
         == "FillHistoryCoverageUnavailable"
     )
     assert "error" not in coverage_event["data"]
+    assert "error_type=FillHistoryCoverageUnavailable" in caplog.text
+    assert "coverage-secret" not in caplog.text
 
 
 @pytest.mark.asyncio
@@ -10970,7 +11058,7 @@ async def test_run_execution_loop_suppresses_inflight_shutdown_refresh_error(cap
 
     async def fake_refresh_authoritative_state():
         bot.stop_signal_received = True
-        raise RuntimeError("connector is closed")
+        raise RuntimeError("api_key=shutdown-refresh-secret")
 
     bot.refresh_authoritative_state = fake_refresh_authoritative_state
     bot.execute_to_exchange = AsyncMock()
@@ -10988,6 +11076,8 @@ async def test_run_execution_loop_suppresses_inflight_shutdown_refresh_error(cap
         "execution loop stopped during in-flight refresh" in r.message
         for r in caplog.records
     )
+    assert "error_type=RuntimeError" in caplog.text
+    assert "shutdown-refresh-secret" not in caplog.text
 
 
 @pytest.mark.asyncio

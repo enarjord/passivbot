@@ -761,9 +761,7 @@ def _emit_authoritative_remote_call_event_unchecked(
     if elapsed_ms is not None:
         data["elapsed_ms"] = int(elapsed_ms)
     if error is not None:
-        data["error_type"] = type(error).__name__
-        data["error"] = _sanitize_remote_text(error, max_len=500)
-        data["error_repr"] = _sanitize_remote_text(repr(error), max_len=500)
+        data["error_type"] = _bounded_exception_type(error)
     elif stage != "start":
         data.update(_authoritative_result_summary(surface, result))
     if live_event_debug_profile_enabled(bot, "remote_calls"):

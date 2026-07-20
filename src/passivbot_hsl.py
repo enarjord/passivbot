@@ -3199,11 +3199,10 @@ async def _equity_hard_stop_flatten_fill_timestamp_with_refresh(
         except Exception as exc:
             logging.warning(
                 "[risk] HSL[%s%s] flatten-fill refresh failed; keeping scope protective | "
-                "error=%s: %s",
+                "error_type=%s",
                 pside,
                 f":{symbol}" if symbol is not None else "",
-                type(exc).__name__,
-                exc,
+                _bounded_hsl_exception_type(exc),
             )
         if refresh_ready:
             stop_ts_ms = self._equity_hard_stop_latest_flatten_fill_timestamp_optional_ms(
