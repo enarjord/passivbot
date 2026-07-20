@@ -22,10 +22,10 @@ Estimated completion:
 
 ## Active Review Slice
 
-- Pending PR on branch `codex/shutdown-diagnostic-redaction`, based on canonical
-  `67416ee4f7fef2dc3ffac001d50e82c0322ee72b`. Resolve its exact head and PR
-  number from live metadata; the commit containing this handoff is a moving
-  review head.
+- Open PR #1348, `Redact shutdown failure diagnostics`, on branch
+  `codex/shutdown-diagnostic-redaction`, based on canonical
+  `67416ee4f7fef2dc3ffac001d50e82c0322ee72b`. Resolve its exact head from live
+  metadata; the commit containing this handoff is a moving review head.
 - Scope: remove arbitrary exception values from `bot.shutdown.stage` failures,
   event-pipeline close failure warnings, per-maintainer cancellation errors,
   and shutdown fallback logs while retaining bounded exception type, stage,
