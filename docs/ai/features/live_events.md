@@ -158,6 +158,10 @@ text, request URLs, response bodies, credentials, or exception-value tracebacks.
 diagnostic-only: exception propagation, retry and coverage behavior, fill accounting, planning,
 risk, and trading behavior remain unchanged.
 
+The blocking failure line may also retain a validated numeric status and bounded exchange code.
+Monitor error events use the same hostile-metadata-safe exception-type boundary; diagnostic
+publication must not replace the original refresh exception.
+
 ## Open-Orders Snapshot Deltas
 
 `open_orders.snapshot_delta` replaces the aggregate INFO lines for open-order snapshot additions or

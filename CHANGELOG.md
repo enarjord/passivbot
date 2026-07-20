@@ -6,8 +6,10 @@ All notable user-facing changes will be documented in this file.
 
 - Fill-history refresh failure diagnostics now retain bounded exception types alongside existing
   source, coverage, retry, timing, count, and endpoint context without arbitrary exception
-  messages or exception-value tracebacks. Exception propagation, fill accounting, refresh cadence,
-  planning, risk, and trading behavior are unchanged.
+  messages or exception-value tracebacks. Safe numeric status and bounded exchange code remain
+  available, and monitor publication cannot replace the original refresh failure through hostile
+  exception metadata. Exception propagation, fill accounting, refresh cadence, planning, risk,
+  and trading behavior are unchanged.
 
 - Best-effort live event emitter failure diagnostics, including HSL event emitters and the
   event-adjacent HSL coin-status human-log fallback, now retain bounded exception types instead of

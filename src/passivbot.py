@@ -63,7 +63,11 @@ from live.data_packets import (
     DataPacketMetadata,
     build_data_packet_metadata,
 )
-from live.diagnostic_safety import bounded_exception_type
+from live.diagnostic_safety import (
+    bounded_exception_code,
+    bounded_exception_status,
+    bounded_exception_type,
+)
 from live.freshness import ACCOUNT_SURFACES, LIVE_STATE_SURFACES, FreshnessLedger
 from live.events import DiagnosticEvent, emit_diagnostic_event, run_diagnostic_step
 from live.event_bus import (
@@ -11668,8 +11672,10 @@ class Passivbot:
                 payload={"source": "update_pnls"},
             )
             logging.error(
-                "[fills] Failed to update FillEventsManager | error_type=%s",
+                "[fills] Failed to update FillEventsManager | error_type=%s status=%s code=%s",
                 bounded_exception_type(e),
+                bounded_exception_status(e) or "-",
+                bounded_exception_code(e) or "-",
             )
             self._emit_fills_refresh_summary_event(
                 source=source,

@@ -5798,6 +5798,65 @@ async def test_routine_fill_prefetch_failure_logs_only_exception_type(
 
 
 @pytest.mark.asyncio
+async def test_update_pnls_failure_logs_only_bounded_status_and_code(caplog):
+    bot = Passivbot.__new__(Passivbot)
+    cached_events = [
+        SimpleNamespace(timestamp=1_700_000_000_000, id="fill-1", source_ids=["fill-1"])
+    ]
+
+    class _Manager:
+        history_scope = "all"
+
+        def __init__(self):
+            self.refresh = AsyncMock()
+            error = RuntimeError("api_key=fill-status-secret")
+            error.status = "503"
+            error.code = "TEMP_UNAVAILABLE"
+            error.info = {
+                "status": "500?api_key=hidden",
+                "code": "ApiKeyProdSecret",
+            }
+            self.refresh_latest = AsyncMock(side_effect=error)
+
+        def get_events(self):
+            return list(cached_events)
+
+        def get_history_scope(self):
+            return self.history_scope
+
+        def set_history_scope(self, scope):
+            self.history_scope = scope
+
+    bot.stop_signal_received = False
+    bot.config = {
+        "live": {
+            "fills_recent_overlap_minutes": 10.0,
+            "pnls_max_lookback_days": "all",
+        }
+    }
+    bot._pnls_manager = _Manager()
+    bot.init_pnls = AsyncMock()
+    bot.live_value = lambda key: "all" if key == "pnls_max_lookback_days" else None
+    bot.get_exchange_time = lambda: 1_700_000_060_000
+    bot._log_new_fill_events = lambda new_events: None
+    bot._monitor_record_event = lambda *args, **kwargs: None
+    bot._monitor_record_error = lambda *args, **kwargs: None
+    bot._emit_fills_refresh_summary_event = lambda *args, **kwargs: None
+    bot._maybe_recover_exchange_time_sync = AsyncMock(return_value=False)
+    bot._shutdown_requested = lambda: False
+    bot._health_rate_limits = 0
+    bot._trailing_fill_fetch_generation = 0
+
+    with caplog.at_level(logging.ERROR):
+        with pytest.raises(RuntimeError, match="fill-status-secret"):
+            await bot.update_pnls()
+
+    assert "error_type=RuntimeError status=503 code=TEMP_UNAVAILABLE" in caplog.text
+    assert "fill-status-secret" not in caplog.text
+    assert "ApiKeyProdSecret" not in caplog.text
+
+
+@pytest.mark.asyncio
 async def test_update_pnls_rate_limit_does_not_advance_trailing_fetch_generation():
     bot = Passivbot.__new__(Passivbot)
     cached_events = [

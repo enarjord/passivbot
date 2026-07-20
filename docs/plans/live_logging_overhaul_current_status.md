@@ -28,8 +28,10 @@ Estimated completion:
   metadata; the commit containing this handoff is a moving review head.
 - Scope: remove arbitrary exception values from structured fill-refresh
   summaries, fill-fetch request timing, blocking refresh failure logs, and
-  routine-prefetch fallback logs while retaining bounded exception type and
-  existing source, coverage, retry, timing, count, and endpoint context.
+  routine-prefetch fallback logs while retaining bounded exception type, safe
+  status/code, and existing source, coverage, retry, timing, count, and
+  endpoint context. The adjacent monitor error sink uses the same safe type
+  boundary so publication cannot mask the refresh failure.
 - Behavior boundary: diagnostic retention and projection only. Exception
   propagation, refresh and retry behavior, fill accounting, planning, orders,
   risk, and trading behavior remain unchanged.

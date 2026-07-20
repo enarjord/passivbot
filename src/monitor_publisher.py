@@ -17,6 +17,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterable, Optional
 
+from live.diagnostic_safety import bounded_exception_type
+
 
 _MONITOR_EVENT_PHASE_TIMING_KEYS = (
     "lock_wait_ns",
@@ -56,7 +58,6 @@ _EVENT_RECOVERY_CHECKSUM_BYTES = 16
 _EVENT_RECOVERY_MARKER = b',"_recovery":{"checksum":"'
 _EVENT_RECOVERY_SEQ_SEPARATOR = b'","seq":'
 _EVENT_RECOVERY_TRAILER_MAX_BYTES = 160
-_MONITOR_ERROR_TYPE_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,79}")
 _MONITOR_ERROR_CONTEXT_VALUES = {
     "source": frozenset(("start_bot", "run_execution_loop", "update_pnls")),
     "stage": frozenset(
@@ -1204,10 +1205,7 @@ class MonitorPublisher:
         pside: Optional[str] = None,
     ) -> Optional[dict]:
         error_payload = _safe_monitor_error_context(payload)
-        error_type = type(error).__name__
-        error_payload["error_type"] = (
-            error_type if _MONITOR_ERROR_TYPE_RE.fullmatch(error_type) else "unknown"
-        )
+        error_payload["error_type"] = bounded_exception_type(error)
         return self.record_event(
             kind,
             tags or ("error",),
