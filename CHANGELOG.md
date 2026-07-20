@@ -6,9 +6,9 @@ All notable user-facing changes will be documented in this file.
 
 - Fill-history refresh failure diagnostics now retain bounded exception types alongside existing
   source, coverage, retry, timing, count, and endpoint context without arbitrary exception
-  messages or exception-value tracebacks. This includes exchange-specific fill fetchers, staged
-  remote-call events, startup initialization, HSL flatten confirmation, and direct refresh callers.
-  Safe numeric status and bounded exchange code remain available, and monitor publication cannot
+  messages or exception-value tracebacks. This includes exchange-specific fill fetchers, cache
+  reads, staged remote-call events, startup/process handling, HSL flatten confirmation, and direct
+  refresh callers. Validated numeric status and exchange code remain available, and publication cannot
   replace the original refresh failure through hostile exception metadata. Exception propagation,
   fill accounting, refresh cadence, planning, risk, and trading behavior are unchanged.
 

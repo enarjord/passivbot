@@ -1568,11 +1568,16 @@ class FillEventCache:
                 with path.open("r", encoding="utf-8") as fh:
                     payload = json.load(fh) or []
             except Exception as exc:
-                logger.warning("[fills] cache load: failed to read %s (%s)", path, exc)
+                error_type = bounded_exception_type(exc)
+                logger.warning(
+                    "[fills] cache load: failed to read %s | error_type=%s",
+                    path,
+                    error_type,
+                )
                 if not allow_legacy_contract:
                     raise FillEventCacheContractError(
                         f"fill-event cache file {path} is unreadable and cannot be used for "
-                        f"trading-critical accounting: {exc}"
+                        f"trading-critical accounting; error_type={error_type}"
                     ) from exc
                 continue
             for raw in payload:
@@ -1599,7 +1604,8 @@ class FillEventCache:
                 except Exception as exc:
                     raise FillEventCacheContractError(
                         f"fill-event cache record {path} is malformed and cannot be used for "
-                        f"trading-critical accounting: {exc}"
+                        "trading-critical accounting; "
+                        f"error_type={bounded_exception_type(exc)}"
                     ) from exc
         events.sort(key=lambda ev: ev.timestamp)
         logger.debug(
@@ -1763,7 +1769,11 @@ class FillEventCache:
                 data.setdefault(key, default[key])
             self._metadata = data
         except Exception as exc:
-            logger.warning("[fills] cache metadata: failed to read %s (%s)", self.metadata_path, exc)
+            logger.warning(
+                "[fills] cache metadata: failed to read %s | error_type=%s",
+                self.metadata_path,
+                bounded_exception_type(exc),
+            )
             self._metadata = default
 
         return self._metadata

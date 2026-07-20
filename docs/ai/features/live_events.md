@@ -161,7 +161,9 @@ boundary follow the same classification-only rule. Redaction is diagnostic-only:
 propagation, retry and coverage behavior, fill accounting, planning, risk, and trading behavior
 remain unchanged.
 
-The blocking failure line may also retain a validated numeric status and bounded exchange code.
+Cache-read contract failures and the outer process failure projection follow the same rule so a
+preserved exception cause cannot be exposed by an unsanitized startup traceback. The blocking
+failure line may also retain validated numeric status and exchange code.
 Monitor error events use the same hostile-metadata-safe exception-type boundary; diagnostic
 publication must not replace the original refresh exception.
 

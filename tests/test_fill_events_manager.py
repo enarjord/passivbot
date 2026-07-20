@@ -1715,6 +1715,34 @@ def test_fill_event_cache_rejects_malformed_current_contract_record(tmp_path: Pa
         FillEventCache(cache_dir).load()
 
 
+def test_fill_event_cache_malformed_record_omits_exception_value(
+    tmp_path: Path, monkeypatch
+):
+    cache_dir = tmp_path / "fills"
+    cache_dir.mkdir()
+    (cache_dir / "metadata.json").write_text(
+        json.dumps({"pnl_contract": fem.PNL_CONTRACT_CURRENT}),
+        encoding="utf-8",
+    )
+    (cache_dir / "2026-02-02.json").write_text(
+        json.dumps([{"pnl_contract": fem.PNL_CONTRACT_CURRENT}]),
+        encoding="utf-8",
+    )
+    secret = "signature=malformed-record-secret"
+
+    def fail_from_dict(_raw):
+        raise RuntimeError(secret)
+
+    monkeypatch.setattr(FillEvent, "from_dict", fail_from_dict)
+
+    with pytest.raises(FillEventCacheContractError) as exc_info:
+        FillEventCache(cache_dir).load()
+
+    assert "malformed" in str(exc_info.value)
+    assert "error_type=RuntimeError" in str(exc_info.value)
+    assert secret not in str(exc_info.value)
+
+
 def test_fill_event_cache_rejects_unreadable_current_contract_day(tmp_path: Path):
     cache_dir = tmp_path / "fills"
     cache_dir.mkdir()
@@ -1747,6 +1775,62 @@ def test_fill_event_cache_rejects_unreadable_current_contract_day(tmp_path: Path
 
     with pytest.raises(FillEventCacheContractError, match="unreadable"):
         FillEventCache(cache_dir).load()
+
+
+def test_fill_event_cache_read_failure_omits_exception_value(
+    tmp_path: Path, monkeypatch, caplog
+):
+    cache_dir = tmp_path / "fills"
+    cache_dir.mkdir()
+    (cache_dir / "metadata.json").write_text(
+        json.dumps({"pnl_contract": fem.PNL_CONTRACT_CURRENT}),
+        encoding="utf-8",
+    )
+    (cache_dir / "2026-02-02.json").write_text("[]", encoding="utf-8")
+    secret = "api_key=cache-read-secret"
+
+    class _CacheReadError(RuntimeError):
+        pass
+
+    original_load = fem.json.load
+
+    def fail_day_file(fh):
+        if Path(fh.name).name == "metadata.json":
+            return original_load(fh)
+        raise _CacheReadError(secret)
+
+    monkeypatch.setattr(fem.json, "load", fail_day_file)
+
+    with caplog.at_level(logging.WARNING, logger=fem.logger.name):
+        with pytest.raises(FillEventCacheContractError) as exc_info:
+            FillEventCache(cache_dir).load()
+
+    assert "error_type=RuntimeError" in str(exc_info.value)
+    assert isinstance(exc_info.value.__cause__, _CacheReadError)
+    assert "error_type=RuntimeError" in caplog.text
+    assert secret not in str(exc_info.value)
+    assert secret not in caplog.text
+
+
+def test_fill_event_cache_metadata_failure_omits_exception_value(
+    tmp_path: Path, monkeypatch, caplog
+):
+    cache_dir = tmp_path / "fills"
+    cache_dir.mkdir()
+    (cache_dir / "metadata.json").write_text("{}", encoding="utf-8")
+    secret = "token=cache-metadata-secret"
+
+    def fail_metadata(_fh):
+        raise RuntimeError(secret)
+
+    monkeypatch.setattr(fem.json, "load", fail_metadata)
+
+    with caplog.at_level(logging.WARNING, logger=fem.logger.name):
+        metadata = FillEventCache(cache_dir).load_metadata()
+
+    assert metadata["history_scope"] == "unknown"
+    assert "error_type=RuntimeError" in caplog.text
+    assert secret not in caplog.text
 
 
 @pytest.mark.asyncio
@@ -4764,7 +4848,7 @@ async def test_manager_refresh_logs_bounded_fetcher_error_type_without_secret(
     assert len(timing_records) == 1
     assert timing_records[0].levelno == logging.INFO
     assert "fetch_a:n=1" in timing_records[0].message
-    assert "err_type=Error" in timing_records[0].message
+    assert "err_type=RuntimeError" in timing_records[0].message
     assert "err_msg=" not in timing_records[0].message
     assert secret_error_type.__name__ not in timing_records[0].message
     assert secret not in caplog.text
@@ -4790,9 +4874,10 @@ def test_fill_fetch_request_timing_error_type_rejects_sensitive_and_hostile_meta
 
     rendered = stats.format_endpoints()
 
-    assert f"err_type={long_safe_name[:80]}" in rendered
+    assert "err_type=RuntimeError" in rendered
     assert long_safe_name not in rendered
-    assert rendered.count("err_type=Error") == 2
+    assert rendered.count("err_type=RuntimeError") == 2
+    assert rendered.count("err_type=Error") == 1
     assert "api_key=super-secret-value" not in rendered
     assert "ApiKeyProdSecret" not in rendered
 

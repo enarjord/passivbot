@@ -8,22 +8,58 @@ _SENSITIVE_EXCEPTION_TYPE_RE = re.compile(
     r"privatekey|secret|signature|token|wallet_?address|walletaddress)"
 )
 _EXCEPTION_STATUS_RE = re.compile(r"[0-9]{1,3}")
-_EXCEPTION_CODE_RE = re.compile(r"-?[A-Za-z0-9][A-Za-z0-9_-]{0,47}")
+_EXCEPTION_CODE_RE = re.compile(r"-?[0-9]{1,12}")
+_TRUSTED_EXCEPTION_MODULE_PREFIXES = (
+    "aiohttp",
+    "asyncio",
+    "binance_ohlcv_archive",
+    "builtins",
+    "candlestick_manager",
+    "ccxt",
+    "custom_endpoint_overrides",
+    "exchanges",
+    "fill_events_manager",
+    "hlcv_preparation",
+    "hlcvs_manifest",
+    "httpx",
+    "live",
+    "metrics_schema",
+    "pareto_store",
+    "passivbot",
+    "passivbot_exceptions",
+    "requests",
+    "ssl",
+    "urllib3",
+    "websockets",
+)
+
+
+def _trusted_exception_module(module: str) -> bool:
+    return any(
+        module == prefix or module.startswith(f"{prefix}.")
+        for prefix in _TRUSTED_EXCEPTION_MODULE_PREFIXES
+    )
 
 
 def bounded_exception_type(exc: BaseException) -> str:
     try:
-        name = type(exc).__name__
-        if type(name) is not str:
+        mro = type.__getattribute__(type(exc), "__mro__")
+        if type(mro) is not tuple:
             return "Error"
-        if (
-            not name
-            or not name.isascii()
-            or not name.isidentifier()
-            or _SENSITIVE_EXCEPTION_TYPE_RE.search(name)
-        ):
-            return "Error"
-        return name[:EXCEPTION_TYPE_MAX_LEN]
+        for cls in mro:
+            module = type.__getattribute__(cls, "__module__")
+            name = type.__getattribute__(cls, "__name__")
+            if type(module) is not str or not _trusted_exception_module(module):
+                continue
+            if (
+                type(name) is str
+                and name
+                and name.isascii()
+                and name.isidentifier()
+                and not _SENSITIVE_EXCEPTION_TYPE_RE.search(name)
+            ):
+                return name[:EXCEPTION_TYPE_MAX_LEN]
+        return "Error"
     except BaseException:
         return "Error"
 

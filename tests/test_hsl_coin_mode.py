@@ -48,7 +48,7 @@ def test_hsl_event_emitter_failure_logs_type_without_secret(caplog):
         )
 
     assert emitted is None
-    assert "HslEventEmitterFailure" in caplog.text
+    assert "RuntimeError" in caplog.text
     assert secret not in caplog.text
     assert url not in caplog.text
 

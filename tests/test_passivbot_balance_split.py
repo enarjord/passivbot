@@ -470,7 +470,7 @@ async def test_init_pnls_failure_logs_bounded_classification_and_reraises(monkey
 
     failure = _StartupFillError(secret)
     failure.status = "503"
-    failure.code = "TEMP_UNAVAILABLE"
+    failure.code = "10006"
 
     class _Manager:
         def __init__(self, **_kwargs):
@@ -496,9 +496,9 @@ async def test_init_pnls_failure_logs_bounded_classification_and_reraises(monkey
             await Passivbot.init_pnls(bot)
 
     assert exc_info.value is failure
-    assert "error_type=_StartupFillError" in caplog.text
+    assert "error_type=RuntimeError" in caplog.text
     assert "status=503" in caplog.text
-    assert "code=TEMP_UNAVAILABLE" in caplog.text
+    assert "code=10006" in caplog.text
     assert secret not in caplog.text
     assert "Traceback" not in caplog.text
 
@@ -2714,7 +2714,9 @@ async def test_start_bot_treats_shutdown_cancelled_warmup_as_clean_stop(monkeypa
 
 
 @pytest.mark.asyncio
-async def test_start_bot_treats_hsl_value_error_as_terminal_startup_failure(monkeypatch):
+async def test_start_bot_treats_hsl_value_error_as_terminal_startup_failure(
+    monkeypatch, caplog
+):
     bot = Passivbot.__new__(Passivbot)
     bot.runtime_identity = TEST_RUNTIME_IDENTITY
     bot._runtime_manifest_written = True
@@ -2739,17 +2741,22 @@ async def test_start_bot_treats_hsl_value_error_as_terminal_startup_failure(monk
     bot.warmup_trading_ready_candles = AsyncMock()
     bot._equity_hard_stop_enabled = lambda *args, **kwargs: True
     bot._equity_hard_stop_signal_mode = lambda *args, **kwargs: "coin"
-    bot._equity_hard_stop_start_coin_history_replay = AsyncMock(
-        side_effect=ValueError("missing unrealized_pnl_by_coin_pside")
-    )
+    secret = "api_key=terminal-startup-secret"
+    failure = ValueError(secret)
+    failure.status = "422"
+    failure.code = "10006"
+    bot._equity_hard_stop_start_coin_history_replay = AsyncMock(side_effect=failure)
 
     async def _format(*args, **kwargs):
         return None
 
     monkeypatch.setattr(passivbot_module, "format_approved_ignored_coins", _format)
 
-    with pytest.raises(FatalBotException, match="terminal startup validation failure"):
-        await bot.start_bot()
+    with caplog.at_level(logging.CRITICAL):
+        with pytest.raises(
+            FatalBotException, match="error_type=ValueError status=422 code=10006"
+        ) as exc_info:
+            await bot.start_bot()
 
     assert monitor_errors
     assert (
@@ -2761,6 +2768,10 @@ async def test_start_bot_treats_hsl_value_error_as_terminal_startup_failure(monk
         "stage": "equity_hard_stop_initialize_coin_from_history",
         "error_type": "ValueError",
     }
+    assert exc_info.value.__cause__ is failure
+    assert secret not in str(exc_info.value)
+    assert secret not in caplog.text
+    assert "Traceback" not in caplog.text
 
 
 def test_coin_hsl_status_logs_distance_only_for_open_position(caplog, monkeypatch):
@@ -5887,7 +5898,7 @@ async def test_routine_fill_prefetch_failure_logs_only_exception_type(
             bot, reason="minute_boundary"
         )
 
-    assert "error_type=SensitiveRuntimeError" in caplog.text
+    assert "error_type=RuntimeError" in caplog.text
     assert secret not in caplog.text
     if shutdown_requested:
         assert "routine fills prefetch stopped" in caplog.text
@@ -5909,7 +5920,7 @@ async def test_update_pnls_failure_logs_only_bounded_status_and_code(caplog):
             self.refresh = AsyncMock()
             error = RuntimeError("api_key=fill-status-secret")
             error.status = "503"
-            error.code = "TEMP_UNAVAILABLE"
+            error.code = "10006"
             error.info = {
                 "status": "500?api_key=hidden",
                 "code": "ApiKeyProdSecret",
@@ -5949,7 +5960,7 @@ async def test_update_pnls_failure_logs_only_bounded_status_and_code(caplog):
         with pytest.raises(RuntimeError, match="fill-status-secret"):
             await bot.update_pnls()
 
-    assert "error_type=RuntimeError status=503 code=TEMP_UNAVAILABLE" in caplog.text
+    assert "error_type=RuntimeError status=503 code=10006" in caplog.text
     assert "fill-status-secret" not in caplog.text
     assert "ApiKeyProdSecret" not in caplog.text
 
@@ -11446,7 +11457,7 @@ async def test_run_execution_loop_error_log_includes_type_status_and_action(capl
         (
             ("error.bot", ("error", "bot"), {
                 "source": "run_execution_loop",
-                "error_type": "FakeExchangeError",
+                "error_type": "RuntimeError",
                 "status": "500",
                 "code": "500000",
                 "endpoint": "account-overview",
@@ -11460,7 +11471,7 @@ async def test_run_execution_loop_error_log_includes_type_status_and_action(capl
     assert not any("error with run_execution_loop" in message for message in messages)
     assert any(
         "[error] operation=run_execution_loop" in message
-        and "error_type=FakeExchangeError" in message
+        and "error_type=RuntimeError" in message
         and "status=500" in message
         and "code=500000" in message
         and "endpoint=account-overview" in message
@@ -11471,9 +11482,9 @@ async def test_run_execution_loop_error_log_includes_type_status_and_action(capl
     assert all(raw_error not in message for message in messages)
     assert all("SECRET" not in message for message in messages)
     degraded_event = bot._emit_live_cycle_degraded.call_args.kwargs
-    assert degraded_event["reason_code"] == "FakeExchangeError"
+    assert degraded_event["reason_code"] == "RuntimeError"
     assert degraded_event["level"] == "error"
-    assert degraded_event["data"]["error_type"] == "FakeExchangeError"
+    assert degraded_event["data"]["error_type"] == "RuntimeError"
     assert "error" not in degraded_event["data"]
     assert raw_error not in str(degraded_event)
     assert "SECRET" not in str(degraded_event)
@@ -11538,19 +11549,65 @@ def test_execution_loop_error_fields_are_bounded_and_classify_unknown_endpoint()
     )
     exc.status = "500?api_key=SECRET"
     exc.code = "500000?signature=SIG"
-    exc.info = {"status": "429", "retCode": "RATE_LIMIT"}
+    exc.info = {"status": "429", "retCode": "10006"}
 
     fields = bot._execution_loop_error_fields(exc)
 
     assert fields == {
-        "error_type": "FakeExchangeError",
+        "error_type": "RuntimeError",
         "status": "429",
-        "code": "RATE_LIMIT",
+        "code": "10006",
         "endpoint": "unknown",
     }
     assert "SECRET" not in str(fields)
     assert "SIG" not in str(fields)
     assert "example.invalid" not in str(fields)
+
+
+def test_execution_loop_error_fields_contain_hostile_exception_metadata():
+    bot = Passivbot.__new__(Passivbot)
+    secret = "api_key=hostile-execution-metadata"
+
+    class HostileError(RuntimeError):
+        @property
+        def status(self):
+            raise KeyboardInterrupt(secret)
+
+        @property
+        def code(self):
+            raise SystemExit(secret)
+
+        @property
+        def info(self):
+            raise GeneratorExit(secret)
+
+        def __str__(self):
+            raise KeyboardInterrupt(secret)
+
+    error = HostileError()
+
+    assert bot._execution_loop_error_fields(error) == {
+        "error_type": "RuntimeError",
+        "status": "-",
+        "code": "-",
+        "endpoint": "unknown",
+    }
+
+
+def test_process_failure_log_omits_exception_value_and_traceback(caplog):
+    secret = "api_key=process-boundary-secret"
+    opaque_error = type("sk_live_7E4v93kR2mN6pQ8t", (RuntimeError,), {})
+    error = opaque_error(secret)
+    error.status = "503"
+    error.code = "sk_live_7E4v93kR2mN6pQ8t"
+
+    with caplog.at_level(logging.ERROR):
+        passivbot_module._log_process_failure("passivbot error", error)
+
+    assert "passivbot error | error_type=RuntimeError status=503 code=-" in caplog.text
+    assert secret not in caplog.text
+    assert "sk_live_7E4v93kR2mN6pQ8t" not in caplog.text
+    assert "Traceback" not in caplog.text
 
 
 def test_execution_loop_error_burst_summarizes_repeated_endpoints(caplog, monkeypatch):

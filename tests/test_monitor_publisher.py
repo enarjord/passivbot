@@ -161,8 +161,7 @@ def test_monitor_publisher_record_error_bounds_pathological_exception_type(tmp_p
 
     event = publisher.record_error("error.bot", pathological_error("safe"))
 
-    assert event["payload"]["error_type"] == pathological_error.__name__[:80]
-    assert len(event["payload"]["error_type"]) == 80
+    assert event["payload"]["error_type"] == "Exception"
 
 
 def test_monitor_publisher_record_error_contains_hostile_type_metadata(tmp_path):
@@ -192,7 +191,7 @@ def test_monitor_publisher_record_error_contains_hostile_type_metadata(tmp_path)
 
     sensitive_type = type("ApiKeyProdSecret", (RuntimeError,), {})
     sensitive_event = publisher.record_error("error.exchange", sensitive_type(secret))
-    assert sensitive_event["payload"]["error_type"] == "Error"
+    assert sensitive_event["payload"]["error_type"] == "RuntimeError"
     assert secret not in publisher.current_events_path.read_text()
 
 

@@ -112,10 +112,8 @@ def test_event_emitter_failure_logs_bounded_exception_type_without_secret(caplog
     with caplog.at_level(logging.DEBUG):
         emitted = live_event_emitters._safe_emit(FakeBot(), EventTypes.HEALTH_SUMMARY)
 
-    bounded_type = error_type.__name__[:80]
     assert emitted is None
-    assert len(bounded_type) == 80
-    assert f"error_type={bounded_type}" in caplog.text
+    assert "error_type=RuntimeError" in caplog.text
     assert error_type.__name__ not in caplog.text
     assert secret not in caplog.text
     assert url not in caplog.text
@@ -135,7 +133,7 @@ def test_event_emitter_failure_logs_bounded_exception_type_without_secret(caplog
             is None
         )
 
-    assert "error_type=Error" in caplog.text
+    assert "error_type=RuntimeError" in caplog.text
     assert "class-name-secret" not in caplog.text
 
     sensitive_identifier = "ApiKey_prod_super_secret_ABC123"
@@ -154,7 +152,7 @@ def test_event_emitter_failure_logs_bounded_exception_type_without_secret(caplog
             is None
         )
 
-    assert "error_type=Error" in caplog.text
+    assert "error_type=RuntimeError" in caplog.text
     assert sensitive_identifier not in caplog.text
 
     camelcase_sensitive_identifier = "ApiKeyProdSecretABC123"
@@ -175,7 +173,7 @@ def test_event_emitter_failure_logs_bounded_exception_type_without_secret(caplog
             is None
         )
 
-    assert "error_type=Error" in caplog.text
+    assert "error_type=RuntimeError" in caplog.text
     assert camelcase_sensitive_identifier not in caplog.text
 
     class HostileName(str):
@@ -204,7 +202,7 @@ def test_event_emitter_failure_logs_bounded_exception_type_without_secret(caplog
             is None
         )
 
-    assert "error_type=Error" in caplog.text
+    assert "error_type=RuntimeError" in caplog.text
     assert "hostile-slice-secret" not in caplog.text
 
     invalid_suffix = "V" * 80 + "\napi_key=tail-class-name-secret"
@@ -223,7 +221,7 @@ def test_event_emitter_failure_logs_bounded_exception_type_without_secret(caplog
             is None
         )
 
-    assert "error_type=Error" in caplog.text
+    assert "error_type=RuntimeError" in caplog.text
     assert "tail-class-name-secret" not in caplog.text
 
     class HostileExceptionMeta(type):

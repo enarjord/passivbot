@@ -484,6 +484,16 @@ def order_has_match(order, orders, tolerance_qty=0.01, tolerance_price=0.002):
     return False
 
 
+def _log_process_failure(label: str, exc: BaseException) -> None:
+    logging.error(
+        "%s | error_type=%s status=%s code=%s",
+        label,
+        bounded_exception_type(exc),
+        bounded_exception_status(exc) or "-",
+        bounded_exception_code(exc) or "-",
+    )
+
+
 def compute_live_warmup_windows(
     symbols_by_side: Dict[str, set],
     bp_lookup: Callable[[str, str, str], float],
@@ -3360,6 +3370,9 @@ class Passivbot:
             raise
         except Exception as exc:
             error_ts = utc_ms()
+            error_type = bounded_exception_type(exc)
+            error_status = bounded_exception_status(exc) or "-"
+            error_code = bounded_exception_code(exc) or "-"
             self._monitor_record_error(
                 "error.bot",
                 exc,
@@ -3371,17 +3384,20 @@ class Passivbot:
             self._monitor_emit_stop(
                 "startup_error",
                 ts=error_ts,
-                payload={"stage": boot_stage, "error_type": type(exc).__name__},
+                payload={"stage": boot_stage, "error_type": error_type},
             )
             if self._startup_exception_is_terminal(exc, boot_stage):
                 logging.critical(
-                    "[boot] terminal startup validation failure | stage=%s error_type=%s error=%s",
+                    "[boot] terminal startup validation failure | "
+                    "stage=%s error_type=%s status=%s code=%s",
                     boot_stage,
-                    type(exc).__name__,
-                    exc,
+                    error_type,
+                    error_status,
+                    error_code,
                 )
                 raise FatalBotException(
-                    f"terminal startup validation failure during {boot_stage}: {exc}"
+                    f"terminal startup validation failure during {boot_stage}; "
+                    f"error_type={error_type} status={error_status} code={error_code}"
                 ) from exc
             raise
 
@@ -5753,64 +5769,18 @@ class Passivbot:
 
     def _execution_loop_error_fields(self, exc: BaseException) -> dict[str, str]:
         """Return bounded classifications for execution-loop incident projections."""
-        fields: dict[str, str] = {
-            "error_type": self._execution_loop_error_field(
-                type(exc).__name__, re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,79}")
-            ),
-            "status": "-",
-            "code": "-",
+        return {
+            "error_type": bounded_exception_type(exc),
+            "status": bounded_exception_status(exc) or "-",
+            "code": bounded_exception_code(exc) or "-",
             "endpoint": self._execution_loop_error_endpoint(exc),
         }
-        for attr in ("http_status", "status", "status_code"):
-            try:
-                value = getattr(exc, attr, None)
-            except Exception:
-                continue
-            status = self._execution_loop_error_field(
-                value, re.compile(r"[0-9]{1,3}")
-            )
-            if status != "-":
-                fields["status"] = status
-                break
-        for attr in ("code", "exact", "error_code"):
-            try:
-                value = getattr(exc, attr, None)
-            except Exception:
-                continue
-            code = self._execution_loop_error_field(
-                value, re.compile(r"-?[A-Za-z0-9][A-Za-z0-9_-]{0,47}")
-            )
-            if code != "-":
-                fields["code"] = code
-                break
-        try:
-            info = getattr(exc, "info", None)
-        except Exception:
-            info = None
-        if isinstance(info, dict):
-            for key in ("code", "retCode", "errorCode"):
-                value = info.get(key)
-                code = self._execution_loop_error_field(
-                    value, re.compile(r"-?[A-Za-z0-9][A-Za-z0-9_-]{0,47}")
-                )
-                if code != "-":
-                    fields["code"] = code
-                    break
-            for key in ("status", "statusCode"):
-                value = info.get(key)
-                status = self._execution_loop_error_field(
-                    value, re.compile(r"[0-9]{1,3}")
-                )
-                if status != "-":
-                    fields["status"] = status
-                    break
-        return fields
 
     def _execution_loop_error_endpoint(self, exc: BaseException) -> str:
         """Extract a bounded endpoint classification without retaining the URL."""
         try:
             error = str(exc)
-        except Exception:
+        except BaseException:
             return "unknown"
         match = re.search(r"https?://[^\s\"'<>]+", error)
         if not match:
@@ -6284,7 +6254,7 @@ class Passivbot:
             except (RestartBotException, FatalBotException) as e:
                 self._emit_live_cycle_degraded(
                     cycle_id=cycle_id,
-                    reason_code=type(e).__name__,
+                    reason_code=bounded_exception_type(e),
                     data={"timings_ms": dict(loop_timings_ms)},
                     level="warning",
                 )
@@ -6297,8 +6267,9 @@ class Passivbot:
                         data={"timings_ms": dict(loop_timings_ms)},
                     )
                     logging.debug(
-                        "[shutdown] execution loop stopped during rate-limit handling: %s",
-                        e,
+                        "[shutdown] execution loop stopped during rate-limit handling | "
+                        "error_type=%s",
+                        bounded_exception_type(e),
                     )
                     break
                 self._health_errors += 1
@@ -6316,7 +6287,7 @@ class Passivbot:
                     cycle_id=cycle_id,
                     reason_code="rate_limit",
                     data={
-                        "error_type": type(e).__name__,
+                        "error_type": bounded_exception_type(e),
                         "timings_ms": dict(loop_timings_ms),
                     },
                     level="warning",
@@ -6359,7 +6330,7 @@ class Passivbot:
                     cycle_id=cycle_id,
                     reason_code="fill_history_coverage_unavailable",
                     data={
-                        "error_type": type(e).__name__,
+                        "error_type": bounded_exception_type(e),
                         "timings_ms": dict(loop_timings_ms),
                     },
                     level="warning",
@@ -6368,11 +6339,12 @@ class Passivbot:
                     1.0, stage="fill_history_coverage_retry"
                 )
             except Exception as e:
+                error_type = bounded_exception_type(e)
                 self._emit_live_cycle_degraded(
                     cycle_id=cycle_id,
-                    reason_code=type(e).__name__,
+                    reason_code=error_type,
                     data={
-                        "error_type": type(e).__name__,
+                        "error_type": error_type,
                         "timings_ms": dict(loop_timings_ms),
                     },
                     level="error",
@@ -20026,16 +19998,14 @@ async def main():
             await bot.start_bot()
         except FatalBotException as e:
             fatal_error = e
-            logging.error(f"passivbot fatal error {e}")
+            _log_process_failure("passivbot fatal error", e)
         except asyncio.CancelledError as e:
             if bot.stop_signal_received or getattr(bot, "_shutdown_in_progress", False):
                 logging.info("passivbot cancellation received during shutdown")
             else:
-                logging.error(f"passivbot cancelled unexpectedly {e}")
-                traceback.print_exc()
+                _log_process_failure("passivbot cancelled unexpectedly", e)
         except Exception as e:
-            logging.error(f"passivbot error {e}")
-            traceback.print_exc()
+            _log_process_failure("passivbot error", e)
         finally:
             try:
                 if bot.stop_signal_received or getattr(
