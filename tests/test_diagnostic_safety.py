@@ -69,3 +69,9 @@ def test_bounded_exception_status_and_code_reject_oversized_integers():
 
     assert bounded_exception_status(error) is None
     assert bounded_exception_code(error) is None
+
+    error.status = "5" * 10_000
+    error.code = "A" * 10_000
+
+    assert bounded_exception_status(error) is None
+    assert bounded_exception_code(error) is None

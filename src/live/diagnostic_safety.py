@@ -55,6 +55,7 @@ def _bounded_exception_attribute(
             text = _exact_scalar_text(value)
             if (
                 text is not None
+                and len(text) <= 80
                 and text.isascii()
                 and pattern.fullmatch(text)
                 and not _SENSITIVE_EXCEPTION_TYPE_RE.search(text)
@@ -70,6 +71,7 @@ def _bounded_exception_attribute(
                 text = _exact_scalar_text(value)
                 if (
                     text is not None
+                    and len(text) <= 80
                     and text.isascii()
                     and pattern.fullmatch(text)
                     and not _SENSITIVE_EXCEPTION_TYPE_RE.search(text)
