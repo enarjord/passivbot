@@ -1186,6 +1186,73 @@ def _console_create_filter_summary(event: LiveEvent) -> list[str]:
     return parts
 
 
+_PRE_CREATE_SKIP_CONSOLE_RECORD_LIMIT = 188
+_PRE_CREATE_SKIP_REASON_CODES = {
+    ReasonCodes.PRE_CREATE_MARKET_SNAPSHOT_UNAVAILABLE,
+    ReasonCodes.PRE_CREATE_PLANNING_SNAPSHOT_INVALID,
+}
+
+
+def _bounded_pre_create_skip_console_token(value: object, *, limit: int) -> str:
+    cleaned = _format_console_label(value)
+    token = "".join(
+        char
+        if char.isascii()
+        and char.isprintable()
+        and not char.isspace()
+        and char not in {",", "=", "|", "[", "]"}
+        else "_"
+        for char in cleaned
+    )
+    return token[:limit] or "-"
+
+
+def _format_pre_create_skip_console(event: LiveEvent) -> str:
+    data = event.data if isinstance(event.data, Mapping) else {}
+    parts = ["[gate]", "skipped"]
+    if event.cycle_id:
+        parts.append(
+            "cycle="
+            + _bounded_pre_create_skip_console_token(event.cycle_id, limit=32)
+        )
+    order_count = _data_int(data, "order_count")
+    if order_count is not None:
+        parts.append(f"orders={min(999_999_999, max(0, order_count))}")
+    raw_symbols = data.get("symbols")
+    if isinstance(raw_symbols, (list, tuple, set)):
+        symbols = [
+            _bounded_pre_create_skip_console_token(
+                _format_position_console_coin(symbol), limit=8
+            )
+            for symbol in list(raw_symbols)[:2]
+        ]
+        if symbols:
+            omitted = min(999, max(0, len(raw_symbols) - len(symbols)))
+            suffix = f",+{omitted}" if omitted else ""
+            parts.append("symbols=" + ",".join(symbols) + suffix)
+    error_type = _data_str(data, "error_type")
+    if error_type:
+        parts.append(
+            "error_type="
+            + _bounded_pre_create_skip_console_token(error_type, limit=24)
+        )
+    if event.reason_code:
+        parts.append(
+            "reason="
+            + _bounded_pre_create_skip_console_token(event.reason_code, limit=48)
+        )
+    stage_message = {
+        "planning_snapshot": "planning snapshot invalid before create",
+        "market_snapshot_refresh": "pre-create market snapshot refresh failed",
+        "market_snapshot_validation": "pre-create market snapshots are stale",
+    }.get(_data_str(data, "stage"))
+    if stage_message:
+        candidate = " ".join((*parts, stage_message))
+        if len(candidate) <= _PRE_CREATE_SKIP_CONSOLE_RECORD_LIMIT:
+            parts.append(stage_message)
+    return " ".join(parts)[:_PRE_CREATE_SKIP_CONSOLE_RECORD_LIMIT]
+
+
 def _console_entry_gate_summary(event: LiveEvent) -> list[str]:
     data = event.data if isinstance(event.data, Mapping) else {}
     parts: list[str] = []
@@ -2745,6 +2812,11 @@ def format_console_event(event: LiveEvent) -> str:
         return format_ema_unavailable_console(event.data)
     if event.event_type == EventTypes.FORAGER_ELIGIBILITY_CHANGED:
         return format_forager_eligibility_console(event.data)
+    if (
+        event.event_type == EventTypes.EXECUTION_CREATE_SKIPPED
+        and event.reason_code in _PRE_CREATE_SKIP_REASON_CODES
+    ):
+        return _format_pre_create_skip_console(event)
     if event.event_type in {
         EventTypes.ENTRY_INITIAL_DISTANCE_GATE_BLOCKED,
         EventTypes.ENTRY_INITIAL_DISTANCE_GATE_CLEARED,

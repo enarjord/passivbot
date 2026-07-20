@@ -8881,10 +8881,8 @@ async def test_pre_create_snapshot_filter_blocks_stale_market_snapshots(caplog):
     assert text_sink.events == [event]
     console_message = format_console_event(event)
     assert "reason=pre_create_market_snapshot_unavailable" in console_message
-    assert "create orders skipped because pre-create market snapshots are stale" in (
-        console_message
-    )
-    assert len(console_message) <= 240
+    assert "pre-create market snapshots are stale" in console_message
+    assert len("2026-07-15T23:45:40Z WARNING  [hyperliquid] " + console_message) <= 240
     assert not any(
         "stale pre-create market snapshots" in record.getMessage()
         for record in caplog.records
@@ -8975,7 +8973,7 @@ async def test_pre_create_snapshot_filter_emits_failed_refresh_skip_event(caplog
     assert "error_type=RuntimeError" in console_message
     assert "reason=pre_create_market_snapshot_unavailable" in console_message
     assert "exchange unavailable" not in console_message
-    assert len(console_message) <= 240
+    assert len("2026-07-15T23:45:40Z WARNING  [hyperliquid] " + console_message) <= 240
     assert not any(
         "failed pre-create market snapshot refresh" in record.getMessage()
         for record in caplog.records
@@ -9347,8 +9345,8 @@ async def test_pre_create_snapshot_filter_blocks_non_market_planning_invalidatio
     assert text_sink.events == [event]
     console_message = format_console_event(event)
     assert "reason=pre_create_planning_snapshot_invalid" in console_message
-    assert "create orders skipped because planning snapshot is invalid" in console_message
-    assert len(console_message) <= 240
+    assert "planning snapshot invalid before create" in console_message
+    assert len("2026-07-15T23:45:40Z WARNING  [hyperliquid] " + console_message) <= 240
     assert not any(
         "planning snapshot invalid before create" in record.getMessage()
         for record in caplog.records
@@ -9357,7 +9355,7 @@ async def test_pre_create_snapshot_filter_blocks_non_market_planning_invalidatio
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("emitter_mode", ["missing", "raises"])
+@pytest.mark.parametrize("emitter_mode", ["missing", "raises", "returns_none"])
 async def test_pre_create_snapshot_filter_keeps_legacy_warning_without_event_owner(
     caplog, emitter_mode
 ):
@@ -9374,18 +9372,24 @@ async def test_pre_create_snapshot_filter_keeps_legacy_warning_without_event_own
     def raising_emitter(**_kwargs):
         raise RuntimeError("event pipeline unavailable with raw detail")
 
+    def swallowed_emitter(**_kwargs):
+        return None
+
+    emitters = {
+        "missing": None,
+        "raises": raising_emitter,
+        "returns_none": swallowed_emitter,
+    }
     bot = SimpleNamespace(
         _current_planning_snapshot_invalid_for_creations=invalid_for_creations,
-        _emit_execution_create_filter_event=(
-            None if emitter_mode == "missing" else raising_emitter
-        ),
+        _emit_execution_create_filter_event=emitters[emitter_mode],
         _fresh_entry_eligibility_trace=None,
         _live_event_pipeline=(
             None
             if emitter_mode == "missing"
             else SimpleNamespace(emit=lambda _event: None, console_sink=object())
         ),
-        live_event_console_enabled=emitter_mode == "raises",
+        live_event_console_enabled=emitter_mode != "missing",
         _log_symbols=lambda symbols, limit=12: ",".join(symbols[:limit]),
         _log_compact_symbol_payload=lambda _details: "positions:surface_epoch_too_old",
     )

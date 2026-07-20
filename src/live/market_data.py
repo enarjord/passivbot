@@ -78,7 +78,7 @@ def _emit_pre_create_skip_event(
     structured_console_available = _pre_create_skip_structured_console_available(bot)
     details_count = len(details or [])
     try:
-        emit_filter_event(
+        emitted = emit_filter_event(
             event_type=EventTypes.EXECUTION_CREATE_SKIPPED,
             status="skipped",
             reason_code=reason_code,
@@ -101,7 +101,7 @@ def _emit_pre_create_skip_event(
             type(exc).__name__,
         )
         return False
-    return structured_console_available
+    return structured_console_available and bool(emitted)
 
 
 def _record_fresh_entry_blocks(bot, orders: list[dict], reason: str) -> None:

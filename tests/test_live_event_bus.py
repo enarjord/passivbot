@@ -2209,6 +2209,86 @@ def test_console_format_summarizes_create_filter_payload():
     )
 
 
+def test_console_format_bounds_pre_create_skip_with_error_and_many_symbols():
+    event = LiveEvent(
+        EventTypes.EXECUTION_CREATE_SKIPPED,
+        status="skipped",
+        cycle_id="cy_123456",
+        reason_code=ReasonCodes.PRE_CREATE_MARKET_SNAPSHOT_UNAVAILABLE,
+        message="unbounded message " * 100,
+        data={
+            "stage": "market_snapshot_refresh",
+            "order_count": 4,
+            "symbols": [
+                "BTC/USDT:USDT",
+                "ETH/USDT:USDT",
+                "SOL/USDT:USDT",
+                "XRP/USDT:USDT",
+            ],
+            "error_type": "ExchangeNotAvailable",
+        },
+    )
+
+    rendered = format_console_event(event)
+    longest_prefix = "2026-07-15T23:45:40Z WARNING  [hyperliquid] "
+
+    assert len(longest_prefix + rendered) <= 240
+    assert "cycle=cy_123456" in rendered
+    assert "orders=4" in rendered
+    assert "symbols=BTC,ETH,+2" in rendered
+    assert "error_type=ExchangeNotAvailable" in rendered
+    assert "reason=pre_create_market_snapshot_unavailable" in rendered
+    assert "pre-create market snapshot refresh failed" in rendered
+    assert "unbounded message" not in rendered
+
+    pathological = LiveEvent(
+        EventTypes.EXECUTION_CREATE_SKIPPED,
+        status="skipped",
+        cycle_id="C" * 1_000,
+        reason_code=ReasonCodes.PRE_CREATE_MARKET_SNAPSHOT_UNAVAILABLE,
+        message="M" * 10_000,
+        data={
+            "stage": "market_snapshot_refresh",
+            "order_count": 10**20,
+            "symbols": ["S" * 1_000] * 12,
+            "error_type": "E" * 1_000,
+        },
+    )
+
+    pathological_rendered = format_console_event(pathological)
+    assert len(longest_prefix + pathological_rendered) <= 240
+    assert "cycle=" + "C" * 32 in pathological_rendered
+    assert "orders=999999999" in pathological_rendered
+    assert "symbols=" + "S" * 8 + "," + "S" * 8 + ",+10" in pathological_rendered
+    assert "error_type=" + "E" * 24 in pathological_rendered
+    assert "reason=pre_create_market_snapshot_unavailable" in pathological_rendered
+
+
+def test_create_filter_emitter_reports_whether_live_event_emission_succeeded():
+    class Bot:
+        live_event_debug_profiles = ()
+
+        def _current_live_event_cycle_id(self):
+            return "cy_1"
+
+        def _emit_live_event(self, *_args, **_kwargs):
+            return None
+
+    bot = Bot()
+    kwargs = {
+        "event_type": EventTypes.EXECUTION_CREATE_SKIPPED,
+        "status": "skipped",
+        "reason_code": ReasonCodes.PRE_CREATE_MARKET_SNAPSHOT_UNAVAILABLE,
+        "order_count": 1,
+        "symbols": ["BTC/USDT:USDT"],
+    }
+
+    assert live_event_emitters.emit_execution_create_filter_event(bot, **kwargs) is False
+
+    bot._emit_live_event = lambda *_args, **_kwargs: LiveEvent("test.event")
+    assert live_event_emitters.emit_execution_create_filter_event(bot, **kwargs) is True
+
+
 def test_console_format_summarizes_low_balance_create_skip():
     event = LiveEvent(
         EventTypes.EXECUTION_CREATE_SKIPPED,
