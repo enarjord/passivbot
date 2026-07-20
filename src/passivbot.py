@@ -182,11 +182,6 @@ from strategy_warmup import (
 
 NetworkError = ccxt_errors.NetworkError
 RateLimitExceeded = ccxt_errors.RateLimitExceeded
-_WS_STACK_COMPONENT_SENSITIVE_RE = re.compile(
-    r"(?:api[_-]?key|secret|token|signature|authorization|password|cookie|"
-    r"credential|bearer|sk[_-]?live)",
-    re.IGNORECASE,
-)
 # Some isolated tests stub ccxt.base.errors without RequestTimeout; treat it as a
 # NetworkError-class transient startup error when the dedicated symbol is absent.
 RequestTimeout = getattr(ccxt_errors, "RequestTimeout", NetworkError)
@@ -6616,45 +6611,14 @@ class Passivbot:
                 reconnect_no <= 1
                 or now_ms - last_traceback_ms >= 15 * 60 * 1000
             ):
-                stack_frames = []
-                for frame in traceback.extract_tb(exc.__traceback__)[-4:]:
-                    raw_file_name = str(frame.filename)
-                    if (
-                        "://" in raw_file_name
-                        or any(char in raw_file_name for char in "?=#&")
-                        or _WS_STACK_COMPONENT_SENSITIVE_RE.search(raw_file_name)
-                    ):
-                        file_name = "redacted"
-                    else:
-                        file_name = "".join(
-                            char
-                            for char in Path(raw_file_name).name
-                            if char.isascii() and (char.isalnum() or char in "._-")
-                        )[:48]
-                    raw_function_name = str(frame.name)
-                    if (
-                        "://" in raw_function_name
-                        or any(char in raw_function_name for char in "?=#&/")
-                        or _WS_STACK_COMPONENT_SENSITIVE_RE.search(raw_function_name)
-                    ):
-                        function_name = "redacted"
-                    else:
-                        function_name = "".join(
-                            char
-                            for char in raw_function_name
-                            if char.isascii() and (char.isalnum() or char == "_")
-                        )[:48]
-                    stack_frames.append(
-                        f"{file_name or 'unknown'}:{max(0, int(frame.lineno))}:"
-                        f"{function_name or 'unknown'}"
-                    )
-                if stack_frames:
+                stack_depth = len(traceback.extract_tb(exc.__traceback__)[-4:])
+                if stack_depth:
                     traceback_emitted = True
                     self._ws_reconnect_traceback_last_ms = now_ms
                     logging.debug(
-                        "[ws] %s: reconnect stack_frames=%s",
+                        "[ws] %s: reconnect stack_frames=%d",
                         exchange,
-                        " <- ".join(stack_frames),
+                        stack_depth,
                     )
         self._emit_websocket_reconnect_event(
             reconnect_no=reconnect_no,

@@ -57,7 +57,6 @@ _EVENT_RECOVERY_MARKER = b',"_recovery":{"checksum":"'
 _EVENT_RECOVERY_SEQ_SEPARATOR = b'","seq":'
 _EVENT_RECOVERY_TRAILER_MAX_BYTES = 160
 _MONITOR_ERROR_TYPE_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,79}")
-_MONITOR_ERROR_CONTEXT_MAX_INT = (1 << 63) - 1
 _MONITOR_ERROR_CONTEXT_VALUES = {
     "source": frozenset(("start_bot", "run_execution_loop", "update_pnls")),
     "stage": frozenset(
@@ -75,10 +74,6 @@ _MONITOR_ERROR_CONTEXT_VALUES = {
         )
     ),
 }
-_MONITOR_ERROR_CONTEXT_COUNT_KEYS = (
-    "attempt",
-    "count",
-)
 
 
 def _empty_monitor_event_phase_timing() -> dict[str, int]:
@@ -92,12 +87,6 @@ def _safe_monitor_error_context(payload: Any) -> dict[str, Any]:
     for key, allowed_values in _MONITOR_ERROR_CONTEXT_VALUES.items():
         value = payload.get(key)
         if isinstance(value, str) and value in allowed_values:
-            context[key] = value
-    for key in _MONITOR_ERROR_CONTEXT_COUNT_KEYS:
-        value = payload.get(key)
-        if isinstance(value, bool) or not isinstance(value, int):
-            continue
-        if 0 <= value <= _MONITOR_ERROR_CONTEXT_MAX_INT:
             context[key] = value
     return context
 

@@ -267,11 +267,11 @@ event emission failure must not change exchange configuration control flow or re
 
 `websocket.reconnect` retains bounded reconnect count, retry delay, reason classification,
 rate-limit state, warning visibility, DEBUG stack-frame-emission state, and optional exception type.
-The human warning/debug projection may retain the same classifications and sanitized stack frames,
-but must not render the exception value, raw reason text, request URLs, responses, or formatted
-exception-value traceback. Suspicious frame labels are replaced rather than normalized, and a frame
-is marked emitted only when DEBUG logging accepts it. Reconnect cadence, retry behavior, and
-connector control flow are independent of observability delivery.
+The human warning/debug projection may retain the same classifications and bounded stack depth, but
+must not render frame labels, line values, the exception value, raw reason text, request URLs,
+responses, or formatted exception-value traceback. A stack diagnostic is marked emitted only when
+DEBUG logging accepts it. Reconnect cadence, retry behavior, and connector control flow are
+independent of observability delivery.
 
 ## Execution-Loop Incidents
 

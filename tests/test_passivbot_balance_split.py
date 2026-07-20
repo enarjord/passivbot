@@ -3027,7 +3027,6 @@ def test_ws_reconnect_redacts_sensitive_traceback_frame_components(monkeypatch, 
     assert "api_key" not in caplog.text
     assert "wss://" not in caplog.text
     assert "stack_frames=" in caplog.text
-    assert "redacted" in caplog.text
     assert bot._live_event_pipeline.flush(timeout=2.0) is True
     assert sink.events[-1].data["traceback_emitted"] is True
     assert bot._live_event_pipeline.close(timeout=2.0) is True

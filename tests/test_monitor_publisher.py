@@ -92,7 +92,7 @@ def test_monitor_publisher_record_error_redacts_diagnostic_fields_and_keeps_safe
         payload={
             "source": "start_bot",
             "operation": "load_account",
-            "attempt": 2,
+            "attempt": 1_234_567_890_123_456_789,
             "status": schemeless_url,
             "count": 1 << 80,
             "stage": "init_markets",
@@ -129,7 +129,6 @@ def test_monitor_publisher_record_error_redacts_diagnostic_fields_and_keeps_safe
     assert event["payload"] == {
         "source": "start_bot",
         "stage": "init_markets",
-        "attempt": 2,
         "error_type": "RuntimeError",
     }
 
@@ -140,14 +139,12 @@ def test_monitor_publisher_record_error_redacts_diagnostic_fields_and_keeps_safe
             "source": opaque_token,
             "stage": opaque_token,
             "status": opaque_token,
-            "attempt": 3,
+            "attempt": 1_234_567_890_123_456_789,
+            "count": 123_456_789_012_345_678,
         },
         ts=1_235,
     )
-    assert opaque_event["payload"] == {
-        "attempt": 3,
-        "error_type": "RuntimeError",
-    }
+    assert opaque_event["payload"] == {"error_type": "RuntimeError"}
 
     serialized = publisher.current_events_path.read_text()
     assert secret not in serialized
