@@ -113,6 +113,19 @@ def test_exception_type_name_contains_rejects_metaclass_name_descriptor_forgery(
     )
 
 
+def test_exception_type_name_contains_normalizes_stored_string_subclass():
+    class HostileName(str):
+        def lower(self):
+            raise KeyboardInterrupt("api_key=hostile-name-subclass")
+
+    class WrappedFailure(RuntimeError):
+        pass
+
+    WrappedFailure.__name__ = HostileName("WrappedInvalidNonceFailure")
+
+    assert exception_type_name_contains(WrappedFailure(), ("invalidnonce",))
+
+
 def test_bounded_exception_status_and_code_contain_hostile_metadata():
     secret = "api_key=attribute-secret"
 

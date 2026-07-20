@@ -131,7 +131,7 @@ def exception_type_name_contains(
     """Inspect the real class name for control flow without projecting that name."""
     try:
         cls = type(exc)
-        name = type.__dict__["__name__"].__get__(cls, type)
+        name = str.__str__(type.__dict__["__name__"].__get__(cls, type))
         return _text_contains(name, needles, case_sensitive=case_sensitive)
     except BaseException:
         return False

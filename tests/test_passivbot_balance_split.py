@@ -11319,6 +11319,21 @@ def test_exchange_time_sync_detection_rejects_forged_class_name_descriptor():
     assert not bot._is_exchange_time_sync_error(UnrelatedFailure("opaque"))
 
 
+def test_exchange_time_sync_detection_normalizes_stored_name_subclass():
+    bot = Passivbot.__new__(Passivbot)
+
+    class HostileName(str):
+        def lower(self):
+            raise KeyboardInterrupt("api_key=hostile-name-subclass")
+
+    class WrappedFailure(RuntimeError):
+        pass
+
+    WrappedFailure.__name__ = HostileName("WrappedInvalidNonceFailure")
+
+    assert bot._is_exchange_time_sync_error(WrappedFailure("opaque"))
+
+
 def test_exchange_time_sync_detection_contains_hostile_exception_text():
     bot = Passivbot.__new__(Passivbot)
     secret = "api_key=time-sync-hostile-string"
