@@ -4,9 +4,8 @@ import re
 
 EXCEPTION_TYPE_MAX_LEN = 80
 _SENSITIVE_EXCEPTION_TYPE_RE = re.compile(
-    r"(?i)(?:^|_)(?:api_?key|apikey|authorization|auth|cookie|passphrase|password|"
-    r"private_?key|privatekey|secret|signature|token|wallet_?address|walletaddress)"
-    r"(?:_|$)"
+    r"(?i)(?:api_?key|apikey|authorization|cookie|passphrase|password|private_?key|"
+    r"privatekey|secret|signature|token|wallet_?address|walletaddress)"
 )
 
 
