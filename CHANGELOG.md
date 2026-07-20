@@ -4,6 +4,12 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Noncritical market-snapshot diagnostic skips now use the existing
+  `market.snapshot_diagnostic_skipped` event as the sole normal warning when the structured console
+  is available. The bounded event and legacy fallback retain only stable context and exception type;
+  position/balance refresh behavior is unchanged, and arbitrary exception text is no longer stored
+  or projected.
+
 - Pre-create planning and market-snapshot skips now use the existing
   `execution.create_skipped` event as the sole normal warning when the structured console is
   available. The bounded event retains the stable reason, stage, count, symbols, and exception

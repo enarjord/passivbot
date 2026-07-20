@@ -77,6 +77,12 @@ _EXCHANGE_TIME_SYNC_CLIENT_SAMPLE_LIMIT = 8
 _CYCLE_DEGRADED_CODE_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_.:-]{0,95}")
 _CYCLE_DEGRADED_CONTEXT_RE = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_ .:-]{0,127}")
 _CYCLE_DEGRADED_SYMBOL_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,159}")
+_MARKET_SNAPSHOT_DIAGNOSTIC_CONTEXT_RE = re.compile(
+    r"[A-Za-z0-9_][A-Za-z0-9_ .:-]{0,95}"
+)
+_MARKET_SNAPSHOT_DIAGNOSTIC_ERROR_TYPE_RE = re.compile(
+    r"[A-Za-z_][A-Za-z0-9_]{0,79}"
+)
 _CYCLE_DEGRADED_READINESS_LIST_KEYS = (
     "missing",
     "changed",
@@ -1796,9 +1802,14 @@ def _emit_market_snapshot_diagnostic_skipped_event_unchecked(
     *,
     context: str,
     error: BaseException,
-) -> None:
-    _safe_emit(
-        bot,
+) -> bool:
+    safe_context = _cycle_degraded_bounded_text(
+        context, _MARKET_SNAPSHOT_DIAGNOSTIC_CONTEXT_RE
+    ) or "unknown"
+    error_type = type(error).__name__
+    if not _MARKET_SNAPSHOT_DIAGNOSTIC_ERROR_TYPE_RE.fullmatch(error_type):
+        error_type = "unknown"
+    emitted = bot._emit_live_event(
         EventTypes.MARKET_SNAPSHOT_DIAGNOSTIC_SKIPPED,
         level="warning",
         component="market.snapshot",
@@ -1807,25 +1818,26 @@ def _emit_market_snapshot_diagnostic_skipped_event_unchecked(
         status="skipped",
         reason_code=ReasonCodes.MARKET_SNAPSHOT_DIAGNOSTIC_SKIPPED,
         data={
-            "context": str(context),
-            "error_type": type(error).__name__,
-            "error": _sanitize_remote_text(error, max_len=500),
+            "context": safe_context,
+            "error_type": error_type,
         },
     )
+    return emitted is not None
 
 
 def emit_market_snapshot_diagnostic_skipped_event(
     bot: Any, *args: Any, **kwargs: Any
-) -> None:
+) -> bool:
     try:
-        _emit_market_snapshot_diagnostic_skipped_event_unchecked(
+        return _emit_market_snapshot_diagnostic_skipped_event_unchecked(
             bot, *args, **kwargs
         )
     except Exception as exc:
         logging.debug(
-            "[event] failed to emit market snapshot diagnostic skipped event: %s",
-            exc,
+            "[event] failed to emit market snapshot diagnostic skipped event error_type=%s",
+            type(exc).__name__,
         )
+        return False
 
 
 def _safe_int_map(value: Any) -> dict[str, int]:
