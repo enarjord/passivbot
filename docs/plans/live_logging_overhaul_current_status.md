@@ -22,26 +22,51 @@ Estimated completion:
 
 ## Active Review Slice
 
-- PR #1340, `Retain smoke log scan cost in incident summaries`; branch:
-  `codex/live-incident-log-scan-cost`, based on canonical
-  `3311085dce8b7540f5a26e809229180d5f784c25`.
-- Scope: propagate the already-computed live smoke text-log `scan_cost`
-  unchanged through the incident bundle manifest summary and command result.
-- Behavior boundary: read-only local tooling only. The slice changes no event
-  producer, archive content, log discovery or reads, matching, redaction,
-  filtering, verdict, monitor persistence, exchange access, process
-  inspection/control, planning, strategy, order, or risk behavior.
-- Baseline: PR #1339's deployed incident archive contains exact log
-  `scan_cost` in `smoke_report.json`, but the bundle manifest summary and
-  command result omit it because their dedicated log-summary projector does
-  not retain the field. The active slice closes only that projection gap.
+- PR #1341, `Structure bulk open-order snapshot deltas`; branch
+  `codex/open-orders-snapshot-delta-event`, based on canonical
+  `bc31fafdbdf045f9c003e49fa6877b721c834600`.
+- Scope: replace the two legacy aggregate INFO lines emitted when an
+  authoritative open-order snapshot adds or removes more than 20 orders with
+  one bounded structured `open_orders.snapshot_delta` event per direction.
+- Behavior boundary: logging migration only. The event retains operator-visible
+  INFO/text projection and persists only the direction and count. It changes no
+  order rows, snapshot application, reconciliation classification, guardrail,
+  confirmation, balance handling, exchange access, planning, strategy, order,
+  or risk behavior.
+- Baseline: smaller deltas already retain per-order developer logs while the
+  bulk path emits only uncorrelated stdlib count lines. Config-age reporting was
+  considered but deferred because runtime currently has no canonical config
+  freshness timestamp or reload contract.
 - Review gate: exact-current-head Hermes approval plus green Python/Rust CI.
   Built-in Codex automatic review is additional and every finding must be
   verified and resolved.
-- Expected VPS action: tracked-clean pull plus one bounded read-only incident
-  bundle; no bot restart or process signal.
+- Expected VPS action: tracked-clean pull and bounded passive event/process
+  validation. Because the producer path changes, restart only the exact five
+  configured panes if the merged diff and guarded preflight warrant activation;
+  preserve `misc:0.0`.
 
-## Deployed Baseline (PR #1339)
+## Deployed Baseline (PR #1340)
+
+- PR #1340 merged exact reviewed head
+  `d9e88d6da9282bc53a355dc3ce18a9cba6de45eb` as canonical
+  `bc31fafdbdf045f9c003e49fa6877b721c834600` after exact-head Hermes approval,
+  green Python/Rust CI, and a finding-free built-in Codex review.
+- VPS5 guarded-prepared tracked-clean from
+  `3311085dce8b7540f5a26e809229180d5f784c25` without a Rust build, bot restart,
+  or process signal. The source fingerprint and compiled stamp stayed
+  `691bff9683deec9382a4e96ab6a107c14145f88edd6ae2f8e2380b8ba6824449`.
+- The bounded incident bundle
+  `/tmp/passivbot_incident_bundle_pr1340_bc31fafdbd.tar.gz` proved identical log
+  `scan_cost` in the command result, manifest, and archived full smoke report:
+  eight `full_scan` files, 3,787 selected records, 573,578 known
+  physical/decoded bytes, and 847.006 ms.
+- The bundle correctly remained non-green on one natural KuCoin authoritative
+  balance `RequestTimeout`. All five exact bot PIDs and pane parents remained
+  intact, final passive sampling retained normal `R`/`S` states, and protected
+  `misc:0.0` remained `%8`/PID `434835`. No direct exchange call, manufactured
+  event, build, restart, or process signal occurred.
+
+## Previous Deployed Baseline (PR #1339)
 
 - PR #1339 merged exact reviewed head
   `c66a306a4b20485d31e3806913c1f2d90279ecb7` as canonical
@@ -1709,11 +1734,11 @@ PR #1288's bounded target-identity stability, and PR #1289's plan binding are
 merged, deployed, and naturally validated without process control. PR #1290's
 pane-parent relaunch classification and the restart preparation/orchestration
 slices through PR #1309 are also merged and deployed. Later logging slices
-through PR #1339, including adjacent PR #1329, are deployed at canonical
-`3311085dce8b7540f5a26e809229180d5f784c25`; their current evidence is recorded
-above. The active incident-summary slice closes the observed log scan-cost
-projection gap without changing archive content, reads, matching, or verdict
-behavior.
+through PR #1340, including adjacent PR #1329, are deployed at canonical
+`bc31fafdbdf045f9c003e49fa6877b721c834600`; their current evidence is recorded
+above. Active PR #1341 migrates only the remaining bulk open-order snapshot
+count lines into the bounded structured event contract while preserving the
+existing threshold, legacy fallback, reconciliation, and trading behavior.
 
 Do not create progress-only PRs or resume unrelated logging work from stale
 worktrees.

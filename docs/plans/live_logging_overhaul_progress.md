@@ -15,7 +15,27 @@ merge, live smoke evidence changes, or new gaps are discovered.
 - Do not use this file for design churn; unresolved design details belong in the
   plan or a focused handoff doc.
 
-## Latest Canonical Deployment (PR #1339)
+## Latest Canonical Deployment (PR #1340)
+
+- PR #1340 merged exact reviewed head
+  `d9e88d6da9282bc53a355dc3ce18a9cba6de45eb` as canonical
+  `bc31fafdbdf045f9c003e49fa6877b721c834600` after exact-head Hermes approval,
+  green Python/Rust CI, and a finding-free built-in Codex review.
+- VPS5 guarded-prepared tracked-clean from `3311085dce` without a Rust build,
+  restart, or signal; the Rust source fingerprint/stamp remained
+  `691bff9683deec9382a4e96ab6a107c14145f88edd6ae2f8e2380b8ba6824449`.
+- The bounded incident bundle retained exact matching log `scan_cost` in its
+  command result, manifest, and archived full smoke report: eight `full_scan`
+  files, 3,787 selected records, 573,578 known physical/decoded bytes, and
+  847.006 ms. It correctly remained non-green on one natural KuCoin
+  authoritative-balance `RequestTimeout`.
+- All five exact bot PIDs and pane parents remained intact; settled passive
+  sampling retained normal `R`/`S` states and protected `misc:0.0` `%8`/PID
+  `434835`. No direct exchange call, manufactured event, build, restart, or
+  process signal occurred. The next logging migration replaces the remaining
+  bulk open-order snapshot stdlib count lines with a bounded structured event.
+
+## Previous Canonical Deployment (PR #1339)
 
 - PR #1339 merged exact reviewed head
   `c66a306a4b20485d31e3806913c1f2d90279ecb7` as canonical

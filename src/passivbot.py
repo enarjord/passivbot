@@ -638,6 +638,9 @@ class Passivbot:
     _emit_live_cycle_completed = live_event_emitters.emit_live_cycle_completed
     _emit_live_cycle_degraded = live_event_emitters.emit_live_cycle_degraded
     _emit_live_event = live_event_emitters.emit_live_event
+    _emit_open_orders_snapshot_delta_event = (
+        live_event_emitters.emit_open_orders_snapshot_delta_event
+    )
     _emit_startup_timing_event = live_event_emitters.emit_startup_timing_event
     _emit_exchange_config_refresh_event = (
         live_event_emitters.emit_exchange_config_refresh_event
@@ -7485,6 +7488,31 @@ class Passivbot:
             msg += " | " + " ".join(extra_parts)
         logging.log(level, msg)
 
+    def _log_open_orders_snapshot_delta(
+        self, *, direction: str, order_count: int
+    ) -> None:
+        """Emit one bulk snapshot event, retaining legacy console fallback."""
+        pipeline = getattr(self, "_live_event_pipeline", None)
+        emit_delta = getattr(self, "_emit_open_orders_snapshot_delta_event", None)
+        structured_console_available = bool(
+            callable(emit_delta)
+            and Passivbot._live_event_console_available(self)
+            and callable(getattr(pipeline, "emit", None))
+            and getattr(pipeline, "console_sink", None) is not None
+        )
+        emitted = None
+        if callable(emit_delta):
+            try:
+                emitted = emit_delta(direction=direction, order_count=order_count)
+            except Exception as exc:
+                logging.debug(
+                    "[event] failed to emit open-orders snapshot delta: %s", exc
+                )
+        if emitted is None:
+            structured_console_available = False
+        if not structured_console_available:
+            logging.info("[order] %s %d orders", direction, order_count)
+
     def _live_market_orders_allowed(self) -> bool:
         value = self.live_value("market_orders_allowed")
         if isinstance(value, str):
@@ -14319,7 +14347,9 @@ class Passivbot:
         schedule_update_positions = False
         unexpected_removed_symbols = set()
         if len(removed_orders) > 20:
-            logging.info(f"removed {len(removed_orders)} orders")
+            self._log_open_orders_snapshot_delta(
+                direction="removed", order_count=len(removed_orders)
+            )
         for order in removed_orders:
             cancelled_by_bot = False
             if hasattr(self, "order_matches_bot_cancellation"):
@@ -14345,7 +14375,9 @@ class Passivbot:
                     context="bot_cancel_confirmed" if cancelled_by_bot else None,
                 )
         if len(added_orders) > 20:
-            logging.info(f"[order] added {len(added_orders)} new orders")
+            self._log_open_orders_snapshot_delta(
+                direction="added", order_count=len(added_orders)
+            )
         else:
             for order in added_orders:
                 created_by_bot = False
