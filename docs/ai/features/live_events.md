@@ -151,6 +151,13 @@ count. An all-pending batch must not present its known PnL as zero. The legacy d
 fallback only when the structured live-event console is disabled or its pipeline is absent. Runtime
 sink degradation remains isolated by the event pipeline and must not activate dual writing.
 
+Fill refresh failures retain code-owned source, refresh mode, coverage, retry, timing, and count
+context plus a bounded exception type. The structured `fills.refresh_summary`, manager request
+timing line, blocking refresh failure line, and routine-prefetch fallback must not retain exception
+text, request URLs, response bodies, credentials, or exception-value tracebacks. Redaction is
+diagnostic-only: exception propagation, retry and coverage behavior, fill accounting, planning,
+risk, and trading behavior remain unchanged.
+
 ## Open-Orders Snapshot Deltas
 
 `open_orders.snapshot_delta` replaces the aggregate INFO lines for open-order snapshot additions or

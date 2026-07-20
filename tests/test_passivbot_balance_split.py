@@ -5680,8 +5680,12 @@ async def test_update_pnls_uses_confirmation_overlap_when_fills_pending():
 
 
 @pytest.mark.asyncio
-async def test_update_pnls_propagates_unexpected_refresh_errors():
+@pytest.mark.parametrize("shutdown_requested", [False, True])
+async def test_update_pnls_propagates_unexpected_refresh_errors_without_retaining_text(
+    caplog, capsys, shutdown_requested
+):
     bot = Passivbot.__new__(Passivbot)
+    secret = "api_key=fill-refresh-secret https://private.example.invalid/fills"
     cached_events = [
         SimpleNamespace(timestamp=1_700_000_000_000, id="fill-1", source_ids=["fill-1"])
     ]
@@ -5690,9 +5694,7 @@ async def test_update_pnls_propagates_unexpected_refresh_errors():
         def __init__(self, events, *, history_scope="unknown"):
             self._events = list(events)
             self.refresh = AsyncMock()
-            self.refresh_latest = AsyncMock(
-                side_effect=RuntimeError("fill refresh failed")
-            )
+            self.refresh_latest = AsyncMock(side_effect=RuntimeError(secret))
             self.history_scope = history_scope
 
         def get_events(self):
@@ -5727,12 +5729,17 @@ async def test_update_pnls_propagates_unexpected_refresh_errors():
     bot._log_new_fill_events = lambda new_events: None
     bot._monitor_record_event = lambda *args, **kwargs: None
     bot._monitor_record_error = lambda *args, **kwargs: None
-    bot.logging_level = 0
+    bot.logging_level = 2
     bot._health_rate_limits = 0
     bot._trailing_fill_fetch_generation = 7
+    bot._shutdown_requested = lambda: shutdown_requested
 
-    with pytest.raises(RuntimeError, match="fill refresh failed"):
-        await bot.update_pnls()
+    with caplog.at_level(logging.DEBUG):
+        if shutdown_requested:
+            assert await bot.update_pnls() is False
+        else:
+            with pytest.raises(RuntimeError, match="fill-refresh-secret"):
+                await bot.update_pnls()
     assert bot._trailing_fill_fetch_generation == 7
     assert bot._live_event_pipeline.flush(timeout=2.0) is True
     events = [
@@ -5740,14 +5747,54 @@ async def test_update_pnls_propagates_unexpected_refresh_errors():
         for event in sink.events
         if event.event_type == EventTypes.FILLS_REFRESH_SUMMARY
     ]
-    assert len(events) == 1
-    event = events[0]
-    assert event.status == "failed"
-    assert event.reason_code == "fill_refresh_failed"
-    assert event.data["error_type"] == "RuntimeError"
-    assert event.data["error"] == "fill refresh failed"
-    assert event.data["coverage_ready_before"] is True
+    if shutdown_requested:
+        assert events == []
+        assert "fill refresh stopped during in-flight request" in caplog.text
+    else:
+        assert len(events) == 1
+        event = events[0]
+        assert event.status == "failed"
+        assert event.reason_code == "fill_refresh_failed"
+        assert event.data["error_type"] == "RuntimeError"
+        assert "error" not in event.data
+        assert event.data["coverage_ready_before"] is True
+    assert "error_type=RuntimeError" in caplog.text
+    assert secret not in caplog.text
+    assert secret not in capsys.readouterr().err
     assert bot._live_event_pipeline.close(timeout=2.0) is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("shutdown_requested", [False, True])
+async def test_routine_fill_prefetch_failure_logs_only_exception_type(
+    caplog, shutdown_requested
+):
+    from live import state_refresh
+
+    secret = "token=routine-prefetch-secret https://private.example.invalid/fills"
+
+    class SensitiveRuntimeError(RuntimeError):
+        pass
+
+    async def fail_update_pnls(*, source):
+        assert source == "routine_prefetch:minute_boundary"
+        raise SensitiveRuntimeError(secret)
+
+    bot = SimpleNamespace(
+        update_pnls=fail_update_pnls,
+        _shutdown_requested=lambda: shutdown_requested,
+    )
+    with caplog.at_level(logging.DEBUG):
+        await state_refresh.routine_fill_refresh_prefetch_task(
+            bot, reason="minute_boundary"
+        )
+
+    assert "error_type=SensitiveRuntimeError" in caplog.text
+    assert secret not in caplog.text
+    if shutdown_requested:
+        assert "routine fills prefetch stopped" in caplog.text
+    else:
+        assert "blocking/confirmation refresh will retry" in caplog.text
 
 
 @pytest.mark.asyncio

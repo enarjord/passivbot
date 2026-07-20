@@ -63,6 +63,7 @@ from live.data_packets import (
     DataPacketMetadata,
     build_data_packet_metadata,
 )
+from live.diagnostic_safety import bounded_exception_type
 from live.freshness import ACCOUNT_SURFACES, LIVE_STATE_SURFACES, FreshnessLedger
 from live.events import DiagnosticEvent, emit_diagnostic_event, run_diagnostic_step
 from live.event_bus import (
@@ -11641,7 +11642,8 @@ class Passivbot:
         except Exception as e:
             if self._shutdown_requested():
                 logging.debug(
-                    "[shutdown] fill refresh stopped during in-flight request: %s", e
+                    "[shutdown] fill refresh stopped during in-flight request | error_type=%s",
+                    bounded_exception_type(e),
                 )
                 return False
             if await self._maybe_recover_exchange_time_sync(e, source="update_pnls"):
@@ -11666,11 +11668,8 @@ class Passivbot:
                 payload={"source": "update_pnls"},
             )
             logging.error(
-                "[fills] Failed to update FillEventsManager | error_type=%s status=%s code=%s error=%s",
-                type(e).__name__,
-                getattr(e, "status", "-"),
-                getattr(e, "code", "-"),
-                e,
+                "[fills] Failed to update FillEventsManager | error_type=%s",
+                bounded_exception_type(e),
             )
             self._emit_fills_refresh_summary_event(
                 source=source,
@@ -11685,8 +11684,6 @@ class Passivbot:
                 error=e,
                 level="error",
             )
-            if self.logging_level >= 2:
-                traceback.print_exc()
             raise
 
     # -------------------------------------------------------------------------

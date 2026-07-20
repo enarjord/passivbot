@@ -7,6 +7,7 @@ import sys
 from config.access import get_optional_config_value
 from live import event_emitters
 from live.balance_composition import malformed_balance_composition, unavailable_balance_composition
+from live.diagnostic_safety import bounded_exception_type
 from utils import ts_to_date, utc_ms
 
 
@@ -278,13 +279,15 @@ async def routine_fill_refresh_prefetch_task(bot, *, reason: str) -> None:
         raise
     except Exception as exc:
         if bot._shutdown_requested():
-            logging.debug("[shutdown] routine fills prefetch stopped: %s", exc)
+            logging.debug(
+                "[shutdown] routine fills prefetch stopped | error_type=%s",
+                bounded_exception_type(exc),
+            )
             return
         logging.warning(
-            "[fills] routine prefetch failed; blocking/confirmation refresh will retry | reason=%s error_type=%s error=%s",
+            "[fills] routine prefetch failed; blocking/confirmation refresh will retry | reason=%s error_type=%s",
             reason,
-            type(exc).__name__,
-            exc,
+            bounded_exception_type(exc),
         )
 
 

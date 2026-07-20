@@ -5220,8 +5220,7 @@ def _emit_fills_refresh_summary_event_unchecked(
     if quarantine_reason is not None:
         data["quarantine_reason"] = str(quarantine_reason)
     if error is not None:
-        data["error_type"] = type(error).__name__
-        data["error"] = _sanitize_remote_text(error, max_len=500)
+        data["error_type"] = _bounded_exception_type(error)
     if live_event_debug_profile_enabled(bot, "fills"):
         debug = _best_effort_fill_refresh_debug_payload(
             coverage_before=coverage_before,

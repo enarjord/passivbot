@@ -4691,12 +4691,15 @@ async def test_manager_refresh_logs_slow_successful_fetcher_request_timing_at_de
 
 
 @pytest.mark.asyncio
-async def test_manager_refresh_logs_fetcher_error_detail(tmp_path: Path, caplog):
+async def test_manager_refresh_logs_bounded_fetcher_error_type_without_secret(
+    tmp_path: Path, caplog
+):
     cache_dir = tmp_path / "fills_request_error_timing"
+    secret = "api_key=super-secret-value"
 
     class _Api:
         async def fetch_a(self):
-            raise RuntimeError("remote timeout detail")
+            raise RuntimeError(f"remote timeout detail {secret}")
 
     class _ApiFetcher(BaseFetcher):
         def __init__(self):
@@ -4714,7 +4717,7 @@ async def test_manager_refresh_logs_fetcher_error_detail(tmp_path: Path, caplog)
     )
 
     with caplog.at_level(logging.INFO, logger=fem.logger.name):
-        with pytest.raises(RuntimeError, match="remote timeout detail"):
+        with pytest.raises(RuntimeError, match=secret):
             await manager.refresh(start_ms=123, end_ms=456)
 
     timing_records = [
@@ -4726,7 +4729,35 @@ async def test_manager_refresh_logs_fetcher_error_detail(tmp_path: Path, caplog)
     assert timing_records[0].levelno == logging.INFO
     assert "fetch_a:n=1" in timing_records[0].message
     assert "err_type=RuntimeError" in timing_records[0].message
-    assert "err_msg=remote timeout detail" in timing_records[0].message
+    assert "err_msg=" not in timing_records[0].message
+    assert secret not in timing_records[0].message
+
+
+def test_fill_fetch_request_timing_error_type_rejects_sensitive_and_hostile_metadata():
+    class _HostileExceptionMeta(type):
+        @property
+        def __name__(cls):
+            raise RuntimeError("api_key=super-secret-value")
+
+    class _HostileError(RuntimeError, metaclass=_HostileExceptionMeta):
+        pass
+
+    long_safe_name = "SafeError" + "x" * 100
+    stats = fem.FillFetchRequestStats()
+    stats.record("safe", 0, ok=False)
+    stats.record_error_detail("safe", type(long_safe_name, (RuntimeError,), {})())
+    stats.record("sensitive", 0, ok=False)
+    stats.record_error_detail("sensitive", type("ApiKeyProdSecret", (RuntimeError,), {})())
+    stats.record("hostile", 0, ok=False)
+    stats.record_error_detail("hostile", _HostileError("api_key=super-secret-value"))
+
+    rendered = stats.format_endpoints()
+
+    assert f"err_type={long_safe_name[:80]}" in rendered
+    assert long_safe_name not in rendered
+    assert rendered.count("err_type=Error") == 2
+    assert "api_key=super-secret-value" not in rendered
+    assert "ApiKeyProdSecret" not in rendered
 
 
 def test_fill_event_cache_disk_full_raises_clear_error(tmp_path: Path, monkeypatch, sample_events):

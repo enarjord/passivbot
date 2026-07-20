@@ -4907,7 +4907,7 @@ def test_fill_ingested_debug_profile_adds_bounded_shape_without_source_id_leak()
     assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 
-def test_emit_fills_refresh_summary_event_sanitizes_error_and_stays_off_console():
+def test_emit_fills_refresh_summary_event_omits_exception_text_and_stays_off_console():
     import passivbot as pb_mod
 
     sink = ListEventSink()
@@ -4967,8 +4967,8 @@ def test_emit_fills_refresh_summary_event_sanitizes_error_and_stays_off_console(
     assert event.data["coverage_before"]["gap_reason"] == "fetch_failed"
     assert event.data["next_retry_in_ms"] == 45_000
     assert event.data["error_type"] == "RuntimeError"
-    assert "secret-token" not in event.data["error"]
-    assert "[redacted]" in event.data["error"]
+    assert "error" not in event.data
+    assert "secret-token" not in str(event.data)
     assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 

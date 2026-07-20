@@ -41,6 +41,7 @@ from bitget_normalization import (
     normalize_uta_fill_payload as _normalize_uta_fill_payload,
 )
 from config import load_input_config, prepare_config
+from live.diagnostic_safety import bounded_exception_type
 
 try:
     from utils import ts_to_date  # type: ignore
@@ -2025,7 +2026,6 @@ class FillFetchRequestStats:
                 "total_ms": 0,
                 "max_ms": 0,
                 "last_error_type": "",
-                "last_error": "",
             },
         )
         data["count"] += 1
@@ -2043,11 +2043,9 @@ class FillFetchRequestStats:
                 "total_ms": 0,
                 "max_ms": 0,
                 "last_error_type": "",
-                "last_error": "",
             },
         )
-        data["last_error_type"] = type(exc).__name__
-        data["last_error"] = str(exc)[:240]
+        data["last_error_type"] = bounded_exception_type(exc)
 
     @property
     def count(self) -> int:
@@ -2077,11 +2075,8 @@ class FillFetchRequestStats:
             if errors:
                 suffix = f",err={errors}"
                 error_type = str(data.get("last_error_type") or "")
-                error_msg = str(data.get("last_error") or "")
                 if error_type:
                     suffix += f",err_type={error_type}"
-                if error_msg:
-                    suffix += f",err_msg={error_msg}"
             parts.append(f"{name}:n={count},sum={total_ms}ms,max={max_ms}ms{suffix}")
         if len(self.calls) > limit:
             parts.append(f"+{len(self.calls) - limit} endpoints")
