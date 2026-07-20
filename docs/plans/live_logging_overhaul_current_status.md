@@ -22,9 +22,10 @@ Estimated completion:
 
 ## Active Review Slice
 
-- Branch `codex/event-emitter-exception-redaction`, based on canonical
-  `49cb68e56b20d71fbe42d33f31906d3a9c793e90`; resolve its PR and active head
-  from live metadata after publication.
+- Open PR #1346, `Redact live event emitter failure diagnostics`, on branch
+  `codex/event-emitter-exception-redaction`, based on canonical
+  `49cb68e56b20d71fbe42d33f31906d3a9c793e90`. Resolve its active head from
+  live metadata; the commit containing this handoff is a moving review head.
 - Scope: replace arbitrary caught exception values in best-effort live event
   emitter failure diagnostics with bounded exception types, including HSL
   event emitters and the event-adjacent HSL coin-status human projection.
@@ -1868,11 +1869,13 @@ through PR #1343, including adjacent PR #1329, are deployed at canonical
 above. PR #1344's EMA diagnostic redaction is merged and deployed at canonical
 `986e5d52f88692d1b6531bc38c307352c08e9cb9`. PR #1345's legacy monitor and
 WebSocket diagnostic redaction is merged and deployed at canonical
-`49cb68e56b20d71fbe42d33f31906d3a9c793e90`. The active
-`codex/event-emitter-exception-redaction` slice removes arbitrary caught
-exception values from best-effort live event emitter diagnostics and the
-event-adjacent HSL coin-status human projection without changing emitter
-isolation, event payloads, HSL, risk, or trading behavior.
+`49cb68e56b20d71fbe42d33f31906d3a9c793e90`. Open PR #1346, `Redact live
+event emitter failure diagnostics`, on
+`codex/event-emitter-exception-redaction` removes arbitrary caught exception
+values from best-effort live event emitter diagnostics and the event-adjacent
+HSL coin-status human projection without changing emitter isolation, event
+payloads, HSL, risk, or trading behavior. Resolve its exact head from live
+metadata.
 
 Do not create progress-only PRs or resume unrelated logging work from stale
 worktrees.

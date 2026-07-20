@@ -138,6 +138,25 @@ def test_event_emitter_failure_logs_bounded_exception_type_without_secret(caplog
     assert "error_type=Error" in caplog.text
     assert "class-name-secret" not in caplog.text
 
+    sensitive_identifier = "ApiKey_prod_super_secret_ABC123"
+    sensitive_identifier_type = type(sensitive_identifier, (RuntimeError,), {})
+
+    class SensitiveIdentifierTypeBot:
+        def _emit_live_event(self, *_args, **_kwargs):
+            raise sensitive_identifier_type("safe")
+
+    caplog.clear()
+    with caplog.at_level(logging.DEBUG):
+        assert (
+            live_event_emitters._safe_emit(
+                SensitiveIdentifierTypeBot(), EventTypes.HEALTH_SUMMARY
+            )
+            is None
+        )
+
+    assert "error_type=Error" in caplog.text
+    assert sensitive_identifier not in caplog.text
+
     invalid_suffix = "V" * 80 + "\napi_key=tail-class-name-secret"
     invalid_suffix_type = type(invalid_suffix, (RuntimeError,), {})
 

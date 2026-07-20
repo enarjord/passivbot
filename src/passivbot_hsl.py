@@ -28,6 +28,7 @@ from config.coerce import (
 )
 from config.pnl_lookback import parse_pnls_max_lookback_days
 from fill_events_manager import signed_fee_paid_from_payload
+from live.diagnostic_safety import bounded_exception_type as _bounded_hsl_exception_type
 from live.event_bus import EventTypes, ReasonCodes, live_event_debug_profile_enabled
 from passivbot_exceptions import RestartBotException
 from utils import make_get_filepath
@@ -63,21 +64,6 @@ _HSL_COIN_REPLAY_STARTUP_YIELD_ROWS = 1_000
 _HSL_COIN_REPLAY_BACKGROUND_YIELD_ROWS = 100
 _HSL_COIN_REPLAY_BACKGROUND_YIELD_SLEEP_S = 0.01
 _HSL_FLATTEN_FILL_REFRESH_INTERVAL_MS = 5_000
-_HSL_EXCEPTION_TYPE_MAX_LEN = 80
-
-
-def _bounded_hsl_exception_type(exc: BaseException) -> str:
-    try:
-        name = type(exc).__name__
-        if not isinstance(name, str):
-            return "Error"
-        if not name or not name.isascii() or not name.isidentifier():
-            return "Error"
-        return name[:_HSL_EXCEPTION_TYPE_MAX_LEN]
-    except BaseException:
-        return "Error"
-
-
 def _hsl_flat_epsilon(qty_step: Any = 0.0) -> float:
     try:
         step = abs(float(qty_step or 0.0))

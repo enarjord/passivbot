@@ -52,6 +52,30 @@ def test_hsl_event_emitter_failure_logs_type_without_secret(caplog):
     assert secret not in caplog.text
     assert url not in caplog.text
 
+    sensitive_identifier = "ApiKey_prod_super_secret_HSL123"
+    sensitive_identifier_type = type(sensitive_identifier, (RuntimeError,), {})
+
+    def fail_with_sensitive_identifier(*_args, **_kwargs):
+        raise sensitive_identifier_type("safe")
+
+    bot._emit_live_event = fail_with_sensitive_identifier
+    caplog.clear()
+    with caplog.at_level(logging.DEBUG):
+        assert (
+            hsl._emit_hsl_event(
+                bot,
+                "hsl.status",
+                ("hsl", "risk"),
+                {},
+                pside="long",
+                symbol="BTC/USDT:USDT",
+            )
+            is None
+        )
+
+    assert "Error" in caplog.text
+    assert sensitive_identifier not in caplog.text
+
     invalid_suffix = "H" * 80 + "\napi_secret=tail-hsl-class-name-secret"
     invalid_suffix_type = type(invalid_suffix, (RuntimeError,), {})
 

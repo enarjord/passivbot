@@ -20,6 +20,7 @@ from live.event_bus import (
     utc_ms,
 )
 from live.balance_composition import public_balance_composition
+from live.diagnostic_safety import bounded_exception_type as _bounded_exception_type
 
 
 def current_live_event_cycle_id(bot: Any) -> str | None:
@@ -59,7 +60,6 @@ _EXCHANGE_CONFIG_EVENT_RESPONSE_CODE_RE = re.compile(r"-?[0-9]{1,12}")
 _EXCHANGE_CONFIG_EVENT_ERROR_TYPE_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,79}")
 _EXCHANGE_CONFIG_EVENT_OUTCOMES = {"confirmed", "unchanged", "failed"}
 _LIVE_EVENT_LEVELS = {"debug", "info", "warning", "error"}
-_EXCEPTION_TYPE_MAX_LEN = 80
 _MEMORY_SNAPSHOT_MAX_BYTES = (1 << 63) - 1
 _MEMORY_SNAPSHOT_MAX_COUNT = 1_000_000_000
 _MEMORY_SNAPSHOT_MAX_DELTA_PCT = 1_000_000.0
@@ -109,19 +109,6 @@ _CYCLE_DEGRADED_INVALID_SYMBOL_LIST_KEYS = (
     "extra_symbols",
     "changed_symbols",
 )
-
-
-def _bounded_exception_type(exc: BaseException) -> str:
-    try:
-        name = type(exc).__name__
-        if not isinstance(name, str):
-            return "Error"
-        if not name or not name.isascii() or not name.isidentifier():
-            return "Error"
-        return name[:_EXCEPTION_TYPE_MAX_LEN]
-    except BaseException:
-        return "Error"
-
 
 _CYCLE_DEGRADED_INVALID_INT_KEYS = (
     "latest_expected_ts",
