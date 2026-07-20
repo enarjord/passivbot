@@ -15,7 +15,27 @@ merge, live smoke evidence changes, or new gaps are discovered.
 - Do not use this file for design churn; unresolved design details belong in the
   plan or a focused handoff doc.
 
-## Latest Canonical Deployment (PR #1344)
+## Latest Canonical Deployment (PR #1345)
+
+- PR #1345 merged exact approved head `e9322f9b50` as canonical
+  `49cb68e56b20d71fbe42d33f31906d3a9c793e90` after exact-head Hermes
+  approval, green Python/Rust CI, and finding-free built-in Codex and
+  independent Sol reviews.
+- VPS5 guarded-prepared tracked-clean from `986e5d52f8` without a Rust build;
+  the Rust source fingerprint/stamp and compiled artifact remained unchanged.
+  The exact-target orchestrator gracefully restarted only panes `%358`-`%362`
+  as PIDs `1077958/1077967/1077961/1077970/1077964`; all five prior processes
+  exited and all five targets relaunched and verified without force or
+  broad-pattern signals.
+- The integrated 120-second smoke was hard-green with complete shutdown and
+  startup identity, zero hard failures, zero hard log or attention matches,
+  and zero monitor warnings or errors. Final three-sample target verification
+  retained five stable exact processes, a tracked-clean checkout, and
+  protected `misc:0.0` `%8`/PID `434835`. No direct authenticated exchange
+  call or event was manufactured. The next redaction slice removes arbitrary
+  caught exception values from best-effort live event emitter diagnostics.
+
+## Previous Canonical Deployment (PR #1344)
 
 - PR #1344 merged exact approved head
   `6a4fe26f90e8cb25f0dc09ecc39a067658addfa8` as canonical

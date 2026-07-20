@@ -21,6 +21,38 @@ class FakeHslBot(SimpleNamespace):
     pass
 
 
+def test_hsl_event_emitter_failure_logs_type_without_secret(caplog):
+    secret = "api_secret=hsl-event-secret"
+    url = "https://private.example.invalid/v1/hsl?token=hsl-event-token"
+
+    class HslEventEmitterFailure(RuntimeError):
+        pass
+
+    def fail_emit(*_args, **_kwargs):
+        raise HslEventEmitterFailure(f"request failed {secret} {url}")
+
+    bot = SimpleNamespace(
+        _live_event_pipeline=object(),
+        _live_event_current_cycle_id="cy_hsl_redaction",
+        _emit_live_event=fail_emit,
+    )
+
+    with caplog.at_level(logging.DEBUG):
+        emitted = hsl._emit_hsl_event(
+            bot,
+            "hsl.status",
+            ("hsl", "risk"),
+            {},
+            pside="long",
+            symbol="BTC/USDT:USDT",
+        )
+
+    assert emitted is None
+    assert "HslEventEmitterFailure" in caplog.text
+    assert secret not in caplog.text
+    assert url not in caplog.text
+
+
 class FakeRiskCache:
     def __init__(self, covered_start_ms=1, history_scope="all"):
         self.covered_start_ms = covered_start_ms

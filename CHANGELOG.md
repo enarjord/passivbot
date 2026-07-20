@@ -4,6 +4,11 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Best-effort live event emitter failure diagnostics, including HSL event emitters, now retain
+  bounded exception types instead of arbitrary exception messages that may contain request URLs,
+  response text, or credentials. Event payloads, routing, sink isolation, retries, HSL behavior,
+  and trading behavior are unchanged.
+
 - Legacy monitor error events and WebSocket reconnect diagnostics now retain bounded exception
   classifications without arbitrary exception messages, request URLs, response text, or formatted
   exception-value tracebacks. Monitor error context is restricted to known code-owned

@@ -100,6 +100,45 @@ class RecorderPublisher:
         self.closed = True
 
 
+def test_event_emitter_failure_logs_bounded_exception_type_without_secret(caplog):
+    secret = "api_key=event-emitter-secret"
+    url = "https://private.example.invalid/v1/orders?token=event-emitter-token"
+    error_type = type("EventEmitterFailure" + "X" * 120, (RuntimeError,), {})
+
+    class FakeBot:
+        def _emit_live_event(self, *_args, **_kwargs):
+            raise error_type(f"request failed {secret} {url}")
+
+    with caplog.at_level(logging.DEBUG):
+        emitted = live_event_emitters._safe_emit(FakeBot(), EventTypes.HEALTH_SUMMARY)
+
+    bounded_type = error_type.__name__[:80]
+    assert emitted is None
+    assert len(bounded_type) == 80
+    assert f"error_type={bounded_type}" in caplog.text
+    assert error_type.__name__ not in caplog.text
+    assert secret not in caplog.text
+    assert url not in caplog.text
+
+    invalid_type = type("Invalid\napi_key=class-name-secret", (RuntimeError,), {})
+
+    class InvalidTypeBot:
+        def _emit_live_event(self, *_args, **_kwargs):
+            raise invalid_type("safe")
+
+    caplog.clear()
+    with caplog.at_level(logging.DEBUG):
+        assert (
+            live_event_emitters._safe_emit(
+                InvalidTypeBot(), EventTypes.HEALTH_SUMMARY
+            )
+            is None
+        )
+
+    assert "error_type=Error" in caplog.text
+    assert "class-name-secret" not in caplog.text
+
+
 def test_live_event_cycle_helpers_emit_structured_events():
     import passivbot as pb_mod
 

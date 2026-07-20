@@ -33,7 +33,10 @@ def set_live_event_context_ids(bot: Any, **kwargs: str | None) -> None:
     try:
         pipeline.with_context_ids(**kwargs)
     except Exception as exc:
-        logging.debug("[event] failed updating live event context: %s", exc)
+        logging.debug(
+            "[event] failed updating live event context: %s",
+            _bounded_exception_type(exc),
+        )
 
 
 def next_live_event_remote_call_id(bot: Any, prefix: str = "rc") -> str:
@@ -56,6 +59,7 @@ _EXCHANGE_CONFIG_EVENT_RESPONSE_CODE_RE = re.compile(r"-?[0-9]{1,12}")
 _EXCHANGE_CONFIG_EVENT_ERROR_TYPE_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,79}")
 _EXCHANGE_CONFIG_EVENT_OUTCOMES = {"confirmed", "unchanged", "failed"}
 _LIVE_EVENT_LEVELS = {"debug", "info", "warning", "error"}
+_EXCEPTION_TYPE_MAX_LEN = 80
 _MEMORY_SNAPSHOT_MAX_BYTES = (1 << 63) - 1
 _MEMORY_SNAPSHOT_MAX_COUNT = 1_000_000_000
 _MEMORY_SNAPSHOT_MAX_DELTA_PCT = 1_000_000.0
@@ -105,6 +109,19 @@ _CYCLE_DEGRADED_INVALID_SYMBOL_LIST_KEYS = (
     "extra_symbols",
     "changed_symbols",
 )
+
+
+def _bounded_exception_type(exc: BaseException) -> str:
+    try:
+        name = type(exc).__name__
+    except Exception:
+        return "Error"
+    bounded = name[:_EXCEPTION_TYPE_MAX_LEN]
+    if not bounded or not bounded.isascii() or not bounded.isidentifier():
+        return "Error"
+    return bounded
+
+
 _CYCLE_DEGRADED_INVALID_INT_KEYS = (
     "latest_expected_ts",
     "last_cached_ts",
@@ -562,7 +579,7 @@ def _add_execution_debug_profile(
         logging.debug(
             "[event] failed to build execution debug payload type=%s: %s",
             event_type,
-            exc,
+            _bounded_exception_type(exc),
         )
 
 
@@ -812,7 +829,7 @@ def emit_authoritative_remote_call_event(
             "[event] failed to emit authoritative remote call event surface=%s stage=%s: %s",
             surface,
             stage,
-            exc,
+            _bounded_exception_type(exc),
         )
         return remote_call_id
 
@@ -878,7 +895,10 @@ def emit_exchange_time_sync_event(bot: Any, *args: Any, **kwargs: Any) -> None:
     try:
         _emit_exchange_time_sync_event_unchecked(bot, *args, **kwargs)
     except Exception as exc:
-        logging.debug("[event] failed to emit exchange time-sync event: %s", exc)
+        logging.debug(
+            "[event] failed to emit exchange time-sync event: %s",
+            _bounded_exception_type(exc),
+        )
 
 
 def _emit_websocket_reconnect_event_unchecked(
@@ -925,7 +945,10 @@ def emit_websocket_reconnect_event(bot: Any, *args: Any, **kwargs: Any) -> None:
     try:
         _emit_websocket_reconnect_event_unchecked(bot, *args, **kwargs)
     except Exception as exc:
-        logging.debug("[event] failed to emit websocket reconnect event: %s", exc)
+        logging.debug(
+            "[event] failed to emit websocket reconnect event: %s",
+            _bounded_exception_type(exc),
+        )
 
 
 def _emit_exchange_config_refresh_event_unchecked(
@@ -996,7 +1019,10 @@ def emit_exchange_config_refresh_event(
     try:
         _emit_exchange_config_refresh_event_unchecked(bot, *args, **kwargs)
     except Exception as exc:
-        logging.debug("[event] failed to emit exchange config-refresh event: %s", exc)
+        logging.debug(
+            "[event] failed to emit exchange config-refresh event: %s",
+            _bounded_exception_type(exc),
+        )
 
 
 def begin_live_event_cycle(bot: Any, *, loop_start_ms: int) -> str:
@@ -1185,7 +1211,10 @@ def emit_planning_defer_summary_event(
             },
         )
     except Exception as exc:
-        logging.debug("[event] failed to emit planning defer summary event: %s", exc)
+        logging.debug(
+            "[event] failed to emit planning defer summary event: %s",
+            _bounded_exception_type(exc),
+        )
 
 
 def emit_planning_symbol_state_event(
@@ -1269,7 +1298,10 @@ def emit_planning_symbol_state_event(
             },
         )
     except Exception as exc:
-        logging.debug("[event] failed to emit planning symbol state event: %s", exc)
+        logging.debug(
+            "[event] failed to emit planning symbol state event: %s",
+            _bounded_exception_type(exc),
+        )
 
 
 def emit_order_wave_completed_event(
@@ -1353,7 +1385,10 @@ def emit_order_wave_started_event(bot: Any, wave: dict | None) -> None:
             data=data,
         )
     except Exception as exc:
-        logging.debug("[event] failed to emit order wave started event: %s", exc)
+        logging.debug(
+            "[event] failed to emit order wave started event: %s",
+            _bounded_exception_type(exc),
+        )
 
 
 def _safe_float(value: Any) -> float | None:
@@ -1554,7 +1589,10 @@ def emit_memory_snapshot_event(
             data=data,
         )
     except Exception as exc:
-        logging.debug("[event] failed to emit memory snapshot event: %s", exc)
+        logging.debug(
+            "[event] failed to emit memory snapshot event: %s",
+            _bounded_exception_type(exc),
+        )
         return None
 
 
@@ -1679,7 +1717,10 @@ def _best_effort_rust_input_symbol_debug_sample(
     try:
         return rust_input_symbol_debug_sample(input_symbols, idx_to_symbol=idx_to_symbol)
     except Exception as exc:
-        logging.debug("[event] failed to build rust input debug sample: %s", exc)
+        logging.debug(
+            "[event] failed to build rust input debug sample: %s",
+            _bounded_exception_type(exc),
+        )
         return None
 
 
@@ -1691,7 +1732,10 @@ def _best_effort_rust_output_order_debug_sample(
     try:
         return rust_output_order_debug_sample(orders, idx_to_symbol=idx_to_symbol)
     except Exception as exc:
-        logging.debug("[event] failed to build rust output debug sample: %s", exc)
+        logging.debug(
+            "[event] failed to build rust output debug sample: %s",
+            _bounded_exception_type(exc),
+        )
         return None
 
 
@@ -1771,7 +1815,7 @@ def emit_startup_timing_event(bot: Any, *args: Any, **kwargs: Any) -> None:
         logging.debug(
             "[event] failed to emit %s: %s",
             EventTypes.BOT_STARTUP_TIMING,
-            exc,
+            _bounded_exception_type(exc),
         )
 
 
@@ -1798,7 +1842,10 @@ def emit_health_summary_event(bot: Any, *args: Any, **kwargs: Any) -> Any:
     try:
         return _emit_health_summary_event_unchecked(bot, *args, **kwargs)
     except Exception as exc:
-        logging.debug("[event] failed to emit health summary event: %s", exc)
+        logging.debug(
+            "[event] failed to emit health summary event: %s",
+            _bounded_exception_type(exc),
+        )
         return None
 
 
@@ -1840,7 +1887,7 @@ def emit_market_snapshot_diagnostic_skipped_event(
     except Exception as exc:
         logging.debug(
             "[event] failed to emit market snapshot diagnostic skipped event error_type=%s",
-            type(exc).__name__,
+            _bounded_exception_type(exc),
         )
         return False
 
@@ -2016,7 +2063,10 @@ def emit_state_refresh_timing_event(bot: Any, *args: Any, **kwargs: Any) -> None
     try:
         _emit_state_refresh_timing_event_unchecked(bot, *args, **kwargs)
     except Exception as exc:
-        logging.debug("[event] failed to emit state refresh timing event: %s", exc)
+        logging.debug(
+            "[event] failed to emit state refresh timing event: %s",
+            _bounded_exception_type(exc),
+        )
 
 
 def _stat_summary_payload(value: Any) -> dict[str, int]:
@@ -2084,7 +2134,8 @@ def emit_state_refresh_timing_summary_event(
         _emit_state_refresh_timing_summary_event_unchecked(bot, *args, **kwargs)
     except Exception as exc:
         logging.debug(
-            "[event] failed to emit state refresh timing summary event: %s", exc
+            "[event] failed to emit state refresh timing summary event: %s",
+            _bounded_exception_type(exc),
         )
 
 
@@ -2129,7 +2180,10 @@ def emit_state_refresh_progress_event(bot: Any, *args: Any, **kwargs: Any) -> No
     try:
         _emit_state_refresh_progress_event_unchecked(bot, *args, **kwargs)
     except Exception as exc:
-        logging.debug("[event] failed to emit state refresh progress event: %s", exc)
+        logging.debug(
+            "[event] failed to emit state refresh progress event: %s",
+            _bounded_exception_type(exc),
+        )
 
 
 def _emit_execution_loop_error_burst_event_unchecked(
@@ -2189,7 +2243,10 @@ def emit_execution_loop_error_burst_event(bot: Any, *args: Any, **kwargs: Any) -
     try:
         _emit_execution_loop_error_burst_event_unchecked(bot, *args, **kwargs)
     except Exception as exc:
-        logging.debug("[event] failed to emit execution loop error burst event: %s", exc)
+        logging.debug(
+            "[event] failed to emit execution loop error burst event: %s",
+            _bounded_exception_type(exc),
+        )
 
 
 def _symbol_sample(symbols: Any, *, limit: int = 12) -> dict[str, Any]:
@@ -2521,7 +2578,7 @@ def _safe_emit(bot: Any, event_type: str, **kwargs: Any) -> Any:
         logging.debug(
             "[event] failed to emit %s error_type=%s",
             event_type,
-            type(exc).__name__,
+            _bounded_exception_type(exc),
         )
         return None
 
@@ -2605,7 +2662,7 @@ def emit_rust_orchestrator_called_event(bot: Any, *args: Any, **kwargs: Any) -> 
         logging.debug(
             "[event] failed to emit %s: %s",
             EventTypes.RUST_ORCHESTRATOR_CALLED,
-            exc,
+            _bounded_exception_type(exc),
         )
 
 
@@ -2682,7 +2739,7 @@ def emit_rust_orchestrator_returned_event(bot: Any, *args: Any, **kwargs: Any) -
         logging.debug(
             "[event] failed to emit %s: %s",
             EventTypes.RUST_ORCHESTRATOR_RETURNED,
-            exc,
+            _bounded_exception_type(exc),
         )
 
 
@@ -2731,7 +2788,7 @@ def emit_forager_feature_unavailable_event(bot: Any, *args: Any, **kwargs: Any) 
         logging.debug(
             "[event] failed to emit %s: %s",
             EventTypes.FORAGER_FEATURE_UNAVAILABLE,
-            exc,
+            _bounded_exception_type(exc),
         )
 
 
@@ -2791,7 +2848,7 @@ def emit_forager_eligibility_changed_event(
         logging.debug(
             "[event] failed to emit %s: %s",
             EventTypes.FORAGER_ELIGIBILITY_CHANGED,
-            exc,
+            _bounded_exception_type(exc),
         )
 
 
@@ -2827,7 +2884,7 @@ def _flush_live_event_pipeline_after_terminal_emit(bot: Any) -> None:
     except Exception as exc:
         logging.debug(
             "[event] terminal market compatibility flush failed: %s",
-            type(exc).__name__,
+            _bounded_exception_type(exc),
         )
 
 
@@ -2884,7 +2941,7 @@ def emit_hip3_account_mode_unsupported_event(
     except Exception as exc:
         logging.debug(
             "[event] failed to emit HIP-3 account-mode compatibility event: %s",
-            type(exc).__name__,
+            _bounded_exception_type(exc),
         )
         return False
 
@@ -2986,7 +3043,7 @@ def emit_config_market_compatibility_event(
         logging.debug(
             "[event] failed to emit %s: %s",
             EventTypes.CONFIG_MARKET_COMPATIBILITY,
-            exc,
+            _bounded_exception_type(exc),
         )
         return False
 
@@ -3048,7 +3105,7 @@ def emit_isolated_only_market_blocked_event(
     except Exception as exc:
         logging.debug(
             "[event] failed to emit isolated-only market compatibility event: %s",
-            type(exc).__name__,
+            _bounded_exception_type(exc),
         )
         return False
 
@@ -3132,7 +3189,7 @@ def emit_forager_selection_event(bot: Any, *args: Any, **kwargs: Any) -> None:
         logging.debug(
             "[event] failed to emit %s: %s",
             EventTypes.FORAGER_SELECTION,
-            exc,
+            _bounded_exception_type(exc),
         )
 
 
@@ -3183,7 +3240,7 @@ def emit_candle_tail_projected_event(bot: Any, *args: Any, **kwargs: Any) -> Non
         logging.debug(
             "[event] failed to emit %s: %s",
             EventTypes.CANDLE_TAIL_PROJECTED,
-            exc,
+            _bounded_exception_type(exc),
         )
 
 
@@ -3304,7 +3361,7 @@ def emit_candle_coverage_checked_event(bot: Any, *args: Any, **kwargs: Any) -> N
         logging.debug(
             "[event] failed to emit %s: %s",
             EventTypes.CANDLE_COVERAGE_CHECKED,
-            exc,
+            _bounded_exception_type(exc),
         )
 
 
@@ -3426,7 +3483,7 @@ def emit_cache_load_completed_event(bot: Any, *args: Any, **kwargs: Any) -> None
         logging.debug(
             "[event] failed to emit %s: %s",
             EventTypes.CACHE_LOAD_COMPLETED,
-            exc,
+            _bounded_exception_type(exc),
         )
 
 
@@ -3476,7 +3533,7 @@ def emit_cache_flush_completed_event(bot: Any, *args: Any, **kwargs: Any) -> Non
         logging.debug(
             "[event] failed to emit %s: %s",
             EventTypes.CACHE_FLUSH_COMPLETED,
-            exc,
+            _bounded_exception_type(exc),
         )
 
 
@@ -3543,7 +3600,7 @@ def emit_cache_warmup_decision_event(bot: Any, *args: Any, **kwargs: Any) -> Non
         logging.debug(
             "[event] failed to emit %s: %s",
             EventTypes.CACHE_WARMUP_DECISION,
-            exc,
+            _bounded_exception_type(exc),
         )
 
 
@@ -3590,7 +3647,7 @@ def emit_ema_bundle_started_event(bot: Any, *args: Any, **kwargs: Any) -> None:
         logging.debug(
             "[event] failed to emit %s error_type=%s",
             EventTypes.EMA_BUNDLE_STARTED,
-            type(exc).__name__,
+            _bounded_exception_type(exc),
         )
 
 
@@ -3632,7 +3689,7 @@ def emit_ema_bundle_completed_event(bot: Any, *args: Any, **kwargs: Any) -> None
         logging.debug(
             "[event] failed to emit %s error_type=%s",
             EventTypes.EMA_BUNDLE_COMPLETED,
-            type(exc).__name__,
+            _bounded_exception_type(exc),
         )
 
 
@@ -3715,7 +3772,7 @@ def emit_ema_fallback_used_event(bot: Any, *args: Any, **kwargs: Any) -> bool:
         logging.debug(
             "[event] failed to emit %s error_type=%s",
             EventTypes.EMA_FALLBACK_USED,
-            type(exc).__name__,
+            _bounded_exception_type(exc),
         )
         return False
 
@@ -3800,7 +3857,7 @@ def emit_ema_unavailable_event(bot: Any, *args: Any, **kwargs: Any) -> bool:
         logging.debug(
             "[event] failed to emit %s error_type=%s",
             EventTypes.EMA_UNAVAILABLE,
-            type(exc).__name__,
+            _bounded_exception_type(exc),
         )
         return False
 
@@ -3917,7 +3974,7 @@ def emit_action_planned_event(
         logging.debug(
             "[event] failed to emit %s: %s",
             EventTypes.ACTION_PLANNED,
-            exc,
+            _bounded_exception_type(exc),
         )
 
 
@@ -3976,7 +4033,7 @@ def emit_initial_entry_distance_gate_event(
             "[event] failed to emit initial entry distance gate event type=%s symbol=%s: %s",
             event_type,
             order.get("symbol") if isinstance(order, dict) else None,
-            exc,
+            _bounded_exception_type(exc),
         )
 
 
@@ -4155,7 +4212,7 @@ def emit_execution_connector_call_started_event(
             "[event] failed to emit connector call event action=%s route=%s error_type=%s",
             action,
             connector_route,
-            type(exc).__name__,
+            _bounded_exception_type(exc),
         )
 
 
@@ -4217,7 +4274,7 @@ def emit_execution_create_filter_event(
             event_type,
             status,
             reason_code,
-            type(exc).__name__,
+            _bounded_exception_type(exc),
         )
         return False
 
@@ -4251,7 +4308,7 @@ def emit_initial_entry_eligibility_event(
         logging.debug(
             "[event] failed to emit %s: %s",
             EventTypes.ENTRY_INITIAL_ELIGIBILITY,
-            exc,
+            _bounded_exception_type(exc),
         )
 
 
@@ -4325,7 +4382,7 @@ def emit_execution_order_event(
             event_type,
             action,
             status,
-            exc,
+            _bounded_exception_type(exc),
         )
 
 
@@ -4368,7 +4425,10 @@ def emit_execution_confirmation_requested_event(
             data=data,
         )
     except Exception as exc:
-        logging.debug("[event] failed to emit confirmation requested event: %s", exc)
+        logging.debug(
+            "[event] failed to emit confirmation requested event: %s",
+            _bounded_exception_type(exc),
+        )
 
 
 def emit_execution_confirmation_satisfied_event(
@@ -4421,7 +4481,10 @@ def emit_execution_confirmation_satisfied_event(
             data=data,
         )
     except Exception as exc:
-        logging.debug("[event] failed to emit confirmation satisfied event: %s", exc)
+        logging.debug(
+            "[event] failed to emit confirmation satisfied event: %s",
+            _bounded_exception_type(exc),
+        )
 
 
 def emit_execution_confirmation_timeout_event(
@@ -4479,7 +4542,10 @@ def emit_execution_confirmation_timeout_event(
             data=data,
         )
     except Exception as exc:
-        logging.debug("[event] failed to emit confirmation timeout event: %s", exc)
+        logging.debug(
+            "[event] failed to emit confirmation timeout event: %s",
+            _bounded_exception_type(exc),
+        )
 
 
 def emit_risk_mode_changed_event(
@@ -4534,7 +4600,7 @@ def emit_risk_mode_changed_event(
             "[event] failed to emit risk mode changed event pside=%s symbol=%s: %s",
             pside,
             symbol,
-            exc,
+            _bounded_exception_type(exc),
         )
 
 
@@ -4577,7 +4643,7 @@ def emit_realized_loss_gate_blocked_event(
             "[event] failed to emit realized loss gate event pside=%s symbol=%s: %s",
             pside,
             symbol,
-            exc,
+            _bounded_exception_type(exc),
         )
 
 
@@ -4619,7 +4685,7 @@ def emit_entry_cooldown_delta_anchored_event(
             "[event] failed to emit entry cooldown delta event pside=%s symbol=%s: %s",
             pside,
             symbol,
-            exc,
+            _bounded_exception_type(exc),
         )
 
 
@@ -4659,7 +4725,7 @@ def emit_entry_min_effective_cost_blocked_event(
             "[event] failed to emit min effective cost event pside=%s symbol=%s: %s",
             pside,
             symbol,
-            exc,
+            _bounded_exception_type(exc),
         )
 
 
@@ -4825,7 +4891,7 @@ def emit_trailing_status_event(
             symbol,
             pside,
             kind,
-            exc,
+            _bounded_exception_type(exc),
         )
 
 
@@ -4868,7 +4934,10 @@ def emit_unstuck_status_event(
             },
         )
     except Exception as exc:
-        logging.debug("[event] failed to emit unstuck status event: %s", exc)
+        logging.debug(
+            "[event] failed to emit unstuck status event: %s",
+            _bounded_exception_type(exc),
+        )
 
 
 def emit_unstuck_selection_event(
@@ -4911,7 +4980,7 @@ def emit_unstuck_selection_event(
             "[event] failed to emit unstuck selection event pside=%s symbol=%s: %s",
             pside,
             symbol,
-            exc,
+            _bounded_exception_type(exc),
         )
 
 
@@ -4953,7 +5022,10 @@ def emit_balance_changed_event(
             data=data,
         )
     except Exception as exc:
-        logging.debug("[event] failed to emit balance changed event: %s", exc)
+        logging.debug(
+            "[event] failed to emit balance changed event: %s",
+            _bounded_exception_type(exc),
+        )
 
 
 def _fill_coverage_summary(status: Any) -> dict[str, Any]:
@@ -5021,7 +5093,10 @@ def _best_effort_fill_refresh_debug_payload(**kwargs: Any) -> dict[str, Any] | N
     try:
         return _fill_refresh_debug_payload(**kwargs)
     except Exception as exc:
-        logging.debug("[event] failed to build fill refresh debug payload: %s", exc)
+        logging.debug(
+            "[event] failed to build fill refresh debug payload: %s",
+            _bounded_exception_type(exc),
+        )
         return None
 
 
@@ -5053,7 +5128,10 @@ def _best_effort_fill_ingested_debug_payload(
     try:
         return _fill_ingested_debug_payload(event, payload=payload)
     except Exception as exc:
-        logging.debug("[event] failed to build fill ingested debug payload: %s", exc)
+        logging.debug(
+            "[event] failed to build fill ingested debug payload: %s",
+            _bounded_exception_type(exc),
+        )
         return None
 
 
@@ -5186,7 +5264,10 @@ def emit_fills_refresh_summary_event(bot: Any, *args: Any, **kwargs: Any) -> Non
     try:
         _emit_fills_refresh_summary_event_unchecked(bot, *args, **kwargs)
     except Exception as exc:
-        logging.debug("[event] failed to emit fills refresh summary event: %s", exc)
+        logging.debug(
+            "[event] failed to emit fills refresh summary event: %s",
+            _bounded_exception_type(exc),
+        )
 
 
 def emit_fill_ingested_event(
@@ -5239,7 +5320,10 @@ def emit_fill_ingested_event(
             data={key: value for key, value in data.items() if value is not None},
         )
     except Exception as exc:
-        logging.debug("[event] failed to emit fill ingested event: %s", exc)
+        logging.debug(
+            "[event] failed to emit fill ingested event: %s",
+            _bounded_exception_type(exc),
+        )
 
 
 def emit_fills_ingested_summary_event(
@@ -5267,7 +5351,10 @@ def emit_fills_ingested_summary_event(
             },
         )
     except Exception as exc:
-        logging.debug("[event] failed to emit fills ingested summary event: %s", exc)
+        logging.debug(
+            "[event] failed to emit fills ingested summary event: %s",
+            _bounded_exception_type(exc),
+        )
 
 
 def emit_position_changed_event(
@@ -5320,4 +5407,7 @@ def emit_position_changed_event(
             },
         )
     except Exception as exc:
-        logging.debug("[event] failed to emit position changed event: %s", exc)
+        logging.debug(
+            "[event] failed to emit position changed event: %s",
+            _bounded_exception_type(exc),
+        )

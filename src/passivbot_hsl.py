@@ -63,6 +63,18 @@ _HSL_COIN_REPLAY_STARTUP_YIELD_ROWS = 1_000
 _HSL_COIN_REPLAY_BACKGROUND_YIELD_ROWS = 100
 _HSL_COIN_REPLAY_BACKGROUND_YIELD_SLEEP_S = 0.01
 _HSL_FLATTEN_FILL_REFRESH_INTERVAL_MS = 5_000
+_HSL_EXCEPTION_TYPE_MAX_LEN = 80
+
+
+def _bounded_hsl_exception_type(exc: BaseException) -> str:
+    try:
+        name = type(exc).__name__
+    except Exception:
+        return "Error"
+    bounded = name[:_HSL_EXCEPTION_TYPE_MAX_LEN]
+    if not bounded or not bounded.isascii() or not bounded.isidentifier():
+        return "Error"
+    return bounded
 
 
 def _hsl_flat_epsilon(qty_step: Any = 0.0) -> float:
@@ -200,7 +212,7 @@ def _best_effort_hsl_debug_payload(
         logging.debug(
             "[event] failed to build HSL debug payload type=%s: %s",
             event_type,
-            exc,
+            _bounded_hsl_exception_type(exc),
         )
         return None
 
@@ -258,7 +270,11 @@ def _emit_hsl_event(
                 data=event_data,
             ) is not None
     except Exception as exc:
-        logging.debug("[event] failed to emit HSL live event type=%s: %s", event_type, exc)
+        logging.debug(
+            "[event] failed to emit HSL live event type=%s: %s",
+            event_type,
+            _bounded_hsl_exception_type(exc),
+        )
     if live_event_delivered:
         return
     try:
@@ -276,7 +292,7 @@ def _emit_hsl_event(
         logging.debug(
             "[event] failed to emit HSL legacy monitor event type=%s: %s",
             event_type,
-            exc,
+            _bounded_hsl_exception_type(exc),
         )
 
 
@@ -313,7 +329,7 @@ def _emit_runtime_forced_mode_changed_event(
             "[event] failed to emit HSL runtime forced mode event pside=%s symbol=%s: %s",
             pside,
             symbol,
-            exc,
+            _bounded_hsl_exception_type(exc),
         )
 
 
@@ -431,7 +447,11 @@ def _emit_hsl_replay_event(
             reason_code=reason_code,
         )
     except Exception as exc:
-        logging.debug("[event] failed to emit HSL replay event type=%s: %s", event_type, exc)
+        logging.debug(
+            "[event] failed to emit HSL replay event type=%s: %s",
+            event_type,
+            _bounded_hsl_exception_type(exc),
+        )
 
 
 def _calc_hsl_pnl(position_side, entry_price, close_price, qty, c_mult):
@@ -4137,7 +4157,7 @@ def _equity_hard_stop_maybe_emit_raw_red_pending(
             "[event] failed to emit HSL raw-red pending event pside=%s symbol=%s: %s",
             pside,
             symbol,
-            exc,
+            _bounded_hsl_exception_type(exc),
         )
 
 
@@ -7010,7 +7030,7 @@ def _equity_hard_stop_emit_coin_status(self, pside: str, symbol: str, metrics: d
                     "[event] failed to log HSL coin status symbol=%s pside=%s: %s",
                     symbol,
                     pside,
-                    exc,
+                    _bounded_hsl_exception_type(exc),
                 )
         _emit_hsl_event(
             self,
@@ -7037,7 +7057,7 @@ def _equity_hard_stop_emit_coin_status(self, pside: str, symbol: str, metrics: d
             "[event] failed to emit HSL coin status symbol=%s pside=%s: %s",
             symbol,
             pside,
-            exc,
+            _bounded_hsl_exception_type(exc),
         )
 
 
