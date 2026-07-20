@@ -15,7 +15,38 @@ merge, live smoke evidence changes, or new gaps are discovered.
 - Do not use this file for design churn; unresolved design details belong in the
   plan or a focused handoff doc.
 
-## Latest Canonical Deployment (PR #1333)
+## Latest Canonical Deployment (PR #1329 After PR #1337)
+
+- PR #1337 merged exact reviewed head
+  `51a82c23230daf4aea5ec68784ef7168293b408e` as canonical
+  `7d463dca56e1b29840954876a25a3f4d0e5df961` after exact-head Hermes and
+  built-in Codex approval plus green Python/Rust CI. VPS5 fast-forwarded
+  tracked-clean from `e0927ed86f` without a Rust build or process signal.
+- Its settled bounded five-minute smoke was `ok=true` with zero hard failures,
+  all five exact processes, and known scan-cost evidence: six `seek_tail`
+  files, 10,388 records, 18,777,444 physical/decoded bytes, and 5,751.099 ms.
+  The immediate sample retained a natural KuCoin timeout and correctly stayed
+  red until that event aged out.
+- External PR #1329 then merged exact mechanical-integration head
+  `6bd2eb0a0a49d21107a2c45ff9784e737d5c4d1c` as canonical
+  `848eb60c502b7af21dd7aa52f50f86aece552bd9`. The maintainer explicitly
+  approved contributor CI; Hermes and Python/Rust CI were green, and the
+  target-relative result remained the reviewed one-line aware-UTC timestamp
+  fix. VPS5 fast-forwarded tracked-clean without a Rust build or restart; the
+  startup-only maintenance-path change did not warrant disrupting running
+  bots.
+- Bot PIDs `1066081/1066091/1066084/1066093/1066087`, pane parents
+  `%358`-`%362`, and protected `misc:0.0` `%8`/PID `434835` remained unchanged.
+  A later natural KuCoin orders timeout kept the immediate post-pull sample
+  red. The final settled five-minute smoke was `ok=true` with zero hard
+  failures, zero failed remote calls, all five exact processes, a tracked-clean
+  repository at `848eb60c`, and six `seek_tail` files reading 9,471 records and
+  17,038,544 known physical/decoded bytes in 4,021.646 ms. No direct exchange
+  call, manufactured event, restart, or process signal occurred. The remaining
+  incident-bundle time-window scan lacks exact byte/read-method cost, motivating
+  the active `codex/live-incident-scan-cost` slice.
+
+## Previous Canonical Deployment (PR #1333)
 
 - PR #1333 merged exact reviewed head
   `ce5a24d72ea811c6b04a376bbd9fcd228ab4c9af` as canonical

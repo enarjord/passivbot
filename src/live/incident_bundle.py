@@ -206,6 +206,16 @@ def _build_time_window_report(
             "enabled": False,
             "filters": {},
             "files_scanned": 0,
+            "scan_cost": {
+                "elapsed_ms": 0.0,
+                "physical_bytes_read": 0,
+                "physical_bytes_known": True,
+                "decoded_bytes_read": 0,
+                "decoded_bytes_known": True,
+                "files_read": 0,
+                "records_read": 0,
+                "read_methods": {},
+            },
             "file_discovery": {},
             "matched_events": 0,
             "events_truncated": False,
@@ -240,6 +250,7 @@ def _build_time_window_report(
     issues: list[dict[str, Any]] = []
     events: list[dict[str, Any]] = []
     matched_events = 0
+    records_total = 0
     max_events = max(0, int(limit))
     max_event_tail_lines = max(0, int(event_tail_lines))
     max_event_file_count_per_bot = max(0, int(max_event_files_per_bot))
@@ -252,6 +263,12 @@ def _build_time_window_report(
     event_files_before_limit = 0
     event_files_skipped_by_limit = 0
     event_file_limit_groups = 0
+    scan_physical_bytes_read = 0
+    scan_physical_bytes_known = True
+    scan_decoded_bytes_read = 0
+    scan_decoded_bytes_known = True
+    scan_files_read = 0
+    scan_read_methods: Counter[str] = Counter()
     file_discovery: dict[str, Any] = {
         "candidate_files": 0,
         "event_segments": 0,
@@ -287,6 +304,7 @@ def _build_time_window_report(
             _limit_recent_event_files_per_bot(files, max_event_file_count_per_bot)
         )
 
+    scan_started_at = time.perf_counter()
     for path in files:
         try:
             with event_file_rows(path, max_tail_lines=max_event_tail_lines) as (
@@ -309,6 +327,7 @@ def _build_time_window_report(
                     line = raw_line.strip()
                     if not line:
                         continue
+                    records_total += 1
                     try:
                         row = json.loads(line)
                     except json.JSONDecodeError as exc:
@@ -352,7 +371,19 @@ def _build_time_window_report(
                                 include_data=include_data,
                             )
                         )
+            scan_files_read += 1
+            if row_window.physical_bytes_read is None:
+                scan_physical_bytes_known = False
+            else:
+                scan_physical_bytes_read += int(row_window.physical_bytes_read)
+            if row_window.decoded_bytes_read is None:
+                scan_decoded_bytes_known = False
+            else:
+                scan_decoded_bytes_read += int(row_window.decoded_bytes_read)
+            scan_read_methods[str(row_window.method)] += 1
         except OSError as exc:
+            scan_physical_bytes_known = False
+            scan_decoded_bytes_known = False
             issues.append(
                 {
                     "path": str(path),
@@ -362,10 +393,25 @@ def _build_time_window_report(
                     "message": str(exc),
                 }
             )
+    scan_elapsed_ms = round((time.perf_counter() - scan_started_at) * 1000, 3)
     report = {
         "enabled": True,
         "filters": filters,
         "files_scanned": len(files),
+        "scan_cost": {
+            "elapsed_ms": scan_elapsed_ms,
+            "physical_bytes_read": (
+                scan_physical_bytes_read if scan_physical_bytes_known else None
+            ),
+            "physical_bytes_known": scan_physical_bytes_known,
+            "decoded_bytes_read": (
+                scan_decoded_bytes_read if scan_decoded_bytes_known else None
+            ),
+            "decoded_bytes_known": scan_decoded_bytes_known,
+            "files_read": scan_files_read,
+            "records_read": records_total,
+            "read_methods": dict(sorted(scan_read_methods.items())),
+        },
         "file_discovery": file_discovery,
         "matched_events": matched_events,
         "events_truncated": matched_events > len(events),
@@ -861,6 +907,7 @@ def _time_window_result_summary(window_report: dict[str, Any]) -> dict[str, Any]
     return {
         "enabled": window_report["enabled"],
         "files_scanned": window_report["files_scanned"],
+        "scan_cost": window_report["scan_cost"],
         "file_discovery": window_report["file_discovery"],
         "matched_events": window_report["matched_events"],
         "events_truncated": window_report["events_truncated"],
