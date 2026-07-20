@@ -22,7 +22,7 @@ Estimated completion:
 
 ## Active Review Slice
 
-- Pending PR, `Report incident time-window scan cost`; branch:
+- PR #1338, `Report incident time-window scan cost`; branch:
   `codex/live-incident-scan-cost`, based on canonical
   `848eb60c502b7af21dd7aa52f50f86aece552bd9`.
 - Scope: expose bounded elapsed-time, byte, successful-file, record, and
