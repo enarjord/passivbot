@@ -99,6 +99,20 @@ def test_exception_type_name_contains_is_hostile_metadata_safe_and_non_projectin
     )
 
 
+def test_exception_type_name_contains_rejects_metaclass_name_descriptor_forgery():
+    class ForgedNameMeta(type):
+        @property
+        def __name__(cls):
+            return "InvalidNonceForged"
+
+    class UnrelatedFailure(RuntimeError, metaclass=ForgedNameMeta):
+        pass
+
+    assert not exception_type_name_contains(
+        UnrelatedFailure(), ("invalidnonce",)
+    )
+
+
 def test_bounded_exception_status_and_code_contain_hostile_metadata():
     secret = "api_key=attribute-secret"
 
