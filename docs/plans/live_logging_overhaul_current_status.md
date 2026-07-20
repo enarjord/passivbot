@@ -1848,10 +1848,12 @@ pane-parent relaunch classification and the restart preparation/orchestration
 slices through PR #1309 are also merged and deployed. Later logging slices
 through PR #1343, including adjacent PR #1329, are deployed at canonical
 `7e26a9062a88ecf211729d7d718fb4530630c4ba`; their current evidence is recorded
-above. Active PR #1344 on `codex/ema-diagnostic-redaction` removes arbitrary
-exception and fallback-reason text from EMA event and human fallback payloads
-without changing EMA calculation, fallback selection, candidate availability,
-or trading behavior. Resolve its exact current head from live PR metadata.
+above. PR #1344's EMA diagnostic redaction is merged and deployed at canonical
+`986e5d52f88692d1b6531bc38c307352c08e9cb9`. Active PR #1345 on
+`codex/diagnostic-exception-redaction` removes arbitrary exception text from
+legacy monitor errors and WebSocket reconnect diagnostics without changing
+reconnect cadence, retry behavior, monitor persistence, or trading behavior.
+Resolve its exact current head from live PR metadata.
 
 Do not create progress-only PRs or resume unrelated logging work from stale
 worktrees.

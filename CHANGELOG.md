@@ -6,8 +6,10 @@ All notable user-facing changes will be documented in this file.
 
 - Legacy monitor error events and WebSocket reconnect diagnostics now retain bounded exception
   classifications without arbitrary exception messages, request URLs, response text, or formatted
-  exception-value tracebacks. Safe event context, reconnect cadence, retry behavior, monitor
-  persistence, and trading behavior are unchanged.
+  exception-value tracebacks. Monitor error context is field-specific and credential-shaped values
+  are rejected; suspicious stack labels are replaced and frame emission reflects actual DEBUG
+  output. Reconnect cadence, retry behavior, monitor persistence, and trading behavior are
+  unchanged.
 
 - The `ema.unavailable` and `ema.fallback_used` events and their dedicated legacy summaries now
   retain only code-owned reason classifications, bounded EMA/error types, symbols, spans, ages,

@@ -5,7 +5,6 @@ import hashlib
 import errno
 import json
 import logging
-import math
 import os
 import re
 import stat
@@ -58,17 +57,23 @@ _EVENT_RECOVERY_MARKER = b',"_recovery":{"checksum":"'
 _EVENT_RECOVERY_SEQ_SEPARATOR = b'","seq":'
 _EVENT_RECOVERY_TRAILER_MAX_BYTES = 160
 _MONITOR_ERROR_TYPE_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,79}")
-_MONITOR_ERROR_CONTEXT_RE = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_./:-]{0,159}")
+_MONITOR_ERROR_CONTEXT_RE = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.:-]{0,159}")
+_MONITOR_ERROR_SENSITIVE_RE = re.compile(
+    r"(?:api[_-]?key|secret|token|signature|authorization|auth|password|cookie|"
+    r"credential|bearer|basic|sk[_-]?live)",
+    re.IGNORECASE,
+)
 _MONITOR_ERROR_CONTEXT_MAX_INT = (1 << 63) - 1
-_MONITOR_ERROR_CONTEXT_KEYS = (
+_MONITOR_ERROR_CONTEXT_TOKEN_KEYS = (
     "source",
     "stage",
     "operation",
     "action",
     "status",
     "code",
-    "endpoint",
     "cycle_id",
+)
+_MONITOR_ERROR_CONTEXT_COUNT_KEYS = (
     "attempt",
     "count",
 )
@@ -82,29 +87,22 @@ def _safe_monitor_error_context(payload: Any) -> dict[str, Any]:
     if not isinstance(payload, dict):
         return {}
     context: dict[str, Any] = {}
-    for key in _MONITOR_ERROR_CONTEXT_KEYS:
+    for key in _MONITOR_ERROR_CONTEXT_TOKEN_KEYS:
         value = payload.get(key)
         if value is None:
             continue
-        if isinstance(value, bool):
+        if not isinstance(value, str):
+            continue
+        if _MONITOR_ERROR_SENSITIVE_RE.search(value):
+            continue
+        if _MONITOR_ERROR_CONTEXT_RE.fullmatch(value):
             context[key] = value
-        elif isinstance(value, int):
-            if (
-                -_MONITOR_ERROR_CONTEXT_MAX_INT
-                <= value
-                <= _MONITOR_ERROR_CONTEXT_MAX_INT
-            ):
-                context[key] = value
-        elif isinstance(value, float):
-            if math.isfinite(value):
-                context[key] = value
-        else:
-            try:
-                text = str(value)
-            except Exception:
-                continue
-            if "://" not in text and _MONITOR_ERROR_CONTEXT_RE.fullmatch(text):
-                context[key] = text
+    for key in _MONITOR_ERROR_CONTEXT_COUNT_KEYS:
+        value = payload.get(key)
+        if isinstance(value, bool) or not isinstance(value, int):
+            continue
+        if 0 <= value <= _MONITOR_ERROR_CONTEXT_MAX_INT:
+            context[key] = value
     return context
 
 

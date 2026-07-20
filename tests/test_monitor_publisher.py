@@ -72,6 +72,8 @@ def test_monitor_publisher_record_error_redacts_diagnostic_fields_and_keeps_safe
 ):
     publisher = _make_publisher(tmp_path)
     secret = "https://api.example.test/private?api_key=top-secret Authorization: Bearer top-secret"
+    schemeless_secret = "api.example.test/private/api_key/top-secret"
+    schemeless_url = "api.kucoin.com/api/v1/accounts"
 
     class Unrenderable:
         def __str__(self):
@@ -83,10 +85,14 @@ def test_monitor_publisher_record_error_redacts_diagnostic_fields_and_keeps_safe
         tags=("error", "bot"),
         payload={
             "source": "startup",
+            "operation": "load_account",
             "attempt": 2,
             "status": Unrenderable(),
             "count": 1 << 80,
-            "stage": secret,
+            "stage": schemeless_url,
+            "endpoint": schemeless_secret,
+            "code": "api_key_top-secret",
+            "action": "sk_live_123456",
             "message": secret,
             "error": secret,
             "error_repr": secret,
@@ -114,12 +120,15 @@ def test_monitor_publisher_record_error_redacts_diagnostic_fields_and_keeps_safe
     assert event["pside"] == "long"
     assert event["payload"] == {
         "source": "startup",
+        "operation": "load_account",
         "attempt": 2,
         "error_type": "RuntimeError",
     }
 
     serialized = publisher.current_events_path.read_text()
     assert secret not in serialized
+    assert schemeless_secret not in serialized
+    assert schemeless_url not in serialized
     assert publisher.record_event("bot.stop", ("bot",), ts=1_235)["seq"] == 2
     assert len(publisher.current_events_path.read_text().splitlines()) == 2
 

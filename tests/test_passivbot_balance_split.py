@@ -2990,6 +2990,95 @@ def test_ws_reconnect_emits_bounded_structured_event(monkeypatch, caplog):
     assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 
+def test_ws_reconnect_redacts_sensitive_traceback_frame_components(monkeypatch, caplog):
+    sink = ListEventSink()
+    bot = Passivbot.__new__(Passivbot)
+    bot.exchange = "kucoin"
+    bot._live_event_pipeline = LiveEventPipeline(
+        structured_sinks=[sink],
+        monitor_sinks=[],
+    )
+    monkeypatch.setattr(passivbot_module, "utc_ms", lambda: 1_000_000)
+    source = (
+        "def api_key_SECRET_TOKEN():\n"
+        "    raise TimeoutError('safe')\n"
+        "api_key_SECRET_TOKEN()\n"
+    )
+
+    with caplog.at_level(logging.DEBUG):
+        try:
+            exec(
+                compile(
+                    source,
+                    "wss://ws.example/private?api_key=SECRET_TOKEN",
+                    "exec",
+                ),
+                {},
+            )
+        except TimeoutError as exc:
+            Passivbot._log_ws_reconnect(
+                bot,
+                reconnect_no=1,
+                retry_delay_s=1.0,
+                reason="connection_lost",
+                exc=exc,
+            )
+
+    assert "SECRET_TOKEN" not in caplog.text
+    assert "api_key" not in caplog.text
+    assert "wss://" not in caplog.text
+    assert "stack_frames=" in caplog.text
+    assert "redacted" in caplog.text
+    assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    assert sink.events[-1].data["traceback_emitted"] is True
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
+
+
+def test_ws_reconnect_does_not_consume_traceback_cadence_when_debug_disabled(
+    monkeypatch, caplog
+):
+    sink = ListEventSink()
+    bot = Passivbot.__new__(Passivbot)
+    bot.exchange = "kucoin"
+    bot._live_event_pipeline = LiveEventPipeline(
+        structured_sinks=[sink],
+        monitor_sinks=[],
+    )
+    monkeypatch.setattr(passivbot_module, "utc_ms", lambda: 1_000_000)
+
+    try:
+        raise TimeoutError("safe")
+    except TimeoutError as exc:
+        with caplog.at_level(logging.INFO):
+            Passivbot._log_ws_reconnect(
+                bot,
+                reconnect_no=1,
+                retry_delay_s=1.0,
+                reason="connection_lost",
+                exc=exc,
+            )
+        assert bot._live_event_pipeline.flush(timeout=2.0) is True
+        assert sink.events[-1].data["traceback_emitted"] is False
+        assert not hasattr(bot, "_ws_reconnect_traceback_last_ms")
+        assert "stack_frames=" not in caplog.text
+
+        caplog.clear()
+        with caplog.at_level(logging.DEBUG):
+            Passivbot._log_ws_reconnect(
+                bot,
+                reconnect_no=2,
+                retry_delay_s=1.0,
+                reason="connection_lost",
+                exc=exc,
+            )
+
+    assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    assert sink.events[-1].data["traceback_emitted"] is True
+    assert bot._ws_reconnect_traceback_last_ms == 1_000_000
+    assert "stack_frames=" in caplog.text
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
+
+
 @pytest.mark.asyncio
 async def test_background_candle_warmup_marks_full_warmup_ready(monkeypatch, caplog):
     bot = Passivbot.__new__(Passivbot)
