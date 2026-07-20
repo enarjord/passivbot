@@ -22,33 +22,54 @@ Estimated completion:
 
 ## Active Review Slice
 
-- Open PR #1347, `Redact fill refresh failure diagnostics`, on branch
-  `codex/fill-history-diagnostic-redaction`, based on canonical
-  `4192e709d46d3ef9516025e121ddad15c0d0cd6e`. Resolve its exact head from live
+- Open PR #1348, `Redact shutdown failure diagnostics`, on branch
+  `codex/shutdown-diagnostic-redaction`, based on canonical
+  `67416ee4f7fef2dc3ffac001d50e82c0322ee72b`. Resolve its exact head from live
   metadata; the commit containing this handoff is a moving review head.
-- Scope: remove arbitrary exception values from structured fill-refresh
-  summaries, exchange-specific fetcher diagnostics, request timing, staged
-  remote-call events, cache reads/doctor repair, startup/process handling, blocking/routine/coverage
-  callers, and HSL flatten confirmation while retaining bounded exception
-  type, validated numeric status/code, and existing source, coverage, retry, timing, count,
-  and code-owned endpoint context. Complete chunked text inspection plus a bounded
-  cause/context graph preserves caller-specific retry marker case rules and timestamp recovery for
-  redacted wrappers, including the legacy class-name marker heuristic without projecting that name.
-  Adjacent
-  monitor, metadata-capture, and HSL progress
-  diagnostics use the same safe type boundary.
-- Behavior boundary: diagnostic retention and projection only. Exception
-  propagation, refresh and retry behavior, fill accounting, planning, orders,
-  risk, and trading behavior remain unchanged.
-- Baseline: these fill-history paths still retain sanitized or raw exception
-  text even though the shared live-event contract requires code-owned context
-  and bounded exception classifications.
+- Scope: remove arbitrary exception values from `bot.shutdown.stage` failures,
+  event-pipeline close failure warnings, per-maintainer cancellation errors,
+  and shutdown fallback logs while retaining bounded exception type, stage,
+  task count, timeout, status, and elapsed-time context.
+- Behavior boundary: diagnostic retention and projection only. Maintainer
+  cancellation, execution-loop waits, session closing, shutdown timing,
+  process control, event routing, and trading behavior remain unchanged.
+- Baseline: maintainer-stop/await, execution-loop-wait, private/public session
+  close, stage-delivery, event-pipeline-close, and legacy cleanup failures
+  still render or retain raw exception text.
 - Review gate: exact-current-head Hermes approval plus green Python/Rust CI.
   Built-in Codex automatic review is additional and every finding must be
   verified and resolved.
 - Expected VPS action: tracked-clean pull plus one exact-five graceful restart
-  and bounded settled smoke because live fill diagnostics change;
-  preserve `misc:0.0`.
+  and bounded settled smoke because live shutdown diagnostics change; preserve
+  `misc:0.0`.
+- Next candidate: candle refresh/cache-maintenance diagnostic redaction after
+  this dependent runtime slice merges.
+
+## Deployed Baseline (PR #1347)
+
+- PR #1347 merged exact approved head
+  `5ef012ed5f9422e9d7a84862f28e2e5cb017d21d` as canonical
+  `67416ee4f7fef2dc3ffac001d50e82c0322ee72b` after exact-head Hermes
+  approval, green Python/Rust CI, and finding-free built-in Codex and
+  independent Sol reviews.
+- VPS5 guarded-prepared tracked-clean from
+  `4192e709d46d3ef9516025e121ddad15c0d0cd6e` without a Rust build. The source
+  fingerprint/stamp remained
+  `691bff9683deec9382a4e96ab6a107c14145f88edd6ae2f8e2380b8ba6824449`, and the
+  compiled artifact SHA remained
+  `7611f3eff1d8702ff29d90490a1aba490db5c816e7e3f09a2c33e5c4085da023`.
+- The exact-target orchestrator gracefully restarted only panes `%358`-`%362`;
+  old PIDs `1079121/1079130/1079124/1079133/1079127` exited and replacement
+  PIDs `1080755/1080764/1080758/1080767/1080761` relaunched and verified
+  without force or broad-pattern signals.
+- The integrated 120-second smoke was hard-green with complete shutdown and
+  startup identity, zero hard failures, zero hard text-log or attention
+  matches, and zero monitor warnings or errors. A bounded settled smoke found
+  all five exact processes stable with no PID churn, persistent uninterruptible
+  state, failed fill refresh, remote-call failure, event-pipeline integrity
+  issue, or hard diagnostic evidence. The checkout remained exact and
+  tracked-clean, while protected `misc:0.0` stayed `%8`/PID `434835`. No direct
+  authenticated exchange call or event was manufactured.
 
 ## Deployed Baseline (PR #1346)
 

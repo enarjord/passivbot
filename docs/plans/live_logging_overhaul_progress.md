@@ -15,7 +15,30 @@ merge, live smoke evidence changes, or new gaps are discovered.
 - Do not use this file for design churn; unresolved design details belong in the
   plan or a focused handoff doc.
 
-## Latest Canonical Deployment (PR #1346)
+## Latest Canonical Deployment (PR #1347)
+
+- PR #1347 merged exact approved head `5ef012ed5f` as canonical
+  `67416ee4f7fef2dc3ffac001d50e82c0322ee72b` after exact-head Hermes
+  approval, green Python/Rust CI, and finding-free built-in Codex and
+  independent Sol reviews.
+- VPS5 guarded-prepared tracked-clean from `4192e709d46` without a Rust build;
+  the Rust source fingerprint/stamp and compiled artifact remained unchanged.
+  The exact-target orchestrator gracefully restarted only panes `%358`-`%362`;
+  old PIDs `1079121/1079130/1079124/1079133/1079127` exited and replacement
+  PIDs `1080755/1080764/1080758/1080767/1080761` relaunched and verified
+  without force or broad-pattern signals.
+- The integrated 120-second smoke was hard-green with complete shutdown and
+  startup identity, zero hard failures, zero hard text-log or attention
+  matches, and zero monitor warnings or errors. A bounded settled smoke found
+  all five exact processes stable with no PID churn, persistent uninterruptible
+  state, failed fill refresh, remote-call failure, event-pipeline integrity
+  issue, or hard diagnostic evidence. The checkout remained exact and
+  tracked-clean, and protected `misc:0.0` stayed `%8`/PID `434835`. No direct
+  authenticated exchange call or event was manufactured. The next slice
+  redacts shutdown-stage failure diagnostics; candle refresh/cache-maintenance
+  diagnostics remain the next candidate after that slice.
+
+## Previous Canonical Deployment (PR #1346)
 
 - PR #1346 merged exact approved head `377cb1dc60` as canonical
   `4192e709d46d3ef9516025e121ddad15c0d0cd6e` after exact-head Hermes

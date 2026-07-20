@@ -6832,7 +6832,10 @@ class Passivbot:
                 logging.warning("[monitor] live event pipeline close timed out")
             return closed
         except Exception as exc:
-            logging.warning("[monitor] live event pipeline close failed: %s", exc)
+            logging.warning(
+                "[monitor] live event pipeline close failed (%s)",
+                bounded_exception_type(exc),
+            )
             return False
         finally:
             self._live_event_pipeline = None
@@ -6884,7 +6887,11 @@ class Passivbot:
                 data=payload,
             )
         except Exception as exc:
-            logging.debug("[shutdown] failed emitting shutdown stage %s: %s", stage, exc)
+            logging.debug(
+                "[shutdown] failed emitting shutdown stage %s (%s)",
+                stage,
+                bounded_exception_type(exc),
+            )
         if emitted is None:
             log_level = logging.INFO
             if level == "warning":
@@ -6930,13 +6937,14 @@ class Passivbot:
                     if task is not None:
                         maintainer_tasks.append(task)
         except Exception as e:
-            logging.error("[shutdown] error stopping maintainers: %s", e)
+            error_type = bounded_exception_type(e)
+            logging.error("[shutdown] error stopping maintainers (%s)", error_type)
             self._emit_shutdown_stage(
                 "maintainers_stop_failed",
                 status="failed",
                 level="error",
                 message="error stopping maintainer tasks",
-                data={"error": str(e)},
+                data={"error_type": error_type},
             )
         if maintainer_tasks:
             try:
@@ -7001,15 +7009,20 @@ class Passivbot:
                     )
                     pass
             except Exception as e:
+                error_type = bounded_exception_type(e)
                 logging.error(
-                    "[shutdown] error awaiting maintainer cancellation: %s", e
+                    "[shutdown] error awaiting maintainer cancellation (%s)",
+                    error_type,
                 )
                 self._emit_shutdown_stage(
                     "maintainers_await_failed",
                     status="failed",
                     level="error",
                     message="error awaiting maintainer tasks",
-                    data={"task_count": len(maintainer_tasks), "error": str(e)},
+                    data={
+                        "task_count": len(maintainer_tasks),
+                        "error_type": error_type,
+                    },
                 )
         execution_loop_stopped = getattr(self, "_execution_loop_stopped", None)
         execution_loop_task = getattr(self, "_execution_loop_task", None)
@@ -7101,13 +7114,16 @@ class Passivbot:
                     message="execution loop cancelled during shutdown",
                 )
             except Exception as e:
-                logging.debug("[shutdown] error waiting for execution loop: %s", e)
+                error_type = bounded_exception_type(e)
+                logging.debug(
+                    "[shutdown] error waiting for execution loop (%s)", error_type
+                )
                 self._emit_shutdown_stage(
                     "execution_loop_wait_failed",
                     status="failed",
                     level="error",
                     message="error waiting for execution loop",
-                    data={"error": str(e)},
+                    data={"error_type": error_type},
                 )
             finally:
                 try:
@@ -7124,13 +7140,16 @@ class Passivbot:
                     message="private ccxt session closed",
                 )
         except Exception as e:
-            logging.error("[shutdown] error closing private ccxt session: %s", e)
+            error_type = bounded_exception_type(e)
+            logging.error(
+                "[shutdown] error closing private ccxt session (%s)", error_type
+            )
             self._emit_shutdown_stage(
                 "private_session_close_failed",
                 status="failed",
                 level="error",
                 message="error closing private ccxt session",
-                data={"error": str(e)},
+                data={"error_type": error_type},
             )
         try:
             if getattr(self, "cca", None) is not None:
@@ -7141,13 +7160,16 @@ class Passivbot:
                     message="public ccxt session closed",
                 )
         except Exception as e:
-            logging.error("[shutdown] error closing public ccxt session: %s", e)
+            error_type = bounded_exception_type(e)
+            logging.error(
+                "[shutdown] error closing public ccxt session (%s)", error_type
+            )
             self._emit_shutdown_stage(
                 "public_session_close_failed",
                 status="failed",
                 level="error",
                 message="error closing public ccxt session",
-                data={"error": str(e)},
+                data={"error_type": error_type},
             )
         await self._monitor_flush_snapshot(force=True, ts=utc_ms())
         self._emit_shutdown_stage(
@@ -8032,7 +8054,11 @@ class Passivbot:
             try:
                 res[key] = self.maintainers[key].cancel()
             except Exception as e:
-                logging.error(f"error stopping maintainer {key} {e}")
+                logging.error(
+                    "error stopping maintainer %s (%s)",
+                    key,
+                    bounded_exception_type(e),
+                )
         if hasattr(self, "WS_ohlcvs_1m_tasks"):
             res0s = {}
             for key in self.WS_ohlcvs_1m_tasks:
@@ -8040,7 +8066,11 @@ class Passivbot:
                     res0 = self.WS_ohlcvs_1m_tasks[key].cancel()
                     res0s[key] = res0
                 except Exception as e:
-                    logging.error(f"error stopping WS_ohlcvs_1m_tasks {key} {e}")
+                    logging.error(
+                        "error stopping WS_ohlcvs_1m_tasks %s (%s)",
+                        key,
+                        bounded_exception_type(e),
+                    )
             if res0s:
                 if verbose:
                     logging.debug(f"stopped ohlcvs watcher tasks {res0s}")
@@ -19852,7 +19882,7 @@ async def shutdown_bot(bot):
     except asyncio.TimeoutError:
         print("Shutdown timed out after 3 seconds. Forcing exit.")
     except Exception as e:
-        print(f"Error during shutdown: {e}")
+        print(f"Error during shutdown ({bounded_exception_type(e)}).")
 
 
 async def main():

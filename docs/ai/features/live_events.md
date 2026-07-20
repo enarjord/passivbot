@@ -308,6 +308,17 @@ responses, or formatted exception-value traceback. A stack diagnostic is marked 
 DEBUG logging accepts it. Reconnect cadence, retry behavior, and connector control flow are
 independent of observability delivery.
 
+## Shutdown Failure Diagnostics
+
+`bot.shutdown.stage` failure records retain the code-owned stage, bounded exception type, elapsed
+time, and applicable task-count or timeout context. The event and its human fallback exclude
+exception messages, request URLs, response text, credentials, and traceback values. Failure to
+deliver the structured stage may emit one DEBUG fallback with only the stage and bounded exception
+type. Event-pipeline close failures retain the same bounded type in their warning. These diagnostics
+do not alter task cancellation, execution-loop waits, session closing, shutdown timing, process
+control, or event-pipeline isolation. Per-maintainer cancellation failures and the legacy cleanup
+helper apply the same type-only boundary.
+
 ## Execution-Loop Incidents
 
 An execution-loop failure publishes a bounded `error.bot` record and an equivalent first-occurrence

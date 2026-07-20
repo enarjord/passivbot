@@ -4,6 +4,13 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Shutdown-stage failure diagnostics now retain bounded exception types alongside existing stage,
+  task-count, timeout, and elapsed-time context without arbitrary exception messages, request URLs,
+  response text, or credentials. Event-delivery and event-pipeline-close fallback logs use the
+  same classification, as do per-maintainer cancellation and legacy cleanup failures.
+  Maintainer cancellation, execution-loop waits, session closing, shutdown timing, and process
+  control are unchanged.
+
 - Fill-history refresh failure diagnostics now retain bounded exception types alongside existing
   source, coverage, retry, timing, count, and endpoint context without arbitrary exception
   messages or exception-value tracebacks. This includes exchange-specific fill fetchers, cache
