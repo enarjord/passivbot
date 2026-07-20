@@ -4,6 +4,19 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Fill-history refresh failure diagnostics now retain bounded exception types alongside existing
+  source, coverage, retry, timing, count, and endpoint context without arbitrary exception
+  messages or exception-value tracebacks. This includes exchange-specific fill fetchers, cache
+  reads and doctor repair, staged remote-call events, startup/process handling, HSL flatten
+  confirmation, and direct refresh callers. Validated numeric status/code and code-owned endpoint
+  labels remain available. Publication and time-sync classification cannot replace the original
+  refresh failure through hostile exception metadata, and wrapped timestamp failures remain
+  recoverable through a bounded cause/context graph check. Code-owned recovery markers are scanned
+  across complete exception text using bounded temporary chunks, preserving existing retry
+  classification and caller-specific marker case rules without retaining that text. Legacy
+  class-name recovery markers are inspected without projecting untrusted names. Exception
+  propagation, fill accounting, refresh cadence, planning, risk, and trading behavior are unchanged.
+
 - Best-effort live event emitter failure diagnostics, including HSL event emitters and the
   event-adjacent HSL coin-status human-log fallback, now retain bounded exception types instead of
   arbitrary exception messages that may contain request URLs, response text, or credentials.

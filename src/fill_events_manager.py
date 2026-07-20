@@ -41,6 +41,7 @@ from bitget_normalization import (
     normalize_uta_fill_payload as _normalize_uta_fill_payload,
 )
 from config import load_input_config, prepare_config
+from live.diagnostic_safety import bounded_exception_type, exception_text_contains
 
 try:
     from utils import ts_to_date  # type: ignore
@@ -104,9 +105,14 @@ class FillEventCacheContractError(RuntimeError):
 
 
 def _is_disk_full_error(exc: BaseException) -> bool:
-    if isinstance(exc, OSError) and getattr(exc, "errno", None) == errno.ENOSPC:
-        return True
-    return "No space left on device" in str(exc)
+    try:
+        if isinstance(exc, OSError) and getattr(exc, "errno", None) == errno.ENOSPC:
+            return True
+    except BaseException:
+        pass
+    return exception_text_contains(
+        exc, ("No space left on device",), case_sensitive=True
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1567,11 +1573,16 @@ class FillEventCache:
                 with path.open("r", encoding="utf-8") as fh:
                     payload = json.load(fh) or []
             except Exception as exc:
-                logger.warning("[fills] cache load: failed to read %s (%s)", path, exc)
+                error_type = bounded_exception_type(exc)
+                logger.warning(
+                    "[fills] cache load: failed to read %s | error_type=%s",
+                    path,
+                    error_type,
+                )
                 if not allow_legacy_contract:
                     raise FillEventCacheContractError(
                         f"fill-event cache file {path} is unreadable and cannot be used for "
-                        f"trading-critical accounting: {exc}"
+                        f"trading-critical accounting; error_type={error_type}"
                     ) from exc
                 continue
             for raw in payload:
@@ -1598,7 +1609,8 @@ class FillEventCache:
                 except Exception as exc:
                     raise FillEventCacheContractError(
                         f"fill-event cache record {path} is malformed and cannot be used for "
-                        f"trading-critical accounting: {exc}"
+                        "trading-critical accounting; "
+                        f"error_type={bounded_exception_type(exc)}"
                     ) from exc
         events.sort(key=lambda ev: ev.timestamp)
         logger.debug(
@@ -1651,9 +1663,10 @@ class FillEventCache:
                     payload = json.load(fh) or []
             except Exception as exc:
                 logger.warning(
-                    "[fills-doctor] could not inspect fill cache file for legacy contract repair | path=%s error=%s",
+                    "[fills-doctor] could not inspect fill cache file for legacy contract repair | "
+                    "path=%s error_type=%s",
                     path,
-                    exc,
+                    bounded_exception_type(exc),
                 )
                 continue
             if not isinstance(payload, list):
@@ -1762,7 +1775,11 @@ class FillEventCache:
                 data.setdefault(key, default[key])
             self._metadata = data
         except Exception as exc:
-            logger.warning("[fills] cache metadata: failed to read %s (%s)", self.metadata_path, exc)
+            logger.warning(
+                "[fills] cache metadata: failed to read %s | error_type=%s",
+                self.metadata_path,
+                bounded_exception_type(exc),
+            )
             self._metadata = default
 
         return self._metadata
@@ -2025,7 +2042,6 @@ class FillFetchRequestStats:
                 "total_ms": 0,
                 "max_ms": 0,
                 "last_error_type": "",
-                "last_error": "",
             },
         )
         data["count"] += 1
@@ -2043,11 +2059,9 @@ class FillFetchRequestStats:
                 "total_ms": 0,
                 "max_ms": 0,
                 "last_error_type": "",
-                "last_error": "",
             },
         )
-        data["last_error_type"] = type(exc).__name__
-        data["last_error"] = str(exc)[:240]
+        data["last_error_type"] = bounded_exception_type(exc)
 
     @property
     def count(self) -> int:
@@ -2077,11 +2091,8 @@ class FillFetchRequestStats:
             if errors:
                 suffix = f",err={errors}"
                 error_type = str(data.get("last_error_type") or "")
-                error_msg = str(data.get("last_error") or "")
                 if error_type:
                     suffix += f",err_type={error_type}"
-                if error_msg:
-                    suffix += f",err_msg={error_msg}"
             parts.append(f"{name}:n={count},sum={total_ms}ms,max={max_ms}ms{suffix}")
         if len(self.calls) > limit:
             parts.append(f"+{len(self.calls) - limit} endpoints")
@@ -2403,8 +2414,8 @@ class BitgetFetcher(BaseFetcher):
         for res in results:
             if isinstance(res, Exception):
                 logger.error(
-                    "BitgetFetcher._flush_detail_tasks: detail fetch failed: %s",
-                    res,
+                    "BitgetFetcher._flush_detail_tasks: detail fetch failed error_type=%s",
+                    bounded_exception_type(res),
                 )
                 continue
             total += res or 0
@@ -2539,9 +2550,9 @@ class BitgetFetcher(BaseFetcher):
             resolved = self._symbol_resolver(market_symbol)
         except Exception as exc:
             logger.warning(
-                "BitgetFetcher._resolve_symbol: resolver failed for %s (%s); using fallback",
+                "BitgetFetcher._resolve_symbol: resolver failed for %s error_type=%s; using fallback",
                 market_symbol,
-                exc,
+                bounded_exception_type(exc),
             )
             resolved = None
         if resolved:
@@ -2667,7 +2678,11 @@ class BinanceFetcher(BaseFetcher):
                     if pending is not task and not pending.done():
                         pending.cancel()
                 await asyncio.gather(*trade_tasks.values(), return_exceptions=True)
-                logger.error("BinanceFetcher.fetch: error fetching trades for %s (%s)", symbol, exc)
+                logger.error(
+                    "BinanceFetcher.fetch: error fetching trades for %s error_type=%s",
+                    symbol,
+                    bounded_exception_type(exc),
+                )
                 raise
             for trade in trades:
                 event = self._normalize_trade(trade)
@@ -2825,8 +2840,8 @@ class BinanceFetcher(BaseFetcher):
                     event, event_id, res = await task
                 except Exception as exc:
                     logger.debug(
-                        "BinanceFetcher.fetch: order-detail enrichment failed (%s)",
-                        exc,
+                        "BinanceFetcher.fetch: order-detail enrichment failed error_type=%s",
+                        bounded_exception_type(exc),
                     )
                     continue
                 if res:
@@ -2884,9 +2899,9 @@ class BinanceFetcher(BaseFetcher):
             detail = await self.api.fetch_order(order_id, symbol)
         except Exception as exc:  # pragma: no cover - live API dependent
             logger.debug(
-                "BinanceFetcher._enrich_with_order_details: fetch_order failed for %s (%s)",
+                "BinanceFetcher._enrich_with_order_details: fetch_order failed for %s error_type=%s",
                 order_id,
-                exc,
+                bounded_exception_type(exc),
             )
             return None
         info = detail.get("info") if isinstance(detail, dict) else detail
@@ -3055,18 +3070,24 @@ class BinanceFetcher(BaseFetcher):
         except Exception as exc:  # pragma: no cover - depends on live API
             if self._stop_requested():
                 logger.debug(
-                    "BinanceFetcher._fetch_symbol_trades: stopped during shutdown for %s (%s)",
+                    "BinanceFetcher._fetch_symbol_trades: stopped during shutdown for %s error_type=%s",
                     ccxt_symbol,
-                    exc,
+                    bounded_exception_type(exc),
                 )
                 return []
-            msg = str(exc).lower() if exc else ""
-            if "does not have market symbol" in msg or "market symbol" in msg:
+            if exception_text_contains(
+                exc, ("does not have market symbol", "market symbol")
+            ):
                 self._note_unsupported_symbol(ccxt_symbol)
                 return []
-            logger.error("BinanceFetcher._fetch_symbol_trades: error %s (%s)", ccxt_symbol, exc)
+            logger.error(
+                "BinanceFetcher._fetch_symbol_trades: error %s error_type=%s",
+                ccxt_symbol,
+                bounded_exception_type(exc),
+            )
             raise RuntimeError(
-                f"Binance trade-history fetch failed for {ccxt_symbol}: {exc}"
+                "Binance trade-history fetch failed for "
+                f"{ccxt_symbol} error_type={bounded_exception_type(exc)}"
             ) from exc
 
     def _normalize_income(
@@ -3146,7 +3167,10 @@ class BinanceFetcher(BaseFetcher):
         try:
             items = provider() or []
         except Exception as exc:
-            logger.warning("BinanceFetcher._collect_symbols: provider failed (%s)", exc)
+            logger.warning(
+                "BinanceFetcher._collect_symbols: provider failed error_type=%s",
+                bounded_exception_type(exc),
+            )
             return []
         symbols: List[str] = []
         for raw in items:
@@ -3163,7 +3187,11 @@ class BinanceFetcher(BaseFetcher):
             if resolved:
                 return resolved
         except Exception as exc:
-            logger.warning("BinanceFetcher._resolve_symbol: resolver failed for %s (%s)", value, exc)
+            logger.warning(
+                "BinanceFetcher._resolve_symbol: resolver failed for %s error_type=%s",
+                value,
+                bounded_exception_type(exc),
+            )
         return str(value)
 
 
@@ -3271,13 +3299,13 @@ class FillEventsManager:
                 ticker = await fetch_ticker(symbol)
             except Exception as exc:
                 logger.debug(
-                    "[fills] fee conversion ticker unavailable | exchange=%s user=%s pair=%s/%s symbol=%s error=%s",
+                    "[fills] fee conversion ticker unavailable | exchange=%s user=%s pair=%s/%s symbol=%s error_type=%s",
                     self.exchange,
                     self.user,
                     fee_currency,
                     quote_currency,
                     symbol,
-                    exc,
+                    bounded_exception_type(exc),
                 )
                 continue
             if not isinstance(ticker, dict):
@@ -4433,7 +4461,9 @@ class FillEventsManager:
                 parsed_events.append((raw, event))
             if malformed_events:
                 preview = ", ".join(
-                    f"id={raw.get('id')!r} error={exc}" for raw, exc in malformed_events[:3]
+                    "id="
+                    f"{raw.get('id')!r} error_type={bounded_exception_type(exc)}"
+                    for raw, exc in malformed_events[:3]
                 )
                 extra = "" if len(malformed_events) <= 3 else f", +{len(malformed_events) - 3} more"
                 raise ValueError(
@@ -5293,7 +5323,10 @@ class BybitFetcher(BaseFetcher):
             try:
                 response = await self.api.private_get_v5_position_closed_pnl(params)
             except Exception as exc:
-                logger.warning("BybitFetcher._fetch_positions_history: API error: %s", exc)
+                logger.warning(
+                    "BybitFetcher._fetch_positions_history: API error_type=%s",
+                    bounded_exception_type(exc),
+                )
                 break
 
             batch = response.get("result", {}).get("list", [])
@@ -5334,7 +5367,10 @@ class BybitFetcher(BaseFetcher):
                 try:
                     response = await self.api.private_get_v5_position_closed_pnl(params)
                 except Exception as exc:
-                    logger.warning("BybitFetcher._fetch_positions_history: API error: %s", exc)
+                    logger.warning(
+                        "BybitFetcher._fetch_positions_history: API error_type=%s",
+                        bounded_exception_type(exc),
+                    )
                     break
 
                 batch = response.get("result", {}).get("list", [])
@@ -5624,10 +5660,10 @@ class HyperliquidFetcher(BaseFetcher):
                     logger.warning("%s", msg)
                     raise RateLimitExceeded(msg) from exc
                 logger.debug(
-                    "HyperliquidFetcher.fetch: rate limit exceeded (retry %d/%d), sleeping (%s)",
+                    "HyperliquidFetcher.fetch: rate limit exceeded (retry %d/%d), sleeping error_type=%s",
                     rate_limit_retries,
                     max_rate_limit_retries,
-                    exc,
+                    bounded_exception_type(exc),
                 )
                 await asyncio.sleep(min(30.0, 2.0 ** rate_limit_retries))
                 # Reset prev_params so the retry is not flagged as repeated
@@ -5908,7 +5944,7 @@ class WeexFetcher(BaseFetcher):
                     logger.debug(
                         "WeexFetcher: fetch_order failed order=%s error_type=%s",
                         order_id,
-                        type(exc).__name__,
+                        bounded_exception_type(exc),
                     )
                     return key, ""
                 info = order.get("info") if isinstance(order, dict) else {}
@@ -6059,18 +6095,22 @@ class GateioFetcher(BaseFetcher):
                 consecutive_rate_limits += 1
                 sleep_time = min(2**consecutive_rate_limits, 30)
                 logger.debug(
-                    "GateioFetcher._fetch_trades: rate-limited (%s); sleeping %.1fs", exc, sleep_time
+                    "GateioFetcher._fetch_trades: rate-limited error_type=%s; sleeping %.1fs",
+                    bounded_exception_type(exc),
+                    sleep_time,
                 )
                 await asyncio.sleep(sleep_time)
                 continue
             except Exception as exc:
                 # Check if it's a rate limit error in disguise
-                if "TOO_MANY_REQUESTS" in str(exc):
+                if exception_text_contains(
+                    exc, ("TOO_MANY_REQUESTS",), case_sensitive=True
+                ):
                     consecutive_rate_limits += 1
                     sleep_time = min(2**consecutive_rate_limits, 30)
                     logger.debug(
-                        "GateioFetcher._fetch_trades: rate-limited (%s); sleeping %.1fs",
-                        exc,
+                        "GateioFetcher._fetch_trades: rate-limited error_type=%s; sleeping %.1fs",
+                        bounded_exception_type(exc),
                         sleep_time,
                     )
                     await asyncio.sleep(sleep_time)
@@ -6165,7 +6205,10 @@ class GateioFetcher(BaseFetcher):
             try:
                 batch = await self.api.fetch_closed_orders(params=params)
             except RateLimitExceeded as exc:
-                logger.debug("GateioFetcher._fetch_orders_for_pnl: rate-limited (%s); sleeping", exc)
+                logger.debug(
+                    "GateioFetcher._fetch_orders_for_pnl: rate-limited error_type=%s; sleeping",
+                    bounded_exception_type(exc),
+                )
                 await asyncio.sleep(1.0)
                 continue
 
@@ -6923,9 +6966,9 @@ class KucoinFetcher(BaseFetcher):
             detail = await self.api.fetch_order(order_id, symbol)
         except Exception as exc:  # pragma: no cover - live API dependent
             logger.debug(
-                "KucoinFetcher._enrich_with_order_details: fetch_order failed for %s (%s)",
+                "KucoinFetcher._enrich_with_order_details: fetch_order failed for %s error_type=%s",
                 order_id,
-                exc,
+                bounded_exception_type(exc),
             )
             return None
         info = detail.get("info") if isinstance(detail, dict) else detail
@@ -7108,7 +7151,10 @@ class OkxFetcher(BaseFetcher):
                 else:
                     response = await self.api.private_get_trade_fills_history(params)
             except RateLimitExceeded as exc:
-                logger.debug("OkxFetcher: rate limit hit, sleeping (%s)", exc)
+                logger.debug(
+                    "OkxFetcher: rate limit hit, sleeping error_type=%s",
+                    bounded_exception_type(exc),
+                )
                 await asyncio.sleep(2.0)
                 continue
 

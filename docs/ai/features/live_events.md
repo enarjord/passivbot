@@ -151,6 +151,27 @@ count. An all-pending batch must not present its known PnL as zero. The legacy d
 fallback only when the structured live-event console is disabled or its pipeline is absent. Runtime
 sink degradation remains isolated by the event pipeline and must not activate dual writing.
 
+Fill refresh failures retain code-owned source, refresh mode, coverage, retry, timing, and count
+context plus a bounded exception type. The structured `fills.refresh_summary`, exchange-specific
+fetcher and manager request-timing lines, staged authoritative remote-call failure, blocking and
+routine-prefetch fallbacks, startup initialization boundary, fill-coverage retry, and HSL flatten
+confirmation must not retain exception text, request URLs, response bodies, credentials, or
+exception-value tracebacks. Metadata-capture and HSL progress-emitter failures at the same caller
+boundary follow the same classification-only rule. Redaction is diagnostic-only: exception
+propagation, retry and coverage behavior, fill accounting, planning, risk, and trading behavior
+remain unchanged.
+
+Cache-read/doctor failures and the outer process failure projection follow the same rule so a
+preserved exception cause cannot be exposed by an unsanitized startup traceback. The blocking
+failure line may also retain validated numeric status/code and a code-owned endpoint label.
+Time-sync and exchange recovery classification may inspect complete exception text in bounded
+temporary chunks and traverse both cause/context edges within a fixed node budget, but that
+inspection must not retain the text, broaden caller-specific marker case rules, or replace the
+original failure. Control-flow-only class-name inspection follows the same non-retaining rule so
+legacy recovery heuristics do not require projecting untrusted class names.
+Monitor error events use the same hostile-metadata-safe exception-type boundary; diagnostic
+publication must not replace the original refresh exception.
+
 ## Open-Orders Snapshot Deltas
 
 `open_orders.snapshot_delta` replaces the aggregate INFO lines for open-order snapshot additions or

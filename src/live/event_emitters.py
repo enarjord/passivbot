@@ -761,9 +761,7 @@ def _emit_authoritative_remote_call_event_unchecked(
     if elapsed_ms is not None:
         data["elapsed_ms"] = int(elapsed_ms)
     if error is not None:
-        data["error_type"] = type(error).__name__
-        data["error"] = _sanitize_remote_text(error, max_len=500)
-        data["error_repr"] = _sanitize_remote_text(repr(error), max_len=500)
+        data["error_type"] = _bounded_exception_type(error)
     elif stage != "start":
         data.update(_authoritative_result_summary(surface, result))
     if live_event_debug_profile_enabled(bot, "remote_calls"):
@@ -866,7 +864,7 @@ def _emit_exchange_time_sync_event_unchecked(
                 source, _EXCHANGE_TIME_SYNC_SOURCE_RE
             ),
             "error_type": _bounded_exchange_time_sync_field(
-                type(error).__name__, _EXCHANGE_TIME_SYNC_ERROR_TYPE_RE
+                _bounded_exception_type(error), _EXCHANGE_TIME_SYNC_ERROR_TYPE_RE
             ),
             "hook_available": bool(hook_available),
             "recovered": recovered,
@@ -5220,8 +5218,7 @@ def _emit_fills_refresh_summary_event_unchecked(
     if quarantine_reason is not None:
         data["quarantine_reason"] = str(quarantine_reason)
     if error is not None:
-        data["error_type"] = type(error).__name__
-        data["error"] = _sanitize_remote_text(error, max_len=500)
+        data["error_type"] = _bounded_exception_type(error)
     if live_event_debug_profile_enabled(bot, "fills"):
         debug = _best_effort_fill_refresh_debug_payload(
             coverage_before=coverage_before,

@@ -112,10 +112,8 @@ def test_event_emitter_failure_logs_bounded_exception_type_without_secret(caplog
     with caplog.at_level(logging.DEBUG):
         emitted = live_event_emitters._safe_emit(FakeBot(), EventTypes.HEALTH_SUMMARY)
 
-    bounded_type = error_type.__name__[:80]
     assert emitted is None
-    assert len(bounded_type) == 80
-    assert f"error_type={bounded_type}" in caplog.text
+    assert "error_type=RuntimeError" in caplog.text
     assert error_type.__name__ not in caplog.text
     assert secret not in caplog.text
     assert url not in caplog.text
@@ -135,7 +133,7 @@ def test_event_emitter_failure_logs_bounded_exception_type_without_secret(caplog
             is None
         )
 
-    assert "error_type=Error" in caplog.text
+    assert "error_type=RuntimeError" in caplog.text
     assert "class-name-secret" not in caplog.text
 
     sensitive_identifier = "ApiKey_prod_super_secret_ABC123"
@@ -154,7 +152,7 @@ def test_event_emitter_failure_logs_bounded_exception_type_without_secret(caplog
             is None
         )
 
-    assert "error_type=Error" in caplog.text
+    assert "error_type=RuntimeError" in caplog.text
     assert sensitive_identifier not in caplog.text
 
     camelcase_sensitive_identifier = "ApiKeyProdSecretABC123"
@@ -175,7 +173,7 @@ def test_event_emitter_failure_logs_bounded_exception_type_without_secret(caplog
             is None
         )
 
-    assert "error_type=Error" in caplog.text
+    assert "error_type=RuntimeError" in caplog.text
     assert camelcase_sensitive_identifier not in caplog.text
 
     class HostileName(str):
@@ -204,7 +202,7 @@ def test_event_emitter_failure_logs_bounded_exception_type_without_secret(caplog
             is None
         )
 
-    assert "error_type=Error" in caplog.text
+    assert "error_type=RuntimeError" in caplog.text
     assert "hostile-slice-secret" not in caplog.text
 
     invalid_suffix = "V" * 80 + "\napi_key=tail-class-name-secret"
@@ -223,7 +221,7 @@ def test_event_emitter_failure_logs_bounded_exception_type_without_secret(caplog
             is None
         )
 
-    assert "error_type=Error" in caplog.text
+    assert "error_type=RuntimeError" in caplog.text
     assert "tail-class-name-secret" not in caplog.text
 
     class HostileExceptionMeta(type):
@@ -3905,7 +3903,7 @@ async def test_remote_call_debug_profile_adds_authoritative_payload_shape():
 
 
 @pytest.mark.asyncio
-async def test_authoritative_timed_fetch_failure_emits_sanitized_remote_call_event():
+async def test_authoritative_timed_fetch_failure_emits_classification_only():
     import passivbot as pb_mod
 
     sink = ListEventSink()
@@ -3928,26 +3926,27 @@ async def test_authoritative_timed_fetch_failure_emits_sanitized_remote_call_eve
                 monitor_sinks=[],
             )
 
-    async def fetch_positions():
+    async def fetch_fills():
         raise RuntimeError("apiKey=SECRET token SECRET Bearer abc123")
 
     bot = FakeBot()
     timings_ms = {}
     with pytest.raises(RuntimeError, match="apiKey=SECRET"):
-        await bot._timed_authoritative_fetch("positions", fetch_positions(), timings_ms)
+        await bot._timed_authoritative_fetch("fills", fetch_fills(), timings_ms)
 
-    assert "positions" in timings_ms
+    assert "fills" in timings_ms
     assert bot._live_event_pipeline.flush(timeout=2.0) is True
     assert bot._live_event_pipeline.close(timeout=2.0) is True
     started, failed = sink.events
     assert failed.event_type == EventTypes.REMOTE_CALL_FAILED
     assert failed.remote_call_id == started.remote_call_id
     assert failed.remote_call_group_id == "auth_19:authoritative"
-    assert failed.data["surface"] == "positions"
+    assert failed.data["surface"] == "fills"
     assert failed.data["error_type"] == "RuntimeError"
-    assert "SECRET" not in failed.data["error"]
-    assert "abc123" not in failed.data["error"]
-    assert "SECRET" not in failed.data["error_repr"]
+    assert "error" not in failed.data
+    assert "error_repr" not in failed.data
+    assert "SECRET" not in str(failed.data)
+    assert "abc123" not in str(failed.data)
 
 
 @pytest.mark.asyncio
@@ -4907,7 +4906,7 @@ def test_fill_ingested_debug_profile_adds_bounded_shape_without_source_id_leak()
     assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 
-def test_emit_fills_refresh_summary_event_sanitizes_error_and_stays_off_console():
+def test_emit_fills_refresh_summary_event_omits_exception_text_and_stays_off_console():
     import passivbot as pb_mod
 
     sink = ListEventSink()
@@ -4967,8 +4966,8 @@ def test_emit_fills_refresh_summary_event_sanitizes_error_and_stays_off_console(
     assert event.data["coverage_before"]["gap_reason"] == "fetch_failed"
     assert event.data["next_retry_in_ms"] == 45_000
     assert event.data["error_type"] == "RuntimeError"
-    assert "secret-token" not in event.data["error"]
-    assert "[redacted]" in event.data["error"]
+    assert "error" not in event.data
+    assert "secret-token" not in str(event.data)
     assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 

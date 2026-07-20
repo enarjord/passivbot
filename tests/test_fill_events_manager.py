@@ -7,6 +7,7 @@ import types
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+from unittest.mock import AsyncMock
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -417,6 +418,37 @@ async def test_binance_fetch_symbol_trades_uses_now_bound_and_one_percent_margin
 
 
 @pytest.mark.asyncio
+async def test_binance_trade_fetch_redacts_secret_error_but_preserves_cause(caplog):
+    secret = "authorization=binance-fill-fetch-secret"
+
+    class _FailingAPI:
+        async def fetch_my_trades(self, *_args, **_kwargs):
+            raise RuntimeError(secret)
+
+    fetcher = BinanceFetcher(
+        api=_FailingAPI(),
+        symbol_resolver=lambda symbol: symbol or "",
+        now_func=lambda: 1_700_000_000_000,
+    )
+
+    with caplog.at_level(logging.ERROR, logger=fem.logger.name):
+        with pytest.raises(RuntimeError) as captured:
+            await fetcher._fetch_symbol_trades(
+                "BTC/USDT:USDT",
+                since_ms=1_699_999_000_000,
+                until_ms=1_700_000_000_000,
+            )
+
+    assert secret not in str(captured.value)
+    assert "BTC/USDT:USDT" in str(captured.value)
+    assert "error_type=RuntimeError" in str(captured.value)
+    assert isinstance(captured.value.__cause__, RuntimeError)
+    assert str(captured.value.__cause__) == secret
+    assert "error_type=RuntimeError" in caplog.text
+    assert secret not in caplog.text
+
+
+@pytest.mark.asyncio
 async def test_binance_fetcher_enriches_missing_client_ids(monkeypatch):
     income_events = [
         {
@@ -652,12 +684,61 @@ async def test_binance_fetcher_trade_history_errors_are_not_income_only_events(m
         types.MethodType(fake_fetch_income, fetcher),
     )
 
-    with pytest.raises(RuntimeError, match="simulated trade-history outage"):
+    with pytest.raises(RuntimeError) as captured:
         await fetcher.fetch(
             since_ms=ts - 1,
             until_ms=ts + 1,
             detail_cache={},
         )
+
+    assert "simulated trade-history outage" not in str(captured.value)
+    assert isinstance(captured.value.__cause__, RuntimeError)
+    assert str(captured.value.__cause__) == "simulated trade-history outage"
+
+
+@pytest.mark.asyncio
+async def test_binance_fetcher_hostile_error_text_preserves_original_failure():
+    secret = "api_key=binance-hostile-string"
+
+    class HostileError(RuntimeError):
+        def __str__(self):
+            raise KeyboardInterrupt(secret)
+
+    original = HostileError()
+
+    class FailingTradeAPI:
+        async def fetch_my_trades(self, *_args, **_kwargs):
+            raise original
+
+    fetcher = BinanceFetcher(
+        api=FailingTradeAPI(),
+        symbol_resolver=lambda sym: sym or "",
+        positions_provider=lambda: [],
+        open_orders_provider=lambda: [],
+    )
+
+    with pytest.raises(RuntimeError) as captured:
+        await fetcher._fetch_symbol_trades("BTC/USDT:USDT", None, None)
+
+    assert captured.value.__cause__ is original
+    assert secret not in str(captured.value)
+
+
+@pytest.mark.asyncio
+async def test_binance_fetcher_classifies_late_unsupported_symbol_marker():
+    class UnsupportedTradeAPI:
+        async def fetch_my_trades(self, *_args, **_kwargs):
+            raise RuntimeError(("x" * 5000) + " does not have market symbol")
+
+    fetcher = BinanceFetcher(
+        api=UnsupportedTradeAPI(),
+        symbol_resolver=lambda sym: sym or "",
+        positions_provider=lambda: [],
+        open_orders_provider=lambda: [],
+    )
+
+    assert await fetcher._fetch_symbol_trades("BTC/USDT:USDT", None, None) == []
+    assert fetcher._unsupported_symbols == {"BTC/USDT:USDT"}
 
 
 @pytest.mark.asyncio
@@ -1680,6 +1761,34 @@ def test_fill_event_cache_rejects_malformed_current_contract_record(tmp_path: Pa
         FillEventCache(cache_dir).load()
 
 
+def test_fill_event_cache_malformed_record_omits_exception_value(
+    tmp_path: Path, monkeypatch
+):
+    cache_dir = tmp_path / "fills"
+    cache_dir.mkdir()
+    (cache_dir / "metadata.json").write_text(
+        json.dumps({"pnl_contract": fem.PNL_CONTRACT_CURRENT}),
+        encoding="utf-8",
+    )
+    (cache_dir / "2026-02-02.json").write_text(
+        json.dumps([{"pnl_contract": fem.PNL_CONTRACT_CURRENT}]),
+        encoding="utf-8",
+    )
+    secret = "signature=malformed-record-secret"
+
+    def fail_from_dict(_raw):
+        raise RuntimeError(secret)
+
+    monkeypatch.setattr(FillEvent, "from_dict", fail_from_dict)
+
+    with pytest.raises(FillEventCacheContractError) as exc_info:
+        FillEventCache(cache_dir).load()
+
+    assert "malformed" in str(exc_info.value)
+    assert "error_type=RuntimeError" in str(exc_info.value)
+    assert secret not in str(exc_info.value)
+
+
 def test_fill_event_cache_rejects_unreadable_current_contract_day(tmp_path: Path):
     cache_dir = tmp_path / "fills"
     cache_dir.mkdir()
@@ -1712,6 +1821,62 @@ def test_fill_event_cache_rejects_unreadable_current_contract_day(tmp_path: Path
 
     with pytest.raises(FillEventCacheContractError, match="unreadable"):
         FillEventCache(cache_dir).load()
+
+
+def test_fill_event_cache_read_failure_omits_exception_value(
+    tmp_path: Path, monkeypatch, caplog
+):
+    cache_dir = tmp_path / "fills"
+    cache_dir.mkdir()
+    (cache_dir / "metadata.json").write_text(
+        json.dumps({"pnl_contract": fem.PNL_CONTRACT_CURRENT}),
+        encoding="utf-8",
+    )
+    (cache_dir / "2026-02-02.json").write_text("[]", encoding="utf-8")
+    secret = "api_key=cache-read-secret"
+
+    class _CacheReadError(RuntimeError):
+        pass
+
+    original_load = fem.json.load
+
+    def fail_day_file(fh):
+        if Path(fh.name).name == "metadata.json":
+            return original_load(fh)
+        raise _CacheReadError(secret)
+
+    monkeypatch.setattr(fem.json, "load", fail_day_file)
+
+    with caplog.at_level(logging.WARNING, logger=fem.logger.name):
+        with pytest.raises(FillEventCacheContractError) as exc_info:
+            FillEventCache(cache_dir).load()
+
+    assert "error_type=RuntimeError" in str(exc_info.value)
+    assert isinstance(exc_info.value.__cause__, _CacheReadError)
+    assert "error_type=RuntimeError" in caplog.text
+    assert secret not in str(exc_info.value)
+    assert secret not in caplog.text
+
+
+def test_fill_event_cache_metadata_failure_omits_exception_value(
+    tmp_path: Path, monkeypatch, caplog
+):
+    cache_dir = tmp_path / "fills"
+    cache_dir.mkdir()
+    (cache_dir / "metadata.json").write_text("{}", encoding="utf-8")
+    secret = "token=cache-metadata-secret"
+
+    def fail_metadata(_fh):
+        raise RuntimeError(secret)
+
+    monkeypatch.setattr(fem.json, "load", fail_metadata)
+
+    with caplog.at_level(logging.WARNING, logger=fem.logger.name):
+        metadata = FillEventCache(cache_dir).load_metadata()
+
+    assert metadata["history_scope"] == "unknown"
+    assert "error_type=RuntimeError" in caplog.text
+    assert secret not in caplog.text
 
 
 @pytest.mark.asyncio
@@ -1790,6 +1955,27 @@ async def test_doctor_reports_unsupported_legacy_cache_without_raising(tmp_path:
     assert report["anomaly_examples"] == ["legacy-bitget-entry"]
     assert report["anomaly_events_after"] == 0
     assert FillEventCache(cache_dir).load() == []
+
+
+def test_doctor_cache_read_failure_omits_exception_value(
+    tmp_path: Path, monkeypatch, caplog
+):
+    cache_dir = tmp_path / "doctor_read_failure"
+    cache_dir.mkdir()
+    (cache_dir / "2023-11-14.json").write_text("[]", encoding="utf-8")
+    secret = "api_key=doctor-secret"
+
+    def fail_load(_fh):
+        raise RuntimeError(secret)
+
+    monkeypatch.setattr(fem.json, "load", fail_load)
+
+    with caplog.at_level(logging.WARNING, logger=fem.logger.name):
+        result = FillEventCache(cache_dir).quarantine_legacy_record_files()
+
+    assert result == {"backup_path": None, "moved_files": []}
+    assert "error_type=RuntimeError" in caplog.text
+    assert secret not in caplog.text
 
 
 @pytest.mark.asyncio
@@ -4691,12 +4877,16 @@ async def test_manager_refresh_logs_slow_successful_fetcher_request_timing_at_de
 
 
 @pytest.mark.asyncio
-async def test_manager_refresh_logs_fetcher_error_detail(tmp_path: Path, caplog):
+async def test_manager_refresh_logs_bounded_fetcher_error_type_without_secret(
+    tmp_path: Path, caplog
+):
     cache_dir = tmp_path / "fills_request_error_timing"
+    secret = "api_key=fill-fetch-secret"
+    secret_error_type = type("ApiKeyFetchSecretError", (RuntimeError,), {})
 
     class _Api:
         async def fetch_a(self):
-            raise RuntimeError("remote timeout detail")
+            raise secret_error_type(secret)
 
     class _ApiFetcher(BaseFetcher):
         def __init__(self):
@@ -4714,7 +4904,7 @@ async def test_manager_refresh_logs_fetcher_error_detail(tmp_path: Path, caplog)
     )
 
     with caplog.at_level(logging.INFO, logger=fem.logger.name):
-        with pytest.raises(RuntimeError, match="remote timeout detail"):
+        with pytest.raises(RuntimeError, match=secret):
             await manager.refresh(start_ms=123, end_ms=456)
 
     timing_records = [
@@ -4726,7 +4916,37 @@ async def test_manager_refresh_logs_fetcher_error_detail(tmp_path: Path, caplog)
     assert timing_records[0].levelno == logging.INFO
     assert "fetch_a:n=1" in timing_records[0].message
     assert "err_type=RuntimeError" in timing_records[0].message
-    assert "err_msg=remote timeout detail" in timing_records[0].message
+    assert "err_msg=" not in timing_records[0].message
+    assert secret_error_type.__name__ not in timing_records[0].message
+    assert secret not in caplog.text
+
+
+def test_fill_fetch_request_timing_error_type_rejects_sensitive_and_hostile_metadata():
+    class _HostileExceptionMeta(type):
+        @property
+        def __name__(cls):
+            raise RuntimeError("api_key=super-secret-value")
+
+    class _HostileError(RuntimeError, metaclass=_HostileExceptionMeta):
+        pass
+
+    long_safe_name = "SafeError" + "x" * 100
+    stats = fem.FillFetchRequestStats()
+    stats.record("safe", 0, ok=False)
+    stats.record_error_detail("safe", type(long_safe_name, (RuntimeError,), {})())
+    stats.record("sensitive", 0, ok=False)
+    stats.record_error_detail("sensitive", type("ApiKeyProdSecret", (RuntimeError,), {})())
+    stats.record("hostile", 0, ok=False)
+    stats.record_error_detail("hostile", _HostileError("api_key=super-secret-value"))
+
+    rendered = stats.format_endpoints()
+
+    assert "err_type=RuntimeError" in rendered
+    assert long_safe_name not in rendered
+    assert rendered.count("err_type=RuntimeError") == 2
+    assert rendered.count("err_type=Error") == 1
+    assert "api_key=super-secret-value" not in rendered
+    assert "ApiKeyProdSecret" not in rendered
 
 
 def test_fill_event_cache_disk_full_raises_clear_error(tmp_path: Path, monkeypatch, sample_events):
@@ -6530,6 +6750,77 @@ class _FakeGateioAPI:
         if not self._orders_batches:
             return []
         return self._orders_batches.pop(0)
+
+
+@pytest.mark.asyncio
+async def test_gateio_fetcher_hostile_error_text_preserves_original_failure():
+    secret = "api_key=gateio-hostile-string"
+
+    class HostileError(RuntimeError):
+        def __str__(self):
+            raise KeyboardInterrupt(secret)
+
+    original = HostileError()
+
+    class FailingGateioAPI:
+        async def private_futures_get_settle_my_trades_timerange(self, _params):
+            raise original
+
+    fetcher = GateioFetcher(FailingGateioAPI(), trade_limit=100)
+
+    with pytest.raises(HostileError) as captured:
+        await fetcher._fetch_trades(1_700_000_000_000, 1_700_000_060_000)
+
+    assert captured.value is original
+
+
+@pytest.mark.asyncio
+async def test_gateio_fetcher_classifies_late_rate_limit_marker(monkeypatch):
+    class LateRateLimitAPI:
+        def __init__(self):
+            self.calls = 0
+
+        async def private_futures_get_settle_my_trades_timerange(self, _params):
+            self.calls += 1
+            if self.calls == 1:
+                raise RuntimeError(("x" * 5000) + " TOO_MANY_REQUESTS")
+            return []
+
+    api = LateRateLimitAPI()
+    sleep = AsyncMock()
+    monkeypatch.setattr(fem.asyncio, "sleep", sleep)
+    fetcher = GateioFetcher(api, trade_limit=100)
+
+    assert await fetcher._fetch_trades(1_700_000_000_000, 1_700_000_060_000) == []
+    assert api.calls == 2
+    sleep.assert_awaited_once_with(2)
+
+
+@pytest.mark.asyncio
+async def test_gateio_fetcher_does_not_broaden_rate_limit_marker_case(monkeypatch):
+    class LowercaseMarkerAPI:
+        def __init__(self):
+            self.calls = 0
+
+        async def private_futures_get_settle_my_trades_timerange(self, _params):
+            self.calls += 1
+            raise RuntimeError("too_many_requests")
+
+    api = LowercaseMarkerAPI()
+    sleep = AsyncMock()
+    monkeypatch.setattr(fem.asyncio, "sleep", sleep)
+    fetcher = GateioFetcher(api, trade_limit=100)
+
+    with pytest.raises(RuntimeError, match="too_many_requests"):
+        await fetcher._fetch_trades(1_700_000_000_000, 1_700_000_060_000)
+
+    assert api.calls == 1
+    sleep.assert_not_awaited()
+
+
+def test_disk_full_text_fallback_preserves_marker_case():
+    assert fem._is_disk_full_error(RuntimeError("No space left on device"))
+    assert not fem._is_disk_full_error(RuntimeError("no space left on device"))
 
 
 def _make_gateio_trade(

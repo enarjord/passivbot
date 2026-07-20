@@ -161,8 +161,38 @@ def test_monitor_publisher_record_error_bounds_pathological_exception_type(tmp_p
 
     event = publisher.record_error("error.bot", pathological_error("safe"))
 
-    assert event["payload"]["error_type"] == "unknown"
-    assert len(event["payload"]["error_type"]) <= 80
+    assert event["payload"]["error_type"] == "Exception"
+
+
+def test_monitor_publisher_record_error_contains_hostile_type_metadata(tmp_path):
+    publisher = _make_publisher(tmp_path)
+    secret = "api_key=monitor-type-secret"
+
+    class _HostileExceptionMeta(type):
+        @property
+        def __name__(cls):
+            raise RuntimeError(secret)
+
+    class _HostileError(RuntimeError, metaclass=_HostileExceptionMeta):
+        pass
+
+    original = _HostileError(secret)
+    try:
+        try:
+            raise original
+        except _HostileError as error:
+            event = publisher.record_error("error.exchange", error)
+            raise
+    except _HostileError as reraised:
+        assert reraised is original
+
+    assert event["payload"]["error_type"] == "Error"
+    assert secret not in publisher.current_events_path.read_text()
+
+    sensitive_type = type("ApiKeyProdSecret", (RuntimeError,), {})
+    sensitive_event = publisher.record_error("error.exchange", sensitive_type(secret))
+    assert sensitive_event["payload"]["error_type"] == "RuntimeError"
+    assert secret not in publisher.current_events_path.read_text()
 
 
 def test_monitor_publisher_records_fills_ticks_and_completed_candles(tmp_path):
