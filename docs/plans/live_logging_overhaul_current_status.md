@@ -22,7 +22,8 @@ Estimated completion:
 
 ## Active Review Slice
 
-- PR #1341; branch `codex/open-orders-snapshot-delta-event`, based on canonical
+- PR #1341, `Structure bulk open-order snapshot deltas`; branch
+  `codex/open-orders-snapshot-delta-event`, based on canonical
   `bc31fafdbdf045f9c003e49fa6877b721c834600`.
 - Scope: replace the two legacy aggregate INFO lines emitted when an
   authoritative open-order snapshot adds or removes more than 20 orders with
@@ -1733,11 +1734,11 @@ PR #1288's bounded target-identity stability, and PR #1289's plan binding are
 merged, deployed, and naturally validated without process control. PR #1290's
 pane-parent relaunch classification and the restart preparation/orchestration
 slices through PR #1309 are also merged and deployed. Later logging slices
-through PR #1339, including adjacent PR #1329, are deployed at canonical
-`3311085dce8b7540f5a26e809229180d5f784c25`; their current evidence is recorded
-above. The active incident-summary slice closes the observed log scan-cost
-projection gap without changing archive content, reads, matching, or verdict
-behavior.
+through PR #1340, including adjacent PR #1329, are deployed at canonical
+`bc31fafdbdf045f9c003e49fa6877b721c834600`; their current evidence is recorded
+above. Active PR #1341 migrates only the remaining bulk open-order snapshot
+count lines into the bounded structured event contract while preserving the
+existing threshold, legacy fallback, reconciliation, and trading behavior.
 
 Do not create progress-only PRs or resume unrelated logging work from stale
 worktrees.
