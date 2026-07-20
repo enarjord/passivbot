@@ -8669,6 +8669,12 @@ def _scan_events(
     event_files_before_limit = 0
     event_files_skipped_by_limit = 0
     event_file_limit_groups = 0
+    scan_physical_bytes_read = 0
+    scan_physical_bytes_known = True
+    scan_decoded_bytes_read = 0
+    scan_decoded_bytes_known = True
+    scan_files_read = 0
+    scan_read_methods: Counter[str] = Counter()
     startup_timing_records: dict[str, list[dict[str, Any]]] = defaultdict(list)
     startup_latest_started: dict[str, dict[str, Any]] = {}
     remote_call_failure_groups: dict[tuple[Any, ...], dict[str, Any]] = {}
@@ -8715,6 +8721,7 @@ def _scan_events(
             _limit_recent_event_files_per_bot(files, max_event_file_count_per_bot)
         )
 
+    scan_started_at = time.perf_counter()
     for path in files:
         try:
             with event_file_rows(path, max_tail_lines=max_event_tail_lines) as (
@@ -9138,12 +9145,25 @@ def _scan_events(
                     )
                     if startup_timing is not None:
                         startup_timing_records[bot_key].append(startup_timing)
+            scan_files_read += 1
+            if row_window.physical_bytes_read is None:
+                scan_physical_bytes_known = False
+            else:
+                scan_physical_bytes_read += int(row_window.physical_bytes_read)
+            if row_window.decoded_bytes_read is None:
+                scan_decoded_bytes_known = False
+            else:
+                scan_decoded_bytes_read += int(row_window.decoded_bytes_read)
+            scan_read_methods[str(row_window.method)] += 1
         except OSError as exc:
+            scan_physical_bytes_known = False
+            scan_decoded_bytes_known = False
             issues.append(
                 _monitor_issue(path, None, "error", "read_failed", str(exc))
             )
             invalid_rows += 1
 
+    scan_elapsed_ms = round((time.perf_counter() - scan_started_at) * 1000, 3)
     recovered_problem_events = _problem_event_recovery_report(
         problem_records, time_sync_recoveries
     )
@@ -9189,6 +9209,20 @@ def _scan_events(
             "root": str(Path(root).expanduser()),
             "include_rotated": bool(include_rotated),
             "files_scanned": len(files),
+            "scan_cost": {
+                "elapsed_ms": scan_elapsed_ms,
+                "physical_bytes_read": (
+                    scan_physical_bytes_read if scan_physical_bytes_known else None
+                ),
+                "physical_bytes_known": scan_physical_bytes_known,
+                "decoded_bytes_read": (
+                    scan_decoded_bytes_read if scan_decoded_bytes_known else None
+                ),
+                "decoded_bytes_known": scan_decoded_bytes_known,
+                "files_read": scan_files_read,
+                "records_read": records_total,
+                "read_methods": dict(sorted(scan_read_methods.items())),
+            },
             "records_total": records_total,
             "live_events": live_events,
             "legacy_events": legacy_events,
@@ -9366,15 +9400,6 @@ def _recent_log_files(root: str | Path, *, max_files: int) -> list[Path]:
     ]
 
 
-def _tail_lines(path: Path, *, max_lines: int) -> list[tuple[int, str]]:
-    try:
-        with _open_text(path) as stream:
-            rows = deque(enumerate(stream, start=1), maxlen=max(0, int(max_lines)))
-    except OSError:
-        return []
-    return [(line_no, line.rstrip("\n")) for line_no, line in rows]
-
-
 def _parse_log_line_ts_ms(line: str) -> int | None:
     match = LOG_LINE_TS_PATTERN.match(str(line))
     if match is None:
@@ -9478,6 +9503,16 @@ def _scan_logs(
             "dropped_unparsed_matches": [],
             "dropped_unparsed_attention_matches": 0,
             "dropped_unparsed_hard_matches": 0,
+            "scan_cost": {
+                "elapsed_ms": 0.0,
+                "physical_bytes_read": 0,
+                "physical_bytes_known": True,
+                "decoded_bytes_read": 0,
+                "decoded_bytes_known": True,
+                "files_read": 0,
+                "records_read": 0,
+                "read_methods": {},
+            },
         }
     files = _recent_log_files(root, max_files=max_files)
     matches: list[dict[str, Any]] = []
@@ -9495,11 +9530,44 @@ def _scan_logs(
     dropped_unparsed_attention_matches = 0
     dropped_unparsed_hard_matches = 0
     dropped_unparsed_matches: list[dict[str, Any]] = []
+    scan_physical_bytes_read = 0
+    scan_physical_bytes_known = True
+    scan_decoded_bytes_read = 0
+    scan_decoded_bytes_known = True
+    scan_files_read = 0
+    scan_records_read = 0
+    scan_read_methods: Counter[str] = Counter()
+    scan_started_at = time.perf_counter()
     for path in files:
+        try:
+            with event_file_rows(
+                path,
+                max_tail_lines=0,
+                text_opener=_open_text,
+            ) as (rows, row_window):
+                selected_rows = deque(
+                    ((line_no, line.rstrip("\n")) for line_no, line in rows),
+                    maxlen=max(0, int(tail_lines)),
+                )
+            scan_files_read += 1
+            scan_records_read += len(selected_rows)
+            if row_window.physical_bytes_read is None:
+                scan_physical_bytes_known = False
+            else:
+                scan_physical_bytes_read += int(row_window.physical_bytes_read)
+            if row_window.decoded_bytes_read is None:
+                scan_decoded_bytes_known = False
+            else:
+                scan_decoded_bytes_read += int(row_window.decoded_bytes_read)
+            scan_read_methods[str(row_window.method)] += 1
+        except OSError:
+            scan_physical_bytes_known = False
+            scan_decoded_bytes_known = False
+            selected_rows = []
         log_context_ts_ms: int | None = None
         log_context_line_no: int | None = None
         log_context_text: str | None = None
-        for line_no, line in _tail_lines(path, max_lines=tail_lines):
+        for line_no, line in selected_rows:
             line_ts = _parse_log_line_ts_ms(line)
             if line_ts is not None:
                 log_context_ts_ms = line_ts
@@ -9580,6 +9648,7 @@ def _scan_logs(
                             log_context_text, max_len=500
                         )
                 matches.append(match)
+    scan_elapsed_ms = round((time.perf_counter() - scan_started_at) * 1000, 3)
     return {
         "root": str(Path(root).expanduser()),
         "max_files": max(0, int(max_files)),
@@ -9608,6 +9677,20 @@ def _scan_logs(
         "dropped_unparsed_matches": dropped_unparsed_matches,
         "dropped_unparsed_attention_matches": dropped_unparsed_attention_matches,
         "dropped_unparsed_hard_matches": dropped_unparsed_hard_matches,
+        "scan_cost": {
+            "elapsed_ms": scan_elapsed_ms,
+            "physical_bytes_read": (
+                scan_physical_bytes_read if scan_physical_bytes_known else None
+            ),
+            "physical_bytes_known": scan_physical_bytes_known,
+            "decoded_bytes_read": (
+                scan_decoded_bytes_read if scan_decoded_bytes_known else None
+            ),
+            "decoded_bytes_known": scan_decoded_bytes_known,
+            "files_read": scan_files_read,
+            "records_read": scan_records_read,
+            "read_methods": dict(sorted(scan_read_methods.items())),
+        },
     }
 
 
@@ -9720,6 +9803,7 @@ def build_live_smoke_report(
             "root": event_report.get("root"),
             "include_rotated": event_report.get("include_rotated"),
             "files_scanned": event_report.get("files_scanned"),
+            "scan_cost": event_report.get("scan_cost"),
             "records_total": event_report.get("records_total"),
             "live_events": event_report.get("live_events"),
             "legacy_events": event_report.get("legacy_events"),
@@ -10459,6 +10543,7 @@ def summarize_live_smoke_report(
                 "legacy_events",
                 "error_count",
                 "warning_count",
+                "scan_cost",
                 "file_discovery",
             )
             if key in monitor
@@ -10555,6 +10640,7 @@ def summarize_live_smoke_report(
             "dropped_unparsed_hard_matches": int(
                 logs.get("dropped_unparsed_hard_matches") or 0
             ),
+            "scan_cost": logs.get("scan_cost"),
             "matches_truncated": len(matches) > max_groups,
             "matches": matches[:max_groups],
             "dropped_unparsed_matches_truncated": len(
@@ -11632,6 +11718,7 @@ def summarize_live_smoke_report_brief(report: dict[str, Any]) -> dict[str, Any]:
                 "legacy_events",
                 "error_count",
                 "warning_count",
+                "scan_cost",
                 "file_discovery",
             )
             if key in monitor
@@ -11686,6 +11773,7 @@ def summarize_live_smoke_report_brief(report: dict[str, Any]) -> dict[str, Any]:
             "dropped_unparsed_hard_matches": _count_value(
                 logs.get("dropped_unparsed_hard_matches")
             ),
+            "scan_cost": logs.get("scan_cost"),
             "window": _brief_log_window(logs),
         }
         | _brief_log_match_samples(logs)

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import time
 from collections.abc import Iterable as IterableABC
 from collections import Counter, defaultdict
 from dataclasses import asdict, dataclass
@@ -1388,6 +1389,12 @@ def build_event_report(
     event_tail_skipped_bytes = 0
     event_tail_line_numbers_exact = True
     event_tail_methods: Counter[str] = Counter()
+    scan_physical_bytes_read = 0
+    scan_physical_bytes_known = True
+    scan_decoded_bytes_read = 0
+    scan_decoded_bytes_known = True
+    scan_files_read = 0
+    scan_read_methods: Counter[str] = Counter()
     issues: list[EventIssue] = []
     discovery = EventFileDiscovery(files=[])
     try:
@@ -1507,6 +1514,7 @@ def build_event_report(
     )
     has_query_filter = has_non_cycle_filter or window_enabled or trace_without_cycle
 
+    scan_started_at = time.perf_counter()
     for path in files:
         try:
             with event_file_rows(path, max_tail_lines=max_event_tail_lines) as (
@@ -1717,10 +1725,24 @@ def build_event_report(
                                     user=record_user,
                                 )
                             )
+            scan_files_read += 1
+            if row_window.physical_bytes_read is None:
+                scan_physical_bytes_known = False
+            else:
+                scan_physical_bytes_read += int(row_window.physical_bytes_read)
+            if row_window.decoded_bytes_read is None:
+                scan_decoded_bytes_known = False
+            else:
+                scan_decoded_bytes_read += int(row_window.decoded_bytes_read)
+            scan_read_methods[str(row_window.method)] += 1
         except OSError as exc:
+            scan_physical_bytes_known = False
+            scan_decoded_bytes_known = False
             issues.append(
                 EventIssue(str(path), None, "error", "read_failed", str(exc))
             )
+
+    scan_elapsed_ms = round((time.perf_counter() - scan_started_at) * 1000, 3)
 
     if has_query_filter and not include_rotated and discovery.rotated_skipped > 0:
         issues.append(
@@ -1745,6 +1767,20 @@ def build_event_report(
         "include_rotated": bool(include_rotated),
         "files": [str(path) for path in files],
         "files_scanned": len(files),
+        "scan_cost": {
+            "elapsed_ms": scan_elapsed_ms,
+            "physical_bytes_read": (
+                scan_physical_bytes_read if scan_physical_bytes_known else None
+            ),
+            "physical_bytes_known": scan_physical_bytes_known,
+            "decoded_bytes_read": (
+                scan_decoded_bytes_read if scan_decoded_bytes_known else None
+            ),
+            "decoded_bytes_known": scan_decoded_bytes_known,
+            "files_read": scan_files_read,
+            "records_read": records_total,
+            "read_methods": dict(sorted(scan_read_methods.items())),
+        },
         "file_discovery": discovery.to_dict(),
         "records_total": records_total,
         "live_events": live_events,

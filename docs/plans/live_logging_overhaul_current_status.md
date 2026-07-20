@@ -1,6 +1,6 @@
 # Live Logging Overhaul Current Status
 
-Updated: 2026-07-19.
+Updated: 2026-07-20.
 
 This is the compact operational source for the active logging-overhaul loop.
 Read it before the historical progress ledger. Update it whenever the active
@@ -22,28 +22,217 @@ Estimated completion:
 
 ## Active Review Slice
 
-- PR #1331, `Preserve completed candle freshness row counts`; branch:
-  `codex/completed-candle-summary-redaction-fix`, based on canonical
-  `c0386ff5673d93b732786cf12c4cd48f6a381767`.
-- Scope: rename the public completed-candle source-row count so the live-event
-  secret-key sanitizer preserves its numeric value, then consume and project
-  that non-sensitive key in `live-performance-report`.
-- Behavior boundary: observability producer and read-only reporting only. The
-  fix changes no sanitizer exception, candle read, exchange access, planning
-  readiness, strategy, order, risk, cache, or process-control behavior.
-- Validation: 362 focused performance-report and planning-snapshot tests passed
-  on exact head `ff6c5606c621acd7fba689ad81b7b8a7755f162a`. A runtime
-  redaction probe preserved the numeric source-row count while redacting genuine
-  signature, API-key, and token fields. Python compilation and diff checks
-  passed.
-- Review gate: final exact-head Hermes approval plus green Python/Rust CI.
+- PR #1341, `Structure bulk open-order snapshot deltas`; branch
+  `codex/open-orders-snapshot-delta-event`, based on canonical
+  `bc31fafdbdf045f9c003e49fa6877b721c834600`.
+- Scope: replace the two legacy aggregate INFO lines emitted when an
+  authoritative open-order snapshot adds or removes more than 20 orders with
+  one bounded structured `open_orders.snapshot_delta` event per direction.
+- Behavior boundary: logging migration only. The event retains operator-visible
+  INFO/text projection and persists only the direction and count. It changes no
+  order rows, snapshot application, reconciliation classification, guardrail,
+  confirmation, balance handling, exchange access, planning, strategy, order,
+  or risk behavior.
+- Baseline: smaller deltas already retain per-order developer logs while the
+  bulk path emits only uncorrelated stdlib count lines. Config-age reporting was
+  considered but deferred because runtime currently has no canonical config
+  freshness timestamp or reload contract.
+- Review gate: exact-current-head Hermes approval plus green Python/Rust CI.
   Built-in Codex automatic review is additional and every finding must be
   verified and resolved.
-- Expected VPS action: tracked-clean pull, guarded exact-pane restart, and
-  immediate plus settled smoke, followed by a natural performance report that
-  proves corrected numeric freshness evidence.
+- Expected VPS action: tracked-clean pull and bounded passive event/process
+  validation. Because the producer path changes, restart only the exact five
+  configured panes if the merged diff and guarded preflight warrant activation;
+  preserve `misc:0.0`.
 
-## Deployed Baseline (PR #1328)
+## Deployed Baseline (PR #1340)
+
+- PR #1340 merged exact reviewed head
+  `d9e88d6da9282bc53a355dc3ce18a9cba6de45eb` as canonical
+  `bc31fafdbdf045f9c003e49fa6877b721c834600` after exact-head Hermes approval,
+  green Python/Rust CI, and a finding-free built-in Codex review.
+- VPS5 guarded-prepared tracked-clean from
+  `3311085dce8b7540f5a26e809229180d5f784c25` without a Rust build, bot restart,
+  or process signal. The source fingerprint and compiled stamp stayed
+  `691bff9683deec9382a4e96ab6a107c14145f88edd6ae2f8e2380b8ba6824449`.
+- The bounded incident bundle
+  `/tmp/passivbot_incident_bundle_pr1340_bc31fafdbd.tar.gz` proved identical log
+  `scan_cost` in the command result, manifest, and archived full smoke report:
+  eight `full_scan` files, 3,787 selected records, 573,578 known
+  physical/decoded bytes, and 847.006 ms.
+- The bundle correctly remained non-green on one natural KuCoin authoritative
+  balance `RequestTimeout`. All five exact bot PIDs and pane parents remained
+  intact, final passive sampling retained normal `R`/`S` states, and protected
+  `misc:0.0` remained `%8`/PID `434835`. No direct exchange call, manufactured
+  event, build, restart, or process signal occurred.
+
+## Previous Deployed Baseline (PR #1339)
+
+- PR #1339 merged exact reviewed head
+  `c66a306a4b20485d31e3806913c1f2d90279ecb7` as canonical
+  `3311085dce8b7540f5a26e809229180d5f784c25` after exact-head Hermes approval
+  and green Python/Rust CI. Built-in Codex was additionally requested and had
+  posted no finding when the proportional temporary gate merged the PR.
+- VPS5 guarded-prepared tracked-clean from
+  `f9ceb9678448201af0c0cc5f40f889b661d3021c` without a Rust build, bot
+  restart, or process signal. The source fingerprint and compiled stamp stayed
+  `691bff9683deec9382a4e96ab6a107c14145f88edd6ae2f8e2380b8ba6824449`.
+- The bounded direct smoke proved the new log `scan_cost`: eight `full_scan`
+  files, 3,442 selected records, 512,497 known physical/decoded bytes, and
+  742.868 ms. It found all five exact processes and a tracked-clean repository
+  at `3311085d`; its non-green verdict correctly retained two natural KuCoin
+  authoritative-balance `RequestTimeout` events.
+- The matching incident archive retained its exact log `scan_cost` in
+  `smoke_report.json`: eight `full_scan` files, 3,446 selected records,
+  513,283 known physical/decoded bytes, and 642.116 ms. Live inspection proved
+  that only the manifest and command-result summaries omitted that field,
+  motivating the active projection-only slice.
+- Incident collection briefly observed unchanged bots in `D` state. Repeated
+  passive samples settled the same exact PIDs to `R/R/R/S/R`; pane parents
+  `%358`-`%362` and protected `misc:0.0` `%8`/PID `434835` were unchanged. No
+  direct exchange call, manufactured event, build, restart, or process signal
+  occurred.
+
+## Previous Deployed Baseline (PR #1338)
+
+- PR #1338 merged exact reviewed head
+  `8924c4ff30f96b8ea3dbf58fc6a97d1faa54514d` as canonical
+  `f9ceb9678448201af0c0cc5f40f889b661d3021c` after exact-head Hermes approval
+  and green Python/Rust CI. Built-in Codex was additionally requested and had
+  posted no finding when the proportional temporary gate merged the PR.
+- VPS5 guarded-prepared tracked-clean from
+  `848eb60c502b7af21dd7aa52f50f86aece552bd9` without a Rust build, bot
+  restart, or process signal. The source fingerprint and compiled stamp stayed
+  `691bff9683deec9382a4e96ab6a107c14145f88edd6ae2f8e2380b8ba6824449`.
+- The bounded five-minute incident bundle was `ok=true`, found all five exact
+  processes, and projected identical time-window `scan_cost` through the full
+  report, manifest, and command result: six `seek_tail` files, 8,848 records,
+  15,501,809 known physical/decoded bytes, and 3,515.111 ms. Its repository
+  evidence was tracked-clean at `f9ceb967`.
+- An immediate post-bundle identity snapshot observed four bot processes in
+  transient `D` state. After 30 seconds the unchanged exact PIDs were
+  `R/R/S/R/R`; pane parents `%358`-`%362` and protected `misc:0.0`
+  `%8`/PID `434835` were unchanged. No direct exchange call, manufactured
+  event, build, restart, or process signal occurred.
+
+## Previous Deployed Baseline (PR #1329 After PR #1337)
+
+- PR #1337 merged exact reviewed head
+  `51a82c23230daf4aea5ec68784ef7168293b408e` as canonical
+  `7d463dca56e1b29840954876a25a3f4d0e5df961` after exact-head Hermes and
+  built-in Codex approval plus green Python/Rust CI. VPS5 fast-forwarded
+  tracked-clean from `e0927ed86f0b10ed8187d8e6a523017baefb98b3`
+  without a Rust build. A settled bounded smoke was `ok=true`, found all five
+  exact processes, and reported six `seek_tail` files, 10,388 records,
+  18,777,444 known physical/decoded bytes, and 5,751.099 ms through the new
+  smoke `scan_cost` projection.
+- External PR #1329 then merged exact mechanical-integration head
+  `6bd2eb0a0a49d21107a2c45ff9784e737d5c4d1c` as canonical
+  `848eb60c502b7af21dd7aa52f50f86aece552bd9`. The maintainer explicitly
+  approved its contributor CI; exact-head Hermes review and Python/Rust CI
+  were green. The target-relative result remained the previously reviewed
+  one-line aware-UTC timestamp fix. VPS5 fast-forwarded tracked-clean again
+  without a Rust build or restart because the changed Gate.io quarantine
+  timestamp path is startup-only and did not warrant disrupting running bots.
+- Immediate smokes retained natural KuCoin authoritative-state timeouts and
+  were not mislabeled green. The final settled five-minute smoke was `ok=true`
+  with zero hard failures, zero failed remote calls, all five exact processes,
+  and a tracked-clean repository at `848eb60c`; its monitor scan reported six
+  `seek_tail` files, 9,471 records, 17,038,544 known physical/decoded bytes,
+  and 4,021.646 ms. Throughout both pulls, bot PIDs
+  `1066081/1066091/1066084/1066093/1066087`, pane parents `%358`-`%362`, and
+  protected `misc:0.0` `%8`/PID `434835` remained unchanged. No direct
+  exchange call, event manufacture, restart, or process signal occurred.
+
+## Previous Deployed Baseline (PR #1333)
+
+- PR #1333 merged exact reviewed head
+  `ce5a24d72ea811c6b04a376bbd9fcd228ab4c9af` as canonical
+  `e0927ed86f0b10ed8187d8e6a523017baefb98b3` after exact-head Hermes
+  approval, a green built-in Codex review, and green Python/Rust CI. VPS5
+  fast-forwarded tracked-clean from
+  `02fb43f6398fc9edba64849cf2ed0bf0f7a6af09` without a Rust build; the
+  source fingerprint/stamp remained
+  `691bff9683deec9382a4e96ab6a107c14145f88edd6ae2f8e2380b8ba6824449`.
+- The bounded five-minute event query was `ok=true` and reported five files,
+  8,133 records, 13,926,420 known physical/decoded bytes, and 4,793.586 ms.
+  The matching performance report was `ok=true` with zero errors/warnings and
+  reported six files, 8,661 records, 14,740,828 known physical/decoded bytes,
+  and 4,781.454 ms. Both used only `seek_tail` reads.
+- No bot was restarted or signalled. Bot PIDs
+  `1066081/1066091/1066084/1066093/1066087`, pane parents `%358`-`%362`, and
+  protected `misc:0.0` `%8`/PID `434835` remained unchanged. Final process
+  states were all `Rl+`; the checkout remained tracked-clean. No direct
+  exchange call or event was manufactured.
+
+## Previous Deployed Baseline (PR #1335)
+
+- PR #1335 merged exact reviewed head
+  `c4d5b8e55f6fd453fd707999ae74ec2dd127e55d` as canonical
+  `02fb43f6398fc9edba64849cf2ed0bf0f7a6af09`. VPS5 fast-forwarded
+  tracked-clean from `97aa36da4c9a9885c840ea48590837e28e5b8069` without a
+  Rust build; the source fingerprint/stamp remained
+  `691bff9683deec9382a4e96ab6a107c14145f88edd6ae2f8e2380b8ba6824449`.
+- The guarded restart replaced bot PIDs
+  `1063302/1063311/1064329/1063314/1063308` with
+  `1066081/1066091/1066084/1066093/1066087` under unchanged pane parents.
+  A post-action three-sample target report confirmed all five configured
+  processes stable with no missing, duplicate, or extra target; protected
+  `misc:0.0` remained `%8`/PID `434835`.
+- The immediate smoke retained one natural KuCoin authoritative-refresh
+  `RequestTimeout` and was not mislabeled green. The fresh settled two-minute
+  smoke was `ok=true` with zero hard failures, `47/47` account-critical calls,
+  `184/185` remote calls, successful latest cycles, a clean event pipeline,
+  and five stable processes. The sole retained remote failure was a non-hard
+  OHLCV `RequestTimeout`. No direct exchange call or event was manufactured.
+
+## Previous Deployed Baseline (PR #1334)
+
+- Emergency PR #1334 merged exact reviewed head
+  `1fb218a61999ed1cf06ba1974407dbfe350ed0ea` as canonical
+  `97aa36da4c9a9885c840ea48590837e28e5b8069`. VPS5 fast-forwarded
+  tracked-clean from `77b97ab8c7b7c4e6ba70025c3ca53e828aa0a321` without a
+  Rust build; the source fingerprint/stamp remained
+  `691bff9683deec9382a4e96ab6a107c14145f88edd6ae2f8e2380b8ba6824449`
+  and the artifact SHA-256 remained
+  `7611f3eff1d8702ff29d90490a1aba490db5c816e7e3f09a2c33e5c4085da023`.
+- The recovery relaunched only the stopped Gate.io pane `%360`, producing bot
+  PID `1064329` under unchanged pane parent PID `856364`. The other four bot
+  PIDs remained `1063302/1063311/1063314/1063308`, and protected
+  `misc:0.0` remained `%8`/PID `434835`.
+- Stable three-sample exact-target validation retained all five configured
+  processes with no missing, duplicate, or extra target. The final fresh
+  two-minute smoke was `ok=true` with zero hard failures, five stable
+  processes, and a tracked-clean checkout. An earlier wider smoke retained an
+  unrelated natural KuCoin `RequestTimeout` and was not mislabeled green; the
+  final window observed one non-hard recovered KuCoin `InvalidNonce`. No direct
+  exchange call or event was manufactured.
+
+## Previous Deployed Baseline (PR #1331)
+
+- PR #1331 merged as canonical
+  `0a6be3ed00261c6d6a2cdbe0f2588e5709e670f1` after exact-head Hermes
+  approval, a green built-in Codex review, and green Python/Rust CI. VPS5
+  fast-forwarded tracked-clean from
+  `c0386ff5673d93b732786cf12c4cd48f6a381767` without a Rust build; the source
+  fingerprint/stamp remained
+  `691bff9683deec9382a4e96ab6a107c14145f88edd6ae2f8e2380b8ba6824449`.
+- The guarded runner gracefully restarted only exact panes `%358`-`%362`.
+  Bot PIDs `1057982/1057991/1057985/1057994/1057988` became
+  `1059196/1059205/1059199/1059208/1059202`; pane parents were unchanged and
+  protected `misc:0.0` remained `%8`/PID `434835`.
+- The immediate bounded smoke was hard-green with complete five-bot lifecycle
+  evidence, zero hard/monitor/text-log failures, `81/81` account-critical
+  calls, `436/436` remote calls, and five stable processes. The settled smoke
+  remained hard-green with `65/65` account-critical and `345/345` remote calls,
+  zero latest degraded cycles, both remaining HSL replays complete, and five
+  stable processes.
+- Natural post-restart snapshots persisted numeric `source_row_count` values
+  `36` and `1`. The exact-window performance report produced two summary and
+  metric observations with zero malformed or missing proofs. No direct exchange
+  call or event was manufactured.
+
+## Previous Deployed Baseline (PR #1328)
 
 - PR #1328 merged as canonical
   `c0386ff5673d93b732786cf12c4cd48f6a381767` after exact-head Hermes
@@ -61,7 +250,7 @@ Estimated completion:
   natural post-restart performance report then classified all seven observed
   completed-candle summaries as malformed because the sanitizer had replaced
   `signature_row_count` with `[redacted]`. No direct exchange call or event was
-  manufactured; active PR #1331 corrects only this public diagnostic contract.
+  manufactured; merged PR #1331 corrected only this public diagnostic contract.
 
 ## Deployed Baseline (PR #1326)
 
@@ -1544,10 +1733,12 @@ PR #1286's aggregate-only follow-up, PR #1287's exact tmux target preflight,
 PR #1288's bounded target-identity stability, and PR #1289's plan binding are
 merged, deployed, and naturally validated without process control. PR #1290's
 pane-parent relaunch classification and the restart preparation/orchestration
-slices through PR #1309 are also merged and deployed. Later slices through PR
-#1328 are merged and deployed at canonical
-`c0386ff5673d93b732786cf12c4cd48f6a381767`; their current evidence is recorded
-above. PR #1331 is the active completed-candle row-count redaction fix.
+slices through PR #1309 are also merged and deployed. Later logging slices
+through PR #1340, including adjacent PR #1329, are deployed at canonical
+`bc31fafdbdf045f9c003e49fa6877b721c834600`; their current evidence is recorded
+above. Active PR #1341 migrates only the remaining bulk open-order snapshot
+count lines into the bounded structured event contract while preserving the
+existing threshold, legacy fallback, reconciliation, and trading behavior.
 
 Do not create progress-only PRs or resume unrelated logging work from stale
 worktrees.

@@ -18,6 +18,7 @@ from live.event_bus import (
     DEFAULT_ROUTES,
     EventTags,
     EventTypes,
+    format_console_event,
     ListEventSink,
     LiveEvent,
     LiveEventPipeline,
@@ -9326,6 +9327,184 @@ def _guardrail_order(**overrides):
     }
     order.update(overrides)
     return order
+
+
+def _open_orders_snapshot_orders(prefix: str, count: int) -> list[dict]:
+    return [_guardrail_order(id=f"{prefix}-{index}") for index in range(count)]
+
+
+@pytest.mark.asyncio
+async def test_large_added_open_orders_snapshot_delta_event_is_bounded_and_operator_visible(
+    caplog,
+):
+    structured_sink = ListEventSink()
+    monitor_sink = ListEventSink()
+    console_sink = ListEventSink()
+    text_sink = ListEventSink()
+    bot = _make_open_order_guardrail_bot()
+    bot.exchange = "bybit"
+    bot.user = "user_01"
+    bot.bot_id = "bot_01"
+    bot.live_event_console_enabled = True
+    bot._live_event_current_cycle_id = "cy_open_orders_added"
+    bot._live_event_pipeline = LiveEventPipeline(
+        structured_sinks=[structured_sink],
+        monitor_sinks=[monitor_sink],
+        console_sink=console_sink,
+        text_sink=text_sink,
+    )
+    bot.open_orders = {}
+    bot.order_matches_recent_execution = lambda _order, max_age_ms=None: True
+    added_orders = _open_orders_snapshot_orders("added", 21)
+
+    with caplog.at_level(logging.INFO):
+        assert await Passivbot._apply_open_orders_snapshot(bot, added_orders) is True
+    assert bot._live_event_pipeline.flush(timeout=2.0) is True
+
+    events = [
+        event
+        for event in structured_sink.events
+        if event.event_type == EventTypes.OPEN_ORDERS_SNAPSHOT_DELTA
+    ]
+    assert len(events) == 1
+    event = events[0]
+    assert event.event_type == EventTypes.OPEN_ORDERS_SNAPSHOT_DELTA
+    assert event.level == "info"
+    assert event.component == "orders.snapshot"
+    assert event.tags == (EventTags.ORDER, EventTags.SNAPSHOT)
+    assert event.cycle_id == "cy_open_orders_added"
+    assert event.status is None
+    assert event.reason_code == ReasonCodes.OPEN_ORDERS_SNAPSHOT_DELTA
+    assert event.data == {"direction": "added", "order_count": 21}
+    assert "id" not in event.data
+    assert "symbol" not in event.data
+    assert event in monitor_sink.events
+    assert console_sink.events == [event]
+    assert text_sink.events == [event]
+    assert format_console_event(event) == (
+        "[order] cycle=cy_open_orders_added direction=added order_count=21 "
+        "reason=open_orders_snapshot_delta"
+    )
+    assert "[order] added 21 orders" not in [
+        record.getMessage() for record in caplog.records
+    ]
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
+
+
+@pytest.mark.asyncio
+async def test_large_removed_open_orders_snapshot_delta_event_preserves_guardrails():
+    structured_sink = ListEventSink()
+    bot = _make_open_order_guardrail_bot(epoch=5)
+    bot._live_event_pipeline = LiveEventPipeline(
+        structured_sinks=[structured_sink], monitor_sinks=[]
+    )
+    removed_orders = _open_orders_snapshot_orders("removed", 21)
+    bot.open_orders = {"BTC/USDT:USDT": removed_orders}
+    bot.fetched_open_orders = list(removed_orders)
+    bot.order_matches_bot_cancellation = lambda _order: False
+    bot.order_was_recently_cancelled = lambda _order: 0.0
+
+    assert (
+        await Passivbot._apply_open_orders_snapshot(
+            bot, [], allow_followup_positions_refresh=False
+        )
+        is True
+    )
+    assert bot._live_event_pipeline.flush(timeout=2.0) is True
+
+    event = next(
+        event
+        for event in structured_sink.events
+        if event.event_type == EventTypes.OPEN_ORDERS_SNAPSHOT_DELTA
+    )
+    assert event.event_type == EventTypes.OPEN_ORDERS_SNAPSHOT_DELTA
+    assert event.data == {"direction": "removed", "order_count": 21}
+    assert bot.open_orders == {}
+    assert bot.execution_scheduled is True
+    assert bot.state_change_detected_by_symbol == {"BTC/USDT:USDT"}
+    assert bot._authoritative_pending_confirmations == {
+        surface: 6 for surface in ACCOUNT_SURFACES
+    }
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("direction", ["added", "removed"])
+async def test_open_orders_snapshot_delta_uses_strictly_greater_than_twenty_threshold(
+    direction,
+):
+    bot = _make_open_order_guardrail_bot()
+    emitted = []
+    logged_orders = []
+    bot._emit_open_orders_snapshot_delta_event = lambda **kwargs: emitted.append(kwargs)
+    bot.log_order_action = lambda *args, **kwargs: logged_orders.append((args, kwargs))
+    orders = _open_orders_snapshot_orders(direction, 20)
+    if direction == "added":
+        bot.open_orders = {}
+        bot.order_matches_recent_execution = lambda _order, max_age_ms=None: True
+        snapshot = orders
+    else:
+        bot.open_orders = {"BTC/USDT:USDT": orders}
+        bot.order_matches_bot_cancellation = lambda _order: True
+        bot.order_was_recently_cancelled = lambda _order: 0.0
+        snapshot = []
+
+    assert await Passivbot._apply_open_orders_snapshot(bot, snapshot) is True
+
+    assert emitted == []
+    assert len(logged_orders) == 20
+
+
+@pytest.mark.asyncio
+async def test_open_orders_snapshot_delta_console_sink_failure_does_not_change_reconciliation():
+    class FailingConsoleSink:
+        def write(self, _event):
+            raise OSError("console unavailable")
+
+    bot = _make_open_order_guardrail_bot(epoch=7)
+    bot.live_event_console_enabled = True
+    bot._live_event_pipeline = LiveEventPipeline(
+        structured_sinks=[],
+        monitor_sinks=[],
+        console_sink=FailingConsoleSink(),
+    )
+    removed_orders = _open_orders_snapshot_orders("removed", 21)
+    bot.open_orders = {"BTC/USDT:USDT": removed_orders}
+    bot.fetched_open_orders = list(removed_orders)
+    bot.order_matches_bot_cancellation = lambda _order: False
+    bot.order_was_recently_cancelled = lambda _order: 0.0
+
+    assert (
+        await Passivbot._apply_open_orders_snapshot(
+            bot, [], allow_followup_positions_refresh=False
+        )
+        is True
+    )
+
+    assert bot.open_orders == {}
+    assert bot.execution_scheduled is True
+    assert bot.state_change_detected_by_symbol == {"BTC/USDT:USDT"}
+    assert bot._authoritative_pending_confirmations == {
+        surface: 8 for surface in ACCOUNT_SURFACES
+    }
+    assert bot._live_event_pipeline.sink_error_counters["console"] >= 1
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
+
+
+@pytest.mark.asyncio
+async def test_large_open_orders_snapshot_delta_keeps_legacy_console_without_pipeline(caplog):
+    bot = _make_open_order_guardrail_bot()
+    bot.live_event_console_enabled = False
+    bot._live_event_pipeline = None
+    bot.open_orders = {}
+    bot.order_matches_recent_execution = lambda _order, max_age_ms=None: True
+    added_orders = _open_orders_snapshot_orders("added", 21)
+
+    with caplog.at_level(logging.INFO):
+        assert await Passivbot._apply_open_orders_snapshot(bot, added_orders) is True
+
+    messages = [record.getMessage() for record in caplog.records]
+    assert "[order] added 21 orders" in messages
 
 
 @pytest.mark.asyncio

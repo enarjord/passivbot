@@ -1,14 +1,18 @@
 from __future__ import annotations
 
+import gzip
 import json
 import os
 import subprocess
 import tarfile
+from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
 
+import live.incident_bundle as incident_bundle_module
 import live.smoke_report as smoke_report_module
+from live.event_file_rows import EventRowWindow
 from live.incident_bundle import (
     _copy_event_segments,
     _redact_url_userinfo,
@@ -83,6 +87,234 @@ def _read_tar_json(tar, name: str):
     member = tar.extractfile(name)
     assert member is not None
     return json.loads(member.read().decode())
+
+
+def _assert_nonnegative_elapsed_scan_cost(scan_cost, expected):
+    assert set(scan_cost) == {
+        "elapsed_ms",
+        "physical_bytes_read",
+        "physical_bytes_known",
+        "decoded_bytes_read",
+        "decoded_bytes_known",
+        "files_read",
+        "records_read",
+        "read_methods",
+    }
+    assert isinstance(scan_cost["elapsed_ms"], float)
+    assert scan_cost["elapsed_ms"] >= 0.0
+    actual = {
+        key: value for key, value in scan_cost.items() if key != "elapsed_ms"
+    }
+    assert actual == expected
+
+
+def test_incident_bundle_time_window_scan_cost_full_read_counts_nonblank_rows(tmp_path):
+    events_path = (
+        tmp_path / "monitor" / "binance" / "binance_01" / "events" / "current.ndjson"
+    )
+    first = json.dumps(_monitor_row(event_type="cycle.completed", seq=1, ts=1000))
+    second = json.dumps(_monitor_row(event_type="cycle.completed", seq=2, ts=2000))
+    events_path.parent.mkdir(parents=True)
+    events_path.write_text(f"{first}\n\n{second}\n", encoding="utf-8")
+
+    report = incident_bundle_module._build_time_window_report(
+        tmp_path / "monitor",
+        since_ms=0,
+        until_ms=None,
+        include_rotated=False,
+        include_data=False,
+        limit=10,
+    )
+
+    _assert_nonnegative_elapsed_scan_cost(
+        report["scan_cost"],
+        {
+            "physical_bytes_read": events_path.stat().st_size,
+            "physical_bytes_known": True,
+            "decoded_bytes_read": events_path.stat().st_size,
+            "decoded_bytes_known": True,
+            "files_read": 1,
+            "records_read": 2,
+            "read_methods": {"full_scan": 1},
+        },
+    )
+    assert report["matched_events"] == 2
+
+
+def test_incident_bundle_time_window_scan_cost_seek_tail_counts_selected_rows(tmp_path):
+    events_path = (
+        tmp_path / "monitor" / "binance" / "binance_01" / "events" / "current.ndjson"
+    )
+    _write_ndjson(
+        events_path,
+        [
+            _monitor_row(event_type="cycle.completed", seq=1, ts=1000),
+            _monitor_row(event_type="cycle.completed", seq=2, ts=2000),
+            _monitor_row(event_type="cycle.completed", seq=3, ts=3000),
+        ],
+    )
+
+    report = incident_bundle_module._build_time_window_report(
+        tmp_path / "monitor",
+        since_ms=0,
+        until_ms=None,
+        include_rotated=False,
+        include_data=False,
+        event_tail_lines=1,
+        limit=10,
+    )
+
+    _assert_nonnegative_elapsed_scan_cost(
+        report["scan_cost"],
+        {
+            "physical_bytes_read": events_path.stat().st_size,
+            "physical_bytes_known": True,
+            "decoded_bytes_read": events_path.stat().st_size,
+            "decoded_bytes_known": True,
+            "files_read": 1,
+            "records_read": 1,
+            "read_methods": {"seek_tail": 1},
+        },
+    )
+    assert [event["seq"] for event in report["events"]] == [3]
+
+
+def test_incident_bundle_time_window_scan_cost_gzip_tracks_physical_and_decoded_bytes(
+    tmp_path,
+):
+    events_path = (
+        tmp_path
+        / "monitor"
+        / "binance"
+        / "binance_01"
+        / "events"
+        / "20260719.ndjson.gz"
+    )
+    rows = [
+        _monitor_row(
+            event_type="cycle.completed",
+            seq=index,
+            ts=index * 1000,
+            data={"padding": "x" * 1000},
+        )
+        for index in range(1, 5)
+    ]
+    decoded = "".join(json.dumps(row, sort_keys=True) + "\n" for row in rows).encode()
+    events_path.parent.mkdir(parents=True)
+    with gzip.open(events_path, "wb") as stream:
+        stream.write(decoded)
+
+    report = incident_bundle_module._build_time_window_report(
+        tmp_path / "monitor",
+        since_ms=0,
+        until_ms=None,
+        include_rotated=True,
+        include_data=False,
+        limit=10,
+    )
+
+    _assert_nonnegative_elapsed_scan_cost(
+        report["scan_cost"],
+        {
+            "physical_bytes_read": events_path.stat().st_size,
+            "physical_bytes_known": True,
+            "decoded_bytes_read": len(decoded),
+            "decoded_bytes_known": True,
+            "files_read": 1,
+            "records_read": 4,
+            "read_methods": {"full_scan": 1},
+        },
+    )
+    assert report["scan_cost"]["physical_bytes_read"] < report["scan_cost"][
+        "decoded_bytes_read"
+    ]
+
+
+def test_incident_bundle_time_window_scan_cost_marks_failed_or_unmeasurable_reads_unknown(
+    tmp_path,
+    monkeypatch,
+):
+    for exchange in ("binance", "okx"):
+        _write_ndjson(
+            tmp_path
+            / "monitor"
+            / exchange
+            / f"{exchange}_01"
+            / "events"
+            / "current.ndjson",
+            [_monitor_row(event_type="cycle.completed", seq=1, ts=1000)],
+        )
+
+    @contextmanager
+    def fake_event_file_rows(path, *, max_tail_lines=0):
+        del max_tail_lines
+        if "okx" in path.parts:
+            raise OSError("unavailable for test")
+        yield [
+            (1, json.dumps(_monitor_row(event_type="cycle.completed", seq=1, ts=1000)))
+        ], EventRowWindow(method="unmeasurable")
+
+    monkeypatch.setattr(
+        incident_bundle_module,
+        "event_file_rows",
+        fake_event_file_rows,
+    )
+
+    report = incident_bundle_module._build_time_window_report(
+        tmp_path / "monitor",
+        since_ms=0,
+        until_ms=None,
+        include_rotated=False,
+        include_data=False,
+        limit=10,
+    )
+
+    _assert_nonnegative_elapsed_scan_cost(
+        report["scan_cost"],
+        {
+            "physical_bytes_read": None,
+            "physical_bytes_known": False,
+            "decoded_bytes_read": None,
+            "decoded_bytes_known": False,
+            "files_read": 1,
+            "records_read": 1,
+            "read_methods": {"unmeasurable": 1},
+        },
+    )
+    assert report["files_scanned"] == 2
+    assert report["issues"] == [
+        {
+            "path": str(
+                tmp_path / "monitor" / "okx" / "okx_01" / "events" / "current.ndjson"
+            ),
+            "line": None,
+            "severity": "error",
+            "code": "read_failed",
+            "message": "unavailable for test",
+        }
+    ]
+
+
+def test_incident_bundle_time_window_scan_cost_is_zero_and_known_when_disabled(tmp_path):
+    report = incident_bundle_module._build_time_window_report(
+        tmp_path / "monitor",
+        since_ms=None,
+        until_ms=None,
+        include_rotated=False,
+        include_data=False,
+        limit=10,
+    )
+
+    assert report["scan_cost"] == {
+        "elapsed_ms": 0.0,
+        "physical_bytes_read": 0,
+        "physical_bytes_known": True,
+        "decoded_bytes_read": 0,
+        "decoded_bytes_known": True,
+        "files_read": 0,
+        "records_read": 0,
+        "read_methods": {},
+    }
 
 
 def test_live_incident_bundle_collects_hashes_snapshots_events_and_window(tmp_path):
@@ -447,7 +679,10 @@ def test_live_incident_bundle_collects_hashes_snapshots_events_and_window(tmp_pa
         "events_skipped_after": 0,
         "invalid_window_ts": 0,
     }
-    assert report["smoke_report"]["logs"] == {
+    smoke_log_summary = report["smoke_report"]["logs"]
+    assert {
+        key: value for key, value in smoke_log_summary.items() if key != "scan_cost"
+    } == {
         "max_files": 8,
         "tail_lines": 500,
         "max_matches": 100,
@@ -474,6 +709,18 @@ def test_live_incident_bundle_collects_hashes_snapshots_events_and_window(tmp_pa
             "dropped_unparsed_hard_matches": 0,
         },
     }
+    _assert_nonnegative_elapsed_scan_cost(
+        smoke_log_summary["scan_cost"],
+        {
+            "physical_bytes_read": (logs_dir / "bot.log").stat().st_size,
+            "physical_bytes_known": True,
+            "decoded_bytes_read": (logs_dir / "bot.log").stat().st_size,
+            "decoded_bytes_known": True,
+            "files_read": 1,
+            "records_read": 1,
+            "read_methods": {"full_scan": 1},
+        },
+    )
     assert report["smoke_report"]["hard_failure_sources"] == {
         "monitor_errors": 0,
         "invalid_event_rows": 0,
@@ -802,6 +1049,8 @@ def test_live_incident_bundle_collects_hashes_snapshots_events_and_window(tmp_pa
     }
     assert manifest["time_window"] == report["time_window"]
     assert manifest["time_window"]["matched_events"] == window_report["matched_events"]
+    assert report["time_window"]["scan_cost"] == window_report["scan_cost"]
+    assert manifest["time_window"]["scan_cost"] == window_report["scan_cost"]
     assert manifest["performance_report"] == report["performance_report"]
     assert performance_report["event_window"] == report["performance_report"][
         "event_window"
@@ -921,6 +1170,9 @@ def test_live_incident_bundle_collects_hashes_snapshots_events_and_window(tmp_pa
     assert smoke_report["logs"]["max_matches"] == report["smoke_report"]["logs"][
         "max_matches"
     ]
+    scan_cost = smoke_report["logs"]["scan_cost"]
+    assert report["smoke_report"]["logs"]["scan_cost"] == scan_cost
+    assert manifest["smoke_report"]["logs"]["scan_cost"] == scan_cost
     assert smoke_report["logs"]["window"] == report["smoke_report"]["logs"]["window"]
     assert smoke_report["remote_call_failures"]["total"] == 1
     assert smoke_report["execution_health"]["total"] == 1

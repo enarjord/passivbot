@@ -4,6 +4,50 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Large open-order snapshot deltas now emit one bounded `open_orders.snapshot_delta` INFO event per
+  added or removed direction, with only the direction and order count. The event reaches structured,
+  monitor, console, and text sinks with the `[order]` tag; reconciliation and order behavior are
+  unchanged, and a bounded legacy INFO fallback remains when the structured console is unavailable.
+
+- Incident bundle manifest and command-result summaries now retain the
+  embedded live smoke report's text-log `scan_cost` metadata. The archive's
+  full smoke report, log reads, matching, redaction, filtering, verdicts,
+  exchange access, and live behavior are unchanged.
+
+- `live-smoke-report` log scans now include bounded `scan_cost` metadata in
+  full, summary, and brief output. The metadata reports elapsed time,
+  successfully read files and selected tail lines, read methods, and known
+  physical-versus-decoded bytes without changing log discovery, sequential
+  reads, matching, redaction, window filtering, smoke verdicts, exchange
+  access, or live behavior.
+
+- Incident bundles now include bounded `scan_cost` metadata for their
+  independent time-window event scan in the full report, manifest, and command
+  result. The metadata uses the same elapsed-time, successful file/record,
+  read-method, and physical-versus-decoded byte contract as the other live
+  artifact reports; event matching, truncation, archive contents, verdicts,
+  exchange access, and live behavior are unchanged.
+
+- `live-smoke-report` now includes bounded monitor `scan_cost` metadata in
+  full, summary, and brief output, matching the elapsed time, successfully
+  read files and records, read methods, and physical-versus-decoded byte
+  semantics exposed by the event query and performance report. This is
+  diagnostic-only and does not change smoke verdicts, event selection,
+  parsing, logs, process inspection, exchange access, or live behavior.
+
+- `live-event-query` and `live-performance-report` now include bounded
+  `scan_cost` metadata for elapsed artifact-scan time, successfully read files
+  and records, read methods, and physical versus decoded byte totals. Explicit
+  known flags prevent failed or unmeasurable reads from appearing complete;
+  query selection, results, monitor data, exchange access, and live behavior
+  are unchanged.
+
+- EMA Anchor live monitor snapshots now mark trailing diagnostics as not
+  applicable instead of requesting unrelated trailing-martingale parameters
+  and repeatedly failing snapshot publication. The trailing diagnostics tool
+  rejects snapshots that explicitly mark those diagnostics unsupported unless
+  the operator selects explicit wizard mode.
+
 - Gate.io live startup now selects CCXT 4.5.66's `gate` REST and WebSocket
   clients at session construction while retaining canonical `gateio` identity
   for user-facing configuration, market settings, caches, and logs.

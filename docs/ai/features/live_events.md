@@ -104,6 +104,20 @@ count. An all-pending batch must not present its known PnL as zero. The legacy d
 fallback only when the structured live-event console is disabled or its pipeline is absent. Runtime
 sink degradation remains isolated by the event pipeline and must not activate dual writing.
 
+## Open-Orders Snapshot Deltas
+
+`open_orders.snapshot_delta` replaces the aggregate INFO lines for open-order snapshot additions or
+removals larger than 20 orders. It emits at most one event for each qualifying aggregate direction,
+with `direction=added|removed` and `order_count` as its only payload fields. The event is routed to
+structured, monitor, console, and durable text sinks at INFO with the `[order]` console tag.
+
+Snapshots of 20 orders or fewer retain the existing per-order logging behavior. The event is
+diagnostic-only: emission or sink failure must not affect reconciliation, unexpected-change
+classification, guardrails, confirmations, balance handling, or follow-up refreshes. It never
+retains order rows, identifiers, symbols, prices, raw payloads, exception text, or samples.
+When the structured console is disabled or unavailable, the same bounded count retains one legacy
+`[order]` INFO fallback; the two console paths never intentionally write the same observation.
+
 ## Fresh-Entry Eligibility
 
 Completed normal live plans emit `entry.initial_eligibility` to structured and monitor sinks. The

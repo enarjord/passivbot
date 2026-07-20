@@ -161,6 +161,7 @@ class EventTypes:
     CYCLE_DEGRADED = "cycle.degraded"
     DATA_PACKET_UPDATED = "data_packet.updated"
     SNAPSHOT_BUILT = "snapshot.built"
+    OPEN_ORDERS_SNAPSHOT_DELTA = "open_orders.snapshot_delta"
     PLANNING_UNAVAILABLE = "planning.unavailable"
     PLANNING_DEFER_SUMMARY = "planning.defer_summary"
     PLANNING_SYMBOL_STATE = "planning.symbol_state"
@@ -325,6 +326,7 @@ class ReasonCodes:
     MEMORY_SNAPSHOT = "memory_snapshot"
     NEW_FILL = "new_fill"
     NEW_FILL_BATCH = "new_fill_batch"
+    OPEN_ORDERS_SNAPSHOT_DELTA = "open_orders_snapshot_delta"
     OPEN_TAIL_PROJECTION = "open_tail_projection"
     OPTIONAL_EMA_DROPPED = "optional_ema_dropped"
     PENDING_EXCHANGE_CONFIG = "pending_exchange_config"
@@ -492,6 +494,7 @@ PHASE1_EVENT_TYPES = {
     EventTypes.CYCLE_DEGRADED,
     EventTypes.DATA_PACKET_UPDATED,
     EventTypes.SNAPSHOT_BUILT,
+    EventTypes.OPEN_ORDERS_SNAPSHOT_DELTA,
     EventTypes.PLANNING_UNAVAILABLE,
     EventTypes.PLANNING_DEFER_SUMMARY,
     EventTypes.PLANNING_SYMBOL_STATE,
@@ -803,6 +806,7 @@ DEFAULT_ROUTES: dict[str, EventRoute] = {
     EventTypes.CYCLE_DEGRADED: EventRoute(console=True, text=True),
     EventTypes.DATA_PACKET_UPDATED: EventRoute(console=False),
     EventTypes.SNAPSHOT_BUILT: EventRoute(console=False),
+    EventTypes.OPEN_ORDERS_SNAPSHOT_DELTA: EventRoute(console=True, text=True),
     EventTypes.PLANNING_UNAVAILABLE: EventRoute(
         console=True, text=True, throttle_interval_ms=60_000
     ),
@@ -985,6 +989,7 @@ _CONSOLE_EVENT_TAGS = {
     EventTypes.CYCLE_COMPLETED: "cycle",
     EventTypes.CYCLE_DEGRADED: "cycle",
     EventTypes.PLANNING_UNAVAILABLE: "gate",
+    EventTypes.OPEN_ORDERS_SNAPSHOT_DELTA: "order",
     EventTypes.FORAGER_SELECTION: "forager",
     EventTypes.RUST_ORCHESTRATOR_RETURNED: "rust",
     EventTypes.ORDER_WAVE_COMPLETED: "execute",
@@ -2042,11 +2047,28 @@ def _console_unstuck_selection_summary(event: LiveEvent) -> list[str]:
     return parts
 
 
+_OPEN_ORDERS_SNAPSHOT_DELTA_CONSOLE_COUNT_LIMIT = 999_999_999
+
+
+def _console_open_orders_snapshot_delta_summary(event: LiveEvent) -> list[str]:
+    data = event.data if isinstance(event.data, Mapping) else {}
+    direction = str(data.get("direction") or "unknown")
+    if direction not in {"added", "removed"}:
+        direction = "unknown"
+    count = _data_int(data, "order_count")
+    if count is None:
+        count = 0
+    count = min(_OPEN_ORDERS_SNAPSHOT_DELTA_CONSOLE_COUNT_LIMIT, max(0, count))
+    return [f"direction={direction}", f"order_count={count}"]
+
+
 def _console_data_summary(event: LiveEvent) -> list[str]:
     if event.event_type == EventTypes.BOT_STARTUP_TIMING:
         return _console_startup_timing_summary(event)
     if event.event_type == EventTypes.ORDER_WAVE_COMPLETED:
         return _console_order_wave_summary(event)
+    if event.event_type == EventTypes.OPEN_ORDERS_SNAPSHOT_DELTA:
+        return _console_open_orders_snapshot_delta_summary(event)
     if event.event_type in {
         EventTypes.EXECUTION_CREATE_DEFERRED,
         EventTypes.EXECUTION_CREATE_SKIPPED,

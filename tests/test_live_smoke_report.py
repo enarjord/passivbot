@@ -148,6 +148,274 @@ def test_live_smoke_report_scans_monitor_segments_once(tmp_path, monkeypatch):
     assert report["event_window"]["events_considered"] == 1
 
 
+def test_live_smoke_report_scan_cost_tracks_plain_full_and_seek_tail_reads(tmp_path):
+    path = tmp_path / "monitor" / "binance" / "binance_01" / "events" / "current.ndjson"
+    _write_ndjson(
+        path,
+        [
+            _monitor_row(
+                event_type="cycle.completed",
+                seq=1,
+                ts=1000,
+                data={"payload": "x" * 70_000},
+            ),
+            _monitor_row(
+                event_type="cycle.completed",
+                seq=2,
+                ts=2000,
+                data={"payload": "x" * 130_000},
+            ),
+            _monitor_row(event_type="cycle.completed", seq=3, ts=3000),
+        ],
+    )
+    expected_bytes = path.stat().st_size
+
+    report = build_live_smoke_report(tmp_path / "monitor", logs_root=None)
+    scan_cost = report["monitor"]["scan_cost"]
+
+    assert scan_cost["elapsed_ms"] >= 0
+    assert scan_cost["physical_bytes_read"] == expected_bytes
+    assert scan_cost["physical_bytes_known"] is True
+    assert scan_cost["decoded_bytes_read"] == expected_bytes
+    assert scan_cost["decoded_bytes_known"] is True
+    assert scan_cost["files_read"] == 1
+    assert scan_cost["records_read"] == 3
+    assert scan_cost["read_methods"] == {"full_scan": 1}
+    assert summarize_live_smoke_report(report)["monitor"]["scan_cost"] == scan_cost
+    assert summarize_live_smoke_report_brief(report)["monitor"]["scan_cost"] == scan_cost
+
+    tail_report = build_live_smoke_report(
+        tmp_path / "monitor", logs_root=None, event_tail_lines=1
+    )
+    tail_scan_cost = tail_report["monitor"]["scan_cost"]
+
+    assert tail_scan_cost["physical_bytes_read"] < expected_bytes
+    assert tail_scan_cost["physical_bytes_known"] is True
+    assert tail_scan_cost["decoded_bytes_read"] == tail_scan_cost["physical_bytes_read"]
+    assert tail_scan_cost["decoded_bytes_known"] is True
+    assert tail_scan_cost["files_read"] == 1
+    assert tail_scan_cost["records_read"] == 1
+    assert tail_scan_cost["read_methods"] == {"seek_tail": 1}
+
+
+def test_live_smoke_report_scan_cost_distinguishes_gzip_physical_and_decoded_bytes(
+    tmp_path,
+):
+    path = (
+        tmp_path
+        / "monitor"
+        / "binance"
+        / "binance_01"
+        / "events"
+        / "2026-07-19T00-00-00.ndjson.gz"
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with gzip.open(path, "wt", encoding="utf-8") as stream:
+        for row in (
+            _monitor_row(event_type="cycle.completed", seq=1, ts=1000),
+            _monitor_row(event_type="cycle.completed", seq=2, ts=2000),
+        ):
+            stream.write(json.dumps(row, sort_keys=True) + "\n")
+    with gzip.open(path, "rb") as stream:
+        expected_decoded_bytes = len(stream.read())
+
+    report = build_live_smoke_report(
+        tmp_path / "monitor",
+        logs_root=None,
+        include_rotated=True,
+        event_tail_lines=1,
+    )
+    scan_cost = report["monitor"]["scan_cost"]
+
+    assert scan_cost["physical_bytes_read"] == path.stat().st_size
+    assert scan_cost["physical_bytes_known"] is True
+    assert scan_cost["decoded_bytes_read"] == expected_decoded_bytes
+    assert scan_cost["decoded_bytes_known"] is True
+    assert scan_cost["files_read"] == 1
+    assert scan_cost["records_read"] == 1
+    assert scan_cost["read_methods"] == {"sequential_gzip_tail": 1}
+
+
+def test_live_smoke_report_scan_cost_marks_unmeasurable_and_failed_reads_unknown(
+    tmp_path, monkeypatch
+):
+    path = tmp_path / "monitor" / "binance" / "binance_01" / "events" / "current.ndjson"
+    row = _monitor_row(event_type="cycle.completed", seq=1, ts=1000)
+    _write_ndjson(path, [row])
+
+    class UnmeasurableRows:
+        def __enter__(self):
+            return (
+                iter([(1, json.dumps(row, sort_keys=True) + "\n")]),
+                event_file_rows_module.EventRowWindow(),
+            )
+
+        def __exit__(self, *args):
+            return False
+
+    monkeypatch.setattr(
+        smoke_report_module,
+        "event_file_rows",
+        lambda *args, **kwargs: UnmeasurableRows(),
+    )
+    unmeasurable = build_live_smoke_report(tmp_path / "monitor", logs_root=None)[
+        "monitor"
+    ]["scan_cost"]
+
+    assert unmeasurable["physical_bytes_read"] is None
+    assert unmeasurable["physical_bytes_known"] is False
+    assert unmeasurable["decoded_bytes_read"] is None
+    assert unmeasurable["decoded_bytes_known"] is False
+    assert unmeasurable["files_read"] == 1
+    assert unmeasurable["records_read"] == 1
+    assert unmeasurable["read_methods"] == {"full_scan": 1}
+
+    class FailingRows:
+        def __enter__(self):
+            raise OSError(13, "Permission denied")
+
+        def __exit__(self, *args):
+            return False
+
+    monkeypatch.setattr(
+        smoke_report_module,
+        "event_file_rows",
+        lambda *args, **kwargs: FailingRows(),
+    )
+    failed = build_live_smoke_report(tmp_path / "monitor", logs_root=None)["monitor"]
+
+    assert failed["issues"][0]["code"] == "read_failed"
+    assert failed["scan_cost"]["elapsed_ms"] >= 0
+    assert {
+        key: value
+        for key, value in failed["scan_cost"].items()
+        if key != "elapsed_ms"
+    } == {
+        "physical_bytes_read": None,
+        "physical_bytes_known": False,
+        "decoded_bytes_read": None,
+        "decoded_bytes_known": False,
+        "files_read": 0,
+        "records_read": 0,
+        "read_methods": {},
+    }
+
+
+def test_live_smoke_report_log_scan_cost_tracks_full_plain_and_gzip_reads(tmp_path):
+    logs_dir = tmp_path / "logs"
+    logs_dir.mkdir()
+    plain_path = logs_dir / "plain.log"
+    plain_text = "first line\n\nlast plain line\n"
+    plain_path.write_text(plain_text, encoding="utf-8")
+    gzip_path = logs_dir / "archive.log.gz"
+    gzip_text = "older gzip line\nlast gzip line\n"
+    with gzip.open(gzip_path, "wt", encoding="utf-8") as stream:
+        stream.write(gzip_text)
+
+    report = build_live_smoke_report(
+        tmp_path / "monitor",
+        logs_root=logs_dir,
+        log_tail_lines=2,
+    )
+    scan_cost = report["logs"]["scan_cost"]
+
+    assert scan_cost["elapsed_ms"] >= 0
+    assert scan_cost["physical_bytes_read"] == (
+        plain_path.stat().st_size + gzip_path.stat().st_size
+    )
+    assert scan_cost["physical_bytes_known"] is True
+    assert scan_cost["decoded_bytes_read"] == len(plain_text.encode()) + len(
+        gzip_text.encode()
+    )
+    assert scan_cost["decoded_bytes_known"] is True
+    assert scan_cost["files_read"] == 2
+    assert scan_cost["records_read"] == 4
+    assert scan_cost["read_methods"] == {"full_scan": 2}
+    assert summarize_live_smoke_report(report)["logs"]["scan_cost"] == scan_cost
+    assert summarize_live_smoke_report_brief(report)["logs"]["scan_cost"] == scan_cost
+
+
+def test_live_smoke_report_log_scan_cost_marks_unmeasurable_and_failed_reads_unknown(
+    tmp_path, monkeypatch
+):
+    logs_dir = tmp_path / "logs"
+    logs_dir.mkdir()
+    (logs_dir / "bot.log").write_text("first\n\nlast\n", encoding="utf-8")
+
+    class UnmeasurableRows:
+        def __enter__(self):
+            return (
+                iter([(4, "first\n"), (5, "\n"), (6, "last\n")]),
+                event_file_rows_module.EventRowWindow(),
+            )
+
+        def __exit__(self, *args):
+            return False
+
+    monkeypatch.setattr(
+        smoke_report_module,
+        "event_file_rows",
+        lambda *args, **kwargs: UnmeasurableRows(),
+    )
+    unmeasurable = build_live_smoke_report(
+        tmp_path / "monitor", logs_root=logs_dir, log_tail_lines=2
+    )["logs"]["scan_cost"]
+
+    assert unmeasurable["elapsed_ms"] >= 0
+    assert unmeasurable["physical_bytes_read"] is None
+    assert unmeasurable["physical_bytes_known"] is False
+    assert unmeasurable["decoded_bytes_read"] is None
+    assert unmeasurable["decoded_bytes_known"] is False
+    assert unmeasurable["files_read"] == 1
+    assert unmeasurable["records_read"] == 2
+    assert unmeasurable["read_methods"] == {"full_scan": 1}
+
+    class FailingRows:
+        def __enter__(self):
+            raise OSError(13, "Permission denied")
+
+        def __exit__(self, *args):
+            return False
+
+    monkeypatch.setattr(
+        smoke_report_module,
+        "event_file_rows",
+        lambda *args, **kwargs: FailingRows(),
+    )
+    failed = build_live_smoke_report(
+        tmp_path / "monitor", logs_root=logs_dir, log_tail_lines=2
+    )["logs"]["scan_cost"]
+
+    assert failed["elapsed_ms"] >= 0
+    assert {key: value for key, value in failed.items() if key != "elapsed_ms"} == {
+        "physical_bytes_read": None,
+        "physical_bytes_known": False,
+        "decoded_bytes_read": None,
+        "decoded_bytes_known": False,
+        "files_read": 0,
+        "records_read": 0,
+        "read_methods": {},
+    }
+
+
+def test_live_smoke_report_log_scan_cost_is_zero_known_without_logs_root(tmp_path):
+    report = build_live_smoke_report(tmp_path / "monitor", logs_root=None)
+    scan_cost = report["logs"]["scan_cost"]
+
+    assert scan_cost == {
+        "elapsed_ms": 0.0,
+        "physical_bytes_read": 0,
+        "physical_bytes_known": True,
+        "decoded_bytes_read": 0,
+        "decoded_bytes_known": True,
+        "files_read": 0,
+        "records_read": 0,
+        "read_methods": {},
+    }
+    assert summarize_live_smoke_report(report)["logs"]["scan_cost"] == scan_cost
+    assert summarize_live_smoke_report_brief(report)["logs"]["scan_cost"] == scan_cost
+
+
 def test_live_smoke_report_event_tail_lines_bounds_monitor_scan(tmp_path):
     events_path = (
         tmp_path / "monitor" / "binance" / "binance_01" / "events" / "current.ndjson"
@@ -1602,7 +1870,19 @@ def test_live_smoke_report_brief_summary_projects_top_level_counters(tmp_path):
     }
     assert brief["monitor"]["live_events"] == 2
     assert brief["event_window"]["enabled"] is False
-    assert brief["logs"] == {
+    brief_logs = dict(brief["logs"])
+    scan_cost = brief_logs.pop("scan_cost")
+    assert scan_cost["elapsed_ms"] >= 0
+    assert scan_cost["physical_bytes_read"] == (
+        logs_dir / "kucoin_01.log"
+    ).stat().st_size
+    assert scan_cost["physical_bytes_known"] is True
+    assert scan_cost["decoded_bytes_read"] == scan_cost["physical_bytes_read"]
+    assert scan_cost["decoded_bytes_known"] is True
+    assert scan_cost["files_read"] == 1
+    assert scan_cost["records_read"] == 1
+    assert scan_cost["read_methods"] == {"full_scan": 1}
+    assert brief_logs == {
         "max_files": 8,
         "tail_lines": 10,
         "max_matches": 50,

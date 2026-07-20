@@ -469,7 +469,7 @@ def _quarantine_gateio_cache_if_stale(cache_base: str, cutoff_date: str) -> None
             except Exception:
                 continue
             if day < cutoff:
-                stamp = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
+                stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
                 backup = f"{gateio_root}_backup_{stamp}"
                 logging.warning(
                     "GateIO cache has shards before %s; moving %s -> %s. "
