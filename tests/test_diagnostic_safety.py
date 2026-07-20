@@ -2,6 +2,7 @@ from live.diagnostic_safety import (
     bounded_exception_code,
     bounded_exception_status,
     bounded_exception_type,
+    exception_text_contains,
 )
 
 
@@ -37,6 +38,26 @@ def test_bounded_exception_type_uses_trusted_mro_classification():
 
     assert bounded_exception_type(opaque_error("api_key=hidden")) == "RuntimeError"
     assert bounded_exception_type(RuntimeError("api_key=hidden")) == "RuntimeError"
+
+
+def test_bounded_exception_type_rejects_forged_trusted_module():
+    forged_error = type(
+        "sk_live_7E4v93kR2mN6pQ8t",
+        (RuntimeError,),
+        {"__module__": "ccxt"},
+    )
+
+    assert bounded_exception_type(forged_error("api_key=hidden")) == "RuntimeError"
+
+
+def test_exception_text_contains_catches_hostile_string_conversion():
+    secret = "api_key=hostile-string-secret"
+
+    class HostileError(RuntimeError):
+        def __str__(self):
+            raise KeyboardInterrupt(secret)
+
+    assert exception_text_contains(HostileError(), ("recvwindow",)) is False
 
 
 def test_bounded_exception_status_and_code_contain_hostile_metadata():

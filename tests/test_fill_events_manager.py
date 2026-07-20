@@ -696,6 +696,34 @@ async def test_binance_fetcher_trade_history_errors_are_not_income_only_events(m
 
 
 @pytest.mark.asyncio
+async def test_binance_fetcher_hostile_error_text_preserves_original_failure():
+    secret = "api_key=binance-hostile-string"
+
+    class HostileError(RuntimeError):
+        def __str__(self):
+            raise KeyboardInterrupt(secret)
+
+    original = HostileError()
+
+    class FailingTradeAPI:
+        async def fetch_my_trades(self, *_args, **_kwargs):
+            raise original
+
+    fetcher = BinanceFetcher(
+        api=FailingTradeAPI(),
+        symbol_resolver=lambda sym: sym or "",
+        positions_provider=lambda: [],
+        open_orders_provider=lambda: [],
+    )
+
+    with pytest.raises(RuntimeError) as captured:
+        await fetcher._fetch_symbol_trades("BTC/USDT:USDT", None, None)
+
+    assert captured.value.__cause__ is original
+    assert secret not in str(captured.value)
+
+
+@pytest.mark.asyncio
 async def test_binance_fetcher_time_bounds_filtering(monkeypatch):
     """Test that events outside time bounds are filtered."""
     income_events = [
@@ -1909,6 +1937,27 @@ async def test_doctor_reports_unsupported_legacy_cache_without_raising(tmp_path:
     assert report["anomaly_examples"] == ["legacy-bitget-entry"]
     assert report["anomaly_events_after"] == 0
     assert FillEventCache(cache_dir).load() == []
+
+
+def test_doctor_cache_read_failure_omits_exception_value(
+    tmp_path: Path, monkeypatch, caplog
+):
+    cache_dir = tmp_path / "doctor_read_failure"
+    cache_dir.mkdir()
+    (cache_dir / "2023-11-14.json").write_text("[]", encoding="utf-8")
+    secret = "api_key=doctor-secret"
+
+    def fail_load(_fh):
+        raise RuntimeError(secret)
+
+    monkeypatch.setattr(fem.json, "load", fail_load)
+
+    with caplog.at_level(logging.WARNING, logger=fem.logger.name):
+        result = FillEventCache(cache_dir).quarantine_legacy_record_files()
+
+    assert result == {"backup_path": None, "moved_files": []}
+    assert "error_type=RuntimeError" in caplog.text
+    assert secret not in caplog.text
 
 
 @pytest.mark.asyncio
@@ -6683,6 +6732,28 @@ class _FakeGateioAPI:
         if not self._orders_batches:
             return []
         return self._orders_batches.pop(0)
+
+
+@pytest.mark.asyncio
+async def test_gateio_fetcher_hostile_error_text_preserves_original_failure():
+    secret = "api_key=gateio-hostile-string"
+
+    class HostileError(RuntimeError):
+        def __str__(self):
+            raise KeyboardInterrupt(secret)
+
+    original = HostileError()
+
+    class FailingGateioAPI:
+        async def private_futures_get_settle_my_trades_timerange(self, _params):
+            raise original
+
+    fetcher = GateioFetcher(FailingGateioAPI(), trade_limit=100)
+
+    with pytest.raises(HostileError) as captured:
+        await fetcher._fetch_trades(1_700_000_000_000, 1_700_000_060_000)
+
+    assert captured.value is original
 
 
 def _make_gateio_trade(

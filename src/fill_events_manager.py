@@ -41,7 +41,7 @@ from bitget_normalization import (
     normalize_uta_fill_payload as _normalize_uta_fill_payload,
 )
 from config import load_input_config, prepare_config
-from live.diagnostic_safety import bounded_exception_type
+from live.diagnostic_safety import bounded_exception_type, exception_text_contains
 
 try:
     from utils import ts_to_date  # type: ignore
@@ -105,9 +105,12 @@ class FillEventCacheContractError(RuntimeError):
 
 
 def _is_disk_full_error(exc: BaseException) -> bool:
-    if isinstance(exc, OSError) and getattr(exc, "errno", None) == errno.ENOSPC:
-        return True
-    return "No space left on device" in str(exc)
+    try:
+        if isinstance(exc, OSError) and getattr(exc, "errno", None) == errno.ENOSPC:
+            return True
+    except BaseException:
+        pass
+    return exception_text_contains(exc, ("no space left on device",))
 
 
 # ---------------------------------------------------------------------------
@@ -1658,9 +1661,10 @@ class FillEventCache:
                     payload = json.load(fh) or []
             except Exception as exc:
                 logger.warning(
-                    "[fills-doctor] could not inspect fill cache file for legacy contract repair | path=%s error=%s",
+                    "[fills-doctor] could not inspect fill cache file for legacy contract repair | "
+                    "path=%s error_type=%s",
                     path,
-                    exc,
+                    bounded_exception_type(exc),
                 )
                 continue
             if not isinstance(payload, list):
@@ -3069,8 +3073,9 @@ class BinanceFetcher(BaseFetcher):
                     bounded_exception_type(exc),
                 )
                 return []
-            msg = str(exc).lower() if exc else ""
-            if "does not have market symbol" in msg or "market symbol" in msg:
+            if exception_text_contains(
+                exc, ("does not have market symbol", "market symbol")
+            ):
                 self._note_unsupported_symbol(ccxt_symbol)
                 return []
             logger.error(
@@ -6096,7 +6101,7 @@ class GateioFetcher(BaseFetcher):
                 continue
             except Exception as exc:
                 # Check if it's a rate limit error in disguise
-                if "TOO_MANY_REQUESTS" in str(exc):
+                if exception_text_contains(exc, ("too_many_requests",)):
                     consecutive_rate_limits += 1
                     sleep_time = min(2**consecutive_rate_limits, 30)
                     logger.debug(

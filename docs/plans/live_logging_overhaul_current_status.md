@@ -28,10 +28,11 @@ Estimated completion:
   metadata; the commit containing this handoff is a moving review head.
 - Scope: remove arbitrary exception values from structured fill-refresh
   summaries, exchange-specific fetcher diagnostics, request timing, staged
-  remote-call events, cache reads, startup/process handling, blocking/routine/coverage
+  remote-call events, cache reads/doctor repair, startup/process handling, blocking/routine/coverage
   callers, and HSL flatten confirmation while retaining bounded exception
   type, validated numeric status/code, and existing source, coverage, retry, timing, count,
-  and endpoint context. Adjacent monitor, metadata-capture, and HSL progress
+  and code-owned endpoint context. Bounded cause-chain inspection preserves timestamp
+  recovery for redacted wrappers. Adjacent monitor, metadata-capture, and HSL progress
   diagnostics use the same safe type boundary.
 - Behavior boundary: diagnostic retention and projection only. Exception
   propagation, refresh and retry behavior, fill accounting, planning, orders,

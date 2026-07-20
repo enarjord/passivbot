@@ -161,9 +161,11 @@ boundary follow the same classification-only rule. Redaction is diagnostic-only:
 propagation, retry and coverage behavior, fill accounting, planning, risk, and trading behavior
 remain unchanged.
 
-Cache-read contract failures and the outer process failure projection follow the same rule so a
+Cache-read/doctor failures and the outer process failure projection follow the same rule so a
 preserved exception cause cannot be exposed by an unsanitized startup traceback. The blocking
-failure line may also retain validated numeric status and exchange code.
+failure line may also retain validated numeric status/code and a code-owned endpoint label.
+Time-sync classification may inspect bounded exception text and a bounded cause chain, but that
+inspection must not retain the text or replace the original failure.
 Monitor error events use the same hostile-metadata-safe exception-type boundary; diagnostic
 publication must not replace the original refresh exception.
 

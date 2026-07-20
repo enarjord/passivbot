@@ -11271,6 +11271,28 @@ async def test_exchange_time_sync_recovery_refreshes_ccxt_clients(caplog):
     assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 
+def test_exchange_time_sync_detection_traverses_cause_without_rendering_wrapper():
+    bot = Passivbot.__new__(Passivbot)
+    inner = RuntimeError("timestamp outside recvWindow code=-1021")
+    try:
+        raise RuntimeError("error_type=RuntimeError") from inner
+    except RuntimeError as outer:
+        assert bot._is_exchange_time_sync_error(outer) is True
+
+
+def test_exchange_time_sync_detection_contains_hostile_exception_text():
+    bot = Passivbot.__new__(Passivbot)
+    secret = "api_key=time-sync-hostile-string"
+
+    class HostileError(RuntimeError):
+        def __str__(self):
+            raise KeyboardInterrupt(secret)
+
+    error = HostileError()
+
+    assert bot._is_exchange_time_sync_error(error) is False
+
+
 @pytest.mark.asyncio
 async def test_exchange_time_sync_no_hook_emits_unavailable_event(caplog):
     bot = Passivbot.__new__(Passivbot)
@@ -11562,6 +11584,18 @@ def test_execution_loop_error_fields_are_bounded_and_classify_unknown_endpoint()
     assert "SECRET" not in str(fields)
     assert "SIG" not in str(fields)
     assert "example.invalid" not in str(fields)
+
+
+def test_execution_loop_error_fields_reject_credential_shaped_endpoint():
+    bot = Passivbot.__new__(Passivbot)
+    secret = "sk_live_7E4v93kR2mN6pQ8t"
+
+    fields = bot._execution_loop_error_fields(
+        RuntimeError(f"GET https://example.invalid/{secret}")
+    )
+
+    assert fields["endpoint"] == "unknown"
+    assert secret not in str(fields)
 
 
 def test_execution_loop_error_fields_contain_hostile_exception_metadata():

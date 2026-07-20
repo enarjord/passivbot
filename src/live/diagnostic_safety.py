@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import sys
 
 EXCEPTION_TYPE_MAX_LEN = 80
 _SENSITIVE_EXCEPTION_TYPE_RE = re.compile(
@@ -41,6 +42,17 @@ def _trusted_exception_module(module: str) -> bool:
     )
 
 
+def _module_exports_exception_class(module: str, name: str, cls: type) -> bool:
+    try:
+        module_obj = sys.modules.get(module)
+        if type(module_obj) is not type(sys):
+            return False
+        namespace = type(sys).__getattribute__(module_obj, "__dict__")
+        return type(namespace) is dict and namespace.get(name) is cls
+    except BaseException:
+        return False
+
+
 def bounded_exception_type(exc: BaseException) -> str:
     try:
         mro = type.__getattribute__(type(exc), "__mro__")
@@ -57,11 +69,32 @@ def bounded_exception_type(exc: BaseException) -> str:
                 and name.isascii()
                 and name.isidentifier()
                 and not _SENSITIVE_EXCEPTION_TYPE_RE.search(name)
+                and _module_exports_exception_class(module, name, cls)
             ):
                 return name[:EXCEPTION_TYPE_MAX_LEN]
         return "Error"
     except BaseException:
         return "Error"
+
+
+def exception_text_contains(
+    exc: BaseException,
+    needles: tuple[str, ...],
+    *,
+    max_chars: int = 4096,
+) -> bool:
+    """Inspect bounded exception text for code-owned markers without returning it."""
+    try:
+        text = str(exc)
+        if type(text) is not str:
+            return False
+        lowered = text[:max_chars].lower()
+        return any(
+            type(needle) is str and needle.lower() in lowered
+            for needle in needles
+        )
+    except BaseException:
+        return False
 
 
 def _exact_scalar_text(value: object) -> str | None:

@@ -67,6 +67,7 @@ from live.diagnostic_safety import (
     bounded_exception_code,
     bounded_exception_status,
     bounded_exception_type,
+    exception_text_contains,
 )
 from live.freshness import ACCOUNT_SURFACES, LIVE_STATE_SURFACES, FreshnessLedger
 from live.events import DiagnosticEvent, emit_diagnostic_event, run_diagnostic_step
@@ -492,6 +493,26 @@ def _log_process_failure(label: str, exc: BaseException) -> None:
         bounded_exception_status(exc) or "-",
         bounded_exception_code(exc) or "-",
     )
+
+
+_EXECUTION_LOOP_ERROR_ENDPOINTS = frozenset(
+    {
+        "account-overview",
+        "accounts",
+        "balance",
+        "candles",
+        "fills",
+        "my-trades",
+        "ohlcv",
+        "open-orders",
+        "orders",
+        "positions",
+        "ticker",
+        "tickers",
+        "time",
+        "trades",
+    }
+)
 
 
 def compute_live_warmup_windows(
@@ -2309,26 +2330,44 @@ class Passivbot:
 
     def _is_exchange_time_sync_error(self, exc: BaseException) -> bool:
         """Return True for CCXT timestamp/nonce errors recoverable by clock sync."""
-        exc_name = type(exc).__name__.lower()
-        text = str(exc).lower()
-        combined = f"{exc_name} {text}"
-        if isinstance(exc, getattr(ccxt_errors, "InvalidNonce", tuple())):
-            return True
-        return any(
-            needle in combined
-            for needle in (
-                "invalidnonce",
-                "invalid nonce",
-                "kc-api-timestamp",
-                "recvwindow",
-                "recv window",
-                "timestamp for this request",
-                "outside of the recvwindow",
-                '"code":-1021',
-                "'code': -1021",
-                "code=-1021",
-            )
+        needles = (
+            "invalidnonce",
+            "invalid nonce",
+            "kc-api-timestamp",
+            "recvwindow",
+            "recv window",
+            "timestamp for this request",
+            "outside of the recvwindow",
+            '"code":-1021',
+            "'code': -1021",
+            "code=-1021",
         )
+        current: BaseException | None = exc
+        seen: set[int] = set()
+        for _ in range(8):
+            if current is None or id(current) in seen:
+                break
+            seen.add(id(current))
+            try:
+                if isinstance(current, getattr(ccxt_errors, "InvalidNonce", tuple())):
+                    return True
+            except BaseException:
+                pass
+            if "invalidnonce" in bounded_exception_type(current).lower():
+                return True
+            if exception_text_contains(current, needles):
+                return True
+            next_exc = None
+            for attr in ("__cause__", "__context__"):
+                try:
+                    candidate = BaseException.__getattribute__(current, attr)
+                except BaseException:
+                    continue
+                if isinstance(candidate, BaseException):
+                    next_exc = candidate
+                    break
+            current = next_exc
+        return False
 
     async def _maybe_recover_exchange_time_sync(
         self, exc: BaseException, *, source: str
@@ -5786,12 +5825,8 @@ class Passivbot:
         if not match:
             return "unknown"
         url = match.group(0).split("?", 1)[0].rstrip("/")
-        endpoint = url.rsplit("/", 1)[-1]
-        return self._execution_loop_error_field(
-            endpoint,
-            re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,47}"),
-            fallback="unknown",
-        )
+        endpoint = url.rsplit("/", 1)[-1].lower()
+        return endpoint if endpoint in _EXECUTION_LOOP_ERROR_ENDPOINTS else "unknown"
 
     def _log_execution_loop_error_burst(self, fields: dict[str, str]) -> None:
         """Summarize repeated execution-loop failures without hiding individual errors."""
