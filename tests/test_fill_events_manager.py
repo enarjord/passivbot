@@ -6796,6 +6796,33 @@ async def test_gateio_fetcher_classifies_late_rate_limit_marker(monkeypatch):
     sleep.assert_awaited_once_with(2)
 
 
+@pytest.mark.asyncio
+async def test_gateio_fetcher_does_not_broaden_rate_limit_marker_case(monkeypatch):
+    class LowercaseMarkerAPI:
+        def __init__(self):
+            self.calls = 0
+
+        async def private_futures_get_settle_my_trades_timerange(self, _params):
+            self.calls += 1
+            raise RuntimeError("too_many_requests")
+
+    api = LowercaseMarkerAPI()
+    sleep = AsyncMock()
+    monkeypatch.setattr(fem.asyncio, "sleep", sleep)
+    fetcher = GateioFetcher(api, trade_limit=100)
+
+    with pytest.raises(RuntimeError, match="too_many_requests"):
+        await fetcher._fetch_trades(1_700_000_000_000, 1_700_000_060_000)
+
+    assert api.calls == 1
+    sleep.assert_not_awaited()
+
+
+def test_disk_full_text_fallback_preserves_marker_case():
+    assert fem._is_disk_full_error(RuntimeError("No space left on device"))
+    assert not fem._is_disk_full_error(RuntimeError("no space left on device"))
+
+
 def _make_gateio_trade(
     trade_id: str,
     order_id: str,

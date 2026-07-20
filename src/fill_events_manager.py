@@ -110,7 +110,9 @@ def _is_disk_full_error(exc: BaseException) -> bool:
             return True
     except BaseException:
         pass
-    return exception_text_contains(exc, ("no space left on device",))
+    return exception_text_contains(
+        exc, ("No space left on device",), case_sensitive=True
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -6101,7 +6103,9 @@ class GateioFetcher(BaseFetcher):
                 continue
             except Exception as exc:
                 # Check if it's a rate limit error in disguise
-                if exception_text_contains(exc, ("too_many_requests",)):
+                if exception_text_contains(
+                    exc, ("TOO_MANY_REQUESTS",), case_sensitive=True
+                ):
                     consecutive_rate_limits += 1
                     sleep_time = min(2**consecutive_rate_limits, 30)
                     logger.debug(

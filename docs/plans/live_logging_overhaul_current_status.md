@@ -32,7 +32,8 @@ Estimated completion:
   callers, and HSL flatten confirmation while retaining bounded exception
   type, validated numeric status/code, and existing source, coverage, retry, timing, count,
   and code-owned endpoint context. Complete chunked text inspection plus a bounded
-  cause/context graph preserves retry and timestamp recovery for redacted wrappers. Adjacent
+  cause/context graph preserves caller-specific retry marker case rules and timestamp recovery for
+  redacted wrappers. Adjacent
   monitor, metadata-capture, and HSL progress
   diagnostics use the same safe type boundary.
 - Behavior boundary: diagnostic retention and projection only. Exception

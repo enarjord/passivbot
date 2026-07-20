@@ -66,6 +66,18 @@ def test_exception_text_contains_scans_late_markers_across_bounded_chunks():
     assert exception_text_contains(error, ("too_many_requests",)) is True
 
 
+def test_exception_text_contains_preserves_case_sensitive_matching():
+    upper = RuntimeError(("x" * 5000) + " TOO_MANY_REQUESTS")
+    lower = RuntimeError(("x" * 5000) + " too_many_requests")
+
+    assert exception_text_contains(
+        upper, ("TOO_MANY_REQUESTS",), case_sensitive=True
+    )
+    assert not exception_text_contains(
+        lower, ("TOO_MANY_REQUESTS",), case_sensitive=True
+    )
+
+
 def test_bounded_exception_status_and_code_contain_hostile_metadata():
     secret = "api_key=attribute-secret"
 

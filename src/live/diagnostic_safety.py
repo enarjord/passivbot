@@ -81,25 +81,27 @@ def exception_text_contains(
     exc: BaseException,
     needles: tuple[str, ...],
     *,
+    case_sensitive: bool = False,
     chunk_chars: int = 4096,
 ) -> bool:
     """Inspect exception text in bounded temporary chunks without returning it."""
     try:
         text = str(exc)
-        if type(text) is not str:
+        if type(text) is not str or type(case_sensitive) is not bool:
             return False
-        lowered_needles = tuple(
-            needle.lower()
+        search_needles = tuple(
+            needle if case_sensitive else needle.lower()
             for needle in needles
             if type(needle) is str and needle
         )
-        if not lowered_needles or type(chunk_chars) is not int or chunk_chars <= 0:
+        if not search_needles or type(chunk_chars) is not int or chunk_chars <= 0:
             return False
-        overlap = max(len(needle) for needle in lowered_needles) - 1
+        overlap = max(len(needle) for needle in search_needles) - 1
         for start in range(0, len(text), chunk_chars):
             chunk_start = max(0, start - overlap)
-            lowered_chunk = text[chunk_start : start + chunk_chars].lower()
-            if any(needle in lowered_chunk for needle in lowered_needles):
+            chunk = text[chunk_start : start + chunk_chars]
+            searchable_chunk = chunk if case_sensitive else chunk.lower()
+            if any(needle in searchable_chunk for needle in search_needles):
                 return True
         return False
     except BaseException:
