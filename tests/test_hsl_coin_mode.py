@@ -52,6 +52,36 @@ def test_hsl_event_emitter_failure_logs_type_without_secret(caplog):
     assert secret not in caplog.text
     assert url not in caplog.text
 
+    class HostileExceptionMeta(type):
+        @property
+        def __name__(cls):
+            return None
+
+    hostile_type = HostileExceptionMeta(
+        "HostileHslEventEmitterFailure", (RuntimeError,), {}
+    )
+
+    def fail_with_hostile_type(*_args, **_kwargs):
+        raise hostile_type("api_secret=hostile-hsl-metadata-secret")
+
+    bot._emit_live_event = fail_with_hostile_type
+    caplog.clear()
+    with caplog.at_level(logging.DEBUG):
+        assert (
+            hsl._emit_hsl_event(
+                bot,
+                "hsl.status",
+                ("hsl", "risk"),
+                {},
+                pside="long",
+                symbol="BTC/USDT:USDT",
+            )
+            is None
+        )
+
+    assert "Error" in caplog.text
+    assert "hostile-hsl-metadata-secret" not in caplog.text
+
 
 class FakeRiskCache:
     def __init__(self, covered_start_ms=1, history_scope="all"):

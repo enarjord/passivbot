@@ -114,12 +114,14 @@ _CYCLE_DEGRADED_INVALID_SYMBOL_LIST_KEYS = (
 def _bounded_exception_type(exc: BaseException) -> str:
     try:
         name = type(exc).__name__
+        if not isinstance(name, str):
+            return "Error"
+        bounded = name[:_EXCEPTION_TYPE_MAX_LEN]
+        if not bounded or not bounded.isascii() or not bounded.isidentifier():
+            return "Error"
+        return bounded
     except Exception:
         return "Error"
-    bounded = name[:_EXCEPTION_TYPE_MAX_LEN]
-    if not bounded or not bounded.isascii() or not bounded.isidentifier():
-        return "Error"
-    return bounded
 
 
 _CYCLE_DEGRADED_INVALID_INT_KEYS = (

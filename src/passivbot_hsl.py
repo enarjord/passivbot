@@ -69,12 +69,14 @@ _HSL_EXCEPTION_TYPE_MAX_LEN = 80
 def _bounded_hsl_exception_type(exc: BaseException) -> str:
     try:
         name = type(exc).__name__
+        if not isinstance(name, str):
+            return "Error"
+        bounded = name[:_HSL_EXCEPTION_TYPE_MAX_LEN]
+        if not bounded or not bounded.isascii() or not bounded.isidentifier():
+            return "Error"
+        return bounded
     except Exception:
         return "Error"
-    bounded = name[:_HSL_EXCEPTION_TYPE_MAX_LEN]
-    if not bounded or not bounded.isascii() or not bounded.isidentifier():
-        return "Error"
-    return bounded
 
 
 def _hsl_flat_epsilon(qty_step: Any = 0.0) -> float:
