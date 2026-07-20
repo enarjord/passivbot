@@ -22,7 +22,7 @@ Estimated completion:
 
 ## Active Review Slice
 
-- PR pending, `Consolidate pre-create snapshot skip warnings`; branch
+- PR #1342, `Consolidate pre-create snapshot skip warnings`; branch
   `codex/pre-create-market-snapshot-projection`, based on canonical
   `524a6d2795015afee7cc1dd916880e4e48a6e13b`.
 - Scope: make the existing `execution.create_skipped` event the sole normal
