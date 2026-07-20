@@ -54,6 +54,19 @@ retain exception text, request URLs, credentials, response bodies, paths, or oth
 from the sink exception. Sink counters and pipeline timings remain available through health
 snapshots independently of the exception payload.
 
+## Market Snapshot Diagnostic Skips
+
+`market.snapshot_diagnostic_skipped` records noncritical position-change and balance diagnostics
+that could not obtain the required live market snapshot. The event retains only bounded context,
+exception type, cycle correlation, and its stable status/reason; it never retains arbitrary
+exception text, request details, account values, credentials, URLs, payloads, or tracebacks.
+
+The event is the sole normal console/text warning when the structured console is available. Its
+projection is bounded to the normal 240-character record budget. One bounded stdlib warning remains
+only when the event emitter or structured console owner is unavailable. Event or sink failure must
+not alter position/balance refresh, state mutation, scheduling, retries, planning, orders, risk, or
+the caller's existing decision to continue after this noncritical diagnostic failure.
+
 The generated value reference is `../generated/live_event_registry.md`.
 
 ## Runtime Identity

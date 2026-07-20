@@ -68,6 +68,7 @@ from live.event_bus import (
     ConsoleSummarySink,
     EventTypes,
     format_forager_eligibility_console,
+    format_market_snapshot_diagnostic_console,
     format_memory_snapshot_console,
     format_periodic_health_summary,
     LIVE_EVENT_CONSOLE_ENV,
@@ -786,6 +787,18 @@ class Passivbot:
         pipeline = getattr(self, "_live_event_pipeline", None)
         return bool(
             callable(getattr(self, "_emit_ema_unavailable_event", None))
+            and Passivbot._live_event_console_available(self)
+            and callable(getattr(pipeline, "emit", None))
+            and getattr(pipeline, "console_sink", None) is not None
+        )
+
+    def _market_snapshot_diagnostic_structured_console_available(self) -> bool:
+        """Return True when the market-snapshot event owns console/text output."""
+        pipeline = getattr(self, "_live_event_pipeline", None)
+        return bool(
+            callable(
+                getattr(self, "_emit_market_snapshot_diagnostic_skipped_event", None)
+            )
             and Passivbot._live_event_console_available(self)
             and callable(getattr(pipeline, "emit", None))
             and getattr(pipeline, "console_sink", None) is not None
@@ -10932,9 +10945,29 @@ class Passivbot:
         emit_market_snapshot_event = getattr(
             self, "_emit_market_snapshot_diagnostic_skipped_event", None
         )
+        event_emitted = False
         if callable(emit_market_snapshot_event):
-            emit_market_snapshot_event(context=context, error=exc)
-        logging.warning("[market] skipped %s | error=%s", context, exc)
+            try:
+                event_emitted = bool(
+                    emit_market_snapshot_event(context=context, error=exc)
+                )
+            except Exception as event_exc:
+                logging.debug(
+                    "[event] failed to emit market snapshot diagnostic skipped event error_type=%s",
+                    type(event_exc).__name__,
+                )
+        if not (
+            event_emitted
+            and Passivbot._market_snapshot_diagnostic_structured_console_available(self)
+        ):
+            logging.warning(
+                "%s",
+                format_market_snapshot_diagnostic_console(
+                    context=context,
+                    error_type=type(exc).__name__,
+                    cycle_id=Passivbot._current_live_event_cycle_id(self),
+                ),
+            )
         return True
 
     async def calc_upnl_sum(self):

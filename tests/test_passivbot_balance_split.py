@@ -145,19 +145,25 @@ def test_market_snapshot_ticker_strategy_respects_explicit_override():
     assert bot._market_snapshot_ticker_strategy() == "bulk"
 
 
-def test_noncritical_market_snapshot_error_emits_skipped_event():
+def test_noncritical_market_snapshot_error_emits_skipped_event(caplog):
     sink = ListEventSink()
+    console_sink = ListEventSink()
+    text_sink = ListEventSink()
     bot = Passivbot.__new__(Passivbot)
     bot._live_event_current_cycle_id = "cy_market_diag"
+    bot.live_event_console_enabled = True
     bot._live_event_pipeline = LiveEventPipeline(
         structured_sinks=[sink],
         monitor_sinks=[],
+        console_sink=console_sink,
+        text_sink=text_sink,
     )
     exc = RuntimeError(
         "missing live market snapshots for upnl api_key=secret-token"
     )
 
-    assert bot._log_noncritical_market_snapshot_error("upnl diagnostics", exc) is True
+    with caplog.at_level(logging.WARNING):
+        assert bot._log_noncritical_market_snapshot_error("upnl diagnostics", exc) is True
     assert bot._live_event_pipeline.flush(timeout=2.0) is True
     events = [
         event
@@ -174,10 +180,51 @@ def test_noncritical_market_snapshot_error_emits_skipped_event():
     assert event.reason_code == ReasonCodes.MARKET_SNAPSHOT_DIAGNOSTIC_SKIPPED
     assert event.data["context"] == "upnl diagnostics"
     assert event.data["error_type"] == "RuntimeError"
-    assert "secret-token" not in event.data["error"]
-    assert DEFAULT_ROUTES[EventTypes.MARKET_SNAPSHOT_DIAGNOSTIC_SKIPPED].console is False
-    assert DEFAULT_ROUTES[EventTypes.MARKET_SNAPSHOT_DIAGNOSTIC_SKIPPED].text is False
+    assert "error" not in event.data
+    assert DEFAULT_ROUTES[EventTypes.MARKET_SNAPSHOT_DIAGNOSTIC_SKIPPED].console is True
+    assert DEFAULT_ROUTES[EventTypes.MARKET_SNAPSHOT_DIAGNOSTIC_SKIPPED].text is True
+    assert console_sink.events == [event]
+    assert text_sink.events == [event]
+    assert not caplog.records
     assert bot._live_event_pipeline.close(timeout=2.0) is True
+
+
+@pytest.mark.parametrize("emitter_mode", ["missing", "raises", "returns_none"])
+def test_noncritical_market_snapshot_error_keeps_bounded_legacy_warning_without_event_owner(
+    caplog, emitter_mode
+):
+    def raising_emitter(**_kwargs):
+        raise RuntimeError("event pipeline failure with raw detail")
+
+    emitters = {
+        "missing": None,
+        "raises": raising_emitter,
+        "returns_none": lambda **_kwargs: None,
+    }
+    bot = Passivbot.__new__(Passivbot)
+    bot._live_event_current_cycle_id = "C" * 1_000
+    bot.live_event_console_enabled = emitter_mode != "missing"
+    bot._live_event_pipeline = (
+        None
+        if emitter_mode == "missing"
+        else SimpleNamespace(emit=lambda *_args, **_kwargs: None, console_sink=object())
+    )
+    bot._emit_market_snapshot_diagnostic_skipped_event = emitters[emitter_mode]
+    exc = RuntimeError("live market snapshots unavailable token=secret-token")
+
+    with caplog.at_level(logging.WARNING):
+        assert (
+            bot._log_noncritical_market_snapshot_error("X" * 1_000, exc) is True
+        )
+
+    warnings = [record.getMessage() for record in caplog.records]
+    assert len(warnings) == 1
+    warning = warnings[0]
+    assert "secret-token" not in warning
+    assert "event pipeline failure" not in warning
+    assert "error_type=RuntimeError" in warning
+    assert "reason=market_snapshot_diagnostic_skipped" in warning
+    assert len("2026-07-15T23:45:40Z WARNING  [hyperliquid] " + warning) <= 240
 
 
 @pytest.mark.asyncio

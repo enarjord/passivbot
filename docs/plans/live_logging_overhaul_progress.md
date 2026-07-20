@@ -15,7 +15,28 @@ merge, live smoke evidence changes, or new gaps are discovered.
 - Do not use this file for design churn; unresolved design details belong in the
   plan or a focused handoff doc.
 
-## Latest Canonical Deployment (PR #1341)
+## Latest Canonical Deployment (PR #1342)
+
+- PR #1342 merged exact approved head
+  `8bae713d56f682744a09033f86a46a546b92ca3e` as canonical
+  `644d058f3975a2772f96bf10281f3873dca7112c` after exact-head Hermes approval,
+  green Python/Rust CI, and a finding-free built-in Codex review.
+- VPS5 guarded-prepared tracked-clean from `524a6d2795` without a Rust build;
+  the Rust source fingerprint/stamp stayed
+  `691bff9683deec9382a4e96ab6a107c14145f88edd6ae2f8e2380b8ba6824449`.
+- The exact-target orchestrator gracefully restarted only panes `%358`-`%362`
+  as PIDs `1073251/1073259/1073253/1073261/1073255`; shutdown, startup, and
+  stable target coverage were complete without force or broad-pattern signals.
+- The integrated smoke retained one natural KuCoin `RequestTimeout` and
+  correctly stayed non-green. A strictly post-timeout settled window was
+  hard-green with zero hard problem events, log hard matches, monitor warnings,
+  or monitor errors. All five exact processes were stable, the tracked checkout
+  remained clean, and protected `misc:0.0` stayed `%8`/PID `434835`. No direct
+  authenticated exchange call or event was manufactured. The next logging
+  migration consolidates noncritical market-snapshot diagnostic warnings under
+  their existing structured event.
+
+## Previous Canonical Deployment (PR #1341)
 
 - PR #1341 merged exact approved head
   `d56ffc3617d9ebed4e0ebb3b98d4b6a80fb2b89c` as canonical

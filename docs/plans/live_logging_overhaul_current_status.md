@@ -22,21 +22,22 @@ Estimated completion:
 
 ## Active Review Slice
 
-- PR #1342, `Consolidate pre-create snapshot skip warnings`; branch
-  `codex/pre-create-market-snapshot-projection`, based on canonical
-  `524a6d2795015afee7cc1dd916880e4e48a6e13b`.
-- Scope: make the existing `execution.create_skipped` event the sole normal
-  warning for pre-create planning-snapshot and market-snapshot failures when
-  the structured console is available, while retaining one bounded legacy
-  fallback when no event console owner exists.
+- Pending PR, `Consolidate market-snapshot diagnostic warnings`; branch
+  `codex/market-snapshot-diagnostic-projection`, based on canonical
+  `644d058f3975a2772f96bf10281f3873dca7112c`.
+- Scope: make the existing `market.snapshot_diagnostic_skipped` event the sole
+  normal console/text warning for noncritical position-change and balance
+  diagnostics when the structured console is available, while retaining one
+  bounded legacy fallback when no event console owner exists.
 - Behavior boundary: logging projection only. The existing planning/market
-  snapshot gate, refresh attempts, reason codes, entry-block attribution, and
-  returned create list are unchanged. Raw exception text remains excluded from
-  structured/monitor/console/text data.
-- Baseline: all three fail-closed skip branches already emit the bounded event,
-  but also write an unconditional stdlib warning. The failed-refresh legacy
-  line additionally includes raw exception text even though the event retains
-  only its safe exception type.
+  snapshot lookup, position/balance refresh, state mutation, and caller
+  continuation are unchanged. The event and fallback retain only stable
+  context and exception type, not arbitrary exception text.
+- Baseline: the helper already emits the durable bounded event, but its route is
+  console/text disabled and it always writes a second stdlib warning containing
+  raw exception text. The public emitter also swallows failures without
+  returning ownership status, so the fallback cannot currently distinguish a
+  successful event from a failed emission.
 - Review gate: exact-current-head Hermes approval plus green Python/Rust CI.
   Built-in Codex automatic review is additional and every finding must be
   verified and resolved.
@@ -44,7 +45,33 @@ Estimated completion:
   and bounded settled smoke because live console ownership changes; preserve
   `misc:0.0`.
 
-## Deployed Baseline (PR #1341)
+## Deployed Baseline (PR #1342)
+
+- PR #1342 merged exact approved head
+  `8bae713d56f682744a09033f86a46a546b92ca3e` as canonical
+  `644d058f3975a2772f96bf10281f3873dca7112c` after exact-head Hermes approval,
+  green Python/Rust CI, and a finding-free built-in Codex review of the final
+  semantic head.
+- VPS5 guarded-prepared tracked-clean from
+  `524a6d2795015afee7cc1dd916880e4e48a6e13b` without a Rust build. The source
+  fingerprint/stamp remained
+  `691bff9683deec9382a4e96ab6a107c14145f88edd6ae2f8e2380b8ba6824449`, and the
+  compiled artifact SHA remained
+  `7611f3eff1d8702ff29d90490a1aba490db5c816e7e3f09a2c33e5c4085da023`.
+- The bounded exact-target orchestrator gracefully restarted only panes
+  `%358`-`%362` as PIDs `1073251/1073259/1073253/1073261/1073255`. All five
+  shutdown and startup cohorts completed without force or broad-pattern
+  signals.
+- The integrated 120-second smoke retained one natural KuCoin
+  `RequestTimeout` and correctly stayed non-green. A strictly post-timeout
+  settled window was hard-green with zero hard problem events, log hard
+  matches, monitor warnings, or monitor errors. Final three-sample target
+  verification found all five processes stable with no missing, duplicate, or
+  extra process; the tracked checkout remained clean and protected `misc:0.0`
+  stayed `%8`/PID `434835`. No direct authenticated exchange call or event was
+  manufactured.
+
+## Previous Deployed Baseline (PR #1341)
 
 - PR #1341 merged exact approved head
   `d56ffc3617d9ebed4e0ebb3b98d4b6a80fb2b89c` as canonical

@@ -795,7 +795,7 @@ DEFAULT_ROUTES: dict[str, EventRoute] = {
     EventTypes.HEALTH_SUMMARY: EventRoute(console=True, text=True),
     EventTypes.RESOURCE_MEMORY_SNAPSHOT: EventRoute(console=True, text=True),
     EventTypes.MARKET_SNAPSHOT_DIAGNOSTIC_SKIPPED: EventRoute(
-        console=False, text=False
+        console=True, text=True
     ),
     EventTypes.CYCLE_STARTED: EventRoute(
         console=True, text=True, throttle_interval_ms=60_000
@@ -1192,6 +1192,8 @@ _PRE_CREATE_SKIP_REASON_CODES = {
     ReasonCodes.PRE_CREATE_PLANNING_SNAPSHOT_INVALID,
 }
 
+_MARKET_SNAPSHOT_DIAGNOSTIC_CONSOLE_RECORD_LIMIT = 188
+
 
 def _bounded_pre_create_skip_console_token(value: object, *, limit: int) -> str:
     cleaned = _format_console_label(value)
@@ -1251,6 +1253,38 @@ def _format_pre_create_skip_console(event: LiveEvent) -> str:
         if len(candidate) <= _PRE_CREATE_SKIP_CONSOLE_RECORD_LIMIT:
             parts.append(stage_message)
     return " ".join(parts)[:_PRE_CREATE_SKIP_CONSOLE_RECORD_LIMIT]
+
+
+def format_market_snapshot_diagnostic_console(
+    *,
+    context: object,
+    error_type: object,
+    status: object = "skipped",
+    reason_code: object = ReasonCodes.MARKET_SNAPSHOT_DIAGNOSTIC_SKIPPED,
+    cycle_id: object = None,
+) -> str:
+    """Project a bounded market-snapshot diagnostic without exception text."""
+    parts = ["[market]"]
+    safe_status = _bounded_pre_create_skip_console_token(status, limit=16)
+    if safe_status:
+        parts.append(safe_status)
+    if cycle_id:
+        parts.append(
+            "cycle="
+            + _bounded_pre_create_skip_console_token(cycle_id, limit=32)
+        )
+    parts.append(
+        "context=" + _bounded_pre_create_skip_console_token(context, limit=32)
+    )
+    parts.append(
+        "error_type="
+        + _bounded_pre_create_skip_console_token(error_type, limit=24)
+    )
+    parts.append(
+        "reason="
+        + _bounded_pre_create_skip_console_token(reason_code, limit=64)
+    )
+    return " ".join(parts)[:_MARKET_SNAPSHOT_DIAGNOSTIC_CONSOLE_RECORD_LIMIT]
 
 
 def _console_entry_gate_summary(event: LiveEvent) -> list[str]:
@@ -2806,6 +2840,15 @@ def format_console_event(event: LiveEvent) -> str:
         return _format_console_balance_changed(event)
     if event.event_type == EventTypes.RESOURCE_MEMORY_SNAPSHOT:
         return format_memory_snapshot_console(event.data)
+    if event.event_type == EventTypes.MARKET_SNAPSHOT_DIAGNOSTIC_SKIPPED:
+        data = event.data if isinstance(event.data, Mapping) else {}
+        return format_market_snapshot_diagnostic_console(
+            context=data.get("context"),
+            error_type=data.get("error_type"),
+            status=event.status,
+            reason_code=event.reason_code,
+            cycle_id=event.cycle_id,
+        )
     if event.event_type == EventTypes.EMA_FALLBACK_USED:
         return format_ema_fallback_console(event.data)
     if event.event_type == EventTypes.EMA_UNAVAILABLE:

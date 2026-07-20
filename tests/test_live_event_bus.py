@@ -27,6 +27,7 @@ from live.event_bus import (
     format_ema_fallback_console,
     format_ema_unavailable_console,
     format_forager_eligibility_console,
+    format_market_snapshot_diagnostic_console,
     format_memory_snapshot_console,
     format_state_refresh_timing_console,
     live_event_debug_profile_enabled,
@@ -88,6 +89,48 @@ def test_live_event_tag_registry_values_are_unique_and_query_safe():
 
 def test_market_compatibility_event_type_is_stable():
     assert EventTypes.CONFIG_MARKET_COMPATIBILITY == "config.market_compatibility"
+
+
+def test_market_snapshot_diagnostic_console_projection_is_bounded_and_excludes_messages():
+    rendered = format_market_snapshot_diagnostic_console(
+        context="C" * 1_000,
+        error_type="E" * 1_000,
+        status="S" * 1_000,
+        reason_code="R" * 1_000,
+        cycle_id="Y" * 1_000,
+    )
+    longest_prefix = "2026-07-15T23:45:40Z WARNING  [hyperliquid] "
+
+    assert len(longest_prefix + rendered) <= 240
+    assert "C" * 65 not in rendered
+    assert "E" * 25 not in rendered
+    assert "Y" * 33 not in rendered
+
+
+def test_market_snapshot_diagnostic_emitter_reports_actual_emission_success():
+    class Bot:
+        live_event_debug_profiles = ()
+
+        def _current_live_event_cycle_id(self):
+            return "cy_1"
+
+        def _emit_live_event(self, *_args, **_kwargs):
+            return None
+
+    bot = Bot()
+    kwargs = {
+        "context": "upnl diagnostics",
+        "error": RuntimeError("market snapshot unavailable"),
+    }
+
+    assert live_event_emitters.emit_market_snapshot_diagnostic_skipped_event(
+        bot, **kwargs
+    ) is False
+
+    bot._emit_live_event = lambda *_args, **_kwargs: LiveEvent("test.event")
+    assert live_event_emitters.emit_market_snapshot_diagnostic_skipped_event(
+        bot, **kwargs
+    ) is True
 
 
 def test_memory_snapshot_event_type_is_stable():
