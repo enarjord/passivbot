@@ -22,7 +22,7 @@ Estimated completion:
 
 ## Active Review Slice
 
-- Pending PR, `Consolidate market-snapshot diagnostic warnings`; branch
+- PR #1343, `Consolidate market-snapshot diagnostic warnings`; branch
   `codex/market-snapshot-diagnostic-projection`, based on canonical
   `644d058f3975a2772f96bf10281f3873dca7112c`.
 - Scope: make the existing `market.snapshot_diagnostic_skipped` event the sole
