@@ -22,9 +22,10 @@ Estimated completion:
 
 ## Active Review Slice
 
-- Active branch `codex/fill-history-diagnostic-redaction`, based on canonical
-  `4192e709d46d3ef9516025e121ddad15c0d0cd6e`; resolve its PR and exact head
-  from live metadata after publication.
+- Open PR #1347, `Redact fill refresh failure diagnostics`, on branch
+  `codex/fill-history-diagnostic-redaction`, based on canonical
+  `4192e709d46d3ef9516025e121ddad15c0d0cd6e`. Resolve its exact head from live
+  metadata; the commit containing this handoff is a moving review head.
 - Scope: remove arbitrary exception values from structured fill-refresh
   summaries, fill-fetch request timing, blocking refresh failure logs, and
   routine-prefetch fallback logs while retaining bounded exception type and
@@ -1890,11 +1891,10 @@ above. PR #1344's EMA diagnostic redaction is merged and deployed at canonical
 WebSocket diagnostic redaction is merged and deployed at canonical
 `49cb68e56b20d71fbe42d33f31906d3a9c793e90`. PR #1346's live-event-emitter
 and event-adjacent HSL diagnostic redaction is merged and deployed at canonical
-`4192e709d46d3ef9516025e121ddad15c0d0cd6e`. The active fill-history
-diagnostic-redaction slice removes retained exception values from fill-refresh
-summaries and human diagnostics without changing refresh, fill, planning,
-risk, or trading behavior. Resolve its PR and exact head from live metadata
-after publication.
+`4192e709d46d3ef9516025e121ddad15c0d0cd6e`. Open PR #1347, `Redact fill
+refresh failure diagnostics`, removes retained exception values from
+fill-refresh summaries and human diagnostics without changing refresh, fill,
+planning, risk, or trading behavior. Resolve its exact head from live metadata.
 
 Do not create progress-only PRs or resume unrelated logging work from stale
 worktrees.
