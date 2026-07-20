@@ -22,9 +22,11 @@ Estimated completion:
 
 ## Active Review Slice
 
-- Branch `codex/diagnostic-exception-redaction`, based on canonical
-  `986e5d52f88692d1b6531bc38c307352c08e9cb9`; the pull request is pending
-  publication. Resolve the active review head from live branch/PR metadata.
+- PR #1345 `Redact legacy diagnostic exception text`; branch
+  `codex/diagnostic-exception-redaction`, based on canonical
+  `986e5d52f88692d1b6531bc38c307352c08e9cb9`. Its semantic predecessor is
+  `2087466167c59389ebf797bf2b9f2f732aaf96cb`; resolve the active review head
+  from live PR metadata because this status update is the final handoff delta.
 - Scope: remove arbitrary exception text from legacy
   `MonitorPublisher.record_error` payloads and WebSocket reconnect human
   diagnostics. Monitor error events retain safe caller context and a bounded
