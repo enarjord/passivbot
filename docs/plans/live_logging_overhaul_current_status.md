@@ -24,7 +24,10 @@ Estimated completion:
 
 - PR #1344 `Redact EMA diagnostics at the producer boundary`; branch
   `codex/ema-diagnostic-redaction`, based on canonical
-  `7e26a9062a88ecf211729d7d718fb4530630c4ba`. The pushed semantic head
+  `7e26a9062a88ecf211729d7d718fb4530630c4ba`. The active review head is the
+  commit containing this status update; resolve its exact SHA from live PR
+  #1344 metadata. Its reviewed predecessor is
+  `d67cbffc415ba6b54eb6d44385c7d0f0f91d0638`. The pushed semantic head
   `f442e4a66e0f78fd628b6e5724fd5865f9ec395c` received a finding-free
   independent Sol review after two exact-head finding/fix rounds.
 - Scope: remove arbitrary exception and fallback-reason text from
@@ -1815,10 +1818,10 @@ pane-parent relaunch classification and the restart preparation/orchestration
 slices through PR #1309 are also merged and deployed. Later logging slices
 through PR #1343, including adjacent PR #1329, are deployed at canonical
 `7e26a9062a88ecf211729d7d718fb4530630c4ba`; their current evidence is recorded
-above. Active pre-create `codex/ema-diagnostic-redaction` removes arbitrary
+above. Active PR #1344 on `codex/ema-diagnostic-redaction` removes arbitrary
 exception and fallback-reason text from EMA event and human fallback payloads
 without changing EMA calculation, fallback selection, candidate availability,
-or trading behavior.
+or trading behavior. Resolve its exact current head from live PR metadata.
 
 Do not create progress-only PRs or resume unrelated logging work from stale
 worktrees.
