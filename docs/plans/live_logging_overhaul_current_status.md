@@ -1784,10 +1784,11 @@ PR #1288's bounded target-identity stability, and PR #1289's plan binding are
 merged, deployed, and naturally validated without process control. PR #1290's
 pane-parent relaunch classification and the restart preparation/orchestration
 slices through PR #1309 are also merged and deployed. Later logging slices
-through PR #1341, including adjacent PR #1329, are deployed at canonical
-`524a6d2795015afee7cc1dd916880e4e48a6e13b`; their current evidence is recorded
-above. The active pre-create snapshot slice consolidates duplicate warning
-projection without changing the existing fail-closed gate or refresh behavior.
+through PR #1342, including adjacent PR #1329, are deployed at canonical
+`644d058f3975a2772f96bf10281f3873dca7112c`; their current evidence is recorded
+above. Active PR #1343 consolidates noncritical market-snapshot diagnostic
+warning ownership and redaction without changing position/balance refresh or
+caller continuation behavior.
 
 Do not create progress-only PRs or resume unrelated logging work from stale
 worktrees.
