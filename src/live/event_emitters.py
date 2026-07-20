@@ -2226,6 +2226,27 @@ def _ema_map_summary(values: dict[str, dict[float, float]] | None) -> dict[str, 
     }
 
 
+_EMA_DIAGNOSTIC_TYPES = frozenset(
+    ("m1_close", "m1_volume", "m1_log_range", "h1_log_range")
+)
+
+
+def _safe_ema_reason_code(value: Any, *, default: str = "unknown_failure") -> str:
+    candidate = str(value or "")
+    return candidate if re.fullmatch(r"[a-z][a-z0-9_]{0,63}", candidate) else default
+
+
+def _safe_ema_error_type(value: Any) -> str:
+    candidate = str(value or "")
+    return candidate if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,63}", candidate) else "Error"
+
+
+def _safe_ema_types(value: Any) -> tuple[str, ...]:
+    if not isinstance(value, (list, tuple, set, frozenset)):
+        return ()
+    return tuple(sorted({str(item) for item in value if str(item) in _EMA_DIAGNOSTIC_TYPES}))
+
+
 def _fallback_examples(
     values: dict[str, list[tuple[Any, ...]]] | None,
     *,
@@ -2237,7 +2258,9 @@ def _fallback_examples(
         ages: list[int] = []
         counts: list[int] = []
         metrics: set[str] = set()
-        reason = None
+        reason_code = None
+        error_type = None
+        ema_type = None
         for item in items or []:
             if not isinstance(item, (list, tuple)):
                 continue
@@ -2264,8 +2287,11 @@ def _fallback_examples(
                     count = _safe_int(item[2])
                     if count is not None:
                         counts.append(count)
-                if len(item) >= 4 and item[3] is not None:
-                    reason = str(item[3])[:160]
+                if len(item) >= 4:
+                    reason_code = _safe_ema_reason_code(item[3])
+                if len(item) >= 5:
+                    error_type = _safe_ema_error_type(item[4])
+                ema_type = "m1_close"
         example: dict[str, Any] = {
             "symbol": str(symbol),
             "count": len(items or []),
@@ -2277,61 +2303,68 @@ def _fallback_examples(
             example["max_age_ms"] = max(ages)
         if counts:
             example["max_fallbacks"] = max(counts)
-        if reason:
-            example["reason"] = reason
+        if ema_type:
+            example["ema_type"] = ema_type
+        if reason_code:
+            example["reason_code"] = reason_code
+        if error_type:
+            example["error_type"] = error_type
         examples.append(example)
     return examples
 
 
+def _candidate_detail_tuple(item: Any) -> tuple[str, str, tuple[str, ...], tuple[float, ...]]:
+    if not isinstance(item, (list, tuple)):
+        return str(item), "Error", (), ()
+    symbol = str(item[0]) if len(item) >= 1 else ""
+    error_type = _safe_ema_error_type(item[1]) if len(item) >= 2 else "Error"
+    ema_types = _safe_ema_types(item[2]) if len(item) >= 3 else ()
+    raw_spans = item[3] if len(item) >= 4 and isinstance(item[3], (list, tuple)) else ()
+    spans = tuple(
+        span for value in raw_spans if (span := _safe_float(value)) is not None
+    )
+    return symbol, error_type, ema_types, spans
+
+
 def _candidate_unavailable_summary(
-    values: dict[str, list[tuple[str, str, str]]] | None,
+    values: dict[str, list[tuple]] | None,
     *,
     limit: int = 8,
 ) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     for reason, items in sorted((values or {}).items())[:limit]:
-        symbols = sorted({str(symbol) for symbol, _error_type, _error in items or []})
+        details = [_candidate_detail_tuple(item) for item in items or []]
+        symbols = sorted({symbol for symbol, _error_type, _ema_types, _spans in details})
         error_types = sorted(
-            {str(error_type) for _symbol, error_type, _error in items or []}
+            {error_type for _symbol, error_type, _ema_types, _spans in details}
         )
-        example_error = next(
-            (str(error) for _symbol, _error_type, error in items or [] if error),
-            "",
+        ema_type_counts: Counter[str] = Counter(
+            ema_type
+            for _symbol, _error_type, ema_types, _spans in details
+            for ema_type in ema_types
         )
+        spans = [
+            span
+            for _symbol, _error_type, _ema_types, item_spans in details
+            for span in item_spans
+        ]
         out.append(
             {
-                "reason": str(reason),
+                "reason": _safe_ema_reason_code(reason),
                 "symbols": _symbol_sample(symbols),
                 "error_types": error_types[:4],
-                "example_error": example_error[:160] if example_error else None,
+                "ema_types": [
+                    {"ema_type": key, "count": int(count)}
+                    for key, count in sorted(ema_type_counts.items())
+                ][:limit],
+                "spans": _span_sample(spans),
             }
         )
     return out
 
 
-_EMA_TYPE_RE = re.compile(
-    r"\b(?:missing\s+required\s+)?"
-    r"(?P<ema_type>m1_close|m1_volume|m1_log_range|h1_log_range)\s+EMA\b",
-    re.IGNORECASE,
-)
-_EMA_SPAN_REASON_RE = re.compile(
-    r"\bspan=(?P<span>[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?)"
-    r"\s+reason=(?P<reason>[^;|]+)",
-    re.IGNORECASE,
-)
-
-
-def _candidate_detail_tuple(item: Any) -> tuple[str, str, str]:
-    if not isinstance(item, (list, tuple)):
-        return str(item), "", ""
-    symbol = str(item[0]) if len(item) >= 1 else ""
-    error_type = str(item[1]) if len(item) >= 2 else ""
-    error = str(item[2]) if len(item) >= 3 else ""
-    return symbol, error_type, error
-
-
 def _ema_unavailable_debug_summary(
-    candidate_values: dict[str, list[tuple[str, str, str]]] | None,
+    candidate_values: dict[str, list[tuple]] | None,
     ema_unavailable_reasons: dict[str, list[str]] | None,
     *,
     limit: int = 8,
@@ -2342,22 +2375,14 @@ def _ema_unavailable_debug_summary(
         error_types: set[str] = set()
         ema_type_counts: Counter[str] = Counter()
         spans: list[float] = []
-        inner_reason_counts: Counter[str] = Counter()
         for raw_item in raw_items or []:
-            symbol, error_type, error = _candidate_detail_tuple(raw_item)
+            symbol, error_type, ema_types, item_spans = _candidate_detail_tuple(raw_item)
             if symbol:
                 symbols.add(symbol)
             if error_type:
                 error_types.add(error_type)
-            for match in _EMA_TYPE_RE.finditer(error or ""):
-                ema_type_counts[match.group("ema_type").lower()] += 1
-            for match in _EMA_SPAN_REASON_RE.finditer(error or ""):
-                span = _safe_float(match.group("span"))
-                if span is not None:
-                    spans.append(span)
-                inner_reason = str(match.group("reason") or "").strip()
-                if inner_reason:
-                    inner_reason_counts[inner_reason[:120]] += 1
+            ema_type_counts.update(ema_types)
+            spans.extend(item_spans)
         group: dict[str, Any] = {
             "reason": str(reason),
             "symbols": _symbol_sample(symbols),
@@ -2370,13 +2395,6 @@ def _ema_unavailable_debug_summary(
             ][:limit]
         if spans:
             group["spans"] = _span_sample(spans)
-        if inner_reason_counts:
-            group["inner_reasons"] = [
-                {"reason": key, "count": int(count)}
-                for key, count in sorted(
-                    inner_reason_counts.items(), key=lambda kv: (-kv[1], kv[0])
-                )[:limit]
-            ]
         candidate_groups.append(group)
 
     unavailable_groups = [
@@ -3553,7 +3571,7 @@ def _emit_ema_fallback_used_event_unchecked(
     bot: Any,
     *,
     close_ema_recoveries: dict[str, list[tuple[float, int]]] | None = None,
-    close_ema_fallbacks: dict[str, list[tuple[float, int, int, str]]] | None = None,
+    close_ema_fallbacks: dict[str, list[tuple[float, int, int, str, str]]] | None = None,
     forager_cached_ema_fallbacks: dict[str, list[tuple[str, float, int]]] | None = None,
 ) -> None:
     recovered_count = sum(len(items) for items in (close_ema_recoveries or {}).values())
@@ -3603,15 +3621,17 @@ def emit_ema_fallback_used_event(bot: Any, *args: Any, **kwargs: Any) -> None:
 def _emit_ema_unavailable_event_unchecked(
     bot: Any,
     *,
-    optional_ema_drops: dict[tuple[str, str], list[tuple[str, float]]] | None = None,
-    candidate_ema_unavailable_details: dict[str, list[tuple[str, str, str]]] | None = None,
+    optional_ema_drops: dict[tuple[str, str, str], list[tuple[str, float]]] | None = None,
+    candidate_ema_unavailable_details: dict[str, list[tuple]] | None = None,
     ema_unavailable_reasons: dict[str, list[str]] | None = None,
 ) -> None:
     optional_count = sum(len(items) for items in (optional_ema_drops or {}).values())
     candidate_symbols = {
         str(symbol)
         for items in (candidate_ema_unavailable_details or {}).values()
-        for symbol, _error_type, _error in items
+        for symbol, _error_type, _ema_types, _spans in (
+            _candidate_detail_tuple(item) for item in items
+        )
     }
     unavailable_symbols = {
         str(symbol)
@@ -3628,11 +3648,16 @@ def _emit_ema_unavailable_event_unchecked(
         else ReasonCodes.OPTIONAL_EMA_DROPPED
     )
     optional_summary = []
-    for (ema_type, reason), items in sorted((optional_ema_drops or {}).items())[:8]:
+    for (ema_type, drop_reason_code, error_type), items in sorted(
+        (optional_ema_drops or {}).items()
+    )[:8]:
         optional_summary.append(
             {
-                "ema_type": str(ema_type),
-                "reason": str(reason)[:160],
+                "ema_type": str(ema_type)
+                if str(ema_type) in _EMA_DIAGNOSTIC_TYPES
+                else "unknown",
+                "reason_code": _safe_ema_reason_code(drop_reason_code),
+                "error_type": _safe_ema_error_type(error_type),
                 "symbols": _symbol_sample(symbol for symbol, _span in items),
                 "spans": _span_sample(span for _symbol, span in items),
             }

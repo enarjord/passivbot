@@ -2431,19 +2431,6 @@ def _bounded_ema_console_span(value: object) -> str:
     return f"{span:.6g}"
 
 
-def _bounded_ema_console_reason(value: object, *, limit: int) -> str:
-    reason = str(value or "").strip()
-    if reason.startswith("non-finite close EMA value"):
-        return "non_finite"
-    if re.fullmatch(r"[A-Za-z0-9_.-]+", reason):
-        return _bounded_ema_console_text(reason, limit=limit)
-    if ":" in reason:
-        error_type = reason.split(":", 1)[0].strip()
-        if re.fullmatch(r"[A-Za-z0-9_.-]+", error_type):
-            return _bounded_ema_console_text(error_type, limit=limit)
-    return "error"
-
-
 def _ema_fallback_examples(data: Mapping[str, Any]) -> list[Mapping[str, Any]]:
     examples = data.get("examples")
     if not isinstance(examples, Mapping):
@@ -2478,7 +2465,18 @@ def _format_ema_fallback_console_example(
             f"[{span_text}]",
             f" age={_bounded_ema_console_count(example.get('max_age_ms'))}ms",
             f" n={_bounded_ema_console_count(example.get('max_fallbacks'))}",
-            f" why={_bounded_ema_console_reason(example.get('reason'), limit=reason_limit)}",
+            " ema="
+            + _bounded_ema_console_text(
+                example.get("ema_type"), limit=reason_limit
+            ),
+            " why="
+            + _bounded_ema_console_text(
+                example.get("reason_code"), limit=reason_limit
+            ),
+            " err="
+            + _bounded_ema_console_text(
+                example.get("error_type"), limit=reason_limit
+            ),
         )
     )
 
@@ -2486,6 +2484,15 @@ def _format_ema_fallback_console_example(
 def format_ema_fallback_console(data: Mapping[str, Any]) -> str:
     """Render the close-EMA fallback warning without generic event decoration."""
     examples = _ema_fallback_examples(data)
+    ema_type = next(
+        (
+            str(example.get("ema_type"))
+            for example in examples
+            if example.get("ema_type")
+            in {"m1_close", "m1_volume", "m1_log_range", "h1_log_range"}
+        ),
+        None,
+    )
     max_age_ms = max(
         (_data_int(example, "max_age_ms") or 0 for example in examples), default=0
     )
@@ -2516,6 +2523,8 @@ def format_ema_fallback_console(data: Mapping[str, Any]) -> str:
         f"age={_bounded_ema_console_count(max_age_ms)}ms",
         f"streak={_bounded_ema_console_count(max_fallbacks)}",
     ]
+    if ema_type:
+        parts.append(f"ema={ema_type}")
     emitted_examples = 0
     for example in examples:
         if emitted_examples >= _EMA_FALLBACK_CONSOLE_EXAMPLE_LIMIT:
@@ -2541,12 +2550,6 @@ _EMA_UNAVAILABLE_CONSOLE_RECORD_LIMIT = 188
 _EMA_UNAVAILABLE_COMPACT_GROUP_LIMIT = 19
 _EMA_UNAVAILABLE_COMPACT_ERROR_LIMIT = 13
 _EMA_UNAVAILABLE_COMPACT_SYMBOL_LIMIT = 14
-_EMA_UNAVAILABLE_EMA_TYPE_RE = re.compile(
-    r"\b(?P<ema_type>m1_close|m1_volume|m1_log_range|h1_log_range)\s+EMA\b",
-    re.IGNORECASE,
-)
-
-
 def _ema_unavailable_console_group(data: Mapping[str, Any]) -> Mapping[str, Any]:
     groups = data.get("candidate_unavailable_groups")
     if not isinstance(groups, (list, tuple)):
@@ -2581,13 +2584,19 @@ def _ema_unavailable_console_symbol_preview(
 
 
 def _ema_unavailable_console_ema_type(group: Mapping[str, Any]) -> str | None:
-    example_error = group.get("example_error")
-    match = _EMA_UNAVAILABLE_EMA_TYPE_RE.search(str(example_error or ""))
-    if match is None:
+    ema_types = group.get("ema_types")
+    if not isinstance(ema_types, (list, tuple)):
         return None
-    return _bounded_ema_console_text(
-        match.group("ema_type"), limit=_EMA_UNAVAILABLE_CONSOLE_ERROR_LIMIT
-    )
+    for item in ema_types:
+        if isinstance(item, Mapping):
+            value = item.get("ema_type")
+        else:
+            value = item
+        if value in {"m1_close", "m1_volume", "m1_log_range", "h1_log_range"}:
+            return _bounded_ema_console_text(
+                value, limit=_EMA_UNAVAILABLE_CONSOLE_ERROR_LIMIT
+            )
+    return None
 
 
 def format_ema_unavailable_console(data: Mapping[str, Any]) -> str:

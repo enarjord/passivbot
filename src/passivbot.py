@@ -15844,10 +15844,12 @@ class Passivbot:
         cache_only_symbols: set[str] = set()
         ema_unavailable_symbols: set[str] = set()
         ema_unavailable_reasons: dict[str, list[str]] = {}
-        candidate_ema_unavailable_details: dict[str, list[tuple[str, str, str]]] = {}
-        optional_ema_drops: dict[tuple[str, str], list[tuple[str, float]]] = {}
+        candidate_ema_unavailable_details: dict[
+            str, list[tuple[str, str, tuple[str, ...], tuple[float, ...]]]
+        ] = {}
+        optional_ema_drops: dict[tuple[str, str, str], list[tuple[str, float]]] = {}
         close_ema_recoveries: dict[str, list[tuple[float, int]]] = {}
-        close_ema_fallbacks: dict[str, list[tuple[float, int, int, str]]] = {}
+        close_ema_fallbacks: dict[str, list[tuple[float, int, int, str, str]]] = {}
 
         def log_ema_issue(
             key: tuple,
@@ -15866,9 +15868,19 @@ class Passivbot:
                 logging.debug(message, *args)
 
         def record_optional_ema_drop(
-            ema_type: str, symbol: str, span: float, reason: str
+            ema_type: str,
+            symbol: str,
+            span: float,
+            reason_code: str,
+            error_type: str,
         ) -> None:
-            optional_ema_drops.setdefault((ema_type, reason), []).append((symbol, span))
+            optional_ema_drops.setdefault((ema_type, reason_code, error_type), []).append(
+                (symbol, span)
+            )
+
+        def ema_error_type(exc: Exception) -> str:
+            name = type(exc).__name__
+            return name if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,63}", name) else "Error"
 
         def mark_ema_unavailable(symbol: str, reason: str) -> None:
             ema_unavailable_symbols.add(symbol)
@@ -16298,7 +16310,7 @@ class Passivbot:
                             out[span] = fallback
                             continue
                     record_optional_ema_drop(
-                        ema_type, symbol, span, f"{type(e).__name__}: {e}"
+                        ema_type, symbol, span, "exception", ema_error_type(e)
                     )
                     continue
                 if math.isfinite(val):
@@ -16312,7 +16324,7 @@ class Passivbot:
                             out[span] = fallback
                             continue
                     record_optional_ema_drop(
-                        ema_type, symbol, span, f"non-finite value {val}"
+                        ema_type, symbol, span, "non_finite_value", "NonFiniteValue"
                     )
             return out
 
@@ -16365,10 +16377,24 @@ class Passivbot:
                             symbol, ema_type, [sp for sp, _why in missing]
                         ),
                     )
-                raise RuntimeError(
+                raise MissingRequiredEma(symbol, ema_type, missing, detail)
+            return out
+
+        class MissingRequiredEma(RuntimeError):
+            def __init__(
+                self,
+                symbol: str,
+                ema_type: str,
+                missing: list[tuple[float, str]],
+                detail: str,
+            ):
+                super().__init__(
                     f"[ema] missing required {ema_type} EMA for {symbol}: {detail}"
                 )
-            return out
+                self.symbol = symbol
+                self.ema_type = ema_type
+                self.missing = list(missing)
+                self.detail = detail
 
         class MissingCloseEma(RuntimeError):
             def __init__(
@@ -16385,6 +16411,31 @@ class Passivbot:
                 self.missing = list(missing)
                 self.detail = detail
 
+        def close_ema_reason_detail(reason: str) -> tuple[str, str]:
+            if str(reason).startswith("non-finite close EMA value"):
+                return "non_finite_value", "NonFiniteValue"
+            error_type = str(reason).split(":", 1)[0].strip()
+            if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,63}", error_type):
+                return "exception", error_type
+            return "unknown_failure", "Error"
+
+        def candidate_ema_detail(
+            exc: Exception,
+        ) -> tuple[str, tuple[str, ...], tuple[float, ...]]:
+            if isinstance(exc, MissingCloseEma):
+                return (
+                    ema_error_type(exc),
+                    ("m1_close",),
+                    tuple(float(span) for span, _reason in exc.missing),
+                )
+            if isinstance(exc, MissingRequiredEma):
+                return (
+                    ema_error_type(exc),
+                    (exc.ema_type,),
+                    tuple(float(span) for span, _reason in exc.missing),
+                )
+            return ema_error_type(exc), (), ()
+
         def log_missing_close_ema(symbol: str, missing: list[tuple[float, str]]) -> None:
             max_fallback_age_ms = int(Passivbot._close_ema_fallback_max_age_ms(self))
             stale = [
@@ -16396,11 +16447,11 @@ class Passivbot:
                 log_ema_issue(
                     ("close_fallback_stale", symbol),
                     required_ema_log_level(symbol),
-                    "[ema] close EMA fallback stale %s spans=%s max_age_ms=%d action=block_until_fresh reason=%s | %s",
+                    "[ema] close EMA fallback stale %s spans=%s max_age_ms=%d action=block_until_fresh reason=previous_close_ema_stale error_type=%s | %s",
                     Passivbot._log_symbol(symbol),
                     ",".join(f"{sp:.8g}" for sp, _why in stale[:8]),
                     max_fallback_age_ms,
-                    stale[0][1],
+                    close_ema_reason_detail(stale[0][1])[1],
                     ema_candle_health_context(symbol),
                     interval_ms=60 * 60 * 1000,
                 )
@@ -16478,20 +16529,22 @@ class Passivbot:
                             + 1
                         )
                         self._orchestrator_close_ema_fallback_counts[key] = n_fallbacks
+                        reason_code, error_type = close_ema_reason_detail(reason)
                         close_ema_fallbacks.setdefault(symbol, []).append(
-                            (span, age_ms, n_fallbacks, reason)
+                            (span, age_ms, n_fallbacks, reason_code, error_type)
                         )
                         log_ema_issue(
                             ("close_fallback", symbol, span),
                             logging.DEBUG,
                             "[ema] close EMA fallback %s span=%.8g ema=%.12g age_ms=%d"
-                            " n_fallbacks=%d reason=%s",
+                            " n_fallbacks=%d reason=%s error_type=%s",
                             Passivbot._log_symbol(symbol),
                             span,
                             prev_val,
                             age_ms,
                             n_fallbacks,
-                            reason,
+                            reason_code,
+                            error_type,
                         )
                         continue
                 missing.append((span, reason))
@@ -16520,7 +16573,8 @@ class Passivbot:
                         ema_type,
                         symbol,
                         span,
-                        f"projected open-tail {metric_key} EMA missing",
+                        "projected_metric_missing",
+                        "MissingProjectedMetric",
                     )
                     continue
                 val = float(metric_values[span])
@@ -16531,7 +16585,8 @@ class Passivbot:
                         ema_type,
                         symbol,
                         span,
-                        f"projected open-tail {metric_key} EMA non-finite value {val}",
+                        "projected_metric_non_finite",
+                        "NonFiniteValue",
                     )
             return out
 
@@ -16795,17 +16850,17 @@ class Passivbot:
                 else:
                     reason = "flat_active_required_ema_unavailable"
                 mark_ema_unavailable(sym, reason)
+                error_type, ema_types, spans = candidate_ema_detail(exc)
                 candidate_ema_unavailable_details.setdefault(reason, []).append(
-                    (sym, type(exc).__name__, str(exc))
+                    (sym, error_type, ema_types, spans)
                 )
                 log_ema_issue(
                     ("required_ema_unavailable", sym),
                     required_ema_log_level(sym),
-                    "[ema] required EMA unavailable %s action=mark_nontradable_until_fresh reason=%s error_type=%s error=%s | %s",
+                    "[ema] required EMA unavailable %s action=mark_nontradable_until_fresh reason=%s error_type=%s | %s",
                     Passivbot._log_symbol(sym),
                     reason,
-                    type(exc).__name__,
-                    exc,
+                    error_type,
                     ema_candle_health_context(sym),
                     interval_ms=15 * 60 * 1000,
                 )
@@ -16919,18 +16974,19 @@ class Passivbot:
         if optional_ema_drops:
             parts = []
             total = 0
-            for (ema_type, reason), items in sorted(optional_ema_drops.items()):
+            for (ema_type, reason_code, error_type), items in sorted(optional_ema_drops.items()):
                 total += len(items)
                 symbols_for_reason = sorted({symbol for symbol, _span in items})
                 spans_for_reason = sorted({float(span) for _symbol, span in items})
                 parts.append(
-                    "%s:n=%d symbols=%s spans=%s reason=%s"
+                    "%s:n=%d symbols=%s spans=%s reason=%s error_type=%s"
                     % (
                         ema_type,
                         len(items),
                         Passivbot._log_symbols(symbols_for_reason, limit=8),
                         ",".join(f"{span:.8g}" for span in spans_for_reason[:6]),
-                        str(reason)[:120],
+                        reason_code,
+                        error_type,
                     )
                 )
             logging.debug(
@@ -16969,25 +17025,37 @@ class Passivbot:
             max_fallbacks = max(
                 count
                 for items in close_ema_fallbacks.values()
-                for _span, _age_ms, count, _reason in items
+                for _span, _age_ms, count, _reason_code, _error_type in items
             )
             max_age_ms = max(
                 age_ms
                 for items in close_ema_fallbacks.values()
-                for _span, age_ms, _count, _reason in items
+                for _span, age_ms, _count, _reason_code, _error_type in items
             )
             examples = []
             for symbol, items in sorted(close_ema_fallbacks.items())[:8]:
                 spans = ",".join(
-                    f"{span:.8g}" for span, _age, _count, _reason in sorted(items)[:6]
+                    f"{span:.8g}"
+                    for span, _age, _count, _reason_code, _error_type in sorted(items)[:6]
                 )
-                symbol_max_age_ms = max(age for _span, age, _count, _reason in items)
-                symbol_max_fallbacks = max(count for _span, _age, count, _reason in items)
-                reason = next((why for _span, _age, _count, why in items if why), "")
+                symbol_max_age_ms = max(
+                    age for _span, age, _count, _reason_code, _error_type in items
+                )
+                symbol_max_fallbacks = max(
+                    count for _span, _age, count, _reason_code, _error_type in items
+                )
+                reason_code, error_type = next(
+                    (
+                        (code, error)
+                        for _span, _age, _count, code, error in items
+                        if code or error
+                    ),
+                    ("-", "-"),
+                )
                 examples.append(
                     f"{Passivbot._log_symbol(symbol)} spans={spans} "
                     f"max_age_ms={symbol_max_age_ms} max_fallbacks={symbol_max_fallbacks} "
-                    f"reason={str(reason)[:80]}"
+                    f"reason={reason_code} error_type={error_type}"
                 )
             log_ema_issue(
                 ("close_ema_fallback_summary",),
@@ -17029,18 +17097,31 @@ class Passivbot:
             parts = []
             all_symbols: set[str] = set()
             for reason, items in sorted(candidate_ema_unavailable_details.items()):
-                unique_symbols = sorted({symbol for symbol, _error_type, _error in items})
+                unique_symbols = sorted(
+                    {symbol for symbol, _error_type, _ema_types, _spans in items}
+                )
                 all_symbols.update(unique_symbols)
-                error_types = sorted({error_type for _symbol, error_type, _error in items})
-                example_error = next((error for _symbol, _error_type, error in items if error), "")
+                error_types = sorted(
+                    {
+                        error_type
+                        for _symbol, error_type, _ema_types, _spans in items
+                    }
+                )
+                ema_types = sorted(
+                    {
+                        ema_type
+                        for _symbol, _error_type, item_ema_types, _spans in items
+                        for ema_type in item_ema_types
+                    }
+                )
                 parts.append(
-                    "%s:n=%d symbols=%s error_types=%s example=%s"
+                    "%s:n=%d symbols=%s error_types=%s ema_types=%s"
                     % (
                         reason,
                         len(unique_symbols),
                         Passivbot._log_symbols(unique_symbols, limit=10),
                         ",".join(error_types[:4]),
-                        str(example_error)[:160],
+                        ",".join(ema_types[:4]) or "-",
                     )
                 )
             log_ema_issue(

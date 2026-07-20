@@ -837,6 +837,38 @@ async def test_close_ema_fallback_event_console_owns_normal_warning(caplog, monk
 
 
 @pytest.mark.asyncio
+async def test_close_ema_fallback_legacy_summary_omits_raw_exception_text(caplog):
+    try:
+        import passivbot as pb_mod
+    except ImportError:
+        pytest.skip("passivbot module not importable in test environment")
+
+    symbol = "AVAX/USDT:USDT"
+    spans = (10.0, (10.0 * 20.0) ** 0.5, 20.0)
+    bot = _BundleReproBot(
+        symbol,
+        close_mode="timeout",
+        prev_close_ema={span: 100.0 for span in spans},
+    )
+    bot.live_event_console_enabled = False
+    bot._live_event_pipeline = None
+
+    with caplog.at_level(logging.WARNING):
+        await pb_mod.Passivbot._load_orchestrator_ema_bundle(bot, [symbol], bot.PB_modes)
+
+    summaries = [
+        record.message
+        for record in caplog.records
+        if "close EMA fallback summary" in record.message
+    ]
+    assert len(summaries) == 1
+    assert "reason=exception" in summaries[0]
+    assert "error_type=TimeoutError" in summaries[0]
+    assert "kucoinfutures GET" not in summaries[0]
+    assert "RequestTimeout" not in summaries[0]
+
+
+@pytest.mark.asyncio
 async def test_candidate_ema_unavailable_logs_single_warning_summary(caplog):
     try:
         import passivbot as pb_mod
@@ -844,7 +876,7 @@ async def test_candidate_ema_unavailable_logs_single_warning_summary(caplog):
         pytest.skip("passivbot module not importable in test environment")
 
     symbols = ["AVAX/USDT:USDT", "TAO/USDT:USDT"]
-    bot = _BundleReproBot(symbols[0], close_mode="nan")
+    bot = _BundleReproBot(symbols[0], close_mode="timeout")
     bot.PB_modes = {"long": {}, "short": {}}
     bot.positions = {
         symbol: {
@@ -887,6 +919,13 @@ async def test_candidate_ema_unavailable_logs_single_warning_summary(caplog):
     assert not any("missing required close EMA AVAX" in message for message in warning_messages)
     assert not any("required EMA unavailable TAO" in message for message in warning_messages)
     assert not any("missing required close EMA TAO" in message for message in warning_messages)
+    summaries = [
+        message for message in warning_messages if "required EMA unavailable summary" in message
+    ]
+    assert "error_types=MissingCloseEma" in summaries[0]
+    assert "ema_types=m1_close" in summaries[0]
+    assert "kucoinfutures GET" not in summaries[0]
+    assert "RequestTimeout" not in summaries[0]
 
 
 @pytest.mark.asyncio
@@ -1369,7 +1408,8 @@ async def test_open_tail_projection_missing_optional_metrics_are_diagnostic(capl
     assert optional_logs
     assert "m1_volume" in optional_logs[-1]
     assert "m1_log_range" in optional_logs[-1]
-    assert "projected open-tail" in optional_logs[-1]
+    assert "reason=projected_metric_missing" in optional_logs[-1]
+    assert "error_type=MissingProjectedMetric" in optional_logs[-1]
 
 
 @pytest.mark.asyncio

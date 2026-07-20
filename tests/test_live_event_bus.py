@@ -1797,14 +1797,18 @@ def test_ema_fallback_console_formatter_retains_compact_warning_semantics():
                     "spans": [10.0, 20.0],
                     "max_age_ms": 120_000,
                     "max_fallbacks": 3,
-                    "reason": "previous_ema_timeout",
+                    "ema_type": "m1_close",
+                    "reason_code": "exception",
+                    "error_type": "TimeoutError",
                 },
                 {
                     "symbol": "ETH/USDT:USDT",
                     "spans": [30.0],
                     "max_age_ms": 60_000,
                     "max_fallbacks": 2,
-                    "reason": "cache_read_timeout",
+                    "ema_type": "m1_close",
+                    "reason_code": "exception",
+                    "error_type": "RequestTimeout",
                 },
             ]
         },
@@ -1817,14 +1821,17 @@ def test_ema_fallback_console_formatter_retains_compact_warning_semantics():
     assert message.startswith("[ema] close fallback n=3 sym=2(BTC/USDT:USDT,ETH/USDT:USDT)")
     assert "age=120000ms" in message
     assert "streak=3" in message
-    assert "ex=BTC/USDT:USDT[10,20] age=120000ms n=3 why=previous_ema_time" in message
+    assert (
+        "ex=BTC/USDT:USDT[10,20] age=120000ms n=3 ema=m1_close "
+        "why=exception err=TimeoutError"
+    ) in message
     assert "recovered" not in message
     assert "reason=" not in message
     assert format_console_event(event) == message
     assert event.to_dict() == before
 
 
-def test_ema_fallback_console_formatter_classifies_exception_reason_without_message():
+def test_ema_fallback_console_formatter_uses_safe_fields_without_raw_reason():
     message = format_ema_fallback_console(
         {
             "close_fallback_count": 1,
@@ -1836,14 +1843,18 @@ def test_ema_fallback_console_formatter_classifies_exception_reason_without_mess
                         "spans": [60.0],
                         "max_age_ms": 1000,
                         "max_fallbacks": 1,
-                        "reason": "RequestTimeout: https://private.example/token",
+                        "ema_type": "m1_close",
+                        "reason_code": "exception",
+                        "error_type": "RequestTimeout",
+                        "reason": "https://private.example/token",
                     }
                 ]
             },
         }
     )
 
-    assert "why=RequestTimeout" in message
+    assert "why=exception" in message
+    assert "err=RequestTimeout" in message
     assert "private.example" not in message
 
 
@@ -1862,14 +1873,18 @@ def test_ema_fallback_console_formatter_is_bounded_without_mutating_payload():
                     "spans": [1e300, 1e-300, 999.0],
                     "max_age_ms": maximum,
                     "max_fallbacks": maximum,
-                    "reason": "timeout " * 10_000,
+                    "ema_type": "m1_close",
+                    "reason_code": "exception",
+                    "error_type": "TimeoutError",
                 },
                 {
                     "symbol": "B" * 10_000,
                     "spans": [2e300],
                     "max_age_ms": maximum,
                     "max_fallbacks": maximum,
-                    "reason": "stale " * 10_000,
+                    "ema_type": "m1_close",
+                    "reason_code": "non_finite_value",
+                    "error_type": "NonFiniteValue",
                 },
             ]
         },
@@ -1885,7 +1900,8 @@ def test_ema_fallback_console_formatter_is_bounded_without_mutating_payload():
     assert "sym=999999999+(XXXXXXXXXXXXXXXX,YYYYYYYYYYYYYYYY)" in message
     assert "age=999999999+ms" in message
     assert "streak=999999999+" in message
-    assert "ex=AAAAAAAA" in message
+    assert "ema=m1_close" in message
+    assert "private.example" not in message
     assert event.to_dict() == before
 
 
@@ -1906,8 +1922,8 @@ def test_ema_unavailable_console_route_throttles_human_projection_but_keeps_deta
                 "reason": "cache_only_fetch_failed",
                 "symbols": {"count": 1, "sample": ["BTC/USDT:USDT"]},
                 "error_types": ["RuntimeError"],
-                "example_error": "missing required h1_log_range EMA",
-                "per_symbol_diagnostic": "detail must stay structured",
+                "ema_types": [{"ema_type": "h1_log_range", "count": 1}],
+                "spans": [672.0],
             }
         ],
     }
@@ -1930,9 +1946,9 @@ def test_ema_unavailable_console_route_throttles_human_projection_but_keeps_deta
     assert text.events == [first, boundary]
     assert pipeline.flush(timeout=2.0) is True
     assert structured.events == [first, throttled, boundary]
-    assert structured.events[0].data["candidate_unavailable_groups"][0][
-        "per_symbol_diagnostic"
-    ] == "detail must stay structured"
+    assert structured.events[0].data["candidate_unavailable_groups"][0]["ema_types"] == [
+        {"ema_type": "h1_log_range", "count": 1}
+    ]
     assert pipeline.close(timeout=2.0) is True
 
 
@@ -1954,11 +1970,8 @@ def test_ema_unavailable_console_formatter_is_bounded_and_retains_required_signa
                     ],
                 },
                 "error_types": ["MissingLogRangeEma", "RuntimeError"],
-                "example_error": (
-                    "[ema] missing required h1_log_range EMA for BTC/USDT:USDT: "
-                    "span=672 reason=non-finite value"
-                ),
-                "per_symbol_diagnostic": "x" * 10_000,
+                "ema_types": [{"ema_type": "h1_log_range", "count": 1}],
+                "spans": [672.0],
             }
         ],
     }
@@ -1975,7 +1988,7 @@ def test_ema_unavailable_console_formatter_is_bounded_and_retains_required_signa
     )
     assert len(longest_prefix + message) <= 240
     assert "SOL/USDT:USDT" not in message
-    assert "per_symbol_diagnostic" not in message
+    assert "example_error" not in message
     assert format_console_event(event) == message
     assert event.to_dict() == before
 
@@ -1989,7 +2002,7 @@ def test_ema_unavailable_console_formatter_keeps_identity_under_pathological_len
                 "reason": "r" * 10_000,
                 "symbols": {"count": maximum, "sample": ["S" * 10_000] * 3},
                 "error_types": ["E" * 10_000],
-                "example_error": "missing required h1_log_range EMA",
+                "ema_types": [{"ema_type": "h1_log_range", "count": maximum}],
             }
         ],
     }
