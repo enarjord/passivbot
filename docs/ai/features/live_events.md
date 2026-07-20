@@ -263,6 +263,16 @@ success remains INFO until the connector can prove whether it changed state; fai
 existing operator-visible warning or error. The event route remains structured/monitor-only, and
 event emission failure must not change exchange configuration control flow or results.
 
+## WebSocket Reconnect Diagnostics
+
+`websocket.reconnect` retains bounded reconnect count, retry delay, reason classification,
+rate-limit state, warning visibility, DEBUG stack-frame-emission state, and optional exception type.
+The human warning/debug projection may retain the same classifications and bounded stack depth, but
+must not render frame labels, line values, the exception value, raw reason text, request URLs,
+responses, or formatted exception-value traceback. A stack diagnostic is marked emitted only when
+DEBUG logging accepts it. Reconnect cadence, retry behavior, and connector control flow are
+independent of observability delivery.
+
 ## Execution-Loop Incidents
 
 An execution-loop failure publishes a bounded `error.bot` record and an equivalent first-occurrence

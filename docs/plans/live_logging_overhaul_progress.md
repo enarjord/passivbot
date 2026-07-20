@@ -15,7 +15,31 @@ merge, live smoke evidence changes, or new gaps are discovered.
 - Do not use this file for design churn; unresolved design details belong in the
   plan or a focused handoff doc.
 
-## Latest Canonical Deployment (PR #1343)
+## Latest Canonical Deployment (PR #1344)
+
+- PR #1344 merged exact approved head
+  `6a4fe26f90e8cb25f0dc09ecc39a067658addfa8` as canonical
+  `986e5d52f88692d1b6531bc38c307352c08e9cb9` after exact-head Hermes approval,
+  green Python/Rust CI, and a finding-free built-in Codex review. Independent
+  Sol review approved the semantic predecessor `f442e4a66e`; the final delta
+  only corrected the active handoff.
+- VPS5 guarded-prepared tracked-clean from `7e26a9062a8` without a Rust build;
+  the Rust source fingerprint/stamp and compiled artifact remained unchanged.
+  The exact-target orchestrator gracefully restarted only panes `%358`-`%362`
+  as PIDs `1076279/1076288/1076282/1076291/1076285`; all five exited,
+  relaunched, and verified without force or broad-pattern signals.
+- The integrated smoke correctly stayed red on one natural KuCoin
+  authoritative-balance `RequestTimeout` and had zero hard log matches or
+  monitor warnings/errors. A strictly post-incident settled window had a green
+  internal smoke contract with zero hard problem events, hard log matches, or
+  monitor warnings/errors. Final three-sample target verification retained five
+  stable exact processes in state `R`, a tracked-clean checkout, preserved
+  untracked artifacts, and protected `misc:0.0` `%8`/PID `434835`. No direct
+  authenticated exchange call or event was manufactured. The next redaction
+  slice removes arbitrary exception text from legacy monitor error events and
+  WebSocket reconnect diagnostics.
+
+## Previous Canonical Deployment (PR #1343)
 
 - PR #1343 merged exact approved head
   `2ee1382781e28e8e1d3341a43e22ef527b86f283` as canonical

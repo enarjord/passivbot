@@ -2899,15 +2899,27 @@ def test_ws_reconnect_emits_bounded_structured_event(monkeypatch, caplog):
     )
     now_ms = [1_000]
     monkeypatch.setattr(passivbot_module, "utc_ms", lambda: now_ms[0])
+    exception_value = "wss://ws.example.test/reconnect?api_key=SECRET_TOKEN"
 
     with caplog.at_level(logging.DEBUG):
-        Passivbot._log_ws_reconnect(
-            bot,
-            reconnect_no=1,
-            retry_delay_s=1.25,
-            reason="time_sync",
-            exc=TimeoutError("api_key=SECRET ping timeout"),
-        )
+        try:
+            raise TimeoutError(exception_value)
+        except TimeoutError as exc:
+            Passivbot._log_ws_reconnect(
+                bot,
+                reconnect_no=1,
+                retry_delay_s=1.25,
+                reason="time_sync",
+                exc=exc,
+            )
+
+    assert exception_value not in caplog.text
+    assert "SECRET_TOKEN" not in caplog.text
+    assert "wss://" not in caplog.text
+    assert "error_type=TimeoutError" in caplog.text
+    assert "reconnect #1" in caplog.text
+    assert "stack_frames=" in caplog.text
+    assert "Traceback" not in caplog.text
 
     assert bot._live_event_pipeline.flush(timeout=2.0) is True
     events = [
@@ -2958,6 +2970,150 @@ def test_ws_reconnect_emits_bounded_structured_event(monkeypatch, caplog):
         "warning_visible": False,
         "traceback_emitted": False,
     }
+
+    pathological_error = type("Error" + "X" * 512, (Exception,), {})
+    with caplog.at_level(logging.DEBUG):
+        Passivbot._log_ws_reconnect(
+            bot,
+            reconnect_no=5,
+            retry_delay_s=3.0,
+            reason="private reason wss://SECRET",
+            exc=pathological_error("wss://SECRET?api_key=SECRET"),
+        )
+    assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    pathological_event = sink.events[-1]
+    assert pathological_event.data["reason"] == "other"
+    assert pathological_event.data["error_type"] == "unknown"
+    assert pathological_event.data["traceback_emitted"] is False
+    assert "error_type=unknown" in caplog.text
+    assert "wss://SECRET" not in caplog.text
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
+
+
+def test_ws_reconnect_redacts_sensitive_traceback_frame_components(monkeypatch, caplog):
+    sink = ListEventSink()
+    bot = Passivbot.__new__(Passivbot)
+    bot.exchange = "kucoin"
+    bot._live_event_pipeline = LiveEventPipeline(
+        structured_sinks=[sink],
+        monitor_sinks=[],
+    )
+    monkeypatch.setattr(passivbot_module, "utc_ms", lambda: 1_000_000)
+    def raise_timeout():
+        raise TimeoutError("safe")
+
+    sensitive_function = types.FunctionType(
+        raise_timeout.__code__.replace(
+            co_name="wss://ws.example/private?id=opaque123",
+            co_filename="wss://ws.example/private?api_key=SECRET_TOKEN",
+        ),
+        globals(),
+    )
+
+    with caplog.at_level(logging.DEBUG):
+        try:
+            sensitive_function()
+        except TimeoutError as exc:
+            Passivbot._log_ws_reconnect(
+                bot,
+                reconnect_no=1,
+                retry_delay_s=1.0,
+                reason="connection_lost",
+                exc=exc,
+            )
+
+    assert "opaque123" not in caplog.text
+    assert "SECRET_TOKEN" not in caplog.text
+    assert "api_key" not in caplog.text
+    assert "wss://" not in caplog.text
+    assert "stack_frames=" in caplog.text
+    assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    assert sink.events[-1].data["traceback_emitted"] is True
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
+
+
+def test_ws_reconnect_bounds_stack_depth_without_extracting_traceback(
+    monkeypatch, caplog
+):
+    sink = ListEventSink()
+    bot = Passivbot.__new__(Passivbot)
+    bot.exchange = "kucoin"
+    bot._live_event_pipeline = LiveEventPipeline(
+        structured_sinks=[sink],
+        monitor_sinks=[],
+    )
+    monkeypatch.setattr(passivbot_module, "utc_ms", lambda: 1_000_000)
+    monkeypatch.setattr(
+        passivbot_module.traceback,
+        "extract_tb",
+        lambda *_args, **_kwargs: pytest.fail("traceback extraction must stay unused"),
+    )
+
+    def raise_deep(depth):
+        if depth:
+            return raise_deep(depth - 1)
+        raise TimeoutError("safe")
+
+    with caplog.at_level(logging.DEBUG):
+        try:
+            raise_deep(12)
+        except TimeoutError as exc:
+            Passivbot._log_ws_reconnect(
+                bot,
+                reconnect_no=1,
+                retry_delay_s=1.0,
+                reason="connection_lost",
+                exc=exc,
+            )
+
+    assert "stack_frames=4" in caplog.text
+    assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    assert sink.events[-1].data["traceback_emitted"] is True
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
+
+
+def test_ws_reconnect_does_not_consume_traceback_cadence_when_debug_disabled(
+    monkeypatch, caplog
+):
+    sink = ListEventSink()
+    bot = Passivbot.__new__(Passivbot)
+    bot.exchange = "kucoin"
+    bot._live_event_pipeline = LiveEventPipeline(
+        structured_sinks=[sink],
+        monitor_sinks=[],
+    )
+    monkeypatch.setattr(passivbot_module, "utc_ms", lambda: 1_000_000)
+
+    try:
+        raise TimeoutError("safe")
+    except TimeoutError as exc:
+        with caplog.at_level(logging.INFO):
+            Passivbot._log_ws_reconnect(
+                bot,
+                reconnect_no=1,
+                retry_delay_s=1.0,
+                reason="connection_lost",
+                exc=exc,
+            )
+        assert bot._live_event_pipeline.flush(timeout=2.0) is True
+        assert sink.events[-1].data["traceback_emitted"] is False
+        assert not hasattr(bot, "_ws_reconnect_traceback_last_ms")
+        assert "stack_frames=" not in caplog.text
+
+        caplog.clear()
+        with caplog.at_level(logging.DEBUG):
+            Passivbot._log_ws_reconnect(
+                bot,
+                reconnect_no=2,
+                retry_delay_s=1.0,
+                reason="connection_lost",
+                exc=exc,
+            )
+
+    assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    assert sink.events[-1].data["traceback_emitted"] is True
+    assert bot._ws_reconnect_traceback_last_ms == 1_000_000
+    assert "stack_frames=" in caplog.text
     assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 

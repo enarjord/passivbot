@@ -24,6 +24,7 @@ from numbers import Integral
 import passivbot_rust as pbr
 import logging
 import math
+import re
 from pathlib import Path
 from cli_utils import (
     add_help_all_argument,
@@ -178,7 +179,6 @@ from strategy_warmup import (
     strategy_warmup_requirements,
     strategy_warmup_value,
 )
-import re
 
 NetworkError = ccxt_errors.NetworkError
 RateLimitExceeded = ccxt_errors.RateLimitExceeded
@@ -6563,6 +6563,16 @@ class Passivbot:
         reconnect_no = int(reconnect_no or 0)
         retry_delay_s = max(0.0, float(retry_delay_s or 0.0))
         reason = str(reason or "connection_lost")
+        if reason not in {"connection_lost", "rate_limited", "time_sync"}:
+            reason = "other"
+        error_type = None
+        if exc is not None:
+            candidate_error_type = type(exc).__name__
+            error_type = (
+                candidate_error_type
+                if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,79}", candidate_error_type)
+                else "unknown"
+            )
         warning_visible = Passivbot._should_log_ws_reconnect_warning(
             self, reconnect_no
         )
@@ -6576,7 +6586,7 @@ class Passivbot:
                 retry_delay_s,
             )
         else:
-            exc_name = type(exc).__name__ if exc is not None else reason
+            exc_name = error_type if error_type is not None else reason
             logging.log(
                 level,
                 "[ws] %s: connection lost (reconnect #%d), retrying in %.1fs: %s",
@@ -6588,23 +6598,32 @@ class Passivbot:
         traceback_emitted = False
         if exc is not None:
             logging.debug(
-                "[ws] %s: reconnect reason=%s exception=%s", exchange, reason, exc
+                "[ws] %s: reconnect reason=%s error_type=%s",
+                exchange,
+                reason,
+                error_type,
             )
             now_ms = utc_ms()
             last_traceback_ms = int(
                 getattr(self, "_ws_reconnect_traceback_last_ms", 0) or 0
             )
-            if reconnect_no <= 1 or now_ms - last_traceback_ms >= 15 * 60 * 1000:
-                traceback_emitted = True
-                self._ws_reconnect_traceback_last_ms = now_ms
-                logging.debug(
-                    "[ws] %s: reconnect traceback follows (throttled)", exchange
-                )
-                logging.debug(
-                    "".join(
-                        traceback.format_exception(type(exc), exc, exc.__traceback__)
+            if logging.getLogger().isEnabledFor(logging.DEBUG) and (
+                reconnect_no <= 1
+                or now_ms - last_traceback_ms >= 15 * 60 * 1000
+            ):
+                stack_depth = 0
+                current_tb = exc.__traceback__
+                while current_tb is not None and stack_depth < 4:
+                    stack_depth += 1
+                    current_tb = current_tb.tb_next
+                if stack_depth:
+                    traceback_emitted = True
+                    self._ws_reconnect_traceback_last_ms = now_ms
+                    logging.debug(
+                        "[ws] %s: reconnect stack_frames=%d",
+                        exchange,
+                        stack_depth,
                     )
-                )
         self._emit_websocket_reconnect_event(
             reconnect_no=reconnect_no,
             retry_delay_s=retry_delay_s,
