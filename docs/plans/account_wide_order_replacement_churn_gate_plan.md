@@ -359,21 +359,24 @@ coordination is a separate feature.
 
 ## Quantitative Churn-Evidence Heuristic
 
-For each unmatched current ideal order outside the allowance exemptions:
+For each exact cohort, first associate the complete unmatched current-ideal group with the complete
+historical group. Market, risk-critical, and near-market ideals participate in this one-to-one
+assignment even though they are exempt later during admission; otherwise their historical mates
+could be reused to misclassify an ordinary peer. After group matching, classify each non-exempt
+current ideal as follows:
 
-1. Partition it by the exact cohort key above.
-2. For each prior valid snapshot in the active per-symbol window, newest first, perform a
+1. For each prior valid snapshot in the active per-symbol window, newest first, perform a
    deterministic one-to-one association within that snapshot.
-3. Prefer tight matches using `order_match_tolerance_pct` for both normalized price and quantity.
-4. Among remaining observations, find wider matches using
+2. Prefer tight matches using `order_match_tolerance_pct` for both normalized price and quantity.
+3. Among remaining observations, find wider matches using
    `order_replacement_churn_gate_tracking_tolerance_pct`.
-5. A newest contiguous run of tight matches spanning
+4. A newest contiguous run of tight matches spanning
    `order_replacement_churn_gate_stability_minutes` proves that the current price and quantity have
    settled; older wider evidence is ignored.
-6. Before that stability horizon is reached, any wider-but-not-tight match is current churn
+5. Before that stability horizon is reached, any wider-but-not-tight match is current churn
    evidence. A missing association is uncertainty/new intent and fails open rather than inheriting
    older evidence across the gap.
-7. Tight-only history shorter than the stability horizon, no history, or no wider association has
+6. Tight-only history shorter than the stability horizon, no history, or no wider association has
    no proven churn evidence and is admitted.
 
 The implementation may stop after proving either continuous recent stability or current
@@ -559,9 +562,12 @@ Rust dependency metadata and separate review.
 For each planning wave:
 
 1. Reconcile authoritative actual orders with the current valid Rust ideal.
-2. If any unmatched stale actual exists anywhere, suppress every non-panic creation account-wide
-   for the entire wave—whether its cancellation is selected, truncated, succeeds, fails, or is
-   reported absent.
+2. If any unmatched stale actual exists in proven bot-managed semantic scope, suppress every
+   non-panic creation account-wide for the entire wave—whether its cancellation is selected,
+   truncated, succeeds, fails, or is reported absent. An intentionally unmanaged actual in
+   `manual` or the entry portion of `tp_only` does not arm this barrier. An actual whose position
+   side or entry/close semantics are ambiguous arms the separate fail-closed creation barrier but
+   is not cancelled.
 3. Send the selected cancellation batch under existing limits and pacing.
 4. Request authoritative balance, positions, open-orders, and fills confirmation and end all
    non-panic creation work for the wave. A positive cancellation acknowledgement does not prove
@@ -898,6 +904,10 @@ events use bounded periodic summaries.
 - evidence expires exactly with the rolling window;
 - a scoped coin-override revision resets compatible history; global config, approved/ignored,
   forager membership, effective mode, and hedge-capability revisions reset account-wide history;
+- an hourly `init_markets()` refresh that changes price/quantity steps, minimums, contract
+  multiplier, active status, or another normalization constraint resets only the affected symbol's
+  history before its next classification; unchanged metadata and volatile raw exchange `info` do
+  not reset it;
 - price, EMA, volatility, trailing extrema, equity, available margin, unrealized PnL, mark/liquidation
   price, and mark-to-market notional changes do not reset history;
 - authoritative fill identity, realized-PnL cumulative max/last, raw/snapped realized wallet
