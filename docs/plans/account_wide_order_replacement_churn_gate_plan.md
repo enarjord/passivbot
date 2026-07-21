@@ -119,14 +119,27 @@ It must never widen exchange-order reconciliation.
 
 ### Cancellation is not gated
 
-Every unmatched actual order remains eligible for cancellation. If creation is deferred, the
-stale actual order is still removed. No replacement allowance or distance decision may leave a
-known stale order resting.
+Every unmatched **proven locally Passivbot-owned** actual order remains eligible for cancellation.
+If creation is deferred, that stale actual order is still removed. No replacement allowance or
+distance decision may leave a known owned stale order resting.
+
+Ownership is a prerequisite, not a heuristic side effect. Classify actual orders through the
+existing authoritative ownership/client-ID/local-execution contract:
+
+- proven local Passivbot ownership: include in exact reconciliation and stale cancellation;
+- proven foreign/manual ownership: exclude from Passivbot reconciliation and never cancel; retain
+  the existing foreign/manual-order policy;
+- unknown or contradictory ownership: do not cancel, append no snapshot, and fail closed for
+  account-wide non-panic creation until authoritative metadata resolves it.
+
+An explicit Passivbot-looking marker from another bot instance is not local ownership. Missing
+client metadata after restart must not turn an unowned order into a cancellation candidate. The
+dedicated protective market-panic path retains its existing separately reviewed authority.
 
 ### Missing inputs are not fabricated
 
 Invalid, partial, or unavailable planning results append no history. A deliberate valid Rust result
-with zero orders is a valid empty snapshot and cancels stale actual orders.
+with zero orders is a valid empty snapshot and cancels proven-owned stale actual orders.
 
 Missing or stale market data follows the existing scoped fail-closed creation contract. Distance
 must not default to zero, infinity, a candle close, or another neutral substitute.
@@ -289,7 +302,8 @@ History compatibility has both account-wide and scoped epochs because the Rust p
 account-wide dependencies. The account epoch covers exactly the non-market state passed to Rust
 that can change allocation: hysteresis-snapped wallet balance, raw realized wallet balance,
 per-symbol/position-side signed position size and average entry price, authoritative fill identity,
-global strategy/live configuration, effective hedge/one-way mode, approved/ignored sets, forager
+the exact `realized_pnl_cumsum_max` and `realized_pnl_cumsum_last` values passed to Rust, global
+strategy/live configuration, effective hedge/one-way mode, approved/ignored sets, forager
 membership, and the complete effective `PB_modes` map. It excludes equity, available margin,
 unrealized PnL, mark/liquidation price, mark-to-market notional, and other price-derived exchange
 fields. A change clears all ideal history before classifying the next complete Rust plan. A scoped
@@ -300,9 +314,10 @@ timestamps: exchange writes already consumed remain consumed for the rolling win
 
 Continuously changing prices, EMAs, volatility, trailing extrema, and price-derived account fields
 are excluded; including them would continuously reset the evidence gate and defeat its purpose. A
-new authoritative fill identity, realized wallet-balance change, or signed position-size/average-
-entry-price transition advances the account epoch because TWEL, entry gates, risk ordering, and
-portfolio sizing may change ideals on other symbols. This also preserves
+new authoritative fill identity, realized-PnL cumulative-value change, realized wallet-balance
+change, or signed position-size/average-entry-price transition advances the account epoch because
+TWEL, entry gates, realized-loss/unstuck policy, risk ordering, and portfolio sizing may change
+ideals on other symbols. This also preserves
 the existing contract that every fill resets trailing extrema and prevents pre-fill evidence from
 suppressing the first entry, close, HSL, or re-entry order of the new account phase. Ordinary market
 price movement does not advance the epoch. If later Rust metadata exposes a proven dependency graph,
@@ -678,6 +693,9 @@ This tradeoff must be measured in fake-live and, only with separate authority, l
 - A valid empty symbol plan is authoritative and may cancel all stale orders in that symbol.
 - Unknown required `pb_order_type`, `reduce_only`, or execution semantics do not match a known ideal
   and fail closed for affected normal planning.
+- Unknown/contradictory order ownership is never cancelled and blocks account-wide non-panic
+  creation until authoritative metadata resolves it; proven foreign/manual orders remain outside
+  Passivbot reconciliation.
 - Missing/stale final market data defers ordinary creation.
 - Missing/stale Hyperliquid action-headroom state defers only far churn-evidenced ordinary creates;
   it never delays cancellations or allowance-exempt actions.
@@ -789,6 +807,10 @@ events use bounded periodic summaries.
     full authoritative refresh and complete Rust replan.
 30. **One-way position attribution:** prefer durable PB metadata, otherwise use the reviewed
     order-side plus close-only tuple; current position inference is forbidden.
+31. **Realized-PnL enrichment:** account epochs include the exact cumulative max/last values passed
+    to Rust, so fee/PnL enrichment cannot retain pre-enrichment churn evidence.
+32. **Order ownership:** only proven locally owned actuals reconcile or cancel; foreign/manual
+    orders are excluded, while unknown ownership blocks non-panic creation without cancellation.
 
 ### Earlier findings retained
 
@@ -818,6 +840,8 @@ events use bounded periodic summaries.
   fixtures prove their explicit connector-native mappings;
 - one-way pside attribution prefers durable PB metadata, then covers all four side/close-only tuples;
   current-position changes cannot relabel a resting order and unknown attribution fails closed;
+- proven local, proven foreign/manual, foreign Passivbot-marker, missing-client-ID-after-restart, and
+  contradictory ownership fixtures; only proven local orders may reconcile or cancel;
 - one historical observation cannot satisfy multiple current candidates;
 - raw list reordering and dictionary order do not change outcomes.
 
@@ -844,8 +868,9 @@ events use bounded periodic summaries.
   forager membership, effective mode, and hedge-capability revisions reset account-wide history;
 - price, EMA, volatility, trailing extrema, equity, available margin, unrealized PnL, mark/liquidation
   price, and mark-to-market notional changes do not reset history;
-- authoritative fill identity, raw/snapped realized wallet balance, signed position size, and
-  average-entry-price transitions reset account-wide history before the first new-phase plan;
+- authoritative fill identity, realized-PnL cumulative max/last, raw/snapped realized wallet
+  balance, signed position size, and average-entry-price transitions reset account-wide history
+  before the first new-phase plan;
 - a policy-history reset does not clear account-wide attempt timestamps;
 - compaction, if implemented, preserves logical results across fast/slow planning cadence.
 
@@ -869,6 +894,7 @@ events use bounded periodic summaries.
 ### Cancel-first executor
 
 - any stale actual suppresses every non-panic create account-wide in hedge and one-way modes;
+- unknown ownership suppresses non-panic creation account-wide without sending cancellation;
 - selected, truncated, failed, ambiguous, and absent cancellation outcomes;
 - every stale cancellation outcome, including positive acknowledgement, requires next-cycle full
   balance/positions/open-orders/fills confirmation for ordinary work;
@@ -905,13 +931,16 @@ events use bounded periodic summaries.
   `pb_order_type`, execution type, and authoritative remaining open quantity. Add focused WEEX V3
   and Bitget UTA mappings without generalizing side/position inference. Defx and Paradex are outside
   the supported production boundary.
+- Preserve the existing local/foreign/manual ownership contract and make unknown ownership an
+  explicit no-cancel fail-closed state.
 - Keep TIF/post-only enforcement at creation and diagnostic normalization, not reconciliation.
 - Audit Rust order families for explicit ordinary/risk-critical priority.
 - Retire `initial_entry_exec_max_market_dist_pct`.
 
 ### Slice 2: pure per-symbol evidence helper
 
-- Implement immutable snapshots, compatibility epochs, pruning/optional compaction, deterministic
+- Implement immutable snapshots, exact realized-PnL/balance/position compatibility epochs,
+  pruning/optional compaction, deterministic
   one-to-one tight/wider association, newest stability clearing, and account-wide rolling attempt
   accounting.
 - Keep helpers independent of live events and exchange I/O.
@@ -990,6 +1019,8 @@ consequences, and connector assumptions—not merely wording:
 - Is one-way `position_side` attribution deterministic from durable PB metadata or the four reviewed
   side/close-only tuples, never current position state?
 - Can every connector recover those fields without fabrication, and is fail-closed scope correct?
+- Can ownership ever be mistaken from a Passivbot-looking marker, missing restart metadata, or a
+  foreign/manual order, and is unknown ownership guaranteed no-cancel?
 - Is Defx's explicit unsupported boundary clear enough that stale adapter code cannot expand scope?
 - Is Paradex's experimental, comparative-only boundary equally clear?
 - Does any stale actual block every non-panic creation account-wide until full confirmation and a
@@ -1018,9 +1049,10 @@ consequences, and connector assumptions—not merely wording:
 - Is the one-cycle ordinary latency acceptable for parity and missed-fill risk?
 - Is the proposed RAM-only canonical exception truly bounded to operational economy and incapable
   of weakening safety after reset?
-- Do account/scoped compatibility epochs reset exact realized Rust balance/position/fill inputs,
-  effective modes, lists, forager membership, and operator changes while excluding equity, margin,
-  unrealized PnL, mark/liquidation prices, other moving fields, and attempt-ledger refunds?
+- Do account/scoped compatibility epochs reset exact realized Rust balance/position/fill and
+  realized-PnL cumulative max/last inputs, effective modes, lists, forager membership, and operator
+  changes while excluding equity, margin, unrealized PnL, mark/liquidation prices, other moving
+  fields, and attempt-ledger refunds?
 - What interactions remain with config reload, forager symbol churn, HSL, WEL/TWEL, unstuck,
   auto-reduce, graceful stop, hedge mode, and one-way mode?
 
