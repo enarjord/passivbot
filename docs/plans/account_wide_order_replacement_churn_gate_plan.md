@@ -180,10 +180,14 @@ Price and quantity must additionally match within `live.order_match_tolerance_pc
 reconciliation or within the explicitly selected historical tolerance for churn evidence. Actual
 order quantity means authoritative remaining open quantity, never the original submitted amount
 after a partial fill. Prefer an exchange-provided `remaining`; derive `amount - filled` only when
-both fields are authoritative, finite, non-negative, and internally consistent. Unknown or
-contradictory remaining quantity makes the account-critical open-orders surface unavailable and
-blocks every exchange write until a fresh authoritative snapshot resolves it. Do not cancel the
-uncertain order, create elsewhere, or let a panic/risk exemption bypass this readiness failure.
+both fields are authoritative, finite, non-negative, and internally consistent. Every actual order
+also requires an authoritative exchange order ID, symbol, order side, position side, positive finite
+price, and close-only effect. A missing, non-finite, contradictory, or otherwise malformed required
+field makes the account-critical open-orders surface unavailable and blocks every exchange write
+until a fresh authoritative snapshot resolves it. Unknown `pb_order_type` or resting execution type
+alone is not malformed because the order can still be scoped and cancelled, but it cannot satisfy a
+known current ideal. Do not cancel an uncertain order, create elsewhere, or let a panic/risk
+exemption bypass this readiness failure.
 
 Matching is deterministic and one-to-one. One actual or historical observation cannot satisfy two
 current ideal orders.

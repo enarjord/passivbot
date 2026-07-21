@@ -473,9 +473,10 @@ changing behavior during extraction commits.
 - [x] Added staged market snapshot fetch headroom. Rust planning now requests ticker snapshots
   with a stricter cache TTL than the hard safety max, avoiding false precondition failures from
   near-expired cached tickers while preserving the pre-create stale-snapshot guard.
-- [x] Superseded the narrow initial-entry-only distance gate with the reviewed account-wide,
+- [ ] Supersede the narrow initial-entry-only distance gate with the reviewed account-wide,
   strategy-agnostic order-replacement churn policy documented in
-  `account_wide_order_replacement_churn_gate_plan.md`.
+  `account_wide_order_replacement_churn_gate_plan.md`; retire the old runtime/config only in the
+  implementation PR.
 - [x] Increased default forager score hysteresis from `0.005` to `0.02` after VPS logs showed
   most churn-relevant replacements had score gaps above the old 0.5% threshold.
 - [x] Tightened default OHLCV fetch budget and widened default REST recv window. Defaults are now
