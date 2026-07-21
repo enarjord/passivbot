@@ -42,15 +42,18 @@ The proposed behavior is:
    - a tight match is evidence of stability in that snapshot;
    - a wider-but-not-tight match is direct price/quantity churn evidence;
    - no wider match is uncertainty, not proof of replacement identity, and therefore fails open.
-5. Always admit market orders, explicitly risk-critical orders, and orders within the configured
-   final market-distance threshold.
+5. Exempt market orders, explicitly risk-critical orders, and orders within the configured final
+   market-distance threshold from allowance waiting. Only dedicated protective market panic may
+   bypass a dirty cancel-first conflict scope.
 6. Admit far churn-evidenced ordinary creates while fewer than ten connector-bound create attempts
    of any class remain in the account-wide rolling ten-minute window. Exempt creates always proceed
    but count for subsequent ordinary admission.
 7. Never retain a stale actual order while waiting. Cancel it and regenerate current Rust intent on
    a later cycle.
-8. Execute all ordinary creations cancel-first by conflict scope: cancel, confirm authoritative
-   balance, positions, open orders, and fills, regenerate the Rust plan, and only then create.
+8. Execute all non-panic creations cancel-first by the effective account-mode conflict scope:
+   symbol plus position side in true hedge mode, or the whole symbol in one-way mode. Cancel,
+   confirm authoritative balance, positions, open orders, and fills, regenerate the Rust plan, and
+   only then create.
 
 This is an operational exchange-write economy layer. It does not alter Rust calculations, widen
 the actual-order reconciliation tolerance, replace CCXT/exchange rate limiting, or make event logs
@@ -184,30 +187,37 @@ from the bot's client-order metadata or authoritative local execution record. Un
 a known ideal type, and Python must not fabricate one. The implementation audit must cover every
 connector before enabling the gate.
 
-### Why authoritative `reduce_only` is required
+### Why authoritative exchange-native close-only effect is required
 
-`reduce_only` is an execution guarantee, not a diagnostic label. A side/position-side inference is
-insufficient: multiple individually plausible close orders can over-close after another order fills
-or after a manual/external position change. The exchange's reduce-only protection prevents a flip
-or unintended exposure increase.
+The exact cohort field remains named `reduce_only` in the current Rust/Python payload contract, but
+its canonical meaning here is **authoritative exchange-native close-only effect**, not necessarily a
+literal REST `reduceOnly=true` response. It is an execution guarantee, not a diagnostic label.
+Multiple individually plausible close orders can over-close after another order fills or after a
+manual/external position change; the connector must prove the venue-native action cannot increase
+or flip the scoped position.
 
-Therefore actual order normalization must use the authoritative exchange flag. Unknown does not
-match either `true` or `false`; it blocks normal planning for the affected symbol until refreshed or
-otherwise resolved under the error contract. Existing inference from side and position side must
-not be carried into this implementation.
+For venues whose contract uses a literal reduce-only flag, actual normalization must use that
+authoritative flag. For venues whose hedge action is authoritatively encoded by an action tuple,
+the adapter may normalize that tuple to the same canonical close-only boolean only under a
+documented connector contract and focused fixtures. Unknown does not match either `true` or
+`false`; it blocks normal planning for the affected symbol until refreshed or otherwise resolved
+under the error contract. Generic side/position-side inference remains forbidden.
 
-Canonical `reduce_only` means authoritative exchange-native close-only effect; it does not require
-every placement API to accept a literal `reduceOnly` parameter. WEEX V3 omits that placement field
-but documents `reduceOnly` in open-order and order-info responses while identifying hedge actions by
-`side` plus `positionSide`. The WEEX adapter must normalize the authoritative response field and
-verify it against the V3 close contract before enabling this gate. If live payloads omit or
-misreport it, an adapter-specific mapping from `side` plus `positionSide` is allowed only after an
-offline contract test and separately authorized live probe prove that the combination cannot
-increase or flip the scoped position. Generic side/position inference remains forbidden.
+WEEX V3 omits a placement `reduceOnly` field but documents it in open-order and order-info responses
+while identifying hedge actions by `side` plus `positionSide`. The WEEX adapter must prefer and
+verify the authoritative response field. If live payloads omit or misreport it, its V3 action tuple
+may be normalized only after offline contract tests and separately authorized live evidence prove
+the combination cannot increase or flip the scoped position.
+
+Bitget UTA/Elite hedge mode is the second explicit connector-native case. Its contract requires
+`side` plus `posSide`, rejects `reduceOnly` with `posSide`, and may report a close with
+`reduceOnly=NO`. The existing canonical exchange contract therefore overrides that literal flag:
+the adapter must normalize the documented UTA action tuple to close-only effect. Classic Bitget
+v2/mix and one-way modes retain their separate authoritative `tradeSide`/`reduceOnly` handling.
 
 This is a prerequisite correction to the current reconciler, whose tight matching tuple omits
-`reduce_only` and whose open-order snapshot derives it from side and position side. The churn gate
-must not be layered on top of that inference.
+`reduce_only` and whose generic open-order snapshot derives it from side and position side. The
+churn gate must not be layered on top of that generic inference.
 
 ### Why execution type stays exact but time-in-force does not
 
@@ -257,23 +267,26 @@ the same logical presence answers at every relevant timestamp.
 
 ### Planning-policy compatibility
 
-Each per-symbol/position-side history carries a planning-policy fingerprint. The fingerprint covers
-effective static strategy configuration, coin overrides, and operator-controlled approved/ignored
-eligibility relevant to that scope. When it changes, discard only the affected history before
-classifying the new Rust ideal. Do not clear the account-wide attempt timestamps: exchange writes
-already consumed remain consumed for the rolling window.
+History compatibility has both account-wide and scoped epochs because the Rust plan has
+account-wide dependencies. The account epoch covers effective balance, all positions, authoritative
+fills, global strategy/live configuration, effective hedge/one-way mode, approved/ignored sets,
+forager membership, and the complete effective `PB_modes` map. A change clears all ideal history
+before classifying the next complete Rust plan. A scoped epoch may additionally cover coin overrides
+or other inputs proven not to influence cross-symbol allocation; a scoped change clears only that
+scope. The conservative initial implementation must use the account-wide epoch when dependency is
+uncertain. Neither reset clears account-wide attempt timestamps: exchange writes already consumed
+remain consumed for the rolling window.
 
-Continuously changing prices, EMAs, volatility, and trailing extrema are excluded from the policy
-fingerprint; including them would continuously reset the evidence gate and defeat its purpose.
-Separately, an authoritative fill or position-phase change resets affected symbol/position-side
-history before classifying the next complete Rust plan. This preserves the existing contract that
-every fill resets trailing extrema and prevents pre-fill churn evidence from suppressing the first
-entry, close, HSL, or re-entry order for a new position phase. A position-phase token advances on a
-new authoritative fill or on an authoritative position size/price transition not already explained
-by that fill; ordinary market-price movement does not advance it. The reset does not clear the
-account-wide attempt ledger. Current coin overrides are normally startup-parsed, so restart already
-resets RAM history; the explicit policy fingerprint keeps the contract correct for approved-list
-refreshes and any future hot config reload.
+Continuously changing prices, EMAs, volatility, and trailing extrema are excluded; including them
+would continuously reset the evidence gate and defeat its purpose. An authoritative fill, balance
+phase change, or position size/price transition advances the account epoch because TWEL, entry
+gates, risk ordering, and portfolio sizing may change ideals on other symbols. This also preserves
+the existing contract that every fill resets trailing extrema and prevents pre-fill evidence from
+suppressing the first entry, close, HSL, or re-entry order of the new account phase. Ordinary market
+price movement does not advance the epoch. If later Rust metadata exposes a proven dependency graph,
+cross-symbol invalidation may be narrowed under separate review; Python must not infer it. Current
+coin overrides are normally startup-parsed, so restart already resets RAM history; explicit epochs
+keep the contract correct for list refreshes, mode transitions, and any future hot config reload.
 
 ### Why history is per symbol but allowance is account-wide
 
@@ -286,7 +299,7 @@ coordination is a separate feature.
 
 ## Quantitative Churn-Evidence Heuristic
 
-For each unmatched current ideal order outside the unconditional exemptions:
+For each unmatched current ideal order outside the allowance exemptions:
 
 1. Partition it by the exact cohort key above.
 2. For each prior valid snapshot in the active per-symbol window, newest first, perform a
@@ -294,11 +307,30 @@ For each unmatched current ideal order outside the unconditional exemptions:
 3. Prefer tight matches using `order_match_tolerance_pct` for both normalized price and quantity.
 4. Among remaining observations, find wider matches using
    `order_replacement_churn_gate_tracking_tolerance_pct`.
-5. If the current candidate has any wider-but-not-tight match, it has recent churn evidence.
-6. If it has tight matches only, or no wider match, it has no proven churn evidence and is admitted.
+5. A newest contiguous run of tight matches spanning
+   `order_replacement_churn_gate_stability_minutes` proves that the current price and quantity have
+   settled; older wider evidence is ignored.
+6. Before that stability horizon is reached, any wider-but-not-tight match is current churn
+   evidence. A missing association is uncertainty/new intent and fails open rather than inheriting
+   older evidence across the gap.
+7. Tight-only history shorter than the stability horizon, no history, or no wider association has
+   no proven churn evidence and is admitted.
 
-The implementation may stop after finding wider-but-not-tight evidence. It need not build tracks,
-tombstones, predecessor identities, or causal classifications.
+The implementation may stop after proving either continuous recent stability or current
+wider-but-not-tight evidence. It need not build tracks, tombstones, predecessor identities, or
+causal classifications.
+
+### Why newer stability clears older evidence
+
+The target is sustained replacement churn, not a permanent penalty for one earlier move. Without a
+stability horizon, a rejected create or manual cancellation after the order settles could remain
+deferred until an unrelated old roll ages out of the full window. The newest tight run therefore
+supersedes older wider evidence once it spans the configured stabilization duration.
+
+The run compares the current candidate to every snapshot in the contiguous prefix, not merely to
+the immediately preceding snapshot. Slow cumulative drift can therefore break tight stability even
+when each adjacent step is individually small. A gap fails open because Python cannot prove the
+same intent continued across it.
 
 ### Deterministic matching
 
@@ -336,15 +368,21 @@ allowance, and fail-open unmatched orders bound the consequence.
 
 ## Admission Policy
 
-### Unconditional exemptions
+### Allowance exemptions
 
-The churn gate always admits:
+The rolling churn allowance never delays:
 
 - market orders;
 - HSL panic and the dedicated protective-panic path;
 - orders Rust explicitly marks `execution_priority=risk_critical`; and
 - limit orders whose final fresh market distance is at or inside
   `order_replacement_churn_gate_market_dist_pct`.
+
+These exemptions apply only to churn-allowance waiting. They do not bypass readiness,
+authoritative-state, batch, or cancel-first sequencing. A non-panic Rust-promoted market order and a
+risk-critical limit still wait for cancellation, full confirmation, and a fresh plan when their
+effective conflict scope is dirty. Dedicated protective market panic is the sole same-wave
+cancel-first bypass.
 
 `reduce_only=true` alone is not an exemption. EMA-gated closes can churn too. Rust must explicitly
 own risk priority for unstuck, WEL/TWEL, auto-reduce, graceful-stop, cooldown re-panic, and other
@@ -361,14 +399,41 @@ Count one logical order when it reaches the concrete connector create-call bound
 failed, rejected, timed-out, and ambiguous attempts and each logical member of a batch. Do not count
 local deferrals or cancellations.
 
-Near-market, market, and explicitly risk-critical actions are always admitted, but every one counts
-for subsequent ordinary admission because it consumes the same connector and account action
-capacity. Exemption means “never wait,” not “invisible to accounting.” A burst of exempt actions may
-therefore hold later far churn-evidenced ordinary creates until timestamps expire; it may never
-delay the exempt action itself.
+Near-market, market, and explicitly risk-critical actions never wait for allowance, but every one
+counts for subsequent ordinary admission because it consumes the same connector and account action
+capacity. Allowance exemption means “never wait for economy capacity,” not “bypass sequencing” or
+“invisible to accounting.” A burst of exempt actions may therefore hold later far churn-evidenced
+ordinary creates until timestamps expire; it may never delay the exempt action itself.
 
 When one timestamp expires, at most one newly far attempt gains capacity before consuming that
 slot. There is no bulk release and no persistent queue of deferred orders.
+
+### Hyperliquid action-headroom overlay
+
+Hyperliquid does not use time-window address capacity. Its adapter therefore adds a second,
+connector-specific admission predicate for far churn-evidenced ordinary creates. It periodically
+queries the official `userRateLimit` info surface, caches `nRequestsUsed`, `nRequestsCap`, and
+`nRequestsSurplus`, and debits every observed local signed address action since that snapshot.
+Create/cancel batch members count individually; any connector action not routed through the central
+counter invalidates the cached estimate and requires refresh before an ordinary far create.
+Cancellations and allowance-exempt creates are never delayed by this overlay but still debit the
+cached estimate.
+
+Compute conservative snapshot headroom as
+`max(0, nRequestsCap - nRequestsUsed) + max(0, nRequestsSurplus)`, then subtract every logical local
+address action attempted after that snapshot. Reject non-finite, negative, or contradictory fields
+rather than clamping invalid payloads into availability. Fills may increase server capacity between
+polls, so local debiting can only understate headroom; refresh recovers it.
+
+If the authoritative response plus local debits shows no normal address-action headroom, defer far
+churn-evidenced ordinary creates even if the generic ten-minute window has capacity. The generic
+window remains a conservative write-economy ceiling when headroom exists; it is not treated as
+capacity refill. A stale or unavailable `userRateLimit` snapshot may not be replaced by invented
+headroom: defer only the far churn-evidenced ordinary class, refresh the info surface under existing
+pacing, and continue cancellations, near-market, market, and risk-critical actions. The exact
+server-field arithmetic above and any future safety reserve must be rechecked against current
+official response semantics during implementation review; do not reverse-engineer refill from HTTP
+timing.
 
 ### Final market-distance check
 
@@ -407,10 +472,11 @@ do not establish a general cancel-confirm-replan-create contract.
 
 ### Execution conflict scope
 
-Use a broader scope for write sequencing than for order satisfaction:
+Use a broader, effective-account-mode scope for write sequencing than for order satisfaction:
 
 ```text
-(symbol, position_side)
+true hedge mode: (symbol, position_side)
+one-way mode:     (symbol)
 ```
 
 Order side, `reduce_only`, `pb_order_type`, time-in-force, and execution type are deliberately
@@ -418,6 +484,12 @@ absent. Any stale order may partially fill before cancellation and change positi
 PnL, and the opposite-side entry or close ladder for the same position side. A stale grid order and
 a new trailing order, or a stale limit order promoted by Rust to ordinary market execution, also
 compete for the same position-side exposure during transition.
+
+In one-way mode, long and short are not independent exchange ledgers. A fill attributed to either
+Passivbot position side changes the single net position and can invalidate both directions' current
+plan. The conflict scope therefore collapses to the whole symbol whenever effective hedge mode is
+false, including exchanges such as Hyperliquid that do not support hedge mode. Use effective runtime
+capability plus config, not the requested config flag alone.
 
 This broader scope is only a sequencing barrier. It does not make unlike orders equivalent during
 reconciliation.
@@ -427,7 +499,7 @@ reconciliation.
 For each planning wave:
 
 1. Reconcile authoritative actual orders with the current valid Rust ideal.
-2. If any unmatched stale actual exists in a conflict scope, suppress every ordinary creation in
+2. If any unmatched stale actual exists in a conflict scope, suppress every non-panic creation in
    that scope for the entire wave—whether its cancellation is selected, truncated, succeeds,
    fails, or is reported absent.
 3. Send the selected cancellation batch under existing limits and pacing.
@@ -498,7 +570,8 @@ Add canonical `config.live` fields:
 |---|---:|---|
 | `order_replacement_churn_gate_activation_count` | `10` | Rolling account-wide create-attempt count below which far churn-evidenced ordinary creates may proceed. Exempt creates always proceed but count. `0` disables churn gating. |
 | `order_replacement_churn_gate_window_minutes` | `10.0` | Per-symbol evidence and account-wide attempt window. |
-| `order_replacement_churn_gate_market_dist_pct` | `0.005` | Final market-distance threshold that always admits a limit creation; 0.5%. |
+| `order_replacement_churn_gate_stability_minutes` | `2.0` | Newest contiguous tight-match duration that clears older wider churn evidence. |
+| `order_replacement_churn_gate_market_dist_pct` | `0.005` | Final market-distance threshold that always exempts a limit creation from allowance waiting; 0.5%. |
 | `order_replacement_churn_gate_tracking_tolerance_pct` | `0.002` | Wider price/quantity tolerance used only for historical churn evidence; 0.2%. |
 
 The existing `live.order_match_tolerance_pct`, normally `0.0002` (0.02%), remains the actual-order
@@ -508,6 +581,7 @@ Validation:
 
 - activation count is an integer greater than or equal to zero;
 - window is finite and greater than zero when enabled;
+- stability duration is finite, greater than zero, and no greater than the window;
 - distance is finite, greater than or equal to zero, and less than one;
 - tracking tolerance is finite, greater than `order_match_tolerance_pct`, and less than one; and
 - canonical schema/preparation owns defaults.
@@ -524,12 +598,12 @@ runtime consumers must not interpret the old value as the new policy silently.
 
 ## Exchange Rate-Limit Research and Ramifications
 
-Official documentation was reviewed on 2026-07-19 and 2026-07-20. Limits and tiers change; the
+Official documentation was reviewed on 2026-07-19 through 2026-07-21. Limits and tiers change; the
 implementation review must recheck the exact endpoints used by each connector.
 
 | Exchange/model | Official behavior relevant to this plan | Ramification |
 |---|---|---|
-| Hyperliquid | REST has weighted IP limits. Address action allowance is tied to cumulative USDC volume, counts logical actions within batches, grants extra cancellation allowance, and may apply congestion/maker-share limits. [Official docs](https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/rate-limits-and-user-limits) | Count logical actions, not HTTP requests. Do not suppress cancellations or fill-producing near-market/risk actions. |
+| Hyperliquid | REST has weighted IP limits. Address action allowance is tied to cumulative USDC volume, counts logical actions within batches, grants extra cancellation allowance, exposes `userRateLimit`, and falls back to one request per ten seconds once limited. [Rate-limit docs](https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/rate-limits-and-user-limits), [`userRateLimit` info](https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/info-endpoint) | Count logical actions, not HTTP requests. Add the authoritative action-headroom overlay; elapsed ten-minute time never fabricates refill. Do not suppress cancellations or fill-producing near-market/risk actions. |
 | Bybit | Private limits use rolling per-second UID windows plus IP limits; batch consumption is based on order count. [Official docs](https://bybit-exchange.github.io/docs/v5/rate-limit) | The ten-minute economy policy supplements short-window pacing. |
 | Bitget | Futures cancellation has UID-scoped endpoint limits. [Official docs](https://www.bitget.com/api-doc/classic/contract/trade/Batch-Cancel-Orders) | Existing connector pacing remains authoritative. |
 | KuCoin | Private quotas use UID resource pools and endpoint weights over short windows. [Rate-limit docs](https://www.kucoin.com/docs-new/rate-limit), [futures order docs](https://www.kucoin.com/docs-new/rest/futures-trading/orders/add-order) | Header-adaptive pacing is separate work. |
@@ -548,10 +622,11 @@ Paradex is also outside the supported production and rollout boundary. Its matri
 only because its account/IP leaky-bucket and batch semantics are useful comparative research; it is
 not an implementation or live-validation target for this feature.
 
-Hyperliquid is the clearest reason not to call this a generic rate-limit budget. Its cancellation
-allowance and requests-per-volume economics differ materially from rolling endpoint quotas. The
-policy still helps by reducing low-fill far creations, but cancellations and risk/fill-producing
-orders must retain priority.
+Hyperliquid is the clearest reason not to call the generic window a rate-limit budget. Its
+cancellation allowance and requests-per-volume economics differ materially from rolling endpoint
+quotas. The connector-specific authoritative headroom overlay prevents the generic window from
+pretending capacity refills with elapsed time. Cancellations and risk/fill-producing orders retain
+priority and are debited, not delayed, by that overlay.
 
 ## Live/Backtest Parity
 
@@ -566,7 +641,7 @@ The consequence is bounded by:
 
 - fail-open behavior for no/uncertain history;
 - a ten-attempt rolling threshold counting every connector-bound create;
-- unconditional final near-market admission;
+- unconditional final near-market allowance exemption;
 - risk-critical and market no-wait exemptions which still count;
 - one-for-one capacity release; and
 - immediate use of fresh current Rust intent on every later cycle.
@@ -582,9 +657,11 @@ This tradeoff must be measured in fake-live and, only with separate authority, l
 - Unknown required `pb_order_type`, `reduce_only`, or execution semantics do not match a known ideal
   and fail closed for affected normal planning.
 - Missing/stale final market data defers ordinary creation.
+- Missing/stale Hyperliquid action-headroom state defers only far churn-evidenced ordinary creates;
+  it never delays cancellations or allowance-exempt actions.
 - Ambiguous create attempts count once when connector-bound and use existing confirmation guards.
-- Every stale cancellation outcome blocks ordinary creation for its symbol/position-side and
-  requires full balance/positions/open-orders/fills confirmation plus replanning.
+- Every stale cancellation outcome blocks non-panic creation for its effective hedge/one-way
+  conflict scope and requires full balance/positions/open-orders/fills confirmation plus replanning.
 - Event publication failure changes no trading decision.
 - Existing exchange pacing, 429/backoff, readiness, ownership, risk, HSL, WEL/TWEL, mode, and
   authoritative-state barriers retain precedence.
@@ -635,35 +712,50 @@ events use bounded periodic summaries.
    quantitative evidence and explicitly accepts bounded false positives/negatives.
 3. **`pb_order_type`:** it is restored as an exact semantic key after auditing current fill-history
    use. The rationale and unknown-attribution behavior are explicit.
-4. **`reduce_only`:** it is an exact authoritative key; side/position-side inference is forbidden.
+4. **Close-only effect:** canonical `reduce_only` remains an exact key, but means authoritative
+   venue-native close-only effect; generic side/position-side inference is forbidden.
 5. **Cancel/create races:** all ordinary creates in a conflict scope wait for cancel confirmation,
    fresh state, and a fresh Rust plan. Batch truncation cannot strand a dependent creation.
 6. **Ordinary market promotion:** execution type is removed from the sequencing scope, so a
    Rust-promoted market creation cannot bypass its stale limit predecessor.
-7. **WEEX close semantics:** canonical `reduce_only` is exchange-native close-only effect; WEEX
-   must normalize and verify its authoritative V3 response semantics before enablement.
+7. **WEEX close semantics:** WEEX must normalize and verify its authoritative V3 response/action
+   semantics before enablement.
 8. **Defx metadata:** Defx is explicitly outside the supported live-exchange boundary and is not an
    implementation prerequisite.
 9. **Cancel acknowledgement after fills:** every limit order, including risk-critical, refreshes and
    replans after a stale cancellation; positive acknowledgement alone is insufficient.
 10. **Time-in-force provenance:** placement-only TIF/post-only is removed from reconciliation and
     history identity while remaining enforced on new creations.
-11. **Operator policy changes:** affected per-symbol/position-side histories reset on a static
-    planning-policy fingerprint change without refunding account-wide attempt timestamps.
+11. **Operator policy changes:** compatible account/scoped histories reset on planning-policy epoch
+    changes without refunding account-wide attempt timestamps.
 12. **Partial-fill quantity:** actual matching uses authoritative remaining open quantity, never
     original submitted amount after a partial fill.
 13. **Paradex scope:** Paradex is explicitly experimental and excluded from production rollout;
     its rate-limit row is comparative research only.
-14. **Cross-side cancellation races:** any stale actual dirties the whole symbol/position-side, so
-    an entry cancellation cannot race a stale-plan close or vice versa.
+14. **Cross-side cancellation races:** any stale actual dirties the whole symbol/position-side in
+    true hedge mode, so an entry cancellation cannot race a stale-plan close or vice versa.
 15. **Exempt action accounting:** market, risk-critical, and near-market creates always proceed but
     count against later ordinary capacity.
 16. **Account-wide Rust failures:** no per-symbol salvage is attempted from an all-or-nothing Rust
     planning failure; symbol-scoped validity begins after a complete account plan.
-17. **Fill phase changes:** authoritative fills and unexplained position transitions reset only the
-    affected history without refunding action timestamps.
+17. **Fill phase changes:** authoritative fills and account-state transitions reset compatible
+    account-wide history without refunding action timestamps.
 18. **Cancellation confirmation:** every stale cancellation requests full account-state and fill
     confirmation unless a future connector proves a no-fill outcome.
+19. **One-way conflicts:** effective one-way mode collapses cancel-first scope to the whole symbol;
+    only true hedge mode may isolate position sides.
+20. **Bitget UTA close semantics:** its documented `side` plus `posSide` hedge action overrides a
+    literal `reduceOnly=NO`; classic/one-way Bitget handling stays separate.
+21. **Cross-symbol risk state:** fills, balance/position phases, global config/list/mode changes, and
+    uncertain dependencies advance an account epoch and clear all ideal history.
+22. **Runtime eligibility:** effective `PB_modes`, approved/ignored sets, forager membership, and
+    hedge capability are explicit compatibility inputs.
+23. **Market wording:** market/risk/near exemptions apply only to allowance waiting; dedicated
+    protective market panic is the sole dirty-scope same-wave bypass.
+24. **Recovered stability:** a newest contiguous tight run spanning the stability horizon clears
+    older wider evidence; gaps fail open.
+25. **Hyperliquid capacity:** authoritative `userRateLimit` headroom plus local logical-action
+    debits overlays the generic economy window; elapsed time never fabricates address refill.
 
 ### Earlier findings retained
 
@@ -684,11 +776,13 @@ events use bounded periodic summaries.
 - deterministic one-to-one tight actual reconciliation, including duplicate prices/quantities;
 - partially filled actual orders match by authoritative remaining quantity; original amount,
   missing remaining, and contradictory amount/filled/remaining fixtures cannot silently match;
-- exact mismatch for `pb_order_type`, panic versus non-panic, `reduce_only`, and execution type;
+- exact mismatch for `pb_order_type`, panic versus non-panic, canonical venue-native close-only
+  effect, and execution type;
 - TIF/post-only differences do not prevent an otherwise exact resting-order match, while every new
   creation still receives the configured placement semantics;
-- unknown actual type/reduce-only fail-closed behavior for every connector adapter;
-- no side/position-side inference of reduce-only;
+- unknown actual type/close-only fail-closed behavior for every connector adapter;
+- no generic side/position-side inference of close-only; focused WEEX V3 and Bitget UTA action-tuple
+  fixtures prove their explicit connector-native mappings;
 - one historical observation cannot satisfy multiple current candidates;
 - raw list reordering and dictionary order do not change outcomes.
 
@@ -701,14 +795,19 @@ events use bounded periodic summaries.
 - processing-universe union retains actual/position/history-only symbols;
 - first observation and restart reset fail open;
 - tight-only history admits; wider-but-not-tight history marks churn;
+- a newest contiguous tight run spanning the stability horizon clears older wider evidence;
+- adjacent tiny steps whose cumulative current-to-snapshot drift breaks tight tolerance remain
+  churn-evidenced until genuinely stable;
+- gaps before the stability horizon fail open rather than inherit older evidence;
 - no wider association admits as uncertain;
 - price-only and quantity-only churn;
 - neighboring grids, duplicate levels, growing/shrinking ladders, equal-cardinality rolls;
 - evidence expires exactly with the rolling window;
-- a static config, coin-override, or affected eligibility revision resets only compatible history;
+- a scoped coin-override revision resets compatible history; global config, approved/ignored,
+  forager membership, effective mode, and hedge-capability revisions reset account-wide history;
 - price, EMA, volatility, and trailing extrema movement without a fill do not reset history;
-- authoritative fills and unexplained position size/price transitions reset affected history before
-  the first new-phase plan is classified;
+- authoritative fills, balance phase changes, and unexplained position size/price transitions reset
+  account-wide history before the first new-phase plan is classified;
 - a policy-history reset does not clear account-wide attempt timestamps;
 - compaction, if implemented, preserves logical results across fast/slow planning cadence.
 
@@ -717,24 +816,30 @@ events use bounded periodic summaries.
 - ten attempts across multiple symbols share one process-wide allowance;
 - eleventh far churn-evidenced ordinary create defers;
 - one expired timestamp releases one slot;
-- near-market churn attempts always admit and count;
-- market and risk-critical orders always bypass waiting but count against subsequent ordinary
-  admission;
+- near-market churn attempts always bypass allowance waiting and count;
+- market and risk-critical orders always bypass allowance waiting but count against subsequent
+  ordinary admission; non-panic orders still obey dirty-scope sequencing;
 - failed/rejected/timed-out/ambiguous connector-bound creates count exactly once;
 - local deferrals count zero;
 - final price movement near-to-far consumes capacity or defers and far-to-near admits;
 - missing/stale/non-finite final market data defers without fabrication;
 - concurrent candidates cannot oversubscribe current capacity.
+- Hyperliquid `userRateLimit` headroom, local logical signed-action debits, unobserved-action cache
+  invalidation, stale/unavailable snapshots, batch-member accounting, and exempt-action no-wait
+  behavior;
 
 ### Cancel-first executor
 
-- any stale actual suppresses every ordinary create for the same symbol/position-side, including
-  opposite order-side and reduce-only semantics;
+- in true hedge mode, any stale actual suppresses every non-panic create for the same
+  symbol/position-side, including opposite order-side and close-only semantics;
+- in effective one-way mode, any stale actual suppresses every non-panic create for the whole
+  symbol, including the opposite Passivbot position side;
 - selected, truncated, failed, ambiguous, and absent cancellation outcomes;
 - every stale cancellation outcome, including positive acknowledgement, requires next-cycle full
   balance/positions/open-orders/fills confirmation for ordinary work;
 - fills and manual position changes regenerate different Rust intent before create;
-- independent conflict scopes may create in the cancellation wave;
+- independent conflict scopes may create in the cancellation wave only as permitted by effective
+  account mode;
 - dedicated market panic bypasses ordinary sequencing;
 - ordinary Rust-promoted market creation cannot escape a stale limit conflict;
 - risk-critical limits replan after every stale cancellation, including positive acknowledgements
@@ -762,22 +867,24 @@ events use bounded periodic summaries.
 ### Slice 1: exact semantic normalization
 
 - Add canonical config fields, validation, templates, migration behavior, and changelog entry.
-- Audit every connector for authoritative `reduce_only`, normalized `pb_order_type`, execution type,
-  authoritative remaining open quantity, and WEEX-native close-only semantics. Defx and Paradex are
-  outside the supported production boundary.
+- Audit every connector for authoritative venue-native close-only effect, normalized
+  `pb_order_type`, execution type, and authoritative remaining open quantity. Add focused WEEX V3
+  and Bitget UTA mappings without generalizing side/position inference. Defx and Paradex are outside
+  the supported production boundary.
 - Keep TIF/post-only enforcement at creation and diagnostic normalization, not reconciliation.
 - Audit Rust order families for explicit ordinary/risk-critical priority.
 - Retire `initial_entry_exec_max_market_dist_pct`.
 
 ### Slice 2: pure per-symbol evidence helper
 
-- Implement immutable snapshots, validity boundaries, pruning/optional compaction, deterministic
-  one-to-one tight/wider association, and account-wide rolling attempt accounting.
+- Implement immutable snapshots, compatibility epochs, pruning/optional compaction, deterministic
+  one-to-one tight/wider association, newest stability clearing, and account-wide rolling attempt
+  accounting.
 - Keep helpers independent of live events and exchange I/O.
 
 ### Slice 3: cancel-first reconciler/executor overhaul
 
-- Separate exact satisfaction cohorts from broader execution conflict scopes.
+- Separate exact satisfaction cohorts from effective-mode execution conflict scopes.
 - Suppress ordinary scoped creations whenever stale actual orders exist.
 - Cancel, request authoritative confirmation, end affected scopes, and replan next cycle.
 - Preserve independent-scope concurrency and explicit emergency paths.
@@ -788,6 +895,8 @@ events use bounded periodic summaries.
 
 - Recheck final fresh distance.
 - Apply allowance reservations atomically at connector boundary.
+- Add Hyperliquid authoritative action-headroom refresh and local logical-action debits without
+  delaying cancellations or exempt actions.
 - Sort risk-critical before ordinary candidates, then preserve deterministic existing secondary
   ordering and native batch caps.
 
@@ -829,7 +938,8 @@ After offline validation and separate live authorization:
 3. Prove the gate never leaves an out-of-tolerance stale actual order resting.
 4. Inspect static grids, changing ladders, EMA Anchor entries/closes, trailing, forager changes, and
    one-for-one capacity release.
-5. Inspect Hyperliquid separately because its requests-per-volume and cancellation economics differ.
+5. Inspect Hyperliquid separately: compare cached/debited `userRateLimit` headroom with observed
+   action acceptance, requests-per-volume growth, and cancellation behavior.
 6. Recheck Binance USD-M overload/risk behavior on the actual endpoints.
 7. Tune defaults only from evidence; do not hide exchange-specific policy in adapters.
 
@@ -838,13 +948,15 @@ After offline validation and separate live authorization:
 Reviewers are explicitly asked to challenge intent, architecture, edge cases, unintended
 consequences, and connector assumptions—not merely wording:
 
-- Is the exact reconciliation key complete with `pb_order_type`, authoritative exchange-native
-  `reduce_only`, and execution type, while correctly excluding placement-only TIF/post-only?
+- Is the exact reconciliation key complete with `pb_order_type`, authoritative venue-native
+  close-only effect, and execution type, while correctly excluding placement-only TIF/post-only?
+- Are the WEEX V3 and Bitget UTA action-tuple mappings narrow, documented, and incapable of
+  increasing/flipping the scoped position?
 - Can every connector recover those fields without fabrication, and is fail-closed scope correct?
 - Is Defx's explicit unsupported boundary clear enough that stale adapter code cannot expand scope?
 - Is Paradex's experimental, comparative-only boundary equally clear?
-- Is the symbol/position-side execution conflict scope sufficiently conservative without stalling
-  unrelated work?
+- Does conflict scope correctly use symbol/position-side only in true hedge mode and collapse to
+  symbol in effective one-way mode?
 - Can any cancellation truncation, ambiguity, fill, manual action, or race still send an ordinary
   order from a stale Rust plan?
 - Does every non-panic market creation obey the stale-limit barrier?
@@ -855,16 +967,21 @@ consequences, and connector assumptions—not merely wording:
 - Can one historical order satisfy multiple current candidates?
 - Are deterministic wider associations sensible for duplicate grids, cardinality changes, and
   equal-cardinality rolls?
+- Does the contiguous tight stability horizon clear stale evidence without allowing slowly drifting
+  orders to evade detection?
 - Is failing open on no wider match preferable to trying to infer identity for large moves?
 - Is 0.2% an appropriate initial evidence tolerance, and what fake-live cases could falsify it?
-- Does the account-wide attempt counter model each connector reasonably, especially Hyperliquid?
-- Are near-market, market, and risk-critical attempts correctly always admitted yet still counted?
+- Does the generic attempt counter model rolling-window connectors reasonably, and does the
+  separate Hyperliquid `userRateLimit` overlay avoid inventing refill or delaying exempt actions?
+- Are near-market, market, and risk-critical attempts correctly exempt from allowance waiting yet
+  still counted and still subject to all non-allowance safety barriers?
 - Can a stale order ever remain while a replacement is gated?
 - Is the one-cycle ordinary latency acceptable for parity and missed-fill risk?
 - Is the proposed RAM-only canonical exception truly bounded to operational economy and incapable
   of weakening safety after reset?
-- Do policy and position-phase invalidation reset deliberate operator/fill transitions without
-  including continuously moving indicators or refunding account-wide attempt usage?
+- Do account/scoped compatibility epochs reset cross-symbol fills, balance/position phases,
+  effective modes, lists, forager membership, and operator changes without including continuously
+  moving indicators or refunding account-wide attempt usage?
 - What interactions remain with config reload, forager symbol churn, HSL, WEL/TWEL, unstuck,
   auto-reduce, graceful stop, hedge mode, and one-way mode?
 
