@@ -15,6 +15,12 @@ regression requirements, or live-testing scope. The canonical live fill-event fa
 because required realized-PnL, unstuck, and HSL replay support is absent. Do not use the Defx adapter
 for live operation or authenticated probes.
 
+Paradex is experimental and outside the supported production boundary. Its adapter and
+`setup_bot()` routing branch may be used as comparative implementation or rate-limit research, but
+required live fill/PnL, unstuck, and HSL replay contracts are incomplete. Do not infer production
+support, implementation coverage, regression requirements, or live-testing scope from its runtime
+routing branch or comparative documentation.
+
 ## Broker Agreement Attribution
 
 Problem:
