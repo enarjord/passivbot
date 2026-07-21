@@ -264,6 +264,12 @@ Bitget UTA/Elite hedge mode is the second explicit connector-native case. Its co
 the adapter must normalize the documented UTA action tuple to close-only effect. Classic Bitget
 v2/mix and one-way modes retain their separate authoritative `tradeSide`/`reduceOnly` handling.
 
+OKX long/short mode is the third explicit connector-native case. CCXT emulates reduce-only by
+selecting `posSide` and may expose a top-level `reduceOnly=false` for a valid close. The adapter must
+therefore normalize the documented `side` plus `posSide` action tuple in effective long/short mode,
+while effective one-way/net mode requires the authoritative raw `reduceOnly` response. A parser
+default may not override an omitted raw exchange field.
+
 This is a prerequisite correction to the current reconciler, whose tight matching tuple omits
 `reduce_only` and whose generic open-order snapshot derives it from side and position side. The
 churn gate must not be layered on top of that generic inference.
@@ -858,6 +864,9 @@ events use bounded periodic summaries.
     only; `tp_only_with_active_entry_cancellation` manages closes plus stale-entry cancellation;
     missing ownership metadata is irrelevant, while unknown entry/close or position-side semantics
     fail closed because mode scope cannot be proven.
+33. **OKX and KuCoin attribution:** OKX long/short mode uses its native side-plus-`posSide` action
+    tuple instead of CCXT's emulated reduce-only default. KuCoin open orders never use current
+    positions as `position_side` evidence.
 
 ### Earlier findings retained
 
@@ -883,8 +892,8 @@ events use bounded periodic summaries.
 - TIF/post-only differences do not prevent an otherwise exact resting-order match, while every new
   creation still receives the configured placement semantics;
 - unknown actual type/close-only fail-closed behavior for every connector adapter;
-- no generic side/position-side inference of close-only; focused WEEX V3 and Bitget UTA action-tuple
-  fixtures prove their explicit connector-native mappings;
+- no generic side/position-side inference of close-only; focused WEEX V3, Bitget UTA, and OKX
+  long/short-mode action-tuple fixtures prove their explicit connector-native mappings;
 - one-way pside attribution prefers durable PB metadata, then covers all four side/close-only tuples;
   current-position changes cannot relabel a resting order and unknown attribution fails closed;
 - normal-mode user-created orders and PB-created orders reconcile by the same exact semantics;

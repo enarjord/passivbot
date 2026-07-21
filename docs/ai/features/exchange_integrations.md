@@ -81,7 +81,9 @@ Handling:
 
 1. Treat current same-mode success as success (`code=200000`, `data.positionMode=1`).
 2. Let unknown `set_position_mode` failures raise unless a verified KuCoin no-op code is added with a targeted test.
-3. Prefer explicit `info.positionSide`/`info.posSide` before position-state inference; raise on ambiguous both-sides-open orders without an explicit hedge side.
+3. Never infer a resting order's position side from the current position. Require explicit
+   `info.positionSide`/`info.posSide` in hedge mode; in effective one-way mode, derive and verify
+   `position_side` from the authoritative order side plus `reduceOnly` tuple.
 
 ### OHLCV limit behavior + sparse-minute markets
 
@@ -136,6 +138,24 @@ Handling:
 
 1. Overlap boundaries by 1 candle.
 2. Back up initial `since` by one candle on pagination start.
+
+## OKX Futures
+
+### Long/short-mode close semantics
+
+Problem:
+
+1. OKX long/short mode identifies entry versus close from `side` plus `posSide`.
+2. CCXT emulates reduce-only for this mode and may expose `reduceOnly=false` for a valid close.
+
+Handling in Passivbot:
+
+1. In effective long/short mode, normalize close-only effect from the documented `side` plus
+   `posSide` action tuple.
+2. In effective one-way/net mode, require an authoritative native `reduceOnly` value and verify
+   one-way `position_side` against side plus close-only effect.
+3. Prefer the raw exchange `info` field over a CCXT top-level default when proving close-only
+   semantics.
 
 ## Gate.io Futures
 
