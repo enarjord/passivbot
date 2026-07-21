@@ -1522,113 +1522,65 @@ mod core {
         }
         let mut simulated_balance = balance_raw;
 
-        for s in per_long.iter_mut().filter_map(|v| v.as_mut()) {
-            let exchange = match input.symbols.get(s.symbol_idx) {
-                Some(sym) => &sym.exchange,
-                None => continue,
+        let mut gate_pass =
+            |per_side: &mut [Option<PerSymbolOrders>], pside, reducers_only: bool| {
+                for s in per_side.iter_mut().filter_map(|v| v.as_mut()) {
+                    let symbol = match input.symbols.get(s.symbol_idx) {
+                        Some(symbol) => symbol,
+                        None => continue,
+                    };
+                    let mut kept: Vec<IdealOrder> = Vec::with_capacity(s.closes.len());
+                    for order in s.closes.drain(..) {
+                        let is_gateable = is_close_order_type(order.order_type)
+                            && !is_panic_close_order_type(order.order_type);
+                        let is_reducer = is_protective_close_reducer(order.order_type, pside);
+                        if !is_gateable || is_reducer != reducers_only {
+                            kept.push(order);
+                            continue;
+                        }
+                        let Some(projected_pnl) = projected_close_pnl(
+                            &order,
+                            &s.pos,
+                            &symbol.exchange,
+                            &input.global,
+                            &symbol.order_book,
+                        ) else {
+                            kept.push(order);
+                            continue;
+                        };
+                        let balance_before = simulated_balance;
+                        let projected_balance_after = balance_before + projected_pnl;
+                        if projected_pnl < 0.0 && projected_balance_after < balance_floor - 1e-12 {
+                            diagnostics.loss_gate_blocks.push(LossGateBlock {
+                                symbol_idx: order.symbol_idx,
+                                pside: order.pside,
+                                order_type: order.order_type,
+                                qty: order.qty,
+                                price: order.price,
+                                projected_pnl,
+                                balance_before,
+                                projected_balance_after,
+                                balance_peak,
+                                balance_floor,
+                                max_realized_loss_pct: pct,
+                            });
+                            continue;
+                        }
+                        if projected_pnl < 0.0 {
+                            simulated_balance = projected_balance_after;
+                        }
+                        kept.push(order);
+                    }
+                    s.closes = kept;
+                }
             };
-            // Evaluate the selected protective reducer before ordinary closes so an ordinary
-            // close cannot consume the realized-loss allowance reserved for risk reduction.
-            s.closes.sort_by_key(|order| {
-                !is_protective_close_reducer(order.order_type, PositionSide::Long)
-            });
-            let mut kept: Vec<IdealOrder> = Vec::with_capacity(s.closes.len());
-            for order in s.closes.drain(..) {
-                if !is_close_order_type(order.order_type)
-                    || is_panic_close_order_type(order.order_type)
-                {
-                    kept.push(order);
-                    continue;
-                }
-                let symbol = &input.symbols[s.symbol_idx];
-                let Some(projected_pnl) = projected_close_pnl(
-                    &order,
-                    &s.pos,
-                    exchange,
-                    &input.global,
-                    &symbol.order_book,
-                ) else {
-                    kept.push(order);
-                    continue;
-                };
-                let balance_before = simulated_balance;
-                let projected_balance_after = balance_before + projected_pnl;
-                if projected_pnl < 0.0 && projected_balance_after < balance_floor - 1e-12 {
-                    diagnostics.loss_gate_blocks.push(LossGateBlock {
-                        symbol_idx: order.symbol_idx,
-                        pside: order.pside,
-                        order_type: order.order_type,
-                        qty: order.qty,
-                        price: order.price,
-                        projected_pnl,
-                        balance_before,
-                        projected_balance_after,
-                        balance_peak,
-                        balance_floor,
-                        max_realized_loss_pct: pct,
-                    });
-                    continue;
-                }
-                if projected_pnl < 0.0 {
-                    simulated_balance = projected_balance_after;
-                }
-                kept.push(order);
-            }
-            s.closes = kept;
-        }
 
-        for s in per_short.iter_mut().filter_map(|v| v.as_mut()) {
-            let exchange = match input.symbols.get(s.symbol_idx) {
-                Some(sym) => &sym.exchange,
-                None => continue,
-            };
-            s.closes.sort_by_key(|order| {
-                !is_protective_close_reducer(order.order_type, PositionSide::Short)
-            });
-            let mut kept: Vec<IdealOrder> = Vec::with_capacity(s.closes.len());
-            for order in s.closes.drain(..) {
-                if !is_close_order_type(order.order_type)
-                    || is_panic_close_order_type(order.order_type)
-                {
-                    kept.push(order);
-                    continue;
-                }
-                let symbol = &input.symbols[s.symbol_idx];
-                let Some(projected_pnl) = projected_close_pnl(
-                    &order,
-                    &s.pos,
-                    exchange,
-                    &input.global,
-                    &symbol.order_book,
-                ) else {
-                    kept.push(order);
-                    continue;
-                };
-                let balance_before = simulated_balance;
-                let projected_balance_after = balance_before + projected_pnl;
-                if projected_pnl < 0.0 && projected_balance_after < balance_floor - 1e-12 {
-                    diagnostics.loss_gate_blocks.push(LossGateBlock {
-                        symbol_idx: order.symbol_idx,
-                        pside: order.pside,
-                        order_type: order.order_type,
-                        qty: order.qty,
-                        price: order.price,
-                        projected_pnl,
-                        balance_before,
-                        projected_balance_after,
-                        balance_peak,
-                        balance_floor,
-                        max_realized_loss_pct: pct,
-                    });
-                    continue;
-                }
-                if projected_pnl < 0.0 {
-                    simulated_balance = projected_balance_after;
-                }
-                kept.push(order);
-            }
-            s.closes = kept;
-        }
+        // The simulated balance is shared by the whole batch, so run every selected protective
+        // reducer before allowing any ordinary close to consume realized-loss allowance.
+        gate_pass(per_long, PositionSide::Long, true);
+        gate_pass(per_short, PositionSide::Short, true);
+        gate_pass(per_long, PositionSide::Long, false);
+        gate_pass(per_short, PositionSide::Short, false);
     }
 
     fn twel_repair_target(bot: &BotParams) -> Option<f64> {
@@ -5986,6 +5938,102 @@ mod core {
             assert_eq!(diagnostics.loss_gate_blocks.len(), 1);
             let block = &diagnostics.loss_gate_blocks[0];
             assert_eq!(block.symbol_idx, 1);
+            assert!((block.balance_before - 940.0).abs() < 1e-12);
+            assert!((block.projected_balance_after - 880.0).abs() < 1e-12);
+            assert!((block.balance_floor - 900.0).abs() < 1e-12);
+        }
+
+        #[test]
+        fn realized_loss_gate_prioritizes_reducers_across_symbols() {
+            let mut sym0 = make_basic_symbol(0);
+            sym0.order_book = OrderBook {
+                bid: 94.0,
+                ask: 94.0,
+            };
+            sym0.exchange.maker_fee = 0.0;
+            sym0.long.position = Position {
+                size: 10.0,
+                price: 100.0,
+            };
+
+            let mut sym1 = make_basic_symbol(1);
+            sym1.order_book = sym0.order_book.clone();
+            sym1.exchange.maker_fee = 0.0;
+            sym1.long.position = sym0.long.position;
+
+            let input = OrchestratorInput {
+                timestamp_ms: 0,
+                balance: 1000.0,
+                balance_raw: 1000.0,
+                global: OrchestratorGlobal {
+                    filter_by_min_effective_cost: false,
+                    market_orders_allowed: false,
+                    market_order_near_touch_threshold: 0.001,
+                    market_order_slippage_pct: 0.0,
+                    panic_close_market: false,
+                    auto_unstuck_allowed: Some(true),
+                    unstuck_allowance_long: 0.0,
+                    unstuck_allowance_short: 0.0,
+                    max_realized_loss_pct: 0.1,
+                    realized_pnl_cumsum_max: 0.0,
+                    realized_pnl_cumsum_last: 0.0,
+                    sort_global: true,
+                    global_bot_params: BotParamsPair::default(),
+                    hedge_mode: true,
+                    strategy_kind: StrategyKind::TrailingMartingale,
+                },
+                symbols: vec![sym0.clone(), sym1.clone()],
+                peek_hints: None,
+                forager_hysteresis: None,
+            };
+            let mut per_long = vec![
+                Some(PerSymbolOrders {
+                    symbol_idx: 0,
+                    entries: vec![],
+                    closes: vec![IdealOrder {
+                        symbol_idx: 0,
+                        pside: PositionSide::Long,
+                        qty: -10.0,
+                        price: 94.0,
+                        order_type: OrderType::CloseGridLong,
+                    }],
+                    pos: sym0.long.position,
+                    mode: TradingMode::Normal,
+                }),
+                Some(PerSymbolOrders {
+                    symbol_idx: 1,
+                    entries: vec![],
+                    closes: vec![IdealOrder {
+                        symbol_idx: 1,
+                        pside: PositionSide::Long,
+                        qty: -10.0,
+                        price: 94.0,
+                        order_type: OrderType::CloseUnstuckLong,
+                    }],
+                    pos: sym1.long.position,
+                    mode: TradingMode::Normal,
+                }),
+            ];
+            let mut per_short: Vec<Option<PerSymbolOrders>> = vec![None, None];
+            let mut diagnostics = OrchestratorDiagnostics::default();
+
+            gate_lossy_closes_by_peak_balance(
+                &input,
+                &mut per_long,
+                &mut per_short,
+                &mut diagnostics,
+            );
+
+            assert!(per_long[0].as_ref().unwrap().closes.is_empty());
+            assert_eq!(per_long[1].as_ref().unwrap().closes.len(), 1);
+            assert_eq!(
+                per_long[1].as_ref().unwrap().closes[0].order_type,
+                OrderType::CloseUnstuckLong
+            );
+            assert_eq!(diagnostics.loss_gate_blocks.len(), 1);
+            let block = &diagnostics.loss_gate_blocks[0];
+            assert_eq!(block.symbol_idx, 0);
+            assert_eq!(block.order_type, OrderType::CloseGridLong);
             assert!((block.balance_before - 940.0).abs() < 1e-12);
             assert!((block.projected_balance_after - 880.0).abs() < 1e-12);
             assert!((block.balance_floor - 900.0).abs() < 1e-12);
