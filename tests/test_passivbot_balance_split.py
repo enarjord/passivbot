@@ -145,19 +145,25 @@ def test_market_snapshot_ticker_strategy_respects_explicit_override():
     assert bot._market_snapshot_ticker_strategy() == "bulk"
 
 
-def test_noncritical_market_snapshot_error_emits_skipped_event():
+def test_noncritical_market_snapshot_error_emits_skipped_event(caplog):
     sink = ListEventSink()
+    console_sink = ListEventSink()
+    text_sink = ListEventSink()
     bot = Passivbot.__new__(Passivbot)
     bot._live_event_current_cycle_id = "cy_market_diag"
+    bot.live_event_console_enabled = True
     bot._live_event_pipeline = LiveEventPipeline(
         structured_sinks=[sink],
         monitor_sinks=[],
+        console_sink=console_sink,
+        text_sink=text_sink,
     )
     exc = RuntimeError(
         "missing live market snapshots for upnl api_key=secret-token"
     )
 
-    assert bot._log_noncritical_market_snapshot_error("upnl diagnostics", exc) is True
+    with caplog.at_level(logging.WARNING):
+        assert bot._log_noncritical_market_snapshot_error("upnl diagnostics", exc) is True
     assert bot._live_event_pipeline.flush(timeout=2.0) is True
     events = [
         event
@@ -174,10 +180,51 @@ def test_noncritical_market_snapshot_error_emits_skipped_event():
     assert event.reason_code == ReasonCodes.MARKET_SNAPSHOT_DIAGNOSTIC_SKIPPED
     assert event.data["context"] == "upnl diagnostics"
     assert event.data["error_type"] == "RuntimeError"
-    assert "secret-token" not in event.data["error"]
-    assert DEFAULT_ROUTES[EventTypes.MARKET_SNAPSHOT_DIAGNOSTIC_SKIPPED].console is False
-    assert DEFAULT_ROUTES[EventTypes.MARKET_SNAPSHOT_DIAGNOSTIC_SKIPPED].text is False
+    assert "error" not in event.data
+    assert DEFAULT_ROUTES[EventTypes.MARKET_SNAPSHOT_DIAGNOSTIC_SKIPPED].console is True
+    assert DEFAULT_ROUTES[EventTypes.MARKET_SNAPSHOT_DIAGNOSTIC_SKIPPED].text is True
+    assert console_sink.events == [event]
+    assert text_sink.events == [event]
+    assert not caplog.records
     assert bot._live_event_pipeline.close(timeout=2.0) is True
+
+
+@pytest.mark.parametrize("emitter_mode", ["missing", "raises", "returns_none"])
+def test_noncritical_market_snapshot_error_keeps_bounded_legacy_warning_without_event_owner(
+    caplog, emitter_mode
+):
+    def raising_emitter(**_kwargs):
+        raise RuntimeError("event pipeline failure with raw detail")
+
+    emitters = {
+        "missing": None,
+        "raises": raising_emitter,
+        "returns_none": lambda **_kwargs: None,
+    }
+    bot = Passivbot.__new__(Passivbot)
+    bot._live_event_current_cycle_id = "C" * 1_000
+    bot.live_event_console_enabled = emitter_mode != "missing"
+    bot._live_event_pipeline = (
+        None
+        if emitter_mode == "missing"
+        else SimpleNamespace(emit=lambda *_args, **_kwargs: None, console_sink=object())
+    )
+    bot._emit_market_snapshot_diagnostic_skipped_event = emitters[emitter_mode]
+    exc = RuntimeError("live market snapshots unavailable token=secret-token")
+
+    with caplog.at_level(logging.WARNING):
+        assert (
+            bot._log_noncritical_market_snapshot_error("X" * 1_000, exc) is True
+        )
+
+    warnings = [record.getMessage() for record in caplog.records]
+    assert len(warnings) == 1
+    warning = warnings[0]
+    assert "secret-token" not in warning
+    assert "event pipeline failure" not in warning
+    assert "error_type=RuntimeError" in warning
+    assert "reason=market_snapshot_diagnostic_skipped" in warning
+    assert len("2026-07-15T23:45:40Z WARNING  [hyperliquid] " + warning) <= 240
 
 
 @pytest.mark.asyncio
@@ -414,6 +461,84 @@ async def test_init_pnls_emits_cache_ready_event(monkeypatch):
     assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 
+@pytest.mark.asyncio
+async def test_init_pnls_failure_logs_bounded_classification_and_reraises(monkeypatch, caplog):
+    secret = "api_key=startup-fill-secret"
+
+    class _StartupFillError(RuntimeError):
+        pass
+
+    failure = _StartupFillError(secret)
+    failure.status = "503"
+    failure.code = "10006"
+
+    class _Manager:
+        def __init__(self, **_kwargs):
+            self._events = []
+
+        async def ensure_loaded(self):
+            raise failure
+
+    bot = Passivbot.__new__(Passivbot)
+    bot.runtime_identity = TEST_RUNTIME_IDENTITY
+    bot.exchange = "binance"
+    bot.user = "binance_01"
+    bot.config = {"live": {"pnls_max_lookback_days": "all"}}
+    bot._pnls_initialized = False
+
+    monkeypatch.delenv("PASSIVBOT_FILL_EVENTS_DOCTOR", raising=False)
+    monkeypatch.setattr(passivbot_module, "_extract_symbol_pool", lambda *_args: [])
+    monkeypatch.setattr(passivbot_module, "_build_fetcher_for_bot", lambda *_args: object())
+    monkeypatch.setattr(passivbot_module, "FillEventsManager", _Manager)
+
+    with caplog.at_level(logging.ERROR):
+        with pytest.raises(_StartupFillError) as exc_info:
+            await Passivbot.init_pnls(bot)
+
+    assert exc_info.value is failure
+    assert "error_type=RuntimeError" in caplog.text
+    assert "status=503" in caplog.text
+    assert "code=10006" in caplog.text
+    assert secret not in caplog.text
+    assert "Traceback" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_init_pnls_history_scope_failure_is_bounded_and_cache_remains_ready(
+    monkeypatch, caplog
+):
+    secret = "api_key=history-scope-secret"
+
+    class _Manager:
+        def __init__(self, **_kwargs):
+            self._events = [object()]
+
+        async def ensure_loaded(self):
+            return None
+
+        def get_history_scope(self):
+            raise RuntimeError(secret)
+
+    bot = Passivbot.__new__(Passivbot)
+    bot.runtime_identity = TEST_RUNTIME_IDENTITY
+    bot.exchange = "binance"
+    bot.user = "binance_01"
+    bot.config = {"live": {"pnls_max_lookback_days": "all"}}
+    bot._pnls_initialized = False
+
+    monkeypatch.delenv("PASSIVBOT_FILL_EVENTS_DOCTOR", raising=False)
+    monkeypatch.setattr(passivbot_module, "_extract_symbol_pool", lambda *_args: [])
+    monkeypatch.setattr(passivbot_module, "_build_fetcher_for_bot", lambda *_args: object())
+    monkeypatch.setattr(passivbot_module, "FillEventsManager", _Manager)
+
+    with caplog.at_level(logging.DEBUG):
+        await Passivbot.init_pnls(bot)
+
+    assert bot._pnls_initialized is True
+    assert "error_type=RuntimeError" in caplog.text
+    assert secret not in caplog.text
+
+
 def _counted_staged_account_refresh_bot(
     *,
     balance: float = 100.0,
@@ -565,24 +690,29 @@ async def test_staged_account_refresh_emits_data_packet_diagnostics():
 
 
 @pytest.mark.asyncio
-async def test_data_packet_capture_failure_does_not_block_authoritative_fetch():
+async def test_data_packet_capture_failure_does_not_block_authoritative_fetch(caplog):
     from live import state_refresh
 
+    secret = "api_key=data-packet-recorder-secret"
+
     def failing_recorder(*_args, **_kwargs):
-        raise RuntimeError("metadata recorder failed")
+        raise RuntimeError(secret)
 
     async def fetched_payload():
-        return ("raw-balance", 123.45)
+        return True
 
     bot = SimpleNamespace(_capture_live_data_packet_fetch_metadata=failing_recorder)
     timings_ms = {}
 
-    result = await state_refresh.timed_authoritative_fetch(
-        bot, "balance", fetched_payload(), timings_ms
-    )
+    with caplog.at_level(logging.DEBUG):
+        result = await state_refresh.timed_authoritative_fetch(
+            bot, "fills", fetched_payload(), timings_ms
+        )
 
-    assert result == ("raw-balance", 123.45)
-    assert timings_ms["balance"] >= 0
+    assert result is True
+    assert timings_ms["fills"] >= 0
+    assert "error_type=RuntimeError" in caplog.text
+    assert secret not in caplog.text
 
 
 def test_balance_data_packet_capture_accepts_legacy_raw_normalized_pair():
@@ -1043,6 +1173,166 @@ async def test_shutdown_gracefully_emits_stage_events():
         for event_type, kwargs in events
         if event_type == EventTypes.BOT_SHUTDOWN_STAGE
     )
+
+
+def test_emit_shutdown_stage_redacts_event_delivery_exception_text(caplog):
+    bot = Passivbot.__new__(Passivbot)
+    bot._shutdown_started_monotonic = None
+
+    def fail_event(*args, **kwargs):
+        raise RuntimeError("token=shutdown-secret https://private.invalid/request")
+
+    bot._emit_live_event = fail_event
+
+    with caplog.at_level(logging.DEBUG):
+        bot._emit_shutdown_stage("event_delivery_failed", status="failed", level="error")
+
+    messages = [record.getMessage() for record in caplog.records]
+    assert any(
+        "failed emitting shutdown stage event_delivery_failed (RuntimeError)" in message
+        for message in messages
+    )
+    assert all("shutdown-secret" not in message for message in messages)
+    assert all("private.invalid" not in message for message in messages)
+
+
+@pytest.mark.asyncio
+async def test_shutdown_gracefully_redacts_maintainer_and_session_failure_text(caplog):
+    bot = Passivbot.__new__(Passivbot)
+    bot._shutdown_in_progress = False
+    bot.stop_signal_received = False
+    events = []
+
+    def emit_event(event_type, *args, **kwargs):
+        events.append((event_type, kwargs))
+        return object()
+
+    def fail_maintainer_stop(*args, **kwargs):
+        raise RuntimeError("token=maintainer-secret https://private.invalid/stop")
+
+    class _FailingCloser:
+        def __init__(self, label):
+            self.label = label
+
+        async def close(self):
+            raise RuntimeError(
+                f"authorization={self.label}-secret https://private.invalid/close"
+            )
+
+    bot._emit_live_event = emit_event
+    bot._monitor_emit_stop = lambda *args, **kwargs: None
+    bot._monitor_flush_snapshot = AsyncMock()
+    bot.monitor_publisher = None
+    bot.stop_data_maintainers = fail_maintainer_stop
+    bot.maintainers = {}
+    bot.WS_ohlcvs_1m_tasks = {}
+    bot._execution_loop_task = None
+    bot._execution_loop_stopped = None
+    bot.ccp = _FailingCloser("private")
+    bot.cca = _FailingCloser("public")
+    bot._live_event_pipeline = None
+
+    with caplog.at_level(logging.DEBUG):
+        await bot.shutdown_gracefully()
+
+    failed_stages = {
+        kwargs["reason_code"]: kwargs["data"]
+        for event_type, kwargs in events
+        if event_type == EventTypes.BOT_SHUTDOWN_STAGE
+        and kwargs["status"] == "failed"
+    }
+    assert failed_stages == {
+        "maintainers_stop_failed": {
+            "error_type": "RuntimeError",
+            "stage": "maintainers_stop_failed",
+            "elapsed_s": failed_stages["maintainers_stop_failed"]["elapsed_s"],
+        },
+        "private_session_close_failed": {
+            "error_type": "RuntimeError",
+            "stage": "private_session_close_failed",
+            "elapsed_s": failed_stages["private_session_close_failed"]["elapsed_s"],
+        },
+        "public_session_close_failed": {
+            "error_type": "RuntimeError",
+            "stage": "public_session_close_failed",
+            "elapsed_s": failed_stages["public_session_close_failed"]["elapsed_s"],
+        },
+    }
+    retained = repr(events) + "\n" + "\n".join(
+        record.getMessage() for record in caplog.records
+    )
+    assert "maintainer-secret" not in retained
+    assert "private-secret" not in retained
+    assert "public-secret" not in retained
+    assert "private.invalid" not in retained
+
+
+@pytest.mark.asyncio
+async def test_shutdown_gracefully_redacts_await_failure_text(caplog):
+    bot = Passivbot.__new__(Passivbot)
+    bot._shutdown_in_progress = False
+    bot.stop_signal_received = False
+    events = []
+
+    def emit_event(event_type, *args, **kwargs):
+        events.append((event_type, kwargs))
+        return object()
+
+    class _InvalidMaintainer:
+        def __repr__(self):
+            return "<password=maintainer-await-secret>"
+
+    class _FailingStopEvent:
+        def __init__(self):
+            self.was_set = False
+
+        async def wait(self):
+            raise RuntimeError("signature=execution-wait-secret")
+
+        def set(self):
+            self.was_set = True
+
+    async def active_execution_loop():
+        await asyncio.sleep(3600)
+
+    execution_task = asyncio.create_task(active_execution_loop())
+    execution_stopped = _FailingStopEvent()
+
+    bot._emit_live_event = emit_event
+    bot._monitor_emit_stop = lambda *args, **kwargs: None
+    bot._monitor_flush_snapshot = AsyncMock()
+    bot.monitor_publisher = None
+    bot.stop_data_maintainers = lambda *args, **kwargs: None
+    bot.maintainers = {"invalid": _InvalidMaintainer()}
+    bot.WS_ohlcvs_1m_tasks = {}
+    bot._execution_loop_task = execution_task
+    bot._execution_loop_stopped = execution_stopped
+    bot.ccp = None
+    bot.cca = None
+    bot._live_event_pipeline = None
+
+    with caplog.at_level(logging.DEBUG):
+        await bot.shutdown_gracefully()
+
+    failed_stages = {
+        kwargs["reason_code"]: kwargs["data"]
+        for event_type, kwargs in events
+        if event_type == EventTypes.BOT_SHUTDOWN_STAGE
+        and kwargs["status"] == "failed"
+    }
+    assert failed_stages["maintainers_await_failed"]["error_type"] == "TypeError"
+    assert failed_stages["maintainers_await_failed"]["task_count"] == 1
+    assert failed_stages["execution_loop_wait_failed"]["error_type"] == "RuntimeError"
+    assert execution_stopped.was_set is True
+    retained = repr(events) + "\n" + "\n".join(
+        record.getMessage() for record in caplog.records
+    )
+    assert "maintainer-await-secret" not in retained
+    assert "execution-wait-secret" not in retained
+
+    execution_task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await execution_task
 
 
 @pytest.mark.asyncio
@@ -2584,7 +2874,9 @@ async def test_start_bot_treats_shutdown_cancelled_warmup_as_clean_stop(monkeypa
 
 
 @pytest.mark.asyncio
-async def test_start_bot_treats_hsl_value_error_as_terminal_startup_failure(monkeypatch):
+async def test_start_bot_treats_hsl_value_error_as_terminal_startup_failure(
+    monkeypatch, caplog
+):
     bot = Passivbot.__new__(Passivbot)
     bot.runtime_identity = TEST_RUNTIME_IDENTITY
     bot._runtime_manifest_written = True
@@ -2609,17 +2901,22 @@ async def test_start_bot_treats_hsl_value_error_as_terminal_startup_failure(monk
     bot.warmup_trading_ready_candles = AsyncMock()
     bot._equity_hard_stop_enabled = lambda *args, **kwargs: True
     bot._equity_hard_stop_signal_mode = lambda *args, **kwargs: "coin"
-    bot._equity_hard_stop_start_coin_history_replay = AsyncMock(
-        side_effect=ValueError("missing unrealized_pnl_by_coin_pside")
-    )
+    secret = "api_key=terminal-startup-secret"
+    failure = ValueError(secret)
+    failure.status = "422"
+    failure.code = "10006"
+    bot._equity_hard_stop_start_coin_history_replay = AsyncMock(side_effect=failure)
 
     async def _format(*args, **kwargs):
         return None
 
     monkeypatch.setattr(passivbot_module, "format_approved_ignored_coins", _format)
 
-    with pytest.raises(FatalBotException, match="terminal startup validation failure"):
-        await bot.start_bot()
+    with caplog.at_level(logging.CRITICAL):
+        with pytest.raises(
+            FatalBotException, match="error_type=ValueError status=422 code=10006"
+        ) as exc_info:
+            await bot.start_bot()
 
     assert monitor_errors
     assert (
@@ -2631,6 +2928,10 @@ async def test_start_bot_treats_hsl_value_error_as_terminal_startup_failure(monk
         "stage": "equity_hard_stop_initialize_coin_from_history",
         "error_type": "ValueError",
     }
+    assert exc_info.value.__cause__ is failure
+    assert secret not in str(exc_info.value)
+    assert secret not in caplog.text
+    assert "Traceback" not in caplog.text
 
 
 def test_coin_hsl_status_logs_distance_only_for_open_position(caplog, monkeypatch):
@@ -2756,22 +3057,30 @@ def test_coin_hsl_status_logs_distance_only_for_open_position(caplog, monkeypatc
 
     import passivbot_hsl as hsl_mod
 
+    secret = "api_key=hsl-log-projection-secret"
+    url = "https://private.example.invalid/v1/hsl?token=hsl-log-token"
+
     def fail_info(*args, **kwargs):
-        raise RuntimeError("logging failed")
+        raise RuntimeError(f"logging failed {secret} {url}")
 
     caplog.clear()
     sink.events.clear()
     monkeypatch.setattr(hsl_mod.logging, "info", fail_info)
     failing_log_bot = FakeBot(has_position=True)
-    failing_log_bot._equity_hard_stop_emit_coin_status(
-        "long",
-        "NEAR/USDT:USDT",
-        metrics | {"timestamp_ms": 30_000},
-    )
+    with caplog.at_level(logging.DEBUG):
+        failing_log_bot._equity_hard_stop_emit_coin_status(
+            "long",
+            "NEAR/USDT:USDT",
+            metrics | {"timestamp_ms": 30_000},
+        )
 
     assert failing_log_bot._live_event_pipeline.flush(timeout=2.0) is True
     assert sink.events[-1].event_type == EventTypes.HSL_STATUS
     assert sink.events[-1].data["dist_to_red"] == pytest.approx(0.04)
+    assert "failed to log HSL coin status" in caplog.text
+    assert "RuntimeError" in caplog.text
+    assert secret not in caplog.text
+    assert url not in caplog.text
 
 
 def test_startup_timing_marks_log_once(monkeypatch, caplog):
@@ -2852,15 +3161,27 @@ def test_ws_reconnect_emits_bounded_structured_event(monkeypatch, caplog):
     )
     now_ms = [1_000]
     monkeypatch.setattr(passivbot_module, "utc_ms", lambda: now_ms[0])
+    exception_value = "wss://ws.example.test/reconnect?api_key=SECRET_TOKEN"
 
     with caplog.at_level(logging.DEBUG):
-        Passivbot._log_ws_reconnect(
-            bot,
-            reconnect_no=1,
-            retry_delay_s=1.25,
-            reason="time_sync",
-            exc=TimeoutError("api_key=SECRET ping timeout"),
-        )
+        try:
+            raise TimeoutError(exception_value)
+        except TimeoutError as exc:
+            Passivbot._log_ws_reconnect(
+                bot,
+                reconnect_no=1,
+                retry_delay_s=1.25,
+                reason="time_sync",
+                exc=exc,
+            )
+
+    assert exception_value not in caplog.text
+    assert "SECRET_TOKEN" not in caplog.text
+    assert "wss://" not in caplog.text
+    assert "error_type=TimeoutError" in caplog.text
+    assert "reconnect #1" in caplog.text
+    assert "stack_frames=" in caplog.text
+    assert "Traceback" not in caplog.text
 
     assert bot._live_event_pipeline.flush(timeout=2.0) is True
     events = [
@@ -2911,6 +3232,150 @@ def test_ws_reconnect_emits_bounded_structured_event(monkeypatch, caplog):
         "warning_visible": False,
         "traceback_emitted": False,
     }
+
+    pathological_error = type("Error" + "X" * 512, (Exception,), {})
+    with caplog.at_level(logging.DEBUG):
+        Passivbot._log_ws_reconnect(
+            bot,
+            reconnect_no=5,
+            retry_delay_s=3.0,
+            reason="private reason wss://SECRET",
+            exc=pathological_error("wss://SECRET?api_key=SECRET"),
+        )
+    assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    pathological_event = sink.events[-1]
+    assert pathological_event.data["reason"] == "other"
+    assert pathological_event.data["error_type"] == "unknown"
+    assert pathological_event.data["traceback_emitted"] is False
+    assert "error_type=unknown" in caplog.text
+    assert "wss://SECRET" not in caplog.text
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
+
+
+def test_ws_reconnect_redacts_sensitive_traceback_frame_components(monkeypatch, caplog):
+    sink = ListEventSink()
+    bot = Passivbot.__new__(Passivbot)
+    bot.exchange = "kucoin"
+    bot._live_event_pipeline = LiveEventPipeline(
+        structured_sinks=[sink],
+        monitor_sinks=[],
+    )
+    monkeypatch.setattr(passivbot_module, "utc_ms", lambda: 1_000_000)
+    def raise_timeout():
+        raise TimeoutError("safe")
+
+    sensitive_function = types.FunctionType(
+        raise_timeout.__code__.replace(
+            co_name="wss://ws.example/private?id=opaque123",
+            co_filename="wss://ws.example/private?api_key=SECRET_TOKEN",
+        ),
+        globals(),
+    )
+
+    with caplog.at_level(logging.DEBUG):
+        try:
+            sensitive_function()
+        except TimeoutError as exc:
+            Passivbot._log_ws_reconnect(
+                bot,
+                reconnect_no=1,
+                retry_delay_s=1.0,
+                reason="connection_lost",
+                exc=exc,
+            )
+
+    assert "opaque123" not in caplog.text
+    assert "SECRET_TOKEN" not in caplog.text
+    assert "api_key" not in caplog.text
+    assert "wss://" not in caplog.text
+    assert "stack_frames=" in caplog.text
+    assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    assert sink.events[-1].data["traceback_emitted"] is True
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
+
+
+def test_ws_reconnect_bounds_stack_depth_without_extracting_traceback(
+    monkeypatch, caplog
+):
+    sink = ListEventSink()
+    bot = Passivbot.__new__(Passivbot)
+    bot.exchange = "kucoin"
+    bot._live_event_pipeline = LiveEventPipeline(
+        structured_sinks=[sink],
+        monitor_sinks=[],
+    )
+    monkeypatch.setattr(passivbot_module, "utc_ms", lambda: 1_000_000)
+    monkeypatch.setattr(
+        passivbot_module.traceback,
+        "extract_tb",
+        lambda *_args, **_kwargs: pytest.fail("traceback extraction must stay unused"),
+    )
+
+    def raise_deep(depth):
+        if depth:
+            return raise_deep(depth - 1)
+        raise TimeoutError("safe")
+
+    with caplog.at_level(logging.DEBUG):
+        try:
+            raise_deep(12)
+        except TimeoutError as exc:
+            Passivbot._log_ws_reconnect(
+                bot,
+                reconnect_no=1,
+                retry_delay_s=1.0,
+                reason="connection_lost",
+                exc=exc,
+            )
+
+    assert "stack_frames=4" in caplog.text
+    assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    assert sink.events[-1].data["traceback_emitted"] is True
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
+
+
+def test_ws_reconnect_does_not_consume_traceback_cadence_when_debug_disabled(
+    monkeypatch, caplog
+):
+    sink = ListEventSink()
+    bot = Passivbot.__new__(Passivbot)
+    bot.exchange = "kucoin"
+    bot._live_event_pipeline = LiveEventPipeline(
+        structured_sinks=[sink],
+        monitor_sinks=[],
+    )
+    monkeypatch.setattr(passivbot_module, "utc_ms", lambda: 1_000_000)
+
+    try:
+        raise TimeoutError("safe")
+    except TimeoutError as exc:
+        with caplog.at_level(logging.INFO):
+            Passivbot._log_ws_reconnect(
+                bot,
+                reconnect_no=1,
+                retry_delay_s=1.0,
+                reason="connection_lost",
+                exc=exc,
+            )
+        assert bot._live_event_pipeline.flush(timeout=2.0) is True
+        assert sink.events[-1].data["traceback_emitted"] is False
+        assert not hasattr(bot, "_ws_reconnect_traceback_last_ms")
+        assert "stack_frames=" not in caplog.text
+
+        caplog.clear()
+        with caplog.at_level(logging.DEBUG):
+            Passivbot._log_ws_reconnect(
+                bot,
+                reconnect_no=2,
+                retry_delay_s=1.0,
+                reason="connection_lost",
+                exc=exc,
+            )
+
+    assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    assert sink.events[-1].data["traceback_emitted"] is True
+    assert bot._ws_reconnect_traceback_last_ms == 1_000_000
+    assert "stack_frames=" in caplog.text
     assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 
@@ -5469,8 +5934,24 @@ async def test_update_pnls_uses_confirmation_overlap_when_fills_pending():
 
 
 @pytest.mark.asyncio
-async def test_update_pnls_propagates_unexpected_refresh_errors():
+@pytest.mark.parametrize("shutdown_requested", [False, True])
+async def test_update_pnls_propagates_unexpected_refresh_errors_without_retaining_text(
+    caplog, capsys, shutdown_requested
+):
     bot = Passivbot.__new__(Passivbot)
+    secret = "api_key=fill-refresh-secret https://private.example.invalid/fills"
+
+    class HostileKey:
+        def __hash__(self):
+            return hash("status")
+
+        def __eq__(self, other):
+            raise KeyboardInterrupt(secret)
+
+    refresh_error = RuntimeError(secret)
+    refresh_error.status = 10**10_000
+    refresh_error.code = -(10**10_000)
+    refresh_error.info = {HostileKey(): "429"}
     cached_events = [
         SimpleNamespace(timestamp=1_700_000_000_000, id="fill-1", source_ids=["fill-1"])
     ]
@@ -5479,9 +5960,7 @@ async def test_update_pnls_propagates_unexpected_refresh_errors():
         def __init__(self, events, *, history_scope="unknown"):
             self._events = list(events)
             self.refresh = AsyncMock()
-            self.refresh_latest = AsyncMock(
-                side_effect=RuntimeError("fill refresh failed")
-            )
+            self.refresh_latest = AsyncMock(side_effect=refresh_error)
             self.history_scope = history_scope
 
         def get_events(self):
@@ -5516,12 +5995,18 @@ async def test_update_pnls_propagates_unexpected_refresh_errors():
     bot._log_new_fill_events = lambda new_events: None
     bot._monitor_record_event = lambda *args, **kwargs: None
     bot._monitor_record_error = lambda *args, **kwargs: None
-    bot.logging_level = 0
+    bot.logging_level = 2
     bot._health_rate_limits = 0
     bot._trailing_fill_fetch_generation = 7
+    bot._shutdown_requested = lambda: shutdown_requested
 
-    with pytest.raises(RuntimeError, match="fill refresh failed"):
-        await bot.update_pnls()
+    with caplog.at_level(logging.DEBUG):
+        if shutdown_requested:
+            assert await bot.update_pnls() is False
+        else:
+            with pytest.raises(RuntimeError) as exc_info:
+                await bot.update_pnls()
+            assert exc_info.value is refresh_error
     assert bot._trailing_fill_fetch_generation == 7
     assert bot._live_event_pipeline.flush(timeout=2.0) is True
     events = [
@@ -5529,14 +6014,115 @@ async def test_update_pnls_propagates_unexpected_refresh_errors():
         for event in sink.events
         if event.event_type == EventTypes.FILLS_REFRESH_SUMMARY
     ]
-    assert len(events) == 1
-    event = events[0]
-    assert event.status == "failed"
-    assert event.reason_code == "fill_refresh_failed"
-    assert event.data["error_type"] == "RuntimeError"
-    assert event.data["error"] == "fill refresh failed"
-    assert event.data["coverage_ready_before"] is True
+    if shutdown_requested:
+        assert events == []
+        assert "fill refresh stopped during in-flight request" in caplog.text
+    else:
+        assert len(events) == 1
+        event = events[0]
+        assert event.status == "failed"
+        assert event.reason_code == "fill_refresh_failed"
+        assert event.data["error_type"] == "RuntimeError"
+        assert "error" not in event.data
+        assert event.data["coverage_ready_before"] is True
+    assert "error_type=RuntimeError" in caplog.text
+    if not shutdown_requested:
+        assert "status=- code=-" in caplog.text
+    assert secret not in caplog.text
+    assert secret not in capsys.readouterr().err
     assert bot._live_event_pipeline.close(timeout=2.0) is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("shutdown_requested", [False, True])
+async def test_routine_fill_prefetch_failure_logs_only_exception_type(
+    caplog, shutdown_requested
+):
+    from live import state_refresh
+
+    secret = "token=routine-prefetch-secret https://private.example.invalid/fills"
+
+    class SensitiveRuntimeError(RuntimeError):
+        pass
+
+    async def fail_update_pnls(*, source):
+        assert source == "routine_prefetch:minute_boundary"
+        raise SensitiveRuntimeError(secret)
+
+    bot = SimpleNamespace(
+        update_pnls=fail_update_pnls,
+        _shutdown_requested=lambda: shutdown_requested,
+    )
+    with caplog.at_level(logging.DEBUG):
+        await state_refresh.routine_fill_refresh_prefetch_task(
+            bot, reason="minute_boundary"
+        )
+
+    assert "error_type=RuntimeError" in caplog.text
+    assert secret not in caplog.text
+    if shutdown_requested:
+        assert "routine fills prefetch stopped" in caplog.text
+    else:
+        assert "blocking/confirmation refresh will retry" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_update_pnls_failure_logs_only_bounded_status_and_code(caplog):
+    bot = Passivbot.__new__(Passivbot)
+    cached_events = [
+        SimpleNamespace(timestamp=1_700_000_000_000, id="fill-1", source_ids=["fill-1"])
+    ]
+
+    class _Manager:
+        history_scope = "all"
+
+        def __init__(self):
+            self.refresh = AsyncMock()
+            error = RuntimeError("api_key=fill-status-secret")
+            error.status = "503"
+            error.code = "10006"
+            error.info = {
+                "status": "500?api_key=hidden",
+                "code": "ApiKeyProdSecret",
+            }
+            self.refresh_latest = AsyncMock(side_effect=error)
+
+        def get_events(self):
+            return list(cached_events)
+
+        def get_history_scope(self):
+            return self.history_scope
+
+        def set_history_scope(self, scope):
+            self.history_scope = scope
+
+    bot.stop_signal_received = False
+    bot.config = {
+        "live": {
+            "fills_recent_overlap_minutes": 10.0,
+            "pnls_max_lookback_days": "all",
+        }
+    }
+    bot._pnls_manager = _Manager()
+    bot.init_pnls = AsyncMock()
+    bot.live_value = lambda key: "all" if key == "pnls_max_lookback_days" else None
+    bot.get_exchange_time = lambda: 1_700_000_060_000
+    bot._log_new_fill_events = lambda new_events: None
+    bot._monitor_record_event = lambda *args, **kwargs: None
+    bot._monitor_record_error = lambda *args, **kwargs: None
+    bot._emit_fills_refresh_summary_event = lambda *args, **kwargs: None
+    bot._maybe_recover_exchange_time_sync = AsyncMock(return_value=False)
+    bot._shutdown_requested = lambda: False
+    bot._health_rate_limits = 0
+    bot._trailing_fill_fetch_generation = 0
+
+    with caplog.at_level(logging.ERROR):
+        with pytest.raises(RuntimeError, match="fill-status-secret"):
+            await bot.update_pnls()
+
+    assert "error_type=RuntimeError status=503 code=10006" in caplog.text
+    assert "fill-status-secret" not in caplog.text
+    assert "ApiKeyProdSecret" not in caplog.text
 
 
 @pytest.mark.asyncio
@@ -8788,16 +9374,23 @@ def test_staged_execution_defer_survives_planning_unavailable_emit_failure():
 
 
 @pytest.mark.asyncio
-async def test_pre_create_snapshot_filter_blocks_stale_market_snapshots():
+async def test_pre_create_snapshot_filter_blocks_stale_market_snapshots(caplog):
     bot = Passivbot.__new__(Passivbot)
     bot.config = {"live": {}}
     bot.exchange = "bybit"
     bot.freshness_ledger = FreshnessLedger(now_ms=0)
     bot._authoritative_refresh_epoch = 1
     sink = ListEventSink()
+    monitor_sink = ListEventSink()
+    console_sink = ListEventSink()
+    text_sink = ListEventSink()
+    bot.live_event_console_enabled = True
     bot._live_event_current_cycle_id = "cy_stale_pre_create_market_snapshot"
     bot._live_event_pipeline = LiveEventPipeline(
-        structured_sinks=[sink], monitor_sinks=[]
+        structured_sinks=[sink],
+        monitor_sinks=[monitor_sink],
+        console_sink=console_sink,
+        text_sink=text_sink,
     )
     symbol = "BTC/USDT:USDT"
 
@@ -8847,7 +9440,8 @@ async def test_pre_create_snapshot_filter_blocks_stale_market_snapshots():
         }
     ]
 
-    assert await bot._filter_fresh_market_snapshot_creations(orders) == []
+    with caplog.at_level(logging.WARNING):
+        assert await bot._filter_fresh_market_snapshot_creations(orders) == []
     assert bot._live_event_pipeline.flush(timeout=2.0) is True
     events = [
         event
@@ -8868,20 +9462,38 @@ async def test_pre_create_snapshot_filter_blocks_stale_market_snapshots():
     assert event.data["details"][0]["reason"] == "stale"
     assert event.data["details"][0]["age_ms"] >= 20_000
     assert event.data["details"][0]["max_age_ms"] == 10_000
+    assert monitor_sink.events == [event]
+    assert console_sink.events == [event]
+    assert text_sink.events == [event]
+    console_message = format_console_event(event)
+    assert "reason=pre_create_market_snapshot_unavailable" in console_message
+    assert "pre-create market snapshots are stale" in console_message
+    assert len("2026-07-15T23:45:40Z WARNING  [hyperliquid] " + console_message) <= 240
+    assert not any(
+        "stale pre-create market snapshots" in record.getMessage()
+        for record in caplog.records
+    )
     assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 
 @pytest.mark.asyncio
-async def test_pre_create_snapshot_filter_emits_failed_refresh_skip_event():
+async def test_pre_create_snapshot_filter_emits_failed_refresh_skip_event(caplog):
     bot = Passivbot.__new__(Passivbot)
     bot.config = {"live": {}}
     bot.exchange = "bybit"
     bot.freshness_ledger = FreshnessLedger(now_ms=0)
     bot._authoritative_refresh_epoch = 1
     sink = ListEventSink()
+    monitor_sink = ListEventSink()
+    console_sink = ListEventSink()
+    text_sink = ListEventSink()
+    bot.live_event_console_enabled = True
     bot._live_event_current_cycle_id = "cy_failed_pre_create_market_snapshot"
     bot._live_event_pipeline = LiveEventPipeline(
-        structured_sinks=[sink], monitor_sinks=[]
+        structured_sinks=[sink],
+        monitor_sinks=[monitor_sink],
+        console_sink=console_sink,
+        text_sink=text_sink,
     )
     symbol = "BTC/USDT:USDT"
     now_ms = passivbot_module.utc_ms()
@@ -8921,7 +9533,8 @@ async def test_pre_create_snapshot_filter_emits_failed_refresh_skip_event():
         }
     ]
 
-    assert await bot._filter_fresh_market_snapshot_creations(orders) == []
+    with caplog.at_level(logging.WARNING):
+        assert await bot._filter_fresh_market_snapshot_creations(orders) == []
     assert bot._live_event_pipeline.flush(timeout=2.0) is True
     events = [
         event
@@ -8939,6 +9552,18 @@ async def test_pre_create_snapshot_filter_emits_failed_refresh_skip_event():
     assert event.data["stage"] == "market_snapshot_refresh"
     assert event.data["error_type"] == "RuntimeError"
     assert "exchange unavailable" not in json.dumps(event.data)
+    assert monitor_sink.events == [event]
+    assert console_sink.events == [event]
+    assert text_sink.events == [event]
+    console_message = format_console_event(event)
+    assert "error_type=RuntimeError" in console_message
+    assert "reason=pre_create_market_snapshot_unavailable" in console_message
+    assert "exchange unavailable" not in console_message
+    assert len("2026-07-15T23:45:40Z WARNING  [hyperliquid] " + console_message) <= 240
+    assert not any(
+        "failed pre-create market snapshot refresh" in record.getMessage()
+        for record in caplog.records
+    )
     assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 
@@ -9215,14 +9840,23 @@ async def test_pre_create_snapshot_filter_disables_limit_order_distance_guard(
 
 
 @pytest.mark.asyncio
-async def test_pre_create_snapshot_filter_blocks_non_market_planning_invalidation():
+async def test_pre_create_snapshot_filter_blocks_non_market_planning_invalidation(
+    caplog,
+):
     bot = Passivbot.__new__(Passivbot)
     bot.config = {"live": {}}
     bot.exchange = "bybit"
     sink = ListEventSink()
+    monitor_sink = ListEventSink()
+    console_sink = ListEventSink()
+    text_sink = ListEventSink()
+    bot.live_event_console_enabled = True
     bot._live_event_current_cycle_id = "cy_invalid_pre_create_planning_snapshot"
     bot._live_event_pipeline = LiveEventPipeline(
-        structured_sinks=[sink], monitor_sinks=[]
+        structured_sinks=[sink],
+        monitor_sinks=[monitor_sink],
+        console_sink=console_sink,
+        text_sink=text_sink,
     )
     symbol = "BTC/USDT:USDT"
     now_ms = passivbot_module.utc_ms()
@@ -9272,7 +9906,8 @@ async def test_pre_create_snapshot_filter_blocks_non_market_planning_invalidatio
         }
     ]
 
-    assert await bot._filter_fresh_market_snapshot_creations(orders) == []
+    with caplog.at_level(logging.WARNING):
+        assert await bot._filter_fresh_market_snapshot_creations(orders) == []
     assert bot._live_event_pipeline.flush(timeout=2.0) is True
     events = [
         event
@@ -9291,7 +9926,115 @@ async def test_pre_create_snapshot_filter_blocks_non_market_planning_invalidatio
     assert event.data["details_count"] == 1
     assert event.data["details"][0]["surface"] == "positions"
     assert event.data["details"][0]["reason"] == "surface_epoch_too_old"
+    assert monitor_sink.events == [event]
+    assert console_sink.events == [event]
+    assert text_sink.events == [event]
+    console_message = format_console_event(event)
+    assert "reason=pre_create_planning_snapshot_invalid" in console_message
+    assert "planning snapshot invalid before create" in console_message
+    assert len("2026-07-15T23:45:40Z WARNING  [hyperliquid] " + console_message) <= 240
+    assert not any(
+        "planning snapshot invalid before create" in record.getMessage()
+        for record in caplog.records
+    )
     assert bot._live_event_pipeline.close(timeout=2.0) is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("emitter_mode", ["missing", "raises", "returns_none"])
+async def test_pre_create_snapshot_filter_keeps_legacy_warning_without_event_owner(
+    caplog, emitter_mode
+):
+    def invalid_for_creations(_symbols):
+        return [
+            {
+                "surface": "positions",
+                "reason": "surface_epoch_too_old",
+                "epoch": 1,
+                "min_epoch": 2,
+            }
+        ]
+
+    def raising_emitter(**_kwargs):
+        raise RuntimeError("event pipeline unavailable with raw detail")
+
+    def swallowed_emitter(**_kwargs):
+        return None
+
+    emitters = {
+        "missing": None,
+        "raises": raising_emitter,
+        "returns_none": swallowed_emitter,
+    }
+    bot = SimpleNamespace(
+        _current_planning_snapshot_invalid_for_creations=invalid_for_creations,
+        _emit_execution_create_filter_event=emitters[emitter_mode],
+        _fresh_entry_eligibility_trace=None,
+        _live_event_pipeline=(
+            None
+            if emitter_mode == "missing"
+            else SimpleNamespace(emit=lambda _event: None, console_sink=object())
+        ),
+        live_event_console_enabled=emitter_mode != "missing",
+        _log_symbols=lambda symbols, limit=12: ",".join(symbols[:limit]),
+        _log_compact_symbol_payload=lambda _details: "positions:surface_epoch_too_old",
+    )
+    orders = [
+        {
+            "symbol": "BTC/USDT:USDT",
+            "side": "buy",
+            "position_side": "long",
+            "qty": 1.0,
+            "price": 99.0,
+        }
+    ]
+
+    with caplog.at_level(logging.WARNING):
+        assert await Passivbot._filter_fresh_market_snapshot_creations(bot, orders) == []
+
+    legacy_messages = [
+        record.getMessage()
+        for record in caplog.records
+        if "planning snapshot invalid before create" in record.getMessage()
+    ]
+    assert legacy_messages == [
+        "[market] skipping order creation; planning snapshot invalid before create | "
+        "symbols=BTC/USDT:USDT details=positions:surface_epoch_too_old"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_pre_create_snapshot_refresh_legacy_fallback_excludes_raw_error(caplog):
+    async def failing_snapshots(*_args, **_kwargs):
+        raise RuntimeError("exchange unavailable with raw account detail")
+
+    bot = SimpleNamespace(
+        _current_planning_snapshot_invalid_for_creations=lambda _symbols: [],
+        _emit_execution_create_filter_event=None,
+        _fresh_entry_eligibility_trace=None,
+        _get_live_market_snapshots=failing_snapshots,
+        _live_market_snapshot_max_age_ms=lambda: 10_000,
+        _log_symbols=lambda symbols, limit=12: ",".join(symbols[:limit]),
+    )
+    orders = [
+        {
+            "symbol": "BTC/USDT:USDT",
+            "side": "buy",
+            "position_side": "long",
+            "qty": 1.0,
+            "price": 99.0,
+        }
+    ]
+
+    with caplog.at_level(logging.WARNING):
+        assert await Passivbot._filter_fresh_market_snapshot_creations(bot, orders) == []
+
+    messages = [record.getMessage() for record in caplog.records]
+    assert messages == [
+        "[market] skipping order creation; failed pre-create market snapshot refresh | "
+        "symbols=BTC/USDT:USDT error_type=RuntimeError"
+    ]
+    assert "raw account detail" not in "\n".join(messages)
 
 
 def _make_open_order_guardrail_bot(*, epoch: int = 3):
@@ -10299,7 +11042,9 @@ async def test_run_execution_loop_waits_on_pending_pnl_without_restart(monkeypat
 
 
 @pytest.mark.asyncio
-async def test_run_execution_loop_retries_fill_history_coverage_without_restart(monkeypatch):
+async def test_run_execution_loop_retries_fill_history_coverage_without_restart(
+    monkeypatch, caplog
+):
     bot = Passivbot.__new__(Passivbot)
     cycle = {"n": 0}
     executes = []
@@ -10357,7 +11102,7 @@ async def test_run_execution_loop_retries_fill_history_coverage_without_restart(
         executes.append(("execute", prepare_cycle, cycle["n"]))
         if cycle["n"] == 1:
             raise passivbot_module.FillHistoryCoverageUnavailable(
-                "fill history coverage unknown for risk lookback"
+                "fill history coverage unknown api_key=coverage-secret"
             )
         return {"executed_cycle": cycle["n"]}
 
@@ -10366,7 +11111,8 @@ async def test_run_execution_loop_retries_fill_history_coverage_without_restart(
     bot.prepare_planning_universe = fake_prepare_planning_universe
     bot.execute_to_exchange = fake_execute_to_exchange
 
-    result = await bot.run_execution_loop()
+    with caplog.at_level(logging.WARNING):
+        result = await bot.run_execution_loop()
 
     assert result == {"executed_cycle": 2}
     bot.restart_bot_on_too_many_errors.assert_not_awaited()
@@ -10390,6 +11136,8 @@ async def test_run_execution_loop_retries_fill_history_coverage_without_restart(
         == "FillHistoryCoverageUnavailable"
     )
     assert "error" not in coverage_event["data"]
+    assert "error_type=FillHistoryCoverageUnavailable" in caplog.text
+    assert "coverage-secret" not in caplog.text
 
 
 @pytest.mark.asyncio
@@ -10481,7 +11229,7 @@ async def test_run_execution_loop_suppresses_inflight_shutdown_refresh_error(cap
 
     async def fake_refresh_authoritative_state():
         bot.stop_signal_received = True
-        raise RuntimeError("connector is closed")
+        raise RuntimeError("api_key=shutdown-refresh-secret")
 
     bot.refresh_authoritative_state = fake_refresh_authoritative_state
     bot.execute_to_exchange = AsyncMock()
@@ -10499,6 +11247,8 @@ async def test_run_execution_loop_suppresses_inflight_shutdown_refresh_error(cap
         "execution loop stopped during in-flight refresh" in r.message
         for r in caplog.records
     )
+    assert "error_type=RuntimeError" in caplog.text
+    assert "shutdown-refresh-secret" not in caplog.text
 
 
 @pytest.mark.asyncio
@@ -10681,6 +11431,82 @@ async def test_exchange_time_sync_recovery_refreshes_ccxt_clients(caplog):
     assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 
+def test_exchange_time_sync_detection_traverses_cause_without_rendering_wrapper():
+    bot = Passivbot.__new__(Passivbot)
+    inner = RuntimeError("timestamp outside recvWindow code=-1021")
+    try:
+        raise RuntimeError("error_type=RuntimeError") from inner
+    except RuntimeError as outer:
+        assert bot._is_exchange_time_sync_error(outer) is True
+
+
+def test_exchange_time_sync_detection_traverses_cause_and_context_branches():
+    bot = Passivbot.__new__(Passivbot)
+    outer = RuntimeError("classification-only wrapper")
+    outer.__cause__ = RuntimeError("unrelated explicit cause")
+    outer.__context__ = RuntimeError("timestamp outside recvWindow code=-1021")
+
+    assert bot._is_exchange_time_sync_error(outer) is True
+
+
+def test_exchange_time_sync_detection_scans_late_marker():
+    bot = Passivbot.__new__(Passivbot)
+    error = RuntimeError(("x" * 5000) + " timestamp outside recvWindow")
+
+    assert bot._is_exchange_time_sync_error(error) is True
+
+
+def test_exchange_time_sync_detection_preserves_class_name_marker():
+    bot = Passivbot.__new__(Passivbot)
+
+    class WrappedInvalidNonceFailure(RuntimeError):
+        pass
+
+    assert bot._is_exchange_time_sync_error(WrappedInvalidNonceFailure("opaque"))
+
+
+def test_exchange_time_sync_detection_rejects_forged_class_name_descriptor():
+    bot = Passivbot.__new__(Passivbot)
+
+    class ForgedNameMeta(type):
+        @property
+        def __name__(cls):
+            return "InvalidNonceForged"
+
+    class UnrelatedFailure(RuntimeError, metaclass=ForgedNameMeta):
+        pass
+
+    assert not bot._is_exchange_time_sync_error(UnrelatedFailure("opaque"))
+
+
+def test_exchange_time_sync_detection_normalizes_stored_name_subclass():
+    bot = Passivbot.__new__(Passivbot)
+
+    class HostileName(str):
+        def lower(self):
+            raise KeyboardInterrupt("api_key=hostile-name-subclass")
+
+    class WrappedFailure(RuntimeError):
+        pass
+
+    WrappedFailure.__name__ = HostileName("WrappedInvalidNonceFailure")
+
+    assert bot._is_exchange_time_sync_error(WrappedFailure("opaque"))
+
+
+def test_exchange_time_sync_detection_contains_hostile_exception_text():
+    bot = Passivbot.__new__(Passivbot)
+    secret = "api_key=time-sync-hostile-string"
+
+    class HostileError(RuntimeError):
+        def __str__(self):
+            raise KeyboardInterrupt(secret)
+
+    error = HostileError()
+
+    assert bot._is_exchange_time_sync_error(error) is False
+
+
 @pytest.mark.asyncio
 async def test_exchange_time_sync_no_hook_emits_unavailable_event(caplog):
     bot = Passivbot.__new__(Passivbot)
@@ -10722,6 +11548,78 @@ async def test_exchange_time_sync_no_hook_emits_unavailable_event(caplog):
     assert event.data["error_type"] == "RuntimeError"
     assert "error" not in event.data
     assert "supersecret" not in str(event.data)
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
+
+
+@pytest.mark.asyncio
+async def test_exchange_time_sync_redacts_forged_original_exception_type(caplog):
+    bot = Passivbot.__new__(Passivbot)
+    bot.exchange = "kucoin"
+    bot.user = "kucoin_01"
+    bot.bot_id = "bot_1"
+    sink = ListEventSink()
+    bot._live_event_pipeline = LiveEventPipeline(
+        structured_sinks=[sink],
+        monitor_sinks=[],
+    )
+    bot.cca = SimpleNamespace(options={})
+    bot.ccp = None
+    secret = "sk_live_7E4v93kR2mN6pQ8t"
+    forged_error = type(secret, (RuntimeError,), {"__module__": "ccxt"})
+
+    with caplog.at_level(logging.WARNING):
+        recovered = await bot._maybe_recover_exchange_time_sync(
+            forged_error("timestamp outside recvWindow"), source="fetch_balance"
+        )
+
+    assert recovered is False
+    assert secret not in caplog.text
+    assert "error_type=RuntimeError" in caplog.text
+    assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    assert sink.events[0].data["error_type"] == "RuntimeError"
+    assert secret not in str(sink.events[0].data)
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
+
+
+@pytest.mark.asyncio
+async def test_exchange_time_sync_contains_hostile_hook_type_metadata(caplog):
+    secret = "api_key=hostile-hook-type"
+
+    class HostileMeta(type):
+        def __getattribute__(cls, name):
+            if name == "__name__":
+                raise KeyboardInterrupt(secret)
+            return super().__getattribute__(name)
+
+    class HostileHookError(RuntimeError, metaclass=HostileMeta):
+        pass
+
+    bot = Passivbot.__new__(Passivbot)
+    bot.exchange = "binance"
+    bot.user = "binance_01"
+    bot.bot_id = "bot_1"
+    sink = ListEventSink()
+    bot._live_event_pipeline = LiveEventPipeline(
+        structured_sinks=[sink],
+        monitor_sinks=[],
+    )
+    bot.cca = SimpleNamespace(
+        options={},
+        load_time_difference=AsyncMock(side_effect=HostileHookError()),
+    )
+    bot.ccp = None
+
+    with caplog.at_level(logging.WARNING):
+        recovered = await bot._maybe_recover_exchange_time_sync(
+            RuntimeError("timestamp outside recvWindow"), source="fetch_balance"
+        )
+
+    assert recovered is False
+    assert secret not in caplog.text
+    assert "failed=1[cca:Runti...]" in caplog.text
+    assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    assert sink.events[0].data["failed_clients"] == ["cca:RuntimeError"]
+    assert secret not in str(sink.events[0].data)
     assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 
@@ -10867,7 +11765,7 @@ async def test_run_execution_loop_error_log_includes_type_status_and_action(capl
         (
             ("error.bot", ("error", "bot"), {
                 "source": "run_execution_loop",
-                "error_type": "FakeExchangeError",
+                "error_type": "RuntimeError",
                 "status": "500",
                 "code": "500000",
                 "endpoint": "account-overview",
@@ -10881,7 +11779,7 @@ async def test_run_execution_loop_error_log_includes_type_status_and_action(capl
     assert not any("error with run_execution_loop" in message for message in messages)
     assert any(
         "[error] operation=run_execution_loop" in message
-        and "error_type=FakeExchangeError" in message
+        and "error_type=RuntimeError" in message
         and "status=500" in message
         and "code=500000" in message
         and "endpoint=account-overview" in message
@@ -10892,9 +11790,9 @@ async def test_run_execution_loop_error_log_includes_type_status_and_action(capl
     assert all(raw_error not in message for message in messages)
     assert all("SECRET" not in message for message in messages)
     degraded_event = bot._emit_live_cycle_degraded.call_args.kwargs
-    assert degraded_event["reason_code"] == "FakeExchangeError"
+    assert degraded_event["reason_code"] == "RuntimeError"
     assert degraded_event["level"] == "error"
-    assert degraded_event["data"]["error_type"] == "FakeExchangeError"
+    assert degraded_event["data"]["error_type"] == "RuntimeError"
     assert "error" not in degraded_event["data"]
     assert raw_error not in str(degraded_event)
     assert "SECRET" not in str(degraded_event)
@@ -10959,19 +11857,77 @@ def test_execution_loop_error_fields_are_bounded_and_classify_unknown_endpoint()
     )
     exc.status = "500?api_key=SECRET"
     exc.code = "500000?signature=SIG"
-    exc.info = {"status": "429", "retCode": "RATE_LIMIT"}
+    exc.info = {"status": "429", "retCode": "10006"}
 
     fields = bot._execution_loop_error_fields(exc)
 
     assert fields == {
-        "error_type": "FakeExchangeError",
+        "error_type": "RuntimeError",
         "status": "429",
-        "code": "RATE_LIMIT",
+        "code": "10006",
         "endpoint": "unknown",
     }
     assert "SECRET" not in str(fields)
     assert "SIG" not in str(fields)
     assert "example.invalid" not in str(fields)
+
+
+def test_execution_loop_error_fields_reject_credential_shaped_endpoint():
+    bot = Passivbot.__new__(Passivbot)
+    secret = "sk_live_7E4v93kR2mN6pQ8t"
+
+    fields = bot._execution_loop_error_fields(
+        RuntimeError(f"GET https://example.invalid/{secret}")
+    )
+
+    assert fields["endpoint"] == "unknown"
+    assert secret not in str(fields)
+
+
+def test_execution_loop_error_fields_contain_hostile_exception_metadata():
+    bot = Passivbot.__new__(Passivbot)
+    secret = "api_key=hostile-execution-metadata"
+
+    class HostileError(RuntimeError):
+        @property
+        def status(self):
+            raise KeyboardInterrupt(secret)
+
+        @property
+        def code(self):
+            raise SystemExit(secret)
+
+        @property
+        def info(self):
+            raise GeneratorExit(secret)
+
+        def __str__(self):
+            raise KeyboardInterrupt(secret)
+
+    error = HostileError()
+
+    assert bot._execution_loop_error_fields(error) == {
+        "error_type": "RuntimeError",
+        "status": "-",
+        "code": "-",
+        "endpoint": "unknown",
+    }
+
+
+def test_process_failure_log_omits_exception_value_and_traceback(caplog):
+    secret = "api_key=process-boundary-secret"
+    opaque_error = type("sk_live_7E4v93kR2mN6pQ8t", (RuntimeError,), {})
+    error = opaque_error(secret)
+    error.status = "503"
+    error.code = "sk_live_7E4v93kR2mN6pQ8t"
+
+    with caplog.at_level(logging.ERROR):
+        passivbot_module._log_process_failure("passivbot error", error)
+
+    assert "passivbot error | error_type=RuntimeError status=503 code=-" in caplog.text
+    assert secret not in caplog.text
+    assert "sk_live_7E4v93kR2mN6pQ8t" not in caplog.text
+    assert "Traceback" not in caplog.text
 
 
 def test_execution_loop_error_burst_summarizes_repeated_endpoints(caplog, monkeypatch):

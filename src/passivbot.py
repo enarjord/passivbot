@@ -24,6 +24,7 @@ from numbers import Integral
 import passivbot_rust as pbr
 import logging
 import math
+import re
 from pathlib import Path
 from cli_utils import (
     add_help_all_argument,
@@ -62,12 +63,20 @@ from live.data_packets import (
     DataPacketMetadata,
     build_data_packet_metadata,
 )
+from live.diagnostic_safety import (
+    bounded_exception_code,
+    bounded_exception_status,
+    bounded_exception_type,
+    exception_text_contains,
+    exception_type_name_contains,
+)
 from live.freshness import ACCOUNT_SURFACES, LIVE_STATE_SURFACES, FreshnessLedger
 from live.events import DiagnosticEvent, emit_diagnostic_event, run_diagnostic_step
 from live.event_bus import (
     ConsoleSummarySink,
     EventTypes,
     format_forager_eligibility_console,
+    format_market_snapshot_diagnostic_console,
     format_memory_snapshot_console,
     format_periodic_health_summary,
     LIVE_EVENT_CONSOLE_ENV,
@@ -177,7 +186,6 @@ from strategy_warmup import (
     strategy_warmup_requirements,
     strategy_warmup_value,
 )
-import re
 
 NetworkError = ccxt_errors.NetworkError
 RateLimitExceeded = ccxt_errors.RateLimitExceeded
@@ -476,6 +484,36 @@ def order_has_match(order, orders, tolerance_qty=0.01, tolerance_price=0.002):
         if orders_matching(order, elm, tolerance_qty, tolerance_price):
             return elm
     return False
+
+
+def _log_process_failure(label: str, exc: BaseException) -> None:
+    logging.error(
+        "%s | error_type=%s status=%s code=%s",
+        label,
+        bounded_exception_type(exc),
+        bounded_exception_status(exc) or "-",
+        bounded_exception_code(exc) or "-",
+    )
+
+
+_EXECUTION_LOOP_ERROR_ENDPOINTS = frozenset(
+    {
+        "account-overview",
+        "accounts",
+        "balance",
+        "candles",
+        "fills",
+        "my-trades",
+        "ohlcv",
+        "open-orders",
+        "orders",
+        "positions",
+        "ticker",
+        "tickers",
+        "time",
+        "trades",
+    }
+)
 
 
 def compute_live_warmup_windows(
@@ -791,6 +829,18 @@ class Passivbot:
             and getattr(pipeline, "console_sink", None) is not None
         )
 
+    def _market_snapshot_diagnostic_structured_console_available(self) -> bool:
+        """Return True when the market-snapshot event owns console/text output."""
+        pipeline = getattr(self, "_live_event_pipeline", None)
+        return bool(
+            callable(
+                getattr(self, "_emit_market_snapshot_diagnostic_skipped_event", None)
+            )
+            and Passivbot._live_event_console_available(self)
+            and callable(getattr(pipeline, "emit", None))
+            and getattr(pipeline, "console_sink", None) is not None
+        )
+
     def _forager_eligibility_structured_console_available(self) -> bool:
         """Return True when eligibility events own normal console/text output."""
         pipeline = getattr(self, "_live_event_pipeline", None)
@@ -932,7 +982,8 @@ class Passivbot:
             f"status={status} recovered={str(recovered).lower()} "
             f"synced={len(synced_clients)}[{client_summary(synced_clients)}] "
             f"failed={len(failed_clients)}[{client_summary(failed_clients)}] "
-            f"error_type={token(type(error).__name__, Passivbot._EXCHANGE_TIME_SYNC_CONSOLE_ERROR_TYPE_MAX_LEN)}"
+            "error_type="
+            f"{token(bounded_exception_type(error), Passivbot._EXCHANGE_TIME_SYNC_CONSOLE_ERROR_TYPE_MAX_LEN)}"
         )
 
     async def _handle_order_write_failures(
@@ -2281,26 +2332,56 @@ class Passivbot:
 
     def _is_exchange_time_sync_error(self, exc: BaseException) -> bool:
         """Return True for CCXT timestamp/nonce errors recoverable by clock sync."""
-        exc_name = type(exc).__name__.lower()
-        text = str(exc).lower()
-        combined = f"{exc_name} {text}"
-        if isinstance(exc, getattr(ccxt_errors, "InvalidNonce", tuple())):
-            return True
-        return any(
-            needle in combined
-            for needle in (
-                "invalidnonce",
-                "invalid nonce",
-                "kc-api-timestamp",
-                "recvwindow",
-                "recv window",
-                "timestamp for this request",
-                "outside of the recvwindow",
-                '"code":-1021',
-                "'code': -1021",
-                "code=-1021",
-            )
+        needles = (
+            "invalidnonce",
+            "invalid nonce",
+            "kc-api-timestamp",
+            "recvwindow",
+            "recv window",
+            "timestamp for this request",
+            "outside of the recvwindow",
+            '"code":-1021',
+            "'code': -1021",
+            "code=-1021",
         )
+        pending: list[BaseException] = [exc]
+        queued: set[int] = {id(exc)}
+        seen: set[int] = set()
+        for _ in range(8):
+            if not pending:
+                break
+            current = pending.pop(0)
+            current_id = id(current)
+            queued.discard(current_id)
+            if current_id in seen:
+                continue
+            seen.add(current_id)
+            try:
+                if isinstance(current, getattr(ccxt_errors, "InvalidNonce", tuple())):
+                    return True
+            except BaseException:
+                pass
+            if exception_type_name_contains(current, ("invalidnonce",)):
+                return True
+            if exception_text_contains(current, needles):
+                return True
+            for attr in ("__cause__", "__context__"):
+                try:
+                    candidate = BaseException.__getattribute__(current, attr)
+                except BaseException:
+                    continue
+                try:
+                    candidate_id = id(candidate)
+                    if (
+                        isinstance(candidate, BaseException)
+                        and candidate_id not in seen
+                        and candidate_id not in queued
+                    ):
+                        pending.append(candidate)
+                        queued.add(candidate_id)
+                except BaseException:
+                    continue
+        return False
 
     async def _maybe_recover_exchange_time_sync(
         self, exc: BaseException, *, source: str
@@ -2329,7 +2410,9 @@ class Passivbot:
                     f"->{Passivbot._format_exchange_time_sync_offset(after)}"
                 )
             except Exception as sync_exc:
-                failed_clients.append(f"{client_name}:{type(sync_exc).__name__}")
+                failed_clients.append(
+                    f"{client_name}:{bounded_exception_type(sync_exc)}"
+                )
         if not synced_clients and not failed_clients:
             logging.warning(
                 "%s",
@@ -3342,6 +3425,9 @@ class Passivbot:
             raise
         except Exception as exc:
             error_ts = utc_ms()
+            error_type = bounded_exception_type(exc)
+            error_status = bounded_exception_status(exc) or "-"
+            error_code = bounded_exception_code(exc) or "-"
             self._monitor_record_error(
                 "error.bot",
                 exc,
@@ -3353,17 +3439,20 @@ class Passivbot:
             self._monitor_emit_stop(
                 "startup_error",
                 ts=error_ts,
-                payload={"stage": boot_stage, "error_type": type(exc).__name__},
+                payload={"stage": boot_stage, "error_type": error_type},
             )
             if self._startup_exception_is_terminal(exc, boot_stage):
                 logging.critical(
-                    "[boot] terminal startup validation failure | stage=%s error_type=%s error=%s",
+                    "[boot] terminal startup validation failure | "
+                    "stage=%s error_type=%s status=%s code=%s",
                     boot_stage,
-                    type(exc).__name__,
-                    exc,
+                    error_type,
+                    error_status,
+                    error_code,
                 )
                 raise FatalBotException(
-                    f"terminal startup validation failure during {boot_stage}: {exc}"
+                    f"terminal startup validation failure during {boot_stage}; "
+                    f"error_type={error_type} status={error_status} code={error_code}"
                 ) from exc
             raise
 
@@ -5735,75 +5824,25 @@ class Passivbot:
 
     def _execution_loop_error_fields(self, exc: BaseException) -> dict[str, str]:
         """Return bounded classifications for execution-loop incident projections."""
-        fields: dict[str, str] = {
-            "error_type": self._execution_loop_error_field(
-                type(exc).__name__, re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,79}")
-            ),
-            "status": "-",
-            "code": "-",
+        return {
+            "error_type": bounded_exception_type(exc),
+            "status": bounded_exception_status(exc) or "-",
+            "code": bounded_exception_code(exc) or "-",
             "endpoint": self._execution_loop_error_endpoint(exc),
         }
-        for attr in ("http_status", "status", "status_code"):
-            try:
-                value = getattr(exc, attr, None)
-            except Exception:
-                continue
-            status = self._execution_loop_error_field(
-                value, re.compile(r"[0-9]{1,3}")
-            )
-            if status != "-":
-                fields["status"] = status
-                break
-        for attr in ("code", "exact", "error_code"):
-            try:
-                value = getattr(exc, attr, None)
-            except Exception:
-                continue
-            code = self._execution_loop_error_field(
-                value, re.compile(r"-?[A-Za-z0-9][A-Za-z0-9_-]{0,47}")
-            )
-            if code != "-":
-                fields["code"] = code
-                break
-        try:
-            info = getattr(exc, "info", None)
-        except Exception:
-            info = None
-        if isinstance(info, dict):
-            for key in ("code", "retCode", "errorCode"):
-                value = info.get(key)
-                code = self._execution_loop_error_field(
-                    value, re.compile(r"-?[A-Za-z0-9][A-Za-z0-9_-]{0,47}")
-                )
-                if code != "-":
-                    fields["code"] = code
-                    break
-            for key in ("status", "statusCode"):
-                value = info.get(key)
-                status = self._execution_loop_error_field(
-                    value, re.compile(r"[0-9]{1,3}")
-                )
-                if status != "-":
-                    fields["status"] = status
-                    break
-        return fields
 
     def _execution_loop_error_endpoint(self, exc: BaseException) -> str:
         """Extract a bounded endpoint classification without retaining the URL."""
         try:
             error = str(exc)
-        except Exception:
+        except BaseException:
             return "unknown"
         match = re.search(r"https?://[^\s\"'<>]+", error)
         if not match:
             return "unknown"
         url = match.group(0).split("?", 1)[0].rstrip("/")
-        endpoint = url.rsplit("/", 1)[-1]
-        return self._execution_loop_error_field(
-            endpoint,
-            re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,47}"),
-            fallback="unknown",
-        )
+        endpoint = url.rsplit("/", 1)[-1].lower()
+        return endpoint if endpoint in _EXECUTION_LOOP_ERROR_ENDPOINTS else "unknown"
 
     def _log_execution_loop_error_burst(self, fields: dict[str, str]) -> None:
         """Summarize repeated execution-loop failures without hiding individual errors."""
@@ -5872,8 +5911,8 @@ class Passivbot:
         """Record a runtime loop failure and apply the existing restart budget policy."""
         if self._shutdown_requested():
             logging.debug(
-                "[shutdown] execution loop stopped during in-flight refresh: %s",
-                exc,
+                "[shutdown] execution loop stopped during in-flight refresh | error_type=%s",
+                bounded_exception_type(exc),
             )
             return False
         if allow_time_sync_recovery and await self._maybe_recover_exchange_time_sync(
@@ -6266,7 +6305,7 @@ class Passivbot:
             except (RestartBotException, FatalBotException) as e:
                 self._emit_live_cycle_degraded(
                     cycle_id=cycle_id,
-                    reason_code=type(e).__name__,
+                    reason_code=bounded_exception_type(e),
                     data={"timings_ms": dict(loop_timings_ms)},
                     level="warning",
                 )
@@ -6279,8 +6318,9 @@ class Passivbot:
                         data={"timings_ms": dict(loop_timings_ms)},
                     )
                     logging.debug(
-                        "[shutdown] execution loop stopped during rate-limit handling: %s",
-                        e,
+                        "[shutdown] execution loop stopped during rate-limit handling | "
+                        "error_type=%s",
+                        bounded_exception_type(e),
                     )
                     break
                 self._health_errors += 1
@@ -6298,7 +6338,7 @@ class Passivbot:
                     cycle_id=cycle_id,
                     reason_code="rate_limit",
                     data={
-                        "error_type": type(e).__name__,
+                        "error_type": bounded_exception_type(e),
                         "timings_ms": dict(loop_timings_ms),
                     },
                     level="warning",
@@ -6326,21 +6366,22 @@ class Passivbot:
                         data={"timings_ms": dict(loop_timings_ms)},
                     )
                     logging.debug(
-                        "[shutdown] execution loop stopped during fill-history coverage retry: %s",
-                        e,
+                        "[shutdown] execution loop stopped during fill-history coverage retry | "
+                        "error_type=%s",
+                        bounded_exception_type(e),
                     )
                     break
                 self._request_authoritative_confirmation({"fills"})
                 logging.warning(
                     "[fills] live planning deferred pending fill-history coverage | "
-                    "action=refresh_lookback_before_retry error=%s",
-                    e,
+                    "action=refresh_lookback_before_retry error_type=%s",
+                    bounded_exception_type(e),
                 )
                 self._emit_live_cycle_degraded(
                     cycle_id=cycle_id,
                     reason_code="fill_history_coverage_unavailable",
                     data={
-                        "error_type": type(e).__name__,
+                        "error_type": bounded_exception_type(e),
                         "timings_ms": dict(loop_timings_ms),
                     },
                     level="warning",
@@ -6349,11 +6390,12 @@ class Passivbot:
                     1.0, stage="fill_history_coverage_retry"
                 )
             except Exception as e:
+                error_type = bounded_exception_type(e)
                 self._emit_live_cycle_degraded(
                     cycle_id=cycle_id,
-                    reason_code=type(e).__name__,
+                    reason_code=error_type,
                     data={
-                        "error_type": type(e).__name__,
+                        "error_type": error_type,
                         "timings_ms": dict(loop_timings_ms),
                     },
                     level="error",
@@ -6550,6 +6592,16 @@ class Passivbot:
         reconnect_no = int(reconnect_no or 0)
         retry_delay_s = max(0.0, float(retry_delay_s or 0.0))
         reason = str(reason or "connection_lost")
+        if reason not in {"connection_lost", "rate_limited", "time_sync"}:
+            reason = "other"
+        error_type = None
+        if exc is not None:
+            candidate_error_type = type(exc).__name__
+            error_type = (
+                candidate_error_type
+                if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,79}", candidate_error_type)
+                else "unknown"
+            )
         warning_visible = Passivbot._should_log_ws_reconnect_warning(
             self, reconnect_no
         )
@@ -6563,7 +6615,7 @@ class Passivbot:
                 retry_delay_s,
             )
         else:
-            exc_name = type(exc).__name__ if exc is not None else reason
+            exc_name = error_type if error_type is not None else reason
             logging.log(
                 level,
                 "[ws] %s: connection lost (reconnect #%d), retrying in %.1fs: %s",
@@ -6575,23 +6627,32 @@ class Passivbot:
         traceback_emitted = False
         if exc is not None:
             logging.debug(
-                "[ws] %s: reconnect reason=%s exception=%s", exchange, reason, exc
+                "[ws] %s: reconnect reason=%s error_type=%s",
+                exchange,
+                reason,
+                error_type,
             )
             now_ms = utc_ms()
             last_traceback_ms = int(
                 getattr(self, "_ws_reconnect_traceback_last_ms", 0) or 0
             )
-            if reconnect_no <= 1 or now_ms - last_traceback_ms >= 15 * 60 * 1000:
-                traceback_emitted = True
-                self._ws_reconnect_traceback_last_ms = now_ms
-                logging.debug(
-                    "[ws] %s: reconnect traceback follows (throttled)", exchange
-                )
-                logging.debug(
-                    "".join(
-                        traceback.format_exception(type(exc), exc, exc.__traceback__)
+            if logging.getLogger().isEnabledFor(logging.DEBUG) and (
+                reconnect_no <= 1
+                or now_ms - last_traceback_ms >= 15 * 60 * 1000
+            ):
+                stack_depth = 0
+                current_tb = exc.__traceback__
+                while current_tb is not None and stack_depth < 4:
+                    stack_depth += 1
+                    current_tb = current_tb.tb_next
+                if stack_depth:
+                    traceback_emitted = True
+                    self._ws_reconnect_traceback_last_ms = now_ms
+                    logging.debug(
+                        "[ws] %s: reconnect stack_frames=%d",
+                        exchange,
+                        stack_depth,
                     )
-                )
         self._emit_websocket_reconnect_event(
             reconnect_no=reconnect_no,
             retry_delay_s=retry_delay_s,
@@ -6771,7 +6832,10 @@ class Passivbot:
                 logging.warning("[monitor] live event pipeline close timed out")
             return closed
         except Exception as exc:
-            logging.warning("[monitor] live event pipeline close failed: %s", exc)
+            logging.warning(
+                "[monitor] live event pipeline close failed (%s)",
+                bounded_exception_type(exc),
+            )
             return False
         finally:
             self._live_event_pipeline = None
@@ -6823,7 +6887,11 @@ class Passivbot:
                 data=payload,
             )
         except Exception as exc:
-            logging.debug("[shutdown] failed emitting shutdown stage %s: %s", stage, exc)
+            logging.debug(
+                "[shutdown] failed emitting shutdown stage %s (%s)",
+                stage,
+                bounded_exception_type(exc),
+            )
         if emitted is None:
             log_level = logging.INFO
             if level == "warning":
@@ -6869,13 +6937,14 @@ class Passivbot:
                     if task is not None:
                         maintainer_tasks.append(task)
         except Exception as e:
-            logging.error("[shutdown] error stopping maintainers: %s", e)
+            error_type = bounded_exception_type(e)
+            logging.error("[shutdown] error stopping maintainers (%s)", error_type)
             self._emit_shutdown_stage(
                 "maintainers_stop_failed",
                 status="failed",
                 level="error",
                 message="error stopping maintainer tasks",
-                data={"error": str(e)},
+                data={"error_type": error_type},
             )
         if maintainer_tasks:
             try:
@@ -6940,15 +7009,20 @@ class Passivbot:
                     )
                     pass
             except Exception as e:
+                error_type = bounded_exception_type(e)
                 logging.error(
-                    "[shutdown] error awaiting maintainer cancellation: %s", e
+                    "[shutdown] error awaiting maintainer cancellation (%s)",
+                    error_type,
                 )
                 self._emit_shutdown_stage(
                     "maintainers_await_failed",
                     status="failed",
                     level="error",
                     message="error awaiting maintainer tasks",
-                    data={"task_count": len(maintainer_tasks), "error": str(e)},
+                    data={
+                        "task_count": len(maintainer_tasks),
+                        "error_type": error_type,
+                    },
                 )
         execution_loop_stopped = getattr(self, "_execution_loop_stopped", None)
         execution_loop_task = getattr(self, "_execution_loop_task", None)
@@ -7040,13 +7114,16 @@ class Passivbot:
                     message="execution loop cancelled during shutdown",
                 )
             except Exception as e:
-                logging.debug("[shutdown] error waiting for execution loop: %s", e)
+                error_type = bounded_exception_type(e)
+                logging.debug(
+                    "[shutdown] error waiting for execution loop (%s)", error_type
+                )
                 self._emit_shutdown_stage(
                     "execution_loop_wait_failed",
                     status="failed",
                     level="error",
                     message="error waiting for execution loop",
-                    data={"error": str(e)},
+                    data={"error_type": error_type},
                 )
             finally:
                 try:
@@ -7063,13 +7140,16 @@ class Passivbot:
                     message="private ccxt session closed",
                 )
         except Exception as e:
-            logging.error("[shutdown] error closing private ccxt session: %s", e)
+            error_type = bounded_exception_type(e)
+            logging.error(
+                "[shutdown] error closing private ccxt session (%s)", error_type
+            )
             self._emit_shutdown_stage(
                 "private_session_close_failed",
                 status="failed",
                 level="error",
                 message="error closing private ccxt session",
-                data={"error": str(e)},
+                data={"error_type": error_type},
             )
         try:
             if getattr(self, "cca", None) is not None:
@@ -7080,13 +7160,16 @@ class Passivbot:
                     message="public ccxt session closed",
                 )
         except Exception as e:
-            logging.error("[shutdown] error closing public ccxt session: %s", e)
+            error_type = bounded_exception_type(e)
+            logging.error(
+                "[shutdown] error closing public ccxt session (%s)", error_type
+            )
             self._emit_shutdown_stage(
                 "public_session_close_failed",
                 status="failed",
                 level="error",
                 message="error closing public ccxt session",
-                data={"error": str(e)},
+                data={"error_type": error_type},
             )
         await self._monitor_flush_snapshot(force=True, ts=utc_ms())
         self._emit_shutdown_stage(
@@ -7971,7 +8054,11 @@ class Passivbot:
             try:
                 res[key] = self.maintainers[key].cancel()
             except Exception as e:
-                logging.error(f"error stopping maintainer {key} {e}")
+                logging.error(
+                    "error stopping maintainer %s (%s)",
+                    key,
+                    bounded_exception_type(e),
+                )
         if hasattr(self, "WS_ohlcvs_1m_tasks"):
             res0s = {}
             for key in self.WS_ohlcvs_1m_tasks:
@@ -7979,7 +8066,11 @@ class Passivbot:
                     res0 = self.WS_ohlcvs_1m_tasks[key].cancel()
                     res0s[key] = res0
                 except Exception as e:
-                    logging.error(f"error stopping WS_ohlcvs_1m_tasks {key} {e}")
+                    logging.error(
+                        "error stopping WS_ohlcvs_1m_tasks %s (%s)",
+                        key,
+                        bounded_exception_type(e),
+                    )
             if res0s:
                 if verbose:
                     logging.debug(f"stopped ohlcvs watcher tasks {res0s}")
@@ -10932,9 +11023,29 @@ class Passivbot:
         emit_market_snapshot_event = getattr(
             self, "_emit_market_snapshot_diagnostic_skipped_event", None
         )
+        event_emitted = False
         if callable(emit_market_snapshot_event):
-            emit_market_snapshot_event(context=context, error=exc)
-        logging.warning("[market] skipped %s | error=%s", context, exc)
+            try:
+                event_emitted = bool(
+                    emit_market_snapshot_event(context=context, error=exc)
+                )
+            except Exception as event_exc:
+                logging.debug(
+                    "[event] failed to emit market snapshot diagnostic skipped event error_type=%s",
+                    type(event_exc).__name__,
+                )
+        if not (
+            event_emitted
+            and Passivbot._market_snapshot_diagnostic_structured_console_available(self)
+        ):
+            logging.warning(
+                "%s",
+                format_market_snapshot_diagnostic_console(
+                    context=context,
+                    error_type=type(exc).__name__,
+                    cycle_id=Passivbot._current_live_event_cycle_id(self),
+                ),
+            )
         return True
 
     async def calc_upnl_sum(self):
@@ -11187,7 +11298,10 @@ class Passivbot:
                 if callable(get_history_scope):
                     history_scope = get_history_scope()
             except Exception as exc:
-                logging.debug("[event] failed to read fill-cache history scope: %s", exc)
+                logging.debug(
+                    "[event] failed to read fill-cache history scope | error_type=%s",
+                    bounded_exception_type(exc),
+                )
             self._emit_fills_refresh_summary_event(
                 source="startup",
                 refresh_mode="cache_load",
@@ -11202,8 +11316,12 @@ class Passivbot:
             self._pnls_initialized = True
 
         except Exception as e:
-            logging.error("Failed to initialize FillEventsManager: %s", e)
-            traceback.print_exc()
+            logging.error(
+                "Failed to initialize FillEventsManager | error_type=%s status=%s code=%s",
+                bounded_exception_type(e),
+                bounded_exception_status(e) or "-",
+                bounded_exception_code(e) or "-",
+            )
             raise
 
     async def update_pnls(
@@ -11589,7 +11707,8 @@ class Passivbot:
         except Exception as e:
             if self._shutdown_requested():
                 logging.debug(
-                    "[shutdown] fill refresh stopped during in-flight request: %s", e
+                    "[shutdown] fill refresh stopped during in-flight request | error_type=%s",
+                    bounded_exception_type(e),
                 )
                 return False
             if await self._maybe_recover_exchange_time_sync(e, source="update_pnls"):
@@ -11614,11 +11733,10 @@ class Passivbot:
                 payload={"source": "update_pnls"},
             )
             logging.error(
-                "[fills] Failed to update FillEventsManager | error_type=%s status=%s code=%s error=%s",
-                type(e).__name__,
-                getattr(e, "status", "-"),
-                getattr(e, "code", "-"),
-                e,
+                "[fills] Failed to update FillEventsManager | error_type=%s status=%s code=%s",
+                bounded_exception_type(e),
+                bounded_exception_status(e) or "-",
+                bounded_exception_code(e) or "-",
             )
             self._emit_fills_refresh_summary_event(
                 source=source,
@@ -11633,8 +11751,6 @@ class Passivbot:
                 error=e,
                 level="error",
             )
-            if self.logging_level >= 2:
-                traceback.print_exc()
             raise
 
     # -------------------------------------------------------------------------
@@ -12819,9 +12935,9 @@ class Passivbot:
                 )
             except Exception as exc:
                 logging.debug(
-                    "[event] failed to emit HSL history progress stage=%s: %s",
+                    "[event] failed to emit HSL history progress stage=%s error_type=%s",
                     stage,
-                    exc,
+                    bounded_exception_type(exc),
                 )
 
         _safe_float = Passivbot._hsl_fill_safe_float
@@ -15811,10 +15927,12 @@ class Passivbot:
         cache_only_symbols: set[str] = set()
         ema_unavailable_symbols: set[str] = set()
         ema_unavailable_reasons: dict[str, list[str]] = {}
-        candidate_ema_unavailable_details: dict[str, list[tuple[str, str, str]]] = {}
-        optional_ema_drops: dict[tuple[str, str], list[tuple[str, float]]] = {}
+        candidate_ema_unavailable_details: dict[
+            str, list[tuple[str, str, tuple[str, ...], tuple[float, ...]]]
+        ] = {}
+        optional_ema_drops: dict[tuple[str, str, str], list[tuple[str, float]]] = {}
         close_ema_recoveries: dict[str, list[tuple[float, int]]] = {}
-        close_ema_fallbacks: dict[str, list[tuple[float, int, int, str]]] = {}
+        close_ema_fallbacks: dict[str, list[tuple[float, int, int, str, str]]] = {}
 
         def log_ema_issue(
             key: tuple,
@@ -15833,9 +15951,19 @@ class Passivbot:
                 logging.debug(message, *args)
 
         def record_optional_ema_drop(
-            ema_type: str, symbol: str, span: float, reason: str
+            ema_type: str,
+            symbol: str,
+            span: float,
+            reason_code: str,
+            error_type: str,
         ) -> None:
-            optional_ema_drops.setdefault((ema_type, reason), []).append((symbol, span))
+            optional_ema_drops.setdefault((ema_type, reason_code, error_type), []).append(
+                (symbol, span)
+            )
+
+        def ema_error_type(exc: Exception) -> str:
+            name = type(exc).__name__
+            return name if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,63}", name) else "Error"
 
         def mark_ema_unavailable(symbol: str, reason: str) -> None:
             ema_unavailable_symbols.add(symbol)
@@ -16157,10 +16285,9 @@ class Passivbot:
                 ctx = Passivbot._active_tail_gap_projection_context(self, sym)
             except Exception as exc:
                 logging.debug(
-                    "[candle] open-tail EMA projection context failed %s | error_type=%s error=%s",
+                    "[candle] open-tail EMA projection context failed %s | error_type=%s",
                     Passivbot._log_symbol(sym),
                     type(exc).__name__,
-                    exc,
                 )
                 ctx = None
             if ctx is None and sym in forager_projection_max_age_by_symbol:
@@ -16182,10 +16309,9 @@ class Passivbot:
                         }
                 except Exception as exc:
                     logging.debug(
-                        "[candle] forager tail projection context failed %s | error_type=%s error=%s",
+                        "[candle] forager tail projection context failed %s | error_type=%s",
                         Passivbot._log_symbol(sym),
                         type(exc).__name__,
-                        exc,
                     )
             if ctx is not None:
                 projection_contexts[sym] = ctx
@@ -16265,7 +16391,7 @@ class Passivbot:
                             out[span] = fallback
                             continue
                     record_optional_ema_drop(
-                        ema_type, symbol, span, f"{type(e).__name__}: {e}"
+                        ema_type, symbol, span, "exception", ema_error_type(e)
                     )
                     continue
                 if math.isfinite(val):
@@ -16279,7 +16405,7 @@ class Passivbot:
                             out[span] = fallback
                             continue
                     record_optional_ema_drop(
-                        ema_type, symbol, span, f"non-finite value {val}"
+                        ema_type, symbol, span, "non_finite_value", "NonFiniteValue"
                     )
             return out
 
@@ -16332,10 +16458,24 @@ class Passivbot:
                             symbol, ema_type, [sp for sp, _why in missing]
                         ),
                     )
-                raise RuntimeError(
+                raise MissingRequiredEma(symbol, ema_type, missing, detail)
+            return out
+
+        class MissingRequiredEma(RuntimeError):
+            def __init__(
+                self,
+                symbol: str,
+                ema_type: str,
+                missing: list[tuple[float, str]],
+                detail: str,
+            ):
+                super().__init__(
                     f"[ema] missing required {ema_type} EMA for {symbol}: {detail}"
                 )
-            return out
+                self.symbol = symbol
+                self.ema_type = ema_type
+                self.missing = list(missing)
+                self.detail = detail
 
         class MissingCloseEma(RuntimeError):
             def __init__(
@@ -16352,6 +16492,31 @@ class Passivbot:
                 self.missing = list(missing)
                 self.detail = detail
 
+        def close_ema_reason_detail(reason: str) -> tuple[str, str]:
+            if str(reason).startswith("non-finite close EMA value"):
+                return "non_finite_value", "NonFiniteValue"
+            error_type = str(reason).split(":", 1)[0].strip()
+            if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,63}", error_type):
+                return "exception", error_type
+            return "unknown_failure", "Error"
+
+        def candidate_ema_detail(
+            exc: Exception,
+        ) -> tuple[str, tuple[str, ...], tuple[float, ...]]:
+            if isinstance(exc, MissingCloseEma):
+                return (
+                    ema_error_type(exc),
+                    ("m1_close",),
+                    tuple(float(span) for span, _reason in exc.missing),
+                )
+            if isinstance(exc, MissingRequiredEma):
+                return (
+                    ema_error_type(exc),
+                    (exc.ema_type,),
+                    tuple(float(span) for span, _reason in exc.missing),
+                )
+            return ema_error_type(exc), (), ()
+
         def log_missing_close_ema(symbol: str, missing: list[tuple[float, str]]) -> None:
             max_fallback_age_ms = int(Passivbot._close_ema_fallback_max_age_ms(self))
             stale = [
@@ -16363,11 +16528,11 @@ class Passivbot:
                 log_ema_issue(
                     ("close_fallback_stale", symbol),
                     required_ema_log_level(symbol),
-                    "[ema] close EMA fallback stale %s spans=%s max_age_ms=%d action=block_until_fresh reason=%s | %s",
+                    "[ema] close EMA fallback stale %s spans=%s max_age_ms=%d action=block_until_fresh reason=previous_close_ema_stale error_type=%s | %s",
                     Passivbot._log_symbol(symbol),
                     ",".join(f"{sp:.8g}" for sp, _why in stale[:8]),
                     max_fallback_age_ms,
-                    stale[0][1],
+                    close_ema_reason_detail(stale[0][1])[1],
                     ema_candle_health_context(symbol),
                     interval_ms=60 * 60 * 1000,
                 )
@@ -16445,20 +16610,22 @@ class Passivbot:
                             + 1
                         )
                         self._orchestrator_close_ema_fallback_counts[key] = n_fallbacks
+                        reason_code, error_type = close_ema_reason_detail(reason)
                         close_ema_fallbacks.setdefault(symbol, []).append(
-                            (span, age_ms, n_fallbacks, reason)
+                            (span, age_ms, n_fallbacks, reason_code, error_type)
                         )
                         log_ema_issue(
                             ("close_fallback", symbol, span),
                             logging.DEBUG,
                             "[ema] close EMA fallback %s span=%.8g ema=%.12g age_ms=%d"
-                            " n_fallbacks=%d reason=%s",
+                            " n_fallbacks=%d reason=%s error_type=%s",
                             Passivbot._log_symbol(symbol),
                             span,
                             prev_val,
                             age_ms,
                             n_fallbacks,
-                            reason,
+                            reason_code,
+                            error_type,
                         )
                         continue
                 missing.append((span, reason))
@@ -16487,7 +16654,8 @@ class Passivbot:
                         ema_type,
                         symbol,
                         span,
-                        f"projected open-tail {metric_key} EMA missing",
+                        "projected_metric_missing",
+                        "MissingProjectedMetric",
                     )
                     continue
                 val = float(metric_values[span])
@@ -16498,7 +16666,8 @@ class Passivbot:
                         ema_type,
                         symbol,
                         span,
-                        f"projected open-tail {metric_key} EMA non-finite value {val}",
+                        "projected_metric_non_finite",
+                        "NonFiniteValue",
                     )
             return out
 
@@ -16570,13 +16739,12 @@ class Passivbot:
                 log_ema_issue(
                     ("open_tail_projection_failed", sym),
                     logging.WARNING,
-                    "[candle] open-tail EMA projection failed %s tail_gap_age_ms=%s latest_expected_ts=%s last_cached_ts=%s error_type=%s error=%s",
+                    "[candle] open-tail EMA projection failed %s tail_gap_age_ms=%s latest_expected_ts=%s last_cached_ts=%s error_type=%s",
                     Passivbot._log_symbol(sym),
                     projection_ctx.get("tail_gap_age_ms"),
                     projection_ctx.get("latest_expected_ts"),
                     projection_ctx.get("last_cached_ts"),
                     type(exc).__name__,
-                    exc,
                     interval_ms=15 * 60 * 1000,
                 )
                 raise
@@ -16627,10 +16795,9 @@ class Passivbot:
                 ctx = Passivbot._active_tail_gap_projection_context(self, sym)
             except Exception as exc:
                 logging.debug(
-                    "[candle] late open-tail EMA projection context failed %s | error_type=%s error=%s",
+                    "[candle] late open-tail EMA projection context failed %s | error_type=%s",
                     Passivbot._log_symbol(sym),
                     type(exc).__name__,
-                    exc,
                 )
                 return None
             if ctx is not None:
@@ -16762,17 +16929,17 @@ class Passivbot:
                 else:
                     reason = "flat_active_required_ema_unavailable"
                 mark_ema_unavailable(sym, reason)
+                error_type, ema_types, spans = candidate_ema_detail(exc)
                 candidate_ema_unavailable_details.setdefault(reason, []).append(
-                    (sym, type(exc).__name__, str(exc))
+                    (sym, error_type, ema_types, spans)
                 )
                 log_ema_issue(
                     ("required_ema_unavailable", sym),
                     required_ema_log_level(sym),
-                    "[ema] required EMA unavailable %s action=mark_nontradable_until_fresh reason=%s error_type=%s error=%s | %s",
+                    "[ema] required EMA unavailable %s action=mark_nontradable_until_fresh reason=%s error_type=%s | %s",
                     Passivbot._log_symbol(sym),
                     reason,
-                    type(exc).__name__,
-                    exc,
+                    error_type,
                     ema_candle_health_context(sym),
                     interval_ms=15 * 60 * 1000,
                 )
@@ -16886,18 +17053,19 @@ class Passivbot:
         if optional_ema_drops:
             parts = []
             total = 0
-            for (ema_type, reason), items in sorted(optional_ema_drops.items()):
+            for (ema_type, reason_code, error_type), items in sorted(optional_ema_drops.items()):
                 total += len(items)
                 symbols_for_reason = sorted({symbol for symbol, _span in items})
                 spans_for_reason = sorted({float(span) for _symbol, span in items})
                 parts.append(
-                    "%s:n=%d symbols=%s spans=%s reason=%s"
+                    "%s:n=%d symbols=%s spans=%s reason=%s error_type=%s"
                     % (
                         ema_type,
                         len(items),
                         Passivbot._log_symbols(symbols_for_reason, limit=8),
                         ",".join(f"{span:.8g}" for span in spans_for_reason[:6]),
-                        str(reason)[:120],
+                        reason_code,
+                        error_type,
                     )
                 )
             logging.debug(
@@ -16926,35 +17094,55 @@ class Passivbot:
                 max_fallbacks,
                 "; ".join(examples),
             )
-        close_fallback_structured_console = (
-            Passivbot._ema_fallback_structured_console_available(self)
-            if close_ema_fallbacks
-            else False
+        ema_fallback_event_emitted = bool(
+            Passivbot._emit_ema_fallback_used_event(
+                self,
+                close_ema_recoveries=close_ema_recoveries,
+                close_ema_fallbacks=close_ema_fallbacks,
+                forager_cached_ema_fallbacks=forager_cached_ema_fallbacks,
+            )
+        )
+        close_fallback_structured_console = bool(
+            close_ema_fallbacks
+            and ema_fallback_event_emitted
+            and Passivbot._ema_fallback_structured_console_available(self)
         )
         if close_ema_fallbacks and not close_fallback_structured_console:
             fallback_count = sum(len(items) for items in close_ema_fallbacks.values())
             max_fallbacks = max(
                 count
                 for items in close_ema_fallbacks.values()
-                for _span, _age_ms, count, _reason in items
+                for _span, _age_ms, count, _reason_code, _error_type in items
             )
             max_age_ms = max(
                 age_ms
                 for items in close_ema_fallbacks.values()
-                for _span, age_ms, _count, _reason in items
+                for _span, age_ms, _count, _reason_code, _error_type in items
             )
             examples = []
             for symbol, items in sorted(close_ema_fallbacks.items())[:8]:
                 spans = ",".join(
-                    f"{span:.8g}" for span, _age, _count, _reason in sorted(items)[:6]
+                    f"{span:.8g}"
+                    for span, _age, _count, _reason_code, _error_type in sorted(items)[:6]
                 )
-                symbol_max_age_ms = max(age for _span, age, _count, _reason in items)
-                symbol_max_fallbacks = max(count for _span, _age, count, _reason in items)
-                reason = next((why for _span, _age, _count, why in items if why), "")
+                symbol_max_age_ms = max(
+                    age for _span, age, _count, _reason_code, _error_type in items
+                )
+                symbol_max_fallbacks = max(
+                    count for _span, _age, count, _reason_code, _error_type in items
+                )
+                reason_code, error_type = next(
+                    (
+                        (code, error)
+                        for _span, _age, _count, code, error in items
+                        if code or error
+                    ),
+                    ("-", "-"),
+                )
                 examples.append(
                     f"{Passivbot._log_symbol(symbol)} spans={spans} "
                     f"max_age_ms={symbol_max_age_ms} max_fallbacks={symbol_max_fallbacks} "
-                    f"reason={str(reason)[:80]}"
+                    f"reason={reason_code} error_type={error_type}"
                 )
             log_ema_issue(
                 ("close_ema_fallback_summary",),
@@ -16987,27 +17175,48 @@ class Passivbot:
                 "; ".join(examples),
                 interval_ms=15 * 60 * 1000,
             )
-        required_ema_unavailable_structured_console = (
-            Passivbot._ema_unavailable_structured_console_available(self)
-            if candidate_ema_unavailable_details
-            else False
+        ema_unavailable_event_emitted = bool(
+            Passivbot._emit_ema_unavailable_event(
+                self,
+                optional_ema_drops=optional_ema_drops,
+                candidate_ema_unavailable_details=candidate_ema_unavailable_details,
+                ema_unavailable_reasons=ema_unavailable_reasons,
+            )
+        )
+        required_ema_unavailable_structured_console = bool(
+            candidate_ema_unavailable_details
+            and ema_unavailable_event_emitted
+            and Passivbot._ema_unavailable_structured_console_available(self)
         )
         if candidate_ema_unavailable_details and not required_ema_unavailable_structured_console:
             parts = []
             all_symbols: set[str] = set()
             for reason, items in sorted(candidate_ema_unavailable_details.items()):
-                unique_symbols = sorted({symbol for symbol, _error_type, _error in items})
+                unique_symbols = sorted(
+                    {symbol for symbol, _error_type, _ema_types, _spans in items}
+                )
                 all_symbols.update(unique_symbols)
-                error_types = sorted({error_type for _symbol, error_type, _error in items})
-                example_error = next((error for _symbol, _error_type, error in items if error), "")
+                error_types = sorted(
+                    {
+                        error_type
+                        for _symbol, error_type, _ema_types, _spans in items
+                    }
+                )
+                ema_types = sorted(
+                    {
+                        ema_type
+                        for _symbol, _error_type, item_ema_types, _spans in items
+                        for ema_type in item_ema_types
+                    }
+                )
                 parts.append(
-                    "%s:n=%d symbols=%s error_types=%s example=%s"
+                    "%s:n=%d symbols=%s error_types=%s ema_types=%s"
                     % (
                         reason,
                         len(unique_symbols),
                         Passivbot._log_symbols(unique_symbols, limit=10),
                         ",".join(error_types[:4]),
-                        str(example_error)[:160],
+                        ",".join(ema_types[:4]) or "-",
                     )
                 )
             log_ema_issue(
@@ -17019,12 +17228,6 @@ class Passivbot:
                 "; ".join(parts[:4]),
                 interval_ms=15 * 60 * 1000,
             )
-        Passivbot._emit_ema_fallback_used_event(
-            self,
-            close_ema_recoveries=close_ema_recoveries,
-            close_ema_fallbacks=close_ema_fallbacks,
-            forager_cached_ema_fallbacks=forager_cached_ema_fallbacks,
-        )
         if errors:
             fatal = next(
                 (err for _sym, err in errors if not isinstance(err, Exception)), None
@@ -17033,10 +17236,9 @@ class Passivbot:
                 raise fatal
             for sym, err in errors[1:]:
                 logging.debug(
-                    "[ema] additional symbol EMA bundle failure %s: %s: %s",
+                    "[ema] additional symbol EMA bundle failure %s error_type=%s",
                     Passivbot._log_symbol(sym),
                     type(err).__name__,
-                    err,
                 )
             raise errors[0][1]
         if ema_unavailable_reasons:
@@ -17054,13 +17256,6 @@ class Passivbot:
                 len(ema_unavailable_reasons),
                 "; ".join(parts[:4]),
             )
-        Passivbot._emit_ema_unavailable_event(
-            self,
-            optional_ema_drops=optional_ema_drops,
-            candidate_ema_unavailable_details=candidate_ema_unavailable_details,
-            ema_unavailable_reasons=ema_unavailable_reasons,
-        )
-
         # Convenience: compute the single-span values used by legacy forager logging.
         volumes_long = {
             s: m1_volume_emas[s][vol_span_long]
@@ -17568,11 +17763,10 @@ class Passivbot:
             )
         except Exception as exc:
             logging.debug(
-                "[ema] forager cached EMA unavailable %s metrics=%s error_type=%s error=%s",
+                "[ema] forager cached EMA unavailable %s metrics=%s error_type=%s",
                 Passivbot._log_symbol(symbol),
                 ",".join(sorted(str(k) for k in spans_by_metric)),
                 type(exc).__name__,
-                exc,
             )
             return {}
         if not isinstance(out, dict):
@@ -19688,7 +19882,7 @@ async def shutdown_bot(bot):
     except asyncio.TimeoutError:
         print("Shutdown timed out after 3 seconds. Forcing exit.")
     except Exception as e:
-        print(f"Error during shutdown: {e}")
+        print(f"Error during shutdown ({bounded_exception_type(e)}).")
 
 
 async def main():
@@ -19885,16 +20079,14 @@ async def main():
             await bot.start_bot()
         except FatalBotException as e:
             fatal_error = e
-            logging.error(f"passivbot fatal error {e}")
+            _log_process_failure("passivbot fatal error", e)
         except asyncio.CancelledError as e:
             if bot.stop_signal_received or getattr(bot, "_shutdown_in_progress", False):
                 logging.info("passivbot cancellation received during shutdown")
             else:
-                logging.error(f"passivbot cancelled unexpectedly {e}")
-                traceback.print_exc()
+                _log_process_failure("passivbot cancelled unexpectedly", e)
         except Exception as e:
-            logging.error(f"passivbot error {e}")
-            traceback.print_exc()
+            _log_process_failure("passivbot error", e)
         finally:
             try:
                 if bot.stop_signal_received or getattr(

@@ -6,6 +6,7 @@ import errno
 import json
 import logging
 import os
+import re
 import stat
 import threading
 import time
@@ -15,6 +16,8 @@ from copy import deepcopy
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterable, Optional
+
+from live.diagnostic_safety import bounded_exception_type
 
 
 _MONITOR_EVENT_PHASE_TIMING_KEYS = (
@@ -55,10 +58,38 @@ _EVENT_RECOVERY_CHECKSUM_BYTES = 16
 _EVENT_RECOVERY_MARKER = b',"_recovery":{"checksum":"'
 _EVENT_RECOVERY_SEQ_SEPARATOR = b'","seq":'
 _EVENT_RECOVERY_TRAILER_MAX_BYTES = 160
+_MONITOR_ERROR_CONTEXT_VALUES = {
+    "source": frozenset(("start_bot", "run_execution_loop", "update_pnls")),
+    "stage": frozenset(
+        (
+            "start",
+            "boot_stagger",
+            "format_approved_ignored_coins",
+            "init_markets",
+            "warmup_trading_ready_candles",
+            "equity_hard_stop_initialize_from_history",
+            "equity_hard_stop_initialize_coin_from_history",
+            "post_init_sleep",
+            "start_data_maintainers",
+            "start_background_candle_warmup",
+        )
+    ),
+}
 
 
 def _empty_monitor_event_phase_timing() -> dict[str, int]:
     return {key: 0 for key in _MONITOR_EVENT_PHASE_TIMING_KEYS}
+
+
+def _safe_monitor_error_context(payload: Any) -> dict[str, Any]:
+    if not isinstance(payload, dict):
+        return {}
+    context: dict[str, Any] = {}
+    for key, allowed_values in _MONITOR_ERROR_CONTEXT_VALUES.items():
+        value = payload.get(key)
+        if isinstance(value, str) and value in allowed_values:
+            context[key] = value
+    return context
 
 
 def _merge_retention_timing(target: dict[str, int], source: dict[str, int]) -> None:
@@ -1173,9 +1204,8 @@ class MonitorPublisher:
         symbol: Optional[str] = None,
         pside: Optional[str] = None,
     ) -> Optional[dict]:
-        error_payload = dict(payload or {})
-        error_payload["error_type"] = type(error).__name__
-        error_payload["message"] = str(error)
+        error_payload = _safe_monitor_error_context(payload)
+        error_payload["error_type"] = bounded_exception_type(error)
         return self.record_event(
             kind,
             tags or ("error",),

@@ -54,6 +54,53 @@ retain exception text, request URLs, credentials, response bodies, paths, or oth
 from the sink exception. Sink counters and pipeline timings remain available through health
 snapshots independently of the exception payload.
 
+## Emitter Failure Diagnostics
+
+Best-effort live event emitters remain isolated from their callers. If event construction,
+sanitization, or publication fails, the developer DEBUG diagnostic may retain bounded code-owned
+event, action, stage, symbol, or position-side context and a bounded exception type. It must not
+retain the caught exception value, traceback, request URL, response body, credential, or arbitrary
+payload fragment. Non-built-in string metadata, invalid type names, and identifier-shaped names
+containing credential markers normalize to `Error` before the safe type is bounded. Redacting the
+diagnostic must not change the emitter's return value, exception isolation, event routing, retries,
+scheduling, HSL/risk behavior, or trading behavior.
+The same redaction applies when the event-adjacent HSL coin-status human projection fails; the
+structured `hsl.status` event must still be attempted independently. Other non-event HSL
+diagnostics are outside this contract.
+
+## Market Snapshot Diagnostic Skips
+
+`market.snapshot_diagnostic_skipped` records noncritical position-change and balance diagnostics
+that could not obtain the required live market snapshot. The event retains only bounded context,
+exception type, cycle correlation, and its stable status/reason; it never retains arbitrary
+exception text, request details, account values, credentials, URLs, payloads, or tracebacks.
+
+The event is the sole normal console/text warning when the structured console is available. Its
+projection is bounded to the normal 240-character record budget. One bounded stdlib warning remains
+only when the event emitter or structured console owner is unavailable. Event or sink failure must
+not alter position/balance refresh, state mutation, scheduling, retries, planning, orders, risk, or
+the caller's existing decision to continue after this noncritical diagnostic failure.
+
+## EMA Diagnostic Redaction
+
+`ema.unavailable` and `ema.fallback_used` retain only code-owned reason classifications, bounded
+EMA types (`m1_close`, `m1_volume`, `m1_log_range`, or `h1_log_range`), exception types, symbols,
+spans, ages, fallback counts, and cycle correlation. Their normal and debug payloads never retain
+arbitrary exception messages, URLs, credentials, raw fallback reasons, or reason fragments parsed
+from exception text. Console formatting derives EMA identity from an explicit safe field rather
+than inspecting an exception message. Malformed symbols and classifications normalize to bounded
+sentinels, unsupported metric names are omitted, and non-finite spans are omitted. Adjacent EMA
+failure logs retain only code-owned context and exception type.
+
+The structured event owns the normal warning only after its emitter reports success and the
+structured console owner is available. Success requires queue admission and no synchronous console
+sink failure; these owner events defer console/text projection until after queue admission so a
+rejected event cannot produce both projections. Otherwise, the bounded legacy warning remains and
+follows the same redaction boundary. Event or sink failure must not alter EMA calculation, cached
+fallback selection, candidate availability, scheduling, retries, planning, orders, risk, or caller
+control flow. Downstream smoke and incident redaction remains defense in depth, not the primary
+payload boundary.
+
 The generated value reference is `../generated/live_event_registry.md`.
 
 ## Runtime Identity
@@ -103,6 +150,27 @@ the net realized PnL over fills whose PnL is known, the number of known-PnL fill
 count. An all-pending batch must not present its known PnL as zero. The legacy direct logger is a
 fallback only when the structured live-event console is disabled or its pipeline is absent. Runtime
 sink degradation remains isolated by the event pipeline and must not activate dual writing.
+
+Fill refresh failures retain code-owned source, refresh mode, coverage, retry, timing, and count
+context plus a bounded exception type. The structured `fills.refresh_summary`, exchange-specific
+fetcher and manager request-timing lines, staged authoritative remote-call failure, blocking and
+routine-prefetch fallbacks, startup initialization boundary, fill-coverage retry, and HSL flatten
+confirmation must not retain exception text, request URLs, response bodies, credentials, or
+exception-value tracebacks. Metadata-capture and HSL progress-emitter failures at the same caller
+boundary follow the same classification-only rule. Redaction is diagnostic-only: exception
+propagation, retry and coverage behavior, fill accounting, planning, risk, and trading behavior
+remain unchanged.
+
+Cache-read/doctor failures and the outer process failure projection follow the same rule so a
+preserved exception cause cannot be exposed by an unsanitized startup traceback. The blocking
+failure line may also retain validated numeric status/code and a code-owned endpoint label.
+Time-sync and exchange recovery classification may inspect complete exception text in bounded
+temporary chunks and traverse both cause/context edges within a fixed node budget, but that
+inspection must not retain the text, broaden caller-specific marker case rules, or replace the
+original failure. Control-flow-only class-name inspection follows the same non-retaining rule so
+legacy recovery heuristics do not require projecting untrusted class names.
+Monitor error events use the same hostile-metadata-safe exception-type boundary; diagnostic
+publication must not replace the original refresh exception.
 
 ## Open-Orders Snapshot Deltas
 
@@ -161,6 +229,14 @@ Stable per-record reason-count values are:
 are deterministic and bounded; payloads contain no order price, quantity, raw payload, path,
 secret, or exception text. Planning failure, deferral, shutdown interruption, or diagnostic failure
 omits the event rather than publishing a misleading candidate-free result.
+
+Pre-create planning-snapshot and market-snapshot gate failures use
+`execution.create_skipped` as the sole normal console/text warning when the structured console is
+available. The event retains the code-owned reason and message plus bounded order/symbol counts,
+stage, safe detail fields, and exception type; it excludes raw exception text and arbitrary
+payloads. The legacy warning remains only when the event emitter or structured console owner is
+unavailable. Event or sink failure must not change refresh attempts, entry-block attribution, the
+returned create list, or any planning, execution, order, and risk decision.
 
 ## Connector Call Boundary
 
@@ -221,6 +297,27 @@ text, request parameters, URLs, and tracebacks. An explicit unchanged outcome is
 success remains INFO until the connector can prove whether it changed state; failures retain their
 existing operator-visible warning or error. The event route remains structured/monitor-only, and
 event emission failure must not change exchange configuration control flow or results.
+
+## WebSocket Reconnect Diagnostics
+
+`websocket.reconnect` retains bounded reconnect count, retry delay, reason classification,
+rate-limit state, warning visibility, DEBUG stack-frame-emission state, and optional exception type.
+The human warning/debug projection may retain the same classifications and bounded stack depth, but
+must not render frame labels, line values, the exception value, raw reason text, request URLs,
+responses, or formatted exception-value traceback. A stack diagnostic is marked emitted only when
+DEBUG logging accepts it. Reconnect cadence, retry behavior, and connector control flow are
+independent of observability delivery.
+
+## Shutdown Failure Diagnostics
+
+`bot.shutdown.stage` failure records retain the code-owned stage, bounded exception type, elapsed
+time, and applicable task-count or timeout context. The event and its human fallback exclude
+exception messages, request URLs, response text, credentials, and traceback values. Failure to
+deliver the structured stage may emit one DEBUG fallback with only the stage and bounded exception
+type. Event-pipeline close failures retain the same bounded type in their warning. These diagnostics
+do not alter task cancellation, execution-loop waits, session closing, shutdown timing, process
+control, or event-pipeline isolation. Per-maintainer cancellation failures and the legacy cleanup
+helper apply the same type-only boundary.
 
 ## Execution-Loop Incidents
 

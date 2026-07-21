@@ -21,6 +21,177 @@ class FakeHslBot(SimpleNamespace):
     pass
 
 
+def test_hsl_event_emitter_failure_logs_type_without_secret(caplog):
+    secret = "api_secret=hsl-event-secret"
+    url = "https://private.example.invalid/v1/hsl?token=hsl-event-token"
+
+    class HslEventEmitterFailure(RuntimeError):
+        pass
+
+    def fail_emit(*_args, **_kwargs):
+        raise HslEventEmitterFailure(f"request failed {secret} {url}")
+
+    bot = SimpleNamespace(
+        _live_event_pipeline=object(),
+        _live_event_current_cycle_id="cy_hsl_redaction",
+        _emit_live_event=fail_emit,
+    )
+
+    with caplog.at_level(logging.DEBUG):
+        emitted = hsl._emit_hsl_event(
+            bot,
+            "hsl.status",
+            ("hsl", "risk"),
+            {},
+            pside="long",
+            symbol="BTC/USDT:USDT",
+        )
+
+    assert emitted is None
+    assert "RuntimeError" in caplog.text
+    assert secret not in caplog.text
+    assert url not in caplog.text
+
+    sensitive_identifier = "ApiKey_prod_super_secret_HSL123"
+    sensitive_identifier_type = type(sensitive_identifier, (RuntimeError,), {})
+
+    def fail_with_sensitive_identifier(*_args, **_kwargs):
+        raise sensitive_identifier_type("safe")
+
+    bot._emit_live_event = fail_with_sensitive_identifier
+    caplog.clear()
+    with caplog.at_level(logging.DEBUG):
+        assert (
+            hsl._emit_hsl_event(
+                bot,
+                "hsl.status",
+                ("hsl", "risk"),
+                {},
+                pside="long",
+                symbol="BTC/USDT:USDT",
+            )
+            is None
+        )
+
+    assert "Error" in caplog.text
+    assert sensitive_identifier not in caplog.text
+
+    camelcase_sensitive_identifier = "ApiKeyProdSecretHSL123"
+    camelcase_sensitive_type = type(
+        camelcase_sensitive_identifier, (RuntimeError,), {}
+    )
+
+    def fail_with_camelcase_sensitive_identifier(*_args, **_kwargs):
+        raise camelcase_sensitive_type("safe")
+
+    bot._emit_live_event = fail_with_camelcase_sensitive_identifier
+    caplog.clear()
+    with caplog.at_level(logging.DEBUG):
+        assert (
+            hsl._emit_hsl_event(
+                bot,
+                "hsl.status",
+                ("hsl", "risk"),
+                {},
+                pside="long",
+                symbol="BTC/USDT:USDT",
+            )
+            is None
+        )
+
+    assert "Error" in caplog.text
+    assert camelcase_sensitive_identifier not in caplog.text
+
+    class HostileName(str):
+        def __getitem__(self, _key):
+            return "api_secret=hostile-hsl-slice-secret"
+
+    class HostileSliceMeta(type):
+        @property
+        def __name__(cls):
+            return HostileName("SafeLookingHslFailure")
+
+    hostile_slice_type = HostileSliceMeta(
+        "HostileSliceHslFailure", (RuntimeError,), {}
+    )
+
+    def fail_with_hostile_slice(*_args, **_kwargs):
+        raise hostile_slice_type("safe")
+
+    bot._emit_live_event = fail_with_hostile_slice
+    caplog.clear()
+    with caplog.at_level(logging.DEBUG):
+        assert (
+            hsl._emit_hsl_event(
+                bot,
+                "hsl.status",
+                ("hsl", "risk"),
+                {},
+                pside="long",
+                symbol="BTC/USDT:USDT",
+            )
+            is None
+        )
+
+    assert "Error" in caplog.text
+    assert "hostile-hsl-slice-secret" not in caplog.text
+
+    invalid_suffix = "H" * 80 + "\napi_secret=tail-hsl-class-name-secret"
+    invalid_suffix_type = type(invalid_suffix, (RuntimeError,), {})
+
+    def fail_with_invalid_suffix(*_args, **_kwargs):
+        raise invalid_suffix_type("safe")
+
+    bot._emit_live_event = fail_with_invalid_suffix
+    caplog.clear()
+    with caplog.at_level(logging.DEBUG):
+        assert (
+            hsl._emit_hsl_event(
+                bot,
+                "hsl.status",
+                ("hsl", "risk"),
+                {},
+                pside="long",
+                symbol="BTC/USDT:USDT",
+            )
+            is None
+        )
+
+    assert "Error" in caplog.text
+    assert "tail-hsl-class-name-secret" not in caplog.text
+
+    class HostileExceptionMeta(type):
+        @property
+        def __name__(cls):
+            raise KeyboardInterrupt("api_secret=hostile-hsl-property-secret")
+
+    hostile_type = HostileExceptionMeta(
+        "HostileHslEventEmitterFailure", (RuntimeError,), {}
+    )
+
+    def fail_with_hostile_type(*_args, **_kwargs):
+        raise hostile_type("api_secret=hostile-hsl-metadata-secret")
+
+    bot._emit_live_event = fail_with_hostile_type
+    caplog.clear()
+    with caplog.at_level(logging.DEBUG):
+        assert (
+            hsl._emit_hsl_event(
+                bot,
+                "hsl.status",
+                ("hsl", "risk"),
+                {},
+                pside="long",
+                symbol="BTC/USDT:USDT",
+            )
+            is None
+        )
+
+    assert "Error" in caplog.text
+    assert "hostile-hsl-metadata-secret" not in caplog.text
+    assert "hostile-hsl-property-secret" not in caplog.text
+
+
 class FakeRiskCache:
     def __init__(self, covered_start_ms=1, history_scope="all"):
         self.covered_start_ms = covered_start_ms
@@ -1317,6 +1488,40 @@ async def test_flatten_confirmation_refreshes_fills_and_rejects_pre_episode_anch
     assert stop_ts_ms == 170_000
     assert refresh_sources == ["hsl_flatten_confirmation"]
     assert state["last_missing_flatten_fill_refresh_ms"] == 0
+
+
+@pytest.mark.asyncio
+async def test_flatten_confirmation_refresh_failure_keeps_scope_protective_without_secret(
+    caplog,
+):
+    bot = make_coin_bot()
+    symbol = "A"
+    state = bot._hsl_coin_state("long", symbol)
+    state["pending_red_since_ms"] = 120_000
+    bot._pnls_manager = make_fake_pnls_manager([])
+    secret = "api_key=flatten-refresh-secret"
+
+    async def update_pnls(*, source, since_ms=None):
+        assert source == "hsl_flatten_confirmation"
+        assert since_ms == 120_000
+        raise RuntimeError(secret)
+
+    bot.update_pnls = update_pnls
+
+    with caplog.at_level(logging.WARNING):
+        stop_ts_ms = await bot._equity_hard_stop_flatten_fill_timestamp_with_refresh(
+            "long",
+            180_000,
+            symbol=symbol,
+            since_ms=state["pending_red_since_ms"],
+        )
+
+    assert stop_ts_ms is None
+    assert state["pending_stop_event"] is None
+    assert state["red_flat_confirmations"] == 0
+    assert state["last_missing_flatten_fill_log_ms"] == 180_000
+    assert "error_type=RuntimeError" in caplog.text
+    assert secret not in caplog.text
 
 
 def test_red_paused_forced_modes_block_entries_without_panic():

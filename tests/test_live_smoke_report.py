@@ -6049,6 +6049,7 @@ def test_live_smoke_report_summarizes_shutdown_events(tmp_path):
                     "elapsed_s": 6.25,
                     "task_count": 4,
                     "timeout_s": 5.0,
+                    "error_type": "RuntimeError",
                     "error": "api_key=AKIA123 Authorization: Bearer TOKEN123",
                 },
             ),
@@ -6103,6 +6104,7 @@ def test_live_smoke_report_summarizes_shutdown_events(tmp_path):
     assert stage_group["status"] == "degraded"
     assert stage_group["latest_data"]["elapsed_s"] == 6.25
     assert stage_group["latest_data"]["task_count"] == 4
+    assert stage_group["latest_data"]["error_type"] == "RuntimeError"
     assert "AKIA123" not in stage_group["latest_data"]["error"]
     assert "TOKEN123" not in stage_group["latest_data"]["error"]
     assert "latest_message" not in stage_group

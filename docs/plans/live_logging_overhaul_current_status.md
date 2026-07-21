@@ -22,30 +22,208 @@ Estimated completion:
 
 ## Active Review Slice
 
-- PR #1341, `Structure bulk open-order snapshot deltas`; branch
-  `codex/open-orders-snapshot-delta-event`, based on canonical
-  `bc31fafdbdf045f9c003e49fa6877b721c834600`.
-- Scope: replace the two legacy aggregate INFO lines emitted when an
-  authoritative open-order snapshot adds or removes more than 20 orders with
-  one bounded structured `open_orders.snapshot_delta` event per direction.
-- Behavior boundary: logging migration only. The event retains operator-visible
-  INFO/text projection and persists only the direction and count. It changes no
-  order rows, snapshot application, reconciliation classification, guardrail,
-  confirmation, balance handling, exchange access, planning, strategy, order,
-  or risk behavior.
-- Baseline: smaller deltas already retain per-order developer logs while the
-  bulk path emits only uncorrelated stdlib count lines. Config-age reporting was
-  considered but deferred because runtime currently has no canonical config
-  freshness timestamp or reload contract.
+- Open PR #1348, `Redact shutdown failure diagnostics`, on branch
+  `codex/shutdown-diagnostic-redaction`, based on canonical
+  `67416ee4f7fef2dc3ffac001d50e82c0322ee72b`. Resolve its exact head from live
+  metadata; the commit containing this handoff is a moving review head.
+- Scope: remove arbitrary exception values from `bot.shutdown.stage` failures,
+  event-pipeline close failure warnings, per-maintainer cancellation errors,
+  and shutdown fallback logs while retaining bounded exception type, stage,
+  task count, timeout, status, and elapsed-time context.
+- Behavior boundary: diagnostic retention and projection only. Maintainer
+  cancellation, execution-loop waits, session closing, shutdown timing,
+  process control, event routing, and trading behavior remain unchanged.
+- Baseline: maintainer-stop/await, execution-loop-wait, private/public session
+  close, stage-delivery, event-pipeline-close, and legacy cleanup failures
+  still render or retain raw exception text.
 - Review gate: exact-current-head Hermes approval plus green Python/Rust CI.
   Built-in Codex automatic review is additional and every finding must be
   verified and resolved.
-- Expected VPS action: tracked-clean pull and bounded passive event/process
-  validation. Because the producer path changes, restart only the exact five
-  configured panes if the merged diff and guarded preflight warrant activation;
-  preserve `misc:0.0`.
+- Expected VPS action: tracked-clean pull plus one exact-five graceful restart
+  and bounded settled smoke because live shutdown diagnostics change; preserve
+  `misc:0.0`.
+- Next candidate: candle refresh/cache-maintenance diagnostic redaction after
+  this dependent runtime slice merges.
 
-## Deployed Baseline (PR #1340)
+## Deployed Baseline (PR #1347)
+
+- PR #1347 merged exact approved head
+  `5ef012ed5f9422e9d7a84862f28e2e5cb017d21d` as canonical
+  `67416ee4f7fef2dc3ffac001d50e82c0322ee72b` after exact-head Hermes
+  approval, green Python/Rust CI, and finding-free built-in Codex and
+  independent Sol reviews.
+- VPS5 guarded-prepared tracked-clean from
+  `4192e709d46d3ef9516025e121ddad15c0d0cd6e` without a Rust build. The source
+  fingerprint/stamp remained
+  `691bff9683deec9382a4e96ab6a107c14145f88edd6ae2f8e2380b8ba6824449`, and the
+  compiled artifact SHA remained
+  `7611f3eff1d8702ff29d90490a1aba490db5c816e7e3f09a2c33e5c4085da023`.
+- The exact-target orchestrator gracefully restarted only panes `%358`-`%362`;
+  old PIDs `1079121/1079130/1079124/1079133/1079127` exited and replacement
+  PIDs `1080755/1080764/1080758/1080767/1080761` relaunched and verified
+  without force or broad-pattern signals.
+- The integrated 120-second smoke was hard-green with complete shutdown and
+  startup identity, zero hard failures, zero hard text-log or attention
+  matches, and zero monitor warnings or errors. A bounded settled smoke found
+  all five exact processes stable with no PID churn, persistent uninterruptible
+  state, failed fill refresh, remote-call failure, event-pipeline integrity
+  issue, or hard diagnostic evidence. The checkout remained exact and
+  tracked-clean, while protected `misc:0.0` stayed `%8`/PID `434835`. No direct
+  authenticated exchange call or event was manufactured.
+
+## Deployed Baseline (PR #1346)
+
+- PR #1346 merged exact approved head
+  `377cb1dc60cade68fda6fc5ef031e6b4a559d6bd` as canonical
+  `4192e709d46d3ef9516025e121ddad15c0d0cd6e` after exact-head Hermes
+  approval, green Python/Rust CI, and finding-free built-in Codex and
+  independent Sol reviews.
+- VPS5 guarded-prepared tracked-clean from
+  `49cb68e56b20d71fbe42d33f31906d3a9c793e90` without a Rust build. The source
+  fingerprint/stamp and compiled artifact remained unchanged.
+- The exact-target orchestrator gracefully restarted only panes `%358`-`%362`;
+  old PIDs `1077958/1077967/1077961/1077970/1077964` exited and replacement
+  PIDs `1079121/1079130/1079124/1079133/1079127` relaunched and verified
+  without force or broad-pattern signals.
+- The integrated 120-second smoke was hard-green with complete shutdown and
+  startup identity, zero hard failures, zero hard text-log or attention
+  matches, and zero monitor warnings or errors. A bounded settled check found
+  all five exact processes stable at the deployed head, while protected
+  `misc:0.0` remained `%8`/PID `434835`. No direct authenticated exchange call
+  or event was manufactured.
+
+## Previous Deployed Baseline (PR #1345)
+
+- PR #1345 merged exact approved head
+  `e9322f9b50de46fc054f0424751f6f0bea802c7f` as canonical
+  `49cb68e56b20d71fbe42d33f31906d3a9c793e90` after exact-head Hermes
+  approval, green Python/Rust CI, and finding-free built-in Codex and
+  independent Sol reviews.
+- VPS5 guarded-prepared tracked-clean from
+  `986e5d52f88692d1b6531bc38c307352c08e9cb9` without a Rust build. The source
+  fingerprint/stamp remained
+  `691bff9683deec9382a4e96ab6a107c14145f88edd6ae2f8e2380b8ba6824449`, and the
+  compiled artifact SHA remained
+  `7611f3eff1d8702ff29d90490a1aba490db5c816e7e3f09a2c33e5c4085da023`.
+- The bounded exact-target orchestrator gracefully restarted only panes
+  `%358`-`%362` as PIDs `1077958/1077967/1077961/1077970/1077964`. All five
+  prior processes exited and all five exact targets relaunched and verified
+  without force or broad-pattern signals.
+- The integrated 120-second smoke was hard-green with complete shutdown and
+  startup identity, zero hard failures, zero hard text-log or attention
+  matches, and zero monitor warnings or errors. Final three-sample target
+  verification found all five replacement processes stable with no missing,
+  duplicate, or extra live process. The checkout remained exact and
+  tracked-clean, and protected `misc:0.0` stayed `%8`/PID `434835`. No direct
+  authenticated exchange call or event was manufactured.
+
+## Deployed Baseline (PR #1344)
+
+- PR #1344 merged exact approved head
+  `6a4fe26f90e8cb25f0dc09ecc39a067658addfa8` as canonical
+  `986e5d52f88692d1b6531bc38c307352c08e9cb9` after exact-head Hermes approval,
+  green Python/Rust CI, and a finding-free built-in Codex review. Independent
+  Sol review approved the semantic predecessor
+  `f442e4a66e0f78fd628b6e5724fd5865f9ec395c`; the final delta only corrected
+  the active handoff.
+- VPS5 guarded-prepared tracked-clean from
+  `7e26a9062a88ecf211729d7d718fb4530630c4ba` without a Rust build. The source
+  fingerprint/stamp remained
+  `691bff9683deec9382a4e96ab6a107c14145f88edd6ae2f8e2380b8ba6824449`, and the
+  compiled artifact SHA remained
+  `7611f3eff1d8702ff29d90490a1aba490db5c816e7e3f09a2c33e5c4085da023`.
+- The bounded exact-target orchestrator gracefully restarted only panes
+  `%358`-`%362` as PIDs `1076279/1076288/1076282/1076291/1076285`. All five
+  targets stopped, exited, relaunched, and verified without force or
+  broad-pattern signals.
+- The integrated 120-second smoke correctly remained non-green on one natural
+  KuCoin authoritative-balance `RequestTimeout`, represented by one hard
+  `cycle.degraded` event. It had zero hard text-log matches, monitor warnings,
+  or monitor errors. A strictly post-incident settled window then had a green
+  internal smoke contract with zero hard problem events, hard log matches,
+  monitor warnings, or monitor errors; its outer collector omitted the earlier
+  shutdown/startup cohorts by construction and therefore was not itself a
+  restart-evidence verdict.
+- Final three-sample verification found all five replacement processes stable
+  in state `R`, with no missing, duplicate, or extra live process. The checkout
+  was exact and tracked-clean, pre-existing untracked configs/probes were
+  preserved, and protected `misc:0.0` stayed `%8`/PID `434835`. No direct
+  authenticated exchange call or event was manufactured.
+
+## Deployed Baseline (PR #1343)
+
+- PR #1343 merged exact approved head
+  `2ee1382781e28e8e1d3341a43e22ef527b86f283` as canonical
+  `7e26a9062a88ecf211729d7d718fb4530630c4ba` after exact-head Hermes approval,
+  green Python/Rust CI, and a finding-free built-in Codex review.
+- VPS5 guarded-prepared tracked-clean from
+  `644d058f3975a2772f96bf10281f3873dca7112c` without a Rust build. The source
+  fingerprint/stamp remained
+  `691bff9683deec9382a4e96ab6a107c14145f88edd6ae2f8e2380b8ba6824449`.
+- The bounded exact-target orchestrator gracefully restarted only panes
+  `%358`-`%362` as PIDs `1075081/1075090/1075084/1075093/1075087`. All five
+  shutdown and startup identities completed without force or broad-pattern
+  signals.
+- The integrated 120-second smoke was hard-green with zero hard failures, log
+  attention matches, monitor warnings, or monitor errors. Its repository,
+  shutdown, startup, target, and smoke-contract gates all passed. Final
+  three-sample verification found the exact five processes stable with no
+  missing, duplicate, or extra process; the tracked checkout remained clean and
+  protected `misc:0.0` stayed `%8`/PID `434835`. The target diagnostic event did
+  not need to occur naturally for this ownership rollout. No direct
+  authenticated exchange call or event was manufactured.
+
+## Deployed Baseline (PR #1342)
+
+- PR #1342 merged exact approved head
+  `8bae713d56f682744a09033f86a46a546b92ca3e` as canonical
+  `644d058f3975a2772f96bf10281f3873dca7112c` after exact-head Hermes approval,
+  green Python/Rust CI, and a finding-free built-in Codex review of the final
+  semantic head.
+- VPS5 guarded-prepared tracked-clean from
+  `524a6d2795015afee7cc1dd916880e4e48a6e13b` without a Rust build. The source
+  fingerprint/stamp remained
+  `691bff9683deec9382a4e96ab6a107c14145f88edd6ae2f8e2380b8ba6824449`, and the
+  compiled artifact SHA remained
+  `7611f3eff1d8702ff29d90490a1aba490db5c816e7e3f09a2c33e5c4085da023`.
+- The bounded exact-target orchestrator gracefully restarted only panes
+  `%358`-`%362` as PIDs `1073251/1073259/1073253/1073261/1073255`. All five
+  shutdown and startup cohorts completed without force or broad-pattern
+  signals.
+- The integrated 120-second smoke retained one natural KuCoin
+  `RequestTimeout` and correctly stayed non-green. A strictly post-timeout
+  settled window was hard-green with zero hard problem events, log hard
+  matches, monitor warnings, or monitor errors. Final three-sample target
+  verification found all five processes stable with no missing, duplicate, or
+  extra process; the tracked checkout remained clean and protected `misc:0.0`
+  stayed `%8`/PID `434835`. No direct authenticated exchange call or event was
+  manufactured.
+
+## Previous Deployed Baseline (PR #1341)
+
+- PR #1341 merged exact approved head
+  `d56ffc3617d9ebed4e0ebb3b98d4b6a80fb2b89c` as canonical
+  `524a6d2795015afee7cc1dd916880e4e48a6e13b` after exact-head Hermes approval,
+  green Python/Rust CI, and a finding-free built-in Codex review of the semantic
+  head; the final delta only corrected the active operator handoff.
+- VPS5 guarded-prepared tracked-clean from
+  `bc31fafdbdf045f9c003e49fa6877b721c834600` without a Rust build. The source
+  fingerprint/stamp remained
+  `691bff9683deec9382a4e96ab6a107c14145f88edd6ae2f8e2380b8ba6824449`, and the
+  compiled artifact SHA remained
+  `7611f3eff1d8702ff29d90490a1aba490db5c816e7e3f09a2c33e5c4085da023`.
+- The bounded exact-target orchestrator gracefully stopped all five old bot
+  PIDs `1066081/1066091/1066084/1066093/1066087` and relaunched only the same
+  panes with PIDs `1072420/1072429/1072423/1072432/1072426`; all five shutdown
+  and startup cohorts were complete, with no force or broad-pattern signal.
+- The 120-second settled smoke was hard-green with zero hard failures, log
+  attention matches, monitor warnings, or monitor errors. Its exact-target and
+  repository gates were green, and a final passive sample settled the five bots
+  to normal `R/R/R/R/S` states. Pane parents `%358`-`%362` remained unchanged,
+  and protected `misc:0.0` stayed `%8`/PID `434835`. No direct authenticated
+  exchange call or event was manufactured.
+
+## Previous Deployed Baseline (PR #1340)
 
 - PR #1340 merged exact reviewed head
   `d9e88d6da9282bc53a355dc3ce18a9cba6de45eb` as canonical
@@ -1734,11 +1912,17 @@ PR #1288's bounded target-identity stability, and PR #1289's plan binding are
 merged, deployed, and naturally validated without process control. PR #1290's
 pane-parent relaunch classification and the restart preparation/orchestration
 slices through PR #1309 are also merged and deployed. Later logging slices
-through PR #1340, including adjacent PR #1329, are deployed at canonical
-`bc31fafdbdf045f9c003e49fa6877b721c834600`; their current evidence is recorded
-above. Active PR #1341 migrates only the remaining bulk open-order snapshot
-count lines into the bounded structured event contract while preserving the
-existing threshold, legacy fallback, reconciliation, and trading behavior.
+through PR #1343, including adjacent PR #1329, are deployed at canonical
+`7e26a9062a88ecf211729d7d718fb4530630c4ba`; their current evidence is recorded
+above. PR #1344's EMA diagnostic redaction is merged and deployed at canonical
+`986e5d52f88692d1b6531bc38c307352c08e9cb9`. PR #1345's legacy monitor and
+WebSocket diagnostic redaction is merged and deployed at canonical
+`49cb68e56b20d71fbe42d33f31906d3a9c793e90`. PR #1346's live-event-emitter
+and event-adjacent HSL diagnostic redaction is merged and deployed at canonical
+`4192e709d46d3ef9516025e121ddad15c0d0cd6e`. Open PR #1347, `Redact fill
+refresh failure diagnostics`, removes retained exception values from
+fill-refresh summaries and human diagnostics without changing refresh, fill,
+planning, risk, or trading behavior. Resolve its exact head from live metadata.
 
 Do not create progress-only PRs or resume unrelated logging work from stale
 worktrees.

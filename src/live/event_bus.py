@@ -795,7 +795,7 @@ DEFAULT_ROUTES: dict[str, EventRoute] = {
     EventTypes.HEALTH_SUMMARY: EventRoute(console=True, text=True),
     EventTypes.RESOURCE_MEMORY_SNAPSHOT: EventRoute(console=True, text=True),
     EventTypes.MARKET_SNAPSHOT_DIAGNOSTIC_SKIPPED: EventRoute(
-        console=False, text=False
+        console=True, text=True
     ),
     EventTypes.CYCLE_STARTED: EventRoute(
         console=True, text=True, throttle_interval_ms=60_000
@@ -1180,7 +1180,111 @@ def _console_create_filter_summary(event: LiveEvent) -> list[str]:
     allowed_protective_create = _data_int(data, "allowed_protective_create")
     if allowed_protective_create is not None:
         parts.append(f"allow_protective_create={allowed_protective_create}")
+    error_type = _data_str(data, "error_type")
+    if error_type:
+        parts.append(f"error_type={error_type[:64]}")
     return parts
+
+
+_PRE_CREATE_SKIP_CONSOLE_RECORD_LIMIT = 188
+_PRE_CREATE_SKIP_REASON_CODES = {
+    ReasonCodes.PRE_CREATE_MARKET_SNAPSHOT_UNAVAILABLE,
+    ReasonCodes.PRE_CREATE_PLANNING_SNAPSHOT_INVALID,
+}
+
+_MARKET_SNAPSHOT_DIAGNOSTIC_CONSOLE_RECORD_LIMIT = 188
+
+
+def _bounded_pre_create_skip_console_token(value: object, *, limit: int) -> str:
+    cleaned = _format_console_label(value)
+    token = "".join(
+        char
+        if char.isascii()
+        and char.isprintable()
+        and not char.isspace()
+        and char not in {",", "=", "|", "[", "]"}
+        else "_"
+        for char in cleaned
+    )
+    return token[:limit] or "-"
+
+
+def _format_pre_create_skip_console(event: LiveEvent) -> str:
+    data = event.data if isinstance(event.data, Mapping) else {}
+    parts = ["[gate]", "skipped"]
+    if event.cycle_id:
+        parts.append(
+            "cycle="
+            + _bounded_pre_create_skip_console_token(event.cycle_id, limit=32)
+        )
+    order_count = _data_int(data, "order_count")
+    if order_count is not None:
+        parts.append(f"orders={min(999_999_999, max(0, order_count))}")
+    raw_symbols = data.get("symbols")
+    if isinstance(raw_symbols, (list, tuple, set)):
+        symbols = [
+            _bounded_pre_create_skip_console_token(
+                _format_position_console_coin(symbol), limit=8
+            )
+            for symbol in list(raw_symbols)[:2]
+        ]
+        if symbols:
+            omitted = min(999, max(0, len(raw_symbols) - len(symbols)))
+            suffix = f",+{omitted}" if omitted else ""
+            parts.append("symbols=" + ",".join(symbols) + suffix)
+    error_type = _data_str(data, "error_type")
+    if error_type:
+        parts.append(
+            "error_type="
+            + _bounded_pre_create_skip_console_token(error_type, limit=24)
+        )
+    if event.reason_code:
+        parts.append(
+            "reason="
+            + _bounded_pre_create_skip_console_token(event.reason_code, limit=48)
+        )
+    stage_message = {
+        "planning_snapshot": "planning snapshot invalid before create",
+        "market_snapshot_refresh": "pre-create market snapshot refresh failed",
+        "market_snapshot_validation": "pre-create market snapshots are stale",
+    }.get(_data_str(data, "stage"))
+    if stage_message:
+        candidate = " ".join((*parts, stage_message))
+        if len(candidate) <= _PRE_CREATE_SKIP_CONSOLE_RECORD_LIMIT:
+            parts.append(stage_message)
+    return " ".join(parts)[:_PRE_CREATE_SKIP_CONSOLE_RECORD_LIMIT]
+
+
+def format_market_snapshot_diagnostic_console(
+    *,
+    context: object,
+    error_type: object,
+    status: object = "skipped",
+    reason_code: object = ReasonCodes.MARKET_SNAPSHOT_DIAGNOSTIC_SKIPPED,
+    cycle_id: object = None,
+) -> str:
+    """Project a bounded market-snapshot diagnostic without exception text."""
+    parts = ["[market]"]
+    safe_status = _bounded_pre_create_skip_console_token(status, limit=16)
+    if safe_status:
+        parts.append(safe_status)
+    if cycle_id:
+        parts.append(
+            "cycle="
+            + _bounded_pre_create_skip_console_token(cycle_id, limit=32)
+        )
+    parts.append(
+        "context=" + _bounded_pre_create_skip_console_token(context, limit=32)
+    )
+    parts.append(
+        "error_type="
+        + _bounded_pre_create_skip_console_token(error_type, limit=24)
+    )
+    parts.append(
+        "reason="
+        + _bounded_pre_create_skip_console_token(reason_code, limit=64)
+    )
+    return " ".join(parts)[:_MARKET_SNAPSHOT_DIAGNOSTIC_CONSOLE_RECORD_LIMIT]
 
 
 def _console_entry_gate_summary(event: LiveEvent) -> list[str]:
@@ -2327,19 +2431,6 @@ def _bounded_ema_console_span(value: object) -> str:
     return f"{span:.6g}"
 
 
-def _bounded_ema_console_reason(value: object, *, limit: int) -> str:
-    reason = str(value or "").strip()
-    if reason.startswith("non-finite close EMA value"):
-        return "non_finite"
-    if re.fullmatch(r"[A-Za-z0-9_.-]+", reason):
-        return _bounded_ema_console_text(reason, limit=limit)
-    if ":" in reason:
-        error_type = reason.split(":", 1)[0].strip()
-        if re.fullmatch(r"[A-Za-z0-9_.-]+", error_type):
-            return _bounded_ema_console_text(error_type, limit=limit)
-    return "error"
-
-
 def _ema_fallback_examples(data: Mapping[str, Any]) -> list[Mapping[str, Any]]:
     examples = data.get("examples")
     if not isinstance(examples, Mapping):
@@ -2374,7 +2465,18 @@ def _format_ema_fallback_console_example(
             f"[{span_text}]",
             f" age={_bounded_ema_console_count(example.get('max_age_ms'))}ms",
             f" n={_bounded_ema_console_count(example.get('max_fallbacks'))}",
-            f" why={_bounded_ema_console_reason(example.get('reason'), limit=reason_limit)}",
+            " ema="
+            + _bounded_ema_console_text(
+                example.get("ema_type"), limit=reason_limit
+            ),
+            " why="
+            + _bounded_ema_console_text(
+                example.get("reason_code"), limit=reason_limit
+            ),
+            " err="
+            + _bounded_ema_console_text(
+                example.get("error_type"), limit=reason_limit
+            ),
         )
     )
 
@@ -2382,6 +2484,15 @@ def _format_ema_fallback_console_example(
 def format_ema_fallback_console(data: Mapping[str, Any]) -> str:
     """Render the close-EMA fallback warning without generic event decoration."""
     examples = _ema_fallback_examples(data)
+    ema_type = next(
+        (
+            str(example.get("ema_type"))
+            for example in examples
+            if example.get("ema_type")
+            in {"m1_close", "m1_volume", "m1_log_range", "h1_log_range"}
+        ),
+        None,
+    )
     max_age_ms = max(
         (_data_int(example, "max_age_ms") or 0 for example in examples), default=0
     )
@@ -2412,6 +2523,8 @@ def format_ema_fallback_console(data: Mapping[str, Any]) -> str:
         f"age={_bounded_ema_console_count(max_age_ms)}ms",
         f"streak={_bounded_ema_console_count(max_fallbacks)}",
     ]
+    if ema_type:
+        parts.append(f"ema={ema_type}")
     emitted_examples = 0
     for example in examples:
         if emitted_examples >= _EMA_FALLBACK_CONSOLE_EXAMPLE_LIMIT:
@@ -2437,12 +2550,6 @@ _EMA_UNAVAILABLE_CONSOLE_RECORD_LIMIT = 188
 _EMA_UNAVAILABLE_COMPACT_GROUP_LIMIT = 19
 _EMA_UNAVAILABLE_COMPACT_ERROR_LIMIT = 13
 _EMA_UNAVAILABLE_COMPACT_SYMBOL_LIMIT = 14
-_EMA_UNAVAILABLE_EMA_TYPE_RE = re.compile(
-    r"\b(?P<ema_type>m1_close|m1_volume|m1_log_range|h1_log_range)\s+EMA\b",
-    re.IGNORECASE,
-)
-
-
 def _ema_unavailable_console_group(data: Mapping[str, Any]) -> Mapping[str, Any]:
     groups = data.get("candidate_unavailable_groups")
     if not isinstance(groups, (list, tuple)):
@@ -2477,13 +2584,19 @@ def _ema_unavailable_console_symbol_preview(
 
 
 def _ema_unavailable_console_ema_type(group: Mapping[str, Any]) -> str | None:
-    example_error = group.get("example_error")
-    match = _EMA_UNAVAILABLE_EMA_TYPE_RE.search(str(example_error or ""))
-    if match is None:
+    ema_types = group.get("ema_types")
+    if not isinstance(ema_types, (list, tuple)):
         return None
-    return _bounded_ema_console_text(
-        match.group("ema_type"), limit=_EMA_UNAVAILABLE_CONSOLE_ERROR_LIMIT
-    )
+    for item in ema_types:
+        if isinstance(item, Mapping):
+            value = item.get("ema_type")
+        else:
+            value = item
+        if value in {"m1_close", "m1_volume", "m1_log_range", "h1_log_range"}:
+            return _bounded_ema_console_text(
+                value, limit=_EMA_UNAVAILABLE_CONSOLE_ERROR_LIMIT
+            )
+    return None
 
 
 def format_ema_unavailable_console(data: Mapping[str, Any]) -> str:
@@ -2736,12 +2849,26 @@ def format_console_event(event: LiveEvent) -> str:
         return _format_console_balance_changed(event)
     if event.event_type == EventTypes.RESOURCE_MEMORY_SNAPSHOT:
         return format_memory_snapshot_console(event.data)
+    if event.event_type == EventTypes.MARKET_SNAPSHOT_DIAGNOSTIC_SKIPPED:
+        data = event.data if isinstance(event.data, Mapping) else {}
+        return format_market_snapshot_diagnostic_console(
+            context=data.get("context"),
+            error_type=data.get("error_type"),
+            status=event.status,
+            reason_code=event.reason_code,
+            cycle_id=event.cycle_id,
+        )
     if event.event_type == EventTypes.EMA_FALLBACK_USED:
         return format_ema_fallback_console(event.data)
     if event.event_type == EventTypes.EMA_UNAVAILABLE:
         return format_ema_unavailable_console(event.data)
     if event.event_type == EventTypes.FORAGER_ELIGIBILITY_CHANGED:
         return format_forager_eligibility_console(event.data)
+    if (
+        event.event_type == EventTypes.EXECUTION_CREATE_SKIPPED
+        and event.reason_code in _PRE_CREATE_SKIP_REASON_CODES
+    ):
+        return _format_pre_create_skip_console(event)
     if event.event_type in {
         EventTypes.ENTRY_INITIAL_DISTANCE_GATE_BLOCKED,
         EventTypes.ENTRY_INITIAL_DISTANCE_GATE_CLEARED,
@@ -3530,8 +3657,10 @@ class LiveEventPipeline:
         event: LiveEvent | Mapping[str, Any],
         *,
         require_enqueue: bool = False,
+        defer_sync_sinks_until_enqueued: bool = False,
         **overrides: Any,
     ) -> LiveEvent | None:
+        require_enqueue = bool(require_enqueue or defer_sync_sinks_until_enqueued)
         if isinstance(event, LiveEvent):
             live_event = event
         else:
@@ -3540,20 +3669,8 @@ class LiveEventPipeline:
             live_event = replace(live_event, **overrides)
         live_event = live_event.with_context(self.context)
         route = self.route_for(live_event)
-        if (
-            route.console
-            and self.console_sink is not None
-            and _console_sink_event_visible(live_event)
-            and self._should_emit_throttled_sink("console", live_event, route)
-        ):
-            self._write_sink("console", self.console_sink, live_event)
-        if (
-            route.text
-            and self.text_sink is not None
-            and _operator_sink_event_visible(live_event)
-            and self._should_emit_throttled_sink("text", live_event, route)
-        ):
-            self._write_sink("text", self.text_sink, live_event)
+        if not defer_sync_sinks_until_enqueued:
+            self._emit_sync_sinks(live_event, route)
         enqueued = True
         if route.structured or route.monitor:
             with self._enqueue_lock:
@@ -3585,7 +3702,25 @@ class LiveEventPipeline:
                         )
         if require_enqueue and not enqueued:
             return None
+        if defer_sync_sinks_until_enqueued:
+            self._emit_sync_sinks(live_event, route)
         return live_event
+
+    def _emit_sync_sinks(self, live_event: LiveEvent, route: EventRoute) -> None:
+        if (
+            route.console
+            and self.console_sink is not None
+            and _console_sink_event_visible(live_event)
+            and self._should_emit_throttled_sink("console", live_event, route)
+        ):
+            self._write_sink("console", self.console_sink, live_event)
+        if (
+            route.text
+            and self.text_sink is not None
+            and _operator_sink_event_visible(live_event)
+            and self._should_emit_throttled_sink("text", live_event, route)
+        ):
+            self._write_sink("text", self.text_sink, live_event)
 
     def _should_emit_throttled_sink(
         self, sink_name: str, event: LiveEvent, route: EventRoute
@@ -3935,6 +4070,7 @@ def emit_event(
     event: LiveEvent | Mapping[str, Any],
     *,
     require_enqueue: bool = False,
+    defer_sync_sinks_until_enqueued: bool = False,
     **overrides: Any,
 ) -> Any:
     pipeline = getattr(bot, "_live_event_pipeline", None)
@@ -3943,11 +4079,14 @@ def emit_event(
     if pipeline is None or not callable(getattr(pipeline, "emit", None)):
         return None
     try:
-        return pipeline.emit(event, require_enqueue=require_enqueue, **overrides)
+        emit_kwargs = {"require_enqueue": require_enqueue, **overrides}
+        if defer_sync_sinks_until_enqueued:
+            emit_kwargs["defer_sync_sinks_until_enqueued"] = True
+        return pipeline.emit(event, **emit_kwargs)
     except Exception as exc:
         logging.debug(
-            "[event] failed to emit %s: %s",
+            "[event] failed to emit %s error_type=%s",
             getattr(event, "event_type", event),
-            exc,
+            type(exc).__name__,
         )
         return None

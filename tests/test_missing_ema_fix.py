@@ -384,6 +384,8 @@ class _BundleReproBot:
         qv_mode="value",
         lr1m_mode="value",
         project_open_tail_after_health_calls=None,
+        projection_error=None,
+        cached_metric_error=None,
     ):
         self.symbol = symbol
         self.PB_modes = {"long": {symbol: "normal"}, "short": {symbol: "manual"}}
@@ -410,6 +412,8 @@ class _BundleReproBot:
         self.qv_mode = qv_mode
         self.lr1m_mode = lr1m_mode
         self.project_open_tail_after_health_calls = project_open_tail_after_health_calls
+        self.projection_error = projection_error
+        self.cached_metric_error = cached_metric_error
         self.completed_candle_health_calls = 0
         self._orchestrator_close_ema_fallback_counts = {}
         self.config = {"live": {"max_forager_candle_staleness_minutes": 10}}
@@ -508,6 +512,8 @@ class _BundleReproBot:
                 max_tail_gap_ms,
             ):
                 self.outer.projected_open_tail_called = True
+                if self.outer.projection_error is not None:
+                    raise self.outer.projection_error
                 qv = (
                     {float(span): 250000.0 for span in spans_by_metric.get("qv", [])}
                     if self.outer.projected_qv_ema is None
@@ -545,6 +551,8 @@ class _BundleReproBot:
                 window_candles=None,
                 timeframe="1m",
             ):
+                if self.outer.cached_metric_error is not None:
+                    raise self.outer.cached_metric_error
                 self.outer.cached_metric_calls.append(
                     {
                         "symbol": symbol,
@@ -819,6 +827,7 @@ async def test_close_ema_fallback_event_console_owns_normal_warning(caplog, monk
 
     def emit_ema_fallback(bot_arg, **kwargs):
         emitted.append((bot_arg, kwargs))
+        return True
 
     monkeypatch.setattr(
         pb_mod.Passivbot,
@@ -837,6 +846,82 @@ async def test_close_ema_fallback_event_console_owns_normal_warning(caplog, monk
 
 
 @pytest.mark.asyncio
+async def test_close_ema_fallback_event_failure_keeps_legacy_warning(caplog, monkeypatch):
+    try:
+        import passivbot as pb_mod
+    except ImportError:
+        pytest.skip("passivbot module not importable in test environment")
+
+    symbol = "AVAX/USDT:USDT"
+    spans = (10.0, (10.0 * 20.0) ** 0.5, 20.0)
+    bot = _BundleReproBot(
+        symbol,
+        close_mode="timeout",
+        prev_close_ema={span: 100.0 for span in spans},
+    )
+    bot.live_event_console_enabled = True
+    bot._live_event_pipeline = type(
+        "Pipeline", (), {"console_sink": object(), "emit": lambda self, event: event}
+    )()
+
+    def fail_ema_fallback(_bot_arg, **_kwargs):
+        return False
+
+    monkeypatch.setattr(
+        pb_mod.Passivbot,
+        "_emit_ema_fallback_used_event",
+        staticmethod(fail_ema_fallback),
+    )
+    bot._emit_ema_fallback_used_event = fail_ema_fallback
+
+    with caplog.at_level(logging.WARNING):
+        await pb_mod.Passivbot._load_orchestrator_ema_bundle(
+            bot, [symbol], bot.PB_modes
+        )
+
+    summaries = [
+        record.message
+        for record in caplog.records
+        if "close EMA fallback summary" in record.message
+    ]
+    assert len(summaries) == 1
+    assert "reason=exception" in summaries[0]
+    assert "kucoinfutures GET" not in summaries[0]
+
+
+@pytest.mark.asyncio
+async def test_close_ema_fallback_legacy_summary_omits_raw_exception_text(caplog):
+    try:
+        import passivbot as pb_mod
+    except ImportError:
+        pytest.skip("passivbot module not importable in test environment")
+
+    symbol = "AVAX/USDT:USDT"
+    spans = (10.0, (10.0 * 20.0) ** 0.5, 20.0)
+    bot = _BundleReproBot(
+        symbol,
+        close_mode="timeout",
+        prev_close_ema={span: 100.0 for span in spans},
+    )
+    bot.live_event_console_enabled = False
+    bot._live_event_pipeline = None
+
+    with caplog.at_level(logging.WARNING):
+        await pb_mod.Passivbot._load_orchestrator_ema_bundle(bot, [symbol], bot.PB_modes)
+
+    summaries = [
+        record.message
+        for record in caplog.records
+        if "close EMA fallback summary" in record.message
+    ]
+    assert len(summaries) == 1
+    assert "reason=exception" in summaries[0]
+    assert "error_type=TimeoutError" in summaries[0]
+    assert "kucoinfutures GET" not in summaries[0]
+    assert "RequestTimeout" not in summaries[0]
+
+
+@pytest.mark.asyncio
 async def test_candidate_ema_unavailable_logs_single_warning_summary(caplog):
     try:
         import passivbot as pb_mod
@@ -844,7 +929,7 @@ async def test_candidate_ema_unavailable_logs_single_warning_summary(caplog):
         pytest.skip("passivbot module not importable in test environment")
 
     symbols = ["AVAX/USDT:USDT", "TAO/USDT:USDT"]
-    bot = _BundleReproBot(symbols[0], close_mode="nan")
+    bot = _BundleReproBot(symbols[0], close_mode="timeout")
     bot.PB_modes = {"long": {}, "short": {}}
     bot.positions = {
         symbol: {
@@ -887,6 +972,13 @@ async def test_candidate_ema_unavailable_logs_single_warning_summary(caplog):
     assert not any("missing required close EMA AVAX" in message for message in warning_messages)
     assert not any("required EMA unavailable TAO" in message for message in warning_messages)
     assert not any("missing required close EMA TAO" in message for message in warning_messages)
+    summaries = [
+        message for message in warning_messages if "required EMA unavailable summary" in message
+    ]
+    assert "error_types=MissingCloseEma" in summaries[0]
+    assert "ema_types=m1_close" in summaries[0]
+    assert "kucoinfutures GET" not in summaries[0]
+    assert "RequestTimeout" not in summaries[0]
 
 
 @pytest.mark.asyncio
@@ -926,6 +1018,7 @@ async def test_candidate_ema_unavailable_event_console_owns_normal_warning(caplo
 
     def emit_ema_unavailable(bot_arg, **kwargs):
         emitted.append((bot_arg, kwargs))
+        return True
 
     monkeypatch.setattr(
         pb_mod.Passivbot,
@@ -943,6 +1036,57 @@ async def test_candidate_ema_unavailable_event_console_owns_normal_warning(caplo
     assert not any(
         "required EMA unavailable summary" in record.message for record in caplog.records
     )
+
+
+@pytest.mark.asyncio
+async def test_candidate_ema_unavailable_event_failure_keeps_legacy_warning(
+    caplog, monkeypatch
+):
+    try:
+        import passivbot as pb_mod
+    except ImportError:
+        pytest.skip("passivbot module not importable in test environment")
+
+    symbol = "AVAX/USDT:USDT"
+    bot = _BundleReproBot(symbol, close_mode="timeout")
+    bot.PB_modes = {"long": {}, "short": {}}
+    bot.positions = {
+        symbol: {
+            "long": {"size": 0.0, "price": 0.0},
+            "short": {"size": 0.0, "price": 0.0},
+        }
+    }
+    bot.cm.get_last_refresh_ms = lambda _symbol: int(time.time() * 1000)
+    bot._candle_staleness_ms = lambda _symbol, now_ms=None: 0
+    _enable_forager_required_ranking(bot)
+    bot.live_event_console_enabled = True
+    bot._live_event_pipeline = type(
+        "Pipeline", (), {"console_sink": object(), "emit": lambda self, event: event}
+    )()
+
+    def fail_ema_unavailable(_bot_arg, **_kwargs):
+        return False
+
+    monkeypatch.setattr(
+        pb_mod.Passivbot,
+        "_emit_ema_unavailable_event",
+        staticmethod(fail_ema_unavailable),
+    )
+    bot._emit_ema_unavailable_event = fail_ema_unavailable
+
+    with caplog.at_level(logging.WARNING):
+        await pb_mod.Passivbot._load_orchestrator_ema_bundle(
+            bot, [symbol], bot.PB_modes
+        )
+
+    summaries = [
+        record.message
+        for record in caplog.records
+        if "required EMA unavailable summary" in record.message
+    ]
+    assert len(summaries) == 1
+    assert "error_types=MissingCloseEma" in summaries[0]
+    assert "kucoinfutures GET" not in summaries[0]
 
 
 def _enable_forager_required_ranking(bot):
@@ -1369,7 +1513,8 @@ async def test_open_tail_projection_missing_optional_metrics_are_diagnostic(capl
     assert optional_logs
     assert "m1_volume" in optional_logs[-1]
     assert "m1_log_range" in optional_logs[-1]
-    assert "projected open-tail" in optional_logs[-1]
+    assert "reason=projected_metric_missing" in optional_logs[-1]
+    assert "error_type=MissingProjectedMetric" in optional_logs[-1]
 
 
 @pytest.mark.asyncio
@@ -1390,6 +1535,72 @@ async def test_open_tail_projection_missing_close_span_fails_loudly():
 
     with pytest.raises(RuntimeError, match="projected open-tail close EMA incomplete"):
         await pb_mod.Passivbot._load_orchestrator_ema_bundle(bot, [symbol], bot.PB_modes)
+
+
+@pytest.mark.asyncio
+async def test_open_tail_projection_failure_log_omits_exception_text(caplog):
+    try:
+        import passivbot as pb_mod
+    except ImportError:
+        pytest.skip("passivbot module not importable in test environment")
+
+    secret = "https://private.example/path?api_key=projection-secret"
+    symbol = "AVAX/USDT:USDT"
+    bot = _BundleReproBot(
+        symbol,
+        close_mode="timeout",
+        project_open_tail=True,
+        projection_error=TimeoutError(secret),
+    )
+
+    with caplog.at_level(logging.WARNING):
+        with pytest.raises(TimeoutError, match="private.example"):
+            await pb_mod.Passivbot._load_orchestrator_ema_bundle(
+                bot, [symbol], bot.PB_modes
+            )
+
+    messages = [record.message for record in caplog.records]
+    assert any(
+        "open-tail EMA projection failed" in message
+        and "error_type=TimeoutError" in message
+        for message in messages
+    )
+    assert all(secret not in message for message in messages)
+    assert all("projection-secret" not in message for message in messages)
+
+
+@pytest.mark.asyncio
+async def test_cached_forager_ema_failure_log_omits_exception_text(caplog):
+    try:
+        import passivbot as pb_mod
+    except ImportError:
+        pytest.skip("passivbot module not importable in test environment")
+
+    secret = "https://private.example/path?api_key=cached-secret"
+    symbol = "AVAX/USDT:USDT"
+    bot = _BundleReproBot(
+        symbol,
+        close_mode="value",
+        cached_metric_error=TimeoutError(secret),
+    )
+
+    with caplog.at_level(logging.DEBUG):
+        result = await pb_mod.Passivbot._get_forager_cached_ema_metrics(
+            bot,
+            symbol,
+            {"qv": 10.0},
+            max_staleness_ms=60_000,
+        )
+
+    assert result == {}
+    messages = [record.message for record in caplog.records]
+    assert any(
+        "forager cached EMA unavailable" in message
+        and "error_type=TimeoutError" in message
+        for message in messages
+    )
+    assert all(secret not in message for message in messages)
+    assert all("cached-secret" not in message for message in messages)
 
 
 @pytest.mark.asyncio

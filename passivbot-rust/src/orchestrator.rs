@@ -43,10 +43,11 @@ mod core {
     };
     use crate::strategies::{
         generate_orders as generate_strategy_orders, parse_strategy_params, strategy_ema_spans,
-        strategy_entry_retracement_enabled, strategy_entry_volatility_span_hours,
-        strategy_initial_entry_offset, strategy_initial_qty_pct, strategy_needs_log_range_1h,
-        strategy_needs_log_range_1m, strategy_offset_volatility_span_minutes, EmaGateMode,
-        NextStepHint, PeekBehavior, StrategyKind, StrategyParams, StrategyRequest, StrategySide,
+        strategy_entry_volatility_span_hours, strategy_initial_entry_offset,
+        strategy_initial_qty_pct, strategy_needs_log_range_1h, strategy_needs_log_range_1m,
+        strategy_offset_volatility_span_minutes, strategy_requires_sequential_entry_staging,
+        EmaGateMode, NextStepHint, PeekBehavior, StrategyKind, StrategyParams, StrategyRequest,
+        StrategySide,
     };
     use crate::types::{
         BotParams, BotParamsPair, EMABands, ExchangeParams, OrderBook, OrderType, Position,
@@ -2994,7 +2995,7 @@ mod core {
                             input.timestamp_ms,
                             s.long.last_increase_fill_timestamp_ms,
                             s.long.bot_params.risk_entry_cooldown_minutes,
-                            strategy_entry_retracement_enabled(&strategy_params),
+                            strategy_requires_sequential_entry_staging(&strategy_params),
                         );
                         append_strategy_orders_as_ideal(
                             &mut closes,
@@ -3160,7 +3161,7 @@ mod core {
                             input.timestamp_ms,
                             s.short.last_increase_fill_timestamp_ms,
                             s.short.bot_params.risk_entry_cooldown_minutes,
-                            strategy_entry_retracement_enabled(&strategy_params),
+                            strategy_requires_sequential_entry_staging(&strategy_params),
                         );
                         append_strategy_orders_as_ideal(
                             &mut closes,

@@ -39,7 +39,9 @@ def test_monitor_publisher_writes_manifest_events_and_snapshot(tmp_path):
 
     event = publisher.record_event("bot.start", ("bot", "lifecycle"), {"status": "starting"}, ts=1000)
     assert event["seq"] == 1
-    publisher.record_error("error.bot", RuntimeError("boom"), payload={"source": "test"}, ts=1001)
+    publisher.record_error(
+        "error.bot", RuntimeError("boom"), payload={"source": "start_bot"}, ts=1001
+    )
     publisher.close()
 
     root = tmp_path / "bybit" / "user01"
@@ -52,7 +54,7 @@ def test_monitor_publisher_writes_manifest_events_and_snapshot(tmp_path):
     events = [json.loads(line) for line in (root / "events" / "current.ndjson").read_text().splitlines()]
     assert [event["kind"] for event in events] == ["bot.start", "error.bot"]
     assert events[1]["payload"]["error_type"] == "RuntimeError"
-    assert events[1]["payload"]["source"] == "test"
+    assert events[1]["payload"]["source"] == "start_bot"
 
     written = publisher.write_snapshot(
         {"meta": {"custom": "value"}, "account": {"balance_raw": 123.0}},
@@ -65,6 +67,132 @@ def test_monitor_publisher_writes_manifest_events_and_snapshot(tmp_path):
     assert snapshot["meta"]["seq"] == 2
     assert snapshot["meta"]["runtime"] == runtime
     assert snapshot["account"]["balance_raw"] == 123.0
+
+
+def test_monitor_publisher_record_error_redacts_diagnostic_fields_and_keeps_safe_context(
+    tmp_path,
+):
+    publisher = _make_publisher(tmp_path)
+    secret = "https://api.example.test/private?api_key=top-secret Authorization: Bearer top-secret"
+    schemeless_secret = "api.example.test/private/api_key/top-secret"
+    schemeless_url = "api.kucoin.com/api/v1/accounts"
+    opaque_token = (
+        "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0."
+        "dGhpc19pc19vcGFxdWVfYnl0ZXM"
+    )
+
+    class Unrenderable:
+        def __str__(self):
+            raise RuntimeError(secret)
+
+    event = publisher.record_error(
+        "error.bot",
+        RuntimeError(secret),
+        tags=("error", "bot"),
+        payload={
+            "source": "start_bot",
+            "operation": "load_account",
+            "attempt": 1_234_567_890_123_456_789,
+            "status": schemeless_url,
+            "count": 1 << 80,
+            "stage": "init_markets",
+            "endpoint": schemeless_secret,
+            "code": "api_key_top-secret",
+            "action": "sk_live_123456",
+            "cycle_id": opaque_token,
+            "detail": Unrenderable(),
+            "message": secret,
+            "error": secret,
+            "error_repr": secret,
+            "exception": secret,
+            "traceback": secret,
+            "url": secret,
+            "raw_response": secret,
+            "authorization": secret,
+            "context": {
+                "operation": "load_account",
+                "response_body": secret,
+                "nested": {"request_headers": secret, "safe": "kept"},
+            },
+        },
+        ts=1_234,
+        symbol="BTC/USDT:USDT",
+        pside="long",
+    )
+
+    assert event["ts"] == 1_234
+    assert event["seq"] == 1
+    assert event["kind"] == "error.bot"
+    assert event["tags"] == ["error", "bot"]
+    assert event["symbol"] == "BTC/USDT:USDT"
+    assert event["pside"] == "long"
+    assert event["payload"] == {
+        "source": "start_bot",
+        "stage": "init_markets",
+        "error_type": "RuntimeError",
+    }
+
+    opaque_event = publisher.record_error(
+        "error.bot",
+        RuntimeError("safe"),
+        payload={
+            "source": opaque_token,
+            "stage": opaque_token,
+            "status": opaque_token,
+            "attempt": 1_234_567_890_123_456_789,
+            "count": 123_456_789_012_345_678,
+        },
+        ts=1_235,
+    )
+    assert opaque_event["payload"] == {"error_type": "RuntimeError"}
+
+    serialized = publisher.current_events_path.read_text()
+    assert secret not in serialized
+    assert schemeless_secret not in serialized
+    assert schemeless_url not in serialized
+    assert opaque_token not in serialized
+    assert publisher.record_event("bot.stop", ("bot",), ts=1_236)["seq"] == 3
+    assert len(publisher.current_events_path.read_text().splitlines()) == 3
+
+
+def test_monitor_publisher_record_error_bounds_pathological_exception_type(tmp_path):
+    publisher = _make_publisher(tmp_path)
+    pathological_error = type("Error" + "X" * 512, (Exception,), {})
+
+    event = publisher.record_error("error.bot", pathological_error("safe"))
+
+    assert event["payload"]["error_type"] == "Exception"
+
+
+def test_monitor_publisher_record_error_contains_hostile_type_metadata(tmp_path):
+    publisher = _make_publisher(tmp_path)
+    secret = "api_key=monitor-type-secret"
+
+    class _HostileExceptionMeta(type):
+        @property
+        def __name__(cls):
+            raise RuntimeError(secret)
+
+    class _HostileError(RuntimeError, metaclass=_HostileExceptionMeta):
+        pass
+
+    original = _HostileError(secret)
+    try:
+        try:
+            raise original
+        except _HostileError as error:
+            event = publisher.record_error("error.exchange", error)
+            raise
+    except _HostileError as reraised:
+        assert reraised is original
+
+    assert event["payload"]["error_type"] == "Error"
+    assert secret not in publisher.current_events_path.read_text()
+
+    sensitive_type = type("ApiKeyProdSecret", (RuntimeError,), {})
+    sensitive_event = publisher.record_error("error.exchange", sensitive_type(secret))
+    assert sensitive_event["payload"]["error_type"] == "RuntimeError"
+    assert secret not in publisher.current_events_path.read_text()
 
 
 def test_monitor_publisher_records_fills_ticks_and_completed_candles(tmp_path):

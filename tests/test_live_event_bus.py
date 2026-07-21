@@ -27,6 +27,7 @@ from live.event_bus import (
     format_ema_fallback_console,
     format_ema_unavailable_console,
     format_forager_eligibility_console,
+    format_market_snapshot_diagnostic_console,
     format_memory_snapshot_console,
     format_state_refresh_timing_console,
     live_event_debug_profile_enabled,
@@ -88,6 +89,48 @@ def test_live_event_tag_registry_values_are_unique_and_query_safe():
 
 def test_market_compatibility_event_type_is_stable():
     assert EventTypes.CONFIG_MARKET_COMPATIBILITY == "config.market_compatibility"
+
+
+def test_market_snapshot_diagnostic_console_projection_is_bounded_and_excludes_messages():
+    rendered = format_market_snapshot_diagnostic_console(
+        context="C" * 1_000,
+        error_type="E" * 1_000,
+        status="S" * 1_000,
+        reason_code="R" * 1_000,
+        cycle_id="Y" * 1_000,
+    )
+    longest_prefix = "2026-07-15T23:45:40Z WARNING  [hyperliquid] "
+
+    assert len(longest_prefix + rendered) <= 240
+    assert "C" * 65 not in rendered
+    assert "E" * 25 not in rendered
+    assert "Y" * 33 not in rendered
+
+
+def test_market_snapshot_diagnostic_emitter_reports_actual_emission_success():
+    class Bot:
+        live_event_debug_profiles = ()
+
+        def _current_live_event_cycle_id(self):
+            return "cy_1"
+
+        def _emit_live_event(self, *_args, **_kwargs):
+            return None
+
+    bot = Bot()
+    kwargs = {
+        "context": "upnl diagnostics",
+        "error": RuntimeError("market snapshot unavailable"),
+    }
+
+    assert live_event_emitters.emit_market_snapshot_diagnostic_skipped_event(
+        bot, **kwargs
+    ) is False
+
+    bot._emit_live_event = lambda *_args, **_kwargs: LiveEvent("test.event")
+    assert live_event_emitters.emit_market_snapshot_diagnostic_skipped_event(
+        bot, **kwargs
+    ) is True
 
 
 def test_memory_snapshot_event_type_is_stable():
@@ -1754,14 +1797,18 @@ def test_ema_fallback_console_formatter_retains_compact_warning_semantics():
                     "spans": [10.0, 20.0],
                     "max_age_ms": 120_000,
                     "max_fallbacks": 3,
-                    "reason": "previous_ema_timeout",
+                    "ema_type": "m1_close",
+                    "reason_code": "exception",
+                    "error_type": "TimeoutError",
                 },
                 {
                     "symbol": "ETH/USDT:USDT",
                     "spans": [30.0],
                     "max_age_ms": 60_000,
                     "max_fallbacks": 2,
-                    "reason": "cache_read_timeout",
+                    "ema_type": "m1_close",
+                    "reason_code": "exception",
+                    "error_type": "RequestTimeout",
                 },
             ]
         },
@@ -1774,14 +1821,17 @@ def test_ema_fallback_console_formatter_retains_compact_warning_semantics():
     assert message.startswith("[ema] close fallback n=3 sym=2(BTC/USDT:USDT,ETH/USDT:USDT)")
     assert "age=120000ms" in message
     assert "streak=3" in message
-    assert "ex=BTC/USDT:USDT[10,20] age=120000ms n=3 why=previous_ema_time" in message
+    assert (
+        "ex=BTC/USDT:USDT[10,20] age=120000ms n=3 ema=m1_close "
+        "why=exception err=TimeoutError"
+    ) in message
     assert "recovered" not in message
     assert "reason=" not in message
     assert format_console_event(event) == message
     assert event.to_dict() == before
 
 
-def test_ema_fallback_console_formatter_classifies_exception_reason_without_message():
+def test_ema_fallback_console_formatter_uses_safe_fields_without_raw_reason():
     message = format_ema_fallback_console(
         {
             "close_fallback_count": 1,
@@ -1793,15 +1843,41 @@ def test_ema_fallback_console_formatter_classifies_exception_reason_without_mess
                         "spans": [60.0],
                         "max_age_ms": 1000,
                         "max_fallbacks": 1,
-                        "reason": "RequestTimeout: https://private.example/token",
+                        "ema_type": "m1_close",
+                        "reason_code": "exception",
+                        "error_type": "RequestTimeout",
+                        "reason": "https://private.example/token",
                     }
                 ]
             },
         }
     )
 
-    assert "why=RequestTimeout" in message
+    assert "why=exception" in message
+    assert "err=RequestTimeout" in message
     assert "private.example" not in message
+
+
+def test_emit_event_failure_log_omits_exception_text(caplog):
+    secret = "https://private.example/path?api_key=pipeline-secret"
+
+    class FailingPipeline:
+        def emit(self, *_args, **_kwargs):
+            raise RuntimeError(secret)
+
+    bot = type("Bot", (), {"_live_event_pipeline": FailingPipeline()})()
+    event = LiveEvent("ema.fallback_used", data={"safe": True})
+
+    with caplog.at_level(logging.DEBUG):
+        assert live_event_bus_module.emit_event(bot, event) is None
+
+    messages = [record.message for record in caplog.records]
+    assert any(
+        "failed to emit ema.fallback_used error_type=RuntimeError" in message
+        for message in messages
+    )
+    assert all(secret not in message for message in messages)
+    assert all("pipeline-secret" not in message for message in messages)
 
 
 def test_ema_fallback_console_formatter_is_bounded_without_mutating_payload():
@@ -1819,14 +1895,18 @@ def test_ema_fallback_console_formatter_is_bounded_without_mutating_payload():
                     "spans": [1e300, 1e-300, 999.0],
                     "max_age_ms": maximum,
                     "max_fallbacks": maximum,
-                    "reason": "timeout " * 10_000,
+                    "ema_type": "m1_close",
+                    "reason_code": "exception",
+                    "error_type": "TimeoutError",
                 },
                 {
                     "symbol": "B" * 10_000,
                     "spans": [2e300],
                     "max_age_ms": maximum,
                     "max_fallbacks": maximum,
-                    "reason": "stale " * 10_000,
+                    "ema_type": "m1_close",
+                    "reason_code": "non_finite_value",
+                    "error_type": "NonFiniteValue",
                 },
             ]
         },
@@ -1842,7 +1922,8 @@ def test_ema_fallback_console_formatter_is_bounded_without_mutating_payload():
     assert "sym=999999999+(XXXXXXXXXXXXXXXX,YYYYYYYYYYYYYYYY)" in message
     assert "age=999999999+ms" in message
     assert "streak=999999999+" in message
-    assert "ex=AAAAAAAA" in message
+    assert "ema=m1_close" in message
+    assert "private.example" not in message
     assert event.to_dict() == before
 
 
@@ -1863,8 +1944,8 @@ def test_ema_unavailable_console_route_throttles_human_projection_but_keeps_deta
                 "reason": "cache_only_fetch_failed",
                 "symbols": {"count": 1, "sample": ["BTC/USDT:USDT"]},
                 "error_types": ["RuntimeError"],
-                "example_error": "missing required h1_log_range EMA",
-                "per_symbol_diagnostic": "detail must stay structured",
+                "ema_types": [{"ema_type": "h1_log_range", "count": 1}],
+                "spans": [672.0],
             }
         ],
     }
@@ -1887,9 +1968,9 @@ def test_ema_unavailable_console_route_throttles_human_projection_but_keeps_deta
     assert text.events == [first, boundary]
     assert pipeline.flush(timeout=2.0) is True
     assert structured.events == [first, throttled, boundary]
-    assert structured.events[0].data["candidate_unavailable_groups"][0][
-        "per_symbol_diagnostic"
-    ] == "detail must stay structured"
+    assert structured.events[0].data["candidate_unavailable_groups"][0]["ema_types"] == [
+        {"ema_type": "h1_log_range", "count": 1}
+    ]
     assert pipeline.close(timeout=2.0) is True
 
 
@@ -1911,11 +1992,8 @@ def test_ema_unavailable_console_formatter_is_bounded_and_retains_required_signa
                     ],
                 },
                 "error_types": ["MissingLogRangeEma", "RuntimeError"],
-                "example_error": (
-                    "[ema] missing required h1_log_range EMA for BTC/USDT:USDT: "
-                    "span=672 reason=non-finite value"
-                ),
-                "per_symbol_diagnostic": "x" * 10_000,
+                "ema_types": [{"ema_type": "h1_log_range", "count": 1}],
+                "spans": [672.0],
             }
         ],
     }
@@ -1932,7 +2010,7 @@ def test_ema_unavailable_console_formatter_is_bounded_and_retains_required_signa
     )
     assert len(longest_prefix + message) <= 240
     assert "SOL/USDT:USDT" not in message
-    assert "per_symbol_diagnostic" not in message
+    assert "example_error" not in message
     assert format_console_event(event) == message
     assert event.to_dict() == before
 
@@ -1946,7 +2024,7 @@ def test_ema_unavailable_console_formatter_keeps_identity_under_pathological_len
                 "reason": "r" * 10_000,
                 "symbols": {"count": maximum, "sample": ["S" * 10_000] * 3},
                 "error_types": ["E" * 10_000],
-                "example_error": "missing required h1_log_range EMA",
+                "ema_types": [{"ema_type": "h1_log_range", "count": maximum}],
             }
         ],
     }
@@ -2207,6 +2285,86 @@ def test_console_format_summarizes_create_filter_payload():
         "reason=pending_exchange_config "
         "create orders skipped while exchange config update is pending"
     )
+
+
+def test_console_format_bounds_pre_create_skip_with_error_and_many_symbols():
+    event = LiveEvent(
+        EventTypes.EXECUTION_CREATE_SKIPPED,
+        status="skipped",
+        cycle_id="cy_123456",
+        reason_code=ReasonCodes.PRE_CREATE_MARKET_SNAPSHOT_UNAVAILABLE,
+        message="unbounded message " * 100,
+        data={
+            "stage": "market_snapshot_refresh",
+            "order_count": 4,
+            "symbols": [
+                "BTC/USDT:USDT",
+                "ETH/USDT:USDT",
+                "SOL/USDT:USDT",
+                "XRP/USDT:USDT",
+            ],
+            "error_type": "ExchangeNotAvailable",
+        },
+    )
+
+    rendered = format_console_event(event)
+    longest_prefix = "2026-07-15T23:45:40Z WARNING  [hyperliquid] "
+
+    assert len(longest_prefix + rendered) <= 240
+    assert "cycle=cy_123456" in rendered
+    assert "orders=4" in rendered
+    assert "symbols=BTC,ETH,+2" in rendered
+    assert "error_type=ExchangeNotAvailable" in rendered
+    assert "reason=pre_create_market_snapshot_unavailable" in rendered
+    assert "pre-create market snapshot refresh failed" in rendered
+    assert "unbounded message" not in rendered
+
+    pathological = LiveEvent(
+        EventTypes.EXECUTION_CREATE_SKIPPED,
+        status="skipped",
+        cycle_id="C" * 1_000,
+        reason_code=ReasonCodes.PRE_CREATE_MARKET_SNAPSHOT_UNAVAILABLE,
+        message="M" * 10_000,
+        data={
+            "stage": "market_snapshot_refresh",
+            "order_count": 10**20,
+            "symbols": ["S" * 1_000] * 12,
+            "error_type": "E" * 1_000,
+        },
+    )
+
+    pathological_rendered = format_console_event(pathological)
+    assert len(longest_prefix + pathological_rendered) <= 240
+    assert "cycle=" + "C" * 32 in pathological_rendered
+    assert "orders=999999999" in pathological_rendered
+    assert "symbols=" + "S" * 8 + "," + "S" * 8 + ",+10" in pathological_rendered
+    assert "error_type=" + "E" * 24 in pathological_rendered
+    assert "reason=pre_create_market_snapshot_unavailable" in pathological_rendered
+
+
+def test_create_filter_emitter_reports_whether_live_event_emission_succeeded():
+    class Bot:
+        live_event_debug_profiles = ()
+
+        def _current_live_event_cycle_id(self):
+            return "cy_1"
+
+        def _emit_live_event(self, *_args, **_kwargs):
+            return None
+
+    bot = Bot()
+    kwargs = {
+        "event_type": EventTypes.EXECUTION_CREATE_SKIPPED,
+        "status": "skipped",
+        "reason_code": ReasonCodes.PRE_CREATE_MARKET_SNAPSHOT_UNAVAILABLE,
+        "order_count": 1,
+        "symbols": ["BTC/USDT:USDT"],
+    }
+
+    assert live_event_emitters.emit_execution_create_filter_event(bot, **kwargs) is False
+
+    bot._emit_live_event = lambda *_args, **_kwargs: LiveEvent("test.event")
+    assert live_event_emitters.emit_execution_create_filter_event(bot, **kwargs) is True
 
 
 def test_console_format_summarizes_low_balance_create_skip():

@@ -4,6 +4,62 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- `trailing_grid_v7` with zero entry cooldown now preserves v7's simultaneous grid-entry ladder
+  when a later trailing leg uses retracement. Positive entry cooldowns and canonical
+  `trailing_martingale` retracement staging remain unchanged.
+
+- Shutdown-stage failure diagnostics now retain bounded exception types alongside existing stage,
+  task-count, timeout, and elapsed-time context without arbitrary exception messages, request URLs,
+  response text, or credentials. Event-delivery and event-pipeline-close fallback logs use the
+  same classification, as do per-maintainer cancellation and legacy cleanup failures.
+  Maintainer cancellation, execution-loop waits, session closing, shutdown timing, and process
+  control are unchanged.
+
+- Fill-history refresh failure diagnostics now retain bounded exception types alongside existing
+  source, coverage, retry, timing, count, and endpoint context without arbitrary exception
+  messages or exception-value tracebacks. This includes exchange-specific fill fetchers, cache
+  reads and doctor repair, staged remote-call events, startup/process handling, HSL flatten
+  confirmation, and direct refresh callers. Validated numeric status/code and code-owned endpoint
+  labels remain available. Publication and time-sync classification cannot replace the original
+  refresh failure through hostile exception metadata, and wrapped timestamp failures remain
+  recoverable through a bounded cause/context graph check. Code-owned recovery markers are scanned
+  across complete exception text using bounded temporary chunks, preserving existing retry
+  classification and caller-specific marker case rules without retaining that text. Legacy
+  class-name recovery markers are inspected without projecting untrusted names. Exception
+  propagation, fill accounting, refresh cadence, planning, risk, and trading behavior are unchanged.
+
+- Best-effort live event emitter failure diagnostics, including HSL event emitters and the
+  event-adjacent HSL coin-status human-log fallback, now retain bounded exception types instead of
+  arbitrary exception messages that may contain request URLs, response text, or credentials.
+  Event payloads, routing, sink isolation, retries, HSL behavior, and trading behavior are
+  unchanged.
+
+- Legacy monitor error events and WebSocket reconnect diagnostics now retain bounded exception
+  classifications without arbitrary exception messages, request URLs, response text, or formatted
+  exception-value tracebacks. Monitor error context is restricted to known code-owned
+  classifications, and reconnect DEBUG output retains only bounded stack depth rather than frame
+  labels or line values. Reconnect cadence, retry behavior, monitor persistence, and trading
+  behavior are unchanged.
+
+- The `ema.unavailable` and `ema.fallback_used` events and their dedicated legacy summaries now
+  retain only code-owned reason classifications, bounded EMA/error types, symbols, spans, ages,
+  and counts. Malformed typed values are normalized or omitted, adjacent EMA failure logs retain
+  only exception type, and a bounded legacy warning remains when the structured event was not
+  emitted. These paths no longer retain arbitrary exception or fallback-reason text; EMA
+  calculation, fallback selection, candidate availability, and trading behavior are unchanged.
+
+- Noncritical market-snapshot diagnostic skips now use the existing
+  `market.snapshot_diagnostic_skipped` event as the sole normal warning when the structured console
+  is available. The bounded event and legacy fallback retain only stable context and exception type;
+  position/balance refresh behavior is unchanged, and arbitrary exception text is no longer stored
+  or projected.
+
+- Pre-create planning and market-snapshot skips now use the existing
+  `execution.create_skipped` event as the sole normal warning when the structured console is
+  available. The bounded event retains the stable reason, stage, count, symbols, and exception
+  type without raw exception text; the legacy warning remains a fallback, and create filtering is
+  unchanged.
+
 - Large open-order snapshot deltas now emit one bounded `open_orders.snapshot_delta` INFO event per
   added or removed direction, with only the direction and order count. The event reaches structured,
   monitor, console, and text sinks with the `[order]` tag; reconciliation and order behavior are

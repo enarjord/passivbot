@@ -100,6 +100,157 @@ class RecorderPublisher:
         self.closed = True
 
 
+def test_event_emitter_failure_logs_bounded_exception_type_without_secret(caplog):
+    secret = "api_key=event-emitter-secret"
+    url = "https://private.example.invalid/v1/orders?token=event-emitter-token"
+    error_type = type("EventEmitterFailure" + "X" * 120, (RuntimeError,), {})
+
+    class FakeBot:
+        def _emit_live_event(self, *_args, **_kwargs):
+            raise error_type(f"request failed {secret} {url}")
+
+    with caplog.at_level(logging.DEBUG):
+        emitted = live_event_emitters._safe_emit(FakeBot(), EventTypes.HEALTH_SUMMARY)
+
+    assert emitted is None
+    assert "error_type=RuntimeError" in caplog.text
+    assert error_type.__name__ not in caplog.text
+    assert secret not in caplog.text
+    assert url not in caplog.text
+
+    invalid_type = type("Invalid\napi_key=class-name-secret", (RuntimeError,), {})
+
+    class InvalidTypeBot:
+        def _emit_live_event(self, *_args, **_kwargs):
+            raise invalid_type("safe")
+
+    caplog.clear()
+    with caplog.at_level(logging.DEBUG):
+        assert (
+            live_event_emitters._safe_emit(
+                InvalidTypeBot(), EventTypes.HEALTH_SUMMARY
+            )
+            is None
+        )
+
+    assert "error_type=RuntimeError" in caplog.text
+    assert "class-name-secret" not in caplog.text
+
+    sensitive_identifier = "ApiKey_prod_super_secret_ABC123"
+    sensitive_identifier_type = type(sensitive_identifier, (RuntimeError,), {})
+
+    class SensitiveIdentifierTypeBot:
+        def _emit_live_event(self, *_args, **_kwargs):
+            raise sensitive_identifier_type("safe")
+
+    caplog.clear()
+    with caplog.at_level(logging.DEBUG):
+        assert (
+            live_event_emitters._safe_emit(
+                SensitiveIdentifierTypeBot(), EventTypes.HEALTH_SUMMARY
+            )
+            is None
+        )
+
+    assert "error_type=RuntimeError" in caplog.text
+    assert sensitive_identifier not in caplog.text
+
+    camelcase_sensitive_identifier = "ApiKeyProdSecretABC123"
+    camelcase_sensitive_type = type(
+        camelcase_sensitive_identifier, (RuntimeError,), {}
+    )
+
+    class CamelcaseSensitiveTypeBot:
+        def _emit_live_event(self, *_args, **_kwargs):
+            raise camelcase_sensitive_type("safe")
+
+    caplog.clear()
+    with caplog.at_level(logging.DEBUG):
+        assert (
+            live_event_emitters._safe_emit(
+                CamelcaseSensitiveTypeBot(), EventTypes.HEALTH_SUMMARY
+            )
+            is None
+        )
+
+    assert "error_type=RuntimeError" in caplog.text
+    assert camelcase_sensitive_identifier not in caplog.text
+
+    class HostileName(str):
+        def __getitem__(self, _key):
+            return "api_key=hostile-slice-secret"
+
+    class HostileSliceMeta(type):
+        @property
+        def __name__(cls):
+            return HostileName("SafeLookingEventFailure")
+
+    hostile_slice_type = HostileSliceMeta(
+        "HostileSliceEventFailure", (RuntimeError,), {}
+    )
+
+    class HostileSliceTypeBot:
+        def _emit_live_event(self, *_args, **_kwargs):
+            raise hostile_slice_type("safe")
+
+    caplog.clear()
+    with caplog.at_level(logging.DEBUG):
+        assert (
+            live_event_emitters._safe_emit(
+                HostileSliceTypeBot(), EventTypes.HEALTH_SUMMARY
+            )
+            is None
+        )
+
+    assert "error_type=RuntimeError" in caplog.text
+    assert "hostile-slice-secret" not in caplog.text
+
+    invalid_suffix = "V" * 80 + "\napi_key=tail-class-name-secret"
+    invalid_suffix_type = type(invalid_suffix, (RuntimeError,), {})
+
+    class InvalidSuffixTypeBot:
+        def _emit_live_event(self, *_args, **_kwargs):
+            raise invalid_suffix_type("safe")
+
+    caplog.clear()
+    with caplog.at_level(logging.DEBUG):
+        assert (
+            live_event_emitters._safe_emit(
+                InvalidSuffixTypeBot(), EventTypes.HEALTH_SUMMARY
+            )
+            is None
+        )
+
+    assert "error_type=RuntimeError" in caplog.text
+    assert "tail-class-name-secret" not in caplog.text
+
+    class HostileExceptionMeta(type):
+        @property
+        def __name__(cls):
+            raise KeyboardInterrupt("api_key=hostile-metadata-property-secret")
+
+    hostile_type = HostileExceptionMeta(
+        "HostileEventEmitterFailure", (RuntimeError,), {}
+    )
+
+    class HostileTypeBot:
+        def _emit_live_event(self, *_args, **_kwargs):
+            raise hostile_type("api_key=hostile-metadata-secret")
+
+    caplog.clear()
+    with caplog.at_level(logging.DEBUG):
+        assert (
+            live_event_emitters._safe_emit(
+                HostileTypeBot(), EventTypes.HEALTH_SUMMARY
+            )
+            is None
+        )
+
+    assert "error_type=Error" in caplog.text
+    assert "hostile-metadata-secret" not in caplog.text
+    assert "hostile-metadata-property-secret" not in caplog.text
+
+
 def test_live_event_cycle_helpers_emit_structured_events():
     import passivbot as pb_mod
 
@@ -2074,17 +2225,25 @@ def test_forager_and_ema_summary_emitters_emit_structured_events():
     )
     bot._emit_ema_fallback_used_event(
         close_ema_recoveries={"BTC/USDT:USDT": [(100.0, 1)]},
-        close_ema_fallbacks={"ETH/USDT:USDT": [(100.0, 120_000, 2, "stale")]},
+        close_ema_fallbacks={
+            "ETH/USDT:USDT": [
+                (100.0, 120_000, 2, "exception", "TimeoutError")
+            ]
+        },
         forager_cached_ema_fallbacks={
             "DOGE/USDT:USDT": [("qv", 60.0, 180_000)]
         },
     )
     bot._emit_ema_unavailable_event(
         optional_ema_drops={
-            ("h1_log_range", "missing_optional"): [("SOL/USDT:USDT", 24.0)]
+            ("h1_log_range", "projected_metric_missing", "MissingProjectedMetric"): [
+                ("SOL/USDT:USDT", 24.0)
+            ]
         },
         candidate_ema_unavailable_details={
-            "required_missing": [("XRP/USDT:USDT", "ValueError", "missing")]
+            "required_missing": [
+                ("XRP/USDT:USDT", "ValueError", ("h1_log_range",), (24.0,))
+            ]
         },
         ema_unavailable_reasons={"cache_only_never_fetched": ["ADA/USDT:USDT"]},
     )
@@ -2552,7 +2711,7 @@ def test_candle_events_debug_profile_adds_bounded_tail_and_coverage_shape():
     assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 
-def test_ema_unavailable_event_debug_profile_adds_parsed_readiness_detail():
+def test_ema_unavailable_event_debug_profile_keeps_safe_readiness_detail():
     import passivbot as pb_mod
 
     sink = ListEventSink()
@@ -2580,15 +2739,14 @@ def test_ema_unavailable_event_debug_profile_adds_parsed_readiness_detail():
                 (
                     "BTC/USDT:USDT",
                     "RuntimeError",
-                    "[ema] missing required h1_log_range EMA for BTC/USDT:USDT: "
-                    "span=672 reason=non-finite h1_log_range value nan; "
-                    "span=1100 reason=non-finite h1_log_range value nan",
+                    ("h1_log_range",),
+                    (672.0, 1100.0),
                 ),
                 (
                     "ETH/USDT:USDT",
                     "RuntimeError",
-                    "[ema] missing required m1_log_range EMA for ETH/USDT:USDT: "
-                    "span=500 reason=missing required window",
+                    ("m1_log_range",),
+                    (500.0,),
                 ),
             ]
         },
@@ -2611,10 +2769,7 @@ def test_ema_unavailable_event_debug_profile_adds_parsed_readiness_detail():
         {"ema_type": "m1_log_range", "count": 1},
     ]
     assert group["spans"] == [500.0, 672.0, 1100.0]
-    assert group["inner_reasons"] == [
-        {"reason": "non-finite h1_log_range value nan", "count": 2},
-        {"reason": "missing required window", "count": 1},
-    ]
+    assert "inner_reasons" not in group
     assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 
@@ -2646,7 +2801,8 @@ def test_ema_unavailable_event_debug_profile_not_enabled_by_candles_profile():
                 (
                     "BTC/USDT:USDT",
                     "RuntimeError",
-                    "[ema] missing required h1_log_range EMA for BTC/USDT:USDT",
+                    ("h1_log_range",),
+                    (672.0,),
                 )
             ]
         }
@@ -2658,6 +2814,329 @@ def test_ema_unavailable_event_debug_profile_not_enabled_by_candles_profile():
     assert "debug_profile" not in event.data
     assert "debug" not in event.data
     assert bot._live_event_pipeline.close(timeout=2.0) is True
+
+
+def test_ema_event_payloads_keep_safe_diagnostics_across_all_sinks():
+    import passivbot as pb_mod
+
+    structured = ListEventSink()
+    monitor = ListEventSink()
+    console = ListEventSink()
+    text = ListEventSink()
+
+    class FakeBot:
+        _current_live_event_cycle_id = pb_mod.Passivbot._current_live_event_cycle_id
+        _emit_ema_fallback_used_event = pb_mod.Passivbot._emit_ema_fallback_used_event
+        _emit_ema_unavailable_event = pb_mod.Passivbot._emit_ema_unavailable_event
+        _emit_live_event = pb_mod.Passivbot._emit_live_event
+
+        def __init__(self):
+            self.exchange = "binance"
+            self.user = "binance_01"
+            self.bot_id = "bot_1"
+            self.live_event_debug_profiles = ("ema",)
+            self._live_event_current_cycle_id = "cy_ema_redaction"
+            self._live_event_pipeline = LiveEventPipeline(
+                structured_sinks=[structured],
+                monitor_sinks=[monitor],
+                console_sink=console,
+                text_sink=text,
+            )
+
+    secret = "https://private.example/path?api_key=secret-token"
+    bot = FakeBot()
+    bot._emit_ema_fallback_used_event(
+        close_ema_fallbacks={
+            "BTC/USDT:USDT": [
+                (60.0, 1_000, 2, "secret_marker", "RequestTimeout", secret)
+            ]
+        }
+    )
+    bot._emit_ema_unavailable_event(
+        optional_ema_drops={
+            ("m1_volume", "secret_marker", "RequestTimeout"): [
+                ("ETH/USDT:USDT", 60.0)
+            ]
+        },
+        candidate_ema_unavailable_details={
+            "secret_marker": [
+                ("ETH/USDT:USDT", "RequestTimeout", ("m1_volume",), (60.0,), secret)
+            ]
+        },
+        ema_unavailable_reasons={"secret_marker": ["ETH/USDT:USDT"]},
+    )
+
+    assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    emitted = [*structured.events, *monitor.events, *console.events, *text.events]
+    assert len(emitted) == 8
+    serialized = json.dumps([event.to_dict() for event in emitted], sort_keys=True)
+    assert secret not in serialized
+    assert "secret-token" not in serialized
+    assert "secret_marker" not in serialized
+    unavailable = next(
+        event for event in structured.events if event.event_type == EventTypes.EMA_UNAVAILABLE
+    )
+    candidate_group = unavailable.data["candidate_unavailable_groups"][0]
+    assert candidate_group["ema_types"] == [{"ema_type": "m1_volume", "count": 1}]
+    assert candidate_group["spans"] == [60.0]
+    assert candidate_group["reason"] == "unknown_failure"
+    assert "example_error" not in candidate_group
+    assert "inner_reasons" not in unavailable.data["debug"]["candidate_groups"][0]
+    optional_group = unavailable.data["optional_drop_groups"][0]
+    assert optional_group["reason_code"] == "unknown_failure"
+    assert optional_group["error_type"] == "RequestTimeout"
+    assert unavailable.data["unavailable_reasons"][0]["reason"] == "unknown_failure"
+    assert unavailable.data["debug"]["unavailable_groups"][0]["reason"] == "unknown_failure"
+    fallback = next(
+        event for event in structured.events if event.event_type == EventTypes.EMA_FALLBACK_USED
+    )
+    fallback_example = fallback.data["examples"]["close_fallback"][0]
+    assert fallback_example["ema_type"] == "m1_close"
+    assert fallback_example["reason_code"] == "unknown_failure"
+    assert fallback_example["error_type"] == "RequestTimeout"
+    assert "reason" not in fallback_example
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
+
+
+def test_ema_event_payloads_reject_malformed_typed_values():
+    import passivbot as pb_mod
+
+    structured = ListEventSink()
+    monitor = ListEventSink()
+
+    class FakeBot:
+        _current_live_event_cycle_id = pb_mod.Passivbot._current_live_event_cycle_id
+        _emit_ema_fallback_used_event = pb_mod.Passivbot._emit_ema_fallback_used_event
+        _emit_ema_unavailable_event = pb_mod.Passivbot._emit_ema_unavailable_event
+        _emit_live_event = pb_mod.Passivbot._emit_live_event
+
+        def __init__(self):
+            self.exchange = "binance"
+            self.user = "binance_01"
+            self.bot_id = "bot_1"
+            self.live_event_debug_profiles = ("ema",)
+            self._live_event_current_cycle_id = "cy_ema_malformed"
+            self._live_event_pipeline = LiveEventPipeline(
+                structured_sinks=[structured],
+                monitor_sinks=[monitor],
+            )
+
+    secret = "https://private.example/path?api_key=typed-secret"
+    bot = FakeBot()
+    assert bot._emit_ema_fallback_used_event(
+        close_ema_fallbacks={
+            secret: [(float("inf"), 1_000, 2, secret, secret, secret)]
+        },
+        forager_cached_ema_fallbacks={
+            secret: [(secret, float("nan"), 1_000)]
+        },
+    )
+    assert bot._emit_ema_unavailable_event(
+        optional_ema_drops={
+            (secret, secret, secret): [(secret, float("inf"))]
+        },
+        candidate_ema_unavailable_details={
+            secret: [
+                (
+                    secret,
+                    secret,
+                    (secret,),
+                    (float("inf"), float("nan")),
+                    secret,
+                )
+            ]
+        },
+        ema_unavailable_reasons={secret: [secret]},
+    )
+
+    assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    emitted = [*structured.events, *monitor.events]
+    assert len(emitted) == 4
+    serialized = json.dumps([event.to_dict() for event in emitted], sort_keys=True)
+    assert secret not in serialized
+    assert "typed-secret" not in serialized
+    assert "Infinity" not in serialized
+    assert "NaN" not in serialized
+
+    fallback = next(
+        event for event in structured.events if event.event_type == EventTypes.EMA_FALLBACK_USED
+    )
+    for examples in fallback.data["examples"].values():
+        for example in examples:
+            assert example["symbol"] == "unknown"
+            assert example["spans"] == []
+            assert secret not in json.dumps(example, sort_keys=True)
+
+    unavailable = next(
+        event for event in structured.events if event.event_type == EventTypes.EMA_UNAVAILABLE
+    )
+    optional = unavailable.data["optional_drop_groups"][0]
+    assert optional["ema_type"] == "unknown"
+    assert optional["reason_code"] == "unknown_failure"
+    assert optional["error_type"] == "Error"
+    assert optional["symbols"]["sample"] == ["unknown"]
+    assert optional["spans"] == []
+    candidate = unavailable.data["candidate_unavailable_groups"][0]
+    assert candidate["reason"] == "unknown_failure"
+    assert candidate["symbols"]["sample"] == ["unknown"]
+    assert candidate["error_types"] == ["Error"]
+    assert candidate["ema_types"] == []
+    assert candidate["spans"] == []
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
+
+
+def test_ema_bundle_emitter_failure_logs_omit_exception_text(caplog):
+    secret = "https://private.example/path?api_key=bundle-secret"
+
+    class FailingSymbols:
+        def __bool__(self):
+            raise RuntimeError(secret)
+
+    with caplog.at_level(logging.DEBUG):
+        live_event_emitters.emit_ema_bundle_started_event(
+            object(),
+            symbols=FailingSymbols(),
+            modes={},
+        )
+        live_event_emitters.emit_ema_bundle_completed_event(
+            object(),
+            symbols=FailingSymbols(),
+            m1_close_emas={},
+            m1_volume_emas={},
+            m1_log_range_emas={},
+            h1_log_range_emas={},
+        )
+
+    messages = [record.message for record in caplog.records]
+    assert any(
+        "failed to emit ema.bundle.started error_type=RuntimeError" in message
+        for message in messages
+    )
+    assert any(
+        "failed to emit ema.bundle.completed error_type=RuntimeError" in message
+        for message in messages
+    )
+    assert all(secret not in message for message in messages)
+    assert all("bundle-secret" not in message for message in messages)
+
+
+def test_ema_warning_event_reports_console_sink_failure():
+    import passivbot as pb_mod
+
+    class FailingConsoleSink:
+        def write(self, _event):
+            raise RuntimeError("console unavailable")
+
+    structured = ListEventSink()
+
+    class FakeBot:
+        _current_live_event_cycle_id = pb_mod.Passivbot._current_live_event_cycle_id
+        _emit_ema_fallback_used_event = pb_mod.Passivbot._emit_ema_fallback_used_event
+        _emit_live_event = pb_mod.Passivbot._emit_live_event
+        exchange = "binance"
+        user = "binance_01"
+        bot_id = "bot_1"
+        _live_event_current_cycle_id = "cy_console_failure"
+
+        def __init__(self):
+            self._live_event_pipeline = LiveEventPipeline(
+                structured_sinks=[structured],
+                console_sink=FailingConsoleSink(),
+            )
+
+    bot = FakeBot()
+    assert (
+        bot._emit_ema_fallback_used_event(
+            close_ema_fallbacks={
+                "BTC/USDT:USDT": [
+                    (60.0, 1_000, 2, "exception", "RuntimeError")
+                ]
+            }
+        )
+        is False
+    )
+    assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    assert any(
+        event.event_type == EventTypes.EMA_FALLBACK_USED for event in structured.events
+    )
+    assert bot._live_event_pipeline.sink_error_counters["console"] >= 1
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
+
+
+def test_ema_warning_event_reports_closed_pipeline_enqueue_failure():
+    import passivbot as pb_mod
+
+    structured = ListEventSink()
+    console = ListEventSink()
+
+    class FakeBot:
+        _current_live_event_cycle_id = pb_mod.Passivbot._current_live_event_cycle_id
+        _emit_ema_unavailable_event = pb_mod.Passivbot._emit_ema_unavailable_event
+        _emit_live_event = pb_mod.Passivbot._emit_live_event
+        exchange = "binance"
+        user = "binance_01"
+        bot_id = "bot_1"
+        _live_event_current_cycle_id = "cy_closed_pipeline"
+
+        def __init__(self):
+            self._live_event_pipeline = LiveEventPipeline(
+                structured_sinks=[structured],
+                console_sink=console,
+            )
+
+    bot = FakeBot()
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
+    assert (
+        bot._emit_ema_unavailable_event(
+            candidate_ema_unavailable_details={
+                "required_missing": [
+                    ("BTC/USDT:USDT", "RuntimeError", ("m1_close",), (60.0,))
+                ]
+            }
+        )
+        is False
+    )
+    assert not any(
+        event.event_type == EventTypes.EMA_UNAVAILABLE for event in structured.events
+    )
+    assert not any(
+        event.event_type == EventTypes.EMA_UNAVAILABLE for event in console.events
+    )
+    assert bot._live_event_pipeline.drop_counters[EventTypes.EMA_UNAVAILABLE] == 1
+
+
+def test_ema_event_emission_failure_logs_type_only(caplog):
+    secret = "https://private.example/path?api_key=emit-secret"
+
+    class FailingBot:
+        exchange = "binance"
+        user = "binance_01"
+        bot_id = "bot_1"
+        _live_event_current_cycle_id = "cy_ema_emit_failure"
+
+        def _emit_live_event(self, *_args, **_kwargs):
+            raise RuntimeError(secret)
+
+    with caplog.at_level(logging.DEBUG):
+        assert (
+            live_event_emitters.emit_ema_fallback_used_event(
+                FailingBot(),
+                close_ema_fallbacks={
+                    "BTC/USDT:USDT": [
+                        (60.0, 1_000, 2, "exception", "RuntimeError")
+                    ]
+                },
+            )
+            is False
+        )
+
+    messages = [record.message for record in caplog.records]
+    assert any(
+        "failed to emit ema.fallback_used error_type=RuntimeError" in message
+        for message in messages
+    )
+    assert all(secret not in message for message in messages)
+    assert all("emit-secret" not in message for message in messages)
 
 
 @pytest.mark.asyncio
@@ -3424,7 +3903,7 @@ async def test_remote_call_debug_profile_adds_authoritative_payload_shape():
 
 
 @pytest.mark.asyncio
-async def test_authoritative_timed_fetch_failure_emits_sanitized_remote_call_event():
+async def test_authoritative_timed_fetch_failure_emits_classification_only():
     import passivbot as pb_mod
 
     sink = ListEventSink()
@@ -3447,26 +3926,27 @@ async def test_authoritative_timed_fetch_failure_emits_sanitized_remote_call_eve
                 monitor_sinks=[],
             )
 
-    async def fetch_positions():
+    async def fetch_fills():
         raise RuntimeError("apiKey=SECRET token SECRET Bearer abc123")
 
     bot = FakeBot()
     timings_ms = {}
     with pytest.raises(RuntimeError, match="apiKey=SECRET"):
-        await bot._timed_authoritative_fetch("positions", fetch_positions(), timings_ms)
+        await bot._timed_authoritative_fetch("fills", fetch_fills(), timings_ms)
 
-    assert "positions" in timings_ms
+    assert "fills" in timings_ms
     assert bot._live_event_pipeline.flush(timeout=2.0) is True
     assert bot._live_event_pipeline.close(timeout=2.0) is True
     started, failed = sink.events
     assert failed.event_type == EventTypes.REMOTE_CALL_FAILED
     assert failed.remote_call_id == started.remote_call_id
     assert failed.remote_call_group_id == "auth_19:authoritative"
-    assert failed.data["surface"] == "positions"
+    assert failed.data["surface"] == "fills"
     assert failed.data["error_type"] == "RuntimeError"
-    assert "SECRET" not in failed.data["error"]
-    assert "abc123" not in failed.data["error"]
-    assert "SECRET" not in failed.data["error_repr"]
+    assert "error" not in failed.data
+    assert "error_repr" not in failed.data
+    assert "SECRET" not in str(failed.data)
+    assert "abc123" not in str(failed.data)
 
 
 @pytest.mark.asyncio
@@ -4426,7 +4906,7 @@ def test_fill_ingested_debug_profile_adds_bounded_shape_without_source_id_leak()
     assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 
-def test_emit_fills_refresh_summary_event_sanitizes_error_and_stays_off_console():
+def test_emit_fills_refresh_summary_event_omits_exception_text_and_stays_off_console():
     import passivbot as pb_mod
 
     sink = ListEventSink()
@@ -4486,8 +4966,8 @@ def test_emit_fills_refresh_summary_event_sanitizes_error_and_stays_off_console(
     assert event.data["coverage_before"]["gap_reason"] == "fetch_failed"
     assert event.data["next_retry_in_ms"] == 45_000
     assert event.data["error_type"] == "RuntimeError"
-    assert "secret-token" not in event.data["error"]
-    assert "[redacted]" in event.data["error"]
+    assert "error" not in event.data
+    assert "secret-token" not in str(event.data)
     assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 
@@ -5479,6 +5959,31 @@ def test_close_live_event_pipeline_is_best_effort_and_clears_reference():
     assert bot._close_live_event_pipeline(timeout=1.25) is True
     assert pipeline.closed_with == 1.25
     assert bot._live_event_pipeline is None
+
+
+def test_close_live_event_pipeline_redacts_failure_text_and_clears_reference(caplog):
+    import passivbot as pb_mod
+
+    class FakePipeline:
+        def close(self, timeout):
+            raise RuntimeError("token=pipeline-secret https://private.invalid/close")
+
+    class FakeBot:
+        _close_live_event_pipeline = pb_mod.Passivbot._close_live_event_pipeline
+
+        def __init__(self):
+            self._live_event_pipeline = FakePipeline()
+
+    bot = FakeBot()
+
+    with caplog.at_level(logging.WARNING):
+        assert bot._close_live_event_pipeline(timeout=1.25) is False
+
+    assert bot._live_event_pipeline is None
+    messages = [record.getMessage() for record in caplog.records]
+    assert "[monitor] live event pipeline close failed (RuntimeError)" in messages
+    assert all("pipeline-secret" not in message for message in messages)
+    assert all("private.invalid" not in message for message in messages)
 
 
 @pytest.mark.asyncio
