@@ -52,17 +52,10 @@ Before order planning/execution, live bot must have coherent state for:
 These are deliberate exceptions to the general "Rust owns order behavior" and live/backtest parity
 rules. Keep them narrow, visible, and test-covered.
 
-- Live initial-entry executor distance gate:
-  - Rust still emits the intended `entry_initial_*` order.
-  - Python live may withhold posting far passive initial-entry creates when
-    `live.initial_entry_exec_max_market_dist_pct > 0`.
-  - This is accepted as an executor-level remote-call/order-churn throttle, not a trading-logic
-    source of truth.
-  - Python must not create any order Rust did not request.
-  - Existing matching orders are preserved by order-match tolerance; if an existing order drifts
-    outside tolerance, live may cancel it and withhold the far replacement create.
-  - Blocking must be INFO-visible and throttled by the same order-match tolerance so operators can
-    see that the bot wants the order but is intentionally not posting it yet.
+- Live order-replacement churn gate:
+  - The former initial-entry-only distance gate is superseded and its configuration field retired.
+  - The reviewed RAM-only, strategy-agnostic replacement contract is maintained in
+    `account_wide_order_replacement_churn_gate_plan.md`.
 
 - Hyperliquid `allMids` market snapshot:
   - User explicitly accepted using a single mid/last-like reference for bid, ask, and last on
@@ -477,11 +470,9 @@ changing behavior during extraction commits.
 - [x] Added staged market snapshot fetch headroom. Rust planning now requests ticker snapshots
   with a stricter cache TTL than the hard safety max, avoiding false precondition failures from
   near-expired cached tickers while preserving the pre-create stale-snapshot guard.
-- [x] Added a narrow live-only initial-entry executor distance gate to reduce churn from
-  EMA-drifting `entry_initial_*` orders. Rust still emits the intended initial entry, but live
-  only posts it when it is within `live.initial_entry_exec_max_market_dist_pct` of market; blocked
-  orders are INFO-visible on first block and then throttled to periodic INFO, with repeated drift
-  kept at DEBUG.
+- [x] Superseded the narrow initial-entry-only distance gate with the reviewed account-wide,
+  strategy-agnostic order-replacement churn policy documented in
+  `account_wide_order_replacement_churn_gate_plan.md`.
 - [x] Increased default forager score hysteresis from `0.005` to `0.02` after VPS logs showed
   most churn-relevant replacements had score gaps above the old 0.5% threshold.
 - [x] Tightened default OHLCV fetch budget and widened default REST recv window. Defaults are now
