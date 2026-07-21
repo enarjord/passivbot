@@ -48,7 +48,7 @@ The proposed behavior is:
    rolling ten-minute window. Defer later far creations while the window is full.
 7. Never retain a stale actual order while waiting. Cancel it and regenerate current Rust intent on
    a later cycle.
-8. Execute ordinary replacements cancel-first by conflict scope: cancel, confirm authoritative
+8. Execute all ordinary creations cancel-first by conflict scope: cancel, confirm authoritative
    open-order state, regenerate the Rust plan, and only then create.
 
 This is an operational exchange-write economy layer. It does not alter Rust calculations, widen
@@ -145,7 +145,6 @@ position_side
 order_side
 reduce_only
 execution_type
-time_in_force / post_only execution semantics
 pb_order_type
 ```
 
@@ -192,15 +191,31 @@ match either `true` or `false`; it blocks normal planning for the affected symbo
 otherwise resolved under the error contract. Existing inference from side and position side must
 not be carried into this implementation.
 
+Canonical `reduce_only` means authoritative exchange-native close-only effect; it does not require
+every placement API to accept a literal `reduceOnly` parameter. WEEX V3 omits that placement field
+but documents `reduceOnly` in open-order and order-info responses while identifying hedge actions by
+`side` plus `positionSide`. The WEEX adapter must normalize the authoritative response field and
+verify it against the V3 close contract before enabling this gate. If live payloads omit or
+misreport it, an adapter-specific mapping from `side` plus `positionSide` is allowed only after an
+offline contract test and separately authorized live probe prove that the combination cannot
+increase or flip the scoped position. Generic side/position inference remains forbidden.
+
 This is a prerequisite correction to the current reconciler, whose tight matching tuple omits
 `reduce_only` and whose open-order snapshot derives it from side and position side. The churn gate
 must not be layered on top of that inference.
 
-### Why execution semantics stay exact
+### Why execution type stays exact but time-in-force does not
 
-Market versus limit and time-in-force/post-only behavior change fill guarantees and taker risk.
-They remain exact keys even when price and quantity match. This avoids treating a resting maker
-order as equivalent to an immediately executable or cancellable order.
+Market versus limit changes execution guarantees and remains exact even when price and quantity
+match. Time-in-force and post-only do not participate in actual-order satisfaction or historical
+churn cohorts.
+
+Post-only is a placement-time constraint: once an order is accepted and resting, post-only and GTC
+orders at the same price and quantity have equivalent ongoing execution behavior. IOC and FOK
+orders do not remain open. Connectors must still apply the configured time-in-force to every new
+creation and preserve returned semantics as diagnostic metadata. If Passivbot later supports a
+persistent lifetime behavior such as GTD expiry, add a narrower authoritative
+`resting_lifetime_semantics` key rather than persisting placement-only metadata.
 
 ## Snapshot Boundary and Scope
 
@@ -229,6 +244,20 @@ symbol appends an empty snapshot and removes stale orders for that symbol.
 Append the current snapshot only after its decision, or otherwise exclude it from its own history.
 Prune by the configured window. Consecutive identical snapshots may be compacted only if tests prove
 the same logical presence answers at every relevant timestamp.
+
+### Planning-policy compatibility
+
+Each per-symbol/position-side history carries a planning-policy fingerprint. The fingerprint covers
+effective static strategy configuration, coin overrides, and operator-controlled approved/ignored
+eligibility relevant to that scope. When it changes, discard only the affected history before
+classifying the new Rust ideal. Do not clear the account-wide attempt timestamps: exchange writes
+already consumed remain consumed for the rolling window.
+
+Positions, prices, EMAs, volatility, trailing extrema, fills, and other dynamic strategy inputs are
+excluded from the fingerprint. Including them would continuously reset the evidence gate and defeat
+its purpose. Current coin overrides are normally startup-parsed, so restart already resets RAM
+history; the explicit fingerprint keeps the contract correct for approved-list refreshes and any
+future hot config reload.
 
 ### Why history is per symbol but allowance is account-wide
 
@@ -362,12 +391,12 @@ do not establish a general cancel-confirm-replan-create contract.
 Use a broader scope for write sequencing than for order satisfaction:
 
 ```text
-(symbol, position_side, order_side, reduce_only, execution_type)
+(symbol, position_side, order_side, reduce_only)
 ```
 
-`pb_order_type` and time-in-force are deliberately absent. A stale grid order and a new trailing
-order, or a stale maker order and a changed execution style, can still compete for the same
-position-side exposure and create duplicates during transition.
+`pb_order_type`, time-in-force, and execution type are deliberately absent. A stale grid order and
+a new trailing order, or a stale limit order promoted by Rust to ordinary market execution, can
+still compete for the same position-side exposure and create duplicates during transition.
 
 This broader scope is only a sequencing barrier. It does not make unlike orders equivalent during
 reconciliation.
@@ -387,22 +416,26 @@ For each planning wave:
    scopes now confirmed clean.
 
 Independent scopes without stale actual orders may create in the same wave. This avoids a global
-one-cycle stall while preventing stale-predecessor duplicates.
+one-cycle stall while preventing stale-predecessor duplicates. Every ordinary market creation obeys
+this barrier; market execution is not itself an emergency exemption.
 
 Failed, ambiguous, not-found, already-filled, or already-cancelled results do not prove a scope is
 clean. They require the existing authoritative confirmation behavior; terminal ambiguity that may
 represent a fill refreshes balance, positions, open orders, and fills before replanning.
 
-### Risk-critical exception
+### Risk-critical sequencing
 
-Dedicated market panic may bypass the ordinary dependency path entirely. Other Rust-marked
-risk-critical limit orders remain ahead of ordinary orders in final batching and may create in the
-same wave only if every stale cancellation in their conflict scope was selected and positively
-acknowledged, with no truncation or ambiguity. Otherwise they replan through the fastest existing
-authoritative path.
+Dedicated market panic may bypass the ordinary dependency path entirely. Every Rust-marked
+risk-critical limit order remains ahead of ordinary orders in final batching, but if its conflict
+scope has a stale actual order it must wait for cancellation, authoritative positions, balance,
+open-orders, and fills confirmation, and a fresh Rust plan. A positive cancel acknowledgement is
+insufficient: the cancelled order or another order may have filled before the acknowledgement and
+changed position size, PnL, risk, or close quantity.
 
-This exception avoids delaying emergency exposure reduction while still preventing an assumed
-cancellation from producing duplicate risk orders.
+This keeps the only same-wave bypass narrow and explicit. If later measurements show that one-loop
+risk-critical limit latency is unacceptable, design a separate fast path that proves no fill or
+account-state change and recomputes current Rust intent; do not infer safety from cancellation
+success alone.
 
 ### Why one-cycle latency is accepted
 
@@ -482,8 +515,11 @@ implementation review must recheck the exact endpoints used by each connector.
 | Binance USD-M | New orders consume account order-count limits; placement and cancellation have different request weights and batch bounds. Qualifying reduce-only/close and cancellation requests receive special overload treatment. [General info](https://developers.binance.com/en/docs/products/derivatives-trading-usds-futures/general-info), [trade endpoints](https://developers.binance.com/en/docs/catalog/core-trading-derivatives-trading-usd-s-m-futures/api/rest-api/trade#new-order) | Use USD-M, not Spot, assumptions. Preserve risk/cancel priority and count logical actions. |
 | OKX | Trading limits are shared across REST/WS, separated by place/amend/cancel operation, and generally scoped by user plus instrument; subaccount fill-ratio rules affect new/amend traffic. [Official docs](https://www.okx.com/docs-v5/) | Native amend and adaptive fill-ratio optimization are later projects. |
 | Paradex | Private APIs use account plus IP limits with leaky-bucket refill; batch operations may consume one unit for multiple orders. [Rate limits](https://docs.paradex.trade/api/general-information/rate-limits/api), [best practices](https://docs.paradex.trade/api/general-information/api-best-practices) | Logical action counting is deliberately conservative. |
-| Defx | Official docs expose placement/cancellation and 429 behavior but do not publish a complete numeric model. [Official docs](https://docs.defx.com/docs/api-docs/developer-hub/rest-apis-documentation) | Do not invent exchange thresholds. |
 | CCXT/generic fallback | CCXT rate limiting is per exchange instance; separate instances do not share limiter state. [Official manual](https://github.com/ccxt/ccxt/wiki/manual#rate-limit) | This per-bot gate cannot guarantee account/IP coordination across processes. |
+
+Defx is excluded. It is a deliberately unsupported legacy placeholder under
+`docs/ai/features/exchange_integrations.md`; stale adapter and `setup_bot()` code do not make it part
+of this feature's implementation, validation, research, or rollout scope.
 
 Hyperliquid is the clearest reason not to call this a generic rate-limit budget. Its cancellation
 allowance and requests-per-volume economics differ materially from rolling endpoint quotas. The
@@ -557,6 +593,8 @@ events use bounded periodic summaries.
 - RAM reset temporarily restores baseline write churn; it does not weaken the current Rust plan or
   safety barriers.
 - Account-wide means one bot execution authority, not multiple processes sharing exchange limits.
+- Risk-critical limit orders in a dirty conflict scope incur one refresh/replan loop; only dedicated
+  market panic bypasses that sequencing barrier.
 
 ## Resolution of Review Findings
 
@@ -573,6 +611,18 @@ events use bounded periodic summaries.
 4. **`reduce_only`:** it is an exact authoritative key; side/position-side inference is forbidden.
 5. **Cancel/create races:** all ordinary creates in a conflict scope wait for cancel confirmation,
    fresh state, and a fresh Rust plan. Batch truncation cannot strand a dependent creation.
+6. **Ordinary market promotion:** execution type is removed from the sequencing scope, so a
+   Rust-promoted market creation cannot bypass its stale limit predecessor.
+7. **WEEX close semantics:** canonical `reduce_only` is exchange-native close-only effect; WEEX
+   must normalize and verify its authoritative V3 response semantics before enablement.
+8. **Defx metadata:** Defx is explicitly outside the supported live-exchange boundary and is not an
+   implementation prerequisite.
+9. **Cancel acknowledgement after fills:** every limit order, including risk-critical, refreshes and
+   replans after a stale cancellation; positive acknowledgement alone is insufficient.
+10. **Time-in-force provenance:** placement-only TIF/post-only is removed from reconciliation and
+    history identity while remaining enforced on new creations.
+11. **Operator policy changes:** affected per-symbol/position-side histories reset on a static
+    planning-policy fingerprint change without refunding account-wide attempt timestamps.
 
 ### Earlier findings retained
 
@@ -591,8 +641,9 @@ events use bounded periodic summaries.
 ### Matching and normalization
 
 - deterministic one-to-one tight actual reconciliation, including duplicate prices/quantities;
-- exact mismatch for `pb_order_type`, panic versus non-panic, `reduce_only`, execution type, and
-  time-in-force/post-only semantics;
+- exact mismatch for `pb_order_type`, panic versus non-panic, `reduce_only`, and execution type;
+- TIF/post-only differences do not prevent an otherwise exact resting-order match, while every new
+  creation still receives the configured placement semantics;
 - unknown actual type/reduce-only fail-closed behavior for every connector adapter;
 - no side/position-side inference of reduce-only;
 - one historical observation cannot satisfy multiple current candidates;
@@ -610,6 +661,9 @@ events use bounded periodic summaries.
 - price-only and quantity-only churn;
 - neighboring grids, duplicate levels, growing/shrinking ladders, equal-cardinality rolls;
 - evidence expires exactly with the rolling window;
+- a static config, coin-override, or affected eligibility revision resets only compatible history;
+- dynamic position, price, EMA, volatility, trailing, and fill changes do not reset history;
+- a policy-history reset does not clear account-wide attempt timestamps;
 - compaction, if implemented, preserves logical results across fast/slow planning cadence.
 
 ### Allowance and final admission
@@ -633,7 +687,9 @@ events use bounded periodic summaries.
 - fills and manual position changes regenerate different Rust intent before create;
 - independent conflict scopes may create in the cancellation wave;
 - dedicated market panic bypasses ordinary sequencing;
-- risk-critical limit same-wave create requires every scoped cancel positively acknowledged;
+- ordinary Rust-promoted market creation cannot escape a stale limit conflict;
+- risk-critical limits replan after every stale cancellation, including positive acknowledgements
+  whose response reports or may conceal a partial fill;
 - no ordinary create is sent from a pre-cancellation plan;
 - existing recent-create/ambiguous-write guards remain effective without duplicate responsibilities.
 
@@ -658,7 +714,8 @@ events use bounded periodic summaries.
 
 - Add canonical config fields, validation, templates, migration behavior, and changelog entry.
 - Audit every connector for authoritative `reduce_only`, normalized `pb_order_type`, execution type,
-  and time-in-force/post-only data.
+  and WEEX-native close-only semantics. Defx is outside the supported boundary.
+- Keep TIF/post-only enforcement at creation and diagnostic normalization, not reconciliation.
 - Audit Rust order families for explicit ordinary/risk-critical priority.
 - Retire `initial_entry_exec_max_market_dist_pct`.
 
@@ -731,15 +788,17 @@ After offline validation and separate live authorization:
 Reviewers are explicitly asked to challenge intent, architecture, edge cases, unintended
 consequences, and connector assumptions—not merely wording:
 
-- Is the exact reconciliation key complete, especially `pb_order_type`, authoritative
-  `reduce_only`, and time-in-force/post-only semantics?
+- Is the exact reconciliation key complete with `pb_order_type`, authoritative exchange-native
+  `reduce_only`, and execution type, while correctly excluding placement-only TIF/post-only?
 - Can every connector recover those fields without fabrication, and is fail-closed scope correct?
+- Is Defx's explicit unsupported boundary clear enough that stale adapter code cannot expand scope?
 - Is the broader execution conflict scope sufficiently conservative without stalling unrelated
   work?
 - Can any cancellation truncation, ambiguity, fill, manual action, or race still send an ordinary
   order from a stale Rust plan?
-- Are the market-panic and risk-critical-limit exceptions narrow enough and prioritized before
-  batching?
+- Does every non-panic market creation obey the stale-limit barrier?
+- Is dedicated market panic the correct sole same-wave bypass, and are risk-critical limits still
+  prioritized adequately after authoritative refresh/replan?
 - Does per-symbol validity isolate outages while the union processing universe preserves actual
   orders and positions?
 - Can one historical order satisfy multiple current candidates?
@@ -753,6 +812,8 @@ consequences, and connector assumptions—not merely wording:
 - Is the one-cycle ordinary latency acceptable for parity and missed-fill risk?
 - Is the proposed RAM-only canonical exception truly bounded to operational economy and incapable
   of weakening safety after reset?
+- Does the planning-policy fingerprint invalidate deliberate operator changes without including
+  dynamic strategy inputs or refunding account-wide attempt usage?
 - What interactions remain with config reload, forager symbol churn, HSL, WEL/TWEL, unstuck,
   auto-reduce, graceful stop, hedge mode, and one-way mode?
 

@@ -3,6 +3,18 @@
 Only task-specific, high-impact contracts and quirks are listed here. Authenticated verification
 requires explicit user approval; prefer offline request-construction tests.
 
+## Supported Live-Exchange Boundary
+
+The supported production live connectors are Binance, Bybit, Bitget, OKX, Gate.io, KuCoin,
+Hyperliquid, and WEEX. The fake connector is an offline deterministic test harness, not an exchange.
+
+Defx is deliberately unsupported. `src/exchanges/defx.py` and the `setup_bot()` routing branch are
+stale legacy placeholders retained only until a separate cleanup removes them. Their presence does
+not make Defx a supported connector and must not expand feature coverage, implementation matrices,
+regression requirements, or live-testing scope. The canonical live fill-event factory rejects Defx
+because required realized-PnL, unstuck, and HSL replay support is absent. Do not use the Defx adapter
+for live operation or authenticated probes.
+
 ## Broker Agreement Attribution
 
 Problem:
