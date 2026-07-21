@@ -1,195 +1,143 @@
-# Temporal Rust-Ideal Snapshot Order Churn Gate Plan
+# Rust-Ideal Churn Evidence Gate and Cancel-First Execution Plan
 
 ## Status
 
-Planning and review specification only. This document intentionally makes no runtime, schema,
-configuration, or test implementation changes.
+Planning and review specification only. This document intentionally changes no runtime behavior,
+configuration schema, or tests.
 
-Implementation must not begin until reviewers approve the temporal matching contract, final
-execution ordering, risk exemptions, exchange assumptions, and the unresolved restart policy in
-this revision.
+This revision replaces the earlier identity-tracking designs in PR #1336. It deliberately keeps the
+same PR because the problem and architectural objective are unchanged, and the existing review
+history explains why this simpler design was selected.
 
-This revision supersedes both earlier PR #1336 designs:
+Implementation must not begin until reviewers approve:
 
-- it does not infer replacement identity from actual exchange orders or best-effort
-  `_context=replace` annotations;
-- it does not use `pb_order_type` or any other strategy/order-type name as a behavior-cohort key;
-- it does not require stable Rust ladder-slot identity merely to detect ordinary price churn;
-- it classifies behavior from a bounded history of normalized Rust ideal-order snapshots using
-  deterministic one-to-one temporal multiset association.
+- the exact reconciliation identity;
+- the quantitative churn-evidence heuristic;
+- the cancel-first execution boundary;
+- risk-critical exemptions and ordering;
+- the narrow RAM-only restart exception; and
+- the accepted live/backtest parity tradeoffs.
 
-Rust remains the source of order intent. Python observes whether Rust's executable ideal prices and
-quantities are stable enough to justify leaving distant limit orders on the exchange.
+## Executive Decision
 
-## Decision Summary
+Rust remains the sole source of current strategy intent. Python does not infer whether an order is
+conceptually new, a replacement, an addition, or a restoration. Those labels are too ambiguous for
+causal trading policy when ladders change cardinality, orders disappear and return, or strategy
+order types change.
 
-1. Capture each complete normalized Rust ideal-order snapshot before reconciliation with actual
-   exchange orders.
-2. Keep a bounded ten-minute temporal history of valid snapshots. An implementation may compact
-   identical observations without changing their logical time coverage.
-3. Reconcile actual orders against the current ideal snapshot one-to-one using the existing
-   universal `live.order_match_tolerance_pct`.
-4. Keep every exact/in-tolerance actual order and cancel every remaining stale actual order.
-5. Classify each unmatched current ideal order as `new`, `addition`, `stable_restoration`, or
-   `replacement_derived` by associating normalized orders across historical snapshots.
-6. Associate orders only within an order-type-agnostic execution cohort:
-   `(symbol, position_side, order_side, reduce_only, execution_type)`.
-7. Always admit market orders, explicitly Rust-marked risk-critical orders, and limit orders whose
-   final fresh signed market distance is within
-   `live.order_replacement_churn_gate_market_dist_pct`.
-8. Always admit `new`, `addition`, and `stable_restoration` limit orders. They do not consume the
-   replacement allowance.
-9. Allow up to the available account-wide rolling capacity for far ordinary
-   `replacement_derived` create attempts. The initial default is 10 attempts per 10 minutes.
-10. When capacity is exhausted, cancel stale predecessors but defer their far replacements. Never
-    retain an out-of-tolerance actual order as a substitute.
-11. Recheck distance after cancellation and exchange-configuration work, as part of final batch
-    admission immediately before the connector call.
-12. Prioritize risk-critical creations ahead of ordinary creations before applying the final
-    creation batch cap.
-13. Treat already-absent/not-found cancellation results as ambiguous state transitions requiring
-    authoritative account refresh and a new Rust plan; never create their dependent replacement
-    from the old plan.
-14. Keep classification and allowance events diagnostic. Trading decisions do not subscribe to
-    the event pipeline.
+Python instead asks one narrow, observable question for each unmatched current ideal order:
+
+> During the configured recent window, has Rust emitted an execution-semantically equivalent order
+> at a materially different price or quantity?
+
+The proposed behavior is:
+
+1. Keep per-symbol, bounded, RAM-only snapshots of valid normalized Rust ideal orders for ten
+   minutes.
+2. Reconcile current actual and ideal orders one-to-one under the existing tight tolerance and an
+   exact execution-semantic cohort.
+3. Cancel every unmatched stale actual order regardless of churn-gate state.
+4. For each unmatched current ideal order, look independently in each prior valid snapshot for a
+   deterministic one-to-one match in the same cohort:
+   - a tight match is evidence of stability in that snapshot;
+   - a wider-but-not-tight match is direct price/quantity churn evidence;
+   - no wider match is uncertainty, not proof of replacement identity, and therefore fails open.
+5. Always admit market orders, explicitly risk-critical orders, and orders within the configured
+   final market-distance threshold.
+6. Admit the first ten connector-bound, churn-evidenced ordinary create attempts account-wide in a
+   rolling ten-minute window. Defer later far creations while the window is full.
+7. Never retain a stale actual order while waiting. Cancel it and regenerate current Rust intent on
+   a later cycle.
+8. Execute ordinary replacements cancel-first by conflict scope: cancel, confirm authoritative
+   open-order state, regenerate the Rust plan, and only then create.
+
+This is an operational exchange-write economy layer. It does not alter Rust calculations, widen
+the actual-order reconciliation tolerance, replace CCXT/exchange rate limiting, or make event logs
+causal inputs.
 
 ## Problem
 
-Some Rust ideal limit prices move continuously because their inputs move continuously. EMA Anchor
-is the current concrete example: both entry and close prices can change with EMA bands, volatility,
-and inventory. Small changes beyond `live.order_match_tolerance_pct` can cause hours of low-value
-cancel/create traffic while the desired orders remain far from market.
+Some ideal limit orders move continuously because their inputs move continuously. EMA Anchor is the
+current concrete example: both entries and closes may move with EMA bands, volatility, and
+inventory. Changes just outside `live.order_match_tolerance_pct` can cause low-value cancel/create
+traffic for hours while the desired orders remain far from market.
 
-Static grids and fixed distant closes behave differently. Placing them once is useful because they
-can catch a sharp move, while leaving them unchanged consumes no further write capacity. A
-universal market-distance gate would suppress these useful resting orders.
+Static grids and fixed distant closes are different. Placing them once is useful because they can
+catch a sharp move, while leaving them unchanged consumes no further write capacity. A universal
+distance gate would suppress these harmless resting orders.
 
-The desired policy is therefore behavioral:
-
-- observe the executable ideal orders Rust actually emits;
-- preserve first placements, additions, and stable restorations;
-- identify orders whose normalized price or quantity has moved materially during the recent
-  observation window;
-- apply distance gating only after the account-wide allowance for such moving replacements is
-  exhausted.
-
-The mechanism is an exchange-write economy layer. It does not replace CCXT pacing,
-exchange-native rate limiting, retry/backoff, ambiguous-write confirmation, or batch-size limits.
+The gate should therefore react to observed Rust output, not to a maintained list of strategy or
+`pb_order_type` names believed to be EMA-driven. That makes it work for future strategy kinds
+without teaching Python their pricing logic.
 
 ## Goals
 
-- Stop sustained low-value replacement churn caused by moving ideal prices or quantities.
-- Remain strategy-agnostic and order-type-agnostic.
-- Preserve static distant limit orders and genuinely new ladder levels.
-- Share the replacement allowance across the bot instance because exchange capacity is generally
-  account-, UID-, subaccount-, or IP-scoped rather than coin-scoped.
-- Preserve Rust ideal orders without synthesizing fallback prices, quantities, or strategy intent.
-- Never preserve an out-of-tolerance stale actual order because its replacement is deferred.
-- Always admit near-market and explicitly risk-critical actions through this economy gate.
-- Pace newly available far-replacement capacity one attempt at a time.
-- Keep classification, admission, deferral, and reset behavior observable and bounded.
+- Reduce sustained low-value order replacement traffic.
+- Remain independent of strategy kind and pricing formula.
+- Preserve distant orders for which no recent churn is evidenced.
+- Share the allowance account-wide within one bot process because exchange write limits are
+  generally broader than one symbol or position side.
+- Preserve current Rust intent without synthesizing fallback orders or keeping stale substitutes.
+- Keep risk-critical actions and near-market opportunities outside the economy restriction.
+- Strengthen duplicate prevention and stale-plan handling around cancellation and creation.
+- Make every admission, deferral, cancellation barrier, and RAM reset observable.
 
 ## Non-Goals
 
-- Reimplement exchange-native rate limiters or replace CCXT throttling.
-- Coordinate multiple bot processes sharing an account, API key, subaccount, or IP.
-- Infer whether an order came from EMA, volatility, trailing, grid, or another strategy input.
-- Use `pb_order_type`, client-order IDs, or exchange order IDs as temporal behavior identity.
-- Preserve maker queue position for an ideal order Rust materially changed.
-- Change Rust prices, quantities, strategy calculations, or backtest order generation.
-- Guarantee that a deferred far replacement could not have filled during a sharp market move.
-- Suppress same-ideal retries caused solely by exchange rejection or ambiguous state; existing
-  confirmation and retry contracts own that separate problem.
+- Reimplement exchange-native or CCXT throttling.
+- Coordinate separate bot processes, API keys, subaccounts, or IP-based limit pools.
+- Infer EMA, volatility, grid, trailing, or strategy provenance.
+- Establish durable order identities or causal `new`/`replacement`/`restoration` tracks.
+- Persist history across restart.
+- Preserve maker queue position for an order Rust changed beyond universal tolerance.
 - Add exchange-native amend support in the first implementation.
-- Treat the proposed 10-per-10-minute values as exchange-native limits.
+- Guarantee that a deliberately deferred distant limit order cannot miss a sharp move.
+- Treat ten attempts per ten minutes as an exchange-native rate limit.
 
-## Safety Invariants
+## Normative Invariants
 
-### Universal reconciliation tolerance remains authoritative
+### Rust owns current intent
 
-The existing `live.order_match_tolerance_pct` remains the only accepted reason to leave an actual
-order at a price or quantity different from the current executable Rust ideal. The churn gate must
-not widen exchange-order reconciliation tolerance.
+Only the current valid Rust plan may produce an order creation. Historical snapshots are evidence
+for whether the current creation is churny; they are never a queue of orders to execute later.
 
-Historical tracking tolerance is identity evidence only. It must never make a stale actual order
-count as satisfying the current ideal.
+The heuristic may omit an ordinary distant current ideal order temporarily. It may never:
 
-### Cancellation and creation are asymmetric
+- create an order absent from the current Rust plan;
+- change its price, quantity, side, type, or reduce-only semantics;
+- keep an out-of-tolerance actual order as its substitute; or
+- weaken readiness, ownership, risk, HSL, WEL/TWEL, or authoritative-state barriers.
 
-Every actual order outside exact/universal-tolerance reconciliation remains eligible for
-cancellation regardless of behavior classification or allowance state.
+### Universal reconciliation tolerance stays universal
 
-If a current replacement is deferred:
+`live.order_match_tolerance_pct` remains the only accepted tolerance for deciding that an actual
+order satisfies a current ideal order. The wider tracking tolerance is historical evidence only.
+It must never widen exchange-order reconciliation.
 
-- its stale actual predecessor is still cancelled when selected by the normal cancellation batch;
-- no stale price remains resting while Python waits for capacity;
-- no older pending ideal is created later;
-- the next cycle starts from fresh Rust intent and authoritative exchange state.
+### Cancellation is not gated
 
-### Required inputs are never fabricated
+Every unmatched actual order remains eligible for cancellation. If creation is deferred, the
+stale actual order is still removed. No replacement allowance or distance decision may leave a
+known stale order resting.
 
-Only complete, valid Rust planning results become history snapshots. A failed, partial, unavailable,
-or fail-closed planning cycle must not append an empty or partial snapshot because that would
-fabricate removals and additions.
+### Missing inputs are not fabricated
 
-Missing or stale market data follows the existing scoped create-deferral contract. Distance never
-defaults to zero, infinity, a candle close, or another neutral substitute.
+Invalid, partial, or unavailable planning results append no history. A deliberate valid Rust result
+with zero orders is a valid empty snapshot and cancels stale actual orders.
 
-### Risk priority is end-to-end
+Missing or stale market data follows the existing scoped fail-closed creation contract. Distance
+must not default to zero, infinity, a candle close, or another neutral substitute.
 
-Market orders, HSL panic orders, the dedicated protective-panic route, and orders Rust explicitly
-marks `execution_priority=risk_critical` bypass the churn allowance and distance gate.
+### Events remain diagnostic
 
-`reduce_only=true` alone is not an exemption. Ordinary EMA Anchor closes and take-profit orders can
-be churny. Before implementation, Rust must explicitly classify unstuck, WEL/TWEL, auto-reduce,
-graceful-stop, cooldown re-panic, and every other exposure-reducing family.
+The centralized live-event stream reports decisions but is not subscribed to by the gate. Causal
+state is updated directly at planner/reconciler/executor boundaries.
 
-Risk priority must survive every later execution stage. Before `max_n_creations_per_batch` is
-applied, risk-critical candidates sort ahead of ordinary candidates. Existing deterministic
-market-distance ordering remains the secondary key within each priority class. Hard connector batch
-limits remain authoritative; if risk-critical candidates alone exceed the cap, deterministic
-priority within that class applies and remaining candidates are retried from a fresh plan.
+## Exact Reconciliation Contract
 
-## Proposed Configuration
+### Cohort key
 
-Add these canonical `config.live` fields:
-
-| Field | Default | Meaning |
-|---|---:|---|
-| `order_replacement_churn_gate_activation_count` | `10` | Account-wide rolling capacity for ordinary far replacement-derived create attempts. `0` disables replacement behavior gating. |
-| `order_replacement_churn_gate_window_minutes` | `10.0` | Historical behavior and replacement-attempt window. |
-| `order_replacement_churn_gate_market_dist_pct` | `0.005` | Final signed market-distance threshold that always admits a limit creation. `0.005` is 0.5%. |
-| `order_replacement_churn_gate_tracking_tolerance_pct` | `0.01` | Wider 1% price/quantity association bound used only to connect temporal ideal observations. |
-
-The existing `live.order_match_tolerance_pct`, currently `0.0002` or 0.02%, remains the tight
-stability and actual-order equivalence tolerance.
-
-Validation requirements:
-
-- activation count is an integer greater than or equal to zero;
-- window is finite and greater than zero when enabled;
-- market distance is finite, greater than or equal to zero, and less than one;
-- tracking tolerance is finite, greater than `order_match_tolerance_pct`, and less than one;
-- defaults are owned by canonical schema/preparation, not repeated in runtime consumers.
-
-### Retirement of the initial-entry setting
-
-`live.initial_entry_exec_max_market_dist_pct` is removed from canonical schema, templates, CLI
-aliases, examples, runtime, and current documentation. It must not remain as a silent alias because
-the new behavior is temporal, account-wide, and applies beyond flat initial entries.
-
-Recommended compatibility behavior is an actionable configuration error naming the replacement
-settings. Reviewers should decide whether a released-version compatibility migration is required.
-
-## Normalized Ideal Snapshot Contract
-
-### Observation point
-
-Capture a snapshot after Rust has applied live market constraints and Python has converted Rust
-output into normalized API-ready order dictionaries, but before reconciliation with actual exchange
-orders mutates, removes, pairs, or annotates them.
-
-The snapshot contains only fields needed for execution behavior:
+Actual-to-current-ideal matching and historical ideal association require equality of:
 
 ```text
 symbol
@@ -197,508 +145,610 @@ position_side
 order_side
 reduce_only
 execution_type
-normalized_price
-normalized_qty
-execution_priority
+time_in_force / post_only execution semantics
+pb_order_type
 ```
 
-`pb_order_type`, custom IDs, exchange IDs, and strategy kind may be retained only as bounded
-diagnostic metadata. They are not classification keys.
+Price and quantity must additionally match within `live.order_match_tolerance_pct` for actual
+reconciliation or within the explicitly selected historical tolerance for churn evidence.
 
-### Logical snapshots and compaction
+Matching is deterministic and one-to-one. One actual or historical observation cannot satisfy two
+current ideal orders.
 
-Conceptually, every complete Rust planning cycle produces an immutable snapshot. Append the current
-snapshot after its reconciliation/classification decision, or otherwise ensure it cannot serve as
-its own historical evidence.
+### Why `pb_order_type` is required
 
-Deep-copying every full dictionary payload is unnecessary. An implementation may store normalized
-immutable tuples and compact consecutive identical snapshots into a time interval, provided the
-compacted representation answers exactly the same presence, continuity, and stability questions as
-the logical per-cycle history.
+Exact ordinary `pb_order_type` is mostly diagnostic today, but it is not universally non-causal.
+HSL uses panic fill identity for cooldown/reset boundaries, replay-cache safety, latest-panic
+selection, and RED-supervisor behavior. Other strategy kinds may acquire similar semantics.
 
-Use monotonic time for in-process window pruning. Snapshot cadence and compaction must be tested so
-fast and slow planning loops produce the same classifications for the same temporal order sequence.
+Letting an actual order with the right price and quantity but the wrong type satisfy a current ideal
+would preserve stale attribution into fill history and could silently become behaviorally wrong as
+strategies evolve. The safer long-term contract is therefore exact normalized `pb_order_type`.
 
-### Validity boundary
+Accepted cost: a rare Rust transition between two order types at effectively the same price and
+quantity causes a cancel/recreate. This is preferable to an `ideal_satisfied_by_existing_different_order_type`
+escape hatch whose semantics every future strategy would need to understand.
 
-Do not append a snapshot when:
+The same exact key applies to historical association. A type transition therefore receives no
+cross-type churn evidence and may get one fail-open creation. That is intentional: suppressing a
+semantically distinct current order based on an older type would make `pb_order_type` causal in the
+opposite and riskier direction. If repeated type alternation becomes a material write source, Rust
+should expose a separately reviewed stable intent-family field rather than Python collapsing names.
 
-- Rust planning failed or returned an invalid structure;
-- required market, account, candle, EMA, trailing, or risk input was unavailable;
-- only a subset of required symbols was silently omitted;
-- shutdown or authoritative confirmation prevented a complete plan.
+If an exchange open-order payload lacks trustworthy type attribution, the connector must recover it
+from the bot's client-order metadata or authoritative local execution record. Unknown does not equal
+a known ideal type, and Python must not fabricate one. The implementation audit must cover every
+connector before enabling the gate.
 
-A deliberate complete Rust result containing no orders is a valid empty snapshot. It must be
-distinguishable from unavailable planning.
+### Why authoritative `reduce_only` is required
 
-## Current Actual-Order Reconciliation
+`reduce_only` is an execution guarantee, not a diagnostic label. A side/position-side inference is
+insufficient: multiple individually plausible close orders can over-close after another order fills
+or after a manual/external position change. The exchange's reduce-only protection prevents a flip
+or unintended exposure increase.
 
-Reconciliation runs one-to-one between authoritative actual orders and a working copy of the
-current normalized ideal snapshot:
+Therefore actual order normalization must use the authoritative exchange flag. Unknown does not
+match either `true` or `false`; it blocks normal planning for the affected symbol until refreshed or
+otherwise resolved under the error contract. Existing inference from side and position side must
+not be carried into this implementation.
 
-1. Partition orders by the existing execution-compatible dimensions.
-2. Deterministically match exact/universal-tolerance actual and ideal orders.
-3. Each actual and ideal order may participate in at most one match.
-4. Matched actual orders are kept and their current ideal counterparts are removed from creation
-   consideration.
-5. Unmatched actual orders are cancellation candidates.
-6. Unmatched current ideal orders are creation candidates requiring temporal classification.
+This is a prerequisite correction to the current reconciler, whose tight matching tuple omits
+`reduce_only` and whose open-order snapshot derives it from side and position side. The churn gate
+must not be layered on top of that inference.
 
-Historical matching never changes which actual orders are kept. It only determines whether an
-unmatched current creation is new/stable or replacement-derived.
+### Why execution semantics stay exact
 
-## Temporal Multiset Association
+Market versus limit and time-in-force/post-only behavior change fill guarantees and taker risk.
+They remain exact keys even when price and quantity match. This avoids treating a resting maker
+order as equivalent to an immediately executable or cancellable order.
 
-### Execution cohort
+## Snapshot Boundary and Scope
 
-Associate normalized ideal observations only within:
+Capture normalized immutable ideal-order tuples after Rust has produced executable live orders and
+Python has applied deterministic exchange precision/normalization, but before reconciliation with
+actual orders removes or annotates candidates.
+
+Maintain an independent bounded deque per symbol using monotonic process time. A logical snapshot
+contains only normalized fields needed by the matching contract plus diagnostic metadata. Deep
+copies of full payload dictionaries are unnecessary.
+
+The symbol processing universe is the union of:
+
+- symbols with a valid current plan;
+- symbols present in authoritative actual open orders;
+- symbols with a held position; and
+- symbols still present in recent history.
+
+This union prevents a partial planner result from making actual orders or positions disappear from
+consideration.
+
+Planning validity is scoped per symbol. A failure for one symbol appends no snapshot and performs no
+ordinary reconciliation for that symbol; healthy symbols continue. A valid empty plan for one
+symbol appends an empty snapshot and removes stale orders for that symbol.
+
+Append the current snapshot only after its decision, or otherwise exclude it from its own history.
+Prune by the configured window. Consecutive identical snapshots may be compacted only if tests prove
+the same logical presence answers at every relevant timestamp.
+
+### Why history is per symbol but allowance is account-wide
+
+Per-symbol history prevents one unhealthy or omitted symbol from poisoning all classification and
+keeps matching bounded. The allowance remains account-wide because the scarce resource—private
+order-write capacity—is normally shared across symbols for the account, UID, subaccount, or IP.
+
+This bot-process scope is intentionally not a complete multi-process account limiter. Cross-process
+coordination is a separate feature.
+
+## Quantitative Churn-Evidence Heuristic
+
+For each unmatched current ideal order outside the unconditional exemptions:
+
+1. Partition it by the exact cohort key above.
+2. For each prior valid snapshot in the active per-symbol window, newest first, perform a
+   deterministic one-to-one association within that snapshot.
+3. Prefer tight matches using `order_match_tolerance_pct` for both normalized price and quantity.
+4. Among remaining observations, find wider matches using
+   `order_replacement_churn_gate_tracking_tolerance_pct`.
+5. If the current candidate has any wider-but-not-tight match, it has recent churn evidence.
+6. If it has tight matches only, or no wider match, it has no proven churn evidence and is admitted.
+
+The implementation may stop after finding wider-but-not-tight evidence. It need not build tracks,
+tombstones, predecessor identities, or causal classifications.
+
+### Deterministic matching
+
+Within each snapshot and cohort, matching must maximize one-to-one matches, minimize a normalized
+price/quantity distance cost, and apply explicit deterministic tie-breaking. Raw Rust list order,
+dictionary iteration order, exchange IDs, and actual-order proximity are forbidden tie-breakers.
+
+This matters for duplicate-price ladders: one historical observation must never be reused to mark
+several current orders stable or churny.
+
+### Why uncertainty fails open
+
+No wider match may mean a genuinely new order, a ladder cardinality change, a very large move, a
+history gap, or a restart. Python cannot distinguish those cases without inventing identity. It
+therefore admits the current Rust order.
+
+This knowingly misses some very large or discontinuous churn. The feature targets sustained small
+drift, which is the observed long-term write-cost problem. A forgiving false negative is safer for
+fills and simpler than a false-positive identity model.
+
+### Why the wider tolerance defaults to 0.2%
+
+The proposed default is `0.002` (0.2%), ten times the existing 0.02% reconciliation tolerance and
+substantially narrower than the earlier 1% proposal. It is wide enough to associate ordinary EMA
+drift while reducing accidental pairing between neighboring grid levels. This is a heuristic,
+configurable, and must be tuned from fake-live and authorized live evidence rather than presented
+as a universal market property.
+
+### Equal-cardinality ladder rolls
+
+A wholesale ladder roll may create wider associations and be treated as churn even when human
+narrative would call the levels new. That is acceptable: the gate claims only recent quantitative
+price/quantity instability, not durable order identity. Near-market admission, the first-ten
+allowance, and fail-open unmatched orders bound the consequence.
+
+## Admission Policy
+
+### Unconditional exemptions
+
+The churn gate always admits:
+
+- market orders;
+- HSL panic and the dedicated protective-panic path;
+- orders Rust explicitly marks `execution_priority=risk_critical`; and
+- limit orders whose final fresh market distance is at or inside
+  `order_replacement_churn_gate_market_dist_pct`.
+
+`reduce_only=true` alone is not an exemption. EMA-gated closes can churn too. Rust must explicitly
+own risk priority for unstuck, WEL/TWEL, auto-reduce, graceful-stop, cooldown re-panic, and other
+exposure-reducing families. The implementation audit must classify every current family rather than
+letting Python infer urgency from names.
+
+### Account-wide rolling allowance
+
+The default allowance is ten churn-evidenced ordinary create attempts in a rolling ten-minute
+window for one bot execution authority.
+
+Count one logical order when it reaches the concrete connector create-call boundary, including
+failed, rejected, timed-out, and ambiguous attempts and each logical member of a batch. Do not count
+local deferrals or cancellations.
+
+Near-market churn-evidenced ordinary attempts are always admitted but still count because they use
+the same exchange write capacity. Market and explicitly risk-critical actions neither consume nor
+wait for this economy allowance.
+
+When one timestamp expires, at most one newly far attempt gains capacity before consuming that
+slot. There is no bulk release and no persistent queue of deferred orders.
+
+### Final market-distance check
+
+Distance decisions made during planning are provisional. Recheck fresh signed distance as close as
+practical to the connector call, after cancellations, configuration work, and authoritative
+barriers. A candidate that moved near is admitted; one that moved far must have capacity or be
+deferred. Missing/non-finite/stale market data defers an affected ordinary create.
+
+### Final batch priority
+
+Exemption from the churn gate does not bypass readiness or authoritative-state safety barriers.
+After those barriers and the final distance check, sort risk-critical candidates before ordinary
+candidates and only then apply `max_n_creations_per_batch`. Preserve the existing deterministic
+distance/order key as the secondary ordering inside each priority class. An ordinary near-market
+order must not displace a far risk-critical order merely because it sorts closer to market.
+
+If risk-critical candidates alone exceed the connector cap, use deterministic ordering within that
+class and regenerate remaining work from a fresh plan. Never silently expand a connector hard cap.
+
+## Cancel-First Execution Contract
+
+### Existing behavior to replace
+
+The current flow in `src/live/executor.py` calls cancellations and then creations from one
+precomputed plan. Cancellation selection may be truncated by
+`max_n_cancellations_per_batch` while the creation list remains unchanged. That permits a new
+ordinary order to be posted while its stale predecessor was not even sent for cancellation.
+Existing recent-create suppression and state-change barriers help with ambiguous writes, but they
+do not establish a general cancel-confirm-replan-create contract.
+
+### Execution conflict scope
+
+Use a broader scope for write sequencing than for order satisfaction:
 
 ```text
 (symbol, position_side, order_side, reduce_only, execution_type)
 ```
 
-This prevents cross-symbol, cross-side, entry/close, reduce-only, and market/limit confusion without
-requiring knowledge of Rust order-type names. Market orders are exempt and need no historical
-association for admission.
+`pb_order_type` and time-in-force are deliberately absent. A stale grid order and a new trailing
+order, or a stale maker order and a changed execution style, can still compete for the same
+position-side exposure and create duplicates during transition.
 
-### Deterministic one-to-one assignment
+This broader scope is only a sequencing barrier. It does not make unlike orders equivalent during
+reconciliation.
 
-For each pair of consecutive valid snapshots, within each cohort:
+### Ordinary two-phase flow
 
-1. Find the maximum deterministic set of one-to-one tight matches using
-   `order_match_tolerance_pct` for normalized price and quantity.
-2. Among the remaining old/current observations, find deterministic one-to-one wider matches using
-   `order_replacement_churn_gate_tracking_tolerance_pct`.
-3. Among still-unmatched old/current observations in the same cohort, pair deterministically up to
-   `min(old_unmatched, current_unmatched)` as discontinuous replacements.
-4. Surplus current observations are additions.
-5. Surplus old observations are removals.
+For each planning wave:
 
-Stage 3 is deliberate. A gradually or abruptly moving order must not become `new` merely because it
-moved more than 1% from an old observation. Conversely, a growing ladder has surplus current
-elements, so genuinely additive levels remain additions rather than replacements.
+1. Reconcile authoritative actual orders with the current valid Rust ideal.
+2. If any unmatched stale actual exists in a conflict scope, suppress every ordinary creation in
+   that scope for the entire wave—whether its cancellation is selected, truncated, succeeds,
+   fails, or is reported absent.
+3. Send the selected cancellation batch under existing limits and pacing.
+4. Request authoritative open-orders confirmation for affected scopes and end those scopes' work
+   for the wave.
+5. On the next loop, refresh state, regenerate the Rust plan, reconcile again, and create only in
+   scopes now confirmed clean.
 
-Assignment must minimize a deterministic normalized price/quantity cost with explicit tie-breaking.
-Raw list ordering, exchange order proximity, `pb_order_type`, client IDs, and arbitrary dictionary
-iteration order are forbidden inputs.
+Independent scopes without stale actual orders may create in the same wave. This avoids a global
+one-cycle stall while preventing stale-predecessor duplicates.
 
-### Temporal tracks
+Failed, ambiguous, not-found, already-filled, or already-cancelled results do not prove a scope is
+clean. They require the existing authoritative confirmation behavior; terminal ambiguity that may
+represent a fill refreshes balance, positions, open orders, and fills before replanning.
 
-Consecutive assignments form short-lived RAM tracks. A track records normalized observations,
-presence intervals, material-change timestamps, and its latest association outcome.
+### Risk-critical exception
 
-Behavior is evaluated across the whole continuous track window, not only between adjacent samples.
-This catches gradual drift: ten 0.01% steps may each be tight to the immediately preceding step but
-the track is unstable once its recent observed price/quantity range exceeds tight tolerance.
+Dedicated market panic may bypass the ordinary dependency path entirely. Other Rust-marked
+risk-critical limit orders remain ahead of ordinary orders in final batching and may create in the
+same wave only if every stale cancellation in their conflict scope was selected and positively
+acknowledged, with no truncation or ambiguity. Otherwise they replan through the fastest existing
+authoritative path.
 
-A track is tight-stable only when every pair of its observations within the active window is
-equivalent under the universal tolerance. Equivalent implementation may maintain deterministic
-price/quantity extrema or an anchored equivalence envelope instead of an all-pairs scan.
+This exception avoids delaying emergency exposure reduction while still preventing an assumed
+cancellation from producing duplicate risk orders.
 
-Recently removed tracks remain as bounded tombstones for the history window. Reappearance is
-associated against eligible tombstones using the same deterministic rules. Disappearance and
-reappearance must not repeatedly manufacture free first placements.
+### Why one-cycle latency is accepted
 
-## Creation Classification
+For ordinary orders, a fresh Rust plan after confirmed cancellation is simpler and safer than
+carrying per-create dependency objects through batch truncation, partial success, fills, and
+position changes. The affected scope pays one loop of latency; independent scopes and emergency
+orders continue. This is an explicit reliability tradeoff, not an accidental delay.
 
-For each unmatched current ideal creation:
+## RAM-Only State and Restart Contract
 
-- `new`: no eligible predecessor track or tombstone exists;
-- `addition`: the current cohort has more elements after predecessor association and this element
-  is surplus;
-- `stable_restoration`: the ideal remained continuously present and tight-stable, but no satisfying
-  actual order exists after an authoritative exchange-state transition;
-- `replacement_derived`: its temporal track contains a material price/quantity transition, a
-  discontinuous replacement, or a bounded disappearance/reappearance transition;
-- `removed`: a historical element has no current successor; it produces cancellation only.
+The snapshot deque and rolling attempt timestamps live only in the bot instance and reset on bot or
+process restart. Reset intentionally fails open: until new churn evidence accumulates, current Rust
+orders may be placed normally.
 
-Admission consequences:
+That means restart temporarily reduces exchange-write savings. It does not authorize a non-current
+order, retain a stale order, bypass risk/readiness checks, or queue old intent. A few replacements
+after restart are acceptable because the target is hours of continuous churn, not restart-perfect
+rate accounting.
 
-| Classification | Far ordinary limit creation |
-|---|---|
-| `new` | Always admitted through this gate. |
-| `addition` | Always admitted through this gate. |
-| `stable_restoration` | Always admitted through this gate. |
-| `replacement_derived` | Uses account-wide rolling capacity once near-market/risk exemptions are evaluated. |
-| `removed` | No creation exists; stale cancellation remains eligible. |
+Current `AGENTS.md` and `docs/ai/principles.md` broadly require decision-changing behavior to be
+reproducible after restart. This plan cannot silently override them. Before runtime implementation,
+Slice 0 must add and review this narrow canonical exception:
 
-A replacement-derived track becomes tight-stable again only after every materially different
-observation ages out of the configured history window. Python never keeps an obsolete pending price;
-every cycle uses only the latest current Rust ideal.
+> An approved operational economy gate may keep RAM-only state when losing that state can only
+> remove throttling and return execution toward the current Rust-ideal baseline. Reset must not
+> create non-ideal orders, relax readiness/risk/ownership checks, preserve stale orders, or queue
+> obsolete intent. Reset must be observable and covered by tests.
 
-## Account-Wide Rolling Replacement Allowance
+Plan approval selects that intended exception; runtime implementation remains blocked until the
+canonical instruction and principle are updated together.
 
-Maintain an account-wide rolling history of ordinary replacement-derived create attempts for one
-bot execution authority. The portable accounting unit is one logical order reaching the concrete
-create connector-call boundary, not one HTTP request.
+## Proposed Configuration
 
-Count:
+Add canonical `config.live` fields:
 
-- an admitted far replacement-derived create attempt;
-- an admitted near-market replacement-derived create attempt;
-- failed, rejected, timed-out, or ambiguous connector-bound attempts;
-- each logical order in a batch separately.
+| Field | Default | Meaning |
+|---|---:|---|
+| `order_replacement_churn_gate_activation_count` | `10` | Rolling account-wide capacity for churn-evidenced ordinary create attempts. `0` disables churn gating. |
+| `order_replacement_churn_gate_window_minutes` | `10.0` | Per-symbol evidence and account-wide attempt window. |
+| `order_replacement_churn_gate_market_dist_pct` | `0.005` | Final market-distance threshold that always admits a limit creation; 0.5%. |
+| `order_replacement_churn_gate_tracking_tolerance_pct` | `0.002` | Wider price/quantity tolerance used only for historical churn evidence; 0.2%. |
 
-Do not count:
+The existing `live.order_match_tolerance_pct`, normally `0.0002` (0.02%), remains the actual-order
+equivalence and tight historical tolerance.
 
-- local deferrals that never reach the connector boundary;
-- new, additive, or stable-restoration creations;
-- market or risk-critical creations;
-- cancellations.
+Validation:
 
-Near-market replacement-derived attempts are always admitted but still recorded. The rolling count
-may therefore exceed `activation_count`, keeping far replacements gated during sustained useful
-near-market activity.
+- activation count is an integer greater than or equal to zero;
+- window is finite and greater than zero when enabled;
+- distance is finite, greater than or equal to zero, and less than one;
+- tracking tolerance is finite, greater than `order_match_tolerance_pct`, and less than one; and
+- canonical schema/preparation owns defaults.
 
-When one timestamp expires, at most one newly far replacement gains capacity before immediately
-reserving and consuming that slot. There is no binary release of every deferred creation and no
-persistent queue of obsolete ideal orders.
+### Retire the old initial-entry setting
 
-## Cancellation Dependency And Authoritative State
+Remove `live.initial_entry_exec_max_market_dist_pct` from canonical schema, templates, aliases,
+examples, runtime, and current docs. It must not remain a silent alias: the new policy is temporal,
+account-wide, and applies to entries and closes.
 
-### Batch selection
+Preferred migration behavior is an actionable configuration error naming the replacement fields.
+If compatibility requirements demand a one-release migration, reviewers must define it explicitly;
+runtime consumers must not interpret the old value as the new policy silently.
 
-Replacement creation must not rely on a cancellation merely because that cancellation appeared in
-the pre-batch plan. Bind every replacement candidate to the stale actual cancellation actions
-selected by `max_n_cancellations_per_batch` for the current wave.
+## Exchange Rate-Limit Research and Ramifications
 
-A creation whose dependency was truncated is deferred. Cancellation priority and existing batch
-limits remain authoritative.
+Official documentation was reviewed on 2026-07-19 and 2026-07-20. Limits and tiers change; the
+implementation review must recheck the exact endpoints used by each connector.
 
-### Cancellation outcomes
-
-Classify cancellation outcomes:
-
-- positively acknowledged cancellation of the intended open order: dependency may proceed to final
-  creation admission in the same wave;
-- failed or ambiguous cancellation: dependent creation is deferred;
-- already-absent, not-found, already-filled, or already-cancelled response: treat as an ambiguous
-  account-state transition, request full authoritative positions, balance, open-orders, and fills
-  confirmation, and require a new Rust plan before any dependent creation;
-- cancellation truncated from the connector batch: dependent creation is deferred.
-
-An already-absent response never proves that the old ideal remains valid. The order may have filled,
-changing position size, balance, risk, close quantities, and trailing state. Existing
-`state_change_detected_by_symbol` and authoritative-confirmation barriers must remain effective.
-
-## Final Admission And Connector Ordering
-
-Planning-stage distance and capacity decisions are provisional. Cancellation execution,
-authoritative barriers, exchange configuration, retries, and elapsed time may change eligibility.
-
-Immediately before the create connector call, build the final batch deterministically:
-
-1. Remove candidates with unresolved/truncated/ambiguous cancellation dependencies.
-2. Apply existing recent-execution, state-change, exchange-configuration, and readiness barriers.
-3. Fetch/validate the canonical fresh market snapshot for every remaining symbol.
-4. Sort candidates by `execution_priority`, risk-critical first, then by the existing deterministic
-   signed market-distance order within each priority class.
-5. Walk candidates in priority order while building a batch no larger than
-   `max_n_creations_per_batch`.
-6. For each ordinary replacement-derived limit candidate at this final boundary:
-   - admit without capacity when its current signed distance is within the configured threshold;
-   - otherwise require and provisionally reserve one rolling slot;
-   - defer it when no slot remains.
-7. New, additive, stable-restoration, market, and risk-critical candidates do not require a slot.
-8. Convert a provisional reservation into a timestamp only when that logical create reaches the
-   connector-call boundary; release reservations for filtered or truncated candidates.
-
-If a provisionally near-market order becomes far before final evaluation, it must consume available
-capacity or be deferred. The broader generic create-distance guard does not substitute for this
-0.5% churn threshold.
-
-No snapshot can eliminate all movement between a final check and network transmission. Reuse the
-existing bounded market-snapshot freshness contract and keep the check as close as practical to the
-connector call.
-
-## Restart Reproducibility: Unresolved Implementation Blocker
-
-The temporal snapshot history and replacement-attempt window change whether a far creation is sent.
-They are therefore decision-changing state, not a performance-only cache.
-
-The current `AGENTS.md` and `docs/ai/principles.md` require trading decisions to be reproducible
-after restart from exchange state and configuration. A RAM-only deque that resets on bot or process
-restart does not satisfy that contract. The prior proposed canonical exception cannot override the
-current repository instruction.
-
-Implementation is blocked until one option is explicitly selected and reviewed:
-
-1. Persist the minimal normalized temporal tracks and rolling attempt timestamps using restart-safe
-   wall-clock time, schema/version validation, bounded retention, corruption fail-closed behavior,
-   and deterministic restart tests.
-2. Reconstruct equivalent history from authoritative exchange/account data without fabricating
-   missing observations. This is likely connector-specific and may be impractical.
-3. Replace the temporal gate with a stateless deterministic policy derived solely from current
-   exchange state and config, accepting its different missed-fill/churn tradeoff.
-4. Explicitly change the repository restart-reproducibility instruction before approving
-   RAM-reset implementation.
-
-An in-process main-loop throttle would reduce bursts after automatic bot-object restarts but would
-not reproduce behavior after a full process restart. It is not sufficient by itself.
-
-No implementation slice may silently choose persistence, reset behavior, or a weaker throttle.
-
-## Centralized Live-Event Integration
-
-The live-event system is observability-only. Causal snapshot, track, allowance, reservation, and
-dependency state is updated directly at canonical planner/executor hooks; no decision subscribes to
-an event sink.
-
-Proposed bounded events/reason codes include:
-
-- valid snapshot observed or compacted;
-- temporal association outcome: tight, wider, discontinuous, addition, removal, reappearance;
-- creation classification: new, addition, stable-restoration, replacement-derived;
-- replacement admitted by capacity or near-market distance;
-- replacement deferred by account churn gate;
-- final distance reclassification;
-- risk-critical final-batch priority;
-- dependent create deferred for truncated, failed, ambiguous, or absent cancellation;
-- restart history restored/reset/unavailable according to the selected restart contract.
-
-Safe fields include bounded cohort hashes, track hashes, classification, symbol, position side,
-order side, reduce-only, execution type/priority, rolling count, thresholds, final distance, and
-wave correlation. Do not emit raw snapshot arrays, full prices/quantities in summary events,
-exchange payloads, arbitrary exception text, or credentials.
-
-Repeated observations and deferrals use bounded periodic summaries. Event failure must not change
-classification, cancellation, admission, or execution priority.
-
-## Exchange Rate-Limit Research And Ramifications
-
-Official documentation was reviewed on 2026-07-19 and 2026-07-20. Limits and account tiers change;
-implementation reviewers must recheck the exact connector endpoints.
-
-| Exchange/model | Official behavior relevant to the plan | Ramification |
+| Exchange/model | Official behavior relevant to this plan | Ramification |
 |---|---|---|
-| Hyperliquid | REST has a weighted IP pool. Address action allowance is tied to cumulative USDC volume, counts logical actions in batches, grants additional cancellation allowance, and may apply congestion/maker-share limits. [Official docs](https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/rate-limits-and-user-limits) | Count logical actions, not HTTP batches. Preserve cancellation and near-market/fill-producing activity. |
-| Bybit | Private limits use rolling per-second UID windows plus IP limits; batch usage is based on order count. [Official docs](https://bybit-exchange.github.io/docs/v5/rate-limit) | The ten-minute economy gate supplements but never replaces burst pacing. |
-| Bitget | Futures cancellation has UID-scoped endpoint limits. [Official docs](https://www.bitget.com/api-doc/classic/contract/trade/Batch-Cancel-Orders) | Existing connector pacing stays authoritative. |
-| KuCoin | Private quotas use UID resource pools and endpoint weights over short windows. [Rate-limit docs](https://www.kucoin.com/docs-new/rate-limit), [futures order docs](https://www.kucoin.com/docs-new/rest/futures-trading/orders/add-order) | Header-adaptive behavior is a separate project. |
-| Gate.io | Futures placement/amend and cancellation have separate UID limits. [Official docs](https://www.gate.com/docs/developers/apiv4/en/) | Never infer that high nominal capacity makes low-fill churn harmless. |
-| WEEX | Place/cancel and trigger actions use endpoint-specific account/UID or IP limits. [Official docs](https://www.weex.com/api-doc/ai/QuickStart/LIMITS) | The temporal gate targets sustained churn while CCXT owns bursts. |
-| Binance USD-M | `/fapi/v1/order` consumes account order-count limits; single cancellation has IP weight; batch placement and cancellation have different weights and maximum element counts. USD-M overload handling explicitly exempts qualifying reduce-only/close and cancellation requests. [General info](https://developers.binance.com/en/docs/products/derivatives-trading-usds-futures/general-info), [trade endpoints](https://developers.binance.com/en/docs/catalog/core-trading-derivatives-trading-usd-s-m-futures/api/rest-api/trade#new-order) | Do not use Spot limits. Preserve risk-critical priority and logical action accounting while CCXT handles endpoint weights. |
-| OKX | Trading limits are shared across REST/WS, separated by place/amend/cancel operation, generally scoped by user plus instrument; subaccount/fill-ratio rules affect new/amend traffic. [Official docs](https://www.okx.com/docs-v5/) | Cancellation remains independent; native amend is a later optimization. |
-| Paradex | Private order APIs use per-account plus IP limits and leaky-bucket refill; batch operations may consume one rate unit for multiple orders. [Rate limits](https://docs.paradex.trade/api/general-information/rate-limits/api), [best practices](https://docs.paradex.trade/api/general-information/api-best-practices) | Logical action counting is conservative; verify JWT mode and native modify behavior. |
-| Defx | Official docs expose placement/cancellation and 429 behavior but currently do not publish complete numeric limits. [Official docs](https://docs.defx.com/docs/api-docs/developer-hub/rest-apis-documentation) | Do not invent thresholds; retain CCXT pacing and require evidence before tuning. |
-| CCXT/generic fallback | CCXT maintains per-instance throttling; separate instances do not share limiter state. [Official manual](https://github.com/ccxt/ccxt/wiki/manual#rate-limit) | The gate is bot-authority-wide, not a complete account/IP limiter across processes. |
+| Hyperliquid | REST has weighted IP limits. Address action allowance is tied to cumulative USDC volume, counts logical actions within batches, grants extra cancellation allowance, and may apply congestion/maker-share limits. [Official docs](https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/rate-limits-and-user-limits) | Count logical actions, not HTTP requests. Do not suppress cancellations or fill-producing near-market/risk actions. |
+| Bybit | Private limits use rolling per-second UID windows plus IP limits; batch consumption is based on order count. [Official docs](https://bybit-exchange.github.io/docs/v5/rate-limit) | The ten-minute economy policy supplements short-window pacing. |
+| Bitget | Futures cancellation has UID-scoped endpoint limits. [Official docs](https://www.bitget.com/api-doc/classic/contract/trade/Batch-Cancel-Orders) | Existing connector pacing remains authoritative. |
+| KuCoin | Private quotas use UID resource pools and endpoint weights over short windows. [Rate-limit docs](https://www.kucoin.com/docs-new/rate-limit), [futures order docs](https://www.kucoin.com/docs-new/rest/futures-trading/orders/add-order) | Header-adaptive pacing is separate work. |
+| Gate.io | Futures placement/amend and cancellation have separate UID limits. [Official docs](https://www.gate.com/docs/developers/apiv4/en/) | High nominal capacity does not make indefinite low-fill churn useful. |
+| WEEX | Place/cancel and trigger actions have endpoint-specific account/UID or IP limits. [Official docs](https://www.weex.com/api-doc/ai/QuickStart/LIMITS) | The gate targets sustained churn; CCXT remains responsible for bursts. |
+| Binance USD-M | New orders consume account order-count limits; placement and cancellation have different request weights and batch bounds. Qualifying reduce-only/close and cancellation requests receive special overload treatment. [General info](https://developers.binance.com/en/docs/products/derivatives-trading-usds-futures/general-info), [trade endpoints](https://developers.binance.com/en/docs/catalog/core-trading-derivatives-trading-usd-s-m-futures/api/rest-api/trade#new-order) | Use USD-M, not Spot, assumptions. Preserve risk/cancel priority and count logical actions. |
+| OKX | Trading limits are shared across REST/WS, separated by place/amend/cancel operation, and generally scoped by user plus instrument; subaccount fill-ratio rules affect new/amend traffic. [Official docs](https://www.okx.com/docs-v5/) | Native amend and adaptive fill-ratio optimization are later projects. |
+| Paradex | Private APIs use account plus IP limits with leaky-bucket refill; batch operations may consume one unit for multiple orders. [Rate limits](https://docs.paradex.trade/api/general-information/rate-limits/api), [best practices](https://docs.paradex.trade/api/general-information/api-best-practices) | Logical action counting is deliberately conservative. |
+| Defx | Official docs expose placement/cancellation and 429 behavior but do not publish a complete numeric model. [Official docs](https://docs.defx.com/docs/api-docs/developer-hub/rest-apis-documentation) | Do not invent exchange thresholds. |
+| CCXT/generic fallback | CCXT rate limiting is per exchange instance; separate instances do not share limiter state. [Official manual](https://github.com/ccxt/ccxt/wiki/manual#rate-limit) | This per-bot gate cannot guarantee account/IP coordination across processes. |
 
-## Live/Backtest Parity Analysis
+Hyperliquid is the clearest reason not to call this a generic rate-limit budget. Its cancellation
+allowance and requests-per-volume economics differ materially from rolling endpoint quotas. The
+policy still helps by reducing low-fill far creations, but cancellations and risk/fill-producing
+orders must retain priority.
 
-Rust ideal orders remain unchanged. The universal order-match tolerance remains the only case where
-live deliberately leaves a resting actual order at a slightly different current price/quantity.
+## Live/Backtest Parity
 
-The churn gate introduces an explicit live execution difference: after removing a stale actual
-order, live may temporarily omit a far replacement that Rust currently wants. This may miss a wick
-or gap before the order becomes near-market, tight-stable, or receives rolling capacity.
+Rust ideal generation is unchanged. The existing tiny universal tolerance remains the only reason
+live may leave a slightly different actual order resting.
 
-The temporal model bounds that difference:
+The explicit live-only difference is omission: after stale cancellation, live may temporarily omit
+a far current ideal order with proven recent churn when the allowance is full. It never substitutes
+an older price. This can miss a sharp move before the order becomes near-market or capacity returns.
 
-- first placements and additive ladder levels may rest at any distance;
-- tight-stable restoration may rest at any distance;
-- the first account-wide replacement-derived attempts inside capacity are admitted;
-- near-market and risk-critical actions are always admitted through this economy gate;
-- no stale actual order remains as a substitute;
-- every cycle uses the latest Rust ideal, never a queued obsolete price.
+The consequence is bounded by:
 
-Fake-live parity evidence must record, for every cycle, the current Rust ideal snapshot, temporal
-association/classification, actual order state, cancellation dependency/outcome, allowance state,
-final distance, final priority, and connector-bound action.
+- fail-open behavior for no/uncertain history;
+- ten initial churn-evidenced attempts per rolling window;
+- unconditional final near-market admission;
+- risk-critical and market exemptions;
+- one-for-one capacity release; and
+- immediate use of fresh current Rust intent on every later cycle.
 
-## Failure And Safety Semantics
+This tradeoff must be measured in fake-live and, only with separate authority, live operation.
 
-- Invalid configuration fails startup validation.
-- Incomplete or unavailable planning appends no history snapshot.
-- Missing/stale final market data defers affected ordinary creations.
-- Missing required Rust execution-priority metadata fails at the schema boundary.
-- Failed/ambiguous replacement create attempts consume rolling capacity once connector-bound.
-- Failed/ambiguous cancellation dependencies block associated creations.
-- Already-absent cancellation results force authoritative account refresh and replanning.
-- Every stale cancellation remains eligible regardless of allowance exhaustion.
-- Event publication failure is diagnostic only.
-- Existing duplicate-write, recent-execution, account-state, HSL, WEL/TWEL, low-balance, mode, and
-  readiness barriers retain precedence.
-- Exchange 429/backoff may defer more actions than this economy gate.
+## Failure Semantics
 
-## Review-Finding Resolution Map
+- Invalid config fails startup.
+- Invalid or unavailable symbol planning appends no snapshot and performs no ordinary actions for
+  that symbol; valid symbols continue.
+- A valid empty symbol plan is authoritative and may cancel all stale orders in that symbol.
+- Unknown required `pb_order_type`, `reduce_only`, or execution semantics do not match a known ideal
+  and fail closed for affected normal planning.
+- Missing/stale final market data defers ordinary creation.
+- Ambiguous create attempts count once when connector-bound and use existing confirmation guards.
+- Failed, ambiguous, absent, or truncated cancellations block ordinary creation in their conflict
+  scope and require confirmation/replanning.
+- Event publication failure changes no trading decision.
+- Existing exchange pacing, 429/backoff, readiness, ownership, risk, HSL, WEL/TWEL, mode, and
+  authoritative-state barriers retain precedence.
 
-### Current-head findings
+## Observability
 
-1. Stable intent families: `pb_order_type` is removed from classification identity; temporal cohorts
-   use only execution semantics and deterministic multiset association.
-2. Risk-critical final batching: risk priority is an explicit pre-slice primary sort key.
-3. Additive ladder levels: surplus current elements are classified as additions, not replacements.
-4. Binance product scope: Spot documentation is replaced by official USD-M general and trade docs.
-5. Near-market staleness: distance is revalidated during final connector-bound batch admission.
-6. Already-absent cancellation: full authoritative refresh and a new Rust plan are mandatory.
-7. Automatic restart reset: surfaced as an unresolved implementation blocker under current
-   restart-reproducibility instructions; no silent RAM-reset exception remains.
+Add bounded diagnostic events/reason codes for:
+
+- valid per-symbol snapshot observed, compacted, skipped, or reset;
+- tight, wider-but-not-tight, absent, and ambiguous historical association;
+- churn evidence present/absent;
+- admission by exemption, distance, or rolling allowance;
+- deferral by allowance or unavailable final distance;
+- conflict-scope create suppression;
+- cancellation acknowledgement, ambiguity, truncation, confirmation, and replan;
+- final risk priority and connector-bound attempt accounting.
+
+Safe payloads include symbol, position side, order side, normalized semantic keys, bounded cohort
+hashes, rolling count, thresholds, distance, wave ID, and reason code. Do not emit credentials,
+arbitrary exchange payloads, unbounded snapshot arrays, or raw exception text. Repeated steady-state
+events use bounded periodic summaries.
+
+## Accepted Tradeoffs
+
+- Exact `pb_order_type` may cause rare type-transition churn; this preserves attribution and future
+  strategy safety.
+- Wider matching can flag an unrelated equal-cardinality ladder roll; the heuristic claims churn,
+  not identity, and exemptions bound missed-fill risk.
+- A move beyond wider tolerance may be admitted as uncertain; this favors fills and targets the
+  observed repetitive small-drift problem.
+- Ordinary cancel-first sequencing adds one loop of latency in an affected conflict scope; it
+  removes stale-plan and truncated-cancel duplicate hazards.
+- RAM reset temporarily restores baseline write churn; it does not weaken the current Rust plan or
+  safety barriers.
+- Account-wide means one bot execution authority, not multiple processes sharing exchange limits.
+
+## Resolution of Review Findings
+
+### Latest design questions
+
+1. **Scoped planning outage:** history and validity are per symbol; the processing universe includes
+   plans, actual orders, positions, and history. Healthy symbols continue. Recovery without history
+   intentionally receives fail-open placement.
+2. **Ambiguous order identity and equal-cardinality ladders:** authoritative narrative
+   classifications and temporal tracks are removed. Policy uses only wider-but-not-tight
+   quantitative evidence and explicitly accepts bounded false positives/negatives.
+3. **`pb_order_type`:** it is restored as an exact semantic key after auditing current fill-history
+   use. The rationale and unknown-attribution behavior are explicit.
+4. **`reduce_only`:** it is an exact authoritative key; side/position-side inference is forbidden.
+5. **Cancel/create races:** all ordinary creates in a conflict scope wait for cancel confirmation,
+   fresh state, and a fresh Rust plan. Batch truncation cannot strand a dependent creation.
 
 ### Earlier findings retained
 
-- Required cancellations are never capped by the churn gate.
-- Released capacity is consumed one-for-one; no bulk release burst exists.
-- Ordinary reduce-only is not a blanket exemption; Rust owns explicit risk priority.
-- `_context=replace` remains diagnostic and non-causal.
-- Every live connector is included or conservatively covered by the generic CCXT contract.
-- Creation depends on cancellation actions actually selected by the connector batch.
+- The allowance governs churn-evidenced creations, never cancellations.
+- Capacity releases one attempt at a time; no deferred-order burst or stale-intent queue exists.
+- Final distance is checked close to the connector call.
+- Risk-critical candidates sort ahead of ordinary candidates before final batch slicing.
+- Already-absent cancellation triggers authoritative confirmation and replanning.
+- `_context=replace`, order names, client IDs, and exchange IDs are non-causal for churn evidence.
+- Every supported connector is researched directly or covered by the conservative CCXT contract.
+- Binance assumptions are explicitly USD-M, not Spot.
+- Restart behavior is an intentional bounded exception requiring a canonical contract change first.
 
-Review threads should not be resolved merely because this map exists. Reviewers must verify the
-revised contracts.
+## Required Tests and Evidence
 
-## Edge Cases Requiring Explicit Tests
+### Matching and normalization
 
-1. Current snapshot cannot match itself.
-2. Invalid/partial planning appends no snapshot; valid empty planning does.
-3. Identical snapshot compaction preserves logical time coverage.
-4. Tight actual/ideal reconciliation is one-to-one with duplicate prices and quantities.
-5. One historical observation cannot satisfy multiple current orders.
-6. Static far first placement is new and admitted.
-7. A growing static ladder marks only surplus levels as additions.
-8. A shrinking ladder marks surplus old levels removed.
-9. Equal-cardinality large price jumps are replacements, not new orders.
-10. Normal/cropped/inflated `pb_order_type` transitions do not change temporal identity.
-11. Raw ideal list reordering changes no association.
-12. Equal-cost assignments use deterministic tie-breaking.
-13. Gradual sub-tolerance steps whose total range exceeds tolerance become unstable.
-14. Material quantity-only changes become replacement-derived.
-15. Tight-stable restoration after a confirmed fill/state transition is admitted.
-16. Disappearance/reappearance inside the history window does not manufacture repeated new orders.
-17. A replacement becomes stable only after its material observations age out.
-18. Ten far replacement-derived attempts across symbols consume one account-wide allowance.
-19. An eleventh far replacement is cancelled and deferred.
-20. One expired timestamp admits at most one newly far replacement.
-21. Near-market replacement is admitted and recorded above activation count.
-22. Market and risk-critical orders bypass capacity.
-23. Risk-critical far create sorts ahead of ordinary near creates before batch slicing.
-24. More risk-critical candidates than the hard cap remain deterministic and replan next cycle.
-25. Final market movement from near to far consumes capacity or defers.
-26. Final market movement from far to near admits without capacity.
-27. Missing/non-finite final market data defers without fabricated distance.
-28. Cancellation truncated by batch capacity blocks its dependent creation.
-29. Positively acknowledged cancellation permits final admission.
-30. Failed/ambiguous cancellation blocks dependent creation.
-31. Already-absent cancellation requests full account confirmation and blocks same-wave creation.
-32. A fill discovered after absent cancellation changes the new Rust ideal before any create.
-33. Failed/ambiguous connector-bound create counts once; local deferral counts zero.
-34. Current-wave reservations prevent capacity oversubscription.
-35. Event failure changes no decision.
-36. Persistent observation/deferral keeps console projection bounded.
-37. Config reload, forager churn, mode changes, graceful stop, HSL, WEL/TWEL, unstuck,
-    auto-reduce, hedge mode, and one-way mode preserve approved semantics.
-38. The selected restart policy reproduces classification and allowance after bot-object and full
-    process restart.
+- deterministic one-to-one tight actual reconciliation, including duplicate prices/quantities;
+- exact mismatch for `pb_order_type`, panic versus non-panic, `reduce_only`, execution type, and
+  time-in-force/post-only semantics;
+- unknown actual type/reduce-only fail-closed behavior for every connector adapter;
+- no side/position-side inference of reduce-only;
+- one historical observation cannot satisfy multiple current candidates;
+- raw list reordering and dictionary order do not change outcomes.
 
-## Proposed Implementation Slices After Plan Approval
+### Per-symbol history and heuristic
 
-### Slice 0: resolve restart policy
+- current snapshot never matches itself;
+- scoped outage skips one symbol while healthy symbols continue;
+- valid empty is distinct from unavailable planning;
+- processing-universe union retains actual/position/history-only symbols;
+- first observation and restart reset fail open;
+- tight-only history admits; wider-but-not-tight history marks churn;
+- no wider association admits as uncertain;
+- price-only and quantity-only churn;
+- neighboring grids, duplicate levels, growing/shrinking ladders, equal-cardinality rolls;
+- evidence expires exactly with the rolling window;
+- compaction, if implemented, preserves logical results across fast/slow planning cadence.
 
-- Select and approve one restart-reproducibility option.
-- Update canonical decisions/contracts before runtime implementation.
-- Define corruption, clock, schema/version, and reset behavior if persistence is selected.
+### Allowance and final admission
 
-### Slice 1: Rust priority metadata and canonical configuration
+- ten attempts across multiple symbols share one process-wide allowance;
+- eleventh far churn-evidenced ordinary create defers;
+- one expired timestamp releases one slot;
+- near-market churn attempts always admit and count;
+- market and risk-critical orders always bypass and do not count;
+- failed/rejected/timed-out/ambiguous connector-bound creates count exactly once;
+- local deferrals count zero;
+- final price movement near-to-far consumes capacity or defers and far-to-near admits;
+- missing/stale/non-finite final market data defers without fabrication;
+- concurrent candidates cannot oversubscribe current capacity.
 
-- Add required `execution_priority=ordinary|risk_critical` metadata owned by Rust.
-- Audit every current risk/close family.
-- Add canonical config fields, validation, templates, CLI aliases, and migration errors.
+### Cancel-first executor
+
+- stale actual suppresses every ordinary create in its conflict scope;
+- selected, truncated, failed, ambiguous, and absent cancellation outcomes;
+- positive acknowledgement still requires next-cycle authoritative confirmation for ordinary work;
+- fills and manual position changes regenerate different Rust intent before create;
+- independent conflict scopes may create in the cancellation wave;
+- dedicated market panic bypasses ordinary sequencing;
+- risk-critical limit same-wave create requires every scoped cancel positively acknowledged;
+- no ordinary create is sent from a pre-cancellation plan;
+- existing recent-create/ambiguous-write guards remain effective without duplicate responsibilities.
+
+### Integration
+
+- static grid, moving EMA Anchor entry and close, trailing, HSL, WEL/TWEL, unstuck, auto-reduce,
+  graceful stop, forager changes, hedge mode, and one-way mode fake-live scenarios;
+- batch saturation and connector-specific create/cancel bounds;
+- RAM reset event and post-restart fail-open behavior;
+- bounded event output and event-sink failure isolation;
+- connector-bound action counts and omitted-order windows with gate enabled/disabled.
+
+## Implementation Slices After Approval
+
+### Slice 0: canonical RAM-only exception
+
+- Update `AGENTS.md` and `docs/ai/principles.md` with the reviewed narrow economy-gate exception.
+- Specify reset observability and tests.
+- Do not begin decision-changing RAM implementation before this lands.
+
+### Slice 1: exact semantic normalization
+
+- Add canonical config fields, validation, templates, migration behavior, and changelog entry.
+- Audit every connector for authoritative `reduce_only`, normalized `pb_order_type`, execution type,
+  and time-in-force/post-only data.
+- Audit Rust order families for explicit ordinary/risk-critical priority.
 - Retire `initial_entry_exec_max_market_dist_pct`.
-- Rebuild/verify the Python extension and add Rust/Python boundary tests.
 
-### Slice 2: pure temporal tracker
+### Slice 2: pure per-symbol evidence helper
 
-- Implement normalized immutable snapshots, validity boundaries, compaction, cohort partitioning,
-  deterministic tight/wider/discontinuous assignment, tracks, tombstones, classifications, rolling
-  attempts, and provisional reservations as pure helpers.
-- Unit-test cadence invariance, duplicates, additions/removals, gradual drift, and window expiry.
+- Implement immutable snapshots, validity boundaries, pruning/optional compaction, deterministic
+  one-to-one tight/wider association, and account-wide rolling attempt accounting.
+- Keep helpers independent of live events and exchange I/O.
 
-### Slice 3: reconciliation and cancellation dependencies
+### Slice 3: cancel-first reconciler/executor overhaul
 
-- Snapshot valid Rust ideal output before actual reconciliation.
-- Preserve universal tolerance and unconditional stale cancellation.
-- Attach classification/dependency metadata only to creation candidates.
-- Carry dependency IDs through cancellation selection/outcome handling.
-- Force refresh/replan for already-absent outcomes.
+- Separate exact satisfaction cohorts from broader execution conflict scopes.
+- Suppress ordinary scoped creations whenever stale actual orders exist.
+- Cancel, request authoritative confirmation, end affected scopes, and replan next cycle.
+- Preserve independent-scope concurrency and explicit emergency paths.
+- Consolidate overlapping recent-create, cancellation, and state-change delay machinery where tests
+  prove simplification is safe.
 
-### Slice 4: final admission and executor priority
+### Slice 4: final admission and priority
 
-- Revalidate fresh distance after cancellation/config work.
-- Integrate capacity reservation with final batch construction.
-- Sort risk-critical candidates before ordinary candidates and then preserve existing ordering.
-- Record attempts only at the concrete connector boundary.
+- Recheck final fresh distance.
+- Apply allowance reservations atomically at connector boundary.
+- Sort risk-critical before ordinary candidates, then preserve deterministic existing secondary
+  ordering and native batch caps.
 
 ### Slice 5: events and fake-live validation
 
-- Add bounded registry events and sink-failure isolation tests.
-- Add multi-symbol static, moving EMA entry/close, growing/shrinking ladder, fill restoration,
-  cancellation race, batch saturation, restart, and mixed-risk fake-live scenarios.
-- Quantify connector-bound calls and missed-order windows with and without the gate.
+- Register bounded diagnostic events and prove sink isolation.
+- Run the complete multi-strategy, multi-symbol, connector, restart, ambiguity, and batch matrix.
+- Quantify write reduction and parity cost before proposing any default change.
 
-No authenticated exchange probe or live bot run is authorized by plan approval. Private probes and
-live runs require explicit current-task authority.
+No authenticated exchange probe or live bot run is authorized by plan approval. Those require
+explicit authority in the implementation task.
 
-## Implementation Validation Matrix
+## Implementation Validation
 
 At minimum, the implementation PR must run:
 
-- focused Rust order-priority tests;
-- Rust suite, rebuilt/verified Python extension, and Python metadata boundary tests;
-- config schema/default/template/CLI/roundtrip tests;
-- pure temporal association, compaction, track, tombstone, rolling-window, and restart tests;
-- reconciliation, cancellation dependency, final distance, priority, and executor tests;
-- static/moving/additive/mixed-risk multi-symbol fake-live scenarios;
-- event-bus, registry, query, smoke, bounded projection, and sink-failure tests;
-- rewritten/removed initial-entry-only distance-gate regressions;
+- focused Rust risk-priority tests;
+- Rust tests plus rebuilt and verified Python extension where Rust metadata changes;
+- config schema/default/template/CLI/roundtrip and retired-setting migration tests;
+- pure normalization, matching, per-symbol history, rolling-window, and reset tests;
+- reconciler/executor cancellation, ambiguity, conflict-scope, final-distance, and batch tests;
+- static/moving/mixed-risk multi-symbol fake-live scenarios across every connector harness;
+- live-event registry/query/sink-failure/bounded-projection tests;
 - `PYTHONPATH=src python src/tools/check_ai_docs.py`;
 - `PYTHONPATH=src python src/tools/generate_live_event_registry.py --check`;
 - `git diff --check`.
 
-Report exact base/head SHAs and a cycle-by-cycle evidence table containing current normalized Rust
-ideal, historical association, classification, actual order, cancellation dependency/outcome,
-rolling usage, final distance, final priority, and connector-bound action.
+Report exact base/head SHAs and cycle-level evidence containing current normalized Rust ideal,
+actual order state, historical tight/wider result, churn evidence, cancellation outcome, conflict
+scope state, rolling usage, final distance/priority, and connector-bound action.
 
-## Rollout And Measurement
+## Rollout and Measurement
 
-After offline validation and separate authorization:
+After offline validation and separate live authorization:
 
 1. Run one controlled account with structured DEBUG execution evidence.
-2. Measure snapshot/track transitions, additions, stable restorations, replacement admissions and
-   deferrals, final distance changes, risk priority, cancellations, fills, 429s, and ambiguity.
-3. Prove no stale actual order is retained by the economy gate.
-4. Inspect static grids, growing/shrinking ladders, EMA Anchor entries/closes, forager churn, and
-   one-for-one release behavior.
-5. Inspect Hyperliquid separately because requests-per-volume and cancellation allowance differ.
-6. Inspect Binance USD-M risk-priority and batch behavior against its actual endpoints.
-7. Revisit defaults only from evidence; do not hide exchange-specific defaults in adapters.
+2. Measure ideal stability/churn, admissions, deferrals, cancellations, fills, 429s, ambiguity, and
+   conflict-scope latency.
+3. Prove the gate never leaves an out-of-tolerance stale actual order resting.
+4. Inspect static grids, changing ladders, EMA Anchor entries/closes, trailing, forager changes, and
+   one-for-one capacity release.
+5. Inspect Hyperliquid separately because its requests-per-volume and cancellation economics differ.
+6. Recheck Binance USD-M overload/risk behavior on the actual endpoints.
+7. Tune defaults only from evidence; do not hide exchange-specific policy in adapters.
 
 ## Reviewer Checklist
 
-Reviewers are explicitly asked to assess:
+Reviewers are explicitly asked to challenge intent, architecture, edge cases, unintended
+consequences, and connector assumptions—not merely wording:
 
-- Is the normalized snapshot boundary complete and independent of actual-order annotations?
-- Can incomplete planning ever look like a valid removal snapshot?
-- Does compaction preserve exact logical history semantics?
-- Is the order-type-agnostic cohort key narrow enough without reintroducing strategy knowledge?
-- Is deterministic one-to-one tight/wider/discontinuous assignment sufficient for equal-price grids,
-  changing cardinality, gradual drift, and partial fills?
-- Can one historical observation satisfy multiple current orders?
-- Can a moving order escape as `new` after crossing the 1% tracking tolerance?
-- Are surplus additions distinguished correctly from replacements?
-- Can disappearance/reappearance manufacture free first placements?
-- Does stable-restoration recreate only current Rust intent?
-- Can any superseded ideal price be sent later?
-- Is the first-10 account-wide allowance the right balance between forgiveness and churn relief?
-- Do near-market attempts intentionally keep far replacements gated when activity remains high?
-- Does final distance revalidation occur late enough without bypassing readiness?
-- Can any ordinary create displace a risk-critical create from the final batch?
-- Can cancellation truncation, failure, ambiguity, or already-absent state ever post a stale-plan
-  replacement?
-- Does one-for-one reservation consumption eliminate release bursts?
-- Which restart-reproducibility option should be selected, and does it satisfy `AGENTS.md`?
-- Are all connector assumptions, especially Binance USD-M and Hyperliquid, correctly scoped?
-- What happens during fills, config reload, balance changes, forager churn, graceful stop, HSL,
-  WEL/TWEL, unstuck, auto-reduce, hedge mode, and one-way mode?
+- Is the exact reconciliation key complete, especially `pb_order_type`, authoritative
+  `reduce_only`, and time-in-force/post-only semantics?
+- Can every connector recover those fields without fabrication, and is fail-closed scope correct?
+- Is the broader execution conflict scope sufficiently conservative without stalling unrelated
+  work?
+- Can any cancellation truncation, ambiguity, fill, manual action, or race still send an ordinary
+  order from a stale Rust plan?
+- Are the market-panic and risk-critical-limit exceptions narrow enough and prioritized before
+  batching?
+- Does per-symbol validity isolate outages while the union processing universe preserves actual
+  orders and positions?
+- Can one historical order satisfy multiple current candidates?
+- Are deterministic wider associations sensible for duplicate grids, cardinality changes, and
+  equal-cardinality rolls?
+- Is failing open on no wider match preferable to trying to infer identity for large moves?
+- Is 0.2% an appropriate initial evidence tolerance, and what fake-live cases could falsify it?
+- Does the account-wide attempt counter model each connector reasonably, especially Hyperliquid?
+- Are near-market attempts correctly always admitted yet still counted?
+- Can a stale order ever remain while a replacement is gated?
+- Is the one-cycle ordinary latency acceptable for parity and missed-fill risk?
+- Is the proposed RAM-only canonical exception truly bounded to operational economy and incapable
+  of weakening safety after reset?
+- What interactions remain with config reload, forager symbol churn, HSL, WEL/TWEL, unstuck,
+  auto-reduce, graceful stop, hedge mode, and one-way mode?
 
-Approval of this plan accepts the temporal classification and execution architecture but does not
-resolve the explicitly blocked restart-policy choice, approve implementation details, authorize
-authenticated testing, or authorize live trading.
+Approval accepts the design and its documented tradeoffs. It does not authorize runtime code,
+authenticated probes, live trading, or unreviewed changes to canonical safety contracts.
