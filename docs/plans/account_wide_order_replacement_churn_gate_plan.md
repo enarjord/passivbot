@@ -181,7 +181,9 @@ reconciliation or within the explicitly selected historical tolerance for churn 
 order quantity means authoritative remaining open quantity, never the original submitted amount
 after a partial fill. Prefer an exchange-provided `remaining`; derive `amount - filled` only when
 both fields are authoritative, finite, non-negative, and internally consistent. Unknown or
-contradictory remaining quantity blocks normal reconciliation for the affected symbol.
+contradictory remaining quantity makes the account-critical open-orders surface unavailable and
+blocks every exchange write until a fresh authoritative snapshot resolves it. Do not cancel the
+uncertain order, create elsewhere, or let a panic/risk exemption bypass this readiness failure.
 
 Matching is deterministic and one-to-one. One actual or historical observation cannot satisfy two
 current ideal orders.
@@ -690,9 +692,11 @@ not an implementation or live-validation target for this feature.
 
 The generic `CCXTBot` fallback is likewise excluded from this feature. `setup_bot()` must mark the
 churn reconciliation, evidence, cancel-first barrier, admission, and accounting policy disabled for
-any exchange outside the explicit supported allowlist. This does not remove or reject the generic
-adapter; it preserves that adapter's prior reconciliation/execution behavior until the named
-connector receives the same authoritative metadata audit as a supported connector.
+any exchange outside the explicit supported production allowlist. The local `fake` connector is an
+explicit non-production exception: it enables the complete feature so deterministic fake-live can
+exercise the same reconciliation, history, sequencing, and accounting paths. This does not remove
+or reject the generic adapter; it preserves that adapter's prior reconciliation/execution behavior
+until the named connector receives the same authoritative metadata audit as a supported connector.
 
 Hyperliquid is the clearest reason not to call the generic window a rate-limit budget. Its
 cancellation allowance and requests-per-volume economics differ materially from rolling endpoint
@@ -1034,6 +1038,7 @@ At minimum, the implementation PR must run:
 - config schema/default/template/CLI/roundtrip and retired-setting migration tests;
 - pure normalization, matching, per-symbol history, rolling-window, and reset tests;
 - reconciler/executor cancellation, ambiguity, account-wide barrier, final-distance, and batch tests;
+- account-wide no-action readiness tests for missing or contradictory actual remaining quantity;
 - static/moving/mixed-risk multi-symbol fake-live scenarios across every connector harness;
 - live-event registry/query/sink-failure/bounded-projection tests;
 - `PYTHONPATH=src python src/tools/check_ai_docs.py`;

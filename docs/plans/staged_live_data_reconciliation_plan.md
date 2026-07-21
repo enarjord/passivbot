@@ -52,9 +52,12 @@ Before order planning/execution, live bot must have coherent state for:
 These are deliberate exceptions to the general "Rust owns order behavior" and live/backtest parity
 rules. Keep them narrow, visible, and test-covered.
 
-- Live order-replacement churn gate:
-  - The former initial-entry-only distance gate is superseded and its configuration field retired.
-  - The reviewed RAM-only, strategy-agnostic replacement contract is maintained in
+- Live order-replacement churn gate transition:
+  - Current `master` still uses the accepted initial-entry-only distance gate and
+    `live.initial_entry_exec_max_market_dist_pct`; this planning-only PR does not retire or
+    supersede that runtime contract.
+  - The implementation PR must atomically replace that exception, retire its configuration field,
+    and install the reviewed RAM-only, strategy-agnostic contract maintained in
     `account_wide_order_replacement_churn_gate_plan.md`.
 
 - Hyperliquid `allMids` market snapshot:
