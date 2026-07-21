@@ -109,7 +109,8 @@ The heuristic may omit an ordinary distant current ideal order temporarily. It m
 - create an order absent from the current Rust plan;
 - change its price, quantity, side, type, or reduce-only semantics;
 - keep an out-of-tolerance actual order as its substitute; or
-- weaken readiness, ownership, risk, HSL, WEL/TWEL, or authoritative-state barriers.
+- weaken readiness, mode scope, semantic attribution, risk, HSL, WEL/TWEL, or
+  authoritative-state barriers.
 
 ### Universal reconciliation tolerance stays universal
 
@@ -119,27 +120,32 @@ It must never widen exchange-order reconciliation.
 
 ### Cancellation is not gated
 
-Every unmatched **proven locally Passivbot-owned** actual order remains eligible for cancellation.
+Every unmatched actual order in a bot-managed semantic scope remains eligible for cancellation.
 If creation is deferred, that stale actual order is still removed. No replacement allowance or
-distance decision may leave a known owned stale order resting.
+distance decision may leave a stale managed order resting.
 
-Ownership is a prerequisite, not a heuristic side effect. Classify actual orders through the
-existing authoritative ownership/client-ID/local-execution contract:
+Management is mode- and intent-scoped, not ownership-scoped:
 
-- proven local Passivbot ownership: include in exact reconciliation and stale cancellation;
-- proven foreign/manual ownership: exclude from Passivbot reconciliation and never cancel; retain
-  the existing foreign/manual-order policy;
-- unknown or contradictory ownership: do not cancel, append no snapshot, and fail closed for
-  account-wide non-panic creation until authoritative metadata resolves it.
+- `normal` and other fully bot-managed modes cancel every unmatched actual order in scope,
+  including user-created orders, and recreate every missing current Rust ideal after the ordinary
+  sequencing barriers are clear;
+- `manual` leaves both entries and closes unmanaged: no creation and no cancellation;
+- `tp_only` leaves entries unmanaged but manages closes normally;
+- `tp_only_with_active_entry_cancellation` creates no entries, actively removes stale entry orders,
+  and manages closes normally, preserving its existing distinction from `tp_only`.
 
-An explicit Passivbot-looking marker from another bot instance is not local ownership. Missing
-client metadata after restart must not turn an unowned order into a cancellation candidate. The
-dedicated protective market-panic path retains its existing separately reviewed authority.
+Accordingly, a user cancellation in a bot-managed scope causes the still-current Rust ideal to be
+recreated, and a user-created unmatched order in that scope is cancelled. Client-order ownership,
+client-ID presence, and Passivbot-looking markers do not change that decision. Unknown coin,
+position side, or entry-versus-close semantics fail closed because the management scope cannot be
+proven; missing `pb_order_type` or client ownership metadata alone is not a no-cancel condition once
+the management scope is authoritative. The dedicated protective market-panic path retains its
+existing separately reviewed authority.
 
 ### Missing inputs are not fabricated
 
 Invalid, partial, or unavailable planning results append no history. A deliberate valid Rust result
-with zero orders is a valid empty snapshot and cancels proven-owned stale actual orders.
+with zero orders is a valid empty snapshot and cancels stale actual orders in bot-managed scopes.
 
 Missing or stale market data follows the existing scoped fail-closed creation contract. Distance
 must not default to zero, infinity, a candle close, or another neutral substitute.
@@ -176,8 +182,8 @@ current ideal orders.
 
 ### One-way `position_side` attribution
 
-The exact cohort retains `position_side` even when the venue has one net position ledger. For a
-Passivbot-owned one-way order, normalize it deterministically in this order:
+The exact cohort retains `position_side` even when the venue has one net position ledger. For any
+one-way actual order, normalize it deterministically in this order:
 
 1. prefer durable client-order/local execution metadata whose exact `pb_order_type` or explicit
    field identifies long versus short;
@@ -188,10 +194,14 @@ Passivbot-owned one-way order, normalize it deterministically in this order:
    - close-only buy = short close.
 
 Do not infer from the current held position: it can change after order placement and would re-label
-the same resting order across fills or restart. Unknown ownership, close-only effect, side, or
-ambiguous type attribution does not match a known ideal and blocks normal reconciliation for the
-affected symbol. Hyperliquid's current position-dependent helper must be replaced or bypassed for
-this canonical snapshot path before enabling the gate.
+the same resting order across fills or restart. Unknown close-only effect, side, or ambiguous
+position-side attribution prevents proving the applicable management scope and therefore blocks
+normal reconciliation for the affected symbol. Missing client ownership metadata does not.
+Hyperliquid's current position-dependent helper must be replaced or bypassed for this canonical
+snapshot path before enabling the gate. Hyperliquid fill normalization already produces
+`position_side` from authoritative direction/close semantics; that does not make the current
+open-order helper safe. Open-order reconciliation must use durable client/local intent metadata or
+the same reviewed side-plus-close-only tuple, never the currently held position.
 
 ### Why `pb_order_type` is required
 
@@ -593,7 +603,7 @@ Slice 0 must add and review this narrow canonical exception:
 
 > An approved operational economy gate may keep RAM-only state when losing that state can only
 > remove throttling and return execution toward the current Rust-ideal baseline. Reset must not
-> create non-ideal orders, relax readiness/risk/ownership checks, preserve stale orders, or queue
+> create non-ideal orders, relax readiness/risk/mode-scope checks, preserve stale orders, or queue
 > obsolete intent. Reset must be observable and covered by tests.
 
 Plan approval selects that intended exception; runtime implementation remains blocked until the
@@ -690,12 +700,13 @@ This tradeoff must be measured in fake-live and, only with separate authority, l
 - Invalid config fails startup.
 - Account-wide Rust planning failure appends no snapshots and performs no ordinary actions; a
   symbol-scoped failure after a complete Rust result blocks only that symbol.
-- A valid empty symbol plan is authoritative and may cancel all stale orders in that symbol.
-- Unknown required `pb_order_type`, `reduce_only`, or execution semantics do not match a known ideal
-  and fail closed for affected normal planning.
-- Unknown/contradictory order ownership is never cancelled and blocks account-wide non-panic
-  creation until authoritative metadata resolves it; proven foreign/manual orders remain outside
-  Passivbot reconciliation.
+- A valid empty symbol plan is authoritative and may cancel all stale orders in bot-managed scopes
+  for that symbol.
+- Unknown `pb_order_type` or execution type cannot satisfy a current ideal but does not by itself
+  exempt an actual order from cancellation in a proven bot-managed scope. Unknown or contradictory
+  position-side/close-only semantics prevent proving whether the actual order is entry or close and
+  whether `manual`/`tp_only` applies; do not cancel it and block account-wide non-panic creation
+  until authoritative semantics resolve the scope.
 - Missing/stale final market data defers ordinary creation.
 - Missing/stale Hyperliquid action-headroom state defers only far churn-evidenced ordinary creates;
   it never delays cancellations or allowance-exempt actions.
@@ -703,7 +714,8 @@ This tradeoff must be measured in fake-live and, only with separate authority, l
 - Every stale cancellation outcome blocks all non-panic creation account-wide and requires full
   balance/positions/open-orders/fills confirmation plus complete replanning.
 - Event publication failure changes no trading decision.
-- Existing exchange pacing, 429/backoff, readiness, ownership, risk, HSL, WEL/TWEL, mode, and
+- Existing exchange pacing, 429/backoff, readiness, mode scope, semantic attribution, risk, HSL,
+  WEL/TWEL, and
   authoritative-state barriers retain precedence.
 
 ## Observability
@@ -809,8 +821,11 @@ events use bounded periodic summaries.
     order-side plus close-only tuple; current position inference is forbidden.
 31. **Realized-PnL enrichment:** account epochs include the exact cumulative max/last values passed
     to Rust, so fee/PnL enrichment cannot retain pre-enrichment churn evidence.
-32. **Order ownership:** only proven locally owned actuals reconcile or cancel; foreign/manual
-    orders are excluded, while unknown ownership blocks non-panic creation without cancellation.
+32. **Management scope, not ownership:** normal bot-managed scopes reconcile and cancel every
+    actual order regardless of who submitted it; `manual` manages none; `tp_only` manages closes
+    only; `tp_only_with_active_entry_cancellation` manages closes plus stale-entry cancellation;
+    missing ownership metadata is irrelevant, while unknown entry/close or position-side semantics
+    fail closed because mode scope cannot be proven.
 
 ### Earlier findings retained
 
@@ -840,8 +855,12 @@ events use bounded periodic summaries.
   fixtures prove their explicit connector-native mappings;
 - one-way pside attribution prefers durable PB metadata, then covers all four side/close-only tuples;
   current-position changes cannot relabel a resting order and unknown attribution fails closed;
-- proven local, proven foreign/manual, foreign Passivbot-marker, missing-client-ID-after-restart, and
-  contradictory ownership fixtures; only proven local orders may reconcile or cancel;
+- normal-mode user-created orders and PB-created orders reconcile by the same exact semantics;
+  unmatched user orders are cancelled and user-cancelled current ideals are recreated;
+- `manual`, `tp_only`, and `tp_only_with_active_entry_cancellation` fixtures prove respectively no
+  management, close-only management, and close management plus stale-entry cancellation;
+- missing client IDs and foreign Passivbot-looking markers do not exempt orders in managed scopes;
+  ambiguous position-side or entry/close attribution fails closed without cancellation;
 - one historical observation cannot satisfy multiple current candidates;
 - raw list reordering and dictionary order do not change outcomes.
 
@@ -894,7 +913,8 @@ events use bounded periodic summaries.
 ### Cancel-first executor
 
 - any stale actual suppresses every non-panic create account-wide in hedge and one-way modes;
-- unknown ownership suppresses non-panic creation account-wide without sending cancellation;
+- unknown position-side or entry/close attribution suppresses non-panic creation account-wide
+  without sending cancellation because the effective management scope is unproven;
 - selected, truncated, failed, ambiguous, and absent cancellation outcomes;
 - every stale cancellation outcome, including positive acknowledgement, requires next-cycle full
   balance/positions/open-orders/fills confirmation for ordinary work;
@@ -928,11 +948,14 @@ events use bounded periodic summaries.
 
 - Add canonical config fields, validation, templates, migration behavior, and changelog entry.
 - Audit every connector for authoritative venue-native close-only effect, normalized
-  `pb_order_type`, execution type, and authoritative remaining open quantity. Add focused WEEX V3
-  and Bitget UTA mappings without generalizing side/position inference. Defx and Paradex are outside
-  the supported production boundary.
-- Preserve the existing local/foreign/manual ownership contract and make unknown ownership an
-  explicit no-cancel fail-closed state.
+  `position_side` in both hedge and one-way modes, normalized `pb_order_type`, execution type, and
+  authoritative remaining open quantity. Add focused Hyperliquid one-way, WEEX V3, and Bitget UTA
+  mappings without using current-position inference. Defx and Paradex are outside the supported
+  production boundary.
+- Make reconciliation eligibility explicit from effective mode plus entry/close semantics, not
+  ownership: normal scopes manage all orders, `manual` none, `tp_only` closes only, and
+  `tp_only_with_active_entry_cancellation` closes plus stale-entry cancellation. Unknown semantic
+  scope is an explicit no-cancel fail-closed state; missing client ownership metadata is not.
 - Keep TIF/post-only enforcement at creation and diagnostic normalization, not reconciliation.
 - Audit Rust order families for explicit ordinary/risk-critical priority.
 - Retire `initial_entry_exec_max_market_dist_pct`.
@@ -1019,8 +1042,11 @@ consequences, and connector assumptions—not merely wording:
 - Is one-way `position_side` attribution deterministic from durable PB metadata or the four reviewed
   side/close-only tuples, never current position state?
 - Can every connector recover those fields without fabrication, and is fail-closed scope correct?
-- Can ownership ever be mistaken from a Passivbot-looking marker, missing restart metadata, or a
-  foreign/manual order, and is unknown ownership guaranteed no-cancel?
+- Do normal, `manual`, `tp_only`, and `tp_only_with_active_entry_cancellation` apply the intended
+  create/cancel scope to PB-created and user-created orders alike, without treating missing client
+  IDs or foreign-looking markers as cancellation exemptions?
+- Is unknown position-side or entry/close attribution guaranteed no-cancel until the effective mode
+  scope can be proven?
 - Is Defx's explicit unsupported boundary clear enough that stale adapter code cannot expand scope?
 - Is Paradex's experimental, comparative-only boundary equally clear?
 - Does any stale actual block every non-panic creation account-wide until full confirmation and a
