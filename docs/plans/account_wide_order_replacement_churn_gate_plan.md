@@ -678,7 +678,7 @@ implementation review must recheck the exact endpoints used by each connector.
 | Binance USD-M | New orders consume account order-count limits; placement and cancellation have different request weights and batch bounds. Qualifying reduce-only/close and cancellation requests receive special overload treatment. [General info](https://developers.binance.com/en/docs/products/derivatives-trading-usds-futures/general-info), [trade endpoints](https://developers.binance.com/en/docs/catalog/core-trading-derivatives-trading-usd-s-m-futures/api/rest-api/trade#new-order) | Use USD-M, not Spot, assumptions. Preserve risk/cancel priority and count logical actions. |
 | OKX | Trading limits are shared across REST/WS, separated by place/amend/cancel operation, and generally scoped by user plus instrument; subaccount fill-ratio rules affect new/amend traffic. [Official docs](https://www.okx.com/docs-v5/) | Native amend and adaptive fill-ratio optimization are later projects. |
 | Paradex | Private APIs use account plus IP limits with leaky-bucket refill; batch operations may consume one unit for multiple orders. [Rate limits](https://docs.paradex.trade/api/general-information/rate-limits/api), [best practices](https://docs.paradex.trade/api/general-information/api-best-practices) | Logical action counting is deliberately conservative. |
-| CCXT/generic fallback | CCXT rate limiting is per exchange instance; separate instances do not share limiter state. [Official manual](https://github.com/ccxt/ccxt/wiki/manual#rate-limit) | This per-bot gate cannot guarantee account/IP coordination across processes. |
+| CCXT/generic fallback | CCXT rate limiting is per exchange instance; separate instances do not share limiter state. [Official manual](https://github.com/ccxt/ccxt/wiki/manual#rate-limit) | Comparative context only. Arbitrary generic-fallback exchanges are outside implementation and rollout scope until their order attribution and remaining-quantity contracts receive a connector audit. |
 
 Defx is excluded. It is a deliberately unsupported legacy placeholder under
 `docs/ai/features/exchange_integrations.md`; stale adapter and `setup_bot()` code do not make it part
@@ -687,6 +687,12 @@ of this feature's implementation, validation, research, or rollout scope.
 Paradex is also outside the supported production and rollout boundary. Its matrix row is retained
 only because its account/IP leaky-bucket and batch semantics are useful comparative research; it is
 not an implementation or live-validation target for this feature.
+
+The generic `CCXTBot` fallback is likewise excluded from this feature. `setup_bot()` must mark the
+churn reconciliation, evidence, cancel-first barrier, admission, and accounting policy disabled for
+any exchange outside the explicit supported allowlist. This does not remove or reject the generic
+adapter; it preserves that adapter's prior reconciliation/execution behavior until the named
+connector receives the same authoritative metadata audit as a supported connector.
 
 Hyperliquid is the clearest reason not to call the generic window a rate-limit budget. Its
 cancellation allowance and requests-per-volume economics differ materially from rolling endpoint
