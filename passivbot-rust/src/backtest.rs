@@ -7121,6 +7121,141 @@ mod tests {
     }
 
     #[test]
+    fn trailing_grid_v7_fills_unstuck_and_trailing_close_in_same_candle() {
+        let hlcvs = Array3::from_shape_vec(
+            (2, 1, 4),
+            vec![
+                100.0, 100.0, 100.0, 1.0, //
+                102.0, 99.0, 100.0, 1.0,
+            ],
+        )
+        .unwrap();
+        let btc_usd_prices = Array1::from_vec(vec![20_000.0, 20_000.0]);
+
+        let mut bp_pair = BotParamsPair::default();
+        bp_pair.long.n_positions = 1;
+        bp_pair.long.total_wallet_exposure_limit = 10.0;
+        bp_pair.long.wallet_exposure_limit = 10.0;
+        bp_pair.long.risk_wel_enforcer_enabled = false;
+        bp_pair.long.risk_twel_enforcer_enabled = false;
+        bp_pair.long.unstuck_enabled = true;
+        bp_pair.long.unstuck_ema_gating_enabled = false;
+        bp_pair.long.unstuck_close_pct = 0.0195;
+        bp_pair.long.unstuck_threshold = 0.9;
+        bp_pair.long.unstuck_loss_allowance_pct = 0.01;
+        bp_pair.short.n_positions = 0;
+        bp_pair.short.total_wallet_exposure_limit = 0.0;
+        bp_pair.short.wallet_exposure_limit = 0.0;
+
+        let strategy = TrailingGridV7Params {
+            ema_span_0: 1.0,
+            ema_span_1: 1.0,
+            entry: TrailingGridV7EntryParams::default(),
+            close: TrailingGridV7CloseParams {
+                trailing_grid_ratio: 1.0,
+                trailing_qty_pct: 0.2624,
+                trailing_retracement_pct: 0.005,
+                trailing_threshold_pct: 0.01,
+                ..Default::default()
+            },
+        };
+        let strategy_params = StrategyParamsPairValue {
+            long: serde_json::to_value(strategy).unwrap(),
+            short: serde_json::to_value(strategy).unwrap(),
+        };
+        let backtest_params = BacktestParams {
+            starting_balance: 1_000.0,
+            maker_fee: 0.0,
+            taker_fee: 0.00055,
+            coins: vec!["TEST".to_string()],
+            active_coin_indices: None,
+            first_timestamp_ms: 0,
+            requested_start_timestamp_ms: 0,
+            first_valid_indices: vec![0],
+            last_valid_indices: vec![1],
+            warmup_minutes: vec![0],
+            trade_start_indices: vec![0],
+            global_warmup_bars: 0,
+            btc_collateral_cap: 0.0,
+            btc_collateral_ltv_cap: None,
+            metrics_only: true,
+            skip_btc_analysis: false,
+            filter_by_min_effective_cost: false,
+            dynamic_wel_by_tradability: false,
+            hedge_mode: true,
+            max_realized_loss_pct: 1.0,
+            pnls_max_lookback_days: 30.0,
+            liquidation_threshold: 0.05,
+            equity_hard_stop_loss: EquityHardStopLossConfig::default(),
+            market_orders_allowed: false,
+            market_order_near_touch_threshold: 0.001,
+            market_order_slippage_pct: 0.0005,
+            forager_score_hysteresis_pct: 0.0,
+            candle_interval_minutes: 1,
+        };
+        let exchange = ExchangeParams {
+            qty_step: 0.01,
+            price_step: 0.01,
+            min_qty: 0.0,
+            min_cost: 0.0,
+            c_mult: 1.0,
+            maker_fee: 0.0,
+            taker_fee: 0.00055,
+        };
+
+        let mut bt = Backtest::new_with_strategy_params(
+            hlcvs.view(),
+            btc_usd_prices.view(),
+            crate::strategies::StrategyKind::TrailingGridV7,
+            vec![bp_pair],
+            vec![strategy_params],
+            vec![exchange],
+            &backtest_params,
+        );
+        bt.positions.long[0] = Position {
+            size: 95.6,
+            price: 100.0,
+        };
+        bt.trailing_prices.long[0] = TrailingPriceBundle {
+            min_since_open: 99.0,
+            max_since_min: 102.0,
+            max_since_open: 102.0,
+            min_since_max: 100.0,
+        };
+        bt.orchestrator_input_cache = None;
+        bt.update_open_orders_all(0);
+
+        let staged_closes = &bt.open_orders.long[0].closes;
+        assert_eq!(staged_closes.len(), 2);
+        assert!(staged_closes.iter().any(|order| {
+            order.order.order_type == OrderType::CloseUnstuckLong
+                && (order.order.qty + 1.95).abs() < 1e-12
+        }));
+        assert!(staged_closes.iter().any(|order| {
+            order.order.order_type == OrderType::CloseTrailingLong
+                && (order.order.qty + 26.24).abs() < 1e-12
+        }));
+
+        bt.check_for_fills(1);
+
+        let same_candle_closes: Vec<&Fill> = bt
+            .fills
+            .iter()
+            .filter(|fill| fill.index == 1 && fill.fill_qty < 0.0)
+            .collect();
+        assert_eq!(same_candle_closes.len(), 2);
+        assert!(same_candle_closes
+            .iter()
+            .any(|fill| fill.order_type == OrderType::CloseUnstuckLong));
+        assert!(same_candle_closes
+            .iter()
+            .any(|fill| fill.order_type == OrderType::CloseTrailingLong));
+        assert!(same_candle_closes
+            .iter()
+            .all(|fill| fill.timestamp_ms == 60_000));
+    }
+
+    #[test]
     fn hard_stop_rolling_peak_strategy_pnl_respects_pnls_max_lookback_days() {
         let hlcvs = Array3::from_shape_vec((2, 1, 4), vec![1.0; 2 * 1 * 4]).unwrap();
         let btc_usd_prices = Array1::from_vec(vec![20_000.0, 20_000.0]);

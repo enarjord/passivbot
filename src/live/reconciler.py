@@ -1307,6 +1307,21 @@ def _reduce_only_order_family(order: dict) -> tuple[str, str] | None:
     return pside, family
 
 
+_PROTECTIVE_REDUCE_ONLY_FAMILIES = frozenset(
+    {
+        "close_panic",
+        "close_auto_reduce_twel",
+        "close_auto_reduce_wel",
+        "close_unstuck",
+    }
+)
+
+
+def _order_is_protective_reducer(order: dict) -> bool:
+    family = _reduce_only_order_family(order)
+    return family is not None and family[1] in _PROTECTIVE_REDUCE_ONLY_FAMILIES
+
+
 def _trailing_unavailable_reasons(bot, symbol: str) -> set[str]:
     by_symbol = getattr(bot, "_orchestrator_trailing_unavailable_reasons", {}) or {}
     reasons = by_symbol.get(symbol, []) if isinstance(by_symbol, dict) else []
@@ -1735,10 +1750,16 @@ def finalize_reduce_only_orders(
             if total <= pos_size_abs + 1e-12:
                 continue
             excess = total - pos_size_abs
+            # Rust already caps a planned wave, but the position may shrink before live
+            # reconciliation. Preserve the selected protective reducer and trim ordinary closes
+            # first when this final exchange-state cap has to intervene.
             ro_sorted = sorted(
                 ro,
-                key=lambda o: order_market_diff(
-                    o.get("side", ""), float(o.get("price", 0.0)), market_price
+                key=lambda o: (
+                    0 if _order_is_protective_reducer(o) else 1,
+                    order_market_diff(
+                        o.get("side", ""), float(o.get("price", 0.0)), market_price
+                    ),
                 ),
                 reverse=True,
             )

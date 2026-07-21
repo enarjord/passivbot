@@ -617,7 +617,33 @@ mod core {
         }
     }
 
-    fn prune_lower_priority_closes(
+    fn close_reducer_reachability_cmp(
+        a: &IdealOrder,
+        b: &IdealOrder,
+        ob: &OrderBook,
+    ) -> std::cmp::Ordering {
+        let da = order_price_diff_strict(a, ob);
+        let db = order_price_diff_strict(b, ob);
+        da.partial_cmp(&db)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.order_type.id().cmp(&b.order_type.id()))
+            .then_with(|| {
+                a.price
+                    .partial_cmp(&b.price)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .then_with(|| {
+                a.qty
+                    .partial_cmp(&b.qty)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+    }
+
+    fn is_protective_close_reducer(order_type: OrderType, pside: PositionSide) -> bool {
+        matches!(close_reducer_priority(order_type, pside), Some(0..=2))
+    }
+
+    fn prune_competing_close_reducers(
         orders: &mut Vec<IdealOrder>,
         pside: PositionSide,
         ob: &OrderBook,
@@ -628,27 +654,19 @@ mod core {
             .min();
         if let Some(priority) = highest {
             if priority < 3 {
+                let selected_reducer = orders
+                    .iter()
+                    .filter(|order| {
+                        close_reducer_priority(order.order_type, pside) == Some(priority)
+                    })
+                    .min_by(|a, b| close_reducer_reachability_cmp(a, b, ob))
+                    .cloned();
                 orders.retain(|order| {
-                    close_reducer_priority(order.order_type, pside).unwrap_or(3) == priority
+                    priority > 0 && close_reducer_priority(order.order_type, pside) == Some(3)
                 });
-                orders.sort_by(|a, b| {
-                    let da = order_price_diff_strict(a, ob);
-                    let db = order_price_diff_strict(b, ob);
-                    da.partial_cmp(&db)
-                        .unwrap_or(std::cmp::Ordering::Equal)
-                        .then_with(|| a.order_type.id().cmp(&b.order_type.id()))
-                        .then_with(|| {
-                            a.price
-                                .partial_cmp(&b.price)
-                                .unwrap_or(std::cmp::Ordering::Equal)
-                        })
-                        .then_with(|| {
-                            a.qty
-                                .partial_cmp(&b.qty)
-                                .unwrap_or(std::cmp::Ordering::Equal)
-                        })
-                });
-                orders.truncate(1);
+                if let Some(reducer) = selected_reducer {
+                    orders.push(reducer);
+                }
             }
         }
     }
@@ -1198,18 +1216,14 @@ mod core {
         // If the position itself is below effective min qty, collapse to a single close which
         // closes the entire position.
         if allow_below_min {
-            // pick closest-to-fill existing close if present; otherwise keep first
+            // Preserve a protective reducer when one is present. Otherwise pick the
+            // closest-to-fill ordinary close.
             closes.sort_by(|a, b| {
-                let da = order_price_diff_strict(a, ob);
-                let db = order_price_diff_strict(b, ob);
-                da.partial_cmp(&db)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-                    .then_with(|| a.order_type.id().cmp(&b.order_type.id()))
-                    .then_with(|| {
-                        a.price
-                            .partial_cmp(&b.price)
-                            .unwrap_or(std::cmp::Ordering::Equal)
-                    })
+                let a_reducer = is_protective_close_reducer(a.order_type, pside);
+                let b_reducer = is_protective_close_reducer(b.order_type, pside);
+                b_reducer
+                    .cmp(&a_reducer)
+                    .then_with(|| close_reducer_reachability_cmp(a, b, ob))
             });
             let mut keep = closes[0].clone();
             keep.qty = match pside {
@@ -1257,22 +1271,18 @@ mod core {
             // remainder into the least-likely-to-fill close matches the existing “trim furthest
             // first” heuristic and aligns legacy/orchestrator distribution.
             closes.sort_by(|a, b| {
-                let da = order_price_diff_strict(a, ob);
-                let db = order_price_diff_strict(b, ob);
-                da.partial_cmp(&db)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-                    .then_with(|| a.order_type.id().cmp(&b.order_type.id()))
-                    .then_with(|| {
-                        a.price
-                            .partial_cmp(&b.price)
-                            .unwrap_or(std::cmp::Ordering::Equal)
-                    })
+                let a_reducer = is_protective_close_reducer(a.order_type, pside);
+                let b_reducer = is_protective_close_reducer(b.order_type, pside);
+                b_reducer
+                    .cmp(&a_reducer)
+                    .then_with(|| close_reducer_reachability_cmp(a, b, ob))
             });
             if closes.is_empty() {
                 return;
             }
             // Set the selected close to close exactly the remaining position after other closes.
-            // After sorting by diff asc, the selected is the last (furthest).
+            // A protective reducer sorts first, so an ordinary close absorbs the remainder when
+            // one exists; otherwise the furthest reducer is used.
             let mut sum_other = 0.0_f64;
             if closes.len() > 1 {
                 for o in closes.iter().take(closes.len() - 1) {
@@ -1312,11 +1322,17 @@ mod core {
             return;
         }
 
-        // Sort furthest-from-fill first.
+        // Trim ordinary closes before a protective reducer. Within each class,
+        // trim furthest-from-fill first.
         closes.sort_by(|a, b| {
+            let a_reducer = is_protective_close_reducer(a.order_type, pside);
+            let b_reducer = is_protective_close_reducer(b.order_type, pside);
             let da = order_price_diff_strict(a, ob);
             let db = order_price_diff_strict(b, ob);
-            match db.partial_cmp(&da).unwrap_or(std::cmp::Ordering::Equal) {
+            match a_reducer
+                .cmp(&b_reducer)
+                .then_with(|| db.partial_cmp(&da).unwrap_or(std::cmp::Ordering::Equal))
+            {
                 std::cmp::Ordering::Equal => a
                     .order_type
                     .id()
@@ -1511,6 +1527,11 @@ mod core {
                 Some(sym) => &sym.exchange,
                 None => continue,
             };
+            // Evaluate the selected protective reducer before ordinary closes so an ordinary
+            // close cannot consume the realized-loss allowance reserved for risk reduction.
+            s.closes.sort_by_key(|order| {
+                !is_protective_close_reducer(order.order_type, PositionSide::Long)
+            });
             let mut kept: Vec<IdealOrder> = Vec::with_capacity(s.closes.len());
             for order in s.closes.drain(..) {
                 if !is_close_order_type(order.order_type)
@@ -1561,6 +1582,9 @@ mod core {
                 Some(sym) => &sym.exchange,
                 None => continue,
             };
+            s.closes.sort_by_key(|order| {
+                !is_protective_close_reducer(order.order_type, PositionSide::Short)
+            });
             let mut kept: Vec<IdealOrder> = Vec::with_capacity(s.closes.len());
             for order in s.closes.drain(..) {
                 if !is_close_order_type(order.order_type)
@@ -3499,10 +3523,11 @@ mod core {
         let twel_candidate_count_long = twel_selected_long.len();
         let twel_candidate_count_short = twel_selected_short.len();
 
-        // Trim closes per symbol to position size (furthest-first).
+        // Select one protective reducer per symbol, preserve compatible ordinary closes, and cap
+        // their aggregate to position size with reducer quantity reserved first.
         for s in per_long.iter_mut().filter_map(|v| v.as_mut()) {
             let sym = &input.symbols[s.symbol_idx];
-            prune_lower_priority_closes(&mut s.closes, PositionSide::Long, &sym.order_book);
+            prune_competing_close_reducers(&mut s.closes, PositionSide::Long, &sym.order_book);
             trim_closes_to_position(
                 PositionSide::Long,
                 &mut s.closes,
@@ -3513,7 +3538,7 @@ mod core {
         }
         for s in per_short.iter_mut().filter_map(|v| v.as_mut()) {
             let sym = &input.symbols[s.symbol_idx];
-            prune_lower_priority_closes(&mut s.closes, PositionSide::Short, &sym.order_book);
+            prune_competing_close_reducers(&mut s.closes, PositionSide::Short, &sym.order_book);
             trim_closes_to_position(
                 PositionSide::Short,
                 &mut s.closes,
@@ -4259,7 +4284,7 @@ mod core {
         }
 
         #[test]
-        fn close_pruning_keeps_single_closest_same_priority_reducer() {
+        fn close_reducer_selection_keeps_single_closest_reducer_and_ordinary_close() {
             let order_book = OrderBook {
                 bid: 100.0,
                 ask: 101.0,
@@ -4279,13 +4304,25 @@ mod core {
                     price: 101.1,
                     order_type: OrderType::CloseAutoReduceTwelLong,
                 },
+                IdealOrder {
+                    symbol_idx: 0,
+                    pside: PositionSide::Long,
+                    qty: -0.2,
+                    price: 101.5,
+                    order_type: OrderType::CloseGridLong,
+                },
             ];
 
-            prune_lower_priority_closes(&mut closes, PositionSide::Long, &order_book);
+            prune_competing_close_reducers(&mut closes, PositionSide::Long, &order_book);
 
-            assert_eq!(closes.len(), 1);
-            assert_eq!(closes[0].order_type, OrderType::CloseAutoReduceTwelLong);
-            assert!((closes[0].price - 101.1).abs() < 1e-12);
+            assert_eq!(closes.len(), 2);
+            assert!(closes.iter().any(|order| {
+                order.order_type == OrderType::CloseAutoReduceTwelLong
+                    && (order.price - 101.1).abs() < 1e-12
+            }));
+            assert!(closes
+                .iter()
+                .any(|order| order.order_type == OrderType::CloseGridLong));
         }
 
         #[test]
@@ -4311,7 +4348,7 @@ mod core {
                 },
             ];
 
-            prune_lower_priority_closes(&mut closes, PositionSide::Long, &order_book);
+            prune_competing_close_reducers(&mut closes, PositionSide::Long, &order_book);
 
             assert_eq!(closes.len(), 1);
             assert_eq!(closes[0].order_type, OrderType::CloseAutoReduceWelLong);
@@ -4341,7 +4378,7 @@ mod core {
                 },
             ];
 
-            prune_lower_priority_closes(&mut closes, PositionSide::Short, &order_book);
+            prune_competing_close_reducers(&mut closes, PositionSide::Short, &order_book);
 
             assert_eq!(closes.len(), 1);
             assert_eq!(closes[0].order_type, OrderType::CloseAutoReduceWelShort);
@@ -4378,9 +4415,79 @@ mod core {
                 },
             ];
 
-            prune_lower_priority_closes(&mut closes, PositionSide::Long, &order_book);
+            prune_competing_close_reducers(&mut closes, PositionSide::Long, &order_book);
 
             assert_eq!(closes.len(), 3);
+        }
+
+        #[test]
+        fn close_reducer_selection_preserves_ordinary_closes_with_unstuck() {
+            let order_book = OrderBook {
+                bid: 100.0,
+                ask: 101.0,
+            };
+            let mut closes = vec![
+                IdealOrder {
+                    symbol_idx: 0,
+                    pside: PositionSide::Long,
+                    qty: -1.95,
+                    price: 100.0,
+                    order_type: OrderType::CloseUnstuckLong,
+                },
+                IdealOrder {
+                    symbol_idx: 0,
+                    pside: PositionSide::Long,
+                    qty: -26.24,
+                    price: 100.5,
+                    order_type: OrderType::CloseTrailingLong,
+                },
+            ];
+
+            prune_competing_close_reducers(&mut closes, PositionSide::Long, &order_book);
+
+            assert_eq!(closes.len(), 2);
+            assert!(closes
+                .iter()
+                .any(|order| order.order_type == OrderType::CloseUnstuckLong));
+            assert!(closes
+                .iter()
+                .any(|order| order.order_type == OrderType::CloseTrailingLong));
+        }
+
+        #[test]
+        fn close_reducer_selection_keeps_panic_exclusive() {
+            let order_book = OrderBook {
+                bid: 100.0,
+                ask: 101.0,
+            };
+            let mut closes = vec![
+                IdealOrder {
+                    symbol_idx: 0,
+                    pside: PositionSide::Long,
+                    qty: -10.0,
+                    price: 100.0,
+                    order_type: OrderType::ClosePanicLong,
+                },
+                IdealOrder {
+                    symbol_idx: 0,
+                    pside: PositionSide::Long,
+                    qty: -1.0,
+                    price: 101.0,
+                    order_type: OrderType::CloseUnstuckLong,
+                },
+                IdealOrder {
+                    symbol_idx: 0,
+                    pside: PositionSide::Long,
+                    qty: -2.0,
+                    price: 102.0,
+                    order_type: OrderType::CloseTrailingLong,
+                },
+            ];
+
+            prune_competing_close_reducers(&mut closes, PositionSide::Long, &order_book);
+
+            assert_eq!(closes.len(), 1);
+            assert_eq!(closes[0].order_type, OrderType::ClosePanicLong);
         }
 
         #[test]
@@ -5204,6 +5311,52 @@ mod core {
                 "expected -0.5, got {}",
                 trimmed.qty
             );
+        }
+
+        #[test]
+        fn trim_closes_reserves_protective_reducer_before_ordinary_close() {
+            let ob = OrderBook {
+                bid: 100.0,
+                ask: 100.0,
+            };
+            let exchange = ExchangeParams {
+                qty_step: 0.1,
+                price_step: 0.1,
+                min_qty: 0.0,
+                min_cost: 0.0,
+                c_mult: 1.0,
+                ..Default::default()
+            };
+            let mut closes = vec![
+                IdealOrder {
+                    symbol_idx: 0,
+                    pside: PositionSide::Long,
+                    qty: -1.0,
+                    price: 100.5,
+                    order_type: OrderType::CloseTrailingLong,
+                },
+                IdealOrder {
+                    symbol_idx: 0,
+                    pside: PositionSide::Long,
+                    qty: -1.0,
+                    price: 102.0,
+                    order_type: OrderType::CloseUnstuckLong,
+                },
+            ];
+
+            trim_closes_to_position(PositionSide::Long, &mut closes, 1.5, &ob, &exchange);
+
+            let reducer = closes
+                .iter()
+                .find(|order| order.order_type == OrderType::CloseUnstuckLong)
+                .unwrap();
+            let ordinary = closes
+                .iter()
+                .find(|order| order.order_type == OrderType::CloseTrailingLong)
+                .unwrap();
+            assert!((reducer.qty + 1.0).abs() < 1e-9);
+            assert!((ordinary.qty + 0.5).abs() < 1e-9);
+            assert!((closes.iter().map(|order| order.qty.abs()).sum::<f64>() - 1.5).abs() < 1e-9);
         }
 
         #[test]
