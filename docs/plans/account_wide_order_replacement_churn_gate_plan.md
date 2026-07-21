@@ -44,16 +44,15 @@ The proposed behavior is:
    - no wider match is uncertainty, not proof of replacement identity, and therefore fails open.
 5. Exempt market orders, explicitly risk-critical orders, and orders within the configured final
    market-distance threshold from allowance waiting. Only dedicated protective market panic may
-   bypass a dirty cancel-first conflict scope.
+   bypass the account-wide stale-cancellation barrier.
 6. Admit far churn-evidenced ordinary creates while fewer than ten connector-bound create attempts
    of any class remain in the account-wide rolling ten-minute window. Exempt creates always proceed
    but count for subsequent ordinary admission.
 7. Never retain a stale actual order while waiting. Cancel it and regenerate current Rust intent on
    a later cycle.
-8. Execute all non-panic creations cancel-first by the effective account-mode conflict scope:
-   symbol plus position side in true hedge mode, or the whole symbol in one-way mode. Cancel,
-   confirm authoritative balance, positions, open orders, and fills, regenerate the Rust plan, and
-   only then create.
+8. Execute all non-panic creations behind an account-wide cancel-first barrier. If any stale actual
+   exists, cancel, confirm authoritative balance, positions, open orders, and fills, regenerate the
+   complete Rust plan, and only then create in a later clean wave.
 
 This is an operational exchange-write economy layer. It does not alter Rust calculations, widen
 the actual-order reconciliation tolerance, replace CCXT/exchange rate limiting, or make event logs
@@ -162,6 +161,25 @@ contradictory remaining quantity blocks normal reconciliation for the affected s
 Matching is deterministic and one-to-one. One actual or historical observation cannot satisfy two
 current ideal orders.
 
+### One-way `position_side` attribution
+
+The exact cohort retains `position_side` even when the venue has one net position ledger. For a
+Passivbot-owned one-way order, normalize it deterministically in this order:
+
+1. prefer durable client-order/local execution metadata whose exact `pb_order_type` or explicit
+   field identifies long versus short;
+2. otherwise use the reviewed one-way intent tuple:
+   - non-close-only buy = long entry;
+   - non-close-only sell = short entry;
+   - close-only sell = long close;
+   - close-only buy = short close.
+
+Do not infer from the current held position: it can change after order placement and would re-label
+the same resting order across fills or restart. Unknown ownership, close-only effect, side, or
+ambiguous type attribution does not match a known ideal and blocks normal reconciliation for the
+affected symbol. Hyperliquid's current position-dependent helper must be replaced or bypassed for
+this canonical snapshot path before enabling the gate.
+
 ### Why `pb_order_type` is required
 
 Exact ordinary `pb_order_type` is mostly diagnostic today, but it is not universally non-causal.
@@ -268,19 +286,23 @@ the same logical presence answers at every relevant timestamp.
 ### Planning-policy compatibility
 
 History compatibility has both account-wide and scoped epochs because the Rust plan has
-account-wide dependencies. The account epoch covers effective balance, all positions, authoritative
-fills, global strategy/live configuration, effective hedge/one-way mode, approved/ignored sets,
-forager membership, and the complete effective `PB_modes` map. A change clears all ideal history
-before classifying the next complete Rust plan. A scoped epoch may additionally cover coin overrides
-or other inputs proven not to influence cross-symbol allocation; a scoped change clears only that
-scope. The conservative initial implementation must use the account-wide epoch when dependency is
-uncertain. Neither reset clears account-wide attempt timestamps: exchange writes already consumed
-remain consumed for the rolling window.
+account-wide dependencies. The account epoch covers exactly the non-market state passed to Rust
+that can change allocation: hysteresis-snapped wallet balance, raw realized wallet balance,
+per-symbol/position-side signed position size and average entry price, authoritative fill identity,
+global strategy/live configuration, effective hedge/one-way mode, approved/ignored sets, forager
+membership, and the complete effective `PB_modes` map. It excludes equity, available margin,
+unrealized PnL, mark/liquidation price, mark-to-market notional, and other price-derived exchange
+fields. A change clears all ideal history before classifying the next complete Rust plan. A scoped
+epoch may additionally cover coin overrides or other inputs proven not to influence cross-symbol
+allocation; a scoped change clears only that scope. The conservative initial implementation must
+use the account-wide epoch when dependency is uncertain. Neither reset clears account-wide attempt
+timestamps: exchange writes already consumed remain consumed for the rolling window.
 
-Continuously changing prices, EMAs, volatility, and trailing extrema are excluded; including them
-would continuously reset the evidence gate and defeat its purpose. An authoritative fill, balance
-phase change, or position size/price transition advances the account epoch because TWEL, entry
-gates, risk ordering, and portfolio sizing may change ideals on other symbols. This also preserves
+Continuously changing prices, EMAs, volatility, trailing extrema, and price-derived account fields
+are excluded; including them would continuously reset the evidence gate and defeat its purpose. A
+new authoritative fill identity, realized wallet-balance change, or signed position-size/average-
+entry-price transition advances the account epoch because TWEL, entry gates, risk ordering, and
+portfolio sizing may change ideals on other symbols. This also preserves
 the existing contract that every fill resets trailing extrema and prevents pre-fill evidence from
 suppressing the first entry, close, HSL, or re-entry order of the new account phase. Ordinary market
 price movement does not advance the epoch. If later Rust metadata exposes a proven dependency graph,
@@ -332,6 +354,16 @@ the immediately preceding snapshot. Slow cumulative drift can therefore break ti
 when each adjacent step is individually small. A gap fails open because Python cannot prove the
 same intent continued across it.
 
+“Contiguous” is explicit, not inferred from two timestamps. Increment a planning-generation counter
+for every attempted account-wide Rust planning cycle, including failures. A stability run may use
+only immediately consecutive successful generations; any unavailable/failed/invalid generation
+breaks it. Also require the current decision and every adjacent snapshot in the run to be separated
+by no more than `max(10 seconds, 3 * live.execution_delay_seconds)`. A larger wall-clock gap breaks
+the run even if no attempt was recorded. The tight prefix must span the full configured stability
+duration and contain at least two prior snapshots. After any generation or time gap, the candidate
+fails open until new contiguous evidence accumulates; two tight snapshots several minutes apart
+cannot clear older evidence.
+
 ### Deterministic matching
 
 Within each snapshot and cohort, matching must maximize one-to-one matches, minimize a normalized
@@ -380,8 +412,8 @@ The rolling churn allowance never delays:
 
 These exemptions apply only to churn-allowance waiting. They do not bypass readiness,
 authoritative-state, batch, or cancel-first sequencing. A non-panic Rust-promoted market order and a
-risk-critical limit still wait for cancellation, full confirmation, and a fresh plan when their
-effective conflict scope is dirty. Dedicated protective market panic is the sole same-wave
+risk-critical limit still wait for cancellation, full confirmation, and a fresh plan whenever any
+stale actual exists account-wide. Dedicated protective market panic is the sole same-wave
 cancel-first bypass.
 
 `reduce_only=true` alone is not an exemption. EMA-gated closes can churn too. Rust must explicitly
@@ -419,11 +451,12 @@ counter invalidates the cached estimate and requires refresh before an ordinary 
 Cancellations and allowance-exempt creates are never delayed by this overlay but still debit the
 cached estimate.
 
-Compute conservative snapshot headroom as
-`max(0, nRequestsCap - nRequestsUsed) + max(0, nRequestsSurplus)`, then subtract every logical local
-address action attempted after that snapshot. Reject non-finite, negative, or contradictory fields
-rather than clamping invalid payloads into availability. Fills may increase server capacity between
-polls, so local debiting can only understate headroom; refresh recovers it.
+Compute conservative normal snapshot headroom as
+`max(0, nRequestsCap - nRequestsUsed)`, then subtract every logical local address action attempted
+after that snapshot. `nRequestsSurplus` is diagnostic unused reserved allowance already reflected by
+the server's cap/usage accounting; never add it again. Reject non-finite, negative, or contradictory
+fields rather than clamping invalid payloads into availability. Fills may increase server capacity
+between polls, so local debiting can only understate headroom; refresh recovers it.
 
 If the authoritative response plus local debits shows no normal address-action headroom, defer far
 churn-evidenced ordinary creates even if the generic ten-minute window has capacity. The generic
@@ -470,48 +503,37 @@ ordinary order to be posted while its stale predecessor was not even sent for ca
 Existing recent-create suppression and state-change barriers help with ambiguous writes, but they
 do not establish a general cancel-confirm-replan-create contract.
 
-### Execution conflict scope
+### Account-wide create barrier
 
-Use a broader, effective-account-mode scope for write sequencing than for order satisfaction:
+Write sequencing is account-wide, not merely order-cohort-, position-side-, or symbol-scoped. Any
+stale actual order may partially fill before or during cancellation and change wallet balance,
+realized PnL, TWEL, entry gates, risk ordering, and portfolio allocation for other symbols in the
+same Rust plan. Without a Rust-owned dependency graph, no non-panic creation from that pre-cancel
+plan is proven fresh.
 
-```text
-true hedge mode: (symbol, position_side)
-one-way mode:     (symbol)
-```
-
-Order side, `reduce_only`, `pb_order_type`, time-in-force, and execution type are deliberately
-absent. Any stale order may partially fill before cancellation and change position size, balance,
-PnL, and the opposite-side entry or close ladder for the same position side. A stale grid order and
-a new trailing order, or a stale limit order promoted by Rust to ordinary market execution, also
-compete for the same position-side exposure during transition.
-
-In one-way mode, long and short are not independent exchange ledgers. A fill attributed to either
-Passivbot position side changes the single net position and can invalidate both directions' current
-plan. The conflict scope therefore collapses to the whole symbol whenever effective hedge mode is
-false, including exchanges such as Hyperliquid that do not support hedge mode. Use effective runtime
-capability plus config, not the requested config flag alone.
-
-This broader scope is only a sequencing barrier. It does not make unlike orders equivalent during
-reconciliation.
+Effective hedge/one-way mode still matters for exact actual-order attribution and diagnostics, but
+does not narrow this barrier. This conservative account-wide stall is the same dependency boundary
+used for planning failure and compatibility epochs. A future narrower barrier requires explicit
+Rust dependency metadata and separate review.
 
 ### Ordinary two-phase flow
 
 For each planning wave:
 
 1. Reconcile authoritative actual orders with the current valid Rust ideal.
-2. If any unmatched stale actual exists in a conflict scope, suppress every non-panic creation in
-   that scope for the entire wave—whether its cancellation is selected, truncated, succeeds,
-   fails, or is reported absent.
+2. If any unmatched stale actual exists anywhere, suppress every non-panic creation account-wide
+   for the entire wave—whether its cancellation is selected, truncated, succeeds, fails, or is
+   reported absent.
 3. Send the selected cancellation batch under existing limits and pacing.
-4. Request authoritative balance, positions, open-orders, and fills confirmation for affected
-   scopes and end those scopes' work for the wave. A positive cancellation acknowledgement does not
-   prove that no partial fill changed account state.
+4. Request authoritative balance, positions, open-orders, and fills confirmation and end all
+   non-panic creation work for the wave. A positive cancellation acknowledgement does not prove
+   that no partial fill changed account state.
 5. On the next loop, refresh state, regenerate the Rust plan, reconcile again, and create only in
-   scopes now confirmed clean.
+   a wave with no stale actual order.
 
-Independent scopes without stale actual orders may create in the same wave. This avoids a global
-one-cycle stall while preventing stale-predecessor duplicates. Every ordinary market creation obeys
-this barrier; market execution is not itself an emergency exemption.
+Every ordinary market creation and every risk-critical limit obeys this barrier; market execution
+is not itself an emergency exemption. The account pays at least one full planning loop of latency
+after any stale cancellation, and possibly more when cancellation batching leaves stale actuals.
 
 Every stale cancellation outcome requires full balance, positions, open-orders, and fills
 confirmation before replanning. Failed, ambiguous, not-found, already-filled, already-cancelled,
@@ -521,8 +543,8 @@ path may narrow this only when its response contract proves no fill and no accou
 ### Risk-critical sequencing
 
 Dedicated market panic may bypass the ordinary dependency path entirely. Every Rust-marked
-risk-critical limit order remains ahead of ordinary orders in final batching, but if its conflict
-scope has a stale actual order it must wait for cancellation, authoritative positions, balance,
+risk-critical limit order remains ahead of ordinary orders in final batching, but if any stale
+actual exists account-wide it must wait for cancellation, authoritative positions, balance,
 open-orders, and fills confirmation, and a fresh Rust plan. A positive cancel acknowledgement is
 insufficient: the cancelled order or another order may have filled before the acknowledgement and
 changed position size, PnL, risk, or close quantity.
@@ -536,8 +558,8 @@ success alone.
 
 For ordinary orders, a fresh Rust plan after confirmed cancellation is simpler and safer than
 carrying per-create dependency objects through batch truncation, partial success, fills, and
-position changes. The affected scope pays one loop of latency; independent scopes and emergency
-orders continue. This is an explicit reliability tradeoff, not an accidental delay.
+position changes. The account's non-panic creations pay one loop of latency; dedicated emergency
+market panic continues. This is an explicit reliability tradeoff, not an accidental delay.
 
 ## RAM-Only State and Restart Contract
 
@@ -660,8 +682,8 @@ This tradeoff must be measured in fake-live and, only with separate authority, l
 - Missing/stale Hyperliquid action-headroom state defers only far churn-evidenced ordinary creates;
   it never delays cancellations or allowance-exempt actions.
 - Ambiguous create attempts count once when connector-bound and use existing confirmation guards.
-- Every stale cancellation outcome blocks non-panic creation for its effective hedge/one-way
-  conflict scope and requires full balance/positions/open-orders/fills confirmation plus replanning.
+- Every stale cancellation outcome blocks all non-panic creation account-wide and requires full
+  balance/positions/open-orders/fills confirmation plus complete replanning.
 - Event publication failure changes no trading decision.
 - Existing exchange pacing, 429/backoff, readiness, ownership, risk, HSL, WEL/TWEL, mode, and
   authoritative-state barriers retain precedence.
@@ -675,7 +697,7 @@ Add bounded diagnostic events/reason codes for:
 - churn evidence present/absent;
 - admission by exemption, distance, or rolling allowance;
 - deferral by allowance or unavailable final distance;
-- conflict-scope create suppression;
+- account-wide post-cancellation create suppression;
 - cancellation acknowledgement, ambiguity, truncation, confirmation, and replan;
 - final risk priority and connector-bound attempt accounting.
 
@@ -692,13 +714,13 @@ events use bounded periodic summaries.
   not identity, and exemptions bound missed-fill risk.
 - A move beyond wider tolerance may be admitted as uncertain; this favors fills and targets the
   observed repetitive small-drift problem.
-- Ordinary cancel-first sequencing adds one loop of latency in an affected conflict scope; it
-  removes stale-plan and truncated-cancel duplicate hazards.
+- Cancel-first sequencing adds at least one loop of non-panic creation latency account-wide; it
+  removes stale-plan and truncated-cancel duplicate hazards across Rust's global dependencies.
 - RAM reset temporarily restores baseline write churn; it does not weaken the current Rust plan or
   safety barriers.
 - Account-wide means one bot execution authority, not multiple processes sharing exchange limits.
-- Risk-critical limit orders in a dirty conflict scope incur one refresh/replan loop; only dedicated
-  market panic bypasses that sequencing barrier.
+- Risk-critical limit orders incur refresh/replan latency whenever any stale actual exists; only
+  dedicated market panic bypasses that sequencing barrier.
 
 ## Resolution of Review Findings
 
@@ -714,8 +736,8 @@ events use bounded periodic summaries.
    use. The rationale and unknown-attribution behavior are explicit.
 4. **Close-only effect:** canonical `reduce_only` remains an exact key, but means authoritative
    venue-native close-only effect; generic side/position-side inference is forbidden.
-5. **Cancel/create races:** all ordinary creates in a conflict scope wait for cancel confirmation,
-   fresh state, and a fresh Rust plan. Batch truncation cannot strand a dependent creation.
+5. **Cancel/create races:** all non-panic creates account-wide wait for cancel confirmation, fresh
+   state, and a fresh Rust plan. Batch truncation cannot strand a dependent creation.
 6. **Ordinary market promotion:** execution type is removed from the sequencing scope, so a
    Rust-promoted market creation cannot bypass its stale limit predecessor.
 7. **WEEX close semantics:** WEEX must normalize and verify its authoritative V3 response/action
@@ -732,8 +754,8 @@ events use bounded periodic summaries.
     original submitted amount after a partial fill.
 13. **Paradex scope:** Paradex is explicitly experimental and excluded from production rollout;
     its rate-limit row is comparative research only.
-14. **Cross-side cancellation races:** any stale actual dirties the whole symbol/position-side in
-    true hedge mode, so an entry cancellation cannot race a stale-plan close or vice versa.
+14. **Cross-side cancellation races:** any stale actual activates the account-wide non-panic create
+    barrier, so no entry/close or cross-symbol stale-plan create can race its cancellation.
 15. **Exempt action accounting:** market, risk-critical, and near-market creates always proceed but
     count against later ordinary capacity.
 16. **Account-wide Rust failures:** no per-symbol salvage is attempted from an all-or-nothing Rust
@@ -742,20 +764,31 @@ events use bounded periodic summaries.
     account-wide history without refunding action timestamps.
 18. **Cancellation confirmation:** every stale cancellation requests full account-state and fill
     confirmation unless a future connector proves a no-fill outcome.
-19. **One-way conflicts:** effective one-way mode collapses cancel-first scope to the whole symbol;
-    only true hedge mode may isolate position sides.
+19. **One-way conflicts:** effective one-way mode is explicit in attribution and epoch state; the
+    final cancellation barrier is now account-wide for hedge and one-way modes alike.
 20. **Bitget UTA close semantics:** its documented `side` plus `posSide` hedge action overrides a
     literal `reduceOnly=NO`; classic/one-way Bitget handling stays separate.
-21. **Cross-symbol risk state:** fills, balance/position phases, global config/list/mode changes, and
-    uncertain dependencies advance an account epoch and clear all ideal history.
+21. **Cross-symbol risk state:** fill identity, realized Rust balance/position inputs, global
+    config/list/mode changes, and uncertain dependencies advance an account epoch and clear all
+    ideal history; price-derived exchange state does not.
 22. **Runtime eligibility:** effective `PB_modes`, approved/ignored sets, forager membership, and
     hedge capability are explicit compatibility inputs.
 23. **Market wording:** market/risk/near exemptions apply only to allowance waiting; dedicated
-    protective market panic is the sole dirty-scope same-wave bypass.
+    protective market panic is the sole account-wide stale-barrier same-wave bypass.
 24. **Recovered stability:** a newest contiguous tight run spanning the stability horizon clears
     older wider evidence; gaps fail open.
 25. **Hyperliquid capacity:** authoritative `userRateLimit` headroom plus local logical-action
     debits overlays the generic economy window; elapsed time never fabricates address refill.
+26. **Hyperliquid surplus arithmetic:** normal headroom is `cap - used`; surplus remains diagnostic
+    and is never double-counted.
+27. **Stability gaps:** failed generations and explicit derived cadence gaps break the tight prefix;
+    sparse snapshots cannot prove stability.
+28. **Price-driven epoch fields:** only realized Rust balance inputs, signed position size/average
+    entry, fill identity, and static/runtime policy enter epochs; mark-to-market fields are excluded.
+29. **Cross-symbol cancel dependency:** any stale cancellation blocks every non-panic create until a
+    full authoritative refresh and complete Rust replan.
+30. **One-way position attribution:** prefer durable PB metadata, otherwise use the reviewed
+    order-side plus close-only tuple; current position inference is forbidden.
 
 ### Earlier findings retained
 
@@ -783,6 +816,8 @@ events use bounded periodic summaries.
 - unknown actual type/close-only fail-closed behavior for every connector adapter;
 - no generic side/position-side inference of close-only; focused WEEX V3 and Bitget UTA action-tuple
   fixtures prove their explicit connector-native mappings;
+- one-way pside attribution prefers durable PB metadata, then covers all four side/close-only tuples;
+  current-position changes cannot relabel a resting order and unknown attribution fails closed;
 - one historical observation cannot satisfy multiple current candidates;
 - raw list reordering and dictionary order do not change outcomes.
 
@@ -798,16 +833,19 @@ events use bounded periodic summaries.
 - a newest contiguous tight run spanning the stability horizon clears older wider evidence;
 - adjacent tiny steps whose cumulative current-to-snapshot drift breaks tight tolerance remain
   churn-evidenced until genuinely stable;
-- gaps before the stability horizon fail open rather than inherit older evidence;
+- failed planning generations, a stale current decision, and adjacent gaps above
+  `max(10 seconds, 3 * execution_delay_seconds)` break stability and fail open;
+- sparse tight snapshots cannot satisfy the stability duration or minimum-snapshot requirement;
 - no wider association admits as uncertain;
 - price-only and quantity-only churn;
 - neighboring grids, duplicate levels, growing/shrinking ladders, equal-cardinality rolls;
 - evidence expires exactly with the rolling window;
 - a scoped coin-override revision resets compatible history; global config, approved/ignored,
   forager membership, effective mode, and hedge-capability revisions reset account-wide history;
-- price, EMA, volatility, and trailing extrema movement without a fill do not reset history;
-- authoritative fills, balance phase changes, and unexplained position size/price transitions reset
-  account-wide history before the first new-phase plan is classified;
+- price, EMA, volatility, trailing extrema, equity, available margin, unrealized PnL, mark/liquidation
+  price, and mark-to-market notional changes do not reset history;
+- authoritative fill identity, raw/snapped realized wallet balance, signed position size, and
+  average-entry-price transitions reset account-wide history before the first new-phase plan;
 - a policy-history reset does not clear account-wide attempt timestamps;
 - compaction, if implemented, preserves logical results across fast/slow planning cadence.
 
@@ -823,23 +861,19 @@ events use bounded periodic summaries.
 - local deferrals count zero;
 - final price movement near-to-far consumes capacity or defers and far-to-near admits;
 - missing/stale/non-finite final market data defers without fabrication;
-- concurrent candidates cannot oversubscribe current capacity.
+- concurrent candidates cannot oversubscribe current capacity;
 - Hyperliquid `userRateLimit` headroom, local logical signed-action debits, unobserved-action cache
   invalidation, stale/unavailable snapshots, batch-member accounting, and exempt-action no-wait
-  behavior;
+  behavior; positive surplus is diagnostic and never added to `cap - used`.
 
 ### Cancel-first executor
 
-- in true hedge mode, any stale actual suppresses every non-panic create for the same
-  symbol/position-side, including opposite order-side and close-only semantics;
-- in effective one-way mode, any stale actual suppresses every non-panic create for the whole
-  symbol, including the opposite Passivbot position side;
+- any stale actual suppresses every non-panic create account-wide in hedge and one-way modes;
 - selected, truncated, failed, ambiguous, and absent cancellation outcomes;
 - every stale cancellation outcome, including positive acknowledgement, requires next-cycle full
   balance/positions/open-orders/fills confirmation for ordinary work;
 - fills and manual position changes regenerate different Rust intent before create;
-- independent conflict scopes may create in the cancellation wave only as permitted by effective
-  account mode;
+- no independent symbol or position-side may create in the stale-cancellation wave;
 - dedicated market panic bypasses ordinary sequencing;
 - ordinary Rust-promoted market creation cannot escape a stale limit conflict;
 - risk-critical limits replan after every stale cancellation, including positive acknowledgements
@@ -884,10 +918,11 @@ events use bounded periodic summaries.
 
 ### Slice 3: cancel-first reconciler/executor overhaul
 
-- Separate exact satisfaction cohorts from effective-mode execution conflict scopes.
-- Suppress ordinary scoped creations whenever stale actual orders exist.
-- Cancel, request authoritative confirmation, end affected scopes, and replan next cycle.
-- Preserve independent-scope concurrency and explicit emergency paths.
+- Separate exact satisfaction cohorts from the account-wide cancellation/create barrier.
+- Suppress all non-panic creations whenever any stale actual order exists.
+- Cancel, request full authoritative confirmation, end account-wide non-panic creation work, and
+  replan next cycle.
+- Preserve only the explicit dedicated market-panic emergency path.
 - Consolidate overlapping recent-create, cancellation, and state-change delay machinery where tests
   prove simplification is safe.
 
@@ -917,7 +952,7 @@ At minimum, the implementation PR must run:
 - Rust tests plus rebuilt and verified Python extension where Rust metadata changes;
 - config schema/default/template/CLI/roundtrip and retired-setting migration tests;
 - pure normalization, matching, per-symbol history, rolling-window, and reset tests;
-- reconciler/executor cancellation, ambiguity, conflict-scope, final-distance, and batch tests;
+- reconciler/executor cancellation, ambiguity, account-wide barrier, final-distance, and batch tests;
 - static/moving/mixed-risk multi-symbol fake-live scenarios across every connector harness;
 - live-event registry/query/sink-failure/bounded-projection tests;
 - `PYTHONPATH=src python src/tools/check_ai_docs.py`;
@@ -925,8 +960,8 @@ At minimum, the implementation PR must run:
 - `git diff --check`.
 
 Report exact base/head SHAs and cycle-level evidence containing current normalized Rust ideal,
-actual order state, historical tight/wider result, churn evidence, cancellation outcome, conflict
-scope state, rolling usage, final distance/priority, and connector-bound action.
+actual order state, historical tight/wider result, churn evidence, cancellation outcome,
+account-wide barrier state, rolling usage, final distance/priority, and connector-bound action.
 
 ## Rollout and Measurement
 
@@ -934,7 +969,7 @@ After offline validation and separate live authorization:
 
 1. Run one controlled account with structured DEBUG execution evidence.
 2. Measure ideal stability/churn, admissions, deferrals, cancellations, fills, 429s, ambiguity, and
-   conflict-scope latency.
+   account-wide post-cancellation latency.
 3. Prove the gate never leaves an out-of-tolerance stale actual order resting.
 4. Inspect static grids, changing ladders, EMA Anchor entries/closes, trailing, forager changes, and
    one-for-one capacity release.
@@ -952,11 +987,13 @@ consequences, and connector assumptions—not merely wording:
   close-only effect, and execution type, while correctly excluding placement-only TIF/post-only?
 - Are the WEEX V3 and Bitget UTA action-tuple mappings narrow, documented, and incapable of
   increasing/flipping the scoped position?
+- Is one-way `position_side` attribution deterministic from durable PB metadata or the four reviewed
+  side/close-only tuples, never current position state?
 - Can every connector recover those fields without fabrication, and is fail-closed scope correct?
 - Is Defx's explicit unsupported boundary clear enough that stale adapter code cannot expand scope?
 - Is Paradex's experimental, comparative-only boundary equally clear?
-- Does conflict scope correctly use symbol/position-side only in true hedge mode and collapse to
-  symbol in effective one-way mode?
+- Does any stale actual block every non-panic creation account-wide until full confirmation and a
+  complete fresh Rust plan, with no cross-symbol same-wave escape?
 - Can any cancellation truncation, ambiguity, fill, manual action, or race still send an ordinary
   order from a stale Rust plan?
 - Does every non-panic market creation obey the stale-limit barrier?
@@ -969,19 +1006,21 @@ consequences, and connector assumptions—not merely wording:
   equal-cardinality rolls?
 - Does the contiguous tight stability horizon clear stale evidence without allowing slowly drifting
   orders to evade detection?
+- Do failed generations, explicit cadence gaps, and sparse snapshots break stability deterministically?
 - Is failing open on no wider match preferable to trying to infer identity for large moves?
 - Is 0.2% an appropriate initial evidence tolerance, and what fake-live cases could falsify it?
 - Does the generic attempt counter model rolling-window connectors reasonably, and does the
-  separate Hyperliquid `userRateLimit` overlay avoid inventing refill or delaying exempt actions?
+  separate Hyperliquid `userRateLimit` overlay use `cap - used` without double-counting surplus,
+  inventing refill, or delaying exempt actions?
 - Are near-market, market, and risk-critical attempts correctly exempt from allowance waiting yet
   still counted and still subject to all non-allowance safety barriers?
 - Can a stale order ever remain while a replacement is gated?
 - Is the one-cycle ordinary latency acceptable for parity and missed-fill risk?
 - Is the proposed RAM-only canonical exception truly bounded to operational economy and incapable
   of weakening safety after reset?
-- Do account/scoped compatibility epochs reset cross-symbol fills, balance/position phases,
-  effective modes, lists, forager membership, and operator changes without including continuously
-  moving indicators or refunding account-wide attempt usage?
+- Do account/scoped compatibility epochs reset exact realized Rust balance/position/fill inputs,
+  effective modes, lists, forager membership, and operator changes while excluding equity, margin,
+  unrealized PnL, mark/liquidation prices, other moving fields, and attempt-ledger refunds?
 - What interactions remain with config reload, forager symbol churn, HSL, WEL/TWEL, unstuck,
   auto-reduce, graceful stop, hedge mode, and one-way mode?
 
