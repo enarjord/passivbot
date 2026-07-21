@@ -502,12 +502,15 @@ counter invalidates the cached estimate and requires refresh before an ordinary 
 Cancellations and allowance-exempt creates are never delayed by this overlay but still debit the
 cached estimate.
 
-Compute conservative normal snapshot headroom as
-`max(0, nRequestsCap - nRequestsUsed)`, then subtract every logical local address action attempted
-after that snapshot. `nRequestsSurplus` is diagnostic unused reserved allowance already reflected by
-the server's cap/usage accounting; never add it again. Reject non-finite, negative, or contradictory
-fields rather than clamping invalid payloads into availability. Fills may increase server capacity
-between polls, so local debiting can only understate headroom; refresh recovers it.
+Compute snapshot headroom as
+`max(0, nRequestsCap - nRequestsUsed + nRequestsSurplus)`, then subtract every logical local address
+action attempted after that snapshot. The official response defines `nRequestsUsed` as
+`max(0, cumulative_used - reserved)` and `nRequestsSurplus` as
+`max(0, reserved - cumulative_used)`. Surplus is therefore unused prepaid request weight which
+extends headroom once used has bottomed out at zero; omitting it discards real reserved capacity.
+Reject non-finite, negative, or contradictory fields rather than clamping invalid payloads into
+availability. Fills may increase server capacity between polls, so local debiting can only
+understate headroom; refresh recovers it.
 
 If the authoritative response plus local debits shows no normal address-action headroom, defer far
 churn-evidenced ordinary creates even if the generic ten-minute window has capacity. The generic
@@ -847,8 +850,8 @@ events use bounded periodic summaries.
     older wider evidence; gaps fail open.
 25. **Hyperliquid capacity:** authoritative `userRateLimit` headroom plus local logical-action
     debits overlays the generic economy window; elapsed time never fabricates address refill.
-26. **Hyperliquid surplus arithmetic:** normal headroom is `cap - used`; surplus remains diagnostic
-    and is never double-counted.
+26. **Hyperliquid surplus arithmetic:** headroom is `cap - used + surplus`; the mutually exclusive
+    used/surplus fields are validated before unused prepaid weight is admitted.
 27. **Stability gaps:** failed generations and explicit derived cadence gaps break the tight prefix;
     sparse snapshots cannot prove stability.
 28. **Price-driven epoch fields:** only realized Rust balance inputs, signed position size/average
@@ -953,7 +956,7 @@ events use bounded periodic summaries.
 - concurrent candidates cannot oversubscribe current capacity;
 - Hyperliquid `userRateLimit` headroom, local logical signed-action debits, unobserved-action cache
   invalidation, stale/unavailable snapshots, batch-member accounting, and exempt-action no-wait
-  behavior; positive surplus is diagnostic and never added to `cap - used`.
+  behavior; positive unused reserved surplus extends `cap - used` headroom exactly once.
 
 ### Cancel-first executor
 
@@ -1113,8 +1116,8 @@ consequences, and connector assumptions—not merely wording:
 - Is failing open on no wider match preferable to trying to infer identity for large moves?
 - Is 0.2% an appropriate initial evidence tolerance, and what fake-live cases could falsify it?
 - Does the generic attempt counter model rolling-window connectors reasonably, and does the
-  separate Hyperliquid `userRateLimit` overlay use `cap - used` without double-counting surplus,
-  inventing refill, or delaying exempt actions?
+  separate Hyperliquid `userRateLimit` overlay use `cap - used + surplus` without omitting prepaid
+  capacity, inventing refill, or delaying exempt actions?
 - Are near-market, market, and risk-critical attempts correctly exempt from allowance waiting yet
   still counted and still subject to all non-allowance safety barriers?
 - Can a stale order ever remain while a replacement is gated?
