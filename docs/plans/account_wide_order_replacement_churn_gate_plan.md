@@ -36,9 +36,11 @@ The proposed behavior is:
    minutes.
 2. Reconcile current actual and ideal orders one-to-one under the existing tight tolerance and an
    exact execution-semantic cohort.
-3. Cancel every unmatched stale actual order regardless of churn-gate state.
-4. For each unmatched current ideal order, look independently in each prior valid snapshot for a
-   deterministic one-to-one match in the same cohort:
+3. Cancel every unmatched stale actual order in bot-managed semantic scope regardless of
+   churn-gate state. Orders in intentionally unmanaged scope do not arm the stale-cancellation
+   barrier; orders whose scope cannot be proven arm the separate fail-closed creation barrier.
+4. For every cohort, associate the complete current and historical groups one-to-one within each
+   prior valid snapshot before classifying individual unmatched current ideals:
    - a tight match is evidence of stability in that snapshot;
    - a wider-but-not-tight match is direct price/quantity churn evidence;
    - no wider match is uncertainty, not proof of replacement identity, and therefore fails open.
@@ -129,6 +131,10 @@ Management is mode- and intent-scoped, not ownership-scoped:
 - `normal` and other fully bot-managed modes cancel every unmatched actual order in scope,
   including user-created orders, and recreate every missing current Rust ideal after the ordinary
   sequencing barriers are clear;
+- `panic` is fully bot-managed: unmatched entries and obsolete closes are cancelled while only the
+  current Rust panic intent is created, with the separately reviewed dedicated market-panic bypass;
+- `graceful_stop` is fully bot-managed: unmatched orders are cancelled and only the current Rust
+  graceful-stop ideal is recreated, so a flat side cannot revive an obsolete entry;
 - `manual` leaves both entries and closes unmanaged: no creation and no cancellation;
 - `tp_only` leaves entries unmanaged but manages closes normally;
 - `tp_only_with_active_entry_cancellation` creates no entries, actively removes stale entry orders,
@@ -321,6 +327,13 @@ epoch may additionally cover coin overrides or other inputs proven not to influe
 allocation; a scoped change clears only that scope. The conservative initial implementation must
 use the account-wide epoch when dependency is uncertain. Neither reset clears account-wide attempt
 timestamps: exchange writes already consumed remain consumed for the rolling window.
+
+Because snapshots are captured after exchange precision and sizing normalization, each symbol's
+scoped compatibility epoch also includes its effective price step, quantity step, minimum quantity,
+minimum cost, contract multiplier, active flag, and any other order-validity constraint used by the
+normalizer. `init_markets()` may refresh these values while the process remains alive. A change
+clears that symbol's history before classifying its next current ideal; it does not require an
+account-wide reset unless the changed metadata also alters an account-wide Rust input.
 
 Continuously changing prices, EMAs, volatility, trailing extrema, and price-derived account fields
 are excluded; including them would continuously reset the evidence gate and defeat its purpose. A
@@ -615,7 +628,7 @@ Add canonical `config.live` fields:
 
 | Field | Default | Meaning |
 |---|---:|---|
-| `order_replacement_churn_gate_activation_count` | `10` | Rolling account-wide create-attempt count below which far churn-evidenced ordinary creates may proceed. Exempt creates always proceed but count. `0` disables churn gating. |
+| `order_replacement_churn_gate_activation_count` | `10` | Rolling account-wide create-attempt count below which far churn-evidenced ordinary creates may proceed. Exempt creates always proceed but count. `0` disables only far churn-evidenced economy deferral; exact reconciliation, stale cancellation, and cancel-confirm-refresh-replan safety remain active. |
 | `order_replacement_churn_gate_window_minutes` | `10.0` | Per-symbol evidence and account-wide attempt window. |
 | `order_replacement_churn_gate_stability_minutes` | `2.0` | Newest contiguous tight-match duration that clears older wider churn evidence. |
 | `order_replacement_churn_gate_market_dist_pct` | `0.005` | Final market-distance threshold that always exempts a limit creation from allowance waiting; 0.5%. |
