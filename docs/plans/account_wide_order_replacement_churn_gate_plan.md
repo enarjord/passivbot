@@ -329,6 +329,12 @@ practical to the connector call, after cancellations, configuration work, and au
 barriers. A candidate that moved near is admitted; one that moved far must have capacity or be
 deferred. Missing/non-finite/stale market data defers an affected ordinary create.
 
+Use the existing side-aware convention: `1 - order_price / market_price` for buys and
+`order_price / market_price - 1` for sells. Admit when the result is less than or equal to the
+threshold, so a marketable negative distance is also inside the gate. Validate the market price
+before calling the helper; its legacy zero fallback for an invalid market price must not become a
+false near-market admission.
+
 ### Final batch priority
 
 Exemption from the churn gate does not bypass readiness or authoritative-state safety barriers.
