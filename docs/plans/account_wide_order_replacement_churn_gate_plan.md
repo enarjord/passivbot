@@ -307,8 +307,10 @@ plan: append no snapshots and perform no ordinary reconciliation for any symbol.
 same decision per symbol or salvage partial output in Python. Symbol-scoped validity begins only
 after a complete Rust result exists; a downstream normalization or required-input failure then
 blocks only that symbol while healthy symbols continue. A valid empty symbol plan appends an empty
-snapshot and removes stale orders for that symbol. A future partial-result Rust API must preserve
-account-wide decisions explicitly before this boundary may be narrowed.
+snapshot and removes stale orders for that symbol. The account-critical open-orders exception is
+stricter: unknown or contradictory remaining quantity or semantic scope makes that surface
+unavailable and blocks every exchange write until a clean refresh. A future partial-result Rust
+API must preserve account-wide decisions explicitly before this boundary may be narrowed.
 
 Append the current snapshot only after its decision, or otherwise exclude it from its own history.
 Prune by the configured window. Consecutive identical snapshots may be compacted only if tests prove
@@ -728,7 +730,8 @@ This tradeoff must be measured in fake-live and, only with separate authority, l
 
 - Invalid config fails startup.
 - Account-wide Rust planning failure appends no snapshots and performs no ordinary actions; a
-  symbol-scoped failure after a complete Rust result blocks only that symbol.
+  symbol-scoped failure after a complete Rust result blocks only that symbol unless it makes an
+  account-critical surface such as open orders unavailable.
 - A valid empty symbol plan is authoritative and may cancel all stale orders in bot-managed scopes
   for that symbol.
 - Unknown `pb_order_type` or execution type cannot satisfy a current ideal but does not by itself
