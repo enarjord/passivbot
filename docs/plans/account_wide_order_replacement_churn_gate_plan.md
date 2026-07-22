@@ -148,6 +148,12 @@ proven; missing `pb_order_type` or client ownership metadata alone is not a no-c
 the management scope is authoritative. The dedicated protective market-panic path retains its
 existing separately reviewed authority.
 
+This mode-scoped management rule does not retire the existing competing-writer safety detector.
+Open-order snapshots run that detector before reconciliation; repeated evidence that another
+Passivbot process is writing to the account still stops this bot. Passivbot-looking ownership
+metadata is not a keep/cancel criterion only after that independent safety check has allowed the
+cycle to continue.
+
 ### Missing inputs are not fabricated
 
 Invalid, partial, or unavailable planning results append no history. A deliberate valid Rust result
@@ -207,8 +213,9 @@ one-way actual order, normalize it deterministically in this order:
 
 Do not infer from the current held position: it can change after order placement and would re-label
 the same resting order across fills or restart. Unknown close-only effect, side, or ambiguous
-position-side attribution prevents proving the applicable management scope and therefore blocks
-normal reconciliation for the affected symbol. Missing client ownership metadata does not.
+position-side attribution prevents proving the applicable management scope and therefore makes the
+account-critical open-orders surface unavailable, blocking every exchange write account-wide
+until a clean authoritative refresh resolves it. Missing client ownership metadata does not.
 Hyperliquid's current position-dependent helper must be replaced or bypassed for this canonical
 snapshot path before enabling the gate. Hyperliquid fill normalization already produces
 `position_side` from authoritative direction/close semantics; that does not make the current
@@ -586,7 +593,9 @@ For each planning wave:
 2. If any actual order has a malformed required field or ambiguous position-side/entry-close
    semantics, treat the account-critical open-orders surface as unavailable: send no cancellation
    or creation and request a clean authoritative refresh. An intentionally unmanaged actual in
-   `manual` or the entry portion of `tp_only` is not malformed and does not arm this barrier.
+   `manual` or the entry portion of `tp_only` is not stale managed work and does not arm the
+   cancellation barrier below, but it must still be fully well formed; a missing or contradictory
+   required field on an unmanaged order arms this account-wide no-write readiness barrier.
 3. Otherwise, if any unmatched stale actual exists in proven bot-managed semantic scope, suppress
    every non-panic creation account-wide for the entire wave—whether its cancellation is selected,
    truncated, succeeds, fails, or is reported absent—and send only the selected cancellation batch
