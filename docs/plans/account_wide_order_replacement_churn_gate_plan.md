@@ -351,17 +351,20 @@ the same logical presence answers at every relevant timestamp.
 ### Planning-policy compatibility
 
 History compatibility has both account-wide and scoped epochs because the Rust plan has
-account-wide dependencies. The account epoch covers exactly the non-market state passed to Rust
-that can change allocation: hysteresis-snapped wallet balance, raw realized wallet balance,
-per-symbol/position-side signed position size and average entry price, authoritative fill identity,
-the exact `realized_pnl_cumsum_max` and `realized_pnl_cumsum_last` values passed to Rust, global
-strategy/live configuration, effective hedge/one-way mode, approved/ignored sets, forager
-membership, and the complete effective `PB_modes` map. It excludes equity, available margin,
+account-wide dependencies. The account epoch covers hysteresis-snapped wallet balance, raw realized
+wallet balance, per-symbol/position-side signed position size and average entry price,
+authoritative fill identity, the exact `realized_pnl_cumsum_max` and
+`realized_pnl_cumsum_last` values passed to Rust, global strategy/live configuration, and effective
+hedge/one-way mode. It excludes equity, available margin,
 unrealized PnL, mark/liquidation price, mark-to-market notional, and other price-derived exchange
 fields. A change clears all ideal history before classifying the next complete Rust plan. A scoped
-epoch may additionally cover coin overrides or other inputs proven not to influence cross-symbol
-allocation; a scoped change clears only that scope. The conservative initial implementation must
-use the account-wide epoch when dependency is uncertain. Neither reset clears account-wide attempt
+epoch covers each symbol's effective `PB_modes`, approved/ignored membership, forager membership,
+and active-universe membership. A scoped change clears only that symbol's history. This prevents a
+rotating empty forager slot from continuously erasing evidence for unrelated resting orders. It is
+safe despite cross-symbol allocation effects because Rust's current ideal remains authoritative:
+the reconciliation path still cancels stale actuals immediately, and any resulting price/quantity
+change is observed directly by the history classifier. Global config changes remain account-wide,
+including operator changes to configured modes or lists. Neither reset clears account-wide attempt
 timestamps: exchange writes already consumed remain consumed for the rolling window.
 
 Because snapshots are captured after exchange precision and sizing normalization, each symbol's
@@ -942,10 +945,11 @@ events use bounded periodic summaries.
 20. **Bitget UTA close semantics:** its documented `side` plus `posSide` hedge action overrides a
     literal `reduceOnly=NO`; classic/one-way Bitget handling stays separate.
 21. **Cross-symbol risk state:** fill identity, realized Rust balance/position inputs, global
-    config/list/mode changes, and uncertain dependencies advance an account epoch and clear all
-    ideal history; price-derived exchange state does not.
+    configuration changes, and uncertain dependencies advance an account epoch and clear all ideal
+    history; price-derived exchange state does not.
 22. **Runtime eligibility:** effective `PB_modes`, approved/ignored sets, forager membership, and
-    hedge capability are explicit compatibility inputs.
+    active-universe membership are symbol-scoped compatibility inputs; hedge capability remains
+    account-wide.
 23. **Market wording:** market/risk/near exemptions apply only to allowance waiting; dedicated
     protective market panic is the sole account-wide stale-barrier same-wave bypass.
 24. **Recovered stability:** a newest contiguous tight run spanning the stability horizon clears
@@ -1042,8 +1046,9 @@ events use bounded periodic summaries.
 - price-only and quantity-only churn;
 - neighboring grids, duplicate levels, growing/shrinking ladders, equal-cardinality rolls;
 - evidence expires exactly with the rolling window;
-- a scoped coin-override revision resets compatible history; global config, approved/ignored,
-  forager membership, effective mode, and hedge-capability revisions reset account-wide history;
+- a scoped coin-override revision resets compatible history; runtime approved/ignored membership,
+  forager membership, effective mode, and active-universe changes reset only the affected symbol;
+  global configuration and hedge-capability revisions reset account-wide history;
 - an hourly `init_markets()` refresh that changes price/quantity steps, minimums, contract
   multiplier, active status, or another normalization constraint resets only the affected symbol's
   history before its next classification; unchanged metadata and volatile raw exchange `info` do
@@ -1264,9 +1269,9 @@ consequences, and connector assumptions—not merely wording:
 - Is the proposed RAM-only canonical exception truly bounded to operational economy and incapable
   of weakening safety after reset?
 - Do account/scoped compatibility epochs reset exact realized Rust balance/position/fill and
-  realized-PnL cumulative max/last inputs, effective modes, lists, forager membership, and operator
-  changes while excluding equity, margin, unrealized PnL, mark/liquidation prices, other moving
-  fields, and attempt-ledger refunds?
+  realized-PnL cumulative max/last inputs account-wide, runtime modes/lists/forager membership only
+  for affected symbols, and configured operator changes account-wide, while excluding equity,
+  margin, unrealized PnL, mark/liquidation prices, other moving fields, and attempt-ledger refunds?
 - What interactions remain with config reload, forager symbol churn, HSL, WEL/TWEL, unstuck,
   auto-reduce, graceful stop, hedge mode, and one-way mode?
 

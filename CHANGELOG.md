@@ -8,8 +8,10 @@ All notable user-facing changes will be documented in this file.
   reported `reduceOnly=false`; WEEX close-only effect now follows its authoritative `side` plus
   `positionSide` action tuple. WEEX account equity is also normalized to realized wallet balance by
   excluding unrealized PnL, restoring live/backtest risk-input parity and preventing mark-to-market
-  churn-history resets. Repeated unchanged churn deferrals and history-reset diagnostics now remain
-  durable in structured events while INFO output is summarized at most every five minutes.
+  churn-history resets. Runtime forager/mode/list changes now invalidate churn evidence only for the
+  affected symbol, so a rotating empty forager slot cannot erase unrelated history account-wide.
+  Repeated unchanged churn deferrals and history-reset diagnostics now remain durable in structured
+  events while INFO output is summarized at most every five minutes.
 - Configs using the retired `live.initial_entry_exec_max_market_dist_pct` now migrate automatically
   to the account-wide replacement-churn gate. Positive values preserve the market-distance
   threshold and hydrate the other new settings from canonical defaults; null and non-positive values

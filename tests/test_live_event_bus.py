@@ -2374,6 +2374,58 @@ def test_create_filter_emitter_reports_whether_live_event_emission_succeeded():
     assert live_event_emitters.emit_execution_create_filter_event(bot, **kwargs) is True
 
 
+def test_order_churn_emitters_use_valid_live_event_statuses():
+    emitted = []
+
+    class Bot:
+        exchange = "weex"
+        user = "weex_01"
+
+        @staticmethod
+        def _current_live_event_cycle_id():
+            return "cy_1"
+
+        @staticmethod
+        def _emit_live_event(event_type, **kwargs):
+            event = LiveEvent(event_type, **kwargs)
+            emitted.append(event)
+            return event
+
+    bot = Bot()
+    assert live_event_emitters.emit_order_churn_evidence_event(
+        bot,
+        generation=1,
+        reset=True,
+        reset_count=1,
+        reason_counts={"no_history": 1},
+        churn_count=0,
+        order_count=1,
+        symbols=["BTC/USDT:USDT"],
+        history_symbol_count=1,
+        snapshot_status="observed",
+    )
+    assert live_event_emitters.emit_order_churn_admission_event(
+        bot,
+        orders=[],
+        rolling_count=1,
+        activation_count=10,
+        market_distance_threshold=0.005,
+        action_headroom=None,
+    )
+    assert live_event_emitters.emit_order_churn_actions_accounted_event(
+        bot,
+        action_count=1,
+        rolling_count=2,
+    )
+
+    assert [event.status for event in emitted] == [
+        "succeeded",
+        "succeeded",
+        "succeeded",
+    ]
+    assert emitted[0].data["snapshot_status"] == "observed"
+
+
 def test_console_format_summarizes_low_balance_create_skip():
     event = LiveEvent(
         EventTypes.EXECUTION_CREATE_SKIPPED,

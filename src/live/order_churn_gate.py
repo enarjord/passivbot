@@ -343,7 +343,7 @@ class OrderChurnGateState:
     def reset_history_for_symbol_epochs(
         self, compatibility_epochs: Mapping[str, object]
     ) -> set[str]:
-        """Clear only histories normalized under changed symbol metadata."""
+        """Clear histories whose symbol-local market or runtime policy changed."""
         changed: set[str] = set()
         for symbol, epoch in compatibility_epochs.items():
             symbol = str(symbol)

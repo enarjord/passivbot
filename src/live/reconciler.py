@@ -1011,33 +1011,6 @@ def _order_churn_account_epoch(bot) -> tuple:
         separators=(",", ":"),
         default=str,
     )
-    modes = tuple(
-        (pside, str(symbol), str(mode))
-        for pside in ("long", "short")
-        for symbol, mode in sorted((getattr(bot, "PB_modes", {}) or {}).get(pside, {}).items())
-    )
-    approved = tuple(
-        (pside, tuple(sorted((getattr(bot, "approved_coins", {}) or {}).get(pside, set()))))
-        for pside in ("long", "short")
-    )
-    ignored = tuple(
-        (pside, tuple(sorted((getattr(bot, "ignored_coins", {}) or {}).get(pside, set()))))
-        for pside in ("long", "short")
-    )
-    approved_minus_ignored = tuple(
-        (
-            pside,
-            tuple(
-                sorted(
-                    (getattr(bot, "approved_coins_minus_ignored_coins", {}) or {}).get(
-                        pside, set()
-                    )
-                )
-            ),
-        )
-        for pside in ("long", "short")
-    )
-    active_symbols = tuple(sorted(getattr(bot, "active_symbols", []) or []))
     return (
         round(float(bot.get_hysteresis_snapped_balance()), 12),
         round(float(bot.get_raw_balance()), 12),
@@ -1046,11 +1019,6 @@ def _order_churn_account_epoch(bot) -> tuple:
         round(float(pnl_stats.get("max", 0.0) or 0.0), 12),
         round(float(pnl_stats.get("last", 0.0) or 0.0), 12),
         config_signature,
-        modes,
-        approved,
-        ignored,
-        approved_minus_ignored,
-        active_symbols,
         bool(getattr(bot, "_config_hedge_mode", False) and getattr(bot, "hedge_mode", False)),
     )
 
@@ -1059,6 +1027,23 @@ def _order_churn_symbol_compatibility_epochs(
     bot, symbols: Iterable[str]
 ) -> dict[str, tuple]:
     markets = getattr(bot, "markets_dict", {}) or {}
+    pb_modes = getattr(bot, "PB_modes", {}) or {}
+    approved = getattr(bot, "approved_coins", {}) or {}
+    ignored = getattr(bot, "ignored_coins", {}) or {}
+    approved_minus_ignored = (
+        getattr(bot, "approved_coins_minus_ignored_coins", {}) or {}
+    )
+    approved_by_pside = {
+        pside: set((approved.get(pside, {}) or {})) for pside in ("long", "short")
+    }
+    ignored_by_pside = {
+        pside: set((ignored.get(pside, {}) or {})) for pside in ("long", "short")
+    }
+    eligible_by_pside = {
+        pside: set((approved_minus_ignored.get(pside, {}) or {}))
+        for pside in ("long", "short")
+    }
+    active_symbols = set(getattr(bot, "active_symbols", []) or [])
     out: dict[str, tuple] = {}
     for symbol in sorted({str(symbol) for symbol in symbols if symbol}):
         market = markets.get(symbol, {}) if isinstance(markets, dict) else {}
@@ -1071,6 +1056,17 @@ def _order_churn_symbol_compatibility_epochs(
             float((getattr(bot, "min_costs", {}) or {}).get(symbol, 0.0) or 0.0),
             float((getattr(bot, "c_mults", {}) or {}).get(symbol, 1.0) or 1.0),
             bool(market.get("active", True)),
+            tuple(
+                (
+                    pside,
+                    str((pb_modes.get(pside, {}) or {}).get(symbol)),
+                    symbol in approved_by_pside[pside],
+                    symbol in ignored_by_pside[pside],
+                    symbol in eligible_by_pside[pside],
+                )
+                for pside in ("long", "short")
+            ),
+            symbol in active_symbols,
             json.dumps(
                 {
                     "precision": market.get("precision", {}),
@@ -1163,14 +1159,17 @@ def prepare_order_churn_evidence(
     )
     if scoped_resets:
         reset = True
+        # Dynamic forager selection may change different symbol pairs on each
+        # cycle. Keep that detail in the message and structured event without
+        # turning every new pair into an unthrottled INFO signature.
         should_log, suppressed = state.should_log_console_event(
-            "history_reset_symbol_metadata",
-            tuple(sorted(scoped_resets)),
+            "history_reset_symbol_compatibility",
+            "symbol_compatibility_changed",
             now_monotonic=time.monotonic(),
         )
         log = logging.info if should_log else logging.debug
         log(
-            "[order] churn evidence history reset | reason=symbol_market_metadata_changed "
+            "[order] churn evidence history reset | reason=symbol_compatibility_changed "
             "symbols=%s reset_count=%d suppressed_repeats=%d",
             _pb_attr("Passivbot")._log_symbols(sorted(scoped_resets), limit=8),
             state.reset_count,
