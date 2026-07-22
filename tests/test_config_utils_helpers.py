@@ -224,19 +224,80 @@ def test_order_replacement_churn_gate_defaults_and_validation():
             validate_config(invalid, verbose=False)
 
 
-def test_retired_initial_entry_gate_fails_with_actionable_replacement_names():
+def test_retired_initial_entry_gate_migrates_distance_and_hydrates_defaults():
+    source = get_template_config()
+    for key in (
+        "order_replacement_churn_gate_activation_count",
+        "order_replacement_churn_gate_market_dist_pct",
+        "order_replacement_churn_gate_stability_minutes",
+        "order_replacement_churn_gate_tracking_tolerance_pct",
+        "order_replacement_churn_gate_window_minutes",
+    ):
+        source["live"].pop(key)
+    source["live"]["initial_entry_exec_max_market_dist_pct"] = 0.005
+
+    prepared = prepare_config(source, verbose=False, target="canonical", runtime=None)
+    live = prepared["live"]
+
+    assert "initial_entry_exec_max_market_dist_pct" not in live
+    assert live["order_replacement_churn_gate_market_dist_pct"] == pytest.approx(0.005)
+    assert live["order_replacement_churn_gate_activation_count"] == 10
+    assert live["order_replacement_churn_gate_window_minutes"] == pytest.approx(10.0)
+    assert live["order_replacement_churn_gate_stability_minutes"] == pytest.approx(2.0)
+    assert live["order_replacement_churn_gate_tracking_tolerance_pct"] == pytest.approx(
+        0.002
+    )
+    changes = prepared["_transform_log"][-1]["details"]["changes"]
+    assert {
+        "action": "rename",
+        "from": "live.initial_entry_exec_max_market_dist_pct",
+        "to": "live.order_replacement_churn_gate_market_dist_pct",
+        "value": 0.005,
+    } in changes
+
+
+@pytest.mark.parametrize("legacy_value", [0.0, -0.1])
+def test_retired_disabled_initial_entry_gate_migrates_to_disabled_churn_gate(
+    legacy_value,
+):
+    source = get_template_config()
+    source["live"].pop("order_replacement_churn_gate_activation_count")
+    source["live"]["initial_entry_exec_max_market_dist_pct"] = legacy_value
+
+    prepared = prepare_config(source, verbose=False, target="canonical", runtime=None)
+    live = prepared["live"]
+
+    assert "initial_entry_exec_max_market_dist_pct" not in live
+    assert live["order_replacement_churn_gate_activation_count"] == 0
+    assert live["order_replacement_churn_gate_market_dist_pct"] == pytest.approx(0.005)
+
+
+def test_retired_initial_entry_gate_accepts_matching_new_distance():
     source = get_template_config()
     source["live"]["initial_entry_exec_max_market_dist_pct"] = 0.005
 
-    with pytest.raises(
-        ValueError,
-        match="initial_entry_exec_max_market_dist_pct has been retired",
-    ) as exc_info:
+    prepared = prepare_config(source, verbose=False, target="canonical", runtime=None)
+
+    assert "initial_entry_exec_max_market_dist_pct" not in prepared["live"]
+    assert prepared["live"]["order_replacement_churn_gate_market_dist_pct"] == pytest.approx(
+        0.005
+    )
+
+
+def test_retired_initial_entry_gate_rejects_conflicting_new_distance():
+    source = get_template_config()
+    source["live"]["initial_entry_exec_max_market_dist_pct"] = 0.004
+
+    with pytest.raises(ValueError, match="conflicts with"):
         prepare_config(source, verbose=False, target="canonical", runtime=None)
 
-    message = str(exc_info.value)
-    assert "order_replacement_churn_gate_market_dist_pct" in message
-    assert "order_replacement_churn_gate_activation_count" in message
+
+def test_retired_disabled_initial_entry_gate_rejects_enabled_new_gate():
+    source = get_template_config()
+    source["live"]["initial_entry_exec_max_market_dist_pct"] = 0.0
+
+    with pytest.raises(ValueError, match="enables the replacement"):
+        prepare_config(source, verbose=False, target="canonical", runtime=None)
 
 
 def test_prepare_config_strips_deprecated_price_distance_threshold():
