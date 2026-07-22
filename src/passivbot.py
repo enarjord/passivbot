@@ -1151,6 +1151,7 @@ class Passivbot:
         self.pside_int_map = {"long": 0, "short": 1}
         self.PB_modes = {"long": {}, "short": {}}
         self._order_churn_gate_state = OrderChurnGateState()
+        self._order_churn_risk_active_pairs: tuple[tuple[str, str], ...] = ()
         self.approved_coins = {"long": set(), "short": set()}
         self.ignored_coins = {"long": set(), "short": set()}
         self.approved_coins_minus_ignored_coins = {"long": set(), "short": set()}
@@ -17626,6 +17627,11 @@ class Passivbot:
         output_hash = payload_hash_raw(out_json)
         orders = out.get("orders", [])
         diagnostics = out.get("diagnostics", {})
+        self._order_churn_risk_active_pairs = (
+            reconciler.order_churn_risk_active_pairs_from_rust_output(
+                out, idx_to_symbol
+            )
+        )
         self._emit_rust_orchestrator_returned_event(
             rust_call_id=rust_call_id,
             status="succeeded",

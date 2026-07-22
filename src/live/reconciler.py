@@ -981,6 +981,55 @@ async def calc_orders_to_cancel_and_create(bot):
     )
 
 
+def order_churn_risk_active_pairs_from_rust_output(
+    out: dict, idx_to_symbol: dict[int, str]
+) -> tuple[tuple[str, str], ...]:
+    """Return symbol/pside pairs whose Rust plan is under an active risk phase.
+
+    Raw balance is intentionally not an epoch scalar: quote-valued collateral may
+    move on every market tick.  Rust remains authoritative for raw-balance risk
+    behavior, and its emitted risk-critical orders plus realized-loss blocks are
+    the behavioral phase boundary needed by churn reconciliation.
+    """
+    if not isinstance(out, dict):
+        raise ValueError("Rust orchestrator output must be a dict")
+    pairs: set[tuple[str, str]] = set()
+
+    def add_pair(item: dict, *, context: str) -> None:
+        if not isinstance(item, dict):
+            raise ValueError(f"Rust {context} item must be a dict")
+        try:
+            symbol_idx = int(item["symbol_idx"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError(f"Rust {context} item missing valid symbol_idx") from exc
+        symbol = idx_to_symbol.get(symbol_idx)
+        if not symbol:
+            raise ValueError(f"Rust {context} item has unknown symbol_idx {symbol_idx}")
+        pside = str(item.get("pside") or "").lower()
+        if pside not in {"long", "short"}:
+            raise ValueError(f"Rust {context} item missing valid pside")
+        pairs.add((str(symbol), pside))
+
+    orders = out.get("orders", [])
+    if not isinstance(orders, list):
+        raise ValueError("Rust orchestrator orders must be a list")
+    for order in orders:
+        if not isinstance(order, dict):
+            raise ValueError("Rust orchestrator order must be a dict")
+        if str(order.get("execution_priority") or "").lower() == "risk_critical":
+            add_pair(order, context="risk-critical order")
+
+    diagnostics = out.get("diagnostics", {})
+    if not isinstance(diagnostics, dict):
+        raise ValueError("Rust orchestrator diagnostics must be a dict")
+    loss_gate_blocks = diagnostics.get("loss_gate_blocks", [])
+    if not isinstance(loss_gate_blocks, list):
+        raise ValueError("Rust loss_gate_blocks must be a list")
+    for block in loss_gate_blocks:
+        add_pair(block, context="loss-gate block")
+    return tuple(sorted(pairs))
+
+
 def _order_churn_account_epoch(bot) -> tuple:
     positions = []
     for symbol, sides in sorted((getattr(bot, "positions", {}) or {}).items()):
@@ -1024,6 +1073,7 @@ def _order_churn_account_epoch(bot) -> tuple:
         fill_signature,
         round(float(pnl_stats.get("max", 0.0) or 0.0), 12),
         round(float(pnl_stats.get("last", 0.0) or 0.0), 12),
+        tuple(getattr(bot, "_order_churn_risk_active_pairs", ()) or ()),
         config_signature,
         bool(getattr(bot, "_config_hedge_mode", False) and getattr(bot, "hedge_mode", False)),
     )
@@ -1241,9 +1291,19 @@ def prepare_order_churn_evidence(
         window_seconds=window_seconds,
         max_generation_gap_seconds=_order_churn_max_generation_gap_seconds(bot),
     )
+    risk_active_pairs = set(
+        getattr(bot, "_order_churn_risk_active_pairs", ()) or ()
+    )
     for orders in valid_ideals.values():
         for order in orders:
             decision = decisions.get(id(order), ChurnDecision(False, "unavailable"))
+            pair = (str(order.get("symbol") or ""), str(order.get("position_side") or ""))
+            if pair in risk_active_pairs:
+                # Raw-balance risk behavior remains owned by Rust.  Never let
+                # economy-only churn admission delay any order sharing the
+                # affected symbol/pside while that risk phase is active.
+                decision = ChurnDecision(False, "rust_risk_phase_active")
+                decisions[id(order)] = decision
             order["_churn_evidence"] = bool(decision.churn_evidenced)
             order["_churn_reason"] = decision.reason
     _emit_order_churn_evidence_summary(

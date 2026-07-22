@@ -354,13 +354,20 @@ History compatibility has both account-wide and scoped epochs because the Rust p
 account-wide dependencies. The account epoch covers hysteresis-snapped wallet balance,
 per-symbol/position-side signed position size and average entry price,
 authoritative fill identity, the exact `realized_pnl_cumsum_max` and
-`realized_pnl_cumsum_last` values passed to Rust, global strategy/live configuration, and effective
-hedge/one-way mode. It excludes equity, available margin,
+`realized_pnl_cumsum_last` values passed to Rust, Rust-reported active risk pairs, global
+strategy/live configuration, and effective hedge/one-way mode. An active risk pair is any
+symbol/position-side for which Rust emits a risk-critical order or a realized-loss-gate block. It
+excludes equity, available margin,
 unrealized PnL, raw quote-valued balance, mark/liquidation price, mark-to-market notional, and other
 price-derived exchange fields. On multi-collateral venues, raw balance may change solely because a
 collateral asset's quote value changes; including it would continuously erase churn evidence.
-Authoritative fills, realized-PnL cumulative values, and position transitions still reset the
-account epoch immediately, while a material wallet change advances the hysteresis-snapped balance.
+Rust continues to consume exact raw balance for risk decisions. Entry into or exit from a
+Rust-reported risk phase resets the account epoch immediately, and every ideal order sharing an
+active risk symbol/position-side bypasses economy-only churn deferral. This covers raw-balance
+changes that alter realized-loss, TWEL, or unstuck behavior without treating valuation-only raw
+balance ticks as policy transitions. Authoritative fills, realized-PnL cumulative values, and
+position transitions also reset the account epoch immediately, while a material wallet change
+advances the hysteresis-snapped balance.
 A change clears all ideal history before classifying the next complete Rust plan. A scoped
 epoch covers each symbol's effective `PB_modes`, approved/ignored membership, forager membership,
 and active-universe membership. A scoped change clears only that symbol's history. This prevents a
@@ -381,8 +388,8 @@ account-wide reset unless the changed metadata also alters an account-wide Rust 
 Continuously changing prices, EMAs, volatility, trailing extrema, raw quote-valued balance, and
 other price-derived account fields are excluded; including them would continuously reset the
 evidence gate and defeat its purpose. A new authoritative fill identity, realized-PnL
-cumulative-value change, hysteresis-snapped wallet-balance change, or signed
-position-size/average-entry-price transition advances the account epoch because
+cumulative-value change, Rust-reported risk-phase transition, hysteresis-snapped wallet-balance
+change, or signed position-size/average-entry-price transition advances the account epoch because
 TWEL, entry gates, realized-loss/unstuck policy, risk ordering, and portfolio sizing may change
 ideals on other symbols. This also preserves
 the existing contract that every fill resets trailing extrema and prevents pre-fill evidence from
@@ -952,9 +959,9 @@ events use bounded periodic summaries.
     final cancellation barrier is now account-wide for hedge and one-way modes alike.
 20. **Bitget UTA close semantics:** its documented `side` plus `posSide` hedge action overrides a
     literal `reduceOnly=NO`; classic/one-way Bitget handling stays separate.
-21. **Cross-symbol risk state:** fill identity, realized Rust balance/position inputs, global
-    configuration changes, and uncertain dependencies advance an account epoch and clear all ideal
-    history; price-derived exchange state does not.
+21. **Cross-symbol risk state:** fill identity, snapped balance/position inputs, Rust-reported risk
+    phases, global configuration changes, and uncertain dependencies advance an account epoch and
+    clear all ideal history; price-derived exchange state does not.
 22. **Runtime eligibility:** effective `PB_modes`, approved/ignored sets, forager membership, and
     active-universe membership are symbol-scoped compatibility inputs; hedge capability remains
     account-wide.
@@ -968,8 +975,9 @@ events use bounded periodic summaries.
     used/surplus fields are validated before unused prepaid weight is admitted.
 27. **Stability gaps:** failed generations and explicit derived cadence gaps break the tight prefix;
     sparse snapshots cannot prove stability.
-28. **Price-driven epoch fields:** only realized Rust balance inputs, signed position size/average
-    entry, fill identity, and static/runtime policy enter epochs; mark-to-market fields are excluded.
+28. **Price-driven epoch fields:** only snapped balance, signed position size/average entry, fill
+    identity, Rust-reported risk phases, and static/runtime policy enter epochs; mark-to-market
+    fields are excluded. Exact raw balance remains a Rust risk input, not an epoch scalar.
 29. **Cross-symbol cancel dependency:** any stale cancellation blocks every non-panic create until a
     full authoritative refresh and complete Rust replan.
 30. **One-way position attribution:** prefer durable PB metadata, otherwise use the reviewed
@@ -1028,9 +1036,10 @@ events use bounded periodic summaries.
 - a current ideal already satisfied by an actual order still reserves its historical mate before an
   unmatched peer is classified;
 - raw list reordering and dictionary order do not change outcomes;
-- WEEX balance normalization subtracts `unrealizePnl` from V3 account equity so mark-to-market
-  movement leaves Rust wallet balance and the churn account epoch unchanged, while realized wallet
-  changes still advance the epoch.
+- WEEX balance normalization subtracts `unrealizePnl` from V3 account equity so position
+  mark-to-market movement does not alter Rust raw balance. On any venue, a raw-balance risk change
+  advances the churn epoch when it changes Rust's active risk pairs; a material wallet change also
+  advances the snapped-balance epoch.
 
 ### Per-symbol history and heuristic
 
@@ -1063,9 +1072,12 @@ events use bounded periodic summaries.
   not reset it;
 - price, EMA, volatility, trailing extrema, equity, available margin, unrealized PnL, mark/liquidation
   price, and mark-to-market notional changes do not reset history;
-- authoritative fill identity, realized-PnL cumulative max/last, hysteresis-snapped wallet balance,
-  signed position size, and average-entry-price transitions reset account-wide history
+- authoritative fill identity, realized-PnL cumulative max/last, Rust-reported active risk pairs,
+  hysteresis-snapped wallet balance, signed position size, and average-entry-price transitions reset
+  account-wide history
   before the first new-phase plan;
+- every ideal order for a Rust-reported active risk pair fails open past churn evidence and cannot
+  be distance- or allowance-deferred by the churn gate;
 - a policy-history reset does not clear account-wide attempt timestamps;
 - compaction, if implemented, preserves logical results across fast/slow planning cadence.
 
@@ -1153,7 +1165,8 @@ events use bounded periodic summaries.
 
 ### Slice 2: pure per-symbol evidence helper
 
-- Implement immutable snapshots, exact realized-PnL/snapped-balance/position compatibility epochs,
+- Implement immutable snapshots, exact realized-PnL/snapped-balance/position and Rust risk-phase
+  compatibility epochs,
   pruning/optional compaction, deterministic
   one-to-one tight/wider association, newest stability clearing, and account-wide rolling attempt
   accounting.
@@ -1276,8 +1289,9 @@ consequences, and connector assumptions—not merely wording:
 - Is the one-cycle ordinary latency acceptable for parity and missed-fill risk?
 - Is the proposed RAM-only canonical exception truly bounded to operational economy and incapable
   of weakening safety after reset?
-- Do account/scoped compatibility epochs reset snapped balance, position, fill identity, and exact
-  realized-PnL cumulative max/last inputs account-wide, runtime modes/lists/forager membership only
+- Do account/scoped compatibility epochs reset snapped balance, position, fill identity, exact
+  realized-PnL cumulative max/last inputs, and Rust-reported risk-phase transitions account-wide,
+  runtime modes/lists/forager membership only
   for affected symbols, and configured operator changes account-wide, while excluding equity,
   margin, unrealized PnL, mark/liquidation prices, other moving fields, and attempt-ledger refunds?
 - What interactions remain with config reload, forager symbol churn, HSL, WEL/TWEL, unstuck,

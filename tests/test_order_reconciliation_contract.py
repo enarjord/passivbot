@@ -966,6 +966,7 @@ def test_account_epoch_tracks_realized_and_global_inputs_not_scoped_runtime_poli
             self.snapped_balance = 100.0
             self.pnl_max = 2.0
             self.pnl_last = 1.0
+            self._order_churn_risk_active_pairs = ()
 
         def get_hysteresis_snapped_balance(self):
             return self.snapped_balance
@@ -990,6 +991,9 @@ def test_account_epoch_tracks_realized_and_global_inputs_not_scoped_runtime_poli
     bot.raw_balance = 101.0
     assert reconciler._order_churn_account_epoch(bot) == baseline
     bot.raw_balance = 100.0
+    bot._order_churn_risk_active_pairs = ((symbol, "long"),)
+    assert reconciler._order_churn_account_epoch(bot) != baseline
+    bot._order_churn_risk_active_pairs = ()
     bot.snapped_balance = 101.0
     assert reconciler._order_churn_account_epoch(bot) != baseline
     bot.snapped_balance = 100.0
@@ -1016,6 +1020,38 @@ def test_account_epoch_tracks_realized_and_global_inputs_not_scoped_runtime_poli
     with_fill_signature = reconciler._order_churn_account_epoch(bot)
     bot._authoritative_surface_signatures["fills"] = ((1, "fill-b"),)
     assert reconciler._order_churn_account_epoch(bot) != with_fill_signature
+
+
+def test_rust_risk_active_pairs_cover_risk_orders_and_loss_gate_blocks():
+    idx_to_symbol = {
+        0: "BTC/USDT:USDT",
+        1: "ETH/USDT:USDT",
+        2: "SOL/USDT:USDT",
+    }
+    out = {
+        "orders": [
+            {
+                "symbol_idx": 0,
+                "pside": "long",
+                "execution_priority": "ordinary",
+            },
+            {
+                "symbol_idx": 1,
+                "pside": "short",
+                "execution_priority": "risk_critical",
+            },
+        ],
+        "diagnostics": {
+            "loss_gate_blocks": [
+                {"symbol_idx": 2, "pside": "long"},
+                {"symbol_idx": 1, "pside": "short"},
+            ]
+        },
+    }
+
+    assert reconciler.order_churn_risk_active_pairs_from_rust_output(
+        out, idx_to_symbol
+    ) == (("ETH/USDT:USDT", "short"), ("SOL/USDT:USDT", "long"))
 
 
 @pytest.mark.parametrize(
