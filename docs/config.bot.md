@@ -260,6 +260,21 @@ create or cancel ordinary orders for them, and they do not count toward active
 slots, auto unstuck, or WEL/TWEL candidate selection. They still count toward
 same-side TWEL measurement and toward the TWEL entry-gate baseline.
 
+## Close Reducer Compatibility
+
+Passivbot selects at most one protective reducer for each coin+pside in one
+ideal-order batch. Panic close is exclusive. TWEL/WEL exposure repair takes
+precedence over auto-unstuck, and only one competing reducer survives.
+
+Ordinary strategy closes are independent reduction intent and may coexist with
+the selected non-panic reducer. The reducer quantity is reserved first; ordinary
+grid, trailing, or EMA-anchor closes are kept within the remaining position
+quantity and trimmed furthest-from-fill first if necessary. The aggregate remains
+reduce-only and capped to the position, and the realized-loss gate evaluates the
+selected reducer before ordinary closes in the resulting mixed close set. Live
+reconciliation preserves the same reducer-first reservation if the position
+shrinks between planning and order submission.
+
 ## Risk-Control Stack
 
 Risk controls are layered from ordinary position management to emergency
