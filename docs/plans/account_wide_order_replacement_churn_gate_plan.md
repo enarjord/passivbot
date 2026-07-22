@@ -725,7 +725,10 @@ any exchange outside the explicit supported production allowlist. The local `fak
 explicit non-production exception: it enables the complete feature so deterministic fake-live can
 exercise the same reconciliation, history, sequencing, and accounting paths. This does not remove
 or reject the generic adapter; it preserves that adapter's prior reconciliation/execution behavior
-until the named connector receives the same authoritative metadata audit as a supported connector.
+for basic matching, tolerance, batching, and sequencing until the named connector receives the same
+authoritative metadata audit as a supported connector. The old shared initial-entry-only distance
+gate is still retired atomically for every connector; its removal does not opt the generic adapter
+into temporal churn evidence, strict reconciliation, cancel-first, or create-attempt accounting.
 
 Hyperliquid is the clearest reason not to call the generic window a rate-limit budget. Its
 cancellation allowance and requests-per-volume economics differ materially from rolling endpoint

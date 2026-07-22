@@ -24,8 +24,10 @@ routing branch or comparative documentation.
 The generic `CCXTBot` fallback for arbitrary exchange names is also outside the supported
 production boundary. It preserves compatibility for unaudited CCXT venues, but a feature requiring
 authoritative order-type, close-only, remaining-quantity, or one-way position-side normalization
-must use an explicit supported-connector allowlist and leave the generic fallback on its prior
-behavior until that venue receives a connector-specific contract audit.
+must use an explicit supported-connector allowlist. The generic fallback retains its legacy basic
+reconciliation/tolerance path until that venue receives a connector-specific contract audit; the
+separate global retirement of the old initial-entry-only distance gate does not enable the new
+churn policy there.
 
 ## Broker Agreement Attribution
 
