@@ -12,6 +12,13 @@ deprecated from introduction, and exists only for configs converted by
 `bot.<side>.strategy.trailing_grid_v7`; do not add them to `trailing_martingale` or shared
 `BotParams` unless a shared runtime function truly requires it.
 
+The legacy pre-V8 `pb_multi` root shape (`TWE_long`, `TWE_short`,
+`universal_live_config`, and related top-level fields) is not a supported V8 config input or
+migration contract. Residual flavor detection, formatter code, and narrow unit fixtures are stale
+internal compatibility surfaces: ignore them when adding current config fields, and do not infer
+production or live support from their presence. The only supported pre-V8 strategy migration path
+is the explicit `passivbot tool migrate-config-v7` workflow for normalized V7 trailing-grid input.
+
 With `entry_cooldown_minutes = 0.0`, `trailing_grid_v7` preserves v7's simultaneous grid-entry
 ladder even when a later trailing leg uses retracement. Its recursive generator stops expansion
 before stacking retracement-dependent trailing orders. Positive entry cooldowns still stage at
