@@ -77,13 +77,17 @@ Problem:
 1. `set_position_mode(True)` is trading-critical setup, but broad no-op swallowing can hide a real one-way/hedge mismatch.
 2. KuCoin order and fill payloads must carry `positionSide` in hedge mode; otherwise a both-sides-open account cannot safely infer an order's position side.
 
-Handling:
+Current handling and planned prerequisite:
 
 1. Treat current same-mode success as success (`code=200000`, `data.positionMode=1`).
 2. Let unknown `set_position_mode` failures raise unless a verified KuCoin no-op code is added with a targeted test.
-3. Never infer a resting order's position side from the current position. Require explicit
-   `info.positionSide`/`info.posSide` in hedge mode; in effective one-way mode, derive and verify
-   `position_side` from the authoritative order side plus `reduceOnly` tuple.
+3. Current runtime prefers explicit `info.positionSide`/`info.posSide` but may still fall back to
+   current-position inference. That fallback is not restart-stable enough for exact churn-gate
+   reconciliation.
+4. Before the churn gate is enabled for KuCoin, never infer a resting order's position side from the
+   current position. Require explicit `info.positionSide`/`info.posSide` in hedge mode; in effective
+   one-way mode, derive and verify `position_side` from the authoritative order side plus
+   `reduceOnly` tuple.
 
 ### OHLCV limit behavior + sparse-minute markets
 
@@ -148,7 +152,7 @@ Problem:
 1. OKX long/short mode identifies entry versus close from `side` plus `posSide`.
 2. CCXT emulates reduce-only for this mode and may expose `reduceOnly=false` for a valid close.
 
-Handling in Passivbot:
+Planned churn-gate prerequisite (not current runtime handling):
 
 1. In effective long/short mode, normalize close-only effect from the documented `side` plus
    `posSide` action tuple.
@@ -156,6 +160,9 @@ Handling in Passivbot:
    one-way `position_side` against side plus close-only effect.
 3. Prefer the raw exchange `info` field over a CCXT top-level default when proving close-only
    semantics.
+
+Current runtime does not yet implement this complete close-only normalization. The implementation
+PR must land the adapter change and focused fixtures before enabling the gate for OKX.
 
 ## Gate.io Futures
 

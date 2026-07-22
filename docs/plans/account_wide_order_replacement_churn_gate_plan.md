@@ -318,9 +318,11 @@ same decision per symbol or salvage partial output in Python. Symbol-scoped vali
 after a complete Rust result exists; a downstream normalization or required-input failure then
 blocks only that symbol while healthy symbols continue. A valid empty symbol plan appends an empty
 snapshot and removes stale orders for that symbol. The account-critical open-orders exception is
-stricter: unknown or contradictory remaining quantity or semantic scope makes that surface
-unavailable and blocks every exchange write until a clean refresh. A future partial-result Rust
-API must preserve account-wide decisions explicitly before this boundary may be narrowed.
+stricter: a missing, non-finite, contradictory, or otherwise malformed required exchange order ID,
+symbol, order side, position side, positive price, positive authoritative remaining quantity, or
+close-only effect makes that surface unavailable and blocks every exchange write until a clean
+refresh. A future partial-result Rust API must preserve account-wide decisions explicitly before
+this boundary may be narrowed.
 
 Append the current snapshot only after its decision, or otherwise exclude it from its own history.
 Prune by the configured window. Consecutive identical snapshots may be compacted only if tests prove
@@ -373,11 +375,13 @@ coordination is a separate feature.
 
 ## Quantitative Churn-Evidence Heuristic
 
-For each exact cohort, first associate the complete unmatched current-ideal group with the complete
-historical group. Market, risk-critical, and near-market ideals participate in this one-to-one
-assignment even though they are exempt later during admission; otherwise their historical mates
-could be reused to misclassify an ordinary peer. After group matching, classify each non-exempt
-current ideal as follows:
+For each exact cohort, first associate the complete current-ideal group with the complete historical
+group. This includes current ideals already satisfied by an actual order; they reserve their
+historical mates even though only unmatched ideals are later eligible for creation. Market,
+risk-critical, and near-market ideals likewise participate in this one-to-one assignment even though
+they are exempt later during admission. Omitting any of these peers could let its historical mate be
+reused to misclassify an ordinary unmatched create. After group matching, classify each unmatched
+non-exempt current ideal as follows:
 
 1. For each prior valid snapshot in the active per-symbol window, newest first, perform a
    deterministic one-to-one association within that snapshot.
@@ -579,13 +583,14 @@ Rust dependency metadata and separate review.
 For each planning wave:
 
 1. Reconcile authoritative actual orders with the current valid Rust ideal.
-2. If any unmatched stale actual exists in proven bot-managed semantic scope, suppress every
-   non-panic creation account-wide for the entire wave—whether its cancellation is selected,
-   truncated, succeeds, fails, or is reported absent. An intentionally unmanaged actual in
-   `manual` or the entry portion of `tp_only` does not arm this barrier. An actual whose position
-   side or entry/close semantics are ambiguous arms the separate fail-closed creation barrier but
-   is not cancelled.
-3. Send the selected cancellation batch under existing limits and pacing.
+2. If any actual order has a malformed required field or ambiguous position-side/entry-close
+   semantics, treat the account-critical open-orders surface as unavailable: send no cancellation
+   or creation and request a clean authoritative refresh. An intentionally unmanaged actual in
+   `manual` or the entry portion of `tp_only` is not malformed and does not arm this barrier.
+3. Otherwise, if any unmatched stale actual exists in proven bot-managed semantic scope, suppress
+   every non-panic creation account-wide for the entire wave—whether its cancellation is selected,
+   truncated, succeeds, fails, or is reported absent—and send only the selected cancellation batch
+   under existing limits and pacing.
 4. Request authoritative balance, positions, open-orders, and fills confirmation and end all
    non-panic creation work for the wave. A positive cancellation acknowledgement does not prove
    that no partial fill changed account state.
@@ -898,7 +903,9 @@ events use bounded periodic summaries.
   effect, and execution type;
 - TIF/post-only differences do not prevent an otherwise exact resting-order match, while every new
   creation still receives the configured placement semantics;
-- unknown actual type/close-only fail-closed behavior for every connector adapter;
+- unknown `pb_order_type` or resting execution type is cancel-safe but cannot satisfy a known ideal;
+  missing or contradictory close-only effect or `position_side` fails closed account-wide for every
+  supported connector adapter;
 - no generic side/position-side inference of close-only; focused WEEX V3, Bitget UTA, and OKX
   long/short-mode action-tuple fixtures prove their explicit connector-native mappings;
 - one-way pside attribution prefers durable PB metadata, then covers all four side/close-only tuples;
@@ -910,6 +917,8 @@ events use bounded periodic summaries.
 - missing client IDs and foreign Passivbot-looking markers do not exempt orders in managed scopes;
   ambiguous position-side or entry/close attribution fails closed without cancellation;
 - one historical observation cannot satisfy multiple current candidates;
+- a current ideal already satisfied by an actual order still reserves its historical mate before an
+  unmatched peer is classified;
 - raw list reordering and dictionary order do not change outcomes.
 
 ### Per-symbol history and heuristic
@@ -965,8 +974,8 @@ events use bounded periodic summaries.
 ### Cancel-first executor
 
 - any stale actual suppresses every non-panic create account-wide in hedge and one-way modes;
-- unknown position-side or entry/close attribution suppresses non-panic creation account-wide
-  without sending cancellation because the effective management scope is unproven;
+- a malformed required open-order field or unknown position-side/entry-close attribution suppresses
+  every exchange write account-wide because the account-critical open-orders surface is unavailable;
 - selected, truncated, failed, ambiguous, and absent cancellation outcomes;
 - every stale cancellation outcome, including positive acknowledgement, requires next-cycle full
   balance/positions/open-orders/fills confirmation for ordinary work;
