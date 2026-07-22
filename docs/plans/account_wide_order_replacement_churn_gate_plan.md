@@ -323,8 +323,12 @@ and portfolio allocation cross symbol boundaries. A Rust planning failure return
 plan: append no snapshots and perform no ordinary reconciliation for any symbol. Do not retry the
 same decision per symbol or salvage partial output in Python. Symbol-scoped validity begins only
 after a complete Rust result exists; a downstream normalization or required-input failure then
-blocks only that symbol while healthy symbols continue. A valid empty symbol plan appends an empty
-snapshot and removes stale orders for that symbol. The account-critical open-orders exception is
+blocks only that symbol while healthy symbols continue **only when authoritative state proves the
+blocked symbol has neither actual open orders nor a held position**. If it has either, suppress all
+account-wide non-panic creates for the wave because a fill or unknown stale order there can
+invalidate the shared Rust plan; a dedicated protective market panic remains the sole bypass. A
+valid empty symbol plan appends an empty snapshot and removes stale orders for that symbol. The
+account-critical open-orders exception is
 stricter: a missing, non-finite, contradictory, or otherwise malformed required exchange order ID,
 symbol, order side, position side, positive price, positive authoritative remaining quantity, or
 close-only effect makes that surface unavailable and blocks every exchange write until a clean
@@ -517,6 +521,11 @@ counter invalidates the cached estimate and requires refresh before an ordinary 
 Cancellations and allowance-exempt creates are never delayed by this overlay but still debit the
 cached estimate.
 
+Linearize each refresh around a captured request-start monotonic timestamp. Local signed-action
+attempts made while the info request is in flight are recorded and subtracted from the returned
+snapshot even if the server response has not observed them yet. A refresh may not clear or classify
+those attempts as pre-snapshot merely because its response arrives later.
+
 Compute snapshot headroom as
 `max(0, nRequestsCap - nRequestsUsed + nRequestsSurplus)`, then subtract every logical local address
 action attempted after that snapshot. The official response defines `nRequestsUsed` as
@@ -542,18 +551,23 @@ timing.
 Distance decisions made during planning are provisional. After cancellations and authoritative
 barriers, recheck fresh signed distance before any candidate-specific exchange configuration or
 margin write. A candidate that moved near is admitted; one that moved far must have capacity or be
-deferred. Missing/non-finite/stale market data defers an affected ordinary create. Only admitted
-candidates may cause exchange configuration work. For connectors whose configuration mutates the
-same account action budget, the first admission reserves the required configuration actions and the
-create together; configuration costs shared by multiple creates on one symbol count once.
+deferred. Missing/non-finite/stale market data defers an affected ordinary create. Sort by priority
+and apply `max_n_creations_per_batch` before reserving or mutating configuration, so a batch-trimmed
+candidate cannot consume configuration capacity. Only admitted, selected candidates may cause
+exchange configuration work. For connectors whose configuration mutates the same account action
+budget, the first admission reserves the required configuration actions and the create together;
+configuration costs shared by multiple creates on one symbol count once.
 
 After configuration, retain the existing final market-snapshot safety guard and then rerun churn
 distance from a forced-fresh, no-candle-fallback market read plus allowance/headroom admission
-immediately before the connector create call. Completed
-configuration actions are debited as observed local actions and are not reserved a second time. A
-candidate that moved from near to far during configuration is deferred unless ordinary capacity
-still exists; a deferred candidate may therefore have configuration work only when it passed the
-earlier reservation-backed admission and was invalidated by a later market move or capacity change.
+immediately before the connector create call. Every connector-bound configuration attempt is
+debited exactly once before awaiting its result, including rejected, timed-out, pending, or
+ambiguous outcomes; only a reservation proven unsent is released. Attempted configuration actions
+are not reserved a second time. A candidate that moved from near to far during configuration is
+re-evaluated with its existing Rust-history churn classification: ordinary capacity applies only
+when it remains churn-evidenced, while stable or uncertain far candidates still fail open. A
+deferred candidate may therefore have configuration work only when it passed the earlier
+reservation-backed admission and was invalidated by a later market move or capacity change.
 
 Use the existing side-aware convention: `1 - order_price / market_price` for buys and
 `order_price / market_price - 1` for sells. Admit when the result is less than or equal to the
@@ -948,7 +962,9 @@ events use bounded periodic summaries.
 
 - current snapshot never matches itself;
 - account-wide Rust planning failure appends no history and performs no ordinary reconciliation;
-- downstream symbol-scoped normalization outage skips one symbol while healthy symbols continue;
+- downstream symbol-scoped normalization outage skips one symbol while healthy symbols continue
+  only when that symbol has no actual orders or held position; otherwise every non-panic create is
+  blocked account-wide while dedicated market panic remains available;
 - valid empty is distinct from unavailable planning;
 - processing-universe union retains actual/position/history-only symbols;
 - first observation and restart reset fail open;
@@ -987,12 +1003,16 @@ events use bounded periodic summaries.
   ordinary admission; non-panic orders still obey dirty-scope sequencing;
 - failed/rejected/timed-out/ambiguous connector-bound creates count exactly once;
 - local deferrals count zero;
-- final price movement near-to-far consumes capacity or defers and far-to-near admits;
+- final price movement near-to-far consumes capacity or defers only for an already churn-evidenced
+  ordinary candidate; stable/uncertain far candidates still fail open and far-to-near admits;
 - missing/stale/non-finite final market data defers without fabrication;
 - concurrent candidates cannot oversubscribe current capacity;
 - Hyperliquid `userRateLimit` headroom, local logical signed-action debits, unobserved-action cache
   invalidation, stale/unavailable snapshots, batch-member accounting, and exempt-action no-wait
   behavior; positive unused reserved surplus extends `cap - used` headroom exactly once.
+- Hyperliquid headroom refresh includes actions attempted while the info request is in flight;
+  configuration attempts are debited before awaiting success, and batch-trimmed candidates perform
+  no configuration writes.
 
 ### Cancel-first executor
 
@@ -1067,9 +1087,12 @@ events use bounded periodic summaries.
 - Recheck final fresh distance.
 - Apply churn admission before candidate-specific exchange configuration or margin writes; deferred
   candidates must cause neither configuration mutations nor create attempts.
+- Apply priority sorting and `max_n_creations_per_batch` before configuration reservation or writes.
 - Reserve connector-reported signed configuration costs together with creates, then rerun churn
   admission with a forced-fresh market read after configuration and the existing market-snapshot
   guard immediately before create.
+- Debit every connector-bound config attempt exactly once and linearize Hyperliquid headroom
+  refreshes against actions attempted while the info request is in flight.
 - Apply allowance reservations atomically at connector boundary.
 - Add Hyperliquid authoritative action-headroom refresh and local logical-action debits without
   delaying cancellations or exempt actions.
