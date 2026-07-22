@@ -183,3 +183,42 @@ async def test_local_create_deferral_consumes_no_churn_attempt(execution_shell):
 
     assert bot.created == []
     assert list(bot._order_churn_gate_state.create_attempt_timestamps) == []
+
+
+@pytest.mark.asyncio
+async def test_churn_admission_defers_before_exchange_config_writes(execution_shell):
+    bot = _PlanBot()
+    bot._order_churn_gate_state = OrderChurnGateState()
+    bot.configured: list[list[str]] = []
+
+    def live_value(key):
+        return {
+            "order_replacement_churn_gate_activation_count": 10,
+            "order_replacement_churn_gate_window_minutes": 10.0,
+            "order_replacement_churn_gate_market_dist_pct": 0.005,
+            "max_n_creations_per_batch": 20,
+        }[key]
+
+    async def fetch_prices(symbols):
+        return {symbol: 100.0 for symbol in symbols}
+
+    async def no_headroom():
+        return 0
+
+    async def update_configs(symbols):
+        bot.configured.append(list(symbols))
+        return set(symbols)
+
+    bot.live_value = live_value
+    bot._fetch_fresh_order_churn_market_prices = fetch_prices
+    bot._order_churn_far_create_headroom = no_headroom
+    bot.update_exchange_configs = update_configs
+    desired = _order("desired")
+    desired["price"] = 90.0
+    desired["_churn_evidence"] = True
+
+    await executor.execute_order_plan(bot, [], [desired])
+
+    assert bot.configured == []
+    assert bot.created == []
+    assert desired["_churn_gate_reason"] == "action_headroom_exhausted"

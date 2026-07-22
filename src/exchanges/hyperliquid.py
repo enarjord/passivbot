@@ -679,17 +679,27 @@ class HyperliquidBot(CCXTBot):
                         for order, _exc in untrusted
                         if isinstance(order, dict) and order.get("symbol")
                     }
-                    logging.warning(
-                        "[ws] hyperliquid order updates lacked authoritative order semantics; "
-                        "discarding %d rows and requesting account-state refresh | symbols=%s",
-                        len(untrusted),
-                        self._log_symbols(sorted(symbols), limit=8),
+                    now_monotonic = time.monotonic()
+                    last_warning = float(
+                        getattr(
+                            self,
+                            "_hl_untrusted_order_ws_last_warning_monotonic",
+                            float("-inf"),
+                        )
                     )
+                    if now_monotonic - last_warning >= 60.0:
+                        logging.warning(
+                            "[ws] hyperliquid order updates lacked authoritative order semantics; "
+                            "discarding %d rows and requesting account-state refresh | symbols=%s",
+                            len(untrusted),
+                            self._log_symbols(sorted(symbols), limit=8),
+                        )
+                        self._hl_untrusted_order_ws_last_warning_monotonic = now_monotonic
                     self._mark_account_critical_state_dirty(
                         reason="order_ws_semantics_unavailable",
                         symbols=symbols,
                         source="hyperliquid_order_ws",
-                        level=logging.WARNING,
+                        level=logging.DEBUG,
                     )
                 if normalized:
                     self.handle_order_update(normalized)

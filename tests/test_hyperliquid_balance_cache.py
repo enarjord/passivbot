@@ -86,9 +86,12 @@ class DummyCCA:
 
 @pytest.mark.asyncio
 async def test_hyperliquid_ws_order_without_reduce_only_requests_refresh_without_reconnect(
-    stubbed_modules,
+    stubbed_modules, monkeypatch, caplog
 ):
-    HyperliquidBot = importlib.import_module("exchanges.hyperliquid").HyperliquidBot
+    hyperliquid_module = importlib.import_module("exchanges.hyperliquid")
+    HyperliquidBot = hyperliquid_module.HyperliquidBot
+    monkeypatch.setattr(hyperliquid_module.time, "monotonic", lambda: 100.0)
+    caplog.set_level(pylogging.WARNING)
     bot = HyperliquidBot.__new__(HyperliquidBot)
     bot.stop_websocket = False
     bot._health_ws_reconnects = 0
@@ -100,8 +103,13 @@ async def test_hyperliquid_ws_order_without_reduce_only_requests_refresh_without
     bot.handle_order_update = lambda orders: handled.append(orders)
     bot._mark_account_critical_state_dirty = lambda **kwargs: dirty.append(kwargs)
 
+    watch_calls = 0
+
     async def watch_orders():
-        bot.stop_websocket = True
+        nonlocal watch_calls
+        watch_calls += 1
+        if watch_calls == 2:
+            bot.stop_websocket = True
         return [
             {
                 "id": "123",
@@ -123,9 +131,16 @@ async def test_hyperliquid_ws_order_without_reduce_only_requests_refresh_without
             "reason": "order_ws_semantics_unavailable",
             "symbols": {"BTC/USDC:USDC"},
             "source": "hyperliquid_order_ws",
-            "level": pylogging.WARNING,
-        }
+            "level": pylogging.DEBUG,
+        },
+        {
+            "reason": "order_ws_semantics_unavailable",
+            "symbols": {"BTC/USDC:USDC"},
+            "source": "hyperliquid_order_ws",
+            "level": pylogging.DEBUG,
+        },
     ]
+    assert sum("lacked authoritative order semantics" in rec.message for rec in caplog.records) == 1
 
 
 @pytest.mark.asyncio
