@@ -86,6 +86,14 @@ The global realized-loss gate remains separate. `live.max_realized_loss_pct`
 can still block a non-panic unstuck close if the projected fill would breach
 that realized-loss floor.
 
+Auto-unstuck may be emitted in the same ideal-order batch as compatible ordinary
+grid, trailing, or EMA-anchor closes for that position. Passivbot keeps only one
+protective reducer, reserves its quantity, and caps ordinary closes to the
+remaining position size. Panic close remains exclusive, and exposure reducers
+still take precedence over auto-unstuck. The realized-loss gate evaluates the
+selected reducer before ordinary closes, and live reconciliation reapplies the
+cap against the latest position without consuming reducer quantity first.
+
 Auto-unstuck allowance is reconstructed from the configured
 `live.pnls_max_lookback_days` fill/PnL window. Enabling auto-unstuck on an
 account with existing history can therefore inherit prior profits or losses
