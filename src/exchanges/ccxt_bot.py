@@ -193,7 +193,7 @@ class CCXTBot(Passivbot):
         # field; that default is not authoritative evidence.
         sources = (info,) if isinstance(info, dict) and info else (order,)
         for source in sources:
-            for key in ("reduce_only", "reduceOnly"):
+            for key in ("reduce_only", "reduceOnly", "is_reduce_only"):
                 if key not in source:
                     continue
                 value = source[key]

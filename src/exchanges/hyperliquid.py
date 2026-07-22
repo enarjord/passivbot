@@ -663,11 +663,36 @@ class HyperliquidBot(CCXTBot):
                     break
                 res = await self.ccp.watch_orders()
                 _ws_consecutive_rate_limits = 0  # reset on success
-                for i in range(len(res)):
-                    res[i]["position_side"] = self.determine_pos_side(res[i])
-                    res[i]["qty"] = res[i]["amount"]
                 self._hl_note_ws_symbols_for_dex_scope(res)
-                self.handle_order_update(res)
+                normalized = []
+                untrusted = []
+                for order in res:
+                    try:
+                        order["position_side"] = self.determine_pos_side(order)
+                        order["qty"] = order["amount"]
+                        normalized.append(order)
+                    except (KeyError, TypeError, ValueError) as exc:
+                        untrusted.append((order, exc))
+                if untrusted:
+                    symbols = {
+                        str(order.get("symbol") or "")
+                        for order, _exc in untrusted
+                        if isinstance(order, dict) and order.get("symbol")
+                    }
+                    logging.warning(
+                        "[ws] hyperliquid order updates lacked authoritative order semantics; "
+                        "discarding %d rows and requesting account-state refresh | symbols=%s",
+                        len(untrusted),
+                        self._log_symbols(sorted(symbols), limit=8),
+                    )
+                    self._mark_account_critical_state_dirty(
+                        reason="order_ws_semantics_unavailable",
+                        symbols=symbols,
+                        source="hyperliquid_order_ws",
+                        level=logging.WARNING,
+                    )
+                if normalized:
+                    self.handle_order_update(normalized)
             except asyncio.CancelledError:
                 break
             except RateLimitExceeded:

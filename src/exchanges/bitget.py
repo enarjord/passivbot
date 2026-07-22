@@ -107,12 +107,13 @@ class BitgetBot(CCXTBot):
             and getattr(self, "hedge_mode", True)
         ):
             return self._normalize_one_way_position_side(order)
-        position_side = str(order.get("info", {}).get("posSide") or "").lower()
+        position_side = str(
+            order.get("position_side")
+            or order.get("info", {}).get("posSide")
+            or ""
+        ).lower()
         if position_side in {"long", "short"}:
             return position_side
-        metadata_side = super()._get_position_side_for_order(order)
-        if metadata_side in {"long", "short"}:
-            return metadata_side
         raise ValueError("bitget order missing authoritative position-side semantics")
 
     def _canonical_open_order_reduce_only(self, order: dict) -> bool | None:

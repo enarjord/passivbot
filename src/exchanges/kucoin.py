@@ -178,9 +178,6 @@ class KucoinBot(CCXTBot):
             explicit = info.get("positionSide") or info.get("posSide")
         if explicit is not None and str(explicit).lower() in {"long", "short"}:
             return str(explicit).lower()
-        metadata_side = super()._get_position_side_for_order(order)
-        if metadata_side in {"long", "short"}:
-            return metadata_side
         raise ValueError("KuCoin open order missing durable long/short attribution")
 
     def determine_pos_side(self, order):

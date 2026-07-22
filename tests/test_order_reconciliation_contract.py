@@ -47,6 +47,38 @@ def test_one_way_and_hedge_action_tuples_have_deterministic_pside_and_close_effe
     assert bot._canonical_open_order_reduce_only(order) is expected_close
 
 
+def test_gateio_accepts_native_is_reduce_only_response_field():
+    bot = GateIOBot.__new__(GateIOBot)
+    close = {
+        "side": "sell",
+        "info": {"side": "sell", "is_reduce_only": True},
+    }
+
+    assert bot._canonical_open_order_reduce_only(close) is True
+    assert bot.determine_pos_side(close) == "long"
+
+
+@pytest.mark.parametrize(
+    "bot_cls",
+    [BinanceBot, BitgetBot, BybitBot, KucoinBot, OKXBot],
+)
+def test_supported_hedge_orders_do_not_fabricate_pside_from_client_id(bot_cls):
+    bot = bot_cls.__new__(bot_cls)
+    bot._config_hedge_mode = True
+    bot.hedge_mode = True
+    if bot_cls is BitgetBot:
+        bot.is_uta = False
+    order = {
+        "symbol": "BTC/USDT:USDT",
+        "side": "buy",
+        "clientOrderId": _client_id("entry_grid_normal_long"),
+        "info": {},
+    }
+
+    with pytest.raises(ValueError, match="missing"):
+        bot._get_position_side_for_order(order)
+
+
 def test_weex_prefers_and_verifies_response_close_only_semantics():
     bot = WeexBot.__new__(WeexBot)
     close = {

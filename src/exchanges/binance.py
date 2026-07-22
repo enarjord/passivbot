@@ -97,9 +97,9 @@ class BinanceBot(CCXTBot):
             return exchange_position_side
         if exchange_position_side == "both":
             return self._normalize_one_way_position_side(order)
-        metadata_side = super()._get_position_side_for_order(order)
-        if metadata_side in {"long", "short"}:
-            return metadata_side
+        normalized_side = str(order.get("position_side") or "").lower()
+        if normalized_side in {"long", "short"}:
+            return normalized_side
         raise ValueError("binance order missing authoritative position-side semantics")
 
     def _canonical_open_order_reduce_only(self, order: dict) -> bool:

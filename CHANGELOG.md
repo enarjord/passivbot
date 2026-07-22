@@ -11,7 +11,10 @@ All notable user-facing changes will be documented in this file.
   modes, malformed account-critical open-order snapshots block exchange writes, and any
   cancellation forces full authoritative refresh and Rust replanning before non-panic creation.
   One-way position-side and native close-only normalization is now deterministic across the
-  supported connectors, including OKX long/short mode and KuCoin open orders.
+  supported connectors, including OKX long/short mode, KuCoin open orders, and Gate.io's native
+  `is_reduce_only` field. Supported hedge-mode adapters no longer substitute client-order metadata
+  for a missing exchange-native position side, and untrusted Hyperliquid WebSocket order rows
+  trigger authoritative account-state refresh instead of reconnect churn.
 
 - `trailing_grid_v7` with zero entry cooldown now preserves v7's simultaneous grid-entry ladder
   when a later trailing leg uses retracement. Positive entry cooldowns and canonical

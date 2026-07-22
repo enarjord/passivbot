@@ -31,7 +31,7 @@ class BybitBot(CCXTBot):
     # ═══════════════════ HOOK OVERRIDES ═══════════════════
 
     def _get_position_side_for_order(self, order: dict) -> str:
-        """Bybit: use durable positionIdx/position-side/client metadata."""
+        """Bybit: require durable exchange positionIdx/position-side metadata."""
         info = order.get("info") or {}
         raw_position_idx = info.get("positionIdx")
         if raw_position_idx is not None:
@@ -43,10 +43,12 @@ class BybitBot(CCXTBot):
             if position_idx == 0:
                 return self._normalize_one_way_position_side(order)
             raise ValueError("bybit hedge order has invalid positionIdx")
-        position_side = super()._get_position_side_for_order(order)
-        if position_side not in {"long", "short"}:
-            raise ValueError("bybit order missing authoritative positionIdx/position side")
-        return position_side
+        normalized_side = str(
+            order.get("position_side") or info.get("positionSide") or ""
+        ).lower()
+        if normalized_side in {"long", "short"}:
+            return normalized_side
+        raise ValueError("bybit order missing authoritative positionIdx/position side")
 
     def _canonical_open_order_reduce_only(self, order: dict) -> bool:
         """Normalize Bybit hedge action semantics from side plus positionIdx."""

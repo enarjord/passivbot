@@ -75,9 +75,6 @@ class OKXBot(CCXTBot):
             return position_side
         if position_side == "net":
             return self._normalize_one_way_position_side(order)
-        metadata_side = super()._get_position_side_for_order(order)
-        if metadata_side in {"long", "short"}:
-            return metadata_side
         raise ValueError("OKX order missing authoritative position-side semantics")
 
     def _canonical_open_order_reduce_only(self, order: dict) -> bool:

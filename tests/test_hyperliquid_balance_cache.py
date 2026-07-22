@@ -85,6 +85,50 @@ class DummyCCA:
 
 
 @pytest.mark.asyncio
+async def test_hyperliquid_ws_order_without_reduce_only_requests_refresh_without_reconnect(
+    stubbed_modules,
+):
+    HyperliquidBot = importlib.import_module("exchanges.hyperliquid").HyperliquidBot
+    bot = HyperliquidBot.__new__(HyperliquidBot)
+    bot.stop_websocket = False
+    bot._health_ws_reconnects = 0
+    bot._health_rate_limits = 0
+    bot._log_symbols = lambda symbols, limit=8: ",".join(symbols[:limit])
+    bot._hl_note_ws_symbols_for_dex_scope = lambda _orders: None
+    handled = []
+    dirty = []
+    bot.handle_order_update = lambda orders: handled.append(orders)
+    bot._mark_account_critical_state_dirty = lambda **kwargs: dirty.append(kwargs)
+
+    async def watch_orders():
+        bot.stop_websocket = True
+        return [
+            {
+                "id": "123",
+                "symbol": "BTC/USDC:USDC",
+                "side": "buy",
+                "amount": 0.01,
+                "info": {"oid": 123, "side": "B", "sz": "0.01"},
+            }
+        ]
+
+    bot.ccp = types.SimpleNamespace(watch_orders=watch_orders)
+
+    await bot.watch_orders()
+
+    assert bot._health_ws_reconnects == 0
+    assert handled == []
+    assert dirty == [
+        {
+            "reason": "order_ws_semantics_unavailable",
+            "symbols": {"BTC/USDC:USDC"},
+            "source": "hyperliquid_order_ws",
+            "level": pylogging.WARNING,
+        }
+    ]
+
+
+@pytest.mark.asyncio
 async def test_hyperliquid_already_gone_cancel_requests_full_confirmation(stubbed_modules):
     HyperliquidBot = importlib.import_module("exchanges.hyperliquid").HyperliquidBot
     markers = []
