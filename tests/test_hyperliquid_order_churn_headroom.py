@@ -203,3 +203,75 @@ async def test_failed_config_connector_attempt_is_debited(monkeypatch):
     bot._record_order_churn_signed_action_attempts.assert_called_once_with(1)
     bot._complete_order_churn_signed_action_attempts.assert_not_called()
     bot.cca.set_margin_mode.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "response", [{}, {"status": "ok"}, {"response": {"type": "default"}}]
+)
+async def test_ambiguous_config_response_stays_pending_and_debited(
+    monkeypatch, response
+):
+    bot = object.__new__(HyperliquidBot)
+    bot.user_info = {"is_vault": False}
+    bot.exchange = "hyperliquid"
+    bot._order_churn_gate_enabled_for_connector = True
+    bot._order_churn_gate_state = OrderChurnGateState()
+    bot.live_value = lambda key: {
+        "order_replacement_churn_gate_activation_count": 10,
+        "order_replacement_churn_gate_window_minutes": 10.0,
+    }[key]
+    bot._emit_order_churn_actions_accounted_event = MagicMock()
+    bot._calc_leverage_for_symbol = lambda _symbol: 5
+    bot._get_margin_mode_for_symbol = lambda _symbol: "cross"
+    bot._record_order_churn_signed_action_attempts = MagicMock(
+        return_value=("config-token",)
+    )
+    bot._complete_order_churn_signed_action_attempts = MagicMock()
+    bot.cca = SimpleNamespace(set_margin_mode=AsyncMock(return_value=response))
+
+    async def no_sleep(_seconds):
+        return None
+
+    monkeypatch.setattr("exchanges.hyperliquid.asyncio.sleep", no_sleep)
+
+    with pytest.raises(RuntimeError, match="not an authoritative success"):
+        await bot.update_exchange_config_by_symbols(["BTC/USDC:USDC"])
+
+    bot._complete_order_churn_signed_action_attempts.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_authoritative_config_success_completes_signed_action(monkeypatch):
+    bot = object.__new__(HyperliquidBot)
+    bot.user_info = {"is_vault": False}
+    bot.exchange = "hyperliquid"
+    bot._order_churn_gate_enabled_for_connector = True
+    bot._order_churn_gate_state = OrderChurnGateState()
+    bot.live_value = lambda key: {
+        "order_replacement_churn_gate_activation_count": 10,
+        "order_replacement_churn_gate_window_minutes": 10.0,
+    }[key]
+    bot._emit_order_churn_actions_accounted_event = MagicMock()
+    bot._calc_leverage_for_symbol = lambda _symbol: 5
+    bot._get_margin_mode_for_symbol = lambda _symbol: "cross"
+    bot._record_order_churn_signed_action_attempts = MagicMock(
+        return_value=("config-token",)
+    )
+    bot._complete_order_churn_signed_action_attempts = MagicMock()
+    bot.cca = SimpleNamespace(
+        set_margin_mode=AsyncMock(
+            return_value={"status": "ok", "response": {"type": "default"}}
+        )
+    )
+
+    async def no_sleep(_seconds):
+        return None
+
+    monkeypatch.setattr("exchanges.hyperliquid.asyncio.sleep", no_sleep)
+
+    await bot.update_exchange_config_by_symbols(["BTC/USDC:USDC"])
+
+    bot._complete_order_churn_signed_action_attempts.assert_called_once_with(
+        ("config-token",)
+    )

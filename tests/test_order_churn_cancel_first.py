@@ -33,6 +33,7 @@ class _PlanBot:
 
     def __init__(self, *, cancel_error: Exception | None = None):
         self.cancel_error = cancel_error
+        self.state_change_detected_by_symbol = set()
         self.cancelled: list[dict] = []
         self.created: list[dict] = []
         self.confirmations: list[set[str]] = []
@@ -161,6 +162,31 @@ async def test_only_dedicated_protective_market_panic_bypasses_cancel_first(
 
 
 @pytest.mark.asyncio
+async def test_dedicated_market_panic_survives_ambiguous_cancel_state_filter(
+    execution_shell,
+):
+    bot = _PlanBot()
+    market_panic = _order("market_panic", execution_type="market", panic=True)
+
+    async def ambiguous_cancel(orders):
+        bot.cancelled = list(orders)
+        bot.state_change_detected_by_symbol.add(orders[0]["symbol"])
+        return []
+
+    bot.execute_cancellations_parent = ambiguous_cancel
+
+    await executor.execute_order_plan(
+        bot,
+        [_order("stale")],
+        [market_panic],
+        configure_creations=False,
+    )
+
+    assert bot.created == [market_panic]
+    assert bot.confirmations == [{"balance", "positions", "open_orders", "fills"}]
+
+
+@pytest.mark.asyncio
 async def test_exposure_increasing_market_panic_never_bypasses_cancel_first(
     execution_shell,
 ):
@@ -225,7 +251,7 @@ async def test_churn_admission_defers_before_exchange_config_writes(execution_sh
         return {symbol: 100.0 for symbol in symbols}
 
     async def config_plus_create_headroom_only():
-        return 2
+        return 1
 
     def config_action_costs(symbols):
         return {symbol: 1 for symbol in symbols}

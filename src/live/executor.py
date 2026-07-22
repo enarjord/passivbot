@@ -110,21 +110,67 @@ def _order_is_protective_create(order: dict) -> bool:
     return _order_is_reduce_only(order)
 
 
-def _complete_terminal_signed_action_attempts(bot, tokens, results) -> None:
+def _complete_terminal_signed_action_attempts(
+    bot, tokens, results, orders, *, action: str
+) -> None:
     complete = getattr(bot, "_complete_order_churn_signed_action_attempts", None)
     if not callable(complete):
         return
     token_rows = tuple(tokens or ())
     result_rows = tuple(results or ())
-    if len(token_rows) != len(result_rows):
+    order_rows = tuple(orders or ())
+    if len(token_rows) != len(result_rows) or len(result_rows) != len(order_rows):
         return
-    terminal_tokens = tuple(
-        token
-        for token, result in zip(token_rows, result_rows)
-        if not isinstance(result, BaseException)
-    )
+    terminal_tokens = []
+    for token, result, order in zip(token_rows, result_rows, order_rows):
+        if isinstance(result, BaseException):
+            continue
+        try:
+            acknowledged = (
+                bot.did_create_order(result)
+                if action == "create"
+                else bot.did_cancel_order(result, order)
+            )
+        except Exception:
+            acknowledged = False
+        proven_terminal_rejection = False
+        if not acknowledged and isinstance(result, dict):
+            if action == "create":
+                proven_terminal_rejection = (
+                    _create_rejection_reason(result) == "terminal_rejection"
+                )
+            else:
+                info = result.get("info")
+                status = str(result.get("status") or "").lower()
+                info_status = (
+                    str(
+                        info.get("status")
+                        or info.get("ordStatus")
+                        or info.get("state")
+                        or ""
+                    ).lower()
+                    if isinstance(info, dict)
+                    else ""
+                )
+                proven_terminal_rejection = status in {
+                    "canceled",
+                    "cancelled",
+                    "closed",
+                    "expired",
+                    "failed",
+                    "rejected",
+                } or info_status in {
+                    "canceled",
+                    "cancelled",
+                    "closed",
+                    "expired",
+                    "failed",
+                    "rejected",
+                }
+        if acknowledged or proven_terminal_rejection:
+            terminal_tokens.append(token)
     if terminal_tokens:
-        complete(terminal_tokens)
+        complete(tuple(terminal_tokens))
 
 
 def _filter_hsl_replay_pending_creates(
@@ -376,7 +422,7 @@ async def _apply_order_churn_final_admission(
                 float(action_headroom)
                 - projected_signed_actions
                 - reserved_headroom
-                <= 0.0
+                < 0.0
             ):
                 deferred.append(order)
                 order["_churn_gate_reason"] = "action_headroom_exhausted"
@@ -813,6 +859,9 @@ async def execute_order_plan(
                 order
                 for order in to_create_mod
                 if order["symbol"] in bot.state_change_detected_by_symbol
+                and not _is_dedicated_protective_market_panic(
+                    bot, order, configure_creations=configure_creations
+                )
             ]
             logging.info(
                 "[order] state change detected; skipping order creation for %s until next cycle",
@@ -847,6 +896,9 @@ async def execute_order_plan(
                 order
                 for order in to_create_mod
                 if order["symbol"] not in bot.state_change_detected_by_symbol
+                or _is_dedicated_protective_market_panic(
+                    bot, order, configure_creations=configure_creations
+                )
             ]
             if order_wave is not None:
                 order_wave["skipped_create"] += max(
@@ -1133,7 +1185,9 @@ async def execute_orders_parent(bot, orders: list[dict]) -> list[dict]:
                 len(res),
             )
         return []
-    _complete_terminal_signed_action_attempts(bot, signed_action_tokens, res)
+    _complete_terminal_signed_action_attempts(
+        bot, signed_action_tokens, res, orders, action="create"
+    )
     to_return = []
     for idx, (ex, order) in enumerate(zip(res, orders)):
         if not bot.did_create_order(ex):
@@ -1354,7 +1408,9 @@ async def execute_cancellations_parent(bot, orders: list[dict]) -> list[dict]:
                 len(res),
             )
         return []
-    _complete_terminal_signed_action_attempts(bot, signed_action_tokens, res)
+    _complete_terminal_signed_action_attempts(
+        bot, signed_action_tokens, res, orders, action="cancel"
+    )
     for idx, (ex, order) in enumerate(zip(res, orders)):
         if not bot.did_cancel_order(ex, order):
             bot.state_change_detected_by_symbol.add(order["symbol"])

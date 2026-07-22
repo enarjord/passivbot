@@ -1507,6 +1507,16 @@ class HyperliquidBot(CCXTBot):
                     res = await self.cca.set_margin_mode(
                         margin_mode, symbol=symbol, params=params
                     )
+                    if not (
+                        isinstance(res, dict)
+                        and str(res.get("status") or "").lower() == "ok"
+                        and isinstance(res.get("response"), dict)
+                        and str(res["response"].get("type") or "").lower()
+                        == "default"
+                    ):
+                        raise RuntimeError(
+                            "Hyperliquid margin-mode response was not an authoritative success"
+                        )
                     self._complete_order_churn_signed_action_attempts(
                         signed_action_tokens
                     )

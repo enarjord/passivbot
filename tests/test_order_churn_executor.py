@@ -4,7 +4,10 @@ import math
 
 import pytest
 
-from live.executor import _apply_order_churn_final_admission
+from live.executor import (
+    _apply_order_churn_final_admission,
+    _complete_terminal_signed_action_attempts,
+)
 from live.order_churn_gate import OrderChurnGateState
 
 
@@ -162,7 +165,7 @@ async def test_far_candidate_cannot_consume_headroom_needed_by_later_exempt_orde
 @pytest.mark.asyncio
 async def test_far_candidate_reserves_required_config_action_with_create():
     bot = _Bot()
-    bot.action_headroom = 2
+    bot.action_headroom = 1
     far = _order("far", price=99.0)
 
     admitted = await _apply_order_churn_final_admission(
@@ -174,13 +177,57 @@ async def test_far_candidate_reserves_required_config_action_with_create():
     assert admitted == []
     assert far["_churn_gate_reason"] == "action_headroom_exhausted"
 
-    bot.action_headroom = 3
+    bot.action_headroom = 2
     admitted = await _apply_order_churn_final_admission(
         bot,
         [far],
         config_action_costs_by_symbol={far["symbol"]: 1},
     )
     assert admitted == [far]
+
+
+def test_signed_action_tokens_complete_only_for_acknowledged_members():
+    bot = _Bot()
+    completed = []
+    bot._complete_order_churn_signed_action_attempts = lambda tokens: completed.append(
+        tokens
+    )
+    bot.did_create_order = lambda result: bool(result.get("acknowledged"))
+    orders = [
+        _order("ack", price=99.0),
+        _order("rejected", price=99.0),
+        _order("ambiguous", price=99.0),
+    ]
+
+    _complete_terminal_signed_action_attempts(
+        bot,
+        ("token-ack", "token-rejected", "token-ambiguous"),
+        ({"acknowledged": True}, {"status": "rejected"}, {}),
+        orders,
+        action="create",
+    )
+
+    assert completed == [("token-ack", "token-rejected")]
+
+
+def test_cancel_signed_action_tokens_distinguish_terminal_and_ambiguous_members():
+    bot = _Bot()
+    completed = []
+    bot._complete_order_churn_signed_action_attempts = lambda tokens: completed.append(
+        tokens
+    )
+    bot.did_cancel_order = lambda result, _order: result.get("status") == "success"
+    orders = [_order("rejected", price=99.0), _order("ambiguous", price=99.0)]
+
+    _complete_terminal_signed_action_attempts(
+        bot,
+        ("token-rejected", "token-ambiguous"),
+        ({"status": "rejected"}, {}),
+        orders,
+        action="cancel",
+    )
+
+    assert completed == [("token-rejected",)]
 
 
 @pytest.mark.asyncio
