@@ -378,6 +378,50 @@ def test_first_prepare_emits_ram_reset_and_fails_open(monkeypatch):
     assert emitted[0]["reset_count"] == 0
 
 
+def test_active_rust_risk_pair_bypasses_observed_churn(monkeypatch):
+    state = OrderChurnGateState()
+    symbol = "BTC/USDT:USDT"
+
+    class Bot:
+        _order_churn_gate_state = state
+        _order_churn_risk_active_pairs = ((symbol, "long"),)
+        active_symbols = [symbol]
+        open_orders = {}
+        positions = {}
+
+        @staticmethod
+        def live_value(key):
+            return {
+                "order_replacement_churn_gate_activation_count": 10,
+                "order_replacement_churn_gate_window_minutes": 10.0,
+                "order_replacement_churn_gate_stability_minutes": 2.0,
+                "order_match_tolerance_pct": 0.0002,
+                "order_replacement_churn_gate_tracking_tolerance_pct": 0.002,
+                "execution_delay_seconds": 2.0,
+            }[key]
+
+    monkeypatch.setattr(reconciler, "_order_churn_account_epoch", lambda _bot: ("e",))
+    monkeypatch.setattr(
+        reconciler,
+        "_order_churn_symbol_compatibility_epochs",
+        lambda _bot, symbols: {item: ("m",) for item in symbols},
+    )
+    monkeypatch.setattr(reconciler.time, "monotonic", lambda: 0.0)
+    first = _order(price=100.0)
+    reconciler.prepare_order_churn_evidence(
+        Bot(), {symbol: [first]}, generation=state.begin_generation()
+    )
+
+    monkeypatch.setattr(reconciler.time, "monotonic", lambda: 5.0)
+    moved = _order(price=100.1)
+    reconciler.prepare_order_churn_evidence(
+        Bot(), {symbol: [moved]}, generation=state.begin_generation()
+    )
+
+    assert moved["_churn_evidence"] is False
+    assert moved["_churn_reason"] == "rust_risk_phase_active"
+
+
 def test_downstream_normalization_outage_is_symbol_scoped(monkeypatch):
     state = OrderChurnGateState()
     btc = "BTC/USDT:USDT"
