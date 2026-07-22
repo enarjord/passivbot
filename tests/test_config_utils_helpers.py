@@ -256,7 +256,7 @@ def test_retired_initial_entry_gate_migrates_distance_and_hydrates_defaults():
     } in changes
 
 
-@pytest.mark.parametrize("legacy_value", [0.0, -0.1])
+@pytest.mark.parametrize("legacy_value", [None, 0.0, -0.1])
 def test_retired_disabled_initial_entry_gate_migrates_to_disabled_churn_gate(
     legacy_value,
 ):
@@ -297,6 +297,16 @@ def test_retired_disabled_initial_entry_gate_rejects_enabled_new_gate():
     source["live"]["initial_entry_exec_max_market_dist_pct"] = 0.0
 
     with pytest.raises(ValueError, match="enables the replacement"):
+        prepare_config(source, verbose=False, target="canonical", runtime=None)
+
+
+def test_retired_enabled_initial_entry_gate_rejects_disabled_new_gate():
+    source = get_template_config()
+    source["live"].pop("order_replacement_churn_gate_market_dist_pct")
+    source["live"]["order_replacement_churn_gate_activation_count"] = 0
+    source["live"]["initial_entry_exec_max_market_dist_pct"] = 0.005
+
+    with pytest.raises(ValueError, match="disables the replacement"):
         prepare_config(source, verbose=False, target="canonical", runtime=None)
 
 

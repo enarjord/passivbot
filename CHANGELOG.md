@@ -6,9 +6,10 @@ All notable user-facing changes will be documented in this file.
 
 - Configs using the retired `live.initial_entry_exec_max_market_dist_pct` now migrate automatically
   to the account-wide replacement-churn gate. Positive values preserve the market-distance
-  threshold and hydrate the other new settings from canonical defaults; non-positive values
+  threshold and hydrate the other new settings from canonical defaults; null and non-positive values
   preserve the old disabled intent through `order_replacement_churn_gate_activation_count = 0`.
-  Explicit conflicting old and new settings still fail for manual resolution.
+  Explicit conflicting old and new settings still fail for manual resolution. This compatibility
+  applies to V8 config shapes; legacy `pb_multi` input remains unsupported.
 - Replaced the initial-entry-only market-distance posting gate with a strategy-agnostic,
   account-wide Rust-ideal churn-evidence gate. Moving distant entries and closes may be deferred
   after sustained create traffic, while market, risk-critical, and near-market orders remain

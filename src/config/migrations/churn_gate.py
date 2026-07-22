@@ -28,6 +28,15 @@ def _as_finite_float(value: object, *, path: str) -> float:
     return normalized
 
 
+def _get_explicit_activation_count(live: dict) -> Optional[int]:
+    if CHURN_ACTIVATION_KEY not in live:
+        return None
+    activation = live[CHURN_ACTIVATION_KEY]
+    if isinstance(activation, bool) or not isinstance(activation, int):
+        raise TypeError(f"config.live.{CHURN_ACTIVATION_KEY} must be an integer")
+    return activation
+
+
 def migrate_initial_entry_distance_gate(
     result: dict,
     *,
@@ -37,9 +46,9 @@ def migrate_initial_entry_distance_gate(
     """Migrate the retired initial-entry-only distance gate.
 
     Positive legacy values map directly to the new near-market exemption distance.
-    Non-positive values disabled the old gate, so they map to the new gate's explicit
-    activation-count disable sentinel. Missing new tuning fields are subsequently
-    hydrated from the canonical template.
+    Null and non-positive values disabled the old gate, so they map to the new
+    gate's explicit activation-count disable sentinel. Missing new tuning fields
+    are subsequently hydrated from the canonical template.
     """
 
     live = result.get("live")
@@ -47,23 +56,24 @@ def migrate_initial_entry_distance_gate(
         return
 
     legacy_raw = live[LEGACY_DISTANCE_KEY]
-    legacy_value = _as_finite_float(
-        legacy_raw,
-        path=f"config.live.{LEGACY_DISTANCE_KEY}",
+    legacy_value = (
+        0.0
+        if legacy_raw is None
+        else _as_finite_float(
+            legacy_raw,
+            path=f"config.live.{LEGACY_DISTANCE_KEY}",
+        )
     )
+    explicit_activation = _get_explicit_activation_count(live)
 
     if legacy_value <= 0.0:
-        if CHURN_ACTIVATION_KEY in live:
-            activation = live[CHURN_ACTIVATION_KEY]
-            if isinstance(activation, bool) or not isinstance(activation, int):
-                raise TypeError(
-                    f"config.live.{CHURN_ACTIVATION_KEY} must be an integer"
-                )
-            if activation != 0:
+        if explicit_activation is not None:
+            if explicit_activation != 0:
                 raise ValueError(
                     f"config.live.{LEGACY_DISTANCE_KEY}={legacy_raw!r} disabled the "
                     "retired gate, but config.live."
-                    f"{CHURN_ACTIVATION_KEY}={activation!r} enables the replacement; "
+                    f"{CHURN_ACTIVATION_KEY}={explicit_activation!r} enables the "
+                    "replacement; "
                     "remove the legacy field or resolve the conflict explicitly"
                 )
             live.pop(LEGACY_DISTANCE_KEY)
@@ -92,6 +102,13 @@ def migrate_initial_entry_distance_gate(
         raise ValueError(
             f"config.live.{LEGACY_DISTANCE_KEY} must be less than 1.0 to migrate; "
             f"got {legacy_raw!r}"
+        )
+
+    if explicit_activation == 0:
+        raise ValueError(
+            f"config.live.{LEGACY_DISTANCE_KEY}={legacy_raw!r} enabled the retired "
+            f"gate, but config.live.{CHURN_ACTIVATION_KEY}=0 disables the replacement; "
+            "remove the legacy field or resolve the conflict explicitly"
         )
 
     if CHURN_DISTANCE_KEY in live:

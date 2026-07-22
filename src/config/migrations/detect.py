@@ -20,6 +20,10 @@ PB_MULTI_FIELD_MAP_INV = {v: k for k, v in PB_MULTI_FIELD_MAP.items()}
 
 
 def detect_flavor(config: dict, template: dict) -> str:
+    # pb_multi is an unsupported pre-V8 input shape. Its residual detection and
+    # formatter path are stale internal compatibility code; do not extend them
+    # for current fields or treat them as a production migration contract. See
+    # docs/config_workflow.md and docs/ai/features/strategy_runtime.md.
     pb_keys = {
         "user",
         "pnls_max_lookback_days",
