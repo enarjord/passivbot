@@ -539,10 +539,12 @@ timing.
 
 ### Final market-distance check
 
-Distance decisions made during planning are provisional. Recheck fresh signed distance as close as
-practical to the connector call, after cancellations, configuration work, and authoritative
-barriers. A candidate that moved near is admitted; one that moved far must have capacity or be
-deferred. Missing/non-finite/stale market data defers an affected ordinary create.
+Distance decisions made during planning are provisional. After cancellations and authoritative
+barriers, recheck fresh signed distance before any candidate-specific exchange configuration or
+margin write. A candidate that moved near is admitted; one that moved far must have capacity or be
+deferred. Missing/non-finite/stale market data defers an affected ordinary create. Only admitted
+candidates may cause exchange configuration work; the existing final market-snapshot safety guard
+still runs after configuration and immediately before the connector create call.
 
 Use the existing side-aware convention: `1 - order_price / market_price` for buys and
 `order_price / market_price - 1` for sells. Admit when the result is less than or equal to the
@@ -1054,6 +1056,8 @@ events use bounded periodic summaries.
 ### Slice 4: final admission and priority
 
 - Recheck final fresh distance.
+- Apply churn admission before candidate-specific exchange configuration or margin writes; deferred
+  candidates must cause neither configuration mutations nor create attempts.
 - Apply allowance reservations atomically at connector boundary.
 - Add Hyperliquid authoritative action-headroom refresh and local logical-action debits without
   delaying cancellations or exempt actions.
