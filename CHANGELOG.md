@@ -15,6 +15,12 @@ All notable user-facing changes will be documented in this file.
   `is_reduce_only` field. Supported hedge-mode adapters no longer substitute client-order metadata
   for a missing exchange-native position side, and untrusted Hyperliquid WebSocket order rows
   trigger authoritative account-state refresh instead of reconnect churn.
+- Non-panic protective reducers may now coexist with compatible ordinary grid, trailing, or
+  EMA-anchor closes for the same position. Passivbot still selects only one protective reducer,
+  keeps panic close exclusive, reserves reducer quantity before trimming ordinary closes, and caps
+  aggregate reduce-only quantity to the position in Rust planning and live reconciliation. The
+  realized-loss gate evaluates the selected reducer first. This restores simultaneous unstuck plus
+  trailing close behavior for `trailing_grid_v7` without a strategy-specific exemption.
 
 - `trailing_grid_v7` with zero entry cooldown now preserves v7's simultaneous grid-entry ladder
   when a later trailing leg uses retracement. Positive entry cooldowns and canonical

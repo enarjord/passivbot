@@ -104,6 +104,78 @@ def _make_order(
     return order
 
 
+def test_finalize_reduce_only_orders_keeps_compatible_unstuck_and_trailing_close():
+    symbol = "BTC/USDT"
+    bot = OrchestrationBot({symbol: 100.0})
+    bot.register_symbol(symbol)
+    bot.positions[symbol]["long"] = {"size": 95.60, "price": 100.0}
+    orders = {
+        symbol: [
+            _make_order(
+                symbol,
+                "sell",
+                "long",
+                1.95,
+                99.0,
+                "close_unstuck_long",
+                reduce_only=True,
+            ),
+            _make_order(
+                symbol,
+                "sell",
+                "long",
+                26.24,
+                101.0,
+                "close_trailing_long",
+                reduce_only=True,
+            ),
+        ]
+    }
+
+    finalized = bot._finalize_reduce_only_orders(orders, {symbol: 100.0})
+
+    assert [(order["pb_order_type"], order["qty"]) for order in finalized[symbol]] == [
+        ("close_unstuck_long", 1.95),
+        ("close_trailing_long", 26.24),
+    ]
+
+
+def test_finalize_reduce_only_orders_trims_ordinary_before_protective_reducer():
+    symbol = "BTC/USDT"
+    bot = OrchestrationBot({symbol: 100.0})
+    bot.register_symbol(symbol)
+    bot.positions[symbol]["long"] = {"size": 20.0, "price": 100.0}
+    orders = {
+        symbol: [
+            _make_order(
+                symbol,
+                "sell",
+                "long",
+                1.95,
+                99.0,
+                "close_unstuck_long",
+                reduce_only=True,
+            ),
+            _make_order(
+                symbol,
+                "sell",
+                "long",
+                26.24,
+                101.0,
+                "close_trailing_long",
+                reduce_only=True,
+            ),
+        ]
+    }
+
+    finalized = bot._finalize_reduce_only_orders(orders, {symbol: 100.0})
+    by_type = {order["pb_order_type"]: order["qty"] for order in finalized[symbol]}
+
+    assert by_type["close_unstuck_long"] == 1.95
+    assert by_type["close_trailing_long"] == 18.05
+    assert sum(by_type.values()) == 20.0
+
+
 def test_coin_hsl_pending_replay_mode_override_is_pair_scoped():
     bot = Passivbot.__new__(Passivbot)
     bot.hsl = {

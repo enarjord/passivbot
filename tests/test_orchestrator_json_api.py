@@ -111,7 +111,7 @@ def adaptive_strategy_params(**overrides):
     return base
 
 
-def trailing_grid_v7_strategy_params(**entry_overrides):
+def trailing_grid_v7_strategy_params(*, close_overrides=None, **entry_overrides):
     entry = {
         "grid_double_down_factor": 1.0,
         "grid_spacing_pct": 0.02,
@@ -130,19 +130,21 @@ def trailing_grid_v7_strategy_params(**entry_overrides):
         "volatility_ema_span_hours": 1.0,
     }
     entry.update(entry_overrides)
+    close = {
+        "grid_markup_start": 0.01,
+        "grid_markup_end": 0.01,
+        "grid_qty_pct": 1.0,
+        "trailing_grid_ratio": 0.0,
+        "trailing_qty_pct": 1.0,
+        "trailing_retracement_pct": 0.0,
+        "trailing_threshold_pct": 0.0,
+    }
+    close.update(close_overrides or {})
     return {
         "ema_span_0": 10.0,
         "ema_span_1": 20.0,
         "entry": entry,
-        "close": {
-            "grid_markup_start": 0.01,
-            "grid_markup_end": 0.01,
-            "grid_qty_pct": 1.0,
-            "trailing_grid_ratio": 0.0,
-            "trailing_qty_pct": 1.0,
-            "trailing_retracement_pct": 0.0,
-            "trailing_threshold_pct": 0.0,
-        },
+        "close": close,
     }
 
 
@@ -1937,7 +1939,7 @@ def test_json_output_is_deterministic():
     assert out1 == out2
 
 
-def test_unstuck_takes_priority_over_close_grid_and_is_capped():
+def test_unstuck_and_ordinary_close_coexist_and_are_capped():
     import passivbot_rust as pbr
 
     balance = 1_000.0
@@ -1973,7 +1975,7 @@ def test_unstuck_takes_priority_over_close_grid_and_is_capped():
     out = compute(pbr, inp)
     order_types = [o["order_type"] for o in out["orders"]]
     assert "close_unstuck_long" in order_types
-    assert "close_grid_long" not in order_types
+    assert "close_grid_long" in order_types
 
     closes = [
         o
@@ -1982,6 +1984,63 @@ def test_unstuck_takes_priority_over_close_grid_and_is_capped():
     ]
     total_close_qty = -sum(o["qty"] for o in closes if o["qty"] < 0.0)
     assert total_close_qty <= 10.0 + 1e-9
+
+
+def test_trailing_grid_v7_emits_compatible_unstuck_and_trailing_closes_together():
+    import passivbot_rust as pbr
+
+    long_bp = {
+        "wallet_exposure_limit": 10.0,
+        "total_wallet_exposure_limit": 10.0,
+        "risk_wel_enforcer_enabled": False,
+        "risk_twel_enforcer_enabled": False,
+        "unstuck_ema_gating_enabled": False,
+        "unstuck_close_pct": 0.0195,
+        "unstuck_threshold": 0.9,
+        "unstuck_loss_allowance_pct": 0.01,
+    }
+    strategy = trailing_grid_v7_strategy_params(
+        close_overrides={
+            "trailing_grid_ratio": 1.0,
+            "trailing_qty_pct": 0.2624,
+            "trailing_retracement_pct": 0.005,
+            "trailing_threshold_pct": 0.01,
+        }
+    )
+    sym = make_symbol(
+        0,
+        bid=100.0,
+        ask=100.0,
+        long_pos_size=95.6,
+        long_pos_price=100.0,
+        long_bp=long_bp,
+        long_strategy=strategy,
+        short_strategy=strategy,
+    )
+    sym["long"]["trailing"] = {
+        "min_since_open": 99.0,
+        "max_since_min": 102.0,
+        "max_since_open": 102.0,
+        "min_since_max": 100.0,
+    }
+    inp = make_input(
+        balance=1_000.0,
+        strategy_kind="trailing_grid_v7",
+        global_bp=bot_params_pair(long_overrides=long_bp),
+        symbols=[sym],
+    )
+    inp["global"]["unstuck_allowance_long"] = 1e9
+
+    out = compute(pbr, inp)
+    closes = {
+        order["order_type"]: order
+        for order in out["orders"]
+        if order["pside"] == "long" and order["qty"] < 0.0
+    }
+
+    assert closes["close_unstuck_long"]["qty"] == pytest.approx(-1.95)
+    assert closes["close_trailing_long"]["qty"] == pytest.approx(-26.24)
+    assert sum(abs(order["qty"]) for order in closes.values()) <= 95.6 + 1e-9
 
 
 def test_unstuck_uses_symbol_loss_allowance_pct_for_loss_cap():
@@ -2550,7 +2609,12 @@ def test_wel_auto_reduce_takes_priority_over_unstuck_for_same_position():
 
     assert "close_auto_reduce_wel_long" in order_types
     assert "close_unstuck_long" not in order_types
-    assert "close_grid_long" not in order_types
+    assert "close_grid_long" in order_types
+    assert sum(
+        abs(o["qty"])
+        for o in out["orders"]
+        if o["pside"] == "long" and o["qty"] < 0.0
+    ) <= 6.0 + 1e-9
 
 
 def test_wel_auto_reduce_takes_priority_over_short_unstuck_for_same_position():
@@ -2584,7 +2648,12 @@ def test_wel_auto_reduce_takes_priority_over_short_unstuck_for_same_position():
 
     assert "close_auto_reduce_wel_short" in order_types
     assert "close_unstuck_short" not in order_types
-    assert "close_grid_short" not in order_types
+    assert "close_grid_short" in order_types
+    assert sum(
+        abs(o["qty"])
+        for o in out["orders"]
+        if o["pside"] == "short" and o["qty"] > 0.0
+    ) <= 6.0 + 1e-9
 
 
 def test_twel_auto_reduce_takes_priority_over_unstuck_for_same_position():
@@ -2619,7 +2688,12 @@ def test_twel_auto_reduce_takes_priority_over_unstuck_for_same_position():
 
     assert "close_auto_reduce_twel_long" in order_types
     assert "close_unstuck_long" not in order_types
-    assert "close_grid_long" not in order_types
+    assert "close_grid_long" in order_types
+    assert sum(
+        abs(o["qty"])
+        for o in out["orders"]
+        if o["pside"] == "long" and o["qty"] < 0.0
+    ) <= 6.0 + 1e-9
 
 
 def test_twel_auto_reduce_takes_priority_over_short_unstuck_for_same_position():
@@ -2654,7 +2728,12 @@ def test_twel_auto_reduce_takes_priority_over_short_unstuck_for_same_position():
 
     assert "close_auto_reduce_twel_short" in order_types
     assert "close_unstuck_short" not in order_types
-    assert "close_grid_short" not in order_types
+    assert "close_grid_short" in order_types
+    assert sum(
+        abs(o["qty"])
+        for o in out["orders"]
+        if o["pside"] == "short" and o["qty"] > 0.0
+    ) <= 6.0 + 1e-9
 
 
 def test_twel_auto_reduce_includes_managed_modes_and_excludes_manual_panic():

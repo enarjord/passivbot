@@ -28,6 +28,10 @@ ratio modes. V8 still uses its current shared execution, risk, forager, unstuck,
 runtime. Those surrounding systems can cause a migrated config to trade differently even when the
 strategy parameters are preserved exactly.
 
+The shared close-allocation contract permits a selected non-panic protective reducer and compatible
+ordinary strategy closes to execute in the same wave when their aggregate quantity fits the
+position. This includes `trailing_grid_v7`; it is not a strategy-specific exemption.
+
 ## Before migrating
 
 1. Keep the exact v7 release or commit used by the existing deployment.

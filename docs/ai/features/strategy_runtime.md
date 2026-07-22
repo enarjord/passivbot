@@ -122,6 +122,21 @@ If `close.retracement_base_pct <= 0.0` and `close.threshold_we_weight == 0.0`, r
 have the same price. Rust intentionally emits one full-position close in that case; `close.qty_pct`
 is effectively moot because multiple same-price slices would be redundant.
 
+## Close Reducer Compatibility
+
+For each coin and position side, Rust selects at most one protective reducer per ideal-order batch.
+HSL panic is exclusive. TWEL/WEL exposure repair takes precedence over auto-unstuck, and the
+closest-to-fill candidate wins when competing reducers have the same priority.
+
+A selected non-panic reducer may coexist with ordinary grid, trailing, or EMA-anchor closes. Its
+quantity is reserved first; if aggregate close quantity would exceed the position, ordinary closes
+are trimmed furthest-from-fill first against the remaining quantity. Aggregate reduce-only quantity
+must never exceed the position after quantity-step and effective-minimum handling. The cumulative
+realized-loss gate applies after this allocation and evaluates the selected reducer before ordinary
+closes. Live reconciliation reapplies the same aggregate cap against current exchange position
+size, still trimming ordinary closes before the reducer if the position shrank after planning.
+This contract is shared by every strategy kind, including `trailing_grid_v7`.
+
 ## Source Of Truth
 
 Rust owns strategy dispatch and order behavior. If Python docs, adapters, or tests imply old

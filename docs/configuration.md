@@ -336,6 +336,11 @@ If a position is stuck, the bot uses profits from other positions to realize los
   - `if wallet_exposure / wallet_exposure_limit > unstuck_threshold: unstucking enabled`
   - Example: If a position size is `$500` and max allowed position size is `$1000`, the position is 50% full. If `unstuck_threshold = 0.45`, unstuck the position until its size is `$450`.
 
+One non-panic protective reducer (TWEL/WEL auto-reduce or auto-unstuck) may coexist with ordinary
+grid, trailing, or EMA-anchor closes for the same position. Passivbot reserves the reducer quantity
+first and caps ordinary closes to the remaining position quantity. Panic close remains exclusive,
+and competing protective reducers do not stack.
+
 ### Filter Parameters
 
 Forager coin selection now uses a two-stage model: coarse volume pruning, then weighted ranking across volume, EMA readiness, and volatility.
