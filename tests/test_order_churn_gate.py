@@ -390,11 +390,12 @@ async def test_unavailable_churn_normalization_leaves_only_that_symbol_untouched
         active_symbols = [btc, eth]
         open_orders = {btc: [], eth: []}
         positions = {}
+        actual_orders = {btc: [], eth: []}
 
-        @staticmethod
-        def _snapshot_actual_orders(symbols, psides_by_symbol=None):
+        @classmethod
+        def _snapshot_actual_orders(cls, symbols, psides_by_symbol=None):
             del psides_by_symbol
-            return {symbol: [] for symbol in symbols}
+            return {symbol: list(cls.actual_orders.get(symbol, [])) for symbol in symbols}
 
         @staticmethod
         def _reconcile_symbol_orders(symbol, actual, ideal, keys, **kwargs):
@@ -428,6 +429,90 @@ async def test_unavailable_churn_normalization_leaves_only_that_symbol_untouched
     )
 
     assert to_create == [btc_ideal]
+
+    Bot.actual_orders = {btc: [], eth: [{"symbol": eth}]}
+    _to_cancel, to_create = await reconciler.calc_orders_to_cancel_and_create_from_ideal(
+        Bot(),
+        {btc: [btc_ideal], eth: [eth_ideal]},
+        apply_creation_guardrails=False,
+        apply_mode_filters=False,
+        collect_fresh_entry_eligibility=False,
+        order_churn_unavailable_symbols={eth},
+    )
+    assert to_create == []
+
+    Bot.actual_orders = {btc: [], eth: []}
+    Bot.positions = {eth: {"long": {"size": 1.0}, "short": {"size": 0.0}}}
+    _to_cancel, to_create = await reconciler.calc_orders_to_cancel_and_create_from_ideal(
+        Bot(),
+        {btc: [btc_ideal], eth: [eth_ideal]},
+        apply_creation_guardrails=False,
+        apply_mode_filters=False,
+        collect_fresh_entry_eligibility=False,
+        order_churn_unavailable_symbols={eth},
+    )
+    assert to_create == []
+
+
+@pytest.mark.asyncio
+async def test_unavailable_stateful_symbol_preserves_only_market_panic_create():
+    btc = "BTC/USDT:USDT"
+    eth = "ETH/USDT:USDT"
+    ordinary = _order(price=100.0)
+    market_panic = {
+        **_order(price=100.0, pb_order_type="close_panic_long"),
+        "side": "sell",
+        "reduce_only": True,
+        "type": "market",
+    }
+    unavailable = {**_order(price=10.0), "symbol": eth}
+
+    class Bot:
+        exchange = "fake"
+        active_symbols = [btc, eth]
+        open_orders = {btc: [], eth: [{"symbol": eth}]}
+        positions = {}
+
+        @staticmethod
+        def _snapshot_actual_orders(symbols, psides_by_symbol=None):
+            del psides_by_symbol
+            return {
+                symbol: ([{"symbol": eth}] if symbol == eth else [])
+                for symbol in symbols
+            }
+
+        @staticmethod
+        def _reconcile_symbol_orders(symbol, actual, ideal, keys, **kwargs):
+            return reconciler.reconcile_symbol_orders(
+                Bot(), symbol, actual, ideal, keys, **kwargs
+            )
+
+        @staticmethod
+        def _annotate_order_deltas(to_cancel, to_create):
+            return to_cancel, to_create
+
+        @staticmethod
+        def _apply_order_match_tolerance(to_cancel, to_create):
+            return to_cancel, to_create, 0
+
+        @staticmethod
+        async def _sort_orders_by_market_diff(orders, _label):
+            return orders
+
+        @staticmethod
+        def _order_plan_summary_is_interesting(**_kwargs):
+            return False
+
+    _to_cancel, to_create = await reconciler.calc_orders_to_cancel_and_create_from_ideal(
+        Bot(),
+        {btc: [ordinary, market_panic], eth: [unavailable]},
+        apply_creation_guardrails=False,
+        apply_mode_filters=False,
+        collect_fresh_entry_eligibility=False,
+        order_churn_unavailable_symbols={eth},
+    )
+
+    assert to_create == [market_panic]
 
 
 def test_epoch_reset_clears_history_but_not_attempts():

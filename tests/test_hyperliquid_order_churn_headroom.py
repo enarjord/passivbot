@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -78,6 +79,20 @@ async def test_headroom_endpoint_failure_is_backed_off_and_does_not_invent_capac
     assert await bot._order_churn_far_create_headroom() is None
 
 
+@pytest.mark.asyncio
+async def test_action_attempted_during_headroom_fetch_is_debited_from_response():
+    bot = _bot({"nRequestsUsed": 0, "nRequestsCap": 10, "nRequestsSurplus": 0})
+
+    async def public_post_info(_request):
+        bot._record_order_churn_signed_action_attempts(1)
+        return {"nRequestsUsed": 0, "nRequestsCap": 10, "nRequestsSurplus": 0}
+
+    bot.cca.publicPostInfo = public_post_info
+
+    assert await bot._order_churn_far_create_headroom() == 9
+    assert len(bot._hl_order_churn_local_action_timestamps) == 1
+
+
 def test_actions_before_first_snapshot_need_no_local_debit():
     bot = _bot({"nRequestsUsed": 0, "nRequestsCap": 10, "nRequestsSurplus": 0})
     bot._record_order_churn_signed_action_attempts(5)
@@ -107,3 +122,25 @@ def test_precreate_cost_counts_only_unconfigured_symbols():
     assert bot._order_churn_precreate_signed_action_costs(
         {"BTC/USDC:USDC", "ETH/USDC:USDC"}
     ) == {"ETH/USDC:USDC": 1}
+
+
+@pytest.mark.asyncio
+async def test_failed_config_connector_attempt_is_debited(monkeypatch):
+    bot = object.__new__(HyperliquidBot)
+    bot.user_info = {"is_vault": False}
+    bot._calc_leverage_for_symbol = lambda _symbol: 5
+    bot._get_margin_mode_for_symbol = lambda _symbol: "cross"
+    bot._record_order_churn_signed_action_attempts = MagicMock()
+    bot.cca = SimpleNamespace(
+        set_margin_mode=AsyncMock(side_effect=RuntimeError("rejected"))
+    )
+
+    async def no_sleep(_seconds):
+        return None
+
+    monkeypatch.setattr("exchanges.hyperliquid.asyncio.sleep", no_sleep)
+
+    await bot.update_exchange_config_by_symbols(["BTC/USDC:USDC"])
+
+    bot._record_order_churn_signed_action_attempts.assert_called_once_with(1)
+    bot.cca.set_margin_mode.assert_awaited_once()

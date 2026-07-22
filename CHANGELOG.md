@@ -16,7 +16,9 @@ All notable user-facing changes will be documented in this file.
   for a missing exchange-native position side, and untrusted Hyperliquid WebSocket order rows
   trigger authoritative account-state refresh instead of reconnect churn. Hyperliquid admission
   reserves required signed configuration actions with creates, and churn distance is rechecked from
-  a forced-fresh market read after configuration before any create call.
+  a forced-fresh market read after configuration before any create call. A downstream churn
+  normalization failure now blocks account-wide non-panic creation when the affected symbol still
+  has actual orders or a position, while preserving the dedicated market-panic path.
 - Non-panic protective reducers may now coexist with compatible ordinary grid, trailing, or
   EMA-anchor closes for the same position. Passivbot still selects only one protective reducer,
   keeps panic close exclusive, reserves reducer quantity before trimming ordinary closes, and caps

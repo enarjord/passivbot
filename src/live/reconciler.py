@@ -1289,6 +1289,12 @@ async def calc_orders_to_cancel_and_create_from_ideal(
     churn_unavailable_symbols = {
         str(symbol) for symbol in (order_churn_unavailable_symbols or []) if symbol
     }
+    churn_unavailable_stateful_symbols = {
+        symbol
+        for symbol in churn_unavailable_symbols
+        if actual_orders.get(symbol)
+        or _symbol_has_open_or_unproven_position(bot, symbol)
+    }
     keys = (
         (
             "symbol",
@@ -1422,6 +1428,25 @@ async def calc_orders_to_cancel_and_create_from_ideal(
         to_cancel += cancel_
         to_create += create_
 
+    if connector_enabled and churn_unavailable_stateful_symbols:
+        blocked = [order for order in to_create if not _order_is_market_panic(order)]
+        to_create = [order for order in to_create if _order_is_market_panic(order)]
+        trace = _trace_record(
+            trace,
+            "record_blocked_orders",
+            blocked,
+            "order_churn_normalization_account_barrier",
+        )
+        logging.error(
+            "[order] blocking account-wide non-panic creations because churn normalization "
+            "is unavailable for symbols with actual orders or positions | symbols=%s | "
+            "blocked_creations=%d | market_panic_bypass=%d",
+            _pb_attr("Passivbot")._log_symbols(
+                sorted(churn_unavailable_stateful_symbols), limit=8
+            ),
+            len(blocked),
+            len(to_create),
+        )
     if malformed_actual_symbols and connector_enabled:
         blocked = list(to_create)
         blocked_cancellations = list(to_cancel)
@@ -1782,6 +1807,37 @@ def _order_is_panic(order: dict) -> bool:
         return "panic" in str(_pb_attr("custom_id_to_snake")(custom_id))
     except Exception:
         return False
+
+
+def _order_is_market_panic(order: dict) -> bool:
+    execution_type = str(
+        order.get("type") or order.get("execution_type") or ""
+    ).lower()
+    return (
+        execution_type == "market"
+        and _order_is_panic(order)
+        and _order_is_reduce_only(order)
+    )
+
+
+def _symbol_has_open_or_unproven_position(bot, symbol: str) -> bool:
+    positions = getattr(bot, "positions", {}) or {}
+    if symbol not in positions:
+        return False
+    sides = positions.get(symbol)
+    if not isinstance(sides, dict):
+        return True
+    for pside in ("long", "short"):
+        position = sides.get(pside) or {}
+        if not isinstance(position, dict):
+            return True
+        try:
+            size = float(position.get("size", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            return True
+        if not math.isfinite(size) or size != 0.0:
+            return True
+    return False
 
 
 def _order_pb_type(order: dict) -> str:

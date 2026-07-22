@@ -277,3 +277,31 @@ async def test_churn_admission_rechecks_after_config_market_move(execution_shell
     assert bot.created == []
     assert desired["_churn_gate_reason"] == "allowance_exhausted"
     assert requested_max_ages == [10_000, 0]
+
+
+@pytest.mark.asyncio
+async def test_batch_slice_happens_before_exchange_config_writes(execution_shell):
+    bot = _PlanBot()
+    bot._order_churn_gate_state = OrderChurnGateState()
+    bot.configured = []
+
+    def live_value(key):
+        return {
+            "order_replacement_churn_gate_activation_count": 0,
+            "max_n_creations_per_batch": 1,
+            "order_replacement_churn_gate_market_dist_pct": 0.005,
+        }[key]
+
+    async def update_configs(symbols):
+        bot.configured.append(list(symbols))
+        return set(symbols)
+
+    bot.live_value = live_value
+    bot.update_exchange_configs = update_configs
+    first = _order("first")
+    second = {**_order("second"), "symbol": "ETH/USDT:USDT"}
+
+    await executor.execute_order_plan(bot, [], [first, second])
+
+    assert bot.configured == [[first["symbol"]]]
+    assert bot.created == [first]
