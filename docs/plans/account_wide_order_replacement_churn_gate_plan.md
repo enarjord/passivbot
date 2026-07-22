@@ -999,8 +999,9 @@ events use bounded periodic summaries.
 - unknown `pb_order_type` or resting execution type is cancel-safe but cannot satisfy a known ideal;
   missing or contradictory close-only effect or `position_side` fails closed account-wide for every
   supported connector adapter;
-- no generic side/position-side inference of close-only; focused WEEX V3, Bitget UTA, and OKX
-  long/short-mode action-tuple fixtures prove their explicit connector-native mappings;
+- no generic side/position-side inference of close-only; focused WEEX V3, Bitget UTA, KuCoin
+  hedge/one-way, and OKX long/short-mode action-tuple fixtures prove their explicit
+  connector-native mappings;
 - one-way pside attribution prefers durable PB metadata, then covers all four side/close-only tuples;
   current-position changes cannot relabel a resting order and unknown attribution fails closed;
 - normal-mode user-created orders and PB-created orders reconcile by the same exact semantics;
@@ -1066,10 +1067,15 @@ events use bounded periodic summaries.
 - concurrent candidates cannot oversubscribe current capacity;
 - Hyperliquid `userRateLimit` headroom, local logical signed-action debits, unobserved-action cache
   invalidation, stale/unavailable snapshots, batch-member accounting, and exempt-action no-wait
-  behavior; positive unused reserved surplus extends `cap - used` headroom exactly once.
+  behavior; positive unused reserved surplus extends `cap - used` headroom exactly once;
+- a Hyperliquid create-plus-config reservation equal to remaining headroom is admitted, while a
+  reservation exceeding it is deferred;
 - Hyperliquid headroom refresh includes actions attempted while the info request is in flight;
   configuration attempts are debited before awaiting success, and batch-trimmed candidates perform
-  no configuration writes.
+  no configuration writes;
+- ambiguous create, cancel, and configuration responses retain their signed-action tokens across
+  later successful `userRateLimit` refreshes, while acknowledged or explicitly terminal responses
+  retire only after a safe refresh boundary.
 
 ### Cancel-first executor
 
@@ -1082,6 +1088,9 @@ events use bounded periodic summaries.
 - fills and manual position changes regenerate different Rust intent before create;
 - no independent symbol or position-side may create in the stale-cancellation wave;
 - only authoritatively close-only/reduce-only dedicated market panic bypasses ordinary sequencing;
+- an already-gone or ambiguous cancellation that marks `state_change_detected_by_symbol` still
+  permits only that dedicated reduce-only market panic through the generic state-change filter;
+  unproven position readiness blocks before this exception and permits no write;
 - ordinary Rust-promoted market creation cannot escape a stale limit conflict;
 - risk-critical limits replan after every stale cancellation, including positive acknowledgements
   whose response reports or may conceal a partial fill;
