@@ -590,39 +590,12 @@ mod core {
         )
     }
 
-    fn is_higher_priority_reducer_than_unstuck(order_type: OrderType, pside: PositionSide) -> bool {
-        matches!(
-            (pside, order_type),
-            (PositionSide::Long, OrderType::ClosePanicLong)
-                | (PositionSide::Long, OrderType::CloseAutoReduceTwelLong)
-                | (PositionSide::Long, OrderType::CloseAutoReduceWelLong)
-                | (PositionSide::Short, OrderType::ClosePanicShort)
-                | (PositionSide::Short, OrderType::CloseAutoReduceTwelShort)
-                | (PositionSide::Short, OrderType::CloseAutoReduceWelShort)
-        )
-    }
-
     fn is_twel_close_order_type(order_type: OrderType, pside: PositionSide) -> bool {
         matches!(
             (pside, order_type),
             (PositionSide::Long, OrderType::CloseAutoReduceTwelLong)
                 | (PositionSide::Short, OrderType::CloseAutoReduceTwelShort)
         )
-    }
-
-    fn close_reducer_priority(order_type: OrderType, pside: PositionSide) -> Option<u8> {
-        match (pside, order_type) {
-            (PositionSide::Long, OrderType::ClosePanicLong)
-            | (PositionSide::Short, OrderType::ClosePanicShort) => Some(0),
-            (PositionSide::Long, OrderType::CloseAutoReduceTwelLong)
-            | (PositionSide::Long, OrderType::CloseAutoReduceWelLong)
-            | (PositionSide::Short, OrderType::CloseAutoReduceTwelShort)
-            | (PositionSide::Short, OrderType::CloseAutoReduceWelShort) => Some(1),
-            (PositionSide::Long, OrderType::CloseUnstuckLong)
-            | (PositionSide::Short, OrderType::CloseUnstuckShort) => Some(2),
-            _ if is_close_order_type(order_type) => Some(3),
-            _ => None,
-        }
     }
 
     fn close_reducer_reachability_cmp(
@@ -648,7 +621,33 @@ mod core {
     }
 
     fn is_protective_close_reducer(order_type: OrderType, pside: PositionSide) -> bool {
-        matches!(close_reducer_priority(order_type, pside), Some(0..=2))
+        matches!(
+            (pside, order_type),
+            (PositionSide::Long, OrderType::ClosePanicLong)
+                | (PositionSide::Long, OrderType::CloseAutoReduceTwelLong)
+                | (PositionSide::Long, OrderType::CloseAutoReduceWelLong)
+                | (PositionSide::Long, OrderType::CloseUnstuckLong)
+                | (PositionSide::Short, OrderType::ClosePanicShort)
+                | (PositionSide::Short, OrderType::CloseAutoReduceTwelShort)
+                | (PositionSide::Short, OrderType::CloseAutoReduceWelShort)
+                | (PositionSide::Short, OrderType::CloseUnstuckShort)
+        )
+    }
+
+    fn close_reducer_preference_cmp(
+        a: &IdealOrder,
+        b: &IdealOrder,
+        ob: &OrderBook,
+    ) -> std::cmp::Ordering {
+        // Larger reductions win. Reachability and stable order fields only break equal-size ties.
+        b.qty
+            .abs()
+            .total_cmp(&a.qty.abs())
+            .then_with(|| {
+                is_panic_close_order_type(b.order_type)
+                    .cmp(&is_panic_close_order_type(a.order_type))
+            })
+            .then_with(|| close_reducer_reachability_cmp(a, b, ob))
     }
 
     fn prune_competing_close_reducers(
@@ -656,26 +655,18 @@ mod core {
         pside: PositionSide,
         ob: &OrderBook,
     ) {
-        let highest = orders
+        let selected_reducer = orders
             .iter()
-            .filter_map(|order| close_reducer_priority(order.order_type, pside))
-            .min();
-        if let Some(priority) = highest {
-            if priority < 3 {
-                let selected_reducer = orders
-                    .iter()
-                    .filter(|order| {
-                        close_reducer_priority(order.order_type, pside) == Some(priority)
-                    })
-                    .min_by(|a, b| close_reducer_reachability_cmp(a, b, ob))
-                    .cloned();
-                orders.retain(|order| {
-                    priority > 0 && close_reducer_priority(order.order_type, pside) == Some(3)
-                });
-                if let Some(reducer) = selected_reducer {
-                    orders.push(reducer);
-                }
+            .filter(|order| is_protective_close_reducer(order.order_type, pside))
+            .min_by(|a, b| close_reducer_preference_cmp(a, b, ob))
+            .cloned();
+        if let Some(reducer) = selected_reducer {
+            if is_panic_close_order_type(reducer.order_type) {
+                orders.clear();
+            } else {
+                orders.retain(|order| !is_protective_close_reducer(order.order_type, pside));
             }
+            orders.push(reducer);
         }
     }
 
@@ -741,11 +732,7 @@ mod core {
         } else {
             ExecutionType::Limit
         };
-        let execution_priority = if is_panic_close_order_type(order.order_type)
-            || matches!(
-                close_reducer_priority(order.order_type, order.pside),
-                Some(1) | Some(2)
-            )
+        let execution_priority = if is_protective_close_reducer(order.order_type, order.pside)
             || (mode == TradingMode::GracefulStop && order.order_type.is_close())
         {
             ExecutionPriority::RiskCritical
@@ -3319,26 +3306,12 @@ mod core {
                 match ideal.pside {
                     PositionSide::Long => {
                         if let Some(s) = per_long.get_mut(idx).and_then(|v| v.as_mut()) {
-                            if !s.closes.iter().any(|o| {
-                                is_higher_priority_reducer_than_unstuck(
-                                    o.order_type,
-                                    PositionSide::Long,
-                                )
-                            }) {
-                                s.closes.push(ideal);
-                            }
+                            s.closes.push(ideal);
                         }
                     }
                     PositionSide::Short => {
                         if let Some(s) = per_short.get_mut(idx).and_then(|v| v.as_mut()) {
-                            if !s.closes.iter().any(|o| {
-                                is_higher_priority_reducer_than_unstuck(
-                                    o.order_type,
-                                    PositionSide::Short,
-                                )
-                            }) {
-                                s.closes.push(ideal);
-                            }
+                            s.closes.push(ideal);
                         }
                     }
                 }
@@ -3403,12 +3376,6 @@ mod core {
             );
             for (idx, order) in actions {
                 if let Some(s) = per_long.get_mut(idx).and_then(|v| v.as_mut()) {
-                    s.closes.retain(|o| {
-                        !matches!(
-                            o.order_type,
-                            OrderType::CloseAutoReduceWelLong | OrderType::CloseUnstuckLong
-                        )
-                    });
                     s.closes.push(IdealOrder {
                         symbol_idx: idx,
                         pside: PositionSide::Long,
@@ -3475,12 +3442,6 @@ mod core {
             );
             for (idx, order) in actions {
                 if let Some(s) = per_short.get_mut(idx).and_then(|v| v.as_mut()) {
-                    s.closes.retain(|o| {
-                        !matches!(
-                            o.order_type,
-                            OrderType::CloseAutoReduceWelShort | OrderType::CloseUnstuckShort
-                        )
-                    });
                     s.closes.push(IdealOrder {
                         symbol_idx: idx,
                         pside: PositionSide::Short,
@@ -4318,7 +4279,7 @@ mod core {
         }
 
         #[test]
-        fn close_reducer_selection_keeps_single_closest_reducer_and_ordinary_close() {
+        fn close_reducer_selection_keeps_largest_reducer_and_ordinary_close() {
             let order_book = OrderBook {
                 bid: 100.0,
                 ask: 101.0,
@@ -4327,16 +4288,16 @@ mod core {
                 IdealOrder {
                     symbol_idx: 0,
                     pside: PositionSide::Long,
-                    qty: -0.3,
-                    price: 102.0,
+                    qty: -0.01,
+                    price: 100.9,
                     order_type: OrderType::CloseAutoReduceWelLong,
                 },
                 IdealOrder {
                     symbol_idx: 0,
                     pside: PositionSide::Long,
-                    qty: -0.3,
-                    price: 101.1,
-                    order_type: OrderType::CloseAutoReduceTwelLong,
+                    qty: -0.81,
+                    price: 102.0,
+                    order_type: OrderType::CloseUnstuckLong,
                 },
                 IdealOrder {
                     symbol_idx: 0,
@@ -4351,8 +4312,7 @@ mod core {
 
             assert_eq!(closes.len(), 2);
             assert!(closes.iter().any(|order| {
-                order.order_type == OrderType::CloseAutoReduceTwelLong
-                    && (order.price - 101.1).abs() < 1e-12
+                order.order_type == OrderType::CloseUnstuckLong && (order.qty + 0.81).abs() < 1e-12
             }));
             assert!(closes
                 .iter()
@@ -4360,7 +4320,7 @@ mod core {
         }
 
         #[test]
-        fn close_pruning_prefers_reachable_long_reducer_with_same_priority() {
+        fn close_pruning_prefers_reachable_long_reducer_with_equal_size() {
             let order_book = OrderBook {
                 bid: 100.0,
                 ask: 101.0,
@@ -4390,7 +4350,7 @@ mod core {
         }
 
         #[test]
-        fn close_pruning_prefers_reachable_short_reducer_with_same_priority() {
+        fn close_pruning_prefers_reachable_short_reducer_with_equal_size() {
             let order_book = OrderBook {
                 bid: 100.0,
                 ask: 101.0,

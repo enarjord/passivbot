@@ -2550,7 +2550,7 @@ def test_twel_reduce_portfolio_can_select_underweight_positions():
     assert {o["symbol_idx"] for o in twel_orders} == {0, 1}
 
 
-def test_twel_auto_reduce_takes_priority_over_wel_for_same_position():
+def test_larger_wel_auto_reduce_wins_over_twel_for_same_position():
     import passivbot_rust as pbr
 
     long_bp = {
@@ -2574,11 +2574,11 @@ def test_twel_auto_reduce_takes_priority_over_wel_for_same_position():
     out = compute(pbr, make_input(balance=1_000.0, global_bp=global_bp, symbols=[sym]))
     order_types = [o["order_type"] for o in out["orders"]]
 
-    assert "close_auto_reduce_twel_long" in order_types
-    assert "close_auto_reduce_wel_long" not in order_types
+    assert "close_auto_reduce_wel_long" in order_types
+    assert "close_auto_reduce_twel_long" not in order_types
 
 
-def test_wel_auto_reduce_takes_priority_over_unstuck_for_same_position():
+def test_larger_wel_auto_reduce_wins_over_unstuck_for_same_position():
     import passivbot_rust as pbr
 
     long_bp = {
@@ -2617,7 +2617,7 @@ def test_wel_auto_reduce_takes_priority_over_unstuck_for_same_position():
     ) <= 6.0 + 1e-9
 
 
-def test_wel_auto_reduce_takes_priority_over_short_unstuck_for_same_position():
+def test_larger_short_wel_auto_reduce_wins_over_unstuck_for_same_position():
     import passivbot_rust as pbr
 
     short_bp = {
@@ -2656,7 +2656,7 @@ def test_wel_auto_reduce_takes_priority_over_short_unstuck_for_same_position():
     ) <= 6.0 + 1e-9
 
 
-def test_twel_auto_reduce_takes_priority_over_unstuck_for_same_position():
+def test_larger_unstuck_wins_over_twel_auto_reduce_for_same_position():
     import passivbot_rust as pbr
 
     long_bp = {
@@ -2686,8 +2686,8 @@ def test_twel_auto_reduce_takes_priority_over_unstuck_for_same_position():
     out = compute(pbr, inp)
     order_types = [o["order_type"] for o in out["orders"]]
 
-    assert "close_auto_reduce_twel_long" in order_types
-    assert "close_unstuck_long" not in order_types
+    assert "close_unstuck_long" in order_types
+    assert "close_auto_reduce_twel_long" not in order_types
     assert "close_grid_long" in order_types
     assert sum(
         abs(o["qty"])
@@ -2696,7 +2696,7 @@ def test_twel_auto_reduce_takes_priority_over_unstuck_for_same_position():
     ) <= 6.0 + 1e-9
 
 
-def test_twel_auto_reduce_takes_priority_over_short_unstuck_for_same_position():
+def test_larger_short_unstuck_wins_over_twel_auto_reduce_for_same_position():
     import passivbot_rust as pbr
 
     short_bp = {
@@ -2726,8 +2726,8 @@ def test_twel_auto_reduce_takes_priority_over_short_unstuck_for_same_position():
     out = compute(pbr, inp)
     order_types = [o["order_type"] for o in out["orders"]]
 
-    assert "close_auto_reduce_twel_short" in order_types
-    assert "close_unstuck_short" not in order_types
+    assert "close_unstuck_short" in order_types
+    assert "close_auto_reduce_twel_short" not in order_types
     assert "close_grid_short" in order_types
     assert sum(
         abs(o["qty"])

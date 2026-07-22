@@ -132,8 +132,11 @@ is effectively moot because multiple same-price slices would be redundant.
 ## Close Reducer Compatibility
 
 For each coin and position side, Rust selects at most one protective reducer per ideal-order batch.
-HSL panic is exclusive. TWEL/WEL exposure repair takes precedence over auto-unstuck, and the
-closest-to-fill candidate wins when competing reducers have the same priority.
+Active panic, TWEL/WEL exposure-repair, and auto-unstuck intents are consolidated by keeping the
+largest requested absolute reduction, not by summing their quantities. This prevents a small
+auto-reduce from suppressing a materially larger unstuck close. A full-position HSL panic is
+therefore largest and remains exclusive; equal-size ties keep panic first and otherwise prefer the
+closest-to-fill candidate.
 
 A selected non-panic reducer may coexist with ordinary grid, trailing, or EMA-anchor closes. Its
 quantity is reserved first; if aggregate close quantity would exceed the position, ordinary closes

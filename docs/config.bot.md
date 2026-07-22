@@ -263,8 +263,10 @@ same-side TWEL measurement and toward the TWEL entry-gate baseline.
 ## Close Reducer Compatibility
 
 Passivbot selects at most one protective reducer for each coin+pside in one
-ideal-order batch. Panic close is exclusive. TWEL/WEL exposure repair takes
-precedence over auto-unstuck, and only one competing reducer survives.
+ideal-order batch. Competing panic, TWEL/WEL auto-reduce, and auto-unstuck
+intents are consolidated by keeping the largest requested absolute reduction,
+not their sum. Equal-size ties keep panic first and otherwise prefer the
+closest-to-fill candidate. A full-position panic close remains exclusive.
 
 Ordinary strategy closes are independent reduction intent and may coexist with
 the selected non-panic reducer. The reducer quantity is reserved first; ordinary
