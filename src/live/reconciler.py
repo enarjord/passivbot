@@ -1823,16 +1823,21 @@ def _order_is_market_panic(order: dict) -> bool:
 def _symbol_has_open_or_unproven_position(bot, symbol: str) -> bool:
     positions = getattr(bot, "positions", {}) or {}
     if symbol not in positions:
-        return False
+        return True
     sides = positions.get(symbol)
     if not isinstance(sides, dict):
         return True
     for pside in ("long", "short"):
-        position = sides.get(pside) or {}
-        if not isinstance(position, dict):
+        if pside not in sides:
+            return True
+        position = sides.get(pside)
+        if not isinstance(position, dict) or "size" not in position:
+            return True
+        raw_size = position["size"]
+        if isinstance(raw_size, bool) or raw_size is None:
             return True
         try:
-            size = float(position.get("size", 0.0) or 0.0)
+            size = float(raw_size)
         except (TypeError, ValueError):
             return True
         if not math.isfinite(size) or size != 0.0:

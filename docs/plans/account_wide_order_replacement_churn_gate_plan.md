@@ -47,9 +47,10 @@ The proposed behavior is:
 5. Exempt market orders, explicitly risk-critical orders, and orders within the configured final
    market-distance threshold from allowance waiting. Only dedicated protective market panic may
    bypass the account-wide stale-cancellation barrier.
-6. Admit far churn-evidenced ordinary creates while fewer than ten connector-bound create attempts
-   of any class remain in the account-wide rolling ten-minute window. Exempt creates always proceed
-   but count for subsequent ordinary admission.
+6. Admit far churn-evidenced ordinary creates while fewer than ten connector-bound action attempts
+   remain in the account-wide rolling ten-minute window. Logical creates and required configuration
+   writes count; cancellations do not. Exempt creates always proceed but count for subsequent
+   ordinary admission.
 7. Never retain a stale actual order while waiting. Cancel it and regenerate current Rust intent on
    a later cycle.
 8. Execute all non-panic creations behind an account-wide cancel-first barrier. If any stale actual
@@ -260,7 +261,8 @@ For venues whose contract uses a literal reduce-only flag, actual normalization 
 authoritative flag. For venues whose hedge action is authoritatively encoded by an action tuple,
 the adapter may normalize that tuple to the same canonical close-only boolean only under a
 documented connector contract and focused fixtures. Unknown does not match either `true` or
-`false`; it blocks normal planning for the affected symbol until refreshed or otherwise resolved
+`false`. Because that ambiguity prevents proving both mode scope and the account-wide cancellation
+dependency, it blocks every exchange write account-wide until authoritative refresh resolves it
 under the error contract. Generic side/position-side inference remains forbidden.
 
 WEEX V3 omits a placement `reduceOnly` field but documents it in open-order and order-info responses
@@ -493,13 +495,17 @@ letting Python infer urgency from names.
 
 ### Account-wide rolling allowance
 
-The default ordinary allowance is evaluated against all connector-bound create attempts in a
-rolling ten-minute window for one bot execution authority. A far churn-evidenced ordinary create is
-admitted only while fewer than ten attempts of any class remain in the active window.
+The default ordinary allowance is evaluated against all connector-bound create attempts and any
+connector-bound configuration attempts reserved by those creates in a rolling ten-minute window
+for one bot execution authority. A far churn-evidenced ordinary create is admitted only while fewer
+than ten attempts of any class remain in the active window after reserving the create and its
+required configuration actions.
 
 Count one logical order when it reaches the concrete connector create-call boundary, including
-failed, rejected, timed-out, and ambiguous attempts and each logical member of a batch. Do not count
-local deferrals or cancellations.
+failed, rejected, timed-out, and ambiguous attempts and each logical member of a batch. Count each
+required connector-bound configuration action exactly once when it reaches its connector boundary,
+including failed, rejected, timed-out, pending, and ambiguous outcomes. A proven-unsent reservation
+is released. Do not count local deferrals or cancellations.
 
 Near-market, market, and explicitly risk-critical actions never wait for allowance, but every one
 counts for subsequent ordinary admission because it consumes the same connector and account action
@@ -521,10 +527,15 @@ counter invalidates the cached estimate and requires refresh before an ordinary 
 Cancellations and allowance-exempt creates are never delayed by this overlay but still debit the
 cached estimate.
 
-Linearize each refresh around a captured request-start monotonic timestamp. Local signed-action
-attempts made while the info request is in flight are recorded and subtracted from the returned
-snapshot even if the server response has not observed them yet. A refresh may not clear or classify
-those attempts as pre-snapshot merely because its response arrives later.
+Linearize each refresh around explicit local action-lifecycle records, not only a request-start
+timestamp. Record an action token before the connector call and mark it completed only after the
+call returns or raises. A successful refresh may retire only actions proven completed before its
+request started. It must carry and subtract every action that was unresolved when the request
+started, plus every action attempted or completed while the info request was in flight, because the
+returned server snapshot cannot prove that any of those actions was observed. A later successful
+refresh may retire a carried debit once that action was completed before the later request began.
+This intentionally permits temporary under-counting of headroom but never overstates it. Failed
+refreshes preserve unresolved lifecycle records; they do not fabricate a new inclusion boundary.
 
 Compute snapshot headroom as
 `max(0, nRequestsCap - nRequestsUsed + nRequestsSurplus)`, then subtract every logical local address
@@ -550,13 +561,15 @@ timing.
 
 Distance decisions made during planning are provisional. After cancellations and authoritative
 barriers, recheck fresh signed distance before any candidate-specific exchange configuration or
-margin write. A candidate that moved near is admitted; one that moved far must have capacity or be
-deferred. Missing/non-finite/stale market data defers an affected ordinary create. Sort by priority
-and apply `max_n_creations_per_batch` before reserving or mutating configuration, so a batch-trimmed
-candidate cannot consume configuration capacity. Only admitted, selected candidates may cause
-exchange configuration work. For connectors whose configuration mutates the same account action
-budget, the first admission reserves the required configuration actions and the create together;
-configuration costs shared by multiple creates on one symbol count once.
+margin write. A candidate that moved near is admitted. A candidate that moved far is deferred for
+capacity only when its retained Rust-history classification proves churn evidence; stable or
+uncertain candidates keep their fail-open admission and consume no churn allowance. Missing,
+non-finite, or stale market data defers an affected ordinary create. Sort by priority and apply
+`max_n_creations_per_batch` before reserving or mutating configuration, so a batch-trimmed candidate
+cannot consume configuration capacity. Only admitted, selected candidates may cause exchange
+configuration work. For connectors whose configuration mutates the same account action budget, the
+first admission reserves the required configuration actions and the create together; configuration
+costs shared by multiple creates on one symbol count once.
 
 After configuration, retain the existing final market-snapshot safety guard and then rerun churn
 distance from a forced-fresh, no-candle-fallback market read plus allowance/headroom admission
@@ -690,7 +703,7 @@ Add canonical `config.live` fields:
 
 | Field | Default | Meaning |
 |---|---:|---|
-| `order_replacement_churn_gate_activation_count` | `10` | Rolling account-wide create-attempt count below which far churn-evidenced ordinary creates may proceed. Exempt creates always proceed but count. `0` disables only far churn-evidenced economy deferral; exact reconciliation, stale cancellation, and cancel-confirm-refresh-replan safety remain active. |
+| `order_replacement_churn_gate_activation_count` | `10` | Rolling account-wide connector-action count below which far churn-evidenced ordinary creates may proceed. Logical creates and their required configuration writes count; cancellations do not. Exempt creates always proceed but count. `0` disables only far churn-evidenced economy deferral; exact reconciliation, stale cancellation, and cancel-confirm-refresh-replan safety remain active. |
 | `order_replacement_churn_gate_window_minutes` | `10.0` | Per-symbol evidence and account-wide attempt window. |
 | `order_replacement_churn_gate_stability_minutes` | `2.0` | Newest contiguous tight-match duration that clears older wider churn evidence. |
 | `order_replacement_churn_gate_market_dist_pct` | `0.005` | Final market-distance threshold that always exempts a limit creation from allowance waiting; 0.5%. |
@@ -753,7 +766,7 @@ or reject the generic adapter; it preserves that adapter's prior reconciliation/
 for basic matching, tolerance, batching, and sequencing until the named connector receives the same
 authoritative metadata audit as a supported connector. The old shared initial-entry-only distance
 gate is still retired atomically for every connector; its removal does not opt the generic adapter
-into temporal churn evidence, strict reconciliation, cancel-first, or create-attempt accounting.
+into temporal churn evidence, strict reconciliation, cancel-first, or action-attempt accounting.
 
 Hyperliquid is the clearest reason not to call the generic window a rate-limit budget. Its
 cancellation allowance and requests-per-volume economics differ materially from rolling endpoint
@@ -784,20 +797,25 @@ This tradeoff must be measured in fake-live and, only with separate authority, l
 ## Failure Semantics
 
 - Invalid config fails startup.
-- Account-wide Rust planning failure appends no snapshots and performs no ordinary actions; a
-  symbol-scoped failure after a complete Rust result blocks only that symbol unless it makes an
-  account-critical surface such as open orders unavailable.
+- Account-wide Rust planning failure appends no snapshots and performs no ordinary actions. A
+  symbol-scoped failure after a complete Rust result permits healthy-symbol actions only when the
+  affected symbol is authoritatively flat and has no actual open orders. If its position is
+  nonzero or unproven, or any actual order remains, block every account-wide non-panic creation;
+  dedicated reduce-only market panic remains the sole create bypass. An unavailable
+  account-critical surface such as open orders blocks every exchange write.
 - A valid empty symbol plan is authoritative and may cancel all stale orders in bot-managed scopes
   for that symbol.
 - Unknown `pb_order_type` or execution type cannot satisfy a current ideal but does not by itself
   exempt an actual order from cancellation in a proven bot-managed scope. Unknown or contradictory
   position-side/close-only semantics prevent proving whether the actual order is entry or close and
-  whether `manual`/`tp_only` applies; do not cancel it and block account-wide non-panic creation
+  whether `manual`/`tp_only` applies; do not cancel it and block every exchange write account-wide
   until authoritative semantics resolve the scope.
 - Missing/stale final market data defers ordinary creation.
 - Missing/stale Hyperliquid action-headroom state defers only far churn-evidenced ordinary creates;
   it never delays cancellations or allowance-exempt actions.
 - Ambiguous create attempts count once when connector-bound and use existing confirmation guards.
+- Required configuration attempts count once when connector-bound, including ambiguous failures;
+  proven-unsent reservations are released.
 - Every stale cancellation outcome blocks all non-panic creation account-wide and requires full
   balance/positions/open-orders/fills confirmation plus complete replanning.
 - Event publication failure changes no trading decision.
@@ -925,7 +943,9 @@ events use bounded periodic summaries.
 - Risk-critical candidates sort ahead of ordinary candidates before final batch slicing.
 - Already-absent cancellation triggers authoritative confirmation and replanning.
 - `_context=replace`, order names, client IDs, and exchange IDs are non-causal for churn evidence.
-- Every supported connector is researched directly or covered by the conservative CCXT contract.
+- Every connector enabled for this feature is a directly audited supported connector with focused
+  normalization fixtures; generic CCXT normalization and unsupported/experimental connectors fail
+  closed and remain outside the gate.
 - Binance assumptions are explicitly USD-M, not Spot.
 - Restart behavior is an intentional bounded exception requiring a canonical contract change first.
 
@@ -1091,8 +1111,9 @@ events use bounded periodic summaries.
 - Reserve connector-reported signed configuration costs together with creates, then rerun churn
   admission with a forced-fresh market read after configuration and the existing market-snapshot
   guard immediately before create.
-- Debit every connector-bound config attempt exactly once and linearize Hyperliquid headroom
-  refreshes against actions attempted while the info request is in flight.
+- Debit every connector-bound config attempt exactly once in both the generic action window and any
+  connector-specific overlay. Linearize Hyperliquid headroom refreshes against unresolved actions
+  and actions attempted while the info request is in flight.
 - Apply allowance reservations atomically at connector boundary.
 - Add Hyperliquid authoritative action-headroom refresh and local logical-action debits without
   delaying cancellations or exempt actions.

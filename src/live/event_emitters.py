@@ -4079,10 +4079,11 @@ def emit_order_churn_actions_accounted_event(
     bot: Any,
     *,
     action_count: int,
+    action_kind: str = "create",
     rolling_count: int,
     wave: dict | None = None,
 ) -> bool:
-    """Emit bounded evidence that one connector-bound logical create batch was debited."""
+    """Emit bounded evidence that connector-bound logical actions were debited."""
     try:
         order_wave_id, _action_id = _execution_event_ids(
             wave, action="create", index=None
@@ -4098,6 +4099,7 @@ def emit_order_churn_actions_accounted_event(
             reason_code=ReasonCodes.ORDER_CHURN_ACTION_ATTEMPT,
             data={
                 "action_count": max(0, int(action_count)),
+                "action_kind": str(action_kind)[:32],
                 "rolling_count": max(0, int(rolling_count)),
             },
         )

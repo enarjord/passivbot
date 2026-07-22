@@ -62,12 +62,12 @@ class _Bot:
 @pytest.mark.asyncio
 async def test_allowance_blocks_only_far_churn_evidenced_ordinary_orders():
     bot = _Bot()
-    bot._order_churn_gate_state.record_create_attempts(10, now_monotonic=0.0)
+    bot._order_churn_gate_state.record_action_attempts(10, now_monotonic=0.0)
     # Keep the attempts in whatever monotonic window the implementation observes.
     import time
 
-    bot._order_churn_gate_state.create_attempt_timestamps.clear()
-    bot._order_churn_gate_state.record_create_attempts(
+    bot._order_churn_gate_state.action_attempt_timestamps.clear()
+    bot._order_churn_gate_state.record_action_attempts(
         10, now_monotonic=time.monotonic()
     )
     far = _order("far", price=99.0)

@@ -221,10 +221,10 @@ def test_snapshot_and_attempt_windows_prune_one_item_at_a_time():
     state = OrderChurnGateState()
     _evaluate(state, [_order(price=100.0)], now=0.0)
     _evaluate(state, [_order(price=100.0)], now=5.0)
-    state.record_create_attempts(2, now_monotonic=0.0)
-    state.record_create_attempts(1, now_monotonic=5.0)
-    assert state.create_attempt_count(now_monotonic=9.0, window_seconds=10.0) == 3
-    assert state.create_attempt_count(now_monotonic=11.0, window_seconds=10.0) == 1
+    state.record_action_attempts(2, now_monotonic=0.0)
+    state.record_action_attempts(1, now_monotonic=5.0)
+    assert state.action_attempt_count(now_monotonic=9.0, window_seconds=10.0) == 3
+    assert state.action_attempt_count(now_monotonic=11.0, window_seconds=10.0) == 1
 
     current = _order(price=100.0)
     _evaluate(state, [current], now=606.0)
@@ -389,7 +389,10 @@ async def test_unavailable_churn_normalization_leaves_only_that_symbol_untouched
         exchange = "fake"
         active_symbols = [btc, eth]
         open_orders = {btc: [], eth: []}
-        positions = {}
+        positions = {
+            btc: {"long": {"size": 0.0}, "short": {"size": 0.0}},
+            eth: {"long": {"size": 0.0}, "short": {"size": 0.0}},
+        }
         actual_orders = {btc: [], eth: []}
 
         @classmethod
@@ -443,6 +446,17 @@ async def test_unavailable_churn_normalization_leaves_only_that_symbol_untouched
 
     Bot.actual_orders = {btc: [], eth: []}
     Bot.positions = {eth: {"long": {"size": 1.0}, "short": {"size": 0.0}}}
+    _to_cancel, to_create = await reconciler.calc_orders_to_cancel_and_create_from_ideal(
+        Bot(),
+        {btc: [btc_ideal], eth: [eth_ideal]},
+        apply_creation_guardrails=False,
+        apply_mode_filters=False,
+        collect_fresh_entry_eligibility=False,
+        order_churn_unavailable_symbols={eth},
+    )
+    assert to_create == []
+
+    Bot.positions = {eth: {"long": {"size": 0.0}}}
     _to_cancel, to_create = await reconciler.calc_orders_to_cancel_and_create_from_ideal(
         Bot(),
         {btc: [btc_ideal], eth: [eth_ideal]},
@@ -519,10 +533,10 @@ def test_epoch_reset_clears_history_but_not_attempts():
     state = OrderChurnGateState()
     assert state.reset_history_for_epoch(("epoch", 1)) is False
     _evaluate(state, [_order(price=100.0)], now=0.0)
-    state.record_create_attempts(1, now_monotonic=0.0)
+    state.record_action_attempts(1, now_monotonic=0.0)
     assert state.reset_history_for_epoch(("epoch", 2)) is True
     assert state.history_by_symbol == {}
-    assert state.create_attempt_count(now_monotonic=1.0, window_seconds=600.0) == 1
+    assert state.action_attempt_count(now_monotonic=1.0, window_seconds=600.0) == 1
 
 
 def test_symbol_epoch_reset_is_scoped_and_preserves_attempts():
@@ -546,7 +560,7 @@ def test_symbol_epoch_reset_is_scoped_and_preserves_attempts():
         window_seconds=600.0,
         max_generation_gap_seconds=70.0,
     )
-    state.record_create_attempts(1, now_monotonic=0.0)
+    state.record_action_attempts(1, now_monotonic=0.0)
 
     changed = state.reset_history_for_symbol_epochs(
         {"BTC/USDT:USDT": (0.01, 0.001), "ETH/USDT:USDT": (0.01, 0.001)}
@@ -555,4 +569,4 @@ def test_symbol_epoch_reset_is_scoped_and_preserves_attempts():
     assert changed == {"BTC/USDT:USDT"}
     assert "BTC/USDT:USDT" not in state.history_by_symbol
     assert "ETH/USDT:USDT" in state.history_by_symbol
-    assert state.create_attempt_count(now_monotonic=1.0, window_seconds=600.0) == 1
+    assert state.action_attempt_count(now_monotonic=1.0, window_seconds=600.0) == 1

@@ -143,6 +143,23 @@ def test_ccxt_close_only_normalization_does_not_trust_parser_default_over_raw_in
 
 
 @pytest.mark.parametrize(
+    "raw_position_idx", [True, False, "1.5", 1.5, float("nan"), 3]
+)
+def test_bybit_rejects_noncanonical_position_idx(raw_position_idx):
+    bot = BybitBot.__new__(BybitBot)
+    order = {
+        "side": "buy",
+        "reduceOnly": False,
+        "info": {"positionIdx": raw_position_idx, "reduceOnly": False},
+    }
+
+    with pytest.raises(ValueError, match="positionIdx"):
+        bot._get_position_side_for_order(order)
+    with pytest.raises(ValueError, match="positionIdx"):
+        bot._canonical_open_order_reduce_only(order)
+
+
+@pytest.mark.parametrize(
     ("bot_cls", "info", "extra_attrs"),
     [
         (BinanceBot, {"positionSide": "BOTH"}, {}),

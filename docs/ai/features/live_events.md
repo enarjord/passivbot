@@ -192,10 +192,11 @@ The account-wide replacement-churn policy emits structured, monitor-only summari
 
 - `order.churn_evidence` reports one bounded per-plan aggregation of RAM-history association
   reasons, churn-evidenced order count, tracked symbol count, generation, and epoch resets.
-- `order.churn_admission` reports one bounded final-admission aggregation, including rolling create
+- `order.churn_admission` reports one bounded final-admission aggregation, including rolling action
   count, threshold, decision reasons, and sampled market distances.
-- `order.churn_actions_accounted` records the number of logical creates debited immediately before
-  each connector batch and the resulting rolling count.
+- `order.churn_actions_accounted` records the action kind and number of logical creates or required
+  connector configuration writes debited immediately before each connector call, plus the resulting
+  rolling count. Cancellations are excluded from the generic window.
 - `execution.cancel_first_barrier` reports account-wide create deferral after any stale-order
   cancellation. `execution.cancel_deferred` reports cancellation batch truncation.
 

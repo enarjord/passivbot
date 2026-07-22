@@ -56,6 +56,7 @@ from live import executor, market_data, planning_gates, reconciler, state_refres
 from live.order_churn_gate import (
     ORDER_CHURN_GATE_SUPPORTED_EXCHANGES,
     OrderChurnGateState,
+    connector_supports_order_churn_gate,
 )
 from live.balance_composition import (
     balance_composition_signature,
@@ -1565,6 +1566,44 @@ class Passivbot:
 
     def live_value(self, key: str):
         return require_live_value(self.config, key)
+
+    def _record_order_churn_allowance_attempts(
+        self, count: int, *, action_kind: str
+    ) -> None:
+        if count < 0:
+            raise ValueError("order churn action count must be non-negative")
+        state = getattr(self, "_order_churn_gate_state", None)
+        if (
+            count == 0
+            or state is None
+            or not connector_supports_order_churn_gate(self)
+            or int(self.live_value("order_replacement_churn_gate_activation_count"))
+            <= 0
+        ):
+            return
+        now_monotonic = time.monotonic()
+        state.record_action_attempts(count, now_monotonic=now_monotonic)
+        window_seconds = (
+            float(self.live_value("order_replacement_churn_gate_window_minutes"))
+            * 60.0
+        )
+        emitter = getattr(self, "_emit_order_churn_actions_accounted_event", None)
+        if callable(emitter):
+            try:
+                emitter(
+                    action_count=count,
+                    action_kind=action_kind,
+                    rolling_count=state.action_attempt_count(
+                        now_monotonic=now_monotonic,
+                        window_seconds=window_seconds,
+                    ),
+                    wave=getattr(self, "_order_wave_in_progress", None),
+                )
+            except Exception as exc:
+                logging.debug(
+                    "[event] order churn accounting emitter failed | error_type=%s",
+                    type(exc).__name__,
+                )
 
     def _live_max_realized_loss_pct(self) -> float:
         value = self.live_value("max_realized_loss_pct")

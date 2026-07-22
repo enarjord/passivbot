@@ -161,6 +161,25 @@ async def test_only_dedicated_protective_market_panic_bypasses_cancel_first(
 
 
 @pytest.mark.asyncio
+async def test_exposure_increasing_market_panic_never_bypasses_cancel_first(
+    execution_shell,
+):
+    bot = _PlanBot()
+    malformed_panic = _order("market_panic", execution_type="market", panic=True)
+    malformed_panic["reduce_only"] = False
+
+    await executor.execute_order_plan(
+        bot,
+        [_order("stale")],
+        [malformed_panic],
+        configure_creations=False,
+    )
+
+    assert bot.created == []
+    assert bot.confirmations == [{"balance", "positions", "open_orders", "fills"}]
+
+
+@pytest.mark.asyncio
 async def test_unsupported_generic_connector_keeps_legacy_same_wave_execution(
     execution_shell,
 ):
@@ -185,7 +204,7 @@ async def test_local_create_deferral_consumes_no_churn_attempt(execution_shell):
     await executor.execute_order_plan(bot, [], [_order("desired")])
 
     assert bot.created == []
-    assert list(bot._order_churn_gate_state.create_attempt_timestamps) == []
+    assert list(bot._order_churn_gate_state.action_attempt_timestamps) == []
 
 
 @pytest.mark.asyncio
@@ -232,10 +251,47 @@ async def test_churn_admission_defers_before_exchange_config_writes(execution_sh
 
 
 @pytest.mark.asyncio
+async def test_config_action_reservation_consumes_generic_allowance(execution_shell):
+    bot = _PlanBot()
+    bot._order_churn_gate_state = OrderChurnGateState()
+    bot._order_churn_gate_state.record_action_attempts(
+        9, now_monotonic=executor.time.monotonic()
+    )
+    bot.configured = []
+
+    def live_value(key):
+        return {
+            "order_replacement_churn_gate_activation_count": 10,
+            "order_replacement_churn_gate_window_minutes": 10.0,
+            "order_replacement_churn_gate_market_dist_pct": 0.005,
+            "max_n_creations_per_batch": 20,
+        }[key]
+
+    async def fetch_prices(symbols, *, max_age_ms=10_000):
+        return {symbol: 100.0 for symbol in symbols}
+
+    bot.live_value = live_value
+    bot._fetch_fresh_order_churn_market_prices = fetch_prices
+    bot._order_churn_far_create_headroom = lambda: None
+    bot._order_churn_precreate_signed_action_costs = lambda symbols: {
+        symbol: 1 for symbol in symbols
+    }
+    desired = _order("desired")
+    desired["price"] = 90.0
+    desired["_churn_evidence"] = True
+
+    await executor.execute_order_plan(bot, [], [desired])
+
+    assert bot.configured == []
+    assert bot.created == []
+    assert desired["_churn_gate_reason"] == "allowance_exhausted"
+
+
+@pytest.mark.asyncio
 async def test_churn_admission_rechecks_after_config_market_move(execution_shell):
     bot = _PlanBot()
     bot._order_churn_gate_state = OrderChurnGateState()
-    bot._order_churn_gate_state.record_create_attempts(
+    bot._order_churn_gate_state.record_action_attempts(
         10, now_monotonic=executor.time.monotonic()
     )
     bot.configured = []

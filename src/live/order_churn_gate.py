@@ -284,7 +284,7 @@ class OrderChurnGateState:
     def __init__(self) -> None:
         self.history_by_symbol: dict[str, deque[IdealSnapshot]] = {}
         self.compatibility_epoch_by_symbol: dict[str, object] = {}
-        self.create_attempt_timestamps: deque[float] = deque()
+        self.action_attempt_timestamps: deque[float] = deque()
         self.generation = 0
         self.account_epoch: object | None = None
         self.reset_count = 0
@@ -462,18 +462,25 @@ class OrderChurnGateState:
                 self.compatibility_epoch_by_symbol.pop(symbol, None)
         return decisions
 
-    def prune_create_attempts(self, *, now_monotonic: float, window_seconds: float) -> None:
+    def prune_action_attempts(
+        self, *, now_monotonic: float, window_seconds: float
+    ) -> None:
         cutoff = now_monotonic - window_seconds
-        while self.create_attempt_timestamps and self.create_attempt_timestamps[0] < cutoff:
-            self.create_attempt_timestamps.popleft()
+        while (
+            self.action_attempt_timestamps
+            and self.action_attempt_timestamps[0] < cutoff
+        ):
+            self.action_attempt_timestamps.popleft()
 
-    def create_attempt_count(self, *, now_monotonic: float, window_seconds: float) -> int:
-        self.prune_create_attempts(
+    def action_attempt_count(
+        self, *, now_monotonic: float, window_seconds: float
+    ) -> int:
+        self.prune_action_attempts(
             now_monotonic=now_monotonic, window_seconds=window_seconds
         )
-        return len(self.create_attempt_timestamps)
+        return len(self.action_attempt_timestamps)
 
-    def record_create_attempts(self, count: int, *, now_monotonic: float) -> None:
+    def record_action_attempts(self, count: int, *, now_monotonic: float) -> None:
         if count < 0:
-            raise ValueError("create attempt count must be non-negative")
-        self.create_attempt_timestamps.extend(now_monotonic for _ in range(count))
+            raise ValueError("action attempt count must be non-negative")
+        self.action_attempt_timestamps.extend(now_monotonic for _ in range(count))

@@ -423,6 +423,13 @@ async def test_connector_bound_create_attempt_is_counted_once_even_when_ambiguou
 
     bot.execute_orders = fail_batch
     bot.add_to_recent_order_executions = lambda _order: None
+    bot._record_order_churn_signed_action_attempts = lambda count: (
+        "create-action",
+    )
+    completed_signed_actions = []
+    bot._complete_order_churn_signed_action_attempts = (
+        lambda tokens: completed_signed_actions.append(tokens)
+    )
     emitted = []
     bot._emit_order_churn_actions_accounted_event = lambda **kwargs: emitted.append(
         kwargs
@@ -433,10 +440,12 @@ async def test_connector_bound_create_attempt_is_counted_once_even_when_ambiguou
     with pytest.raises(RuntimeError, match="ambiguous connector failure"):
         await executor.execute_orders_parent(bot, [order])
 
-    assert len(bot._order_churn_gate_state.create_attempt_timestamps) == 1
+    assert len(bot._order_churn_gate_state.action_attempt_timestamps) == 1
+    assert completed_signed_actions == [("create-action",)]
     assert emitted == [
         {
             "action_count": 1,
+            "action_kind": "create",
             "rolling_count": 1,
             "wave": {"event_id": "ow_1"},
         }

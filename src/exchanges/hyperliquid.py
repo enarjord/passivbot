@@ -62,7 +62,8 @@ class HyperliquidBot(CCXTBot):
         self._hl_user_abstraction = "unknown"
         self._hl_unified_enabled = False
         self._hl_order_churn_rate_snapshot = None
-        self._hl_order_churn_local_action_timestamps = []
+        self._hl_order_churn_local_actions = {}
+        self._hl_order_churn_local_action_sequence = 0
         self._hl_order_churn_rate_next_refresh_monotonic = 0.0
         self._hl_order_churn_rate_request_started_monotonic = 0.0
 
@@ -78,44 +79,57 @@ class HyperliquidBot(CCXTBot):
             )
         return int(parsed)
 
-    def _record_order_churn_signed_action_attempts(self, count: int) -> None:
+    def _record_order_churn_signed_action_attempts(
+        self, count: int
+    ) -> tuple[int, ...]:
         if count < 0:
             raise ValueError("Hyperliquid signed action count must be non-negative")
-        if count:
-            snapshot = getattr(self, "_hl_order_churn_rate_snapshot", None)
-            request_started = float(
-                getattr(
-                    self, "_hl_order_churn_rate_request_started_monotonic", 0.0
-                )
-                or 0.0
-            )
-            now = time.monotonic()
-            if (
-                isinstance(snapshot, dict)
-                and now >= float(snapshot.get("expires_monotonic", 0.0) or 0.0)
-                and request_started <= 0.0
-            ):
-                self._hl_order_churn_rate_snapshot = None
-                self._hl_order_churn_local_action_timestamps = []
-                snapshot = None
-            if not isinstance(snapshot, dict) and request_started <= 0.0:
-                return
-            timestamps = getattr(self, "_hl_order_churn_local_action_timestamps", None)
-            if not isinstance(timestamps, list):
-                timestamps = []
-                self._hl_order_churn_local_action_timestamps = timestamps
-            timestamps.extend(now for _ in range(count))
+        if count == 0:
+            return ()
+        actions = getattr(self, "_hl_order_churn_local_actions", None)
+        if not isinstance(actions, dict):
+            actions = {}
+            self._hl_order_churn_local_actions = actions
+        sequence = int(
+            getattr(self, "_hl_order_churn_local_action_sequence", 0) or 0
+        )
+        now = time.monotonic()
+        tokens = []
+        for _ in range(count):
+            sequence += 1
+            actions[sequence] = {
+                "attempted_monotonic": now,
+                "completed_monotonic": None,
+            }
+            tokens.append(sequence)
+        self._hl_order_churn_local_action_sequence = sequence
+        return tuple(tokens)
+
+    def _complete_order_churn_signed_action_attempts(self, tokens) -> None:
+        actions = getattr(self, "_hl_order_churn_local_actions", None)
+        if not isinstance(actions, dict):
+            return
+        now = time.monotonic()
+        for token in tuple(tokens or ()):
+            record = actions.get(token)
+            if isinstance(record, dict) and record.get("completed_monotonic") is None:
+                record["completed_monotonic"] = now
+        snapshot = getattr(self, "_hl_order_churn_rate_snapshot", None)
+        request_started = float(
+            getattr(self, "_hl_order_churn_rate_request_started_monotonic", 0.0)
+            or 0.0
+        )
+        if not isinstance(snapshot, dict) and request_started <= 0.0:
+            for token in tuple(tokens or ()):
+                actions.pop(token, None)
 
     async def _order_churn_far_create_headroom(self) -> int | None:
         """Return conservative address-action headroom from userRateLimit plus local debits."""
         now = time.monotonic()
         snapshot = getattr(self, "_hl_order_churn_rate_snapshot", None)
         if isinstance(snapshot, dict) and now < float(snapshot["expires_monotonic"]):
-            local_debits = sum(
-                timestamp >= float(snapshot["request_started_monotonic"])
-                for timestamp in getattr(
-                    self, "_hl_order_churn_local_action_timestamps", []
-                )
+            local_debits = len(
+                getattr(self, "_hl_order_churn_local_actions", {}) or {}
             )
             return max(0, int(snapshot["headroom"]) - local_debits)
         if now < float(
@@ -158,17 +172,20 @@ class HyperliquidBot(CCXTBot):
                 "expires_monotonic": time.monotonic() + 30.0,
             }
             self._hl_order_churn_rate_next_refresh_monotonic = 0.0
-            self._hl_order_churn_local_action_timestamps = [
-                timestamp
-                for timestamp in getattr(
-                    self, "_hl_order_churn_local_action_timestamps", []
-                )
-                if timestamp >= request_started
-            ]
+            actions = getattr(self, "_hl_order_churn_local_actions", {}) or {}
+            self._hl_order_churn_local_actions = {
+                token: record
+                for token, record in actions.items()
+                if float(record.get("attempted_monotonic", 0.0) or 0.0)
+                >= request_started
+                or record.get("completed_monotonic") is None
+                or float(record.get("completed_monotonic", 0.0) or 0.0)
+                >= request_started
+            }
             return max(
                 0,
                 headroom
-                - len(self._hl_order_churn_local_action_timestamps),
+                - len(self._hl_order_churn_local_actions),
             )
         except Exception as exc:
             self._hl_order_churn_rate_snapshot = None
@@ -1481,10 +1498,20 @@ class HyperliquidBot(CCXTBot):
                     params["vaultAddress"] = self.user_info["wallet_address"]
 
                 try:
-                    self._record_order_churn_signed_action_attempts(1)
-                    res = await self.cca.set_margin_mode(
-                        margin_mode, symbol=symbol, params=params
+                    self._record_order_churn_allowance_attempts(
+                        1, action_kind="config"
                     )
+                    signed_action_tokens = (
+                        self._record_order_churn_signed_action_attempts(1)
+                    )
+                    try:
+                        res = await self.cca.set_margin_mode(
+                            margin_mode, symbol=symbol, params=params
+                        )
+                    finally:
+                        self._complete_order_churn_signed_action_attempts(
+                            signed_action_tokens
+                        )
                     to_print = (
                         f"margin={format_exchange_config_response(res)} ({margin_mode})"
                     )

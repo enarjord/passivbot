@@ -101,12 +101,13 @@ def _is_dedicated_protective_market_panic(
     return (
         not configure_creations
         and _order_is_panic(order)
+        and _order_is_reduce_only(order)
         and bot._is_market_execution_order(order)
     )
 
 
 def _order_is_protective_create(order: dict) -> bool:
-    return _order_is_reduce_only(order) or _order_is_panic(order)
+    return _order_is_reduce_only(order)
 
 
 def _filter_hsl_replay_pending_creates(
@@ -214,7 +215,7 @@ async def _apply_order_churn_final_admission(
         float(bot.live_value("order_replacement_churn_gate_window_minutes")) * 60.0
     )
     now_monotonic = time.monotonic()
-    projected_usage = state.create_attempt_count(
+    projected_usage = state.action_attempt_count(
         now_monotonic=now_monotonic, window_seconds=window_seconds
     )
     threshold = float(
@@ -294,11 +295,18 @@ async def _apply_order_churn_final_admission(
             deferred.append(order)
             order["_churn_gate_reason"] = admission_status
             continue
+        symbol = str(order.get("symbol"))
+        config_action_cost = (
+            int(config_action_costs_by_symbol.get(symbol, 0) or 0)
+            if symbol not in projected_config_symbols
+            else 0
+        )
+        projected_attempt_cost = 1 + max(0, config_action_cost)
         if (
             activation_count > 0
             and churn_evidenced
             and not exempt
-            and projected_usage >= activation_count
+            and projected_usage + projected_attempt_cost > activation_count
         ):
             deferred.append(order)
             order["_churn_gate_reason"] = "allowance_exhausted"
@@ -368,13 +376,9 @@ async def _apply_order_churn_final_admission(
             reason = "allowance"
         order["_churn_gate_reason"] = reason
         selected.append(order)
-        projected_usage += 1
+        projected_usage += projected_attempt_cost
         projected_signed_actions += 1
-        symbol = str(order.get("symbol"))
         if symbol not in projected_config_symbols:
-            config_action_cost = int(
-                config_action_costs_by_symbol.get(symbol, 0) or 0
-            )
             if config_action_cost > 0:
                 projected_signed_actions += config_action_cost
                 projected_config_symbols.add(symbol)
@@ -382,7 +386,7 @@ async def _apply_order_churn_final_admission(
         logging.info(
             "[order] churn gate deferred %d far unstable creates | rolling_usage=%d activation_count=%d",
             len(deferred),
-            state.create_attempt_count(
+            state.action_attempt_count(
                 now_monotonic=now_monotonic, window_seconds=window_seconds
             ),
             activation_count,
@@ -410,7 +414,7 @@ async def _apply_order_churn_final_admission(
                 symbols=_symbols_from_orders(grouped),
                 wave=getattr(bot, "_order_wave_in_progress", None),
                 data={
-                    "rolling_count": state.create_attempt_count(
+                    "rolling_count": state.action_attempt_count(
                         now_monotonic=now_monotonic, window_seconds=window_seconds
                     ),
                     "activation_count": activation_count,
@@ -436,7 +440,7 @@ async def _apply_order_churn_final_admission(
         try:
             emitter(
                 orders=prioritized_orders,
-                rolling_count=state.create_attempt_count(
+                rolling_count=state.action_attempt_count(
                     now_monotonic=now_monotonic, window_seconds=window_seconds
                 ),
                 activation_count=activation_count,
@@ -1017,42 +1021,15 @@ async def execute_orders_parent(bot, orders: list[dict]) -> list[dict]:
         "wave": wave,
     }
     bot._execution_connector_call_context = connector_call_context
-    churn_state = getattr(bot, "_order_churn_gate_state", None)
-    connector_enabled = connector_supports_order_churn_gate(bot)
-    churn_activation_count = (
-        int(bot.live_value("order_replacement_churn_gate_activation_count"))
-        if churn_state is not None and connector_enabled
-        else 0
+    _pb_attr("Passivbot")._record_order_churn_allowance_attempts(
+        bot, len(orders), action_kind="create"
     )
-    if churn_activation_count > 0:
-        now_monotonic = time.monotonic()
-        churn_state.record_create_attempts(
-            len(orders), now_monotonic=now_monotonic
-        )
-        window_seconds = (
-            float(bot.live_value("order_replacement_churn_gate_window_minutes"))
-            * 60.0
-        )
-        emitter = getattr(bot, "_emit_order_churn_actions_accounted_event", None)
-        if callable(emitter):
-            try:
-                emitter(
-                    action_count=len(orders),
-                    rolling_count=churn_state.create_attempt_count(
-                        now_monotonic=now_monotonic, window_seconds=window_seconds
-                    ),
-                    wave=wave,
-                )
-            except Exception as exc:
-                logging.debug(
-                    "[event] order churn accounting emitter failed | error_type=%s",
-                    type(exc).__name__,
-                )
     record_signed_actions = getattr(
         bot, "_record_order_churn_signed_action_attempts", None
     )
+    signed_action_tokens = None
     if callable(record_signed_actions):
-        record_signed_actions(len(orders))
+        signed_action_tokens = record_signed_actions(len(orders))
     try:
         res = await bot.execute_orders(orders)
     except RestartBotException:
@@ -1082,6 +1059,11 @@ async def execute_orders_parent(bot, orders: list[dict]) -> list[dict]:
             )
         raise
     finally:
+        complete_signed_actions = getattr(
+            bot, "_complete_order_churn_signed_action_attempts", None
+        )
+        if callable(complete_signed_actions):
+            complete_signed_actions(signed_action_tokens)
         if (
             getattr(bot, "_execution_connector_call_context", None)
             is connector_call_context
@@ -1307,8 +1289,9 @@ async def execute_cancellations_parent(bot, orders: list[dict]) -> list[dict]:
     record_signed_actions = getattr(
         bot, "_record_order_churn_signed_action_attempts", None
     )
+    signed_action_tokens = None
     if callable(record_signed_actions):
-        record_signed_actions(len(orders))
+        signed_action_tokens = record_signed_actions(len(orders))
     try:
         res = await bot.execute_cancellations(orders)
     except RestartBotException:
@@ -1329,6 +1312,11 @@ async def execute_cancellations_parent(bot, orders: list[dict]) -> list[dict]:
             )
         raise
     finally:
+        complete_signed_actions = getattr(
+            bot, "_complete_order_churn_signed_action_attempts", None
+        )
+        if callable(complete_signed_actions):
+            complete_signed_actions(signed_action_tokens)
         if (
             getattr(bot, "_execution_connector_call_context", None)
             is connector_call_context

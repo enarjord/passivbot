@@ -5082,6 +5082,7 @@ async def test_execute_orders_parent_records_order_opened_event():
             self.bot_id = "bot_1"
             self._live_event_current_cycle_id = "cy_11"
             self._order_wave_in_progress = {"id": 7, "event_id": "ow_7"}
+            self.completed_signed_action_tokens = []
             self._live_event_pipeline = LiveEventPipeline(
                 structured_sinks=[sink],
                 monitor_sinks=[],
@@ -5099,6 +5100,13 @@ async def test_execute_orders_parent_records_order_opened_event():
 
         def _log_order_action_summary(self, *args, **kwargs):
             return None
+
+        def _record_order_churn_signed_action_attempts(self, count):
+            assert count == 1
+            return ("create-action",)
+
+        def _complete_order_churn_signed_action_attempts(self, tokens):
+            self.completed_signed_action_tokens.append(tokens)
 
         async def execute_orders(self, orders):
             context = self._execution_connector_call_context
@@ -5131,6 +5139,7 @@ async def test_execute_orders_parent_records_order_opened_event():
 
     assert len(res) == 1
     assert bot._execution_connector_call_context is None
+    assert bot.completed_signed_action_tokens == [("create-action",)]
     assert bot._health_orders_placed == 1
     assert bot.monitor_publisher.events[-1]["kind"] == "order.opened"
     assert bot.monitor_publisher.events[-1]["symbol"] == "BTC/USDT:USDT"
@@ -5339,6 +5348,7 @@ async def test_execute_cancellations_parent_emits_ambiguous_confirmation_events(
             self._order_wave_in_progress = {"id": 9, "event_id": "ow_9"}
             self._health_orders_cancelled = 0
             self.state_change_detected_by_symbol = set()
+            self.completed_signed_action_tokens = []
             self._live_event_pipeline = LiveEventPipeline(
                 structured_sinks=[sink],
                 monitor_sinks=[],
@@ -5356,6 +5366,13 @@ async def test_execute_cancellations_parent_emits_ambiguous_confirmation_events(
 
         def _log_order_action_summary(self, *args, **kwargs):
             return None
+
+        def _record_order_churn_signed_action_attempts(self, count):
+            assert count == 1
+            return ("cancel-action",)
+
+        def _complete_order_churn_signed_action_attempts(self, tokens):
+            self.completed_signed_action_tokens.append(tokens)
 
         async def execute_cancellations(self, orders):
             context = self._execution_connector_call_context
@@ -5398,6 +5415,7 @@ async def test_execute_cancellations_parent_emits_ambiguous_confirmation_events(
 
     assert len(res) == 1
     assert bot._execution_connector_call_context is None
+    assert bot.completed_signed_action_tokens == [("cancel-action",)]
     assert bot._authoritative_pending_confirmations == {
         "balance": 5,
         "positions": 5,
