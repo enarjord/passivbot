@@ -4,6 +4,13 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Fixed Bitget UTA open-order normalization recursively deriving position side from close-only
+  effect and close-only effect from position side in effective one-way mode. UTA orders with an
+  explicit `posSide` now derive close-only effect directly from the authoritative `side` plus
+  `posSide` tuple.
+- Fixed multi-collateral quote-value movement continuously resetting live order-churn evidence.
+  The account epoch now follows the hysteresis-snapped sizing balance plus authoritative fills,
+  realized PnL, and positions instead of exact raw quote-valued balance.
 - Fixed live order-churn evidence treating the execution loop's normal 30-second scheduled wait as
   a provenance gap, which could prevent the account-wide churn gate from activating for slowly
   moving EMA-based orders.

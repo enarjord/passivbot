@@ -1020,7 +1020,6 @@ def _order_churn_account_epoch(bot) -> tuple:
     )
     return (
         round(float(bot.get_hysteresis_snapped_balance()), 12),
-        round(float(bot.get_raw_balance()), 12),
         tuple(positions),
         fill_signature,
         round(float(pnl_stats.get("max", 0.0) or 0.0), 12),

@@ -351,13 +351,17 @@ the same logical presence answers at every relevant timestamp.
 ### Planning-policy compatibility
 
 History compatibility has both account-wide and scoped epochs because the Rust plan has
-account-wide dependencies. The account epoch covers hysteresis-snapped wallet balance, raw realized
-wallet balance, per-symbol/position-side signed position size and average entry price,
+account-wide dependencies. The account epoch covers hysteresis-snapped wallet balance,
+per-symbol/position-side signed position size and average entry price,
 authoritative fill identity, the exact `realized_pnl_cumsum_max` and
 `realized_pnl_cumsum_last` values passed to Rust, global strategy/live configuration, and effective
 hedge/one-way mode. It excludes equity, available margin,
-unrealized PnL, mark/liquidation price, mark-to-market notional, and other price-derived exchange
-fields. A change clears all ideal history before classifying the next complete Rust plan. A scoped
+unrealized PnL, raw quote-valued balance, mark/liquidation price, mark-to-market notional, and other
+price-derived exchange fields. On multi-collateral venues, raw balance may change solely because a
+collateral asset's quote value changes; including it would continuously erase churn evidence.
+Authoritative fills, realized-PnL cumulative values, and position transitions still reset the
+account epoch immediately, while a material wallet change advances the hysteresis-snapped balance.
+A change clears all ideal history before classifying the next complete Rust plan. A scoped
 epoch covers each symbol's effective `PB_modes`, approved/ignored membership, forager membership,
 and active-universe membership. A scoped change clears only that symbol's history. This prevents a
 rotating empty forager slot from continuously erasing evidence for unrelated resting orders. It is
@@ -374,10 +378,11 @@ normalizer. `init_markets()` may refresh these values while the process remains 
 clears that symbol's history before classifying its next current ideal; it does not require an
 account-wide reset unless the changed metadata also alters an account-wide Rust input.
 
-Continuously changing prices, EMAs, volatility, trailing extrema, and price-derived account fields
-are excluded; including them would continuously reset the evidence gate and defeat its purpose. A
-new authoritative fill identity, realized-PnL cumulative-value change, realized wallet-balance
-change, or signed position-size/average-entry-price transition advances the account epoch because
+Continuously changing prices, EMAs, volatility, trailing extrema, raw quote-valued balance, and
+other price-derived account fields are excluded; including them would continuously reset the
+evidence gate and defeat its purpose. A new authoritative fill identity, realized-PnL
+cumulative-value change, hysteresis-snapped wallet-balance change, or signed
+position-size/average-entry-price transition advances the account epoch because
 TWEL, entry gates, realized-loss/unstuck policy, risk ordering, and portfolio sizing may change
 ideals on other symbols. This also preserves
 the existing contract that every fill resets trailing extrema and prevents pre-fill evidence from
@@ -1058,8 +1063,8 @@ events use bounded periodic summaries.
   not reset it;
 - price, EMA, volatility, trailing extrema, equity, available margin, unrealized PnL, mark/liquidation
   price, and mark-to-market notional changes do not reset history;
-- authoritative fill identity, realized-PnL cumulative max/last, raw/snapped realized wallet
-  balance, signed position size, and average-entry-price transitions reset account-wide history
+- authoritative fill identity, realized-PnL cumulative max/last, hysteresis-snapped wallet balance,
+  signed position size, and average-entry-price transitions reset account-wide history
   before the first new-phase plan;
 - a policy-history reset does not clear account-wide attempt timestamps;
 - compaction, if implemented, preserves logical results across fast/slow planning cadence.
@@ -1148,7 +1153,7 @@ events use bounded periodic summaries.
 
 ### Slice 2: pure per-symbol evidence helper
 
-- Implement immutable snapshots, exact realized-PnL/balance/position compatibility epochs,
+- Implement immutable snapshots, exact realized-PnL/snapped-balance/position compatibility epochs,
   pruning/optional compaction, deterministic
   one-to-one tight/wider association, newest stability clearing, and account-wide rolling attempt
   accounting.
@@ -1271,7 +1276,7 @@ consequences, and connector assumptions—not merely wording:
 - Is the one-cycle ordinary latency acceptable for parity and missed-fill risk?
 - Is the proposed RAM-only canonical exception truly bounded to operational economy and incapable
   of weakening safety after reset?
-- Do account/scoped compatibility epochs reset exact realized Rust balance/position/fill and
+- Do account/scoped compatibility epochs reset snapped balance, position, fill identity, and exact
   realized-PnL cumulative max/last inputs account-wide, runtime modes/lists/forager membership only
   for affected symbols, and configured operator changes account-wide, while excluding equity,
   margin, unrealized PnL, mark/liquidation prices, other moving fields, and attempt-ledger refunds?

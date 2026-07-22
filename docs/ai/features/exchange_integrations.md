@@ -130,7 +130,10 @@ Handling in Passivbot:
    `reduceOnly`.
 2. Normalize UTA open orders from the explicit exchange/CCXT `side` field for
    buy/sell direction, and from `posSide` for long/short position side.
-3. Keep classic Bitget v2/mix `tradeSide`/`reduceOnly` handling separate.
+3. If the effective account mode is one-way but a UTA order still reports an explicit long/short
+   `posSide`, derive close-only effect directly from its `side` plus `posSide` action tuple. If it
+   does not report that tuple, require an authoritative native `reduceOnly` value.
+4. Keep classic Bitget v2/mix `tradeSide`/`reduceOnly` handling separate.
 
 ### `since` is effectively exclusive for OHLCV paging
 

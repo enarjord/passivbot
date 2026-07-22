@@ -126,11 +126,10 @@ class BitgetBot(CCXTBot):
                     raise ValueError("bitget UTA one-way order missing reduceOnly")
                 return reduce_only
             side = str(order.get("side") or info.get("side") or "").lower()
-            position_side = self._get_position_side_for_order(order)
             if side not in {"buy", "sell"}:
                 raise ValueError("bitget UTA order missing explicit buy/sell side")
-            return (position_side == "long" and side == "sell") or (
-                position_side == "short" and side == "buy"
+            return (raw_position_side == "long" and side == "sell") or (
+                raw_position_side == "short" and side == "buy"
             )
         trade_side = str(info.get("tradeSide") or "").lower()
         if trade_side in {"open", "close"}:

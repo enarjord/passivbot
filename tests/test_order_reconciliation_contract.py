@@ -318,6 +318,43 @@ def test_bitget_one_way_open_order_normalizer_uses_action_tuple():
 
 
 @pytest.mark.parametrize(
+    ("side", "pos_side", "expected_close"),
+    [
+        ("buy", "long", False),
+        ("sell", "long", True),
+        ("sell", "short", False),
+        ("buy", "short", True),
+    ],
+)
+def test_bitget_uta_one_way_open_order_normalizer_uses_action_tuple_without_recursion(
+    side, pos_side, expected_close
+):
+    bot = BitgetBot.__new__(BitgetBot)
+    bot.is_uta = True
+    bot._config_hedge_mode = False
+    bot.hedge_mode = False
+    bot._record_live_margin_mode_from_payload = lambda _order: None
+    order = {
+        "id": "1",
+        "symbol": "BTC/USDT:USDT",
+        "side": side,
+        "amount": 1.0,
+        "timestamp": 1,
+        "clientOrderId": "",
+        # Bitget UTA may report the literal as false for an action which
+        # closes the explicit posSide.  The action tuple is authoritative.
+        "reduceOnly": False,
+        "info": {"side": side, "posSide": pos_side, "reduceOnly": "NO"},
+    }
+
+    [normalized] = bot._normalize_open_orders([order])
+
+    assert normalized["position_side"] == pos_side
+    assert normalized["side"] == side
+    assert bot._canonical_open_order_reduce_only(normalized) is expected_close
+
+
+@pytest.mark.parametrize(
     ("side", "trade_side", "expected_pside", "expected_close"),
     [
         ("buy", "open", "long", False),
@@ -947,8 +984,11 @@ def test_account_epoch_tracks_realized_and_global_inputs_not_scoped_runtime_poli
     bot.positions[symbol]["long"]["liquidation_price"] = 60.0
     assert reconciler._order_churn_account_epoch(bot) == baseline
 
+    # Raw balance may be quote-valued collateral and therefore move with the
+    # market even without a fill or transfer. Rust sizing uses the snapped
+    # balance, while fills/PnL/positions provide phase-change evidence.
     bot.raw_balance = 101.0
-    assert reconciler._order_churn_account_epoch(bot) != baseline
+    assert reconciler._order_churn_account_epoch(bot) == baseline
     bot.raw_balance = 100.0
     bot.snapped_balance = 101.0
     assert reconciler._order_churn_account_epoch(bot) != baseline
