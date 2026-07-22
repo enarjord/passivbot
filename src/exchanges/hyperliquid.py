@@ -2,6 +2,7 @@ import asyncio
 import json
 import math
 import random
+import time
 from copy import deepcopy
 
 import ccxt.pro as ccxt_pro
@@ -60,6 +61,152 @@ class HyperliquidBot(CCXTBot):
         self._hl_cache_generation = 0
         self._hl_user_abstraction = "unknown"
         self._hl_unified_enabled = False
+        self._hl_order_churn_rate_snapshot = None
+        self._hl_order_churn_local_actions = {}
+        self._hl_order_churn_local_action_sequence = 0
+        self._hl_order_churn_rate_next_refresh_monotonic = 0.0
+        self._hl_order_churn_rate_request_started_monotonic = 0.0
+
+    @staticmethod
+    def _hl_rate_limit_int(payload: dict, key: str) -> int:
+        value = payload.get(key)
+        if isinstance(value, bool):
+            raise ValueError(f"Hyperliquid userRateLimit {key} must be an integer")
+        parsed = float(value)
+        if not math.isfinite(parsed) or parsed < 0.0 or not parsed.is_integer():
+            raise ValueError(
+                f"Hyperliquid userRateLimit {key} must be a finite non-negative integer"
+            )
+        return int(parsed)
+
+    def _record_order_churn_signed_action_attempts(
+        self, count: int
+    ) -> tuple[int, ...]:
+        if count < 0:
+            raise ValueError("Hyperliquid signed action count must be non-negative")
+        if count == 0:
+            return ()
+        actions = getattr(self, "_hl_order_churn_local_actions", None)
+        if not isinstance(actions, dict):
+            actions = {}
+            self._hl_order_churn_local_actions = actions
+        sequence = int(
+            getattr(self, "_hl_order_churn_local_action_sequence", 0) or 0
+        )
+        now = time.monotonic()
+        tokens = []
+        for _ in range(count):
+            sequence += 1
+            actions[sequence] = {
+                "attempted_monotonic": now,
+                "completed_monotonic": None,
+            }
+            tokens.append(sequence)
+        self._hl_order_churn_local_action_sequence = sequence
+        return tuple(tokens)
+
+    def _complete_order_churn_signed_action_attempts(self, tokens) -> None:
+        actions = getattr(self, "_hl_order_churn_local_actions", None)
+        if not isinstance(actions, dict):
+            return
+        now = time.monotonic()
+        for token in tuple(tokens or ()):
+            record = actions.get(token)
+            if isinstance(record, dict) and record.get("completed_monotonic") is None:
+                record["completed_monotonic"] = now
+        snapshot = getattr(self, "_hl_order_churn_rate_snapshot", None)
+        request_started = float(
+            getattr(self, "_hl_order_churn_rate_request_started_monotonic", 0.0)
+            or 0.0
+        )
+        if not isinstance(snapshot, dict) and request_started <= 0.0:
+            for token in tuple(tokens or ()):
+                actions.pop(token, None)
+
+    async def _order_churn_far_create_headroom(self) -> int | None:
+        """Return conservative address-action headroom from userRateLimit plus local debits."""
+        now = time.monotonic()
+        snapshot = getattr(self, "_hl_order_churn_rate_snapshot", None)
+        if isinstance(snapshot, dict) and now < float(snapshot["expires_monotonic"]):
+            local_debits = len(
+                getattr(self, "_hl_order_churn_local_actions", {}) or {}
+            )
+            return max(0, int(snapshot["headroom"]) - local_debits)
+        if now < float(
+            getattr(self, "_hl_order_churn_rate_next_refresh_monotonic", 0.0) or 0.0
+        ):
+            return None
+
+        request_started = time.monotonic()
+        self._hl_order_churn_rate_request_started_monotonic = request_started
+        wallet_address = str(self.user_info.get("wallet_address") or "")
+        if not wallet_address:
+            logging.error("[order] Hyperliquid userRateLimit unavailable: missing wallet address")
+            self._hl_order_churn_rate_next_refresh_monotonic = now + 10.0
+            self._hl_order_churn_rate_request_started_monotonic = 0.0
+            return None
+        try:
+            payload = await self.cca.publicPostInfo(
+                {"type": "userRateLimit", "user": wallet_address}
+            )
+            if not isinstance(payload, dict):
+                raise ValueError("Hyperliquid userRateLimit response must be an object")
+            used = self._hl_rate_limit_int(payload, "nRequestsUsed")
+            cap = self._hl_rate_limit_int(payload, "nRequestsCap")
+            surplus = self._hl_rate_limit_int(payload, "nRequestsSurplus")
+            if used > 0 and surplus > 0:
+                raise ValueError("Hyperliquid userRateLimit response is contradictory")
+            # Official semantics:
+            #   used    = max(0, cumulative_used - reserved)
+            #   surplus = max(0, reserved - cumulative_used)
+            # Unconsumed reserved weight therefore extends the remaining
+            # address-action allowance; it is not included in ``cap`` once
+            # ``used`` has bottomed out at zero.
+            headroom = max(0, cap - used + surplus)
+            self._hl_order_churn_rate_snapshot = {
+                "headroom": headroom,
+                "used": used,
+                "cap": cap,
+                "surplus": surplus,
+                "request_started_monotonic": request_started,
+                "expires_monotonic": time.monotonic() + 30.0,
+            }
+            self._hl_order_churn_rate_next_refresh_monotonic = 0.0
+            actions = getattr(self, "_hl_order_churn_local_actions", {}) or {}
+            self._hl_order_churn_local_actions = {
+                token: record
+                for token, record in actions.items()
+                if float(record.get("attempted_monotonic", 0.0) or 0.0)
+                >= request_started
+                or record.get("completed_monotonic") is None
+                or float(record.get("completed_monotonic", 0.0) or 0.0)
+                >= request_started
+            }
+            return max(
+                0,
+                headroom
+                - len(self._hl_order_churn_local_actions),
+            )
+        except Exception as exc:
+            self._hl_order_churn_rate_snapshot = None
+            self._hl_order_churn_rate_next_refresh_monotonic = time.monotonic() + 10.0
+            logging.warning(
+                "[order] Hyperliquid userRateLimit unavailable; deferring only far churn-evidenced ordinary creates | error_type=%s",
+                type(exc).__name__,
+            )
+            return None
+        finally:
+            self._hl_order_churn_rate_request_started_monotonic = 0.0
+
+    def _order_churn_precreate_signed_action_costs(self, symbols) -> dict[str, int]:
+        configured = set(
+            getattr(self, "already_updated_exchange_config_symbols", set()) or set()
+        )
+        return {
+            str(symbol): 1
+            for symbol in symbols
+            if str(symbol) not in configured
+        }
 
     def _hl_state_fetch_concurrency(self) -> int:
         """Bound internal Hyperliquid account-state fanout to avoid rate-limit spikes."""
@@ -543,11 +690,46 @@ class HyperliquidBot(CCXTBot):
                     break
                 res = await self.ccp.watch_orders()
                 _ws_consecutive_rate_limits = 0  # reset on success
-                for i in range(len(res)):
-                    res[i]["position_side"] = self.determine_pos_side(res[i])
-                    res[i]["qty"] = res[i]["amount"]
                 self._hl_note_ws_symbols_for_dex_scope(res)
-                self.handle_order_update(res)
+                normalized = []
+                untrusted = []
+                for order in res:
+                    try:
+                        order["position_side"] = self.determine_pos_side(order)
+                        order["qty"] = order["amount"]
+                        normalized.append(order)
+                    except (KeyError, TypeError, ValueError) as exc:
+                        untrusted.append((order, exc))
+                if untrusted:
+                    symbols = {
+                        str(order.get("symbol") or "")
+                        for order, _exc in untrusted
+                        if isinstance(order, dict) and order.get("symbol")
+                    }
+                    now_monotonic = time.monotonic()
+                    last_warning = float(
+                        getattr(
+                            self,
+                            "_hl_untrusted_order_ws_last_warning_monotonic",
+                            float("-inf"),
+                        )
+                    )
+                    if now_monotonic - last_warning >= 60.0:
+                        logging.warning(
+                            "[ws] hyperliquid order updates lacked authoritative order semantics; "
+                            "discarding %d rows and requesting account-state refresh | symbols=%s",
+                            len(untrusted),
+                            self._log_symbols(sorted(symbols), limit=8),
+                        )
+                        self._hl_untrusted_order_ws_last_warning_monotonic = now_monotonic
+                    self._mark_account_critical_state_dirty(
+                        reason="order_ws_semantics_unavailable",
+                        symbols=symbols,
+                        source="hyperliquid_order_ws",
+                        level=logging.DEBUG,
+                    )
+                if normalized:
+                    self.handle_order_update(normalized)
             except asyncio.CancelledError:
                 break
             except RateLimitExceeded:
@@ -576,21 +758,9 @@ class HyperliquidBot(CCXTBot):
                 logging.debug("[ws] %s: reconnecting...", self.exchange)
 
     def determine_pos_side(self, order):
-        # hyperliquid is not hedge mode
-        if order["symbol"] in self.positions:
-            if self.positions[order["symbol"]]["long"]["size"] != 0.0:
-                return "long"
-            elif self.positions[order["symbol"]]["short"]["size"] != 0.0:
-                return "short"
-            else:
-                return "long" if order["side"] == "buy" else "short"
-        else:
-            if "reduceOnly" in order:
-                if order["side"] == "buy":
-                    return "short" if order["reduceOnly"] else "long"
-                if order["side"] == "sell":
-                    return "long" if order["reduceOnly"] else "short"
-            return "long" if order["side"] == "buy" else "short"
+        # Hyperliquid is one-way, but current position state must never label a
+        # resting order: fills may change it after placement.
+        return self._normalize_one_way_position_side(order)
 
     def _get_position_side_for_order(self, order: dict) -> str:
         """Hook: Derive position_side from order data for Hyperliquid (one-way mode)."""
@@ -1328,23 +1498,39 @@ class HyperliquidBot(CCXTBot):
                     params["vaultAddress"] = self.user_info["wallet_address"]
 
                 try:
+                    self._record_order_churn_allowance_attempts(
+                        1, action_kind="config"
+                    )
+                    signed_action_tokens = (
+                        self._record_order_churn_signed_action_attempts(1)
+                    )
                     res = await self.cca.set_margin_mode(
                         margin_mode, symbol=symbol, params=params
+                    )
+                    if not (
+                        isinstance(res, dict)
+                        and str(res.get("status") or "").lower() == "ok"
+                        and isinstance(res.get("response"), dict)
+                        and str(res["response"].get("type") or "").lower()
+                        == "default"
+                    ):
+                        raise RuntimeError(
+                            "Hyperliquid margin-mode response was not an authoritative success"
+                        )
+                    self._complete_order_churn_signed_action_attempts(
+                        signed_action_tokens
                     )
                     to_print = (
                         f"margin={format_exchange_config_response(res)} ({margin_mode})"
                     )
                 except Exception as e:
                     if '"code":"59107"' in str(e):
+                        self._complete_order_churn_signed_action_attempts(
+                            signed_action_tokens
+                        )
                         to_print = f"margin=ok (unchanged, {margin_mode})"
                     else:
-                        log_symbol = symbol_to_coin(symbol, verbose=False) or symbol
-                        logging.error(
-                            "[config] %s %s-margin update failed | %s",
-                            log_symbol,
-                            margin_mode,
-                            self._format_exchange_config_error(e),
-                        )
+                        raise
             except Exception as e:
                 log_symbol = symbol_to_coin(symbol, verbose=False) or symbol
                 logging.error(
@@ -1352,6 +1538,7 @@ class HyperliquidBot(CCXTBot):
                     log_symbol,
                     self._format_exchange_config_error(e),
                 )
+                raise
             if to_print:
                 log_symbol = symbol_to_coin(symbol, verbose=False) or symbol
                 logging.debug(f"{log_symbol}: {to_print}")

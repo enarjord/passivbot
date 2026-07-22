@@ -28,8 +28,6 @@ The code-owned registries live in `src/live/event_bus.py`. Payload and emission 
 - `ema.bundle.started`
 - `ema.fallback_used`
 - `ema.unavailable`
-- `entry.initial_distance_gate_blocked`
-- `entry.initial_distance_gate_cleared`
 - `entry.initial_eligibility`
 - `entry.min_effective_cost_blocked`
 - `exchange.config_refresh`
@@ -37,7 +35,9 @@ The code-owned registries live in `src/live/event_bus.py`. Payload and emission 
 - `execution.ambiguous`
 - `execution.cancel_ambiguous_terminal`
 - `execution.cancel_connector_call_started`
+- `execution.cancel_deferred`
 - `execution.cancel_failed`
+- `execution.cancel_first_barrier`
 - `execution.cancel_sent`
 - `execution.cancel_succeeded`
 - `execution.confirmation_requested`
@@ -71,6 +71,9 @@ The code-owned registries live in `src/live/event_bus.py`. Payload and emission 
 - `hsl.transition`
 - `market.snapshot_diagnostic_skipped`
 - `open_orders.snapshot_delta`
+- `order.churn_actions_accounted`
+- `order.churn_admission`
+- `order.churn_evidence`
 - `order_wave.completed`
 - `order_wave.started`
 - `planning.defer_summary`
@@ -153,9 +156,12 @@ The code-owned registries live in `src/live/event_bus.py`. Payload and emission 
 
 ## Reason Codes
 
+- `account_cancel_first_barrier`
 - `authoritative_confirmation`
 - `authoritative_confirmation_timeout`
 - `balance_changed`
+- `batch_capacity`
+- `cancel_batch_capacity`
 - `candle_disk_flush_completed`
 - `candle_disk_load_completed`
 - `config_hip3_account_mode_unsupported`
@@ -197,7 +203,6 @@ The code-owned registries live in `src/live/event_bus.py`. Payload and emission 
 - `hsl_replay_pending`
 - `hsl_timeline_replay_completed`
 - `hsl_timeline_replay_started`
-- `initial_entry_distance_gate`
 - `length_mismatch`
 - `limit_order_create_market_distance`
 - `low_balance`
@@ -209,6 +214,13 @@ The code-owned registries live in `src/live/event_bus.py`. Payload and emission 
 - `open_orders_snapshot_delta`
 - `open_tail_projection`
 - `optional_ema_dropped`
+- `order_churn_action_attempt`
+- `order_churn_action_headroom_exhausted`
+- `order_churn_action_headroom_unavailable`
+- `order_churn_admission`
+- `order_churn_allowance_exhausted`
+- `order_churn_history`
+- `order_churn_market_data_unavailable`
 - `pending_exchange_config`
 - `periodic_health_summary`
 - `pipeline_closing`

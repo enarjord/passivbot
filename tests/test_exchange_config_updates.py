@@ -642,15 +642,7 @@ async def test_execute_to_exchange_stops_after_exchange_config_shutdown():
 
         async def calc_orders_to_cancel_and_create(self):
             self.calc_called = True
-            return [
-                {
-                    "symbol": "BTC/USDT:USDT",
-                    "side": "buy",
-                    "position_side": "long",
-                    "price": 1.0,
-                    "qty": 1.0,
-                }
-            ], [
+            return [], [
                 {
                     "symbol": "ETH/USDT:USDT",
                     "side": "buy",
@@ -988,15 +980,7 @@ async def test_execute_to_exchange_configures_only_symbols_with_creations():
             return None
 
         async def calc_orders_to_cancel_and_create(self):
-            return [
-                {
-                    "symbol": "CANCEL/USDT:USDT",
-                    "side": "buy",
-                    "position_side": "long",
-                    "price": 1.0,
-                    "qty": 1.0,
-                },
-            ], [
+            return [], [
                 {
                     "symbol": "ETH/USDT:USDT",
                     "side": "buy",
@@ -1313,7 +1297,7 @@ async def test_execute_to_exchange_emits_state_change_skipped_event():
 
 
 @pytest.mark.asyncio
-async def test_execute_order_plan_posts_replacement_matching_cancel_same_cycle():
+async def test_execute_order_plan_defers_replacement_until_cancel_confirmation():
     import passivbot as pb_mod
 
     class FakeBot:
@@ -1404,13 +1388,19 @@ async def test_execute_order_plan_posts_replacement_matching_cancel_same_cycle()
     await pb_mod.Passivbot.execute_order_plan_to_exchange(bot, to_cancel, to_create)
 
     assert bot.cancelled_orders == to_cancel
-    assert bot.config_symbols == [symbol]
-    assert bot.created_orders == to_create
+    assert bot.config_symbols is None
+    assert bot.created_orders is None
+    assert set(bot._authoritative_pending_confirmations) == {
+        "balance",
+        "positions",
+        "open_orders",
+        "fills",
+    }
     assert bot.execution_scheduled is True
 
 
 @pytest.mark.asyncio
-async def test_execute_order_plan_blocks_pending_hsl_entry_but_allows_cancel_and_close():
+async def test_execute_order_plan_blocks_pending_hsl_entry_and_defers_close_after_cancel():
     import passivbot as pb_mod
 
     class FakeBot:
@@ -1523,8 +1513,8 @@ async def test_execute_order_plan_blocks_pending_hsl_entry_but_allows_cancel_and
     )
 
     assert bot.cancelled_orders == to_cancel
-    assert bot.config_symbols == [symbol]
-    assert bot.created_orders == [close]
+    assert bot.config_symbols is None
+    assert bot.created_orders is None
     assert bot.execution_scheduled is True
     assert bot._live_event_pipeline.flush(timeout=2.0) is True
     skipped = [
@@ -1535,6 +1525,13 @@ async def test_execute_order_plan_blocks_pending_hsl_entry_but_allows_cancel_and
     assert len(skipped) == 1
     assert skipped[0].data["order_count"] == 1
     assert skipped[0].data["pending_pairs_count"] == 1
+    barriers = [
+        event
+        for event in bot._live_event_sink.events
+        if event.reason_code == ReasonCodes.ACCOUNT_CANCEL_FIRST_BARRIER
+    ]
+    assert len(barriers) == 1
+    assert barriers[0].data["order_count"] == 1
     assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 

@@ -408,10 +408,17 @@ def test_route_table_keeps_data_events_off_console_by_default():
     assert DEFAULT_ROUTES[EventTypes.EXECUTION_CREATE_SKIPPED].text is True
     assert DEFAULT_ROUTES[EventTypes.EXECUTION_CONFIRMATION_TIMEOUT].console is True
     assert DEFAULT_ROUTES[EventTypes.EXECUTION_CONFIRMATION_TIMEOUT].text is True
-    assert DEFAULT_ROUTES[EventTypes.ENTRY_INITIAL_DISTANCE_GATE_BLOCKED].console is True
-    assert DEFAULT_ROUTES[EventTypes.ENTRY_INITIAL_DISTANCE_GATE_BLOCKED].text is True
-    assert DEFAULT_ROUTES[EventTypes.ENTRY_INITIAL_DISTANCE_GATE_CLEARED].console is True
-    assert DEFAULT_ROUTES[EventTypes.ENTRY_INITIAL_DISTANCE_GATE_CLEARED].text is True
+    for event_type in (
+        EventTypes.ORDER_CHURN_EVIDENCE,
+        EventTypes.ORDER_CHURN_ADMISSION,
+        EventTypes.ORDER_CHURN_ACTIONS_ACCOUNTED,
+        EventTypes.EXECUTION_CANCEL_FIRST_BARRIER,
+        EventTypes.EXECUTION_CANCEL_DEFERRED,
+    ):
+        assert DEFAULT_ROUTES[event_type].structured is True
+        assert DEFAULT_ROUTES[event_type].monitor is True
+        assert DEFAULT_ROUTES[event_type].console is False
+        assert DEFAULT_ROUTES[event_type].text is False
     assert DEFAULT_ROUTES[EventTypes.ENTRY_MIN_EFFECTIVE_COST_BLOCKED].console is True
     assert DEFAULT_ROUTES[EventTypes.ENTRY_MIN_EFFECTIVE_COST_BLOCKED].text is True
     assert DEFAULT_ROUTES[EventTypes.FILL_INGESTED].console is True
@@ -2579,101 +2586,6 @@ def test_console_format_summarizes_hsl_cooldown_seconds():
         "[risk] degraded tier=red cooldown=300s symbol=NEAR/USDT:USDT "
         "pside=long reason=cooldown_active"
     )
-
-
-def test_console_format_summarizes_initial_entry_distance_gate_block():
-    event = LiveEvent(
-        EventTypes.ENTRY_INITIAL_DISTANCE_GATE_BLOCKED,
-        status="skipped",
-        cycle_id="cy_entry_gate",
-        symbol="BTC/USDT:USDT",
-        pside="long",
-        side="buy",
-        reason_code="initial_entry_distance_gate",
-        data={
-            "action": "skip_create",
-            "order_type": "entry_initial_normal_long",
-            "qty": 0.001,
-            "price": 98_750.0,
-            "market_price": 101_000.0,
-            "distance_pct": 2.278481012658,
-            "threshold_pct": 1.25,
-            "tolerance_pct": 0.1,
-            "active_count": 3,
-            "suppressed_count": 2,
-        },
-    )
-
-    rendered = format_console_event(event)
-
-    assert rendered == (
-        "[entry] blocked cy=cy_entry_gate symbol=BTC/USDT:USDT pside=long "
-        "type=entry_initial_normal_long q=0.001 px=98750 mkt=101000 "
-        "d=2.2785% max=1.2500% tol=0.1000% active=3 sup=2"
-    )
-    assert len(f"2026-07-15T12:34:56Z INFO     [hyperliquid] {rendered}") <= 240
-
-
-def test_console_format_summarizes_initial_entry_distance_gate_clear():
-    event = LiveEvent(
-        EventTypes.ENTRY_INITIAL_DISTANCE_GATE_CLEARED,
-        status="recovered",
-        cycle_id="cy_entry_gate",
-        symbol="BTC/USDT:USDT",
-        pside="long",
-        side="buy",
-        reason_code="initial_entry_distance_gate",
-        data={
-            "action": "allow_create",
-            "order_type": "entry_initial_normal_long",
-            "qty": 0.001,
-            "price": 98_750.0,
-            "market_price": 99_000.0,
-            "distance_pct": 0.2525252525,
-            "threshold_pct": 1.25,
-        },
-    )
-
-    rendered = format_console_event(event)
-
-    assert rendered == (
-        "[entry] cleared cy=cy_entry_gate symbol=BTC/USDT:USDT pside=long "
-        "type=entry_initial_normal_long q=0.001 px=98750 mkt=99000 "
-        "d=0.2525% max=1.2500%"
-    )
-    assert "tol=" not in rendered
-    assert len(f"2026-07-15T12:34:56Z INFO     [hyperliquid] {rendered}") <= 240
-
-
-def test_console_format_bounds_and_sanitizes_initial_entry_distance_gate_payload():
-    event = LiveEvent(
-        EventTypes.ENTRY_INITIAL_DISTANCE_GATE_BLOCKED,
-        symbol="\x1b[31mBTC/USDT:USDT\n" + "x" * 100,
-        pside="long\t" + "y" * 100,
-        data={
-            "action": "skip_create",
-            "order_type": "entry_initial_" + "z" * 1_000 + "\nunsafe",
-            "qty": 0.0,
-            "price": 0.0,
-            "market_price": 0.0,
-            "distance_pct": 0.0,
-            "threshold_pct": 0.0,
-            "tolerance_pct": 0.0,
-            "active_count": 50_000,
-            "suppressed_count": 50_000,
-        },
-    )
-    payload_before = dict(event.data)
-
-    rendered = format_console_event(event)
-
-    assert len(f"2026-07-15T12:34:56Z INFO     [hyperliquid] {rendered}") <= 240
-    assert "\x1b" not in rendered
-    assert "\n" not in rendered
-    assert "\t" not in rendered
-    assert "q=0 px=0 mkt=0 d=0.0000% max=0.0000% tol=0.0000%" in rendered
-    assert "active=999 sup=999" in rendered
-    assert event.data == payload_before
 
 
 def test_console_format_summarizes_min_effective_cost_block():

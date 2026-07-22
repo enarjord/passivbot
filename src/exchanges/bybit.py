@@ -2,6 +2,7 @@ from exchanges.ccxt_bot import CCXTBot, format_exchange_config_response
 from passivbot import logging, clip_by_timestamp
 from uuid import uuid4
 import asyncio
+import math
 import ccxt
 from copy import deepcopy
 from collections import defaultdict
@@ -30,9 +31,59 @@ class BybitBot(CCXTBot):
 
     # ═══════════════════ HOOK OVERRIDES ═══════════════════
 
+    @staticmethod
+    def _strict_position_idx(raw_position_idx) -> int:
+        if isinstance(raw_position_idx, bool):
+            raise ValueError("bybit positionIdx must be an integer")
+        try:
+            parsed = float(raw_position_idx)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("bybit positionIdx must be an integer") from exc
+        if not math.isfinite(parsed) or not parsed.is_integer():
+            raise ValueError("bybit positionIdx must be an integer")
+        position_idx = int(parsed)
+        if position_idx not in {0, 1, 2}:
+            raise ValueError("bybit order has invalid positionIdx")
+        return position_idx
+
     def _get_position_side_for_order(self, order: dict) -> str:
-        """Bybit: Use determine_pos_side_ccxt helper."""
-        return determine_pos_side_ccxt(order)
+        """Bybit: require durable exchange positionIdx/position-side metadata."""
+        info = order.get("info") or {}
+        raw_position_idx = info.get("positionIdx")
+        if raw_position_idx is not None:
+            position_idx = self._strict_position_idx(raw_position_idx)
+            if position_idx == 1:
+                return "long"
+            if position_idx == 2:
+                return "short"
+            if position_idx == 0:
+                return self._normalize_one_way_position_side(order)
+        normalized_side = str(
+            order.get("position_side") or info.get("positionSide") or ""
+        ).lower()
+        if normalized_side in {"long", "short"}:
+            return normalized_side
+        raise ValueError("bybit order missing authoritative positionIdx/position side")
+
+    def _canonical_open_order_reduce_only(self, order: dict) -> bool:
+        """Normalize Bybit hedge action semantics from side plus positionIdx."""
+        info = order.get("info") or {}
+        raw_position_idx = info.get("positionIdx")
+        if (
+            raw_position_idx is not None
+            and self._strict_position_idx(raw_position_idx) == 0
+        ):
+            reduce_only = self._strict_order_reduce_only_response(order)
+            if not isinstance(reduce_only, bool):
+                raise ValueError("bybit one-way order missing authoritative reduceOnly")
+            return reduce_only
+        position_side = self._get_position_side_for_order(order)
+        side = str(order.get("side") or "").lower()
+        if side not in {"buy", "sell"}:
+            raise ValueError("bybit order missing explicit buy/sell side")
+        return (position_side == "long" and side == "sell") or (
+            position_side == "short" and side == "buy"
+        )
 
     # ═══════════════════ BYBIT-SPECIFIC METHODS ═══════════════════
 

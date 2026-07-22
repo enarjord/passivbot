@@ -626,6 +626,7 @@ def test_adaptive_grid_long_entry_output_regression():
             "price": 100.0,
             "order_type": "entry_initial_normal_long",
             "execution_type": "limit",
+            "execution_priority": "ordinary",
         },
         {
             "symbol_idx": 0,
@@ -634,6 +635,7 @@ def test_adaptive_grid_long_entry_output_regression():
             "price": 98.0,
             "order_type": "entry_grid_normal_long",
             "execution_type": "limit",
+            "execution_priority": "ordinary",
         },
         {
             "symbol_idx": 0,
@@ -642,6 +644,7 @@ def test_adaptive_grid_long_entry_output_regression():
             "price": 97.01,
             "order_type": "entry_grid_normal_long",
             "execution_type": "limit",
+            "execution_priority": "ordinary",
         },
         {
             "symbol_idx": 0,
@@ -650,6 +653,7 @@ def test_adaptive_grid_long_entry_output_regression():
             "price": 96.04,
             "order_type": "entry_grid_normal_long",
             "execution_type": "limit",
+            "execution_priority": "ordinary",
         },
         {
             "symbol_idx": 0,
@@ -658,6 +662,7 @@ def test_adaptive_grid_long_entry_output_regression():
             "price": 95.07,
             "order_type": "entry_grid_cropped_long",
             "execution_type": "limit",
+            "execution_priority": "ordinary",
         },
     ]
 
@@ -705,6 +710,7 @@ def test_adaptive_grid_short_entry_output_regression():
             "price": 101.0,
             "order_type": "entry_initial_normal_short",
             "execution_type": "limit",
+            "execution_priority": "ordinary",
         },
         {
             "symbol_idx": 0,
@@ -713,6 +719,7 @@ def test_adaptive_grid_short_entry_output_regression():
             "price": 103.02,
             "order_type": "entry_grid_normal_short",
             "execution_type": "limit",
+            "execution_priority": "ordinary",
         },
         {
             "symbol_idx": 0,
@@ -721,6 +728,7 @@ def test_adaptive_grid_short_entry_output_regression():
             "price": 104.06,
             "order_type": "entry_grid_normal_short",
             "execution_type": "limit",
+            "execution_priority": "ordinary",
         },
         {
             "symbol_idx": 0,
@@ -729,6 +737,7 @@ def test_adaptive_grid_short_entry_output_regression():
             "price": 105.1,
             "order_type": "entry_grid_normal_short",
             "execution_type": "limit",
+            "execution_priority": "ordinary",
         },
         {
             "symbol_idx": 0,
@@ -737,6 +746,7 @@ def test_adaptive_grid_short_entry_output_regression():
             "price": 106.15,
             "order_type": "entry_grid_cropped_short",
             "execution_type": "limit",
+            "execution_priority": "ordinary",
         },
     ]
 
@@ -1100,6 +1110,7 @@ def test_ema_anchor_long_position_emits_single_entry_and_close():
             "price": 101.0,
             "order_type": "close_ema_anchor_long",
             "execution_type": "limit",
+            "execution_priority": "ordinary",
         },
         {
             "symbol_idx": 0,
@@ -1108,6 +1119,7 @@ def test_ema_anchor_long_position_emits_single_entry_and_close():
             "price": 99.0,
             "order_type": "entry_ema_anchor_long",
             "execution_type": "limit",
+            "execution_priority": "ordinary",
         },
     ]
 
@@ -1730,7 +1742,8 @@ def test_graceful_stop_blocks_initial_entries_only():
     out_no_pos = compute(pbr, inp_no_pos)
     assert out_no_pos["orders"] == []
 
-    # With a position, GracefulStop behaves like Normal.
+    # With a position, GracefulStop preserves Normal prices/quantities while
+    # promoting its closes to risk-critical execution priority.
     sym = make_symbol(
         0,
         bid=100.0,
@@ -1747,7 +1760,26 @@ def test_graceful_stop_blocks_initial_entries_only():
     )
     out_normal = compute(pbr, inp_normal)
     out_gs = compute(pbr, inp_gs)
-    assert out_normal["orders"] == out_gs["orders"]
+    assert [
+        {key: value for key, value in order.items() if key != "execution_priority"}
+        for order in out_normal["orders"]
+    ] == [
+        {key: value for key, value in order.items() if key != "execution_priority"}
+        for order in out_gs["orders"]
+    ]
+    assert {order["execution_priority"] for order in out_normal["orders"]} == {
+        "ordinary"
+    }
+    assert {
+        order["execution_priority"]
+        for order in out_gs["orders"]
+        if order["order_type"].startswith("close_")
+    } == {"risk_critical"}
+    assert {
+        order["execution_priority"]
+        for order in out_gs["orders"]
+        if order["order_type"].startswith("entry_")
+    } == {"ordinary"}
     assert (
         out_normal["diagnostics"]["symbol_states"][0]["long"]["effective_mode"]
         == "normal"

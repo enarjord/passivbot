@@ -201,7 +201,9 @@ class TestHyperliquidBotHIP3:
             }
         }
         bot.cca = MagicMock()
-        bot.cca.set_margin_mode = AsyncMock(return_value={"status": "ok"})
+        bot.cca.set_margin_mode = AsyncMock(
+            return_value={"status": "ok", "response": {"type": "default"}}
+        )
         bot._calc_leverage_for_symbol = lambda symbol: 7
 
         await bot.update_exchange_config_by_symbols(["XYZ-XYZ100/USDC:USDC"])

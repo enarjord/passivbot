@@ -36,7 +36,12 @@ import math
 import time
 from copy import deepcopy
 
-from passivbot import Passivbot, logging, custom_id_to_snake
+from passivbot import (
+    Passivbot,
+    custom_id_has_explicit_passivbot_marker,
+    custom_id_to_snake,
+    logging,
+)
 import ccxt.pro as ccxt_pro
 import ccxt.async_support as ccxt_async
 from procedures import assert_correct_ccxt_version
@@ -145,16 +150,32 @@ class CCXTBot(Passivbot):
         Default: Use CCXT unified fields, fall back to custom_id derivation.
         Override: Exchange-specific logic when neither source is available.
         """
-        info = order.get("info", {})
+        return self._durable_order_position_side(order)
+
+    def _durable_order_position_side(self, order: dict) -> str:
+        """Return exchange/client metadata pside without action-side inference."""
+        info = order.get("info", {}) or {}
+
+        # 0. Already-normalized durable metadata
+        normalized = str(order.get("position_side") or "").lower()
+        if normalized in {"long", "short"}:
+            return normalized
 
         # 1. Exchange provides positionSide directly
-        pos_side = info.get("positionSide", "")
-        if pos_side:
-            return pos_side.lower()
+        pos_side = str(info.get("positionSide") or "").lower()
+        if pos_side in {"long", "short"}:
+            return pos_side
 
         # 2. Derive from CCXT unified clientOrderId
-        custom_id = order.get("clientOrderId", "")
-        if custom_id:
+        custom_id = (
+            order.get("clientOrderId")
+            or order.get("custom_id")
+            or info.get("clientOrderId")
+            or info.get("clientOid")
+            or info.get("clOrdId")
+            or ""
+        )
+        if custom_id and custom_id_has_explicit_passivbot_marker(custom_id):
             order_type = custom_id_to_snake(custom_id)
             if order_type.endswith("_long"):
                 return "long"
@@ -162,6 +183,61 @@ class CCXTBot(Passivbot):
                 return "short"
 
         return "both"
+
+    @staticmethod
+    def _strict_order_reduce_only_response(order: dict) -> bool | None:
+        """Read only an explicit exchange/CCXT close-only boolean."""
+        info = order.get("info")
+        # Prefer the raw exchange payload. Some CCXT parsers materialize a
+        # top-level ``reduceOnly=False`` when the native response omitted the
+        # field; that default is not authoritative evidence.
+        sources = (info,) if isinstance(info, dict) and info else (order,)
+        for source in sources:
+            for key in ("reduce_only", "reduceOnly", "is_reduce_only"):
+                if key not in source:
+                    continue
+                value = source[key]
+                if isinstance(value, bool):
+                    return value
+                if isinstance(value, str):
+                    normalized = value.strip().lower()
+                    if normalized in {"true", "1", "yes", "y"}:
+                        return True
+                    if normalized in {"false", "0", "no", "n"}:
+                        return False
+                    return None
+                if isinstance(value, (int, float)) and value in {0, 1}:
+                    return bool(value)
+                return None
+        return None
+
+    def _canonical_open_order_reduce_only(self, order: dict) -> bool | None:
+        """Return only an exchange-native close-only response for CCXT adapters."""
+        return self._strict_order_reduce_only_response(order)
+
+    def _derive_one_way_position_side(self, order: dict) -> str:
+        """Map authoritative side plus close-only intent into PB's mandatory pside."""
+        side = str(
+            order.get("side") or (order.get("info") or {}).get("side") or ""
+        ).lower()
+        reduce_only = self._strict_order_reduce_only_response(order)
+        if side not in {"buy", "sell"} or not isinstance(reduce_only, bool):
+            raise ValueError(
+                "one-way order lacks authoritative buy/sell plus reduceOnly semantics"
+            )
+        if reduce_only:
+            return "short" if side == "buy" else "long"
+        return "long" if side == "buy" else "short"
+
+    def _normalize_one_way_position_side(self, order: dict) -> str:
+        """Prefer durable PB metadata and verify it against venue action semantics."""
+        metadata_side = self._durable_order_position_side(order)
+        action_side = self._derive_one_way_position_side(order)
+        if metadata_side in {"long", "short"} and metadata_side != action_side:
+            raise ValueError(
+                "one-way order position-side metadata contradicts side/reduceOnly semantics"
+            )
+        return metadata_side if metadata_side in {"long", "short"} else action_side
 
     # ═══════════════════ PNL FETCHING HOOKS ═══════════════════
 

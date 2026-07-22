@@ -102,7 +102,54 @@ class BitgetBot(CCXTBot):
 
     def _get_position_side_for_order(self, order: dict) -> str:
         """Bitget provides posSide in info."""
-        return order.get("info", {}).get("posSide", "long").lower()
+        if not bool(
+            getattr(self, "_config_hedge_mode", True)
+            and getattr(self, "hedge_mode", True)
+        ):
+            return self._normalize_one_way_position_side(order)
+        position_side = str(
+            order.get("position_side")
+            or order.get("info", {}).get("posSide")
+            or ""
+        ).lower()
+        if position_side in {"long", "short"}:
+            return position_side
+        raise ValueError("bitget order missing authoritative position-side semantics")
+
+    def _canonical_open_order_reduce_only(self, order: dict) -> bool | None:
+        info = order.get("info") or {}
+        if getattr(self, "is_uta", False):
+            raw_position_side = str(info.get("posSide") or "").lower()
+            if raw_position_side not in {"long", "short"}:
+                reduce_only = self._strict_order_reduce_only_response(order)
+                if not isinstance(reduce_only, bool):
+                    raise ValueError("bitget UTA one-way order missing reduceOnly")
+                return reduce_only
+            side = str(order.get("side") or info.get("side") or "").lower()
+            position_side = self._get_position_side_for_order(order)
+            if side not in {"buy", "sell"}:
+                raise ValueError("bitget UTA order missing explicit buy/sell side")
+            return (position_side == "long" and side == "sell") or (
+                position_side == "short" and side == "buy"
+            )
+        trade_side = str(info.get("tradeSide") or "").lower()
+        if trade_side in {"open", "close"}:
+            return trade_side == "close"
+        return super()._canonical_open_order_reduce_only(order)
+
+    def _derive_one_way_position_side(self, order: dict) -> str:
+        """Use classic Bitget's authoritative tradeSide when reduceOnly is absent."""
+        side = str(
+            order.get("side") or (order.get("info") or {}).get("side") or ""
+        ).lower()
+        reduce_only = self._canonical_open_order_reduce_only(order)
+        if side not in {"buy", "sell"} or not isinstance(reduce_only, bool):
+            raise ValueError(
+                "bitget one-way order lacks authoritative side plus close-only semantics"
+            )
+        if reduce_only:
+            return "short" if side == "buy" else "long"
+        return "long" if side == "buy" else "short"
 
     def get_symbol_id(self, symbol):
         """Return the exchange-native identifier for `symbol`, caching defaults."""
@@ -122,9 +169,9 @@ class BitgetBot(CCXTBot):
 
     def _normalize_order_update(self, order: dict) -> dict:
         """Bitget override: derive side from tradeSide/posSide."""
+        order["side"] = self._determine_side(order)
         order["position_side"] = self._get_position_side_for_order(order)
         order["qty"] = order["amount"]
-        order["side"] = self._determine_side(order)
         return order
 
     def _determine_side(self, order: dict) -> str:
@@ -149,15 +196,18 @@ class BitgetBot(CCXTBot):
                         return "buy"
                     elif order["info"]["posSide"] == "short":
                         return "sell"
+        side = str(order.get("side") or (order.get("info") or {}).get("side") or "").lower()
+        if side in {"buy", "sell"}:
+            return side
         raise Exception(f"failed to determine side {order}")
 
     def _normalize_open_orders(self, fetched: list) -> list:
         """Bitget override: derive side from tradeSide/posSide."""
         for elm in fetched:
-            elm["position_side"] = elm["info"]["posSide"]
-            elm["qty"] = elm["amount"]
-            elm["custom_id"] = elm["clientOrderId"]
             elm["side"] = self._determine_side(elm)
+            elm["position_side"] = self._get_position_side_for_order(elm)
+            elm["qty"] = elm["amount"]
+            elm["custom_id"] = elm.get("clientOrderId") or ""
             self._record_live_margin_mode_from_payload(elm)
         return sorted(fetched, key=lambda x: x["timestamp"])
 

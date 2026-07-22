@@ -257,7 +257,27 @@ FIELD_RUNTIME_RULES = {
             "optimize": "Coin Selection",
         },
     },
-    "live.initial_entry_exec_max_market_dist_pct": {
+    "live.order_replacement_churn_gate_activation_count": {
+        "owner": "live",
+        "consumed_by": {"live"},
+        "cli_exposed_on": {"live"},
+    },
+    "live.order_replacement_churn_gate_market_dist_pct": {
+        "owner": "live",
+        "consumed_by": {"live"},
+        "cli_exposed_on": {"live"},
+    },
+    "live.order_replacement_churn_gate_stability_minutes": {
+        "owner": "live",
+        "consumed_by": {"live"},
+        "cli_exposed_on": {"live"},
+    },
+    "live.order_replacement_churn_gate_tracking_tolerance_pct": {
+        "owner": "live",
+        "consumed_by": {"live"},
+        "cli_exposed_on": {"live"},
+    },
+    "live.order_replacement_churn_gate_window_minutes": {
         "owner": "live",
         "consumed_by": {"live"},
         "cli_exposed_on": {"live"},
@@ -1003,17 +1023,65 @@ RESERVED_CLI_ARGS = {
         },
         "help": "Forager incumbent score tolerance. Keeps an already-selected flat forager coin when a challenger score is within this fractional normalized-score gap.",
     },
-    "live.initial_entry_exec_max_market_dist_pct": {
-        "visible": ["--initial-entry-exec-max-market-dist-pct"],
+    "live.order_replacement_churn_gate_activation_count": {
+        "visible": ["--order-replacement-churn-gate-activation-count"],
         "hidden": [
-            "--live.initial_entry_exec_max_market_dist_pct",
-            "--live_initial_entry_exec_max_market_dist_pct",
+            "--live.order_replacement_churn_gate_activation_count",
+            "--live_order_replacement_churn_gate_activation_count",
+        ],
+        "type": int,
+        "metavar": "INT",
+        "commands": {"live"},
+        "group": {"live": "Behavior"},
+        "help": "Account-wide rolling create-attempt count that activates economy deferral for far unstable orders. Set to 0 to disable only that deferral; reconciliation safety remains active.",
+    },
+    "live.order_replacement_churn_gate_market_dist_pct": {
+        "visible": ["--order-replacement-churn-gate-market-dist-pct"],
+        "hidden": [
+            "--live.order_replacement_churn_gate_market_dist_pct",
+            "--live_order_replacement_churn_gate_market_dist_pct",
         ],
         "type": float,
         "metavar": "FLOAT",
         "commands": {"live"},
         "group": {"live": "Behavior"},
-        "help": "Executor-side distance gate for initial entry creations. Set to 0 to disable. Far initial entries are logged but not posted until they are near market.",
+        "help": "Final market-distance threshold that always admits a limit order despite churn allowance exhaustion.",
+    },
+    "live.order_replacement_churn_gate_stability_minutes": {
+        "visible": ["--order-replacement-churn-gate-stability-minutes"],
+        "hidden": [
+            "--live.order_replacement_churn_gate_stability_minutes",
+            "--live_order_replacement_churn_gate_stability_minutes",
+        ],
+        "type": float,
+        "metavar": "FLOAT",
+        "commands": {"live"},
+        "group": {"live": "Behavior"},
+        "help": "Newest contiguous tight-match duration required to clear older churn evidence.",
+    },
+    "live.order_replacement_churn_gate_tracking_tolerance_pct": {
+        "visible": ["--order-replacement-churn-gate-tracking-tolerance-pct"],
+        "hidden": [
+            "--live.order_replacement_churn_gate_tracking_tolerance_pct",
+            "--live_order_replacement_churn_gate_tracking_tolerance_pct",
+        ],
+        "type": float,
+        "metavar": "FLOAT",
+        "commands": {"live"},
+        "group": {"live": "Behavior"},
+        "help": "Wider price/quantity tolerance used only for historical churn evidence.",
+    },
+    "live.order_replacement_churn_gate_window_minutes": {
+        "visible": ["--order-replacement-churn-gate-window-minutes"],
+        "hidden": [
+            "--live.order_replacement_churn_gate_window_minutes",
+            "--live_order_replacement_churn_gate_window_minutes",
+        ],
+        "type": float,
+        "metavar": "FLOAT",
+        "commands": {"live"},
+        "group": {"live": "Behavior"},
+        "help": "Window for per-symbol ideal-order evidence and account-wide create-attempt accounting.",
     },
     "live.limit_order_create_max_market_dist_pct": {
         "visible": ["--limit-order-create-max-market-dist-pct"],
@@ -1657,9 +1725,13 @@ def _classify_live_argument(full_name: str, help_all: bool) -> Optional[str]:
         "live.leverage",
         "live.market_orders_allowed",
         "live.max_realized_loss_pct",
-        "live.initial_entry_exec_max_market_dist_pct",
         "live.limit_order_create_max_market_dist_pct",
         "live.order_match_tolerance_pct",
+        "live.order_replacement_churn_gate_activation_count",
+        "live.order_replacement_churn_gate_market_dist_pct",
+        "live.order_replacement_churn_gate_stability_minutes",
+        "live.order_replacement_churn_gate_tracking_tolerance_pct",
+        "live.order_replacement_churn_gate_window_minutes",
     }
     runtime = {
         "live.execution_delay_seconds",

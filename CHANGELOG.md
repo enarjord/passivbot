@@ -4,6 +4,25 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Replaced the initial-entry-only market-distance posting gate with a strategy-agnostic,
+  account-wide Rust-ideal churn-evidence gate. Moving distant entries and closes may be deferred
+  after sustained create traffic, while market, risk-critical, and near-market orders remain
+  allowance-exempt. On audited supported connectors, stale actual orders are removed in managed
+  modes, malformed account-critical open-order snapshots block exchange writes, and any
+  cancellation forces full authoritative refresh and Rust replanning before non-panic creation.
+  One-way position-side and native close-only normalization is now deterministic across the
+  supported connectors, including OKX long/short mode, KuCoin open orders, and Gate.io's native
+  `is_reduce_only` field. Supported hedge-mode adapters no longer substitute client-order metadata
+  for a missing exchange-native position side, and untrusted Hyperliquid WebSocket order rows
+  trigger authoritative account-state refresh instead of reconnect churn. Hyperliquid admission
+  reserves required signed configuration actions with creates, and churn distance is rechecked from
+  a forced-fresh market read after configuration before any create call. A downstream churn
+  normalization failure now blocks account-wide non-panic creation when the affected symbol still
+  has actual orders or an authoritative nonzero position, while preserving only the dedicated
+  reduce-only market panic path. Missing or malformed position sides block every exchange write.
+  Hyperliquid carries ambiguous signed-action debits across `userRateLimit` refreshes, preventing
+  overlapping requests from overstating available action headroom, and failed required margin-mode
+  writes now leave dependent creates pending instead of marking the symbol configured.
 - Non-panic protective reducers may now coexist with compatible ordinary grid, trailing, or
   EMA-anchor closes for the same position. Passivbot still selects only one protective reducer,
   keeps panic close exclusive, reserves reducer quantity before trimming ordinary closes, and caps
@@ -136,6 +155,8 @@ All notable user-facing changes will be documented in this file.
 - Hardened WEEX live reconciliation by requiring explicit combined/separated
   position mode and long/short open-order sides, and by adaptively splitting
   full fill-history windows so endpoint ordering cannot silently omit fills.
+  Empty private order-channel heartbeat messages no longer trigger CCXT Pro's
+  symbol resolver with an empty symbol set.
 
 - Added live WEEX USDT perpetual-futures support through CCXT, including
   authenticated account state, simultaneous long/short order placement and

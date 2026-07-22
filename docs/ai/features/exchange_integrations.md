@@ -3,6 +3,32 @@
 Only task-specific, high-impact contracts and quirks are listed here. Authenticated verification
 requires explicit user approval; prefer offline request-construction tests.
 
+## Supported Live-Exchange Boundary
+
+The supported production live connectors are Binance, Bybit, Bitget, OKX, Gate.io, KuCoin,
+Hyperliquid, and WEEX. The fake connector is an offline deterministic test harness, not an exchange.
+
+Defx is deliberately unsupported. `src/exchanges/defx.py` and the `setup_bot()` routing branch are
+stale legacy placeholders retained only until a separate cleanup removes them. Their presence does
+not make Defx a supported connector and must not expand feature coverage, implementation matrices,
+regression requirements, or live-testing scope. The canonical live fill-event factory rejects Defx
+because required realized-PnL, unstuck, and HSL replay support is absent. Do not use the Defx adapter
+for live operation or authenticated probes.
+
+Paradex is experimental and outside the supported production boundary. Its adapter and
+`setup_bot()` routing branch may be used as comparative implementation or rate-limit research, but
+required live fill/PnL, unstuck, and HSL replay contracts are incomplete. Do not infer production
+support, implementation coverage, regression requirements, or live-testing scope from its runtime
+routing branch or comparative documentation.
+
+The generic `CCXTBot` fallback for arbitrary exchange names is also outside the supported
+production boundary. It preserves compatibility for unaudited CCXT venues, but a feature requiring
+authoritative order-type, close-only, remaining-quantity, or one-way position-side normalization
+must use an explicit supported-connector allowlist. The generic fallback retains its legacy basic
+reconciliation/tolerance path until that venue receives a connector-specific contract audit; the
+separate global retirement of the old initial-entry-only distance gate does not enable the new
+churn policy there.
+
 ## Broker Agreement Attribution
 
 Problem:
@@ -57,7 +83,9 @@ Handling:
 
 1. Treat current same-mode success as success (`code=200000`, `data.positionMode=1`).
 2. Let unknown `set_position_mode` failures raise unless a verified KuCoin no-op code is added with a targeted test.
-3. Prefer explicit `info.positionSide`/`info.posSide` before position-state inference; raise on ambiguous both-sides-open orders without an explicit hedge side.
+3. Never infer a resting order's position side from the current position. Require explicit
+   `info.positionSide`/`info.posSide` in hedge mode; in effective one-way mode, derive and verify
+   `position_side` from the authoritative order side plus `reduceOnly` tuple.
 
 ### OHLCV limit behavior + sparse-minute markets
 
@@ -112,6 +140,24 @@ Handling:
 
 1. Overlap boundaries by 1 candle.
 2. Back up initial `since` by one candle on pagination start.
+
+## OKX Futures
+
+### Long/short-mode close semantics
+
+Problem:
+
+1. OKX long/short mode identifies entry versus close from `side` plus `posSide`.
+2. CCXT emulates reduce-only for this mode and may expose `reduceOnly=false` for a valid close.
+
+Handling in Passivbot:
+
+1. In effective long/short mode, normalize close-only effect from the documented `side` plus
+   `posSide` action tuple.
+2. In effective one-way/net mode, require an authoritative native `reduceOnly` value and verify
+   one-way `position_side` against side plus close-only effect.
+3. Prefer the raw exchange `info` field over a CCXT top-level default when proving close-only
+   semantics.
 
 ## Gate.io Futures
 

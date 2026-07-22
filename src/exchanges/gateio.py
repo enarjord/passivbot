@@ -57,11 +57,7 @@ class GateIOBot(CCXTBot):
 
     def determine_pos_side(self, order):
         """GateIO-specific logic for one-way mode position side derivation."""
-        if order["side"] == "buy":
-            return "short" if order["reduceOnly"] else "long"
-        if order["side"] == "sell":
-            return "long" if order["reduceOnly"] else "short"
-        raise Exception(f"unsupported order side {order['side']}")
+        return self._normalize_one_way_position_side(order)
 
     # ═══════════════════ GATEIO-SPECIFIC METHODS ═══════════════════
 

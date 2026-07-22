@@ -2208,8 +2208,13 @@ def _make_order(
     price=100.0,
     reduce_only=False,
     custom_hex=0x0001,
+    execution_type="limit",
+    pb_order_type=None,
 ):
     suffix = "ro" if reduce_only else "entry"
+    if pb_order_type is None:
+        action = "close_grid" if reduce_only else "entry_grid_normal"
+        pb_order_type = f"{action}_{position_side}"
     return {
         "symbol": symbol,
         "side": side,
@@ -2217,6 +2222,8 @@ def _make_order(
         "qty": qty,
         "price": price,
         "reduce_only": reduce_only,
+        "type": execution_type,
+        "pb_order_type": pb_order_type,
         "id": f"{position_side}_{side}_{price}",
         "custom_id": f"0x{custom_hex:04x}{suffix}",
     }
@@ -3531,7 +3538,7 @@ def test_orange_overlay_tp_only_with_active_entry_cancellation_blocks_initial_en
 
 def test_executable_orders_take_execution_type_from_rust_only():
     # The Rust orchestrator is the single source of execution-type truth:
-    # 5-tuple execution_type passes through verbatim, and a short tuple is a
+    # execution type and priority pass through verbatim, and a short tuple is a
     # broken producer that must fail loudly rather than silently downgrade a
     # panic market close to a limit order.
     cfg = _dummy_config()
@@ -3544,18 +3551,37 @@ def test_executable_orders_take_execution_type_from_rust_only():
 
     for execution_type in ("market", "limit"):
         ideal_orders = {
-            symbol: [(0.1, 100.0, "close_panic_long", panic_id, execution_type)]
+            symbol: [
+                (
+                    0.1,
+                    100.0,
+                    "close_panic_long",
+                    panic_id,
+                    execution_type,
+                    "risk_critical",
+                )
+            ]
         }
         orders, _ = bot._to_executable_orders(ideal_orders, last_prices)
         assert orders[symbol][0]["type"] == execution_type
+        assert orders[symbol][0]["execution_priority"] == "risk_critical"
 
     with pytest.raises(ValueError, match="missing execution_type"):
         bot._to_executable_orders(
             {symbol: [(0.1, 100.0, "close_panic_long", panic_id)]}, last_prices
         )
-    with pytest.raises(ValueError, match="invalid execution_type"):
+    with pytest.raises(ValueError, match="missing execution_type or execution_priority"):
         bot._to_executable_orders(
             {symbol: [(0.1, 100.0, "close_panic_long", panic_id, "stop")]},
+            last_prices,
+        )
+    with pytest.raises(ValueError, match="invalid execution_type"):
+        bot._to_executable_orders(
+            {
+                symbol: [
+                    (0.1, 100.0, "close_panic_long", panic_id, "stop", "risk_critical")
+                ]
+            },
             last_prices,
         )
 

@@ -219,13 +219,32 @@ def test_determine_pos_side_prefers_info_position_side_when_both_psides_open():
     assert bot.determine_pos_side(order) == "short"
 
 
-def test_determine_pos_side_rejects_ambiguous_hedge_order_without_payload():
+def test_determine_pos_side_rejects_hedge_order_without_durable_payload():
     bot = make_bot()
     bot.positions["BTC/USDT:USDT"]["long"]["size"] = 1.0
     bot.positions["BTC/USDT:USDT"]["short"]["size"] = -1.0
 
-    with pytest.raises(Exception, match="ambiguous KuCoin position side"):
+    with pytest.raises(ValueError, match="missing durable long/short attribution"):
         bot.determine_pos_side({"symbol": "BTC/USDT:USDT", "side": "buy", "info": {}})
+
+
+def test_determine_pos_side_one_way_uses_side_and_reduce_only_not_position_state():
+    bot = make_bot()
+    bot._config_hedge_mode = False
+    bot.hedge_mode = False
+    bot.positions["BTC/USDT:USDT"]["long"]["size"] = 1.0
+
+    assert (
+        bot.determine_pos_side(
+            {
+                "symbol": "BTC/USDT:USDT",
+                "side": "sell",
+                "reduceOnly": False,
+                "info": {"reduceOnly": False},
+            }
+        )
+        == "short"
+    )
 
 
 @pytest.mark.asyncio

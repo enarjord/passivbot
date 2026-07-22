@@ -85,6 +85,65 @@ class DummyCCA:
 
 
 @pytest.mark.asyncio
+async def test_hyperliquid_ws_order_without_reduce_only_requests_refresh_without_reconnect(
+    stubbed_modules, monkeypatch, caplog
+):
+    hyperliquid_module = importlib.import_module("exchanges.hyperliquid")
+    HyperliquidBot = hyperliquid_module.HyperliquidBot
+    monkeypatch.setattr(hyperliquid_module.time, "monotonic", lambda: 100.0)
+    caplog.set_level(pylogging.WARNING)
+    bot = HyperliquidBot.__new__(HyperliquidBot)
+    bot.stop_websocket = False
+    bot._health_ws_reconnects = 0
+    bot._health_rate_limits = 0
+    bot._log_symbols = lambda symbols, limit=8: ",".join(symbols[:limit])
+    bot._hl_note_ws_symbols_for_dex_scope = lambda _orders: None
+    handled = []
+    dirty = []
+    bot.handle_order_update = lambda orders: handled.append(orders)
+    bot._mark_account_critical_state_dirty = lambda **kwargs: dirty.append(kwargs)
+
+    watch_calls = 0
+
+    async def watch_orders():
+        nonlocal watch_calls
+        watch_calls += 1
+        if watch_calls == 2:
+            bot.stop_websocket = True
+        return [
+            {
+                "id": "123",
+                "symbol": "BTC/USDC:USDC",
+                "side": "buy",
+                "amount": 0.01,
+                "info": {"oid": 123, "side": "B", "sz": "0.01"},
+            }
+        ]
+
+    bot.ccp = types.SimpleNamespace(watch_orders=watch_orders)
+
+    await bot.watch_orders()
+
+    assert bot._health_ws_reconnects == 0
+    assert handled == []
+    assert dirty == [
+        {
+            "reason": "order_ws_semantics_unavailable",
+            "symbols": {"BTC/USDC:USDC"},
+            "source": "hyperliquid_order_ws",
+            "level": pylogging.DEBUG,
+        },
+        {
+            "reason": "order_ws_semantics_unavailable",
+            "symbols": {"BTC/USDC:USDC"},
+            "source": "hyperliquid_order_ws",
+            "level": pylogging.DEBUG,
+        },
+    ]
+    assert sum("lacked authoritative order semantics" in rec.message for rec in caplog.records) == 1
+
+
+@pytest.mark.asyncio
 async def test_hyperliquid_already_gone_cancel_requests_full_confirmation(stubbed_modules):
     HyperliquidBot = importlib.import_module("exchanges.hyperliquid").HyperliquidBot
     markers = []
@@ -214,6 +273,7 @@ async def test_hyperliquid_fetch_open_orders_dedupes_parallel_routes(stubbed_mod
                         "id": "2",
                         "symbol": "XYZ-SP500/USDC:USDC",
                         "side": "buy",
+                        "reduceOnly": False,
                         "amount": 0.003,
                         "price": 5088.8,
                         "timestamp": 2,
@@ -222,6 +282,7 @@ async def test_hyperliquid_fetch_open_orders_dedupes_parallel_routes(stubbed_mod
                         "id": "1",
                         "symbol": "BTC/USDC:USDC",
                         "side": "buy",
+                        "reduceOnly": False,
                         "amount": 0.001,
                         "price": 70000.0,
                         "timestamp": 1,
@@ -232,6 +293,7 @@ async def test_hyperliquid_fetch_open_orders_dedupes_parallel_routes(stubbed_mod
                     "id": "1",
                     "symbol": "BTC/USDC:USDC",
                     "side": "buy",
+                    "reduceOnly": False,
                     "amount": 0.001,
                     "price": 70000.0,
                     "timestamp": 1,

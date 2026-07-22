@@ -52,17 +52,16 @@ Before order planning/execution, live bot must have coherent state for:
 These are deliberate exceptions to the general "Rust owns order behavior" and live/backtest parity
 rules. Keep them narrow, visible, and test-covered.
 
-- Live initial-entry executor distance gate:
-  - Rust still emits the intended `entry_initial_*` order.
-  - Python live may withhold posting far passive initial-entry creates when
-    `live.initial_entry_exec_max_market_dist_pct > 0`.
-  - This is accepted as an executor-level remote-call/order-churn throttle, not a trading-logic
-    source of truth.
-  - Python must not create any order Rust did not request.
-  - Existing matching orders are preserved by order-match tolerance; if an existing order drifts
-    outside tolerance, live may cancel it and withhold the far replacement create.
-  - Blocking must be INFO-visible and throttled by the same order-match tolerance so operators can
-    see that the bot wants the order but is intentionally not posting it yet.
+- Live order-replacement churn gate:
+  - Rust remains the source of every ideal order. Python never invents or preserves a non-ideal
+    order, but may defer a far ordinary create only when bounded Rust-history evidence proves that
+    the ideal itself is moving and the account-wide action allowance is exhausted.
+  - Market, risk-critical, near-market, new, and proven-stable orders are not capacity-gated; every
+    connector-bound create and required configuration attempt still counts for later admission.
+  - Stale managed orders are cancelled immediately. Non-panic replacement creation waits for full
+    authoritative confirmation and fresh Rust replanning rather than leaving a stale order resting.
+  - The former initial-entry-only field is retired. The RAM-only state and accepted restart
+    exception are specified in `account_wide_order_replacement_churn_gate_plan.md`.
 
 - Hyperliquid `allMids` market snapshot:
   - User explicitly accepted using a single mid/last-like reference for bid, ask, and last on
@@ -477,11 +476,9 @@ changing behavior during extraction commits.
 - [x] Added staged market snapshot fetch headroom. Rust planning now requests ticker snapshots
   with a stricter cache TTL than the hard safety max, avoiding false precondition failures from
   near-expired cached tickers while preserving the pre-create stale-snapshot guard.
-- [x] Added a narrow live-only initial-entry executor distance gate to reduce churn from
-  EMA-drifting `entry_initial_*` orders. Rust still emits the intended initial entry, but live
-  only posts it when it is within `live.initial_entry_exec_max_market_dist_pct` of market; blocked
-  orders are INFO-visible on first block and then throttled to periodic INFO, with repeated drift
-  kept at DEBUG.
+- [x] Superseded the narrow initial-entry-only distance gate with the reviewed account-wide,
+  strategy-agnostic order-replacement churn policy documented in
+  `account_wide_order_replacement_churn_gate_plan.md`.
 - [x] Increased default forager score hysteresis from `0.005` to `0.02` after VPS logs showed
   most churn-relevant replacements had score gaps above the old 0.5% threshold.
 - [x] Tightened default OHLCV fetch budget and widened default REST recv window. Defaults are now

@@ -202,8 +202,11 @@ class EventTypes:
     EXECUTION_CREATE_DEFERRED = "execution.create_deferred"
     EXECUTION_CREATE_SKIPPED = "execution.create_skipped"
     ENTRY_INITIAL_ELIGIBILITY = "entry.initial_eligibility"
-    ENTRY_INITIAL_DISTANCE_GATE_BLOCKED = "entry.initial_distance_gate_blocked"
-    ENTRY_INITIAL_DISTANCE_GATE_CLEARED = "entry.initial_distance_gate_cleared"
+    ORDER_CHURN_EVIDENCE = "order.churn_evidence"
+    ORDER_CHURN_ADMISSION = "order.churn_admission"
+    ORDER_CHURN_ACTIONS_ACCOUNTED = "order.churn_actions_accounted"
+    EXECUTION_CANCEL_FIRST_BARRIER = "execution.cancel_first_barrier"
+    EXECUTION_CANCEL_DEFERRED = "execution.cancel_deferred"
     ENTRY_MIN_EFFECTIVE_COST_BLOCKED = "entry.min_effective_cost_blocked"
     EXECUTION_CANCEL_SENT = "execution.cancel_sent"
     EXECUTION_CANCEL_CONNECTOR_CALL_STARTED = (
@@ -317,7 +320,20 @@ class ReasonCodes:
     FILL_CACHE_QUARANTINED = "fill_cache_quarantined"
     FILL_CACHE_READY = "fill_cache_ready"
     FILL_CACHE_REBUILD_STARTED = "fill_cache_rebuild_started"
-    INITIAL_ENTRY_DISTANCE_GATE = "initial_entry_distance_gate"
+    ORDER_CHURN_HISTORY = "order_churn_history"
+    ORDER_CHURN_ADMISSION = "order_churn_admission"
+    ORDER_CHURN_ACTION_ATTEMPT = "order_churn_action_attempt"
+    ORDER_CHURN_ALLOWANCE_EXHAUSTED = "order_churn_allowance_exhausted"
+    ORDER_CHURN_MARKET_DATA_UNAVAILABLE = "order_churn_market_data_unavailable"
+    ORDER_CHURN_ACTION_HEADROOM_UNAVAILABLE = (
+        "order_churn_action_headroom_unavailable"
+    )
+    ORDER_CHURN_ACTION_HEADROOM_EXHAUSTED = (
+        "order_churn_action_headroom_exhausted"
+    )
+    ACCOUNT_CANCEL_FIRST_BARRIER = "account_cancel_first_barrier"
+    CANCEL_BATCH_CAPACITY = "cancel_batch_capacity"
+    BATCH_CAPACITY = "batch_capacity"
     LENGTH_MISMATCH = "length_mismatch"
     LIMIT_ORDER_CREATE_MARKET_DISTANCE = "limit_order_create_market_distance"
     LOW_BALANCE = "low_balance"
@@ -531,8 +547,11 @@ PHASE1_EVENT_TYPES = {
     EventTypes.EXECUTION_CREATE_DEFERRED,
     EventTypes.EXECUTION_CREATE_SKIPPED,
     EventTypes.ENTRY_INITIAL_ELIGIBILITY,
-    EventTypes.ENTRY_INITIAL_DISTANCE_GATE_BLOCKED,
-    EventTypes.ENTRY_INITIAL_DISTANCE_GATE_CLEARED,
+    EventTypes.ORDER_CHURN_EVIDENCE,
+    EventTypes.ORDER_CHURN_ADMISSION,
+    EventTypes.ORDER_CHURN_ACTIONS_ACCOUNTED,
+    EventTypes.EXECUTION_CANCEL_FIRST_BARRIER,
+    EventTypes.EXECUTION_CANCEL_DEFERRED,
     EventTypes.ENTRY_MIN_EFFECTIVE_COST_BLOCKED,
     EventTypes.EXECUTION_CANCEL_SENT,
     EventTypes.EXECUTION_CANCEL_CONNECTOR_CALL_STARTED,
@@ -856,12 +875,11 @@ DEFAULT_ROUTES: dict[str, EventRoute] = {
     EventTypes.EXECUTION_CREATE_DEFERRED: EventRoute(console=False, text=False),
     EventTypes.EXECUTION_CREATE_SKIPPED: EventRoute(console=True, text=True),
     EventTypes.ENTRY_INITIAL_ELIGIBILITY: EventRoute(console=False, text=False),
-    EventTypes.ENTRY_INITIAL_DISTANCE_GATE_BLOCKED: EventRoute(
-        console=True, text=True
-    ),
-    EventTypes.ENTRY_INITIAL_DISTANCE_GATE_CLEARED: EventRoute(
-        console=True, text=True
-    ),
+    EventTypes.ORDER_CHURN_EVIDENCE: EventRoute(console=False, text=False),
+    EventTypes.ORDER_CHURN_ADMISSION: EventRoute(console=False, text=False),
+    EventTypes.ORDER_CHURN_ACTIONS_ACCOUNTED: EventRoute(console=False, text=False),
+    EventTypes.EXECUTION_CANCEL_FIRST_BARRIER: EventRoute(console=False, text=False),
+    EventTypes.EXECUTION_CANCEL_DEFERRED: EventRoute(console=False, text=False),
     EventTypes.ENTRY_MIN_EFFECTIVE_COST_BLOCKED: EventRoute(console=True, text=True),
     EventTypes.EXECUTION_CANCEL_SENT: EventRoute(console=False),
     EventTypes.EXECUTION_CANCEL_CONNECTOR_CALL_STARTED: EventRoute(
@@ -998,8 +1016,6 @@ _CONSOLE_EVENT_TAGS = {
     EventTypes.EXECUTION_CREATE_REJECTED: "order",
     EventTypes.EXECUTION_CREATE_DEFERRED: "gate",
     EventTypes.EXECUTION_CREATE_SKIPPED: "gate",
-    EventTypes.ENTRY_INITIAL_DISTANCE_GATE_BLOCKED: "entry",
-    EventTypes.ENTRY_INITIAL_DISTANCE_GATE_CLEARED: "entry",
     EventTypes.ENTRY_MIN_EFFECTIVE_COST_BLOCKED: "entry",
     EventTypes.EXECUTION_CANCEL_SUCCEEDED: "order",
     EventTypes.EXECUTION_CANCEL_FAILED: "order",
@@ -1285,35 +1301,6 @@ def format_market_snapshot_diagnostic_console(
         + _bounded_pre_create_skip_console_token(reason_code, limit=64)
     )
     return " ".join(parts)[:_MARKET_SNAPSHOT_DIAGNOSTIC_CONSOLE_RECORD_LIMIT]
-
-
-def _console_entry_gate_summary(event: LiveEvent) -> list[str]:
-    data = event.data if isinstance(event.data, Mapping) else {}
-    parts: list[str] = []
-    action = _data_str(data, "action")
-    if action:
-        parts.append(f"action={action}")
-    order_type = _data_str(data, "order_type")
-    if order_type:
-        parts.append(f"type={order_type}")
-    qty = _data_float(data, "qty")
-    price = _data_float(data, "price")
-    market = _data_float(data, "market_price")
-    if qty:
-        parts.append(f"qty={qty}")
-    if price:
-        parts.append(f"price={price}")
-    if market:
-        parts.append(f"market={market}")
-    for label, key in (
-        ("dist", "distance_pct"),
-        ("threshold", "threshold_pct"),
-        ("tolerance", "tolerance_pct"),
-    ):
-        value = _data_number(data, key)
-        if value is not None:
-            parts.append(f"{label}={value:.4f}%")
-    return parts
 
 
 def _console_min_effective_cost_summary(event: LiveEvent) -> list[str]:
@@ -2178,11 +2165,6 @@ def _console_data_summary(event: LiveEvent) -> list[str]:
         EventTypes.EXECUTION_CREATE_SKIPPED,
     }:
         return _console_create_filter_summary(event)
-    if event.event_type in {
-        EventTypes.ENTRY_INITIAL_DISTANCE_GATE_BLOCKED,
-        EventTypes.ENTRY_INITIAL_DISTANCE_GATE_CLEARED,
-    }:
-        return _console_entry_gate_summary(event)
     if event.event_type == EventTypes.ENTRY_MIN_EFFECTIVE_COST_BLOCKED:
         return _console_min_effective_cost_summary(event)
     if event.event_type in {
@@ -2649,101 +2631,6 @@ def format_ema_unavailable_console(data: Mapping[str, Any]) -> str:
     return " ".join(parts)
 
 
-_INITIAL_ENTRY_DISTANCE_GATE_CONSOLE_RECORD_LIMIT = 188
-_INITIAL_ENTRY_DISTANCE_GATE_CONSOLE_CYCLE_LIMIT = 24
-_INITIAL_ENTRY_DISTANCE_GATE_CONSOLE_SYMBOL_LIMIT = 24
-_INITIAL_ENTRY_DISTANCE_GATE_CONSOLE_PSIDE_LIMIT = 8
-_INITIAL_ENTRY_DISTANCE_GATE_CONSOLE_TYPE_LIMIT = 32
-
-
-def _bounded_initial_entry_distance_gate_console_text(
-    value: object, *, limit: int
-) -> str:
-    """Return a sanitized, bounded display token for the gate projection."""
-    return _format_console_label(value).replace(" ", "-")[:limit] or "-"
-
-
-def _format_initial_entry_distance_gate_console_pct(value: float | None) -> str:
-    if value is None or not math.isfinite(value):
-        return "-"
-    return f"{value:.4f}"
-
-
-def _format_initial_entry_distance_gate_console(event: LiveEvent) -> str:
-    """Render a compact blocked or cleared initial-entry distance-gate transition."""
-    data = event.data if isinstance(event.data, Mapping) else {}
-    transition = (
-        "blocked"
-        if event.event_type == EventTypes.ENTRY_INITIAL_DISTANCE_GATE_BLOCKED
-        else "cleared"
-    )
-    parts = ["[entry]", transition]
-    cycle_candidate = (
-        (
-            "cy="
-            + _bounded_initial_entry_distance_gate_console_text(
-                event.cycle_id,
-                limit=_INITIAL_ENTRY_DISTANCE_GATE_CONSOLE_CYCLE_LIMIT,
-            ),
-        )
-        if event.cycle_id
-        else ()
-    )
-    tolerance_candidate = (
-        "tol="
-        + _format_initial_entry_distance_gate_console_pct(
-            _data_number(data, "tolerance_pct")
-        )
-        + "%",
-    ) if "tolerance_pct" in data else ()
-    aggregate_candidates = (
-        "active=" + str(min(max(_data_int(data, "active_count") or 0, 0), 999)),
-        "sup=" + str(min(max(_data_int(data, "suppressed_count") or 0, 0), 999)),
-    ) if (
-        event.event_type == EventTypes.ENTRY_INITIAL_DISTANCE_GATE_BLOCKED
-        and ("active_count" in data or "suppressed_count" in data)
-    ) else ()
-    candidates = (
-        *cycle_candidate,
-        "symbol="
-        + _bounded_initial_entry_distance_gate_console_text(
-            event.symbol, limit=_INITIAL_ENTRY_DISTANCE_GATE_CONSOLE_SYMBOL_LIMIT
-        ),
-        "pside="
-        + _bounded_initial_entry_distance_gate_console_text(
-            event.pside, limit=_INITIAL_ENTRY_DISTANCE_GATE_CONSOLE_PSIDE_LIMIT
-        ),
-        "type="
-        + _bounded_initial_entry_distance_gate_console_text(
-            _data_str(data, "order_type"),
-            limit=_INITIAL_ENTRY_DISTANCE_GATE_CONSOLE_TYPE_LIMIT,
-        ),
-        f"q={_format_console_number(_data_number(data, 'qty'))}",
-        f"px={_format_console_number(_data_number(data, 'price'))}",
-        f"mkt={_format_console_number(_data_number(data, 'market_price'))}",
-        "d="
-        + _format_initial_entry_distance_gate_console_pct(
-            _data_number(data, "distance_pct")
-        )
-        + "%",
-        "max="
-        + _format_initial_entry_distance_gate_console_pct(
-            _data_number(data, "threshold_pct")
-        )
-        + "%",
-        *tolerance_candidate,
-        *aggregate_candidates,
-    )
-    for candidate in candidates:
-        if (
-            len(" ".join((*parts, candidate)))
-            > _INITIAL_ENTRY_DISTANCE_GATE_CONSOLE_RECORD_LIMIT
-        ):
-            break
-        parts.append(candidate)
-    return " ".join(parts)
-
-
 _FORAGER_ELIGIBILITY_CONSOLE_RECORD_LIMIT = 188
 _FORAGER_ELIGIBILITY_CONSOLE_TOKEN_LIMIT = 16
 _FORAGER_ELIGIBILITY_CONSOLE_SAMPLE_LIMIT = 3
@@ -2869,11 +2756,6 @@ def format_console_event(event: LiveEvent) -> str:
         and event.reason_code in _PRE_CREATE_SKIP_REASON_CODES
     ):
         return _format_pre_create_skip_console(event)
-    if event.event_type in {
-        EventTypes.ENTRY_INITIAL_DISTANCE_GATE_BLOCKED,
-        EventTypes.ENTRY_INITIAL_DISTANCE_GATE_CLEARED,
-    }:
-        return _format_initial_entry_distance_gate_console(event)
     if event.event_type == EventTypes.STATE_REFRESH_TIMING:
         data = event.data if isinstance(event.data, Mapping) else {}
         return format_state_refresh_timing_console(data)

@@ -1,11 +1,10 @@
-import types
-
 import pytest
 
 from live import event_emitters, executor, market_data, reconciler
 from live.event_bus import EventTypes, ListEventSink, LiveEvent, LiveEventPipeline
 from live.fresh_entry_eligibility import FreshEntryEligibilityTrace
 from live.market_snapshot import MarketSnapshot
+from live.order_churn_gate import OrderChurnGateState
 from passivbot import Passivbot
 
 
@@ -84,14 +83,10 @@ def _reconciliation_bot(symbol: str, actual_orders: list[dict]) -> Passivbot:
     bot._apply_freshness_creation_guardrails = lambda create: (create, 0)
     bot._order_plan_summary_is_interesting = lambda **kwargs: False
 
-    async def keep_initials(self, orders):
-        return orders, 0
-
     async def keep_sort(self, orders, _label):
         return orders
 
-    bot._apply_initial_entry_distance_gate = types.MethodType(keep_initials, bot)
-    bot._sort_orders_by_market_diff = types.MethodType(keep_sort, bot)
+    bot._sort_orders_by_market_diff = keep_sort.__get__(bot, Passivbot)
     return bot
 
 
@@ -125,23 +120,8 @@ async def test_reconciliation_trace_distinguishes_satisfied_and_no_candidate():
 
 
 @pytest.mark.asyncio
-async def test_reconciliation_trace_observes_distance_block_and_protective_only():
+async def test_reconciliation_trace_observes_protective_only():
     symbol = "BTC/USDT:USDT"
-    bot = _reconciliation_bot(symbol, [])
-
-    async def block_initials(self, orders):
-        return [], len(orders)
-
-    bot._apply_initial_entry_distance_gate = types.MethodType(block_initials, bot)
-    await reconciler.calc_orders_to_cancel_and_create_from_ideal(
-        bot, {symbol: [_initial(symbol)]}
-    )
-    data = bot._fresh_entry_eligibility_trace.to_event_data()
-    assert data["records"][0]["outcome"] == "blocked_candidate"
-    assert data["records"][0]["reason_counts"] == {
-        "initial_entry_distance_gate": 1
-    }
-
     protective_bot = _reconciliation_bot(symbol, [])
     await reconciler.calc_orders_to_cancel_and_create_from_ideal(
         protective_bot, {symbol: [_protective(symbol)]}
@@ -153,6 +133,35 @@ async def test_reconciliation_trace_observes_distance_block_and_protective_only(
     }
 
 
+@pytest.mark.asyncio
+async def test_malformed_open_order_snapshot_blocks_every_account_action():
+    malformed_symbol = "BTC/USDT:USDT"
+    healthy_symbol = "ETH/USDT:USDT"
+    stale_actual = _initial(healthy_symbol, price=90.0)
+    bot = _reconciliation_bot(healthy_symbol, [stale_actual])
+    bot.active_symbols = [malformed_symbol, healthy_symbol]
+    bot.PB_modes["long"][malformed_symbol] = "normal"
+    bot.PB_modes["short"][malformed_symbol] = "normal"
+
+    def snapshot(*_args, **_kwargs):
+        bot._malformed_actual_order_symbols = {malformed_symbol}
+        bot._malformed_actual_order_counts = {malformed_symbol: 1}
+        return {malformed_symbol: [], healthy_symbol: [stale_actual]}
+
+    bot._snapshot_actual_orders = snapshot
+    to_cancel, to_create = await reconciler.calc_orders_to_cancel_and_create_from_ideal(
+        bot,
+        {
+            malformed_symbol: [_protective(malformed_symbol)],
+            healthy_symbol: [_initial(healthy_symbol, price=100.0)],
+        },
+        apply_mode_filters=False,
+    )
+
+    assert to_cancel == []
+    assert to_create == []
+
+
 class _CreateBot:
     def __init__(self, trace: FreshEntryEligibilityTrace):
         self._fresh_entry_eligibility_trace = trace
@@ -162,8 +171,11 @@ class _CreateBot:
         self.submitted: list[dict] = []
 
     def live_value(self, key):
-        assert key == "max_n_creations_per_batch"
-        return 1
+        return {
+            "max_n_creations_per_batch": 1,
+            "order_replacement_churn_gate_activation_count": 10,
+            "order_replacement_churn_gate_window_minutes": 10.0,
+        }[key]
 
     def get_exchange_time(self):
         return 123456
@@ -176,6 +188,9 @@ class _CreateBot:
 
     def _is_market_execution_order(self, _order):
         return False
+
+    def _resolve_pb_order_type(self, order):
+        return str(order.get("pb_order_type") or "unknown")
 
     async def execute_orders(self, orders):
         self.submitted = list(orders)
@@ -393,3 +408,45 @@ async def test_eligibility_emitter_failure_cannot_change_connector_batch(monkeyp
     assert bot.submitted == [order]
     assert len(result) == 1
     assert bot._fresh_entry_eligibility_trace is None
+
+
+@pytest.mark.asyncio
+async def test_connector_bound_create_attempt_is_counted_once_even_when_ambiguous(
+    monkeypatch,
+):
+    order = _initial("BTC/USDT:USDT")
+    bot = _CreateBot(FreshEntryEligibilityTrace())
+    bot._order_churn_gate_state = OrderChurnGateState()
+
+    async def fail_batch(_orders):
+        raise RuntimeError("ambiguous connector failure")
+
+    bot.execute_orders = fail_batch
+    bot.add_to_recent_order_executions = lambda _order: None
+    bot._record_order_churn_signed_action_attempts = lambda count: (
+        "create-action",
+    )
+    completed_signed_actions = []
+    bot._complete_order_churn_signed_action_attempts = (
+        lambda tokens: completed_signed_actions.append(tokens)
+    )
+    emitted = []
+    bot._emit_order_churn_actions_accounted_event = lambda **kwargs: emitted.append(
+        kwargs
+    )
+    monkeypatch.setattr(Passivbot, "_record_emitted_order_custom_id", lambda *args, **kwargs: None)
+    monkeypatch.setattr(Passivbot, "_emit_execution_order_event", lambda *args, **kwargs: None)
+
+    with pytest.raises(RuntimeError, match="ambiguous connector failure"):
+        await executor.execute_orders_parent(bot, [order])
+
+    assert len(bot._order_churn_gate_state.action_attempt_timestamps) == 1
+    assert completed_signed_actions == []
+    assert emitted == [
+        {
+            "action_count": 1,
+            "action_kind": "create",
+            "rolling_count": 1,
+            "wave": {"event_id": "ow_1"},
+        }
+    ]

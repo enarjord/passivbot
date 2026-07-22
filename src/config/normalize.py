@@ -74,6 +74,15 @@ def normalize_config(
             tracker.add([section], result[section])
     for path in ("backtest", "bot", "live", "optimize"):
         require_config_dict(result, path)
+    if "initial_entry_exec_max_market_dist_pct" in result["live"]:
+        raise ValueError(
+            "config.live.initial_entry_exec_max_market_dist_pct has been retired; use "
+            "config.live.order_replacement_churn_gate_market_dist_pct together with "
+            "order_replacement_churn_gate_activation_count, "
+            "order_replacement_churn_gate_window_minutes, "
+            "order_replacement_churn_gate_stability_minutes, and "
+            "order_replacement_churn_gate_tracking_tolerance_pct"
+        )
     reject_legacy_flat_strategy_fields(result)
     apply_migrations(result, verbose=verbose, tracker=tracker)
     for key in ("approved_coins", "ignored_coins"):
