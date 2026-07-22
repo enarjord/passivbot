@@ -50,7 +50,9 @@ class _Bot:
     def _is_market_execution_order(self, order: dict) -> bool:
         return order.get("type") == "market"
 
-    async def _fetch_fresh_order_churn_market_prices(self, symbols: set[str]):
+    async def _fetch_fresh_order_churn_market_prices(
+        self, symbols: set[str], *, max_age_ms: int = 10_000
+    ):
         return {symbol: self.prices.get(symbol) for symbol in symbols}
 
     async def _order_churn_far_create_headroom(self):
@@ -155,6 +157,30 @@ async def test_far_candidate_cannot_consume_headroom_needed_by_later_exempt_orde
     assert [order["name"] for order in admitted] == ["near"]
     assert far["_churn_gate_reason"] == "action_headroom_exhausted"
     assert near["_churn_gate_reason"] == "market_distance_exempt"
+
+
+@pytest.mark.asyncio
+async def test_far_candidate_reserves_required_config_action_with_create():
+    bot = _Bot()
+    bot.action_headroom = 2
+    far = _order("far", price=99.0)
+
+    admitted = await _apply_order_churn_final_admission(
+        bot,
+        [far],
+        config_action_costs_by_symbol={far["symbol"]: 1},
+    )
+
+    assert admitted == []
+    assert far["_churn_gate_reason"] == "action_headroom_exhausted"
+
+    bot.action_headroom = 3
+    admitted = await _apply_order_churn_final_admission(
+        bot,
+        [far],
+        config_action_costs_by_symbol={far["symbol"]: 1},
+    )
+    assert admitted == [far]
 
 
 @pytest.mark.asyncio

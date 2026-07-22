@@ -14,7 +14,9 @@ All notable user-facing changes will be documented in this file.
   supported connectors, including OKX long/short mode, KuCoin open orders, and Gate.io's native
   `is_reduce_only` field. Supported hedge-mode adapters no longer substitute client-order metadata
   for a missing exchange-native position side, and untrusted Hyperliquid WebSocket order rows
-  trigger authoritative account-state refresh instead of reconnect churn.
+  trigger authoritative account-state refresh instead of reconnect churn. Hyperliquid admission
+  reserves required signed configuration actions with creates, and churn distance is rechecked from
+  a forced-fresh market read after configuration before any create call.
 - Non-panic protective reducers may now coexist with compatible ordinary grid, trailing, or
   EMA-anchor closes for the same position. Passivbot still selects only one protective reducer,
   keeps panic close exclusive, reserves reducer quantity before trimming ordinary closes, and caps

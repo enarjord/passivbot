@@ -162,7 +162,13 @@ def _orders_removed_by_identity(before: list[dict], after: list[dict]) -> list[d
     return removed
 
 
-async def _apply_order_churn_final_admission(bot, orders: list[dict]) -> list[dict]:
+async def _apply_order_churn_final_admission(
+    bot,
+    orders: list[dict],
+    *,
+    config_action_costs_by_symbol: dict[str, int] | None = None,
+    market_price_max_age_ms: int = 10_000,
+) -> list[dict]:
     if not orders:
         return []
     if not connector_supports_order_churn_gate(bot):
@@ -229,7 +235,8 @@ async def _apply_order_churn_final_admission(bot, orders: list[dict]) -> list[di
                     str(order.get("symbol"))
                     for order in churn_limit_orders
                     if order.get("symbol")
-                }
+                },
+                max_age_ms=market_price_max_age_ms,
             )
         except Exception as exc:
             logging.warning(
@@ -268,12 +275,14 @@ async def _apply_order_churn_final_admission(bot, orders: list[dict]) -> list[di
             continue
         order["_churn_gate_market_distance"] = signed_distance
         admission[id(order)] = ("ready", signed_distance <= threshold)
+    config_action_costs_by_symbol = config_action_costs_by_symbol or {}
     selected: list[dict] = []
     deferred: list[dict] = []
     capacity_deferred: list[dict] = []
     action_headroom: float | int | None = None
     action_headroom_checked = False
     projected_signed_actions = 0
+    projected_config_symbols: set[str] = set()
     for order_index, order in enumerate(prioritized_orders):
         if len(selected) >= max_batch:
             capacity_deferred.append(order)
@@ -316,12 +325,28 @@ async def _apply_order_churn_final_admission(bot, orders: list[dict]) -> list[di
                 order["_churn_gate_reason"] = "action_headroom_unavailable"
                 continue
             remaining_slots = max(0, max_batch - len(selected))
-            future_always_allowed = sum(
-                1
+            future_always_allowed = [
+                future
                 for future in prioritized_orders[order_index + 1 :]
                 if admission[id(future)] == ("ready", True)
+            ][:remaining_slots]
+            budgeted_orders = [order, *future_always_allowed]
+            budgeted_config_symbols = {
+                str(candidate.get("symbol"))
+                for candidate in budgeted_orders
+                if str(candidate.get("symbol")) not in projected_config_symbols
+                and int(
+                    config_action_costs_by_symbol.get(
+                        str(candidate.get("symbol")), 0
+                    )
+                    or 0
+                )
+                > 0
+            }
+            reserved_headroom = len(budgeted_orders) + sum(
+                int(config_action_costs_by_symbol[symbol])
+                for symbol in budgeted_config_symbols
             )
-            reserved_headroom = min(remaining_slots, future_always_allowed)
             if not math.isinf(float(action_headroom)) and (
                 float(action_headroom)
                 - projected_signed_actions
@@ -345,6 +370,14 @@ async def _apply_order_churn_final_admission(bot, orders: list[dict]) -> list[di
         selected.append(order)
         projected_usage += 1
         projected_signed_actions += 1
+        symbol = str(order.get("symbol"))
+        if symbol not in projected_config_symbols:
+            config_action_cost = int(
+                config_action_costs_by_symbol.get(symbol, 0) or 0
+            )
+            if config_action_cost > 0:
+                projected_signed_actions += config_action_cost
+                projected_config_symbols.add(symbol)
     if deferred:
         logging.info(
             "[order] churn gate deferred %d far unstable creates | rolling_usage=%d activation_count=%d",
@@ -798,8 +831,24 @@ async def execute_order_plan(
                 order_wave["skipped_create"] += max(
                     0, before_state_filter - len(to_create_mod)
                 )
+        config_action_costs_by_symbol = {}
+        if to_create_mod and configure_creations:
+            config_cost_estimator = getattr(
+                bot, "_order_churn_precreate_signed_action_costs", None
+            )
+            if callable(config_cost_estimator):
+                config_action_costs_by_symbol = (
+                    config_cost_estimator(
+                        {str(order["symbol"]) for order in to_create_mod}
+                    )
+                    or {}
+                )
         before_churn_admission = list(to_create_mod)
-        to_create_mod = await _apply_order_churn_final_admission(bot, to_create_mod)
+        to_create_mod = await _apply_order_churn_final_admission(
+            bot,
+            to_create_mod,
+            config_action_costs_by_symbol=config_action_costs_by_symbol,
+        )
         if order_wave is not None:
             order_wave["deferred_create"] += max(
                 0, len(before_churn_admission) - len(to_create_mod)
@@ -869,6 +918,15 @@ async def execute_order_plan(
         if order_wave is not None:
             order_wave["skipped_create"] += max(
                 0, before_market_filter - len(to_create_mod)
+            )
+        before_post_config_churn_admission = list(to_create_mod)
+        to_create_mod = await _apply_order_churn_final_admission(
+            bot, to_create_mod, market_price_max_age_ms=0
+        )
+        if order_wave is not None:
+            order_wave["deferred_create"] += max(
+                0,
+                len(before_post_config_churn_admission) - len(to_create_mod),
             )
         if to_create_mod:
             res = None

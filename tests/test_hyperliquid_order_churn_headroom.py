@@ -98,3 +98,12 @@ def test_expired_snapshot_discards_obsolete_local_debits(monkeypatch):
 
     assert bot._hl_order_churn_rate_snapshot is None
     assert bot._hl_order_churn_local_action_timestamps == []
+
+
+def test_precreate_cost_counts_only_unconfigured_symbols():
+    bot = object.__new__(HyperliquidBot)
+    bot.already_updated_exchange_config_symbols = {"BTC/USDC:USDC"}
+
+    assert bot._order_churn_precreate_signed_action_costs(
+        {"BTC/USDC:USDC", "ETH/USDC:USDC"}
+    ) == {"ETH/USDC:USDC": 1}

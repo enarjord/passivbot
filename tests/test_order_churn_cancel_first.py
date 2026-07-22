@@ -71,6 +71,9 @@ class _PlanBot:
     async def update_exchange_configs(self, symbols):
         return set(symbols)
 
+    def _order_churn_precreate_signed_action_costs(self, _symbols):
+        return {}
+
 
 @pytest.fixture
 def execution_shell(monkeypatch):
@@ -199,11 +202,14 @@ async def test_churn_admission_defers_before_exchange_config_writes(execution_sh
             "max_n_creations_per_batch": 20,
         }[key]
 
-    async def fetch_prices(symbols):
+    async def fetch_prices(symbols, *, max_age_ms=10_000):
         return {symbol: 100.0 for symbol in symbols}
 
-    async def no_headroom():
-        return 0
+    async def config_plus_create_headroom_only():
+        return 2
+
+    def config_action_costs(symbols):
+        return {symbol: 1 for symbol in symbols}
 
     async def update_configs(symbols):
         bot.configured.append(list(symbols))
@@ -211,7 +217,8 @@ async def test_churn_admission_defers_before_exchange_config_writes(execution_sh
 
     bot.live_value = live_value
     bot._fetch_fresh_order_churn_market_prices = fetch_prices
-    bot._order_churn_far_create_headroom = no_headroom
+    bot._order_churn_far_create_headroom = config_plus_create_headroom_only
+    bot._order_churn_precreate_signed_action_costs = config_action_costs
     bot.update_exchange_configs = update_configs
     desired = _order("desired")
     desired["price"] = 90.0
@@ -222,3 +229,51 @@ async def test_churn_admission_defers_before_exchange_config_writes(execution_sh
     assert bot.configured == []
     assert bot.created == []
     assert desired["_churn_gate_reason"] == "action_headroom_exhausted"
+
+
+@pytest.mark.asyncio
+async def test_churn_admission_rechecks_after_config_market_move(execution_shell):
+    bot = _PlanBot()
+    bot._order_churn_gate_state = OrderChurnGateState()
+    bot._order_churn_gate_state.record_create_attempts(
+        10, now_monotonic=executor.time.monotonic()
+    )
+    bot.configured = []
+    prices = iter((100.0, 101.0))
+
+    def live_value(key):
+        return {
+            "order_replacement_churn_gate_activation_count": 10,
+            "order_replacement_churn_gate_window_minutes": 10.0,
+            "order_replacement_churn_gate_market_dist_pct": 0.005,
+            "max_n_creations_per_batch": 20,
+        }[key]
+
+    requested_max_ages = []
+
+    async def fetch_prices(symbols, *, max_age_ms=10_000):
+        requested_max_ages.append(max_age_ms)
+        price = next(prices)
+        return {symbol: price for symbol in symbols}
+
+    async def unlimited_headroom():
+        return float("inf")
+
+    async def update_configs(symbols):
+        bot.configured.append(list(symbols))
+        return set(symbols)
+
+    bot.live_value = live_value
+    bot._fetch_fresh_order_churn_market_prices = fetch_prices
+    bot._order_churn_far_create_headroom = unlimited_headroom
+    bot.update_exchange_configs = update_configs
+    desired = _order("desired")
+    desired["price"] = 99.8
+    desired["_churn_evidence"] = True
+
+    await executor.execute_order_plan(bot, [], [desired])
+
+    assert bot.configured == [[desired["symbol"]]]
+    assert bot.created == []
+    assert desired["_churn_gate_reason"] == "allowance_exhausted"
+    assert requested_max_ages == [10_000, 0]

@@ -8842,6 +8842,10 @@ class Passivbot:
                         await asyncio.sleep(pause_s)
         return configured_symbols
 
+    def _order_churn_precreate_signed_action_costs(self, symbols) -> dict[str, int]:
+        """Return connector signed-action costs required before creating on symbols."""
+        return {}
+
     def _is_rate_limit_like_exception(self, exc: Exception) -> bool:
         if isinstance(exc, RateLimitExceeded):
             return True
@@ -17884,14 +17888,14 @@ class Passivbot:
         return math.inf
 
     async def _fetch_fresh_order_churn_market_prices(
-        self, symbols: set[str]
+        self, symbols: set[str], *, max_age_ms: int = 10_000
     ) -> dict[str, float]:
         """Fetch final-admission prices without a completed-candle fallback."""
         if not symbols:
             return {}
         return await self._get_live_last_prices(
             symbols,
-            max_age_ms=10_000,
+            max_age_ms=max(0, int(max_age_ms)),
             context="order_churn_final_admission",
             allow_completed_candle_fallback=False,
         )

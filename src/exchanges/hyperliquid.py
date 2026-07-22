@@ -181,6 +181,16 @@ class HyperliquidBot(CCXTBot):
         finally:
             self._hl_order_churn_rate_request_started_monotonic = 0.0
 
+    def _order_churn_precreate_signed_action_costs(self, symbols) -> dict[str, int]:
+        configured = set(
+            getattr(self, "already_updated_exchange_config_symbols", set()) or set()
+        )
+        return {
+            str(symbol): 1
+            for symbol in symbols
+            if str(symbol) not in configured
+        }
+
     def _hl_state_fetch_concurrency(self) -> int:
         """Bound internal Hyperliquid account-state fanout to avoid rate-limit spikes."""
         return 4

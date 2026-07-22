@@ -543,8 +543,17 @@ Distance decisions made during planning are provisional. After cancellations and
 barriers, recheck fresh signed distance before any candidate-specific exchange configuration or
 margin write. A candidate that moved near is admitted; one that moved far must have capacity or be
 deferred. Missing/non-finite/stale market data defers an affected ordinary create. Only admitted
-candidates may cause exchange configuration work; the existing final market-snapshot safety guard
-still runs after configuration and immediately before the connector create call.
+candidates may cause exchange configuration work. For connectors whose configuration mutates the
+same account action budget, the first admission reserves the required configuration actions and the
+create together; configuration costs shared by multiple creates on one symbol count once.
+
+After configuration, retain the existing final market-snapshot safety guard and then rerun churn
+distance from a forced-fresh, no-candle-fallback market read plus allowance/headroom admission
+immediately before the connector create call. Completed
+configuration actions are debited as observed local actions and are not reserved a second time. A
+candidate that moved from near to far during configuration is deferred unless ordinary capacity
+still exists; a deferred candidate may therefore have configuration work only when it passed the
+earlier reservation-backed admission and was invalidated by a later market move or capacity change.
 
 Use the existing side-aware convention: `1 - order_price / market_price` for buys and
 `order_price / market_price - 1` for sells. Admit when the result is less than or equal to the
@@ -1058,6 +1067,9 @@ events use bounded periodic summaries.
 - Recheck final fresh distance.
 - Apply churn admission before candidate-specific exchange configuration or margin writes; deferred
   candidates must cause neither configuration mutations nor create attempts.
+- Reserve connector-reported signed configuration costs together with creates, then rerun churn
+  admission with a forced-fresh market read after configuration and the existing market-snapshot
+  guard immediately before create.
 - Apply allowance reservations atomically at connector boundary.
 - Add Hyperliquid authoritative action-headroom refresh and local logical-action debits without
   delaying cancellations or exempt actions.
