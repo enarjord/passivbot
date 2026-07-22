@@ -446,13 +446,33 @@ async def _apply_order_churn_final_admission(
                 projected_signed_actions += config_action_cost
                 projected_config_symbols.add(symbol)
     if deferred:
-        logging.info(
-            "[order] churn gate deferred %d far unstable creates | rolling_usage=%d activation_count=%d",
+        rolling_count = state.action_attempt_count(
+            now_monotonic=now_monotonic, window_seconds=window_seconds
+        )
+        console_signature = tuple(
+            sorted(
+                (
+                    str(order.get("_churn_gate_reason") or ""),
+                    str(order.get("symbol") or ""),
+                    str(order.get("position_side") or ""),
+                    str(order.get("pb_order_type") or ""),
+                )
+                for order in deferred
+            )
+        )
+        should_log, suppressed = state.should_log_console_event(
+            "create_deferred",
+            console_signature,
+            now_monotonic=now_monotonic,
+        )
+        log = logging.info if should_log else logging.debug
+        log(
+            "[order] churn gate deferred %d far unstable creates | rolling_usage=%d "
+            "activation_count=%d suppressed_repeats=%d",
             len(deferred),
-            state.action_attempt_count(
-                now_monotonic=now_monotonic, window_seconds=window_seconds
-            ),
+            rolling_count,
             activation_count,
+            suppressed,
         )
         _record_fresh_entry_orders(bot, "record_blocked_orders", deferred, "order_churn_gate")
         reason_codes = {

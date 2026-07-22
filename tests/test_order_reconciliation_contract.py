@@ -79,22 +79,34 @@ def test_supported_hedge_orders_do_not_fabricate_pside_from_client_id(bot_cls):
         bot._get_position_side_for_order(order)
 
 
-def test_weex_prefers_and_verifies_response_close_only_semantics():
+@pytest.mark.parametrize(
+    ("side", "position_side", "reported_reduce_only", "expected_close"),
+    [
+        ("buy", "LONG", False, False),
+        ("sell", "SHORT", False, False),
+        # WEEX V3 COMBINED has been observed returning reduceOnly=false for
+        # ordinary closes even though side + positionSide closes the position.
+        ("sell", "LONG", False, True),
+        ("buy", "SHORT", False, True),
+        # The response field is not part of the V3 placement contract, so the
+        # authoritative action tuple also wins when that literal is true.
+        ("buy", "LONG", True, False),
+    ],
+)
+def test_weex_uses_v3_action_tuple_not_response_reduce_only_literal(
+    side, position_side, reported_reduce_only, expected_close
+):
     bot = WeexBot.__new__(WeexBot)
-    close = {
-        "side": "sell",
-        "reduceOnly": True,
-        "info": {"positionSide": "LONG", "reduceOnly": True},
+    order = {
+        "side": side,
+        "reduceOnly": reported_reduce_only,
+        "info": {
+            "side": side.upper(),
+            "positionSide": position_side,
+            "reduceOnly": reported_reduce_only,
+        },
     }
-    assert bot._canonical_open_order_reduce_only(close) is True
-
-    contradictory = {
-        "side": "sell",
-        "reduceOnly": False,
-        "info": {"positionSide": "LONG", "reduceOnly": False},
-    }
-    with pytest.raises(ValueError, match="contradicts"):
-        bot._canonical_open_order_reduce_only(contradictory)
+    assert bot._canonical_open_order_reduce_only(order) is expected_close
 
 
 def test_bitget_uta_uses_action_tuple_even_when_literal_reduce_only_is_false():
@@ -882,7 +894,7 @@ def test_hourly_market_refresh_changes_reset_symbol_compatibility_epoch(field, v
     assert reconciler._order_churn_symbol_compatibility_epochs(bot, {symbol}) != baseline
 
 
-def test_account_epoch_tracks_realized_rust_inputs_not_mark_to_market_fields():
+def test_account_epoch_tracks_realized_and_global_inputs_not_scoped_runtime_policy():
     symbol = "BTC/USDT:USDT"
 
     class Bot:
@@ -935,17 +947,83 @@ def test_account_epoch_tracks_realized_rust_inputs_not_mark_to_market_fields():
     bot.positions[symbol]["long"]["liquidation_price"] = 60.0
     assert reconciler._order_churn_account_epoch(bot) == baseline
 
+    bot.raw_balance = 101.0
+    assert reconciler._order_churn_account_epoch(bot) != baseline
+    bot.raw_balance = 100.0
+    bot.snapped_balance = 101.0
+    assert reconciler._order_churn_account_epoch(bot) != baseline
+    bot.snapped_balance = 100.0
+
     bot.positions[symbol]["long"]["size"] = 1.1
     assert reconciler._order_churn_account_epoch(bot) != baseline
     bot.positions[symbol]["long"]["size"] = 1.0
     bot.pnl_last = 1.1
     assert reconciler._order_churn_account_epoch(bot) != baseline
     bot.pnl_last = 1.0
-    bot.active_symbols = [symbol, "ETH/USDT:USDT"]
+    bot.config["live"]["execution_delay_seconds"] = 3.0
     assert reconciler._order_churn_account_epoch(bot) != baseline
+    bot.config["live"]["execution_delay_seconds"] = 2.0
+    # Runtime forager/mode/list changes are symbol-scoped: resetting them
+    # account-wide lets a rotating empty slot erase unrelated churn evidence.
+    bot.active_symbols = [symbol, "ETH/USDT:USDT"]
+    bot.PB_modes["long"][symbol] = "graceful_stop"
+    bot.approved_coins["long"].clear()
+    bot.ignored_coins["long"].add(symbol)
+    bot.approved_coins_minus_ignored_coins["long"].clear()
+    assert reconciler._order_churn_account_epoch(bot) == baseline
 
-    bot.active_symbols = [symbol]
     bot._authoritative_surface_signatures = {"fills": ((1, "fill-a"),)}
     with_fill_signature = reconciler._order_churn_account_epoch(bot)
     bot._authoritative_surface_signatures["fills"] = ((1, "fill-b"),)
     assert reconciler._order_churn_account_epoch(bot) != with_fill_signature
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "mode",
+        "approved",
+        "ignored",
+        "approved_minus_ignored",
+        "active",
+    ],
+)
+def test_runtime_policy_changes_reset_only_the_affected_symbol_epoch(mutation):
+    btc = "BTC/USDT:USDT"
+    eth = "ETH/USDT:USDT"
+
+    class Bot:
+        price_steps = {btc: 0.1, eth: 0.01}
+        qty_steps = {btc: 0.001, eth: 0.01}
+        min_qtys = {btc: 0.001, eth: 0.01}
+        min_costs = {btc: 5.0, eth: 5.0}
+        c_mults = {btc: 1.0, eth: 1.0}
+        markets_dict = {btc: {"active": True}, eth: {"active": True}}
+        PB_modes = {
+            "long": {btc: "normal", eth: "normal"},
+            "short": {btc: "normal", eth: "normal"},
+        }
+        approved_coins = {"long": {btc, eth}, "short": {btc, eth}}
+        ignored_coins = {"long": set(), "short": set()}
+        approved_coins_minus_ignored_coins = {
+            "long": {btc, eth},
+            "short": {btc, eth},
+        }
+        active_symbols = [btc, eth]
+
+    bot = Bot()
+    baseline = reconciler._order_churn_symbol_compatibility_epochs(bot, {btc, eth})
+    if mutation == "mode":
+        bot.PB_modes["long"][btc] = "graceful_stop"
+    elif mutation == "approved":
+        bot.approved_coins["long"].remove(btc)
+    elif mutation == "ignored":
+        bot.ignored_coins["long"].add(btc)
+    elif mutation == "approved_minus_ignored":
+        bot.approved_coins_minus_ignored_coins["long"].remove(btc)
+    else:
+        bot.active_symbols.remove(btc)
+
+    changed = reconciler._order_churn_symbol_compatibility_epochs(bot, {btc, eth})
+    assert changed[btc] != baseline[btc]
+    assert changed[eth] == baseline[eth]

@@ -157,6 +157,12 @@ from collections import defaultdict, Counter
 from sortedcontainers import SortedDict
 
 
+# The execution loop may wait this long for a websocket-triggered replan after
+# its configured execution delay. Churn-history cadence checks must include
+# this normal quiet-period wait or ordinary live operation breaks provenance.
+EXECUTION_SCHEDULED_WAIT_SECONDS = 30
+
+
 class FillHistoryCoverageUnavailable(RuntimeError):
     """Raised when live risk gates need fill history whose lookback is unproven."""
 
@@ -6345,7 +6351,7 @@ class Passivbot:
                     stage="execution_delay",
                 )
                 mark_phase("execution_delay", phase_start_ms)
-                sleep_duration = 30
+                sleep_duration = EXECUTION_SCHEDULED_WAIT_SECONDS
                 self._set_log_silence_watchdog_context(
                     phase="runtime", stage="scheduled_wait"
                 )

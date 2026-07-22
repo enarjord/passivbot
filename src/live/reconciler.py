@@ -43,6 +43,13 @@ def _utc_ms() -> int:
     return int(_utils_utc_ms())
 
 
+def _order_churn_max_generation_gap_seconds(bot) -> float:
+    """Return a cadence gap which includes the execution loop's quiet wait."""
+    execution_delay = float(bot.live_value("execution_delay_seconds"))
+    scheduled_wait = float(_pb_const("EXECUTION_SCHEDULED_WAIT_SECONDS"))
+    return max(10.0, 3.0 * (execution_delay + scheduled_wait))
+
+
 def _orders_removed_by_identity(before: list[dict], after: list[dict]) -> list[dict]:
     """Return objects removed by an existing filter without comparing mutable payloads."""
     remaining = Counter(id(order) for order in after)
@@ -1011,33 +1018,6 @@ def _order_churn_account_epoch(bot) -> tuple:
         separators=(",", ":"),
         default=str,
     )
-    modes = tuple(
-        (pside, str(symbol), str(mode))
-        for pside in ("long", "short")
-        for symbol, mode in sorted((getattr(bot, "PB_modes", {}) or {}).get(pside, {}).items())
-    )
-    approved = tuple(
-        (pside, tuple(sorted((getattr(bot, "approved_coins", {}) or {}).get(pside, set()))))
-        for pside in ("long", "short")
-    )
-    ignored = tuple(
-        (pside, tuple(sorted((getattr(bot, "ignored_coins", {}) or {}).get(pside, set()))))
-        for pside in ("long", "short")
-    )
-    approved_minus_ignored = tuple(
-        (
-            pside,
-            tuple(
-                sorted(
-                    (getattr(bot, "approved_coins_minus_ignored_coins", {}) or {}).get(
-                        pside, set()
-                    )
-                )
-            ),
-        )
-        for pside in ("long", "short")
-    )
-    active_symbols = tuple(sorted(getattr(bot, "active_symbols", []) or []))
     return (
         round(float(bot.get_hysteresis_snapped_balance()), 12),
         round(float(bot.get_raw_balance()), 12),
@@ -1046,11 +1026,6 @@ def _order_churn_account_epoch(bot) -> tuple:
         round(float(pnl_stats.get("max", 0.0) or 0.0), 12),
         round(float(pnl_stats.get("last", 0.0) or 0.0), 12),
         config_signature,
-        modes,
-        approved,
-        ignored,
-        approved_minus_ignored,
-        active_symbols,
         bool(getattr(bot, "_config_hedge_mode", False) and getattr(bot, "hedge_mode", False)),
     )
 
@@ -1059,6 +1034,23 @@ def _order_churn_symbol_compatibility_epochs(
     bot, symbols: Iterable[str]
 ) -> dict[str, tuple]:
     markets = getattr(bot, "markets_dict", {}) or {}
+    pb_modes = getattr(bot, "PB_modes", {}) or {}
+    approved = getattr(bot, "approved_coins", {}) or {}
+    ignored = getattr(bot, "ignored_coins", {}) or {}
+    approved_minus_ignored = (
+        getattr(bot, "approved_coins_minus_ignored_coins", {}) or {}
+    )
+    approved_by_pside = {
+        pside: set((approved.get(pside, {}) or {})) for pside in ("long", "short")
+    }
+    ignored_by_pside = {
+        pside: set((ignored.get(pside, {}) or {})) for pside in ("long", "short")
+    }
+    eligible_by_pside = {
+        pside: set((approved_minus_ignored.get(pside, {}) or {}))
+        for pside in ("long", "short")
+    }
+    active_symbols = set(getattr(bot, "active_symbols", []) or [])
     out: dict[str, tuple] = {}
     for symbol in sorted({str(symbol) for symbol in symbols if symbol}):
         market = markets.get(symbol, {}) if isinstance(markets, dict) else {}
@@ -1071,6 +1063,17 @@ def _order_churn_symbol_compatibility_epochs(
             float((getattr(bot, "min_costs", {}) or {}).get(symbol, 0.0) or 0.0),
             float((getattr(bot, "c_mults", {}) or {}).get(symbol, 1.0) or 1.0),
             bool(market.get("active", True)),
+            tuple(
+                (
+                    pside,
+                    str((pb_modes.get(pside, {}) or {}).get(symbol)),
+                    symbol in approved_by_pside[pside],
+                    symbol in ignored_by_pside[pside],
+                    symbol in eligible_by_pside[pside],
+                )
+                for pside in ("long", "short")
+            ),
+            symbol in active_symbols,
             json.dumps(
                 {
                     "precision": market.get("precision", {}),
@@ -1137,9 +1140,17 @@ def prepare_order_churn_evidence(
             "[order] churn evidence history initialized empty | reason=process_start"
         )
     elif reset:
-        logging.info(
-            "[order] churn evidence history reset | reason=account_epoch_changed reset_count=%d",
+        should_log, suppressed = state.should_log_console_event(
+            "history_reset_account_epoch",
+            "account_epoch_changed",
+            now_monotonic=time.monotonic(),
+        )
+        log = logging.info if should_log else logging.debug
+        log(
+            "[order] churn evidence history reset | reason=account_epoch_changed "
+            "reset_count=%d suppressed_repeats=%d",
             state.reset_count,
+            suppressed,
         )
     current_universe = set(ideal_orders)
     current_universe.update(getattr(bot, "active_symbols", []) or [])
@@ -1155,11 +1166,21 @@ def prepare_order_churn_evidence(
     )
     if scoped_resets:
         reset = True
-        logging.info(
-            "[order] churn evidence history reset | reason=symbol_market_metadata_changed "
-            "symbols=%s reset_count=%d",
+        # Dynamic forager selection may change different symbol pairs on each
+        # cycle. Keep that detail in the message and structured event without
+        # turning every new pair into an unthrottled INFO signature.
+        should_log, suppressed = state.should_log_console_event(
+            "history_reset_symbol_compatibility",
+            "symbol_compatibility_changed",
+            now_monotonic=time.monotonic(),
+        )
+        log = logging.info if should_log else logging.debug
+        log(
+            "[order] churn evidence history reset | reason=symbol_compatibility_changed "
+            "symbols=%s reset_count=%d suppressed_repeats=%d",
             _pb_attr("Passivbot")._log_symbols(sorted(scoped_resets), limit=8),
             state.reset_count,
+            suppressed,
         )
     if activation_count <= 0:
         state.history_by_symbol.clear()
@@ -1209,7 +1230,6 @@ def prepare_order_churn_evidence(
     stability_seconds = (
         float(bot.live_value("order_replacement_churn_gate_stability_minutes")) * 60.0
     )
-    execution_delay = float(bot.live_value("execution_delay_seconds"))
     decisions = state.evaluate_and_record(
         valid_ideals,
         generation=generation,
@@ -1220,7 +1240,7 @@ def prepare_order_churn_evidence(
         ),
         stability_seconds=stability_seconds,
         window_seconds=window_seconds,
-        max_generation_gap_seconds=max(10.0, 3.0 * execution_delay),
+        max_generation_gap_seconds=_order_churn_max_generation_gap_seconds(bot),
     )
     for orders in valid_ideals.values():
         for order in orders:

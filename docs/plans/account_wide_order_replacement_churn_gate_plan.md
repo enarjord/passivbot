@@ -351,17 +351,20 @@ the same logical presence answers at every relevant timestamp.
 ### Planning-policy compatibility
 
 History compatibility has both account-wide and scoped epochs because the Rust plan has
-account-wide dependencies. The account epoch covers exactly the non-market state passed to Rust
-that can change allocation: hysteresis-snapped wallet balance, raw realized wallet balance,
-per-symbol/position-side signed position size and average entry price, authoritative fill identity,
-the exact `realized_pnl_cumsum_max` and `realized_pnl_cumsum_last` values passed to Rust, global
-strategy/live configuration, effective hedge/one-way mode, approved/ignored sets, forager
-membership, and the complete effective `PB_modes` map. It excludes equity, available margin,
+account-wide dependencies. The account epoch covers hysteresis-snapped wallet balance, raw realized
+wallet balance, per-symbol/position-side signed position size and average entry price,
+authoritative fill identity, the exact `realized_pnl_cumsum_max` and
+`realized_pnl_cumsum_last` values passed to Rust, global strategy/live configuration, and effective
+hedge/one-way mode. It excludes equity, available margin,
 unrealized PnL, mark/liquidation price, mark-to-market notional, and other price-derived exchange
 fields. A change clears all ideal history before classifying the next complete Rust plan. A scoped
-epoch may additionally cover coin overrides or other inputs proven not to influence cross-symbol
-allocation; a scoped change clears only that scope. The conservative initial implementation must
-use the account-wide epoch when dependency is uncertain. Neither reset clears account-wide attempt
+epoch covers each symbol's effective `PB_modes`, approved/ignored membership, forager membership,
+and active-universe membership. A scoped change clears only that symbol's history. This prevents a
+rotating empty forager slot from continuously erasing evidence for unrelated resting orders. It is
+safe despite cross-symbol allocation effects because Rust's current ideal remains authoritative:
+the reconciliation path still cancels stale actuals immediately, and any resulting price/quantity
+change is observed directly by the history classifier. Global config changes remain account-wide,
+including operator changes to configured modes or lists. Neither reset clears account-wide attempt
 timestamps: exchange writes already consumed remain consumed for the rolling window.
 
 Because snapshots are captured after exchange precision and sizing normalization, each symbol's
@@ -437,11 +440,14 @@ same intent continued across it.
 for every attempted account-wide Rust planning cycle, including failures. A stability run may use
 only immediately consecutive successful generations; any unavailable/failed/invalid generation
 breaks it. Also require the current decision and every adjacent snapshot in the run to be separated
-by no more than `max(10 seconds, 3 * live.execution_delay_seconds)`. A larger wall-clock gap breaks
-the run even if no attempt was recorded. The tight prefix must span the full configured stability
-duration and contain at least two prior snapshots. After any generation or time gap, the candidate
-fails open until new contiguous evidence accumulates; two tight snapshots several minutes apart
-cannot clear older evidence.
+by no more than three nominal quiet execution cadences, with a 10-second floor. One nominal quiet
+cadence is `live.execution_delay_seconds` plus the execution loop's maximum 30-second scheduled
+wait for a websocket trigger. The scheduled wait is ordinary runtime behavior and therefore is not
+itself an evidence discontinuity. A larger wall-clock gap breaks the run even if no attempt was
+recorded. The tight prefix must span the full configured stability duration and contain at least
+two prior snapshots. After any generation or time gap, the candidate fails open until new
+contiguous evidence accumulates; two tight snapshots several minutes apart cannot clear older
+evidence.
 
 ### Deterministic matching
 
@@ -911,8 +917,10 @@ events use bounded periodic summaries.
    state, and a fresh Rust plan. Batch truncation cannot strand a dependent creation.
 6. **Ordinary market promotion:** execution type is removed from the sequencing scope, so a
    Rust-promoted market creation cannot bypass its stale limit predecessor.
-7. **WEEX close semantics:** WEEX must normalize and verify its authoritative V3 response/action
-   semantics before enablement.
+7. **WEEX close semantics:** WEEX `COMBINED` mode must normalize close-only effect from the
+   authoritative V3 `side` plus `positionSide` action tuple. The response's `reduceOnly` literal
+   is not authoritative because regular V3 placement cannot set it and valid closes may report
+   `false`.
 8. **Defx metadata:** Defx is explicitly outside the supported live-exchange boundary and is not an
    implementation prerequisite.
 9. **Cancel acknowledgement after fills:** every limit order, including risk-critical, refreshes and
@@ -940,10 +948,11 @@ events use bounded periodic summaries.
 20. **Bitget UTA close semantics:** its documented `side` plus `posSide` hedge action overrides a
     literal `reduceOnly=NO`; classic/one-way Bitget handling stays separate.
 21. **Cross-symbol risk state:** fill identity, realized Rust balance/position inputs, global
-    config/list/mode changes, and uncertain dependencies advance an account epoch and clear all
-    ideal history; price-derived exchange state does not.
+    configuration changes, and uncertain dependencies advance an account epoch and clear all ideal
+    history; price-derived exchange state does not.
 22. **Runtime eligibility:** effective `PB_modes`, approved/ignored sets, forager membership, and
-    hedge capability are explicit compatibility inputs.
+    active-universe membership are symbol-scoped compatibility inputs; hedge capability remains
+    account-wide.
 23. **Market wording:** market/risk/near exemptions apply only to allowance waiting; dedicated
     protective market panic is the sole account-wide stale-barrier same-wave bypass.
 24. **Recovered stability:** a newest contiguous tight run spanning the stability horizon clears
@@ -1013,7 +1022,10 @@ events use bounded periodic summaries.
 - one historical observation cannot satisfy multiple current candidates;
 - a current ideal already satisfied by an actual order still reserves its historical mate before an
   unmatched peer is classified;
-- raw list reordering and dictionary order do not change outcomes.
+- raw list reordering and dictionary order do not change outcomes;
+- WEEX balance normalization subtracts `unrealizePnl` from V3 account equity so mark-to-market
+  movement leaves Rust wallet balance and the churn account epoch unchanged, while realized wallet
+  changes still advance the epoch.
 
 ### Per-symbol history and heuristic
 
@@ -1037,8 +1049,9 @@ events use bounded periodic summaries.
 - price-only and quantity-only churn;
 - neighboring grids, duplicate levels, growing/shrinking ladders, equal-cardinality rolls;
 - evidence expires exactly with the rolling window;
-- a scoped coin-override revision resets compatible history; global config, approved/ignored,
-  forager membership, effective mode, and hedge-capability revisions reset account-wide history;
+- a scoped coin-override revision resets compatible history; runtime approved/ignored membership,
+  forager membership, effective mode, and active-universe changes reset only the affected symbol;
+  global configuration and hedge-capability revisions reset account-wide history;
 - an hourly `init_markets()` refresh that changes price/quantity steps, minimums, contract
   multiplier, active status, or another normalization constraint resets only the affected symbol's
   history before its next classification; unchanged metadata and volatile raw exchange `info` do
@@ -1259,9 +1272,9 @@ consequences, and connector assumptions—not merely wording:
 - Is the proposed RAM-only canonical exception truly bounded to operational economy and incapable
   of weakening safety after reset?
 - Do account/scoped compatibility epochs reset exact realized Rust balance/position/fill and
-  realized-PnL cumulative max/last inputs, effective modes, lists, forager membership, and operator
-  changes while excluding equity, margin, unrealized PnL, mark/liquidation prices, other moving
-  fields, and attempt-ledger refunds?
+  realized-PnL cumulative max/last inputs account-wide, runtime modes/lists/forager membership only
+  for affected symbols, and configured operator changes account-wide, while excluding equity,
+  margin, unrealized PnL, mark/liquidation prices, other moving fields, and attempt-ledger refunds?
 - What interactions remain with config reload, forager symbol churn, HSL, WEL/TWEL, unstuck,
   auto-reduce, graceful stop, hedge mode, and one-way mode?
 

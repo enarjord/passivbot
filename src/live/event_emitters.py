@@ -3990,7 +3990,7 @@ def emit_order_churn_evidence_event(
             component="order.churn_history",
             tags=(EventTags.ORDER, EventTags.GATE, EventTags.MEMORY, EventTags.SNAPSHOT),
             cycle_id=current_live_event_cycle_id(bot),
-            status="reset" if reset else str(snapshot_status)[:24],
+            status="skipped" if snapshot_status == "skipped" else "succeeded",
             reason_code=ReasonCodes.ORDER_CHURN_HISTORY,
             data={
                 "generation": max(0, int(generation)),
@@ -4000,6 +4000,7 @@ def emit_order_churn_evidence_event(
                 "churn_count": max(0, int(churn_count)),
                 "reason_counts": bounded_reasons,
                 "history_symbol_count": max(0, int(history_symbol_count)),
+                "snapshot_status": str(snapshot_status)[:24],
                 "symbols": symbol_values[:12],
                 "symbols_count": len(symbol_values),
                 "symbols_truncated": len(symbol_values) > 12,
@@ -4062,7 +4063,7 @@ def emit_order_churn_admission_event(
             tags=(EventTags.ORDER, EventTags.GATE, EventTags.ACTION),
             cycle_id=current_live_event_cycle_id(bot),
             order_wave_id=order_wave_id,
-            status="evaluated",
+            status="succeeded",
             reason_code=ReasonCodes.ORDER_CHURN_ADMISSION,
             data=data,
         )
@@ -4095,7 +4096,7 @@ def emit_order_churn_actions_accounted_event(
             tags=(EventTags.ORDER, EventTags.ACTION, EventTags.GATE),
             cycle_id=current_live_event_cycle_id(bot),
             order_wave_id=order_wave_id,
-            status="accounted",
+            status="succeeded",
             reason_code=ReasonCodes.ORDER_CHURN_ACTION_ATTEMPT,
             data={
                 "action_count": max(0, int(action_count)),
