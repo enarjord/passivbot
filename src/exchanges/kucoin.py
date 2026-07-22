@@ -166,36 +166,26 @@ class KucoinBot(CCXTBot):
         return
 
     def _get_position_side_for_order(self, order: dict) -> str:
-        """KuCoin: Derive position_side from position state."""
-        return self.determine_pos_side(order)
-
-    def determine_pos_side(self, order):
+        """KuCoin: require durable open-order metadata, never current position state."""
+        if not bool(
+            getattr(self, "_config_hedge_mode", True)
+            and getattr(self, "hedge_mode", True)
+        ):
+            return self._normalize_one_way_position_side(order)
         explicit = order.get("position_side")
         if explicit is None:
             info = order.get("info", {}) or {}
             explicit = info.get("positionSide") or info.get("posSide")
-        if explicit is not None:
-            explicit = str(explicit).lower()
-            if explicit in ("long", "short"):
-                return explicit
-            raise Exception(f"unknown position_side {explicit} for order {order}")
+        if explicit is not None and str(explicit).lower() in {"long", "short"}:
+            return str(explicit).lower()
+        metadata_side = super()._get_position_side_for_order(order)
+        if metadata_side in {"long", "short"}:
+            return metadata_side
+        raise ValueError("KuCoin open order missing durable long/short attribution")
 
-        symbol = order["symbol"]
-        has_long = self.has_position("long", symbol)
-        has_short = self.has_position("short", symbol)
-        if has_long and not has_short:
-            return "long"
-        if has_short and not has_long:
-            return "short"
-
-        side = str(order.get("side", "")).lower()
-        if has_long and has_short:
-            raise Exception(f"ambiguous KuCoin position side for hedge-mode order {order}")
-        if side == "buy":
-            return "long"
-        if side == "sell":
-            return "short"
-        raise Exception(f"unknown side {order.get('side')}")
+    def determine_pos_side(self, order):
+        """Compatibility route for the authoritative open-order attribution hook."""
+        return self._get_position_side_for_order(order)
 
     async def _do_fetch_open_orders(self, symbol: str = None) -> list:
         """KuCoin: Fetch open orders with pagination.

@@ -2,6 +2,7 @@ import asyncio
 import json
 import math
 import random
+import time
 from copy import deepcopy
 
 import ccxt.pro as ccxt_pro
@@ -60,6 +61,125 @@ class HyperliquidBot(CCXTBot):
         self._hl_cache_generation = 0
         self._hl_user_abstraction = "unknown"
         self._hl_unified_enabled = False
+        self._hl_order_churn_rate_snapshot = None
+        self._hl_order_churn_local_action_timestamps = []
+        self._hl_order_churn_rate_next_refresh_monotonic = 0.0
+        self._hl_order_churn_rate_request_started_monotonic = 0.0
+
+    @staticmethod
+    def _hl_rate_limit_int(payload: dict, key: str) -> int:
+        value = payload.get(key)
+        if isinstance(value, bool):
+            raise ValueError(f"Hyperliquid userRateLimit {key} must be an integer")
+        parsed = float(value)
+        if not math.isfinite(parsed) or parsed < 0.0 or not parsed.is_integer():
+            raise ValueError(
+                f"Hyperliquid userRateLimit {key} must be a finite non-negative integer"
+            )
+        return int(parsed)
+
+    def _record_order_churn_signed_action_attempts(self, count: int) -> None:
+        if count < 0:
+            raise ValueError("Hyperliquid signed action count must be non-negative")
+        if count:
+            snapshot = getattr(self, "_hl_order_churn_rate_snapshot", None)
+            request_started = float(
+                getattr(
+                    self, "_hl_order_churn_rate_request_started_monotonic", 0.0
+                )
+                or 0.0
+            )
+            now = time.monotonic()
+            if (
+                isinstance(snapshot, dict)
+                and now >= float(snapshot.get("expires_monotonic", 0.0) or 0.0)
+                and request_started <= 0.0
+            ):
+                self._hl_order_churn_rate_snapshot = None
+                self._hl_order_churn_local_action_timestamps = []
+                snapshot = None
+            if not isinstance(snapshot, dict) and request_started <= 0.0:
+                return
+            timestamps = getattr(self, "_hl_order_churn_local_action_timestamps", None)
+            if not isinstance(timestamps, list):
+                timestamps = []
+                self._hl_order_churn_local_action_timestamps = timestamps
+            timestamps.extend(now for _ in range(count))
+
+    async def _order_churn_far_create_headroom(self) -> int | None:
+        """Return conservative address-action headroom from userRateLimit plus local debits."""
+        now = time.monotonic()
+        snapshot = getattr(self, "_hl_order_churn_rate_snapshot", None)
+        if isinstance(snapshot, dict) and now < float(snapshot["expires_monotonic"]):
+            local_debits = sum(
+                timestamp >= float(snapshot["request_started_monotonic"])
+                for timestamp in getattr(
+                    self, "_hl_order_churn_local_action_timestamps", []
+                )
+            )
+            return max(0, int(snapshot["headroom"]) - local_debits)
+        if now < float(
+            getattr(self, "_hl_order_churn_rate_next_refresh_monotonic", 0.0) or 0.0
+        ):
+            return None
+
+        request_started = time.monotonic()
+        self._hl_order_churn_rate_request_started_monotonic = request_started
+        wallet_address = str(self.user_info.get("wallet_address") or "")
+        if not wallet_address:
+            logging.error("[order] Hyperliquid userRateLimit unavailable: missing wallet address")
+            self._hl_order_churn_rate_next_refresh_monotonic = now + 10.0
+            self._hl_order_churn_rate_request_started_monotonic = 0.0
+            return None
+        try:
+            payload = await self.cca.publicPostInfo(
+                {"type": "userRateLimit", "user": wallet_address}
+            )
+            if not isinstance(payload, dict):
+                raise ValueError("Hyperliquid userRateLimit response must be an object")
+            used = self._hl_rate_limit_int(payload, "nRequestsUsed")
+            cap = self._hl_rate_limit_int(payload, "nRequestsCap")
+            surplus = self._hl_rate_limit_int(payload, "nRequestsSurplus")
+            if used > 0 and surplus > 0:
+                raise ValueError("Hyperliquid userRateLimit response is contradictory")
+            # Official semantics:
+            #   used    = max(0, cumulative_used - reserved)
+            #   surplus = max(0, reserved - cumulative_used)
+            # Unconsumed reserved weight therefore extends the remaining
+            # address-action allowance; it is not included in ``cap`` once
+            # ``used`` has bottomed out at zero.
+            headroom = max(0, cap - used + surplus)
+            self._hl_order_churn_rate_snapshot = {
+                "headroom": headroom,
+                "used": used,
+                "cap": cap,
+                "surplus": surplus,
+                "request_started_monotonic": request_started,
+                "expires_monotonic": time.monotonic() + 30.0,
+            }
+            self._hl_order_churn_rate_next_refresh_monotonic = 0.0
+            self._hl_order_churn_local_action_timestamps = [
+                timestamp
+                for timestamp in getattr(
+                    self, "_hl_order_churn_local_action_timestamps", []
+                )
+                if timestamp >= request_started
+            ]
+            return max(
+                0,
+                headroom
+                - len(self._hl_order_churn_local_action_timestamps),
+            )
+        except Exception as exc:
+            self._hl_order_churn_rate_snapshot = None
+            self._hl_order_churn_rate_next_refresh_monotonic = time.monotonic() + 10.0
+            logging.warning(
+                "[order] Hyperliquid userRateLimit unavailable; deferring only far churn-evidenced ordinary creates | error_type=%s",
+                type(exc).__name__,
+            )
+            return None
+        finally:
+            self._hl_order_churn_rate_request_started_monotonic = 0.0
 
     def _hl_state_fetch_concurrency(self) -> int:
         """Bound internal Hyperliquid account-state fanout to avoid rate-limit spikes."""
@@ -576,21 +696,9 @@ class HyperliquidBot(CCXTBot):
                 logging.debug("[ws] %s: reconnecting...", self.exchange)
 
     def determine_pos_side(self, order):
-        # hyperliquid is not hedge mode
-        if order["symbol"] in self.positions:
-            if self.positions[order["symbol"]]["long"]["size"] != 0.0:
-                return "long"
-            elif self.positions[order["symbol"]]["short"]["size"] != 0.0:
-                return "short"
-            else:
-                return "long" if order["side"] == "buy" else "short"
-        else:
-            if "reduceOnly" in order:
-                if order["side"] == "buy":
-                    return "short" if order["reduceOnly"] else "long"
-                if order["side"] == "sell":
-                    return "long" if order["reduceOnly"] else "short"
-            return "long" if order["side"] == "buy" else "short"
+        # Hyperliquid is one-way, but current position state must never label a
+        # resting order: fills may change it after placement.
+        return self._normalize_one_way_position_side(order)
 
     def _get_position_side_for_order(self, order: dict) -> str:
         """Hook: Derive position_side from order data for Hyperliquid (one-way mode)."""
@@ -1328,6 +1436,7 @@ class HyperliquidBot(CCXTBot):
                     params["vaultAddress"] = self.user_info["wallet_address"]
 
                 try:
+                    self._record_order_churn_signed_action_attempts(1)
                     res = await self.cca.set_margin_mode(
                         margin_mode, symbol=symbol, params=params
                     )

@@ -62,7 +62,43 @@ class OKXBot(CCXTBot):
 
     def _get_position_side_for_order(self, order: dict) -> str:
         """OKX provides posSide in info."""
-        return order.get("info", {}).get("posSide", "long").lower()
+        info = order.get("info") or {}
+        position_side = str(
+            order.get("position_side") or info.get("posSide") or ""
+        ).lower()
+        if not bool(
+            getattr(self, "_config_hedge_mode", True)
+            and getattr(self, "hedge_mode", True)
+        ):
+            return self._normalize_one_way_position_side(order)
+        if position_side in {"long", "short"}:
+            return position_side
+        if position_side == "net":
+            return self._normalize_one_way_position_side(order)
+        metadata_side = super()._get_position_side_for_order(order)
+        if metadata_side in {"long", "short"}:
+            return metadata_side
+        raise ValueError("OKX order missing authoritative position-side semantics")
+
+    def _canonical_open_order_reduce_only(self, order: dict) -> bool:
+        """Normalize OKX long/short-mode action tuples to close-only effect."""
+        info = order.get("info") or {}
+        raw_position_side = str(info.get("posSide") or "").lower()
+        effective_hedge_mode = bool(
+            getattr(self, "_config_hedge_mode", True)
+            and getattr(self, "hedge_mode", True)
+        )
+        if effective_hedge_mode and raw_position_side in {"long", "short"}:
+            side = str(order.get("side") or info.get("side") or "").lower()
+            if side not in {"buy", "sell"}:
+                raise ValueError("OKX hedge order missing explicit buy/sell side")
+            return (raw_position_side == "long" and side == "sell") or (
+                raw_position_side == "short" and side == "buy"
+            )
+        reduce_only = self._strict_order_reduce_only_response(order)
+        if not isinstance(reduce_only, bool):
+            raise ValueError("OKX one-way order missing authoritative reduceOnly")
+        return reduce_only
 
     def _normalize_positions(self, fetched: list) -> list:
         """OKX: Preserve live positions across both cross and isolated margin modes."""

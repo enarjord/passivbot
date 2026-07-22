@@ -19,6 +19,8 @@ documents should link here rather than restating these rules.
 - Do not add decision-changing local state that cannot be rederived.
 - Performance caches are allowed only when cache loss, rejection, or rebuild does not change the
   intended trading decision.
+- A reviewed RAM-only economy gate may reset only toward current Rust intent. It must never preserve
+  or synthesize orders, weaken readiness/risk/mode checks, or hide resets; cover resets with tests.
 
 ## Terminology And Numeric Conventions
 

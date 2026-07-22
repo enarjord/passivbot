@@ -186,6 +186,23 @@ retains order rows, identifiers, symbols, prices, raw payloads, exception text, 
 When the structured console is disabled or unavailable, the same bounded count retains one legacy
 `[order]` INFO fallback; the two console paths never intentionally write the same observation.
 
+## Order-Replacement Churn
+
+The account-wide replacement-churn policy emits structured, monitor-only summaries:
+
+- `order.churn_evidence` reports one bounded per-plan aggregation of RAM-history association
+  reasons, churn-evidenced order count, tracked symbol count, generation, and epoch resets.
+- `order.churn_admission` reports one bounded final-admission aggregation, including rolling create
+  count, threshold, decision reasons, and sampled market distances.
+- `order.churn_actions_accounted` records the number of logical creates debited immediately before
+  each connector batch and the resulting rolling count.
+- `execution.cancel_first_barrier` reports account-wide create deferral after any stale-order
+  cancellation. `execution.cancel_deferred` reports cancellation batch truncation.
+
+These events are diagnostic projections only. The causal history, rolling counter, and
+cancel-first state are updated directly in the planner and executor, and sink failure cannot alter
+the selected exchange actions.
+
 ## Fresh-Entry Eligibility
 
 Completed normal live plans emit `entry.initial_eligibility` to structured and monitor sinks. The
@@ -208,12 +225,13 @@ Stable per-record reason-count values are:
 - `exact_reconciliation_match`
 - `freshness_creation_guardrail`
 - `hsl_replay_pending`
-- `initial_entry_distance_gate`
+- `account_cancel_first_barrier`
 - `limit_order_create_market_distance`
 - `low_balance`
 - `malformed_actual_orders`
 - `mode_filter`
 - `order_match_tolerance`
+- `order_churn_gate`
 - `pending_exchange_config`
 - `pre_create_market_snapshot_unavailable`
 - `pre_create_planning_snapshot_invalid`

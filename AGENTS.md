@@ -48,6 +48,8 @@ or order-construction work; it is not mandatory for unrelated documentation or t
 1. Rust owns order, strategy, risk, unstuck, and backtesting behavior. Python owns orchestration,
    exchange I/O, configuration, and data plumbing.
 2. Trading behavior must be reproducible after restart from exchange state and config.
+   A reviewed RAM-only economy gate may reset toward Rust intent without preserving orders or
+   weakening safety.
 3. Never fabricate a required trading input. Follow the explicit failure and degradation contract.
 4. Keep `position_side`/`pside` (long/short) separate from `side`/`order_side` (buy/sell).
    Quantities and position sizes are signed internally.

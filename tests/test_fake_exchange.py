@@ -172,6 +172,7 @@ def test_setup_bot_fake_uses_fake_bot():
             result = setup_bot(config)
             mock_fake_bot.assert_called_once_with(config)
             assert result == mock_bot
+            assert result._order_churn_gate_enabled_for_connector is True
 
 
 def test_fake_ccxt_client_builds_replay_timeline_from_file(tmp_path):

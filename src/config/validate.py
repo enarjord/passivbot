@@ -193,6 +193,50 @@ def validate_config(
         raise TypeError("config.live.fee_conversion_max_age_ms must be an integer")
     if fee_conversion_max_age_ms < 0:
         raise ValueError("config.live.fee_conversion_max_age_ms must be >= 0")
+    activation_raw = config["live"]["order_replacement_churn_gate_activation_count"]
+    if isinstance(activation_raw, bool) or not isinstance(activation_raw, int):
+        raise TypeError(
+            "config.live.order_replacement_churn_gate_activation_count must be an integer"
+        )
+    if activation_raw < 0:
+        raise ValueError(
+            "config.live.order_replacement_churn_gate_activation_count must be >= 0"
+        )
+    churn_numeric = {}
+    for key in (
+        "order_replacement_churn_gate_window_minutes",
+        "order_replacement_churn_gate_stability_minutes",
+        "order_replacement_churn_gate_market_dist_pct",
+        "order_replacement_churn_gate_tracking_tolerance_pct",
+    ):
+        try:
+            value = float(config["live"][key])
+        except (TypeError, ValueError) as exc:
+            raise TypeError(f"config.live.{key} must be numeric") from exc
+        if not math.isfinite(value):
+            raise ValueError(f"config.live.{key} must be finite")
+        churn_numeric[key] = value
+    window = churn_numeric["order_replacement_churn_gate_window_minutes"]
+    stability = churn_numeric["order_replacement_churn_gate_stability_minutes"]
+    distance = churn_numeric["order_replacement_churn_gate_market_dist_pct"]
+    tracking = churn_numeric["order_replacement_churn_gate_tracking_tolerance_pct"]
+    tight = float(config["live"]["order_match_tolerance_pct"])
+    if activation_raw > 0 and window <= 0.0:
+        raise ValueError(
+            "config.live.order_replacement_churn_gate_window_minutes must be > 0 when enabled"
+        )
+    if activation_raw > 0 and (stability <= 0.0 or stability > window):
+        raise ValueError(
+            "config.live.order_replacement_churn_gate_stability_minutes must be > 0 and <= window_minutes when enabled"
+        )
+    if distance < 0.0 or distance >= 1.0:
+        raise ValueError(
+            "config.live.order_replacement_churn_gate_market_dist_pct must be >= 0 and < 1"
+        )
+    if tracking <= tight or tracking >= 1.0:
+        raise ValueError(
+            "config.live.order_replacement_churn_gate_tracking_tolerance_pct must be greater than order_match_tolerance_pct and < 1"
+        )
     max_cancellations = int(config["live"]["max_n_cancellations_per_batch"])
     max_creations = int(config["live"]["max_n_creations_per_batch"])
     if max_cancellations <= max_creations:

@@ -97,6 +97,13 @@ mod core {
         Market,
     }
 
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+    #[serde(rename_all = "snake_case")]
+    pub enum ExecutionPriority {
+        Ordinary,
+        RiskCritical,
+    }
+
     #[derive(Debug, Clone, Serialize, Deserialize)]
     #[serde(deny_unknown_fields)]
     pub struct IdealOrder {
@@ -117,6 +124,7 @@ mod core {
         pub price: f64,
         pub order_type: OrderType,
         pub execution_type: ExecutionType,
+        pub execution_priority: ExecutionPriority,
     }
 
     #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -708,11 +716,23 @@ mod core {
         order: IdealOrder,
         global: &OrchestratorGlobal,
         order_book: &OrderBook,
+        mode: TradingMode,
     ) -> ExecutableOrder {
         let execution_type = if should_use_market_execution(&order, global, order_book) {
             ExecutionType::Market
         } else {
             ExecutionType::Limit
+        };
+        let execution_priority = if is_panic_close_order_type(order.order_type)
+            || matches!(
+                close_reducer_priority(order.order_type, order.pside),
+                Some(1) | Some(2)
+            )
+            || (mode == TradingMode::GracefulStop && order.order_type.is_close())
+        {
+            ExecutionPriority::RiskCritical
+        } else {
+            ExecutionPriority::Ordinary
         };
         ExecutableOrder {
             symbol_idx: order.symbol_idx,
@@ -721,6 +741,7 @@ mod core {
             price: order.price,
             order_type: order.order_type,
             execution_type,
+            execution_priority,
         }
     }
 
@@ -3747,8 +3768,14 @@ mod core {
         let orders = orders
             .into_iter()
             .map(|order| {
-                let order_book = &input.symbols[order.symbol_idx].order_book;
-                to_executable_order(order, &input.global, order_book)
+                let symbol = &input.symbols[order.symbol_idx];
+                let side = symbol_side_input(symbol, order.pside);
+                // Use the configured mode here, not generation's effective mode. In
+                // graceful-stop with a position, generation intentionally behaves like
+                // normal so it can emit closes, but those closes remain risk-critical
+                // for live execution priority.
+                let mode = side.mode.unwrap_or(TradingMode::Normal);
+                to_executable_order(order, &input.global, &symbol.order_book, mode)
             })
             .collect();
 
@@ -4149,8 +4176,62 @@ mod core {
                 order_type: OrderType::CloseGridLong,
             };
             assert!(should_use_market_execution(&order, &global, &order_book));
-            let executable = to_executable_order(order, &global, &order_book);
+            let executable = to_executable_order(order, &global, &order_book, TradingMode::Normal);
             assert_eq!(executable.execution_type, ExecutionType::Market);
+        }
+
+        #[test]
+        fn execution_priority_is_explicit_for_every_risk_family() {
+            let global = make_basic_global();
+            let order_book = OrderBook {
+                bid: 100.0,
+                ask: 101.0,
+            };
+            let make = |order_type, qty| IdealOrder {
+                symbol_idx: 0,
+                pside: PositionSide::Long,
+                qty,
+                price: 100.5,
+                order_type,
+            };
+            for order_type in [
+                OrderType::ClosePanicLong,
+                OrderType::CloseAutoReduceTwelLong,
+                OrderType::CloseAutoReduceWelLong,
+                OrderType::CloseUnstuckLong,
+            ] {
+                assert_eq!(
+                    to_executable_order(
+                        make(order_type, -1.0),
+                        &global,
+                        &order_book,
+                        TradingMode::Normal,
+                    )
+                    .execution_priority,
+                    ExecutionPriority::RiskCritical,
+                    "{order_type:?} must remain ahead of ordinary creates"
+                );
+            }
+            assert_eq!(
+                to_executable_order(
+                    make(OrderType::CloseGridLong, -1.0),
+                    &global,
+                    &order_book,
+                    TradingMode::GracefulStop,
+                )
+                .execution_priority,
+                ExecutionPriority::RiskCritical
+            );
+            for order in [
+                make(OrderType::CloseGridLong, -1.0),
+                make(OrderType::EntryGridNormalLong, 1.0),
+            ] {
+                assert_eq!(
+                    to_executable_order(order, &global, &order_book, TradingMode::Normal,)
+                        .execution_priority,
+                    ExecutionPriority::Ordinary
+                );
+            }
         }
 
         #[test]
@@ -4228,11 +4309,11 @@ mod core {
             assert!(should_use_market_execution(&buy, &global, &order_book));
             assert!(should_use_market_execution(&sell, &global, &order_book));
             assert_eq!(
-                to_executable_order(buy, &global, &order_book).execution_type,
+                to_executable_order(buy, &global, &order_book, TradingMode::Normal).execution_type,
                 ExecutionType::Market
             );
             assert_eq!(
-                to_executable_order(sell, &global, &order_book).execution_type,
+                to_executable_order(sell, &global, &order_book, TradingMode::Normal).execution_type,
                 ExecutionType::Market
             );
         }
@@ -4253,7 +4334,8 @@ mod core {
             };
             assert!(!should_use_market_execution(&order, &global, &order_book));
             assert_eq!(
-                to_executable_order(order, &global, &order_book).execution_type,
+                to_executable_order(order, &global, &order_book, TradingMode::Normal)
+                    .execution_type,
                 ExecutionType::Limit
             );
         }
@@ -4409,16 +4491,29 @@ mod core {
                 order_type: OrderType::ClosePanicShort,
             };
             assert_eq!(
-                to_executable_order(long_order.clone(), &global, &order_book).execution_type,
+                to_executable_order(
+                    long_order.clone(),
+                    &global,
+                    &order_book,
+                    TradingMode::Normal,
+                )
+                .execution_type,
                 ExecutionType::Market
             );
             assert_eq!(
-                to_executable_order(short_order.clone(), &global, &order_book).execution_type,
+                to_executable_order(
+                    short_order.clone(),
+                    &global,
+                    &order_book,
+                    TradingMode::Normal,
+                )
+                .execution_type,
                 ExecutionType::Limit
             );
             global.panic_close_market = true;
             assert_eq!(
-                to_executable_order(short_order, &global, &order_book).execution_type,
+                to_executable_order(short_order, &global, &order_book, TradingMode::Normal,)
+                    .execution_type,
                 ExecutionType::Market
             );
         }

@@ -4,11 +4,19 @@ import json
 import logging
 import math
 import sys
+import time
 from collections import Counter
 from typing import Iterable, Optional
 
 from live.fresh_entry_eligibility import FreshEntryEligibilityTrace
 from live.freshness import ACCOUNT_SURFACES
+from live.order_churn_gate import (
+    ChurnDecision,
+    OrderChurnGateState,
+    connector_supports_order_churn_gate,
+    deterministic_one_to_one_matches,
+    normalize_ideal_orders,
+)
 from pure_funcs import determine_side_from_order_tuple, filter_orders, shorten_custom_id
 from utils import symbol_to_coin, ts_to_date, utc_ms as _utils_utc_ms
 
@@ -317,8 +325,55 @@ def extract_order_reduce_only(order: dict) -> Optional[bool]:
             if isinstance(value, bool):
                 return value
             if isinstance(value, str):
-                return value.strip().lower() in {"true", "1", "yes", "y"}
-            return bool(value)
+                normalized = value.strip().lower()
+                if normalized in {"true", "1", "yes", "y"}:
+                    return True
+                if normalized in {"false", "0", "no", "n"}:
+                    return False
+                return None
+            if isinstance(value, (int, float)) and value in {0, 1}:
+                return bool(value)
+            return None
+    return None
+
+
+def extract_order_remaining_qty(order: dict) -> Optional[float]:
+    """Return authoritative remaining open quantity, or None when unproven."""
+    if not isinstance(order, dict):
+        return None
+
+    def get_number(key: str) -> Optional[float]:
+        for source in (order, order.get("info", {})):
+            if not isinstance(source, dict) or key not in source:
+                continue
+            value = source.get(key)
+            if value in (None, ""):
+                continue
+            try:
+                parsed = float(value)
+            except (TypeError, ValueError):
+                return None
+            return parsed if math.isfinite(parsed) and parsed >= 0.0 else None
+        return None
+
+    remaining = get_number("remaining")
+    amount = get_number("amount")
+    filled = get_number("filled")
+    if remaining is not None:
+        if amount is not None and filled is not None:
+            if filled > amount or remaining > amount:
+                return None
+            derived = max(0.0, amount - filled)
+            scale = max(1.0, remaining, amount, filled)
+            if abs(remaining - derived) > scale * 1e-10:
+                return None
+        return remaining
+    if amount is not None and filled is not None:
+        return max(0.0, amount - filled) if filled <= amount else None
+    # Locally normalized/fake order fixtures may expose only qty. Treat it as
+    # authoritative only when no original-amount fields are present.
+    if amount is None and filled is None:
+        return get_number("qty")
     return None
 
 
@@ -885,8 +940,302 @@ def mark_account_critical_state_dirty(
 async def calc_orders_to_cancel_and_create(bot):
     """Determine which existing orders to cancel and which new ones to place."""
     bot._fresh_entry_eligibility_trace = None
-    ideal_orders = await bot.calc_ideal_orders()
-    return await calc_orders_to_cancel_and_create_from_ideal(bot, ideal_orders)
+    connector_enabled = connector_supports_order_churn_gate(bot)
+    state = getattr(bot, "_order_churn_gate_state", None)
+    if not isinstance(state, OrderChurnGateState):
+        state = OrderChurnGateState()
+        bot._order_churn_gate_state = state
+    generation = state.begin_generation()
+    try:
+        ideal_orders = await bot.calc_ideal_orders()
+    except Exception:
+        if connector_enabled:
+            _emit_order_churn_evidence_summary(
+                bot,
+                state=state,
+                generation=generation,
+                reset=False,
+                decisions=[ChurnDecision(False, "planning_failed")],
+                symbols=getattr(bot, "active_symbols", []) or [],
+                snapshot_status="skipped",
+            )
+        raise
+    if connector_enabled:
+        churn_unavailable_symbols = prepare_order_churn_evidence(
+            bot, ideal_orders, generation=generation
+        )
+    else:
+        state.history_by_symbol.clear()
+        churn_unavailable_symbols = set()
+    return await calc_orders_to_cancel_and_create_from_ideal(
+        bot,
+        ideal_orders,
+        order_churn_unavailable_symbols=churn_unavailable_symbols,
+    )
+
+
+def _order_churn_account_epoch(bot) -> tuple:
+    positions = []
+    for symbol, sides in sorted((getattr(bot, "positions", {}) or {}).items()):
+        if not isinstance(sides, dict):
+            continue
+        for pside in ("long", "short"):
+            position = sides.get(pside) or {}
+            positions.append(
+                (
+                    str(symbol),
+                    pside,
+                    round(float(position.get("size", 0.0) or 0.0), 12),
+                    round(float(position.get("price", 0.0) or 0.0), 12),
+                )
+            )
+    pnl_stats = bot._get_realized_pnl_cumsum_stats()
+    authoritative_signatures = getattr(bot, "_authoritative_surface_signatures", {}) or {}
+    fill_signature = authoritative_signatures.get("fills")
+    if fill_signature is None:
+        events = (
+            bot._get_effective_pnl_events()
+            if getattr(bot, "_pnls_manager", None)
+            else []
+        )
+        fill_signature = bot._fill_events_signature(events) if events else ()
+    config_signature = json.dumps(
+        {
+            "live": (getattr(bot, "config", {}) or {}).get("live", {}),
+            "bot": (getattr(bot, "config", {}) or {}).get("bot", {}),
+            "coin_overrides": (getattr(bot, "config", {}) or {}).get(
+                "coin_overrides", {}
+            ),
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    )
+    modes = tuple(
+        (pside, str(symbol), str(mode))
+        for pside in ("long", "short")
+        for symbol, mode in sorted((getattr(bot, "PB_modes", {}) or {}).get(pside, {}).items())
+    )
+    approved = tuple(
+        (pside, tuple(sorted((getattr(bot, "approved_coins", {}) or {}).get(pside, set()))))
+        for pside in ("long", "short")
+    )
+    ignored = tuple(
+        (pside, tuple(sorted((getattr(bot, "ignored_coins", {}) or {}).get(pside, set()))))
+        for pside in ("long", "short")
+    )
+    approved_minus_ignored = tuple(
+        (
+            pside,
+            tuple(
+                sorted(
+                    (getattr(bot, "approved_coins_minus_ignored_coins", {}) or {}).get(
+                        pside, set()
+                    )
+                )
+            ),
+        )
+        for pside in ("long", "short")
+    )
+    active_symbols = tuple(sorted(getattr(bot, "active_symbols", []) or []))
+    return (
+        round(float(bot.get_hysteresis_snapped_balance()), 12),
+        round(float(bot.get_raw_balance()), 12),
+        tuple(positions),
+        fill_signature,
+        round(float(pnl_stats.get("max", 0.0) or 0.0), 12),
+        round(float(pnl_stats.get("last", 0.0) or 0.0), 12),
+        config_signature,
+        modes,
+        approved,
+        ignored,
+        approved_minus_ignored,
+        active_symbols,
+        bool(getattr(bot, "_config_hedge_mode", False) and getattr(bot, "hedge_mode", False)),
+    )
+
+
+def _order_churn_symbol_compatibility_epochs(
+    bot, symbols: Iterable[str]
+) -> dict[str, tuple]:
+    markets = getattr(bot, "markets_dict", {}) or {}
+    out: dict[str, tuple] = {}
+    for symbol in sorted({str(symbol) for symbol in symbols if symbol}):
+        market = markets.get(symbol, {}) if isinstance(markets, dict) else {}
+        if not isinstance(market, dict):
+            market = {}
+        out[symbol] = (
+            float((getattr(bot, "price_steps", {}) or {}).get(symbol, 0.0) or 0.0),
+            float((getattr(bot, "qty_steps", {}) or {}).get(symbol, 0.0) or 0.0),
+            float((getattr(bot, "min_qtys", {}) or {}).get(symbol, 0.0) or 0.0),
+            float((getattr(bot, "min_costs", {}) or {}).get(symbol, 0.0) or 0.0),
+            float((getattr(bot, "c_mults", {}) or {}).get(symbol, 1.0) or 1.0),
+            bool(market.get("active", True)),
+            json.dumps(
+                {
+                    "precision": market.get("precision", {}),
+                    "limits": market.get("limits", {}),
+                    "contractSize": market.get("contractSize"),
+                    "linear": market.get("linear"),
+                    "inverse": market.get("inverse"),
+                    "type": market.get("type"),
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+                default=str,
+            ),
+        )
+    return out
+
+
+def _emit_order_churn_evidence_summary(
+    bot,
+    *,
+    state: OrderChurnGateState,
+    generation: int,
+    reset: bool,
+    decisions: Iterable[ChurnDecision],
+    symbols: Iterable[str],
+    snapshot_status: str = "observed",
+) -> None:
+    emitter = getattr(bot, "_emit_order_churn_evidence_event", None)
+    if not callable(emitter):
+        return
+    decisions = list(decisions)
+    reason_counts = Counter(decision.reason for decision in decisions)
+    try:
+        emitter(
+            generation=generation,
+            reset=reset,
+            reset_count=state.reset_count,
+            reason_counts=reason_counts,
+            churn_count=sum(decision.churn_evidenced for decision in decisions),
+            order_count=len(decisions),
+            symbols=symbols,
+            history_symbol_count=len(state.history_by_symbol),
+            snapshot_status=snapshot_status,
+        )
+    except Exception as exc:
+        logging.debug(
+            "[event] order churn evidence emitter failed | error_type=%s",
+            type(exc).__name__,
+        )
+
+
+def prepare_order_churn_evidence(
+    bot, ideal_orders: dict, *, generation: int
+) -> set[str]:
+    """Annotate valid Rust ideals and return symbols unavailable to the gate."""
+    state = bot._order_churn_gate_state
+    activation_count = int(bot.live_value("order_replacement_churn_gate_activation_count"))
+    epoch = _order_churn_account_epoch(bot)
+    initialized_empty = state.account_epoch is None
+    reset = state.reset_history_for_epoch(epoch)
+    if initialized_empty:
+        reset = True
+        logging.info(
+            "[order] churn evidence history initialized empty | reason=process_start"
+        )
+    elif reset:
+        logging.info(
+            "[order] churn evidence history reset | reason=account_epoch_changed reset_count=%d",
+            state.reset_count,
+        )
+    current_universe = set(ideal_orders)
+    current_universe.update(getattr(bot, "active_symbols", []) or [])
+    current_universe.update((getattr(bot, "open_orders", {}) or {}).keys())
+    current_universe.update((getattr(bot, "positions", {}) or {}).keys())
+    history_symbols = state.symbols_with_history()
+    compatibility_universe = current_universe | history_symbols
+    complete_ideals = {
+        str(symbol): list(ideal_orders.get(symbol, [])) for symbol in current_universe
+    }
+    scoped_resets = state.reset_history_for_symbol_epochs(
+        _order_churn_symbol_compatibility_epochs(bot, compatibility_universe)
+    )
+    if scoped_resets:
+        reset = True
+        logging.info(
+            "[order] churn evidence history reset | reason=symbol_market_metadata_changed "
+            "symbols=%s reset_count=%d",
+            _pb_attr("Passivbot")._log_symbols(sorted(scoped_resets), limit=8),
+            state.reset_count,
+        )
+    if activation_count <= 0:
+        state.history_by_symbol.clear()
+        for orders in complete_ideals.values():
+            for order in orders:
+                order["_churn_evidence"] = False
+                order["_churn_reason"] = "disabled"
+        _emit_order_churn_evidence_summary(
+            bot,
+            state=state,
+            generation=generation,
+            reset=reset,
+            decisions=[
+                ChurnDecision(False, "disabled")
+                for orders in complete_ideals.values()
+                for _order in orders
+            ],
+            symbols=complete_ideals,
+        )
+        return set()
+    valid_ideals: dict[str, list[dict]] = {}
+    unavailable_symbols: set[str] = set()
+    unavailable_decisions: list[ChurnDecision] = []
+    for symbol, orders in complete_ideals.items():
+        try:
+            # Validate one symbol at a time so a downstream normalization
+            # outage cannot erase a complete, valid Rust plan for its peers.
+            normalize_ideal_orders(orders)
+        except (KeyError, TypeError, ValueError, OverflowError) as exc:
+            unavailable_symbols.add(symbol)
+            unavailable_decisions.extend(
+                ChurnDecision(False, "normalization_unavailable") for _order in orders
+            )
+            for order in orders:
+                if isinstance(order, dict):
+                    order["_churn_evidence"] = False
+                    order["_churn_reason"] = "normalization_unavailable"
+            logging.error(
+                "[order] churn evidence unavailable for symbol; leaving its actual orders "
+                "untouched | symbol=%s | error_type=%s",
+                _pb_attr("Passivbot")._log_symbol(symbol),
+                type(exc).__name__,
+            )
+            continue
+        valid_ideals[symbol] = orders
+    window_seconds = float(bot.live_value("order_replacement_churn_gate_window_minutes")) * 60.0
+    stability_seconds = (
+        float(bot.live_value("order_replacement_churn_gate_stability_minutes")) * 60.0
+    )
+    execution_delay = float(bot.live_value("execution_delay_seconds"))
+    decisions = state.evaluate_and_record(
+        valid_ideals,
+        generation=generation,
+        now_monotonic=time.monotonic(),
+        tight_tolerance=float(bot.live_value("order_match_tolerance_pct")),
+        wider_tolerance=float(
+            bot.live_value("order_replacement_churn_gate_tracking_tolerance_pct")
+        ),
+        stability_seconds=stability_seconds,
+        window_seconds=window_seconds,
+        max_generation_gap_seconds=max(10.0, 3.0 * execution_delay),
+    )
+    for orders in valid_ideals.values():
+        for order in orders:
+            decision = decisions.get(id(order), ChurnDecision(False, "unavailable"))
+            order["_churn_evidence"] = bool(decision.churn_evidenced)
+            order["_churn_reason"] = decision.reason
+    _emit_order_churn_evidence_summary(
+        bot,
+        state=state,
+        generation=generation,
+        reset=reset,
+        decisions=[*decisions.values(), *unavailable_decisions],
+        symbols=complete_ideals,
+    )
+    return unavailable_symbols
 
 
 async def calc_orders_to_cancel_and_create_from_ideal(
@@ -895,16 +1244,30 @@ async def calc_orders_to_cancel_and_create_from_ideal(
     *,
     actual_symbols: Optional[Iterable[str]] = None,
     actual_psides_by_symbol: Optional[dict[str, Iterable[str]]] = None,
-    apply_initial_entry_gate: bool = True,
     apply_creation_guardrails: bool = True,
     apply_mode_filters: bool = True,
     collect_fresh_entry_eligibility: bool = True,
+    order_churn_unavailable_symbols: Optional[Iterable[str]] = None,
 ):
     """Reconcile exchange orders against a supplied ideal order map."""
     bot._fresh_entry_eligibility_trace = None
     if not hasattr(bot, "_last_plan_detail"):
         bot._last_plan_detail = {}
 
+    if actual_symbols is None:
+        actual_symbols = sorted(
+            set(getattr(bot, "active_symbols", []) or [])
+            | set(ideal_orders if isinstance(ideal_orders, dict) else {})
+            | set((getattr(bot, "open_orders", {}) or {}).keys())
+            | set((getattr(bot, "positions", {}) or {}).keys())
+            | set(
+                getattr(
+                    getattr(bot, "_order_churn_gate_state", None),
+                    "symbols_with_history",
+                    lambda: set(),
+                )()
+            )
+        )
     actual_orders = bot._snapshot_actual_orders(
         actual_symbols, psides_by_symbol=actual_psides_by_symbol
     )
@@ -922,13 +1285,48 @@ async def calc_orders_to_cancel_and_create_from_ideal(
     malformed_actual_counts = dict(
         getattr(bot, "_malformed_actual_order_counts", {}) or {}
     )
-    keys = ("symbol", "side", "position_side", "qty", "price")
+    connector_enabled = connector_supports_order_churn_gate(bot)
+    churn_unavailable_symbols = {
+        str(symbol) for symbol in (order_churn_unavailable_symbols or []) if symbol
+    }
+    keys = (
+        (
+            "symbol",
+            "side",
+            "position_side",
+            "reduce_only",
+            "type",
+            "pb_order_type",
+            "qty",
+            "price",
+        )
+        if connector_enabled
+        else ("symbol", "side", "position_side", "qty", "price")
+    )
     to_cancel, to_create = [], []
     plan_summaries = []
     for symbol, symbol_orders in actual_orders.items():
         ideal_list = (
             ideal_orders.get(symbol, []) if isinstance(ideal_orders, dict) else []
         )
+        if connector_enabled and symbol in churn_unavailable_symbols:
+            trace = _trace_record(
+                trace,
+                "record_blocked_orders",
+                ideal_list,
+                "order_churn_normalization_unavailable",
+            )
+            plan_summaries.append(
+                (
+                    symbol,
+                    len(symbol_orders),
+                    0,
+                    len(ideal_list),
+                    0,
+                    len(symbol_orders) + len(ideal_list),
+                )
+            )
+            continue
         if symbol in malformed_actual_symbols:
             trace = _trace_record(
                 trace,
@@ -1024,19 +1422,24 @@ async def calc_orders_to_cancel_and_create_from_ideal(
         to_cancel += cancel_
         to_create += create_
 
-    if apply_initial_entry_gate:
-        before_initial_entry_gate = list(to_create)
-        to_create, initial_entry_gate_skipped = (
-            await bot._apply_initial_entry_distance_gate(to_create)
-        )
+    if malformed_actual_symbols and connector_enabled:
+        blocked = list(to_create)
+        blocked_cancellations = list(to_cancel)
+        to_cancel = []
+        to_create = []
         trace = _trace_record(
             trace,
             "record_blocked_orders",
-            _orders_removed_by_identity(before_initial_entry_gate, to_create),
-            "initial_entry_distance_gate",
+            blocked,
+            "malformed_actual_orders",
         )
-    else:
-        initial_entry_gate_skipped = 0
+        logging.error(
+            "[order] blocking all exchange actions because the account-critical open-orders "
+            "snapshot is malformed | symbols=%s | blocked_cancellations=%d | blocked_creations=%d",
+            _pb_attr("Passivbot")._log_symbols(sorted(malformed_actual_symbols), limit=8),
+            len(blocked_cancellations),
+            len(blocked),
+        )
     to_cancel = await bot._sort_orders_by_market_diff(to_cancel, "to_cancel")
     to_create = await bot._sort_orders_by_market_diff(to_create, "to_create")
     if apply_creation_guardrails:
@@ -1058,7 +1461,6 @@ async def calc_orders_to_cancel_and_create_from_ideal(
         total_skipped = (
             sum(p[5] for p in plan_summaries)
             + freshness_skipped
-            + initial_entry_gate_skipped
         )
         detail_parts = []
         untouched_cancel = total_pre_cancel - total_cancel
@@ -1127,37 +1529,99 @@ def snapshot_actual_orders(
     psides_by_symbol: Optional[dict[str, Iterable[str]]] = None,
 ) -> dict[str, list[dict]]:
     """Return a normalized snapshot of currently open orders keyed by symbol."""
+    connector_enabled = connector_supports_order_churn_gate(bot)
     actual_orders: dict[str, list[dict]] = {}
     malformed_symbols: set[str] = set()
     malformed_counts: dict[str, int] = {}
+    open_orders_by_symbol = getattr(bot, "open_orders", {}) or {}
+    if not isinstance(open_orders_by_symbol, dict):
+        open_orders_by_symbol = {}
+        malformed_symbols.add("<unknown>")
+        malformed_counts["<unknown>"] = 1
+        logging.error(
+            "[order] malformed open-orders snapshot container; "
+            "marking account-critical open-orders surface unavailable"
+        )
+    for raw_symbol, bucket_orders in open_orders_by_symbol.items():
+        bucket_symbol = str(raw_symbol or "").strip()
+        diagnostic_symbol = bucket_symbol or "<unknown>"
+        valid_bucket_symbol = isinstance(raw_symbol, str) and bool(bucket_symbol)
+        if not valid_bucket_symbol or not isinstance(bucket_orders, list):
+            malformed_symbols.add(diagnostic_symbol)
+            malformed_counts[diagnostic_symbol] = max(
+                1, len(bucket_orders) if isinstance(bucket_orders, list) else 1
+            )
+            logging.error(
+                "[order] malformed open-orders snapshot bucket; "
+                "marking account-critical open-orders surface unavailable | symbol=%s | reason=%s",
+                _pb_attr("Passivbot")._log_symbol(diagnostic_symbol),
+                (
+                    "missing or non-string symbol"
+                    if not valid_bucket_symbol
+                    else "orders bucket is not a list"
+                ),
+            )
     if symbols is None:
-        symbols = getattr(bot, "active_symbols", [])
+        requested_symbols = set(
+            set(getattr(bot, "active_symbols", []) or [])
+            | {
+                symbol
+                for symbol in open_orders_by_symbol
+                if isinstance(symbol, str) and symbol.strip()
+            }
+            | set((getattr(bot, "positions", {}) or {}).keys())
+        )
+    else:
+        requested_symbols = {str(symbol) for symbol in symbols if symbol}
+    # A scoped protective reconciliation may return only selected symbols or
+    # psides, but the open-orders surface remains account-critical. Validate
+    # every currently known resting order before authorizing any account write.
+    validation_symbols = requested_symbols | set(
+        symbol
+        for symbol in open_orders_by_symbol
+        if isinstance(symbol, str) and symbol.strip()
+    )
     pside_filter = None
     if psides_by_symbol is not None:
         pside_filter = {
             str(symbol): {str(pside) for pside in psides if pside}
             for symbol, psides in psides_by_symbol.items()
         }
-    for symbol in sorted(dict.fromkeys(str(symbol) for symbol in symbols if symbol)):
+    for symbol in sorted(str(symbol) for symbol in validation_symbols if symbol):
+        return_symbol = symbol in requested_symbols
         symbol_orders = []
         allowed_psides = (
             pside_filter.get(symbol, set()) if pside_filter is not None else None
         )
-        if allowed_psides == set():
+        if allowed_psides == set() and not connector_enabled:
             actual_orders[symbol] = symbol_orders
             continue
-        for order in bot.open_orders.get(symbol, []):
+        bucket_orders = open_orders_by_symbol.get(symbol, [])
+        if not isinstance(bucket_orders, list):
+            bucket_orders = []
+        for order in bucket_orders:
             try:
                 if not isinstance(order, dict):
                     raise TypeError(f"expected dict, got {type(order).__name__}")
+                exchange_order_id = extract_order_exchange_id(order)
+                if connector_enabled and not exchange_order_id:
+                    raise ValueError("missing authoritative exchange order id")
                 missing = [
                     key
-                    for key in ("symbol", "side", "position_side", "qty", "price")
+                    for key in ("symbol", "side", "position_side", "price")
                     if key not in order
                 ]
                 if missing:
                     raise ValueError(f"missing required fields {','.join(missing)}")
-                qty = abs(float(order["qty"]))
+                if connector_enabled:
+                    remaining_qty = extract_order_remaining_qty(order)
+                else:
+                    remaining_qty = (
+                        abs(float(order["qty"])) if "qty" in order else None
+                    )
+                if remaining_qty is None or remaining_qty <= 0.0:
+                    raise ValueError("missing or contradictory authoritative remaining quantity")
+                qty = float(remaining_qty)
                 price = float(order["price"])
                 if (
                     not math.isfinite(qty)
@@ -1172,13 +1636,58 @@ def snapshot_actual_orders(
                 if raw_symbol is None or raw_side is None or raw_position_side is None:
                     raise ValueError("null symbol, side, or position_side")
                 order_symbol = str(raw_symbol).strip()
-                side = str(raw_side).strip()
-                position_side = str(raw_position_side).strip()
+                side = str(raw_side).strip().lower()
+                position_side = str(raw_position_side).strip().lower()
                 if not order_symbol or side not in {"buy", "sell"}:
                     raise ValueError("empty symbol or invalid side")
+                if connector_enabled and order_symbol != symbol:
+                    raise ValueError(
+                        "open-order symbol contradicts its authoritative snapshot bucket"
+                    )
                 if position_side not in {"long", "short"}:
                     raise ValueError("invalid position_side")
-                if allowed_psides is not None and position_side not in allowed_psides:
+                if connector_enabled:
+                    close_only_resolver = getattr(
+                        bot, "_canonical_open_order_reduce_only", None
+                    )
+                    reduce_only = (
+                        close_only_resolver(order)
+                        if callable(close_only_resolver)
+                        else extract_order_reduce_only(order)
+                    )
+                    if not isinstance(reduce_only, bool):
+                        raise ValueError("missing authoritative close-only semantics")
+                else:
+                    reduce_only = (
+                        position_side == "long" and side == "sell"
+                    ) or (position_side == "short" and side == "buy")
+                raw_execution_type = str(
+                    order.get("type") or order.get("execution_type") or ""
+                ).lower()
+                execution_type = (
+                    "limit" if raw_execution_type == "limit" else "unknown"
+                )
+                custom_id = extract_order_custom_id(order)
+                pb_order_type = (
+                    str(_pb_attr("custom_id_to_snake")(custom_id)).lower()
+                    if custom_id
+                    and _pb_attr("custom_id_has_explicit_passivbot_marker")(
+                        custom_id
+                    )
+                    else "unknown"
+                )
+                if connector_enabled and pb_order_type != "unknown":
+                    if pb_order_type.startswith("close_") and not reduce_only:
+                        raise ValueError(
+                            "close pb_order_type contradicts authoritative close-only semantics"
+                        )
+                    if pb_order_type.startswith("entry_") and reduce_only:
+                        raise ValueError(
+                            "entry pb_order_type contradicts authoritative close-only semantics"
+                        )
+                if not return_symbol or (
+                    allowed_psides is not None and position_side not in allowed_psides
+                ):
                     continue
                 symbol_orders.append(
                     {
@@ -1187,29 +1696,27 @@ def snapshot_actual_orders(
                         "position_side": position_side,
                         "qty": qty,
                         "price": price,
-                        "reduce_only": (
-                            position_side == "long" and side == "sell"
-                        )
-                        or (
-                            position_side == "short" and side == "buy"
-                        ),
-                        "id": order.get("id"),
-                        "custom_id": order.get("custom_id"),
+                        "reduce_only": reduce_only,
+                        "type": execution_type,
+                        "pb_order_type": pb_order_type,
+                        "id": exchange_order_id or order.get("id"),
+                        "custom_id": custom_id,
                     }
                 )
-            except (TypeError, KeyError, ValueError) as exc:
+            except (TypeError, KeyError, ValueError, OverflowError) as exc:
                 malformed_symbols.add(symbol)
                 malformed_counts[symbol] = malformed_counts.get(symbol, 0) + 1
                 order_id = order.get("id") if isinstance(order, dict) else None
                 logging.error(
                     "[order] malformed open order snapshot; "
-                    "blocking order planning for symbol | symbol=%s | "
+                    "marking account-critical open-orders surface unavailable | symbol=%s | "
                     "order_id=%s | reason=%s",
                     _pb_attr("Passivbot")._log_symbol(symbol),
                     order_id or "unknown",
                     exc,
                 )
-        actual_orders[symbol] = symbol_orders
+        if return_symbol:
+            actual_orders[symbol] = symbol_orders
     bot._malformed_actual_order_symbols = malformed_symbols
     bot._malformed_actual_order_counts = malformed_counts
     if malformed_symbols:
@@ -1524,49 +2031,43 @@ def apply_order_match_tolerance(
     if tolerance <= 0.0:
         return to_cancel, to_create, 0
 
-    used_cancel: set[int] = set()
-    kept_create: list[dict] = []
-    skipped = 0
-
     def pct_diff(a: float, b: float) -> float:
         if b == 0:
             return 0.0 if a == 0 else float("inf")
         return abs(a - b) / abs(b) * 100.0
 
-    for order in to_create:
-        match_idx = None
-        for idx, existing in enumerate(to_cancel):
-            if idx in used_cancel:
+    if not connector_supports_order_churn_gate(bot):
+        used_cancel: set[int] = set()
+        kept_create: list[dict] = []
+        skipped = 0
+        for order in to_create:
+            match_idx = None
+            for idx, existing in enumerate(to_cancel):
+                if idx in used_cancel:
+                    continue
+                try:
+                    if _pb_attr("orders_matching")(
+                        order,
+                        existing,
+                        tolerance_qty=tolerance,
+                        tolerance_price=tolerance,
+                    ):
+                        match_idx = idx
+                        break
+                except Exception:
+                    continue
+            if match_idx is None:
+                kept_create.append(order)
                 continue
-            try:
-                if _pb_attr("orders_matching")(
-                    order,
-                    existing,
-                    tolerance_qty=tolerance,
-                    tolerance_price=tolerance,
-                ):
-                    match_idx = idx
-                    break
-            except Exception:
-                continue
-        if match_idx is None:
-            kept_create.append(order)
-        else:
             used_cancel.add(match_idx)
             skipped += 1
             try:
-                price_diff = pct_diff(
-                    float(order["price"]), float(to_cancel[match_idx]["price"])
-                )
-                qty_diff = pct_diff(
-                    float(order["qty"]), float(to_cancel[match_idx]["qty"])
-                )
                 logging.debug(
                     "skipped_recreate | %s | tolerance=%.4f%% price_diff=%.4f%% qty_diff=%.4f%%",
                     order.get("symbol", "?"),
                     tolerance * 100.0,
-                    price_diff,
-                    qty_diff,
+                    pct_diff(float(order["price"]), float(to_cancel[match_idx]["price"])),
+                    pct_diff(float(order["qty"]), float(to_cancel[match_idx]["qty"])),
                 )
             except Exception:
                 logging.debug(
@@ -1574,6 +2075,65 @@ def apply_order_match_tolerance(
                     order.get("symbol", "?"),
                     tolerance * 100.0,
                 )
+        return (
+            [order for idx, order in enumerate(to_cancel) if idx not in used_cancel],
+            kept_create,
+            skipped,
+        )
+
+    try:
+        current = normalize_ideal_orders(to_create)
+    except (KeyError, TypeError, ValueError):
+        # Current ideals are expected to be complete. Preserve the pre-existing
+        # fail-open behavior here; validation at the producer boundary owns the
+        # malformed-ideal failure contract.
+        return to_cancel, to_create, 0
+
+    matchable_cancel: list[dict] = []
+    matchable_cancel_indices: list[int] = []
+    for idx, order in enumerate(to_cancel):
+        try:
+            normalize_ideal_orders([order])
+        except (KeyError, TypeError, ValueError):
+            continue
+        matchable_cancel.append(order)
+        matchable_cancel_indices.append(idx)
+    previous = normalize_ideal_orders(matchable_cancel)
+    matches = deterministic_one_to_one_matches(current, previous, tolerance)
+    used_cancel = {
+        matchable_cancel_indices[previous[previous_idx].source_index]
+        for previous_idx in matches.values()
+    }
+    matched_create = {current[current_idx].source_index for current_idx in matches}
+    kept_create = [
+        order for idx, order in enumerate(to_create) if idx not in matched_create
+    ]
+    skipped = len(matches)
+
+    for current_idx, previous_idx in sorted(matches.items()):
+        create_idx = current[current_idx].source_index
+        order = to_create[create_idx]
+        match_idx = matchable_cancel_indices[previous[previous_idx].source_index]
+        try:
+            price_diff = pct_diff(
+                float(order["price"]), float(to_cancel[match_idx]["price"])
+            )
+            qty_diff = pct_diff(
+                float(order["qty"]), float(to_cancel[match_idx]["qty"])
+            )
+            logging.debug(
+                "skipped_recreate | %s | tolerance=%.4f%% price_diff=%.4f%% qty_diff=%.4f%%",
+                order.get("symbol", "?"),
+                tolerance * 100.0,
+                price_diff,
+                qty_diff,
+            )
+        except Exception:
+            logging.debug(
+                "skipped_recreate | %s | tolerance=%.4f%%",
+                order.get("symbol", "?"),
+                tolerance * 100.0,
+            )
 
     remaining_cancel = [o for i, o in enumerate(to_cancel) if i not in used_cancel]
     return remaining_cancel, kept_create, skipped
@@ -1662,19 +2222,25 @@ def to_executable_orders(
                 continue
             pb_order_type = snake_of(order[3])
             # The Rust orchestrator is the single source of execution-type
-            # truth (every live path builds 5-tuples from its execution_type
-            # field); a short tuple here means a broken producer, and
+            # truth (every live path builds 6-tuples from its execution_type
+            # and execution_priority fields); a short tuple here means a broken producer, and
             # silently defaulting could downgrade a panic market close.
-            if len(order) < 5:
+            if len(order) < 6:
                 raise ValueError(
-                    f"ideal order for {symbol} missing execution_type: {order!r}; "
-                    "the Rust orchestrator must supply it"
+                    f"ideal order for {symbol} missing execution_type or execution_priority: {order!r}; "
+                    "the Rust orchestrator must supply both"
                 )
             execution_type = str(order[4]).lower()
             if execution_type not in {"limit", "market"}:
                 raise ValueError(
                     f"ideal order for {symbol} has invalid execution_type "
                     f"{order[4]!r}; expected limit or market"
+                )
+            execution_priority = str(order[5]).lower()
+            if execution_priority not in {"ordinary", "risk_critical"}:
+                raise ValueError(
+                    f"ideal order for {symbol} has invalid execution_priority "
+                    f"{order[5]!r}; expected ordinary or risk_critical"
                 )
             ideal_orders_f[symbol].append(
                 {
@@ -1687,6 +2253,7 @@ def to_executable_orders(
                     "custom_id": bot.format_custom_id_single(order[3]),
                     "type": execution_type,
                     "pb_order_type": pb_order_type,
+                    "execution_priority": execution_priority,
                 }
             )
             seen.add(seen_key)

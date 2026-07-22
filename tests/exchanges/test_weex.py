@@ -8,7 +8,7 @@ import ccxt
 import pytest
 
 from ccxt_contracts import build_contract_bot, get_bot_class
-from exchanges.weex import AsyncWeex, WeexBot
+from exchanges.weex import AsyncWeex, ProWeex, WeexBot
 from fill_events_manager import WeexFetcher, _build_fetcher_for_bot
 from market_snapshot import MarketSnapshotProvider
 
@@ -93,6 +93,34 @@ def test_weex_client_accepts_only_documented_success_envelope():
             {},
             "{}",
         )
+
+
+def test_weex_order_websocket_ignores_empty_order_event():
+    exchange = ProWeex()
+    client = MagicMock()
+
+    assert exchange.handle_orders(client, {"e": "orders", "d": []}) is None
+    client.resolve.assert_not_called()
+
+
+def test_weex_order_websocket_delegates_nonempty_order_event():
+    exchange = ProWeex()
+    client = MagicMock()
+    message = {"e": "orders", "d": [{"symbol": "cmt_btcusdt"}]}
+
+    with patch.object(ccxt.pro.weex, "handle_orders", return_value="handled") as handler:
+        assert exchange.handle_orders(client, message) == "handled"
+        handler.assert_called_once_with(client, message)
+
+
+def test_weex_order_websocket_does_not_hide_malformed_order_event():
+    exchange = ProWeex()
+    client = MagicMock()
+    message = {"e": "orders", "d": {"unexpected": "object"}}
+
+    with patch.object(ccxt.pro.weex, "handle_orders", return_value="handled") as handler:
+        assert exchange.handle_orders(client, message) == "handled"
+        handler.assert_called_once_with(client, message)
 
 
 def test_weex_order_params_match_v3_hedge_contract():
@@ -587,3 +615,4 @@ def test_setup_bot_weex_uses_weex_adapter():
             mock_cls.return_value = mock_bot
             assert setup_bot(config) is mock_bot
             mock_cls.assert_called_once_with(config)
+            assert mock_bot._order_churn_gate_enabled_for_connector is True

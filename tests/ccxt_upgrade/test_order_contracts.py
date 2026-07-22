@@ -11,7 +11,6 @@ from exchanges.bybit import BybitBot
 from exchanges.defx import DefxBot
 from exchanges.gateio import GateIOBot
 from exchanges.hyperliquid import HyperliquidBot
-from exchanges.kucoin import KucoinBot
 from exchanges.okx import OKXBot
 from passivbot import custom_id_has_explicit_passivbot_marker, custom_id_to_snake
 from passivbot_exceptions import FatalBotException
@@ -1079,19 +1078,18 @@ async def test_okx_legacy_and_staged_balance_snapshot_use_same_collateral_value(
     assert staged_balance == pytest.approx(legacy_balance)
 
 
-def test_one_way_exchanges_prefer_existing_position_state_over_side():
-    for bot_cls in (DefxBot, KucoinBot):
-        bot = bot_cls.__new__(bot_cls)
-        bot.positions = {
-            "BTC/USDT:USDT": {
-                "long": {"size": 1.0},
-                "short": {"size": 0.0},
-            }
+def test_legacy_defx_prefers_existing_position_state_over_side():
+    bot = DefxBot.__new__(DefxBot)
+    bot.positions = {
+        "BTC/USDT:USDT": {
+            "long": {"size": 1.0},
+            "short": {"size": 0.0},
         }
-        bot.has_position = lambda pside, symbol: abs(
-            float(bot.positions.get(symbol, {}).get(pside, {}).get("size", 0.0) or 0.0)
-        ) > 0.0
-        assert bot.determine_pos_side({"symbol": "BTC/USDT:USDT", "side": "sell"}) == "long"
+    }
+    bot.has_position = lambda pside, symbol: abs(
+        float(bot.positions.get(symbol, {}).get(pside, {}).get("size", 0.0) or 0.0)
+    ) > 0.0
+    assert bot.determine_pos_side({"symbol": "BTC/USDT:USDT", "side": "sell"}) == "long"
 
 
 @pytest.mark.asyncio

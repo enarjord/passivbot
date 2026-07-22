@@ -56,7 +56,19 @@ class AsyncWeex(_WeexSuccessEnvelopeMixin, ccxt_async.weex):
 
 
 class ProWeex(_WeexSuccessEnvelopeMixin, ccxt_pro.weex):
-    pass
+    def handle_orders(self, client, message):
+        """Ignore WEEX order-channel heartbeats with no order rows.
+
+        CCXT Pro versions through 4.5.67 call ``get_market_from_symbols([])`` for an empty
+        ``d`` payload, which eventually evaluates ``None.endswith(...)`` in
+        the base market resolver.  Leaving the subscription unresolved is the
+        correct websocket behavior: the pending ``watch_orders`` call remains
+        active until an actual order update arrives.
+        """
+        rows = message.get("d") if isinstance(message, dict) else None
+        if isinstance(rows, list) and not rows:
+            return
+        return super().handle_orders(client, message)
 
 
 class WeexBot(CCXTBot):
@@ -239,6 +251,22 @@ class WeexBot(CCXTBot):
                 "weex order missing explicit LONG/SHORT positionSide"
             )
         return position_side
+
+    def _canonical_open_order_reduce_only(self, order: dict) -> bool:
+        """Normalize WEEX V3's authoritative hedge action to close-only effect."""
+        explicit = super()._canonical_open_order_reduce_only(order)
+        side = str(
+            order.get("side") or (order.get("info") or {}).get("side") or ""
+        ).lower()
+        position_side = self._get_position_side_for_order(order)
+        if side not in {"buy", "sell"}:
+            raise ValueError("weex order missing explicit buy/sell side")
+        action_close = (position_side == "long" and side == "sell") or (
+            position_side == "short" and side == "buy"
+        )
+        if explicit is not None and bool(explicit) != action_close:
+            raise ValueError("weex order close-only response contradicts V3 action tuple")
+        return action_close
 
     async def _do_fetch_tickers(self) -> list[dict]:
         return await self.cca.contract_get_capi_v3_market_ticker_bookticker()

@@ -10480,7 +10480,7 @@ async def test_disappeared_self_order_guardrail_blocks_real_plan_create_until_re
 
 
 @pytest.mark.asyncio
-async def test_malformed_actual_open_order_blocks_symbol_plan(caplog):
+async def test_malformed_actual_open_order_blocks_account_wide_creates(caplog):
     bot = _make_open_order_guardrail_bot(epoch=11)
     bot._last_plan_detail = {}
     bot._order_plan_summary_is_interesting = lambda **kwargs: False
@@ -10534,7 +10534,7 @@ async def test_malformed_actual_open_order_blocks_symbol_plan(caplog):
         to_cancel, to_create = await Passivbot.calc_orders_to_cancel_and_create(bot)
 
     assert to_cancel == []
-    assert [order["symbol"] for order in to_create] == ["ETH/USDT:USDT"]
+    assert to_create == []
     assert bot._malformed_actual_order_symbols == {"BTC/USDT:USDT"}
     assert bot._malformed_actual_order_counts == {"BTC/USDT:USDT": 1}
     assert bot.state_change_detected_by_symbol == {"BTC/USDT:USDT"}

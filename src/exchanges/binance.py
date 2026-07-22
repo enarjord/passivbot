@@ -84,7 +84,45 @@ class BinanceBot(CCXTBot):
 
     def _get_position_side_for_order(self, order: dict) -> str:
         """Binance provides ps (positionSide) in info."""
-        return order.get("info", {}).get("ps", "long").lower()
+        info = order.get("info") or {}
+        exchange_position_side = str(
+            info.get("positionSide") or info.get("ps") or ""
+        ).lower()
+        if not bool(
+            getattr(self, "_config_hedge_mode", True)
+            and getattr(self, "hedge_mode", True)
+        ):
+            return self._normalize_one_way_position_side(order)
+        if exchange_position_side in {"long", "short"}:
+            return exchange_position_side
+        if exchange_position_side == "both":
+            return self._normalize_one_way_position_side(order)
+        metadata_side = super()._get_position_side_for_order(order)
+        if metadata_side in {"long", "short"}:
+            return metadata_side
+        raise ValueError("binance order missing authoritative position-side semantics")
+
+    def _canonical_open_order_reduce_only(self, order: dict) -> bool:
+        """Normalize Binance hedge action semantics; reduceOnly is not submitted in hedge mode."""
+        info = order.get("info") or {}
+        exchange_position_side = str(
+            info.get("positionSide") or info.get("ps") or ""
+        ).lower()
+        if exchange_position_side == "both" or not bool(
+            getattr(self, "_config_hedge_mode", True)
+            and getattr(self, "hedge_mode", True)
+        ):
+            reduce_only = self._strict_order_reduce_only_response(order)
+            if not isinstance(reduce_only, bool):
+                raise ValueError("binance one-way order missing authoritative reduceOnly")
+            return reduce_only
+        position_side = self._get_position_side_for_order(order)
+        side = str(order.get("side") or "").lower()
+        if side not in {"buy", "sell"}:
+            raise ValueError("binance order missing explicit buy/sell side")
+        return (position_side == "long" and side == "sell") or (
+            position_side == "short" and side == "buy"
+        )
 
     async def _do_fetch_positions(self) -> list:
         """Binance: Use fapiprivatev3_get_positionrisk endpoint."""
@@ -192,7 +230,7 @@ class BinanceBot(CCXTBot):
                     f"{raw_symbol}. Passivbot live supports perpetual swaps; cancel this "
                     "dated futures order before starting the bot."
                 )
-            elm["position_side"] = elm["info"]["positionSide"].lower()
+            elm["position_side"] = self._get_position_side_for_order(elm)
             elm["qty"] = elm["amount"]
             self._record_live_margin_mode_from_payload(elm)
             open_orders[elm["id"]] = elm

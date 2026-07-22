@@ -3,11 +3,13 @@ from __future__ import annotations
 import logging
 import math
 import sys
+import time
 from collections import Counter, defaultdict
 
 from passivbot_exceptions import RestartBotException
 from live.event_bus import EventTypes, ReasonCodes
 from live.fresh_entry_eligibility import FreshEntryEligibilityTrace
+from live.order_churn_gate import connector_supports_order_churn_gate
 from pure_funcs import shorten_custom_id
 from utils import utc_ms as _utils_utc_ms
 
@@ -33,6 +35,21 @@ def _utc_ms() -> int:
 def _live_event_console_available(bot, passivbot_cls) -> bool:
     checker = getattr(passivbot_cls, "_live_event_console_available", None)
     return bool(checker(bot)) if callable(checker) else False
+
+
+def _authoritative_full_confirmation_surfaces(bot, passivbot_cls) -> set[str]:
+    getter = getattr(bot, "_authoritative_full_confirmation_surfaces", None)
+    if callable(getter):
+        return set(getter())
+    return set(passivbot_cls._authoritative_full_confirmation_surfaces(bot))
+
+
+def _request_authoritative_confirmation(bot, passivbot_cls, surfaces) -> None:
+    requester = getattr(bot, "_request_authoritative_confirmation", None)
+    if callable(requester):
+        requester(surfaces)
+    else:
+        passivbot_cls._request_authoritative_confirmation(bot, surfaces)
 
 
 def _order_is_reduce_only(order: dict) -> bool:
@@ -72,6 +89,20 @@ def _order_pb_type(order: dict) -> str:
 
 def _order_is_panic(order: dict) -> bool:
     return "panic" in _order_pb_type(order)
+
+
+def _order_is_risk_critical(order: dict) -> bool:
+    return str(order.get("execution_priority") or "ordinary").lower() == "risk_critical"
+
+
+def _is_dedicated_protective_market_panic(
+    bot, order: dict, *, configure_creations: bool
+) -> bool:
+    return (
+        not configure_creations
+        and _order_is_panic(order)
+        and bot._is_market_execution_order(order)
+    )
 
 
 def _order_is_protective_create(order: dict) -> bool:
@@ -129,6 +160,263 @@ def _orders_removed_by_identity(before: list[dict], after: list[dict]) -> list[d
         else:
             removed.append(order)
     return removed
+
+
+async def _apply_order_churn_final_admission(bot, orders: list[dict]) -> list[dict]:
+    if not orders:
+        return []
+    if not connector_supports_order_churn_gate(bot):
+        return orders
+    state = getattr(bot, "_order_churn_gate_state", None)
+    if state is None:
+        return orders
+    activation_count = int(bot.live_value("order_replacement_churn_gate_activation_count"))
+    max_batch = int(bot.live_value("max_n_creations_per_batch"))
+    if max_batch <= 0:
+        return []
+    prioritized = sorted(
+        enumerate(orders),
+        key=lambda item: (0 if _order_is_risk_critical(item[1]) else 1, item[0]),
+    )
+    prioritized_orders = [order for _index, order in prioritized]
+    if activation_count <= 0:
+        selected = prioritized_orders[:max_batch]
+        for order in selected:
+            order["_churn_gate_reason"] = "disabled"
+        for order in prioritized_orders[max_batch:]:
+            order["_churn_gate_reason"] = "batch_capacity"
+        emitter = getattr(bot, "_emit_order_churn_admission_event", None)
+        if callable(emitter):
+            try:
+                emitter(
+                    orders=prioritized_orders,
+                    rolling_count=0,
+                    activation_count=activation_count,
+                    market_distance_threshold=float(
+                        bot.live_value("order_replacement_churn_gate_market_dist_pct")
+                    ),
+                    action_headroom=None,
+                    wave=getattr(bot, "_order_wave_in_progress", None),
+                )
+            except Exception as exc:
+                logging.debug(
+                    "[event] order churn admission emitter failed | error_type=%s",
+                    type(exc).__name__,
+                )
+        return selected
+    window_seconds = (
+        float(bot.live_value("order_replacement_churn_gate_window_minutes")) * 60.0
+    )
+    now_monotonic = time.monotonic()
+    projected_usage = state.create_attempt_count(
+        now_monotonic=now_monotonic, window_seconds=window_seconds
+    )
+    threshold = float(
+        bot.live_value("order_replacement_churn_gate_market_dist_pct")
+    )
+    churn_limit_orders = [
+        order
+        for order in prioritized_orders
+        if bool(order.get("_churn_evidence"))
+        and not bot._is_market_execution_order(order)
+        and not _order_is_risk_critical(order)
+    ]
+    market_prices = {}
+    if churn_limit_orders:
+        try:
+            market_prices = await bot._fetch_fresh_order_churn_market_prices(
+                {
+                    str(order.get("symbol"))
+                    for order in churn_limit_orders
+                    if order.get("symbol")
+                }
+            )
+        except Exception as exc:
+            logging.warning(
+                "[order] fresh market data unavailable for churn-gate final admission | error_type=%s",
+                type(exc).__name__,
+            )
+            market_prices = {}
+    admission: dict[int, tuple[str, bool]] = {}
+    for order in prioritized_orders:
+        churn_evidenced = bool(order.get("_churn_evidence"))
+        always_allowed = (
+            bot._is_market_execution_order(order)
+            or _order_is_risk_critical(order)
+            or not churn_evidenced
+        )
+        if always_allowed:
+            admission[id(order)] = ("ready", True)
+            continue
+        market_price = market_prices.get(str(order.get("symbol")))
+        if market_price is None:
+            admission[id(order)] = ("market_price_unavailable", False)
+            continue
+        try:
+            market_price = float(market_price)
+            if not math.isfinite(market_price) or market_price <= 0.0:
+                raise ValueError("invalid market price")
+            signed_distance = float(
+                _pb_attr("order_market_diff")(
+                    str(order["side"]), float(order["price"]), market_price
+                )
+            )
+            if not math.isfinite(signed_distance):
+                raise ValueError("invalid market distance")
+        except (KeyError, TypeError, ValueError):
+            admission[id(order)] = ("market_price_invalid", False)
+            continue
+        order["_churn_gate_market_distance"] = signed_distance
+        admission[id(order)] = ("ready", signed_distance <= threshold)
+    selected: list[dict] = []
+    deferred: list[dict] = []
+    capacity_deferred: list[dict] = []
+    action_headroom: float | int | None = None
+    action_headroom_checked = False
+    projected_signed_actions = 0
+    for order_index, order in enumerate(prioritized_orders):
+        if len(selected) >= max_batch:
+            capacity_deferred.append(order)
+            order["_churn_gate_reason"] = "batch_capacity"
+            continue
+        churn_evidenced = bool(order.get("_churn_evidence"))
+        admission_status, exempt = admission[id(order)]
+        if admission_status != "ready":
+            deferred.append(order)
+            order["_churn_gate_reason"] = admission_status
+            continue
+        if (
+            activation_count > 0
+            and churn_evidenced
+            and not exempt
+            and projected_usage >= activation_count
+        ):
+            deferred.append(order)
+            order["_churn_gate_reason"] = "allowance_exhausted"
+            continue
+        if churn_evidenced and not exempt:
+            if not action_headroom_checked:
+                action_headroom_checked = True
+                try:
+                    action_headroom = await bot._order_churn_far_create_headroom()
+                    if action_headroom is not None:
+                        normalized_headroom = float(action_headroom)
+                        if math.isnan(normalized_headroom) or normalized_headroom < 0.0:
+                            action_headroom = None
+                        else:
+                            action_headroom = normalized_headroom
+                except Exception as exc:
+                    action_headroom = None
+                    logging.warning(
+                        "[order] connector churn headroom unavailable | error_type=%s",
+                        type(exc).__name__,
+                    )
+            if action_headroom is None:
+                deferred.append(order)
+                order["_churn_gate_reason"] = "action_headroom_unavailable"
+                continue
+            remaining_slots = max(0, max_batch - len(selected))
+            future_always_allowed = sum(
+                1
+                for future in prioritized_orders[order_index + 1 :]
+                if admission[id(future)] == ("ready", True)
+            )
+            reserved_headroom = min(remaining_slots, future_always_allowed)
+            if not math.isinf(float(action_headroom)) and (
+                float(action_headroom)
+                - projected_signed_actions
+                - reserved_headroom
+                <= 0.0
+            ):
+                deferred.append(order)
+                order["_churn_gate_reason"] = "action_headroom_exhausted"
+                continue
+        if not churn_evidenced:
+            reason = "no_churn_evidence"
+        elif bot._is_market_execution_order(order):
+            reason = "market_order_exempt"
+        elif _order_is_risk_critical(order):
+            reason = "risk_critical_exempt"
+        elif exempt:
+            reason = "market_distance_exempt"
+        else:
+            reason = "allowance"
+        order["_churn_gate_reason"] = reason
+        selected.append(order)
+        projected_usage += 1
+        projected_signed_actions += 1
+    if deferred:
+        logging.info(
+            "[order] churn gate deferred %d far unstable creates | rolling_usage=%d activation_count=%d",
+            len(deferred),
+            state.create_attempt_count(
+                now_monotonic=now_monotonic, window_seconds=window_seconds
+            ),
+            activation_count,
+        )
+        _record_fresh_entry_orders(bot, "record_blocked_orders", deferred, "order_churn_gate")
+        reason_codes = {
+            "allowance_exhausted": ReasonCodes.ORDER_CHURN_ALLOWANCE_EXHAUSTED,
+            "market_price_unavailable": ReasonCodes.ORDER_CHURN_MARKET_DATA_UNAVAILABLE,
+            "market_price_invalid": ReasonCodes.ORDER_CHURN_MARKET_DATA_UNAVAILABLE,
+            "action_headroom_unavailable": ReasonCodes.ORDER_CHURN_ACTION_HEADROOM_UNAVAILABLE,
+            "action_headroom_exhausted": ReasonCodes.ORDER_CHURN_ACTION_HEADROOM_EXHAUSTED,
+        }
+        for reason in sorted({str(order.get("_churn_gate_reason")) for order in deferred}):
+            grouped = [
+                order
+                for order in deferred
+                if str(order.get("_churn_gate_reason")) == reason
+            ]
+            _pb_attr("Passivbot")._emit_execution_create_filter_event(
+                bot,
+                event_type=EventTypes.EXECUTION_CREATE_DEFERRED,
+                status="deferred",
+                reason_code=reason_codes.get(reason, ReasonCodes.ORDER_CHURN_ADMISSION),
+                order_count=len(grouped),
+                symbols=_symbols_from_orders(grouped),
+                wave=getattr(bot, "_order_wave_in_progress", None),
+                data={
+                    "rolling_count": state.create_attempt_count(
+                        now_monotonic=now_monotonic, window_seconds=window_seconds
+                    ),
+                    "activation_count": activation_count,
+                    "market_distance_threshold_pct": threshold * 100.0,
+                },
+            )
+    if capacity_deferred:
+        _record_fresh_entry_orders(
+            bot, "record_blocked_orders", capacity_deferred, "batch_capacity"
+        )
+        _pb_attr("Passivbot")._emit_execution_create_filter_event(
+            bot,
+            event_type=EventTypes.EXECUTION_CREATE_DEFERRED,
+            status="deferred",
+            reason_code=ReasonCodes.BATCH_CAPACITY,
+            order_count=len(capacity_deferred),
+            symbols=_symbols_from_orders(capacity_deferred),
+            wave=getattr(bot, "_order_wave_in_progress", None),
+            data={"max_n_creations_per_batch": max_batch},
+        )
+    emitter = getattr(bot, "_emit_order_churn_admission_event", None)
+    if callable(emitter):
+        try:
+            emitter(
+                orders=prioritized_orders,
+                rolling_count=state.create_attempt_count(
+                    now_monotonic=now_monotonic, window_seconds=window_seconds
+                ),
+                activation_count=activation_count,
+                market_distance_threshold=threshold,
+                action_headroom=action_headroom if action_headroom_checked else None,
+                wave=getattr(bot, "_order_wave_in_progress", None),
+            )
+        except Exception as exc:
+            logging.debug(
+                "[event] order churn admission emitter failed | error_type=%s",
+                type(exc).__name__,
+            )
+    return selected
 
 
 def _fresh_entry_trace(bot) -> FreshEntryEligibilityTrace | None:
@@ -259,6 +547,11 @@ async def execute_order_plan(
     """Execute a precomputed order plan against the exchange."""
     passivbot_cls = _pb_attr("Passivbot")
     order_wave = passivbot_cls._begin_order_wave(bot, to_cancel, to_create)
+    cancel_first_barrier = (
+        bool(to_cancel)
+        and not bot.debug_mode
+        and connector_supports_order_churn_gate(bot)
+    )
 
     seen = set()
     for elm in to_cancel:
@@ -351,10 +644,61 @@ async def execute_order_plan(
         try:
             res = await bot.execute_cancellations_parent(to_cancel)
         finally:
+            if cancel_first_barrier:
+                _request_authoritative_confirmation(
+                    bot,
+                    passivbot_cls,
+                    _authoritative_full_confirmation_surfaces(bot, passivbot_cls),
+                )
             bot._order_wave_in_progress = None
         if order_wave is not None:
             order_wave["cancel_ms"] = int(max(0, _utc_ms() - cancel_started_ms))
             order_wave["cancel_posted"] = len(res or [])
+    if cancel_first_barrier:
+        barrier_deferred = [
+            order
+            for order in to_create
+            if not _is_dedicated_protective_market_panic(
+                bot, order, configure_creations=configure_creations
+            )
+        ]
+        bypass_creates = [
+            order
+            for order in to_create
+            if _is_dedicated_protective_market_panic(
+                bot, order, configure_creations=configure_creations
+            )
+        ]
+        _record_fresh_entry_orders(
+            bot,
+            "record_blocked_orders",
+            barrier_deferred,
+            "account_cancel_first_barrier",
+        )
+        if order_wave is not None:
+            order_wave["deferred_create"] += len(barrier_deferred)
+        if barrier_deferred:
+            logging.info(
+                "[order] account-wide cancel-first barrier deferred %d creates until full confirmation and replanning",
+                len(barrier_deferred),
+            )
+            passivbot_cls._emit_execution_create_filter_event(
+                bot,
+                event_type=EventTypes.EXECUTION_CANCEL_FIRST_BARRIER,
+                status="deferred",
+                reason_code=ReasonCodes.ACCOUNT_CANCEL_FIRST_BARRIER,
+                order_count=len(barrier_deferred),
+                symbols=_symbols_from_orders(barrier_deferred),
+                wave=order_wave,
+                data={
+                    "cancel_count": len(to_cancel),
+                    "dedicated_market_panic_bypass_count": len(bypass_creates),
+                    "required_surfaces": sorted(
+                        _authoritative_full_confirmation_surfaces(bot, passivbot_cls)
+                    ),
+                },
+            )
+        to_create = bypass_creates
     if bot.debug_mode:
         if to_create:
             _record_fresh_entry_orders(
@@ -520,6 +864,12 @@ async def execute_order_plan(
             order_wave["skipped_create"] += max(
                 0, before_market_filter - len(to_create_mod)
             )
+        before_churn_admission = list(to_create_mod)
+        to_create_mod = await _apply_order_churn_final_admission(bot, to_create_mod)
+        if order_wave is not None:
+            order_wave["deferred_create"] += max(
+                0, len(before_churn_admission) - len(to_create_mod)
+            )
         if to_create_mod:
             res = None
             try:
@@ -609,6 +959,42 @@ async def execute_orders_parent(bot, orders: list[dict]) -> list[dict]:
         "wave": wave,
     }
     bot._execution_connector_call_context = connector_call_context
+    churn_state = getattr(bot, "_order_churn_gate_state", None)
+    connector_enabled = connector_supports_order_churn_gate(bot)
+    churn_activation_count = (
+        int(bot.live_value("order_replacement_churn_gate_activation_count"))
+        if churn_state is not None and connector_enabled
+        else 0
+    )
+    if churn_activation_count > 0:
+        now_monotonic = time.monotonic()
+        churn_state.record_create_attempts(
+            len(orders), now_monotonic=now_monotonic
+        )
+        window_seconds = (
+            float(bot.live_value("order_replacement_churn_gate_window_minutes"))
+            * 60.0
+        )
+        emitter = getattr(bot, "_emit_order_churn_actions_accounted_event", None)
+        if callable(emitter):
+            try:
+                emitter(
+                    action_count=len(orders),
+                    rolling_count=churn_state.create_attempt_count(
+                        now_monotonic=now_monotonic, window_seconds=window_seconds
+                    ),
+                    wave=wave,
+                )
+            except Exception as exc:
+                logging.debug(
+                    "[event] order churn accounting emitter failed | error_type=%s",
+                    type(exc).__name__,
+                )
+    record_signed_actions = getattr(
+        bot, "_record_order_churn_signed_action_attempts", None
+    )
+    if callable(record_signed_actions):
+        record_signed_actions(len(orders))
     try:
         res = await bot.execute_orders(orders)
     except RestartBotException:
@@ -788,10 +1174,7 @@ async def execute_orders_parent(bot, orders: list[dict]) -> list[dict]:
                 pside=elm.get("position_side"),
             )
         bot._health_orders_placed += len(to_return)
-        if hasattr(bot, "_request_authoritative_confirmation"):
-            bot._request_authoritative_confirmation({"open_orders"})
-        else:
-            passivbot_cls._request_authoritative_confirmation(bot, {"open_orders"})
+        _request_authoritative_confirmation(bot, passivbot_cls, {"open_orders"})
     return to_return
 
 
@@ -799,12 +1182,11 @@ async def execute_cancellations_parent(bot, orders: list[dict]) -> list[dict]:
     """Submit a batch of cancellations, prioritising reduce-only orders."""
     passivbot_cls = _pb_attr("Passivbot")
     max_cancellations = int(bot.live_value("max_n_cancellations_per_batch"))
+    requested_orders = list(orders)
     if len(orders) > max_cancellations:
         try:
-            reduce_only_orders = [
-                x for x in orders if x.get("reduce_only") or x.get("reduceOnly")
-            ]
-            rest = [x for x in orders if not x["reduce_only"]]
+            reduce_only_orders = [x for x in orders if _order_is_reduce_only(x)]
+            rest = [x for x in orders if not _order_is_reduce_only(x)]
             orders = (reduce_only_orders + rest)[:max_cancellations]
         except Exception as exc:
             logging.error(
@@ -812,6 +1194,28 @@ async def execute_cancellations_parent(bot, orders: list[dict]) -> list[dict]:
                 type(exc).__name__,
             )
             orders = orders[:max_cancellations]
+        deferred = _orders_removed_by_identity(requested_orders, orders)
+        emitter = getattr(bot, "_emit_execution_cancel_filter_event", None)
+        if callable(emitter):
+            try:
+                emitter(
+                    event_type=EventTypes.EXECUTION_CANCEL_DEFERRED,
+                    status="deferred",
+                    reason_code=ReasonCodes.CANCEL_BATCH_CAPACITY,
+                    order_count=len(deferred),
+                    symbols=_symbols_from_orders(deferred),
+                    wave=getattr(bot, "_order_wave_in_progress", None),
+                    data={
+                        "requested_count": len(requested_orders),
+                        "submitted_count": len(orders),
+                        "max_n_cancellations_per_batch": max_cancellations,
+                    },
+                )
+            except Exception as exc:
+                logging.debug(
+                    "[event] cancellation-capacity emitter failed | error_type=%s",
+                    type(exc).__name__,
+                )
     grouped_orders: dict[str, list[dict]] = defaultdict(list)
     for order in orders:
         bot.add_to_recent_order_cancellations(order)
@@ -842,6 +1246,11 @@ async def execute_cancellations_parent(bot, orders: list[dict]) -> list[dict]:
         "wave": wave,
     }
     bot._execution_connector_call_context = connector_call_context
+    record_signed_actions = getattr(
+        bot, "_record_order_churn_signed_action_attempts", None
+    )
+    if callable(record_signed_actions):
+        record_signed_actions(len(orders))
     try:
         res = await bot.execute_cancellations(orders)
     except RestartBotException:
@@ -981,7 +1390,9 @@ async def execute_cancellations_parent(bot, orders: list[dict]) -> list[dict]:
             }
         )
         if ambiguous_symbols:
-            confirmation_surfaces = bot._authoritative_full_confirmation_surfaces()
+            confirmation_surfaces = _authoritative_full_confirmation_surfaces(
+                bot, passivbot_cls
+            )
             if not (
                 _live_event_console_available(bot, passivbot_cls)
                 and getattr(getattr(bot, "_live_event_pipeline", None), "console_sink", None)
@@ -992,10 +1403,7 @@ async def execute_cancellations_parent(bot, orders: list[dict]) -> list[dict]:
                     "before next cycle | symbols=%s",
                     passivbot_cls._log_symbols(ambiguous_symbols, limit=12),
                 )
-        if hasattr(bot, "_request_authoritative_confirmation"):
-            bot._request_authoritative_confirmation(confirmation_surfaces)
-        else:
-            passivbot_cls._request_authoritative_confirmation(
-                bot, confirmation_surfaces
-            )
+        _request_authoritative_confirmation(
+            bot, passivbot_cls, confirmation_surfaces
+        )
     return to_return

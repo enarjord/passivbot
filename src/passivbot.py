@@ -53,6 +53,10 @@ from fill_events_manager import (
     signed_fee_paid_from_payload,
 )
 from live import executor, market_data, planning_gates, reconciler, state_refresh
+from live.order_churn_gate import (
+    ORDER_CHURN_GATE_SUPPORTED_EXCHANGES,
+    OrderChurnGateState,
+)
 from live.balance_composition import (
     balance_composition_signature,
     format_balance_composition_sample,
@@ -699,11 +703,20 @@ class Passivbot:
     _emit_execution_create_filter_event = (
         live_event_emitters.emit_execution_create_filter_event
     )
+    _emit_execution_cancel_filter_event = (
+        live_event_emitters.emit_execution_cancel_filter_event
+    )
     _emit_initial_entry_eligibility_event = (
         live_event_emitters.emit_initial_entry_eligibility_event
     )
-    _emit_initial_entry_distance_gate_event = (
-        live_event_emitters.emit_initial_entry_distance_gate_event
+    _emit_order_churn_evidence_event = (
+        live_event_emitters.emit_order_churn_evidence_event
+    )
+    _emit_order_churn_admission_event = (
+        live_event_emitters.emit_order_churn_admission_event
+    )
+    _emit_order_churn_actions_accounted_event = (
+        live_event_emitters.emit_order_churn_actions_accounted_event
     )
     _emit_action_planned_event = live_event_emitters.emit_action_planned_event
     _emit_rust_orchestrator_called_event = (
@@ -1130,6 +1143,7 @@ class Passivbot:
         self.max_leverage = {}
         self.pside_int_map = {"long": 0, "short": 1}
         self.PB_modes = {"long": {}, "short": {}}
+        self._order_churn_gate_state = OrderChurnGateState()
         self.approved_coins = {"long": set(), "short": set()}
         self.ignored_coins = {"long": set(), "short": set()}
         self.approved_coins_minus_ignored_coins = {"long": set(), "short": set()}
@@ -11935,7 +11949,7 @@ class Passivbot:
 
     def _get_realized_pnl_cumsum_stats(self) -> dict[str, float]:
         """Return net realized pnl cumsum peak/current from FillEventsManager history."""
-        if self._pnls_manager is None:
+        if getattr(self, "_pnls_manager", None) is None:
             return {"max": 0.0, "last": 0.0}
         start_ms = self._pnls_lookback_start_ms()
         events = self._get_effective_pnl_events()
@@ -14896,6 +14910,11 @@ class Passivbot:
                     f"Rust orchestrator order missing execution_type: {order!r}"
                 )
             execution_type = str(order["execution_type"])
+            execution_priority = str(order.get("execution_priority") or "")
+            if execution_priority not in {"ordinary", "risk_critical"}:
+                raise ValueError(
+                    f"Rust orchestrator order missing valid execution_priority: {order!r}"
+                )
             ideal_orders.setdefault(symbol, []).append(
                 (
                     float(order["qty"]),
@@ -14903,6 +14922,7 @@ class Passivbot:
                     order_type,
                     order_type_id,
                     execution_type,
+                    execution_priority,
                 )
             )
         ideal_orders_f, _wel_blocked = self._to_executable_orders(
@@ -15643,12 +15663,18 @@ class Passivbot:
                     f"Rust orchestrator order missing execution_type: {o!r}"
                 )
             execution_type = str(o["execution_type"])
+            execution_priority = str(o.get("execution_priority") or "")
+            if execution_priority not in {"ordinary", "risk_critical"}:
+                raise ValueError(
+                    f"Rust orchestrator order missing valid execution_priority: {o!r}"
+                )
             tup = (
                 float(o["qty"]),
                 float(o["price"]),
                 order_type,
                 order_type_id,
                 execution_type,
+                execution_priority,
             )
             ideal_orders.setdefault(symbol, []).append(tup)
 
@@ -17607,12 +17633,18 @@ class Passivbot:
                     f"Rust orchestrator order missing execution_type: {o!r}"
                 )
             execution_type = str(o["execution_type"])
+            execution_priority = str(o.get("execution_priority") or "")
+            if execution_priority not in {"ordinary", "risk_critical"}:
+                raise ValueError(
+                    f"Rust orchestrator order missing valid execution_priority: {o!r}"
+                )
             tup = (
                 float(o["qty"]),
                 float(o["price"]),
                 order_type,
                 order_type_id,
                 execution_type,
+                execution_priority,
             )
             ideal_orders.setdefault(symbol, []).append(tup)
 
@@ -17827,7 +17859,6 @@ class Passivbot:
             ideal_orders,
             actual_symbols=actual_symbols,
             actual_psides_by_symbol=actual_psides_by_symbol,
-            apply_initial_entry_gate=False,
             apply_creation_guardrails=False,
             apply_mode_filters=False,
             collect_fresh_entry_eligibility=False,
@@ -17843,6 +17874,31 @@ class Passivbot:
         return reconciler.snapshot_actual_orders(
             self, symbols, psides_by_symbol=psides_by_symbol
         )
+
+    def _canonical_open_order_reduce_only(self, order: dict) -> Optional[bool]:
+        """Return authoritative venue-native close-only effect for one open order."""
+        return reconciler.extract_order_reduce_only(order)
+
+    async def _order_churn_far_create_headroom(self) -> float | int | None:
+        """Optional connector overlay for far churn-evidenced ordinary creates."""
+        return math.inf
+
+    async def _fetch_fresh_order_churn_market_prices(
+        self, symbols: set[str]
+    ) -> dict[str, float]:
+        """Fetch final-admission prices without a completed-candle fallback."""
+        if not symbols:
+            return {}
+        return await self._get_live_last_prices(
+            symbols,
+            max_age_ms=10_000,
+            context="order_churn_final_admission",
+            allow_completed_candle_fallback=False,
+        )
+
+    def _record_order_churn_signed_action_attempts(self, count: int) -> None:
+        """Connector hook for action-based exchange limits; generic venues need no overlay."""
+        return None
 
     def _reconcile_symbol_orders(
         self,
@@ -17883,259 +17939,6 @@ class Passivbot:
         Returns (remaining_cancel, remaining_create, skipped_pairs)
         """
         return reconciler.apply_order_match_tolerance(self, to_cancel, to_create)
-
-    async def _apply_initial_entry_distance_gate(
-        self, to_create: list[dict]
-    ) -> tuple[list[dict], int]:
-        """Drop far-from-market initial entry creations to reduce exchange churn.
-
-        Rust remains the source of truth for the intended initial entry. This live
-        executor guard only decides whether posting that passive initial entry now
-        is economical. Existing matching orders are preserved earlier by
-        _apply_order_match_tolerance(); if an existing initial has drifted beyond
-        tolerance, its cancel remains and the far replacement create is withheld.
-        """
-        if not to_create:
-            return to_create, 0
-        try:
-            threshold = float(
-                self.live_value("initial_entry_exec_max_market_dist_pct") or 0.0
-            )
-        except (TypeError, ValueError) as exc:
-            raise ValueError(
-                "live.initial_entry_exec_max_market_dist_pct must be numeric"
-            ) from exc
-        if threshold <= 0.0:
-            return to_create, 0
-        candidates = [
-            order
-            for order in to_create
-            if self._is_initial_entry_order(order)
-            and str(order.get("type", "limit")).lower() != "market"
-        ]
-        if not candidates:
-            return to_create, 0
-        symbols = {str(order["symbol"]) for order in candidates if order.get("symbol")}
-        market_prices = await self._fetch_market_prices(symbols)
-        kept: list[dict] = []
-        skipped = 0
-        for order in to_create:
-            if (
-                not self._is_initial_entry_order(order)
-                or str(order.get("type", "limit")).lower() == "market"
-            ):
-                kept.append(order)
-                continue
-            market_price = market_prices.get(str(order.get("symbol")))
-            if market_price is None or float(market_price) <= 0.0:
-                kept.append(order)
-                continue
-            dist = order_market_diff(
-                str(order["side"]), float(order["price"]), float(market_price)
-            )
-            if dist > threshold:
-                skipped += 1
-                self._log_initial_entry_distance_gate_block(
-                    order,
-                    market_price=float(market_price),
-                    signed_dist=float(dist),
-                    threshold=float(threshold),
-                )
-                continue
-            self._log_initial_entry_distance_gate_cleared(
-                order,
-                market_price=float(market_price),
-                signed_dist=float(dist),
-                threshold=float(threshold),
-            )
-            kept.append(order)
-        return kept, skipped
-
-    def _is_initial_entry_order(self, order: dict) -> bool:
-        pb_type = self._resolve_pb_order_type(order).lower()
-        return pb_type.startswith("entry_initial_")
-
-    def _initial_entry_gate_key(self, order: dict) -> tuple[str, str, str]:
-        return (
-            str(order.get("symbol") or ""),
-            str(order.get("position_side") or ""),
-            self._resolve_pb_order_type(order).lower(),
-        )
-
-    def _initial_entry_gate_log_probe(self, order: dict) -> dict:
-        return {
-            "symbol": str(order.get("symbol") or ""),
-            "side": str(order.get("side") or ""),
-            "position_side": str(order.get("position_side") or ""),
-            "qty": float(order.get("qty", 0.0) or 0.0),
-            "price": float(order.get("price", 0.0) or 0.0),
-        }
-
-    def _initial_entry_gate_structured_console_available(self) -> bool:
-        emit_gate_event = getattr(self, "_emit_initial_entry_distance_gate_event", None)
-        pipeline = getattr(self, "_live_event_pipeline", None)
-        return bool(
-            callable(emit_gate_event)
-            and Passivbot._live_event_console_available(self)
-            and getattr(pipeline, "console_sink", None) is not None
-        )
-
-    def _initial_entry_distance_gate_console_decision(
-        self, now_ms: int
-    ) -> tuple[bool, int, int]:
-        """Choose the bot-level operator projection for an admitted block event."""
-        state = getattr(self, "_initial_entry_distance_gate_console_state", None)
-        if not isinstance(state, dict):
-            state = {}
-            self._initial_entry_distance_gate_console_state = state
-        interval_ms = max(
-            0,
-            int(
-                getattr(
-                    self,
-                    "_initial_entry_distance_gate_console_interval_ms",
-                    5 * 60 * 1000,
-                )
-                or 0
-            ),
-        )
-        last_visible_ms = state.get("last_visible_ms")
-        operator_visible = (
-            last_visible_ms is None
-            or now_ms - int(last_visible_ms) >= interval_ms
-        )
-        suppressed_count = min(int(state.get("suppressed_count", 0) or 0), 999)
-        if operator_visible:
-            state["last_visible_ms"] = now_ms
-            state["suppressed_count"] = 0
-        else:
-            suppressed_count = min(suppressed_count + 1, 999)
-            state["suppressed_count"] = suppressed_count
-        active_state = getattr(self, "_initial_entry_distance_gate_log_state", {})
-        active_count = min(
-            len(active_state) if isinstance(active_state, dict) else 0, 999
-        )
-        return operator_visible, active_count, suppressed_count
-
-    def _log_initial_entry_distance_gate_block(
-        self,
-        order: dict,
-        *,
-        market_price: float,
-        signed_dist: float,
-        threshold: float,
-    ) -> None:
-        if not hasattr(self, "_initial_entry_distance_gate_log_state"):
-            self._initial_entry_distance_gate_log_state = {}
-        key = self._initial_entry_gate_key(order)
-        probe = self._initial_entry_gate_log_probe(order)
-        now_ms = utc_ms()
-        last_probe = self._initial_entry_distance_gate_log_state.get(key)
-        try:
-            tolerance = float(self.live_value("order_match_tolerance_pct") or 0.0)
-        except (TypeError, ValueError) as exc:
-            raise ValueError("live.order_match_tolerance_pct must be numeric") from exc
-        should_log = last_probe is None
-        if last_probe is not None:
-            last_info_ms = int(last_probe.get("last_info_ms", 0) or 0)
-            should_log = now_ms - last_info_ms >= 60 * 60 * 1000
-        probe["last_info_ms"] = now_ms if should_log else int(
-            (last_probe or {}).get("last_info_ms", 0) or 0
-        )
-        self._initial_entry_distance_gate_log_state[key] = probe
-        if not should_log:
-            logging.debug(
-                "[entry] initial entry creation still distance-gated | symbol=%s pside=%s qty=%.10g price=%.10g market=%.10g dist=%.4f%% threshold=%.4f%% tolerance=%.4f%% type=%s",
-                Passivbot._log_symbol(probe["symbol"]),
-                probe["position_side"],
-                probe["qty"],
-                probe["price"],
-                market_price,
-                signed_dist * 100.0,
-                threshold * 100.0,
-                tolerance * 100.0,
-                self._resolve_pb_order_type(order),
-            )
-            return
-        (
-            operator_visible,
-            active_count,
-            suppressed_count,
-        ) = self._initial_entry_distance_gate_console_decision(now_ms)
-        if (
-            operator_visible
-            and not self._initial_entry_gate_structured_console_available()
-        ):
-            logging.info(
-                "[entry] initial entry staged but not placed | symbol=%s pside=%s qty=%.10g price=%.10g market=%.10g dist=%.4f%% threshold=%.4f%% tolerance=%.4f%% type=%s reason=initial_entry_distance_gate",
-                Passivbot._log_symbol(probe["symbol"]),
-                probe["position_side"],
-                probe["qty"],
-                probe["price"],
-                market_price,
-                signed_dist * 100.0,
-                threshold * 100.0,
-                tolerance * 100.0,
-                self._resolve_pb_order_type(order),
-            )
-        event_order = dict(order)
-        event_order["pb_order_type"] = self._resolve_pb_order_type(order)
-        emit_gate_event = getattr(self, "_emit_initial_entry_distance_gate_event", None)
-        if callable(emit_gate_event):
-            emit_gate_event(
-                event_type=EventTypes.ENTRY_INITIAL_DISTANCE_GATE_BLOCKED,
-                status="skipped",
-                action="skip_create",
-                order=event_order,
-                market_price=market_price,
-                signed_dist=signed_dist,
-                threshold=threshold,
-                tolerance=tolerance,
-                operator_visible=operator_visible,
-                active_count=active_count,
-                suppressed_count=suppressed_count,
-            )
-
-    def _log_initial_entry_distance_gate_cleared(
-        self,
-        order: dict,
-        *,
-        market_price: float,
-        signed_dist: float,
-        threshold: float,
-    ) -> None:
-        state = getattr(self, "_initial_entry_distance_gate_log_state", None)
-        if not isinstance(state, dict):
-            return
-        key = self._initial_entry_gate_key(order)
-        if key not in state:
-            return
-        state.pop(key, None)
-        if not self._initial_entry_gate_structured_console_available():
-            logging.info(
-                "[entry] initial entry distance gate cleared | symbol=%s pside=%s qty=%.10g price=%.10g market=%.10g dist=%.4f%% threshold=%.4f%% type=%s",
-                Passivbot._log_symbol(order.get("symbol")),
-                str(order.get("position_side") or ""),
-                float(order.get("qty", 0.0) or 0.0),
-                float(order.get("price", 0.0) or 0.0),
-                market_price,
-                signed_dist * 100.0,
-                threshold * 100.0,
-                self._resolve_pb_order_type(order),
-            )
-        event_order = dict(order)
-        event_order["pb_order_type"] = self._resolve_pb_order_type(order)
-        emit_gate_event = getattr(self, "_emit_initial_entry_distance_gate_event", None)
-        if callable(emit_gate_event):
-            emit_gate_event(
-                event_type=EventTypes.ENTRY_INITIAL_DISTANCE_GATE_CLEARED,
-                status="recovered",
-                action="allow_create",
-                order=event_order,
-                market_price=market_price,
-                signed_dist=signed_dist,
-                threshold=threshold,
-            )
 
     def _apply_mode_filters(
         self,
@@ -19870,6 +19673,9 @@ def setup_bot(config):
         logging.info(
             f"Using generic CCXTBot for '{user_info['exchange']}' (no custom implementation)"
         )
+    bot._order_churn_gate_enabled_for_connector = (
+        user_info["exchange"] in ORDER_CHURN_GATE_SUPPORTED_EXCHANGES
+    )
     return bot
 
 

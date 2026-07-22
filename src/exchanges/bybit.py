@@ -31,8 +31,39 @@ class BybitBot(CCXTBot):
     # ═══════════════════ HOOK OVERRIDES ═══════════════════
 
     def _get_position_side_for_order(self, order: dict) -> str:
-        """Bybit: Use determine_pos_side_ccxt helper."""
-        return determine_pos_side_ccxt(order)
+        """Bybit: use durable positionIdx/position-side/client metadata."""
+        info = order.get("info") or {}
+        raw_position_idx = info.get("positionIdx")
+        if raw_position_idx is not None:
+            position_idx = int(float(raw_position_idx))
+            if position_idx == 1:
+                return "long"
+            if position_idx == 2:
+                return "short"
+            if position_idx == 0:
+                return self._normalize_one_way_position_side(order)
+            raise ValueError("bybit hedge order has invalid positionIdx")
+        position_side = super()._get_position_side_for_order(order)
+        if position_side not in {"long", "short"}:
+            raise ValueError("bybit order missing authoritative positionIdx/position side")
+        return position_side
+
+    def _canonical_open_order_reduce_only(self, order: dict) -> bool:
+        """Normalize Bybit hedge action semantics from side plus positionIdx."""
+        info = order.get("info") or {}
+        raw_position_idx = info.get("positionIdx")
+        if raw_position_idx is not None and int(float(raw_position_idx)) == 0:
+            reduce_only = self._strict_order_reduce_only_response(order)
+            if not isinstance(reduce_only, bool):
+                raise ValueError("bybit one-way order missing authoritative reduceOnly")
+            return reduce_only
+        position_side = self._get_position_side_for_order(order)
+        side = str(order.get("side") or "").lower()
+        if side not in {"buy", "sell"}:
+            raise ValueError("bybit order missing explicit buy/sell side")
+        return (position_side == "long" and side == "sell") or (
+            position_side == "short" and side == "buy"
+        )
 
     # ═══════════════════ BYBIT-SPECIFIC METHODS ═══════════════════
 

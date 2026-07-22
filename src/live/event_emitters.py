@@ -3964,63 +3964,150 @@ def emit_action_planned_event(
         )
 
 
-def emit_initial_entry_distance_gate_event(
+def emit_order_churn_evidence_event(
     bot: Any,
     *,
-    event_type: str,
-    status: str,
-    action: str,
-    order: dict,
-    market_price: float,
-    signed_dist: float,
-    threshold: float,
-    tolerance: float | None = None,
-    operator_visible: bool = True,
-    active_count: int | None = None,
-    suppressed_count: int | None = None,
-) -> None:
+    generation: int,
+    reset: bool,
+    reset_count: int,
+    reason_counts: Mapping[str, int],
+    churn_count: int,
+    order_count: int,
+    symbols: Any,
+    history_symbol_count: int,
+    snapshot_status: str = "observed",
+) -> bool:
+    """Emit one bounded summary of the causal RAM-history update for a plan."""
     try:
-        symbol = str(order.get("symbol") or "")
-        pside = str(order.get("position_side") or "")
-        side = str(order.get("side") or "")
-        data = {
-            "qty": _safe_float(order.get("qty")),
-            "price": _safe_float(order.get("price")),
-            "market_price": _safe_float(market_price),
-            "distance_pct": _safe_float(float(signed_dist) * 100.0),
-            "threshold_pct": _safe_float(float(threshold) * 100.0),
-            "action": str(action),
-            "operator_visible": bool(operator_visible),
-            "order_type": str(
-                order.get("pb_order_type") or order.get("type") or "unknown"
-            ),
+        symbol_values = sorted({str(symbol) for symbol in symbols or [] if symbol})
+        bounded_reasons = {
+            str(reason)[:64]: max(0, int(count))
+            for reason, count in sorted(reason_counts.items())[:16]
         }
-        if tolerance is not None:
-            data["tolerance_pct"] = _safe_float(float(tolerance) * 100.0)
-        if active_count is not None:
-            data["active_count"] = max(0, min(int(active_count), 999))
-        if suppressed_count is not None:
-            data["suppressed_count"] = max(0, min(int(suppressed_count), 999))
-        bot._emit_live_event(
-            event_type,
-            level="info",
-            component="entry.initial_distance_gate",
-            tags=(EventTags.ORDER, EventTags.GATE, EventTags.ACTION),
+        emitted = bot._emit_live_event(
+            EventTypes.ORDER_CHURN_EVIDENCE,
+            level="debug",
+            component="order.churn_history",
+            tags=(EventTags.ORDER, EventTags.GATE, EventTags.MEMORY, EventTags.SNAPSHOT),
             cycle_id=current_live_event_cycle_id(bot),
-            symbol=symbol,
-            pside=pside,
-            side=side,
-            status=status,
-            reason_code=ReasonCodes.INITIAL_ENTRY_DISTANCE_GATE,
-            data={key: value for key, value in data.items() if value is not None},
+            status="reset" if reset else str(snapshot_status)[:24],
+            reason_code=ReasonCodes.ORDER_CHURN_HISTORY,
+            data={
+                "generation": max(0, int(generation)),
+                "reset": bool(reset),
+                "reset_count": max(0, int(reset_count)),
+                "order_count": max(0, int(order_count)),
+                "churn_count": max(0, int(churn_count)),
+                "reason_counts": bounded_reasons,
+                "history_symbol_count": max(0, int(history_symbol_count)),
+                "symbols": symbol_values[:12],
+                "symbols_count": len(symbol_values),
+                "symbols_truncated": len(symbol_values) > 12,
+            },
         )
+        return emitted is not None
     except Exception as exc:
         logging.debug(
-            "[event] failed to emit initial entry distance gate event type=%s symbol=%s: %s",
-            event_type,
-            order.get("symbol") if isinstance(order, dict) else None,
+            "[event] failed to emit order churn evidence event error_type=%s",
             _bounded_exception_type(exc),
         )
+        return False
+
+
+def emit_order_churn_admission_event(
+    bot: Any,
+    *,
+    orders: Any,
+    rolling_count: int,
+    activation_count: int,
+    market_distance_threshold: float,
+    action_headroom: float | int | None,
+    wave: dict | None = None,
+) -> bool:
+    """Emit one bounded summary after final churn admission and priority slicing."""
+    try:
+        rows = [order for order in list(orders or []) if isinstance(order, dict)]
+        reasons = Counter(str(order.get("_churn_gate_reason") or "unknown") for order in rows)
+        symbols = sorted({str(order.get("symbol")) for order in rows if order.get("symbol")})
+        distances = [
+            float(order["_churn_gate_market_distance"])
+            for order in rows
+            if isinstance(order.get("_churn_gate_market_distance"), (int, float))
+            and math.isfinite(float(order["_churn_gate_market_distance"]))
+        ]
+        order_wave_id, _action_id = _execution_event_ids(
+            wave, action="create", index=None
+        )
+        data: dict[str, Any] = {
+            "order_count": len(rows),
+            "reason_counts": dict(sorted(reasons.items())[:16]),
+            "rolling_count": max(0, int(rolling_count)),
+            "activation_count": max(0, int(activation_count)),
+            "market_distance_threshold_pct": _safe_float(
+                float(market_distance_threshold) * 100.0
+            ),
+            "symbols": symbols[:12],
+            "symbols_count": len(symbols),
+            "symbols_truncated": len(symbols) > 12,
+            "distance_pct_sample": [
+                float(distance) * 100.0 for distance in sorted(distances)[:8]
+            ],
+        }
+        if action_headroom is not None and math.isfinite(float(action_headroom)):
+            data["action_headroom"] = max(0, int(action_headroom))
+        emitted = bot._emit_live_event(
+            EventTypes.ORDER_CHURN_ADMISSION,
+            level="debug",
+            component="order.churn_admission",
+            tags=(EventTags.ORDER, EventTags.GATE, EventTags.ACTION),
+            cycle_id=current_live_event_cycle_id(bot),
+            order_wave_id=order_wave_id,
+            status="evaluated",
+            reason_code=ReasonCodes.ORDER_CHURN_ADMISSION,
+            data=data,
+        )
+        return emitted is not None
+    except Exception as exc:
+        logging.debug(
+            "[event] failed to emit order churn admission event error_type=%s",
+            _bounded_exception_type(exc),
+        )
+        return False
+
+
+def emit_order_churn_actions_accounted_event(
+    bot: Any,
+    *,
+    action_count: int,
+    rolling_count: int,
+    wave: dict | None = None,
+) -> bool:
+    """Emit bounded evidence that one connector-bound logical create batch was debited."""
+    try:
+        order_wave_id, _action_id = _execution_event_ids(
+            wave, action="create", index=None
+        )
+        emitted = bot._emit_live_event(
+            EventTypes.ORDER_CHURN_ACTIONS_ACCOUNTED,
+            level="debug",
+            component="order.churn_accounting",
+            tags=(EventTags.ORDER, EventTags.ACTION, EventTags.GATE),
+            cycle_id=current_live_event_cycle_id(bot),
+            order_wave_id=order_wave_id,
+            status="accounted",
+            reason_code=ReasonCodes.ORDER_CHURN_ACTION_ATTEMPT,
+            data={
+                "action_count": max(0, int(action_count)),
+                "rolling_count": max(0, int(rolling_count)),
+            },
+        )
+        return emitted is not None
+    except Exception as exc:
+        logging.debug(
+            "[event] failed to emit order churn accounting event error_type=%s",
+            _bounded_exception_type(exc),
+        )
+        return False
 
 
 def _order_event_data(order: dict | None, *, index: int | None = None) -> dict[str, Any]:
@@ -4259,6 +4346,54 @@ def emit_execution_create_filter_event(
             "[event] failed to emit execution create filter event type=%s status=%s reason=%s error_type=%s",
             event_type,
             status,
+            reason_code,
+            _bounded_exception_type(exc),
+        )
+        return False
+
+
+def emit_execution_cancel_filter_event(
+    bot: Any,
+    *,
+    event_type: str,
+    status: str,
+    reason_code: str,
+    order_count: int,
+    symbols: Any,
+    wave: dict | None = None,
+    data: dict | None = None,
+) -> bool:
+    """Emit a bounded event for cancellations deferred before exchange write."""
+    try:
+        order_wave_id, _action_id = _execution_event_ids(
+            wave, action="cancel", index=None
+        )
+        symbol_values = sorted({str(symbol) for symbol in symbols or [] if symbol})
+        payload = dict(data or {})
+        payload.update(
+            {
+                "order_count": max(0, int(order_count)),
+                "symbols": symbol_values[:12],
+                "symbols_count": len(symbol_values),
+                "symbols_truncated": len(symbol_values) > 12,
+            }
+        )
+        emitted = bot._emit_live_event(
+            event_type,
+            level="debug",
+            component="execution.cancel_filter",
+            tags=(EventTags.EXECUTION, EventTags.ORDER, EventTags.DEFER, "cancel"),
+            cycle_id=current_live_event_cycle_id(bot),
+            order_wave_id=order_wave_id,
+            status=status,
+            reason_code=reason_code,
+            data=payload,
+        )
+        return emitted is not None
+    except Exception as exc:
+        logging.debug(
+            "[event] failed to emit execution cancel filter event type=%s reason=%s error_type=%s",
+            event_type,
             reason_code,
             _bounded_exception_type(exc),
         )

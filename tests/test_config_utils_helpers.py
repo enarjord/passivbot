@@ -195,6 +195,50 @@ def test_limit_order_create_market_distance_default_and_validation():
             validate_config(invalid, verbose=False)
 
 
+def test_order_replacement_churn_gate_defaults_and_validation():
+    config = get_template_config()
+    live = config["live"]
+    assert live["order_replacement_churn_gate_activation_count"] == 10
+    assert live["order_replacement_churn_gate_window_minutes"] == pytest.approx(10.0)
+    assert live["order_replacement_churn_gate_stability_minutes"] == pytest.approx(2.0)
+    assert live["order_replacement_churn_gate_market_dist_pct"] == pytest.approx(0.005)
+    assert live["order_replacement_churn_gate_tracking_tolerance_pct"] == pytest.approx(
+        0.002
+    )
+    validate_config(config, verbose=False)
+
+    invalid_cases = (
+        ("order_replacement_churn_gate_activation_count", True),
+        ("order_replacement_churn_gate_activation_count", -1),
+        ("order_replacement_churn_gate_window_minutes", 0.0),
+        ("order_replacement_churn_gate_stability_minutes", 11.0),
+        ("order_replacement_churn_gate_market_dist_pct", 1.0),
+        ("order_replacement_churn_gate_market_dist_pct", -0.1),
+        ("order_replacement_churn_gate_tracking_tolerance_pct", 0.0002),
+        ("order_replacement_churn_gate_tracking_tolerance_pct", float("inf")),
+    )
+    for key, value in invalid_cases:
+        invalid = get_template_config()
+        invalid["live"][key] = value
+        with pytest.raises((TypeError, ValueError), match=key):
+            validate_config(invalid, verbose=False)
+
+
+def test_retired_initial_entry_gate_fails_with_actionable_replacement_names():
+    source = get_template_config()
+    source["live"]["initial_entry_exec_max_market_dist_pct"] = 0.005
+
+    with pytest.raises(
+        ValueError,
+        match="initial_entry_exec_max_market_dist_pct has been retired",
+    ) as exc_info:
+        prepare_config(source, verbose=False, target="canonical", runtime=None)
+
+    message = str(exc_info.value)
+    assert "order_replacement_churn_gate_market_dist_pct" in message
+    assert "order_replacement_churn_gate_activation_count" in message
+
+
 def test_prepare_config_strips_deprecated_price_distance_threshold():
     source = get_template_config()
     source["live"]["price_distance_threshold"] = 0.002
