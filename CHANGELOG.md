@@ -4,6 +4,9 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Fixed live order-churn evidence treating the execution loop's normal 30-second scheduled wait as
+  a provenance gap, which could prevent the account-wide churn gate from activating for slowly
+  moving EMA-based orders.
 - Fixed WEEX V3 live reconciliation rejecting valid `COMBINED`-mode close orders when the response
   reported `reduceOnly=false`; WEEX close-only effect now follows its authoritative `side` plus
   `positionSide` action tuple. WEEX account equity is also normalized to realized wallet balance by

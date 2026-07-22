@@ -43,6 +43,13 @@ def _utc_ms() -> int:
     return int(_utils_utc_ms())
 
 
+def _order_churn_max_generation_gap_seconds(bot) -> float:
+    """Return a cadence gap which includes the execution loop's quiet wait."""
+    execution_delay = float(bot.live_value("execution_delay_seconds"))
+    scheduled_wait = float(_pb_const("EXECUTION_SCHEDULED_WAIT_SECONDS"))
+    return max(10.0, 3.0 * (execution_delay + scheduled_wait))
+
+
 def _orders_removed_by_identity(before: list[dict], after: list[dict]) -> list[dict]:
     """Return objects removed by an existing filter without comparing mutable payloads."""
     remaining = Counter(id(order) for order in after)
@@ -1223,7 +1230,6 @@ def prepare_order_churn_evidence(
     stability_seconds = (
         float(bot.live_value("order_replacement_churn_gate_stability_minutes")) * 60.0
     )
-    execution_delay = float(bot.live_value("execution_delay_seconds"))
     decisions = state.evaluate_and_record(
         valid_ideals,
         generation=generation,
@@ -1234,7 +1240,7 @@ def prepare_order_churn_evidence(
         ),
         stability_seconds=stability_seconds,
         window_seconds=window_seconds,
-        max_generation_gap_seconds=max(10.0, 3.0 * execution_delay),
+        max_generation_gap_seconds=_order_churn_max_generation_gap_seconds(bot),
     )
     for orders in valid_ideals.values():
         for order in orders:

@@ -440,11 +440,14 @@ same intent continued across it.
 for every attempted account-wide Rust planning cycle, including failures. A stability run may use
 only immediately consecutive successful generations; any unavailable/failed/invalid generation
 breaks it. Also require the current decision and every adjacent snapshot in the run to be separated
-by no more than `max(10 seconds, 3 * live.execution_delay_seconds)`. A larger wall-clock gap breaks
-the run even if no attempt was recorded. The tight prefix must span the full configured stability
-duration and contain at least two prior snapshots. After any generation or time gap, the candidate
-fails open until new contiguous evidence accumulates; two tight snapshots several minutes apart
-cannot clear older evidence.
+by no more than three nominal quiet execution cadences, with a 10-second floor. One nominal quiet
+cadence is `live.execution_delay_seconds` plus the execution loop's maximum 30-second scheduled
+wait for a websocket trigger. The scheduled wait is ordinary runtime behavior and therefore is not
+itself an evidence discontinuity. A larger wall-clock gap breaks the run even if no attempt was
+recorded. The tight prefix must span the full configured stability duration and contain at least
+two prior snapshots. After any generation or time gap, the candidate fails open until new
+contiguous evidence accumulates; two tight snapshots several minutes apart cannot clear older
+evidence.
 
 ### Deterministic matching
 

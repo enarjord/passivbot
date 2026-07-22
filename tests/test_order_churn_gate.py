@@ -287,6 +287,51 @@ def test_prepare_prunes_history_only_symbol_without_appending_empty_snapshot(mon
     assert state.history_by_symbol == {}
 
 
+def test_live_generation_gap_allows_normal_scheduled_wait(monkeypatch):
+    class Bot:
+        @staticmethod
+        def live_value(key):
+            assert key == "execution_delay_seconds"
+            return 2.0
+
+    monkeypatch.setattr(
+        reconciler,
+        "_pb_const",
+        lambda key: 30.0 if key == "EXECUTION_SCHEDULED_WAIT_SECONDS" else None,
+    )
+
+    max_gap = reconciler._order_churn_max_generation_gap_seconds(Bot())
+    assert max_gap == 96.0
+
+    state = OrderChurnGateState()
+    first = _order(price=100.0)
+    generation = state.begin_generation()
+    state.evaluate_and_record(
+        {first["symbol"]: [first]},
+        generation=generation,
+        now_monotonic=0.0,
+        tight_tolerance=0.0002,
+        wider_tolerance=0.002,
+        stability_seconds=120.0,
+        window_seconds=600.0,
+        max_generation_gap_seconds=max_gap,
+    )
+    moved = _order(price=100.1)
+    generation = state.begin_generation()
+    decision = state.evaluate_and_record(
+        {moved["symbol"]: [moved]},
+        generation=generation,
+        now_monotonic=40.0,
+        tight_tolerance=0.0002,
+        wider_tolerance=0.002,
+        stability_seconds=120.0,
+        window_seconds=600.0,
+        max_generation_gap_seconds=max_gap,
+    )[id(moved)]
+    assert decision.churn_evidenced is True
+    assert decision.reason == "wider_but_not_tight"
+
+
 def test_first_prepare_emits_ram_reset_and_fails_open(monkeypatch):
     state = OrderChurnGateState()
     symbol = "BTC/USDT:USDT"
