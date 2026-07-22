@@ -725,6 +725,10 @@ Add canonical `config.live` fields:
 | `order_replacement_churn_gate_market_dist_pct` | `0.005` | Final market-distance threshold that always exempts a limit creation from allowance waiting; 0.5%. |
 | `order_replacement_churn_gate_tracking_tolerance_pct` | `0.002` | Wider price/quantity tolerance used only for historical churn evidence; 0.2%. |
 
+`order_replacement_churn_gate_activation_count = 0` is an explicit special case: skip the
+far-churn economy-capacity predicate entirely rather than comparing a reservation against zero.
+Priority, batch caps, reconciliation, readiness, and cancel-first safety remain active.
+
 The existing `live.order_match_tolerance_pct`, normally `0.0002` (0.02%), remains the actual-order
 equivalence and tight historical tolerance.
 
@@ -880,8 +884,11 @@ events use bounded periodic summaries.
 ### Latest design questions
 
 1. **Scoped planning outage:** history and validity are per symbol; the processing universe includes
-   plans, actual orders, positions, and history. Healthy symbols continue. Recovery without history
-   intentionally receives fail-open placement.
+   plans, actual orders, positions, and history. Healthy symbols continue only when authoritative
+   state proves the affected symbol flat with no actual orders. Actual orders or an authoritative
+   nonzero position block account-wide non-panic creates, while unproven position state blocks every
+   exchange write. Recovery without history intentionally receives fail-open placement only after
+   those readiness conditions hold.
 2. **Ambiguous order identity and equal-cardinality ladders:** authoritative narrative
    classifications and temporal tracks are removed. Policy uses only wider-but-not-tight
    quantitative evidence and explicitly accepts bounded false positives/negatives.
@@ -1077,7 +1084,9 @@ events use bounded periodic summaries.
 - batch saturation and connector-specific create/cancel bounds;
 - RAM reset event and post-restart fail-open behavior;
 - bounded event output and event-sink failure isolation;
-- connector-bound action counts and omitted-order windows with gate enabled/disabled.
+- connector-bound action counts and omitted-order windows with gate enabled/disabled, including an
+  explicit `activation_count=0` case that admits a far churn-evidenced candidate without consulting
+  distance or connector-headroom economy gates.
 
 ## Implementation Slices After Approval
 
@@ -1092,9 +1101,9 @@ events use bounded periodic summaries.
 - Add canonical config fields, validation, templates, migration behavior, and changelog entry.
 - Audit every connector for authoritative venue-native close-only effect, normalized
   `position_side` in both hedge and one-way modes, normalized `pb_order_type`, execution type, and
-  authoritative remaining open quantity. Add focused Hyperliquid one-way, WEEX V3, and Bitget UTA
-  mappings without using current-position inference. Defx and Paradex are outside the supported
-  production boundary.
+  authoritative remaining open quantity. Add focused Hyperliquid one-way, WEEX V3, Bitget UTA, and
+  OKX long/short action-tuple mappings without using current-position inference. Defx and Paradex
+  are outside the supported production boundary.
 - Make reconciliation eligibility explicit from effective mode plus entry/close semantics, not
   ownership: normal scopes manage all orders, `manual` none, `tp_only` closes only, and
   `tp_only_with_active_entry_cancellation` closes plus stale-entry cancellation. Unknown semantic
