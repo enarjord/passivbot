@@ -53,9 +53,15 @@ These are deliberate exceptions to the general "Rust owns order behavior" and li
 rules. Keep them narrow, visible, and test-covered.
 
 - Live order-replacement churn gate:
-  - The former initial-entry-only distance gate is superseded and its configuration field retired.
-  - The reviewed RAM-only, strategy-agnostic replacement contract is maintained in
-    `account_wide_order_replacement_churn_gate_plan.md`.
+  - Rust remains the source of every ideal order. Python never invents or preserves a non-ideal
+    order, but may defer a far ordinary create only when bounded Rust-history evidence proves that
+    the ideal itself is moving and the account-wide action allowance is exhausted.
+  - Market, risk-critical, near-market, new, and proven-stable orders are not capacity-gated; every
+    connector-bound create and required configuration attempt still counts for later admission.
+  - Stale managed orders are cancelled immediately. Non-panic replacement creation waits for full
+    authoritative confirmation and fresh Rust replanning rather than leaving a stale order resting.
+  - The former initial-entry-only field is retired. The RAM-only state and accepted restart
+    exception are specified in `account_wide_order_replacement_churn_gate_plan.md`.
 
 - Hyperliquid `allMids` market snapshot:
   - User explicitly accepted using a single mid/last-like reference for bid, ask, and last on

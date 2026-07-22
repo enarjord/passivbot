@@ -1504,28 +1504,23 @@ class HyperliquidBot(CCXTBot):
                     signed_action_tokens = (
                         self._record_order_churn_signed_action_attempts(1)
                     )
-                    try:
-                        res = await self.cca.set_margin_mode(
-                            margin_mode, symbol=symbol, params=params
-                        )
-                    finally:
-                        self._complete_order_churn_signed_action_attempts(
-                            signed_action_tokens
-                        )
+                    res = await self.cca.set_margin_mode(
+                        margin_mode, symbol=symbol, params=params
+                    )
+                    self._complete_order_churn_signed_action_attempts(
+                        signed_action_tokens
+                    )
                     to_print = (
                         f"margin={format_exchange_config_response(res)} ({margin_mode})"
                     )
                 except Exception as e:
                     if '"code":"59107"' in str(e):
+                        self._complete_order_churn_signed_action_attempts(
+                            signed_action_tokens
+                        )
                         to_print = f"margin=ok (unchanged, {margin_mode})"
                     else:
-                        log_symbol = symbol_to_coin(symbol, verbose=False) or symbol
-                        logging.error(
-                            "[config] %s %s-margin update failed | %s",
-                            log_symbol,
-                            margin_mode,
-                            self._format_exchange_config_error(e),
-                        )
+                        raise
             except Exception as e:
                 log_symbol = symbol_to_coin(symbol, verbose=False) or symbol
                 logging.error(
@@ -1533,6 +1528,7 @@ class HyperliquidBot(CCXTBot):
                     log_symbol,
                     self._format_exchange_config_error(e),
                 )
+                raise
             if to_print:
                 log_symbol = symbol_to_coin(symbol, verbose=False) or symbol
                 logging.debug(f"{log_symbol}: {to_print}")

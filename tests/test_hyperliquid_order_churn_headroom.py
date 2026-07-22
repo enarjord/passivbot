@@ -141,6 +141,23 @@ async def test_unresolved_action_started_before_refresh_is_carried(monkeypatch):
     assert bot._hl_order_churn_local_actions == {}
 
 
+@pytest.mark.asyncio
+async def test_ambiguous_action_debit_survives_later_refreshes(monkeypatch):
+    bot = _bot({"nRequestsUsed": 0, "nRequestsCap": 10, "nRequestsSurplus": 0})
+    clock = [1.0]
+    monkeypatch.setattr("exchanges.hyperliquid.time.monotonic", lambda: clock[0])
+    tokens = bot._record_order_churn_signed_action_attempts(1)
+
+    clock[0] = 2.0
+    assert await bot._order_churn_far_create_headroom() == 9
+    assert set(bot._hl_order_churn_local_actions) == set(tokens)
+
+    bot._hl_order_churn_rate_snapshot["expires_monotonic"] = 0.0
+    clock[0] = 40.0
+    assert await bot._order_churn_far_create_headroom() == 9
+    assert set(bot._hl_order_churn_local_actions) == set(tokens)
+
+
 def test_precreate_cost_counts_only_unconfigured_symbols():
     bot = object.__new__(HyperliquidBot)
     bot.already_updated_exchange_config_symbols = {"BTC/USDC:USDC"}
@@ -175,7 +192,8 @@ async def test_failed_config_connector_attempt_is_debited(monkeypatch):
 
     monkeypatch.setattr("exchanges.hyperliquid.asyncio.sleep", no_sleep)
 
-    await bot.update_exchange_config_by_symbols(["BTC/USDC:USDC"])
+    with pytest.raises(RuntimeError, match="rejected"):
+        await bot.update_exchange_config_by_symbols(["BTC/USDC:USDC"])
 
     assert len(bot._order_churn_gate_state.action_attempt_timestamps) == 1
     bot._emit_order_churn_actions_accounted_event.assert_called_once()
@@ -183,5 +201,5 @@ async def test_failed_config_connector_attempt_is_debited(monkeypatch):
         "action_kind"
     ] == "config"
     bot._record_order_churn_signed_action_attempts.assert_called_once_with(1)
-    bot._complete_order_churn_signed_action_attempts.assert_called_once()
+    bot._complete_order_churn_signed_action_attempts.assert_not_called()
     bot.cca.set_margin_mode.assert_awaited_once()

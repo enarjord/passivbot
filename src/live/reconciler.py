@@ -1289,11 +1289,20 @@ async def calc_orders_to_cancel_and_create_from_ideal(
     churn_unavailable_symbols = {
         str(symbol) for symbol in (order_churn_unavailable_symbols or []) if symbol
     }
+    churn_unavailable_position_state = {
+        symbol: _symbol_position_state(bot, symbol)
+        for symbol in churn_unavailable_symbols
+    }
+    churn_unavailable_unproven_position_symbols = {
+        symbol
+        for symbol, state in churn_unavailable_position_state.items()
+        if state == "unproven"
+    }
     churn_unavailable_stateful_symbols = {
         symbol
         for symbol in churn_unavailable_symbols
         if actual_orders.get(symbol)
-        or _symbol_has_open_or_unproven_position(bot, symbol)
+        or churn_unavailable_position_state[symbol] == "nonzero"
     }
     keys = (
         (
@@ -1428,7 +1437,28 @@ async def calc_orders_to_cancel_and_create_from_ideal(
         to_cancel += cancel_
         to_create += create_
 
-    if connector_enabled and churn_unavailable_stateful_symbols:
+    if connector_enabled and churn_unavailable_unproven_position_symbols:
+        blocked = list(to_create)
+        blocked_cancellations = list(to_cancel)
+        to_cancel = []
+        to_create = []
+        trace = _trace_record(
+            trace,
+            "record_blocked_orders",
+            blocked,
+            "order_churn_normalization_position_unproven",
+        )
+        logging.error(
+            "[order] blocking every exchange write because churn normalization is unavailable "
+            "for symbols with unproven position state | symbols=%s | blocked_creations=%d | "
+            "blocked_cancellations=%d",
+            _pb_attr("Passivbot")._log_symbols(
+                sorted(churn_unavailable_unproven_position_symbols), limit=8
+            ),
+            len(blocked),
+            len(blocked_cancellations),
+        )
+    elif connector_enabled and churn_unavailable_stateful_symbols:
         blocked = [order for order in to_create if not _order_is_market_panic(order)]
         to_create = [order for order in to_create if _order_is_market_panic(order)]
         trace = _trace_record(
@@ -1820,29 +1850,32 @@ def _order_is_market_panic(order: dict) -> bool:
     )
 
 
-def _symbol_has_open_or_unproven_position(bot, symbol: str) -> bool:
-    positions = getattr(bot, "positions", {}) or {}
-    if symbol not in positions:
-        return True
+def _symbol_position_state(bot, symbol: str) -> str:
+    positions = getattr(bot, "positions", None)
+    if not isinstance(positions, dict) or symbol not in positions:
+        return "unproven"
     sides = positions.get(symbol)
     if not isinstance(sides, dict):
-        return True
+        return "unproven"
+    has_nonzero = False
     for pside in ("long", "short"):
         if pside not in sides:
-            return True
+            return "unproven"
         position = sides.get(pside)
         if not isinstance(position, dict) or "size" not in position:
-            return True
+            return "unproven"
         raw_size = position["size"]
         if isinstance(raw_size, bool) or raw_size is None:
-            return True
+            return "unproven"
         try:
             size = float(raw_size)
         except (TypeError, ValueError):
-            return True
-        if not math.isfinite(size) or size != 0.0:
-            return True
-    return False
+            return "unproven"
+        if not math.isfinite(size):
+            return "unproven"
+        if size != 0.0:
+            has_nonzero = True
+    return "nonzero" if has_nonzero else "flat"
 
 
 def _order_pb_type(order: dict) -> str:

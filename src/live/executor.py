@@ -110,6 +110,23 @@ def _order_is_protective_create(order: dict) -> bool:
     return _order_is_reduce_only(order)
 
 
+def _complete_terminal_signed_action_attempts(bot, tokens, results) -> None:
+    complete = getattr(bot, "_complete_order_churn_signed_action_attempts", None)
+    if not callable(complete):
+        return
+    token_rows = tuple(tokens or ())
+    result_rows = tuple(results or ())
+    if len(token_rows) != len(result_rows):
+        return
+    terminal_tokens = tuple(
+        token
+        for token, result in zip(token_rows, result_rows)
+        if not isinstance(result, BaseException)
+    )
+    if terminal_tokens:
+        complete(terminal_tokens)
+
+
 def _filter_hsl_replay_pending_creates(
     bot, passivbot_cls, orders: list[dict], order_wave
 ) -> list[dict]:
@@ -1059,11 +1076,6 @@ async def execute_orders_parent(bot, orders: list[dict]) -> list[dict]:
             )
         raise
     finally:
-        complete_signed_actions = getattr(
-            bot, "_complete_order_churn_signed_action_attempts", None
-        )
-        if callable(complete_signed_actions):
-            complete_signed_actions(signed_action_tokens)
         if (
             getattr(bot, "_execution_connector_call_context", None)
             is connector_call_context
@@ -1121,6 +1133,7 @@ async def execute_orders_parent(bot, orders: list[dict]) -> list[dict]:
                 len(res),
             )
         return []
+    _complete_terminal_signed_action_attempts(bot, signed_action_tokens, res)
     to_return = []
     for idx, (ex, order) in enumerate(zip(res, orders)):
         if not bot.did_create_order(ex):
@@ -1312,11 +1325,6 @@ async def execute_cancellations_parent(bot, orders: list[dict]) -> list[dict]:
             )
         raise
     finally:
-        complete_signed_actions = getattr(
-            bot, "_complete_order_churn_signed_action_attempts", None
-        )
-        if callable(complete_signed_actions):
-            complete_signed_actions(signed_action_tokens)
         if (
             getattr(bot, "_execution_connector_call_context", None)
             is connector_call_context
@@ -1346,6 +1354,7 @@ async def execute_cancellations_parent(bot, orders: list[dict]) -> list[dict]:
                 len(res),
             )
         return []
+    _complete_terminal_signed_action_attempts(bot, signed_action_tokens, res)
     for idx, (ex, order) in enumerate(zip(res, orders)):
         if not bot.did_cancel_order(ex, order):
             bot.state_change_detected_by_symbol.add(order["symbol"])

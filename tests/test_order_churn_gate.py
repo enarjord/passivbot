@@ -485,7 +485,10 @@ async def test_unavailable_stateful_symbol_preserves_only_market_panic_create():
         exchange = "fake"
         active_symbols = [btc, eth]
         open_orders = {btc: [], eth: [{"symbol": eth}]}
-        positions = {}
+        positions = {
+            btc: {"long": {"size": 0.0}, "short": {"size": 0.0}},
+            eth: {"long": {"size": 0.0}, "short": {"size": 0.0}},
+        }
 
         @staticmethod
         def _snapshot_actual_orders(symbols, psides_by_symbol=None):
@@ -527,6 +530,17 @@ async def test_unavailable_stateful_symbol_preserves_only_market_panic_create():
     )
 
     assert to_create == [market_panic]
+
+    Bot.positions = {eth: {"long": {"size": 1.0}}}
+    _to_cancel, to_create = await reconciler.calc_orders_to_cancel_and_create_from_ideal(
+        Bot(),
+        {btc: [ordinary, market_panic], eth: [unavailable]},
+        apply_creation_guardrails=False,
+        apply_mode_filters=False,
+        collect_fresh_entry_eligibility=False,
+        order_churn_unavailable_symbols={eth},
+    )
+    assert to_create == []
 
 
 def test_epoch_reset_clears_history_but_not_attempts():

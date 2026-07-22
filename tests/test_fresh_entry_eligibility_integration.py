@@ -441,7 +441,7 @@ async def test_connector_bound_create_attempt_is_counted_once_even_when_ambiguou
         await executor.execute_orders_parent(bot, [order])
 
     assert len(bot._order_churn_gate_state.action_attempt_timestamps) == 1
-    assert completed_signed_actions == [("create-action",)]
+    assert completed_signed_actions == []
     assert emitted == [
         {
             "action_count": 1,

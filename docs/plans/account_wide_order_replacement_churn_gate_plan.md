@@ -47,10 +47,10 @@ The proposed behavior is:
 5. Exempt market orders, explicitly risk-critical orders, and orders within the configured final
    market-distance threshold from allowance waiting. Only dedicated protective market panic may
    bypass the account-wide stale-cancellation barrier.
-6. Admit far churn-evidenced ordinary creates while fewer than ten connector-bound action attempts
-   remain in the account-wide rolling ten-minute window. Logical creates and required configuration
-   writes count; cancellations do not. Exempt creates always proceed but count for subsequent
-   ordinary admission.
+6. Admit far churn-evidenced ordinary creates when their create-plus-required-configuration
+   reservation leaves at most ten connector-bound action attempts in the account-wide rolling
+   ten-minute window. The eleventh action defers; cancellations do not count. Exempt creates always
+   proceed but count for subsequent ordinary admission.
 7. Never retain a stale actual order while waiting. Cancel it and regenerate current Rust intent on
    a later cycle.
 8. Execute all non-panic creations behind an account-wide cancel-first barrier. If any stale actual
@@ -140,6 +140,10 @@ Management is mode- and intent-scoped, not ownership-scoped:
 - `tp_only` leaves entries unmanaged but manages closes normally;
 - `tp_only_with_active_entry_cancellation` creates no entries, actively removes stale entry orders,
   and manages closes normally, preserving its existing distinction from `tp_only`.
+
+Throughout this plan, **dedicated protective market panic** means a current Rust-emitted market
+order whose payload is authoritatively close-only/reduce-only for the affected position. A panic
+name or priority marker without that close-only proof never receives the bypass.
 
 Accordingly, a user cancellation in a bot-managed scope causes the still-current Rust ideal to be
 recreated, and a user-created unmatched order in that scope is cancelled. Client-order ownership,
@@ -326,9 +330,11 @@ plan: append no snapshots and perform no ordinary reconciliation for any symbol.
 same decision per symbol or salvage partial output in Python. Symbol-scoped validity begins only
 after a complete Rust result exists; a downstream normalization or required-input failure then
 blocks only that symbol while healthy symbols continue **only when authoritative state proves the
-blocked symbol has neither actual open orders nor a held position**. If it has either, suppress all
-account-wide non-panic creates for the wave because a fill or unknown stale order there can
-invalidate the shared Rust plan; a dedicated protective market panic remains the sole bypass. A
+blocked symbol has neither actual open orders nor a held position**. If it has actual orders or an
+authoritatively nonzero position, suppress all account-wide non-panic creates for the wave because
+a fill or unknown stale order there can invalidate the shared Rust plan; a dedicated protective
+market panic remains the sole bypass. If either position side is absent, malformed, non-finite, or
+otherwise unproven, block every exchange write because even panic side and quantity are unsafe. A
 valid empty symbol plan appends an empty snapshot and removes stale orders for that symbol. The
 account-critical open-orders exception is
 stricter: a missing, non-finite, contradictory, or otherwise malformed required exchange order ID,
@@ -497,9 +503,9 @@ letting Python infer urgency from names.
 
 The default ordinary allowance is evaluated against all connector-bound create attempts and any
 connector-bound configuration attempts reserved by those creates in a rolling ten-minute window
-for one bot execution authority. A far churn-evidenced ordinary create is admitted only while fewer
-than ten attempts of any class remain in the active window after reserving the create and its
-required configuration actions.
+for one bot execution authority. With the default of ten, a far churn-evidenced ordinary create is
+admitted when its create-plus-required-configuration reservation leaves **at most ten** active
+attempts; defer only when the reservation would produce the eleventh or later attempt.
 
 Count one logical order when it reaches the concrete connector create-call boundary, including
 failed, rejected, timed-out, and ambiguous attempts and each logical member of a batch. Count each
@@ -528,14 +534,17 @@ Cancellations and allowance-exempt creates are never delayed by this overlay but
 cached estimate.
 
 Linearize each refresh around explicit local action-lifecycle records, not only a request-start
-timestamp. Record an action token before the connector call and mark it completed only after the
-call returns or raises. A successful refresh may retire only actions proven completed before its
-request started. It must carry and subtract every action that was unresolved when the request
-started, plus every action attempted or completed while the info request was in flight, because the
-returned server snapshot cannot prove that any of those actions was observed. A later successful
-refresh may retire a carried debit once that action was completed before the later request began.
-This intentionally permits temporary under-counting of headroom but never overstates it. Failed
-refreshes preserve unresolved lifecycle records; they do not fabricate a new inclusion boundary.
+timestamp. Record an action token before the connector call and mark it terminal only after an
+authoritative, non-ambiguous response. A raised exception, timeout, empty/partial response, or other
+ambiguous outcome remains unresolved and locally debited for the rest of the bot process unless a
+separately reviewed authoritative terminal-confirmation path proves its disposition. A successful
+refresh may retire only terminal actions completed before its request started. It must carry and
+subtract every unresolved action, plus every action attempted or terminally completed while the
+info request was in flight, because the returned server snapshot cannot prove that any of those
+actions was observed. A later successful refresh may retire a carried terminal debit once that
+action was completed before the later request began. This intentionally understates headroom after
+ambiguous actions but never overstates it. Failed refreshes preserve lifecycle records; they do not
+fabricate a new inclusion boundary.
 
 Compute snapshot headroom as
 `max(0, nRequestsCap - nRequestsUsed + nRequestsSurplus)`, then subtract every logical local address
@@ -563,8 +572,10 @@ Distance decisions made during planning are provisional. After cancellations and
 barriers, recheck fresh signed distance before any candidate-specific exchange configuration or
 margin write. A candidate that moved near is admitted. A candidate that moved far is deferred for
 capacity only when its retained Rust-history classification proves churn evidence; stable or
-uncertain candidates keep their fail-open admission and consume no churn allowance. Missing,
-non-finite, or stale market data defers an affected ordinary create. Sort by priority and apply
+uncertain candidates keep their fail-open admission and are not capacity-gated. Once any admitted
+candidate or its required configuration write reaches the connector, however, every attempt is
+debited for subsequent churn-evidenced admission. Missing, non-finite, or stale market data defers
+an affected ordinary create. Sort by priority and apply
 `max_n_creations_per_batch` before reserving or mutating configuration, so a batch-trimmed candidate
 cannot consume configuration capacity. Only admitted, selected candidates may cause exchange
 configuration work. For connectors whose configuration mutates the same account action budget, the
@@ -575,8 +586,11 @@ After configuration, retain the existing final market-snapshot safety guard and 
 distance from a forced-fresh, no-candle-fallback market read plus allowance/headroom admission
 immediately before the connector create call. Every connector-bound configuration attempt is
 debited exactly once before awaiting its result, including rejected, timed-out, pending, or
-ambiguous outcomes; only a reservation proven unsent is released. Attempted configuration actions
-are not reserved a second time. A candidate that moved from near to far during configuration is
+ambiguous outcomes; only a reservation proven unsent is released. A dependent create proceeds only
+after the configuration is authoritatively applied or proven already correct. Rejected, timed-out,
+pending, or ambiguous configuration leaves that symbol pending and removes its creates from the
+wave. Attempted configuration actions are not reserved a second time. A candidate that moved from
+near to far during configuration is
 re-evaluated with its existing Rust-history churn classification: ordinary capacity applies only
 when it remains churn-evidenced, while stable or uncertain far candidates still fail open. A
 deferred candidate may therefore have configuration work only when it passed the earlier
@@ -655,12 +669,14 @@ path may narrow this only when its response contract proves no fill and no accou
 
 ### Risk-critical sequencing
 
-Dedicated market panic may bypass the ordinary dependency path entirely. Every Rust-marked
+Dedicated market panic may bypass the ordinary dependency path entirely only when its current order
+payload is authoritatively close-only/reduce-only for the affected position. Every Rust-marked
 risk-critical limit order remains ahead of ordinary orders in final batching, but if any stale
 actual exists account-wide it must wait for cancellation, authoritative positions, balance,
-open-orders, and fills confirmation, and a fresh Rust plan. A positive cancel acknowledgement is
-insufficient: the cancelled order or another order may have filled before the acknowledgement and
-changed position size, PnL, risk, or close quantity.
+open-orders, and fills confirmation, and a fresh Rust plan. A malformed or non-close-only panic
+never bypasses readiness or sequencing. A positive cancel acknowledgement is insufficient: the
+cancelled order or another order may have filled before the acknowledgement and changed position
+size, PnL, risk, or close quantity.
 
 This keeps the only same-wave bypass narrow and explicit. If later measurements show that one-loop
 risk-critical limit latency is unacceptable, design a separate fast path that proves no fill or
@@ -800,9 +816,11 @@ This tradeoff must be measured in fake-live and, only with separate authority, l
 - Account-wide Rust planning failure appends no snapshots and performs no ordinary actions. A
   symbol-scoped failure after a complete Rust result permits healthy-symbol actions only when the
   affected symbol is authoritatively flat and has no actual open orders. If its position is
-  nonzero or unproven, or any actual order remains, block every account-wide non-panic creation;
-  dedicated reduce-only market panic remains the sole create bypass. An unavailable
-  account-critical surface such as open orders blocks every exchange write.
+  authoritatively nonzero or any actual order remains, block every account-wide non-panic creation;
+  dedicated close-only/reduce-only market panic remains the sole create bypass. If either position
+  side is missing, malformed, non-finite, or otherwise unproven, block every exchange write because
+  panic side and quantity are not trustworthy. Any other unavailable account-critical surface such
+  as open orders likewise blocks every exchange write.
 - A valid empty symbol plan is authoritative and may cancel all stale orders in bot-managed scopes
   for that symbol.
 - Unknown `pb_order_type` or execution type cannot satisfy a current ideal but does not by itself
@@ -983,8 +1001,9 @@ events use bounded periodic summaries.
 - current snapshot never matches itself;
 - account-wide Rust planning failure appends no history and performs no ordinary reconciliation;
 - downstream symbol-scoped normalization outage skips one symbol while healthy symbols continue
-  only when that symbol has no actual orders or held position; otherwise every non-panic create is
-  blocked account-wide while dedicated market panic remains available;
+  only when that symbol is authoritatively flat with no actual orders; actual orders or a proven
+  nonzero position block every non-panic create account-wide while dedicated protective market
+  panic remains available, whereas unproven position state blocks every exchange write;
 - valid empty is distinct from unavailable planning;
 - processing-universe union retains actual/position/history-only symbols;
 - first observation and restart reset fail open;
@@ -1044,7 +1063,7 @@ events use bounded periodic summaries.
   balance/positions/open-orders/fills confirmation for ordinary work;
 - fills and manual position changes regenerate different Rust intent before create;
 - no independent symbol or position-side may create in the stale-cancellation wave;
-- dedicated market panic bypasses ordinary sequencing;
+- only authoritatively close-only/reduce-only dedicated market panic bypasses ordinary sequencing;
 - ordinary Rust-promoted market creation cannot escape a stale limit conflict;
 - risk-critical limits replan after every stale cancellation, including positive acknowledgements
   whose response reports or may conceal a partial fill;
