@@ -38,7 +38,8 @@ The proposed behavior is:
    exact execution-semantic cohort.
 3. Cancel every unmatched stale actual order in bot-managed semantic scope regardless of
    churn-gate state. Orders in intentionally unmanaged scope do not arm the stale-cancellation
-   barrier; orders whose scope cannot be proven arm the separate fail-closed creation barrier.
+   barrier; orders whose scope cannot be proven make the account-critical open-orders surface
+   unavailable and arm an account-wide no-write/no-cancel readiness barrier.
 4. For every cohort, associate the complete current and historical groups one-to-one within each
    prior valid snapshot before classifying individual unmatched current ideals:
    - a tight match is evidence of stability in that snapshot;
@@ -559,7 +560,9 @@ understate headroom; refresh recovers it.
 If the authoritative response plus local debits shows no normal address-action headroom, defer far
 churn-evidenced ordinary creates even if the generic ten-minute window has capacity. The generic
 window remains a conservative write-economy ceiling when headroom exists; it is not treated as
-capacity refill. A stale or unavailable `userRateLimit` snapshot may not be replaced by invented
+capacity refill. A reservation is admissible when it exactly consumes the reported remaining
+headroom; defer only when projected signed actions plus the reservation exceed headroom. A stale or
+unavailable `userRateLimit` snapshot may not be replaced by invented
 headroom: defer only the far churn-evidenced ordinary class, refresh the info surface under existing
 pacing, and continue cancellations, near-market, market, and risk-critical actions. The exact
 server-field arithmetic above and any future safety reserve must be rechecked against current
@@ -589,7 +592,9 @@ debited exactly once before awaiting its result, including rejected, timed-out, 
 ambiguous outcomes; only a reservation proven unsent is released. A dependent create proceeds only
 after the configuration is authoritatively applied or proven already correct. Rejected, timed-out,
 pending, or ambiguous configuration leaves that symbol pending and removes its creates from the
-wave. Attempted configuration actions are not reserved a second time. A candidate that moved from
+wave. For Hyperliquid, the expected CCXT success response must contain `status=ok` and the native
+`response.type=default`; empty or partial payloads are not terminal success and retain their local
+action debit. Attempted configuration actions are not reserved a second time. A candidate that moved from
 near to far during configuration is
 re-evaluated with its existing Rust-history churn classification: ordinary capacity applies only
 when it remains churn-evidenced, while stable or uncertain far candidates still fail open. A
@@ -677,6 +682,12 @@ open-orders, and fills confirmation, and a fresh Rust plan. A malformed or non-c
 never bypasses readiness or sequencing. A positive cancel acknowledgement is insufficient: the
 cancelled order or another order may have filled before the acknowledgement and changed position
 size, PnL, risk, or close quantity.
+
+Once admitted through that dedicated path, the same reduce-only market panic is exempt from the
+generic post-cancellation `state_change_detected_by_symbol` create-delay filter; ambiguous or
+already-gone cancellation outcomes must not accidentally remove the sole emergency bypass. This
+does not weaken the earlier readiness rule: unproven position state blocks every exchange write
+before a panic can reach this path.
 
 This keeps the only same-wave bypass narrow and explicit. If later measurements show that one-loop
 risk-critical limit latency is unacceptable, design a separate fast path that proves no fill or
@@ -1085,8 +1096,9 @@ events use bounded periodic summaries.
 - RAM reset event and post-restart fail-open behavior;
 - bounded event output and event-sink failure isolation;
 - connector-bound action counts and omitted-order windows with gate enabled/disabled, including an
-  explicit `activation_count=0` case that admits a far churn-evidenced candidate without consulting
-  distance or connector-headroom economy gates.
+  explicit `activation_count=0` case that skips only churn-specific distance/headroom economy
+  predicates. The universal forced-fresh market-snapshot guard, reconciliation readiness, priority,
+  and batch caps still apply.
 
 ## Implementation Slices After Approval
 
@@ -1101,9 +1113,9 @@ events use bounded periodic summaries.
 - Add canonical config fields, validation, templates, migration behavior, and changelog entry.
 - Audit every connector for authoritative venue-native close-only effect, normalized
   `position_side` in both hedge and one-way modes, normalized `pb_order_type`, execution type, and
-  authoritative remaining open quantity. Add focused Hyperliquid one-way, WEEX V3, Bitget UTA, and
-  OKX long/short action-tuple mappings without using current-position inference. Defx and Paradex
-  are outside the supported production boundary.
+  authoritative remaining open quantity. Add focused Hyperliquid one-way, WEEX V3, Bitget UTA,
+  KuCoin hedge/one-way, and OKX long/short action-tuple mappings without using current-position
+  inference. Defx and Paradex are outside the supported production boundary.
 - Make reconciliation eligibility explicit from effective mode plus entry/close semantics, not
   ownership: normal scopes manage all orders, `manual` none, `tp_only` closes only, and
   `tp_only_with_active_entry_cancellation` closes plus stale-entry cancellation. Unknown semantic
