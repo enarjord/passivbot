@@ -911,8 +911,10 @@ events use bounded periodic summaries.
    state, and a fresh Rust plan. Batch truncation cannot strand a dependent creation.
 6. **Ordinary market promotion:** execution type is removed from the sequencing scope, so a
    Rust-promoted market creation cannot bypass its stale limit predecessor.
-7. **WEEX close semantics:** WEEX must normalize and verify its authoritative V3 response/action
-   semantics before enablement.
+7. **WEEX close semantics:** WEEX `COMBINED` mode must normalize close-only effect from the
+   authoritative V3 `side` plus `positionSide` action tuple. The response's `reduceOnly` literal
+   is not authoritative because regular V3 placement cannot set it and valid closes may report
+   `false`.
 8. **Defx metadata:** Defx is explicitly outside the supported live-exchange boundary and is not an
    implementation prerequisite.
 9. **Cancel acknowledgement after fills:** every limit order, including risk-critical, refreshes and
@@ -1013,7 +1015,10 @@ events use bounded periodic summaries.
 - one historical observation cannot satisfy multiple current candidates;
 - a current ideal already satisfied by an actual order still reserves its historical mate before an
   unmatched peer is classified;
-- raw list reordering and dictionary order do not change outcomes.
+- raw list reordering and dictionary order do not change outcomes;
+- WEEX balance normalization subtracts `unrealizePnl` from V3 account equity so mark-to-market
+  movement leaves Rust wallet balance and the churn account epoch unchanged, while realized wallet
+  changes still advance the epoch.
 
 ### Per-symbol history and heuristic
 

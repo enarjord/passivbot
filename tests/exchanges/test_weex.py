@@ -95,6 +95,61 @@ def test_weex_client_accepts_only_documented_success_envelope():
         )
 
 
+def test_weex_balance_excludes_unrealized_pnl_from_equity():
+    bot = _bot()
+    raw = [
+        {
+            "asset": "USDT",
+            "balance": "100.1875",
+            "availableBalance": "89.0",
+            "frozen": "10.0",
+            "unrealizePnl": "-0.25",
+        }
+    ]
+    unified = _ccxt_exchange().parse_balance(raw)
+
+    assert unified["total"]["USDT"] == pytest.approx(100.1875)
+    assert bot._get_balance(unified) == pytest.approx(100.4375)
+
+
+def test_weex_wallet_balance_is_stable_across_mark_to_market_changes():
+    bot = _bot()
+
+    def fetched(equity: float, unrealized_pnl: float) -> dict:
+        return {
+            "info": [
+                {
+                    "asset": "USDT",
+                    "balance": str(equity),
+                    "unrealizePnl": str(unrealized_pnl),
+                }
+            ]
+        }
+
+    assert bot._get_balance(fetched(100.2, -0.3)) == pytest.approx(100.5)
+    assert bot._get_balance(fetched(100.8, 0.3)) == pytest.approx(100.5)
+
+
+@pytest.mark.parametrize(
+    "info",
+    [
+        [],
+        [{"asset": "BTC", "balance": "1", "unrealizePnl": "0"}],
+        [
+            {"asset": "USDT", "balance": "1", "unrealizePnl": "0"},
+            {"asset": "USDT", "balance": "1", "unrealizePnl": "0"},
+        ],
+        [{"asset": "USDT", "balance": "1"}],
+        [{"asset": "USDT", "balance": "nan", "unrealizePnl": "0"}],
+    ],
+)
+def test_weex_balance_rejects_missing_ambiguous_or_nonfinite_wallet_inputs(info):
+    bot = _bot()
+
+    with pytest.raises(ValueError, match="balance response"):
+        bot._get_balance({"info": info})
+
+
 def test_weex_order_websocket_ignores_empty_order_event():
     exchange = ProWeex()
     client = MagicMock()

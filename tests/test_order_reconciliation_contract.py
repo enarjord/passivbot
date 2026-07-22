@@ -79,22 +79,34 @@ def test_supported_hedge_orders_do_not_fabricate_pside_from_client_id(bot_cls):
         bot._get_position_side_for_order(order)
 
 
-def test_weex_prefers_and_verifies_response_close_only_semantics():
+@pytest.mark.parametrize(
+    ("side", "position_side", "reported_reduce_only", "expected_close"),
+    [
+        ("buy", "LONG", False, False),
+        ("sell", "SHORT", False, False),
+        # WEEX V3 COMBINED has been observed returning reduceOnly=false for
+        # ordinary closes even though side + positionSide closes the position.
+        ("sell", "LONG", False, True),
+        ("buy", "SHORT", False, True),
+        # The response field is not part of the V3 placement contract, so the
+        # authoritative action tuple also wins when that literal is true.
+        ("buy", "LONG", True, False),
+    ],
+)
+def test_weex_uses_v3_action_tuple_not_response_reduce_only_literal(
+    side, position_side, reported_reduce_only, expected_close
+):
     bot = WeexBot.__new__(WeexBot)
-    close = {
-        "side": "sell",
-        "reduceOnly": True,
-        "info": {"positionSide": "LONG", "reduceOnly": True},
+    order = {
+        "side": side,
+        "reduceOnly": reported_reduce_only,
+        "info": {
+            "side": side.upper(),
+            "positionSide": position_side,
+            "reduceOnly": reported_reduce_only,
+        },
     }
-    assert bot._canonical_open_order_reduce_only(close) is True
-
-    contradictory = {
-        "side": "sell",
-        "reduceOnly": False,
-        "info": {"positionSide": "LONG", "reduceOnly": False},
-    }
-    with pytest.raises(ValueError, match="contradicts"):
-        bot._canonical_open_order_reduce_only(contradictory)
+    assert bot._canonical_open_order_reduce_only(order) is expected_close
 
 
 def test_bitget_uta_uses_action_tuple_even_when_literal_reduce_only_is_false():
@@ -934,6 +946,13 @@ def test_account_epoch_tracks_realized_rust_inputs_not_mark_to_market_fields():
     bot.positions[symbol]["long"]["unrealized_pnl"] = 20.0
     bot.positions[symbol]["long"]["liquidation_price"] = 60.0
     assert reconciler._order_churn_account_epoch(bot) == baseline
+
+    bot.raw_balance = 101.0
+    assert reconciler._order_churn_account_epoch(bot) != baseline
+    bot.raw_balance = 100.0
+    bot.snapped_balance = 101.0
+    assert reconciler._order_churn_account_epoch(bot) != baseline
+    bot.snapped_balance = 100.0
 
     bot.positions[symbol]["long"]["size"] = 1.1
     assert reconciler._order_churn_account_epoch(bot) != baseline

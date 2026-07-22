@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import logging
 import math
+from unittest.mock import MagicMock
 
 import pytest
 
+from live import executor as executor_module
 from live.executor import (
     _apply_order_churn_final_admission,
     _complete_terminal_signed_action_attempts,
@@ -259,3 +262,40 @@ async def test_diagnostic_emitter_failure_cannot_change_admission():
     admitted = await _apply_order_churn_final_admission(bot, [stable])
 
     assert admitted == [stable]
+
+
+@pytest.mark.asyncio
+async def test_repeated_churn_deferral_keeps_structured_path_but_throttles_info(
+    monkeypatch, caplog
+):
+    bot = _Bot()
+    now = [100.0]
+    monkeypatch.setattr(executor_module.time, "monotonic", lambda: now[0])
+    structured_emitter = MagicMock()
+    monkeypatch.setattr(
+        executor_module._pb_attr("Passivbot"),
+        "_emit_execution_create_filter_event",
+        structured_emitter,
+    )
+    bot._order_churn_gate_state.record_action_attempts(10, now_monotonic=now[0])
+    far = _order("far", price=99.0)
+
+    with caplog.at_level(logging.DEBUG):
+        assert await _apply_order_churn_final_admission(bot, [far]) == []
+        now[0] = 101.0
+        assert await _apply_order_churn_final_admission(bot, [far]) == []
+        now[0] = 400.0
+        assert await _apply_order_churn_final_admission(bot, [far]) == []
+
+    records = [
+        record
+        for record in caplog.records
+        if "churn gate deferred" in record.getMessage()
+    ]
+    assert [record.levelno for record in records] == [
+        logging.INFO,
+        logging.DEBUG,
+        logging.INFO,
+    ]
+    assert "suppressed_repeats=1" in records[-1].getMessage()
+    assert structured_emitter.call_count == 3

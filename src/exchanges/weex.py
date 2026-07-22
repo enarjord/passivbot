@@ -254,7 +254,6 @@ class WeexBot(CCXTBot):
 
     def _canonical_open_order_reduce_only(self, order: dict) -> bool:
         """Normalize WEEX V3's authoritative hedge action to close-only effect."""
-        explicit = super()._canonical_open_order_reduce_only(order)
         side = str(
             order.get("side") or (order.get("info") or {}).get("side") or ""
         ).lower()
@@ -264,9 +263,50 @@ class WeexBot(CCXTBot):
         action_close = (position_side == "long" and side == "sell") or (
             position_side == "short" and side == "buy"
         )
-        if explicit is not None and bool(explicit) != action_close:
-            raise ValueError("weex order close-only response contradicts V3 action tuple")
+        # V3 COMBINED orders cannot send reduceOnly.  WEEX nevertheless exposes
+        # a response field with that name and has been observed returning false
+        # for valid side + positionSide closes.  Treating it as authoritative
+        # makes the bot reject its own resting close.  The documented hedge
+        # action tuple is the connector-native close-only contract.
         return action_close
+
+    def _get_balance(self, fetched: dict) -> float:
+        """Return WEEX wallet balance, excluding unrealized position PnL.
+
+        WEEX V3's ``balance`` moves with ``unrealizePnl``.  Passivbot's raw
+        balance is the realized wallet balance used by Rust and backtests, so
+        normalize equity back to wallet balance from the same authoritative
+        response row.
+        """
+        raw = fetched.get("info") if isinstance(fetched, dict) else None
+        rows = raw if isinstance(raw, list) else [raw]
+        matches = [
+            row
+            for row in rows
+            if isinstance(row, dict)
+            and str(row.get("asset") or "").upper() == self.quote
+        ]
+        if len(matches) != 1:
+            raise ValueError(
+                f"weex: balance response missing unique {self.quote} asset row"
+            )
+        row = matches[0]
+        try:
+            equity = float(row["balance"])
+            unrealized_pnl = float(row["unrealizePnl"])
+        except (KeyError, TypeError, ValueError, OverflowError) as exc:
+            raise ValueError(
+                "weex: balance response missing finite balance/unrealizePnl"
+            ) from exc
+        wallet_balance = equity - unrealized_pnl
+        if not all(
+            math.isfinite(value)
+            for value in (equity, unrealized_pnl, wallet_balance)
+        ):
+            raise ValueError(
+                "weex: balance response contains non-finite balance/unrealizePnl"
+            )
+        return wallet_balance
 
     async def _do_fetch_tickers(self) -> list[dict]:
         return await self.cca.contract_get_capi_v3_market_ticker_bookticker()

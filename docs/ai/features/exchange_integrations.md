@@ -217,8 +217,19 @@ Handling in Passivbot:
 5. Require the raw symbol configuration to explicitly report `COMBINED` or
    `SEPARATED`; CCXT's normalized `hedged=false` is not sufficient evidence
    because it also represents missing or unknown raw mode state.
+6. In `COMBINED` mode, derive an open order's close-only effect exclusively from
+   `side` plus `positionSide`. Although V3 order-query responses expose a
+   `reduceOnly` field, ordinary V3 placement cannot set it and valid closes have
+   been observed returning `reduceOnly=false`; it is therefore not authoritative
+   for reconciliation.
+7. Normalize V3 account `balance` to realized wallet balance by subtracting the
+   same response row's `unrealizePnl`. Rust and backtests consume balance without
+   open-position mark-to-market PnL; passing WEEX equity directly changes risk
+   inputs and continuously invalidates churn evidence.
 
-Primary reference: [WEEX V3 place-order API](https://www.weex.com/api-doc/contract/Transaction_API/PlaceOrder).
+Primary references: [WEEX V3 place-order API](https://www.weex.com/api-doc/contract/Transaction_API/PlaceOrder),
+[current-orders API](https://www.weex.com/api-doc/contract/Transaction_API/GetCurrentOrderStatus),
+and [account-balance API](https://www.weex.com/api-doc/contract/Account_API/GetAccountBalance).
 
 ### Market data and CCXT compatibility
 

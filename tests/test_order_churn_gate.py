@@ -584,3 +584,35 @@ def test_symbol_epoch_reset_is_scoped_and_preserves_attempts():
     assert "BTC/USDT:USDT" not in state.history_by_symbol
     assert "ETH/USDT:USDT" in state.history_by_symbol
     assert state.action_attempt_count(now_monotonic=1.0, window_seconds=600.0) == 1
+
+
+def test_console_projection_throttle_preserves_first_transition_and_periodic_summary():
+    state = OrderChurnGateState()
+    signature = (("allowance_exhausted", "BTC/USDT:USDT"),)
+
+    assert state.should_log_console_event(
+        "create_deferred", signature, now_monotonic=100.0, repeat_seconds=300.0
+    ) == (True, 0)
+    assert state.should_log_console_event(
+        "create_deferred", signature, now_monotonic=101.0, repeat_seconds=300.0
+    ) == (False, 0)
+    assert state.should_log_console_event(
+        "create_deferred", signature, now_monotonic=399.9, repeat_seconds=300.0
+    ) == (False, 0)
+    assert state.should_log_console_event(
+        "create_deferred", signature, now_monotonic=400.0, repeat_seconds=300.0
+    ) == (True, 2)
+
+
+def test_console_projection_throttle_logs_material_signature_change_immediately():
+    state = OrderChurnGateState()
+
+    assert state.should_log_console_event(
+        "history_reset", "account", now_monotonic=1.0
+    ) == (True, 0)
+    assert state.should_log_console_event(
+        "history_reset", "account", now_monotonic=2.0
+    ) == (False, 0)
+    assert state.should_log_console_event(
+        "history_reset", ("market", "BTC"), now_monotonic=3.0
+    ) == (True, 0)

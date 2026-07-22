@@ -1137,9 +1137,17 @@ def prepare_order_churn_evidence(
             "[order] churn evidence history initialized empty | reason=process_start"
         )
     elif reset:
-        logging.info(
-            "[order] churn evidence history reset | reason=account_epoch_changed reset_count=%d",
+        should_log, suppressed = state.should_log_console_event(
+            "history_reset_account_epoch",
+            "account_epoch_changed",
+            now_monotonic=time.monotonic(),
+        )
+        log = logging.info if should_log else logging.debug
+        log(
+            "[order] churn evidence history reset | reason=account_epoch_changed "
+            "reset_count=%d suppressed_repeats=%d",
             state.reset_count,
+            suppressed,
         )
     current_universe = set(ideal_orders)
     current_universe.update(getattr(bot, "active_symbols", []) or [])
@@ -1155,11 +1163,18 @@ def prepare_order_churn_evidence(
     )
     if scoped_resets:
         reset = True
-        logging.info(
+        should_log, suppressed = state.should_log_console_event(
+            "history_reset_symbol_metadata",
+            tuple(sorted(scoped_resets)),
+            now_monotonic=time.monotonic(),
+        )
+        log = logging.info if should_log else logging.debug
+        log(
             "[order] churn evidence history reset | reason=symbol_market_metadata_changed "
-            "symbols=%s reset_count=%d",
+            "symbols=%s reset_count=%d suppressed_repeats=%d",
             _pb_attr("Passivbot")._log_symbols(sorted(scoped_resets), limit=8),
             state.reset_count,
+            suppressed,
         )
     if activation_count <= 0:
         state.history_by_symbol.clear()

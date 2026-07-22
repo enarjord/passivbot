@@ -20,6 +20,8 @@ ORDER_CHURN_GATE_SUPPORTED_EXCHANGES = frozenset(
     }
 )
 
+ORDER_CHURN_CONSOLE_REPEAT_SECONDS = 5.0 * 60.0
+
 
 def connector_supports_order_churn_gate(bot) -> bool:
     """Return the explicit setup-time rollout decision for this connector.
@@ -288,6 +290,39 @@ class OrderChurnGateState:
         self.generation = 0
         self.account_epoch: object | None = None
         self.reset_count = 0
+        self.console_log_state: dict[str, dict[str, object]] = {}
+
+    def should_log_console_event(
+        self,
+        family: str,
+        signature: object,
+        *,
+        now_monotonic: float,
+        repeat_seconds: float = ORDER_CHURN_CONSOLE_REPEAT_SECONDS,
+    ) -> tuple[bool, int]:
+        """Throttle repeated INFO projections without suppressing events or decisions."""
+        if not family:
+            raise ValueError("console log family must be non-empty")
+        if not math.isfinite(now_monotonic):
+            raise ValueError("console log timestamp must be finite")
+        if not math.isfinite(repeat_seconds) or repeat_seconds <= 0.0:
+            raise ValueError("console log repeat interval must be finite and positive")
+        previous = self.console_log_state.get(family)
+        if previous is None or previous.get("signature") != signature:
+            self.console_log_state[family] = {
+                "signature": signature,
+                "last_log_monotonic": now_monotonic,
+                "suppressed_count": 0,
+            }
+            return True, 0
+        last_log = float(previous["last_log_monotonic"])
+        if now_monotonic - last_log >= repeat_seconds:
+            suppressed = int(previous.get("suppressed_count", 0) or 0)
+            previous["last_log_monotonic"] = now_monotonic
+            previous["suppressed_count"] = 0
+            return True, suppressed
+        previous["suppressed_count"] = int(previous.get("suppressed_count", 0) or 0) + 1
+        return False, 0
 
     def begin_generation(self) -> int:
         self.generation += 1
