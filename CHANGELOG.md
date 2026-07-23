@@ -4,6 +4,11 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Startup monitor-publisher and live-event-pipeline installation diagnostics now retain bounded
+  exception types and stable continuation actions without exception messages, unsafe class names,
+  URLs, credentials, tokens, or tracebacks. Monitor enablement, pipeline installation, startup
+  continuation, and trading behavior are unchanged.
+
 - Order-sort market-price fetch failure diagnostics now retain bounded symbol context, a bounded
   exception type, and the stable `preserve_original_order` action. The existing empty-price
   fallback, original-order preservation, reconciliation, planning, and trading behavior are
