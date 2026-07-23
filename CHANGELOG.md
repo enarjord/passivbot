@@ -4,6 +4,11 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- HSL replay cache and replay-lifecycle diagnostics now retain bounded exception types without
+  exception messages, tracebacks, or unsafe exception class names. Cache write failures remain
+  nonfatal, cache reuse still falls back to authoritative replay, and HSL readiness and protection
+  behavior are unchanged.
+
 - Fixed Bitget UTA open-order normalization recursively deriving position side from close-only
   effect and close-only effect from position side in effective one-way mode. UTA orders with an
   explicit `posSide` now derive close-only effect directly from the authoritative `side` plus

@@ -295,6 +295,8 @@ For coin-mode `hsl.replay.completed`, `full_elapsed_s` is total replay time;
 
 Cache events use `hsl.replay.cache` with `cache_status=hit|miss|rejected`. Cache misses and
 rejections are non-authoritative performance outcomes and fall back to exchange-derived replay.
+Cache write/load rejection reasons and coin replay failures retain bounded exception types only,
+never exception text, tracebacks, or unsafe exception class names.
 Pair progress exposes `applied_rows`/`total_applied_rows` and scan-cost fields
 `scanned_rows`/`total_scanned_rows`/`scanned_rows_per_second`/`pair_elapsed_s`.
 `is_held_pair`, `is_cooldown_pair`, and `pair_idx` expose deterministic

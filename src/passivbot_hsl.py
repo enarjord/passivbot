@@ -1762,7 +1762,7 @@ def _try_load_hsl_replay_matrix_cache(
             _hsl_replay_cache_status_data(
                 cache_status="rejected",
                 elapsed_s=elapsed_s,
-                reasons=[f"validation_exception:{type(exc).__name__}"],
+                reasons=[f"validation_exception:{_bounded_hsl_exception_type(exc)}"],
                 expected_metadata=expected_metadata,
             ),
             pside=pside,
@@ -1814,7 +1814,7 @@ def _try_load_hsl_replay_matrix_cache(
             _hsl_replay_cache_status_data(
                 cache_status="rejected",
                 elapsed_s=elapsed_s,
-                reasons=[f"load_exception:{type(exc).__name__}"],
+                reasons=[f"load_exception:{_bounded_hsl_exception_type(exc)}"],
                 expected_metadata=expected_metadata,
             ),
             pside=pside,
@@ -2319,12 +2319,11 @@ def _equity_hard_stop_persist_replay_matrices(self, history: dict[str, Any]) -> 
                 manifest = _write_hsl_replay_matrix_cache(cache_dir, rows, metadata)
             except Exception as exc:
                 logging.warning(
-                    "[risk] HSL[%s:%s] replay cache write failed | rows=%d error=%s: %s",
+                    "[risk] HSL[%s:%s] replay cache write failed | rows=%d error_type=%s",
                     pside,
                     symbol,
                     len(rows) if isinstance(rows, list) else -1,
-                    type(exc).__name__,
-                    exc,
+                    _bounded_hsl_exception_type(exc),
                 )
                 _emit_hsl_replay_event(
                     self,
@@ -2332,7 +2331,7 @@ def _equity_hard_stop_persist_replay_matrices(self, history: dict[str, Any]) -> 
                     _hsl_replay_cache_status_data(
                         cache_status="write_failed",
                         elapsed_s=time.monotonic() - started_s,
-                        reasons=[f"write_exception:{type(exc).__name__}"],
+                        reasons=[f"write_exception:{_bounded_hsl_exception_type(exc)}"],
                     ),
                     pside=pside,
                     symbol=symbol,
@@ -2384,10 +2383,9 @@ def _equity_hard_stop_persist_replay_matrices(self, history: dict[str, Any]) -> 
             )
         except Exception as exc:
             logging.warning(
-                "[risk] HSL account series replay cache write failed | rows=%d error=%s: %s",
+                "[risk] HSL account series replay cache write failed | rows=%d error_type=%s",
                 len(account_rows),
-                type(exc).__name__,
-                exc,
+                _bounded_hsl_exception_type(exc),
             )
             _emit_hsl_replay_event(
                 self,
@@ -2395,7 +2393,7 @@ def _equity_hard_stop_persist_replay_matrices(self, history: dict[str, Any]) -> 
                 _hsl_replay_cache_status_data(
                     cache_status="write_failed",
                     elapsed_s=time.monotonic() - started_s,
-                    reasons=[f"write_exception:{type(exc).__name__}"],
+                    reasons=[f"write_exception:{_bounded_hsl_exception_type(exc)}"],
                 ),
                 pside=_HSL_REPLAY_CACHE_ACCOUNT_PSIDE,
                 symbol=_HSL_REPLAY_CACHE_ACCOUNT_SYMBOL,
@@ -4888,9 +4886,8 @@ async def _equity_hard_stop_initialize_from_history(self) -> None:
             # to the authoritative full replay, never abort startup.
             logging.warning(
                 "[risk] HSL pside replay cache reuse failed; falling back to "
-                "full replay | error=%s: %s",
-                type(exc).__name__,
-                exc,
+                "full replay | error_type=%s",
+                _bounded_hsl_exception_type(exc),
             )
             history = None
         if history is not None:
@@ -5249,9 +5246,8 @@ async def _equity_hard_stop_initialize_from_history(self) -> None:
             # Cache persistence is a performance aid; a failure here must
             # never invalidate the completed replay.
             logging.warning(
-                "[risk] HSL replay cache persistence failed | error=%s: %s",
-                type(exc).__name__,
-                exc,
+                "[risk] HSL replay cache persistence failed | error_type=%s",
+                _bounded_hsl_exception_type(exc),
             )
     finally:
         if hasattr(self, "_set_log_silence_watchdog_context"):
@@ -5325,9 +5321,8 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
             # to the authoritative full replay, never abort startup.
             logging.warning(
                 "[risk] HSL replay cache reuse failed; falling back to full "
-                "replay | error=%s: %s",
-                type(exc).__name__,
-                exc,
+                "replay | error_type=%s",
+                _bounded_hsl_exception_type(exc),
             )
             history = None
         if history is not None:
@@ -6627,9 +6622,8 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
             # Cache persistence is a performance aid; a failure here must
             # never invalidate the completed replay.
             logging.warning(
-                "[risk] HSL replay cache persistence failed | error=%s: %s",
-                type(exc).__name__,
-                exc,
+                "[risk] HSL replay cache persistence failed | error_type=%s",
+                _bounded_hsl_exception_type(exc),
             )
     except asyncio.CancelledError:
         self._equity_hard_stop_coin_replay_failure = "shutdown_cancelled"
@@ -6655,16 +6649,14 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
         )
         raise
     except Exception as exc:
-        self._equity_hard_stop_coin_replay_failure = (
-            f"{type(exc).__name__}: {exc}"
-        )
+        self._equity_hard_stop_coin_replay_failure = _bounded_hsl_exception_type(exc)
         ready_event.set()
         _emit_hsl_replay_event(
             self,
             EventTypes.HSL_REPLAY_FAILED,
             {
                 "signal_mode": "coin",
-                "error_type": type(exc).__name__,
+                "error_type": _bounded_hsl_exception_type(exc),
                 "elapsed_s": round(time.monotonic() - initialization_started_s, 3),
                 "history_fetch_elapsed_s": round(history_fetch_elapsed_s, 3)
                 if "history_fetch_elapsed_s" in locals()
