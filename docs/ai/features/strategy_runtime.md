@@ -133,21 +133,22 @@ is effectively moot because multiple same-price slices would be redundant.
 
 For each coin and position side, Rust selects at most one protective reducer per ideal-order batch.
 Active panic, TWEL/WEL exposure-repair, and auto-unstuck intents are consolidated by keeping the
-largest loss-admissible requested absolute reduction, not by summing their quantities. If the
-realized-loss gate blocks the largest non-panic intent, Rust tries the next-largest intent. This
-prevents a small auto-reduce from suppressing a materially larger unstuck close while retaining a
-smaller safety fallback when the larger close would exceed the loss budget. A full-position HSL
-panic is therefore largest and remains exclusive; equal-size ties keep panic first and otherwise
-prefer the closest-to-fill candidate.
+largest loss-admissible absolute reduction after final position/minimum sizing, not by summing
+their quantities. If the realized-loss gate blocks the largest non-panic intent, Rust tries the
+next-largest intent. This prevents a small auto-reduce from suppressing a materially larger unstuck
+close while retaining a smaller safety fallback when the larger close would exceed the loss
+budget. A full-position HSL panic is therefore largest and remains exclusive; equal-size ties keep
+panic first and otherwise prefer the closest-to-fill candidate.
 
 A selected non-panic reducer may coexist with ordinary grid, trailing, or EMA-anchor closes. Its
 quantity is reserved first; if aggregate close quantity would exceed the position, ordinary closes
 are trimmed furthest-from-fill first against the remaining quantity. Aggregate reduce-only quantity
 must never exceed the position after quantity-step and effective-minimum handling. The cumulative
-realized-loss gate participates in this allocation and evaluates reducer candidates largest-first,
-then evaluates ordinary closes after the selected reducer. Live reconciliation reapplies the same
-aggregate cap against current exchange position size, still trimming ordinary closes before the
-reducer if the position shrank after planning.
+realized-loss gate participates in this allocation, checks the final reducer size, and spends the
+shared batch allowance on final reducer quantities largest-first rather than in symbol iteration
+order. It then evaluates ordinary closes after the selected reducers. Live reconciliation reapplies
+the same aggregate cap against current exchange position size, still trimming ordinary closes
+before the reducer if the position shrank after planning.
 This contract is shared by every strategy kind, including `trailing_grid_v7`.
 
 ## Source Of Truth

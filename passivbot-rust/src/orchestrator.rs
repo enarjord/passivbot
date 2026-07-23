@@ -678,6 +678,22 @@ mod core {
         simulated_balance: f64,
     }
 
+    #[derive(Clone)]
+    struct FinalizedReducerCandidate {
+        reducer: IdealOrder,
+        closes: Vec<IdealOrder>,
+    }
+
+    struct ReducerPositionCandidates {
+        pside: PositionSide,
+        slot_idx: usize,
+        position: Position,
+        candidates: Vec<FinalizedReducerCandidate>,
+        next_candidate_idx: usize,
+        selected_closes: Option<Vec<IdealOrder>>,
+        closes_without_reducer: Vec<IdealOrder>,
+    }
+
     fn current_market_price(order_book: &OrderBook) -> f64 {
         if order_book.bid.is_finite()
             && order_book.ask.is_finite()
@@ -1580,60 +1596,140 @@ mod core {
         true
     }
 
-    fn select_protective_reducers_for_side(
+    fn finalized_closes_with_reducer(
+        closes: &[IdealOrder],
+        reducer: Option<IdealOrder>,
+        pside: PositionSide,
+        position: &Position,
+        symbol: &SymbolInput,
+    ) -> Vec<IdealOrder> {
+        let mut finalized = if reducer
+            .as_ref()
+            .is_some_and(|order| is_panic_close_order_type(order.order_type))
+        {
+            Vec::new()
+        } else {
+            closes
+                .iter()
+                .filter(|order| !is_protective_close_reducer(order.order_type, pside))
+                .cloned()
+                .collect()
+        };
+        if let Some(order) = reducer {
+            finalized.push(order);
+        }
+        trim_closes_to_position(
+            pside,
+            &mut finalized,
+            position.size,
+            &symbol.order_book,
+            &symbol.exchange,
+        );
+        finalized
+    }
+
+    fn collect_reducer_candidates_for_side(
         input: &OrchestratorInput,
         per_side: &mut [Option<PerSymbolOrders>],
         pside: PositionSide,
-        mut loss_gate: Option<&mut RealizedLossGateState>,
-        diagnostics: &mut OrchestratorDiagnostics,
+        positions: &mut Vec<ReducerPositionCandidates>,
     ) {
-        for s in per_side.iter_mut().filter_map(|v| v.as_mut()) {
+        for (slot_idx, s) in per_side
+            .iter_mut()
+            .enumerate()
+            .filter_map(|(idx, value)| value.as_mut().map(|orders| (idx, orders)))
+        {
             let Some(symbol) = input.symbols.get(s.symbol_idx) else {
                 continue;
             };
-            if loss_gate.is_none() {
-                prune_competing_close_reducers(&mut s.closes, pside, &symbol.order_book);
-                continue;
-            }
-            let mut candidates: Vec<IdealOrder> = s
+            let mut requested_reducers: Vec<IdealOrder> = s
                 .closes
                 .iter()
                 .filter(|order| is_protective_close_reducer(order.order_type, pside))
                 .cloned()
                 .collect();
-            candidates.sort_by(|a, b| close_reducer_preference_cmp(a, b, &symbol.order_book));
+            requested_reducers
+                .sort_by(|a, b| close_reducer_preference_cmp(a, b, &symbol.order_book));
 
-            let mut selected = None;
-            for candidate in candidates {
-                let allowed = if is_panic_close_order_type(candidate.order_type) {
-                    true
-                } else {
-                    close_passes_realized_loss_gate(
-                        input,
-                        &candidate,
+            let closes_without_reducer =
+                finalized_closes_with_reducer(&s.closes, None, pside, &s.pos, symbol);
+            let candidates: Vec<FinalizedReducerCandidate> = requested_reducers
+                .into_iter()
+                .filter_map(|requested| {
+                    let closes = finalized_closes_with_reducer(
+                        &s.closes,
+                        Some(requested),
+                        pside,
                         &s.pos,
                         symbol,
-                        loss_gate.as_deref_mut().expect("loss gate checked above"),
-                        diagnostics,
-                    )
-                };
-                if allowed {
-                    selected = Some(candidate);
-                    break;
-                }
+                    );
+                    let reducer = closes
+                        .iter()
+                        .find(|order| is_protective_close_reducer(order.order_type, pside))
+                        .cloned()?;
+                    Some(FinalizedReducerCandidate { reducer, closes })
+                })
+                .collect();
+            s.closes = closes_without_reducer.clone();
+            if !candidates.is_empty() {
+                positions.push(ReducerPositionCandidates {
+                    pside,
+                    slot_idx,
+                    position: s.pos,
+                    candidates,
+                    next_candidate_idx: 0,
+                    selected_closes: None,
+                    closes_without_reducer,
+                });
             }
+        }
+    }
 
-            if selected
-                .as_ref()
-                .is_some_and(|order| is_panic_close_order_type(order.order_type))
+    fn batch_reducer_preference_cmp(
+        a: &ReducerPositionCandidates,
+        b: &ReducerPositionCandidates,
+    ) -> std::cmp::Ordering {
+        let a_order = &a.candidates[a.next_candidate_idx].reducer;
+        let b_order = &b.candidates[b.next_candidate_idx].reducer;
+        let a_pside_rank = match a.pside {
+            PositionSide::Long => 0u8,
+            PositionSide::Short => 1u8,
+        };
+        let b_pside_rank = match b.pside {
+            PositionSide::Long => 0u8,
+            PositionSide::Short => 1u8,
+        };
+        b_order
+            .qty
+            .abs()
+            .total_cmp(&a_order.qty.abs())
+            .then_with(|| {
+                is_panic_close_order_type(b_order.order_type)
+                    .cmp(&is_panic_close_order_type(a_order.order_type))
+            })
+            .then_with(|| a_order.symbol_idx.cmp(&b_order.symbol_idx))
+            .then_with(|| a_pside_rank.cmp(&b_pside_rank))
+            .then_with(|| a_order.order_type.id().cmp(&b_order.order_type.id()))
+            .then_with(|| a_order.price.total_cmp(&b_order.price))
+            .then_with(|| a_order.qty.total_cmp(&b_order.qty))
+    }
+
+    fn apply_selected_reducers_for_side(
+        per_side: &mut [Option<PerSymbolOrders>],
+        pside: PositionSide,
+        positions: Vec<ReducerPositionCandidates>,
+    ) {
+        for position in positions
+            .into_iter()
+            .filter(|position| position.pside == pside)
+        {
+            if let Some(s) = per_side
+                .get_mut(position.slot_idx)
+                .and_then(|value| value.as_mut())
             {
-                s.closes.clear();
-            } else {
-                s.closes
-                    .retain(|order| !is_protective_close_reducer(order.order_type, pside));
-            }
-            if let Some(order) = selected {
-                s.closes.push(order);
+                s.closes = position
+                    .selected_closes
+                    .unwrap_or(position.closes_without_reducer);
             }
         }
     }
@@ -1696,37 +1792,77 @@ mod core {
     ) {
         let mut loss_gate = realized_loss_gate_state(input);
 
-        // The simulated balance is shared by the whole batch. Select the largest admissible
-        // reducer for each position across both sides before ordinary closes can consume loss
-        // allowance. If a larger reducer is blocked, try the next-largest active safety intent.
-        select_protective_reducers_for_side(
-            input,
-            per_long,
-            PositionSide::Long,
-            loss_gate.as_mut(),
-            diagnostics,
-        );
-        select_protective_reducers_for_side(
-            input,
-            per_short,
-            PositionSide::Short,
-            loss_gate.as_mut(),
-            diagnostics,
-        );
+        let Some(state) = loss_gate.as_mut() else {
+            for s in per_long.iter_mut().filter_map(|value| value.as_mut()) {
+                let symbol = &input.symbols[s.symbol_idx];
+                prune_competing_close_reducers(
+                    &mut s.closes,
+                    PositionSide::Long,
+                    &symbol.order_book,
+                );
+            }
+            for s in per_short.iter_mut().filter_map(|value| value.as_mut()) {
+                let symbol = &input.symbols[s.symbol_idx];
+                prune_competing_close_reducers(
+                    &mut s.closes,
+                    PositionSide::Short,
+                    &symbol.order_book,
+                );
+            }
+            trim_closes_for_side(input, per_long, PositionSide::Long);
+            trim_closes_for_side(input, per_short, PositionSide::Short);
+            return;
+        };
 
-        trim_closes_for_side(input, per_long, PositionSide::Long);
-        trim_closes_for_side(input, per_short, PositionSide::Short);
+        // Finalize each candidate's executable close sizing before evaluating its loss. The
+        // simulated balance is shared by the whole batch, so consider each position's current
+        // largest candidate globally rather than spending the allowance in symbol iteration order.
+        let mut positions = Vec::new();
+        collect_reducer_candidates_for_side(input, per_long, PositionSide::Long, &mut positions);
+        collect_reducer_candidates_for_side(input, per_short, PositionSide::Short, &mut positions);
 
-        if let Some(state) = loss_gate.as_mut() {
-            gate_ordinary_closes_for_side(input, per_long, PositionSide::Long, state, diagnostics);
-            gate_ordinary_closes_for_side(
-                input,
-                per_short,
-                PositionSide::Short,
-                state,
-                diagnostics,
-            );
+        while let Some(position_idx) = positions
+            .iter()
+            .enumerate()
+            .filter(|(_, position)| {
+                position.selected_closes.is_none()
+                    && position.next_candidate_idx < position.candidates.len()
+            })
+            .min_by(|(_, a), (_, b)| batch_reducer_preference_cmp(a, b))
+            .map(|(idx, _)| idx)
+        {
+            let candidate_idx = positions[position_idx].next_candidate_idx;
+            let candidate = positions[position_idx].candidates[candidate_idx].clone();
+            let symbol = &input.symbols[candidate.reducer.symbol_idx];
+            let allowed = is_panic_close_order_type(candidate.reducer.order_type)
+                || close_passes_realized_loss_gate(
+                    input,
+                    &candidate.reducer,
+                    &positions[position_idx].position,
+                    symbol,
+                    state,
+                    diagnostics,
+                );
+            if allowed {
+                positions[position_idx].selected_closes = Some(candidate.closes);
+            } else {
+                positions[position_idx].next_candidate_idx += 1;
+            }
         }
+
+        let mut short_positions = Vec::new();
+        let mut long_positions = Vec::new();
+        for position in positions {
+            match position.pside {
+                PositionSide::Long => long_positions.push(position),
+                PositionSide::Short => short_positions.push(position),
+            }
+        }
+        apply_selected_reducers_for_side(per_long, PositionSide::Long, long_positions);
+        apply_selected_reducers_for_side(per_short, PositionSide::Short, short_positions);
+
+        gate_ordinary_closes_for_side(input, per_long, PositionSide::Long, state, diagnostics);
+        gate_ordinary_closes_for_side(input, per_short, PositionSide::Short, state, diagnostics);
     }
 
     fn twel_repair_target(bot: &BotParams) -> Option<f64> {
@@ -6274,6 +6410,151 @@ mod core {
             assert_eq!(block.order_type, OrderType::CloseAutoReduceWelLong);
             assert!((block.projected_balance_after - 940.0).abs() < 1e-12);
             assert!((block.balance_floor - 950.0).abs() < 1e-12);
+        }
+
+        #[test]
+        fn realized_loss_gate_checks_reducer_after_dust_is_absorbed() {
+            let mut sym = make_basic_symbol(0);
+            sym.order_book = OrderBook {
+                bid: 90.0,
+                ask: 90.0,
+            };
+            sym.exchange.qty_step = 1.0;
+            sym.exchange.min_qty = 10.0;
+            sym.exchange.min_cost = 0.0;
+            sym.exchange.maker_fee = 0.0;
+            sym.long.position = Position {
+                size: 11.0,
+                price: 100.0,
+            };
+
+            let input = OrchestratorInput {
+                timestamp_ms: 0,
+                balance: 1000.0,
+                balance_raw: 1000.0,
+                global: OrchestratorGlobal {
+                    max_realized_loss_pct: 0.105,
+                    ..make_basic_global()
+                },
+                symbols: vec![sym.clone()],
+                peek_hints: None,
+                forager_hysteresis: None,
+            };
+            let mut per_long = vec![Some(PerSymbolOrders {
+                symbol_idx: 0,
+                entries: vec![],
+                closes: vec![IdealOrder {
+                    symbol_idx: 0,
+                    pside: PositionSide::Long,
+                    qty: -10.0,
+                    price: 90.0,
+                    order_type: OrderType::CloseAutoReduceWelLong,
+                }],
+                pos: sym.long.position,
+                mode: TradingMode::Normal,
+            })];
+            let mut per_short = vec![None];
+            let mut diagnostics = OrchestratorDiagnostics::default();
+
+            gate_lossy_closes_by_peak_balance(
+                &input,
+                &mut per_long,
+                &mut per_short,
+                &mut diagnostics,
+            );
+
+            assert!(per_long[0].as_ref().unwrap().closes.is_empty());
+            assert_eq!(diagnostics.loss_gate_blocks.len(), 1);
+            let block = &diagnostics.loss_gate_blocks[0];
+            assert_eq!(block.order_type, OrderType::CloseAutoReduceWelLong);
+            assert!((block.qty + 11.0).abs() < 1e-12);
+            assert!((block.projected_balance_after - 890.0).abs() < 1e-12);
+            assert!((block.balance_floor - 895.0).abs() < 1e-12);
+        }
+
+        #[test]
+        fn realized_loss_gate_prioritizes_larger_reducers_across_symbols() {
+            let mut sym0 = make_basic_symbol(0);
+            sym0.order_book = OrderBook {
+                bid: 90.0,
+                ask: 90.0,
+            };
+            sym0.exchange.maker_fee = 0.0;
+            sym0.long.position = Position {
+                size: 4.0,
+                price: 100.0,
+            };
+
+            let mut sym1 = make_basic_symbol(1);
+            sym1.order_book = sym0.order_book.clone();
+            sym1.exchange.maker_fee = 0.0;
+            sym1.long.position = Position {
+                size: 6.0,
+                price: 100.0,
+            };
+
+            let input = OrchestratorInput {
+                timestamp_ms: 0,
+                balance: 1000.0,
+                balance_raw: 1000.0,
+                global: OrchestratorGlobal {
+                    max_realized_loss_pct: 0.07,
+                    ..make_basic_global()
+                },
+                symbols: vec![sym0.clone(), sym1.clone()],
+                peek_hints: None,
+                forager_hysteresis: None,
+            };
+            let mut per_long = vec![
+                Some(PerSymbolOrders {
+                    symbol_idx: 0,
+                    entries: vec![],
+                    closes: vec![IdealOrder {
+                        symbol_idx: 0,
+                        pside: PositionSide::Long,
+                        qty: -4.0,
+                        price: 90.0,
+                        order_type: OrderType::CloseUnstuckLong,
+                    }],
+                    pos: sym0.long.position,
+                    mode: TradingMode::Normal,
+                }),
+                Some(PerSymbolOrders {
+                    symbol_idx: 1,
+                    entries: vec![],
+                    closes: vec![IdealOrder {
+                        symbol_idx: 1,
+                        pside: PositionSide::Long,
+                        qty: -6.0,
+                        price: 90.0,
+                        order_type: OrderType::CloseAutoReduceWelLong,
+                    }],
+                    pos: sym1.long.position,
+                    mode: TradingMode::Normal,
+                }),
+            ];
+            let mut per_short = vec![None, None];
+            let mut diagnostics = OrchestratorDiagnostics::default();
+
+            gate_lossy_closes_by_peak_balance(
+                &input,
+                &mut per_long,
+                &mut per_short,
+                &mut diagnostics,
+            );
+
+            assert!(per_long[0].as_ref().unwrap().closes.is_empty());
+            let accepted = &per_long[1].as_ref().unwrap().closes;
+            assert_eq!(accepted.len(), 1);
+            assert_eq!(accepted[0].order_type, OrderType::CloseAutoReduceWelLong);
+            assert!((accepted[0].qty + 6.0).abs() < 1e-12);
+            assert_eq!(diagnostics.loss_gate_blocks.len(), 1);
+            let block = &diagnostics.loss_gate_blocks[0];
+            assert_eq!(block.symbol_idx, 0);
+            assert_eq!(block.order_type, OrderType::CloseUnstuckLong);
+            assert!((block.balance_before - 940.0).abs() < 1e-12);
+            assert!((block.projected_balance_after - 900.0).abs() < 1e-12);
+            assert!((block.balance_floor - 930.0).abs() < 1e-12);
         }
 
         #[test]

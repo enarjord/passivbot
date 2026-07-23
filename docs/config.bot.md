@@ -264,20 +264,21 @@ same-side TWEL measurement and toward the TWEL entry-gate baseline.
 
 Passivbot selects at most one protective reducer for each coin+pside in one
 ideal-order batch. Competing panic, TWEL/WEL auto-reduce, and auto-unstuck
-intents are consolidated by keeping the largest loss-admissible requested
-absolute reduction, not their sum. If the realized-loss gate blocks the largest
-non-panic intent, Passivbot tries the next-largest intent. Equal-size ties keep
-panic first and otherwise prefer the closest-to-fill candidate. A full-position
-panic close remains exclusive.
+intents are consolidated by keeping the largest loss-admissible final absolute
+reduction after position/minimum sizing, not their sum. If the realized-loss
+gate blocks the largest non-panic intent, Passivbot tries the next-largest
+intent. Equal-size ties keep panic first and otherwise prefer the
+closest-to-fill candidate. A full-position panic close remains exclusive.
 
 Ordinary strategy closes are independent reduction intent and may coexist with
 the selected non-panic reducer. The reducer quantity is reserved first; ordinary
 grid, trailing, or EMA-anchor closes are kept within the remaining position
 quantity and trimmed furthest-from-fill first if necessary. The aggregate remains
 reduce-only and capped to the position, and the realized-loss gate evaluates
-reducer candidates largest-first before ordinary closes in the resulting mixed
-close set. Live reconciliation preserves the same reducer-first reservation if
-the position shrinks between planning and order submission.
+the final reducer quantities largest-first across the batch before ordinary
+closes in the resulting mixed close set. Live reconciliation preserves the same
+reducer-first reservation if the position shrinks between planning and order
+submission.
 
 ## Risk-Control Stack
 

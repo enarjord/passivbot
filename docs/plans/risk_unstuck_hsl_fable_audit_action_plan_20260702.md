@@ -875,9 +875,9 @@ Remaining implementation details:
       with ordinary closes whose aggregate quantity fits the position. Panic
       remains exclusive, and ordinary closes are trimmed before reducer quantity.
       The current canonical policy later replaced fixed reducer-type priority by
-      selecting the largest loss-admissible requested absolute protective
-      reduction, without summing competing intents; a loss-blocked candidate
-      falls back to the next-largest active safety intent.
+      selecting the largest loss-admissible final absolute protective reduction
+      after position/minimum sizing, without summing competing intents; a
+      loss-blocked candidate falls back to the next-largest active safety intent.
 - [x] Contract docs batch: unstuck min-qty overshoot, inherited lookbacks,
       HSL/config-change risks, statelessness, `pnls_max_lookback_days`, and
       HSL-enabled startup warning.
