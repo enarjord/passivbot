@@ -7421,8 +7421,7 @@ class CandlestickManager:
                     "debug",
                     "get_last_prices_completed_close_failed",
                     symbol=sym,
-                    error_type=type(exc).__name__,
-                    error=str(exc),
+                    error_type=bounded_exception_type(exc),
                 )
                 return 0.0
 

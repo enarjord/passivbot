@@ -86,6 +86,11 @@ All notable user-facing changes will be documented in this file.
   messages, repr values, or exception-value tracebacks. Cache contents, migration and cleanup
   behavior, lock handling, retries, fallbacks, and trading behavior are unchanged.
 
+- Live candle completed-close fallback, startup/index/background warmup, forager refresh, active
+  refresh, and refresh-cap diagnostics now retain bounded exception types without arbitrary
+  exception messages or exception-value tracebacks. Warmup, cancellation, lock retry, refresh
+  scheduling, fallback values, readiness, and trading behavior are unchanged.
+
 - Fill-history refresh failure diagnostics now retain bounded exception types alongside existing
   source, coverage, retry, timing, count, and endpoint context without arbitrary exception
   messages or exception-value tracebacks. This includes exchange-specific fill fetchers, cache

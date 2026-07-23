@@ -3402,7 +3402,10 @@ class Passivbot:
             try:
                 await self.warmup_trading_ready_candles()
             except Exception as e:
-                logging.info("[boot] trading-ready candle warmup skipped due to: %s", e)
+                logging.info(
+                    "[boot] trading-ready candle warmup skipped | error_type=%s",
+                    bounded_exception_type(e),
+                )
             Passivbot._startup_timing_mark(self, "active-candle")
             if self.stop_signal_received:
                 self._monitor_emit_stop(
@@ -4802,7 +4805,10 @@ class Passivbot:
                 end_final_hour,
             )
         except Exception as e:
-            logging.info("[boot] candle index rebuild skipped due to: %s", e)
+            logging.info(
+                "[boot] candle index rebuild skipped | error_type=%s",
+                bounded_exception_type(e),
+            )
 
         sem = asyncio.Semaphore(max(1, int(concurrency)))
         completed = 0
@@ -5120,7 +5126,8 @@ class Passivbot:
             raise
         except Exception as exc:
             logging.error(
-                "[candle] background warmup failed: %s", exc, exc_info=True
+                "[candle] background warmup failed | error_type=%s",
+                bounded_exception_type(exc),
             )
 
     async def start_background_candle_warmup(self) -> None:
@@ -18385,9 +18392,8 @@ class Passivbot:
             )
         except Exception as exc:
             logging.debug(
-                "[candle] forager refresh cap log failed | error_type=%s error=%s",
-                type(exc).__name__,
-                exc,
+                "[candle] forager refresh cap log failed | error_type=%s",
+                bounded_exception_type(exc),
             )
 
     async def _refresh_forager_candidate_candles(self) -> None:
@@ -18811,16 +18817,16 @@ class Passivbot:
                     )
                     break
                 logging.warning(
-                    "Timed out acquiring candle lock for %s; forager refresh will retry (%s)",
+                    "Timed out acquiring candle lock for %s; forager refresh will retry "
+                    "| error_type=%s",
                     Passivbot._log_symbol(sym),
-                    exc,
+                    bounded_exception_type(exc),
                 )
             except Exception as exc:
                 logging.error(
-                    "error refreshing forager candles for %s: %s",
+                    "error refreshing forager candles for %s | error_type=%s",
                     Passivbot._log_symbol(sym),
-                    exc,
-                    exc_info=True,
+                    bounded_exception_type(exc),
                 )
         try:
             elapsed_s = int(max(0, utc_ms() - refresh_started_ms) / 1000)
@@ -18851,7 +18857,8 @@ class Passivbot:
             raise
         except Exception as exc:
             logging.error(
-                "[candle] forager candidate refresh failed: %s", exc, exc_info=True
+                "[candle] forager candidate refresh failed | error_type=%s",
+                bounded_exception_type(exc),
             )
 
     def _schedule_forager_candidate_candle_refresh(self) -> None:
@@ -18926,13 +18933,16 @@ class Passivbot:
                         )
                 except TimeoutError as exc:
                     logging.warning(
-                        "Timed out acquiring candle lock for %s; will retry next cycle (%s)",
+                        "Timed out acquiring candle lock for %s; will retry next cycle "
+                        "| error_type=%s",
                         sym,
-                        exc,
+                        bounded_exception_type(exc),
                     )
                 except Exception as exc:
                     logging.error(
-                        "error refreshing candles for %s: %s", sym, exc, exc_info=True
+                        "error refreshing candles for %s | error_type=%s",
+                        sym,
+                        bounded_exception_type(exc),
                     )
             signature, missing = Passivbot._completed_candle_freshness_signature(
                 self, ordered_symbols, now_ms=now
@@ -18952,11 +18962,14 @@ class Passivbot:
         except Exception as e:
             if Passivbot._shutdown_requested(self):
                 logging.debug(
-                    "[shutdown] stopped candle refresh during shutdown: %s", e
+                    "[shutdown] stopped candle refresh during shutdown | error_type=%s",
+                    bounded_exception_type(e),
                 )
                 return False
-            logging.error(f"error with {get_function_name()} {e}")
-            traceback.print_exc()
+            logging.error(
+                "[candle] active refresh failed | action=return_false error_type=%s",
+                bounded_exception_type(e),
+            )
             return False
 
     async def maintain_hourly_cycle(self):
