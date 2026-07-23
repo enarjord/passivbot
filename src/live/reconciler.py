@@ -81,7 +81,7 @@ def _trace_record(
             "[entry] fresh-entry eligibility trace disabled during reconciliation | "
             "method=%s error_type=%s",
             method,
-            type(exc).__name__,
+            bounded_exception_type(exc),
         )
         return None
 
@@ -147,7 +147,7 @@ def _initialize_fresh_entry_trace(
     except Exception as exc:
         logging.debug(
             "[entry] fresh-entry eligibility trace initialization failed | error_type=%s",
-            type(exc).__name__,
+            bounded_exception_type(exc),
         )
         return None
 
@@ -1175,7 +1175,7 @@ def _emit_order_churn_evidence_summary(
     except Exception as exc:
         logging.debug(
             "[event] order churn evidence emitter failed | error_type=%s",
-            type(exc).__name__,
+            bounded_exception_type(exc),
         )
 
 
@@ -1276,7 +1276,7 @@ def prepare_order_churn_evidence(
                 "[order] churn evidence unavailable for symbol; leaving its actual orders "
                 "untouched | symbol=%s | error_type=%s",
                 _pb_attr("Passivbot")._log_symbol(symbol),
-                type(exc).__name__,
+                bounded_exception_type(exc),
             )
             continue
         valid_ideals[symbol] = orders
@@ -1849,10 +1849,10 @@ def snapshot_actual_orders(
                 logging.error(
                     "[order] malformed open order snapshot; "
                     "marking account-critical open-orders surface unavailable | symbol=%s | "
-                    "order_id=%s | reason=%s",
+                    "order_id=%s | error_type=%s",
                     _pb_attr("Passivbot")._log_symbol(symbol),
                     order_id or "unknown",
-                    exc,
+                    bounded_exception_type(exc),
                 )
         if return_symbol:
             actual_orders[symbol] = symbol_orders

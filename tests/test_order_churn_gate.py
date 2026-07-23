@@ -422,13 +422,14 @@ def test_active_rust_risk_pair_bypasses_observed_churn(monkeypatch):
     assert moved["_churn_reason"] == "rust_risk_phase_active"
 
 
-def test_downstream_normalization_outage_is_symbol_scoped(monkeypatch):
+def test_downstream_normalization_outage_is_symbol_scoped(monkeypatch, caplog):
     state = OrderChurnGateState()
     btc = "BTC/USDT:USDT"
     eth = "ETH/USDT:USDT"
     valid = _order(price=100.0)
     invalid = {**_order(price=10.0), "symbol": eth}
-    invalid.pop("qty")
+    hostile_error = type("ApiKeySecretError", (ValueError,), {})
+    secret = "normalization-secret https://example.invalid/normalization"
 
     class Bot:
         _order_churn_gate_state = state
@@ -454,17 +455,59 @@ def test_downstream_normalization_outage_is_symbol_scoped(monkeypatch):
         lambda _bot, symbols: {symbol: ("m",) for symbol in symbols},
     )
     monkeypatch.setattr(reconciler.time, "monotonic", lambda: 1.0)
+    original_normalize = reconciler.normalize_ideal_orders
+
+    def normalize_or_fail(orders):
+        if orders[0]["symbol"] == eth:
+            raise hostile_error(secret)
+        return original_normalize(orders)
+
+    monkeypatch.setattr(reconciler, "normalize_ideal_orders", normalize_or_fail)
 
     generation = state.begin_generation()
-    unavailable = reconciler.prepare_order_churn_evidence(
-        Bot(), {btc: [valid], eth: [invalid]}, generation=generation
-    )
+    with caplog.at_level("ERROR"):
+        unavailable = reconciler.prepare_order_churn_evidence(
+            Bot(), {btc: [valid], eth: [invalid]}, generation=generation
+        )
 
     assert unavailable == {eth}
     assert btc in state.history_by_symbol
     assert eth not in state.history_by_symbol
     assert valid["_churn_reason"] == "no_history"
     assert invalid["_churn_reason"] == "normalization_unavailable"
+    rendered = "\n".join(record.getMessage() for record in caplog.records)
+    assert "error_type=ValueError" in rendered
+    assert hostile_error.__name__ not in rendered
+    assert secret not in rendered
+    assert "example.invalid" not in rendered
+
+
+def test_churn_evidence_emitter_failure_redacts_hostile_metadata(caplog):
+    hostile_error = type("ApiKeySecretError", (RuntimeError,), {})
+    secret = "emitter-secret https://example.invalid/emitter"
+    state = OrderChurnGateState()
+
+    class Bot:
+        def _emit_order_churn_evidence_event(self, **_kwargs):
+            raise hostile_error(secret)
+
+    with caplog.at_level("DEBUG"):
+        reconciler._emit_order_churn_evidence_summary(
+            Bot(),
+            state=state,
+            generation=1,
+            reset=False,
+            decisions=[],
+            symbols=["BTC/USDT:USDT"],
+        )
+
+    rendered = "\n".join(record.getMessage() for record in caplog.records)
+    assert "error_type=RuntimeError" in rendered
+    assert hostile_error.__name__ not in rendered
+    assert secret not in rendered
+    assert "example.invalid" not in rendered
+    assert state.history_by_symbol == {}
+    assert state.reset_count == 0
 
 
 @pytest.mark.asyncio
