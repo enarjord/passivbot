@@ -163,8 +163,9 @@ def test_noncritical_market_snapshot_error_emits_skipped_event(caplog):
         console_sink=console_sink,
         text_sink=text_sink,
     )
-    exc = RuntimeError(
-        "missing live market snapshots for upnl api_key=secret-token"
+    exc = _hostile_runtime_error(
+        "missing live market snapshots for upnl token=structured-secret "
+        "https://example.invalid/structured"
     )
 
     with caplog.at_level(logging.WARNING):
@@ -186,6 +187,9 @@ def test_noncritical_market_snapshot_error_emits_skipped_event(caplog):
     assert event.data["context"] == "upnl diagnostics"
     assert event.data["error_type"] == "RuntimeError"
     assert "error" not in event.data
+    assert type(exc).__name__ not in str(event.data)
+    assert "structured-secret" not in str(event.data)
+    assert "example.invalid" not in str(event.data)
     assert DEFAULT_ROUTES[EventTypes.MARKET_SNAPSHOT_DIAGNOSTIC_SKIPPED].console is True
     assert DEFAULT_ROUTES[EventTypes.MARKET_SNAPSHOT_DIAGNOSTIC_SKIPPED].text is True
     assert console_sink.events == [event]
@@ -198,8 +202,12 @@ def test_noncritical_market_snapshot_error_emits_skipped_event(caplog):
 def test_noncritical_market_snapshot_error_keeps_bounded_legacy_warning_without_event_owner(
     caplog, emitter_mode
 ):
+    emitter_failure = _hostile_runtime_error(
+        "token=emitter-secret https://example.invalid/emitter"
+    )
+
     def raising_emitter(**_kwargs):
-        raise RuntimeError("event pipeline failure with raw detail")
+        raise emitter_failure
 
     emitters = {
         "missing": None,
@@ -215,7 +223,10 @@ def test_noncritical_market_snapshot_error_keeps_bounded_legacy_warning_without_
         else SimpleNamespace(emit=lambda *_args, **_kwargs: None, console_sink=object())
     )
     bot._emit_market_snapshot_diagnostic_skipped_event = emitters[emitter_mode]
-    exc = RuntimeError("live market snapshots unavailable token=secret-token")
+    exc = _hostile_runtime_error(
+        "live market snapshots unavailable token=legacy-secret "
+        "https://example.invalid/legacy"
+    )
 
     with caplog.at_level(logging.WARNING):
         assert (
@@ -225,11 +236,50 @@ def test_noncritical_market_snapshot_error_keeps_bounded_legacy_warning_without_
     warnings = [record.getMessage() for record in caplog.records]
     assert len(warnings) == 1
     warning = warnings[0]
-    assert "secret-token" not in warning
-    assert "event pipeline failure" not in warning
     assert "error_type=RuntimeError" in warning
     assert "reason=market_snapshot_diagnostic_skipped" in warning
+    assert type(exc).__name__ not in warning
+    assert "legacy-secret" not in warning
+    assert "emitter-secret" not in warning
+    assert "example.invalid" not in warning
     assert len("2026-07-15T23:45:40Z WARNING  [hyperliquid] " + warning) <= 240
+
+
+def test_noncritical_market_snapshot_error_redacts_emitter_failure_debug(caplog):
+    diagnostic_error = _hostile_runtime_error(
+        "live market snapshots unavailable token=diagnostic-secret "
+        "https://example.invalid/diagnostic"
+    )
+    emitter_failure = _hostile_runtime_error(
+        "token=emitter-secret https://example.invalid/emitter-debug"
+    )
+    bot = Passivbot.__new__(Passivbot)
+    bot.live_event_console_enabled = False
+    bot._live_event_pipeline = None
+
+    def fail_emitter(**_kwargs):
+        raise emitter_failure
+
+    bot._emit_market_snapshot_diagnostic_skipped_event = fail_emitter
+
+    with caplog.at_level(logging.DEBUG):
+        assert (
+            bot._log_noncritical_market_snapshot_error(
+                "position-change diagnostics", diagnostic_error
+            )
+            is True
+        )
+
+    messages = "\n".join(record.getMessage() for record in caplog.records)
+    assert (
+        "failed to emit market snapshot diagnostic skipped event error_type=RuntimeError"
+        in messages
+    )
+    assert "reason=market_snapshot_diagnostic_skipped" in messages
+    assert type(diagnostic_error).__name__ not in messages
+    assert "diagnostic-secret" not in messages
+    assert "emitter-secret" not in messages
+    assert "example.invalid" not in messages
 
 
 @pytest.mark.asyncio
@@ -7291,6 +7341,100 @@ async def test_update_positions_only_updates_positions(monkeypatch):
     assert ok is True
     assert bot.fetched_positions[0]["symbol"] == "BTC/USDT:USDT"
     assert bot.positions["BTC/USDT:USDT"]["long"]["size"] == pytest.approx(1.0)
+
+
+@pytest.mark.asyncio
+async def test_handle_balance_update_redacts_equity_observer_failure_and_preserves_anchors(
+    caplog,
+):
+    secret = "token=observer-secret https://example.invalid/equity"
+    observer_error = _hostile_runtime_error(secret)
+    bot = Passivbot.__new__(Passivbot)
+    bot.balance_raw = 120.0
+    bot.balance = 120.0
+    bot._previous_balance_raw = 100.0
+    bot._previous_balance_snapped = 100.0
+    bot.execution_scheduled = False
+    bot._log_noncritical_market_snapshot_error = lambda *_args: False
+
+    async def fail_calc_upnl_sum():
+        raise observer_error
+
+    bot.calc_upnl_sum = fail_calc_upnl_sum
+
+    with caplog.at_level(logging.ERROR):
+        await bot.handle_balance_update(source="REST")
+
+    assert bot._previous_balance_raw == pytest.approx(120.0)
+    assert bot._previous_balance_snapped == pytest.approx(120.0)
+    assert bot.execution_scheduled is True
+    messages = "\n".join(record.getMessage() for record in caplog.records)
+    assert "error_type=RuntimeError" in messages
+    assert "action=preserve_balance_anchors_and_schedule" in messages
+    assert secret not in messages
+    assert type(observer_error).__name__ not in messages
+    assert "Traceback" not in messages
+
+
+@pytest.mark.asyncio
+async def test_update_positions_redacts_observer_failure_and_returns_updated_positions(caplog):
+    secret = "token=observer-secret https://example.invalid/positions"
+    observer_error = _hostile_runtime_error(secret)
+    bot = Passivbot.__new__(Passivbot)
+    bot._fetch_and_apply_positions = AsyncMock(return_value=(True, [], []))
+    bot._log_noncritical_market_snapshot_error = lambda *_args: False
+
+    async def fail_log_position_changes(*_args):
+        raise observer_error
+
+    bot.log_position_changes = fail_log_position_changes
+
+    with caplog.at_level(logging.ERROR):
+        assert await bot.update_positions() is True
+
+    bot._fetch_and_apply_positions.assert_awaited_once()
+    messages = "\n".join(record.getMessage() for record in caplog.records)
+    assert "error_type=RuntimeError" in messages
+    assert "action=return_updated_positions" in messages
+    assert secret not in messages
+    assert type(observer_error).__name__ not in messages
+
+
+@pytest.mark.asyncio
+async def test_combined_refresh_redacts_observer_failure_and_continues_reconciliation(caplog):
+    secret = "token=observer-secret https://example.invalid/combined-refresh"
+    observer_error = _hostile_runtime_error(secret)
+    bot = Passivbot.__new__(Passivbot)
+    bot.update_balance = AsyncMock(return_value=True)
+    bot._fetch_and_apply_positions = AsyncMock(return_value=(True, [], []))
+    bot._log_noncritical_market_snapshot_error = lambda *_args: False
+    bot._record_authoritative_surface = MagicMock()
+    bot._positions_signature = lambda _positions: ()
+    bot._reconcile_balance_after_positions_and_balance_refresh = MagicMock(
+        return_value=False
+    )
+    bot.get_hysteresis_snapped_balance = lambda: 120.0
+    bot.handle_balance_update = AsyncMock()
+
+    async def fail_log_position_changes(*_args):
+        raise observer_error
+
+    bot.log_position_changes = fail_log_position_changes
+
+    with caplog.at_level(logging.ERROR):
+        assert await bot.update_positions_and_balance() == (True, True)
+
+    bot._reconcile_balance_after_positions_and_balance_refresh.assert_called_once()
+    bot.handle_balance_update.assert_awaited_once_with(source="REST")
+    assert [call.args[0] for call in bot._record_authoritative_surface.call_args_list] == [
+        "positions",
+        "balance",
+    ]
+    messages = "\n".join(record.getMessage() for record in caplog.records)
+    assert "error_type=RuntimeError" in messages
+    assert "action=continue_balance_reconciliation" in messages
+    assert secret not in messages
+    assert type(observer_error).__name__ not in messages
 
 
 @pytest.mark.asyncio

@@ -86,9 +86,6 @@ _CYCLE_DEGRADED_SYMBOL_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,159}")
 _MARKET_SNAPSHOT_DIAGNOSTIC_CONTEXT_RE = re.compile(
     r"[A-Za-z0-9_][A-Za-z0-9_ .:-]{0,95}"
 )
-_MARKET_SNAPSHOT_DIAGNOSTIC_ERROR_TYPE_RE = re.compile(
-    r"[A-Za-z_][A-Za-z0-9_]{0,79}"
-)
 _CYCLE_DEGRADED_READINESS_LIST_KEYS = (
     "missing",
     "changed",
@@ -1829,9 +1826,6 @@ def _emit_market_snapshot_diagnostic_skipped_event_unchecked(
     safe_context = _cycle_degraded_bounded_text(
         context, _MARKET_SNAPSHOT_DIAGNOSTIC_CONTEXT_RE
     ) or "unknown"
-    error_type = type(error).__name__
-    if not _MARKET_SNAPSHOT_DIAGNOSTIC_ERROR_TYPE_RE.fullmatch(error_type):
-        error_type = "unknown"
     emitted = bot._emit_live_event(
         EventTypes.MARKET_SNAPSHOT_DIAGNOSTIC_SKIPPED,
         level="warning",
@@ -1842,7 +1836,7 @@ def _emit_market_snapshot_diagnostic_skipped_event_unchecked(
         reason_code=ReasonCodes.MARKET_SNAPSHOT_DIAGNOSTIC_SKIPPED,
         data={
             "context": safe_context,
-            "error_type": error_type,
+            "error_type": _bounded_exception_type(error),
         },
     )
     return emitted is not None
