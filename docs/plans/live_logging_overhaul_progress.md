@@ -15,7 +15,27 @@ merge, live smoke evidence changes, or new gaps are discovered.
 - Do not use this file for design churn; unresolved design details belong in the
   plan or a focused handoff doc.
 
-## Latest Canonical Deployment (PR #1347)
+## Latest Canonical Deployment (PR #1348)
+
+- PR #1348 merged exact approved head `3adba8fd3d` as canonical
+  `acccfdac51d27c5fde114821c939cd77b933685f` after exact-head Hermes
+  approval, green Python/Rust CI, and a direct-consumer correction retaining
+  bounded shutdown `error_type` evidence in live smoke reports.
+- VPS5 fast-forwarded tracked-clean and restarted only configured panes
+  `%358`-`%362`; the bounded restart window proved complete five-bot shutdown
+  and startup identity with zero hard failures, hard text-log matches,
+  monitor warnings/errors, or event-pipeline integrity failures. Protected
+  `misc:0.0` remained `%8`/PID `434835`.
+- A 2026-07-23 local-only preflight found the checkout still exact and
+  tracked-clean at the same merge commit, five stable expected PIDs, and zero
+  missing, duplicate, extra, config, or scan failures. The short sample
+  retained transient I/O-wait pressure without a hard process-contract
+  failure. No authenticated exchange request, manufactured event, or process
+  action occurred. The active follow-up redacts upstream candle remote-fetch
+  callback and retained diagnostic surfaces; cache/index/migration
+  diagnostics remain a later slice.
+
+## Previous Canonical Deployment (PR #1347)
 
 - PR #1347 merged exact approved head `5ef012ed5f` as canonical
   `67416ee4f7fef2dc3ffac001d50e82c0322ee72b` after exact-head Hermes

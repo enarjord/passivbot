@@ -1,6 +1,6 @@
 # Live Logging Overhaul Current Status
 
-Updated: 2026-07-20.
+Updated: 2026-07-23.
 
 This is the compact operational source for the active logging-overhaul loop.
 Read it before the historical progress ledger. Update it whenever the active
@@ -22,28 +22,52 @@ Estimated completion:
 
 ## Active Review Slice
 
-- Open PR #1348, `Redact shutdown failure diagnostics`, on branch
-  `codex/shutdown-diagnostic-redaction`, based on canonical
-  `67416ee4f7fef2dc3ffac001d50e82c0322ee72b`. Resolve its exact head from live
-  metadata; the commit containing this handoff is a moving review head.
-- Scope: remove arbitrary exception values from `bot.shutdown.stage` failures,
-  event-pipeline close failure warnings, per-maintainer cancellation errors,
-  and shutdown fallback logs while retaining bounded exception type, stage,
-  task count, timeout, status, and elapsed-time context.
-- Behavior boundary: diagnostic retention and projection only. Maintainer
-  cancellation, execution-loop waits, session closing, shutdown timing,
-  process control, event routing, and trading behavior remain unchanged.
-- Baseline: maintainer-stop/await, execution-loop-wait, private/public session
-  close, stage-delivery, event-pipeline-close, and legacy cleanup failures
-  still render or retain raw exception text.
+- Open PR #1356, `Redact candle remote fetch diagnostics`, on branch
+  `codex/candle-refresh-diagnostic-redaction`, based on canonical
+  `64928305f0f5b4b8bc1da353a579a5d492b47648`. Resolve its exact head from live
+  metadata; the commit containing this handoff is the intended final review
+  head unless a verified finding requires a semantic fix.
+- Scope: remove arbitrary exception values, raw request URLs, and request
+  parameter values from candle remote-fetch callbacks, HLCV progress logs,
+  archive fetch/day diagnostics, and fake-live candle traces while retaining
+  bounded exception type, URL hash, parameter keys, operation/stage,
+  symbol/timeframe, attempt/status/timing, and remote-call correlation.
+- Behavior boundary: diagnostic retention and projection only. Fetches,
+  archive availability, retry/backoff and rate-limit classification,
+  exception propagation, cache behavior, event routing, and trading behavior
+  remain unchanged.
+- Baseline: normal live structured remote-call events are already redacted,
+  but their upstream manager callback and the HLCV/fake-live/archive
+  diagnostic consumers can still retain raw exception text, request URLs, or
+  request parameter values.
 - Review gate: exact-current-head Hermes approval plus green Python/Rust CI.
   Built-in Codex automatic review is additional and every finding must be
   verified and resolved.
 - Expected VPS action: tracked-clean pull plus one exact-five graceful restart
-  and bounded settled smoke because live shutdown diagnostics change; preserve
+  and bounded settled smoke because live candle diagnostics change; preserve
   `misc:0.0`.
-- Next candidate: candle refresh/cache-maintenance diagnostic redaction after
-  this dependent runtime slice merges.
+- Next candidate: cache/index/migration diagnostic redaction after this remote
+  fetch slice merges.
+
+## Deployed Baseline (PR #1348)
+
+- PR #1348 merged exact approved head
+  `3adba8fd3d55a3a2b26081bf5517ccff611f73d9` as canonical
+  `acccfdac51d27c5fde114821c939cd77b933685f` after exact-head Hermes
+  approval, green Python/Rust CI, and a direct-consumer fix retaining the new
+  bounded `error_type` in shutdown smoke evidence.
+- VPS5 fast-forwarded tracked-clean to the merge commit and restarted only the
+  configured panes `%358`-`%362`; protected `misc:0.0` remained `%8`/PID
+  `434835`. The bounded restart window retained complete five-bot shutdown and
+  startup identity, zero hard failures, zero hard text-log matches, zero
+  monitor warnings/errors, and no event-pipeline integrity failure.
+- A current 2026-07-23 local-only preflight still found VPS5 exact and
+  tracked-clean at the same merge commit with all five configured bots
+  matched, stable PIDs, zero missing/duplicate/extra/config failures, and no
+  process control. Its three one-second samples observed transient system I/O
+  wait, including one persistent process in that short window, without a hard
+  process-contract failure. No direct authenticated exchange request or event
+  was manufactured.
 
 ## Deployed Baseline (PR #1347)
 

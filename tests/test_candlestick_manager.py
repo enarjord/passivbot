@@ -19,6 +19,7 @@ from candlestick_manager import (
     _GAP_MAX_RETRIES,
     _GATEIO_RECENT_1M_LIMIT_CANDLES,
     _floor_minute,
+    sanitize_remote_fetch_diagnostic,
 )
 from logging_setup import DEFAULT_DATEFMT, DEFAULT_FORMAT_WITH_PREFIX
 
@@ -300,7 +301,7 @@ async def test_get_candles_aborts_when_stop_requested(tmp_path):
         await cm.get_candles("FOO/USDT")
 
 
-def test_remote_fetch_callback_exception_is_isolated(tmp_path):
+def test_remote_fetch_callback_is_sanitized_and_exception_is_isolated(tmp_path):
     calls = []
 
     def callback(payload):
@@ -314,13 +315,34 @@ def test_remote_fetch_callback_exception_is_isolated(tmp_path):
         remote_fetch_callback=callback,
     )
 
-    cm._emit_remote_fetch({"kind": "ccxt_fetch_ohlcv", "stage": "start"})
+    url = "https://api.example.invalid/ohlcv?apiKey=SECRET"
+    cm._emit_remote_fetch(
+        {
+            "kind": "ccxt_fetch_ohlcv",
+            "stage": "error",
+            "url": url,
+            "params": {"until": 123, "apiKey": "SECRET"},
+            "error_type": "TokenError",
+            "error": f"GET {url}",
+            "error_repr": f"AuthError({url!r})",
+        }
+    )
 
-    assert calls == [{"kind": "ccxt_fetch_ohlcv", "stage": "start"}]
+    assert len(calls) == 1
+    payload = calls[0]
+    assert payload["param_keys"] == ["apiKey", "until"]
+    assert len(payload["url_hash"]) == 64
+    assert payload["error_type"] == "Error"
+    assert "url" not in payload
+    assert "params" not in payload
+    assert "error" not in payload
+    assert "error_repr" not in payload
+    assert "SECRET" not in str(payload)
+    assert sanitize_remote_fetch_diagnostic(payload) == payload
 
 
 @pytest.mark.asyncio
-async def test_ccxt_fetch_warning_uses_bounded_signature_and_keeps_callback_payload(
+async def test_ccxt_fetch_warning_uses_bounded_signature_and_sanitizes_callback_payload(
     tmp_path, monkeypatch
 ):
     url = "https://api.example.invalid/ohlcv?apiKey=SECRET&signature=abc"
@@ -400,7 +422,7 @@ async def test_ccxt_fetch_warning_uses_bounded_signature_and_keeps_callback_payl
         "attempt=1",
         "max_attempts=5",
         "elapsed_ms=",
-        "error_type=UrlBearingError",
+        "error_type=RuntimeError",
         "action=retry",
     ):
         assert field in retry_warning
@@ -411,7 +433,7 @@ async def test_ccxt_fetch_warning_uses_bounded_signature_and_keeps_callback_payl
         "attempt=5",
         "max_attempts=5",
         "elapsed_ms=",
-        "error_type=UrlBearingError",
+        "error_type=RuntimeError",
         "action=exhausted",
     ):
         assert field in exhausted_warning
@@ -432,9 +454,123 @@ async def test_ccxt_fetch_warning_uses_bounded_signature_and_keeps_callback_payl
 
     error_payloads = [payload for payload in callback_payloads if payload.get("stage") == "error"]
     assert error_payloads
-    assert error_payloads[0]["params"] == {"until": 1_723_456_059_999}
-    assert error_payloads[0]["error"] == url
-    assert error_payloads[0]["error_repr"] == repr(UrlBearingError(url))
+    assert error_payloads[0]["param_keys"] == ["until"]
+    assert error_payloads[0]["error_type"] == "RuntimeError"
+    assert "params" not in error_payloads[0]
+    assert "error" not in error_payloads[0]
+    assert "error_repr" not in error_payloads[0]
+    assert url not in str(error_payloads[0])
+
+
+@pytest.mark.asyncio
+async def test_ccxt_fetch_debug_log_keeps_param_keys_without_values(tmp_path, caplog):
+    class _Ex:
+        id = "bybit"
+
+        async def fetch_ohlcv(self, *_args, **_kwargs):
+            return []
+
+    cm = CandlestickManager(
+        exchange=_Ex(),
+        exchange_name="bybit",
+        cache_dir=str(tmp_path / "caches"),
+        debug=3,
+    )
+    caplog.set_level(int(getattr(logging, "TRACE", 5)), logger=cm.log.name)
+
+    await cm._ccxt_fetch_ohlcv_once(
+        "BTC/USDT:USDT",
+        since_ms=1_723_456_000_000,
+        limit=100,
+        end_exclusive_ms=1_723_456_060_000,
+        timeframe="1m",
+    )
+
+    fetch_lines = [
+        record.getMessage()
+        for record in caplog.records
+        if "event=ccxt_fetch_ohlcv " in record.getMessage()
+    ]
+    assert len(fetch_lines) == 1
+    assert "param_keys=['category']" in fetch_lines[0]
+    assert "params=" not in fetch_lines[0]
+    assert "linear" not in fetch_lines[0]
+
+
+@pytest.mark.asyncio
+async def test_archive_fetch_diagnostics_keep_only_url_hash_and_error_type(tmp_path, monkeypatch):
+    url = "https://data.example.invalid/archive.zip?apiKey=SECRET&signature=abc"
+
+    class UrlBearingError(RuntimeError):
+        pass
+
+    class _Response:
+        status = 500
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        def raise_for_status(self):
+            raise UrlBearingError(url)
+
+    class _Session:
+        def get(self, _url):
+            return _Response()
+
+    cm = CandlestickManager(exchange=None, exchange_name="binance", cache_dir=str(tmp_path / "caches"))
+    callback_payloads = []
+    logs = []
+    cm._remote_fetch_callback = callback_payloads.append
+
+    async def fake_get_session():
+        return _Session()
+
+    monkeypatch.setattr(cm, "_get_http_session", fake_get_session)
+    monkeypatch.setattr(cm, "_log", lambda level, event, **fields: logs.append((level, event, fields)))
+
+    with pytest.raises(UrlBearingError):
+        await cm._archive_fetch_bytes(url)
+
+    by_event = {event: fields for _level, event, fields in logs}
+    assert by_event["archive_http_get"]["url_hash"]
+    assert by_event["archive_http_error"] == {
+        "url_hash": by_event["archive_http_get"]["url_hash"],
+        "error_type": "RuntimeError",
+    }
+    assert all("url" not in payload for payload in callback_payloads)
+    assert all("error" not in payload and "error_repr" not in payload for payload in callback_payloads)
+    assert all("SECRET" not in str(payload) for payload in callback_payloads)
+
+
+@pytest.mark.asyncio
+async def test_archive_day_warning_keeps_only_bounded_error_type(tmp_path, monkeypatch):
+    url = "https://data.example.invalid/archive.zip?apiKey=SECRET&signature=abc"
+
+    class UrlBearingError(RuntimeError):
+        pass
+
+    cm = CandlestickManager(exchange=None, exchange_name="binance", cache_dir=str(tmp_path / "caches"))
+    logs = []
+    monkeypatch.setattr(cm, "_archive_supported", lambda: True)
+    monkeypatch.setattr(cm, "_get_authoritative_start_ts", lambda _symbol: None)
+    monkeypatch.setattr(cm, "_date_keys_between", lambda _start, _end: {"1970-01-01": (0, 86_340_000)})
+    monkeypatch.setattr(cm, "_iter_shard_paths", lambda _symbol, tf: {})
+    monkeypatch.setattr(cm, "_get_legacy_shard_paths", lambda _symbol, _tf: {})
+    monkeypatch.setattr(cm, "_ensure_symbol_index", lambda _symbol, tf: {"shards": {}})
+    monkeypatch.setattr(cm, "_log", lambda level, event, **fields: logs.append((level, event, fields)))
+
+    async def fail_archive_day(_symbol, _day_key):
+        raise UrlBearingError(url)
+
+    monkeypatch.setattr(cm, "_archive_fetch_day", fail_archive_day)
+
+    await cm._prefetch_archives_for_range("BTC/USDT:USDT", 0, 86_340_000, parallel_days=1)
+
+    warnings = [fields for level, event, fields in logs if level == "warning" and event == "archive_day_failed"]
+    assert warnings == [{"symbol": "BTC/USDT:USDT", "day": "1970-01-01", "error_type": "RuntimeError"}]
 
 
 @pytest.mark.asyncio

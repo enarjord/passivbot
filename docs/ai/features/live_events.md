@@ -172,6 +172,19 @@ legacy recovery heuristics do not require projecting untrusted class names.
 Monitor error events use the same hostile-metadata-safe exception-type boundary; diagnostic
 publication must not replace the original refresh exception.
 
+## Candle Remote-Fetch Diagnostics
+
+Candle manager callbacks are sanitized before any live-event, HLCV, or fake-live consumer receives
+them. CCXT and archive diagnostics retain code-owned stage, symbol/timeframe, attempt/status/timing,
+bounded exception type, parameter keys, and a SHA-256 URL hash where needed for correlation. They
+exclude exception text and repr, raw request URLs, and request-parameter values.
+
+`remote.call_started`, `remote.call_succeeded`, `remote.call_failed`, and
+`remote.call_throttled` preserve start/result correlation after this redaction, including concurrent
+archive calls keyed by URL hash. Repeated consumer-side sanitization must be idempotent. Redaction
+and sink failure cannot change fetches, retries, backoff, rate-limit classification, archive
+availability, cache behavior, or trading decisions.
+
 ## Open-Orders Snapshot Deltas
 
 `open_orders.snapshot_delta` replaces the aggregate INFO lines for open-order snapshot additions or

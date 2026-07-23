@@ -21,6 +21,7 @@ from live.event_bus import (
 )
 from live.balance_composition import public_balance_composition
 from live.diagnostic_safety import bounded_exception_type as _bounded_exception_type
+from candlestick_manager import sanitize_remote_fetch_diagnostic
 
 
 def current_live_event_cycle_id(bot: Any) -> str | None:
@@ -134,24 +135,6 @@ def _sanitize_remote_text(value: Any, *, max_len: int = 500) -> str:
     if len(text) > max_len:
         text = f"{text[:max_len]}...<truncated>"
     return text
-
-
-def _sanitize_remote_url(value: Any) -> tuple[str, str | None]:
-    raw = str(value)
-    raw_hash = hashlib.sha256(raw.encode("utf-8")).hexdigest()
-    return "[redacted-url]", raw_hash
-
-
-def _sanitize_remote_fetch_payload(payload: dict[str, Any]) -> dict[str, Any]:
-    data = dict(payload)
-    data.pop("error", None)
-    data.pop("error_repr", None)
-    if data.get("url") is not None:
-        url, url_hash = _sanitize_remote_url(data["url"])
-        data["url"] = url
-        if url_hash is not None:
-            data["url_hash"] = url_hash
-    return data
 
 
 def _cycle_degraded_bounded_text(value: Any, pattern: re.Pattern[str]) -> str | None:
@@ -361,7 +344,7 @@ def _remote_fetch_payload_key(payload: dict[str, Any]) -> tuple[Any, ...]:
         payload.get("symbol"),
         payload.get("tf") or payload.get("timeframe"),
         payload.get("since_ts"),
-        payload.get("url"),
+        payload.get("url_hash") or payload.get("url"),
     )
 
 
@@ -421,7 +404,9 @@ def _remote_call_debug_payload(
     debug: dict[str, Any] = {
         "data_keys": _mapping_key_sample(data, limit=limit),
     }
-    if isinstance(data.get("params"), dict):
+    if isinstance(data.get("param_keys"), list):
+        debug["param_keys"] = [str(key) for key in data["param_keys"][:limit]]
+    elif isinstance(data.get("params"), dict):
         debug["param_keys"] = _mapping_key_sample(data.get("params"), limit=limit)
     if matched_start is not None:
         debug["matched_start"] = bool(matched_start)
@@ -627,12 +612,13 @@ def emit_candle_remote_fetch_event(bot: Any, payload: dict[str, Any]) -> Any:
     """Translate CandlestickManager remote-fetch callbacks into LiveEvents."""
     if not isinstance(payload, dict):
         return None
-    stage = str(payload.get("stage") or "").lower()
+    data = sanitize_remote_fetch_diagnostic(payload)
+    stage = str(data.get("stage") or "").lower()
     if not stage:
         return None
     if stage in _REMOTE_CALL_NONTERMINAL_STAGES:
         return None
-    key = _remote_fetch_payload_key(payload)
+    key = _remote_fetch_payload_key(data)
     call_map = getattr(bot, "_live_event_remote_call_ids", None)
     if not isinstance(call_map, dict):
         call_map = {}
@@ -662,7 +648,6 @@ def emit_candle_remote_fetch_event(bot: Any, payload: dict[str, Any]) -> Any:
             event_type = EventTypes.REMOTE_CALL_SUCCEEDED
             status = "skipped" if stage in {"not_found", "missing"} else "succeeded"
             level = "debug"
-    data = _sanitize_remote_fetch_payload(payload)
     if stage != "start" and not matched_start:
         data["orphan_result"] = True
     if live_event_debug_profile_enabled(bot, "remote_calls"):
@@ -679,9 +664,9 @@ def emit_candle_remote_fetch_event(bot: Any, payload: dict[str, Any]) -> Any:
         cycle_id=cycle_id,
         remote_call_id=remote_call_id,
         remote_call_group_id=remote_call_group_id,
-        symbol=str(payload.get("symbol")) if payload.get("symbol") is not None else None,
+        symbol=str(data.get("symbol")) if data.get("symbol") is not None else None,
         status=status,
-        reason_code=str(payload.get("kind") or ReasonCodes.REMOTE_FETCH),
+        reason_code=str(data.get("kind") or ReasonCodes.REMOTE_FETCH),
         data=data,
     )
 
