@@ -66,8 +66,9 @@ Estimated completion:
   order-replacement churn gate.
 - A read-only three-sample process preflight found all five configured bots
   matched with stable PIDs, zero missing/duplicate/extra/config/scan failures,
-  and no persistent uninterruptible process. No pull, restart, signal,
-  authenticated exchange request, or manufactured event occurred.
+  and one process remaining in I/O wait throughout that short window, without
+  a hard process-contract failure. No pull, restart, signal, authenticated
+  exchange request, or manufactured event occurred.
 
 ## Deployed Baseline (PR #1348)
 

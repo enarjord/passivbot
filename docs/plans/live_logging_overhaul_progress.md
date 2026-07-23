@@ -28,10 +28,11 @@ merge, live smoke evidence changes, or new gaps are discovered.
   replacement-churn gate. Deployment is therefore deferred pending an explicit
   config/rollout decision rather than treated as a failed logging rollout.
 - A read-only process preflight found five stable exact processes with zero
-  hard failures and no persistent uninterruptible process. No pull, restart,
-  signal, authenticated exchange request, or manufactured event occurred. The
-  active follow-up redacts local candle cache/index/lock diagnostics; direct
-  live consumer diagnostics remain a later slice.
+  hard failures and one process remaining in I/O wait throughout the short
+  three-sample window, without a hard process-contract failure. No pull,
+  restart, signal, authenticated exchange request, or manufactured event
+  occurred. The active follow-up redacts local candle cache/index/lock
+  diagnostics; direct live consumer diagnostics remain a later slice.
 
 ## Latest Canonical Deployment (PR #1348)
 
