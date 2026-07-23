@@ -71,6 +71,11 @@ TEST_RUNTIME_IDENTITY = RuntimeIdentity(
 )
 
 
+def _hostile_runtime_error(detail: str) -> RuntimeError:
+    error_cls = type("ApiKeySecretError", (RuntimeError,), {})
+    return error_cls(detail)
+
+
 class _SafeRiskCache:
     def get_known_gaps(self):
         return []
@@ -832,6 +837,109 @@ async def test_hyperliquid_live_market_snapshot_uses_symbol_fallback_for_hip3():
     snap = snapshots["XYZ-SILVER/USDC:USDC"]
     assert snap.source == "hyperliquid_symbol_tickers"
     assert snap.last == pytest.approx(73.455)
+
+
+@pytest.mark.asyncio
+async def test_hyperliquid_live_market_snapshot_fallback_logs_are_redacted(caplog):
+    bot = Passivbot.__new__(Passivbot)
+    bot.exchange = "hyperliquid"
+    bot.symbol_ids = {}
+
+    async def fail_primary(*_args, **_kwargs):
+        raise _hostile_runtime_error("primary token=secret-primary")
+
+    async def fail_all_mids(*_args, **_kwargs):
+        raise _hostile_runtime_error("allMids token=secret-mid")
+
+    async def fetch_symbol_tickers(symbols):
+        assert symbols == ["BTC/USDC:USDC"]
+        return {
+            "BTC/USDC:USDC": {
+                "bid": 100.0,
+                "ask": 101.0,
+                "last": 100.5,
+            }
+        }
+
+    bot.market_snapshot_provider = SimpleNamespace(get_snapshots=fail_primary)
+    bot.cca = SimpleNamespace(fetch=fail_all_mids)
+    bot._hl_info_url = lambda: "https://example.invalid/info"
+    bot.fetch_tickers_for_symbols = fetch_symbol_tickers
+
+    with caplog.at_level(logging.DEBUG):
+        snapshots = await bot._get_live_market_snapshots(
+            ["BTC/USDC:USDC"], context="test"
+        )
+
+    assert snapshots["BTC/USDC:USDC"].last == pytest.approx(100.5)
+    messages = "\n".join(record.getMessage() for record in caplog.records)
+    assert "error_type=RuntimeError action=try_all_mids" in messages
+    assert "error_type=RuntimeError action=try_symbol_tickers" in messages
+    assert "ApiKeySecretError" not in messages
+    assert "secret-primary" not in messages
+    assert "secret-mid" not in messages
+
+
+@pytest.mark.asyncio
+async def test_hyperliquid_symbol_ticker_failure_log_is_redacted(caplog):
+    bot = Passivbot.__new__(Passivbot)
+    bot.exchange = "hyperliquid"
+    bot.symbol_ids = {}
+    bot.market_snapshot_provider = SimpleNamespace(
+        get_snapshots=AsyncMock(return_value={})
+    )
+    bot.cca = SimpleNamespace(fetch=AsyncMock(return_value={}))
+    bot._hl_info_url = lambda: "https://example.invalid/info"
+    bot._log_symbols = lambda symbols, limit=12: ",".join(symbols[:limit])
+
+    async def fail_symbol_tickers(_symbols):
+        raise _hostile_runtime_error("symbol ticker token=secret-symbol")
+
+    bot.fetch_tickers_for_symbols = fail_symbol_tickers
+
+    with caplog.at_level(logging.DEBUG):
+        with pytest.raises(RuntimeError, match="missing live market snapshots"):
+            await bot._get_live_market_snapshots(
+                ["BTC/USDC:USDC"], context="test"
+            )
+
+    messages = "\n".join(record.getMessage() for record in caplog.records)
+    assert "error_type=RuntimeError action=fail_if_incomplete" in messages
+    assert "ApiKeySecretError" not in messages
+    assert "secret-symbol" not in messages
+
+
+@pytest.mark.asyncio
+async def test_hyperliquid_orchestrator_fallback_preserves_redacted_cause(caplog):
+    bot = Passivbot.__new__(Passivbot)
+    bot.exchange = "hyperliquid"
+    bot._live_market_snapshot_fetch_max_age_ms = lambda: 5_000
+    bot._log_symbols = lambda symbols, limit=12: ",".join(symbols[:limit])
+
+    async def fail_primary(*_args, **_kwargs):
+        raise _hostile_runtime_error("primary token=secret-primary")
+
+    fallback_error = _hostile_runtime_error("fallback token=secret-fallback")
+
+    async def fail_fallback(*_args, **_kwargs):
+        raise fallback_error
+
+    bot.market_snapshot_provider = SimpleNamespace(get_snapshots=fail_primary)
+    bot._get_live_market_snapshots = fail_fallback
+
+    with caplog.at_level(logging.DEBUG):
+        with pytest.raises(RuntimeError) as raised:
+            await bot._get_orchestrator_market_snapshots(["BTC/USDC:USDC"])
+
+    assert raised.value.__cause__ is fallback_error
+    assert str(raised.value).endswith("fallback_error=RuntimeError")
+    rendered = f"{raised.value}\n" + "\n".join(
+        record.getMessage() for record in caplog.records
+    )
+    assert "error_type=RuntimeError action=try_explicit_fallback" in rendered
+    assert "ApiKeySecretError" not in rendered
+    assert "secret-primary" not in rendered
+    assert "secret-fallback" not in rendered
 
 
 @pytest.mark.asyncio
@@ -9612,7 +9720,9 @@ async def test_pre_create_snapshot_filter_emits_failed_refresh_skip_event(caplog
     )
 
     async def fail_get_snapshots(symbols, max_age_ms=None):
-        raise RuntimeError("exchange unavailable with raw detail")
+        raise _hostile_runtime_error(
+            "exchange unavailable token=secret-pre-create-refresh"
+        )
 
     bot.market_snapshot_provider = SimpleNamespace(get_snapshots=fail_get_snapshots)
     orders = [
@@ -9644,6 +9754,8 @@ async def test_pre_create_snapshot_filter_emits_failed_refresh_skip_event(caplog
     assert event.data["stage"] == "market_snapshot_refresh"
     assert event.data["error_type"] == "RuntimeError"
     assert "exchange unavailable" not in json.dumps(event.data)
+    assert "ApiKeySecretError" not in json.dumps(event.data)
+    assert "secret-pre-create-refresh" not in json.dumps(event.data)
     assert monitor_sink.events == [event]
     assert console_sink.events == [event]
     assert text_sink.events == [event]
@@ -9651,6 +9763,8 @@ async def test_pre_create_snapshot_filter_emits_failed_refresh_skip_event(caplog
     assert "error_type=RuntimeError" in console_message
     assert "reason=pre_create_market_snapshot_unavailable" in console_message
     assert "exchange unavailable" not in console_message
+    assert "ApiKeySecretError" not in console_message
+    assert "secret-pre-create-refresh" not in console_message
     assert len("2026-07-15T23:45:40Z WARNING  [hyperliquid] " + console_message) <= 240
     assert not any(
         "failed pre-create market snapshot refresh" in record.getMessage()
@@ -10048,7 +10162,7 @@ async def test_pre_create_snapshot_filter_keeps_legacy_warning_without_event_own
         ]
 
     def raising_emitter(**_kwargs):
-        raise RuntimeError("event pipeline unavailable with raw detail")
+        raise _hostile_runtime_error("event pipeline token=secret-event")
 
     def swallowed_emitter(**_kwargs):
         return None
@@ -10098,7 +10212,7 @@ async def test_pre_create_snapshot_filter_keeps_legacy_warning_without_event_own
 @pytest.mark.asyncio
 async def test_pre_create_snapshot_refresh_legacy_fallback_excludes_raw_error(caplog):
     async def failing_snapshots(*_args, **_kwargs):
-        raise RuntimeError("exchange unavailable with raw account detail")
+        raise _hostile_runtime_error("exchange unavailable token=secret-refresh")
 
     bot = SimpleNamespace(
         _current_planning_snapshot_invalid_for_creations=lambda _symbols: [],
@@ -10124,9 +10238,66 @@ async def test_pre_create_snapshot_refresh_legacy_fallback_excludes_raw_error(ca
     messages = [record.getMessage() for record in caplog.records]
     assert messages == [
         "[market] skipping order creation; failed pre-create market snapshot refresh | "
-        "symbols=BTC/USDT:USDT error_type=RuntimeError"
+        "symbols=BTC/USDT:USDT error_type=RuntimeError action=skip_create"
     ]
-    assert "raw account detail" not in "\n".join(messages)
+    rendered = "\n".join(messages)
+    assert "ApiKeySecretError" not in rendered
+    assert "secret-refresh" not in rendered
+
+
+@pytest.mark.asyncio
+async def test_pre_create_snapshot_diagnostic_failures_are_redacted(caplog):
+    def invalid_for_creations(_symbols):
+        return [
+            {
+                "surface": "positions",
+                "reason": "surface_epoch_too_old",
+                "epoch": 1,
+                "min_epoch": 2,
+            }
+        ]
+
+    def raising_emitter(**_kwargs):
+        raise _hostile_runtime_error("event token=secret-event")
+
+    class FailingTrace:
+        def record_blocked_orders(self, _orders, _reason):
+            raise _hostile_runtime_error("trace token=secret-trace")
+
+    bot = SimpleNamespace(
+        _current_planning_snapshot_invalid_for_creations=invalid_for_creations,
+        _emit_execution_create_filter_event=raising_emitter,
+        _fresh_entry_eligibility_trace=FailingTrace(),
+        _live_event_pipeline=SimpleNamespace(
+            emit=lambda _event: None,
+            console_sink=object(),
+        ),
+        live_event_console_enabled=True,
+        _log_symbols=lambda symbols, limit=12: ",".join(symbols[:limit]),
+        _log_compact_symbol_payload=lambda _details: (
+            "positions:surface_epoch_too_old"
+        ),
+    )
+    orders = [
+        {
+            "symbol": "BTC/USDT:USDT",
+            "side": "buy",
+            "position_side": "long",
+            "qty": 1.0,
+            "price": 99.0,
+        }
+    ]
+
+    with caplog.at_level(logging.DEBUG):
+        assert await Passivbot._filter_fresh_market_snapshot_creations(bot, orders) == []
+
+    assert bot._fresh_entry_eligibility_trace is None
+    messages = "\n".join(record.getMessage() for record in caplog.records)
+    assert "error_type=RuntimeError action=use_legacy_warning" in messages
+    assert "error_type=RuntimeError action=disable_trace" in messages
+    assert "ApiKeySecretError" not in messages
+    assert "secret-event" not in messages
+    assert "secret-trace" not in messages
 
 
 def _make_open_order_guardrail_bot(*, epoch: int = 3):

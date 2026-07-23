@@ -4,6 +4,11 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Market-snapshot provider, fallback, pre-create gate, event-emitter, and eligibility-trace
+  diagnostics now retain only bounded exception types and stable actions. Snapshot fallback order,
+  fail-closed order filtering, block attribution, trace isolation, and exception cause chaining are
+  unchanged.
+
 - Hourly candle disk-audit, maintenance-cycle, and exchange-config event-emitter fallback
   diagnostics now retain only bounded exception types. Audit continuation, maintenance retry,
   market refresh, and exchange-config result behavior are unchanged.
