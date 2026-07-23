@@ -1592,3 +1592,68 @@ async def test_order_sort_preserves_original_order_when_market_price_missing(cap
     assert not to_cancel
     assert [order["price"] for order in to_create] == [95.0, 101.0]
     assert any("preserving to_create order" in rec.message for rec in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_order_sort_fetch_failure_redacts_diagnostic_and_preserves_original_order(
+    caplog, capsys
+):
+    symbol = "BTC/USDT"
+    bot = OrchestrationBot({})
+    bot.register_symbol(symbol)
+    first = _make_order(symbol, "buy", "long", 0.5, 95.0, "entry_grid_cropped_long")
+    second = _make_order(symbol, "buy", "long", 0.5, 101.0, "entry_grid_normal_long")
+    orders = [first, second]
+    fetch_calls = []
+    hostile_detail = (
+        "hostile-message https://order-sort.invalid/price?api_key=operator-secret&token=token-123"
+    )
+    hostile_error = type("ApiTokenCredentialsError", (RuntimeError,), {})(hostile_detail)
+
+    async def fail_get_live_last_prices(symbols, **kwargs):
+        fetch_calls.append((symbols, kwargs))
+        raise hostile_error
+
+    bot._fetch_market_prices = types.MethodType(Passivbot._fetch_market_prices, bot)
+    bot._get_live_last_prices = fail_get_live_last_prices
+
+    with caplog.at_level(logging.WARNING):
+        result = await bot._sort_orders_by_market_diff(orders, log_label="to_create")
+
+    diagnostic = next(
+        record.getMessage()
+        for record in caplog.records
+        if "market price lookup failed for order sorting" in record.getMessage()
+    )
+    captured = capsys.readouterr()
+    output = "\n".join((caplog.text, captured.out, captured.err))
+
+    assert result == orders
+    assert result is not orders
+    assert all(returned is original for returned, original in zip(result, orders))
+    assert fetch_calls == [
+        (
+            {symbol},
+            {
+                "max_age_ms": 10_000,
+                "context": "order_sort",
+                "allow_completed_candle_fallback": True,
+            },
+        )
+    ]
+    assert diagnostic == (
+        "[order] market price lookup failed for order sorting | "
+        "symbols=BTC error_type=RuntimeError action=preserve_original_order"
+    )
+    assert captured.out == ""
+    assert captured.err == ""
+    for unsafe_value in (
+        "hostile-message",
+        "ApiTokenCredentialsError",
+        "https://order-sort.invalid",
+        "api_key",
+        "operator-secret",
+        "token-123",
+        "Traceback",
+    ):
+        assert unsafe_value not in output

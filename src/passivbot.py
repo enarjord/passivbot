@@ -18068,10 +18068,10 @@ class Passivbot:
             )
         except Exception as exc:
             logging.warning(
-                "[order] market price lookup failed for order sorting; preserving original order | symbols=%s error_type=%s error=%s",
+                "[order] market price lookup failed for order sorting | "
+                "symbols=%s error_type=%s action=preserve_original_order",
                 Passivbot._log_symbols(tuple(sorted(symbols)), limit=8),
-                type(exc).__name__,
-                exc,
+                bounded_exception_type(exc),
             )
             prices = {}
         for symbol in symbols:
