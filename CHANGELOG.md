@@ -4,6 +4,10 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Shared live diagnostic-event fallback and diagnostic-step failures now log only their stable
+  context and a bounded exception type. Their existing return values, isolation, routing, retry,
+  scheduling, and trading behavior are unchanged.
+
 - HSL history-replay candle-fetch and passive cache-observer diagnostics now retain bounded
   exception types only. Candle fallback and degraded replay outputs, retries, cache behavior, and
   trading state are unchanged.

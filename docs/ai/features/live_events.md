@@ -64,6 +64,9 @@ payload fragment. Non-built-in string metadata, invalid type names, and identifi
 containing credential markers normalize to `Error` before the safe type is bounded. Redacting the
 diagnostic must not change the emitter's return value, exception isolation, event routing, retries,
 scheduling, HSL/risk behavior, or trading behavior.
+The shared diagnostic-event legacy monitor fallback and diagnostic-step wrapper follow this same
+boundary: their DEBUG logs retain the code-owned event kind or step label plus a bounded exception
+type, never the exception value or raw class metadata.
 The same redaction applies when the event-adjacent HSL coin-status human projection fails; the
 structured `hsl.status` event must still be attempted independently. Other non-event HSL
 diagnostics are outside this contract.

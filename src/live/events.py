@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 import logging
 from typing import Any, Iterable, Mapping, TypeVar
 
+from live.diagnostic_safety import bounded_exception_type
 from live.event_bus import LiveEvent, emit_event
 
 
@@ -66,9 +67,9 @@ class DiagnosticEvent:
             )
         except Exception as exc:
             logging.debug(
-                "[diagnostic] failed to emit %s event: %s",
+                "[diagnostic] failed to emit %s event error_type=%s",
                 self.kind,
-                exc,
+                bounded_exception_type(exc),
             )
             return None
 
@@ -115,8 +116,8 @@ def run_diagnostic_step(
         return func()
     except Exception as exc:
         logging.debug(
-            "[diagnostic] %s failed: %s",
+            "[diagnostic] %s failed error_type=%s",
             str(label),
-            exc,
+            bounded_exception_type(exc),
         )
         return default
