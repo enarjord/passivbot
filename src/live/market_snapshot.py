@@ -6,6 +6,7 @@ import math
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Iterable, Optional
 
+from live.diagnostic_safety import bounded_exception_type
 from utils import utc_ms
 
 
@@ -95,11 +96,11 @@ class MarketSnapshotProvider:
             fetched, source = await self._fetch_tickers_for_missing(missing)
         except Exception as exc:
             self._log.warning(
-                "[market] ticker snapshot fetch failed | exchange=%s symbols=%s error_type=%s error=%s",
+                "[market] ticker snapshot fetch failed | exchange=%s symbols=%s "
+                "error_type=%s action=propagate",
                 self.exchange_name,
                 len(missing),
-                type(exc).__name__,
-                exc,
+                bounded_exception_type(exc),
             )
             raise RuntimeError(
                 f"[market] ticker snapshot fetch failed for {self.exchange_name}; "
@@ -131,10 +132,10 @@ class MarketSnapshotProvider:
                     self._cache_sink(symbol, float(snap.last), int(snap.fetched_ms))
                 except Exception as exc:
                     self._log.debug(
-                        "[market] snapshot cache sink failed | symbol=%s error_type=%s error=%s",
+                        "[market] snapshot cache sink failed | symbol=%s "
+                        "error_type=%s action=preserve_snapshot",
                         symbol,
-                        type(exc).__name__,
-                        exc,
+                        bounded_exception_type(exc),
                     )
 
         for symbol in missing:
@@ -155,11 +156,11 @@ class MarketSnapshotProvider:
                 )
             except Exception as exc:
                 self._log.warning(
-                    "[market] ticker missing-symbol retry failed | exchange=%s symbols=%s error_type=%s error=%s",
+                    "[market] ticker missing-symbol retry failed | exchange=%s symbols=%s "
+                    "error_type=%s action=propagate",
                     self.exchange_name,
                     len(missing_after),
-                    type(exc).__name__,
-                    exc,
+                    bounded_exception_type(exc),
                 )
                 raise RuntimeError(
                     f"[market] ticker missing-symbol retry failed for {self.exchange_name}; "
@@ -196,10 +197,10 @@ class MarketSnapshotProvider:
                         self._cache_sink(symbol, float(snap.last), int(snap.fetched_ms))
                     except Exception as exc:
                         self._log.debug(
-                            "[market] snapshot cache sink failed | symbol=%s error_type=%s error=%s",
+                            "[market] snapshot cache sink failed | symbol=%s "
+                            "error_type=%s action=preserve_snapshot",
                             symbol,
-                            type(exc).__name__,
-                            exc,
+                            bounded_exception_type(exc),
                         )
             for symbol in missing_after:
                 snap = self.get_cached(symbol, now_ms=retry_ms, max_age_ms=max_age_ms)

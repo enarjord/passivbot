@@ -81,12 +81,12 @@ only when the event emitter or structured console owner is unavailable. Event or
 not alter position/balance refresh, state mutation, scheduling, retries, planning, orders, risk, or
 the caller's existing decision to continue after this noncritical diagnostic failure.
 
-Adjacent market-snapshot provider, fallback, pre-create gate, event-emitter, and eligibility-trace
-diagnostics retain only bounded exception types and stable code-owned actions. They never retain
-exception messages, unsafe exception class names, tracebacks, request details, credentials, or
-arbitrary payload fragments. Redaction must not change provider fallback order, optional completed
-candle fallback, fail-closed create filtering, entry-block attribution, trace isolation, or
-exception cause chaining.
+Adjacent market-snapshot provider primary-fetch, missing-symbol retry, cache-sink, fallback,
+pre-create gate, event-emitter, and eligibility-trace diagnostics retain only bounded exception types
+and stable code-owned actions. They never retain exception messages, unsafe exception class names,
+tracebacks, request details, credentials, or arbitrary payload fragments. Redaction must not change
+provider fallback order, optional completed candle fallback, fail-closed create filtering,
+entry-block attribution, cache-sink suppression, trace isolation, or exception cause chaining.
 
 ## EMA Diagnostic Redaction
 
