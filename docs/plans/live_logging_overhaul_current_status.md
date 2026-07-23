@@ -22,8 +22,11 @@ Estimated completion:
 
 ## Active Review Slice
 
-- Implementation branch `codex/candle-refresh-diagnostic-redaction` is based on
-  canonical `64928305f0f5b4b8bc1da353a579a5d492b47648`; no PR is open yet.
+- Open PR #1356, `Redact candle remote fetch diagnostics`, on branch
+  `codex/candle-refresh-diagnostic-redaction`, based on canonical
+  `64928305f0f5b4b8bc1da353a579a5d492b47648`. Resolve its exact head from live
+  metadata; the commit containing this handoff is the intended final review
+  head unless a verified finding requires a semantic fix.
 - Scope: remove arbitrary exception values, raw request URLs, and request
   parameter values from candle remote-fetch callbacks, HLCV progress logs,
   archive fetch/day diagnostics, and fake-live candle traces while retaining
