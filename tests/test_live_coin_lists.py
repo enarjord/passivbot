@@ -643,3 +643,70 @@ def test_refresh_approved_ignored_coin_lists_does_not_restore_legacy_output_on_e
         record for record in caplog.records if record.message.startswith("[forager]")
     ]
     assert bot._live_event_pipeline.close(timeout=2.0) is True
+
+
+def test_refresh_approved_ignored_coin_lists_redacts_outer_failure_and_returns(
+    caplog, capsys
+):
+    bot = _make_eligibility_event_bot()
+    filter_calls = []
+    fallback_summary_called = False
+    hostile_error = type(
+        "ApiTokenCredentialsError",
+        (Exception,),
+        {},
+    )(
+        "hostile-message https://coin-list.invalid/refresh?api_key=operator-secret&token=token-123"
+    )
+
+    def fail_filter(pside, symbols):
+        filter_calls.append((pside, set(symbols)))
+        raise hostile_error
+
+    def record_fallback_summary():
+        nonlocal fallback_summary_called
+        fallback_summary_called = True
+
+    bot._filter_approved_symbols = fail_filter
+    bot._log_coin_symbol_fallback_summary = record_fallback_summary
+
+    with caplog.at_level(logging.ERROR):
+        result = bot.refresh_approved_ignored_coins_lists()
+
+    diagnostic = next(
+        record.getMessage()
+        for record in caplog.records
+        if "approved/ignored coin refresh failed" in record.getMessage()
+    )
+    captured = capsys.readouterr()
+    output = "\n".join((caplog.text, captured.out, captured.err))
+
+    assert result is None
+    assert filter_calls == [
+        (
+            "long",
+            {f"A{index:02d}/USDT:USDT" for index in range(14)},
+        )
+    ]
+    assert fallback_summary_called is False
+    assert bot.approved_coins["long"] == {
+        f"A{index:02d}/USDT:USDT" for index in range(14)
+    }
+    assert bot.ignored_coins == {"long": {"IGNORED/USDT:USDT"}, "short": set()}
+    assert bot.approved_coins_minus_ignored_coins == {}
+    assert diagnostic == (
+        "[forager] approved/ignored coin refresh failed | "
+        "error_type=Exception action=return_from_coin_list_refresh"
+    )
+    assert captured.out == ""
+    assert captured.err == ""
+    for unsafe_value in (
+        "hostile-message",
+        "ApiTokenCredentialsError",
+        "https://coin-list.invalid",
+        "api_key",
+        "operator-secret",
+        "token-123",
+        "Traceback",
+    ):
+        assert unsafe_value not in output

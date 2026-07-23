@@ -103,6 +103,14 @@ failure records only a bounded type and `stop_progress_logger`; explicit cancell
 propagates. These diagnostics do not change refresh propagation, balance anchors, scheduling,
 reconciliation, balance handling, cleanup, timing, fallback values, or event schemas.
 
+## Coin-List Refresh Failure Diagnostics
+
+The outer approved/ignored coin-list refresh failure diagnostic retains only a bounded exception
+type and the `return_from_coin_list_refresh` action. It never retains exception messages, unsafe
+exception class names, URLs, credentials, tokens, or tracebacks. This redaction does not alter the
+existing return, list/universe/eligibility update semantics, scheduling, risk, HSL, or trading
+behavior.
+
 When unrealized-PnL aggregation cannot calculate a fetched position, its ERROR diagnostic retains
 only a bounded exception type and the `return_zero` action. It immediately returns the existing
 `0.0` fallback without retaining exception text, unsafe class metadata, URLs, credentials, or a
