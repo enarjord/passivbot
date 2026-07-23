@@ -339,8 +339,9 @@ If a position is stuck, the bot uses profits from other positions to realize los
 One non-panic protective reducer (TWEL/WEL auto-reduce or auto-unstuck) may coexist with ordinary
 grid, trailing, or EMA-anchor closes for the same position. Passivbot reserves the reducer quantity
 first and caps ordinary closes to the remaining position quantity. Panic close remains exclusive,
-and competing protective reducers do not stack: Passivbot keeps the largest requested absolute
-reduction rather than summing active safety intents.
+and competing protective reducers do not stack: Passivbot keeps the largest loss-admissible
+requested absolute reduction rather than summing active safety intents, trying the next-largest
+intent when the realized-loss gate blocks a larger non-panic close.
 
 ### Filter Parameters
 

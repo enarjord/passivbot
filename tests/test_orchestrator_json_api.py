@@ -2656,6 +2656,44 @@ def test_larger_short_wel_auto_reduce_wins_over_unstuck_for_same_position():
     ) <= 6.0 + 1e-9
 
 
+def test_loss_gate_falls_back_from_larger_wel_to_smaller_unstuck():
+    import passivbot_rust as pbr
+
+    long_bp = {
+        "wallet_exposure_limit": 0.4,
+        "risk_wel_enforcer_threshold": 1.0,
+        "risk_twel_enforcer_enabled": False,
+        "total_wallet_exposure_limit": 1.0,
+        "n_positions": 1,
+        "unstuck_close_pct": 0.4,
+        "unstuck_threshold": 0.001,
+        "unstuck_ema_dist": 0.0,
+        "unstuck_loss_allowance_pct": 0.01,
+    }
+    global_bp = bot_params_pair(long_overrides=long_bp)
+    sym = make_symbol(
+        0,
+        bid=90.0,
+        ask=90.0,
+        long_pos_size=6.0,
+        long_pos_price=100.0,
+        long_bp=long_bp,
+    )
+    inp = make_input(balance=1_000.0, global_bp=global_bp, symbols=[sym])
+    inp["global"]["unstuck_allowance_long"] = 1e9
+    inp["global"]["max_realized_loss_pct"] = 0.019
+
+    out = compute(pbr, inp)
+    order_types = [o["order_type"] for o in out["orders"]]
+
+    assert "close_unstuck_long" in order_types
+    assert "close_auto_reduce_wel_long" not in order_types
+    assert any(
+        block["order_type"] == "close_auto_reduce_wel_long"
+        for block in out["diagnostics"]["loss_gate_blocks"]
+    )
+
+
 def test_larger_unstuck_wins_over_twel_auto_reduce_for_same_position():
     import passivbot_rust as pbr
 
