@@ -6790,7 +6790,11 @@ class Passivbot:
             last_by_key[key] = now
             self._emit_cache_load_completed_event(data)
         except Exception as exc:
-            logging.debug("[event] failed handling cache load event: %s", exc)
+            logging.debug(
+                "[event] failed handling cache load event | "
+                "error_type=%s action=return_from_cache_load_observer",
+                bounded_exception_type(exc),
+            )
 
     def _handle_candle_persist_event(
         self,
@@ -6801,11 +6805,19 @@ class Passivbot:
         try:
             self._monitor_handle_candlestick_persist(symbol, timeframe, batch)
         except Exception as exc:
-            logging.debug("[monitor] failed handling candlestick persist: %s", exc)
+            logging.debug(
+                "[monitor] failed handling candlestick persist | "
+                "error_type=%s action=continue_to_cache_flush_observer",
+                bounded_exception_type(exc),
+            )
         try:
             self._handle_candle_cache_flush_event(symbol, timeframe, batch)
         except Exception as exc:
-            logging.debug("[event] failed handling cache flush event: %s", exc)
+            logging.debug(
+                "[event] failed handling cache flush event | "
+                "error_type=%s action=return_from_persist_observer",
+                bounded_exception_type(exc),
+            )
 
     def _handle_candle_cache_flush_event(
         self,
@@ -6876,7 +6888,11 @@ class Passivbot:
             last_by_key[key] = now
             self._emit_cache_flush_completed_event(data)
         except Exception as exc:
-            logging.debug("[event] failed handling cache flush event: %s", exc)
+            logging.debug(
+                "[event] failed handling cache flush event | "
+                "error_type=%s action=return_from_cache_flush_observer",
+                bounded_exception_type(exc),
+            )
 
     def _install_live_event_pipeline(self) -> Optional[LiveEventPipeline]:
         publisher = getattr(self, "monitor_publisher", None)

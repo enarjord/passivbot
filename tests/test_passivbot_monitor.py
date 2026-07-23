@@ -3399,6 +3399,100 @@ def test_candle_persist_handler_preserves_monitor_and_emits_flush_summary():
     ]
 
 
+def test_candle_observer_failures_redact_hostile_exceptions_and_keep_flush_independent(
+    caplog, capsys
+):
+    import passivbot as pb_mod
+
+    secret = "https://hostile.example.invalid/candles?api_key=observer-secret&token=observer-token"
+    unsafe_type = type("ApiKeyCandleObserverFailure", (RuntimeError,), {})
+    error = unsafe_type(secret)
+
+    class FakeBot:
+        _handle_candle_disk_load_event = (
+            pb_mod.Passivbot._handle_candle_disk_load_event
+        )
+        _handle_candle_persist_event = pb_mod.Passivbot._handle_candle_persist_event
+        _handle_candle_cache_flush_event = (
+            pb_mod.Passivbot._handle_candle_cache_flush_event
+        )
+
+        def __init__(self):
+            self._cache_load_event_throttle_seconds = 0.0
+            self._cache_flush_event_throttle_seconds = 0.0
+            self.flush_events = []
+            self.monitor_calls = 0
+
+        def _emit_cache_load_completed_event(self, _payload):
+            raise error
+
+        def _monitor_handle_candlestick_persist(self, _symbol, _timeframe, _batch):
+            self.monitor_calls += 1
+            if self.monitor_calls == 1:
+                raise error
+
+        def _emit_cache_flush_completed_event(self, payload):
+            self.flush_events.append(dict(payload))
+
+    bot = FakeBot()
+    batch = np.array(
+        [(60_000, 1.0, 2.0, 0.5, 1.5, 10.0)], dtype=pb_mod.CANDLE_DTYPE
+    )
+
+    def fail_cache_flush_handoff(*_args):
+        raise error
+
+    def fail_cache_flush_emission(_payload):
+        raise error
+
+    with caplog.at_level(logging.DEBUG):
+        bot._handle_candle_disk_load_event(
+            {
+                "symbol": "BTC/USDT:USDT",
+                "timeframe": "1m",
+                "loaded_rows": 1,
+            }
+        )
+        bot._handle_candle_persist_event("BTC/USDT:USDT", "1m", batch)
+        bot._handle_candle_cache_flush_event = fail_cache_flush_handoff
+        bot._handle_candle_persist_event("BTC/USDT:USDT", "1m", batch)
+        bot._emit_cache_flush_completed_event = fail_cache_flush_emission
+        pb_mod.Passivbot._handle_candle_cache_flush_event(
+            bot, "BTC/USDT:USDT", "1m", batch
+        )
+
+    captured = capsys.readouterr()
+    messages = [record.getMessage() for record in caplog.records]
+    complete_output = "\n".join((caplog.text, captured.out, captured.err))
+
+    assert messages == [
+        "[event] failed handling cache load event | "
+        "error_type=RuntimeError action=return_from_cache_load_observer",
+        "[monitor] failed handling candlestick persist | "
+        "error_type=RuntimeError action=continue_to_cache_flush_observer",
+        "[event] failed handling cache flush event | "
+        "error_type=RuntimeError action=return_from_persist_observer",
+        "[event] failed handling cache flush event | "
+        "error_type=RuntimeError action=return_from_cache_flush_observer",
+    ]
+    assert bot.flush_events == [
+        {
+            "symbol": "BTC/USDT:USDT",
+            "timeframe": "1m",
+            "persisted_rows": 1,
+            "persisted_start_ts": 60_000,
+            "persisted_end_ts": 60_000,
+        }
+    ]
+    assert bot.monitor_calls == 2
+    assert secret not in complete_output
+    assert unsafe_type.__name__ not in complete_output
+    assert "hostile.example.invalid" not in complete_output
+    assert "api_key" not in complete_output.lower()
+    assert "token" not in complete_output.lower()
+    assert "Traceback" not in complete_output
+
+
 def test_forager_and_ema_summary_emitters_are_best_effort_on_malformed_inputs(caplog):
     import passivbot as pb_mod
 
