@@ -13330,7 +13330,7 @@ class Passivbot:
                                     ),
                                     3,
                                 ),
-                                "error_type": type(exc).__name__,
+                                "error_type": bounded_exception_type(exc),
                             },
                             symbol=sym,
                             status="failed",
@@ -13347,7 +13347,11 @@ class Passivbot:
                 *(fetch_replay_candles(sym) for sym in sorted(price_replay_symbols))
             ):
                 if exc is not None:
-                    logging.error(f"error fetching candles for {sym} {exc}")
+                    logging.error(
+                        "error fetching candles for %s | error_type=%s",
+                        Passivbot._log_symbol(sym),
+                        bounded_exception_type(exc),
+                    )
                     arr = np.empty((0,), dtype=CANDLE_DTYPE)
                 if arr is None:
                     arr = np.empty((0,), dtype=CANDLE_DTYPE)
@@ -13375,10 +13379,11 @@ class Passivbot:
                     ):
                         if exc is not None:
                             logging.error(
-                                "error fetching %s candles for %s during equity history replay: %s",
+                                "error fetching %s candles for %s during equity history replay "
+                                "| error_type=%s",
                                 timeframe,
-                                sym,
-                                exc,
+                                Passivbot._log_symbol(sym),
+                                bounded_exception_type(exc),
                             )
                             continue
                         if arr is None or arr.size == 0:
@@ -13565,10 +13570,9 @@ class Passivbot:
                 replay_account_rows.clear()
                 logging.warning(
                     "[risk] HSL account series row build failed; "
-                    "skipping account series cache | ts=%s error=%s: %s",
+                    "skipping account series cache | ts=%s error_type=%s",
                     minute_ts,
-                    type(exc).__name__,
-                    exc,
+                    bounded_exception_type(exc),
                 )
 
         def _collect_replay_matrix_rows(minute_ts: int, *, record: bool) -> None:
@@ -13623,12 +13627,11 @@ class Passivbot:
                     replay_matrix_rows.pop(pair, None)
                     logging.warning(
                         "[risk] HSL[%s:%s] replay matrix row build failed; "
-                        "skipping cache for this pair | ts=%s error=%s: %s",
+                        "skipping cache for this pair | ts=%s error_type=%s",
                         pside,
                         Passivbot._log_symbol(sym),
                         minute_ts,
-                        type(exc).__name__,
-                        exc,
+                        bounded_exception_type(exc),
                     )
 
         history_minutes = int(max(0, (end_minute - start_minute) // ONE_MIN_MS)) + 1
