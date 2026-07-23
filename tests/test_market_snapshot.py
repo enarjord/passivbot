@@ -1,8 +1,14 @@
 import asyncio
+import logging
 
 import pytest
 
 from market_snapshot import MarketSnapshotProvider
+
+
+def _unsafe_snapshot_exception(secret: str) -> RuntimeError:
+    unsafe_type = type("SnapshotCredentialFailure", (RuntimeError,), {})
+    return unsafe_type(secret)
 
 
 @pytest.mark.asyncio
@@ -183,6 +189,106 @@ async def test_market_snapshot_provider_raises_on_fetch_failure_for_missing_symb
     assert first["BTC/USDT:USDT"].last == 100.0
     with pytest.raises(RuntimeError, match="ticker snapshot fetch failed"):
         await provider.get_snapshots(["BTC/USDT:USDT", "ETH/USDT:USDT"], max_age_ms=60_000)
+
+
+@pytest.mark.asyncio
+async def test_market_snapshot_provider_redacts_primary_fetch_failure_and_preserves_cause(caplog):
+    secret = "api_key=provider-secret https://example.invalid/request"
+    original = _unsafe_snapshot_exception(secret)
+
+    async def fetch_tickers():
+        raise original
+
+    provider = MarketSnapshotProvider(exchange_name="bybit", fetch_tickers=fetch_tickers)
+
+    with caplog.at_level(logging.WARNING):
+        with pytest.raises(RuntimeError, match="ticker snapshot fetch failed") as raised:
+            await provider.get_snapshots(["BTC/USDT:USDT"], max_age_ms=60_000)
+
+    assert raised.value.__cause__ is original
+    assert "error_type=RuntimeError" in caplog.text
+    assert "action=propagate" in caplog.text
+    assert secret not in caplog.text
+    assert type(original).__name__ not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_market_snapshot_provider_redacts_missing_symbol_retry_failure_and_preserves_cause(
+    caplog,
+):
+    secret = "token=retry-secret https://example.invalid/retry"
+    original = _unsafe_snapshot_exception(secret)
+    calls = {"symbols": []}
+
+    async def fetch_tickers():
+        return {"BTC/USDT:USDT": {"bid": 99.0, "ask": 101.0, "last": 100.0}}
+
+    async def fetch_tickers_for_symbols(symbols):
+        calls["symbols"].append(list(symbols))
+        raise original
+
+    provider = MarketSnapshotProvider(
+        exchange_name="bybit",
+        fetch_tickers=fetch_tickers,
+        fetch_tickers_for_symbols=fetch_tickers_for_symbols,
+    )
+
+    with caplog.at_level(logging.WARNING):
+        with pytest.raises(RuntimeError, match="ticker missing-symbol retry failed") as raised:
+            await provider.get_snapshots(
+                ["BTC/USDT:USDT", "ETH/USDT:USDT"], max_age_ms=60_000
+            )
+
+    assert calls["symbols"] == [["ETH/USDT:USDT"]]
+    assert raised.value.__cause__ is original
+    assert "error_type=RuntimeError" in caplog.text
+    assert "action=propagate" in caplog.text
+    assert secret not in caplog.text
+    assert type(original).__name__ not in caplog.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_retry", [False, True], ids=["initial", "retry"])
+async def test_market_snapshot_provider_cache_sink_failure_is_redacted_and_nonblocking(
+    use_retry, caplog
+):
+    secret = "password=cache-secret https://example.invalid/cache"
+    original = _unsafe_snapshot_exception(secret)
+    sink_calls = []
+
+    async def fetch_tickers():
+        return (
+            {"BTC/USDT:USDT": {"bid": 99.0, "ask": 101.0, "last": 100.0}}
+            if use_retry
+            else {"ETH/USDT:USDT": {"bid": 199.0, "ask": 201.0, "last": 200.0}}
+        )
+
+    async def fetch_tickers_for_symbols(symbols):
+        assert use_retry
+        assert symbols == ["ETH/USDT:USDT"]
+        return {"ETH/USDT:USDT": {"bid": 199.0, "ask": 201.0, "last": 200.0}}
+
+    def cache_sink(symbol, price, timestamp):
+        sink_calls.append((symbol, price, timestamp))
+        raise original
+
+    provider = MarketSnapshotProvider(
+        exchange_name="bybit",
+        fetch_tickers=fetch_tickers,
+        fetch_tickers_for_symbols=fetch_tickers_for_symbols if use_retry else None,
+        cache_sink=cache_sink,
+    )
+    symbols = ["BTC/USDT:USDT", "ETH/USDT:USDT"] if use_retry else ["ETH/USDT:USDT"]
+
+    with caplog.at_level(logging.DEBUG):
+        out = await provider.get_snapshots(symbols, max_age_ms=60_000)
+
+    assert set(out) == set(symbols)
+    assert [call[0] for call in sink_calls] == symbols
+    assert "error_type=RuntimeError" in caplog.text
+    assert "action=preserve_snapshot" in caplog.text
+    assert secret not in caplog.text
+    assert type(original).__name__ not in caplog.text
 
 
 @pytest.mark.asyncio
