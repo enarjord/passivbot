@@ -414,6 +414,271 @@ async def test_forager_candidate_refresh_scheduler_coalesces_running_task():
 
 
 @pytest.mark.asyncio
+async def test_live_candle_refresh_failures_are_bounded_and_continue_unaffected_symbols(
+    monkeypatch, caplog
+):
+    import passivbot as pb_mod
+
+    now_ms = 1_000_000
+    secret = "wss://private.example.test/?api_key=CANDLE_REFRESH_SECRET"
+    monkeypatch.setattr(pb_mod, "utc_ms", lambda: now_ms)
+
+    class FakeCM:
+        default_window_candles = 120
+
+        def __init__(self):
+            self.calls = []
+
+        def is_rate_limited(self):
+            return False
+
+        async def get_candles(self, symbol, **kwargs):
+            self.calls.append(symbol)
+            if symbol == "TIMEOUT/USDT:USDT":
+                raise TimeoutError(secret)
+            if symbol == "BROKEN/USDT:USDT":
+                raise RuntimeError(secret)
+            return []
+
+    class Ledger:
+        def __init__(self):
+            self.stamps = []
+
+        def stamp(self, *args, **kwargs):
+            self.stamps.append((args, kwargs))
+
+    class ActiveBot:
+        stop_signal_received = False
+        _shutdown_in_progress = False
+
+        def __init__(self):
+            self.cm = FakeCM()
+            self.ledger = Ledger()
+
+        def _get_fetch_delay_seconds(self):
+            return 0.0
+
+        def _maybe_log_candle_refresh(self, *args, **kwargs):
+            return None
+
+        def _urgent_active_candle_symbols(self):
+            return ["BROKEN/USDT:USDT", "OK/USDT:USDT"]
+
+        def _completed_candle_health_now_ms(self):
+            return now_ms
+
+        def _completed_candle_freshness_signature(self, symbols, *, now_ms):
+            return (("completed", tuple(symbols)),), []
+
+        def _ensure_freshness_ledger(self):
+            return self.ledger
+
+        _shutdown_requested = pb_mod.Passivbot._shutdown_requested
+
+    monkeypatch.setattr(
+        pb_mod.Passivbot,
+        "_urgent_active_candle_symbols",
+        lambda _bot: ["TIMEOUT/USDT:USDT", "BROKEN/USDT:USDT", "OK/USDT:USDT"],
+    )
+    monkeypatch.setattr(
+        pb_mod.Passivbot,
+        "_completed_candle_freshness_signature",
+        lambda _bot, symbols, *, now_ms: ((("completed", tuple(symbols)),), []),
+    )
+    bot = ActiveBot()
+    with caplog.at_level(logging.WARNING):
+        assert await pb_mod.Passivbot.update_ohlcvs_1m_for_actives(bot) is True
+
+    assert bot.cm.calls == [
+        "TIMEOUT/USDT:USDT",
+        "BROKEN/USDT:USDT",
+        "OK/USDT:USDT",
+    ]
+    assert bot.ledger.stamps
+    assert "Timed out acquiring candle lock for TIMEOUT/USDT:USDT" in caplog.text
+    assert "error refreshing candles for BROKEN/USDT:USDT" in caplog.text
+    assert "error_type=TimeoutError" in caplog.text
+    assert "error_type=RuntimeError" in caplog.text
+    assert secret not in caplog.text
+    assert "Traceback" not in caplog.text
+
+    caplog.clear()
+
+    class OuterFailureBot:
+        stop_signal_received = False
+        _shutdown_in_progress = False
+        _shutdown_requested = pb_mod.Passivbot._shutdown_requested
+
+    monkeypatch.setattr(
+        pb_mod.Passivbot,
+        "_completed_candle_health_now_ms",
+        lambda _bot: (_ for _ in ()).throw(RuntimeError(secret)),
+    )
+    with caplog.at_level(logging.ERROR):
+        assert await pb_mod.Passivbot.update_ohlcvs_1m_for_actives(OuterFailureBot()) is False
+
+    assert "active refresh failed" in caplog.text
+    assert "action=return_false" in caplog.text
+    assert "error_type=RuntimeError" in caplog.text
+    assert secret not in caplog.text
+    assert "Traceback" not in caplog.text
+
+    caplog.clear()
+
+    class ShutdownFailureBot(OuterFailureBot):
+        stop_signal_received = True
+
+    with caplog.at_level(logging.DEBUG):
+        assert await pb_mod.Passivbot.update_ohlcvs_1m_for_actives(ShutdownFailureBot()) is False
+
+    assert "stopped candle refresh during shutdown" in caplog.text
+    assert "error_type=RuntimeError" in caplog.text
+    assert secret not in caplog.text
+    assert "Traceback" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_forager_refresh_task_and_cap_log_bound_failure_diagnostics(monkeypatch, caplog):
+    import passivbot as pb_mod
+
+    secret = "https://private.example.test/?secret=FORAGER_REFRESH_SECRET"
+    monkeypatch.setattr(pb_mod, "utc_ms", lambda: 1_000_000)
+
+    class FakeBot:
+        def __init__(self):
+            self.stop_signal_received = False
+            self._shutdown_in_progress = False
+
+        async def _refresh_forager_candidate_candles(self):
+            raise RuntimeError(secret)
+
+        _shutdown_requested = pb_mod.Passivbot._shutdown_requested
+
+    bot = FakeBot()
+    with caplog.at_level(logging.DEBUG):
+        await pb_mod.Passivbot._forager_candidate_candle_refresh_task(bot)
+
+        def raise_while_formatting(_symbol):
+            raise RuntimeError(secret)
+
+        monkeypatch.setattr(pb_mod.Passivbot, "_log_symbol", raise_while_formatting)
+        pb_mod.Passivbot._log_forager_refresh_wall_time_cap(
+            bot,
+            symbol="BROKEN/USDT:USDT",
+            max_refresh_ms=60_000,
+            stale_age_ms=60_000,
+            target_age_ms=30_000,
+            refreshed_count=0,
+            total_count=1,
+        )
+
+    assert "forager candidate refresh failed" in caplog.text
+    assert "forager refresh cap log failed" in caplog.text
+    assert caplog.text.count("error_type=RuntimeError") == 2
+    assert secret not in caplog.text
+    assert "Traceback" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_forager_refresh_bounds_per_symbol_timeout_and_failure(monkeypatch, caplog):
+    import passivbot as pb_mod
+
+    now_ms = 1_000_000
+    secret = "https://private.example.test/?token=FORAGER_SYMBOL_SECRET"
+    symbols = ["TIMEOUT/USDT:USDT", "BROKEN/USDT:USDT", "OK/USDT:USDT"]
+    monkeypatch.setattr(pb_mod, "utc_ms", lambda: now_ms)
+    monkeypatch.setattr(
+        pb_mod,
+        "compute_live_warmup_windows",
+        lambda *args, **kwargs: (
+            {symbol: 10 for symbol in symbols},
+            {symbol: 0 for symbol in symbols},
+            {symbol: True for symbol in symbols},
+        ),
+    )
+    monkeypatch.setattr(pb_mod.Passivbot, "_urgent_active_candle_symbols", lambda _bot: [])
+    monkeypatch.setattr(
+        pb_mod.Passivbot,
+        "_forager_refresh_budget",
+        lambda _bot, *args, **kwargs: 3,
+    )
+    monkeypatch.setattr(
+        pb_mod.Passivbot,
+        "_forager_target_staleness_ms",
+        lambda _bot, *args, **kwargs: 0,
+    )
+    monkeypatch.setattr(
+        pb_mod.Passivbot,
+        "_candidate_candle_surface_health",
+        lambda _bot, *args, **kwargs: {"age_ms": 60_000, "coverage_ok": False, "no_basis": True},
+    )
+
+    class FakeCM:
+        default_window_candles = 120
+
+        def __init__(self):
+            self.calls = []
+
+        async def get_candles(self, symbol, **kwargs):
+            self.calls.append(symbol)
+            if symbol == "TIMEOUT/USDT:USDT":
+                raise TimeoutError(secret)
+            if symbol == "BROKEN/USDT:USDT":
+                raise RuntimeError(secret)
+            return []
+
+    class FakeBot:
+        config = {
+            "live": {
+                "max_ohlcv_fetches_per_minute": 12,
+                "max_forager_candle_refresh_seconds": 0,
+            }
+        }
+        approved_coins_minus_ignored_coins = {"long": set(symbols), "short": set()}
+        stop_signal_received = False
+        _shutdown_in_progress = False
+        start_time_ms = now_ms
+
+        def __init__(self):
+            self.cm = FakeCM()
+
+        def is_forager_mode(self, pside=None):
+            return pside in (None, "long")
+
+        def get_max_n_positions(self, pside):
+            return 3 if pside == "long" else 0
+
+        def get_current_n_positions(self, pside):
+            return 0
+
+        def bp(self, *args, **kwargs):
+            return 0.0
+
+        def _get_fetch_delay_seconds(self):
+            return 0.0
+
+        def _forager_refresh_budget(self, *args, **kwargs):
+            return 3
+
+        def _forager_target_staleness_ms(self, *args, **kwargs):
+            return 0
+
+        _shutdown_requested = pb_mod.Passivbot._shutdown_requested
+
+    bot = FakeBot()
+    with caplog.at_level(logging.WARNING):
+        await pb_mod.Passivbot._refresh_forager_candidate_candles(bot)
+
+    assert bot.cm.calls == sorted(symbols)
+    assert "Timed out acquiring candle lock for TIMEOUT" in caplog.text
+    assert "error refreshing forager candles for BROKEN" in caplog.text
+    assert caplog.text.count("error_type=TimeoutError") == 1
+    assert caplog.text.count("error_type=RuntimeError") == 1
+    assert secret not in caplog.text
+    assert "Traceback" not in caplog.text
+
+
+@pytest.mark.asyncio
 async def test_orchestrator_ema_bundle_uses_cache_only_for_secondary_forager_symbols(
     monkeypatch,
 ):
@@ -1981,6 +2246,7 @@ async def test_warmup_candles_reuses_fresh_1m_cache(monkeypatch, caplog):
     cached_symbol = "CACHED/USDT:USDT"
     cold_symbols = [f"MISS{idx}/USDT:USDT" for idx in range(20)]
     symbols = [cached_symbol, *cold_symbols]
+    secret = "https://private.example.test/?token=CANDLE_INDEX_SECRET"
     monkeypatch.setattr(pb_mod, "utc_ms", lambda: now_ms)
 
     def fake_compute_live_warmup_windows(*args, **kwargs):
@@ -2066,6 +2332,7 @@ async def test_warmup_candles_reuses_fresh_1m_cache(monkeypatch, caplog):
 
         async def rebuild_required_candle_indices(self, *args, **kwargs):
             self.rebuild_calls.append((args, kwargs))
+            raise RuntimeError(secret)
 
     bot = FakeBot()
     events = []
@@ -2120,6 +2387,10 @@ async def test_warmup_candles_reuses_fresh_1m_cache(monkeypatch, caplog):
     }
     assert warmup_events[0]["data"]["window_min_candles"] == 12
     assert warmup_events[0]["data"]["window_max_candles"] == 12
+    assert "candle index rebuild skipped" in caplog.text
+    assert "error_type=RuntimeError" in caplog.text
+    assert secret not in caplog.text
+    assert "Traceback" not in caplog.text
 
 
 @pytest.mark.asyncio
@@ -2360,7 +2631,7 @@ async def test_background_candle_warmup_failure_remains_error(caplog):
     records = [record for record in caplog.records if "background warmup failed" in record.message]
     assert len(records) == 1
     assert records[0].levelno == logging.ERROR
-    assert records[0].message == "[candle] background warmup failed: warmup failed"
+    assert records[0].message == "[candle] background warmup failed | error_type=RuntimeError"
 
 
 @pytest.mark.asyncio

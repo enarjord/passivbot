@@ -22,6 +22,10 @@
    inception metadata, and deferred index writes retain bounded exception type instead of exception
    text, repr, or exception-value traceback. Redaction must not alter cache contents, migration and
    cleanup behavior, lock handling, retries, fallbacks, or exception propagation.
+8. Direct live lifecycle diagnostics for completed-close fallback, startup/index/background
+   warmup, forager refresh, active refresh, and refresh-cap handling retain bounded exception type
+   instead of exception text or exception-value traceback. Redaction must not alter warmup,
+   cancellation, lock retry, refresh scheduling, fallback values, readiness, or trading behavior.
 
 ## Non-Obvious Details
 
@@ -107,6 +111,9 @@ Cache paths use `to_standard_exchange_name()` rather than raw CCXT identifiers s
    correlation through URL hashes rather than raw URLs.
 7. Hostile local-storage failures retain bounded exception classification without exception values
    while preserving the original cache, migration, lock, and fallback outcomes.
+8. Hostile live lifecycle failures retain bounded exception classification without exception values
+   or traceback text while preserving completed-close fallback, warmup, cancellation, lock retry,
+   refresh scheduling, readiness, and return behavior.
 
 ## Key Code
 

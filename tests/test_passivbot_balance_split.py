@@ -2874,6 +2874,53 @@ async def test_start_bot_treats_shutdown_cancelled_warmup_as_clean_stop(monkeypa
 
 
 @pytest.mark.asyncio
+async def test_start_bot_bounds_trading_ready_warmup_failure(monkeypatch, caplog):
+    bot = Passivbot.__new__(Passivbot)
+    bot.runtime_identity = TEST_RUNTIME_IDENTITY
+    bot._runtime_manifest_written = True
+    bot.exchange = "bybit"
+    bot.user = "test_user"
+    bot.quote = "USDT"
+    bot.start_time_ms = 1_000_000
+    bot.config = {"live": {}}
+    bot.debug_mode = False
+    bot.stop_signal_received = False
+    bot._shutdown_in_progress = False
+    bot._bot_ready = False
+    bot.user_info = {"exchange": "bybit"}
+    bot._log_startup_banner = lambda: None
+    bot._monitor_record_event = lambda *args, **kwargs: None
+    bot._monitor_record_error = lambda *args, **kwargs: None
+    bot._monitor_flush_snapshot = AsyncMock()
+    bot._monitor_emit_stop = lambda *args, **kwargs: None
+    bot.init_markets = AsyncMock()
+    bot._equity_hard_stop_enabled = lambda *args, **kwargs: False
+    secret = "api_key=trading-ready-warmup-secret"
+
+    async def _format(*args, **kwargs):
+        return None
+
+    async def _warmup():
+        raise RuntimeError(secret)
+
+    async def _sleep(*args, **kwargs):
+        bot.stop_signal_received = True
+
+    monkeypatch.setattr(passivbot_module, "format_approved_ignored_coins", _format)
+    bot.warmup_trading_ready_candles = _warmup
+    bot._sleep_unless_shutdown = _sleep
+
+    with caplog.at_level(logging.INFO):
+        await bot.start_bot()
+
+    assert bot.stop_signal_received is True
+    assert "trading-ready candle warmup skipped" in caplog.text
+    assert "error_type=RuntimeError" in caplog.text
+    assert secret not in caplog.text
+    assert "Traceback" not in caplog.text
+
+
+@pytest.mark.asyncio
 async def test_start_bot_treats_hsl_value_error_as_terminal_startup_failure(
     monkeypatch, caplog
 ):
@@ -3399,6 +3446,25 @@ async def test_background_candle_warmup_marks_full_warmup_ready(monkeypatch, cap
 
     assert calls == [{"context": "background warmup"}]
     assert any("full-warmup-ready=4.25s" in record.message for record in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_background_candle_warmup_bounds_failure_diagnostic(caplog):
+    bot = Passivbot.__new__(Passivbot)
+    secret = "wss://private.example.test/?token=BACKGROUND_SECRET"
+
+    async def warmup_candles_staggered(**kwargs):
+        raise RuntimeError(secret)
+
+    bot.warmup_candles_staggered = warmup_candles_staggered
+
+    with caplog.at_level(logging.ERROR):
+        await Passivbot._background_candle_warmup_task(bot)
+
+    assert "background warmup failed" in caplog.text
+    assert "error_type=RuntimeError" in caplog.text
+    assert secret not in caplog.text
+    assert "Traceback" not in caplog.text
 
 
 def _set_pnl_lookback(bot, *, lookback_days: float, now_ms: int) -> None:

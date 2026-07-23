@@ -2022,6 +2022,37 @@ async def test_get_last_prices_uses_completed_candles_not_bulk_tickers(monkeypat
 
 
 @pytest.mark.asyncio
+async def test_get_last_prices_bounds_failed_completed_close_diagnostic(tmp_path):
+    class _Ex:
+        id = "bybit"
+
+    secret = "https://private.example.test/?api_key=SECRET_LAST_PRICE"
+    cm = CandlestickManager(exchange=_Ex(), exchange_name="bybit", cache_dir=str(tmp_path / "caches"))
+    diagnostics = []
+
+    async def fake_completed_close(symbol, **kwargs):
+        if symbol == "BROKEN/USDT:USDT":
+            raise RuntimeError(secret)
+        return 123.45
+
+    cm.get_latest_completed_close = fake_completed_close
+    cm._log = lambda level, event, **data: diagnostics.append((level, event, data))
+
+    prices = await cm.get_last_prices(["BROKEN/USDT:USDT", "OK/USDT:USDT"])
+
+    assert prices == {"BROKEN/USDT:USDT": 0.0, "OK/USDT:USDT": 123.45}
+    assert diagnostics == [
+        (
+            "debug",
+            "get_last_prices_completed_close_failed",
+            {"symbol": "BROKEN/USDT:USDT", "error_type": "RuntimeError"},
+        )
+    ]
+    assert secret not in repr(diagnostics)
+    assert "Traceback" not in repr(diagnostics)
+
+
+@pytest.mark.asyncio
 async def test_remote_ohlcv_fetch_spacing_paces_concurrent_calls(tmp_path):
     class _Ex:
         id = "okx"
