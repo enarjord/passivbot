@@ -1066,18 +1066,30 @@ async def test_trailing_fetch_failure_preserves_bundle_and_marks_symbol_unavaila
     }
     bot.is_trailing = lambda sym, pside=None: pside == "long"
 
+    secret = "credential=trailing-secret\nTraceback (most recent call last)"
+
     async def fail_get_candles(*args, **kwargs):
-        raise RuntimeError("remote down")
+        raise RuntimeError(secret)
 
     bot.cm.get_candles = fail_get_candles
 
-    caplog.set_level(logging.WARNING)
+    caplog.set_level(logging.DEBUG)
     await bot.update_trailing_data()
 
     assert bot.trailing_prices[symbol]["long"] == previous_bundle
     assert bot._orchestrator_trailing_unavailable_symbols == {symbol}
-    assert any("[trailing]" in record.message for record in caplog.records)
-    assert any("candle_fetch_failed" in record.message for record in caplog.records)
+    records = [
+        record
+        for record in caplog.records
+        if "[trailing] candle fetch failed" in record.message
+    ]
+    assert len(records) == 1
+    assert "[trailing]" in records[0].message
+    assert "symbol=TEST" in records[0].message
+    assert "action=mark_unavailable" in records[0].message
+    assert records[0].getMessage().endswith("error_type=RuntimeError")
+    assert secret not in records[0].getMessage()
+    assert "Traceback" not in records[0].getMessage()
 
 
 @pytest.mark.asyncio
