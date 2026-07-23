@@ -76,6 +76,52 @@ def _hostile_runtime_error(detail: str) -> RuntimeError:
     return error_cls(detail)
 
 
+@pytest.mark.asyncio
+async def test_calc_upnl_sum_redacts_failure_and_returns_zero(caplog, capsys, monkeypatch):
+    bot = Passivbot.__new__(Passivbot)
+    symbol = "BTC/USDT:USDT"
+    bot.fetched_positions = [
+        {
+            "symbol": symbol,
+            "position_side": "long",
+            "price": 100.0,
+            "size": 1.0,
+        }
+    ]
+    bot.inverse = False
+    bot.c_mults = {symbol: 1.0}
+
+    async def fake_last_prices(*_args, **_kwargs):
+        return {symbol: 101.0}
+
+    bot._get_live_last_prices = fake_last_prices
+    hostile_detail = "https://hostile.example.invalid/upnl?credential=secret-token"
+
+    def fail_calc_pnl(*_args, **_kwargs):
+        raise _hostile_runtime_error(hostile_detail)
+
+    monkeypatch.setattr(passivbot_module, "calc_pnl", fail_calc_pnl)
+
+    with caplog.at_level(logging.ERROR):
+        assert await bot.calc_upnl_sum() == 0.0
+
+    messages = [record.getMessage() for record in caplog.records]
+    assert messages == [
+        "[balance] upnl calculation failed error_type=RuntimeError action=return_zero"
+    ]
+    captured = capsys.readouterr()
+    rendered = caplog.text + captured.out + captured.err
+    for unsafe in (
+        hostile_detail,
+        "ApiKeySecretError",
+        "https://",
+        "credential",
+        "secret-token",
+        "Traceback",
+    ):
+        assert unsafe not in rendered
+
+
 class _SafeRiskCache:
     def get_known_gaps(self):
         return []

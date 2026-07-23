@@ -103,6 +103,12 @@ failure records only a bounded type and `stop_progress_logger`; explicit cancell
 propagates. These diagnostics do not change refresh propagation, balance anchors, scheduling,
 reconciliation, balance handling, cleanup, timing, fallback values, or event schemas.
 
+When unrealized-PnL aggregation cannot calculate a fetched position, its ERROR diagnostic retains
+only a bounded exception type and the `return_zero` action. It immediately returns the existing
+`0.0` fallback without retaining exception text, unsafe class metadata, URLs, credentials, or a
+traceback; price fetching, iteration, balance/equity handling, state, scheduling, risk, HSL, and
+trading behavior are unchanged.
+
 Foreign-writer safety shutdown keeps its terminal stop behavior when best-effort data-maintainer
 cleanup fails. The ERROR diagnostic retains only a bounded exception type and the stable
 `continue_foreign_writer_stop` action; it never retains exception text, unsafe exception class

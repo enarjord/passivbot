@@ -11139,8 +11139,10 @@ class Passivbot:
                 if upnl:
                     upnl_sum += upnl
             except Exception as e:
-                logging.error(f"error calculating upnl sum {e}")
-                traceback.print_exc()
+                logging.error(
+                    "[balance] upnl calculation failed error_type=%s action=return_zero",
+                    bounded_exception_type(e),
+                )
                 return 0.0
         return upnl_sum
 
