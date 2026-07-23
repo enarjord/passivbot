@@ -4,6 +4,10 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Approved/ignored coin-list refresh failure diagnostics now retain only a bounded exception type
+  and the stable `return_from_coin_list_refresh` action. Existing refresh return, list/universe and
+  eligibility update semantics, scheduling, risk, HSL, and trading behavior are unchanged.
+
 - Unrealized-PnL aggregation failure diagnostics now retain only a bounded exception type and the
   stable `return_zero` action. The existing immediate `0.0` fallback, price fetching, balance and
   equity handling, scheduling, risk, HSL, and trading behavior are unchanged.

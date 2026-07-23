@@ -19616,8 +19616,11 @@ class Passivbot:
                 pass
             self._log_coin_symbol_fallback_summary()
         except Exception as e:
-            logging.error(f"error with refresh_approved_ignored_coins_lists {e}")
-            traceback.print_exc()
+            logging.error(
+                "[forager] approved/ignored coin refresh failed | "
+                "error_type=%s action=return_from_coin_list_refresh",
+                bounded_exception_type(e),
+            )
 
     def _log_coin_symbol_fallback_summary(self):
         """Emit a brief summary of symbol/coin mapping fallbacks (once per change)."""
