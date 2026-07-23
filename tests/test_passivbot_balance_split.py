@@ -11029,14 +11029,15 @@ async def test_malformed_actual_open_order_blocks_account_wide_creates(caplog):
     bot.live_value = lambda key: 0.0 if key == "order_match_tolerance_pct" else 0.0
 
     secret = "open-order-secret https://example.invalid/open-order"
+    unsafe_order_id = "token=order-id-secret https://example.invalid/order-id"
     hostile_error = type("ApiKeySecretError", (ValueError,), {})
 
-    class HostileQuantity:
+    class HostilePrice:
         def __float__(self):
             raise hostile_error(secret)
 
-    malformed_order = _guardrail_order(id="malformed-entry")
-    malformed_order["qty"] = HostileQuantity()
+    malformed_order = _guardrail_order(id=unsafe_order_id)
+    malformed_order["price"] = HostilePrice()
     bot.open_orders = {"BTC/USDT:USDT": [malformed_order], "ETH/USDT:USDT": []}
     ideal_orders = {
         "BTC/USDT:USDT": [
@@ -11083,6 +11084,8 @@ async def test_malformed_actual_open_order_blocks_account_wide_creates(caplog):
     assert "error_type=ValueError" in caplog.text
     assert hostile_error.__name__ not in caplog.text
     assert secret not in caplog.text
+    assert unsafe_order_id not in caplog.text
+    assert "order-id-secret" not in caplog.text
     assert "example.invalid" not in caplog.text
 
 

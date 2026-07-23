@@ -1845,13 +1845,11 @@ def snapshot_actual_orders(
             except (TypeError, KeyError, ValueError, OverflowError) as exc:
                 malformed_symbols.add(symbol)
                 malformed_counts[symbol] = malformed_counts.get(symbol, 0) + 1
-                order_id = order.get("id") if isinstance(order, dict) else None
                 logging.error(
                     "[order] malformed open order snapshot; "
                     "marking account-critical open-orders surface unavailable | symbol=%s | "
-                    "order_id=%s | error_type=%s",
+                    "error_type=%s",
                     _pb_attr("Passivbot")._log_symbol(symbol),
-                    order_id or "unknown",
                     bounded_exception_type(exc),
                 )
         if return_symbol:
