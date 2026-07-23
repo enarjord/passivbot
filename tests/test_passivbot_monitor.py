@@ -3571,7 +3571,8 @@ def test_candle_remote_fetch_callback_emits_correlated_remote_call_events():
     assert succeeded.cycle_id == "cy_7"
     assert started.symbol == "BTC/USDT:USDT"
     assert succeeded.data["rows"] == 100
-    assert started.data["params"]["apiKey"] == "[redacted]"
+    assert started.data["param_keys"] == ["apiKey"]
+    assert "params" not in started.data
     assert "debug" not in started.data
     assert "debug" not in succeeded.data
     assert bot._live_event_remote_call_seq == 1
@@ -3671,7 +3672,14 @@ def test_candle_remote_fetch_url_is_sanitized_and_hashed():
 
     bot._handle_candle_remote_fetch_event({**base, "stage": "start"})
     bot._handle_candle_remote_fetch_event(
-        {**base, "stage": "not_found", "status": 404, "elapsed_ms": 12}
+        {
+            "kind": "archive_http_get",
+            "exchange": "binance",
+            "stage": "not_found",
+            "url_hash": hashlib.sha256(url.encode("utf-8")).hexdigest(),
+            "status": 404,
+            "elapsed_ms": 12,
+        }
     )
 
     assert bot._live_event_pipeline.flush(timeout=2.0) is True
@@ -3679,11 +3687,53 @@ def test_candle_remote_fetch_url_is_sanitized_and_hashed():
     started, skipped = sink.events
     assert skipped.remote_call_id == started.remote_call_id
     for event in (started, skipped):
-        assert event.data["url"] == "[redacted-url]"
-        assert event.data["url_hash"]
-        assert len(event.data["url_hash"]) == 64
-        assert "SECRET" not in event.data["url"]
-        assert "signature=abc" not in event.data["url"]
+        assert event.data["url_hash"] == hashlib.sha256(url.encode("utf-8")).hexdigest()
+        assert "url" not in event.data
+        assert "SECRET" not in str(event.data)
+        assert "signature=abc" not in str(event.data)
+
+
+def test_candle_remote_fetch_url_hash_keeps_concurrent_archive_correlation():
+    sink = ListEventSink()
+    bot = _make_remote_fetch_event_bot(sink, cycle_id=None)
+    urls = [
+        "https://data.example/first.zip?apiKey=SECRET",
+        "https://data.example/second.zip?apiKey=SECRET",
+    ]
+    hashes = [hashlib.sha256(url.encode("utf-8")).hexdigest() for url in urls]
+
+    for url in urls:
+        bot._handle_candle_remote_fetch_event(
+            {
+                "kind": "archive_http_get",
+                "exchange": "binance",
+                "stage": "start",
+                "url": url,
+            }
+        )
+    for url_hash in reversed(hashes):
+        bot._handle_candle_remote_fetch_event(
+            {
+                "kind": "archive_http_get",
+                "exchange": "binance",
+                "stage": "not_found",
+                "url_hash": url_hash,
+                "status": 404,
+            }
+        )
+
+    assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
+    first_started, second_started, second_skipped, first_skipped = sink.events
+    assert second_skipped.remote_call_id == second_started.remote_call_id
+    assert first_skipped.remote_call_id == first_started.remote_call_id
+    assert [event.data["url_hash"] for event in sink.events] == [
+        hashes[0],
+        hashes[1],
+        hashes[1],
+        hashes[0],
+    ]
+    assert bot._live_event_remote_call_ids == {}
 
 
 def test_candle_remote_fetch_throttled_stage_emits_throttled_event():

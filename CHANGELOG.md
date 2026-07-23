@@ -67,6 +67,12 @@ All notable user-facing changes will be documented in this file.
   Maintainer cancellation, execution-loop waits, session closing, shutdown timing, and process
   control are unchanged.
 
+- Candle remote-fetch callbacks, HLCV progress logs, archive fetch/day diagnostics, structured
+  remote-call events, and fake-live candle traces now retain bounded exception types, URL hashes,
+  parameter keys, stage, attempt, timing, and correlation without arbitrary exception messages,
+  request URLs, or request-parameter values. Fetches, retry/backoff and rate-limit classification,
+  archive availability, cache behavior, and trading behavior are unchanged.
+
 - Fill-history refresh failure diagnostics now retain bounded exception types alongside existing
   source, coverage, retry, timing, count, and endpoint context without arbitrary exception
   messages or exception-value tracebacks. This includes exchange-specific fill fetchers, cache

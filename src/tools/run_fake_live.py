@@ -15,7 +15,7 @@ import numpy as np
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from candlestick_manager import CANDLE_DTYPE
+from candlestick_manager import CANDLE_DTYPE, sanitize_remote_fetch_diagnostic
 from config import load_prepared_config
 from config.pnl_lookback import parse_pnls_max_lookback_days
 from exchanges.fake import FakeCCXTClient, load_fake_scenario
@@ -137,11 +137,12 @@ def _install_candle_remote_fetch_trace(bot) -> tuple[List[dict], callable]:
     events: List[dict] = []
 
     def traced(payload: Dict[str, Any]) -> None:
-        item = dict(payload)
+        safe_payload = sanitize_remote_fetch_diagnostic(payload)
+        item = dict(safe_payload)
         item["event_index"] = len(events)
         events.append(item)
         if existing_cb is not None:
-            existing_cb(payload)
+            existing_cb(safe_payload)
 
     bot.cm._remote_fetch_callback = traced
     return events, lambda: setattr(bot.cm, "_remote_fetch_callback", existing_cb)

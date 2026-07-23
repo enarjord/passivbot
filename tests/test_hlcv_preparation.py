@@ -218,6 +218,44 @@ def test_remote_fetch_log_ccxt_ok_includes_returned_range(caplog):
     assert "last=2022-01-14T23:59:00Z" in caplog.text
 
 
+def test_remote_fetch_log_sanitizes_hostile_legacy_payload(caplog):
+    om = HLCVManager(
+        exchange="bybit",
+        start_date="2024-01-01",
+        end_date="2024-01-02",
+    )
+    url = "https://api.example.invalid/ohlcv?apiKey=SECRET&signature=abc"
+
+    with caplog.at_level("INFO"):
+        om._remote_fetch_log(
+            {
+                "kind": "ccxt_fetch_ohlcv",
+                "stage": "start",
+                "symbol": "BTC/USDT:USDT",
+                "tf": "1m",
+                "params": {"until": 123, "apiKey": "SECRET"},
+                "url": url,
+            }
+        )
+        om._remote_fetch_log(
+            {
+                "kind": "ccxt_fetch_ohlcv",
+                "stage": "error",
+                "symbol": "BTC/USDT:USDT",
+                "tf": "1m",
+                "error_type": "AuthError",
+                "error": f"GET {url}",
+                "error_repr": f"AuthError({url!r})",
+            }
+        )
+
+    assert "param_keys=['apiKey', 'until']" in caplog.text
+    assert "error_type=AuthError" in caplog.text
+    assert "SECRET" not in caplog.text
+    assert "signature=abc" not in caplog.text
+    assert url not in caplog.text
+
+
 # ============================================================================
 # Test Class: HLCVManager Basics
 # ============================================================================

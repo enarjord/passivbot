@@ -13,6 +13,11 @@
 4. Fill only internal gaps within the configured tolerance. Larger internal gaps must be repaired,
    excluded from the returned tradable window, or fail; do not make them tradable via synthetic rows.
 5. Synthesize zero-candles only for verified gaps where the downstream consumer requires a dense array.
+6. Remote-fetch diagnostics retain only bounded exception type, URL hash, parameter keys,
+   operation/stage, symbol/timeframe, attempt/status/timing, and correlation. Manager callbacks,
+   HLCV progress logs, archive fetch/day logs, structured events, and fake-live traces do not retain
+   exception text or repr, raw request URLs, or request-parameter values. This diagnostic boundary
+   must not alter retry, rate-limit classification, exception propagation, or cache behavior.
 
 ## Non-Obvious Details
 
@@ -93,6 +98,9 @@ Cache paths use `to_standard_exchange_name()` rather than raw CCXT identifiers s
 4. Backtest/live parity for live tail-gap EMA projection behavior.
 5. Binance archive threshold, publication-lag, checksum, source-order, non-overwrite, and CCXT
    fallback behavior, including public unauthenticated download smokes.
+6. Hostile remote-fetch diagnostics are redacted at the manager callback boundary and remain
+   redacted after repeated sanitization by direct consumers. Concurrent archive requests preserve
+   correlation through URL hashes rather than raw URLs.
 
 ## Key Code
 
