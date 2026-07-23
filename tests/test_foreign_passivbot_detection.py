@@ -1081,3 +1081,42 @@ async def test_detect_foreign_passivbot_orders_stops_after_unique_threshold():
 
     assert len(bot.foreign_passivbot_seen) == pb_mod.FOREIGN_PASSIVBOT_MAX_UNIQUE_PER_WINDOW
     assert bot.stop_signal_received is True
+
+
+@pytest.mark.asyncio
+async def test_foreign_writer_stop_redacts_maintainer_failure_and_still_propagates(caplog):
+    import passivbot as pb_mod
+
+    bot = _make_detection_bot(now_ts=2_000_000, start_ts=1_000_000)
+    calls = []
+    hostile_error = type("CredentialLeakError", (Exception,), {})
+
+    def fail_maintainer_stop(*args, **kwargs):
+        calls.append((args, kwargs))
+        raise hostile_error("token=foreign-secret https://example.invalid/maintainers")
+
+    bot.stop_data_maintainers = fail_maintainer_stop
+    custom_id = _pb_custom_id("entry_grid_normal_long", "foreign")
+    detections = [
+        (
+            {"symbol": "BTC/USDT:USDT", "custom_id": custom_id},
+            "entry_grid_normal_long",
+            custom_id,
+            2_000_000,
+        )
+    ]
+
+    with caplog.at_level(logging.ERROR), pytest.raises(
+        Exception, match="foreign Passivbot writer detected"
+    ):
+        await pb_mod.Passivbot._stop_for_foreign_passivbot_orders(bot, detections, 1)
+
+    assert calls == [((), {"verbose": False})]
+    assert bot._foreign_passivbot_stop_requested is True
+    assert bot.stop_signal_received is True
+    assert "action=continue_foreign_writer_stop" in caplog.text
+    assert "error_type=Exception" in caplog.text
+    assert "CredentialLeakError" not in caplog.text
+    assert "foreign-secret" not in caplog.text
+    assert "example.invalid" not in caplog.text
+    assert any(record.levelno == logging.ERROR for record in caplog.records)

@@ -4,6 +4,10 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Foreign-writer safety shutdown diagnostics now retain only bounded maintainer-cleanup failure
+  types and a stable continuation action. Stop flags, cleanup invocation, and terminal
+  foreign-writer stop behavior are unchanged.
+
 - Redact observer-only balance and position refresh diagnostic fallbacks, including their shared
   market-snapshot structured and legacy projections, while preserving existing refresh
   continuation behavior.

@@ -100,6 +100,12 @@ failure records only a bounded type and `stop_progress_logger`; explicit cancell
 propagates. These diagnostics do not change refresh propagation, balance anchors, scheduling,
 reconciliation, balance handling, cleanup, timing, fallback values, or event schemas.
 
+Foreign-writer safety shutdown keeps its terminal stop behavior when best-effort data-maintainer
+cleanup fails. The ERROR diagnostic retains only a bounded exception type and the stable
+`continue_foreign_writer_stop` action; it never retains exception text, unsafe exception class
+names, URLs, credentials, or tracebacks. This diagnostic redaction does not alter stop flags,
+maintainer invocation, foreign-writer detection, or the terminal exception.
+
 ## EMA Diagnostic Redaction
 
 `ema.unavailable` and `ema.fallback_used` retain only code-owned reason classifications, bounded

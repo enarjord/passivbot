@@ -8,6 +8,7 @@ import time
 from collections import Counter
 from typing import Iterable, Optional
 
+from live.diagnostic_safety import bounded_exception_type
 from live.fresh_entry_eligibility import FreshEntryEligibilityTrace
 from live.freshness import ACCOUNT_SURFACES
 from live.order_churn_gate import (
@@ -729,7 +730,11 @@ async def stop_for_foreign_passivbot_orders(
         try:
             bot.stop_data_maintainers(verbose=False)
         except Exception as exc:
-            logging.error("[safety] failed to stop data maintainers: %s", exc)
+            logging.error(
+                "[safety] failed to stop data maintainers | error_type=%s "
+                "action=continue_foreign_writer_stop",
+                bounded_exception_type(exc),
+            )
     raise Exception("foreign Passivbot writer detected; stopping bot")
 
 
