@@ -2550,7 +2550,7 @@ def test_twel_reduce_portfolio_can_select_underweight_positions():
     assert {o["symbol_idx"] for o in twel_orders} == {0, 1}
 
 
-def test_twel_auto_reduce_takes_priority_over_wel_for_same_position():
+def test_larger_wel_auto_reduce_wins_over_twel_for_same_position():
     import passivbot_rust as pbr
 
     long_bp = {
@@ -2574,11 +2574,11 @@ def test_twel_auto_reduce_takes_priority_over_wel_for_same_position():
     out = compute(pbr, make_input(balance=1_000.0, global_bp=global_bp, symbols=[sym]))
     order_types = [o["order_type"] for o in out["orders"]]
 
-    assert "close_auto_reduce_twel_long" in order_types
-    assert "close_auto_reduce_wel_long" not in order_types
+    assert "close_auto_reduce_wel_long" in order_types
+    assert "close_auto_reduce_twel_long" not in order_types
 
 
-def test_wel_auto_reduce_takes_priority_over_unstuck_for_same_position():
+def test_larger_wel_auto_reduce_wins_over_unstuck_for_same_position():
     import passivbot_rust as pbr
 
     long_bp = {
@@ -2617,7 +2617,7 @@ def test_wel_auto_reduce_takes_priority_over_unstuck_for_same_position():
     ) <= 6.0 + 1e-9
 
 
-def test_wel_auto_reduce_takes_priority_over_short_unstuck_for_same_position():
+def test_larger_short_wel_auto_reduce_wins_over_unstuck_for_same_position():
     import passivbot_rust as pbr
 
     short_bp = {
@@ -2656,7 +2656,134 @@ def test_wel_auto_reduce_takes_priority_over_short_unstuck_for_same_position():
     ) <= 6.0 + 1e-9
 
 
-def test_twel_auto_reduce_takes_priority_over_unstuck_for_same_position():
+def test_loss_gate_falls_back_from_larger_wel_to_smaller_unstuck():
+    import passivbot_rust as pbr
+
+    long_bp = {
+        "wallet_exposure_limit": 0.4,
+        "risk_wel_enforcer_threshold": 1.0,
+        "risk_twel_enforcer_enabled": False,
+        "total_wallet_exposure_limit": 1.0,
+        "n_positions": 1,
+        "unstuck_close_pct": 0.4,
+        "unstuck_threshold": 0.001,
+        "unstuck_ema_dist": 0.0,
+        "unstuck_loss_allowance_pct": 0.01,
+    }
+    global_bp = bot_params_pair(long_overrides=long_bp)
+    sym = make_symbol(
+        0,
+        bid=90.0,
+        ask=90.0,
+        long_pos_size=6.0,
+        long_pos_price=100.0,
+        long_bp=long_bp,
+    )
+    inp = make_input(balance=1_000.0, global_bp=global_bp, symbols=[sym])
+    inp["global"]["unstuck_allowance_long"] = 1e9
+    inp["global"]["max_realized_loss_pct"] = 0.019
+
+    out = compute(pbr, inp)
+    order_types = [o["order_type"] for o in out["orders"]]
+
+    assert "close_unstuck_long" in order_types
+    assert "close_auto_reduce_wel_long" not in order_types
+    assert any(
+        block["order_type"] == "close_auto_reduce_wel_long"
+        for block in out["diagnostics"]["loss_gate_blocks"]
+    )
+
+
+def test_loss_gate_checks_wel_reducer_after_dust_is_absorbed():
+    import passivbot_rust as pbr
+
+    long_bp = {
+        "wallet_exposure_limit": 0.1,
+        "risk_wel_enforcer_threshold": 1.0,
+        "risk_twel_enforcer_enabled": False,
+        "total_wallet_exposure_limit": 2.0,
+        "n_positions": 1,
+    }
+    global_bp = bot_params_pair(long_overrides=long_bp)
+    sym = make_symbol(
+        0,
+        bid=90.0,
+        ask=90.0,
+        long_pos_size=11.0,
+        long_pos_price=100.0,
+        long_bp=long_bp,
+    )
+    sym["exchange"].update(
+        {"qty_step": 0.01, "min_qty": 10.0, "min_cost": 0.0, "maker_fee": 0.0}
+    )
+    inp = make_input(balance=1_000.0, global_bp=global_bp, symbols=[sym])
+    inp["global"]["max_realized_loss_pct"] = 0.105
+
+    out = compute(pbr, inp)
+
+    assert all(o["order_type"] != "close_auto_reduce_wel_long" for o in out["orders"])
+    block = next(
+        block
+        for block in out["diagnostics"]["loss_gate_blocks"]
+        if block["order_type"] == "close_auto_reduce_wel_long"
+    )
+    assert block["qty"] == pytest.approx(-11.0)
+    assert block["projected_balance_after"] == pytest.approx(890.0)
+    assert block["balance_floor"] == pytest.approx(895.0)
+
+
+def test_loss_gate_prioritizes_larger_wel_reducer_across_symbols():
+    import passivbot_rust as pbr
+
+    long_bp = {
+        "wallet_exposure_limit": 0.1,
+        "risk_wel_enforcer_threshold": 1.0,
+        "risk_twel_enforcer_enabled": False,
+        "total_wallet_exposure_limit": 2.0,
+        "n_positions": 2,
+    }
+    global_bp = bot_params_pair(long_overrides=long_bp)
+    sym0 = make_symbol(
+        0,
+        bid=90.0,
+        ask=90.0,
+        long_pos_size=5.0,
+        long_pos_price=100.0,
+        long_bp=long_bp,
+    )
+    sym1 = make_symbol(
+        1,
+        bid=90.0,
+        ask=90.0,
+        long_pos_size=7.0,
+        long_pos_price=100.0,
+        long_bp=long_bp,
+    )
+    sym0["exchange"]["maker_fee"] = 0.0
+    sym1["exchange"]["maker_fee"] = 0.0
+    inp = make_input(balance=1_000.0, global_bp=global_bp, symbols=[sym0, sym1])
+    inp["global"]["max_realized_loss_pct"] = 0.07
+
+    out = compute(pbr, inp)
+    wel_orders = [
+        order for order in out["orders"] if order["order_type"] == "close_auto_reduce_wel_long"
+    ]
+
+    assert len(wel_orders) == 1
+    assert wel_orders[0]["symbol_idx"] == 1
+    assert wel_orders[0]["qty"] == pytest.approx(-6.01)
+    block = next(
+        block
+        for block in out["diagnostics"]["loss_gate_blocks"]
+        if block["order_type"] == "close_auto_reduce_wel_long"
+    )
+    assert block["symbol_idx"] == 0
+    assert block["balance_before"] == pytest.approx(939.9)
+    assert block["projected_balance_after"] == pytest.approx(899.8)
+    assert block["balance_floor"] == pytest.approx(930.0)
+
+
+def test_larger_unstuck_wins_over_twel_auto_reduce_for_same_position():
     import passivbot_rust as pbr
 
     long_bp = {
@@ -2686,8 +2813,8 @@ def test_twel_auto_reduce_takes_priority_over_unstuck_for_same_position():
     out = compute(pbr, inp)
     order_types = [o["order_type"] for o in out["orders"]]
 
-    assert "close_auto_reduce_twel_long" in order_types
-    assert "close_unstuck_long" not in order_types
+    assert "close_unstuck_long" in order_types
+    assert "close_auto_reduce_twel_long" not in order_types
     assert "close_grid_long" in order_types
     assert sum(
         abs(o["qty"])
@@ -2696,7 +2823,7 @@ def test_twel_auto_reduce_takes_priority_over_unstuck_for_same_position():
     ) <= 6.0 + 1e-9
 
 
-def test_twel_auto_reduce_takes_priority_over_short_unstuck_for_same_position():
+def test_larger_short_unstuck_wins_over_twel_auto_reduce_for_same_position():
     import passivbot_rust as pbr
 
     short_bp = {
@@ -2726,8 +2853,8 @@ def test_twel_auto_reduce_takes_priority_over_short_unstuck_for_same_position():
     out = compute(pbr, inp)
     order_types = [o["order_type"] for o in out["orders"]]
 
-    assert "close_auto_reduce_twel_short" in order_types
-    assert "close_unstuck_short" not in order_types
+    assert "close_unstuck_short" in order_types
+    assert "close_auto_reduce_twel_short" not in order_types
     assert "close_grid_short" in order_types
     assert sum(
         abs(o["qty"])
