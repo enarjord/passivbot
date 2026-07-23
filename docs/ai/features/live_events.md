@@ -71,6 +71,14 @@ The same redaction applies when the event-adjacent HSL coin-status human project
 structured `hsl.status` event must still be attempted independently. Other non-event HSL
 diagnostics are outside this contract.
 
+Startup monitor-publisher construction failures retain the existing ERROR `[monitor]` projection,
+while live-event-pipeline installation failures retain their existing WARNING `[monitor]` or
+`[event]` projection. These startup-observer diagnostics retain only a bounded exception type and
+the stable `continue_without_monitor_publisher` or `continue_without_live_event_pipeline` action;
+they never retain exception messages, unsafe class names, URLs, credentials, tokens, or tracebacks.
+Their monitor-enabled behavior, pipeline-install condition, assignments, startup continuation, and
+all runtime and trading behavior remain unchanged.
+
 ## Market Snapshot Diagnostic Skips
 
 `market.snapshot_diagnostic_skipped` records noncritical position-change and balance diagnostics

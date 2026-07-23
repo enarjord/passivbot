@@ -6004,6 +6004,59 @@ def test_live_event_pipeline_records_candle_remote_fetch_only_with_monitor_sink(
     assert bot._live_event_pipeline_records_candle_remote_fetch() is False
 
 
+def test_startup_observer_failure_logs_redact_hostile_exception_metadata(caplog, capsys):
+    import passivbot as pb_mod
+
+    secret = "https://hostile.example.invalid/v1/orders?api_key=startup-secret&token=observer-token"
+    unsafe_type = type("ApiKeyStartupObserverFailure", (RuntimeError,), {})
+    error = unsafe_type(secret)
+    cases = (
+        (
+            logging.ERROR,
+            "monitor",
+            "failed to initialize monitor publisher",
+            "continue_without_monitor_publisher",
+        ),
+        (
+            logging.WARNING,
+            "monitor",
+            "live event pipeline disabled",
+            "continue_without_live_event_pipeline",
+        ),
+        (
+            logging.WARNING,
+            "event",
+            "live event pipeline disabled",
+            "continue_without_live_event_pipeline",
+        ),
+    )
+
+    with caplog.at_level(logging.DEBUG):
+        for level, tag, message, action in cases:
+            pb_mod._log_startup_observer_failure(level, tag, message, action, error)
+
+    captured = capsys.readouterr()
+    messages = [record.getMessage() for record in caplog.records]
+    complete_output = "\n".join((caplog.text, captured.out, captured.err))
+    expected_records = [
+        (
+            level,
+            f"[{tag}] {message} | error_type=RuntimeError action={action}",
+        )
+        for level, tag, message, action in cases
+    ]
+
+    assert [
+        (record.levelno, message) for record, message in zip(caplog.records, messages)
+    ] == expected_records
+    assert secret not in complete_output
+    assert unsafe_type.__name__ not in complete_output
+    assert "hostile.example.invalid" not in complete_output
+    assert "api_key" not in complete_output.lower()
+    assert "token" not in complete_output.lower()
+    assert "Traceback" not in complete_output
+
+
 def test_close_live_event_pipeline_is_best_effort_and_clears_reference():
     import passivbot as pb_mod
 

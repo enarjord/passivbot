@@ -507,6 +507,23 @@ def _log_process_failure(label: str, exc: BaseException) -> None:
     )
 
 
+def _log_startup_observer_failure(
+    level: int,
+    tag: str,
+    message: str,
+    action: str,
+    exc: BaseException,
+) -> None:
+    logging.log(
+        level,
+        "[%s] %s | error_type=%s action=%s",
+        tag,
+        message,
+        bounded_exception_type(exc),
+        action,
+    )
+
+
 _EXECUTION_LOOP_ERROR_ENDPOINTS = frozenset(
     {
         "account-overview",
@@ -1250,8 +1267,12 @@ class Passivbot:
                     runtime_identity=self.runtime_identity.to_dict(),
                 )
             except Exception as exc:
-                logging.error(
-                    "[monitor] failed to initialize monitor publisher: %s", exc
+                _log_startup_observer_failure(
+                    logging.ERROR,
+                    "monitor",
+                    "failed to initialize monitor publisher",
+                    "continue_without_monitor_publisher",
+                    exc,
                 )
                 self.monitor_publisher = None
                 self._live_event_pipeline = None
@@ -1260,9 +1281,21 @@ class Passivbot:
                 self._install_live_event_pipeline()
             except Exception as exc:
                 if self.monitor_publisher is not None and not self.live_event_console_enabled:
-                    logging.warning("[monitor] live event pipeline disabled: %s", exc)
+                    _log_startup_observer_failure(
+                        logging.WARNING,
+                        "monitor",
+                        "live event pipeline disabled",
+                        "continue_without_live_event_pipeline",
+                        exc,
+                    )
                 else:
-                    logging.warning("[event] live event pipeline disabled: %s", exc)
+                    _log_startup_observer_failure(
+                        logging.WARNING,
+                        "event",
+                        "live event pipeline disabled",
+                        "continue_without_live_event_pipeline",
+                        exc,
+                    )
                 self._live_event_pipeline = None
         # CandlestickManager settings from config.live
         # Use denormalized exchange name for cache paths (e.g., "binance" not "binanceusdm")
