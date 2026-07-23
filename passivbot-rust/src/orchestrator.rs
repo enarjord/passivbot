@@ -650,6 +650,7 @@ mod core {
             .then_with(|| close_reducer_reachability_cmp(a, b, ob))
     }
 
+    #[cfg(test)]
     fn prune_competing_close_reducers(
         orders: &mut Vec<IdealOrder>,
         pside: PositionSide,
@@ -1628,6 +1629,51 @@ mod core {
         finalized
     }
 
+    fn finalized_reducer_candidates(
+        closes: &[IdealOrder],
+        pside: PositionSide,
+        position: &Position,
+        symbol: &SymbolInput,
+    ) -> Vec<FinalizedReducerCandidate> {
+        let mut candidates: Vec<FinalizedReducerCandidate> = closes
+            .iter()
+            .filter(|order| is_protective_close_reducer(order.order_type, pside))
+            .cloned()
+            .filter_map(|requested| {
+                let closes =
+                    finalized_closes_with_reducer(closes, Some(requested), pside, position, symbol);
+                let reducer = closes
+                    .iter()
+                    .find(|order| is_protective_close_reducer(order.order_type, pside))
+                    .cloned()?;
+                Some(FinalizedReducerCandidate { reducer, closes })
+            })
+            .collect();
+        candidates.sort_by(|a, b| {
+            close_reducer_preference_cmp(&a.reducer, &b.reducer, &symbol.order_book)
+        });
+        candidates
+    }
+
+    fn select_finalized_reducers_without_loss_gate(
+        input: &OrchestratorInput,
+        per_side: &mut [Option<PerSymbolOrders>],
+        pside: PositionSide,
+    ) {
+        for s in per_side.iter_mut().filter_map(|value| value.as_mut()) {
+            let Some(symbol) = input.symbols.get(s.symbol_idx) else {
+                continue;
+            };
+            let closes_without_reducer =
+                finalized_closes_with_reducer(&s.closes, None, pside, &s.pos, symbol);
+            s.closes = finalized_reducer_candidates(&s.closes, pside, &s.pos, symbol)
+                .into_iter()
+                .next()
+                .map(|candidate| candidate.closes)
+                .unwrap_or(closes_without_reducer);
+        }
+    }
+
     fn collect_reducer_candidates_for_side(
         input: &OrchestratorInput,
         per_side: &mut [Option<PerSymbolOrders>],
@@ -1642,34 +1688,9 @@ mod core {
             let Some(symbol) = input.symbols.get(s.symbol_idx) else {
                 continue;
             };
-            let mut requested_reducers: Vec<IdealOrder> = s
-                .closes
-                .iter()
-                .filter(|order| is_protective_close_reducer(order.order_type, pside))
-                .cloned()
-                .collect();
-            requested_reducers
-                .sort_by(|a, b| close_reducer_preference_cmp(a, b, &symbol.order_book));
-
             let closes_without_reducer =
                 finalized_closes_with_reducer(&s.closes, None, pside, &s.pos, symbol);
-            let candidates: Vec<FinalizedReducerCandidate> = requested_reducers
-                .into_iter()
-                .filter_map(|requested| {
-                    let closes = finalized_closes_with_reducer(
-                        &s.closes,
-                        Some(requested),
-                        pside,
-                        &s.pos,
-                        symbol,
-                    );
-                    let reducer = closes
-                        .iter()
-                        .find(|order| is_protective_close_reducer(order.order_type, pside))
-                        .cloned()?;
-                    Some(FinalizedReducerCandidate { reducer, closes })
-                })
-                .collect();
+            let candidates = finalized_reducer_candidates(&s.closes, pside, &s.pos, symbol);
             s.closes = closes_without_reducer.clone();
             if !candidates.is_empty() {
                 positions.push(ReducerPositionCandidates {
@@ -1734,23 +1755,6 @@ mod core {
         }
     }
 
-    fn trim_closes_for_side(
-        input: &OrchestratorInput,
-        per_side: &mut [Option<PerSymbolOrders>],
-        pside: PositionSide,
-    ) {
-        for s in per_side.iter_mut().filter_map(|v| v.as_mut()) {
-            let symbol = &input.symbols[s.symbol_idx];
-            trim_closes_to_position(
-                pside,
-                &mut s.closes,
-                s.pos.size,
-                &symbol.order_book,
-                &symbol.exchange,
-            );
-        }
-    }
-
     fn gate_ordinary_closes_for_side(
         input: &OrchestratorInput,
         per_side: &mut [Option<PerSymbolOrders>],
@@ -1793,24 +1797,8 @@ mod core {
         let mut loss_gate = realized_loss_gate_state(input);
 
         let Some(state) = loss_gate.as_mut() else {
-            for s in per_long.iter_mut().filter_map(|value| value.as_mut()) {
-                let symbol = &input.symbols[s.symbol_idx];
-                prune_competing_close_reducers(
-                    &mut s.closes,
-                    PositionSide::Long,
-                    &symbol.order_book,
-                );
-            }
-            for s in per_short.iter_mut().filter_map(|value| value.as_mut()) {
-                let symbol = &input.symbols[s.symbol_idx];
-                prune_competing_close_reducers(
-                    &mut s.closes,
-                    PositionSide::Short,
-                    &symbol.order_book,
-                );
-            }
-            trim_closes_for_side(input, per_long, PositionSide::Long);
-            trim_closes_for_side(input, per_short, PositionSide::Short);
+            select_finalized_reducers_without_loss_gate(input, per_long, PositionSide::Long);
+            select_finalized_reducers_without_loss_gate(input, per_short, PositionSide::Short);
             return;
         };
 
@@ -6470,6 +6458,76 @@ mod core {
             assert!((block.qty + 11.0).abs() < 1e-12);
             assert!((block.projected_balance_after - 890.0).abs() < 1e-12);
             assert!((block.balance_floor - 895.0).abs() < 1e-12);
+        }
+
+        #[test]
+        fn reducer_selection_uses_reachability_after_final_sizing() {
+            for max_realized_loss_pct in [0.5, 1.0] {
+                let mut sym = make_basic_symbol(0);
+                sym.order_book = OrderBook {
+                    bid: 100.0,
+                    ask: 100.0,
+                };
+                sym.exchange.qty_step = 0.5;
+                sym.exchange.min_qty = 9.0;
+                sym.exchange.min_cost = 0.0;
+                sym.exchange.maker_fee = 0.0;
+                sym.long.position = Position {
+                    size: 10.5,
+                    price: 100.0,
+                };
+
+                let input = OrchestratorInput {
+                    timestamp_ms: 0,
+                    balance: 1000.0,
+                    balance_raw: 1000.0,
+                    global: OrchestratorGlobal {
+                        max_realized_loss_pct,
+                        ..make_basic_global()
+                    },
+                    symbols: vec![sym.clone()],
+                    peek_hints: None,
+                    forager_hysteresis: None,
+                };
+                let mut per_long = vec![Some(PerSymbolOrders {
+                    symbol_idx: 0,
+                    entries: vec![],
+                    closes: vec![
+                        IdealOrder {
+                            symbol_idx: 0,
+                            pside: PositionSide::Long,
+                            qty: -10.0,
+                            price: 110.0,
+                            order_type: OrderType::CloseAutoReduceWelLong,
+                        },
+                        IdealOrder {
+                            symbol_idx: 0,
+                            pside: PositionSide::Long,
+                            qty: -9.5,
+                            price: 101.0,
+                            order_type: OrderType::CloseUnstuckLong,
+                        },
+                    ],
+                    pos: sym.long.position,
+                    mode: TradingMode::Normal,
+                })];
+                let mut per_short = vec![None];
+                let mut diagnostics = OrchestratorDiagnostics::default();
+
+                gate_lossy_closes_by_peak_balance(
+                    &input,
+                    &mut per_long,
+                    &mut per_short,
+                    &mut diagnostics,
+                );
+
+                let closes = &per_long[0].as_ref().unwrap().closes;
+                assert_eq!(closes.len(), 1);
+                assert_eq!(closes[0].order_type, OrderType::CloseUnstuckLong);
+                assert!((closes[0].qty + 10.5).abs() < 1e-12);
+                assert!((closes[0].price - 101.0).abs() < 1e-12);
+                assert!(diagnostics.loss_gate_blocks.is_empty());
+            }
         }
 
         #[test]
