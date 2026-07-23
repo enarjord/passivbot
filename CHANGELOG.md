@@ -4,6 +4,10 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Unrealized-PnL aggregation failure diagnostics now retain only a bounded exception type and the
+  stable `return_zero` action. The existing immediate `0.0` fallback, price fetching, balance and
+  equity handling, scheduling, risk, HSL, and trading behavior are unchanged.
+
 - Shared live diagnostic-event fallback and diagnostic-step failures now log only their stable
   context and a bounded exception type. Their existing return values, isolation, routing, retry,
   scheduling, and trading behavior are unchanged.
