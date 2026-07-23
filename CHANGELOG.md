@@ -4,6 +4,10 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Reconciliation diagnostics for trace recording, order-churn evidence, and malformed open-order
+  snapshots now retain only bounded exception types. This diagnostic-only redaction does not change
+  order planning, churn availability, malformed-order guardrails, or exchange-action gating.
+
 - Foreign-writer safety shutdown diagnostics now retain only bounded maintainer-cleanup failure
   types and a stable continuation action. Stop flags, cleanup invocation, and terminal
   foreign-writer stop behavior are unchanged.

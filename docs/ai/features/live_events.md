@@ -242,6 +242,11 @@ These events are diagnostic projections only. The causal history, rolling counte
 cancel-first state are updated directly in the planner and executor, and sink failure cannot alter
 the selected exchange actions.
 
+Reconciliation trace, churn-summary, normalization, and malformed-open-order diagnostics retain
+only bounded exception types. They exclude exception text, untrusted exception class names, URLs,
+and traceback data; this diagnostic redaction does not change churn availability, malformed-order
+guardrails, planned orders, or exchange-action gating.
+
 ## Fresh-Entry Eligibility
 
 Completed normal live plans emit `entry.initial_eligibility` to structured and monitor sinks. The

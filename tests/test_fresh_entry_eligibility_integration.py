@@ -67,6 +67,37 @@ def test_eligibility_emitter_builds_schema_valid_correlated_event():
     assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 
+def test_reconciliation_trace_diagnostics_redact_hostile_failure_metadata(caplog):
+    secret = "trace-secret https://example.invalid/trace"
+    hostile_error = type("ApiKeySecretError", (RuntimeError,), {})
+
+    class Trace:
+        def record_evaluated(self, *_args, **_kwargs):
+            raise hostile_error(secret)
+
+    with caplog.at_level("DEBUG"):
+        assert (
+            reconciler._trace_record(
+                Trace(), "record_evaluated", "BTC/USDT:USDT", "long"
+            )
+            is None
+        )
+
+    class Bot:
+        @property
+        def active_symbols(self):
+            raise hostile_error(secret)
+
+    with caplog.at_level("DEBUG"):
+        assert reconciler._initialize_fresh_entry_trace(Bot(), {}, {}) is None
+
+    rendered = "\n".join(record.getMessage() for record in caplog.records)
+    assert "error_type=RuntimeError" in rendered
+    assert hostile_error.__name__ not in rendered
+    assert secret not in rendered
+    assert "example.invalid" not in rendered
+
+
 def _reconciliation_bot(symbol: str, actual_orders: list[dict]) -> Passivbot:
     bot = Passivbot.__new__(Passivbot)
     bot.active_symbols = [symbol]
