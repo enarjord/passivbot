@@ -4,6 +4,10 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Order-sort market-price fetch failure diagnostics now retain only a bounded exception type and
+  the stable `preserve_original_order` action. The existing empty-price fallback, original-order
+  preservation, reconciliation, planning, and trading behavior are unchanged.
+
 - Approved/ignored coin-list refresh failure diagnostics now retain only a bounded exception type
   and the stable `return_from_coin_list_refresh` action. Existing refresh return, list/universe and
   eligibility update semantics, scheduling, risk, HSL, and trading behavior are unchanged.

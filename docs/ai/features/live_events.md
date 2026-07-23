@@ -264,6 +264,14 @@ only bounded exception types. They exclude exception text, untrusted exception c
 and traceback data; this diagnostic redaction does not change churn availability, malformed-order
 guardrails, planned orders, or exchange-action gating.
 
+## Order-Sort Price-Fetch Diagnostics
+
+Market-price fetch failures while sorting orders retain only a bounded exception type and the
+stable `preserve_original_order` action. They use the existing empty-price-map path to return the
+original order object sequence without retaining exception messages, unsafe exception class names,
+URLs, credentials, tokens, or tracebacks. Fetch parameters, missing-price handling, complete-price
+sorting, reconciliation, planning, and trading behavior remain unchanged.
+
 ## Fresh-Entry Eligibility
 
 Completed normal live plans emit `entry.initial_eligibility` to structured and monitor sinks. The
