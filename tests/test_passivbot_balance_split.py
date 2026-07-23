@@ -10897,6 +10897,34 @@ async def test_open_orders_snapshot_delta_uses_strictly_greater_than_twenty_thre
     assert len(logged_orders) == 20
 
 
+def test_open_orders_snapshot_delta_emitter_failure_is_bounded_and_keeps_fallback(caplog):
+    bot = _make_open_order_guardrail_bot()
+
+    def fail_emit_delta(**_kwargs):
+        raise RuntimeError(
+            "request=https://hostile.example.invalid/api?api_key=secret "
+            "authorization=Bearer token-123"
+        )
+
+    bot._emit_open_orders_snapshot_delta_event = fail_emit_delta
+
+    with caplog.at_level(logging.DEBUG):
+        bot._log_open_orders_snapshot_delta(direction="added", order_count=21)
+
+    messages = [record.getMessage() for record in caplog.records]
+    assert "[event] failed to emit open-orders snapshot delta: RuntimeError" in messages
+    assert "[order] added 21 orders" in messages
+    output = "\n".join(messages)
+    for unsafe_value in (
+        "hostile.example.invalid",
+        "api_key",
+        "secret",
+        "authorization",
+        "token-123",
+    ):
+        assert unsafe_value not in output
+
+
 @pytest.mark.asyncio
 async def test_open_orders_snapshot_delta_console_sink_failure_does_not_change_reconciliation():
     class FailingConsoleSink:
