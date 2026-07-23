@@ -26,6 +26,10 @@ HSL drawdown state is scoped by `live.hsl_signal_mode`:
    proven non-flat intervention snapshot; an entry or partial-close fill is not flatten evidence.
 6. Restart reconstruction uses exchange state, fill/PnL history, candles where required, config, and
    current time. Local latch and replay-cache files are accelerators or diagnostics, not authority.
+7. Replay-cache write, reuse, and completed-replay persistence failures are nonfatal performance
+   outcomes. They retain only a bounded exception type in diagnostics and fall back to authoritative
+   replay when reuse is unavailable. Coin replay failures retain the same bounded classification
+   without changing exception propagation or held-pair protection and flat-pair entry blocking.
 
 ## Failure Semantics
 

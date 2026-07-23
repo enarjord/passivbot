@@ -810,6 +810,65 @@ def test_hsl_replay_matrix_cache_try_load_emits_rejected_event(tmp_path):
     assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 
+@pytest.mark.parametrize(
+    ("stage", "expected_reason"),
+    [
+        ("validation", "validation_exception:RuntimeError"),
+        ("load", "load_exception:RuntimeError"),
+    ],
+)
+def test_hsl_replay_matrix_cache_try_load_redacts_hostile_exception_types(
+    tmp_path, monkeypatch, stage, expected_reason
+):
+    from live.event_bus import EventTypes, ListEventSink, LiveEventPipeline, ReasonCodes
+
+    secret = f"api_secret=hsl-cache-{stage}-secret"
+    unsafe_type = type(f"ApiKeyHslCache{stage.title()}Secret", (RuntimeError,), {})
+    bot = FakeHslBot()
+    sink = ListEventSink()
+    bot._live_event_pipeline = LiveEventPipeline(
+        structured_sinks=[sink],
+        monitor_sinks=[],
+    )
+    bot._emit_live_event = MethodType(Passivbot._emit_live_event, bot)
+    monkeypatch.setattr(hsl, "_hsl_replay_cache_validation_reasons", lambda *_a, **_k: [])
+    if stage == "validation":
+        def fail_validation(*_args, **_kwargs):
+            raise unsafe_type(secret)
+
+        monkeypatch.setattr(hsl, "_hsl_replay_cache_validation_reasons", fail_validation)
+    else:
+        (tmp_path / hsl._HSL_REPLAY_CACHE_MANIFEST_FILENAME).write_text("{}")
+
+        def fail_load(*_args, **_kwargs):
+            raise unsafe_type(secret)
+
+        monkeypatch.setattr(hsl.json, "loads", fail_load)
+
+    assert (
+        hsl._try_load_hsl_replay_matrix_cache(
+            bot,
+            tmp_path,
+            expected_metadata=_hsl_cache_metadata(),
+            pside="long",
+            symbol="BTC/USDT:USDT",
+        )
+        is None
+    )
+
+    assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    events = [event for event in sink.events if event.event_type == EventTypes.HSL_REPLAY_CACHE]
+    assert len(events) == 1
+    event = events[0]
+    assert event.status == "skipped"
+    assert event.reason_code == ReasonCodes.HSL_REPLAY_CACHE_REJECTED
+    assert event.data["cache_status"] == "rejected"
+    assert event.data["reasons"] == [expected_reason]
+    assert secret not in str(event.data)
+    assert unsafe_type.__name__ not in str(event.data)
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
+
+
 def test_hsl_replay_cache_config_digest_is_stable_and_hsl_scoped():
     bot = make_coin_bot()
     digest = hsl._hsl_replay_cache_config_digest(bot, "long")
@@ -1699,9 +1758,14 @@ def test_hsl_replay_cache_persist_matrices_write_failure_is_nonfatal(
 
     bot, sink = _make_persist_bot(tmp_path, monkeypatch)
     symbol = "BTC/USDT:USDT"
+    secret = "api_secret=hsl-pair-cache-write-secret"
+    unsafe_type = type("ApiKeyHslPairCacheWriteSecret", (RuntimeError,), {})
+
+    def fail_write(*_args, **_kwargs):
+        raise unsafe_type(secret)
+
+    monkeypatch.setattr(hsl, "_write_hsl_replay_matrix_cache", fail_write)
     rows = _hsl_cache_rows()
-    # Break 1m continuity so the fail-loud writer rejects the rows.
-    rows[-1] = dict(rows[-1], ts=rows[-1]["ts"] + 60_000)
     history = {
         "hsl_replay_matrices": {"long": {symbol: rows}},
         "hsl_replay_matrix_coverage": {
@@ -1718,7 +1782,11 @@ def test_hsl_replay_cache_persist_matrices_write_failure_is_nonfatal(
         written = hsl._equity_hard_stop_persist_replay_matrices(bot, history)
 
     assert written == 0
-    assert "replay cache write failed" in caplog.text
+    assert caplog.records[-1].getMessage() == (
+        f"[risk] HSL[long:{symbol}] replay cache write failed | rows=3 error_type=RuntimeError"
+    )
+    assert secret not in caplog.text
+    assert unsafe_type.__name__ not in caplog.text
     cache_dir = hsl._hsl_replay_cache_dir(bot, "long", symbol)
     assert hsl._hsl_replay_cache_validation_reasons(cache_dir) == ["manifest_missing"]
 
@@ -1735,7 +1803,67 @@ def test_hsl_replay_cache_persist_matrices_write_failure_is_nonfatal(
     assert event.pside == "long"
     assert event.symbol == symbol
     assert event.data["cache_status"] == "write_failed"
-    assert event.data["reasons"] == ["write_exception:ValueError"]
+    assert event.data["reasons"] == ["write_exception:RuntimeError"]
+    assert secret not in str(event.data)
+    assert unsafe_type.__name__ not in str(event.data)
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
+
+
+def test_hsl_replay_cache_account_write_failure_is_nonfatal_and_redacted(
+    tmp_path, monkeypatch, caplog
+):
+    import logging as logging_module
+
+    from live.event_bus import EventTypes, ReasonCodes
+
+    bot, sink = _make_persist_bot(tmp_path, monkeypatch)
+    secret = "api_secret=hsl-account-cache-write-secret"
+    unsafe_type = type("ApiKeyHslAccountCacheWriteSecret", (RuntimeError,), {})
+    original_write = hsl._write_hsl_replay_matrix_cache
+
+    def fail_account_write(*args, **kwargs):
+        if kwargs.get("series_kind") == "account_pnl":
+            raise unsafe_type(secret)
+        return original_write(*args, **kwargs)
+
+    monkeypatch.setattr(hsl, "_write_hsl_replay_matrix_cache", fail_account_write)
+    symbol = "BTC/USDT:USDT"
+    history = {
+        "hsl_replay_matrices": {"long": {symbol: _hsl_cache_rows()}},
+        "hsl_replay_account_series": _hsl_account_series_rows(),
+        "hsl_replay_matrix_coverage": {
+            "fill_covered_start_ms": 60_000,
+            "fill_covered_end_ms": 200_000,
+            "fill_history_scope": "window",
+            "fill_coverage_proven": True,
+            "candle_covered_start_ms": 60_000,
+            "candle_covered_end_ms": 180_000,
+        },
+    }
+
+    with caplog.at_level(logging_module.WARNING):
+        written = hsl._equity_hard_stop_persist_replay_matrices(bot, history)
+
+    assert written == 1
+    assert caplog.records[-1].getMessage() == (
+        "[risk] HSL account series replay cache write failed | rows=3 error_type=RuntimeError"
+    )
+    assert secret not in caplog.text
+    assert unsafe_type.__name__ not in caplog.text
+    assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    failed_events = [
+        event
+        for event in sink.events
+        if event.event_type == EventTypes.HSL_REPLAY_CACHE
+        and event.reason_code == ReasonCodes.HSL_REPLAY_CACHE_WRITE_FAILED
+    ]
+    assert len(failed_events) == 1
+    event = failed_events[0]
+    assert event.pside == hsl._HSL_REPLAY_CACHE_ACCOUNT_PSIDE
+    assert event.symbol == hsl._HSL_REPLAY_CACHE_ACCOUNT_SYMBOL
+    assert event.data["reasons"] == ["write_exception:RuntimeError"]
+    assert secret not in str(event.data)
+    assert unsafe_type.__name__ not in str(event.data)
     assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 
@@ -2277,6 +2405,110 @@ async def test_coin_hsl_replay_cancels_when_shutdown_requested_after_history_loa
 
 
 @pytest.mark.asyncio
+async def test_coin_hsl_replay_failure_redacts_state_and_event_but_preserves_exception():
+    from live.event_bus import EventTypes, ListEventSink, LiveEventPipeline
+
+    bot = make_coin_bot()
+    secret = "api_secret=hsl-coin-replay-before-ready-secret"
+    unsafe_type = type("ApiKeyHslCoinReplayBeforeReadySecret", (RuntimeError,), {})
+    sink = ListEventSink()
+    bot._live_event_pipeline = LiveEventPipeline(
+        structured_sinks=[sink],
+        monitor_sinks=[],
+    )
+    bot._emit_live_event = MethodType(Passivbot._emit_live_event, bot)
+
+    async def cache_miss(_now_ms):
+        return None
+
+    async def fail_history(*_args, **_kwargs):
+        raise unsafe_type(secret)
+
+    bot._equity_hard_stop_try_reuse_replay_cache = cache_miss
+    bot.get_balance_equity_history = fail_history
+
+    with pytest.raises(unsafe_type) as raised:
+        await bot._equity_hard_stop_start_coin_history_replay()
+
+    assert str(raised.value) == secret
+    assert bot._equity_hard_stop_coin_replay_failure == "RuntimeError"
+    assert bot._equity_hard_stop_coin_protective_ready is False
+    assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    failed_events = [
+        event for event in sink.events if event.event_type == EventTypes.HSL_REPLAY_FAILED
+    ]
+    assert len(failed_events) == 1
+    assert failed_events[0].data["error_type"] == "RuntimeError"
+    assert secret not in str(failed_events[0].data)
+    assert unsafe_type.__name__ not in str(failed_events[0].data)
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
+
+
+@pytest.mark.asyncio
+async def test_coin_hsl_cache_reuse_and_persistence_failures_are_redacted_and_nonfatal(
+    monkeypatch, caplog
+):
+    bot = make_coin_bot()
+    symbol = "A"
+    secret_reuse = "api_secret=hsl-coin-cache-reuse-secret"
+    secret_persist = "api_secret=hsl-coin-cache-persist-secret"
+    unsafe_reuse_type = type("ApiKeyHslCoinCacheReuseSecret", (RuntimeError,), {})
+    unsafe_persist_type = type("ApiKeyHslCoinCachePersistSecret", (RuntimeError,), {})
+    history_calls = []
+    bot.positions = {
+        symbol: {
+            "long": {"size": 1.0, "price": 100.0},
+            "short": {"size": 0.0, "price": 0.0},
+        }
+    }
+
+    async def fail_reuse(_now_ms):
+        raise unsafe_reuse_type(secret_reuse)
+
+    async def full_history(*_args, **_kwargs):
+        history_calls.append(True)
+        return {
+            "timeline": [
+                {
+                    "timestamp": 60_000,
+                    "balance": 100.0,
+                    "realized_pnl": 0.0,
+                    "realized_pnl_by_coin_pside": {
+                        symbol: {"long": 0.0, "short": 0.0}
+                    },
+                    "unrealized_pnl_by_coin_pside": {
+                        symbol: {"long": -1.0, "short": 0.0}
+                    },
+                }
+            ],
+            "panic_flatten_events": [],
+            "fill_events": [],
+        }
+
+    def fail_persist(_history):
+        raise unsafe_persist_type(secret_persist)
+
+    monkeypatch.setattr(bot, "_equity_hard_stop_try_reuse_replay_cache", fail_reuse)
+    monkeypatch.setattr(bot, "get_balance_equity_history", full_history, raising=False)
+    monkeypatch.setattr(bot, "_equity_hard_stop_persist_replay_matrices", fail_persist)
+
+    with caplog.at_level(logging.WARNING):
+        await bot._equity_hard_stop_initialize_coin_from_history()
+
+    assert history_calls == [True]
+    assert bot._equity_hard_stop_coin_initialized is True
+    messages = [record.getMessage() for record in caplog.records if "HSL replay cache" in record.getMessage()]
+    assert messages == [
+        "[risk] HSL replay cache reuse failed; falling back to full replay | error_type=RuntimeError",
+        "[risk] HSL replay cache persistence failed | error_type=RuntimeError",
+    ]
+    assert secret_reuse not in caplog.text
+    assert secret_persist not in caplog.text
+    assert unsafe_reuse_type.__name__ not in caplog.text
+    assert unsafe_persist_type.__name__ not in caplog.text
+
+
+@pytest.mark.asyncio
 async def test_coin_hsl_history_replay_emits_lifecycle_events():
     from live.event_bus import EventTypes, ListEventSink, LiveEventPipeline, ReasonCodes
 
@@ -2777,6 +3009,8 @@ async def test_coin_hsl_partial_replay_restarts_if_pending_pair_becomes_held():
 
 @pytest.mark.asyncio
 async def test_coin_hsl_background_failure_keeps_pending_pair_blocked_without_retry():
+    from live.event_bus import EventTypes, ListEventSink, LiveEventPipeline
+
     bot = make_coin_bot()
     bot.positions = {
         "Z": {
@@ -2806,9 +3040,18 @@ async def test_coin_hsl_background_failure_keeps_pending_pair_blocked_without_re
             "fill_events": [],
         }
 
+    secret = "api_secret=hsl-coin-replay-failure-secret"
+    unsafe_type = type("ApiKeyHslCoinReplayFailureSecret", (RuntimeError,), {})
+    sink = ListEventSink()
+    bot._live_event_pipeline = LiveEventPipeline(
+        structured_sinks=[sink],
+        monitor_sinks=[],
+    )
+    bot._emit_live_event = MethodType(Passivbot._emit_live_event, bot)
+
     async def failing_upnl(pside=None, symbol=None):
         if symbol == "A":
-            raise RuntimeError("flat replay failed")
+            raise unsafe_type(secret)
         return 0.0
 
     bot.get_balance_equity_history = fake_history
@@ -2821,13 +3064,22 @@ async def test_coin_hsl_background_failure_keeps_pending_pair_blocked_without_re
     assert getattr(bot, "_equity_hard_stop_coin_initialized", False) is False
     assert bot._equity_hard_stop_coin_replay_ready_pairs == {("long", "Z")}
     assert bot._equity_hard_stop_coin_replay_pending_pairs == {("long", "A")}
-    assert "flat replay failed" in bot._equity_hard_stop_coin_replay_failure
+    assert bot._equity_hard_stop_coin_replay_failure == "RuntimeError"
+    assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    failed_events = [
+        event for event in sink.events if event.event_type == EventTypes.HSL_REPLAY_FAILED
+    ]
+    assert len(failed_events) == 1
+    assert failed_events[0].data["error_type"] == "RuntimeError"
+    assert secret not in str(failed_events[0].data)
+    assert unsafe_type.__name__ not in str(failed_events[0].data)
     await bot._equity_hard_stop_start_coin_history_replay()
     assert bot._equity_hard_stop_coin_replay_task is replay_task
 
     metrics = await bot._equity_hard_stop_check_coin()
     assert "long:Z" in metrics
     assert "long:A" not in metrics
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 
 @pytest.mark.asyncio

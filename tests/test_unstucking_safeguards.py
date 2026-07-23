@@ -4463,8 +4463,11 @@ async def test_hard_stop_initialize_from_history_survives_cache_persist_failure(
     async def fake_history(*, current_balance=None, **kwargs):
         return _minimal_pside_history()
 
+    secret = "api_secret=hsl-pside-cache-persist-secret"
+    unsafe_type = type("ApiKeyHslPsideCachePersistSecret", (RuntimeError,), {})
+
     def failing_persist(history):
-        raise RuntimeError("synthetic cache write failure")
+        raise unsafe_type(secret)
 
     monkeypatch.setattr(bot, "get_balance_equity_history", fake_history)
     monkeypatch.setattr(
@@ -4476,7 +4479,45 @@ async def test_hard_stop_initialize_from_history_survives_cache_persist_failure(
     with caplog.at_level(logging_module.WARNING):
         await bot._equity_hard_stop_initialize_from_history()
 
-    assert "HSL replay cache persistence failed" in caplog.text
+    assert caplog.records[-1].getMessage() == (
+        "[risk] HSL replay cache persistence failed | error_type=RuntimeError"
+    )
+    assert secret not in caplog.text
+    assert unsafe_type.__name__ not in caplog.text
+    assert _hsl_state(bot)["halted"] is False
+
+
+@pytest.mark.asyncio
+async def test_hard_stop_initialize_from_history_redacts_cache_reuse_failure(monkeypatch, caplog):
+    cfg = _dummy_config()
+    cfg["live"]["hsl_signal_mode"] = "unified"
+    bot = _make_dummy_bot(cfg)
+    _hsl_cfg(bot)["enabled"] = True
+    bot.balance = 100.0
+    secret = "api_secret=hsl-pside-cache-reuse-secret"
+    unsafe_type = type("ApiKeyHslPsideCacheReuseSecret", (RuntimeError,), {})
+    history_calls = []
+
+    async def failing_reuse(_now_ms):
+        raise unsafe_type(secret)
+
+    async def full_history(*, current_balance=None, **kwargs):
+        history_calls.append((current_balance, kwargs))
+        return _minimal_pside_history()
+
+    monkeypatch.setattr(bot, "_equity_hard_stop_try_reuse_pside_replay_cache", failing_reuse)
+    monkeypatch.setattr(bot, "get_balance_equity_history", full_history)
+    monkeypatch.setattr(bot, "_equity_hard_stop_persist_replay_matrices", lambda _h: 0)
+
+    with caplog.at_level(logging.WARNING):
+        await bot._equity_hard_stop_initialize_from_history()
+
+    assert len(history_calls) == 1
+    assert caplog.records[-1].getMessage() == (
+        "[risk] HSL pside replay cache reuse failed; falling back to full replay | error_type=RuntimeError"
+    )
+    assert secret not in caplog.text
+    assert unsafe_type.__name__ not in caplog.text
     assert _hsl_state(bot)["halted"] is False
 
 
