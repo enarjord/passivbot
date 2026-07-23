@@ -360,6 +360,15 @@ The fixed fields are `action=create|cancel`,
 `connector_route=base|hyperliquid|okx`. Normal plan calls retain cycle, `order_wave_id`, and
 `action_id` correlation.
 
+## Terminal Execution Outcomes
+
+Terminal and ambiguous execution-order outcome events retain their existing envelope correlation,
+status, reason, action, bounded order metadata, result summaries, and optional bounded debug
+profiles. When an outcome carries an exception object or result, its payload retains only a bounded
+`error_type`; it omits exception text, unsafe exception class metadata, URLs, credentials, tokens,
+raw responses, and tracebacks. This diagnostic redaction does not alter event routing, emitter
+isolation, executor retries or re-raises, exchange calls, or trading behavior.
+
 ## HSL Replay Timing
 
 For coin-mode `hsl.replay.completed`, `full_elapsed_s` is total replay time;

@@ -4447,8 +4447,7 @@ def emit_execution_order_event(
         elif isinstance(result, BaseException):
             error = result
         if error is not None:
-            data["error_type"] = type(error).__name__
-            data["error"] = _sanitize_remote_text(error, max_len=500)
+            data["error_type"] = _bounded_exception_type(error)
         if extra:
             data.update(extra)
         _add_execution_debug_profile(

@@ -4,6 +4,10 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Terminal and ambiguous execution-order events now retain bounded exception types instead of
+  persisted exception text. Existing envelope correlation, result summaries, debug profiles,
+  routing, executor behavior, exchange calls, and trading behavior are unchanged.
+
 - Exchange-configuration refresh failure events now retain bounded exception types instead of
   exception text. Periodic and connector-local payloads continue to preserve their existing
   outcome and response metadata, best-effort delivery, and configuration control flow.

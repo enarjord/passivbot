@@ -5388,6 +5388,80 @@ def test_execution_debug_profile_adds_bounded_order_write_shape():
     assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 
+def test_execution_failure_event_redacts_hostile_exception_metadata():
+    import passivbot as pb_mod
+
+    sink = ListEventSink()
+
+    class FakeBot:
+        _current_live_event_cycle_id = pb_mod.Passivbot._current_live_event_cycle_id
+        _emit_execution_order_event = pb_mod.Passivbot._emit_execution_order_event
+        _emit_live_event = pb_mod.Passivbot._emit_live_event
+
+        def __init__(self):
+            self.exchange = "okx"
+            self.user = "okx_01"
+            self.bot_id = "bot_1"
+            self._live_event_current_cycle_id = "cy_execution_failure"
+            self._live_event_pipeline = LiveEventPipeline(
+                structured_sinks=[sink],
+                monitor_sinks=[],
+            )
+
+    hostile_type_name = "HostileTokenClass"
+    HostileError = type(hostile_type_name, (RuntimeError,), {})
+    hostile_value = (
+        "request https://hostile.example.invalid/orders?api_key=LEAKED "
+        "token=LEAKED\\nTraceback (most recent call last): SECRET"
+    )
+    bot = FakeBot()
+    order = {
+        "symbol": "BTC/USDT:USDT",
+        "side": "buy",
+        "position_side": "long",
+        "type": "limit",
+        "pb_order_type": "entry_grid_normal_long",
+        "qty": 0.01,
+        "price": 100000.0,
+        "reduce_only": False,
+        "custom_id": "cid-execution-failure-123",
+    }
+
+    bot._emit_execution_order_event(
+        event_type=EventTypes.EXECUTION_CREATE_FAILED,
+        order=order,
+        action="create",
+        status="failed",
+        reason_code=ReasonCodes.EXCHANGE_EXCEPTION,
+        level="warning",
+        index=2,
+        wave={"id": 23, "event_id": "ow_23"},
+        result=HostileError(hostile_value),
+    )
+
+    assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    event = sink.events[-1]
+    assert event.event_type == EventTypes.EXECUTION_CREATE_FAILED
+    assert event.status == "failed"
+    assert event.reason_code == ReasonCodes.EXCHANGE_EXCEPTION
+    assert event.order_wave_id == "ow_23"
+    assert event.action_id == "ow_23:create:2"
+    assert event.tags == ("execution", "order", "create")
+    assert event.symbol == "BTC/USDT:USDT"
+    assert event.pside == "long"
+    assert event.side == "buy"
+    assert event.client_order_id == "cid-execution-failure-123"
+    assert event.data["error_type"] == "RuntimeError"
+    assert "error" not in event.data
+    rendered = json.dumps(event.to_dict(), sort_keys=True)
+    assert hostile_type_name not in rendered
+    assert hostile_value not in rendered
+    assert "hostile.example.invalid" not in rendered
+    assert "LEAKED" not in rendered
+    assert "Traceback" not in rendered
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
+
+
 def test_connector_call_event_is_bounded_and_correlated_to_batch_action():
     import passivbot as pb_mod
 
