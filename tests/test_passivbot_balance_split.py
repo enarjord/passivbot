@@ -6605,6 +6605,128 @@ async def test_refresh_authoritative_state_staged_applies_fake_snapshots():
 
 
 @pytest.mark.asyncio
+async def test_refresh_authoritative_state_staged_redacts_position_change_observer_failure(
+    caplog,
+):
+    from live import state_refresh
+
+    secret = "token=top-secret https://example.invalid/path"
+    position_change_error = _hostile_runtime_error(secret)
+    handled_sources = []
+    bot = SimpleNamespace(
+        _authoritative_staged_refresh_plan=lambda: {
+            "balance",
+            "positions",
+            "open_orders",
+        },
+        _fetch_authoritative_state_staged_snapshot=AsyncMock(
+            return_value={
+                "balance": 100.0,
+                "positions": [],
+                "open_orders": [],
+            }
+        ),
+        _prepare_balance_snapshot=lambda balance: {"balance": balance},
+        _apply_open_orders_snapshot=AsyncMock(return_value=True),
+        _apply_positions_snapshot=lambda positions: ([], {}),
+        _commit_balance_snapshot=MagicMock(),
+        _record_authoritative_surface=MagicMock(),
+        _positions_signature=lambda positions: (),
+        _update_entry_cooldown_position_delta_guard=MagicMock(),
+        _reconcile_balance_after_staged_refresh=MagicMock(),
+        _staged_balance_update_source=lambda: "REST",
+        get_hysteresis_snapped_balance=lambda: 100.0,
+        get_exchange_time=lambda: 1_700_000_000_000,
+        positions={},
+        _log_noncritical_market_snapshot_error=lambda *_args: False,
+        _finalize_authoritative_refresh_consistency=MagicMock(),
+    )
+
+    async def fail_log_position_changes(*_args):
+        raise position_change_error
+
+    async def record_balance_update(*, source):
+        handled_sources.append(source)
+
+    bot.log_position_changes = fail_log_position_changes
+    bot.handle_balance_update = record_balance_update
+
+    with caplog.at_level(logging.ERROR):
+        assert await state_refresh.refresh_authoritative_state_staged(bot) is True
+
+    assert handled_sources == ["REST"]
+    messages = "\n".join(record.getMessage() for record in caplog.records)
+    assert "error_type=RuntimeError" in messages
+    assert "action=continue_balance_update" in messages
+    assert secret not in messages
+    assert type(position_change_error).__name__ not in messages
+
+
+@pytest.mark.asyncio
+async def test_staged_refresh_progress_logger_redacts_non_cancellation_failure(caplog):
+    from live import state_refresh
+
+    secret = "token=top-secret https://example.invalid/path"
+    progress_error = _hostile_runtime_error(secret)
+
+    class FakeBot:
+        config = {"logging": {"staged_refresh_slow_surface_seconds": 0.01}}
+
+        async def _sleep_unless_shutdown(self, *_args, **_kwargs):
+            raise progress_error
+
+        def _shutdown_requested(self):
+            return False
+
+    pending_task = asyncio.create_task(asyncio.sleep(60.0))
+    try:
+        with caplog.at_level(logging.DEBUG):
+            await state_refresh.log_staged_refresh_progress_until(
+                FakeBot(),
+                {"balance"},
+                {},
+                {"balance": pending_task},
+                0,
+            )
+    finally:
+        pending_task.cancel()
+        await asyncio.gather(pending_task, return_exceptions=True)
+    messages = "\n".join(record.getMessage() for record in caplog.records)
+    assert "error_type=RuntimeError" in messages
+    assert "action=stop_progress_logger" in messages
+    assert secret not in messages
+    assert type(progress_error).__name__ not in messages
+
+
+@pytest.mark.asyncio
+async def test_staged_refresh_progress_logger_propagates_cancellation():
+    from live import state_refresh
+
+    class FakeBot:
+        config = {"logging": {"staged_refresh_slow_surface_seconds": 0.01}}
+
+        async def _sleep_unless_shutdown(self, *_args, **_kwargs):
+            raise asyncio.CancelledError("shutdown")
+
+        def _shutdown_requested(self):
+            return False
+
+    pending_task = asyncio.create_task(asyncio.sleep(60.0))
+    try:
+        with pytest.raises(asyncio.CancelledError, match="shutdown"):
+            await state_refresh.log_staged_refresh_progress_until(
+                FakeBot(),
+                {"balance"},
+                {},
+                {"balance": pending_task},
+                0,
+            )
+    finally:
+        pending_task.cancel()
+        await asyncio.gather(pending_task, return_exceptions=True)
+
+
+@pytest.mark.asyncio
 async def test_refresh_authoritative_state_staged_applies_bybit_snapshots():
     bot = Passivbot.__new__(Passivbot)
     bot.config = {"live": {}}
