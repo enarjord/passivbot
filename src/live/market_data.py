@@ -8,6 +8,7 @@ from collections import Counter
 from typing import Iterable
 
 from config.access import get_optional_live_value
+from live.diagnostic_safety import bounded_exception_type
 from live.event_bus import EventTypes, ReasonCodes
 from live.market_snapshot import MarketSnapshot
 from utils import utc_ms
@@ -96,9 +97,10 @@ def _emit_pre_create_skip_event(
         )
     except Exception as exc:
         logging.debug(
-            "[event] failed to emit pre-create skip event stage=%s error_type=%s",
+            "[event] failed to emit pre-create skip event | stage=%s "
+            "error_type=%s action=use_legacy_warning",
             stage,
-            type(exc).__name__,
+            bounded_exception_type(exc),
         )
         return False
     return structured_console_available and bool(emitted)
@@ -116,9 +118,9 @@ def _record_fresh_entry_blocks(bot, orders: list[dict], reason: str) -> None:
         bot._fresh_entry_eligibility_trace = None
         logging.debug(
             "[entry] fresh-entry eligibility trace disabled during market filter | "
-            "reason=%s error_type=%s",
+            "reason=%s error_type=%s action=disable_trace",
             reason,
-            type(exc).__name__,
+            bounded_exception_type(exc),
         )
 
 
@@ -203,6 +205,7 @@ async def filter_fresh_market_snapshot_creations(
         bot._record_market_snapshot_surface(symbols, snapshots)
         invalid = bot._market_snapshot_signature_invalid(symbols)
     except Exception as exc:
+        error_type = bounded_exception_type(exc)
         structured_console_owned = _emit_pre_create_skip_event(
             bot,
             reason_code=ReasonCodes.PRE_CREATE_MARKET_SNAPSHOT_UNAVAILABLE,
@@ -210,13 +213,14 @@ async def filter_fresh_market_snapshot_creations(
             symbols=symbols,
             stage="market_snapshot_refresh",
             message="create orders skipped because pre-create market snapshot refresh failed",
-            error_type=type(exc).__name__,
+            error_type=error_type,
         )
         if not structured_console_owned:
             logging.warning(
-                "[market] skipping order creation; failed pre-create market snapshot refresh | symbols=%s error_type=%s",
+                "[market] skipping order creation; failed pre-create market snapshot refresh | "
+                "symbols=%s error_type=%s action=skip_create",
                 bot._log_symbols(symbols, limit=12),
-                type(exc).__name__,
+                error_type,
             )
         _record_fresh_entry_blocks(
             bot, orders, "pre_create_market_snapshot_unavailable"
@@ -445,10 +449,11 @@ async def get_live_market_snapshots(
             if str(getattr(bot, "exchange", "") or "").lower() != "hyperliquid":
                 raise
             logging.debug(
-                "[market] hyperliquid primary ticker snapshot path failed; trying explicit fallback | context=%s symbols=%s error=%s",
+                "[market] hyperliquid primary ticker snapshot path failed | "
+                "context=%s symbols=%s error_type=%s action=try_all_mids",
                 context,
                 len(ordered_symbols),
-                exc,
+                bounded_exception_type(exc),
             )
             snapshots = {}
 
@@ -484,11 +489,11 @@ async def get_live_market_snapshots(
                     snapshots[sym] = snap
         except Exception as exc:
             logging.debug(
-                "[market] hyperliquid allMids snapshot failed | context=%s symbols=%s error_type=%s error=%s",
+                "[market] hyperliquid allMids snapshot failed | "
+                "context=%s symbols=%s error_type=%s action=try_symbol_tickers",
                 context,
                 len(missing),
-                type(exc).__name__,
-                exc,
+                bounded_exception_type(exc),
             )
         missing = [
             symbol
@@ -523,11 +528,11 @@ async def get_live_market_snapshots(
                         snapshots[symbol] = snap
             except Exception as exc:
                 logging.debug(
-                    "[market] hyperliquid symbol ticker snapshot failed | context=%s symbols=%s error_type=%s error=%s",
+                    "[market] hyperliquid symbol ticker snapshot failed | "
+                    "context=%s symbols=%s error_type=%s action=fail_if_incomplete",
                     context,
                     len(missing),
-                    type(exc).__name__,
-                    exc,
+                    bounded_exception_type(exc),
                 )
             missing = [
                 symbol
@@ -586,9 +591,10 @@ async def get_orchestrator_market_snapshots(
             if str(getattr(bot, "exchange", "") or "").lower() != "hyperliquid":
                 raise
             logging.debug(
-                "[state] staged hyperliquid primary market snapshots failed; trying explicit fallback | symbols=%s error=%s",
+                "[state] staged hyperliquid primary market snapshots failed | "
+                "symbols=%s error_type=%s action=try_explicit_fallback",
                 len(symbols),
-                exc,
+                bounded_exception_type(exc),
             )
             snapshots = {}
     invalid = [
@@ -629,7 +635,7 @@ async def get_orchestrator_market_snapshots(
                 raise RuntimeError(
                     "staged market snapshots incomplete after hyperliquid fallback "
                     f"| missing={bot._log_symbols(invalid, limit=12)} "
-                    f"| fallback_error={type(exc).__name__}: {exc}"
+                    f"| fallback_error={bounded_exception_type(exc)}"
                 ) from exc
         raise RuntimeError(
             "staged market snapshots incomplete "
