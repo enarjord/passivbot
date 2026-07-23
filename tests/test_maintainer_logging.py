@@ -1,5 +1,6 @@
 import logging
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -123,3 +124,83 @@ async def test_hourly_maintenance_jitter_is_debug_only(caplog, monkeypatch):
 
     assert "[hourly] starting maintenance cycle (jitter=42.0s)" in caplog.text
     assert not [record for record in caplog.records if record.levelno == logging.INFO]
+
+
+@pytest.mark.asyncio
+async def test_hourly_candle_audit_failure_is_redacted_and_continues(caplog, monkeypatch):
+    now_ms = 4_000_000
+    sleeps = []
+    bot = SimpleNamespace(
+        stop_signal_received=False,
+        _mem_log_prev={"timestamp": now_ms},
+        memory_snapshot_interval_ms=3_600_000,
+        candle_disk_check_interval_ms=1,
+        candle_disk_check_boot_delay_ms=0,
+        _candle_disk_check_last_ms=0,
+        start_time_ms=0,
+        init_markets_last_update_ms=0,
+        audit_required_candle_disk_coverage=AsyncMock(
+            side_effect=RuntimeError("apiKey=audit-secret\ntraceback-value")
+        ),
+        _refresh_markets_for_maintenance=AsyncMock(),
+        restart_bot_on_too_many_errors=AsyncMock(),
+    )
+
+    async def sleep(seconds):
+        sleeps.append(seconds)
+        bot.stop_signal_received = True
+
+    monkeypatch.setattr("passivbot.utc_ms", lambda: now_ms)
+    monkeypatch.setattr("passivbot.random.uniform", lambda _start, _end: 0.0)
+    monkeypatch.setattr("passivbot.asyncio.sleep", sleep)
+
+    with caplog.at_level(logging.DEBUG):
+        await Passivbot.maintain_hourly_cycle(bot)
+
+    assert bot._candle_disk_check_last_ms == now_ms
+    bot.audit_required_candle_disk_coverage.assert_awaited_once_with()
+    bot._refresh_markets_for_maintenance.assert_awaited_once_with()
+    bot.restart_bot_on_too_many_errors.assert_not_awaited()
+    assert sleeps == [1]
+    assert (
+        "[candle] disk coverage audit failed | action=continue error_type=RuntimeError"
+        in caplog.text
+    )
+    assert "audit-secret" not in caplog.text
+    assert "traceback-value" not in caplog.text
+    assert all(record.exc_info is None for record in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_hourly_cycle_failure_is_redacted_and_retries_after_five_seconds(caplog, monkeypatch):
+    sleeps = []
+    bot = SimpleNamespace(
+        stop_signal_received=False,
+        _mem_log_prev=None,
+        _log_memory_snapshot=lambda now_ms: (_ for _ in ()).throw(
+            RuntimeError("authorization=cycle-secret\ntraceback-value")
+        ),
+        restart_bot_on_too_many_errors=AsyncMock(),
+    )
+
+    async def sleep(seconds):
+        sleeps.append(seconds)
+        bot.stop_signal_received = True
+
+    monkeypatch.setattr("passivbot.utc_ms", lambda: 1_000)
+    monkeypatch.setattr("passivbot.random.uniform", lambda _start, _end: 0.0)
+    monkeypatch.setattr("passivbot.asyncio.sleep", sleep)
+
+    with caplog.at_level(logging.DEBUG):
+        await Passivbot.maintain_hourly_cycle(bot)
+
+    bot.restart_bot_on_too_many_errors.assert_awaited_once_with()
+    assert sleeps == [5]
+    assert (
+        "[hourly] maintenance cycle failed | "
+        "action=check_error_budget_then_retry error_type=RuntimeError"
+        in caplog.text
+    )
+    assert "cycle-secret" not in caplog.text
+    assert "traceback-value" not in caplog.text
+    assert all(record.exc_info is None for record in caplog.records)

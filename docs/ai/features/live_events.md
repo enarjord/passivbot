@@ -330,7 +330,8 @@ digit-only `response_code`, `error_type`, and the envelope's `symbol`. They excl
 text, request parameters, URLs, and tracebacks. An explicit unchanged outcome is DEBUG; confirmed
 success remains INFO until the connector can prove whether it changed state; failures retain their
 existing operator-visible warning or error. The event route remains structured/monitor-only, and
-event emission failure must not change exchange configuration control flow or results.
+event emission failure must log only a bounded exception type, preserve exchange configuration
+control flow and results, and never replace an original configuration exception.
 
 ## WebSocket Reconnect Diagnostics
 

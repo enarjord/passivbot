@@ -4,6 +4,10 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Hourly candle disk-audit, maintenance-cycle, and exchange-config event-emitter fallback
+  diagnostics now retain only bounded exception types. Audit continuation, maintenance retry,
+  market refresh, and exchange-config result behavior are unchanged.
+
 - HSL replay cache and replay-lifecycle diagnostics now retain bounded exception types without
   exception messages, tracebacks, or unsafe exception class names. Cache write failures remain
   nonfatal, cache reuse still falls back to authoritative replay, and HSL readiness and protection
