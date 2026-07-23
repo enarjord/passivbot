@@ -22,6 +22,8 @@
    inception metadata, and deferred index writes retain bounded exception type instead of exception
    text, repr, or exception-value traceback. Redaction must not alter cache contents, migration and
    cleanup behavior, lock handling, retries, fallbacks, or exception propagation.
+   The periodic disk-coverage audit stamps its check timestamp before auditing; an audit failure is
+   type-only and does not prevent the regular market refresh or normal cycle sleep.
 8. Direct live lifecycle diagnostics for completed-close fallback, startup/index/background
    warmup, forager refresh, active refresh, and refresh-cap handling retain bounded exception type
    instead of exception text or exception-value traceback. Redaction must not alter warmup,

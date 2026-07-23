@@ -34,7 +34,7 @@ def _make_bot_with_event_sink():
 
 
 def _raise_emit_failure(**_kwargs):
-    raise RuntimeError("emit failed")
+    raise RuntimeError("token=event-secret\ntraceback-value")
 
 
 @pytest.mark.asyncio
@@ -86,27 +86,48 @@ async def test_maintenance_exchange_config_refresh_failure_is_sanitized_and_rera
 
 
 @pytest.mark.asyncio
-async def test_maintenance_exchange_config_emit_failure_preserves_success():
+async def test_maintenance_exchange_config_emit_failure_is_redacted_and_preserves_success(caplog):
     bot, _sink = _make_bot_with_event_sink()
     bot.init_markets = AsyncMock(return_value="ok")
     bot._emit_exchange_config_refresh_event = _raise_emit_failure
 
-    assert await bot._refresh_markets_for_maintenance() == "ok"
+    with caplog.at_level("DEBUG"):
+        assert await bot._refresh_markets_for_maintenance() == "ok"
+
     bot.init_markets.assert_awaited_once_with(verbose=False)
+    assert (
+        "[event] failed to emit maintenance exchange config-refresh event | "
+        "action=preserve_result error_type=RuntimeError"
+        in caplog.text
+    )
+    assert "event-secret" not in caplog.text
+    assert "traceback-value" not in caplog.text
+    assert all(record.exc_info is None for record in caplog.records)
 
 
 @pytest.mark.asyncio
-async def test_maintenance_exchange_config_emit_failure_preserves_original_error():
+async def test_maintenance_exchange_config_emit_failure_is_redacted_and_preserves_original_error(
+    caplog,
+):
     bot, _sink = _make_bot_with_event_sink()
     exc = RuntimeError("exchange failed")
     bot.init_markets = AsyncMock(side_effect=exc)
     bot._emit_exchange_config_refresh_event = _raise_emit_failure
 
-    with pytest.raises(RuntimeError) as raised:
-        await bot._refresh_markets_for_maintenance()
+    with caplog.at_level("DEBUG"):
+        with pytest.raises(RuntimeError) as raised:
+            await bot._refresh_markets_for_maintenance()
 
     assert raised.value is exc
     bot.init_markets.assert_awaited_once_with(verbose=False)
+    assert (
+        "[event] failed to emit maintenance exchange config-refresh event | "
+        "action=preserve_result error_type=RuntimeError"
+        in caplog.text
+    )
+    assert "event-secret" not in caplog.text
+    assert "traceback-value" not in caplog.text
+    assert all(record.exc_info is None for record in caplog.records)
 
 
 def test_exchange_config_outcome_metadata_is_bounded_and_value_safe():

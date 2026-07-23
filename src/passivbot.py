@@ -19007,9 +19007,8 @@ class Passivbot:
                         await self.audit_required_candle_disk_coverage()
                     except Exception as exc:
                         logging.error(
-                            "error running candle disk coverage audit: %s",
-                            exc,
-                            exc_info=True,
+                            "[candle] disk coverage audit failed | action=continue error_type=%s",
+                            bounded_exception_type(exc),
                         )
                 # update markets dict once every hour, with per-instance jitter
                 hourly_interval_ms = 1000 * 60 * 60 + int(jitter_s * 1000)
@@ -19030,7 +19029,11 @@ class Passivbot:
                         await asyncio.sleep(10)
                 await asyncio.sleep(1)
             except Exception as e:
-                logging.error("error with %s %s", get_function_name(), e, exc_info=True)
+                logging.error(
+                    "[hourly] maintenance cycle failed | "
+                    "action=check_error_budget_then_retry error_type=%s",
+                    bounded_exception_type(e),
+                )
                 await self.restart_bot_on_too_many_errors()
                 await asyncio.sleep(5)
 
@@ -19039,8 +19042,9 @@ class Passivbot:
             self._emit_exchange_config_refresh_event(**kwargs)
         except Exception as exc:
             logging.debug(
-                "[event] failed to emit maintenance exchange config-refresh event: %s",
-                exc,
+                "[event] failed to emit maintenance exchange config-refresh event | "
+                "action=preserve_result error_type=%s",
+                bounded_exception_type(exc),
             )
 
     async def _refresh_markets_for_maintenance(self):
