@@ -4797,6 +4797,32 @@ def test_candle_health_summary_projection_preserves_debug_payload_and_transition
     }
 
 
+def test_candle_health_summary_failure_is_bounded(monkeypatch, caplog):
+    secret = "api_secret=health-summary-secret\nTraceback (most recent call last)"
+    bot = Passivbot.__new__(Passivbot)
+    bot.active_symbols = ["BTC/USDT:USDT"]
+    bot.open_orders = {}
+    bot.positions = {}
+
+    def fail_report(_symbols):
+        raise RuntimeError(secret)
+
+    monkeypatch.setattr(bot, "build_required_candle_health_report", fail_report)
+
+    with caplog.at_level(logging.DEBUG):
+        bot._maybe_log_candle_health_summary()
+
+    records = [
+        record
+        for record in caplog.records
+        if "[candle] health diagnostics failed" in record.message
+    ]
+    assert len(records) == 1
+    assert records[0].getMessage().endswith("error_type=RuntimeError")
+    assert secret not in records[0].getMessage()
+    assert "Traceback" not in records[0].getMessage()
+
+
 def test_memory_snapshot_is_interesting_only_initially_or_on_large_change():
     bot = Passivbot.__new__(Passivbot)
 

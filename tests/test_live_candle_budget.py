@@ -2088,6 +2088,62 @@ def test_forager_target_staleness_obeys_configured_cap():
     assert target_ms == 10 * 60_000
 
 
+def test_required_candle_health_window_failures_are_bounded_and_keep_other_side_windows(caplog):
+    import passivbot as pb_mod
+
+    secret = "api_key=health-window-secret\nTraceback (most recent call last)"
+
+    class FakeCM:
+        pass
+
+    class FakeBot:
+        cm = FakeCM()
+        config = {"live": {}}
+
+        def get_max_n_positions(self, pside):
+            if pside == "long":
+                raise RuntimeError(secret)
+            return 2
+
+        def get_current_n_positions(self, pside):
+            if pside == "long":
+                raise RuntimeError(secret)
+            return 1
+
+        def get_symbols_with_pos(self, pside):
+            if pside == "long":
+                raise RuntimeError(secret)
+            return {"SHORT/USDT:USDT"}
+
+        def is_forager_mode(self, pside):
+            if pside == "long":
+                raise RuntimeError(secret)
+            return False
+
+        def get_symbols_approved_or_has_pos(self, pside):
+            if pside == "long":
+                raise RuntimeError(secret)
+            return {"SHORT/USDT:USDT"}
+
+        def bp(self, pside, key, symbol):
+            return 0.0
+
+    with caplog.at_level(logging.DEBUG):
+        windows = pb_mod.Passivbot._required_candle_windows_by_symbol(FakeBot())
+
+    messages = [record.getMessage() for record in caplog.records if "health windows" in record.message]
+    assert len(messages) == 5
+    assert all("pside=long" in message and "error_type=RuntimeError" in message for message in messages)
+    assert all(secret not in message and "Traceback" not in message for message in messages)
+    assert windows == {
+        "SHORT/USDT:USDT": {
+            "1m": {"candles": 1, "required": True},
+            "15m": {"candles": 1, "required": False},
+            "1h": {"candles": 1, "required": False},
+        }
+    }
+
+
 def test_startup_active_candle_symbols_include_positions_orders_and_active():
     import passivbot as pb_mod
 
@@ -4388,6 +4444,69 @@ def test_completed_candle_freshness_allows_bounded_active_tail_gap(monkeypatch, 
         and record.levelno == logging.INFO
         for record in caplog.records
     )
+
+
+def test_completed_candle_health_failure_payload_is_bounded_and_keeps_other_symbols(caplog):
+    import passivbot as pb_mod
+
+    secret = "token=candle-health-secret\nTraceback (most recent call last)"
+
+    class FakeCM:
+        def get_completed_candle_health(self, symbol, windows, *, now_ms=None):
+            assert windows == {"1m": 1}
+            if symbol == "BAD/USDT:USDT":
+                raise RuntimeError(secret)
+            return {
+                "ok": True,
+                "timeframes": {
+                    "1m": {"coverage_ok": True, "latest_expected_ts": 120_000}
+                },
+            }
+
+    bot = pb_mod.Passivbot.__new__(pb_mod.Passivbot)
+    bot.cm = FakeCM()
+
+    with caplog.at_level(logging.DEBUG):
+        signature, missing = pb_mod.Passivbot._completed_candle_freshness_signature(
+            bot, ["BAD/USDT:USDT", "GOOD/USDT:USDT"], now_ms=180_000
+        )
+
+    assert signature == (("GOOD/USDT:USDT", 120_000),)
+    assert missing == [
+        {
+            "symbol": "BAD/USDT:USDT",
+            "reason": "candle_health_failed",
+            "error_type": "RuntimeError",
+        }
+    ]
+    rendered = "\n".join(record.getMessage() for record in caplog.records)
+    assert secret not in rendered
+    assert "Traceback" not in rendered
+
+
+def test_completed_candle_tail_gap_fallback_log_failure_is_bounded(caplog):
+    import passivbot as pb_mod
+
+    secret = "password=tail-gap-secret\nTraceback (most recent call last)"
+
+    class FailingSignatures:
+        def __iter__(self):
+            raise RuntimeError(secret)
+
+    bot = pb_mod.Passivbot.__new__(pb_mod.Passivbot)
+
+    with caplog.at_level(logging.DEBUG):
+        pb_mod.Passivbot._log_completed_candle_tail_gap_fallbacks(bot, FailingSignatures())
+
+    records = [
+        record
+        for record in caplog.records
+        if "active tail-gap fallback log failed" in record.message
+    ]
+    assert len(records) == 1
+    assert records[0].getMessage().endswith("error_type=RuntimeError")
+    assert secret not in records[0].getMessage()
+    assert "Traceback" not in records[0].getMessage()
 
 
 def test_completed_candle_tail_gap_fallback_repeats_at_debug(monkeypatch, caplog):

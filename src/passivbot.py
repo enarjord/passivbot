@@ -5402,30 +5402,27 @@ class Passivbot:
                 max_n = int(self.get_max_n_positions(pside))
             except Exception as exc:
                 logging.debug(
-                    "[candle] unable to read max positions for health windows | pside=%s error_type=%s error=%s",
+                    "[candle] unable to read max positions for health windows | pside=%s error_type=%s",
                     pside,
-                    type(exc).__name__,
-                    exc,
+                    bounded_exception_type(exc),
                 )
                 max_n = 0
             try:
                 current_n = int(self.get_current_n_positions(pside))
             except Exception as exc:
                 logging.debug(
-                    "[candle] unable to read current positions for health windows | pside=%s error_type=%s error=%s",
+                    "[candle] unable to read current positions for health windows | pside=%s error_type=%s",
                     pside,
-                    type(exc).__name__,
-                    exc,
+                    bounded_exception_type(exc),
                 )
                 try:
                     current_n = len(self.get_symbols_with_pos(pside))
                 except Exception as fallback_exc:
                     logging.debug(
                         "[candle] unable to infer current positions for health windows | "
-                        "pside=%s error_type=%s error=%s",
+                        "pside=%s error_type=%s",
                         pside,
-                        type(fallback_exc).__name__,
-                        fallback_exc,
+                        bounded_exception_type(fallback_exc),
                     )
                     current_n = 0
             slots_open = max_n > current_n
@@ -5435,10 +5432,9 @@ class Passivbot:
                 )
             except Exception as exc:
                 logging.debug(
-                    "[candle] unable to read forager mode for health windows | pside=%s error_type=%s error=%s",
+                    "[candle] unable to read forager mode for health windows | pside=%s error_type=%s",
                     pside,
-                    type(exc).__name__,
-                    exc,
+                    bounded_exception_type(exc),
                 )
                 forager_enabled[pside] = False
             try:
@@ -5448,10 +5444,9 @@ class Passivbot:
                     syms = set(self.get_symbols_with_pos(pside))
             except Exception as exc:
                 logging.debug(
-                    "[candle] unable to build symbol set for health windows | pside=%s error_type=%s error=%s",
+                    "[candle] unable to build symbol set for health windows | pside=%s error_type=%s",
                     pside,
-                    type(exc).__name__,
-                    exc,
+                    bounded_exception_type(exc),
                 )
                 syms = set()
             if symbol_filter is not None:
@@ -5726,9 +5721,8 @@ class Passivbot:
                 logging.debug("[candle] health ok | symbols=%d", len(symbol_reports))
         except Exception as exc:
             logging.debug(
-                "[candle] health diagnostics failed | error_type=%s error=%s",
-                type(exc).__name__,
-                exc,
+                "[candle] health diagnostics failed | error_type=%s",
+                bounded_exception_type(exc),
             )
 
     def _candle_health_missing_is_actionable(
@@ -8584,7 +8578,11 @@ class Passivbot:
             except Exception as e:
                 unavailable_reasons["candle_fetch_failed"].add(sym)
                 unavailable_psides[sym].update(required_trailing.get(sym, set()))
-                logging.debug("failed to fetch candles for trailing %s: %s", sym, e)
+                logging.debug(
+                    "[trailing] candle fetch failed | symbol=%s reason=candle_fetch_failed action=mark_unavailable error_type=%s",
+                    Passivbot._log_symbol(sym),
+                    bounded_exception_type(e),
+                )
                 results[sym] = None
 
         # Compute trailing metrics per symbol/side
@@ -10403,8 +10401,7 @@ class Passivbot:
                         {
                             "symbol": symbol,
                             "reason": "candle_health_failed",
-                            "error_type": type(exc).__name__,
-                            "error": str(exc),
+                            "error_type": bounded_exception_type(exc),
                         }
                     )
                     continue
@@ -10647,9 +10644,8 @@ class Passivbot:
             )
         except Exception as exc:
             logging.debug(
-                "[candle] active tail-gap fallback log failed | error_type=%s error=%s",
-                type(exc).__name__,
-                exc,
+                "[candle] active tail-gap fallback log failed | error_type=%s",
+                bounded_exception_type(exc),
             )
 
     def _completed_candle_signature_mismatch_details(

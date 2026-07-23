@@ -26,6 +26,10 @@
    warmup, forager refresh, active refresh, and refresh-cap handling retain bounded exception type
    instead of exception text or exception-value traceback. Redaction must not alter warmup,
    cancellation, lock retry, refresh scheduling, fallback values, readiness, or trading behavior.
+9. Direct live health and trailing diagnostics retain bounded exception type instead of exception
+   text in health-window construction, health summaries, trailing fetch failures, freshness
+   readiness, and tail-gap projection logging. Redaction must not alter fallback values,
+   symbol/position-side availability, trailing deferral, readiness results, or trading behavior.
 
 ## Non-Obvious Details
 
@@ -114,6 +118,9 @@ Cache paths use `to_standard_exchange_name()` rather than raw CCXT identifiers s
 8. Hostile live lifecycle failures retain bounded exception classification without exception values
    or traceback text while preserving completed-close fallback, warmup, cancellation, lock retry,
    refresh scheduling, readiness, and return behavior.
+9. Hostile live health and trailing failures retain bounded exception classification without
+   exception values while preserving fallback values, affected symbol/position-side unavailability,
+   trailing deferral, readiness results, and unaffected consumers.
 
 ## Key Code
 
