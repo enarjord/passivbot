@@ -81,6 +81,11 @@ All notable user-facing changes will be documented in this file.
   request URLs, or request-parameter values. Fetches, retry/backoff and rate-limit classification,
   archive availability, cache behavior, and trading behavior are unchanged.
 
+- Local candle migration, cleanup, lock, index, disk/cache, health, inception-metadata, and
+  deferred-index diagnostics now retain bounded exception types without arbitrary exception
+  messages, repr values, or exception-value tracebacks. Cache contents, migration and cleanup
+  behavior, lock handling, retries, fallbacks, and trading behavior are unchanged.
+
 - Fill-history refresh failure diagnostics now retain bounded exception types alongside existing
   source, coverage, retry, timing, count, and endpoint context without arbitrary exception
   messages or exception-value tracebacks. This includes exchange-specific fill fetchers, cache

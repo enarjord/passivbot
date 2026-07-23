@@ -551,7 +551,12 @@ def _quarantine_gateio_cache_if_stale(cache_base: str, cutoff_date: str) -> None
                 try:
                     os.rename(gateio_root, backup)
                 except Exception as exc:
-                    logging.error("Failed to move gateio cache to backup: %s", exc)
+                    logging.error(
+                        "Failed to move GateIO cache to backup error_type=%s cache_base=%s backup=%s",
+                        bounded_exception_type(exc),
+                        gateio_root,
+                        backup,
+                    )
                 return
 
 
@@ -860,9 +865,11 @@ class CandlestickManager:
                 try:
                     _quarantine_root_level_timeframe_debris(ohlcv_cache_base)
                 except Exception as exc:
-                    logging.exception(
-                        "Root-level OHLCV cache cleanup failed (non-fatal). Continuing: %s",
-                        exc,
+                    logging.error(
+                        "Root-level OHLCV cache cleanup failed (non-fatal). Continuing "
+                        "error_type=%s cache_base=%s",
+                        bounded_exception_type(exc),
+                        ohlcv_cache_base,
                     )
                 if not os.path.exists(migration_done):
                     try:
@@ -878,9 +885,12 @@ class CandlestickManager:
                         except Exception:
                             pass
                     except Exception as exc:
-                        logging.exception(
-                            "Cache migration failed (non-fatal). Continuing without migration: %s",
-                            exc,
+                        logging.error(
+                            "Cache migration failed (non-fatal). Continuing without migration "
+                            "error_type=%s cache_base=%s historical_data_path=%s",
+                            bounded_exception_type(exc),
+                            ohlcv_cache_base,
+                            historical_data_path,
                         )
         except portalocker.exceptions.LockException:
             # Another process is handling migrations; skip.
@@ -1150,7 +1160,11 @@ class CandlestickManager:
             except FileNotFoundError:
                 continue
             except Exception as exc:
-                self.log.warning("failed to stat lock %s during cleanup: %s", lock_path, exc)
+                self.log.warning(
+                    "failed to stat lock %s during cleanup error_type=%s",
+                    lock_path,
+                    bounded_exception_type(exc),
+                )
                 continue
             age = now - stat.st_mtime
             if age > threshold:
@@ -1165,7 +1179,11 @@ class CandlestickManager:
                 except FileNotFoundError:
                     pass
                 except Exception as exc:
-                    self.log.error("failed to remove stale lock %s: %s", lock_path, exc)
+                    self.log.error(
+                        "failed to remove stale lock %s error_type=%s",
+                        lock_path,
+                        bounded_exception_type(exc),
+                    )
                 finally:
                     try:
                         lock.release()
@@ -1229,7 +1247,7 @@ class CandlestickManager:
                 "fetch_lock_release_failed",
                 symbol=symbol,
                 timeframe=timeframe,
-                error=str(exc),
+                error_type=bounded_exception_type(exc),
             )
         except Exception as exc:
             self._log(
@@ -1237,7 +1255,7 @@ class CandlestickManager:
                 "fetch_lock_release_error",
                 symbol=symbol,
                 timeframe=timeframe,
-                error=str(exc),
+                error_type=bounded_exception_type(exc),
             )
         finally:
             self._remove_lockfile(path)
@@ -1749,7 +1767,7 @@ class CandlestickManager:
                         "index_load_failed",
                         symbol=symbol,
                         timeframe=tf_norm,
-                        error=str(e),
+                        error_type=bounded_exception_type(e),
                     )
             if not isinstance(idx, dict):
                 idx = {"shards": {}, "meta": {}}
@@ -2007,7 +2025,7 @@ class CandlestickManager:
                     symbol=symbol,
                     timeframe=tf_norm,
                     attempt=attempt,
-                    error=str(exc),
+                    error_type=bounded_exception_type(exc),
                 )
                 await self._sleep_interruptible(backoff, stage="fetch_lock_wait")
                 backoff = min(backoff * 2.0, self._lock_backoff_max)
@@ -2214,7 +2232,11 @@ class CandlestickManager:
                 return out
             return _ensure_dtype(arr)
         except Exception as e:  # pragma: no cover - best effort
-            self.log.warning(f"Failed loading shard {path}: {e}")
+            self.log.warning(
+                "Failed loading shard %s error_type=%s",
+                path,
+                bounded_exception_type(e),
+            )
             return np.empty((0,), dtype=CANDLE_DTYPE)
 
     def _legacy_day_is_complete(self, symbol: str, tf: str, date_key: str) -> bool:
@@ -2408,7 +2430,7 @@ class CandlestickManager:
                         "warning",
                         "maybe_update_inception_ts_failed",
                         symbol=symbol,
-                        error=str(exc),
+                        error_type=bounded_exception_type(exc),
                     )
             self._log(
                 "debug",
@@ -2475,7 +2497,13 @@ class CandlestickManager:
                 # Do not touch 1m cache for higher TF; let caller handle
                 return merged_disk
         except Exception as e:  # pragma: no cover - noncritical
-            self._log("warning", "disk_load_error", symbol=symbol, timeframe=tf_norm, error=str(e))
+            self._log(
+                "warning",
+                "disk_load_error",
+                symbol=symbol,
+                timeframe=tf_norm,
+                error_type=bounded_exception_type(e),
+            )
             return None
 
     def _save_range(
@@ -3360,8 +3388,7 @@ class CandlestickManager:
                         "candle_health_disk_load_failed",
                         symbol=symbol,
                         timeframe=tf_norm,
-                        error_type=type(exc).__name__,
-                        error=str(exc),
+                        error_type=bounded_exception_type(exc),
                     )
                     disk_arr = np.empty((0,), dtype=CANDLE_DTYPE)
 
@@ -3378,8 +3405,7 @@ class CandlestickManager:
                             "candle_health_runtime_cache_failed",
                             symbol=symbol,
                             timeframe=tf_norm,
-                            error_type=type(exc).__name__,
-                            error=str(exc),
+                            error_type=bounded_exception_type(exc),
                         )
                         runtime_arr = np.empty((0,), dtype=CANDLE_DTYPE)
                 combined = self._merge_overwrite(disk_arr, runtime_arr)
@@ -3741,7 +3767,7 @@ class CandlestickManager:
                         "warning",
                         "prune_pre_inception_gaps_failed",
                         symbol=symbol,
-                        error=str(exc),
+                        error_type=bounded_exception_type(exc),
                     )
             self._log(
                 "debug",
@@ -3824,7 +3850,7 @@ class CandlestickManager:
                     "warning",
                     "prune_pre_inception_gaps_failed",
                     symbol=symbol,
-                    error=str(exc),
+                    error_type=bounded_exception_type(exc),
                 )
 
     def _prune_pre_inception_gaps(self, symbol: str, inception_ts: int, *, save: bool = True) -> None:
@@ -4499,16 +4525,17 @@ class CandlestickManager:
                 try:
                     on_batch(arr)
                 except Exception as on_batch_err:
+                    error_type = bounded_exception_type(on_batch_err)
                     self.log.error(
-                        "on_batch callback failed; stopping pagination | symbol=%s timeframe=%s error_type=%s error=%s",
+                        "on_batch callback failed; stopping pagination | "
+                        "symbol=%s timeframe=%s error_type=%s",
                         symbol,
                         tf_norm,
-                        type(on_batch_err).__name__,
-                        on_batch_err,
+                        error_type,
                         extra={
                             "symbol": symbol,
                             "timeframe": tf_norm,
-                            "error": str(on_batch_err),
+                            "error_type": error_type,
                         },
                     )
                     break
@@ -5345,7 +5372,12 @@ class CandlestickManager:
             pq.write_table(table, cache_path, compression="zstd")
             self._log("debug", "tradfi_cache_saved", path=str(cache_path))
         except Exception as e:
-            self._log("debug", "tradfi_cache_save_error", error=str(e))
+            self._log(
+                "debug",
+                "tradfi_cache_save_error",
+                path=str(cache_path),
+                error_type=bounded_exception_type(e),
+            )
 
     def _ohlcv_df_to_day_arr(self, df, day_key: str) -> np.ndarray:
         """Convert a dataframe with timestamp/open/high/low/close/volume to 1m day array."""
@@ -6465,19 +6497,12 @@ class CandlestickManager:
                                             Exception
                                         ) as exc:  # best-effort; keep fetching even if index update fails
                                             if not flush_failed_once:
-                                                try:
-                                                    err_type = type(exc).__name__
-                                                    err_repr = repr(exc)
-                                                except Exception:
-                                                    err_type = "Exception"
-                                                    err_repr = "<unrepresentable exception>"
                                                 self._log(
                                                     "warning",
                                                     "flush_deferred_index_failed",
                                                     symbol=symbol,
                                                     timeframe="1m",
-                                                    error_type=err_type,
-                                                    error=err_repr,
+                                                    error_type=bounded_exception_type(exc),
                                                 )
                                                 flush_failed_once = True
                                         deferred_index_any = False
@@ -6498,19 +6523,12 @@ class CandlestickManager:
                                             Exception
                                         ) as exc:  # best-effort; keep fetching even if index update fails
                                             if not flush_failed_once:
-                                                try:
-                                                    err_type = type(exc).__name__
-                                                    err_repr = repr(exc)
-                                                except Exception:
-                                                    err_type = "Exception"
-                                                    err_repr = "<unrepresentable exception>"
                                                 self._log(
                                                     "warning",
                                                     "flush_deferred_index_failed",
                                                     symbol=symbol,
                                                     timeframe="1m",
-                                                    error_type=err_type,
-                                                    error=err_repr,
+                                                    error_type=bounded_exception_type(exc),
                                                 )
                                                 flush_failed_once = True
                             arr = (
@@ -8023,20 +8041,13 @@ class CandlestickManager:
             except (
                 Exception
             ) as exc:  # best-effort; legacy cache may be unreadable, fall back to primary write
-                try:
-                    err_type = type(exc).__name__
-                    err_repr = repr(exc)
-                except Exception:
-                    err_type = "Exception"
-                    err_repr = "<unrepresentable exception>"
                 self._log(
                     "warning",
                     "legacy_day_quality_check_failed",
                     symbol=symbol,
                     timeframe=tf_norm,
                     day=date_key,
-                    error_type=err_type,
-                    error=err_repr,
+                    error_type=bounded_exception_type(exc),
                 )
         shard_path = self._shard_path(symbol, date_key, tf=tf_norm)
         os.makedirs(os.path.dirname(shard_path), exist_ok=True)

@@ -15,6 +15,25 @@ merge, live smoke evidence changes, or new gaps are discovered.
 - Do not use this file for design churn; unresolved design details belong in the
   plan or a focused handoff doc.
 
+## Latest Canonical Merge, Deployment Deferred (PR #1356)
+
+- PR #1356 merged exact approved head `b7047af8c8` as canonical
+  `248895745e85077cdec51f97415d8c8b91b937d5` after exact-head Hermes
+  approval and green Python/Rust CI. It redacts candle remote-fetch callbacks,
+  HLCV progress logs, archive diagnostics, structured events, and fake-live
+  traces while retaining bounded classification, timing, and correlation.
+- VPS5 remains at PR #1348 canonical `acccfdac51d2`. Both active configs still
+  contain legacy `initial_entry_exec_max_market_dist_pct=0.005`; pulling the
+  accumulated master delta would activate the intervening account-wide
+  replacement-churn gate. Deployment is therefore deferred pending an explicit
+  config/rollout decision rather than treated as a failed logging rollout.
+- A read-only process preflight found five stable exact processes with zero
+  hard failures and one process remaining in I/O wait throughout the short
+  three-sample window, without a hard process-contract failure. No pull,
+  restart, signal, authenticated exchange request, or manufactured event
+  occurred. The active follow-up redacts local candle cache/index/lock
+  diagnostics; direct live consumer diagnostics remain a later slice.
+
 ## Latest Canonical Deployment (PR #1348)
 
 - PR #1348 merged exact approved head `3adba8fd3d` as canonical
@@ -31,9 +50,7 @@ merge, live smoke evidence changes, or new gaps are discovered.
   missing, duplicate, extra, config, or scan failures. The short sample
   retained transient I/O-wait pressure without a hard process-contract
   failure. No authenticated exchange request, manufactured event, or process
-  action occurred. The active follow-up redacts upstream candle remote-fetch
-  callback and retained diagnostic surfaces; cache/index/migration
-  diagnostics remain a later slice.
+  action occurred.
 
 ## Previous Canonical Deployment (PR #1347)
 
