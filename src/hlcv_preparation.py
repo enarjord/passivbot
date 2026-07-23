@@ -15,7 +15,11 @@ from uuid import uuid4
 import numpy as np
 import pandas as pd
 
-from candlestick_manager import CandlestickManager, OhlcvTerminalEmptyPage
+from candlestick_manager import (
+    CandlestickManager,
+    OhlcvTerminalEmptyPage,
+    sanitize_remote_fetch_diagnostic,
+)
 from binance_ohlcv_archive import (
     BinanceArchiveRequest,
     BinanceArchiveResult,
@@ -345,6 +349,8 @@ class HLCVManager:
         INFO level without changing CandlestickManager verbosity globally.
         """
 
+        payload = sanitize_remote_fetch_diagnostic(payload)
+
         # Throttle per (kind, symbol, tf/stage) to avoid log spam.
         if not hasattr(self, "_download_log_last"):
             self._download_log_last = {}
@@ -375,14 +381,14 @@ class HLCVManager:
                     since_iso = None
 
                 logging.info(
-                    "[%s] download ccxt start symbol=%s tf=%s since=%s since_ms=%s limit=%s params=%s",
+                    "[%s] download ccxt start symbol=%s tf=%s since=%s since_ms=%s limit=%s param_keys=%s",
                     self.exchange,
                     symbol,
                     payload.get("tf"),
                     since_iso if since_iso is not None else since_ms,
                     since_ms,
                     payload.get("limit"),
-                    payload.get("params"),
+                    payload.get("param_keys"),
                 )
                 return
 
@@ -426,12 +432,14 @@ class HLCVManager:
                 # Let CandlestickManager warnings show the details; keep this concise.
                 if attempt == 1:
                     logging.warning(
-                        "[%s] download ccxt error symbol=%s tf=%s error_type=%s error=%s",
+                        "[%s] download ccxt error symbol=%s tf=%s attempt=%s "
+                        "elapsed_ms=%s error_type=%s",
                         self.exchange,
                         symbol,
                         tf,
+                        payload.get("attempt"),
+                        payload.get("elapsed_ms"),
                         payload.get("error_type"),
-                        payload.get("error"),
                     )
                 return
 

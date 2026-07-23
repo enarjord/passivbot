@@ -6,6 +6,7 @@ import hjson
 import json
 import shutil
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -20,6 +21,7 @@ from tools.run_fake_live import (
     _apply_assertions,
     _compare_run_artifacts,
     _extract_hsl_trace,
+    _install_candle_remote_fetch_trace,
     _install_fake_user_override,
     _install_runtime_overrides,
     _load_run_artifacts,
@@ -30,6 +32,39 @@ from tools.run_fake_live import (
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_candle_remote_fetch_trace_sanitizes_hostile_payload():
+    forwarded = []
+    bot = SimpleNamespace(cm=SimpleNamespace(_remote_fetch_callback=forwarded.append))
+    events, restore = _install_candle_remote_fetch_trace(bot)
+    url = "https://api.example.invalid/ohlcv?apiKey=SECRET&signature=abc"
+
+    try:
+        bot.cm._remote_fetch_callback(
+            {
+                "kind": "ccxt_fetch_ohlcv",
+                "stage": "error",
+                "url": url,
+                "params": {"until": 123, "apiKey": "SECRET"},
+                "error_type": "AuthError",
+                "error": f"GET {url}",
+                "error_repr": f"AuthError({url!r})",
+            }
+        )
+    finally:
+        restore()
+
+    assert len(events) == 1
+    assert events[0]["event_index"] == 0
+    assert events[0]["param_keys"] == ["apiKey", "until"]
+    assert len(events[0]["url_hash"]) == 64
+    assert "url" not in events[0]
+    assert "params" not in events[0]
+    assert "error" not in events[0]
+    assert "error_repr" not in events[0]
+    assert "SECRET" not in str(events[0])
+    assert forwarded == [{key: value for key, value in events[0].items() if key != "event_index"}]
 
 
 def _cleanup_fake_user_state(user: str) -> None:

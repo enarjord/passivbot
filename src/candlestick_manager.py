@@ -32,11 +32,13 @@ from __future__ import annotations
 
 import asyncio
 import calendar
+import hashlib
 import inspect
 import json
 import logging
 import math
 import os
+import re
 import shutil
 import sys
 
@@ -66,6 +68,7 @@ from legacy_data_migrator import (
     merge_duplicate_symbol_directories,
     normalize_ccxt_volume_to_base,
 )
+from live.diagnostic_safety import bounded_exception_type
 from utils import symbol_to_coin
 
 # Suppress portalocker's "timeout has no effect in blocking mode" warning
@@ -78,6 +81,73 @@ warnings.filterwarnings(
 ONE_MIN_MS = 60_000
 
 _LOCK_TIMEOUT_SECONDS = 10.0
+_REMOTE_FETCH_ERROR_TYPE_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,79}")
+_REMOTE_FETCH_SENSITIVE_ERROR_TYPE_RE = re.compile(
+    r"(?i)(?:api_?key|apikey|authorization|cookie|passphrase|password|private_?key|"
+    r"privatekey|secret|signature|token|wallet_?address|walletaddress)"
+)
+_REMOTE_FETCH_PARAM_KEYS_MAX = 32
+
+
+def _bounded_remote_fetch_param_keys(value: Any) -> list[str]:
+    if isinstance(value, dict):
+        values = value.keys()
+    elif isinstance(value, (list, tuple)):
+        values = value
+    else:
+        return []
+    keys = []
+    for key in values:
+        if isinstance(key, str) and 0 < len(key) <= 80 and key.isascii():
+            keys.append(key)
+    return sorted(set(keys))[:_REMOTE_FETCH_PARAM_KEYS_MAX]
+
+
+def _bounded_remote_fetch_error_type(value: Any) -> str:
+    if (
+        not isinstance(value, str)
+        or not _REMOTE_FETCH_ERROR_TYPE_RE.fullmatch(value)
+        or _REMOTE_FETCH_SENSITIVE_ERROR_TYPE_RE.search(value)
+    ):
+        return "Error"
+    return value
+
+
+def _remote_fetch_url_hash(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def sanitize_remote_fetch_diagnostic(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Return the callback-safe projection of a remote-fetch diagnostic payload."""
+    data = dict(payload)
+    data.pop("error", None)
+    data.pop("error_repr", None)
+
+    raw_url = data.pop("url", None)
+    url_hash = _remote_fetch_url_hash(raw_url) if raw_url is not None else None
+    if url_hash is None:
+        candidate_hash = data.get("url_hash")
+        if isinstance(candidate_hash, str) and re.fullmatch(r"[0-9a-f]{64}", candidate_hash):
+            url_hash = candidate_hash
+    if url_hash is not None:
+        data["url_hash"] = url_hash
+    else:
+        data.pop("url_hash", None)
+
+    raw_params = data.pop("params", None)
+    param_keys = _bounded_remote_fetch_param_keys(
+        raw_params if isinstance(raw_params, dict) else data.pop("param_keys", None)
+    )
+    if param_keys:
+        data["param_keys"] = param_keys
+    else:
+        data.pop("param_keys", None)
+
+    if "error_type" in data:
+        data["error_type"] = _bounded_remote_fetch_error_type(data["error_type"])
+    return data
 
 
 class OhlcvFetchError(RuntimeError):
@@ -1551,7 +1621,7 @@ class CandlestickManager:
         if cb is None:
             return
         try:
-            cb(payload)
+            cb(sanitize_remote_fetch_diagnostic(payload))
         except Exception:
             # Must never break the fetch path due to logging/progress UI.
             return
@@ -4002,7 +4072,7 @@ class CandlestickManager:
                     since_ts=int(since_ms),
                     limit=request_limit,
                     attempt=attempt + 1,
-                    params=params,
+                    param_keys=_bounded_remote_fetch_param_keys(params),
                 )
                 if getattr(self, "_net_sem", None) is not None:
                     async with self._net_sem:  # type: ignore[attr-defined]
@@ -4065,8 +4135,8 @@ class CandlestickManager:
                 return res or []
             except Exception as e:  # pragma: no cover - network not used in tests
                 last_exc = e
-                err_type = type(e).__name__
-                err_repr = repr(e)
+                raw_err_type = type(e).__name__
+                err_type = bounded_exception_type(e)
                 elapsed_ms = int((time.monotonic() - t0) * 1000) if "t0" in locals() else None
                 self._emit_remote_fetch(
                     {
@@ -4080,8 +4150,6 @@ class CandlestickManager:
                         "elapsed_ms": elapsed_ms,
                         "params": dict(params) if "params" in locals() else None,
                         "error_type": err_type,
-                        "error": str(e),
-                        "error_repr": err_repr,
                     }
                 )
                 action = "exhausted" if attempt == max_attempts - 1 else "retry"
@@ -4109,7 +4177,7 @@ class CandlestickManager:
                     sleep_s = max(sleep_s, global_backoff)
                 # Bybit: be more persistent on transient network-ish errors.
                 if is_bybit and (
-                    err_type
+                    raw_err_type
                     in {"RequestTimeout", "NetworkError", "ExchangeNotAvailable", "DDoSProtection"}
                     or any(
                         x in msg_l
@@ -4866,6 +4934,7 @@ class CandlestickManager:
 
     async def _archive_fetch_bytes(self, url: str) -> Optional[bytes]:
         t0 = time.monotonic()
+        url_hash = _remote_fetch_url_hash(url)
         self._emit_remote_fetch(
             {
                 "kind": "archive_http_get",
@@ -4874,7 +4943,7 @@ class CandlestickManager:
                 "url": str(url),
             }
         )
-        self._log("debug", "archive_http_get", url=url)
+        self._log("debug", "archive_http_get", url_hash=url_hash)
 
         session = await self._get_http_session()
         try:
@@ -4893,15 +4962,14 @@ class CandlestickManager:
                     self._log(
                         "debug",
                         "archive_http_404",
-                        url=url,
+                        url_hash=url_hash,
                         elapsed_ms=int((time.monotonic() - t0) * 1000),
                     )
                     return None
                 resp.raise_for_status()
                 data = await resp.read()
         except Exception as e:
-            err_type = type(e).__name__
-            err_repr = repr(e)
+            err_type = bounded_exception_type(e)
             self._emit_remote_fetch(
                 {
                     "kind": "archive_http_get",
@@ -4909,18 +4977,14 @@ class CandlestickManager:
                     "exchange": str(self._ex_id),
                     "url": str(url),
                     "error_type": err_type,
-                    "error": str(e),
-                    "error_repr": err_repr,
                     "elapsed_ms": int((time.monotonic() - t0) * 1000),
                 }
             )
             self._log(
                 "debug",
                 "archive_http_error",
-                url=url,
+                url_hash=url_hash,
                 error_type=err_type,
-                error=str(e),
-                error_repr=err_repr,
             )
             raise
 
@@ -4937,7 +5001,7 @@ class CandlestickManager:
         self._log(
             "debug",
             "archive_http_ok",
-            url=url,
+            url_hash=url_hash,
             bytes=len(data),
             elapsed_ms=int((time.monotonic() - t0) * 1000),
         )
@@ -5145,7 +5209,11 @@ class CandlestickManager:
                 return self._ohlcv_df_to_day_arr(df, day_key)
             except Exception as e:
                 self._log(
-                    "debug", "hyperliquid_archive_error", symbol=symbol, day_key=day_key, error=str(e)
+                    "debug",
+                    "hyperliquid_archive_error",
+                    symbol=symbol,
+                    day_key=day_key,
+                    error_type=bounded_exception_type(e),
                 )
 
         # 2. For stock perps, try TradFi data fetch
@@ -5230,7 +5298,13 @@ class CandlestickManager:
                 return self._ohlcv_df_to_day_arr(df, day_key)
 
         except Exception as e:
-            self._log("debug", "tradfi_fetch_error", coin=coin, day_key=day_key, error=str(e))
+            self._log(
+                "debug",
+                "tradfi_fetch_error",
+                coin=coin,
+                day_key=day_key,
+                error_type=bounded_exception_type(e),
+            )
 
         return None
 
@@ -5539,17 +5613,13 @@ class CandlestickManager:
         # Semaphore to limit concurrent fetches
         sem = asyncio.Semaphore(max(1, parallel_days))
 
-        def _format_archive_exc(exc: BaseException) -> Tuple[str, str]:
-            """Return (error_type, error_repr) for logging."""
-            try:
-                return (type(exc).__name__, repr(exc))
-            except Exception:
-                return (type(exc).__name__, "<unrepresentable exception>")
+        def _format_archive_exc(exc: BaseException) -> str:
+            return bounded_exception_type(exc)
 
         async def fetch_single_day(
             day_info: Tuple[str, int, int],
-        ) -> Tuple[str, Optional[np.ndarray], Optional[Tuple[str, str]]]:
-            """Fetch a single day's archive data. Returns (day_key, array or None, (err_type, err_repr) or None)."""
+        ) -> Tuple[str, Optional[np.ndarray], Optional[str]]:
+            """Fetch a single day's archive data with a bounded failure type."""
             day_key, day_start, day_end = day_info
             async with sem:
                 try:
@@ -5608,24 +5678,22 @@ class CandlestickManager:
                 for i, result in enumerate(results):
                     day_key = batch[i][0]
                     if isinstance(result, Exception):
-                        err_type, err_repr = _format_archive_exc(result)
+                        err_type = _format_archive_exc(result)
                         self._log(
                             "warning",
                             "archive_day_failed",
                             symbol=symbol,
                             day=day_key,
-                            error=err_repr,
                             error_type=err_type,
                         )
                         skipped += 1
-                    elif result[2] is not None:  # (error_type, error_repr)
-                        err_type, err_repr = result[2]
+                    elif result[2] is not None:
+                        err_type = result[2]
                         self._log(
                             "warning",
                             "archive_day_failed",
                             symbol=symbol,
                             day=day_key,
-                            error=err_repr,
                             error_type=err_type,
                         )
                         skipped += 1
