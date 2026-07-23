@@ -4,6 +4,11 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Candle disk-load and persistence observer diagnostics now retain only code-owned stages, bounded
+  exception types, and stable control-flow actions. Monitor persistence and cache-flush reporting
+  remain independently best-effort; callback ordering, throttling, completed disk persistence/load
+  behavior, event schemas, and trading behavior are unchanged.
+
 - Startup monitor-publisher and live-event-pipeline installation diagnostics now retain bounded
   exception types and stable continuation actions without exception messages, unsafe class names,
   URLs, credentials, tokens, or tracebacks. Monitor enablement, pipeline installation, startup

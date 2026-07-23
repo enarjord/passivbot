@@ -79,6 +79,16 @@ they never retain exception messages, unsafe class names, URLs, credentials, tok
 Their monitor-enabled behavior, pipeline-install condition, assignments, startup continuation, and
 all runtime and trading behavior remain unchanged.
 
+## Candle Persistence Observer Diagnostics
+
+Candle disk-load and persisted-batch observer diagnostics retain only their code-owned stage, a
+bounded exception type, and stable control-flow action: `return_from_cache_load_observer`,
+`continue_to_cache_flush_observer`, `return_from_persist_observer`, or
+`return_from_cache_flush_observer`. They never retain exception messages, unsafe class names, URLs,
+credentials, tokens, or tracebacks. Monitor persistence and cache-flush reporting remain
+independently best-effort; redaction does not change callback placement, throttling, suppression,
+completed disk persistence/load behavior, event schemas, or trading behavior.
+
 ## Market Snapshot Diagnostic Skips
 
 `market.snapshot_diagnostic_skipped` records noncritical position-change and balance diagnostics
