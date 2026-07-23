@@ -495,7 +495,10 @@ async def test_live_candle_refresh_failures_are_bounded_and_continue_unaffected_
         "OK/USDT:USDT",
     ]
     assert bot.ledger.stamps
-    assert "Timed out acquiring candle lock for TIMEOUT/USDT:USDT" in caplog.text
+    assert (
+        "Timed out acquiring candle lock for TIMEOUT/USDT:USDT; "
+        "will retry next cycle | error_type=TimeoutError"
+    ) in caplog.text
     assert "error refreshing candles for BROKEN/USDT:USDT" in caplog.text
     assert "error_type=TimeoutError" in caplog.text
     assert "error_type=RuntimeError" in caplog.text
@@ -670,7 +673,10 @@ async def test_forager_refresh_bounds_per_symbol_timeout_and_failure(monkeypatch
         await pb_mod.Passivbot._refresh_forager_candidate_candles(bot)
 
     assert bot.cm.calls == sorted(symbols)
-    assert "Timed out acquiring candle lock for TIMEOUT" in caplog.text
+    assert (
+        "Timed out acquiring candle lock for TIMEOUT; "
+        "forager refresh will retry | error_type=TimeoutError"
+    ) in caplog.text
     assert "error refreshing forager candles for BROKEN" in caplog.text
     assert caplog.text.count("error_type=TimeoutError") == 1
     assert caplog.text.count("error_type=RuntimeError") == 1

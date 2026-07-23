@@ -18818,7 +18818,7 @@ class Passivbot:
                     break
                 logging.warning(
                     "Timed out acquiring candle lock for %s; forager refresh will retry "
-                    "error_type=%s",
+                    "| error_type=%s",
                     Passivbot._log_symbol(sym),
                     bounded_exception_type(exc),
                 )
@@ -18934,7 +18934,7 @@ class Passivbot:
                 except TimeoutError as exc:
                     logging.warning(
                         "Timed out acquiring candle lock for %s; will retry next cycle "
-                        "error_type=%s",
+                        "| error_type=%s",
                         sym,
                         bounded_exception_type(exc),
                     )
