@@ -1,15 +1,19 @@
 import asyncio
+import builtins
 import logging
 import os
+import sys
 import time
 import math
 import json
+import types
 import zlib
 from collections import OrderedDict
 import pytest
 import numpy as np
 from pathlib import Path
 
+import candlestick_manager
 from candlestick_manager import (
     CandlestickManager,
     CANDLE_DTYPE,
@@ -339,6 +343,191 @@ def test_remote_fetch_callback_is_sanitized_and_exception_is_isolated(tmp_path):
     assert "error_repr" not in payload
     assert "SECRET" not in str(payload)
     assert sanitize_remote_fetch_diagnostic(payload) == payload
+
+
+def test_cache_migration_diagnostics_redact_hostile_exception_text(tmp_path, monkeypatch, caplog):
+    secret = "cache-secret-should-not-reach-logs"
+
+    def fail_cleanup(_cache_base):
+        raise RuntimeError(secret)
+
+    def fail_migration(_cache_base):
+        raise RuntimeError(secret)
+
+    monkeypatch.setattr(candlestick_manager, "_quarantine_root_level_timeframe_debris", fail_cleanup)
+    monkeypatch.setattr(candlestick_manager, "standardize_cache_directories", fail_migration)
+    caplog.set_level(logging.ERROR)
+
+    CandlestickManager(exchange=None, exchange_name="cache-test", cache_dir=str(tmp_path / "caches"))
+
+    messages = [record.getMessage() for record in caplog.records]
+    assert any("Root-level OHLCV cache cleanup failed" in message for message in messages)
+    assert any("Cache migration failed" in message for message in messages)
+    assert all(secret not in message for message in messages)
+    assert all("error_type=RuntimeError" in message for message in messages)
+    assert all(record.exc_info is None for record in caplog.records)
+
+
+def test_gateio_cache_quarantine_failure_keeps_bounded_context(tmp_path, monkeypatch, caplog):
+    secret = "gateio-cache-secret"
+    cache_base = tmp_path / "ohlcv"
+    shard_dir = cache_base / "gateio" / "1m" / "BTC_USDT"
+    shard_dir.mkdir(parents=True)
+    (shard_dir / "2026-02-06.npy").write_bytes(b"cache")
+
+    def fail_rename(_source, _target):
+        raise RuntimeError(secret)
+
+    monkeypatch.setattr(candlestick_manager.os, "rename", fail_rename)
+    caplog.set_level(logging.ERROR)
+
+    candlestick_manager._quarantine_gateio_cache_if_stale(str(cache_base), "2026-02-07")
+
+    record = next(record for record in caplog.records if "Failed to move GateIO cache" in record.getMessage())
+    message = record.getMessage()
+    assert secret not in message
+    assert "error_type=RuntimeError" in message
+    assert f"cache_base={cache_base / 'gateio'}" in message
+    assert "backup=" in message
+    assert record.exc_info is None
+
+
+@pytest.mark.asyncio
+async def test_cache_diagnostics_redact_hostile_exception_text_and_keep_context(
+    tmp_path, monkeypatch, caplog
+):
+    secret = "cache-diagnostic-secret"
+    symbol = "BTC/USDT:USDT"
+    cm = CandlestickManager(exchange=None, exchange_name="cache-test", cache_dir=str(tmp_path / "caches"))
+    cm.debug_level = 3
+    caplog.set_level(int(getattr(logging, "TRACE", 5)), logger=cm.log.name)
+
+    class FailingLock:
+        def release(self):
+            raise RuntimeError(secret)
+
+    await cm._release_lock(FailingLock(), str(tmp_path / "fetch.lock"), symbol, "1m")
+
+    index_path = Path(cm._index_path(symbol, tf="1m"))
+    index_path.parent.mkdir(parents=True, exist_ok=True)
+    index_path.write_text("{}", encoding="utf-8")
+    original_open = builtins.open
+
+    def fail_index_open(path, *args, **kwargs):
+        if str(path) == str(index_path):
+            raise RuntimeError(secret)
+        return original_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "open", fail_index_open)
+    cm._ensure_symbol_index(symbol, tf="1m")
+    monkeypatch.setattr(builtins, "open", original_open)
+
+    shard_path = tmp_path / "broken.npy"
+    shard_path.write_bytes(b"broken")
+    monkeypatch.setattr(candlestick_manager.np, "load", lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError(secret)))
+    cm._load_shard(str(shard_path))
+
+    def fail_disk_load(*_args, **_kwargs):
+        raise RuntimeError(secret)
+
+    monkeypatch.setattr(cm, "_load_from_disk", fail_disk_load)
+    cm.get_completed_candle_health(symbol, {"1m": 1}, now_ms=2 * ONE_MIN_MS)
+
+    events = []
+    monkeypatch.setattr(cm, "_log", lambda level, event, **fields: events.append((level, event, fields)))
+    monkeypatch.setattr(cm, "_ensure_symbol_index", lambda *_args, **_kwargs: {"meta": {}, "shards": {}})
+    monkeypatch.setattr(cm, "_get_inception_ts", lambda _symbol: None)
+    monkeypatch.setattr(
+        cm,
+        "_prune_pre_inception_gaps",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError(secret)),
+    )
+    cm._set_authoritative_start_ts(symbol, ONE_MIN_MS, source="test", save=False)
+
+    fake_pyarrow = types.ModuleType("pyarrow")
+    fake_parquet = types.ModuleType("pyarrow.parquet")
+    fake_pyarrow.array = lambda values: values
+    fake_pyarrow.table = lambda _columns: (_ for _ in ()).throw(RuntimeError(secret))
+    fake_pyarrow.parquet = fake_parquet
+    monkeypatch.setitem(sys.modules, "pyarrow", fake_pyarrow)
+    monkeypatch.setitem(sys.modules, "pyarrow.parquet", fake_parquet)
+    cm._save_tradfi_cache(np.empty((0,), dtype=CANDLE_DTYPE), tmp_path / "tradfi.parquet")
+
+    messages = [record.getMessage() for record in caplog.records]
+    assert all(secret not in message for message in messages)
+    assert all(record.exc_info is None for record in caplog.records)
+    assert any("event=fetch_lock_release_error" in message and "symbol=BTC" in message for message in messages)
+    assert any("event=index_load_failed" in message and "timeframe=1m" in message for message in messages)
+    assert any("Failed loading shard" in message and "error_type=RuntimeError" in message for message in messages)
+    assert any("event=candle_health_disk_load_failed" in message for message in messages)
+    by_event = {event: fields for _level, event, fields in events}
+    assert by_event["prune_pre_inception_gaps_failed"] == {
+        "symbol": symbol,
+        "error_type": "RuntimeError",
+    }
+    assert by_event["tradfi_cache_save_error"] == {
+        "path": str(tmp_path / "tradfi.parquet"),
+        "error_type": "RuntimeError",
+    }
+    assert secret not in str(events)
+
+
+@pytest.mark.asyncio
+async def test_paginated_cache_callback_failure_is_redacted_and_stops_pagination(
+    tmp_path, caplog
+):
+    secret = "callback-secret-should-not-reach-logs"
+    symbol = "BTC/USDT:USDT"
+    start_ts = 10 * ONE_MIN_MS
+    end_exclusive_ts = start_ts + 2 * ONE_MIN_MS
+
+    class _Exchange:
+        id = "cache-test"
+
+    cm = CandlestickManager(
+        exchange=_Exchange(),
+        exchange_name="cache-test",
+        cache_dir=str(tmp_path / "caches"),
+    )
+    calls = 0
+
+    async def fake_once(
+        _symbol,
+        since_ms,
+        _limit,
+        end_exclusive_ms=None,
+        timeframe=None,
+        *,
+        tf=None,
+    ):
+        nonlocal calls
+        calls += 1
+        return [[since_ms, 1.0, 1.0, 1.0, 1.0, 1.0]]
+
+    def fail_on_batch(_arr):
+        raise RuntimeError(secret)
+
+    cm._ccxt_fetch_ohlcv_once = fake_once
+    caplog.set_level(logging.ERROR, logger=cm.log.name)
+
+    result = await cm._fetch_ohlcv_paginated(
+        symbol,
+        start_ts,
+        end_exclusive_ts,
+        on_batch=fail_on_batch,
+    )
+
+    record = next(
+        record
+        for record in caplog.records
+        if "on_batch callback failed" in record.getMessage()
+    )
+    assert calls == 1
+    assert result.size == 1
+    assert secret not in record.getMessage()
+    assert record.error_type == "RuntimeError"
+    assert not hasattr(record, "error")
+    assert record.exc_info is None
 
 
 @pytest.mark.asyncio

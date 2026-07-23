@@ -22,32 +22,53 @@ Estimated completion:
 
 ## Active Review Slice
 
-- Open PR #1356, `Redact candle remote fetch diagnostics`, on branch
-  `codex/candle-refresh-diagnostic-redaction`, based on canonical
-  `64928305f0f5b4b8bc1da353a579a5d492b47648`. Resolve its exact head from live
+- Open PR #1357, `Redact candle storage diagnostics`, on branch
+  `codex/candle-cache-diagnostic-redaction`, based on canonical
+  `248895745e85077cdec51f97415d8c8b91b937d5`. Resolve its exact head from live
   metadata; the commit containing this handoff is the intended final review
   head unless a verified finding requires a semantic fix.
-- Scope: remove arbitrary exception values, raw request URLs, and request
-  parameter values from candle remote-fetch callbacks, HLCV progress logs,
-  archive fetch/day diagnostics, and fake-live candle traces while retaining
-  bounded exception type, URL hash, parameter keys, operation/stage,
-  symbol/timeframe, attempt/status/timing, and remote-call correlation.
-- Behavior boundary: diagnostic retention and projection only. Fetches,
-  archive availability, retry/backoff and rate-limit classification,
-  exception propagation, cache behavior, event routing, and trading behavior
-  remain unchanged.
-- Baseline: normal live structured remote-call events are already redacted,
-  but their upstream manager callback and the HLCV/fake-live/archive
-  diagnostic consumers can still retain raw exception text, request URLs, or
-  request parameter values.
+- Scope: remove arbitrary exception messages, repr values, and
+  exception-value tracebacks from `CandlestickManager` migration, cleanup,
+  lock, index, disk/cache, candle-health, inception-metadata, and
+  deferred-index diagnostics while retaining bounded exception type and
+  existing code-owned operation, symbol/timeframe, artifact, and timing
+  context.
+- Behavior boundary: diagnostic retention and projection only. Migration,
+  cleanup, lock acquisition/release, index/shard reads and writes, disk/cache
+  fallback, retry, exception propagation, and trading behavior remain
+  unchanged.
+- Baseline: the remote-fetch boundary is redacted, but local candle-storage
+  diagnostics can still persist hostile exception text, repr values, or
+  traceback values in developer/operator logs.
 - Review gate: exact-current-head Hermes approval plus green Python/Rust CI.
   Built-in Codex automatic review is additional and every finding must be
   verified and resolved.
-- Expected VPS action: tracked-clean pull plus one exact-five graceful restart
-  and bounded settled smoke because live candle diagnostics change; preserve
-  `misc:0.0`.
-- Next candidate: cache/index/migration diagnostic redaction after this remote
-  fetch slice merges.
+- Expected VPS action: no pull or restart while the accumulated canonical
+  trading delta remains unapproved for VPS5. Once that deployment boundary is
+  cleared, use one tracked-clean pull, one exact-five graceful restart, and a
+  bounded settled smoke; preserve `misc:0.0`.
+- Next candidate: direct live candle startup/refresh/forager consumer
+  diagnostics after this producer slice merges.
+
+## Canonical Merge Pending Deployment (PR #1356)
+
+- PR #1356 merged exact approved head
+  `b7047af8c8a32fac4d8f97b38a68d341721fd83f` as canonical
+  `248895745e85077cdec51f97415d8c8b91b937d5` after exact-head Hermes
+  approval and green Python/Rust CI. A built-in Codex observation was verified
+  and fixed before the final review, retaining bounded HLCV `attempt` and
+  `elapsed_ms` context without raw exception or request values.
+- VPS5 deployment is deferred, not failed. Its checkout remains tracked-clean
+  apart from preserved untracked operator artifacts at PR #1348 canonical
+  `acccfdac51d27c5fde114821c939cd77b933685f`. Both active bot configs contain
+  legacy `initial_entry_exec_max_market_dist_pct=0.005`; pulling intervening
+  master would migrate that setting into the newly enabled account-wide
+  order-replacement churn gate.
+- A read-only three-sample process preflight found all five configured bots
+  matched with stable PIDs, zero missing/duplicate/extra/config/scan failures,
+  and one process remaining in I/O wait throughout that short window, without
+  a hard process-contract failure. No pull, restart, signal, authenticated
+  exchange request, or manufactured event occurred.
 
 ## Deployed Baseline (PR #1348)
 

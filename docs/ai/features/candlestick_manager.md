@@ -18,6 +18,10 @@
    HLCV progress logs, archive fetch/day logs, structured events, and fake-live traces do not retain
    exception text or repr, raw request URLs, or request-parameter values. This diagnostic boundary
    must not alter retry, rate-limit classification, exception propagation, or cache behavior.
+7. Local storage diagnostics for migration, cleanup, locks, indexes, shards, disk/cache health,
+   inception metadata, and deferred index writes retain bounded exception type instead of exception
+   text, repr, or exception-value traceback. Redaction must not alter cache contents, migration and
+   cleanup behavior, lock handling, retries, fallbacks, or exception propagation.
 
 ## Non-Obvious Details
 
@@ -101,6 +105,8 @@ Cache paths use `to_standard_exchange_name()` rather than raw CCXT identifiers s
 6. Hostile remote-fetch diagnostics are redacted at the manager callback boundary and remain
    redacted after repeated sanitization by direct consumers. Concurrent archive requests preserve
    correlation through URL hashes rather than raw URLs.
+7. Hostile local-storage failures retain bounded exception classification without exception values
+   while preserving the original cache, migration, lock, and fallback outcomes.
 
 ## Key Code
 
