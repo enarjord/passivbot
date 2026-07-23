@@ -89,10 +89,14 @@ that realized-loss floor.
 Auto-unstuck may be emitted in the same ideal-order batch as compatible ordinary
 grid, trailing, or EMA-anchor closes for that position. Passivbot keeps only one
 protective reducer, reserves its quantity, and caps ordinary closes to the
-remaining position size. Panic close remains exclusive, and exposure reducers
-still take precedence over auto-unstuck. The realized-loss gate evaluates the
-selected reducer before ordinary closes, and live reconciliation reapplies the
-cap against the latest position without consuming reducer quantity first.
+remaining position size. Competing panic, exposure-repair, and auto-unstuck
+intents are consolidated by keeping the largest loss-admissible final absolute
+reduction after position/minimum sizing, not their sum. If the realized-loss
+gate blocks the largest non-panic intent, Passivbot tries the next-largest
+intent. A full-position panic remains exclusive. The realized-loss gate
+evaluates reducer candidates largest-first across the shared batch allowance
+before ordinary closes, and live reconciliation reapplies the cap against the
+latest position without consuming reducer quantity first.
 
 Auto-unstuck allowance is reconstructed from the configured
 `live.pnls_max_lookback_days` fill/PnL window. Enabling auto-unstuck on an

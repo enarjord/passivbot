@@ -49,6 +49,14 @@ All notable user-facing changes will be documented in this file.
   Hyperliquid carries ambiguous signed-action debits across `userRateLimit` refreshes, preventing
   overlapping requests from overstating available action headroom, and failed required margin-mode
   writes now leave dependent creates pending instead of marking the symbol configured.
+- Protective reducer arbitration now keeps the largest loss-admissible final absolute
+  reduction among active panic, TWEL/WEL auto-reduce, and auto-unstuck intents for each position
+  instead of using a fixed type priority or summing quantities. If the realized-loss gate blocks
+  the largest non-panic intent, Passivbot tries the next-largest intent before giving up protective
+  reduction. Equal-size ties keep panic first and otherwise prefer the closest-to-fill candidate,
+  so a tiny auto-reduce can no longer suppress a materially larger unstuck close. Reducer sizing is
+  finalized before its loss is checked, and a shared batch loss allowance is spent on finalized
+  reducers largest-first rather than in symbol iteration order.
 - Non-panic protective reducers may now coexist with compatible ordinary grid, trailing, or
   EMA-anchor closes for the same position. Passivbot still selects only one protective reducer,
   keeps panic close exclusive, reserves reducer quantity before trimming ordinary closes, and caps
