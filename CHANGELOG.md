@@ -4,6 +4,10 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Exchange-configuration refresh failure events now retain bounded exception types instead of
+  exception text. Periodic and connector-local payloads continue to preserve their existing
+  outcome and response metadata, best-effort delivery, and configuration control flow.
+
 - Candle disk-load and persistence observer diagnostics now retain only code-owned stages, bounded
   exception types, and stable control-flow actions. Monitor persistence and cache-flush reporting
   remain independently best-effort; callback ordering, throttling, completed disk persistence/load

@@ -1,5 +1,6 @@
 from exchanges.ccxt_bot import CCXTBot, format_exchange_config_response
 from live.balance_composition import normalize_okx_balance_composition
+from live.diagnostic_safety import bounded_exception_type
 from passivbot import logging
 import passivbot_rust as pbr
 
@@ -280,13 +281,13 @@ class OKXBot(CCXTBot):
                 symbol=symbol,
                 outcome=outcome,
                 response_code=response_code,
-                error_type=type(error).__name__ if error is not None else None,
+                error=error,
                 level=level,
             )
         except Exception as exc:
             logging.debug(
                 "[event] failed to emit OKX exchange config-refresh outcome | error_type=%s",
-                type(exc).__name__,
+                bounded_exception_type(exc),
             )
 
     async def update_exchange_config_by_symbols(self, symbols: [str]):

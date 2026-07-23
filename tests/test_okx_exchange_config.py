@@ -17,6 +17,8 @@ sys.modules.setdefault(
 )
 
 from exchanges.okx import OKXBot
+from live.event_bus import EventTypes
+from live.event_emitters import emit_exchange_config_refresh_event
 
 
 SYMBOL = "BTC/USDT:USDT"
@@ -54,7 +56,7 @@ async def test_okx_margin_response_emits_confirmed_outcome_and_keeps_info_log(ca
         "symbol": SYMBOL,
         "outcome": "confirmed",
         "response_code": None,
-        "error_type": None,
+        "error": None,
         "level": "info",
     }
     assert "margin=ok" in caplog.text
@@ -78,7 +80,7 @@ async def test_okx_59107_emits_unchanged_debug_outcome_and_demotes_legacy_log(ca
         "symbol": SYMBOL,
         "outcome": "unchanged",
         "response_code": "59107",
-        "error_type": None,
+        "error": None,
         "level": "debug",
     }
     record = next(record for record in caplog.records if "margin=ok (unchanged)" in record.message)
@@ -88,8 +90,9 @@ async def test_okx_59107_emits_unchanged_debug_outcome_and_demotes_legacy_log(ca
 
 @pytest.mark.asyncio
 async def test_okx_51039_emits_warning_failure_outcome_and_continues(caplog):
+    exc = RuntimeError('{"code":"51039","apiKey":"SECRET"}')
     cca = types.SimpleNamespace(
-        set_margin_mode=AsyncMock(side_effect=RuntimeError('{"code":"51039","apiKey":"SECRET"}'))
+        set_margin_mode=AsyncMock(side_effect=exc)
     )
     bot = _make_bot(cca)
 
@@ -103,7 +106,7 @@ async def test_okx_51039_emits_warning_failure_outcome_and_continues(caplog):
         "symbol": SYMBOL,
         "outcome": "failed",
         "response_code": "51039",
-        "error_type": "RuntimeError",
+        "error": exc,
         "level": "warning",
     }
     assert "unable to adjust margin mode/leverage" in caplog.text
@@ -112,10 +115,9 @@ async def test_okx_51039_emits_warning_failure_outcome_and_continues(caplog):
 
 @pytest.mark.asyncio
 async def test_okx_generic_failure_emits_bounded_error_outcome(caplog):
+    exc = RuntimeError("https://example.invalid/api?apiKey=SECRET")
     cca = types.SimpleNamespace(
-        set_margin_mode=AsyncMock(
-            side_effect=RuntimeError("https://example.invalid/api?apiKey=SECRET")
-        )
+        set_margin_mode=AsyncMock(side_effect=exc)
     )
     bot = _make_bot(cca)
 
@@ -129,12 +131,88 @@ async def test_okx_generic_failure_emits_bounded_error_outcome(caplog):
         "symbol": SYMBOL,
         "outcome": "failed",
         "response_code": None,
-        "error_type": "RuntimeError",
+        "error": exc,
         "level": "error",
     }
     assert "cross-margin update failed" in caplog.text
     assert "error_type=RuntimeError" in caplog.text
     assert "SECRET" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_okx_hostile_failure_event_uses_bounded_exception_projection(caplog):
+    hostile_error_type = type(
+        "HostileTokenClass",
+        (RuntimeError,),
+        {"__module__": "hostile.example.invalid"},
+    )
+    exc = hostile_error_type(
+        "credential=supersecret token=event-token "
+        "https://example.invalid/config Traceback: hostile-message"
+    )
+    cca = types.SimpleNamespace(set_margin_mode=AsyncMock(side_effect=exc))
+    bot = _make_bot(cca)
+    bot._emit_live_event = Mock()
+    bot._emit_exchange_config_refresh_event = lambda **kwargs: (
+        emit_exchange_config_refresh_event(bot, **kwargs)
+    )
+
+    with caplog.at_level(logging.ERROR):
+        await bot.update_exchange_config_by_symbols([SYMBOL])
+
+    bot._emit_live_event.assert_called_once()
+    event_type, = bot._emit_live_event.call_args.args
+    event_kwargs = bot._emit_live_event.call_args.kwargs
+    assert event_type == EventTypes.EXCHANGE_CONFIG_REFRESH
+    assert event_kwargs["data"]["error_type"] == "RuntimeError"
+    event_repr = repr(event_kwargs)
+    for unsafe_value in (
+        "HostileTokenClass",
+        "hostile-message",
+        "example.invalid",
+        "credential",
+        "supersecret",
+        "event-token",
+        "Traceback",
+    ):
+        assert unsafe_value not in event_repr
+    assert "cross-margin update failed" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_okx_hostile_event_failure_logs_bounded_type_and_preserves_success(caplog):
+    hostile_error_type = type(
+        "HostileTokenClass",
+        (RuntimeError,),
+        {"__module__": "hostile.example.invalid"},
+    )
+    emitter_error = hostile_error_type(
+        "credential=supersecret token=event-token "
+        "https://example.invalid/config Traceback: hostile-message"
+    )
+    cca = types.SimpleNamespace(set_margin_mode=AsyncMock(return_value={"code": "0"}))
+    bot = _make_bot(cca, emitter=Mock(side_effect=emitter_error))
+
+    with caplog.at_level(logging.DEBUG):
+        await bot.update_exchange_config_by_symbols([SYMBOL])
+
+    assert any(
+        record.getMessage()
+        == "[event] failed to emit OKX exchange config-refresh outcome | "
+        "error_type=RuntimeError"
+        for record in caplog.records
+    )
+    assert "margin=ok" in caplog.text
+    for unsafe_value in (
+        "HostileTokenClass",
+        "hostile-message",
+        "example.invalid",
+        "credential",
+        "supersecret",
+        "event-token",
+        "Traceback",
+    ):
+        assert unsafe_value not in caplog.text
 
 
 @pytest.mark.asyncio

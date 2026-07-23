@@ -64,10 +64,18 @@ async def test_maintenance_exchange_config_refresh_success_emits_event():
 @pytest.mark.asyncio
 async def test_maintenance_exchange_config_refresh_failure_is_sanitized_and_reraised():
     bot, sink = _make_bot_with_event_sink()
-    exc = RuntimeError("binanceusdm apiKey=supersecret code=-4084")
+    hostile_error_type = type(
+        "HostileTokenClass",
+        (RuntimeError,),
+        {"__module__": "hostile.example.invalid"},
+    )
+    exc = hostile_error_type(
+        "credential=supersecret token=event-token "
+        "https://example.invalid/config Traceback: hostile-message"
+    )
     bot.init_markets = AsyncMock(side_effect=exc)
 
-    with pytest.raises(RuntimeError) as raised:
+    with pytest.raises(hostile_error_type) as raised:
         await bot._refresh_markets_for_maintenance()
 
     assert raised.value is exc
@@ -80,8 +88,18 @@ async def test_maintenance_exchange_config_refresh_failure_is_sanitized_and_rera
     assert event.level == "warning"
     assert event.reason_code == ReasonCodes.EXCHANGE_CONFIG_REFRESH_FAILED
     assert event.data["error_type"] == "RuntimeError"
-    assert "supersecret" not in event.data["error"]
-    assert "[redacted]" in event.data["error"]
+    assert "error" not in event.data
+    event_repr = repr(event)
+    for unsafe_value in (
+        "HostileTokenClass",
+        "hostile-message",
+        "example.invalid",
+        "credential",
+        "supersecret",
+        "event-token",
+        "Traceback",
+    ):
+        assert unsafe_value not in event_repr
     assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 

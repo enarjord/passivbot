@@ -956,8 +956,7 @@ def _emit_exchange_config_refresh_event_unchecked(
         ),
     }
     if error is not None:
-        data["error_type"] = type(error).__name__
-        data["error"] = _sanitize_remote_text(error, max_len=500)
+        data["error_type"] = _bounded_exception_type(error)
     elif error_type is not None:
         data["error_type"] = _bounded_exchange_config_event_field(
             error_type, _EXCHANGE_CONFIG_EVENT_ERROR_TYPE_RE
