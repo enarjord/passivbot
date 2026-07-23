@@ -266,11 +266,11 @@ guardrails, planned orders, or exchange-action gating.
 
 ## Order-Sort Price-Fetch Diagnostics
 
-Market-price fetch failures while sorting orders retain only a bounded exception type and the
-stable `preserve_original_order` action. They use the existing empty-price-map path to return the
-original order object sequence without retaining exception messages, unsafe exception class names,
-URLs, credentials, tokens, or tracebacks. Fetch parameters, missing-price handling, complete-price
-sorting, reconciliation, planning, and trading behavior remain unchanged.
+Market-price fetch failures while sorting orders retain bounded symbol context, a bounded exception
+type, and the stable `preserve_original_order` action. They use the existing empty-price-map path to
+return the original order object sequence without retaining exception messages, unsafe exception
+class names, URLs, credentials, tokens, or tracebacks. Fetch parameters, missing-price handling,
+complete-price sorting, reconciliation, planning, and trading behavior remain unchanged.
 
 ## Fresh-Entry Eligibility
 
