@@ -2076,6 +2076,94 @@ async def test_balance_equity_history_paces_replay_candle_fetches(monkeypatch):
     assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 
+@pytest.mark.asyncio
+async def test_balance_equity_history_redacts_failed_candle_fetch_diagnostics(monkeypatch, caplog):
+    bot = Passivbot.__new__(Passivbot)
+    bot.config = {"live": {}}
+    bot.exchange = "hyperliquid"
+    bot.user = "test_user"
+    bot.init_pnls = AsyncMock()
+    bot.live_value = lambda key: "all" if key == "pnls_max_lookback_days" else None
+    base_ts = 1_800_000_000_000
+    end_ts = base_ts + 5_001 * 60_000
+    symbol = "ETH/USDT:USDT"
+    bot.get_exchange_time = lambda: end_ts
+    bot.get_raw_balance = lambda: 100.0
+    bot.get_symbol_id_inv = lambda value: value
+    bot.positions = {
+        symbol: {
+            "long": {"size": 1.0, "price": 100.0},
+            "short": {"size": 0.0, "price": 0.0},
+        }
+    }
+    bot._pnls_manager = None
+    bot.inverse = False
+    bot._candle_fetch_concurrency = lambda *, context="runtime": 1
+    bot._get_fetch_delay_seconds = lambda: 0.0
+    sink = ListEventSink()
+    bot._live_event_pipeline = LiveEventPipeline(
+        structured_sinks=[sink],
+        monitor_sinks=[],
+    )
+    bot._live_event_current_cycle_id = "cy_hsl_history_failure"
+    bot._emit_live_event = Passivbot._emit_live_event.__get__(bot, Passivbot)
+    bot.c_mults = {symbol: 1.0}
+    monkeypatch.setattr(
+        passivbot_module, "compute_psize_pprice", lambda *args, **kwargs: None
+    )
+    hostile = "token=hsl-history-secret https://example.invalid/hsl-history"
+
+    class _CM:
+        async def get_candles(self, sym, **kwargs):
+            raise _hostile_runtime_error(hostile)
+
+    bot.cm = _CM()
+    fill_events = [
+        {
+            "timestamp": base_ts,
+            "symbol": symbol,
+            "position_side": "long",
+            "side": "buy",
+            "qty": 1.0,
+            "price": 100.0,
+            "pnl": 0.0,
+        }
+    ]
+
+    with caplog.at_level(logging.ERROR):
+        history = await bot.get_balance_equity_history(
+            fill_events=fill_events,
+            current_balance=100.0,
+            hsl_replay_signal_mode="coin",
+        )
+
+    assert history["timeline"]
+    assert history["metadata"]["missing_price_symbols"] == [symbol]
+    assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    failed_events = [
+        event
+        for event in sink.events
+        if event.reason_code == ReasonCodes.HSL_PRICE_HISTORY_SYMBOL_FETCH_COMPLETED
+        and event.status == "failed"
+    ]
+    assert {event.data["timeframe"] for event in failed_events} == {"1m", "5m"}
+    assert {event.data["error_type"] for event in failed_events} == {"RuntimeError"}
+    assert all(
+        event.data["stage"] == "price_history_symbol_fetch_completed"
+        for event in failed_events
+    )
+    assert all("elapsed_s" in event.data for event in failed_events)
+    rendered_events = "\n".join(str(event.data) for event in failed_events)
+    assert hostile not in rendered_events
+    assert "ApiKeySecretError" not in rendered_events
+    assert "example.invalid" not in rendered_events
+    assert "error_type=RuntimeError" in caplog.text
+    assert hostile not in caplog.text
+    assert "ApiKeySecretError" not in caplog.text
+    assert "example.invalid" not in caplog.text
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
+
+
 def test_pside_timeline_synthesis_rejects_inconsistent_pside_pnl():
     # Codex P1: the trust boundary must reject a v5 account series whose
     # account-level pnl and per-pside pnl describe different realized streams.
@@ -2483,7 +2571,7 @@ async def test_balance_equity_history_first_minute_realized_pnl_attributes_pside
 
 
 @pytest.mark.asyncio
-async def test_balance_equity_history_builds_replay_matrices_for_held_pairs(monkeypatch):
+async def test_balance_equity_history_builds_replay_matrices_for_held_pairs(monkeypatch, caplog):
     bot = Passivbot.__new__(Passivbot)
     bot.config = {"live": {}}
     bot.exchange = "kucoin"
@@ -2615,9 +2703,41 @@ async def test_balance_equity_history_builds_replay_matrices_for_held_pairs(monk
     assert history_no_mode["hsl_replay_matrices"] == {}
     assert history_no_mode["hsl_replay_account_series"] == []
 
+    hostile = "token=hsl-observer-secret https://example.invalid/hsl-observer"
+    account_row_builder = passivbot_module.pb_hsl._hsl_replay_account_series_row
+
+    def raising_account_row_builder(**kwargs):
+        raise _hostile_runtime_error(hostile)
+
+    monkeypatch.setattr(
+        passivbot_module.pb_hsl,
+        "_hsl_replay_account_series_row",
+        raising_account_row_builder,
+    )
+    with caplog.at_level(logging.WARNING):
+        history_account_degraded = await bot.get_balance_equity_history(
+            fill_events=fill_events,
+            current_balance=100.0,
+            hsl_replay_signal_mode="coin",
+        )
+    assert history_account_degraded["hsl_replay_matrices"] == matrices
+    assert history_account_degraded["hsl_replay_account_series"] == []
+    assert len(history_account_degraded["timeline"]) == len(history["timeline"])
+    assert "error_type=RuntimeError" in caplog.text
+    assert hostile not in caplog.text
+    assert "ApiKeySecretError" not in caplog.text
+    assert "example.invalid" not in caplog.text
+
+    monkeypatch.setattr(
+        passivbot_module.pb_hsl,
+        "_hsl_replay_account_series_row",
+        account_row_builder,
+    )
+    caplog.clear()
+
     # A failing matrix row build must drop the pair's cache, not the replay.
     def raising_row_builder(**kwargs):
-        raise ValueError("synthetic matrix row failure")
+        raise _hostile_runtime_error(hostile)
 
     monkeypatch.setattr(
         passivbot_module.pb_hsl, "_hsl_replay_matrix_row", raising_row_builder
@@ -2630,6 +2750,10 @@ async def test_balance_equity_history_builds_replay_matrices_for_held_pairs(monk
     assert history_degraded["hsl_replay_matrices"] == {}
     assert history_degraded["hsl_replay_account_series"] == []
     assert len(history_degraded["timeline"]) == len(history["timeline"])
+    assert "error_type=RuntimeError" in caplog.text
+    assert hostile not in caplog.text
+    assert "ApiKeySecretError" not in caplog.text
+    assert "example.invalid" not in caplog.text
     assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 

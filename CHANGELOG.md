@@ -4,6 +4,10 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- HSL history-replay candle-fetch and passive cache-observer diagnostics now retain bounded
+  exception types only. Candle fallback and degraded replay outputs, retries, cache behavior, and
+  trading state are unchanged.
+
 - Reconciliation diagnostics for trace recording, order-churn evidence, and malformed open-order
   snapshots now retain only bounded exception types. This diagnostic-only redaction does not change
   order planning, churn availability, malformed-order guardrails, or exchange-action gating.
