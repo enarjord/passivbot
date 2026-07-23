@@ -22,8 +22,11 @@ Estimated completion:
 
 ## Active Review Slice
 
-- Implementation branch `codex/candle-cache-diagnostic-redaction` is based on
-  canonical `248895745e85077cdec51f97415d8c8b91b937d5`; no PR is open yet.
+- Open PR #1357, `Redact candle storage diagnostics`, on branch
+  `codex/candle-cache-diagnostic-redaction`, based on canonical
+  `248895745e85077cdec51f97415d8c8b91b937d5`. Resolve its exact head from live
+  metadata; the commit containing this handoff is the intended final review
+  head unless a verified finding requires a semantic fix.
 - Scope: remove arbitrary exception messages, repr values, and
   exception-value tracebacks from `CandlestickManager` migration, cleanup,
   lock, index, disk/cache, candle-health, inception-metadata, and
