@@ -11063,8 +11063,11 @@ class Passivbot:
                 ):
                     pass
                 else:
-                    logging.error(f"error with handle_balance_update {e}")
-                    traceback.print_exc()
+                    logging.error(
+                        "[balance] equity diagnostics failed | "
+                        "error_type=%s action=preserve_balance_anchors_and_schedule",
+                        bounded_exception_type(e),
+                    )
             finally:
                 self._previous_balance_raw = balance_raw
                 self._previous_balance_snapped = balance_snapped
@@ -11099,7 +11102,7 @@ class Passivbot:
             except Exception as event_exc:
                 logging.debug(
                     "[event] failed to emit market snapshot diagnostic skipped event error_type=%s",
-                    type(event_exc).__name__,
+                    bounded_exception_type(event_exc),
                 )
         if not (
             event_emitted
@@ -11109,7 +11112,7 @@ class Passivbot:
                 "%s",
                 format_market_snapshot_diagnostic_console(
                     context=context,
-                    error_type=type(exc).__name__,
+                    error_type=bounded_exception_type(exc),
                     cycle_id=Passivbot._current_live_event_cycle_id(self),
                 ),
             )
@@ -14637,7 +14640,11 @@ class Passivbot:
                 if not self._log_noncritical_market_snapshot_error(
                     "position-change diagnostics", e
                 ):
-                    logging.error(f"error logging position changes {e}")
+                    logging.error(
+                        "[pos] position-change diagnostics failed | "
+                        "error_type=%s action=return_updated_positions",
+                        bounded_exception_type(e),
+                    )
         return True
 
     async def update_balance(self):
@@ -14691,7 +14698,11 @@ class Passivbot:
                 if not self._log_noncritical_market_snapshot_error(
                     "position-change diagnostics", e
                 ):
-                    logging.error(f"error logging position changes {e}")
+                    logging.error(
+                        "[pos] position-change diagnostics failed | "
+                        "error_type=%s action=continue_balance_reconciliation",
+                        bounded_exception_type(e),
+                    )
         if positions_ok:
             self._record_authoritative_surface(
                 "positions", self._positions_signature(fetched_positions_new)

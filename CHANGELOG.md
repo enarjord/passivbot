@@ -4,6 +4,10 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Redact observer-only balance and position refresh diagnostic fallbacks, including their shared
+  market-snapshot structured and legacy projections, while preserving existing refresh
+  continuation behavior.
+
 - State-refresh position-change and progress-observer fallback diagnostics now retain only bounded
   exception types and stable actions. Balance handling, cancellation propagation, staged refresh
   cleanup, timing, fallback values, and event schemas are unchanged.

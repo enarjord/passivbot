@@ -77,7 +77,9 @@ exception text, request details, account values, credentials, URLs, payloads, or
 
 The event is the sole normal console/text warning when the structured console is available. Its
 projection is bounded to the normal 240-character record budget. One bounded stdlib warning remains
-only when the event emitter or structured console owner is unavailable. Event or sink failure must
+only when the event emitter or structured console owner is unavailable. The structured event,
+legacy warning, and emitter-failure DEBUG diagnostic use the same hostile-metadata-safe bounded
+exception type and retain neither the raw class name nor exception text. Event or sink failure must
 not alter position/balance refresh, state mutation, scheduling, retries, planning, orders, risk, or
 the caller's existing decision to continue after this noncritical diagnostic failure.
 
@@ -88,12 +90,15 @@ tracebacks, request details, credentials, or arbitrary payload fragments. Redact
 provider fallback order, optional completed candle fallback, fail-closed create filtering,
 entry-block attribution, cache-sink suppression, trace isolation, or exception cause chaining.
 
-Observer-only staged refresh diagnostics follow the same rule. A position-change observer failure
-that is not owned by the market-snapshot diagnostic path records only a bounded exception type and
-the `continue_balance_update` action before balance handling proceeds. A non-cancellation progress
-logger failure records only a bounded type and `stop_progress_logger`; explicit cancellation still
-propagates. These diagnostics do not change staged fetch propagation, cleanup, timing, fallback
-values, or event schemas.
+Observer-only position and balance diagnostics follow the same rule. A non-market-snapshot balance
+equity observer failure records only a bounded exception type and the
+`preserve_balance_anchors_and_schedule` action. A position-change observer failure records only a
+bounded exception type and a stable continuation action: `return_updated_positions` for a
+standalone positions refresh, `continue_balance_reconciliation` for a combined positions/balance
+refresh, or `continue_balance_update` for staged refresh. A non-cancellation progress logger
+failure records only a bounded type and `stop_progress_logger`; explicit cancellation still
+propagates. These diagnostics do not change refresh propagation, balance anchors, scheduling,
+reconciliation, balance handling, cleanup, timing, fallback values, or event schemas.
 
 ## EMA Diagnostic Redaction
 
