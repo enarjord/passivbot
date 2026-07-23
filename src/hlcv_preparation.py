@@ -432,10 +432,13 @@ class HLCVManager:
                 # Let CandlestickManager warnings show the details; keep this concise.
                 if attempt == 1:
                     logging.warning(
-                        "[%s] download ccxt error symbol=%s tf=%s error_type=%s",
+                        "[%s] download ccxt error symbol=%s tf=%s attempt=%s "
+                        "elapsed_ms=%s error_type=%s",
                         self.exchange,
                         symbol,
                         tf,
+                        payload.get("attempt"),
+                        payload.get("elapsed_ms"),
                         payload.get("error_type"),
                     )
                 return

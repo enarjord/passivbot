@@ -243,6 +243,8 @@ def test_remote_fetch_log_sanitizes_hostile_legacy_payload(caplog):
                 "stage": "error",
                 "symbol": "BTC/USDT:USDT",
                 "tf": "1m",
+                "attempt": 1,
+                "elapsed_ms": 47,
                 "error_type": "AuthError",
                 "error": f"GET {url}",
                 "error_repr": f"AuthError({url!r})",
@@ -250,6 +252,8 @@ def test_remote_fetch_log_sanitizes_hostile_legacy_payload(caplog):
         )
 
     assert "param_keys=['apiKey', 'until']" in caplog.text
+    assert "attempt=1" in caplog.text
+    assert "elapsed_ms=47" in caplog.text
     assert "error_type=AuthError" in caplog.text
     assert "SECRET" not in caplog.text
     assert "signature=abc" not in caplog.text
