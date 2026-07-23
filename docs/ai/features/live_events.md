@@ -404,13 +404,14 @@ and distinguish the observed result in `data.outcome`:
 - `unchanged`: the exchange explicitly reported that the requested setting already matched
 - `failed`: the request raised or returned a connector-classified failure
 
-Connector-local payloads include only bounded `context`, `operation`, `outcome`, optional
-digit-only `response_code`, `error_type`, and the envelope's `symbol`. They exclude raw responses, exception
-text, request parameters, URLs, and tracebacks. An explicit unchanged outcome is DEBUG; confirmed
-success remains INFO until the connector can prove whether it changed state; failures retain their
-existing operator-visible warning or error. The event route remains structured/monitor-only, and
-event emission failure must log only a bounded exception type, preserve exchange configuration
-control flow and results, and never replace an original configuration exception.
+Periodic and connector-local failure payloads include only bounded `context`, `operation`,
+`outcome`, optional digit-only `response_code`, `error_type`, and the envelope's `symbol`. They
+omit raw responses, exception text, request parameters, URLs, and tracebacks. An explicit
+unchanged outcome is DEBUG; confirmed success remains INFO until the connector can prove whether
+it changed state; failures retain their existing operator-visible warning or error. The event route
+remains structured/monitor-only, and event emission failure must log only a bounded exception type,
+preserve exchange configuration control flow and results, and never replace an original
+configuration exception.
 
 ## WebSocket Reconnect Diagnostics
 
