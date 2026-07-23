@@ -7699,7 +7699,8 @@ class Passivbot:
                 emitted = emit_delta(direction=direction, order_count=order_count)
             except Exception as exc:
                 logging.debug(
-                    "[event] failed to emit open-orders snapshot delta: %s", exc
+                    "[event] failed to emit open-orders snapshot delta: %s",
+                    bounded_exception_type(exc),
                 )
         if emitted is None:
             structured_console_available = False
