@@ -42,7 +42,7 @@ from live.event_bus import (
     startup_phase_readiness_contract,
     startup_timing_phase,
 )
-from live.events import DiagnosticEvent
+from live.events import DiagnosticEvent, run_diagnostic_step
 from monitor_publisher import MonitorPublisher
 
 
@@ -1621,6 +1621,52 @@ def test_diagnostic_event_falls_back_to_legacy_recorder_when_pipeline_queue_is_f
     assert first.emit(bot).event_type == EventTypes.PLANNING_UNAVAILABLE
     assert second.emit(bot) == "legacy"
     assert bot.calls[0][0][:3] == ("planning_unavailable", ("planning",), {"n": 2})
+
+
+def test_diagnostic_event_legacy_fallback_failure_redacts_hostile_exception_metadata(caplog):
+    secret = "https://hostile.example.invalid/v1/orders?api_key=legacy-monitor-secret"
+    unsafe_type = type("ApiKeyLegacyMonitorFailure", (RuntimeError,), {})
+
+    class LegacyBot:
+        def _monitor_record_event(self, *_args, **_kwargs):
+            raise unsafe_type(secret)
+
+    event = DiagnosticEvent.build("planning_unavailable", ("planning",), {"safe": True})
+
+    with caplog.at_level(logging.DEBUG):
+        assert event.emit(LegacyBot()) is None
+
+    messages = [record.getMessage() for record in caplog.records]
+    assert any(
+        "[diagnostic] failed to emit planning_unavailable event error_type=RuntimeError"
+        in message
+        for message in messages
+    )
+    assert all(secret not in message for message in messages)
+    assert all("hostile.example.invalid" not in message for message in messages)
+    assert all("legacy-monitor-secret" not in message for message in messages)
+    assert all(unsafe_type.__name__ not in message for message in messages)
+
+
+def test_run_diagnostic_step_failure_redacts_hostile_exception_metadata(caplog):
+    secret = "https://hostile.example.invalid/v1/orders?token=diagnostic-step-secret"
+    unsafe_type = type("ApiKeyDiagnosticStepFailure", (RuntimeError,), {})
+
+    def fail():
+        raise unsafe_type(secret)
+
+    with caplog.at_level(logging.DEBUG):
+        assert run_diagnostic_step("finalize snapshot metadata", fail, default="fallback") == "fallback"
+
+    messages = [record.getMessage() for record in caplog.records]
+    assert any(
+        "[diagnostic] finalize snapshot metadata failed error_type=RuntimeError" in message
+        for message in messages
+    )
+    assert all(secret not in message for message in messages)
+    assert all("hostile.example.invalid" not in message for message in messages)
+    assert all("diagnostic-step-secret" not in message for message in messages)
+    assert all(unsafe_type.__name__ not in message for message in messages)
 
 
 def test_console_format_is_compact_and_operator_facing():
