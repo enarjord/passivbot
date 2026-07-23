@@ -88,6 +88,13 @@ tracebacks, request details, credentials, or arbitrary payload fragments. Redact
 provider fallback order, optional completed candle fallback, fail-closed create filtering,
 entry-block attribution, cache-sink suppression, trace isolation, or exception cause chaining.
 
+Observer-only staged refresh diagnostics follow the same rule. A position-change observer failure
+that is not owned by the market-snapshot diagnostic path records only a bounded exception type and
+the `continue_balance_update` action before balance handling proceeds. A non-cancellation progress
+logger failure records only a bounded type and `stop_progress_logger`; explicit cancellation still
+propagates. These diagnostics do not change staged fetch propagation, cleanup, timing, fallback
+values, or event schemas.
+
 ## EMA Diagnostic Redaction
 
 `ema.unavailable` and `ema.fallback_used` retain only code-owned reason classifications, bounded

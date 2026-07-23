@@ -4,6 +4,10 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- State-refresh position-change and progress-observer fallback diagnostics now retain only bounded
+  exception types and stable actions. Balance handling, cancellation propagation, staged refresh
+  cleanup, timing, fallback values, and event schemas are unchanged.
+
 - Market-snapshot provider primary-fetch, missing-symbol retry, cache-sink, fallback, pre-create
   gate, event-emitter, and eligibility-trace diagnostics now retain only bounded exception types and
   stable actions. Snapshot fallback order, fail-closed order filtering, block attribution, cache-sink

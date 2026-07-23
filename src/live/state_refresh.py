@@ -154,7 +154,11 @@ async def refresh_authoritative_state_staged(bot) -> bool:
             if not bot._log_noncritical_market_snapshot_error(
                 "position-change diagnostics", e
             ):
-                logging.error(f"error logging position changes {e}")
+                logging.error(
+                    "[state] position-change diagnostics failed | "
+                    "error_type=%s action=continue_balance_update",
+                    bounded_exception_type(e),
+                )
         await bot.handle_balance_update(source=balance_source)
     bot._finalize_authoritative_refresh_consistency(plan)
     return True
@@ -583,7 +587,11 @@ async def log_staged_refresh_progress_until(
     except asyncio.CancelledError:
         raise
     except Exception as exc:
-        logging.debug("[state] staged refresh progress logger stopped: %s", exc)
+        logging.debug(
+            "[state] staged refresh progress logger stopped | "
+            "error_type=%s action=stop_progress_logger",
+            bounded_exception_type(exc),
+        )
 
 
 async def fetch_authoritative_state_staged_snapshot(bot, plan: set[str]) -> dict:
