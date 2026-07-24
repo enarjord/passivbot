@@ -4,6 +4,10 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Ambiguous create diagnostics now retain bounded exception types only. Existing ambiguous
+  bookkeeping, restart behavior, acknowledgement handling, event emission, and trading behavior
+  are unchanged.
+
 - Executor cancellation-priority/capacity and create/cancel acknowledgement diagnostics now
   retain bounded exception types only. Existing priority fallback, emitter isolation,
   acknowledgement/confirmation, and trading behavior are unchanged.

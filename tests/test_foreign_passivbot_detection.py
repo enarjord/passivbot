@@ -302,8 +302,15 @@ async def test_execute_orders_parent_does_not_throttle_rejected_create_response(
 
 
 @pytest.mark.asyncio
-async def test_execute_orders_parent_tracks_hard_failed_create_as_ambiguous():
+async def test_execute_orders_parent_tracks_hard_failed_create_as_ambiguous(
+    caplog, capsys
+):
     import passivbot as pb_mod
+
+    hostile_type_name = "ApiKeyRaisedCreateFailure"
+    hostile_secret = "https://hostile.example.invalid/create?token=raised-secret"
+    HostileError = type(hostile_type_name, (RuntimeError,), {})
+    hostile_error = HostileError(hostile_secret)
 
     class FakeBot:
         execute_orders_parent = pb_mod.Passivbot.execute_orders_parent
@@ -346,7 +353,7 @@ async def test_execute_orders_parent_tracks_hard_failed_create_as_ambiguous():
             return None
 
         async def execute_orders(self, orders):
-            raise RuntimeError("exchange create failed before acknowledgement")
+            raise hostile_error
 
     bot = FakeBot()
     order = {
@@ -360,13 +367,32 @@ async def test_execute_orders_parent_tracks_hard_failed_create_as_ambiguous():
         "pb_order_type": "close_grid_long",
     }
 
-    with pytest.raises(RuntimeError, match="exchange create failed"):
-        await pb_mod.Passivbot.execute_orders_parent(bot, [order])
+    with caplog.at_level(logging.DEBUG):
+        with pytest.raises(HostileError) as exc_info:
+            await pb_mod.Passivbot.execute_orders_parent(bot, [order])
 
+    assert exc_info.value is hostile_error
     assert len(bot.recent_order_executions) == 1
     assert bot.recent_order_executions[0]["custom_id"] == order["custom_id"]
     assert len(bot.orders_emitted_to_exchange) == 1
     assert bot.orders_emitted_to_exchange[0]["status"] == "create_error_ambiguous"
+    captured = capsys.readouterr()
+    rendered = captured.out + captured.err + caplog.text
+    assert hostile_type_name not in rendered
+    assert hostile_secret not in rendered
+    ambiguous_records = [
+        record
+        for record in caplog.records
+        if record.getMessage().startswith("[order] remembered ambiguous create")
+    ]
+    assert [(record.levelno, record.getMessage()) for record in ambiguous_records] == [
+        (
+            logging.DEBUG,
+            "[order] remembered ambiguous create | symbol=TON type=close_grid_long "
+            "custom_id=pb-0x0007-hardfail status=create_error_ambiguous "
+            "reason=exchange_exception error_type=RuntimeError",
+        )
+    ]
 
 
 @pytest.mark.asyncio
@@ -374,6 +400,10 @@ async def test_execute_order_plan_bounds_raised_create_exception_diagnostics(
     monkeypatch, caplog, capsys
 ):
     import passivbot as pb_mod
+
+    hostile_type_name = "AuthorizationBatchCreateFailure"
+    hostile_secret = "https://hostile.example.invalid/create?token=batch-secret"
+    HostileError = type(hostile_type_name, (RuntimeError,), {})
 
     async def keep_fresh_creations(_bot, orders):
         return orders
@@ -407,9 +437,7 @@ async def test_execute_order_plan_bounds_raised_create_exception_diagnostics(
             return 0
 
         async def execute_orders_parent(self, orders):
-            raise RuntimeError(
-                "exchange create failed Authorization: Bearer RAW_BATCH_SECRET"
-            )
+            raise HostileError(f"exchange create failed {hostile_secret}")
 
         async def restart_bot_on_too_many_errors(self):
             self.restart_called = True
@@ -438,11 +466,20 @@ async def test_execute_order_plan_bounds_raised_create_exception_diagnostics(
     assert bot.execution_scheduled is True
     captured = capsys.readouterr()
     rendered = captured.out + captured.err + caplog.text
-    assert "RAW_BATCH_SECRET" not in rendered
-    assert "Authorization" not in rendered
+    assert hostile_type_name not in rendered
+    assert hostile_secret not in rendered
     assert "Traceback" not in rendered
-    assert "create batch raised before completion" in caplog.text
-    assert "count=1 error_type=RuntimeError" in caplog.text
+    batch_records = [
+        record
+        for record in caplog.records
+        if record.getMessage().startswith("[order] create batch raised before completion")
+    ]
+    assert [(record.levelno, record.getMessage()) for record in batch_records] == [
+        (
+            logging.ERROR,
+            "[order] create batch raised before completion | count=1 error_type=RuntimeError",
+        )
+    ]
 
 
 @pytest.mark.asyncio
