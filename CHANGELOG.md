@@ -9,6 +9,10 @@ All notable user-facing changes will be documented in this file.
   Existing websocket position-side and reduce-only metadata must agree with that record; ambiguous,
   contradictory, and foreign updates still fail closed and request authoritative state.
 
+- Backtests now treat a finite balance depleted by fills as liquidation before recomputing orders,
+  so extreme optimizer candidates terminate normally instead of panicking an optimizer worker.
+  Other invalid orchestrator inputs now propagate as backtest errors without unwinding Rust.
+
 - Live candle orchestration now reads bounded cache-only native 1h EMA carry-forward from the 1h
   index, requires a complete native window, isolates carried values from the active EMA cache, and
   applies the background refresher's surface-count staleness limit using the active live/replay

@@ -2300,13 +2300,27 @@ impl<'a> Backtest<'a> {
             self.update_emas(k);
             self.update_rounded_balance(k);
             self.update_trailing_prices(k);
+            if self.equity_tracking_active
+                && self.balance.usd_total_balance.is_finite()
+                && self.balance.usd_total_balance <= 0.0
+            {
+                self.update_equities(k);
+                if !self.check_and_apply_liquidation(k) {
+                    return Err(format!(
+                        "depleted balance did not trigger liquidation at k {}: {}",
+                        k, self.balance.usd_total_balance
+                    ));
+                }
+                self.record_strategy_equity_sample();
+                break;
+            }
             let current_ts = self.first_timestamp_ms + (k as u64) * self.interval_ms;
             if k > warmup_bars && current_ts >= guard_timestamp_ms {
                 if self.update_n_positions_and_wallet_exposure_limits(k) {
                     self.equity_tracking_active = true;
                 }
                 self.initialize_btc_collateral_if_needed(k);
-                self.update_open_orders_all(k);
+                self.update_open_orders_all(k)?;
             }
             self.force_close_delisted_positions(k);
             if self.equity_tracking_active {
@@ -4956,8 +4970,8 @@ impl<'a> Backtest<'a> {
         None
     }
 
-    fn update_open_orders_all(&mut self, k: usize) {
-        self.update_open_orders_all_orchestrator(k);
+    fn update_open_orders_all(&mut self, k: usize) -> Result<(), String> {
+        self.update_open_orders_all_orchestrator(k)
     }
 
     fn forager_hysteresis_state_from_open_orders(&self) -> ForagerHysteresisState {
@@ -4992,7 +5006,7 @@ impl<'a> Backtest<'a> {
         }
     }
 
-    fn update_open_orders_all_orchestrator(&mut self, k: usize) {
+    fn update_open_orders_all_orchestrator(&mut self, k: usize) -> Result<(), String> {
         let total_t0 = Instant::now();
         if let Some(p) = self.orch_profile.as_mut() {
             p.steps = p.steps.saturating_add(1);
@@ -5045,7 +5059,7 @@ impl<'a> Backtest<'a> {
                 &input,
                 &mut self.orchestrator_workspace,
             )
-            .unwrap_or_else(|e| panic!("orchestrator error at k {}: {:?}", k, e));
+            .map_err(|e| format!("orchestrator error at k {}: {:?}", k, e))?;
             let compute_elapsed = t1.elapsed();
             self.orchestrator_input_cache = Some(input);
             (res, input_update_elapsed, compute_elapsed)
@@ -5097,6 +5111,7 @@ impl<'a> Backtest<'a> {
         if let Some(p) = self.orch_profile.as_mut() {
             OrchProfile::add_ns(&mut p.total_ns, total_t0.elapsed());
         }
+        Ok(())
     }
 
     fn record_debug_orders_stage(&mut self, k: usize, stage: &'static str) {
@@ -7090,7 +7105,7 @@ mod tests {
 
         bt.bot_params[0].long.risk_entry_cooldown_minutes = 0.05;
         bt.orchestrator_input_cache = None;
-        bt.update_open_orders_all(0);
+        bt.update_open_orders_all(0).unwrap();
         assert_eq!(
             bt.open_orders.long[0].entries.len(),
             1,
@@ -7099,7 +7114,7 @@ mod tests {
 
         bt.bot_params[0].long.risk_entry_cooldown_minutes = 0.0;
         bt.orchestrator_input_cache = None;
-        bt.update_open_orders_all(0);
+        bt.update_open_orders_all(0).unwrap();
         let staged_entry_count = bt.open_orders.long[0].entries.len();
         assert!(
             staged_entry_count >= 2,
@@ -7223,7 +7238,7 @@ mod tests {
             min_since_max: 100.0,
         };
         bt.orchestrator_input_cache = None;
-        bt.update_open_orders_all(0);
+        bt.update_open_orders_all(0).unwrap();
 
         let staged_closes = &bt.open_orders.long[0].closes;
         assert_eq!(staged_closes.len(), 2);
@@ -9697,6 +9712,93 @@ mod tests {
         assert!(bt.liquidated());
         assert!(bt.hard_stop_coin[LONG][0].state.is_none());
         assert!(bt.hard_stop_drawdown_samples_pside[LONG].is_empty());
+    }
+
+    #[test]
+    fn post_fill_depleted_balance_liquidates_before_orchestrator() {
+        let hlcvs = Array3::from_shape_vec(
+            (4, 1, 4),
+            vec![
+                101.0, 99.0, 100.0, 1.0, //
+                101.0, 99.0, 100.0, 1.0, //
+                2.0, 1.0, 1.0, 1.0, //
+                2.0, 1.0, 1.0, 1.0,
+            ],
+        )
+        .unwrap();
+        let btc_usd_prices = Array1::from_vec(vec![20_000.0; 4]);
+
+        let mut bp_pair = BotParamsPair::default();
+        bp_pair.long.n_positions = 1;
+        bp_pair.long.total_wallet_exposure_limit = 5.0;
+        bp_pair.long.wallet_exposure_limit = 5.0;
+        bp_pair.long.ema_span_0 = 1.0;
+        bp_pair.long.ema_span_1 = 1.0;
+
+        let backtest_params = BacktestParams {
+            starting_balance: 100.0,
+            maker_fee: 0.0,
+            taker_fee: 0.0,
+            coins: vec!["TEST".to_string()],
+            active_coin_indices: None,
+            first_timestamp_ms: 0,
+            requested_start_timestamp_ms: 0,
+            first_valid_indices: vec![0],
+            last_valid_indices: vec![3],
+            warmup_minutes: vec![0],
+            trade_start_indices: vec![2],
+            global_warmup_bars: 0,
+            btc_collateral_cap: 0.0,
+            btc_collateral_ltv_cap: None,
+            metrics_only: true,
+            skip_btc_analysis: false,
+            filter_by_min_effective_cost: false,
+            dynamic_wel_by_tradability: true,
+            hedge_mode: true,
+            max_realized_loss_pct: 1.0,
+            pnls_max_lookback_days: 30.0,
+            liquidation_threshold: 0.05,
+            equity_hard_stop_loss: EquityHardStopLossConfig::default(),
+            market_orders_allowed: false,
+            market_order_near_touch_threshold: 0.001,
+            market_order_slippage_pct: 0.0,
+            forager_score_hysteresis_pct: 0.0,
+            candle_interval_minutes: 1,
+        };
+
+        let mut bt = Backtest::new(
+            hlcvs.view(),
+            btc_usd_prices.view(),
+            vec![bp_pair],
+            vec![ExchangeParams {
+                maker_fee: 0.0,
+                taker_fee: 0.0,
+                ..Default::default()
+            }],
+            &backtest_params,
+        );
+        bt.positions.long[0] = Position {
+            size: 2.0,
+            price: 100.0,
+        };
+        bt.open_orders.long[0].closes.push(BacktestOrder {
+            order: Order {
+                qty: -2.0,
+                price: 1.0,
+                order_type: OrderType::CloseGridLong,
+            },
+            execution_type: orchestrator::ExecutionType::Limit,
+        });
+        bt.equity_tracking_active = true;
+
+        let (fills, equities) = bt.run().expect("depleted balance should liquidate");
+
+        assert!(bt.liquidated());
+        assert_eq!(fills.len(), 1);
+        assert!(fills[0].usd_total_balance < 0.0);
+        assert_eq!(equities.timestamps_ms, vec![60_000, 120_000]);
+        assert_eq!(equities.usd_total_equity, vec![100.0, 5.0]);
+        assert!((equities.btc_total_equity[1] - 0.00025).abs() < 1e-12);
     }
 
     #[test]
