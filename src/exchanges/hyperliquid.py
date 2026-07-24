@@ -707,6 +707,10 @@ class HyperliquidBot(CCXTBot):
                         order["_pb_order_semantics_source"] = (
                             "acknowledged_exchange_order_id"
                         )
+                        if self._hl_ws_order_has_fill_progress(order):
+                            order[
+                                "_pb_order_update_requires_authoritative_refresh"
+                            ] = True
                     try:
                         order["qty"] = order["amount"]
                     except (KeyError, TypeError, ValueError) as exc:
@@ -784,7 +788,19 @@ class HyperliquidBot(CCXTBot):
         """
         if not isinstance(order, dict):
             return None
-        exchange_id = self._extract_order_exchange_id(order)
+        info = order.get("info")
+        raw_info = info if isinstance(info, dict) else {}
+
+        exchange_id_keys = ("id", "order_id", "orderId", "orderID", "ordId", "oid")
+        exchange_ids = {
+            str(source.get(key))
+            for source in (order, raw_info)
+            for key in exchange_id_keys
+            if source.get(key) not in (None, "")
+        }
+        if len(exchange_ids) != 1:
+            return None
+        exchange_id = next(iter(exchange_ids))
         side = str(order.get("side") or "").lower()
         if not exchange_id or side not in {"buy", "sell"}:
             return None
@@ -796,6 +812,28 @@ class HyperliquidBot(CCXTBot):
         if len(matches) != 1:
             return None
         record = matches[0]
+        client_id_keys = (
+            "custom_id",
+            "customId",
+            "client_order_id",
+            "clientOrderId",
+            "client_oid",
+            "clientOid",
+            "clOrdId",
+        )
+        client_ids = {
+            self._canonical_passivbot_custom_id(str(source.get(key)))
+            for source in (order, raw_info)
+            for key in client_id_keys
+            if source.get(key) not in (None, "")
+        }
+        record_client_id = str(record.get("canonical_custom_id") or "")
+        if client_ids and (
+            not record_client_id
+            or len(client_ids) != 1
+            or next(iter(client_ids)) != record_client_id
+        ):
+            return None
         record_side = str(record.get("side") or "").lower()
         position_side = str(record.get("position_side") or "").lower()
         reduce_only = record.get("reduce_only")
@@ -811,8 +849,6 @@ class HyperliquidBot(CCXTBot):
         )
         if action_side != position_side:
             return None
-        info = order.get("info")
-        raw_info = info if isinstance(info, dict) else {}
         raw_side_value = raw_info.get("side")
         if raw_side_value not in (None, ""):
             raw_side = {
@@ -857,6 +893,31 @@ class HyperliquidBot(CCXTBot):
         ):
             return None
         return position_side, reduce_only
+
+    @staticmethod
+    def _hl_ws_order_has_fill_progress(order: dict) -> bool:
+        """Whether an open WS row proves that an acknowledged order has filled."""
+
+        def _number(key: str) -> float | None:
+            for source in (order, order.get("info", {})):
+                if not isinstance(source, dict) or source.get(key) in (None, ""):
+                    continue
+                try:
+                    value = float(source[key])
+                except (TypeError, ValueError, OverflowError):
+                    return None
+                return value if math.isfinite(value) and value >= 0.0 else None
+            return None
+
+        filled = _number("filled")
+        if filled is not None and filled > 0.0:
+            return True
+        amount = _number("amount")
+        remaining = _number("remaining")
+        if amount is None or remaining is None:
+            return False
+        tolerance = max(1e-12, amount * 1e-12)
+        return remaining < amount - tolerance
 
     def determine_pos_side(self, order):
         # Hyperliquid is one-way, but current position state must never label a
