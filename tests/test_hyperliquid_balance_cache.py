@@ -199,6 +199,9 @@ async def test_hyperliquid_ws_order_recovers_semantics_from_exact_acknowledged_i
                 "symbol": "BTC/USDC:USDC",
                 "side": side,
                 "amount": 0.01,
+                # CCXT may synthesize False when the native WS payload omits
+                # reduceOnly. It must not contradict the acknowledged close.
+                "reduceOnly": False,
                 "info": {"oid": 123, "side": raw_side, "sz": "0.01"},
             }
         ]
@@ -420,6 +423,12 @@ async def test_hyperliquid_recovered_partial_fill_forces_authoritative_refresh(
     [
         ({"side": "sell", "position_side": "short"}, {}),
         ({}, {"position_side": "short"}),
+        (
+            {},
+            {
+                "reduceOnly": True,
+            },
+        ),
         (
             {},
             {

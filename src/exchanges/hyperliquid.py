@@ -926,17 +926,38 @@ class HyperliquidBot(CCXTBot):
             return None
         authoritative_reduce_sources = raw_sources if raw_sources else (order,)
         reduce_only_keys = ("reduce_only", "reduceOnly", "is_reduce_only")
+        raw_has_explicit_reduce_only = False
         for source in authoritative_reduce_sources:
-            if not any(key in source for key in reduce_only_keys):
-                continue
-            websocket_reduce_only = self._strict_order_reduce_only_response(
-                {"info": source}
-            )
-            if (
-                not isinstance(websocket_reduce_only, bool)
-                or websocket_reduce_only != reduce_only
-            ):
-                return None
+            for key in reduce_only_keys:
+                if key not in source:
+                    continue
+                raw_has_explicit_reduce_only = True
+                websocket_reduce_only = self._strict_order_reduce_only_response(
+                    {"info": {key: source[key]}}
+                )
+                if (
+                    not isinstance(websocket_reduce_only, bool)
+                    or websocket_reduce_only != reduce_only
+                ):
+                    return None
+        if raw_sources:
+            for key in reduce_only_keys:
+                if key not in order:
+                    continue
+                value = order[key]
+                # CCXT may synthesize a unified False when the native payload
+                # omits reduceOnly. Preserve that compatibility, but never
+                # discard a supplied True or contradict native semantics.
+                if value is False and not raw_has_explicit_reduce_only:
+                    continue
+                websocket_reduce_only = self._strict_order_reduce_only_response(
+                    {"info": {key: value}}
+                )
+                if (
+                    not isinstance(websocket_reduce_only, bool)
+                    or websocket_reduce_only != reduce_only
+                ):
+                    return None
         return position_side, reduce_only
 
     @staticmethod
