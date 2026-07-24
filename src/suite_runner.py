@@ -459,6 +459,29 @@ def _config_for_dataset_window(
     return cfg
 
 
+def _config_for_dataset_coins(
+    base_config: Dict[str, Any],
+    scenarios: Sequence[SuiteScenario],
+) -> Dict[str, Any]:
+    """Restrict a preload to the coins its assigned scenarios can use."""
+
+    if not scenarios or any(scenario.coins is None for scenario in scenarios):
+        return base_config
+    required_coins = sorted(
+        {coin for scenario in scenarios for coin in (scenario.coins or [])}
+    )
+    if not required_coins:
+        return base_config
+    cfg = deepcopy(base_config)
+    approved_coins = cfg.setdefault("live", {}).get("approved_coins")
+    if isinstance(approved_coins, dict):
+        cfg["live"]["approved_coins"]["long"] = list(required_coins)
+        cfg["live"]["approved_coins"]["short"] = list(required_coins)
+    else:
+        cfg["live"]["approved_coins"] = list(required_coins)
+    return cfg
+
+
 def _log_dataset_window(dataset_label: str, window: DatasetWindow) -> None:
     logging.info(
         "[suite] dataset window %s start=%s end=%s scenarios=%s",
@@ -753,10 +776,29 @@ async def prepare_master_datasets(
     use_combined = len(exchanges) > 1
 
     if use_combined:
+        exchange_set = {str(exchange) for exchange in exchanges}
+        combined_scenarios = [
+            scenario
+            for scenario in (scenarios or [])
+            if set(scenario.exchanges or exchanges) == exchange_set
+        ]
+        individual_scenarios = {
+            str(exchange): [
+                scenario
+                for scenario in (scenarios or [])
+                if set(scenario.exchanges or exchanges) != exchange_set
+                and str(exchange) in set(scenario.exchanges or exchanges)
+            ]
+            for exchange in (needed_individual_exchanges or set())
+        }
         # Prepare combined (best-per-coin) dataset
         combined_window = dataset_windows["combined"]
         _log_dataset_window("combined", combined_window)
         combined_config = _config_for_dataset_window(base_config, combined_window)
+        combined_config = _config_for_dataset_coins(
+            combined_config,
+            combined_scenarios or list(scenarios or []),
+        )
         (
             coins,
             hlcvs,
@@ -803,6 +845,10 @@ async def prepare_master_datasets(
                     )
                 _log_dataset_window(exchange, exchange_window)
                 exchange_config = _config_for_dataset_window(base_config, exchange_window)
+                exchange_config = _config_for_dataset_coins(
+                    exchange_config,
+                    individual_scenarios.get(str(exchange), []),
+                )
                 (
                     ex_coins,
                     ex_hlcvs,
@@ -832,6 +878,11 @@ async def prepare_master_datasets(
                 del ex_hlcvs, ex_btc_usd_prices
     else:
         for exchange in exchanges:
+            exchange_scenarios = [
+                scenario
+                for scenario in (scenarios or [])
+                if str(exchange) in set(scenario.exchanges or exchanges)
+            ]
             exchange_window = dataset_windows.get(exchange)
             if exchange_window is None:
                 exchange_window = DatasetWindow(
@@ -841,6 +892,10 @@ async def prepare_master_datasets(
                 )
             _log_dataset_window(exchange, exchange_window)
             exchange_config = _config_for_dataset_window(base_config, exchange_window)
+            exchange_config = _config_for_dataset_coins(
+                exchange_config,
+                exchange_scenarios,
+            )
             (
                 coins,
                 hlcvs,

@@ -14,7 +14,8 @@ All notable user-facing changes will be documented in this file.
 - Optimizer suites may set `optimize.objective_scenario` (or
   `--objective-scenario LABEL`) to score performance objectives on one named scenario while
   continuing to enforce limits against configured suite aggregates. Suite scenario labels must
-  now be unique.
+  now be unique. Dataset preparation restricts exchange-specific preloads to the union of
+  explicitly requested scenario coins when every assigned scenario names its coins.
 
 - `passivbot tool crash-finder` can discover ordered low-to-later-high pumps as well as
   high-to-later-low crashes via `--direction up|both`. Generated idiosyncratic stress scenarios
