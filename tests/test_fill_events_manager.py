@@ -4825,6 +4825,39 @@ async def test_manager_refresh_records_successful_empty_refresh(tmp_path: Path):
 
 
 @pytest.mark.asyncio
+async def test_manager_cache_load_does_not_advance_last_exchange_refresh(
+    tmp_path: Path, sample_events
+):
+    cache_dir = tmp_path / "fills_local_load_preserves_refresh"
+    cached = [FillEvent.from_dict(dict(event)) for event in sample_events]
+    cache = FillEventCache(cache_dir)
+    cache.save(cached)
+    previous_refresh_ms = sample_events[-1]["timestamp"] + 60_000
+    cache.save_metadata(
+        {
+            "last_refresh_ms": previous_refresh_ms,
+            "oldest_event_ts": sample_events[0]["timestamp"],
+            "newest_event_ts": sample_events[-1]["timestamp"],
+            "covered_start_ms": sample_events[0]["timestamp"],
+            "known_gaps": [],
+            "history_scope": "window",
+            "pnl_contract": fem.PNL_CONTRACT_CURRENT,
+        }
+    )
+    fetcher = _StaticFetcher([])
+    manager = FillEventsManager(
+        exchange="bitget",
+        user="default",
+        fetcher=fetcher,
+        cache_path=cache_dir,
+    )
+
+    await manager.ensure_loaded()
+
+    assert manager.cache.load_metadata()["last_refresh_ms"] == previous_refresh_ms
+
+
+@pytest.mark.asyncio
 async def test_manager_refresh_logs_slow_successful_fetcher_request_timing_at_debug(
     tmp_path: Path, caplog, monkeypatch
 ):

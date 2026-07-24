@@ -8,6 +8,12 @@ All notable user-facing changes will be documented in this file.
   so extreme optimizer candidates terminate normally instead of panicking an optimizer worker.
   Other invalid orchestrator inputs now propagate as backtest errors without unwinding Rust.
 
+- Live fill confirmation now preserves the last successful exchange-refresh timestamp while
+  loading or repairing local fill caches, widens fill-history fetches with bounded backoff when a
+  position remains tied to a stale or mismatched fill, and recognizes an exact full-opening fill
+  even when older truncated history polluted its reconstructed post-fill size. Affected trailing
+  positions remain fail-closed until the refreshed fill evidence matches exchange state.
+
 - Live candle orchestration now reads bounded cache-only native 1h EMA carry-forward from the 1h
   index, requires a complete native window, isolates carried values from the active EMA cache, and
   applies the background refresher's surface-count staleness limit using the active live/replay

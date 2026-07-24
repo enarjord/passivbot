@@ -8327,29 +8327,31 @@ class Passivbot:
                     "timestamp": int(event.timestamp),
                     "epoch": self._fill_position_change_epoch(event, event_index),
                 }
-                for field in ("psize", "pprice"):
+                for field in ("psize", "pprice", "qty", "price", "c_mult"):
                     try:
                         value = float(getattr(event, field))
                     except (AttributeError, TypeError, ValueError, OverflowError):
                         continue
                     if math.isfinite(value):
                         anchor[field] = value
+                side = str(getattr(event, "side", "") or "").lower()
+                if side:
+                    anchor["side"] = side
                 anchors[key] = anchor
         return anchors
 
     def _fill_anchor_matches_position_state(
-        self, symbol: str, state: tuple[float, float], anchor: dict | None
+        self,
+        symbol: str,
+        pside: str,
+        state: tuple[float, float],
+        anchor: dict | None,
     ) -> bool:
         """Whether a fill's recorded after-state matches an exchange position."""
-        if anchor is None or "psize" not in anchor or "pprice" not in anchor:
+        if anchor is None:
             return False
         position_size, position_price = state
-        fill_size = abs(float(anchor["psize"]))
-        fill_price = float(anchor["pprice"])
-        if not all(
-            math.isfinite(value)
-            for value in (position_size, position_price, fill_size, fill_price)
-        ):
+        if not all(math.isfinite(value) for value in (position_size, position_price)):
             return False
         qty_step = abs(float(getattr(self, "qty_steps", {}).get(symbol, 0.0) or 0.0))
         price_step = abs(
@@ -8359,9 +8361,42 @@ class Passivbot:
         position_size_in_fill_units = abs(position_size) * c_mult
         qty_tolerance = max(qty_step * c_mult * 0.5, 1e-12)
         price_tolerance = max(price_step * 0.5, abs(position_price) * 1e-9, 1e-12)
-        return abs(fill_size - position_size_in_fill_units) <= qty_tolerance and abs(
-            fill_price - position_price
-        ) <= price_tolerance
+        if "psize" in anchor and "pprice" in anchor:
+            fill_size = abs(float(anchor["psize"]))
+            fill_price = float(anchor["pprice"])
+            if (
+                math.isfinite(fill_size)
+                and math.isfinite(fill_price)
+                and abs(fill_size - position_size_in_fill_units) <= qty_tolerance
+                and abs(fill_price - position_price) <= price_tolerance
+            ):
+                return True
+
+        # A cache whose retained history starts mid-position can carry a
+        # phantom reconstructed psize into every later fill.  The latest fill
+        # itself still proves a flat-to-position transition when its direction,
+        # entire quantity, and price exactly match the authoritative exchange
+        # position.  This narrow proof does not accept partial entries, DCA, or
+        # a mismatched average price.
+        required = ("qty", "price", "side")
+        if not all(field in anchor for field in required):
+            return False
+        fill_side = str(anchor["side"]).lower()
+        opening_side = "buy" if str(pside).lower() == "long" else "sell"
+        if fill_side != opening_side:
+            return False
+        try:
+            anchor_c_mult = abs(float(anchor.get("c_mult", c_mult) or c_mult))
+            opening_qty = abs(float(anchor["qty"])) * anchor_c_mult
+            opening_price = float(anchor["price"])
+        except (TypeError, ValueError, OverflowError):
+            return False
+        return (
+            math.isfinite(opening_qty)
+            and math.isfinite(opening_price)
+            and abs(opening_qty - position_size_in_fill_units) <= qty_tolerance
+            and abs(opening_price - position_price) <= price_tolerance
+        )
 
     def _latest_fill_position_change_epochs(self) -> dict[tuple[str, str], str]:
         """Return the newest known fill identity for each symbol and position side."""
@@ -8540,7 +8575,7 @@ class Passivbot:
                         and current_epoch.startswith("fill:")
                         and expected_position_state is not None
                         and not self._fill_anchor_matches_position_state(
-                            symbol, expected_position_state, anchor
+                            symbol, pside, expected_position_state, anchor
                         )
                     ):
                         failed_predicates.append("fill_after_state_mismatch")
@@ -8597,6 +8632,8 @@ class Passivbot:
         self._trailing_pending_position_states = pending_position_states
         self._trailing_position_snapshot_fill_epochs = associated_fill_epochs
         self._trailing_fill_confirmation_diagnostics = confirmation_diagnostics
+        if not confirmation_diagnostics:
+            self._trailing_fill_history_recovery_state = {}
 
         # Build concurrent fetches per symbol that has position changes
         fetch_plan = {}
@@ -11464,6 +11501,89 @@ class Passivbot:
                 since_ms=since_ms,
             )
 
+    def _trailing_fill_history_recovery_start_ms(
+        self, age_limit: int | None
+    ) -> int | None:
+        """Return a bounded refetch start for unresolved position/fill state.
+
+        Routine confirmation refreshes intentionally cover only recent fills.
+        If that leaves a position tied to a stale or mismatched fill, retry from
+        the exchange-reported position anchor (or the stale fill itself) with
+        an in-memory exponential backoff.  The affected position remains
+        nontradable until normal confirmation succeeds.
+        """
+        diagnostics = dict(
+            getattr(self, "_trailing_fill_confirmation_diagnostics", {}) or {}
+        )
+        recoverable_predicates = {
+            "missing_fill_anchor",
+            "non_fill_anchor",
+            "fill_identity_unchanged",
+            "fill_after_state_mismatch",
+        }
+        candidates: list[int] = []
+        cohorts: list[tuple[str, str]] = []
+        for raw_key, detail in diagnostics.items():
+            if not isinstance(raw_key, tuple) or len(raw_key) != 2:
+                continue
+            if not isinstance(detail, dict):
+                continue
+            failed = set(detail.get("failed_predicates") or [])
+            if not failed.intersection(recoverable_predicates):
+                continue
+            symbol, pside = str(raw_key[0]), str(raw_key[1])
+            anchor_ts = self._position_anchor_timestamp_ms(symbol, pside)
+            if anchor_ts is None:
+                try:
+                    anchor_ts = int(detail.get("fill_timestamp_ms") or 0) or None
+                except (TypeError, ValueError, OverflowError):
+                    anchor_ts = None
+            if anchor_ts is None:
+                continue
+            candidates.append(max(0, int(anchor_ts) - 5 * ONE_MIN_MS))
+            cohorts.append((symbol, pside))
+        if not candidates:
+            return None
+
+        start_ms = min(candidates)
+        if age_limit is not None:
+            start_ms = max(int(age_limit), start_ms)
+        recovery_key = (tuple(sorted(cohorts)), int(start_ms))
+        now_ms = utc_ms()
+        state = dict(
+            getattr(self, "_trailing_fill_history_recovery_state", {}) or {}
+        )
+        if state.get("key") == recovery_key and now_ms < int(
+            state.get("next_retry_ms", 0) or 0
+        ):
+            return None
+
+        retry_count = (
+            int(state.get("retry_count", 0) or 0) + 1
+            if state.get("key") == recovery_key
+            else 1
+        )
+        delay_ms = min(
+            60 * ONE_MIN_MS,
+            5 * ONE_MIN_MS * (2 ** min(retry_count - 1, 4)),
+        )
+        self._trailing_fill_history_recovery_state = {
+            "key": recovery_key,
+            "retry_count": retry_count,
+            "last_attempt_ms": now_ms,
+            "next_retry_ms": now_ms + delay_ms,
+        }
+        logging.warning(
+            "[fills] widening refresh for unresolved position/fill confirmation | "
+            "cohorts=%s start=%s retry=%d next_retry_minutes=%.1f "
+            "action=refetch_then_keep_nontradable_until_confirmed",
+            ",".join(f"{symbol}:{pside}" for symbol, pside in sorted(cohorts)),
+            ts_to_date(start_ms)[:19],
+            retry_count,
+            delay_ms / ONE_MIN_MS,
+        )
+        return start_ms
+
     async def _update_pnls_locked(
         self,
         *,
@@ -11652,6 +11772,11 @@ class Passivbot:
                         end_ms=None,
                     )
                 else:
+                    recovery_start_ms = (
+                        self._trailing_fill_history_recovery_start_ms(age_limit)
+                        if confirmation_refresh
+                        else None
+                    )
                     overlap_minutes_key = (
                         "fills_confirmation_overlap_minutes"
                         if confirmation_refresh
@@ -11665,10 +11790,17 @@ class Passivbot:
                         )
                     )
                     overlap_minutes = max(0.0, overlap_minutes)
-                    await self._pnls_manager.refresh_latest(
-                        overlap=20,
-                        last_refresh_overlap_ms=int(overlap_minutes * 60 * 1000),
-                    )
+                    if recovery_start_ms is not None:
+                        refresh_mode = "trailing_confirmation_recovery"
+                        await self._pnls_manager.refresh(
+                            start_ms=int(recovery_start_ms),
+                            end_ms=None,
+                        )
+                    else:
+                        await self._pnls_manager.refresh_latest(
+                            overlap=20,
+                            last_refresh_overlap_ms=int(overlap_minutes * 60 * 1000),
+                        )
                 fill_fetch_completed = True
 
             # Find and log new events (those not in cache before refresh)
@@ -11745,7 +11877,13 @@ class Passivbot:
                 )
             elapsed_ms = int(max(0, utc_ms() - refresh_started_ms))
             blocking_or_confirmation_refresh = (
-                refresh_mode in {"full", "lookback_bootstrap", "incremental_confirm"}
+                refresh_mode
+                in {
+                    "full",
+                    "lookback_bootstrap",
+                    "incremental_confirm",
+                    "trailing_confirmation_recovery",
+                }
                 or "confirm" in str(source)
                 or "staged" in str(source)
             )
