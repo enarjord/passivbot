@@ -248,6 +248,44 @@ def test_hyperliquid_ws_order_rejects_ambiguous_acknowledged_id(stubbed_modules)
     )
 
 
+def test_hyperliquid_ws_order_unwraps_native_ccxt_payload(stubbed_modules):
+    HyperliquidBot = importlib.import_module("exchanges.hyperliquid").HyperliquidBot
+    bot = HyperliquidBot.__new__(HyperliquidBot)
+    bot.orders_emitted_to_exchange = [
+        {
+            "timestamp": 1,
+            "exchange_id": "123",
+            "canonical_custom_id": "entry_initial_normal_long_local",
+            "side": "buy",
+            "position_side": "long",
+            "reduce_only": False,
+            "pb_type": "entry_initial_normal_long",
+            "status": "acknowledged",
+        }
+    ]
+
+    recovered = bot._hl_acknowledged_ws_order_semantics(
+        {
+            "id": "123",
+            "side": "buy",
+            "amount": 0.01,
+            "status": "open",
+            "info": {
+                "order": {
+                    "oid": 123,
+                    "cloid": "entry_initial_normal_long_local",
+                    "side": "B",
+                    "sz": "0.01",
+                    "reduceOnly": False,
+                },
+                "status": "open",
+            },
+        }
+    )
+
+    assert recovered == ("long", False)
+
+
 @pytest.mark.parametrize(
     "order_overrides",
     [
@@ -262,6 +300,27 @@ def test_hyperliquid_ws_order_rejects_ambiguous_acknowledged_id(stubbed_modules)
                 "cloid": "entry_initial_normal_long_different",
                 "side": "B",
                 "sz": "0.01",
+            }
+        },
+        {
+            "info": {
+                "order": {
+                    "oid": 123,
+                    "cloid": "entry_initial_normal_long_different",
+                    "side": "B",
+                    "sz": "0.01",
+                },
+                "status": "open",
+            }
+        },
+        {
+            "info": {
+                "order": {
+                    "oid": 456,
+                    "side": "B",
+                    "sz": "0.01",
+                },
+                "status": "open",
             }
         },
     ],
@@ -392,6 +451,35 @@ async def test_hyperliquid_recovered_partial_fill_forces_authoritative_refresh(
                     "side": "B",
                     "status": "filled",
                     "sz": "0.01",
+                },
+            },
+        ),
+        (
+            {},
+            {
+                "status": "open",
+                "info": {
+                    "order": {
+                        "oid": 123,
+                        "side": "B",
+                        "sz": "0.01",
+                        "reduceOnly": True,
+                    },
+                    "status": "open",
+                },
+            },
+        ),
+        (
+            {},
+            {
+                "status": "open",
+                "info": {
+                    "order": {
+                        "oid": 123,
+                        "side": "B",
+                        "sz": "0.01",
+                    },
+                    "status": "filled",
                 },
             },
         ),

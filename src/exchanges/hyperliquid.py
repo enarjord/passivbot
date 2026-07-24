@@ -789,12 +789,23 @@ class HyperliquidBot(CCXTBot):
         if not isinstance(order, dict):
             return None
         info = order.get("info")
-        raw_info = info if isinstance(info, dict) else {}
+        info_wrapper = info if isinstance(info, dict) else {}
+        nested_order = info_wrapper.get("order")
+        raw_info = nested_order if isinstance(nested_order, dict) else info_wrapper
+        raw_source_candidates = (info_wrapper, raw_info)
+        raw_sources = tuple(
+            source
+            for index, source in enumerate(raw_source_candidates)
+            if source
+            and all(
+                source is not prior for prior in raw_source_candidates[:index]
+            )
+        )
 
         exchange_id_keys = ("id", "order_id", "orderId", "orderID", "ordId", "oid")
         exchange_ids = {
             str(source.get(key))
-            for source in (order, raw_info)
+            for source in (order, *raw_sources)
             for key in exchange_id_keys
             if source.get(key) not in (None, "")
         }
@@ -824,7 +835,7 @@ class HyperliquidBot(CCXTBot):
         )
         client_ids = {
             self._canonical_passivbot_custom_id(str(source.get(key)))
-            for source in (order, raw_info)
+            for source in (order, *raw_sources)
             for key in client_id_keys
             if source.get(key) not in (None, "")
         }
@@ -850,8 +861,12 @@ class HyperliquidBot(CCXTBot):
         )
         if action_side != position_side:
             return None
-        raw_side_value = raw_info.get("side")
-        if raw_side_value not in (None, ""):
+        raw_side_values = [
+            source.get("side")
+            for source in raw_sources
+            if source.get("side") not in (None, "")
+        ]
+        for raw_side_value in raw_side_values:
             raw_side = {
                 "a": "sell",
                 "ask": "sell",
@@ -862,8 +877,12 @@ class HyperliquidBot(CCXTBot):
             }.get(str(raw_side_value).strip().lower())
             if raw_side is None or raw_side != side:
                 return None
-        raw_status_value = raw_info.get("status")
-        if raw_status_value not in (None, ""):
+        raw_status_values = [
+            source.get("status")
+            for source in raw_sources
+            if source.get("status") not in (None, "")
+        ]
+        for raw_status_value in raw_status_values:
             normalized_status = {
                 "open": "open",
                 "opened": "open",
@@ -891,10 +910,8 @@ class HyperliquidBot(CCXTBot):
                 return None
         explicit_position_sides = [
             value
-            for value in (
-                order.get("position_side"),
-                raw_info.get("positionSide"),
-            )
+            for source in (order, *raw_sources)
+            for value in (source.get("position_side"), source.get("positionSide"))
             if value not in (None, "")
         ]
         if any(
@@ -907,19 +924,19 @@ class HyperliquidBot(CCXTBot):
             and durable_position_side != position_side
         ):
             return None
-        authoritative_reduce_source = raw_info if raw_info else order
+        authoritative_reduce_sources = raw_sources if raw_sources else (order,)
         reduce_only_keys = ("reduce_only", "reduceOnly", "is_reduce_only")
-        has_explicit_reduce_only = any(
-            key in authoritative_reduce_source for key in reduce_only_keys
-        )
-        websocket_reduce_only = self._strict_order_reduce_only_response(order)
-        if has_explicit_reduce_only and not isinstance(websocket_reduce_only, bool):
-            return None
-        if (
-            isinstance(websocket_reduce_only, bool)
-            and websocket_reduce_only != reduce_only
-        ):
-            return None
+        for source in authoritative_reduce_sources:
+            if not any(key in source for key in reduce_only_keys):
+                continue
+            websocket_reduce_only = self._strict_order_reduce_only_response(
+                {"info": source}
+            )
+            if (
+                not isinstance(websocket_reduce_only, bool)
+                or websocket_reduce_only != reduce_only
+            ):
+                return None
         return position_side, reduce_only
 
     @staticmethod
