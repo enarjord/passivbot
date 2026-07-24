@@ -1,0 +1,32 @@
+{
+  "id": "540817",
+  "question": "New Rihanna Album before GTA VI?",
+  "conditionId": "0x1fad72fae204143ff1c3035e99e7c0f65ea8d5cd9bd1070987bd1a3316f772be",
+  "questionID": "0xb6fd5ea8c21f01471ad673950edd4a1645698946906abb27597e3f3de7bd70f1",
+  "slug": "new-rhianna-album-before-gta-vi-926",
+  "resolutionSource": "",
+  "denominationToken": "USDC.e",
+  "startDate": "2025-05-02T15:48:10.582Z",
+  "endDate": "2026-07-31T12:00:00Z",
+  "createdAt": "2025-05-02T15:04:43.762151Z",
+  "description": "This market resolves Yes, No, or 50-50 under its published rules.",
+  "outcomes": "[\"Yes\", \"No\"]",
+  "clobTokenIds": "[\"98022490269692409998126496127597032490334070080325855126491859374983463996227\", \"53831553061883006530739877284105938919721408776239639687877978808906551086026\"]",
+  "active": true,
+  "closed": false,
+  "restricted": true,
+  "enableOrderBook": true,
+  "orderPriceMinTickSize": 0.01,
+  "orderMinSize": 5,
+  "acceptingOrders": true,
+  "acceptingOrdersTimestamp": "2025-05-02T15:47:45Z",
+  "negRisk": false,
+  "feesEnabled": true,
+  "feeType": "general_fees",
+  "feeSchedule": {
+    "exponent": 1,
+    "rate": 0.05,
+    "takerOnly": true,
+    "rebateRate": 0.25
+  }
+}

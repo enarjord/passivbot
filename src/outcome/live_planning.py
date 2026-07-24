@@ -1,0 +1,176 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+import math
+from typing import Any, Mapping, Sequence
+
+from outcome.hyperliquid_live import HyperliquidOutcomeAccountSnapshot
+from outcome.models import (
+    NormalizedOutcomeMarket,
+    OutcomeOrderSide,
+    OutcomeSide,
+    OutcomeSignalCandle1s,
+)
+from outcome.rust_runner import (
+    normalized_market_to_rust_spec,
+    plan_outcome_ema_anchor,
+)
+
+
+class OutcomeSignalPlanningUnavailable(ValueError):
+    def __init__(self, reason: str, message: str) -> None:
+        if reason not in {"incomplete_verified_signal", "stale_verified_signal"}:
+            raise ValueError("unsupported outcome signal unavailability reason")
+        super().__init__(message)
+        self.reason = reason
+
+
+@dataclass(frozen=True)
+class OutcomeLiveOrderIntent:
+    slot: str
+    outcome: OutcomeSide
+    side: OutcomeOrderSide
+    native_price: float
+    canonical_yes_price: float
+    qty: float
+
+    def __post_init__(self) -> None:
+        if self.slot not in {"canonical_bid", "canonical_ask"}:
+            raise ValueError(f"unsupported live outcome intent slot {self.slot!r}")
+        for name in ("native_price", "canonical_yes_price"):
+            value = getattr(self, name)
+            if not math.isfinite(value) or not 0.0 <= value <= 1.0:
+                raise ValueError(f"live outcome intent {name} must be in [0, 1]")
+        if not math.isfinite(self.qty) or self.qty <= 0.0:
+            raise ValueError("live outcome intent qty must be finite and positive")
+
+
+@dataclass(frozen=True)
+class OutcomeLivePlan:
+    strategy_kind: str
+    market_id: str
+    observation_start_ms: int
+    observation_end_ms: int
+    observation_count: int
+    ema_fast: float
+    ema_slow: float
+    inventory_shift: float
+    configured_estimated_fee_per_share: float
+    effective_estimated_fee_per_share: float
+    estimated_fee_source: str
+    intents: tuple[OutcomeLiveOrderIntent, ...]
+
+
+def _average_cost(entry_notional: float, qty: float) -> float:
+    return entry_notional / qty if qty > 0.0 else 0.0
+
+
+def build_ema_anchor_outcome_live_plan(
+    market: NormalizedOutcomeMarket,
+    strategy_params: Mapping[str, Any],
+    signal_candles: Sequence[OutcomeSignalCandle1s],
+    account: HyperliquidOutcomeAccountSnapshot,
+    *,
+    now_ms: int,
+    max_account_age_ms: int = 5_000,
+    max_signal_age_ms: int = 5_000,
+) -> OutcomeLivePlan:
+    """Create a restart-reproducible Rust plan from exchange state and archived candles."""
+
+    if now_ms < 0:
+        raise ValueError("live outcome planning now_ms must be non-negative")
+    account_age_ms = now_ms - account.received_time_ms
+    if account_age_ms < 0 or account_age_ms > max_account_age_ms:
+        raise ValueError("HIP-4 account snapshot is stale or from the future")
+    if not signal_candles:
+        raise OutcomeSignalPlanningUnavailable(
+            "incomplete_verified_signal",
+            "live outcome planning requires signal candles",
+        )
+    for index, candle in enumerate(signal_candles):
+        if index > 0 and candle.timestamp_ms != signal_candles[index - 1].timestamp_ms + 1_000:
+            raise OutcomeSignalPlanningUnavailable(
+                "incomplete_verified_signal",
+                "live outcome signal candles must be contiguous",
+            )
+    latest = signal_candles[-1]
+    signal_age_ms = now_ms - (latest.timestamp_ms + 1_000)
+    if signal_age_ms < 0 or signal_age_ms > max_signal_age_ms:
+        raise OutcomeSignalPlanningUnavailable(
+            "stale_verified_signal",
+            "live outcome signal candle is stale or incomplete",
+        )
+
+    yes = account.balance(market.market_id, OutcomeSide.YES)
+    no = account.balance(market.market_id, OutcomeSide.NO)
+    configured_params = dict(strategy_params)
+    try:
+        configured_fee_per_share = float(configured_params["estimated_fee_per_share"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError(
+            "outcome strategy estimated_fee_per_share must be configured"
+        ) from exc
+    if not math.isfinite(configured_fee_per_share) or configured_fee_per_share < 0.0:
+        raise ValueError(
+            "outcome strategy estimated_fee_per_share must be finite and non-negative"
+        )
+    account_fee_floor = account.fee_rates.conservative_maker_rate * market.payout_unit
+    effective_fee_per_share = max(configured_fee_per_share, account_fee_floor)
+    configured_params["estimated_fee_per_share"] = effective_fee_per_share
+    payload = {
+        "market": normalized_market_to_rust_spec(market),
+        "strategy_params": configured_params,
+        "observations": [
+            {
+                "timestamp_ms": candle.timestamp_ms,
+                "close": candle.close,
+            }
+            for candle in signal_candles
+        ],
+        "inventory": {
+            "yes_qty": yes.total_qty,
+            "no_qty": no.total_qty,
+            "yes_average_cost": _average_cost(yes.entry_notional, yes.total_qty),
+            "no_average_cost": _average_cost(no.entry_notional, no.total_qty),
+            "free_collateral": account.collateral.conservative_available,
+        },
+    }
+    output = plan_outcome_ema_anchor(payload)
+    quotes = output.get("quotes")
+    if not isinstance(quotes, Mapping):
+        raise TypeError("Rust outcome planner omitted quotes")
+    intents = []
+    for key in ("canonical_bid", "canonical_ask"):
+        raw_intent = quotes.get(key)
+        if raw_intent is None:
+            continue
+        if not isinstance(raw_intent, Mapping):
+            raise TypeError(f"Rust outcome planner returned malformed {key}")
+        intents.append(
+            OutcomeLiveOrderIntent(
+                slot=key,
+                outcome=OutcomeSide(str(raw_intent["outcome"])),
+                side=OutcomeOrderSide(str(raw_intent["side"])),
+                native_price=float(raw_intent["native_price"]),
+                canonical_yes_price=float(raw_intent["canonical_yes_price"]),
+                qty=float(raw_intent["qty"]),
+            )
+        )
+    return OutcomeLivePlan(
+        strategy_kind=str(output["strategy_kind"]),
+        market_id=market.market_id,
+        observation_start_ms=int(output["observation_start_ms"]),
+        observation_end_ms=int(output["observation_end_ms"]),
+        observation_count=int(output["observation_count"]),
+        ema_fast=float(quotes["ema_fast"]),
+        ema_slow=float(quotes["ema_slow"]),
+        inventory_shift=float(quotes["inventory_shift"]),
+        configured_estimated_fee_per_share=configured_fee_per_share,
+        effective_estimated_fee_per_share=effective_fee_per_share,
+        estimated_fee_source=(
+            "configured"
+            if configured_fee_per_share >= account_fee_floor
+            else "hyperliquid_user_fees_conservative_maker_floor"
+        ),
+        intents=tuple(intents),
+    )

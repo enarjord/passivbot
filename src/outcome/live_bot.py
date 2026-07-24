@@ -1,0 +1,275 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+from enum import Enum
+import time
+from typing import Any, AsyncIterator, Callable, Mapping, Sequence
+
+from outcome.archive import OutcomeTradeArchive
+from outcome.hyperliquid_live import (
+    HyperliquidOutcomeAccountSnapshot,
+    HyperliquidOutcomeLifecycleSnapshot,
+    HyperliquidOutcomeLifecycleState,
+    HyperliquidOutcomeLiveClient,
+)
+from outcome.live_data import (
+    OutcomeIncompleteVerifiedSignal,
+    OutcomeNoPublicFill,
+    VerifiedOutcomeSignalWindow,
+    collect_verified_hyperliquid_signal_window,
+)
+from outcome.live_planning import (
+    OutcomeLivePlan,
+    OutcomeSignalPlanningUnavailable,
+    build_ema_anchor_outcome_live_plan,
+)
+from outcome.live_reconciliation import (
+    OutcomeOrderReconciliation,
+    OutcomeOrderReconciliationResult,
+    execute_hip4_order_reconciliation,
+    reconcile_outcome_orders,
+    reconcile_outcome_orders_to_empty,
+)
+from outcome.models import (
+    NormalizedOutcomeMarket,
+    NormalizedOutcomeTrade,
+    OutcomeSignalCandle1s,
+)
+
+
+class OutcomePlanningUnavailableReason(str, Enum):
+    NO_PUBLIC_FILL = "no_public_fill"
+    INCOMPLETE_VERIFIED_SIGNAL = "incomplete_verified_signal"
+    STALE_VERIFIED_SIGNAL = "stale_verified_signal"
+    MARKET_EXPIRED_AWAITING_SETTLEMENT = "market_expired_awaiting_settlement"
+    MARKET_SETTLED = "market_settled"
+
+
+@dataclass(frozen=True)
+class HyperliquidOutcomeCycle:
+    market_id: str
+    planned_at_ms: int
+    account: HyperliquidOutcomeAccountSnapshot
+    lifecycle: HyperliquidOutcomeLifecycleSnapshot
+    plan: OutcomeLivePlan | None
+    reconciliation: OutcomeOrderReconciliation
+    mutation_result: OutcomeOrderReconciliationResult | None
+    planning_unavailable_reason: OutcomePlanningUnavailableReason | None = None
+
+    @property
+    def is_dry_run(self) -> bool:
+        return self.mutation_result is None
+
+    @property
+    def planning_available(self) -> bool:
+        return self.plan is not None
+
+
+@dataclass(frozen=True)
+class HyperliquidOutcomeCollectedCycle:
+    cycle: HyperliquidOutcomeCycle
+    signal_window: VerifiedOutcomeSignalWindow | None
+
+
+async def run_hip4_outcome_cycle(
+    client: HyperliquidOutcomeLiveClient,
+    market: NormalizedOutcomeMarket,
+    strategy_params: Mapping[str, Any],
+    signal_candles: Sequence[OutcomeSignalCandle1s],
+    *,
+    execute: bool = False,
+    now_ms: int | None = None,
+) -> HyperliquidOutcomeCycle:
+    """Plan and optionally reconcile one HIP-4 market from authoritative current inputs."""
+
+    planned_at_ms = int(time.time() * 1_000) if now_ms is None else int(now_ms)
+    account = await client.fetch_account_snapshot((market,))
+    lifecycle = await client.fetch_market_lifecycle(
+        market,
+        account=account,
+        now_ms=planned_at_ms,
+    )
+    lifecycle_reason = _planning_reason_for_lifecycle(lifecycle)
+    if lifecycle_reason is not None:
+        return await _finish_unavailable_cycle(
+            client,
+            market,
+            account,
+            lifecycle=lifecycle,
+            reason=lifecycle_reason,
+            execute=execute,
+            planned_at_ms=planned_at_ms,
+        )
+    try:
+        plan = build_ema_anchor_outcome_live_plan(
+            market,
+            strategy_params,
+            signal_candles,
+            account,
+            now_ms=planned_at_ms,
+        )
+    except OutcomeSignalPlanningUnavailable as exc:
+        return await _finish_unavailable_cycle(
+            client,
+            market,
+            account,
+            lifecycle=lifecycle,
+            reason=OutcomePlanningUnavailableReason(exc.reason),
+            execute=execute,
+            planned_at_ms=planned_at_ms,
+        )
+    reconciliation = reconcile_outcome_orders(market, plan, account)
+    mutation_result = (
+        await execute_hip4_order_reconciliation(client, market, reconciliation)
+        if execute
+        else None
+    )
+    return HyperliquidOutcomeCycle(
+        market_id=market.market_id,
+        planned_at_ms=planned_at_ms,
+        account=account,
+        lifecycle=lifecycle,
+        plan=plan,
+        reconciliation=reconciliation,
+        mutation_result=mutation_result,
+        planning_unavailable_reason=None,
+    )
+
+
+async def run_hip4_outcome_unavailable_cycle(
+    client: HyperliquidOutcomeLiveClient,
+    market: NormalizedOutcomeMarket,
+    *,
+    reason: OutcomePlanningUnavailableReason,
+    execute: bool = False,
+    now_ms: int | None = None,
+) -> HyperliquidOutcomeCycle:
+    """Produce a cancel-only decision when a verified strategy signal is unavailable."""
+
+    if not isinstance(reason, OutcomePlanningUnavailableReason):
+        raise TypeError("outcome planning unavailability requires a stable reason")
+    planned_at_ms = int(time.time() * 1_000) if now_ms is None else int(now_ms)
+    account = await client.fetch_account_snapshot((market,))
+    lifecycle = await client.fetch_market_lifecycle(
+        market,
+        account=account,
+        now_ms=planned_at_ms,
+    )
+    lifecycle_reason = _planning_reason_for_lifecycle(lifecycle)
+    return await _finish_unavailable_cycle(
+        client,
+        market,
+        account,
+        lifecycle=lifecycle,
+        reason=lifecycle_reason or reason,
+        execute=execute,
+        planned_at_ms=planned_at_ms,
+    )
+
+
+def _planning_reason_for_lifecycle(
+    lifecycle: HyperliquidOutcomeLifecycleSnapshot,
+) -> OutcomePlanningUnavailableReason | None:
+    if lifecycle.state is HyperliquidOutcomeLifecycleState.ACTIVE:
+        return None
+    if lifecycle.state is HyperliquidOutcomeLifecycleState.SETTLED:
+        return OutcomePlanningUnavailableReason.MARKET_SETTLED
+    if (
+        lifecycle.state
+        is HyperliquidOutcomeLifecycleState.EXPIRED_AWAITING_SETTLEMENT
+    ):
+        return OutcomePlanningUnavailableReason.MARKET_EXPIRED_AWAITING_SETTLEMENT
+    raise ValueError(f"unsupported HIP-4 lifecycle state {lifecycle.state!r}")
+
+
+async def _finish_unavailable_cycle(
+    client: HyperliquidOutcomeLiveClient,
+    market: NormalizedOutcomeMarket,
+    account: HyperliquidOutcomeAccountSnapshot,
+    *,
+    lifecycle: HyperliquidOutcomeLifecycleSnapshot,
+    reason: OutcomePlanningUnavailableReason,
+    execute: bool,
+    planned_at_ms: int,
+) -> HyperliquidOutcomeCycle:
+    decision_time_ms = planned_at_ms // 1_000 * 1_000
+    reconciliation = reconcile_outcome_orders_to_empty(
+        market,
+        account,
+        decision_time_ms=decision_time_ms,
+    )
+    mutation_result = (
+        await execute_hip4_order_reconciliation(client, market, reconciliation)
+        if execute
+        else None
+    )
+    return HyperliquidOutcomeCycle(
+        market_id=market.market_id,
+        planned_at_ms=planned_at_ms,
+        account=account,
+        lifecycle=lifecycle,
+        plan=None,
+        reconciliation=reconciliation,
+        mutation_result=mutation_result,
+        planning_unavailable_reason=reason,
+    )
+
+
+async def run_hip4_outcome_collected_cycle(
+    client: HyperliquidOutcomeLiveClient,
+    market: NormalizedOutcomeMarket,
+    strategy_params: Mapping[str, Any],
+    *,
+    min_observations: int,
+    max_wait_seconds: float = 120.0,
+    delivery_lag_ms: int = 1_000,
+    max_live_trade_lag_ms: int = 2_000,
+    archive: OutcomeTradeArchive | None = None,
+    collector_session: str | None = None,
+    execute: bool = False,
+    now_ms: int | None = None,
+    wall_clock_ms: Callable[[], int] | None = None,
+    trade_stream: AsyncIterator[NormalizedOutcomeTrade] | None = None,
+) -> HyperliquidOutcomeCollectedCycle:
+    """Collect a verified HIP-4 signal and reconcile, or cancel managed quotes on silence."""
+
+    try:
+        window = await collect_verified_hyperliquid_signal_window(
+            market,
+            min_observations=min_observations,
+            max_wait_seconds=max_wait_seconds,
+            delivery_lag_ms=delivery_lag_ms,
+            max_live_trade_lag_ms=max_live_trade_lag_ms,
+            wall_clock_ms=wall_clock_ms,
+            trade_stream=trade_stream,
+            archive=archive,
+            collector_session=collector_session,
+        )
+    except OutcomeNoPublicFill:
+        cycle = await run_hip4_outcome_unavailable_cycle(
+            client,
+            market,
+            reason=OutcomePlanningUnavailableReason.NO_PUBLIC_FILL,
+            execute=execute,
+            now_ms=now_ms,
+        )
+        return HyperliquidOutcomeCollectedCycle(cycle=cycle, signal_window=None)
+    except OutcomeIncompleteVerifiedSignal:
+        cycle = await run_hip4_outcome_unavailable_cycle(
+            client,
+            market,
+            reason=OutcomePlanningUnavailableReason.INCOMPLETE_VERIFIED_SIGNAL,
+            execute=execute,
+            now_ms=now_ms,
+        )
+        return HyperliquidOutcomeCollectedCycle(cycle=cycle, signal_window=None)
+
+    cycle = await run_hip4_outcome_cycle(
+        client,
+        market,
+        strategy_params,
+        window.candles,
+        execute=execute,
+        now_ms=now_ms,
+    )
+    return HyperliquidOutcomeCollectedCycle(cycle=cycle, signal_window=window)

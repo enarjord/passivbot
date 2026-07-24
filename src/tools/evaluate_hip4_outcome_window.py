@@ -1,0 +1,214 @@
+#!/usr/bin/env python3
+"""Evaluate EMA-anchor modes on one verified archived HIP-4 fill window."""
+
+from __future__ import annotations
+
+import argparse
+import asyncio
+from dataclasses import asdict
+import json
+import math
+from pathlib import Path
+
+import aiohttp
+
+from outcome.adapters import hyperliquid
+from outcome.archive import OutcomeTradeArchive
+from outcome.backtest_input import build_trade_derived_ema_anchor_input
+from outcome.candles import VerifiedCoverage
+from outcome.evaluation import (
+    evaluate_ema_anchor_outcome_modes,
+    summarize_outcome_strategy_modes,
+)
+from outcome.rust_runner import normalized_market_to_rust_spec
+
+
+INFO_URL = "https://api.hyperliquid.xyz/info"
+
+
+async def _post_info(session: aiohttp.ClientSession, payload: dict) -> object:
+    async with session.post(INFO_URL, json=payload) as response:
+        response.raise_for_status()
+        return await response.json()
+
+
+async def _fetch_market(underlying: str):
+    timeout = aiohttp.ClientTimeout(total=20, connect=10)
+    async with aiohttp.ClientSession(timeout=timeout) as session:
+        meta = await _post_info(session, {"type": "outcomeMeta"})
+    if not isinstance(meta, dict) or not isinstance(meta.get("outcomes"), list):
+        raise ValueError("unexpected Hyperliquid outcomeMeta response")
+    markets = []
+    for raw_market in meta["outcomes"]:
+        try:
+            market = hyperliquid.normalize_market(raw_market)
+        except ValueError:
+            continue
+        if market.native_metadata["underlying"].casefold() == underlying.casefold():
+            markets.append(market)
+    if len(markets) != 1:
+        raise ValueError(f"expected one active HIP-4 {underlying} market, got {len(markets)}")
+    return markets[0]
+
+
+def _proves_interval(
+    coverage: list[VerifiedCoverage],
+    start_ms: int,
+    end_ms: int,
+) -> bool:
+    cursor = start_ms
+    for interval in sorted(coverage, key=lambda item: item.start_ms):
+        if interval.end_ms <= cursor:
+            continue
+        if interval.start_ms > cursor:
+            return False
+        cursor = max(cursor, interval.end_ms)
+        if cursor >= end_ms:
+            return True
+    return False
+
+
+async def _main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--underlying", default="BTC")
+    parser.add_argument("--start-ms", required=True, type=int)
+    parser.add_argument("--end-ms", required=True, type=int)
+    parser.add_argument("--archive", default="caches/outcome_markets.sqlite")
+    parser.add_argument("--starting-collateral", type=float, default=1_000.0)
+    parser.add_argument("--ema-fast-seconds", type=float, default=5.0)
+    parser.add_argument("--ema-slow-seconds", type=float, default=30.0)
+    parser.add_argument("--quote-offset", type=float, default=0.001)
+    parser.add_argument("--inventory-skew", type=float, default=0.002)
+    parser.add_argument("--clip-qty", type=float, default=25.0)
+    parser.add_argument("--max-total-inventory-qty", type=float, default=500.0)
+    parser.add_argument("--max-abs-residual-qty", type=float, default=50.0)
+    parser.add_argument("--min-locked-pair-edge", type=float, default=0.001)
+    parser.add_argument(
+        "--maker-rate",
+        required=True,
+        type=float,
+        help="Explicit account/venue maker rate used for this replay",
+    )
+    parser.add_argument(
+        "--taker-rate",
+        required=True,
+        type=float,
+        help="Explicit account/venue taker rate used for this replay",
+    )
+    parser.add_argument(
+        "--settlement-rate",
+        required=True,
+        type=float,
+        help="Explicit payout-notional settlement rate; pass 0 only as a stated assumption",
+    )
+    args = parser.parse_args()
+    if args.end_ms <= args.start_ms:
+        parser.error("--end-ms must be greater than --start-ms")
+    if args.start_ms % 1_000 or args.end_ms % 1_000:
+        parser.error("--start-ms and --end-ms must be second-aligned")
+    if any(
+        not math.isfinite(rate)
+        for rate in (args.maker_rate, args.taker_rate, args.settlement_rate)
+    ):
+        parser.error("fee rates must be finite")
+
+    market = await _fetch_market(args.underlying)
+    archive = OutcomeTradeArchive(Path(args.archive))
+    try:
+        trades = []
+        for asset in (market.yes_asset, market.no_asset):
+            coverage = archive.load_verified_coverage(
+                market.venue,
+                market.market_id,
+                asset.asset_id,
+                start_ms=args.start_ms,
+                end_ms=args.end_ms,
+            )
+            if not _proves_interval(coverage, args.start_ms, args.end_ms):
+                raise ValueError(
+                    f"archive does not prove complete coverage for {asset.side.value}"
+                )
+            trades.extend(
+                archive.load_trades(
+                    market.venue,
+                    market.market_id,
+                    asset.asset_id,
+                    start_ms=args.start_ms,
+                    end_ms=args.end_ms,
+                )
+            )
+    finally:
+        archive.close()
+
+    strategy_params = {
+        "ema_span_fast_seconds": args.ema_fast_seconds,
+        "ema_span_slow_seconds": args.ema_slow_seconds,
+        "ema_warmup_seconds": int(args.ema_slow_seconds),
+        "quote_offset": args.quote_offset,
+        "inventory_skew": args.inventory_skew,
+        "clip_qty": args.clip_qty,
+        "max_total_inventory_qty": args.max_total_inventory_qty,
+        "max_abs_residual_qty": args.max_abs_residual_qty,
+        "min_locked_pair_edge": args.min_locked_pair_edge,
+        "estimated_fee_per_share": max(0.0, args.maker_rate) * market.payout_unit,
+        "risk_reduction_only_ms_before_close": 30 * 60 * 1_000,
+        "entry_cutoff_ms_before_close": 60 * 1_000,
+        "execution_mode": "accumulate_pairs",
+    }
+    payload = build_trade_derived_ema_anchor_input(
+        market_spec=normalized_market_to_rust_spec(market),
+        trades=trades,
+        verified_coverage=(VerifiedCoverage(args.start_ms, args.end_ms),),
+        fee_schedule={
+            "maker_rate": args.maker_rate,
+            "taker_rate": args.taker_rate,
+            "formula": "notional",
+            "incidence": "inventory_reduction_only",
+            "settlement_rate": args.settlement_rate,
+        },
+        starting_collateral=args.starting_collateral,
+        strategy_params=strategy_params,
+        settlement_time_ms=market.lifecycle.scheduled_event_time_ms,
+        yes_fraction=0.0,
+    )
+    summaries = summarize_outcome_strategy_modes(
+        evaluate_ema_anchor_outcome_modes(payload)
+    )
+    print(
+        json.dumps(
+            {
+                "authenticated": False,
+                "mutations_performed": False,
+                "sample_is_full_contract_backtest": False,
+                "market": {
+                    "market_id": market.market_id,
+                    "title": market.title,
+                    "quote_asset": market.quote_asset,
+                },
+                "coverage": {"start_ms": args.start_ms, "end_ms": args.end_ms},
+                "actual_fill_records": len(trades),
+                "signal_candles": len(payload["signal_candles"]),
+                "execution_candles": len(payload["execution_candles"]),
+                "assumptions": {
+                    "maker_rate": args.maker_rate,
+                    "taker_rate": args.taker_rate,
+                    "fee_incidence": "inventory_reduction_only",
+                    "settlement_rate": args.settlement_rate,
+                    "settlement_scenarios": [0.0, 1.0],
+                },
+                "strategy_params": strategy_params,
+                "mode_summaries": [asdict(summary) for summary in summaries],
+            },
+            indent=2,
+            sort_keys=True,
+        )
+    )
+    return 0
+
+
+def main() -> int:
+    return asyncio.run(_main())
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -1,0 +1,121 @@
+from __future__ import annotations
+
+import pytest
+
+from outcome.orchestrator import (
+    InsufficientCapitalPolicy,
+    OutcomeBacktestJob,
+    SingleOutcomeBacktestResult,
+    run_outcome_portfolio_backtest,
+)
+
+
+def result(
+    market_id: str,
+    start_ms: int,
+    settle_ms: int,
+    allocation: float,
+    pnl: float,
+) -> SingleOutcomeBacktestResult:
+    return SingleOutcomeBacktestResult(
+        market_id=market_id,
+        trading_open_time_ms=start_ms,
+        settlement_time_ms=settle_ms,
+        starting_collateral=allocation,
+        ending_collateral=allocation + pnl,
+        orders_placed_count=20,
+        fills_count=10,
+        maker_fills_count=8,
+        traded_notional=20.0,
+        fees_paid=0.1,
+        rebates_earned=0.02,
+        gross_spread_pnl=pnl + 0.1,
+        settlement_pnl=0.0,
+        pre_settlement_yes_qty=5.0,
+        pre_settlement_no_qty=4.0,
+        pre_settlement_paired_qty=4.0,
+        pre_settlement_net_yes_exposure=1.0,
+        max_paired_qty=5.0,
+        max_abs_residual_qty=1.0,
+        cumulative_yes_buy_qty=10.0,
+        cumulative_no_buy_qty=8.0,
+        pair_completion_ratio=0.8,
+        time_weighted_abs_residual_qty=0.5,
+        time_weighted_total_inventory_qty=6.0,
+        worst_case_settlement_equity_min=max(0.0, allocation - 2.0),
+    )
+
+
+def job(
+    market_id: str,
+    start_ms: int,
+    settle_ms: int,
+    allocation: float,
+    pnl: float,
+) -> OutcomeBacktestJob:
+    return OutcomeBacktestJob(
+        market_id=market_id,
+        trading_open_time_ms=start_ms,
+        settlement_time_ms=settle_ms,
+        requested_collateral=allocation,
+        runner=lambda allocated: result(market_id, start_ms, settle_ms, allocated, pnl),
+    )
+
+
+def test_overlapping_markets_cannot_each_receive_the_full_wallet():
+    jobs = [
+        job("first", 0, 10_000, 100.0, 1.0),
+        job("second", 1_000, 9_000, 100.0, 1.0),
+    ]
+    with pytest.raises(ValueError, match="insufficient shared collateral"):
+        run_outcome_portfolio_backtest(jobs, starting_collateral=100.0)
+
+
+def test_settled_capital_and_profit_are_reused_only_after_settlement():
+    portfolio = run_outcome_portfolio_backtest(
+        [
+            job("first", 0, 5_000, 60.0, 3.0),
+            job("overlap-skipped", 1_000, 4_000, 60.0, 100.0),
+            job("after-settlement", 5_000, 10_000, 60.0, 2.0),
+        ],
+        starting_collateral=100.0,
+        insufficient_capital_policy=InsufficientCapitalPolicy.SKIP,
+    )
+
+    assert [result.market_id for result in portfolio.market_results] == [
+        "first",
+        "after-settlement",
+    ]
+    assert [skipped.market_id for skipped in portfolio.skipped_markets] == ["overlap-skipped"]
+    assert portfolio.ending_collateral == pytest.approx(105.0)
+    assert portfolio.net_pnl == pytest.approx(5.0)
+    assert portfolio.max_concurrent_allocated_collateral == pytest.approx(60.0)
+    assert portfolio.allocated_collateral_time_ratio == pytest.approx(0.6)
+    assert portfolio.fills_count == 20
+    assert portfolio.orders_placed_count == 40
+    assert portfolio.order_fill_ratio == pytest.approx(0.5)
+    assert portfolio.maker_fill_ratio == pytest.approx(0.8)
+    assert portfolio.cumulative_yes_buy_qty == pytest.approx(20.0)
+    assert portfolio.cumulative_no_buy_qty == pytest.approx(16.0)
+    assert portfolio.pair_completion_ratio == pytest.approx(0.8)
+    assert portfolio.max_abs_residual_qty == pytest.approx(1.0)
+    assert portfolio.time_weighted_abs_residual_qty == pytest.approx(0.5)
+    assert portfolio.time_weighted_total_inventory_qty == pytest.approx(6.0)
+
+
+def test_same_timestamp_settlement_is_released_before_new_market_allocation():
+    portfolio = run_outcome_portfolio_backtest(
+        [
+            job("first", 0, 5_000, 100.0, 1.0),
+            job("second", 5_000, 10_000, 100.0, 1.0),
+        ],
+        starting_collateral=100.0,
+    )
+    assert portfolio.ending_collateral == pytest.approx(102.0)
+
+
+def test_empty_portfolio_preserves_wallet():
+    portfolio = run_outcome_portfolio_backtest([], starting_collateral=100.0)
+    assert portfolio.ending_collateral == 100.0
+    assert portfolio.market_results == ()
+    assert portfolio.pair_completion_ratio == 0.0

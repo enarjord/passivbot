@@ -13,6 +13,10 @@ from utils import to_ccxt_client_id
 
 
 PRICE_FIELDS = ("last", "bid", "ask")
+ORDER_BOOK_PROBE_LIMITS = {
+    # KuCoin Futures accepts only 20 or 100. Five is the smallest useful default elsewhere.
+    "kucoinfutures": 20,
+}
 
 
 def split_csv(raw: str | None) -> list[str]:
@@ -154,6 +158,10 @@ def summarize_order_book(order_book: Any) -> dict[str, Any]:
     }
 
 
+def order_book_probe_limit(exchange: Any) -> int:
+    return ORDER_BOOK_PROBE_LIMITS.get(str(getattr(exchange, "id", "")).lower(), 5)
+
+
 async def timed_call(coro) -> dict[str, Any]:
     started = time.perf_counter()
     try:
@@ -234,8 +242,12 @@ async def probe_ticker_capabilities(
         result["fetch_tickers_all"] = outcome
 
     if probe_order_book:
+        order_book_limit = order_book_probe_limit(exchange)
+        result["order_book_limit"] = order_book_limit
         for symbol in symbols:
-            outcome = await timed_call(exchange.fetch_order_book(symbol, limit=5))
+            outcome = await timed_call(
+                exchange.fetch_order_book(symbol, limit=order_book_limit)
+            )
             if outcome["ok"]:
                 outcome["value"] = summarize_order_book(outcome["value"])
             result["fetch_order_book"][symbol] = outcome
@@ -262,7 +274,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--order-book",
         action="store_true",
-        help="also probe fetch_order_book(symbol, limit=5)",
+        help="also probe fetch_order_book using the smallest venue-supported depth",
     )
     parser.add_argument("--json", action="store_true", help="emit JSON only")
     return parser

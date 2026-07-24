@@ -79,6 +79,30 @@ TOOL_COMMANDS: dict[str, CommandSpec] = {
         "tools.probe_hyperliquid_position_balance",
         "mutating Hyperliquid position/balance diagnostic",
     ),
+    "outcome-hip4-dry-cycle": CommandSpec(
+        "tools.probe_hyperliquid_outcome_dry_cycle",
+        "read-only HIP-4 fill, account, planning, and reconciliation cycle",
+    ),
+    "outcome-hip4-state": CommandSpec(
+        "tools.probe_hyperliquid_outcome_state",
+        "read-only HIP-4 market, account, inventory, fill, and book probe",
+    ),
+    "outcome-hip4-evaluate": CommandSpec(
+        "tools.evaluate_hip4_outcome_window",
+        "evaluate outcome EMA-anchor modes on an archived HIP-4 window",
+    ),
+    "outcome-polymarket-backfill": CommandSpec(
+        "tools.backfill_polymarket_outcome_trades",
+        "archive ordered public Polymarket fills from Polygon logs",
+    ),
+    "outcome-polymarket-evaluate": CommandSpec(
+        "tools.evaluate_polymarket_outcome_window",
+        "evaluate outcome EMA-anchor modes on an archived Polymarket window",
+    ),
+    "outcome-polymarket-signal": CommandSpec(
+        "tools.probe_polymarket_outcome_signal",
+        "capture a public Polymarket actual-fill signal window",
+    ),
     "fill-events-dash": CommandSpec(
         "tools.fill_events_dash",
         "launch fill events dashboard (requires full install)",

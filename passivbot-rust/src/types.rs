@@ -58,6 +58,7 @@ pub struct CoinMeta {
 pub struct HlcvsMeta {
     pub requested_start_timestamp_ms: u64,
     pub effective_start_timestamp_ms: u64,
+    pub bar_interval_ms: u64,
     pub warmup_minutes_requested: u64,
     pub warmup_minutes_provided: u64,
     pub coins: Vec<CoinMeta>,
@@ -330,7 +331,15 @@ pub struct BacktestParams {
     pub market_order_near_touch_threshold: f64,
     pub market_order_slippage_pct: f64,
     pub forager_score_hysteresis_pct: f64,
-    pub candle_interval_minutes: u64, // 1 for 1m candles (default), 5 for 5m, etc.
+    /// Resolved base-bar interval. Configuration compatibility is handled by Python before this
+    /// value crosses the Rust boundary.
+    pub candle_interval_ms: u64,
+}
+
+impl BacktestParams {
+    pub fn candle_interval_minutes(&self) -> f64 {
+        self.candle_interval_ms as f64 / 60_000.0
+    }
 }
 
 #[derive(Default, Debug, Clone, Copy, Serialize, Deserialize)]

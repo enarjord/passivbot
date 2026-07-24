@@ -5,6 +5,7 @@ from tools.probe_ticker_capabilities import (
     create_exchange,
     probe_ticker_capabilities,
     resolve_symbols,
+    order_book_probe_limit,
     summarize_order_book,
     summarize_ticker,
     summarize_tickers,
@@ -95,6 +96,7 @@ async def test_probe_ticker_capabilities_summarizes_success_and_errors():
     class FakeExchange:
         id = "fake"
         has = {"fetchTicker": True, "fetchTickers": True, "fetchOrderBook": True}
+        order_book_limits = []
 
         async def fetch_ticker(self, symbol):
             if symbol == "BAD/USDT:USDT":
@@ -110,10 +112,12 @@ async def test_probe_ticker_capabilities_summarizes_success_and_errors():
             return {symbol: {"symbol": symbol, "last": 10.0} for symbol in symbols}
 
         async def fetch_order_book(self, symbol, limit=None):
+            self.order_book_limits.append(limit)
             return {"bids": [[9.0, 1.0]], "asks": [[11.0, 1.0]]}
 
+    exchange = FakeExchange()
     out = await probe_ticker_capabilities(
-        FakeExchange(),
+        exchange,
         ["BTC/USDT:USDT", "BAD/USDT:USDT"],
         probe_all=True,
         probe_order_book=True,
@@ -126,6 +130,15 @@ async def test_probe_ticker_capabilities_summarizes_success_and_errors():
     assert out["fetch_tickers_symbols"]["ok"] is True
     assert out["fetch_tickers_all"]["ok"] is True
     assert out["fetch_order_book"]["BTC/USDT:USDT"]["value"]["bid"] == 9.0
+    assert out["order_book_limit"] == 5
+    assert exchange.order_book_limits == [5, 5]
+
+
+def test_order_book_probe_uses_kucoin_futures_supported_minimum():
+    class Exchange:
+        id = "kucoinfutures"
+
+    assert order_book_probe_limit(Exchange()) == 20
 
 
 def test_select_default_symbols_prefers_active_linear_swaps_for_quote():

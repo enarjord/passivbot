@@ -28,6 +28,39 @@ All notable user-facing changes will be documented in this file.
   exposure during pumps. CSV regeneration preserves all stored directions unless explicitly
   filtered with `--direction`.
 
+- Update CCXT from 4.5.66 to 4.5.68 after before/after account-contract snapshots, prediction
+  connector fixtures, supported-venue public endpoint probes, and exchange regression coverage.
+  Optional CCXT prediction clients now disable builder attribution by default so Hyperliquid
+  cannot implicitly approve a builder before its first outcome order. KuCoin Futures endpoint
+  probes now request its supported 20-level order-book minimum.
+
+- Add the first exchange-neutral binary-outcome foundation: one-second actual-fill candles,
+  strict-cross Rust simulation and settlement, portfolio orchestration, HIP-4 discovery/account
+  reconciliation and guarded dry-run planning, Polymarket reference adapters and ordered
+  historical ingestion, and an outcome-specific EMA-anchor strategy with pair-first inventory
+  controls, pre-close passive residual liquidation, and buy-path pair-completion metrics that do
+  not mistake same-token round trips for completed pairs. Missing verified public fills now produce
+  an observable cancel-only HIP-4 safety cycle that removes only Passivbot-namespaced quotes and
+  preserves unmanaged orders. Outcome fees now support per-fill versus inventory-reduction
+  incidence and payout-notional settlement charges; HIP-4 live planning requires current account
+  fee rates and applies a conservative maker-fee floor without replacing authoritative fill fees.
+  HIP-4 settlement fills are normalized and archived separately from market trades; expired and
+  settled markets fail closed to cancel-only reconciliation, with time-ranged account fills used
+  as a bounded settlement-recovery source. Outcome archives now retain fingerprinted market
+  metadata and stream ordered Hyperliquid node-fill files with cross-file block-continuity checks,
+  preventing expired contract terms from disappearing or conflicting IDs from mixing. Settled
+  full-contract archives can now build authoritative EMA-anchor jobs and compose those strategy
+  runs—not generic scripted simulations—against a shared collateral wallet. Standard Polymarket
+  history now imports on-chain CTF resolution vectors, retains actual `closedTime` across metadata
+  versions, and requires explicit collateral identity when Gamma omits it so USDC.e and pUSD eras
+  cannot silently mix. The existing perpetual backtest data path also accepts an explicit
+  `backtest.candle_interval_seconds`, including native one-second candles, without merging outcome
+  accounting into the perp simulator. Outcome strategy and shared-wallet reports now carry
+  cumulative complementary buys, pair completion, peak residual, and time-weighted residual and
+  total inventory through settlement. HIP-4 reconciliation now independently proves exact
+  Passivbot client-order IDs before every cancellation or creation and verifies the complete final
+  managed-order set. Authenticated outcome mutations remain disabled by default.
+
 - Canonical live-event payloads now make a bounded JSON-compatible copy at construction time,
   revalidate that copy at persistence boundaries, redact sensitive keys before retention, and
   record aggregate truncation metadata only when a limit applies. Event identity, routing, monitor

@@ -121,6 +121,7 @@ def get_template_config():
                 "btc_collateral_cap": 0.0,
                 "btc_collateral_ltv_cap": None,
                 "candle_interval_minutes": 1,
+                "candle_interval_seconds": None,
                 "coin_sources": {},
                 "compress_cache": True,
                 "dynamic_wel_by_tradability": True,

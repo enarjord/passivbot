@@ -7,6 +7,7 @@ mod dynamic;
 mod entries;
 mod equity_hard_stop_loss;
 mod orchestrator;
+pub mod outcome;
 mod python;
 mod risk;
 mod strategies;
@@ -80,6 +81,9 @@ fn passivbot_rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(order_type_snake_to_id, m)?)?;
     m.add_function(wrap_pyfunction!(get_order_id_type_from_string_alias, m)?)?;
     m.add_function(wrap_pyfunction!(compute_ideal_orders_json, m)?)?;
+    m.add_function(wrap_pyfunction!(run_single_outcome_backtest_json, m)?)?;
+    m.add_function(wrap_pyfunction!(run_outcome_ema_anchor_backtest_json, m)?)?;
+    m.add_function(wrap_pyfunction!(plan_outcome_ema_anchor_json, m)?)?;
     m.add_function(wrap_pyfunction!(get_strategy_spec, m)?)?;
     m.add_function(wrap_pyfunction!(get_strategy_kinds, m)?)?;
     m.add_function(wrap_pyfunction!(gate_entries_by_twel_py, m)?)?;
