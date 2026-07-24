@@ -54,6 +54,13 @@ retain exception text, request URLs, credentials, response bodies, paths, or oth
 from the sink exception. Sink counters and pipeline timings remain available through health
 snapshots independently of the exception payload.
 
+Queue-full and pipeline-closing degradation diagnostics retain a canonical registered event type
+only. Unsafe, malformed, sensitive-marker-bearing, or unregistered labels normalize to
+`unknown_event` in the drop counter, message, and `dropped_event_type`; canonical event labels are
+unchanged. Monitor-delivery and generic emitter fallback warnings follow the same bounded event-type
+and exception-type rule. These diagnostics remain isolated from event routing, queue semantics,
+sink timing/counters, caller return values, and trading behavior.
+
 ## Emitter Failure Diagnostics
 
 Best-effort live event emitters remain isolated from their callers. If event construction,

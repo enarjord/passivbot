@@ -4,6 +4,10 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Event-bus degradation diagnostics now retain bounded exception types and canonical dropped-event
+  labels only. Sink isolation, queue behavior, counters for registered events, timing, return
+  values, event routing, and trading behavior are unchanged.
+
 - Failed Rust-orchestrator return events now retain bounded exception types instead of persisted
   exception text. Existing timing and correlation metadata, event delivery, orchestration, and
   trading behavior are unchanged.
