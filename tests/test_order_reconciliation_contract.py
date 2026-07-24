@@ -19,6 +19,12 @@ def _client_id(pb_order_type: str) -> str:
     return f"pb-0x{pbr.order_type_snake_to_id(pb_order_type):04x}-test"
 
 
+def test_hyperliquid_native_cloid_is_a_client_order_identity():
+    client_id = _client_id("entry_grid_normal_long")
+
+    assert reconciler.extract_order_custom_id({"info": {"cloid": client_id}}) == client_id
+
+
 @pytest.mark.parametrize(
     ("bot_cls", "extra", "side", "expected_pside", "expected_close"),
     [
