@@ -625,6 +625,32 @@ def test_pipeline_queue_overflow_is_observable_without_raising():
     assert pipeline.drop_counters[EventTypes.DATA_PACKET_UPDATED] == 1
     assert pipeline.degraded_events[-1].event_type == EventTypes.SINK_DEGRADED
     assert pipeline.degraded_events[-1].reason_code == "queue_full"
+    assert pipeline.degraded_events[-1].data == {
+        "dropped_event_type": EventTypes.DATA_PACKET_UPDATED
+    }
+
+
+def test_bounded_diagnostic_event_type_preserves_only_registered_labels():
+    assert (
+        live_event_bus_module.bounded_diagnostic_event_type(
+            EventTypes.DATA_PACKET_UPDATED
+        )
+        == EventTypes.DATA_PACKET_UPDATED
+    )
+    assert (
+        live_event_bus_module.bounded_diagnostic_event_type("planning_unavailable")
+        == EventTypes.PLANNING_UNAVAILABLE
+    )
+    for unsafe_value in (
+        "secret.event",
+        "event." + "x" * 200,
+        1,
+        None,
+    ):
+        assert (
+            live_event_bus_module.bounded_diagnostic_event_type(unsafe_value)
+            == "unknown_event"
+        )
 
 
 def test_pipeline_health_snapshot_reports_queue_and_degraded_counters():
@@ -1272,8 +1298,11 @@ def test_pipeline_queue_overflow_is_logged_and_monitor_visible(caplog):
     assert any("live event queue full" in record.message for record in caplog.records)
 
 
-def test_sink_failure_degrades_observability_without_raising(monkeypatch):
+def test_sink_failure_degrades_observability_without_raising(monkeypatch, caplog):
     clock = {"ns": 1_000_000_000}
+    secret = "sink-secret"
+    hostile_type_name = "SinkApiKeyFailure"
+    HostileSinkFailure = type(hostile_type_name, (OSError,), {})
     monkeypatch.setattr(
         live_event_bus_module.time,
         "monotonic_ns",
@@ -1283,8 +1312,8 @@ def test_sink_failure_degrades_observability_without_raising(monkeypatch):
     class FailingSink:
         def write(self, event):
             clock["ns"] += 3_000_000
-            raise OSError(
-                "disk full https://example.invalid/private?api_key=do-not-retain"
+            raise HostileSinkFailure(
+                f"disk full https://example.invalid/private?api_key={secret}\nTraceback"
             )
 
     class ControlledMonitorSink(ListEventSink):
@@ -1299,10 +1328,11 @@ def test_sink_failure_degrades_observability_without_raising(monkeypatch):
         routes={EventTypes.SNAPSHOT_BUILT: EventRoute(structured=True, monitor=False)},
     )
 
-    event = pipeline.emit(LiveEvent(EventTypes.SNAPSHOT_BUILT))
+    with caplog.at_level(logging.WARNING):
+        event = pipeline.emit(LiveEvent(EventTypes.SNAPSHOT_BUILT))
+        assert pipeline.flush(timeout=2.0) is True
 
     assert event.event_type == EventTypes.SNAPSHOT_BUILT
-    assert pipeline.flush(timeout=2.0) is True
     assert pipeline.sink_error_counters["structured"] == 1
     timing = pipeline.health_snapshot()
     assert timing["event_structured_sink_write_count"] == 1
@@ -1322,9 +1352,97 @@ def test_sink_failure_degrades_observability_without_raising(monkeypatch):
         "sink": "structured",
         "error_type": "OSError",
     }
-    assert "do-not-retain" not in repr(pipeline.degraded_events)
-    assert "do-not-retain" not in repr(monitor.events)
+    emitted_diagnostics = "\n".join(
+        [repr(pipeline.degraded_events), repr(monitor.events)]
+        + [record.getMessage() for record in caplog.records]
+    )
+    for unsafe_value in (
+        hostile_type_name,
+        secret,
+        "example.invalid",
+        "Traceback",
+    ):
+        assert unsafe_value not in emitted_diagnostics
     assert pipeline.close(timeout=2.0) is True
+
+
+@pytest.mark.parametrize("prepare_error", [False, True])
+def test_degraded_monitor_warning_uses_bounded_exception_type(caplog, prepare_error):
+    secret = "monitor-secret"
+    hostile_type_name = "MonitorTokenFailure"
+    HostileMonitorFailure = type(hostile_type_name, (OSError,), {})
+
+    class FailingMonitor(MonitorEventSink):
+        def _write_with_timing(self, event):
+            error = HostileMonitorFailure(
+                f"https://example.invalid/monitor?token={secret}\nTraceback"
+            )
+            if prepare_error:
+                raise live_event_bus_module._MonitorEventPrepareError(
+                    error,
+                    live_event_bus_module._empty_monitor_phase_timing(),
+                )
+            raise error
+
+    pipeline = LiveEventPipeline(
+        monitor_sinks=[FailingMonitor(object())],
+        start=False,
+    )
+
+    with caplog.at_level(logging.WARNING):
+        pipeline._record_degraded(
+            reason_code=ReasonCodes.QUEUE_FULL,
+            message="live event queue full; dropped unknown_event",
+            data={"dropped_event_type": "unknown_event"},
+        )
+
+    assert pipeline.sink_error_counters["monitor"] == 1
+    assert pipeline.degraded_events[-1].data == {"dropped_event_type": "unknown_event"}
+    messages = "\n".join(record.getMessage() for record in caplog.records)
+    assert "failed to emit sink.degraded to monitor: OSError" in messages
+    for unsafe_value in (
+        hostile_type_name,
+        secret,
+        "example.invalid",
+        "Traceback",
+    ):
+        assert unsafe_value not in messages
+
+
+@pytest.mark.parametrize("pipeline_closing", [False, True])
+def test_drop_diagnostics_bound_hostile_event_types(caplog, pipeline_closing):
+    secret = "event-secret"
+    hostile_event_type = f"secret.event https://example.invalid/?token={secret}\nTraceback"
+    monitor = ListEventSink()
+    pipeline = LiveEventPipeline(
+        queue_maxsize=1,
+        start=False,
+        monitor_sinks=[monitor],
+    )
+
+    with caplog.at_level(logging.WARNING):
+        if pipeline_closing:
+            pipeline._stop.set()
+        else:
+            assert pipeline.emit(LiveEvent(hostile_event_type)) is not None
+        assert (
+            pipeline.emit(LiveEvent(hostile_event_type), require_enqueue=True) is None
+        )
+
+    expected_reason = (
+        ReasonCodes.SINK_PIPELINE_CLOSING if pipeline_closing else ReasonCodes.QUEUE_FULL
+    )
+    assert pipeline.drop_counters == {"unknown_event": 1}
+    assert pipeline.health_snapshot()["event_drop_counts"] == {"unknown_event": 1}
+    assert pipeline.degraded_events[-1].reason_code == expected_reason
+    assert pipeline.degraded_events[-1].data == {"dropped_event_type": "unknown_event"}
+    assert monitor.events[-1] == pipeline.degraded_events[-1]
+    emitted_diagnostics = "\n".join(
+        [repr(pipeline.degraded_events), repr(monitor.events)]
+        + [record.getMessage() for record in caplog.records]
+    )
+    for unsafe_value in (hostile_event_type, secret, "example.invalid", "Traceback"):
+        assert unsafe_value not in emitted_diagnostics
 
 
 def test_monitor_sink_none_ack_records_monitor_sink_failure():
@@ -1931,6 +2049,47 @@ def test_emit_event_failure_log_omits_exception_text(caplog):
     )
     assert all(secret not in message for message in messages)
     assert all("pipeline-secret" not in message for message in messages)
+
+
+def test_emit_event_failure_log_bounds_hostile_event_type_and_exception_class(caplog):
+    secret = "fallback-secret"
+    hostile_type_name = "FallbackPrivateKeyFailure"
+    HostilePipelineFailure = type(hostile_type_name, (RuntimeError,), {})
+    hostile_event_type = f"secret.event https://example.invalid/?token={secret}\nTraceback"
+
+    class FailingPipeline:
+        def emit(self, *_args, **_kwargs):
+            raise HostilePipelineFailure(secret)
+
+    class HostileEventMapping(dict):
+        def get(self, *_args, **_kwargs):
+            raise RuntimeError(
+                f"https://example.invalid/mapping?token={secret}\nTraceback"
+            )
+
+    bot = type("Bot", (), {"_live_event_pipeline": FailingPipeline()})()
+
+    with caplog.at_level(logging.DEBUG):
+        for event in (
+            {"event_type": hostile_event_type},
+            HostileEventMapping(event_type=hostile_event_type),
+        ):
+            assert live_event_bus_module.emit_event(bot, event) is None
+
+    messages = [record.getMessage() for record in caplog.records]
+    assert sum(
+        "failed to emit unknown_event error_type=RuntimeError" in message
+        for message in messages
+    ) == 2
+    emitted_diagnostics = "\n".join(messages)
+    for unsafe_value in (
+        hostile_type_name,
+        hostile_event_type,
+        secret,
+        "example.invalid",
+        "Traceback",
+    ):
+        assert unsafe_value not in emitted_diagnostics
 
 
 def test_ema_fallback_console_formatter_is_bounded_without_mutating_payload():

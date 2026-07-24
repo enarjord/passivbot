@@ -16,6 +16,7 @@ import uuid
 from typing import Any, Iterable, Mapping, Protocol
 
 from live.balance_composition import format_balance_composition_sample
+from live.diagnostic_safety import bounded_exception_type
 
 
 SCHEMA_VERSION = 1
@@ -591,6 +592,17 @@ PHASE1_EVENT_TYPES = {
 LEGACY_EVENT_TYPE_ALIASES = {
     "planning_unavailable": EventTypes.PLANNING_UNAVAILABLE,
 }
+_REGISTERED_EVENT_TYPES = frozenset(
+    value
+    for name, value in vars(EventTypes).items()
+    if name.isupper() and type(value) is str
+)
+_DIAGNOSTIC_EVENT_TYPE_MAX_LEN = 120
+_DIAGNOSTIC_EVENT_TYPE_SENSITIVE_RE = re.compile(
+    r"(?i)(?:api_?key|apikey|authorization|cookie|passphrase|password|private_?key|"
+    r"privatekey|secret|signature|token|wallet_?address|walletaddress)"
+)
+_UNKNOWN_DIAGNOSTIC_EVENT_TYPE = "unknown_event"
 
 
 VALID_LEVELS = {"trace", "debug", "info", "warning", "error", "critical"}
@@ -638,6 +650,20 @@ def monotonic_ms() -> int:
 def normalize_event_type(event_type: object) -> str:
     raw = str(event_type)
     return LEGACY_EVENT_TYPE_ALIASES.get(raw, raw)
+
+
+def bounded_diagnostic_event_type(event_type: object) -> str:
+    """Return a public-safe event type for failure and degradation diagnostics."""
+    if type(event_type) is not str:
+        return _UNKNOWN_DIAGNOSTIC_EVENT_TYPE
+    normalized = LEGACY_EVENT_TYPE_ALIASES.get(event_type, event_type)
+    if (
+        len(normalized) > _DIAGNOSTIC_EVENT_TYPE_MAX_LEN
+        or _DIAGNOSTIC_EVENT_TYPE_SENSITIVE_RE.search(normalized)
+        or normalized not in _REGISTERED_EVENT_TYPES
+    ):
+        return _UNKNOWN_DIAGNOSTIC_EVENT_TYPE
+    return normalized
 
 
 def payload_hash(payload: Any) -> str:
@@ -3558,12 +3584,18 @@ class LiveEventPipeline:
             with self._enqueue_lock:
                 if self._stop.is_set():
                     enqueued = False
+                    dropped_event_type = bounded_diagnostic_event_type(
+                        live_event.event_type
+                    )
                     with self._state_lock:
-                        self.drop_counters[live_event.event_type] += 1
+                        self.drop_counters[dropped_event_type] += 1
                     self._record_degraded(
                         reason_code=ReasonCodes.SINK_PIPELINE_CLOSING,
-                        message=f"live event pipeline closing; dropped {live_event.event_type}",
-                        data={"dropped_event_type": live_event.event_type},
+                        message=(
+                            "live event pipeline closing; dropped "
+                            f"{dropped_event_type}"
+                        ),
+                        data={"dropped_event_type": dropped_event_type},
                     )
                 else:
                     try:
@@ -3575,12 +3607,18 @@ class LiveEventPipeline:
                         )
                     except queue.Full:
                         enqueued = False
+                        dropped_event_type = bounded_diagnostic_event_type(
+                            live_event.event_type
+                        )
                         with self._state_lock:
-                            self.drop_counters[live_event.event_type] += 1
+                            self.drop_counters[dropped_event_type] += 1
                         self._record_degraded(
                             reason_code=ReasonCodes.QUEUE_FULL,
-                            message=f"live event queue full; dropped {live_event.event_type}",
-                            data={"dropped_event_type": live_event.event_type},
+                            message=(
+                                "live event queue full; dropped "
+                                f"{dropped_event_type}"
+                            ),
+                            data={"dropped_event_type": dropped_event_type},
                         )
         if require_enqueue and not enqueued:
             return None
@@ -3873,10 +3911,11 @@ class LiveEventPipeline:
     ) -> None:
         with self._state_lock:
             self.sink_error_counters[name] += 1
+        error_type = bounded_exception_type(exc)
         self._record_degraded(
             reason_code=sink_failed_reason_code(name),
-            message=f"{name} sink failed: {type(exc).__name__}",
-            data={"sink": name, "error_type": type(exc).__name__},
+            message=f"{name} sink failed: {error_type}",
+            data={"sink": name, "error_type": error_type},
             sink_write_timing=sink_write_timing,
         )
 
@@ -3931,14 +3970,14 @@ class LiveEventPipeline:
                         self.sink_error_counters["monitor"] += 1
                     logging.warning(
                         "[event] failed to emit sink.degraded to monitor: %s",
-                        type(exc.error).__name__,
+                        bounded_exception_type(exc.error),
                     )
                 except Exception as exc:
                     with self._state_lock:
                         self.sink_error_counters["monitor"] += 1
                     logging.warning(
                         "[event] failed to emit sink.degraded to monitor: %s",
-                        type(exc).__name__,
+                        bounded_exception_type(exc),
                     )
                 finally:
                     if sink_write_timing is not None:
@@ -3966,9 +4005,20 @@ def emit_event(
             emit_kwargs["defer_sync_sinks_until_enqueued"] = True
         return pipeline.emit(event, **emit_kwargs)
     except Exception as exc:
+        try:
+            raw_event_type = (
+                event.event_type
+                if isinstance(event, LiveEvent)
+                else event.get("event_type")
+                if isinstance(event, Mapping)
+                else None
+            )
+        except Exception:
+            raw_event_type = None
+        event_type = bounded_diagnostic_event_type(raw_event_type)
         logging.debug(
             "[event] failed to emit %s error_type=%s",
-            getattr(event, "event_type", event),
-            type(exc).__name__,
+            event_type,
+            bounded_exception_type(exc),
         )
         return None
