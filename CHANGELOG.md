@@ -6,7 +6,8 @@ All notable user-facing changes will be documented in this file.
 
 - Documented Python 3.12+ support, including Python 3.14, and fixed reentrant candle fetch-lock
   cleanup so a missing bookkeeping record no longer suppresses an exception raised by the
-  protected operation.
+  protected operation. CI now builds the Rust extension and runs the Python suite on both Python
+  3.12 and 3.14.
 
 - Live candle orchestration now reads bounded cache-only native 1h EMA carry-forward from the 1h
   index, requires a complete native window, isolates carried values from the active EMA cache, and
