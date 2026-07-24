@@ -1370,6 +1370,7 @@ def test_position_anchor_timestamp_prefers_update_fields_over_open_fields():
     )
 
     assert bot._position_anchor_timestamp_ms(symbol, "long") == 360_000
+    assert bot._position_history_anchor_timestamp_ms(symbol, "long") == 120_000
     assert bot._position_update_timestamp_ms(symbol, "long") == 360_000
 
 
@@ -1661,7 +1662,7 @@ def test_restart_without_update_timestamp_requires_matching_fill_after_state():
     assert "fills" in bot._authoritative_pending_confirmations
 
 
-def test_full_opening_fill_matches_position_despite_truncated_cache_psize():
+def test_matching_fill_shape_does_not_override_truncated_cache_psize():
     cfg = _dummy_config()
     bot = _make_dummy_bot(cfg)
     symbol = _set_basic_state(bot)
@@ -1674,7 +1675,7 @@ def test_full_opening_fill_matches_position_despite_truncated_cache_psize():
         "c_mult": 1.0,
     }
 
-    assert bot._fill_anchor_matches_position_state(
+    assert not bot._fill_anchor_matches_position_state(
         symbol, "long", (1.1, 58.717), anchor
     )
     assert not bot._fill_anchor_matches_position_state(
@@ -1682,6 +1683,33 @@ def test_full_opening_fill_matches_position_despite_truncated_cache_psize():
     )
     assert not bot._fill_anchor_matches_position_state(
         symbol, "short", (1.1, 58.717), anchor
+    )
+
+
+def test_fill_history_recovery_starts_before_open_even_outside_pnl_window():
+    cfg = _dummy_config()
+    bot = _make_dummy_bot(cfg)
+    symbol = _set_basic_state(bot)
+    now_ms = 1_800_000_000_000
+    minute_ms = 60_000
+    open_ms = now_ms - 60 * 24 * 60 * minute_ms
+    update_ms = now_ms - 2 * 60 * minute_ms
+    age_limit = now_ms - 30 * 24 * 60 * minute_ms
+    bot.positions[symbol]["long"].update(
+        {
+            "openTime": open_ms,
+            "lastUpdateTimestamp": update_ms,
+        }
+    )
+    bot._trailing_fill_confirmation_diagnostics = {
+        (symbol, "long"): {
+            "failed_predicates": ["fill_after_state_mismatch"],
+            "fill_timestamp_ms": update_ms,
+        }
+    }
+
+    assert bot._trailing_fill_history_recovery_start_ms(age_limit) == (
+        open_ms - 5 * minute_ms
     )
 
 

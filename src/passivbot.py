@@ -8301,6 +8301,46 @@ class Passivbot:
         position = self.positions.get(symbol, {}).get(pside, {})
         return self._position_anchor_timestamp_from_row(position)
 
+    def _position_history_anchor_timestamp_ms(
+        self, symbol: str, pside: str
+    ) -> int | None:
+        """Return the earliest exchange position timestamp usable for fill recovery.
+
+        Candle anchoring prefers the latest position update. Fill-history recovery
+        has the opposite requirement: start before the position opened so the
+        reconstructed state includes every entry and reduction still available
+        from the exchange.
+        """
+        position = self.positions.get(symbol, {}).get(pside, {})
+        timestamp_keys = (
+            "open_time",
+            "openTime",
+            "createdTime",
+            "createTime",
+            "cTime",
+            "timestamp",
+            "timestamp_ms",
+            "lastUpdateTimestamp",
+            "updateTime",
+            "updatedTime",
+            "update_time",
+            "updated_at",
+            "uTime",
+        )
+        candidates = [position.get(key) for key in timestamp_keys]
+        info = position.get("info")
+        if isinstance(info, dict):
+            candidates.extend(info.get(key) for key in timestamp_keys)
+        parsed = [
+            timestamp
+            for timestamp in (
+                self._parse_position_anchor_timestamp_ms(candidate)
+                for candidate in candidates
+            )
+            if timestamp is not None
+        ]
+        return min(parsed) if parsed else None
+
     def _position_update_timestamp_ms(self, symbol: str, pside: str) -> int | None:
         position = self.positions.get(symbol, {}).get(pside, {})
         return self._position_update_timestamp_from_row(position)
@@ -8400,31 +8440,11 @@ class Passivbot:
             ):
                 return True
 
-        # A cache whose retained history starts mid-position can carry a
-        # phantom reconstructed psize into every later fill.  The latest fill
-        # itself still proves a flat-to-position transition when its direction,
-        # entire quantity, and price exactly match the authoritative exchange
-        # position.  This narrow proof does not accept partial entries, DCA, or
-        # a mismatched average price.
-        required = ("qty", "price", "side")
-        if not all(field in anchor for field in required):
-            return False
-        fill_side = str(anchor["side"]).lower()
-        opening_side = "buy" if str(pside).lower() == "long" else "sell"
-        if fill_side != opening_side:
-            return False
-        try:
-            anchor_c_mult = abs(float(anchor.get("c_mult", c_mult) or c_mult))
-            opening_qty = abs(float(anchor["qty"])) * anchor_c_mult
-            opening_price = float(anchor["price"])
-        except (TypeError, ValueError, OverflowError):
-            return False
-        return (
-            math.isfinite(opening_qty)
-            and math.isfinite(opening_price)
-            and abs(opening_qty - position_size_in_fill_units) <= qty_tolerance
-            and abs(opening_price - position_price) <= price_tolerance
-        )
+        # Price and quantity alone cannot prove this fill opened the entire
+        # position: unseen reductions can produce the same live size/average.
+        # Keep the cohort pending until refreshed history reconstructs a
+        # matching post-fill state.
+        return False
 
     def _latest_fill_position_change_epochs(self) -> dict[tuple[str, str], str]:
         """Return the newest known fill identity for each symbol and position side."""
@@ -11560,7 +11580,7 @@ class Passivbot:
             if not failed.intersection(recoverable_predicates):
                 continue
             symbol, pside = str(raw_key[0]), str(raw_key[1])
-            anchor_ts = self._position_anchor_timestamp_ms(symbol, pside)
+            anchor_ts = self._position_history_anchor_timestamp_ms(symbol, pside)
             if anchor_ts is None:
                 try:
                     anchor_ts = int(detail.get("fill_timestamp_ms") or 0) or None
@@ -11574,8 +11594,8 @@ class Passivbot:
             return None
 
         start_ms = min(candidates)
-        if age_limit is not None:
-            start_ms = max(int(age_limit), start_ms)
+        # `age_limit` bounds PnL accounting, not current-position
+        # reconciliation. A position may legitimately predate that window.
         recovery_key = (tuple(sorted(cohorts)), int(start_ms))
         now_ms = utc_ms()
         state = dict(

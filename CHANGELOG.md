@@ -10,9 +10,10 @@ All notable user-facing changes will be documented in this file.
 
 - Live fill confirmation now preserves the last successful exchange-refresh timestamp while
   loading or repairing local fill caches, widens fill-history fetches with bounded backoff when a
-  position remains tied to a stale or mismatched fill, and recognizes an exact full-opening fill
-  even when older truncated history polluted its reconstructed post-fill size. Affected trailing
-  positions remain fail-closed until the refreshed fill evidence matches exchange state. Id-less
+  position remains tied to a stale or mismatched fill, starting before the earliest available
+  position/open timestamp even when that predates the configured PnL window. Affected trailing
+  positions remain fail-closed until refreshed history reconstructs a post-fill state matching
+  exchange state; price and quantity alone cannot prove a flat-to-position transition. Id-less
   fills use stable content-based identities rather than history-list indices.
 
 - Live candle orchestration now reads bounded cache-only native 1h EMA carry-forward from the 1h
