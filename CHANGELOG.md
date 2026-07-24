@@ -4,6 +4,10 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Executor churn-admission and fresh-entry eligibility diagnostics now retain bounded exception
+  types only. Existing admission/defer reasons, batch limits, fail-closed behavior, trace handling,
+  event delivery isolation, scheduling, and trading behavior are unchanged.
+
 - Ambiguous create diagnostics now retain bounded exception types only. Existing ambiguous
   bookkeeping, restart behavior, acknowledgement handling, event emission, and trading behavior
   are unchanged.

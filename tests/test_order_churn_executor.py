@@ -265,6 +265,122 @@ async def test_diagnostic_emitter_failure_cannot_change_admission():
 
 
 @pytest.mark.asyncio
+async def test_churn_admission_emitter_diagnostics_bound_hostile_exception_types(caplog):
+    hostile_name = "AuthorizationChurnAdmissionEmitterFailure"
+    secret = "https://hostile.example.invalid/churn?token=emitter-secret"
+    HostileError = type(hostile_name, (RuntimeError,), {})
+
+    def fail_event(**_kwargs):
+        raise HostileError(secret)
+
+    bot = _Bot()
+    bot._emit_order_churn_admission_event = fail_event
+    stable = _order("stable", price=90.0, churn=False)
+
+    with caplog.at_level(logging.DEBUG):
+        bot.values["order_replacement_churn_gate_activation_count"] = 0
+        assert await _apply_order_churn_final_admission(bot, [stable]) == [stable]
+        assert stable["_churn_gate_reason"] == "disabled"
+
+        bot.values["order_replacement_churn_gate_activation_count"] = 10
+        assert await _apply_order_churn_final_admission(bot, [stable]) == [stable]
+        assert stable["_churn_gate_reason"] == "no_churn_evidence"
+
+    records = [
+        record
+        for record in caplog.records
+        if record.getMessage().startswith("[event] order churn admission emitter failed")
+    ]
+    assert [(record.levelno, record.getMessage()) for record in records] == [
+        (
+            logging.DEBUG,
+            "[event] order churn admission emitter failed | error_type=RuntimeError",
+        ),
+        (
+            logging.DEBUG,
+            "[event] order churn admission emitter failed | error_type=RuntimeError",
+        ),
+    ]
+    rendered = "\n".join(record.getMessage() for record in records)
+    assert hostile_name not in rendered
+    assert secret not in rendered
+    assert "hostile.example.invalid" not in rendered
+
+
+@pytest.mark.asyncio
+async def test_churn_market_data_diagnostic_bounds_hostile_exception_type(caplog):
+    hostile_name = "PrivateKeyChurnMarketDataFailure"
+    secret = "https://hostile.example.invalid/churn?token=market-secret"
+    HostileError = type(hostile_name, (RuntimeError,), {})
+
+    async def fail_market_data(*_args, **_kwargs):
+        raise HostileError(secret)
+
+    bot = _Bot()
+    bot._fetch_fresh_order_churn_market_prices = fail_market_data
+    churn = _order("churn", price=99.0)
+    stable = _order("stable", price=90.0, churn=False)
+
+    with caplog.at_level(logging.DEBUG):
+        admitted = await _apply_order_churn_final_admission(bot, [churn, stable])
+
+    assert admitted == [stable]
+    assert churn["_churn_gate_reason"] == "market_price_unavailable"
+    records = [
+        record
+        for record in caplog.records
+        if record.getMessage().startswith("[order] fresh market data unavailable")
+    ]
+    assert [(record.levelno, record.getMessage()) for record in records] == [
+        (
+            logging.WARNING,
+            "[order] fresh market data unavailable for churn-gate final admission | "
+            "error_type=RuntimeError",
+        )
+    ]
+    rendered = "\n".join(record.getMessage() for record in records)
+    assert hostile_name not in rendered
+    assert secret not in rendered
+    assert "hostile.example.invalid" not in rendered
+
+
+@pytest.mark.asyncio
+async def test_churn_headroom_diagnostic_bounds_hostile_exception_type(caplog):
+    hostile_name = "SecretChurnHeadroomFailure"
+    secret = "https://hostile.example.invalid/churn?token=headroom-secret"
+    HostileError = type(hostile_name, (RuntimeError,), {})
+
+    async def fail_headroom():
+        raise HostileError(secret)
+
+    bot = _Bot()
+    bot._order_churn_far_create_headroom = fail_headroom
+    churn = _order("churn", price=99.0)
+    stable = _order("stable", price=90.0, churn=False)
+
+    with caplog.at_level(logging.DEBUG):
+        admitted = await _apply_order_churn_final_admission(bot, [churn, stable])
+
+    assert admitted == [stable]
+    assert churn["_churn_gate_reason"] == "action_headroom_unavailable"
+    records = [
+        record
+        for record in caplog.records
+        if record.getMessage().startswith("[order] connector churn headroom unavailable")
+    ]
+    assert [(record.levelno, record.getMessage()) for record in records] == [
+        (
+            logging.WARNING,
+            "[order] connector churn headroom unavailable | error_type=RuntimeError",
+        )
+    ]
+    rendered = "\n".join(record.getMessage() for record in records)
+    assert hostile_name not in rendered
+    assert secret not in rendered
+    assert "hostile.example.invalid" not in rendered
+
+
+@pytest.mark.asyncio
 async def test_cancellation_capacity_diagnostics_bound_hostile_exception_types(
     monkeypatch, caplog
 ):
