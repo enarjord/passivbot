@@ -265,6 +265,102 @@ async def test_diagnostic_emitter_failure_cannot_change_admission():
 
 
 @pytest.mark.asyncio
+async def test_cancellation_capacity_diagnostics_bound_hostile_exception_types(
+    monkeypatch, caplog
+):
+    hostile_name = "ApiKeyCancellationCapacityFailure"
+    secret = "https://hostile.example.invalid/cancel?token=capacity-secret"
+    HostileError = type(hostile_name, (RuntimeError,), {})
+
+    class FakePassivbot:
+        @staticmethod
+        def _emit_execution_order_event(*_args, **_kwargs):
+            return None
+
+        @staticmethod
+        def _live_event_console_available(_bot):
+            return False
+
+        @staticmethod
+        def _log_symbol(symbol):
+            return str(symbol).split("/")[0]
+
+    class FakeBot:
+        debug_mode = False
+
+        def __init__(self):
+            self._health_orders_cancelled = 0
+            self._order_wave_in_progress = None
+            self.state_change_detected_by_symbol = set()
+            self.submitted_orders = []
+
+        def live_value(self, key):
+            assert key == "max_n_cancellations_per_batch"
+            return 1
+
+        def _emit_execution_cancel_filter_event(self, **_kwargs):
+            raise HostileError(secret)
+
+        def add_to_recent_order_cancellations(self, _order):
+            return None
+
+        def log_order_action(self, *_args, **_kwargs):
+            return None
+
+        def _log_order_action_summary(self, *_args, **_kwargs):
+            return None
+
+        async def execute_cancellations(self, orders):
+            self.submitted_orders = list(orders)
+            return []
+
+        def _resolve_pb_order_type(self, order):
+            return str(order["pb_order_type"])
+
+    def fail_priority_filter(_order):
+        raise HostileError(secret)
+
+    monkeypatch.setattr(executor_module, "_pb_attr", lambda _name: FakePassivbot)
+    monkeypatch.setattr(executor_module, "_order_is_reduce_only", fail_priority_filter)
+    bot = FakeBot()
+    orders = [
+        {"symbol": "BTC/USDT:USDT", "pb_order_type": "close_grid_long"},
+        {"symbol": "ETH/USDT:USDT", "pb_order_type": "close_grid_short"},
+    ]
+
+    with caplog.at_level(logging.DEBUG):
+        result = await executor_module.execute_cancellations_parent(bot, orders)
+
+    assert result == []
+    assert bot.submitted_orders == [orders[0]]
+    records = [
+        record
+        for record in caplog.records
+        if record.getMessage().startswith(
+            (
+                "[order] cancellation priority filtering failed",
+                "[event] cancellation-capacity emitter failed",
+            )
+        )
+    ]
+    assert [(record.levelno, record.getMessage()) for record in records] == [
+        (
+            logging.ERROR,
+            "[order] cancellation priority filtering failed; using input order | "
+            "error_type=RuntimeError",
+        ),
+        (
+            logging.DEBUG,
+            "[event] cancellation-capacity emitter failed | error_type=RuntimeError",
+        ),
+    ]
+    rendered = "\n".join(record.getMessage() for record in records)
+    assert hostile_name not in rendered
+    assert secret not in rendered
+    assert "hostile.example.invalid" not in rendered
+
+
+@pytest.mark.asyncio
 async def test_repeated_churn_deferral_keeps_structured_path_but_throttles_info(
     monkeypatch, caplog
 ):
