@@ -5402,6 +5402,7 @@ def test_execution_failure_event_redacts_hostile_exception_metadata():
             self.exchange = "okx"
             self.user = "okx_01"
             self.bot_id = "bot_1"
+            self.live_event_debug_profiles = ("execution",)
             self._live_event_current_cycle_id = "cy_execution_failure"
             self._live_event_pipeline = LiveEventPipeline(
                 structured_sinks=[sink],
@@ -5438,22 +5439,49 @@ def test_execution_failure_event_redacts_hostile_exception_metadata():
         wave={"id": 23, "event_id": "ow_23"},
         result=HostileError(hostile_value),
     )
+    bot._emit_execution_order_event(
+        event_type=EventTypes.EXECUTION_CANCEL_FAILED,
+        order=order,
+        action="cancel",
+        status="failed",
+        reason_code=ReasonCodes.EXCHANGE_EXCEPTION,
+        level="warning",
+        index=3,
+        wave={"id": 24, "event_id": "ow_24"},
+        error=HostileError(hostile_value),
+    )
 
     assert bot._live_event_pipeline.flush(timeout=2.0) is True
-    event = sink.events[-1]
-    assert event.event_type == EventTypes.EXECUTION_CREATE_FAILED
-    assert event.status == "failed"
-    assert event.reason_code == ReasonCodes.EXCHANGE_EXCEPTION
-    assert event.order_wave_id == "ow_23"
-    assert event.action_id == "ow_23:create:2"
-    assert event.tags == ("execution", "order", "create")
-    assert event.symbol == "BTC/USDT:USDT"
-    assert event.pside == "long"
-    assert event.side == "buy"
-    assert event.client_order_id == "cid-execution-failure-123"
-    assert event.data["error_type"] == "RuntimeError"
-    assert "error" not in event.data
-    rendered = json.dumps(event.to_dict(), sort_keys=True)
+    result_event, explicit_error_event = sink.events[-2:]
+    assert result_event.event_type == EventTypes.EXECUTION_CREATE_FAILED
+    assert result_event.status == "failed"
+    assert result_event.reason_code == ReasonCodes.EXCHANGE_EXCEPTION
+    assert result_event.order_wave_id == "ow_23"
+    assert result_event.action_id == "ow_23:create:2"
+    assert result_event.tags == ("execution", "order", "create")
+    assert result_event.symbol == "BTC/USDT:USDT"
+    assert result_event.pside == "long"
+    assert result_event.side == "buy"
+    assert result_event.client_order_id == "cid-execution-failure-123"
+    assert result_event.data["error_type"] == "RuntimeError"
+    assert result_event.data["debug"]["result_error_type"] == "RuntimeError"
+    assert "error" not in result_event.data
+    assert explicit_error_event.event_type == EventTypes.EXECUTION_CANCEL_FAILED
+    assert explicit_error_event.status == "failed"
+    assert explicit_error_event.reason_code == ReasonCodes.EXCHANGE_EXCEPTION
+    assert explicit_error_event.order_wave_id == "ow_24"
+    assert explicit_error_event.action_id == "ow_24:cancel:3"
+    assert explicit_error_event.tags == ("execution", "order", "cancel")
+    assert explicit_error_event.symbol == "BTC/USDT:USDT"
+    assert explicit_error_event.pside == "long"
+    assert explicit_error_event.side == "buy"
+    assert explicit_error_event.client_order_id == "cid-execution-failure-123"
+    assert explicit_error_event.data["error_type"] == "RuntimeError"
+    assert "error" not in explicit_error_event.data
+    rendered = "\n".join(
+        json.dumps(event.to_dict(), sort_keys=True)
+        for event in (result_event, explicit_error_event)
+    )
     assert hostile_type_name not in rendered
     assert hostile_value not in rendered
     assert "hostile.example.invalid" not in rendered
