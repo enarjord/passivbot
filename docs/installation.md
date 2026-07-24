@@ -7,7 +7,7 @@ This guide collects all steps (and common pitfalls) for setting up Passivbot on 
 - **Python 3.12 or newer** – Earlier versions are no longer supported. On Debian/Ubuntu systems
   whose default interpreter is Python 3.12+, install it and its build headers with
   `sudo apt install python3 python3-venv python3-dev`. Otherwise install a supported newer
-  interpreter, then confirm the selected `python3 --version` reports Python 3.12+.
+  interpreter and note its executable name, such as `python3.14`.
 - **Rust toolchain** – Passivbot’s hot paths live in Rust. Install via [rustup](https://rustup.rs/) if `rustc --version` is not available.
 - **C build tools** – Ubuntu/Debian: `sudo apt install build-essential`. macOS: Xcode command-line tools (`xcode-select --install`).
 - **Virtual environment** – Strongly recommended so dependencies do not leak into the system interpreter.
@@ -19,10 +19,18 @@ This guide collects all steps (and common pitfalls) for setting up Passivbot on 
  git clone https://github.com/enarjord/passivbot.git
  cd passivbot
 
-# Create + activate a Python 3.12+ venv (inside repo root)
- python3 -m venv venv
+# Select the supported interpreter you installed. Use python3 only if it is already 3.12+.
+ PYTHON_BIN=python3.14
+ "$PYTHON_BIN" --version
+
+# Create + activate the venv with that exact interpreter (inside repo root)
+ "$PYTHON_BIN" -m venv venv
  source venv/bin/activate  # Windows: venv\Scripts\activate
+ python --version
 ```
+
+Replace `python3.14` with another installed Python 3.12+ executable as needed. Do not assume the
+system `python3` changed when a versioned interpreter was installed alongside it.
 
 ## 3. Install Passivbot
 

@@ -88,7 +88,10 @@ Create a virtual environment to manage dependencies:
 
  **Linux/macOS:**
 ```sh
-python3 -m venv venv
+# Replace python3.14 with the installed Python 3.12+ executable you want Passivbot to use.
+PYTHON_BIN=python3.14
+"$PYTHON_BIN" --version
+"$PYTHON_BIN" -m venv venv
 ```
 
  **Windows (Command Prompt or PowerShell):**
