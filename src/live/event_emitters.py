@@ -495,7 +495,7 @@ def _execution_debug_payload(
         if result.get("status") is not None:
             debug["result_status"] = str(result.get("status"))
     elif isinstance(result, BaseException):
-        debug["result_error_type"] = type(result).__name__
+        debug["result_error_type"] = _bounded_exception_type(result)
     if isinstance(extra, dict):
         debug["extra_keys"] = _mapping_key_sample(extra, limit=limit)
     if isinstance(wave, dict):
@@ -4447,8 +4447,7 @@ def emit_execution_order_event(
         elif isinstance(result, BaseException):
             error = result
         if error is not None:
-            data["error_type"] = type(error).__name__
-            data["error"] = _sanitize_remote_text(error, max_len=500)
+            data["error_type"] = _bounded_exception_type(error)
         if extra:
             data.update(extra)
         _add_execution_debug_profile(

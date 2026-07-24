@@ -5388,6 +5388,108 @@ def test_execution_debug_profile_adds_bounded_order_write_shape():
     assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 
+def test_execution_failure_event_redacts_hostile_exception_metadata():
+    import passivbot as pb_mod
+
+    sink = ListEventSink()
+
+    class FakeBot:
+        _current_live_event_cycle_id = pb_mod.Passivbot._current_live_event_cycle_id
+        _emit_execution_order_event = pb_mod.Passivbot._emit_execution_order_event
+        _emit_live_event = pb_mod.Passivbot._emit_live_event
+
+        def __init__(self):
+            self.exchange = "okx"
+            self.user = "okx_01"
+            self.bot_id = "bot_1"
+            self.live_event_debug_profiles = ("execution",)
+            self._live_event_current_cycle_id = "cy_execution_failure"
+            self._live_event_pipeline = LiveEventPipeline(
+                structured_sinks=[sink],
+                monitor_sinks=[],
+            )
+
+    hostile_type_name = "HostileTokenClass"
+    HostileError = type(hostile_type_name, (RuntimeError,), {})
+    hostile_value = (
+        "request https://hostile.example.invalid/orders?api_key=LEAKED "
+        "token=LEAKED\\nTraceback (most recent call last): SECRET"
+    )
+    bot = FakeBot()
+    order = {
+        "symbol": "BTC/USDT:USDT",
+        "side": "buy",
+        "position_side": "long",
+        "type": "limit",
+        "pb_order_type": "entry_grid_normal_long",
+        "qty": 0.01,
+        "price": 100000.0,
+        "reduce_only": False,
+        "custom_id": "cid-execution-failure-123",
+    }
+
+    bot._emit_execution_order_event(
+        event_type=EventTypes.EXECUTION_CREATE_FAILED,
+        order=order,
+        action="create",
+        status="failed",
+        reason_code=ReasonCodes.EXCHANGE_EXCEPTION,
+        level="warning",
+        index=2,
+        wave={"id": 23, "event_id": "ow_23"},
+        result=HostileError(hostile_value),
+    )
+    bot._emit_execution_order_event(
+        event_type=EventTypes.EXECUTION_CANCEL_FAILED,
+        order=order,
+        action="cancel",
+        status="failed",
+        reason_code=ReasonCodes.EXCHANGE_EXCEPTION,
+        level="warning",
+        index=3,
+        wave={"id": 24, "event_id": "ow_24"},
+        error=HostileError(hostile_value),
+    )
+
+    assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    result_event, explicit_error_event = sink.events[-2:]
+    assert result_event.event_type == EventTypes.EXECUTION_CREATE_FAILED
+    assert result_event.status == "failed"
+    assert result_event.reason_code == ReasonCodes.EXCHANGE_EXCEPTION
+    assert result_event.order_wave_id == "ow_23"
+    assert result_event.action_id == "ow_23:create:2"
+    assert result_event.tags == ("execution", "order", "create")
+    assert result_event.symbol == "BTC/USDT:USDT"
+    assert result_event.pside == "long"
+    assert result_event.side == "buy"
+    assert result_event.client_order_id == "cid-execution-failure-123"
+    assert result_event.data["error_type"] == "RuntimeError"
+    assert result_event.data["debug"]["result_error_type"] == "RuntimeError"
+    assert "error" not in result_event.data
+    assert explicit_error_event.event_type == EventTypes.EXECUTION_CANCEL_FAILED
+    assert explicit_error_event.status == "failed"
+    assert explicit_error_event.reason_code == ReasonCodes.EXCHANGE_EXCEPTION
+    assert explicit_error_event.order_wave_id == "ow_24"
+    assert explicit_error_event.action_id == "ow_24:cancel:3"
+    assert explicit_error_event.tags == ("execution", "order", "cancel")
+    assert explicit_error_event.symbol == "BTC/USDT:USDT"
+    assert explicit_error_event.pside == "long"
+    assert explicit_error_event.side == "buy"
+    assert explicit_error_event.client_order_id == "cid-execution-failure-123"
+    assert explicit_error_event.data["error_type"] == "RuntimeError"
+    assert "error" not in explicit_error_event.data
+    rendered = "\n".join(
+        json.dumps(event.to_dict(), sort_keys=True)
+        for event in (result_event, explicit_error_event)
+    )
+    assert hostile_type_name not in rendered
+    assert hostile_value not in rendered
+    assert "hostile.example.invalid" not in rendered
+    assert "LEAKED" not in rendered
+    assert "Traceback" not in rendered
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
+
+
 def test_connector_call_event_is_bounded_and_correlated_to_batch_action():
     import passivbot as pb_mod
 
