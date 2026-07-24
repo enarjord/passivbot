@@ -1437,6 +1437,45 @@ async def test_late_open_tail_projection_recovers_required_close_ema(caplog):
 
 
 @pytest.mark.asyncio
+async def test_late_open_tail_projection_precedes_available_previous_close_ema():
+    try:
+        import passivbot as pb_mod
+    except ImportError:
+        pytest.skip("passivbot module not importable in test environment")
+
+    symbol = "ENA/USDT:USDT"
+    span0 = 10.0
+    span1 = 20.0
+    span2 = (span0 * span1) ** 0.5
+    prev = {span0: 100.04, span1: 100.03, span2: 100.02}
+    projected = {span0: 201.0, span1: 202.0, span2: 203.0}
+    bot = _BundleReproBot(
+        symbol,
+        close_mode="nan",
+        prev_close_ema=prev,
+        project_open_tail_after_health_calls=1,
+        projected_close_ema=projected,
+    )
+    bot.projected_open_tail_called = False
+
+    (
+        m1_close_emas,
+        _m1_volume_emas,
+        _m1_log_range_emas,
+        _h1_log_range_emas,
+        _volumes_long,
+        _log_ranges_long,
+    ) = await pb_mod.Passivbot._load_orchestrator_ema_bundle(
+        bot, [symbol], bot.PB_modes
+    )
+
+    assert bot.completed_candle_health_calls >= 2
+    assert bot.projected_open_tail_called is True
+    assert m1_close_emas[symbol] == pytest.approx(projected)
+    assert bot._orchestrator_close_ema_fallback_counts == {}
+
+
+@pytest.mark.asyncio
 async def test_late_open_tail_projection_recovers_required_m1_log_range():
     try:
         import passivbot as pb_mod
@@ -1729,6 +1768,91 @@ async def test_required_h1_log_range_ema_present_in_bundle():
     ) = await pb_mod.Passivbot._load_orchestrator_ema_bundle(bot, [symbol], bot.PB_modes)
 
     assert h1_log_range_emas[symbol][4.0] == pytest.approx(0.0042)
+
+
+@pytest.mark.asyncio
+async def test_cache_only_forager_uses_bounded_cached_h1_log_range(monkeypatch):
+    try:
+        import passivbot as pb_mod
+    except ImportError:
+        pytest.skip("passivbot module not importable in test environment")
+
+    symbol = "AAVE/USDT:USDT"
+    hour_ms = 60 * 60_000
+    fixed_now_ms = 10 * hour_ms + 5 * 60_000
+    clock = {"now_ms": fixed_now_ms}
+    wall_clock_ms = fixed_now_ms + 365 * 24 * hour_ms
+    monkeypatch.setattr(pb_mod, "utc_ms", lambda: wall_clock_ms)
+    staleness_inputs = []
+
+    def target_staleness(_bot, surface_count, max_calls):
+        staleness_inputs.append((surface_count, max_calls))
+        return 10 * 60_000
+
+    monkeypatch.setattr(
+        pb_mod.Passivbot,
+        "_forager_target_staleness_ms",
+        target_staleness,
+    )
+    bot = _BundleReproBot(
+        symbol,
+        close_mode="value",
+        h1_mode="nan",
+        entry_h1_span_hours=4.0,
+        cached_qv_ema={10.0: 250000.0},
+        cached_log_range_ema={4.0: 0.0042, 10.0: 0.0015},
+        projected_close_ema={
+            10.0: 100.0,
+            (10.0 * 20.0) ** 0.5: 100.0,
+            20.0: 100.0,
+        },
+    )
+    bot.PB_modes = {"long": {symbol: "manual"}, "short": {symbol: "manual"}}
+    bot.active_symbols = []
+    bot.config["live"]["max_ohlcv_fetches_per_minute"] = 1
+    bot.cm.get_last_refresh_ms = lambda _symbol: fixed_now_ms
+    bot.cm.get_last_final_ts = (
+        lambda _symbol, timeframe=None: 8 * hour_ms
+        if timeframe == "1h"
+        else fixed_now_ms - 60_000
+    )
+    bot.cm._now_ms = lambda: clock["now_ms"]
+    bot._candle_staleness_ms = lambda _symbol, now_ms=None: 0
+    _enable_forager_required_ranking(bot)
+
+    (
+        _m1_close_emas,
+        _m1_volume_emas,
+        _m1_log_range_emas,
+        h1_log_range_emas,
+        _volumes_long,
+        _log_ranges_long,
+    ) = await pb_mod.Passivbot._load_orchestrator_ema_bundle(
+        bot, [symbol], bot.PB_modes
+    )
+
+    assert h1_log_range_emas[symbol][4.0] == pytest.approx(0.0042)
+    h1_calls = [
+        call for call in bot.cached_metric_calls if call["timeframe"] == "1h"
+    ]
+    assert len(h1_calls) == 1
+    assert h1_calls[0]["spans_by_metric"] == {"log_range": 4.0}
+    assert h1_calls[0]["max_staleness_ms"] >= 60 * 60_000
+    assert (2, 1) in staleness_inputs
+
+    clock["now_ms"] = 10 * hour_ms + 11 * 60_000
+    (
+        _m1_close_emas,
+        _m1_volume_emas,
+        _m1_log_range_emas,
+        stale_h1_log_range_emas,
+        _volumes_long,
+        _log_ranges_long,
+    ) = await pb_mod.Passivbot._load_orchestrator_ema_bundle(
+        bot, [symbol], bot.PB_modes
+    )
+    assert stale_h1_log_range_emas[symbol] == {}
+    assert bot._orchestrator_ema_unavailable_symbols == {symbol}
 
 
 @pytest.mark.asyncio

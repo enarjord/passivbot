@@ -16379,9 +16379,13 @@ class Passivbot:
             for sym in priority_symbols:
                 forager_cached_metric_max_age_by_symbol[sym] = priority_max_age_ms
             if secondary_symbols:
+                secondary_surface_count = sum(
+                    1 + int(bool(need_h1_lr_spans.get(sym)))
+                    for sym in secondary_symbols
+                )
                 secondary_max_age_ms = int(
                     Passivbot._forager_target_staleness_ms(
-                        self, len(secondary_symbols), max_calls_i
+                        self, secondary_surface_count, max_calls_i
                     )
                 )
                 now_ms = utc_ms()
@@ -16489,29 +16493,60 @@ class Passivbot:
         forager_cached_ema_fallbacks: dict[str, list[tuple[str, float, int]]] = {}
 
         async def fetch_cached_forager_metric(
-            symbol: str, span: float, metric_key: str
+            symbol: str,
+            span: float,
+            metric_key: str,
+            *,
+            timeframe: str = "1m",
+            diagnostic_key: Optional[str] = None,
         ) -> Optional[float]:
             max_staleness_ms = forager_cached_metric_max_age_by_symbol.get(symbol)
             if max_staleness_ms is None:
                 return None
+            cached_age_ms: Optional[int] = None
+            if timeframe == "1h":
+                # A newly finalized hourly bucket is one full candle interval
+                # ahead of the prior cached bucket. Enforce the configured
+                # budget against the candle manager's replay-aware clock since
+                # that bucket became due, then include the expected interval for
+                # the cache reader's timestamp-gap bound.
+                period_ms = 60 * ONE_MIN_MS
+                try:
+                    last_cached = int(
+                        self.cm.get_last_final_ts(symbol, timeframe=timeframe) or 0
+                    )
+                    now_ms = int(self.cm._now_ms())
+                except Exception:
+                    return None
+                latest_expected = (now_ms // period_ms) * period_ms - period_ms
+                if last_cached <= 0:
+                    return None
+                if last_cached < latest_expected:
+                    first_missing_finalized_at = last_cached + 2 * period_ms
+                    cached_age_ms = max(0, now_ms - first_missing_finalized_at)
+                    if cached_age_ms > int(max_staleness_ms):
+                        return None
+                max_staleness_ms = int(max_staleness_ms) + 60 * ONE_MIN_MS
             cached = await Passivbot._get_forager_cached_ema_metrics(
                 self,
                 symbol,
                 {metric_key: float(span)},
                 max_staleness_ms=int(max_staleness_ms),
                 window_candles=max(1, int(math.ceil(float(span)))),
+                timeframe=timeframe,
             )
             if metric_key not in cached:
                 return None
             val = float(cached[metric_key])
             if not math.isfinite(val):
                 return None
-            try:
-                age_ms = int(Passivbot._candle_staleness_ms(self, symbol))
-            except Exception:
-                age_ms = -1
+            if cached_age_ms is None:
+                try:
+                    cached_age_ms = int(Passivbot._candle_staleness_ms(self, symbol))
+                except Exception:
+                    cached_age_ms = -1
             forager_cached_ema_fallbacks.setdefault(symbol, []).append(
-                (metric_key, float(span), int(age_ms))
+                (diagnostic_key or metric_key, float(span), int(cached_age_ms))
             )
             return val
 
@@ -16569,6 +16604,10 @@ class Passivbot:
             metric_key = {"m1_volume": "qv", "m1_log_range": "log_range"}.get(
                 ema_type
             )
+            metric_timeframe = "1m"
+            if ema_type == "h1_log_range" and symbol in cache_only_symbols:
+                metric_key = "log_range"
+                metric_timeframe = "1h"
             for sp in spans:
                 Passivbot._raise_if_shutdown_requested(self, f"required_ema_{ema_type}")
                 span = float(sp)
@@ -16582,7 +16621,13 @@ class Passivbot:
                         continue
                     reason = f"non-finite {ema_type} value {val}"
                 if metric_key is not None:
-                    fallback = await fetch_cached_forager_metric(symbol, span, metric_key)
+                    fallback = await fetch_cached_forager_metric(
+                        symbol,
+                        span,
+                        metric_key,
+                        timeframe=metric_timeframe,
+                        diagnostic_key=ema_type,
+                    )
                     if fallback is not None:
                         out[span] = fallback
                         continue
@@ -16701,7 +16746,7 @@ class Passivbot:
             now_ms = int(utc_ms())
             max_fallback_age_ms = int(Passivbot._close_ema_fallback_max_age_ms(self))
             prev_by_span = self._orchestrator_prev_close_ema.setdefault(symbol, {})
-            missing: list[tuple[float, str]] = []
+            primary_missing: list[tuple[float, str]] = []
             for sp in spans:
                 Passivbot._raise_if_shutdown_requested(self, "close_ema")
                 span = float(sp)
@@ -16733,6 +16778,23 @@ class Passivbot:
                         reason = f"non-finite close EMA value {val}"
                 if reason is None:
                     continue
+                primary_missing.append((span, reason))
+            if not primary_missing:
+                return out
+
+            # A minute may finalize between the cycle's initial health snapshot
+            # and the EMA read. Recheck open-tail eligibility before carrying a
+            # previous EMA forward so live behavior uses the current projected
+            # completed-candle surface whenever that projection is valid.
+            if refresh_open_tail_projection_context(symbol) is not None:
+                detail = "; ".join(
+                    [f"span={sp:.8g} reason={why}" for sp, why in primary_missing]
+                )
+                raise MissingCloseEma(symbol, primary_missing, detail)
+
+            missing: list[tuple[float, str]] = []
+            for span, reason in primary_missing:
+                key = (symbol, span)
                 prev = prev_by_span.get(span)
                 if prev is not None:
                     prev_val = float(prev[0])
@@ -16990,7 +17052,9 @@ class Passivbot:
                             sym, sorted(need_close_spans[sym]), log_on_missing=False
                         )
                     except MissingCloseEma as exc:
-                        late_projection_ctx = refresh_open_tail_projection_context(sym)
+                        late_projection_ctx = projection_contexts.get(
+                            sym
+                        ) or refresh_open_tail_projection_context(sym)
                         if late_projection_ctx is None:
                             log_missing_close_ema(sym, exc.missing)
                             raise
@@ -17904,6 +17968,7 @@ class Passivbot:
         *,
         max_staleness_ms: Optional[int],
         window_candles: Optional[int] = None,
+        timeframe: str = "1m",
     ) -> dict[str, float]:
         """Read bounded cache-derived qv/log-range EMAs for stale forager ranking."""
         fn = getattr(self.cm, "get_latest_cached_ema_metrics", None)
@@ -17915,7 +17980,7 @@ class Passivbot:
                 spans_by_metric,
                 max_staleness_ms=max_staleness_ms,
                 window_candles=window_candles,
-                timeframe="1m",
+                timeframe=timeframe,
             )
         except Exception as exc:
             logging.debug(
