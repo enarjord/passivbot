@@ -4197,6 +4197,19 @@ def test_resume_config_mismatches_rejects_changed_backend():
     assert any("optimize.backend" in mismatch for mismatch in mismatches)
 
 
+def test_resume_config_mismatches_rejects_adding_objective_scenario_to_old_result():
+    entry = _resume_validation_entry()
+    config = deepcopy(entry)
+    config["optimize"]["objective_scenario"] = "base"
+
+    mismatches = optimize._resume_config_mismatches(entry, config)
+
+    assert any(
+        "optimize.objective_scenario: 'None' -> 'base'" in mismatch
+        for mismatch in mismatches
+    )
+
+
 def test_resume_config_mismatches_allows_machine_local_optimizer_settings():
     entry = _resume_validation_entry()
     entry["optimize"]["n_cpus"] = 6

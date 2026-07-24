@@ -1123,7 +1123,7 @@ def _build_suite_payloads_from_clusters(
 def run_from_clusters_csv(args: argparse.Namespace) -> dict[str, Any]:
     clusters_csv = Path(args.clusters_csv).expanduser()
     clusters = load_clusters_csv(clusters_csv)
-    if args.direction != "both":
+    if getattr(args, "_direction_explicit", True) and args.direction != "both":
         clusters = [cluster for cluster in clusters if cluster.direction == args.direction]
     selected_clusters = list(clusters[: args.top_clusters] if args.top_clusters > 0 else clusters)
     scanned_ranges_path = clusters_csv.parent / "scanned_ranges.csv"
@@ -1325,6 +1325,18 @@ def run_scan(args: argparse.Namespace) -> dict[str, Any]:
     }
 
 
+class _StoreDirection(argparse.Action):
+    def __call__(
+        self,
+        parser: argparse.ArgumentParser,
+        namespace: argparse.Namespace,
+        values: str,
+        option_string: str | None = None,
+    ) -> None:
+        setattr(namespace, self.dest, values)
+        setattr(namespace, "_direction_explicit", True)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="passivbot tool crash-finder",
@@ -1363,8 +1375,13 @@ def build_parser() -> argparse.ArgumentParser:
         "--direction",
         choices=("down", "up", "both"),
         default="down",
-        help="Discover crashes, pumps, or both (default: down, preserving legacy behavior).",
+        action=_StoreDirection,
+        help=(
+            "Discover crashes, pumps, or both (default: down). With --clusters-csv, omitted "
+            "--direction preserves every direction already present in the CSV."
+        ),
     )
+    parser.set_defaults(_direction_explicit=False)
     parser.add_argument(
         "--pump-threshold",
         type=float,

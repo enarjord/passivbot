@@ -857,6 +857,32 @@ def test_clusters_csv_fast_path_does_not_create_empty_scan_artifacts(tmp_path):
     assert not (out_dir / "scan_errors.csv").exists()
 
 
+def test_clusters_csv_preserves_directions_unless_explicitly_filtered(tmp_path):
+    clusters_csv = tmp_path / "crash_clusters.csv"
+    clusters_csv.write_text(
+        "\n".join(
+            [
+                "label,timestamp,timestamp_iso,start_ts,end_ts,start_iso,end_iso,severity,event_count,affected_coin_count,affected_coins,exchanges,market_wide,direction",
+                "crash_test,1744567200000,2025-04-13T18:00:00Z,1744567200000,1744567200000,2025-04-13T18:00:00Z,2025-04-13T18:00:00Z,-1.0,1,1,OM,binance,False,down",
+                "pump_test,1744653600000,2025-04-14T18:00:00Z,1744653600000,1744653600000,2025-04-14T18:00:00Z,2025-04-14T18:00:00Z,-1.0,1,1,ALGO,bybit,False,up",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    parser = crash_finder.build_parser()
+
+    unfiltered = crash_finder.run_scan(
+        parser.parse_args(["--clusters-csv", str(clusters_csv)])
+    )
+    down_only = crash_finder.run_scan(
+        parser.parse_args(["--clusters-csv", str(clusters_csv), "--direction", "down"])
+    )
+
+    assert {cluster["direction"] for cluster in unfiltered["clusters"]} == {"down", "up"}
+    assert [cluster["direction"] for cluster in down_only["clusters"]] == ["down"]
+
+
 def test_logging_configuration_honors_requested_level_with_existing_handlers():
     logging.basicConfig(level=logging.INFO, force=True)
 

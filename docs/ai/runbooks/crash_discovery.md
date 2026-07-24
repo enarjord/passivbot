@@ -10,7 +10,8 @@ backtest/optimizer scenario suites. Keep output under
   high-to-later-low and/or low-to-later-high events, clusters them by direction, and generates
   scenarios.
 - `--clusters-csv` regenerates suites from existing clusters without reading candles. It cannot
-  discover events added by a later data download.
+  discover events added by a later data download. It preserves every direction present in the CSV
+  unless `--direction down|up` is explicitly supplied as a regeneration filter.
 - `--timeframe` defaults to `1h`; wider candles may combine unrelated moves and shift cluster time.
 - `--threshold` is log return (`-0.10` is about a 9.5% decline).
 - `--pump-threshold` is a positive log return (`0.10` is about a 10.5% rally).

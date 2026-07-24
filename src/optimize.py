@@ -730,6 +730,9 @@ def _resume_config_mismatches(entry: dict, config: dict) -> list[str]:
             "scoring",
         },
     )
+    # Objective source changes invalidate checkpoint fitness, including resumes
+    # from artifacts written before objective_scenario existed.
+    old_opt_compare.setdefault("objective_scenario", None)
     new_opt_compare = _resume_subset(new_opt, old_opt_compare.keys())
     _append_resume_section_mismatches(mismatches, "optimize", old_opt_compare, new_opt_compare)
 
