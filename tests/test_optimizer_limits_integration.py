@@ -63,6 +63,25 @@ def test_evaluator_returns_weighted_metric_when_within_limits():
     assert pytest.approx(penalty) == 0.0
 
 
+def test_evaluator_can_score_one_metric_source_and_limit_another():
+    limits = [
+        {"metric": "drawdown_worst", "penalize_if": "greater_than", "value": 0.4, "stat": "max"},
+    ]
+    cfg = _make_config(limits, scoring=["adg"])
+    evaluator = Evaluator({}, {}, {}, cfg)
+
+    objective_stats = {"adg_mean": 0.002}
+    suite_limit_stats = {"drawdown_worst_max": 0.45}
+    scores, penalty = evaluator.calc_fitness(
+        objective_stats,
+        limit_metrics=suite_limit_stats,
+    )
+
+    expected_penalty = (0.45 - 0.4) * 1e6
+    assert scores == pytest.approx((expected_penalty,))
+    assert penalty == pytest.approx(expected_penalty)
+
+
 def test_limit_penalty_applies_only_to_matching_objective():
     limits = [
         {

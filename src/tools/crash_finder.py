@@ -88,6 +88,9 @@ class CrashEvent:
     bucket_high: float
     bucket_low: float
     previous_close: float | None
+    direction: str = "down"
+    ordered_low_to_later_high_log: float | None = None
+    prev_close_high_log: float | None = None
 
 
 @dataclass(frozen=True)
@@ -105,6 +108,7 @@ class CrashCluster:
     affected_coins: list[str]
     exchanges: list[str]
     market_wide: bool
+    direction: str = "down"
 
 
 @dataclass(frozen=True)
@@ -196,6 +200,12 @@ def _worst_ordered_high_to_later_low_log(high: np.ndarray, low: np.ndarray) -> f
     prefix_high = np.maximum.accumulate(high)
     ratios = low / prefix_high
     return float(np.log(np.min(ratios)))
+
+
+def _worst_ordered_low_to_later_high_log(high: np.ndarray, low: np.ndarray) -> float:
+    prefix_low = np.minimum.accumulate(low)
+    ratios = high / prefix_low
+    return float(np.log(np.max(ratios)))
 
 
 def _duration_timeframe_to_ms(timeframe: str) -> int:
@@ -324,6 +334,8 @@ def scan_symbol(
     bucket_ms: int,
     min_valid_minutes: int,
     threshold: float,
+    direction: str,
+    pump_threshold: float,
     rank_metric: str,
 ) -> tuple[list[CrashEvent], ScannedRange]:
     start_ts = _floor_ts(symbol_range.first_ts, interval_ms)
@@ -376,17 +388,49 @@ def scan_symbol(
         bucket_high = float(np.max(high))
         bucket_low = float(np.min(low))
         range_log = float(np.log(bucket_low / bucket_high))
-        ordered_log = _worst_ordered_high_to_later_low_log(high, low)
+        ordered_down_log = _worst_ordered_high_to_later_low_log(high, low)
+        ordered_up_log = _worst_ordered_low_to_later_high_log(high, low)
         prev_close_low_log = None
+        prev_close_high_log = None
         if prev_close is not None and np.isfinite(prev_close) and prev_close > 0.0:
             prev_close_low_log = float(np.log(bucket_low / prev_close))
+            prev_close_high_log = float(np.log(bucket_high / prev_close))
         if rank_metric == "range":
-            threshold_value = range_log
+            down_threshold_value = range_log
+            up_threshold_value = -range_log
         elif rank_metric == "prev-close":
-            threshold_value = prev_close_low_log if prev_close_low_log is not None else ordered_log
+            down_threshold_value = (
+                prev_close_low_log if prev_close_low_log is not None else ordered_down_log
+            )
+            up_threshold_value = (
+                prev_close_high_log if prev_close_high_log is not None else ordered_up_log
+            )
         else:
-            threshold_value = ordered_log
-        if threshold_value <= threshold:
+            down_threshold_value = ordered_down_log
+            up_threshold_value = ordered_up_log
+        event_ts = int(bucket_id * bucket_ms)
+        if direction in {"down", "both"} and down_threshold_value <= threshold:
+            events.append(
+                CrashEvent(
+                    exchange=symbol_range.exchange,
+                    symbol=symbol_range.symbol,
+                    coin=coin,
+                    timeframe=scan_timeframe,
+                    timestamp=event_ts,
+                    timestamp_iso=_ts_to_iso(event_ts),
+                    valid_minutes=int(len(indices)),
+                    range_log=range_log,
+                    ordered_high_to_later_low_log=ordered_down_log,
+                    prev_close_low_log=prev_close_low_log,
+                    bucket_high=bucket_high,
+                    bucket_low=bucket_low,
+                    previous_close=prev_close,
+                    direction="down",
+                    ordered_low_to_later_high_log=ordered_up_log,
+                    prev_close_high_log=prev_close_high_log,
+                )
+            )
+        if direction in {"up", "both"} and up_threshold_value >= pump_threshold:
             event_ts = int(bucket_id * bucket_ms)
             events.append(
                 CrashEvent(
@@ -398,11 +442,14 @@ def scan_symbol(
                     timestamp_iso=_ts_to_iso(event_ts),
                     valid_minutes=int(len(indices)),
                     range_log=range_log,
-                    ordered_high_to_later_low_log=ordered_log,
+                    ordered_high_to_later_low_log=ordered_down_log,
                     prev_close_low_log=prev_close_low_log,
                     bucket_high=bucket_high,
                     bucket_low=bucket_low,
                     previous_close=prev_close,
+                    direction="up",
+                    ordered_low_to_later_high_log=ordered_up_log,
+                    prev_close_high_log=prev_close_high_log,
                 )
             )
         prev_close = float(close[-1])
@@ -424,6 +471,20 @@ def scan_symbol(
 
 
 def _event_severity(event: CrashEvent, rank_metric: str) -> float:
+    if event.direction == "up":
+        if rank_metric == "range":
+            value = -event.range_log
+        elif rank_metric == "prev-close":
+            value = (
+                event.prev_close_high_log
+                if event.prev_close_high_log is not None
+                else event.ordered_low_to_later_high_log
+            )
+        else:
+            value = event.ordered_low_to_later_high_log
+        if value is None:
+            raise ValueError(f"pump event missing {rank_metric} severity metric")
+        return -float(value)
     if rank_metric == "range":
         return event.range_log
     if rank_metric == "prev-close":
@@ -440,9 +501,9 @@ def select_top_events(
     dedupe_window_ms: int,
     rank_metric: str,
 ) -> list[CrashEvent]:
-    grouped: dict[tuple[str, str], list[CrashEvent]] = {}
+    grouped: dict[tuple[str, str, str], list[CrashEvent]] = {}
     for event in events:
-        grouped.setdefault((event.exchange, event.symbol), []).append(event)
+        grouped.setdefault((event.exchange, event.symbol, event.direction), []).append(event)
 
     selected: list[CrashEvent] = []
     for key_events in grouped.values():
@@ -467,12 +528,15 @@ def _sanitize_label_piece(value: str) -> str:
     return "".join(out).strip("_") or "event"
 
 
-def _cluster_label(timestamp: int, market_wide: bool, coins: Sequence[str]) -> str:
+def _cluster_label(
+    timestamp: int, market_wide: bool, coins: Sequence[str], direction: str = "down"
+) -> str:
     base = datetime.fromtimestamp(int(timestamp) / 1000, tz=UTC).strftime("%Y_%m_%d_%H")
+    prefix = "pump" if direction == "up" else "crash"
     if market_wide:
-        return f"crash_{base}_market_wide"
+        return f"{prefix}_{base}_market_wide"
     suffix = "_".join(_sanitize_label_piece(coin) for coin in list(coins)[:3])
-    return f"crash_{base}_{suffix}"
+    return f"{prefix}_{base}_{suffix}"
 
 
 def cluster_events(
@@ -487,13 +551,21 @@ def cluster_events(
     clusters_raw: list[list[CrashEvent]] = []
     current: list[CrashEvent] = []
     current_last_ts: int | None = None
-    for event in sorted(events, key=lambda item: (item.timestamp, item.symbol)):
-        if current_last_ts is None or event.timestamp - current_last_ts <= cluster_window_ms:
+    current_direction: str | None = None
+    for event in sorted(events, key=lambda item: (item.direction, item.timestamp, item.symbol)):
+        if (
+            current_last_ts is None
+            or (
+                event.direction == current_direction
+                and event.timestamp - current_last_ts <= cluster_window_ms
+            )
+        ):
             current.append(event)
         else:
             clusters_raw.append(current)
             current = [event]
         current_last_ts = event.timestamp
+        current_direction = event.direction
     if current:
         clusters_raw.append(current)
 
@@ -502,12 +574,13 @@ def cluster_events(
         worst = min(raw, key=lambda item: (_event_severity(item, rank_metric), item.timestamp))
         coins = sorted({event.coin for event in raw if event.coin})
         exchanges = sorted({event.exchange for event in raw})
+        direction = worst.direction
         market_wide = len(coins) >= min_market_wide_coins
         start_ts = min(event.timestamp for event in raw)
         end_ts = max(event.timestamp for event in raw)
         clusters.append(
             CrashCluster(
-                label=_cluster_label(worst.timestamp, market_wide, coins),
+                label=_cluster_label(worst.timestamp, market_wide, coins, direction),
                 timestamp=worst.timestamp,
                 timestamp_iso=_ts_to_iso(worst.timestamp),
                 start_ts=start_ts,
@@ -520,6 +593,7 @@ def cluster_events(
                 affected_coins=coins,
                 exchanges=exchanges,
                 market_wide=market_wide,
+                direction=direction,
             )
         )
     return sorted(clusters, key=lambda item: (item.severity, item.timestamp))
@@ -565,6 +639,7 @@ def build_suite_payload(
                 "exchanges": list(cluster.exchanges),
                 "severity": cluster.severity,
                 "market_wide": cluster.market_wide,
+                "direction": cluster.direction,
             }
         )
     if merge_overlaps:
@@ -610,25 +685,33 @@ def _merge_overlapping_scenario_specs(scenario_specs: Sequence[dict[str, Any]]) 
     if not scenario_specs:
         return []
     merged: list[dict[str, Any]] = []
-    for spec in sorted(scenario_specs, key=lambda item: (item["start_dt"], item["severity"])):
-        if not merged or spec["start_dt"] > merged[-1]["end_dt"]:
-            merged.append({**spec, "labels": [spec["label"]]})
-            continue
-        current = merged[-1]
-        current["end_dt"] = max(current["end_dt"], spec["end_dt"])
-        current["coins"] = sorted(dict.fromkeys([*current["coins"], *spec["coins"]]))
-        current["exchanges"] = sorted(dict.fromkeys([*current["exchanges"], *spec["exchanges"]]))
-        current["market_wide"] = bool(current["market_wide"] or spec["market_wide"])
-        current["force_coins"] = (
-            []
-            if current["market_wide"]
-            else sorted(dict.fromkeys([*current["force_coins"], *spec["force_coins"]]))
-        )
-        current["labels"].append(spec["label"])
-        if spec["severity"] < current["severity"]:
-            current["severity"] = spec["severity"]
-            current["label"] = spec["label"]
-    return merged
+    by_direction: dict[str, list[dict[str, Any]]] = {}
+    for spec in scenario_specs:
+        by_direction.setdefault(str(spec.get("direction") or "down"), []).append(spec)
+    for direction_specs in by_direction.values():
+        direction_merged: list[dict[str, Any]] = []
+        for spec in sorted(direction_specs, key=lambda item: (item["start_dt"], item["severity"])):
+            if not direction_merged or spec["start_dt"] > direction_merged[-1]["end_dt"]:
+                direction_merged.append({**spec, "labels": [spec["label"]]})
+                continue
+            current = direction_merged[-1]
+            current["end_dt"] = max(current["end_dt"], spec["end_dt"])
+            current["coins"] = sorted(dict.fromkeys([*current["coins"], *spec["coins"]]))
+            current["exchanges"] = sorted(
+                dict.fromkeys([*current["exchanges"], *spec["exchanges"]])
+            )
+            current["market_wide"] = bool(current["market_wide"] or spec["market_wide"])
+            current["force_coins"] = (
+                []
+                if current["market_wide"]
+                else sorted(dict.fromkeys([*current["force_coins"], *spec["force_coins"]]))
+            )
+            current["labels"].append(spec["label"])
+            if spec["severity"] < current["severity"]:
+                current["severity"] = spec["severity"]
+                current["label"] = spec["label"]
+        merged.extend(direction_merged)
+    return sorted(merged, key=lambda item: (item["start_dt"], item["direction"], item["label"]))
 
 
 def _scenario_spec_to_payload_items(
@@ -705,7 +788,20 @@ def _scenario_payload_item(
         scenario["coins"] = list(coins)
     if spec["exchanges"]:
         scenario["exchanges"] = list(spec["exchanges"])
-    overrides = _forced_normal_overrides(force_coins, force_normal=force_normal)
+    if force_normal == "adverse" and spec["market_wide"]:
+        if str(spec.get("direction") or "down") == "up":
+            scenario["overrides"] = {
+                "bot.long.risk.total_wallet_exposure_limit": 0.0,
+            }
+        else:
+            scenario["overrides"] = {
+                "bot.short.risk.total_wallet_exposure_limit": 0.0,
+            }
+    overrides = _forced_normal_overrides(
+        force_coins,
+        force_normal=force_normal,
+        direction=str(spec.get("direction") or "down"),
+    )
     if overrides:
         scenario["overrides"] = {"coin_overrides": overrides}
     return scenario
@@ -745,10 +841,19 @@ def _force_coin_groups(coins: Sequence[str], *, force_normal: str) -> list[list[
     return [unique[idx : idx + 2] for idx in range(0, len(unique), 2)]
 
 
-def _forced_normal_overrides(coins: Sequence[str], *, force_normal: str) -> dict[str, Any]:
+def _forced_normal_overrides(
+    coins: Sequence[str], *, force_normal: str, direction: str = "down"
+) -> dict[str, Any]:
     if force_normal == "none" or not coins:
         return {}
     live_payload: dict[str, str] = {}
+    if force_normal == "adverse":
+        if direction == "up":
+            live_payload["forced_mode_long"] = "manual"
+            live_payload["forced_mode_short"] = "normal"
+        else:
+            live_payload["forced_mode_long"] = "normal"
+            live_payload["forced_mode_short"] = "manual"
     if force_normal in {"long", "both"}:
         live_payload["forced_mode_long"] = "normal"
     if force_normal in {"short", "both"}:
@@ -797,6 +902,7 @@ def load_clusters_csv(path: Path) -> list[CrashCluster]:
                 affected_coins=coins,
                 exchanges=exchanges,
                 market_wide=_parse_csv_bool(row.get("market_wide")),
+                direction=str(row.get("direction") or "down"),
             )
         )
     return sorted(clusters, key=lambda item: (item.severity, item.timestamp))
@@ -882,6 +988,7 @@ def write_outputs(
             "affected_coins",
             "exchanges",
             "market_wide",
+            "direction",
         ],
     )
     _write_csv(scanned_path, scanned_rows, list(ScannedRange.__dataclass_fields__.keys()))
@@ -937,6 +1044,7 @@ def write_cluster_suite_outputs(
             "affected_coins",
             "exchanges",
             "market_wide",
+            "direction",
         ],
     )
     suite_path.write_text(json.dumps(suite_payload, indent=2, sort_keys=False) + "\n", encoding="utf-8")
@@ -1015,6 +1123,8 @@ def _build_suite_payloads_from_clusters(
 def run_from_clusters_csv(args: argparse.Namespace) -> dict[str, Any]:
     clusters_csv = Path(args.clusters_csv).expanduser()
     clusters = load_clusters_csv(clusters_csv)
+    if getattr(args, "_direction_explicit", True) and args.direction != "both":
+        clusters = [cluster for cluster in clusters if cluster.direction == args.direction]
     selected_clusters = list(clusters[: args.top_clusters] if args.top_clusters > 0 else clusters)
     scanned_ranges_path = clusters_csv.parent / "scanned_ranges.csv"
     scanned_ranges = load_scanned_ranges_csv(scanned_ranges_path) if scanned_ranges_path.exists() else []
@@ -1066,6 +1176,10 @@ def run_scan(args: argparse.Namespace) -> dict[str, Any]:
         )
     if args.min_valid_minutes <= 0:
         raise ValueError("min-valid-minutes must be positive")
+    if args.threshold >= 0.0:
+        raise ValueError("threshold must be negative")
+    if args.pump_threshold <= 0.0:
+        raise ValueError("pump-threshold must be positive")
     exchanges = sorted(
         dict.fromkeys(str(exchange).strip().lower() for exchange in (args.exchange or []))
     )
@@ -1110,6 +1224,8 @@ def run_scan(args: argparse.Namespace) -> dict[str, Any]:
                 bucket_ms=bucket_ms,
                 min_valid_minutes=args.min_valid_minutes,
                 threshold=args.threshold,
+                direction=args.direction,
+                pump_threshold=args.pump_threshold,
                 rank_metric=args.rank_metric,
             )
         except (FileNotFoundError, OSError, ValueError) as exc:
@@ -1191,7 +1307,9 @@ def run_scan(args: argparse.Namespace) -> dict[str, Any]:
         "timeframe": scan_timeframe,
         "exchanges": exchanges,
         "rank_metric": args.rank_metric,
+        "direction": args.direction,
         "threshold": args.threshold,
+        "pump_threshold": args.pump_threshold,
         "symbols_attempted": len(symbol_ranges),
         "symbols_scanned": len(scanned_ranges),
         "symbols_failed": len(scan_errors),
@@ -1207,10 +1325,24 @@ def run_scan(args: argparse.Namespace) -> dict[str, Any]:
     }
 
 
+class _StoreDirection(argparse.Action):
+    def __call__(
+        self,
+        parser: argparse.ArgumentParser,
+        namespace: argparse.Namespace,
+        values: str,
+        option_string: str | None = None,
+    ) -> None:
+        setattr(namespace, self.dest, values)
+        setattr(namespace, "_direction_explicit", True)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="passivbot tool crash-finder",
-        description="Scan local v2 OHLCV cache data for the worst historical crash windows.",
+        description=(
+            "Scan local v2 OHLCV cache data for the worst historical crash and pump windows."
+        ),
     )
     parser.add_argument("--root", default=str(DEFAULT_ROOT), help="v2 OHLCV cache root.")
     parser.add_argument(
@@ -1238,6 +1370,23 @@ def build_parser() -> argparse.ArgumentParser:
         type=float,
         default=-0.10,
         help="Only keep crash candidates at or below this log-return severity.",
+    )
+    parser.add_argument(
+        "--direction",
+        choices=("down", "up", "both"),
+        default="down",
+        action=_StoreDirection,
+        help=(
+            "Discover crashes, pumps, or both (default: down). With --clusters-csv, omitted "
+            "--direction preserves every direction already present in the CSV."
+        ),
+    )
+    parser.set_defaults(_direction_explicit=False)
+    parser.add_argument(
+        "--pump-threshold",
+        type=float,
+        default=0.10,
+        help="Only keep pump candidates at or above this positive log-return severity.",
     )
     parser.add_argument("--top-per-coin", type=int, default=10)
     parser.add_argument("--top-clusters", type=int, default=30)
@@ -1272,11 +1421,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--scenario-force-normal",
-        choices=("none", "long", "short", "both"),
+        choices=("none", "long", "short", "both", "adverse"),
         default="none",
         help=(
             "Emit forced_mode_* = normal overrides for idiosyncratic non-market-wide "
-            "crash coins, with at most two forced coins per scenario."
+            "event coins, with at most two forced coins per scenario. 'adverse' forces "
+            "long-only exposure for crashes and short-only exposure for pumps."
         ),
     )
     parser.add_argument(

@@ -35,6 +35,16 @@ def test_suite_aggregate_default_preserved():
     assert formatted["backtest"]["aggregate"]["default"] == "median"
 
 
+def test_optimizer_objective_scenario_is_preserved():
+    base = get_template_config()
+    base["_raw"] = deepcopy(base)
+    base["optimize"]["objective_scenario"] = " base "
+
+    formatted = format_config(deepcopy(base), verbose=False)
+
+    assert formatted["optimize"]["objective_scenario"] == "base"
+
+
 def test_optimizer_preserves_explicit_hsl_aggregate_config():
     """Optimizer must not inherit template metric-specific aggregate overrides."""
     cfg = load_prepared_config("configs/examples/hsl_npos1.json", verbose=False)

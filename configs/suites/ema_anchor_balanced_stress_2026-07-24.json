@@ -1,0 +1,515 @@
+{
+    "backtest": {
+        "suite_enabled": true,
+        "scenarios": [
+            {
+                "label": "crash_2020_03_13_02_market_wide",
+                "start_date": "2020-03-06",
+                "end_date": "2020-04-17",
+                "coins": [
+                    "ATOM",
+                    "BCH",
+                    "BNB",
+                    "ETH",
+                    "LTC",
+                    "TRX"
+                ],
+                "exchanges": [
+                    "binance"
+                ],
+                "overrides": {
+                    "bot.short.risk.total_wallet_exposure_limit": 0.0
+                }
+            },
+            {
+                "label": "pump_2020_03_13_02_market_wide",
+                "start_date": "2020-03-06",
+                "end_date": "2020-04-17",
+                "coins": [
+                    "ATOM",
+                    "BCH",
+                    "BNB",
+                    "ETH",
+                    "LTC",
+                    "TRX",
+                    "XRP"
+                ],
+                "exchanges": [
+                    "binance"
+                ],
+                "overrides": {
+                    "bot.long.risk.total_wallet_exposure_limit": 0.0
+                }
+            },
+            {
+                "label": "crash_2021_05_19_12_market_wide",
+                "start_date": "2021-05-12",
+                "end_date": "2021-06-23",
+                "coins": [
+                    "AAVE",
+                    "ADA",
+                    "ATOM",
+                    "AVAX",
+                    "BCH",
+                    "BNB",
+                    "BTC",
+                    "DOGE",
+                    "DOT",
+                    "ETC",
+                    "ETH",
+                    "FIL",
+                    "HBAR",
+                    "LINK",
+                    "LTC",
+                    "NEAR",
+                    "SOL",
+                    "TRX",
+                    "UNI",
+                    "XLM",
+                    "XMR",
+                    "XRP",
+                    "ZEC"
+                ],
+                "exchanges": [
+                    "binance",
+                    "bybit"
+                ],
+                "overrides": {
+                    "bot.short.risk.total_wallet_exposure_limit": 0.0
+                }
+            },
+            {
+                "label": "pump_2021_05_19_13_market_wide",
+                "start_date": "2021-05-12",
+                "end_date": "2021-06-23",
+                "coins": [
+                    "AAVE",
+                    "ADA",
+                    "ATOM",
+                    "AVAX",
+                    "BCH",
+                    "BNB",
+                    "BTC",
+                    "DOGE",
+                    "DOT",
+                    "ETC",
+                    "ETH",
+                    "FIL",
+                    "HBAR",
+                    "LINK",
+                    "LTC",
+                    "NEAR",
+                    "SOL",
+                    "TRX",
+                    "UNI",
+                    "XLM",
+                    "XMR",
+                    "XRP",
+                    "ZEC"
+                ],
+                "exchanges": [
+                    "binance",
+                    "bybit"
+                ],
+                "overrides": {
+                    "bot.long.risk.total_wallet_exposure_limit": 0.0
+                }
+            },
+            {
+                "label": "crash_2022_05_11_12_market_wide",
+                "start_date": "2022-05-04",
+                "end_date": "2022-06-15",
+                "coins": [
+                    "AAVE",
+                    "ADA",
+                    "ALGO",
+                    "ATOM",
+                    "AVAX",
+                    "BCH",
+                    "BNB",
+                    "CRO",
+                    "DOGE",
+                    "DOT",
+                    "ETC",
+                    "ETH",
+                    "FIL",
+                    "HBAR",
+                    "ICP",
+                    "JST",
+                    "LINK",
+                    "LTC",
+                    "NEAR",
+                    "SHIB",
+                    "SOL",
+                    "TRX",
+                    "UNI",
+                    "XLM",
+                    "XMR",
+                    "XRP",
+                    "ZEC"
+                ],
+                "exchanges": [
+                    "binance",
+                    "bybit"
+                ],
+                "overrides": {
+                    "bot.short.risk.total_wallet_exposure_limit": 0.0
+                }
+            },
+            {
+                "label": "pump_2022_05_11_13_market_wide",
+                "start_date": "2022-05-04",
+                "end_date": "2022-06-15",
+                "coins": [
+                    "AAVE",
+                    "ADA",
+                    "ALGO",
+                    "ATOM",
+                    "AVAX",
+                    "BCH",
+                    "BNB",
+                    "DOGE",
+                    "DOT",
+                    "ETC",
+                    "ETH",
+                    "FIL",
+                    "HBAR",
+                    "ICP",
+                    "JST",
+                    "LINK",
+                    "LTC",
+                    "NEAR",
+                    "SHIB",
+                    "SOL",
+                    "TRX",
+                    "UNI",
+                    "XMR",
+                    "XRP",
+                    "ZEC"
+                ],
+                "exchanges": [
+                    "binance",
+                    "bybit"
+                ],
+                "overrides": {
+                    "bot.long.risk.total_wallet_exposure_limit": 0.0
+                }
+            },
+            {
+                "label": "crash_2024_01_03_12_market_wide",
+                "start_date": "2023-12-27",
+                "end_date": "2024-02-07",
+                "coins": [
+                    "AAVE",
+                    "ADA",
+                    "ALGO",
+                    "APT",
+                    "ARB",
+                    "ATOM",
+                    "AVAX",
+                    "BCH",
+                    "BNB",
+                    "CRO",
+                    "DOGE",
+                    "DOT",
+                    "ETC",
+                    "ETH",
+                    "FIL",
+                    "HBAR",
+                    "ICP",
+                    "INJ",
+                    "KAS",
+                    "LINK",
+                    "LTC",
+                    "NEAR",
+                    "PEPE",
+                    "QNT",
+                    "SHIB",
+                    "SOL",
+                    "SUI",
+                    "TON",
+                    "UNI",
+                    "WLD",
+                    "XLM",
+                    "XMR",
+                    "XRP",
+                    "ZEC"
+                ],
+                "exchanges": [
+                    "binance",
+                    "bybit"
+                ],
+                "overrides": {
+                    "bot.short.risk.total_wallet_exposure_limit": 0.0
+                }
+            },
+            {
+                "label": "pump_2024_01_03_12_market_wide",
+                "start_date": "2023-12-27",
+                "end_date": "2024-02-07",
+                "coins": [
+                    "AAVE",
+                    "ADA",
+                    "ALGO",
+                    "APT",
+                    "ARB",
+                    "ATOM",
+                    "AVAX",
+                    "BNB",
+                    "CRO",
+                    "DOGE",
+                    "DOT",
+                    "ETC",
+                    "FIL",
+                    "HBAR",
+                    "ICP",
+                    "INJ",
+                    "KAS",
+                    "LINK",
+                    "LTC",
+                    "NEAR",
+                    "PEPE",
+                    "QNT",
+                    "SHIB",
+                    "SOL",
+                    "SUI",
+                    "TON",
+                    "UNI",
+                    "WLD",
+                    "XLM",
+                    "XMR",
+                    "XRP",
+                    "ZEC"
+                ],
+                "exchanges": [
+                    "binance",
+                    "bybit"
+                ],
+                "overrides": {
+                    "bot.long.risk.total_wallet_exposure_limit": 0.0
+                }
+            },
+            {
+                "label": "crash_2025_10_10_21_market_wide",
+                "start_date": "2025-10-03",
+                "end_date": "2025-11-14",
+                "coins": [
+                    "AAVE",
+                    "ADA",
+                    "ALGO",
+                    "APT",
+                    "ARB",
+                    "ASTER",
+                    "ATOM",
+                    "AVAX",
+                    "BCH",
+                    "BNB",
+                    "BTC",
+                    "CRO",
+                    "DEXE",
+                    "DOGE",
+                    "DOT",
+                    "ENA",
+                    "ETC",
+                    "ETH",
+                    "FIL",
+                    "HBAR",
+                    "HYPE",
+                    "ICP",
+                    "INJ",
+                    "JST",
+                    "KAS",
+                    "LINK",
+                    "LTC",
+                    "M",
+                    "MNT",
+                    "MORPHO",
+                    "NEAR",
+                    "OKB",
+                    "OM",
+                    "ONDO",
+                    "PAXG",
+                    "PEPE",
+                    "POL",
+                    "QNT",
+                    "RENDER",
+                    "SHIB",
+                    "SKY",
+                    "SOL",
+                    "SUI",
+                    "TAO",
+                    "TON",
+                    "UNI",
+                    "WLD",
+                    "WLFI",
+                    "XLM",
+                    "XMR",
+                    "XRP",
+                    "ZEC"
+                ],
+                "exchanges": [
+                    "binance",
+                    "bybit"
+                ],
+                "overrides": {
+                    "bot.short.risk.total_wallet_exposure_limit": 0.0
+                }
+            },
+            {
+                "label": "pump_2025_10_10_21_market_wide",
+                "start_date": "2025-10-03",
+                "end_date": "2025-11-14",
+                "coins": [
+                    "AAVE",
+                    "ADA",
+                    "ALGO",
+                    "APT",
+                    "ARB",
+                    "ASTER",
+                    "ATOM",
+                    "AVAX",
+                    "BCH",
+                    "BNB",
+                    "BTC",
+                    "CRO",
+                    "DEXE",
+                    "DOGE",
+                    "DOT",
+                    "ENA",
+                    "ETC",
+                    "ETH",
+                    "FIL",
+                    "HBAR",
+                    "HYPE",
+                    "ICP",
+                    "INJ",
+                    "JST",
+                    "KAS",
+                    "LINK",
+                    "LTC",
+                    "M",
+                    "MNT",
+                    "MORPHO",
+                    "NEAR",
+                    "OKB",
+                    "OM",
+                    "ONDO",
+                    "PAXG",
+                    "PEPE",
+                    "POL",
+                    "QNT",
+                    "RENDER",
+                    "SHIB",
+                    "SKY",
+                    "SOL",
+                    "SUI",
+                    "TAO",
+                    "TON",
+                    "UNI",
+                    "WLD",
+                    "WLFI",
+                    "XLM",
+                    "XMR",
+                    "XRP",
+                    "ZEC"
+                ],
+                "exchanges": [
+                    "binance",
+                    "bybit"
+                ],
+                "overrides": {
+                    "bot.long.risk.total_wallet_exposure_limit": 0.0
+                }
+            },
+            {
+                "label": "crash_2025_04_13_18_om",
+                "start_date": "2025-04-06",
+                "end_date": "2025-05-18",
+                "coins": [
+                    "OM"
+                ],
+                "exchanges": [
+                    "binance"
+                ],
+                "overrides": {
+                    "coin_overrides": {
+                        "OM": {
+                            "live": {
+                                "forced_mode_long": "normal",
+                                "forced_mode_short": "manual"
+                            }
+                        }
+                    }
+                }
+            },
+            {
+                "label": "crash_2025_06_02_19_dexe",
+                "start_date": "2025-05-26",
+                "end_date": "2025-07-07",
+                "coins": [
+                    "DEXE"
+                ],
+                "exchanges": [
+                    "binance",
+                    "bybit"
+                ],
+                "overrides": {
+                    "coin_overrides": {
+                        "DEXE": {
+                            "live": {
+                                "forced_mode_long": "normal",
+                                "forced_mode_short": "manual"
+                            }
+                        }
+                    }
+                }
+            },
+            {
+                "label": "pump_2021_11_18_04_algo",
+                "start_date": "2021-11-11",
+                "end_date": "2021-12-23",
+                "coins": [
+                    "ALGO"
+                ],
+                "exchanges": [
+                    "bybit"
+                ],
+                "overrides": {
+                    "coin_overrides": {
+                        "ALGO": {
+                            "live": {
+                                "forced_mode_long": "manual",
+                                "forced_mode_short": "normal"
+                            }
+                        }
+                    }
+                }
+            },
+            {
+                "label": "pump_2024_02_23_14_uni",
+                "start_date": "2024-02-16",
+                "end_date": "2024-03-29",
+                "coins": [
+                    "UNI"
+                ],
+                "exchanges": [
+                    "binance",
+                    "bybit"
+                ],
+                "overrides": {
+                    "coin_overrides": {
+                        "UNI": {
+                            "live": {
+                                "forced_mode_long": "manual",
+                                "forced_mode_short": "normal"
+                            }
+                        }
+                    }
+                }
+            }
+        ],
+        "aggregate": {
+            "default": "mean"
+        }
+    }
+}

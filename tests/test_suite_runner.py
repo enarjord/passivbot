@@ -152,6 +152,21 @@ def test_build_scenarios_rejects_non_mapping_scenarios():
         build_scenarios({"scenarios": ["not-a-mapping"]})
 
 
+def test_build_scenarios_rejects_duplicate_labels():
+    with pytest.raises(
+        ValueError,
+        match=r"config\.backtest\.scenarios labels must be unique; duplicate label\(s\): repeated",
+    ):
+        build_scenarios(
+            {
+                "scenarios": [
+                    {"label": "repeated"},
+                    {"label": "repeated"},
+                ]
+            }
+        )
+
+
 def test_apply_scenario_filters_unavailable_coins():
     base_config = {
         "backtest": {
@@ -474,7 +489,7 @@ async def test_prepare_master_datasets_uses_scenario_windows_for_individual_exch
             label="binance_only",
             start_date="2025-01-01",
             end_date=None,
-            coins=None,
+            coins=["BTC", "ETH"],
             ignored_coins=None,
             exchanges=["binance"],
         ),
@@ -482,7 +497,7 @@ async def test_prepare_master_datasets_uses_scenario_windows_for_individual_exch
             label="bybit_only",
             start_date="2025-01-01",
             end_date=None,
-            coins=None,
+            coins=["SOL"],
             ignored_coins=None,
             exchanges=["bybit"],
         ),
@@ -495,6 +510,7 @@ async def test_prepare_master_datasets_uses_scenario_windows_for_individual_exch
                 exchange,
                 config["backtest"]["start_date"],
                 config["backtest"]["end_date"],
+                config["live"]["approved_coins"]["long"],
             )
         )
         timestamps = np.array([0, 60_000], dtype=np.int64)
@@ -523,9 +539,9 @@ async def test_prepare_master_datasets_uses_scenario_windows_for_individual_exch
     )
 
     assert calls == [
-        ("combined", "2021", "2026-05-21"),
-        ("binance", "2025-01-01", "2026-05-21"),
-        ("bybit", "2025-01-01", "2026-05-21"),
+        ("combined", "2021", "2026-05-21", ["BTC"]),
+        ("binance", "2025-01-01", "2026-05-21", ["BTC", "ETH"]),
+        ("bybit", "2025-01-01", "2026-05-21", ["SOL"]),
     ]
     assert any(
         "[suite] dataset window binance start=2025-01-01 end=2026-05-21 scenarios=binance_only"

@@ -28,6 +28,8 @@ def test_crash_finder_defaults_to_hourly_discovery_from_minute_candles():
 
     assert args.source_timeframe == "1m"
     assert args.timeframe == "1h"
+    assert args.direction == "down"
+    assert args.pump_threshold == 0.10
     assert args.exchange == ["binance", "bybit"]
     assert crash_finder._duration_timeframe_to_ms("4h") == 4 * HOUR_MS
     assert crash_finder._duration_timeframe_to_ms("12h") == 12 * HOUR_MS
@@ -131,6 +133,136 @@ def test_ordered_metric_does_not_treat_low_before_high_as_crash(tmp_path):
     )
 
     assert payload["events_selected"] == 0
+
+
+def test_ordered_metric_discovers_low_to_later_high_as_pump(tmp_path):
+    root = tmp_path / "ohlcvs"
+    catalog = OhlcvCatalog(root / "catalog.sqlite")
+    store = OhlcvStore(root, catalog)
+    hour_ts = month_start_ts(2025, 5) + 5 * HOUR_MS
+    timestamps = np.array([hour_ts + idx * 60_000 for idx in range(4)], dtype=np.int64)
+    values = np.asarray(
+        [
+            [20.0, 20.0, 20.0, 1.0],
+            [30.0, 30.0, 30.0, 1.0],
+            [60.0, 60.0, 60.0, 1.0],
+            [100.0, 100.0, 100.0, 1.0],
+        ],
+        dtype=np.float32,
+    )
+    store.write_rows("binance", "1m", "PUMP/USDT:USDT", timestamps, values)
+
+    payload = crash_finder.run_scan(
+        crash_finder.build_parser().parse_args(
+            [
+                "--root",
+                str(root),
+                "--direction",
+                "both",
+                "--threshold",
+                "-0.50",
+                "--pump-threshold",
+                "0.50",
+                "--min-valid-minutes",
+                "2",
+                "--rank-metric",
+                "ordered",
+                "--timeframe",
+                "4h",
+            ]
+        )
+    )
+
+    assert payload["events_selected"] == 1
+    assert payload["events"][0]["direction"] == "up"
+    assert payload["events"][0]["ordered_low_to_later_high_log"] > 1.0
+    assert payload["clusters"][0]["label"].startswith("pump_")
+
+
+def test_adverse_force_mode_is_directional():
+    timestamp = month_start_ts(2025, 5) + 5 * HOUR_MS
+    common = {
+        "timestamp": timestamp,
+        "timestamp_iso": crash_finder._ts_to_iso(timestamp),
+        "start_ts": timestamp,
+        "end_ts": timestamp,
+        "start_iso": crash_finder._ts_to_iso(timestamp),
+        "end_iso": crash_finder._ts_to_iso(timestamp),
+        "severity": -1.0,
+        "event_count": 1,
+        "affected_coin_count": 1,
+        "affected_coins": ["TEST"],
+        "exchanges": ["binance"],
+        "market_wide": False,
+    }
+    clusters = [
+        crash_finder.CrashCluster(label="crash_test", direction="down", **common),
+        crash_finder.CrashCluster(label="pump_test", direction="up", **common),
+    ]
+
+    payload = crash_finder.build_suite_payload(
+        clusters,
+        pre_days=1,
+        post_days=1,
+        top_clusters=0,
+        coin_mode="affected",
+        scenario_kind="all",
+        force_normal="adverse",
+        merge_overlaps=True,
+        all_scanned_coins=["TEST"],
+    )
+
+    scenarios = {item["label"]: item for item in payload["backtest"]["scenarios"]}
+    assert scenarios["crash_test"]["overrides"]["coin_overrides"]["TEST"]["live"] == {
+        "forced_mode_long": "normal",
+        "forced_mode_short": "manual",
+    }
+    assert scenarios["pump_test"]["overrides"]["coin_overrides"]["TEST"]["live"] == {
+        "forced_mode_long": "manual",
+        "forced_mode_short": "normal",
+    }
+
+
+def test_adverse_force_mode_isolates_market_wide_side():
+    timestamp = month_start_ts(2025, 5) + 5 * HOUR_MS
+    common = {
+        "timestamp": timestamp,
+        "timestamp_iso": crash_finder._ts_to_iso(timestamp),
+        "start_ts": timestamp,
+        "end_ts": timestamp,
+        "start_iso": crash_finder._ts_to_iso(timestamp),
+        "end_iso": crash_finder._ts_to_iso(timestamp),
+        "severity": -1.0,
+        "event_count": 3,
+        "affected_coin_count": 3,
+        "affected_coins": ["BTC", "ETH", "SOL"],
+        "exchanges": ["binance"],
+        "market_wide": True,
+    }
+    clusters = [
+        crash_finder.CrashCluster(label="crash_market", direction="down", **common),
+        crash_finder.CrashCluster(label="pump_market", direction="up", **common),
+    ]
+
+    payload = crash_finder.build_suite_payload(
+        clusters,
+        pre_days=1,
+        post_days=1,
+        top_clusters=0,
+        coin_mode="affected",
+        scenario_kind="all",
+        force_normal="adverse",
+        merge_overlaps=True,
+        all_scanned_coins=["BTC", "ETH", "SOL"],
+    )
+
+    scenarios = {item["label"]: item for item in payload["backtest"]["scenarios"]}
+    assert scenarios["crash_market"]["overrides"] == {
+        "bot.short.risk.total_wallet_exposure_limit": 0.0,
+    }
+    assert scenarios["pump_market"]["overrides"] == {
+        "bot.long.risk.total_wallet_exposure_limit": 0.0,
+    }
 
 
 def test_larger_scan_timeframe_combines_source_minutes_across_hour_boundary(tmp_path):
@@ -723,6 +855,32 @@ def test_clusters_csv_fast_path_does_not_create_empty_scan_artifacts(tmp_path):
     assert not (out_dir / "crash_events.csv").exists()
     assert not (out_dir / "scanned_ranges.csv").exists()
     assert not (out_dir / "scan_errors.csv").exists()
+
+
+def test_clusters_csv_preserves_directions_unless_explicitly_filtered(tmp_path):
+    clusters_csv = tmp_path / "crash_clusters.csv"
+    clusters_csv.write_text(
+        "\n".join(
+            [
+                "label,timestamp,timestamp_iso,start_ts,end_ts,start_iso,end_iso,severity,event_count,affected_coin_count,affected_coins,exchanges,market_wide,direction",
+                "crash_test,1744567200000,2025-04-13T18:00:00Z,1744567200000,1744567200000,2025-04-13T18:00:00Z,2025-04-13T18:00:00Z,-1.0,1,1,OM,binance,False,down",
+                "pump_test,1744653600000,2025-04-14T18:00:00Z,1744653600000,1744653600000,2025-04-14T18:00:00Z,2025-04-14T18:00:00Z,-1.0,1,1,ALGO,bybit,False,up",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    parser = crash_finder.build_parser()
+
+    unfiltered = crash_finder.run_scan(
+        parser.parse_args(["--clusters-csv", str(clusters_csv)])
+    )
+    down_only = crash_finder.run_scan(
+        parser.parse_args(["--clusters-csv", str(clusters_csv), "--direction", "down"])
+    )
+
+    assert {cluster["direction"] for cluster in unfiltered["clusters"]} == {"down", "up"}
+    assert [cluster["direction"] for cluster in down_only["clusters"]] == ["down"]
 
 
 def test_logging_configuration_honors_requested_level_with_existing_handlers():

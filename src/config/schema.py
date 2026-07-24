@@ -488,6 +488,7 @@ def get_template_config():
                     "mutation_indpb": 0.0135135135,
                     "mutation_probability": 0.34,
                     "n_cpus": 4,
+                    "objective_scenario": None,
                     "offspring_multiplier": 1,
                     "pareto_max_size": 1000,
                     "population_size": None,
