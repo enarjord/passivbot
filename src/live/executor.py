@@ -7,6 +7,7 @@ import time
 from collections import Counter, defaultdict
 
 from passivbot_exceptions import RestartBotException
+from live.diagnostic_safety import bounded_exception_type
 from live.event_bus import EventTypes, ReasonCodes
 from live.fresh_entry_eligibility import FreshEntryEligibilityTrace
 from live.order_churn_gate import connector_supports_order_churn_gate
@@ -1259,7 +1260,7 @@ async def execute_orders_parent(bot, orders: list[dict]) -> list[dict]:
                     passivbot_cls._log_symbol(order.get("symbol")),
                     bot._resolve_pb_order_type(order),
                     reason_code,
-                    type(ex).__name__ if isinstance(ex, BaseException) else "",
+                    bounded_exception_type(ex) if isinstance(ex, BaseException) else "",
                 )
             continue
         normalized_fields: dict[str, list[str]] = {}
@@ -1318,7 +1319,7 @@ async def execute_cancellations_parent(bot, orders: list[dict]) -> list[dict]:
         except Exception as exc:
             logging.error(
                 "[order] cancellation priority filtering failed; using input order | error_type=%s",
-                type(exc).__name__,
+                bounded_exception_type(exc),
             )
             orders = orders[:max_cancellations]
         deferred = _orders_removed_by_identity(requested_orders, orders)
@@ -1341,7 +1342,7 @@ async def execute_cancellations_parent(bot, orders: list[dict]) -> list[dict]:
             except Exception as exc:
                 logging.debug(
                     "[event] cancellation-capacity emitter failed | error_type=%s",
-                    type(exc).__name__,
+                    bounded_exception_type(exc),
                 )
     grouped_orders: dict[str, list[dict]] = defaultdict(list)
     for order in orders:
@@ -1452,7 +1453,7 @@ async def execute_cancellations_parent(bot, orders: list[dict]) -> list[dict]:
                     "[order] cancel not acknowledged | symbol=%s type=%s error_type=%s",
                     passivbot_cls._log_symbol(order.get("symbol")),
                     bot._resolve_pb_order_type(order),
-                    type(ex).__name__ if isinstance(ex, BaseException) else "",
+                    bounded_exception_type(ex) if isinstance(ex, BaseException) else "",
                 )
             continue
         ambiguous_terminal_state = (

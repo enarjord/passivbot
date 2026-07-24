@@ -4,6 +4,10 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Executor cancellation-priority/capacity and create/cancel acknowledgement diagnostics now
+  retain bounded exception types only. Existing priority fallback, emitter isolation,
+  acknowledgement/confirmation, and trading behavior are unchanged.
+
 - Terminal and ambiguous execution-order events now retain bounded exception types instead of
   persisted exception text. Existing envelope correlation, result summaries, debug profiles,
   routing, executor behavior, exchange calls, and trading behavior are unchanged.

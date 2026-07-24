@@ -109,6 +109,10 @@ async def test_execute_orders_parent_tracks_ambiguous_create_error_custom_id(
 ):
     import passivbot as pb_mod
 
+    hostile_type_name = "ApiKeyCreateAcknowledgementFailure"
+    hostile_secret = "https://hostile.example.invalid/create?token=create-secret"
+    HostileError = type(hostile_type_name, (RuntimeError,), {})
+
     class FakeBot:
         execute_orders_parent = pb_mod.Passivbot.execute_orders_parent
         _monitor_record_event = pb_mod.Passivbot._monitor_record_event
@@ -154,7 +158,7 @@ async def test_execute_orders_parent_tracks_ambiguous_create_error_custom_id(
             return None
 
         async def execute_orders(self, orders):
-            return [TimeoutError("create timed out apiKey=RAW_CREATE_SECRET")]
+            return [HostileError(hostile_secret)]
 
         def did_create_order(self, executed):
             return False
@@ -191,10 +195,21 @@ async def test_execute_orders_parent_tracks_ambiguous_create_error_custom_id(
     assert bot.recent_order_executions[0]["custom_id"] == custom_id
     captured = capsys.readouterr()
     rendered = captured.out + captured.err + caplog.text
-    assert "RAW_CREATE_SECRET" not in rendered
-    assert "create timed out" not in rendered
-    assert "create not acknowledged" in caplog.text
-    assert "error_type=TimeoutError" in caplog.text
+    assert hostile_secret not in rendered
+    create_records = [
+        record
+        for record in caplog.records
+        if record.getMessage().startswith("[order] create not acknowledged")
+    ]
+    assert [(record.levelno, record.getMessage()) for record in create_records] == [
+        (
+            logging.WARNING,
+            "[order] create not acknowledged | symbol=TON "
+            "type=entry_grid_normal_long reason=result_exception error_type=RuntimeError",
+        )
+    ]
+    assert hostile_type_name not in create_records[0].getMessage()
+    assert hostile_secret not in create_records[0].getMessage()
 
 
 @pytest.mark.asyncio
@@ -597,6 +612,10 @@ async def test_execute_cancellations_parent_bounds_partial_response_diagnostics(
 ):
     import passivbot as pb_mod
 
+    hostile_type_name = "ApiKeyCancelAcknowledgementFailure"
+    hostile_secret = "https://hostile.example.invalid/cancel?token=cancel-secret"
+    HostileError = type(hostile_type_name, (RuntimeError,), {})
+
     class FakeBot:
         debug_mode = False
 
@@ -667,6 +686,40 @@ async def test_execute_cancellations_parent_bounds_partial_response_diagnostics(
     assert "RAW_CANCEL_SECRET" not in rendered
     assert "raw_response" not in rendered
     assert "cancel response count mismatch | requested=2 returned=1" in caplog.text
+
+    async def not_acknowledged(_orders):
+        return [HostileError(hostile_secret)]
+
+    bot.execute_cancellations = not_acknowledged
+    bot.did_cancel_order = lambda _executed, _order: False
+    caplog.clear()
+    capsys.readouterr()
+    with caplog.at_level(logging.WARNING):
+        result = await pb_mod.Passivbot.execute_cancellations_parent(bot, [orders[0]])
+
+    assert result == []
+    assert bot.state_change_detected_by_symbol == {
+        "BTC/USDT:USDT",
+        "ETH/USDT:USDT",
+    }
+    assert bot._health_orders_cancelled == 0
+    captured = capsys.readouterr()
+    rendered = captured.out + captured.err + caplog.text
+    assert hostile_secret not in rendered
+    cancel_records = [
+        record
+        for record in caplog.records
+        if record.getMessage().startswith("[order] cancel not acknowledged")
+    ]
+    assert [(record.levelno, record.getMessage()) for record in cancel_records] == [
+        (
+            logging.WARNING,
+            "[order] cancel not acknowledged | symbol=BTC "
+            "type=close_grid_long error_type=RuntimeError",
+        )
+    ]
+    assert hostile_type_name not in cancel_records[0].getMessage()
+    assert hostile_secret not in cancel_records[0].getMessage()
 
 
 def _make_detection_bot(now_ts: int, start_ts: int):
