@@ -58,6 +58,10 @@
    every consumed native candle surface, including 1m inputs and native 1h log-range inputs with a
    nonzero strategy weight, using the same per-symbol requirements and explicit warmup cap as the
    live EMA bundle.
+   Cache-only EMA carry-forward must read the index and candle range for the requested native
+   timeframe. When the newest native 1h bucket has only just become due, the previous cached 1h
+   EMA may remain eligible only for the configured wall-clock candidate staleness window; the
+   one-hour bucket interval itself is not counted as one hour of refresh lateness.
    Tail-only gaps remain eligible within the configured candidate staleness window; missing basis
    and internal gaps do not. Refresh budgets count symbol/timeframe fetches, health scans are
    bounded and rotated across cycles, interleave each candidate's 1m and native 1h health surfaces,

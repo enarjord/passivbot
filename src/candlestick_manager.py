@@ -3670,12 +3670,28 @@ class CandlestickManager:
         """Public helper to read last refresh timestamp (ms) from index metadata."""
         return self._get_last_refresh_ms(symbol)
 
-    def get_last_final_ts(self, symbol: str) -> int:
-        """Return last finalized candle timestamp (ms) seen for this symbol, or 0 if unknown."""
-        idx = self._ensure_symbol_index(symbol)
+    def get_last_final_ts(
+        self,
+        symbol: str,
+        timeframe: Optional[str] = None,
+        *,
+        tf: Optional[str] = None,
+    ) -> int:
+        """Return the last locally cached finalized timestamp for one timeframe."""
+        idx = self._ensure_symbol_index(symbol, timeframe=timeframe, tf=tf)
         try:
-            return int(idx.get("meta", {}).get("last_final_ts", 0))
+            last_final = int(idx.get("meta", {}).get("last_final_ts", 0) or 0)
         except Exception:
+            last_final = 0
+        if last_final > 0:
+            return last_final
+        try:
+            return max(
+                int(shard.get("max_ts", 0) or 0)
+                for shard in (idx.get("shards", {}) or {}).values()
+                if isinstance(shard, dict)
+            )
+        except (TypeError, ValueError):
             return 0
 
     def _set_last_refresh_meta(
@@ -7161,7 +7177,10 @@ class CandlestickManager:
         normalized = self._normalize_spans_by_metric(spans_by_metric)
         if not normalized:
             return {}
-        last_cached = _floor_minute(int(self.get_last_final_ts(symbol) or 0))
+        last_cached = int(
+            self.get_last_final_ts(symbol, timeframe=timeframe) or 0
+        )
+        last_cached = (last_cached // period_ms) * period_ms
         if last_cached <= 0:
             return {}
         latest_expected = (int(self._now_ms()) // period_ms) * period_ms - period_ms
@@ -8074,6 +8093,15 @@ class CandlestickManager:
             "count": int(arr.shape[0]),
             "crc32": crc,
         }
+        meta = idx.setdefault("meta", {})
+        meta["last_final_ts"] = max(
+            int(meta.get("last_final_ts", 0) or 0),
+            int(arr[-1]["ts"]),
+        )
+        observed_start = meta.get("observed_start_ts", meta.get("inception_ts"))
+        if observed_start is None or int(arr[0]["ts"]) < int(observed_start):
+            meta["observed_start_ts"] = int(arr[0]["ts"])
+            meta["inception_ts"] = int(arr[0]["ts"])
         key = f"{symbol}::{tf_norm}"
         self._index[key] = idx
 

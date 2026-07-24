@@ -4,6 +4,12 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Live candle orchestration now reads bounded cache-only native 1h EMA carry-forward from the 1h
+  index and applies the configured forager staleness limit to actual refresh lateness. A
+  minute-boundary open-tail projection is also retried before reusing a previous close EMA,
+  avoiding transient candidate drops and unnecessary close-EMA fallback on WEEX and other
+  exchanges without weakening active-symbol fail-closed behavior.
+
 - Canonical live-event payloads now make a bounded JSON-compatible copy at construction time,
   revalidate that copy at persistence boundaries, redact sensitive keys before retention, and
   record aggregate truncation metadata only when a limit applies. Event identity, routing, monitor
