@@ -16379,9 +16379,13 @@ class Passivbot:
             for sym in priority_symbols:
                 forager_cached_metric_max_age_by_symbol[sym] = priority_max_age_ms
             if secondary_symbols:
+                secondary_surface_count = sum(
+                    1 + int(bool(need_h1_lr_spans.get(sym)))
+                    for sym in secondary_symbols
+                )
                 secondary_max_age_ms = int(
                     Passivbot._forager_target_staleness_ms(
-                        self, len(secondary_symbols), max_calls_i
+                        self, secondary_surface_count, max_calls_i
                     )
                 )
                 now_ms = utc_ms()
@@ -16503,17 +16507,17 @@ class Passivbot:
             if timeframe == "1h":
                 # A newly finalized hourly bucket is one full candle interval
                 # ahead of the prior cached bucket. Enforce the configured
-                # budget against wall-clock lateness since that bucket became
-                # due, then include the expected interval for the cache reader's
-                # timestamp-gap bound.
+                # budget against the candle manager's replay-aware clock since
+                # that bucket became due, then include the expected interval for
+                # the cache reader's timestamp-gap bound.
                 period_ms = 60 * ONE_MIN_MS
                 try:
                     last_cached = int(
                         self.cm.get_last_final_ts(symbol, timeframe=timeframe) or 0
                     )
+                    now_ms = int(self.cm._now_ms())
                 except Exception:
                     return None
-                now_ms = int(utc_ms())
                 latest_expected = (now_ms // period_ms) * period_ms - period_ms
                 if last_cached <= 0:
                     return None

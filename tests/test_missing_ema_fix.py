@@ -1781,7 +1781,19 @@ async def test_cache_only_forager_uses_bounded_cached_h1_log_range(monkeypatch):
     hour_ms = 60 * 60_000
     fixed_now_ms = 10 * hour_ms + 5 * 60_000
     clock = {"now_ms": fixed_now_ms}
-    monkeypatch.setattr(pb_mod, "utc_ms", lambda: clock["now_ms"])
+    wall_clock_ms = fixed_now_ms + 365 * 24 * hour_ms
+    monkeypatch.setattr(pb_mod, "utc_ms", lambda: wall_clock_ms)
+    staleness_inputs = []
+
+    def target_staleness(_bot, surface_count, max_calls):
+        staleness_inputs.append((surface_count, max_calls))
+        return 10 * 60_000
+
+    monkeypatch.setattr(
+        pb_mod.Passivbot,
+        "_forager_target_staleness_ms",
+        target_staleness,
+    )
     bot = _BundleReproBot(
         symbol,
         close_mode="value",
@@ -1797,12 +1809,14 @@ async def test_cache_only_forager_uses_bounded_cached_h1_log_range(monkeypatch):
     )
     bot.PB_modes = {"long": {symbol: "manual"}, "short": {symbol: "manual"}}
     bot.active_symbols = []
+    bot.config["live"]["max_ohlcv_fetches_per_minute"] = 1
     bot.cm.get_last_refresh_ms = lambda _symbol: fixed_now_ms
     bot.cm.get_last_final_ts = (
         lambda _symbol, timeframe=None: 8 * hour_ms
         if timeframe == "1h"
         else fixed_now_ms - 60_000
     )
+    bot.cm._now_ms = lambda: clock["now_ms"]
     bot._candle_staleness_ms = lambda _symbol, now_ms=None: 0
     _enable_forager_required_ranking(bot)
 
@@ -1824,6 +1838,7 @@ async def test_cache_only_forager_uses_bounded_cached_h1_log_range(monkeypatch):
     assert len(h1_calls) == 1
     assert h1_calls[0]["spans_by_metric"] == {"log_range": 4.0}
     assert h1_calls[0]["max_staleness_ms"] >= 60 * 60_000
+    assert (2, 1) in staleness_inputs
 
     clock["now_ms"] = 10 * hour_ms + 11 * 60_000
     (

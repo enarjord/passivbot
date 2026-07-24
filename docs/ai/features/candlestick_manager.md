@@ -60,8 +60,11 @@
    live EMA bundle.
    Cache-only EMA carry-forward must read the index and candle range for the requested native
    timeframe. When the newest native 1h bucket has only just become due, the previous cached 1h
-   EMA may remain eligible only for the configured wall-clock candidate staleness window; the
-   one-hour bucket interval itself is not counted as one hour of refresh lateness.
+   EMA may remain eligible only for the candidate staleness window computed from the same
+   refreshable surface count used by the background refresher and measured on the candle manager's
+   active live/replay clock; the one-hour bucket interval itself is not counted as one hour of
+   refresh lateness. Cached carry-forward requires full requested-window coverage and must not
+   populate the normal active-strategy EMA cache.
    Tail-only gaps remain eligible within the configured candidate staleness window; missing basis
    and internal gaps do not. Refresh budgets count symbol/timeframe fetches, health scans are
    bounded and rotated across cycles, interleave each candidate's 1m and native 1h health surfaces,

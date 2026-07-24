@@ -167,6 +167,7 @@ async def test_latest_cached_h1_ema_metrics_use_h1_index(tmp_path):
     )
 
     assert out["log_range"] > 0.0
+    assert symbol not in cm._ema_cache
     too_stale = await cm.get_latest_cached_ema_metrics(
         symbol,
         {"log_range": 4.0},
@@ -175,6 +176,40 @@ async def test_latest_cached_h1_ema_metrics_use_h1_index(tmp_path):
         timeframe="1h",
     )
     assert too_stale == {}
+
+
+@pytest.mark.asyncio
+async def test_latest_cached_h1_ema_rejects_internal_gap_on_non_weex(tmp_path):
+    class _Ex:
+        id = "bybit"
+
+    cm = CandlestickManager(
+        exchange=_Ex(), exchange_name="bybit", cache_dir=str(tmp_path / "caches")
+    )
+    symbol = "GAPPED-H1/USDT:USDT"
+    hour_ms = 60 * ONE_MIN_MS
+    now_ms = 10 * hour_ms
+    cm._now_ms = lambda: now_ms
+    candles = np.array(
+        [
+            (5 * hour_ms, 100.0, 102.0, 99.0, 101.0, 2.0),
+            (6 * hour_ms, 101.0, 103.0, 100.0, 102.0, 3.0),
+            (8 * hour_ms, 104.0, 106.0, 103.0, 105.0, 5.0),
+        ],
+        dtype=CANDLE_DTYPE,
+    )
+    cm._persist_batch(symbol, candles, timeframe="1h")
+
+    out = await cm.get_latest_cached_ema_metrics(
+        symbol,
+        {"log_range": 4.0},
+        max_staleness_ms=60 * ONE_MIN_MS,
+        window_candles=4,
+        timeframe="1h",
+    )
+
+    assert out == {}
+    assert symbol not in cm._ema_cache
 
 
 @pytest.mark.parametrize("debug", [False])

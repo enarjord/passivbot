@@ -7210,18 +7210,12 @@ class CandlestickManager:
             fill_trailing_gaps=False,
             allow_remote_fetch=False,
         )
-        if raw.size == 0 or not self._ema_window_has_required_coverage(
-            raw,
-            start_ts,
-            int(last_cached),
-            timeframe=timeframe,
+        if raw.size == 0 or not candle_range_has_full_coverage(
+            raw, start_ts, int(last_cached), timeframe=timeframe
         ):
             return {}
 
         out: Dict[str, float] = {}
-        tf_key = str(period_ms)
-        now = self._now_ms()
-        cache = self._ema_cache.setdefault(symbol, {})
         for metric_key, spans in normalized.items():
             for span in spans:
                 span_candles = max(1, int(math.ceil(span)))
@@ -7247,11 +7241,6 @@ class CandlestickManager:
                 val = float(self._ema(series, span))
                 if math.isfinite(val):
                     out[str(metric_key)] = val
-                    cache[(str(metric_key), float(span), tf_key)] = (
-                        val,
-                        int(last_cached),
-                        int(now),
-                    )
         return out
 
     async def _latest_finalized_range(
