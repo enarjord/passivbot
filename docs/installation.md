@@ -4,8 +4,8 @@ This guide collects all steps (and common pitfalls) for setting up Passivbot on 
 
 ## 1. Prerequisites
 
-- **Python 3.12 or newer** – Earlier versions are no longer supported. On Debian/Ubuntu systems
-  whose default interpreter is Python 3.12+, install it and its build headers with
+- **Python 3.12 or 3.14** – Earlier versions and Python 3.13 are not supported. On Debian/Ubuntu
+  systems whose default interpreter is a supported version, install it and its build headers with
   `sudo apt install python3 python3-venv python3-dev`. Otherwise install a supported newer
   interpreter and note its executable name, such as `python3.14`.
 - **Rust toolchain** – Passivbot’s hot paths live in Rust. Install via [rustup](https://rustup.rs/) if `rustc --version` is not available.
@@ -19,7 +19,7 @@ This guide collects all steps (and common pitfalls) for setting up Passivbot on 
  git clone https://github.com/enarjord/passivbot.git
  cd passivbot
 
-# Select the supported interpreter you installed. Use python3 only if it is already 3.12+.
+# Select the supported interpreter you installed. Use python3 only if it is 3.12 or 3.14.
  PYTHON_BIN=python3.14
  "$PYTHON_BIN" --version
 
@@ -29,8 +29,8 @@ This guide collects all steps (and common pitfalls) for setting up Passivbot on 
  python --version
 ```
 
-Replace `python3.14` with another installed Python 3.12+ executable as needed. Do not assume the
-system `python3` changed when a versioned interpreter was installed alongside it.
+Replace `python3.14` with `python3.12` as needed. Do not assume the system `python3` changed when
+a versioned interpreter was installed alongside it.
 
 ## 3. Install Passivbot
 
@@ -119,7 +119,7 @@ If you see linker errors after an OS update (e.g. new glibc), rebuild the extens
 | `feature edition2024 is required` during the Rust build | Update Rust with `rustup update stable`, then retry `python3 -m pip install -e ".[full]"`. |
 | `python3 -m pip install … failed due to SSL` | Update `certifi` or set `PIP_CERT` if corporate proxies intercept TLS. |
 | `maturin develop` can’t find Python | Ensure you run it inside the venv (`which python` should point to `venv/bin/python`). |
-| `TypeError: unsupported operand type(s) for |: ...` | You are running an unsupported Python version; install Python 3.12+ and recreate the venv with that interpreter. |
+| `TypeError: unsupported operand type(s) for |: ...` | You are running an unsupported Python version; install Python 3.12 or 3.14 and recreate the venv with that interpreter. |
 
 For more detail, see [docs/troubleshooting.md](troubleshooting.md).
 

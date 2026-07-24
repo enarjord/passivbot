@@ -157,5 +157,5 @@ Then rerun:
 maturin develop --release
 ```
 
-If you are still seeing the wrong interpreter, recreate the venv with Python 3.12 or newer and
-reinstall Passivbot inside that venv.
+If you are still seeing the wrong interpreter, recreate the venv with a supported interpreter
+(Python 3.12 or 3.14; not 3.13) and reinstall Passivbot inside that venv.

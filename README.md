@@ -42,7 +42,8 @@ Passivbot manages underperforming, or "stuck", positions by realizing small loss
 
 To install Passivbot and its dependencies, follow the steps below.
 
-Passivbot requires **Python 3.12 or newer**. Earlier versions are not supported.
+Passivbot supports **Python 3.12 and Python 3.14**. Python 3.13 is not supported by the pinned
+dependency set.
 
 ### Upgrading a v7 config
 
@@ -88,7 +89,7 @@ Create a virtual environment to manage dependencies:
 
  **Linux/macOS:**
 ```sh
-# Replace python3.14 with the installed Python 3.12+ executable you want Passivbot to use.
+# Replace python3.14 with the installed supported executable (python3.12 or python3.14).
 PYTHON_BIN=python3.14
 "$PYTHON_BIN" --version
 "$PYTHON_BIN" -m venv venv
