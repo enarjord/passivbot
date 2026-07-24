@@ -839,12 +839,22 @@ class _DummyFillEvent:
         pb_order_type: str = "unknown",
         psize: float | None = None,
         pprice: float | None = None,
+        side: str = "buy",
+        qty: float = 1.0,
+        price: float = 100.0,
+        client_order_id: str = "",
+        source_ids: list[str] | None = None,
     ):
         self.symbol = symbol
         self.position_side = position_side
         self.timestamp = timestamp
         self.id = event_id
         self.pb_order_type = pb_order_type
+        self.side = side
+        self.qty = qty
+        self.price = price
+        self.client_order_id = client_order_id
+        self.source_ids = list(source_ids or [])
         if psize is not None:
             self.psize = psize
         if pprice is not None:
@@ -1193,6 +1203,49 @@ async def test_same_timestamp_fill_identity_advances_trailing_epoch():
     assert bot._trailing_position_change_epochs[(symbol, "long")] == (
         "fill:120000:fill-b"
     )
+
+
+def test_idless_fill_identity_is_prefix_stable_and_distinguishes_duplicate_fills():
+    cfg = _dummy_config()
+    bot = _make_dummy_bot(cfg)
+    symbol = _set_basic_state(bot)
+    first = _DummyFillEvent(
+        symbol,
+        "long",
+        120_000,
+        None,
+        qty=0.5,
+        price=100.0,
+    )
+    bot._pnls_manager = _DummyPnlsManager([first])
+
+    first_epoch = bot._latest_fill_position_change_epochs()[(symbol, "long")]
+    assert ":fingerprint:" in first_epoch
+
+    older = _DummyFillEvent(
+        symbol,
+        "long",
+        60_000,
+        None,
+        qty=0.25,
+        price=99.0,
+    )
+    bot._pnls_manager._events.insert(0, older)
+    assert bot._latest_fill_position_change_epochs()[(symbol, "long")] == first_epoch
+
+    duplicate = _DummyFillEvent(
+        symbol,
+        "long",
+        120_000,
+        None,
+        qty=0.5,
+        price=100.0,
+    )
+    bot._pnls_manager._events.append(duplicate)
+    duplicate_epoch = bot._latest_fill_position_change_epochs()[(symbol, "long")]
+
+    assert duplicate_epoch != first_epoch
+    assert duplicate_epoch.endswith(":1")
 
 
 @pytest.mark.asyncio
@@ -1749,6 +1802,82 @@ async def test_runtime_delta_accepts_fresh_identity_when_reconstructed_after_sta
         in record.getMessage()
         for record in caplog.records
     )
+
+
+@pytest.mark.asyncio
+async def test_runtime_delta_rejects_idless_fill_reindexed_by_older_history():
+    cfg = _dummy_config()
+    bot = _make_dummy_bot(cfg)
+    symbol = _set_basic_state(bot)
+    latest_known_fill = _DummyFillEvent(
+        symbol,
+        "long",
+        120_000,
+        None,
+        psize=1.0,
+        pprice=100.0,
+        qty=1.0,
+        price=100.0,
+    )
+    bot._pnls_manager = _DummyPnlsManager([latest_known_fill])
+    bot.is_trailing = lambda sym, pside=None: pside == "long"
+    bot.get_exchange_time = lambda: 361_000
+
+    baseline = [
+        {
+            "symbol": symbol,
+            "position_side": "long",
+            "size": 1.0,
+            "price": 100.0,
+            "lastUpdateTimestamp": 120_000,
+        }
+    ]
+    changed = [
+        {
+            "symbol": symbol,
+            "position_side": "long",
+            "size": 1.5,
+            "price": 101.0,
+            "lastUpdateTimestamp": 240_000,
+        }
+    ]
+    bot._apply_positions_snapshot(baseline)
+    bot._begin_authoritative_refresh_epoch()
+    bot._apply_positions_snapshot(changed)
+    baseline_epoch = bot._trailing_pending_fill_confirmations[(symbol, "long")]
+
+    older_fill = _DummyFillEvent(
+        symbol,
+        "long",
+        60_000,
+        None,
+        psize=0.5,
+        pprice=99.0,
+        qty=0.5,
+        price=99.0,
+    )
+    bot._pnls_manager._events.insert(0, older_fill)
+    bot._trailing_fill_fetch_generation = 1
+
+    async def complete_epoch_candles(*args, **kwargs):
+        return _make_candles(
+            [
+                (180_000, 100.0, 102.0, 99.0, 101.0, 1.0),
+                (240_000, 101.0, 103.0, 100.0, 102.0, 1.0),
+                (300_000, 102.0, 104.0, 101.0, 103.0, 1.0),
+            ]
+        )
+
+    bot.cm.get_candles = complete_epoch_candles
+    await bot.update_trailing_data()
+
+    assert bot._trailing_pending_fill_confirmations == {
+        (symbol, "long"): baseline_epoch
+    }
+    assert bot._latest_fill_position_change_epochs()[(symbol, "long")] == baseline_epoch
+    assert bot._orchestrator_trailing_unavailable_reasons == {
+        symbol: ["position_fill_confirmation_pending"]
+    }
 
 
 @pytest.mark.asyncio

@@ -13,6 +13,7 @@ import traceback
 import argparse
 import asyncio
 import json
+import hashlib
 import sys
 import signal
 import hjson
@@ -8305,13 +8306,28 @@ class Passivbot:
         return self._position_update_timestamp_from_row(position)
 
     @staticmethod
-    def _fill_position_change_epoch(event, event_index: int) -> str:
-        timestamp = int(event.timestamp)
-        event_id = getattr(event, "id", None) or getattr(
-            event, "client_order_id", None
+    def _fill_position_change_fallback_key(event) -> str:
+        """Return an immutable content key for a fill without exchange identity."""
+        fields = (
+            int(event.timestamp),
+            str(getattr(event, "symbol", "") or ""),
+            str(getattr(event, "position_side", "") or ""),
+            str(getattr(event, "side", "") or ""),
+            str(getattr(event, "qty", "") or ""),
+            str(getattr(event, "price", "") or ""),
         )
+        payload = json.dumps(fields, ensure_ascii=True, separators=(",", ":"))
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:20]
+
+    @classmethod
+    def _fill_position_change_epoch(
+        cls, event, fallback_occurrence: int = 0
+    ) -> str:
+        timestamp = int(event.timestamp)
+        event_id = str(getattr(event, "id", "") or "")
         if not event_id:
-            event_id = f"event_index:{event_index}"
+            fallback_key = cls._fill_position_change_fallback_key(event)
+            event_id = f"fingerprint:{fallback_key}:{int(fallback_occurrence)}"
         return f"fill:{timestamp}:{event_id}"
 
     def _latest_fill_position_change_anchors(self) -> dict[tuple[str, str], dict]:
@@ -8319,13 +8335,25 @@ class Passivbot:
         manager = getattr(self, "_pnls_manager", None)
         events = [] if manager is None else manager.get_events()
         anchors: dict[tuple[str, str], dict] = {}
+        fallback_occurrences: dict[str, int] = defaultdict(int)
+        fallback_occurrence_by_index: dict[int, int] = {}
+        for event_index, event in enumerate(events):
+            if getattr(event, "id", None):
+                continue
+            fallback_key = self._fill_position_change_fallback_key(event)
+            fallback_occurrence_by_index[event_index] = fallback_occurrences[
+                fallback_key
+            ]
+            fallback_occurrences[fallback_key] += 1
         for event_index in range(len(events) - 1, -1, -1):
             event = events[event_index]
             key = (str(event.symbol), str(event.position_side))
             if key not in anchors:
                 anchor = {
                     "timestamp": int(event.timestamp),
-                    "epoch": self._fill_position_change_epoch(event, event_index),
+                    "epoch": self._fill_position_change_epoch(
+                        event, fallback_occurrence_by_index.get(event_index, 0)
+                    ),
                 }
                 for field in ("psize", "pprice"):
                     try:
