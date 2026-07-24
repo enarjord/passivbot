@@ -4,13 +4,6 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
-- Fixed live trailing fill confirmation getting stuck after restart when cached fill history starts
-  mid-position and therefore cannot reconstruct the exchange position's exact size or average
-  price. A completed post-snapshot fill refresh and current fill identity now restore trailing
-  extrema while reconstructed fill after-state remains diagnostic-only. Id-less fills use stable
-  content-based identities rather than history-list indices, so loading older history cannot
-  falsely confirm a new position-changing fill.
-
 - Backtests now treat a finite balance depleted by fills as liquidation before recomputing orders,
   so extreme optimizer candidates terminate normally instead of panicking an optimizer worker.
   Other invalid orchestrator inputs now propagate as backtest errors without unwinding Rust.
@@ -19,7 +12,8 @@ All notable user-facing changes will be documented in this file.
   loading or repairing local fill caches, widens fill-history fetches with bounded backoff when a
   position remains tied to a stale or mismatched fill, and recognizes an exact full-opening fill
   even when older truncated history polluted its reconstructed post-fill size. Affected trailing
-  positions remain fail-closed until the refreshed fill evidence matches exchange state.
+  positions remain fail-closed until the refreshed fill evidence matches exchange state. Id-less
+  fills use stable content-based identities rather than history-list indices.
 
 - Live candle orchestration now reads bounded cache-only native 1h EMA carry-forward from the 1h
   index, requires a complete native window, isolates carried values from the active EMA cache, and

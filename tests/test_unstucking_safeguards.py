@@ -1761,10 +1761,7 @@ async def test_restart_same_state_waits_for_post_position_fill_refresh():
 
 
 @pytest.mark.asyncio
-async def test_runtime_delta_accepts_fresh_identity_when_reconstructed_after_state_mismatches(
-    caplog,
-):
-    caplog.set_level(logging.INFO)
+async def test_runtime_delta_keeps_mismatched_after_state_pending():
     cfg = _dummy_config()
     bot = _make_dummy_bot(cfg)
     symbol = _set_basic_state(bot)
@@ -1831,16 +1828,15 @@ async def test_runtime_delta_accepts_fresh_identity_when_reconstructed_after_sta
     bot._trailing_fill_fetch_generation = 3
     await bot.update_trailing_data()
 
-    assert bot._trailing_pending_fill_confirmations == {}
-    assert bot._trailing_position_snapshot_fill_epochs == {
-        (symbol, "long"): "fill:180000:mismatched-fill"
+    assert bot._trailing_pending_fill_confirmations == {
+        (symbol, "long"): "fill:120000:old-fill"
     }
-    assert bot._orchestrator_trailing_unavailable_symbols == set()
-    assert any(
-        "accepted fresh fill identity despite reconstructed after-state mismatch"
-        in record.getMessage()
-        for record in caplog.records
-    )
+    assert bot._trailing_fill_confirmation_diagnostics[(symbol, "long")][
+        "failed_predicates"
+    ] == ["fill_after_state_mismatch"]
+    assert bot._orchestrator_trailing_unavailable_reasons == {
+        symbol: ["position_fill_confirmation_pending"]
+    }
 
 
 @pytest.mark.asyncio
@@ -1920,10 +1916,7 @@ async def test_runtime_delta_rejects_idless_fill_reindexed_by_older_history():
 
 
 @pytest.mark.asyncio
-async def test_restart_accepts_fresh_fill_identity_when_cache_starts_mid_position(
-    caplog,
-):
-    caplog.set_level(logging.INFO)
+async def test_restart_keeps_partial_history_fill_pending_until_recovery():
     cfg = _dummy_config()
     bot = _make_dummy_bot(cfg)
     symbol = _set_basic_state(bot)
@@ -1970,19 +1963,15 @@ async def test_restart_accepts_fresh_fill_identity_when_cache_starts_mid_positio
     bot._trailing_fill_fetch_generation = 1
     await bot.update_trailing_data()
 
-    assert bot._trailing_pending_fill_confirmations == {}
-    assert bot._trailing_position_snapshot_fill_epochs == {
-        (symbol, "long"): "fill:120000:partial-history-fill"
+    assert bot._trailing_pending_fill_confirmations == {
+        (symbol, "long"): None
     }
-    assert bot._orchestrator_trailing_unavailable_symbols == set()
-    assert bot.trailing_prices[symbol]["long"]["max_since_open"] == pytest.approx(
-        112.0
-    )
-    assert any(
-        "accepted fresh fill identity despite reconstructed after-state mismatch"
-        in record.getMessage()
-        for record in caplog.records
-    )
+    assert bot._trailing_fill_confirmation_diagnostics[(symbol, "long")][
+        "failed_predicates"
+    ] == ["fill_after_state_mismatch"]
+    assert bot._orchestrator_trailing_unavailable_reasons == {
+        symbol: ["position_fill_confirmation_pending"]
+    }
 
 
 @pytest.mark.asyncio
