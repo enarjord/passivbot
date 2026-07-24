@@ -642,7 +642,7 @@ def _remember_ambiguous_create(
         shorten_custom_id(str(order.get("custom_id", ""))),
         status,
         reason,
-        type(error).__name__ if error is not None else "",
+        bounded_exception_type(error) if error is not None else "",
     )
 
 
@@ -1041,7 +1041,7 @@ async def execute_order_plan(
                     logging.error(
                         "[order] create batch raised before completion | count=%d error_type=%s",
                         len(to_create_mod),
-                        type(exc).__name__,
+                        bounded_exception_type(exc),
                     )
                 await bot.restart_bot_on_too_many_errors()
     _emit_fresh_entry_eligibility(bot, passivbot_cls, order_wave)
