@@ -696,10 +696,23 @@ class HyperliquidBot(CCXTBot):
                 for order in res:
                     try:
                         order["position_side"] = self.determine_pos_side(order)
+                    except (KeyError, TypeError, ValueError) as exc:
+                        recovered = self._hl_acknowledged_ws_order_semantics(order)
+                        if recovered is None:
+                            untrusted.append((order, exc))
+                            continue
+                        position_side, reduce_only = recovered
+                        order["position_side"] = position_side
+                        order["reduceOnly"] = reduce_only
+                        order["_pb_order_semantics_source"] = (
+                            "acknowledged_exchange_order_id"
+                        )
+                    try:
                         order["qty"] = order["amount"]
-                        normalized.append(order)
                     except (KeyError, TypeError, ValueError) as exc:
                         untrusted.append((order, exc))
+                        continue
+                    normalized.append(order)
                 if untrusted:
                     symbols = {
                         str(order.get("symbol") or "")
@@ -756,6 +769,49 @@ class HyperliquidBot(CCXTBot):
                 )
                 await asyncio.sleep(1)
                 logging.debug("[ws] %s: reconnecting...", self.exchange)
+
+    def _hl_acknowledged_ws_order_semantics(
+        self, order: dict
+    ) -> tuple[str, bool] | None:
+        """Recover missing WS semantics from an exact acknowledged-order id.
+
+        Hyperliquid websocket order updates commonly omit ``reduceOnly`` and
+        client metadata.  Passivbot's acknowledged create records retain those
+        semantics together with the exchange-assigned order id.  An exact id
+        match is strong enough for websocket hint attribution; ambiguous,
+        malformed, contradictory, or foreign updates remain untrusted and
+        trigger the authoritative account-state refresh path.
+        """
+        if not isinstance(order, dict):
+            return None
+        exchange_id = self._extract_order_exchange_id(order)
+        side = str(order.get("side") or "").lower()
+        if not exchange_id or side not in {"buy", "sell"}:
+            return None
+        matches = [
+            record
+            for record in self._emitted_order_records()
+            if str(record.get("exchange_id") or "") == exchange_id
+        ]
+        if len(matches) != 1:
+            return None
+        record = matches[0]
+        record_side = str(record.get("side") or "").lower()
+        position_side = str(record.get("position_side") or "").lower()
+        reduce_only = record.get("reduce_only")
+        if (
+            record.get("status") != "acknowledged"
+            or record_side != side
+            or position_side not in {"long", "short"}
+            or not isinstance(reduce_only, bool)
+        ):
+            return None
+        action_side = self._derive_one_way_position_side(
+            {"side": side, "reduceOnly": reduce_only}
+        )
+        if action_side != position_side:
+            return None
+        return position_side, reduce_only
 
     def determine_pos_side(self, order):
         # Hyperliquid is one-way, but current position state must never label a
