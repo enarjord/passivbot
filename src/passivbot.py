@@ -8323,33 +8323,25 @@ class Passivbot:
     def _position_history_anchor_timestamp_ms(
         self, symbol: str, pside: str
     ) -> int | None:
-        """Return the earliest exchange position timestamp usable for fill recovery.
+        """Return an exchange position-opening timestamp usable for fill recovery.
 
         Candle anchoring prefers the latest position update. Fill-history recovery
         has the opposite requirement: start before the position opened so the
         reconstructed state includes every entry and reduction still available
-        from the exchange.
+        from the exchange. An update-only timestamp is not an opening boundary;
+        callers must progressively widen history when no open/generic timestamp
+        is available.
         """
         position = self.positions.get(symbol, {}).get(pside, {})
-        timestamp_keys = (
-            "open_time",
-            "openTime",
-            "createdTime",
-            "createTime",
-            "cTime",
-            "timestamp",
-            "timestamp_ms",
-            "lastUpdateTimestamp",
-            "updateTime",
-            "updatedTime",
-            "update_time",
-            "updated_at",
-            "uTime",
-        )
-        candidates = [position.get(key) for key in timestamp_keys]
+        open_ts = self._position_open_timestamp_from_row(position)
+        if open_ts is not None:
+            return open_ts
+
+        generic_keys = ("timestamp", "timestamp_ms")
+        candidates = [position.get(key) for key in generic_keys]
         info = position.get("info")
         if isinstance(info, dict):
-            candidates.extend(info.get(key) for key in timestamp_keys)
+            candidates.extend(info.get(key) for key in generic_keys)
         parsed = [
             timestamp
             for timestamp in (
@@ -8358,6 +8350,13 @@ class Passivbot:
             )
             if timestamp is not None
         ]
+        update_ts = self._position_update_timestamp_from_row(position)
+        if update_ts is not None:
+            # Snapshot normalization stores its latest anchor in ``timestamp``.
+            # When that value is only a copy of the update time, it does not
+            # establish where the position opened. A genuinely earlier generic
+            # timestamp remains useful when an exchange exposes both.
+            parsed = [timestamp for timestamp in parsed if timestamp < update_ts]
         return min(parsed) if parsed else None
 
     def _position_update_timestamp_ms(self, symbol: str, pside: str) -> int | None:
@@ -11609,14 +11608,19 @@ class Passivbot:
             anchor_ts = self._position_history_anchor_timestamp_ms(symbol, pside)
             if anchor_ts is None:
                 try:
-                    anchor_ts = int(detail.get("fill_timestamp_ms") or 0) or None
+                    diagnostic_fill_ts = (
+                        int(detail.get("fill_timestamp_ms") or 0) or None
+                    )
                 except (TypeError, ValueError, OverflowError):
-                    anchor_ts = None
-            if anchor_ts is None:
+                    diagnostic_fill_ts = None
                 missing_anchor_cohorts.append((symbol, pside))
+                if diagnostic_fill_ts is not None:
+                    anchored_candidates.append(
+                        max(1, int(diagnostic_fill_ts) - 5 * ONE_MIN_MS)
+                    )
             else:
                 anchored_candidates.append(
-                    max(0, int(anchor_ts) - 5 * ONE_MIN_MS)
+                    max(1, int(anchor_ts) - 5 * ONE_MIN_MS)
                 )
             cohorts.append((symbol, pside))
         if not cohorts:
@@ -11647,7 +11651,10 @@ class Passivbot:
             except Exception:
                 history_now_ms = now_ms
             if age_limit is None:
-                candidates.append(0)
+                # Several exchange fetchers use falsey zero to mean "no start"
+                # and replace it with a short default window. One millisecond
+                # after the Unix epoch is an explicit, portable all-history bound.
+                candidates.append(1)
             else:
                 base_window_ms = max(
                     24 * 60 * ONE_MIN_MS,
@@ -11655,7 +11662,7 @@ class Passivbot:
                 )
                 widened_window_ms = base_window_ms * (2**retry_count)
                 candidates.append(
-                    max(0, history_now_ms - widened_window_ms)
+                    max(1, history_now_ms - widened_window_ms)
                 )
         if not candidates:
             return None

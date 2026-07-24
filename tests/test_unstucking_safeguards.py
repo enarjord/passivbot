@@ -1374,6 +1374,27 @@ def test_position_anchor_timestamp_prefers_update_fields_over_open_fields():
     assert bot._position_update_timestamp_ms(symbol, "long") == 360_000
 
 
+def test_fill_history_anchor_ignores_update_only_timestamp():
+    cfg = _dummy_config()
+    bot = _make_dummy_bot(cfg)
+    symbol = _set_basic_state(bot)
+    bot._apply_positions_snapshot(
+        [
+            {
+                "symbol": symbol,
+                "position_side": "long",
+                "size": 1.0,
+                "price": 100.0,
+                "updatedTime": "360000",
+            }
+        ]
+    )
+
+    assert bot.positions[symbol]["long"]["timestamp"] == 360_000
+    assert bot._position_history_anchor_timestamp_ms(symbol, "long") is None
+    assert bot._position_update_timestamp_ms(symbol, "long") == 360_000
+
+
 def test_position_snapshot_preserves_distinct_open_and_update_timestamps():
     cfg = _dummy_config()
     bot = _make_dummy_bot(cfg)
@@ -1764,6 +1785,29 @@ def test_timestamp_free_fill_history_recovery_progressively_widens(
         now_ms - 120 * day_ms
     )
     assert bot._trailing_fill_history_recovery_state["retry_count"] == 2
+
+
+def test_all_history_fill_recovery_uses_positive_epoch_start(monkeypatch):
+    cfg = _dummy_config()
+    bot = _make_dummy_bot(cfg)
+    symbol = _set_basic_state(bot)
+    now_ms = 1_800_000_000_000
+    monkeypatch.setattr(sys.modules["passivbot"], "utc_ms", lambda: now_ms)
+    bot.get_exchange_time = lambda: now_ms
+    bot.positions[symbol]["long"] = {
+        "size": 1.0,
+        "price": 100.0,
+        "lastUpdateTimestamp": now_ms - 60_000,
+    }
+    bot._trailing_fill_confirmation_diagnostics = {
+        (symbol, "long"): {
+            "failed_predicates": ["fill_after_state_mismatch"],
+            "fill_timestamp_ms": now_ms - 30_000,
+        }
+    }
+
+    assert bot._trailing_fill_history_recovery_start_ms(None) == 1
+    assert bot._trailing_fill_history_recovery_state["start_ms"] == 1
 
 
 @pytest.mark.asyncio
