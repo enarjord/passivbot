@@ -7,7 +7,8 @@ All notable user-facing changes will be documented in this file.
 - Documented Python 3.12+ support, including Python 3.14, and fixed reentrant candle fetch-lock
   cleanup so a missing bookkeeping record no longer suppresses an exception raised by the
   protected operation. CI now builds the Rust extension and runs the Python suite on both Python
-  3.12 and 3.14.
+  3.12 and 3.14. Reentrancy is now restricted to the owning asyncio task, so parallel requests
+  sharing one candle manager serialize same-symbol/timeframe fetches correctly.
 
 - Backtests now treat a finite balance depleted by fills as liquidation before recomputing orders,
   so extreme optimizer candidates terminate normally instead of panicking an optimizer worker.
