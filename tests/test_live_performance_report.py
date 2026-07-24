@@ -9,6 +9,12 @@ from types import SimpleNamespace
 
 import pytest
 import live.performance_report as performance_report_module
+from live.event_bus import (
+    EventTypes,
+    LIVE_EVENT_BUDGET_METADATA_KEY,
+    LIVE_EVENT_MAX_LIST_ITEMS,
+    LiveEvent,
+)
 from live.performance_report import (
     build_live_performance_report,
     project_live_performance_report_sections,
@@ -103,6 +109,37 @@ def _operation_duration_groups_by_operation(report):
         group["operation"]: group
         for group in report["operation_durations"]["groups"]
     }
+
+
+def test_live_performance_report_ignores_canonical_budget_metadata(tmp_path):
+    event = LiveEvent(
+        EventTypes.CYCLE_COMPLETED,
+        data={
+            "elapsed_ms": 10,
+            "samples": list(range(LIVE_EVENT_MAX_LIST_ITEMS + 1)),
+        },
+    )
+    event_type, tags, payload = event.to_monitor_event()
+    events_dir = tmp_path / "monitor" / "test_exchange" / "test_user" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            {
+                "exchange": "test_exchange",
+                "user": "test_user",
+                "kind": event_type,
+                "tags": list(tags),
+                "payload": payload,
+                "seq": 1,
+                "ts": 1000,
+            }
+        ],
+    )
+
+    report = build_live_performance_report(tmp_path / "monitor")
+
+    assert report["performance"]["groups"]
+    assert LIVE_EVENT_BUDGET_METADATA_KEY not in json.dumps(report, sort_keys=True)
 
 
 def test_live_performance_report_aggregates_cycle_state_remote_and_hsl_timings(tmp_path):

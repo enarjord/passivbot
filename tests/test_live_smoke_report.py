@@ -8,6 +8,12 @@ from pathlib import Path
 
 import pytest
 
+from live.event_bus import (
+    EventTypes,
+    LIVE_EVENT_BUDGET_METADATA_KEY,
+    LIVE_EVENT_MAX_LIST_ITEMS,
+    LiveEvent,
+)
 import live.event_file_rows as event_file_rows_module
 import live.smoke_report as smoke_report_module
 from live.smoke_report import (
@@ -92,6 +98,37 @@ def _write_minimal_monitor_event(monitor_root):
             )
         ],
     )
+
+
+def test_live_smoke_report_ignores_canonical_budget_metadata(tmp_path):
+    event = LiveEvent(
+        EventTypes.CYCLE_COMPLETED,
+        data={
+            "elapsed_ms": 10,
+            "samples": list(range(LIVE_EVENT_MAX_LIST_ITEMS + 1)),
+        },
+    )
+    event_type, tags, payload = event.to_monitor_event()
+    events_dir = tmp_path / "monitor" / "test_exchange" / "test_user" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            {
+                "exchange": "test_exchange",
+                "user": "test_user",
+                "kind": event_type,
+                "tags": list(tags),
+                "payload": payload,
+                "seq": 1,
+                "ts": 1000,
+            }
+        ],
+    )
+
+    report = build_live_smoke_report(tmp_path / "monitor", logs_root=None)
+
+    assert report["monitor"]["live_events"] == 1
+    assert LIVE_EVENT_BUDGET_METADATA_KEY not in json.dumps(report, sort_keys=True)
 
 
 def test_live_smoke_report_scans_monitor_segments_once(tmp_path, monkeypatch):

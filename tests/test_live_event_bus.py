@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 import json
 import logging
 import queue
@@ -14,7 +15,14 @@ from live.event_bus import (
     EventRoute,
     EventTags,
     EventTypes,
+    LIVE_EVENT_BUDGET_METADATA_KEY,
     LIVE_EVENT_DEBUG_PROFILES,
+    LIVE_EVENT_MAX_DATA_BYTES,
+    LIVE_EVENT_MAX_DATA_DEPTH,
+    LIVE_EVENT_MAX_LIST_ITEMS,
+    LIVE_EVENT_MAX_MAPPING_INSPECTIONS,
+    LIVE_EVENT_MAX_MAPPING_KEYS,
+    LIVE_EVENT_MAX_STRING_CHARS,
     ListEventSink,
     LiveEvent,
     LiveEventContext,
@@ -304,6 +312,381 @@ def test_live_event_serializes_stable_envelope_and_redacts_sensitive_data():
     assert data["data"]["nested"]["safe"] == "ok"
     assert data["data"]["rows"][0]["signature"] == REDACTED
     assert json.loads(event.to_json())["event_type"] == event.event_type
+
+
+def test_live_event_data_budget_preserves_under_limit_json_and_redaction_without_marker():
+    source = {
+        "planning": {"ready": True, "candidate_count": 3},
+        "order_wave": {"created": 2, "cancelled": 1},
+        "health": {"queue_depth": 4, "healthy": True},
+        "apiKey": "secret",
+    }
+    expected_source = {
+        "planning": {"ready": True, "candidate_count": 3},
+        "order_wave": {"created": 2, "cancelled": 1},
+        "health": {"queue_depth": 4, "healthy": True},
+        "apiKey": "secret",
+    }
+
+    event = LiveEvent(EventTypes.CYCLE_COMPLETED, data=source)
+    monitor_payload = event.to_monitor_event()[2]
+
+    assert source == expected_source
+    assert event.data == {
+        "planning": {"ready": True, "candidate_count": 3},
+        "order_wave": {"created": 2, "cancelled": 1},
+        "health": {"queue_depth": 4, "healthy": True},
+        "apiKey": REDACTED,
+    }
+    assert LIVE_EVENT_BUDGET_METADATA_KEY not in event.data
+    assert event.to_dict()["data"] == event.data
+    assert monitor_payload["_live_event"]["data"] == event.data
+    assert monitor_payload["planning"] == event.data["planning"]
+
+
+def test_live_event_data_budget_bounds_shape_cycles_and_unsafe_values_without_mutation():
+    class Unrenderable:
+        def __repr__(self):
+            raise AssertionError("unsupported values must not render")
+
+        def __str__(self):
+            raise AssertionError("unsupported values must not render")
+
+    cycle: dict[str, object] = {}
+    cycle["self"] = cycle
+    deep: dict[str, object] = {}
+    cursor = deep
+    for _ in range(LIVE_EVENT_MAX_DATA_DEPTH + 2):
+        child: dict[str, object] = {}
+        cursor["child"] = child
+        cursor = child
+    long_key = "k" * 140
+    source = {
+        "apiKey": "secret",
+        "long_text": "x" * (LIVE_EVENT_MAX_STRING_CHARS + 8),
+        long_key: "must_not_be_retained",
+        "items": list(range(LIVE_EVENT_MAX_LIST_ITEMS + 3)),
+        "mapping": {
+            f"key_{index:03d}": index
+            for index in range(LIVE_EVENT_MAX_MAPPING_KEYS + 3)
+        },
+        "deep": deep,
+        "cycle": cycle,
+        LIVE_EVENT_BUDGET_METADATA_KEY: {"injected": "untrusted"},
+        "unsupported": Unrenderable(),
+        "nonfinite": float("nan"),
+    }
+
+    event = LiveEvent(EventTypes.PLANNING_UNAVAILABLE, data=source)
+    serialized = json.dumps(event.data, allow_nan=False, sort_keys=True)
+    metadata = event.data[LIVE_EVENT_BUDGET_METADATA_KEY]
+
+    assert source["apiKey"] == "secret"
+    assert source[long_key] == "must_not_be_retained"
+    assert source["cycle"] is cycle
+    assert event.data["apiKey"] == REDACTED
+    assert event.data["long_text"].endswith("...<truncated>")
+    assert len(event.data["items"]) == LIVE_EVENT_MAX_LIST_ITEMS
+    assert event.data["items"] == list(range(LIVE_EVENT_MAX_LIST_ITEMS))
+    assert len(event.data["mapping"]) == LIVE_EVENT_MAX_MAPPING_KEYS
+    assert event.data["cycle"]["self"] == "[cycle-limited]"
+    assert "[depth-limited]" in serialized
+    assert event.data["unsupported"] == "[unsupported]"
+    assert event.data["nonfinite"] == "[unsupported]"
+    assert "must_not_be_retained" not in serialized
+    assert "untrusted" not in serialized
+    assert metadata["version"] == 1
+    assert metadata["omitted_keys"] >= 3
+    assert metadata["omitted_items"] == 3
+    assert metadata["truncated_strings"] == 1
+    assert metadata["truncated_keys"] == 1
+    assert metadata["depth_limited"] >= 1
+    assert metadata["cycle_limited"] == 1
+    assert metadata["unsupported_values"] >= 2
+    assert metadata["reserved_keys"] == 1
+
+
+def test_live_event_data_budget_enforces_final_serialized_byte_limit_in_order():
+    source = {
+        f"order_wave_{index:03d}": "x" * LIVE_EVENT_MAX_STRING_CHARS
+        for index in range(LIVE_EVENT_MAX_MAPPING_KEYS)
+    }
+
+    event = LiveEvent(EventTypes.ORDER_WAVE_COMPLETED, data=source)
+    metadata = event.data[LIVE_EVENT_BUDGET_METADATA_KEY]
+    encoded = json.dumps(
+        event.data,
+        ensure_ascii=True,
+        allow_nan=False,
+        separators=(",", ":"),
+    ).encode("utf-8")
+
+    assert len(encoded) <= LIVE_EVENT_MAX_DATA_BYTES
+    assert metadata["byte_limited"] >= 1
+    assert metadata["omitted_keys"] >= 1
+    assert event.data["order_wave_000"] == "x" * LIVE_EVENT_MAX_STRING_CHARS
+    assert "order_wave_127" not in event.data
+
+
+def test_live_event_data_budget_byte_pruning_uses_bounded_serialization_passes(
+    monkeypatch,
+):
+    calls = 0
+    original = live_event_bus_module._live_event_json_size
+
+    def counted_json_size(value):
+        nonlocal calls
+        calls += 1
+        return original(value)
+
+    monkeypatch.setattr(
+        live_event_bus_module,
+        "_live_event_json_size",
+        counted_json_size,
+    )
+
+    LiveEvent(
+        EventTypes.ORDER_WAVE_COMPLETED,
+        data={
+            f"order_wave_{index:03d}": "x" * LIVE_EVENT_MAX_STRING_CHARS
+            for index in range(LIVE_EVENT_MAX_MAPPING_KEYS)
+        },
+    )
+
+    assert calls <= 12
+
+
+@pytest.mark.parametrize(
+    ("source", "expected_omitted_keys", "expected_reserved_keys"),
+    [
+        (
+            {
+                **{"key_000": "x" * (LIVE_EVENT_MAX_STRING_CHARS + 1)},
+                **{
+                    f"key_{index:03d}": index
+                    for index in range(1, LIVE_EVENT_MAX_MAPPING_KEYS)
+                },
+            },
+            0,
+            0,
+        ),
+        (
+            {
+                f"key_{index:03d}": index
+                for index in range(LIVE_EVENT_MAX_MAPPING_KEYS + 1)
+            },
+            1,
+            0,
+        ),
+        (
+            {
+                LIVE_EVENT_BUDGET_METADATA_KEY: {"forged": True},
+                **{
+                    f"key_{index:03d}": index
+                    for index in range(LIVE_EVENT_MAX_MAPPING_KEYS + 1)
+                },
+            },
+            1,
+            1,
+        ),
+        (
+            {
+                **{
+                    f"key_{index:03d}": index
+                    for index in range(LIVE_EVENT_MAX_MAPPING_KEYS + 1)
+                },
+                LIVE_EVENT_BUDGET_METADATA_KEY: {"forged": True},
+            },
+            1,
+            1,
+        ),
+    ],
+)
+def test_live_event_data_budget_saturated_root_metadata_is_idempotent(
+    source,
+    expected_omitted_keys,
+    expected_reserved_keys,
+):
+    event = LiveEvent(EventTypes.CYCLE_COMPLETED, data=source)
+
+    for metadata in (
+        event.data[LIVE_EVENT_BUDGET_METADATA_KEY],
+        event.to_dict()["data"][LIVE_EVENT_BUDGET_METADATA_KEY],
+    ):
+        assert metadata["omitted_keys"] == expected_omitted_keys
+        assert metadata["reserved_keys"] == expected_reserved_keys
+
+    contextual = LiveEventContext(exchange="test_exchange").apply(event)
+    contextual_metadata = contextual.data[LIVE_EVENT_BUDGET_METADATA_KEY]
+    assert contextual_metadata["omitted_keys"] == expected_omitted_keys
+    assert contextual_metadata["reserved_keys"] == expected_reserved_keys
+
+    sink = ListEventSink()
+    pipeline = LiveEventPipeline(structured_sinks=[sink], monitor_sinks=[])
+    emitted = pipeline.emit(contextual)
+    assert emitted is not None
+    assert pipeline.flush(timeout=2.0) is True
+    emitted_metadata = emitted.data[LIVE_EVENT_BUDGET_METADATA_KEY]
+    assert emitted_metadata["omitted_keys"] == expected_omitted_keys
+    assert emitted_metadata["reserved_keys"] == expected_reserved_keys
+    assert sink.events == [emitted]
+    assert pipeline.close(timeout=2.0) is True
+
+
+@pytest.mark.parametrize("marker_first", [True, False])
+def test_live_event_data_budget_non_dict_mapping_reserves_saturated_root_marker(
+    marker_first,
+):
+    class OrderedMapping(Mapping):
+        def __init__(self, items):
+            self._items = list(items)
+            self._values = dict(items)
+
+        def __getitem__(self, key):
+            return self._values[key]
+
+        def __iter__(self):
+            return iter(self._values)
+
+        def __len__(self):
+            return len(self._values)
+
+        def items(self):
+            return iter(self._items)
+
+    caller_items = [
+        (f"key_{index:03d}", index)
+        for index in range(LIVE_EVENT_MAX_MAPPING_KEYS + 1)
+    ]
+    marker_item = (LIVE_EVENT_BUDGET_METADATA_KEY, {"forged": True})
+    items = (
+        [marker_item, *caller_items]
+        if marker_first
+        else [*caller_items, marker_item]
+    )
+
+    event = LiveEvent(
+        EventTypes.CYCLE_COMPLETED,
+        data=OrderedMapping(items),
+    )
+
+    metadata = event.to_dict()["data"][LIVE_EVENT_BUDGET_METADATA_KEY]
+    assert metadata["omitted_keys"] == 1
+    assert metadata["reserved_keys"] == 1
+
+
+def test_live_event_data_budget_caps_inspection_of_malformed_mapping_items():
+    class InfiniteMalformedMapping(Mapping):
+        def __init__(self):
+            self.inspections = 0
+
+        def __getitem__(self, key):
+            raise KeyError(key)
+
+        def __iter__(self):
+            return iter(())
+
+        def __len__(self):
+            return 0
+
+        def items(self):
+            while True:
+                self.inspections += 1
+                yield object()
+
+    source = InfiniteMalformedMapping()
+    event = LiveEvent(EventTypes.CYCLE_COMPLETED, data=source)
+
+    assert source.inspections == LIVE_EVENT_MAX_MAPPING_INSPECTIONS
+    metadata = event.data[LIVE_EVENT_BUDGET_METADATA_KEY]
+    assert metadata["omitted_keys"] == 1
+    assert metadata["unsupported_values"] == LIVE_EVENT_MAX_MAPPING_INSPECTIONS
+
+
+def test_live_event_data_budget_limits_global_traversal(monkeypatch):
+    monkeypatch.setattr(live_event_bus_module, "LIVE_EVENT_MAX_NODES", 4)
+
+    event = LiveEvent(
+        EventTypes.CYCLE_COMPLETED,
+        data={"values": [{"value": 1}, {"value": 2}, {"value": 3}]},
+    )
+
+    assert event.data["values"][0] == {"value": 1}
+    assert event.data["values"] == [{"value": 1}]
+    assert event.data[LIVE_EVENT_BUDGET_METADATA_KEY]["node_limited"] >= 1
+    assert event.data[LIVE_EVENT_BUDGET_METADATA_KEY]["omitted_items"] == 2
+
+
+def test_live_event_data_budget_revalidates_mutated_data_at_every_output_boundary():
+    source = {"nested": {"items": [{"value": 1}]}}
+    event = LiveEvent(EventTypes.CYCLE_COMPLETED, data=source)
+
+    dict.__setitem__(event.data, "apiKey", "secret")
+    list.append(
+        event.data["nested"]["items"],
+        {"apiKey": "secret", "blob": "x" * 100_000},
+    )
+
+    direct_data = event.to_dict()["data"]
+    assert direct_data["apiKey"] == REDACTED
+    assert direct_data["nested"]["items"][1]["apiKey"] == REDACTED
+    assert direct_data["nested"]["items"][1]["blob"].endswith("...<truncated>")
+
+    contextual = LiveEventContext(exchange="test_exchange").apply(event)
+    dict.__setitem__(contextual.data, "auth_token", "secret")
+    dict.__setitem__(contextual.data, "oversized", "y" * 100_000)
+    sink = ListEventSink()
+    pipeline = LiveEventPipeline(structured_sinks=[sink], monitor_sinks=[])
+    emitted = pipeline.emit(contextual)
+
+    assert emitted is not contextual
+    assert emitted.data["apiKey"] == REDACTED
+    assert emitted.data["auth_token"] == REDACTED
+    assert len(emitted.data["oversized"]) == LIVE_EVENT_MAX_STRING_CHARS
+    assert (
+        len(
+            json.dumps(
+                emitted.data,
+                ensure_ascii=True,
+                allow_nan=False,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        )
+        <= LIVE_EVENT_MAX_DATA_BYTES
+    )
+    assert pipeline.flush(timeout=2.0) is True
+    assert sink.events == [emitted]
+    assert pipeline.close(timeout=2.0) is True
+
+
+def test_live_event_data_budget_visible_metadata_cannot_erase_or_forge_counters():
+    limited = LiveEvent(
+        EventTypes.CYCLE_COMPLETED,
+        data={"items": list(range(LIVE_EVENT_MAX_LIST_ITEMS + 1))},
+    )
+    visible_metadata = limited.data[LIVE_EVENT_BUDGET_METADATA_KEY]
+    visible_metadata["omitted_items"] = 0
+    limited.data._budget_metadata = (999,) * 10
+
+    projected = limited.to_dict()["data"]
+    assert projected[LIVE_EVENT_BUDGET_METADATA_KEY]["omitted_items"] == 1
+
+    dict.__delitem__(limited.data, LIVE_EVENT_BUDGET_METADATA_KEY)
+    projected = limited.to_dict()["data"]
+    assert projected[LIVE_EVENT_BUDGET_METADATA_KEY]["omitted_items"] == 1
+
+    clean = LiveEvent(EventTypes.CYCLE_COMPLETED, data={"ready": True})
+    forged_metadata = dict(projected[LIVE_EVENT_BUDGET_METADATA_KEY])
+    forged_metadata["omitted_keys"] = 999
+    dict.__setitem__(
+        clean.data,
+        LIVE_EVENT_BUDGET_METADATA_KEY,
+        forged_metadata,
+    )
+
+    projected = clean.to_dict()["data"]
+    assert projected[LIVE_EVENT_BUDGET_METADATA_KEY]["omitted_keys"] == 0
+    assert projected[LIVE_EVENT_BUDGET_METADATA_KEY]["reserved_keys"] == 1
 
 
 def test_live_event_context_propagates_ids_without_overwriting_event_values():
@@ -4040,6 +4423,36 @@ def test_monitor_event_sink_writes_real_monitor_event_stream(tmp_path):
     assert rows[0]["payload"]["_live_event"]["ids"]["cycle_id"] == "cy_1"
     assert rows[0]["payload"]["_live_event"]["reason_code"] == "stale_ema"
     assert rows[0]["payload"]["_live_event"]["data"]["apiKey"] == REDACTED
+
+
+def test_monitor_event_sink_persists_the_same_budgeted_canonical_data(tmp_path):
+    publisher = _make_monitor_publisher(tmp_path)
+    pipeline = LiveEventPipeline(
+        context=LiveEventContext(exchange="bybit", user="user01"),
+        structured_sinks=[],
+        monitor_sinks=[MonitorEventSink(publisher)],
+    )
+    event = pipeline.emit(
+        LiveEvent(
+            EventTypes.PLANNING_UNAVAILABLE,
+            data={
+                "availability": "missing_candles",
+                "samples": list(range(LIVE_EVENT_MAX_LIST_ITEMS + 1)),
+            },
+            ts_ms=12345,
+        )
+    )
+
+    assert event is not None
+    assert pipeline.flush(timeout=2.0) is True
+    assert pipeline.close(timeout=2.0) is True
+
+    event_path = tmp_path / "bybit" / "user01" / "events" / "current.ndjson"
+    row = json.loads(event_path.read_text().splitlines()[0])
+    persisted_data = row["payload"]["_live_event"]["data"]
+    assert persisted_data == event.data
+    assert row["payload"]["availability"] == "missing_candles"
+    assert persisted_data[LIVE_EVENT_BUDGET_METADATA_KEY]["omitted_items"] == 1
 
 
 def test_cycle_events_are_reconstructable_by_cycle_id():

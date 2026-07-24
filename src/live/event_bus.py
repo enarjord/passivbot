@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections import Counter, deque
-from dataclasses import asdict, dataclass, field, replace
+from dataclasses import asdict, dataclass, field, fields, replace
 from datetime import datetime, timezone
 import hashlib
 import json
@@ -13,6 +13,7 @@ import threading
 import time
 from types import MappingProxyType
 import uuid
+import weakref
 from typing import Any, Iterable, Mapping, Protocol
 
 from live.balance_composition import format_balance_composition_sample
@@ -22,6 +23,17 @@ from live.diagnostic_safety import bounded_exception_type
 SCHEMA_VERSION = 1
 REDACTED = "[redacted]"
 LIVE_EVENT_MONITOR_PAYLOAD_KEY = "_live_event"
+LIVE_EVENT_BUDGET_METADATA_KEY = "_live_event_budget"
+LIVE_EVENT_BUDGET_VERSION = 1
+LIVE_EVENT_MAX_DATA_DEPTH = 6
+LIVE_EVENT_MAX_LIST_ITEMS = 64
+LIVE_EVENT_MAX_MAPPING_KEYS = 128
+LIVE_EVENT_MAX_MAPPING_INSPECTIONS = 256
+LIVE_EVENT_MAX_STRING_CHARS = 512
+LIVE_EVENT_MAX_KEY_CHARS = 128
+LIVE_EVENT_MAX_DATA_BYTES = 32 * 1024
+LIVE_EVENT_MAX_NODES = 4_096
+LIVE_EVENT_BUDGET_COUNTER_MAX = 1_000_000
 LIVE_EVENT_ID_KEYS = (
     "bot_id",
     "cycle_id",
@@ -703,6 +715,459 @@ def redact_payload(value: Any) -> Any:
     return value
 
 
+_LIVE_EVENT_TRUNCATION_SUFFIX = "...<truncated>"
+_LIVE_EVENT_DEPTH_LIMITED = "[depth-limited]"
+_LIVE_EVENT_CYCLE_LIMITED = "[cycle-limited]"
+_LIVE_EVENT_NODE_LIMITED = "[node-limited]"
+_LIVE_EVENT_UNSUPPORTED = "[unsupported]"
+_LIVE_EVENT_UNSUPPORTED_KEY = "[unsupported-key]"
+_LIVE_EVENT_MAX_INTEGER_BITS = 4_096
+_LIVE_EVENT_OMIT_LIST_ITEM = object()
+_LIVE_EVENT_BUDGET_COUNTER_FIELDS = (
+    "omitted_keys",
+    "omitted_items",
+    "truncated_strings",
+    "truncated_keys",
+    "depth_limited",
+    "cycle_limited",
+    "byte_limited",
+    "unsupported_values",
+    "node_limited",
+    "reserved_keys",
+)
+
+
+class _CanonicalLiveEventData(dict[str, Any]):
+    """Private marker for data normalized by this module."""
+
+
+_LIVE_EVENT_BUDGET_REGISTRY_LOCK = threading.Lock()
+_LIVE_EVENT_BUDGET_REGISTRY: dict[
+    int,
+    tuple[
+        weakref.ReferenceType[_CanonicalLiveEventData],
+        tuple[int, ...],
+    ],
+] = {}
+
+
+def _discard_live_event_budget_metadata(
+    data_id: int,
+    data_ref: weakref.ReferenceType[_CanonicalLiveEventData],
+) -> None:
+    with _LIVE_EVENT_BUDGET_REGISTRY_LOCK:
+        current = _LIVE_EVENT_BUDGET_REGISTRY.get(data_id)
+        if current is not None and current[0] is data_ref:
+            _LIVE_EVENT_BUDGET_REGISTRY.pop(data_id, None)
+
+
+def _canonical_live_event_data(
+    value: Mapping[str, Any],
+    *,
+    budget_metadata: Mapping[str, int] | None = None,
+) -> _CanonicalLiveEventData:
+    canonical = _CanonicalLiveEventData(value)
+    if budget_metadata is None:
+        return canonical
+    metadata_values = tuple(
+        int(budget_metadata[field_name])
+        for field_name in _LIVE_EVENT_BUDGET_COUNTER_FIELDS
+    )
+    canonical_id = id(canonical)
+    canonical_ref = weakref.ref(
+        canonical,
+        lambda data_ref: _discard_live_event_budget_metadata(
+            canonical_id,
+            data_ref,
+        ),
+    )
+    with _LIVE_EVENT_BUDGET_REGISTRY_LOCK:
+        _LIVE_EVENT_BUDGET_REGISTRY[canonical_id] = (
+            canonical_ref,
+            metadata_values,
+        )
+    return canonical
+
+
+def _copy_canonical_live_event_value(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {
+            key: _copy_canonical_live_event_value(item)
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [_copy_canonical_live_event_value(item) for item in value]
+    return value
+
+
+@dataclass
+class _LiveEventBudgetState:
+    omitted_keys: int = 0
+    omitted_items: int = 0
+    truncated_strings: int = 0
+    truncated_keys: int = 0
+    depth_limited: int = 0
+    cycle_limited: int = 0
+    byte_limited: int = 0
+    unsupported_values: int = 0
+    node_limited: int = 0
+    reserved_keys: int = 0
+    nodes: int = 0
+
+    def add(self, field_name: str, amount: int = 1) -> None:
+        current = getattr(self, field_name)
+        setattr(
+            self,
+            field_name,
+            min(LIVE_EVENT_BUDGET_COUNTER_MAX, current + max(0, int(amount))),
+        )
+
+    def changed(self) -> bool:
+        return any(getattr(self, field_name) for field_name in _LIVE_EVENT_BUDGET_COUNTER_FIELDS)
+
+
+def _truncate_live_event_text(value: str, limit: int) -> str:
+    if len(value) <= limit:
+        return value
+    return value[: limit - len(_LIVE_EVENT_TRUNCATION_SUFFIX)] + _LIVE_EVENT_TRUNCATION_SUFFIX
+
+
+def _bounded_live_event_key(key: object) -> tuple[str, bool, bool]:
+    """Return key text, whether it was shortened, and whether its value must redact."""
+    if isinstance(key, str):
+        value = key
+    elif key is None:
+        value = "None"
+    elif type(key) is bool:
+        value = "True" if key else "False"
+    elif type(key) is int:
+        if key.bit_length() > _LIVE_EVENT_MAX_INTEGER_BITS:
+            return _LIVE_EVENT_UNSUPPORTED_KEY, False, True
+        value = str(key)
+    elif type(key) is float:
+        value = str(key)
+    else:
+        return _LIVE_EVENT_UNSUPPORTED_KEY, False, True
+    if len(value) > LIVE_EVENT_MAX_KEY_CHARS:
+        return _truncate_live_event_text(value, LIVE_EVENT_MAX_KEY_CHARS), True, True
+    return value, False, False
+
+
+def _live_event_collection_omitted_count(value: object, retained: int) -> int:
+    try:
+        return max(1, len(value) - retained)
+    except Exception:
+        return 1
+
+
+def _live_event_mapping_omitted_count(
+    value: Mapping[Any, Any],
+    *,
+    processed_keys: int,
+    root_budget_key_present: bool,
+) -> int:
+    try:
+        total_keys = (
+            dict.__len__(value)
+            if isinstance(value, dict)
+            else len(value)
+        )
+    except Exception:
+        return 1
+    caller_key_count = total_keys - int(root_budget_key_present)
+    return max(1, caller_key_count - processed_keys)
+
+
+def _bounded_live_event_value(
+    value: Any,
+    *,
+    depth: int,
+    ancestors: set[int],
+    state: _LiveEventBudgetState,
+    is_root: bool = False,
+    omit_on_limit: bool = False,
+    existing_budget_metadata: Mapping[str, int] | None = None,
+) -> Any:
+    if state.nodes >= LIVE_EVENT_MAX_NODES:
+        state.add("node_limited")
+        return _LIVE_EVENT_OMIT_LIST_ITEM if omit_on_limit else _LIVE_EVENT_NODE_LIMITED
+    state.nodes += 1
+    if depth > LIVE_EVENT_MAX_DATA_DEPTH:
+        state.add("depth_limited")
+        return _LIVE_EVENT_OMIT_LIST_ITEM if omit_on_limit else _LIVE_EVENT_DEPTH_LIMITED
+    if value is None or type(value) is bool:
+        return value
+    if isinstance(value, str):
+        if len(value) > LIVE_EVENT_MAX_STRING_CHARS:
+            state.add("truncated_strings")
+            return _truncate_live_event_text(value, LIVE_EVENT_MAX_STRING_CHARS)
+        return value
+    if type(value) is int:
+        if value.bit_length() <= _LIVE_EVENT_MAX_INTEGER_BITS:
+            return value
+        state.add("unsupported_values")
+        return _LIVE_EVENT_OMIT_LIST_ITEM if omit_on_limit else _LIVE_EVENT_UNSUPPORTED
+    if type(value) is float:
+        if math.isfinite(value):
+            return value
+        state.add("unsupported_values")
+        return _LIVE_EVENT_OMIT_LIST_ITEM if omit_on_limit else _LIVE_EVENT_UNSUPPORTED
+    if isinstance(value, Mapping):
+        value_id = id(value)
+        if value_id in ancestors:
+            state.add("cycle_limited")
+            return (
+                _LIVE_EVENT_OMIT_LIST_ITEM
+                if omit_on_limit
+                else _LIVE_EVENT_CYCLE_LIMITED
+            )
+        ancestors.add(value_id)
+        normalized: dict[str, Any] = {}
+        processed_keys = 0
+        root_budget_key_present = False
+        if is_root:
+            if isinstance(value, dict):
+                root_budget_key_present = dict.__contains__(
+                    value,
+                    LIVE_EVENT_BUDGET_METADATA_KEY,
+                )
+            else:
+                try:
+                    value[LIVE_EVENT_BUDGET_METADATA_KEY]
+                    root_budget_key_present = True
+                except KeyError:
+                    pass
+                except Exception:
+                    state.add("unsupported_values")
+        if root_budget_key_present and existing_budget_metadata is None:
+            state.add("reserved_keys")
+        try:
+            items = iter(value.items())
+            for index in range(LIVE_EVENT_MAX_MAPPING_INSPECTIONS):
+                try:
+                    item = next(items)
+                except StopIteration:
+                    break
+                try:
+                    key, child = item
+                except (TypeError, ValueError):
+                    state.add("unsupported_values")
+                    continue
+                normalized_key, key_truncated, force_redaction = _bounded_live_event_key(key)
+                if is_root and normalized_key == LIVE_EVENT_BUDGET_METADATA_KEY:
+                    if (
+                        existing_budget_metadata is None
+                        and not root_budget_key_present
+                    ):
+                        state.add("reserved_keys")
+                    continue
+                if processed_keys >= LIVE_EVENT_MAX_MAPPING_KEYS:
+                    state.add(
+                        "omitted_keys",
+                        _live_event_mapping_omitted_count(
+                            value,
+                            processed_keys=processed_keys,
+                            root_budget_key_present=root_budget_key_present,
+                        ),
+                    )
+                    break
+                processed_keys += 1
+                if key_truncated:
+                    state.add("truncated_keys")
+                if normalized_key == _LIVE_EVENT_UNSUPPORTED_KEY:
+                    state.add("unsupported_values")
+                if normalized_key in normalized and (key_truncated or force_redaction):
+                    state.add("omitted_keys")
+                    continue
+                if force_redaction or _is_sensitive_key(normalized_key):
+                    normalized[normalized_key] = REDACTED
+                else:
+                    normalized[normalized_key] = _bounded_live_event_value(
+                        child,
+                        depth=depth + 1,
+                        ancestors=ancestors,
+                        state=state,
+                    )
+            else:
+                state.add(
+                    "omitted_keys",
+                    _live_event_mapping_omitted_count(
+                        value,
+                        processed_keys=processed_keys,
+                        root_budget_key_present=root_budget_key_present,
+                    ),
+                )
+        except Exception:
+            state.add("unsupported_values")
+        finally:
+            ancestors.remove(value_id)
+        return normalized
+    if isinstance(value, (list, tuple)):
+        value_id = id(value)
+        if value_id in ancestors:
+            state.add("cycle_limited")
+            return (
+                _LIVE_EVENT_OMIT_LIST_ITEM
+                if omit_on_limit
+                else _LIVE_EVENT_CYCLE_LIMITED
+            )
+        ancestors.add(value_id)
+        normalized_items: list[Any] = []
+        try:
+            for index, child in enumerate(value):
+                if index >= LIVE_EVENT_MAX_LIST_ITEMS:
+                    state.add(
+                        "omitted_items",
+                        _live_event_collection_omitted_count(value, index),
+                    )
+                    break
+                normalized_child = _bounded_live_event_value(
+                    child,
+                    depth=depth + 1,
+                    ancestors=ancestors,
+                    state=state,
+                    omit_on_limit=True,
+                )
+                if normalized_child is _LIVE_EVENT_OMIT_LIST_ITEM:
+                    state.add(
+                        "omitted_items",
+                        _live_event_collection_omitted_count(value, index),
+                    )
+                    break
+                normalized_items.append(normalized_child)
+        except Exception:
+            state.add("unsupported_values")
+        finally:
+            ancestors.remove(value_id)
+        return normalized_items
+    state.add("unsupported_values")
+    return _LIVE_EVENT_OMIT_LIST_ITEM if omit_on_limit else _LIVE_EVENT_UNSUPPORTED
+
+
+def _live_event_budget_metadata(state: _LiveEventBudgetState) -> dict[str, int]:
+    return {
+        "version": LIVE_EVENT_BUDGET_VERSION,
+        "omitted_keys": state.omitted_keys,
+        "omitted_items": state.omitted_items,
+        "truncated_strings": state.truncated_strings,
+        "truncated_keys": state.truncated_keys,
+        "depth_limited": state.depth_limited,
+        "cycle_limited": state.cycle_limited,
+        "byte_limited": state.byte_limited,
+        "unsupported_values": state.unsupported_values,
+        "node_limited": state.node_limited,
+        "reserved_keys": state.reserved_keys,
+    }
+
+
+def _existing_live_event_budget_metadata(
+    value: Mapping[str, Any] | None,
+) -> dict[str, int] | None:
+    if not isinstance(value, _CanonicalLiveEventData):
+        return None
+    with _LIVE_EVENT_BUDGET_REGISTRY_LOCK:
+        registered = _LIVE_EVENT_BUDGET_REGISTRY.get(id(value))
+    if registered is None or registered[0]() is not value:
+        return None
+    metadata_values = registered[1]
+    if len(metadata_values) != len(_LIVE_EVENT_BUDGET_COUNTER_FIELDS):
+        return None
+    normalized = {"version": LIVE_EVENT_BUDGET_VERSION}
+    for field_name, field_value in zip(
+        _LIVE_EVENT_BUDGET_COUNTER_FIELDS,
+        metadata_values,
+    ):
+        if (
+            type(field_value) is not int
+            or field_value < 0
+            or field_value > LIVE_EVENT_BUDGET_COUNTER_MAX
+        ):
+            return None
+        normalized[field_name] = field_value
+    return normalized
+
+
+def _live_event_json_size(value: Mapping[str, Any]) -> int:
+    return len(
+        json.dumps(
+            value,
+            ensure_ascii=True,
+            allow_nan=False,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    )
+
+
+def bounded_live_event_data(value: Mapping[str, Any] | None) -> dict[str, Any]:
+    """Return the canonical, non-mutating JSON-safe data payload for one LiveEvent."""
+    state = _LiveEventBudgetState()
+    existing_budget_metadata = _existing_live_event_budget_metadata(value)
+    if isinstance(value, Mapping):
+        normalized = _bounded_live_event_value(
+            value,
+            depth=0,
+            ancestors=set(),
+            state=state,
+            is_root=True,
+            existing_budget_metadata=existing_budget_metadata,
+        )
+    elif value is None:
+        normalized = {}
+    else:
+        state.add("unsupported_values")
+        normalized = {}
+    assert isinstance(normalized, dict)
+    if existing_budget_metadata is not None:
+        for field_name in _LIVE_EVENT_BUDGET_COUNTER_FIELDS:
+            state.add(field_name, existing_budget_metadata[field_name])
+    if (
+        existing_budget_metadata is None
+        and not state.changed()
+        and _live_event_json_size(normalized) <= LIVE_EVENT_MAX_DATA_BYTES
+    ):
+        return _canonical_live_event_data(normalized)
+    payload = dict(normalized)
+    metadata = _live_event_budget_metadata(state)
+    payload[LIVE_EVENT_BUDGET_METADATA_KEY] = metadata
+    if _live_event_json_size(payload) <= LIVE_EVENT_MAX_DATA_BYTES:
+        return _canonical_live_event_data(payload, budget_metadata=metadata)
+
+    state.add("byte_limited")
+    keys = list(normalized)
+    base_omitted_keys = state.omitted_keys
+    low = 0
+    high = len(keys)
+    retained_count = 0
+    while low <= high:
+        candidate_count = (low + high) // 2
+        metadata = _live_event_budget_metadata(state)
+        metadata["omitted_keys"] = min(
+            LIVE_EVENT_BUDGET_COUNTER_MAX,
+            base_omitted_keys + len(keys) - candidate_count,
+        )
+        candidate = {
+            key: normalized[key] for key in keys[:candidate_count]
+        }
+        candidate[LIVE_EVENT_BUDGET_METADATA_KEY] = metadata
+        if _live_event_json_size(candidate) <= LIVE_EVENT_MAX_DATA_BYTES:
+            retained_count = candidate_count
+            low = candidate_count + 1
+        else:
+            high = candidate_count - 1
+
+    state.add("omitted_keys", len(keys) - retained_count)
+    payload = {key: normalized[key] for key in keys[:retained_count]}
+    metadata = _live_event_budget_metadata(state)
+    payload[LIVE_EVENT_BUDGET_METADATA_KEY] = metadata
+    if _live_event_json_size(payload) > LIVE_EVENT_MAX_DATA_BYTES:
+        state.add("omitted_keys", retained_count)
+        metadata = _live_event_budget_metadata(state)
+        payload = {
+            LIVE_EVENT_BUDGET_METADATA_KEY: metadata
+        }
+    return _canonical_live_event_data(payload, budget_metadata=metadata)
+
+
 @dataclass(frozen=True)
 class LiveEvent:
     event_type: str
@@ -748,22 +1213,31 @@ class LiveEvent:
             object.__setattr__(self, "status", status)
         object.__setattr__(self, "event_type", normalize_event_type(self.event_type))
         object.__setattr__(self, "tags", tuple(str(tag) for tag in self.tags))
-        object.__setattr__(self, "data", dict(redact_payload(dict(self.data or {}))))
+        object.__setattr__(self, "data", bounded_live_event_data(self.data))
 
     def with_context(self, context: "LiveEventContext") -> "LiveEvent":
         return context.apply(self)
 
     def to_dict(self) -> dict[str, Any]:
-        data = asdict(self)
+        data = {
+            item.name: getattr(self, item.name)
+            for item in fields(self)
+            if item.name != "data"
+        }
         data["tags"] = list(self.tags)
-        data["data"] = dict(self.data)
+        data["data"] = _copy_canonical_live_event_value(
+            bounded_live_event_data(self.data)
+        )
         return data
 
     def to_json(self) -> str:
         return json.dumps(self.to_dict(), sort_keys=True, separators=(",", ":"))
 
     def to_monitor_event(self) -> tuple[str, tuple[str, ...], dict[str, Any]]:
-        payload = dict(self.data)
+        canonical_data = _copy_canonical_live_event_value(
+            bounded_live_event_data(self.data)
+        )
+        payload = dict(canonical_data)
         payload[LIVE_EVENT_MONITOR_PAYLOAD_KEY] = {
             "schema_version": self.schema_version,
             "event_id": self.event_id,
@@ -782,7 +1256,7 @@ class LiveEvent:
             "status": self.status,
             "reason_code": self.reason_code,
             "message": self.message,
-            "data": dict(self.data),
+            "data": dict(canonical_data),
             "raw_ref": self.raw_ref,
             "raw_hash": self.raw_hash,
             "ids": {key: getattr(self, key) for key in LIVE_EVENT_ID_KEYS},
@@ -3571,11 +4045,19 @@ class LiveEventPipeline:
         require_enqueue = bool(require_enqueue or defer_sync_sinks_until_enqueued)
         if isinstance(event, LiveEvent):
             live_event = event
+            revalidated = False
         else:
             live_event = LiveEvent(**dict(event))
+            revalidated = True
         if overrides:
             live_event = replace(live_event, **overrides)
-        live_event = live_event.with_context(self.context)
+            revalidated = True
+        contextual_event = live_event.with_context(self.context)
+        if contextual_event is not live_event:
+            revalidated = True
+        live_event = contextual_event
+        if not revalidated:
+            live_event = replace(live_event, data=live_event.data)
         route = self.route_for(live_event)
         if not defer_sync_sinks_until_enqueued:
             self._emit_sync_sinks(live_event, route)
