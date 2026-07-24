@@ -996,6 +996,9 @@ def test_rust_orchestrator_emitters_record_bounded_summaries():
     import passivbot as pb_mod
 
     sink = ListEventSink()
+    secret = "rust-orchestrator-secret"
+    url = "https://example.invalid/rust?token=rust-orchestrator-token"
+    error_type = type("RustOrchestratorFailure" + "X" * 120, (RuntimeError,), {})
 
     class FakeBot:
         _current_live_event_cycle_id = pb_mod.Passivbot._current_live_event_cycle_id
@@ -1043,7 +1046,7 @@ def test_rust_orchestrator_emitters_record_bounded_summaries():
         status="failed",
         input_hash="failed_input_hash",
         elapsed_ms=9,
-        error=ValueError("MissingEma { symbol_idx: 0 } apiKey=SECRET token SECRET"),
+        error=error_type(f"orchestrator failed secret={secret} url={url}"),
     )
 
     assert bot._live_event_pipeline.flush(timeout=2.0) is True
@@ -1064,20 +1067,27 @@ def test_rust_orchestrator_emitters_record_bounded_summaries():
     assert returned.event_type == EventTypes.RUST_ORCHESTRATOR_RETURNED
     assert returned.status == "succeeded"
     assert returned.raw_hash == "output_hash"
-    assert returned.data["elapsed_ms"] == 12
-    assert returned.data["input_hash"] == "input_hash"
-    assert returned.data["output_hash"] == "output_hash"
-    assert returned.data["order_count"] == 5
-    assert returned.data["diagnostic_keys"] == ["forager", "min_cost"]
+    assert returned.data == {
+        "elapsed_ms": 12,
+        "input_hash": "input_hash",
+        "output_hash": "output_hash",
+        "order_count": 5,
+        "diagnostic_keys": ["forager", "min_cost"],
+    }
     assert failed.event_type == EventTypes.RUST_ORCHESTRATOR_RETURNED
     assert failed.level == "error"
     assert failed.status == "failed"
-    assert failed.reason_code == "ValueError"
+    assert failed.reason_code == "RuntimeError"
     assert failed.raw_hash == "failed_input_hash"
-    assert failed.data["error_type"] == "ValueError"
-    assert "MissingEma" in failed.data["error"]
-    assert "SECRET" not in failed.data["error"]
-    assert "[redacted]" in failed.data["error"]
+    assert failed.data == {
+        "elapsed_ms": 9,
+        "input_hash": "failed_input_hash",
+        "error_type": "RuntimeError",
+    }
+    assert "error" not in failed.data
+    assert error_type.__name__ not in str(failed.data)
+    assert secret not in str(failed.data)
+    assert url not in str(failed.data)
     assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 

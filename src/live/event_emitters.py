@@ -2657,14 +2657,10 @@ def _emit_rust_orchestrator_returned_event_unchecked(
     reason_code = None
     if failed:
         err = error or RuntimeError("rust orchestrator failed")
+        error_type = _bounded_exception_type(err)
         tags.append("error")
-        reason_code = type(err).__name__
-        data.update(
-            {
-                "error_type": type(err).__name__,
-                "error": _sanitize_remote_text(err, max_len=500),
-            }
-        )
+        reason_code = error_type
+        data["error_type"] = error_type
     else:
         if output_hash is not None:
             raw_hash = str(output_hash)

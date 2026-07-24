@@ -290,6 +290,14 @@ return the original order object sequence without retaining exception messages, 
 class names, URLs, credentials, tokens, or tracebacks. Fetch parameters, missing-price handling,
 complete-price sorting, reconciliation, planning, and trading behavior remain unchanged.
 
+## Rust Orchestrator Returned Events
+
+Failed `rust_orchestrator.returned` events retain their existing timing, input hash, cycle and
+remote-call correlation, error level/status/tags, and one bounded exception type used for both
+`reason_code` and `data.error_type`. They omit exception text, URLs, credentials, and unsafe class
+metadata. This diagnostic redaction does not change Rust orchestration, event ordering or
+isolation, caller propagation, connector calls, or trading behavior.
+
 ## Fresh-Entry Eligibility
 
 Completed normal live plans emit `entry.initial_eligibility` to structured and monitor sinks. The
