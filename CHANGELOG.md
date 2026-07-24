@@ -14,6 +14,12 @@ All notable user-facing changes will be documented in this file.
   so extreme optimizer candidates terminate normally instead of panicking an optimizer worker.
   Other invalid orchestrator inputs now propagate as backtest errors without unwinding Rust.
 
+- Bybit closed-PnL refreshes now cover requested history with explicit,
+  contiguous sub-seven-day windows and cursor pagination inside each window.
+  Sparse pages no longer create gaps in older realized-PnL history, and endpoint
+  or pagination failures propagate instead of returning a partial result as a
+  successful refresh.
+
 - Live candle orchestration now reads bounded cache-only native 1h EMA carry-forward from the 1h
   index, requires a complete native window, isolates carried values from the active EMA cache, and
   applies the background refresher's surface-count staleness limit using the active live/replay
