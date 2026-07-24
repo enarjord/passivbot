@@ -17,6 +17,8 @@ All notable user-facing changes will be documented in this file.
   now be unique. Dataset preparation restricts exchange-specific preloads to the union of
   explicitly requested scenario coins when every assigned scenario names its coins. Resume
   validation rejects objective-scenario changes, including old results that predate the setting.
+  The bundled balanced EMA-anchor suite keeps the configured position-count denominator in every
+  non-base stress scenario and fixes both total-exposure-enforcer threshold bounds at `1.0`.
 
 - `passivbot tool crash-finder` can discover ordered low-to-later-high pumps as well as
   high-to-later-low crashes via `--direction up|both`. Generated idiosyncratic stress scenarios

@@ -50,7 +50,8 @@
                     "binance"
                 ],
                 "overrides": {
-                    "bot.short.risk.total_wallet_exposure_limit": 0.0
+                    "bot.short.risk.total_wallet_exposure_limit": 0.0,
+                    "backtest.dynamic_wel_by_tradability": false
                 }
             },
             {
@@ -70,7 +71,8 @@
                     "binance"
                 ],
                 "overrides": {
-                    "bot.long.risk.total_wallet_exposure_limit": 0.0
+                    "bot.long.risk.total_wallet_exposure_limit": 0.0,
+                    "backtest.dynamic_wel_by_tradability": false
                 }
             },
             {
@@ -107,7 +109,8 @@
                     "bybit"
                 ],
                 "overrides": {
-                    "bot.short.risk.total_wallet_exposure_limit": 0.0
+                    "bot.short.risk.total_wallet_exposure_limit": 0.0,
+                    "backtest.dynamic_wel_by_tradability": false
                 }
             },
             {
@@ -144,7 +147,8 @@
                     "bybit"
                 ],
                 "overrides": {
-                    "bot.long.risk.total_wallet_exposure_limit": 0.0
+                    "bot.long.risk.total_wallet_exposure_limit": 0.0,
+                    "backtest.dynamic_wel_by_tradability": false
                 }
             },
             {
@@ -185,7 +189,8 @@
                     "bybit"
                 ],
                 "overrides": {
-                    "bot.short.risk.total_wallet_exposure_limit": 0.0
+                    "bot.short.risk.total_wallet_exposure_limit": 0.0,
+                    "backtest.dynamic_wel_by_tradability": false
                 }
             },
             {
@@ -224,7 +229,8 @@
                     "bybit"
                 ],
                 "overrides": {
-                    "bot.long.risk.total_wallet_exposure_limit": 0.0
+                    "bot.long.risk.total_wallet_exposure_limit": 0.0,
+                    "backtest.dynamic_wel_by_tradability": false
                 }
             },
             {
@@ -272,7 +278,8 @@
                     "bybit"
                 ],
                 "overrides": {
-                    "bot.short.risk.total_wallet_exposure_limit": 0.0
+                    "bot.short.risk.total_wallet_exposure_limit": 0.0,
+                    "backtest.dynamic_wel_by_tradability": false
                 }
             },
             {
@@ -318,7 +325,8 @@
                     "bybit"
                 ],
                 "overrides": {
-                    "bot.long.risk.total_wallet_exposure_limit": 0.0
+                    "bot.long.risk.total_wallet_exposure_limit": 0.0,
+                    "backtest.dynamic_wel_by_tradability": false
                 }
             },
             {
@@ -384,7 +392,8 @@
                     "bybit"
                 ],
                 "overrides": {
-                    "bot.short.risk.total_wallet_exposure_limit": 0.0
+                    "bot.short.risk.total_wallet_exposure_limit": 0.0,
+                    "backtest.dynamic_wel_by_tradability": false
                 }
             },
             {
@@ -450,7 +459,8 @@
                     "bybit"
                 ],
                 "overrides": {
-                    "bot.long.risk.total_wallet_exposure_limit": 0.0
+                    "bot.long.risk.total_wallet_exposure_limit": 0.0,
+                    "backtest.dynamic_wel_by_tradability": false
                 }
             },
             {
@@ -464,6 +474,7 @@
                     "binance"
                 ],
                 "overrides": {
+                    "backtest.dynamic_wel_by_tradability": false,
                     "coin_overrides": {
                         "OM": {
                             "live": {
@@ -486,6 +497,7 @@
                     "bybit"
                 ],
                 "overrides": {
+                    "backtest.dynamic_wel_by_tradability": false,
                     "coin_overrides": {
                         "DEXE": {
                             "live": {
@@ -507,6 +519,7 @@
                     "bybit"
                 ],
                 "overrides": {
+                    "backtest.dynamic_wel_by_tradability": false,
                     "coin_overrides": {
                         "ALGO": {
                             "live": {
@@ -529,6 +542,7 @@
                     "bybit"
                 ],
                 "overrides": {
+                    "backtest.dynamic_wel_by_tradability": false,
                     "coin_overrides": {
                         "UNI": {
                             "live": {
@@ -876,8 +890,8 @@
                         0.001
                     ],
                     "total_exposure_enforcer_threshold": [
-                        0.8,
-                        1.01,
+                        1.0,
+                        1.0,
                         0.001
                     ],
                     "total_wallet_exposure_limit": [
@@ -1034,8 +1048,8 @@
                         0.001
                     ],
                     "total_exposure_enforcer_threshold": [
-                        0.8,
-                        1.01,
+                        1.0,
+                        1.0,
                         0.001
                     ],
                     "total_wallet_exposure_limit": [
