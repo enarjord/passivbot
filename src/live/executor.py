@@ -272,7 +272,7 @@ async def _apply_order_churn_final_admission(
             except Exception as exc:
                 logging.debug(
                     "[event] order churn admission emitter failed | error_type=%s",
-                    type(exc).__name__,
+                    bounded_exception_type(exc),
                 )
         return selected
     window_seconds = (
@@ -306,7 +306,7 @@ async def _apply_order_churn_final_admission(
         except Exception as exc:
             logging.warning(
                 "[order] fresh market data unavailable for churn-gate final admission | error_type=%s",
-                type(exc).__name__,
+                bounded_exception_type(exc),
             )
             market_prices = {}
     admission: dict[int, tuple[str, bool]] = {}
@@ -390,7 +390,7 @@ async def _apply_order_churn_final_admission(
                     action_headroom = None
                     logging.warning(
                         "[order] connector churn headroom unavailable | error_type=%s",
-                        type(exc).__name__,
+                        bounded_exception_type(exc),
                     )
             if action_headroom is None:
                 deferred.append(order)
@@ -535,7 +535,7 @@ async def _apply_order_churn_final_admission(
         except Exception as exc:
             logging.debug(
                 "[event] order churn admission emitter failed | error_type=%s",
-                type(exc).__name__,
+                bounded_exception_type(exc),
             )
     return selected
 
@@ -564,7 +564,7 @@ def _record_fresh_entry_orders(
             "[entry] fresh-entry eligibility trace disabled during execution | "
             "method=%s error_type=%s",
             method,
-            type(exc).__name__,
+            bounded_exception_type(exc),
         )
 
 
@@ -579,7 +579,7 @@ def _emit_fresh_entry_eligibility(bot, passivbot_cls, wave) -> None:
     except Exception as exc:
         logging.debug(
             "[entry] fresh-entry eligibility payload build failed | error_type=%s",
-            type(exc).__name__,
+            bounded_exception_type(exc),
         )
         return
     try:
@@ -587,7 +587,7 @@ def _emit_fresh_entry_eligibility(bot, passivbot_cls, wave) -> None:
     except Exception as exc:
         logging.debug(
             "[entry] fresh-entry eligibility event emission failed | error_type=%s",
-            type(exc).__name__,
+            bounded_exception_type(exc),
         )
 
 

@@ -1,3 +1,5 @@
+import logging
+
 import pytest
 
 from live import event_emitters, executor, market_data, reconciler
@@ -276,6 +278,129 @@ async def test_final_batch_cap_classifies_eligible_and_blocked_without_changing_
     assert records[second["symbol"]]["outcome"] == "blocked_candidate"
     assert records[second["symbol"]]["reason_counts"] == {"batch_capacity": 1}
     assert bot._fresh_entry_eligibility_trace is None
+
+
+def test_fresh_entry_trace_recorder_diagnostic_bounds_hostile_exception_type(caplog):
+    hostile_name = "TokenFreshEntryTraceRecorderFailure"
+    secret = "https://hostile.example.invalid/entry?token=trace-secret"
+    HostileError = type(hostile_name, (RuntimeError,), {})
+    order = _initial("BTC/USDT:USDT")
+
+    class FailingTrace(FreshEntryEligibilityTrace):
+        def record_eligible_orders(self, _orders):
+            raise HostileError(secret)
+
+    class Bot:
+        _fresh_entry_eligibility_trace = FailingTrace()
+
+    bot = Bot()
+    with caplog.at_level(logging.DEBUG):
+        executor._record_fresh_entry_orders(bot, "record_eligible_orders", [order])
+
+    assert bot._fresh_entry_eligibility_trace is None
+    records = [
+        record
+        for record in caplog.records
+        if record.getMessage().startswith("[entry] fresh-entry eligibility trace disabled")
+    ]
+    assert [(record.levelno, record.getMessage()) for record in records] == [
+        (
+            logging.DEBUG,
+            "[entry] fresh-entry eligibility trace disabled during execution | "
+            "method=record_eligible_orders error_type=RuntimeError",
+        )
+    ]
+    rendered = "\n".join(record.getMessage() for record in records)
+    assert hostile_name not in rendered
+    assert secret not in rendered
+    assert "hostile.example.invalid" not in rendered
+
+
+def test_fresh_entry_payload_diagnostic_bounds_hostile_exception_type(caplog):
+    hostile_name = "PrivateKeyFreshEntryPayloadFailure"
+    secret = "https://hostile.example.invalid/entry?token=payload-secret"
+    HostileError = type(hostile_name, (RuntimeError,), {})
+
+    class FailingTrace(FreshEntryEligibilityTrace):
+        def to_event_data(self, max_records=32):
+            raise HostileError(secret)
+
+    class Bot:
+        _fresh_entry_eligibility_trace = FailingTrace()
+
+    class Emitter:
+        emitted = []
+
+        @staticmethod
+        def _emit_initial_entry_eligibility_event(*_args, **_kwargs):
+            Emitter.emitted.append(True)
+
+    bot = Bot()
+    with caplog.at_level(logging.DEBUG):
+        executor._emit_fresh_entry_eligibility(bot, Emitter, {"event_id": "ow_1"})
+
+    assert bot._fresh_entry_eligibility_trace is None
+    assert Emitter.emitted == []
+    records = [
+        record
+        for record in caplog.records
+        if record.getMessage().startswith("[entry] fresh-entry eligibility payload build failed")
+    ]
+    assert [(record.levelno, record.getMessage()) for record in records] == [
+        (
+            logging.DEBUG,
+            "[entry] fresh-entry eligibility payload build failed | error_type=RuntimeError",
+        )
+    ]
+    rendered = "\n".join(record.getMessage() for record in records)
+    assert hostile_name not in rendered
+    assert secret not in rendered
+    assert "hostile.example.invalid" not in rendered
+
+
+def test_fresh_entry_event_emission_diagnostic_bounds_hostile_exception_type(caplog):
+    hostile_name = "AuthorizationFreshEntryEmissionFailure"
+    secret = "https://hostile.example.invalid/entry?token=emission-secret"
+    HostileError = type(hostile_name, (RuntimeError,), {})
+    payload = {"records_total": 0, "records": []}
+
+    class Trace(FreshEntryEligibilityTrace):
+        def to_event_data(self, max_records=32):
+            return payload
+
+    class Bot:
+        _fresh_entry_eligibility_trace = Trace()
+
+    class Emitter:
+        emitted = []
+
+        @staticmethod
+        def _emit_initial_entry_eligibility_event(_bot, *, data, wave=None):
+            Emitter.emitted.append((data, wave))
+            raise HostileError(secret)
+
+    bot = Bot()
+    wave = {"event_id": "ow_1"}
+    with caplog.at_level(logging.DEBUG):
+        executor._emit_fresh_entry_eligibility(bot, Emitter, wave)
+
+    assert bot._fresh_entry_eligibility_trace is None
+    assert Emitter.emitted == [(payload, wave)]
+    records = [
+        record
+        for record in caplog.records
+        if record.getMessage().startswith("[entry] fresh-entry eligibility event emission failed")
+    ]
+    assert [(record.levelno, record.getMessage()) for record in records] == [
+        (
+            logging.DEBUG,
+            "[entry] fresh-entry eligibility event emission failed | error_type=RuntimeError",
+        )
+    ]
+    rendered = "\n".join(record.getMessage() for record in records)
+    assert hostile_name not in rendered
+    assert secret not in rendered
+    assert "hostile.example.invalid" not in rendered
 
 
 @pytest.mark.asyncio
