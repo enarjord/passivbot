@@ -49,6 +49,11 @@ source venv/bin/activate
 maturin develop --release
 ```
 
+The Rust crate's default features include `abi3-py312`, so one extension build
+targets the stable Python 3.12 ABI and remains loadable by newer supported
+interpreters, including Python 3.14. Do not use `--no-default-features` to test
+the supported installation path: that disables the ABI3 compatibility feature.
+
 Common errors:
 
 - `error: linker cc not found` → install build tools: `sudo apt install build-essential`. On macOS ensure Xcode CLT is installed.
