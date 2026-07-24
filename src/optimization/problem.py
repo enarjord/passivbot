@@ -19,6 +19,7 @@ _PYMOO_WORKER_EVALUATOR = None
 _PYMOO_WORKER_OVERRIDES_LIST: list[str] = []
 _PYMOO_WORKER_N_OBJ = 0
 _PYMOO_WORKER_HAS_CONSTRAINTS = False
+_PYMOO_WORKER_FAILURE_KEY = "__passivbot_pymoo_worker_failure__"
 OPTIMIZE_PROFILE_ENV = "PASSIVBOT_OPTIMIZE_PROFILE"
 
 
@@ -98,13 +99,21 @@ def _evaluate_pymoo_worker(
 def _evaluate_pymoo_worker_from_globals(vector: Sequence[float]) -> dict[str, Any]:
     if _PYMOO_WORKER_EVALUATOR is None:
         raise RuntimeError("pymoo worker evaluator not initialized")
-    return _evaluate_pymoo_worker(
-        _PYMOO_WORKER_EVALUATOR,
-        vector,
-        _PYMOO_WORKER_OVERRIDES_LIST,
-        _PYMOO_WORKER_N_OBJ,
-        _PYMOO_WORKER_HAS_CONSTRAINTS,
-    )
+    try:
+        return _evaluate_pymoo_worker(
+            _PYMOO_WORKER_EVALUATOR,
+            vector,
+            _PYMOO_WORKER_OVERRIDES_LIST,
+            _PYMOO_WORKER_N_OBJ,
+            _PYMOO_WORKER_HAS_CONSTRAINTS,
+        )
+    except BaseException as exc:
+        return {
+            _PYMOO_WORKER_FAILURE_KEY: {
+                "type": exc.__class__.__name__,
+                "message": str(exc),
+            }
+        }
 
 
 class PymooEvaluatorAdapter:
@@ -163,6 +172,38 @@ class PymooAsyncRecordingRunner:
         self.overrides_list = list(overrides_list or [])
         self.poll_interval_seconds = max(0.0, float(poll_interval_seconds))
 
+    def _capture_pool_workers(self) -> tuple[Any, ...]:
+        workers = getattr(self.pool, "_pool", ())
+        return tuple(workers or ())
+
+    @staticmethod
+    def _raise_if_pool_workers_exited(workers: Sequence[Any]) -> None:
+        exited = []
+        for worker in workers:
+            try:
+                exitcode = worker.exitcode
+            except Exception:
+                continue
+            if exitcode is not None:
+                exited.append(f"pid={getattr(worker, 'pid', None)} exitcode={exitcode}")
+        if exited:
+            raise RuntimeError(
+                "pymoo worker exited before returning all candidate results; "
+                "pending evaluations cannot be recovered safely "
+                f"({', '.join(exited)})"
+            )
+
+    @staticmethod
+    def _raise_if_worker_failure(payload: dict[str, Any], batch_index: int) -> None:
+        if _PYMOO_WORKER_FAILURE_KEY not in payload:
+            return
+        failure = payload[_PYMOO_WORKER_FAILURE_KEY]
+        raise RuntimeError(
+            "pymoo worker candidate evaluation failed "
+            f"at batch index {batch_index}: {failure.get('type', 'BaseException')}: "
+            f"{failure.get('message', '')}"
+        )
+
     def _record_result(self, vector, metrics) -> None:
         profile_enabled = _optimize_profile_enabled()
         started = time.perf_counter() if profile_enabled else 0.0
@@ -184,6 +225,7 @@ class PymooAsyncRecordingRunner:
 
     def __call__(self, _f, X):
         xs = list(X)
+        workers = self._capture_pool_workers()
         _set_pymoo_worker_globals(
             self.evaluator,
             self.overrides_list,
@@ -201,6 +243,7 @@ class PymooAsyncRecordingRunner:
 
         def _on_result(context, payload):
             idx, x = context
+            self._raise_if_worker_failure(payload, idx)
             self._record_result(
                 payload.get("evaluation_vector", x),
                 payload.get("metrics") or {},
@@ -214,6 +257,7 @@ class PymooAsyncRecordingRunner:
             pending,
             poll_interval_seconds=self.poll_interval_seconds,
             on_result=_on_result,
+            pending_health_check=lambda: self._raise_if_pool_workers_exited(workers),
         )
 
         return [payload for payload in ordered_results if payload is not None]

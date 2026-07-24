@@ -14,6 +14,9 @@ All notable user-facing changes will be documented in this file.
   or pagination failures propagate instead of returning a partial result as a
   successful refresh.
 
+- Unexpected PyMoo worker failures and process exits now abort optimization visibly instead of
+  leaving the optimizer polling forever for a lost result.
+
 - Live candle orchestration now reads bounded cache-only native 1h EMA carry-forward from the 1h
   index, requires a complete native window, isolates carried values from the active EMA cache, and
   applies the background refresher's surface-count staleness limit using the active live/replay
