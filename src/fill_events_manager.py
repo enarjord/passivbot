@@ -5312,107 +5312,57 @@ class BybitFetcher(BaseFetcher):
         return deduped
 
     async def _fetch_positions_history(self, start_ms: int, end_ms: int) -> List[Dict[str, object]]:
-        """Fetch closed-pnl records using Bybit's raw API with hybrid pagination.
+        """Fetch closed-PnL records in explicit contiguous time windows.
 
-        Uses a two-phase approach:
-        1. Cursor pagination for recent records (more efficient, no missed records)
-        2. Time-based sliding window for older records (cursor doesn't go back far enough)
-
-        This is necessary because:
-        - CCXT's fetch_positions_history uses time-based pagination which can miss records
-        - Bybit's cursor pagination only covers ~7 days of recent data
+        Bybit implicitly searches only ``endTime - 7 days`` when ``endTime`` is
+        supplied without ``startTime``.  Each explicit window is therefore
+        bounded below the seven-day limit and fully cursor-paginated before the
+        next older window begins.
         """
         results: Dict[str, Dict[str, object]] = {}  # Dedupe by orderId
         max_fetches = 500
         fetch_count = 0
-
-        # Phase 1: Use cursor pagination for recent records
-        params: Dict[str, object] = {
-            "category": "linear",
-            "limit": self.position_limit,
-            "endTime": int(end_ms),
-        }
-
-        cursor_oldest_ts = end_ms
-
-        while True:
-            fetch_count += 1
-            if fetch_count > max_fetches:
-                logger.warning(
-                    "BybitFetcher._fetch_positions_history: max fetches reached (%d)", max_fetches
-                )
-                break
-
-            try:
-                response = await self.api.private_get_v5_position_closed_pnl(params)
-            except Exception as exc:
-                logger.warning(
-                    "BybitFetcher._fetch_positions_history: API error_type=%s",
-                    bounded_exception_type(exc),
-                )
-                break
-
-            batch = response.get("result", {}).get("list", [])
-            if not batch:
-                break
-
-            self._process_closed_pnl_batch(batch, start_ms, results)
-
-            oldest_ts = int(batch[-1].get("updatedTime", 0)) if batch else 0
-            cursor_oldest_ts = oldest_ts
-
-            if oldest_ts <= start_ms:
-                break
-
-            cursor = response.get("result", {}).get("nextPageCursor")
-            if not cursor:
-                # Cursor exhausted - switch to time-based sliding window
-                break
-            params["cursor"] = cursor
-
-        # Phase 2: Time-based sliding window for older records (if cursor didn't reach start)
-        if cursor_oldest_ts > start_ms:
-            logger.debug(
-                "BybitFetcher._fetch_positions_history: cursor exhausted at %s, switching to time-based",
-                _format_ms(cursor_oldest_ts),
-            )
-            # Remove cursor and continue with time-based pagination
-            current_end = cursor_oldest_ts
-
-            while current_end > start_ms and fetch_count < max_fetches:
-                fetch_count += 1
-                params = {
+        current_end = int(end_ms)
+        while current_end >= start_ms:
+            window_start = max(int(start_ms), current_end - self._max_span_ms)
+            cursor: str | None = None
+            seen_cursors: set[str] = set()
+            while True:
+                if fetch_count >= max_fetches:
+                    raise RuntimeError(
+                        "BybitFetcher._fetch_positions_history: "
+                        f"max fetches reached ({max_fetches})"
+                    )
+                params: Dict[str, object] = {
                     "category": "linear",
                     "limit": self.position_limit,
+                    "startTime": int(window_start),
                     "endTime": int(current_end),
                 }
+                if cursor is not None:
+                    params["cursor"] = cursor
+                fetch_count += 1
+                response = await self.api.private_get_v5_position_closed_pnl(params)
+                result = response.get("result", {})
+                batch = result.get("list", [])
+                if batch:
+                    self._process_closed_pnl_batch(batch, start_ms, results)
 
-                try:
-                    response = await self.api.private_get_v5_position_closed_pnl(params)
-                except Exception as exc:
-                    logger.warning(
-                        "BybitFetcher._fetch_positions_history: API error_type=%s",
-                        bounded_exception_type(exc),
+                next_cursor = str(result.get("nextPageCursor") or "")
+                if not next_cursor:
+                    break
+                if next_cursor in seen_cursors:
+                    raise RuntimeError(
+                        "BybitFetcher._fetch_positions_history: "
+                        f"repeated cursor in window {_format_ms(window_start)}.."
+                        f"{_format_ms(current_end)}"
                     )
-                    break
+                seen_cursors.add(next_cursor)
+                cursor = next_cursor
 
-                batch = response.get("result", {}).get("list", [])
-                if not batch:
-                    # No more records, slide window back
-                    current_end = max(start_ms, current_end - self._max_span_ms)
-                    continue
-
-                self._process_closed_pnl_batch(batch, start_ms, results)
-
-                oldest_ts = int(batch[-1].get("updatedTime", 0)) if batch else 0
-                if oldest_ts <= start_ms:
-                    break
-
-                # Slide window: if batch was full, use oldest ts; otherwise jump back
-                if len(batch) >= self.position_limit:
-                    current_end = oldest_ts
-                else:
-                    current_end = max(start_ms, oldest_ts - self._max_span_ms)
+            if window_start <= start_ms:
+                break
+            current_end = window_start - 1
 
         logger.debug(
             "BybitFetcher._fetch_positions_history: fetched %d records in %d requests",

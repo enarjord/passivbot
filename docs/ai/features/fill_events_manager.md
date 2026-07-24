@@ -50,7 +50,7 @@ logs, runtime windows, and immutable manifests.
 | Exchange | Primary Fills Source | PnL/Close Source |
 |----------|----------------------|------------------|
 | Binance | `fetch_my_trades` | income history |
-| Bybit | `fetch_my_trades` | closed-pnl (hybrid pagination) |
+| Bybit | `fetch_my_trades` | closed-pnl (explicit time windows + cursor pagination) |
 | Bitget | `fetch_my_trades` | embedded in trade payload |
 | Hyperliquid | fill events | embedded |
 | OKX | `fetch_my_trades` | positions history |
@@ -61,7 +61,10 @@ logs, runtime windows, and immutable manifests.
 ## Non-Obvious Details
 
 1. Exchanges split fill/PnL data across different endpoints.
-2. Bybit requires hybrid pagination for better closed-PnL completeness.
+2. Bybit closed-PnL history is fetched in contiguous windows shorter than the
+   endpoint's seven-day maximum. Every window is cursor-paginated to exhaustion
+   before moving to the next older window; sparse pages do not determine window
+   boundaries.
 3. Historical retention limits can make old PnL records unavailable.
 4. WEEX trade-detail queries are limited to 100 rows and seven days per request,
    with up to 365 days of retention; its client order id may require an order-detail lookup.

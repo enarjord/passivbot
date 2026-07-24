@@ -60,13 +60,20 @@ Handling:
 
 Problem:
 
-1. Cursor pagination has limited historical reach.
-2. Time-based pagination can skip records when windows exceed page limits.
+1. Supplying only `endTime` makes Bybit search the preceding seven days.
+2. Deriving the next window from a sparse page's oldest row can skip records
+   between that row and the current window boundary.
+3. A time window may still contain more than one page.
 
 Handling in Passivbot:
 
-1. Use hybrid pagination (cursor for recent, time-window for older).
-2. Deduplicate by `orderId`.
+1. Partition the requested range into explicit contiguous windows shorter than
+   seven days, passing both `startTime` and `endTime`.
+2. Cursor-paginate each window to exhaustion before moving to the next older
+   window.
+3. Deduplicate by `orderId`.
+4. Propagate endpoint and pagination-progress failures; incomplete closed-PnL
+   history must not be treated as a successful fetch.
 
 Primary reference: `src/fill_events_manager.py` (`BybitFetcher._fetch_positions_history`).
 

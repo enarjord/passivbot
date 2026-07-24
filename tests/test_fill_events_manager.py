@@ -2950,6 +2950,95 @@ async def test_bybit_fetcher_merges_pnl_and_batches(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_bybit_closed_pnl_uses_contiguous_cursor_paginated_windows():
+    day_ms = 24 * 60 * 60 * 1000
+    end_ms = 2_000_000_000_000
+    start_ms = end_ms - 14 * day_ms
+
+    def record(order_id: str, timestamp: int) -> Dict[str, object]:
+        return {
+            "symbol": "XMRUSDT",
+            "orderId": order_id,
+            "side": "Sell",
+            "closedPnl": "1.0",
+            "closedSize": "0.1",
+            "avgEntryPrice": "300.0",
+            "avgExitPrice": "310.0",
+            "updatedTime": str(timestamp),
+            "createdTime": str(timestamp),
+            "leverage": "1",
+        }
+
+    class _WindowedBybitAPI:
+        markets = {}
+
+        def __init__(self):
+            self.calls: List[Dict[str, object]] = []
+            self.responses = [
+                {
+                    "result": {
+                        "list": [record("recent-1", end_ms - day_ms)],
+                        "nextPageCursor": "recent-page-2",
+                    }
+                },
+                {
+                    "result": {
+                        "list": [record("recent-2", end_ms - 2 * day_ms)],
+                        "nextPageCursor": "",
+                    }
+                },
+                {"result": {"list": [], "nextPageCursor": ""}},
+                {
+                    "result": {
+                        "list": [record("old-sparse", start_ms + day_ms)],
+                        "nextPageCursor": "",
+                    }
+                },
+            ]
+
+        async def private_get_v5_position_closed_pnl(self, params):
+            self.calls.append(dict(params))
+            return self.responses.pop(0)
+
+    api = _WindowedBybitAPI()
+    fetcher = BybitFetcher(api, max_span_days=6.5)
+
+    positions = await fetcher._fetch_positions_history(start_ms, end_ms)
+
+    assert {row["info"]["orderId"] for row in positions} == {
+        "recent-1",
+        "recent-2",
+        "old-sparse",
+    }
+    assert len(api.calls) == 4
+    assert api.calls[1]["cursor"] == "recent-page-2"
+    assert api.calls[1]["startTime"] == api.calls[0]["startTime"]
+    assert api.calls[1]["endTime"] == api.calls[0]["endTime"]
+    window_calls = [api.calls[0], api.calls[2], api.calls[3]]
+    assert window_calls[1]["endTime"] == window_calls[0]["startTime"] - 1
+    assert window_calls[2]["endTime"] == window_calls[1]["startTime"] - 1
+    assert window_calls[-1]["startTime"] == start_ms
+    assert all(
+        call["endTime"] - call["startTime"] <= fetcher._max_span_ms
+        for call in window_calls
+    )
+
+
+@pytest.mark.asyncio
+async def test_bybit_closed_pnl_fetch_propagates_api_error():
+    api = types.SimpleNamespace(
+        markets={},
+        private_get_v5_position_closed_pnl=AsyncMock(
+            side_effect=RuntimeError("closed-pnl unavailable")
+        ),
+    )
+    fetcher = BybitFetcher(api)
+
+    with pytest.raises(RuntimeError, match="closed-pnl unavailable"):
+        await fetcher._fetch_positions_history(1_900_000_000_000, 1_900_000_060_000)
+
+
+@pytest.mark.asyncio
 async def test_bybit_fetcher_uses_detail_cache(monkeypatch):
     base_ts = int(datetime.now(timezone.utc).timestamp() * 1000)
     trades_batches = [
