@@ -190,9 +190,11 @@ def _evaluate_starting_individuals(
         ordered_payload_slots_bytes=approx_object_size(ordered_payloads),
     )
     completed = {"count": 0}
+    workers = runner._capture_pool_workers()
 
     def _on_result(context, payload):
         idx, vector = context
+        runner._raise_if_worker_failure(payload, idx)
         runner._record_result(
             payload.get("evaluation_vector", vector),
             payload.get("metrics") or {},
@@ -222,6 +224,7 @@ def _evaluate_starting_individuals(
         max_pending=max_pending,
         poll_interval_seconds=runner.poll_interval_seconds,
         on_interrupt=_on_interrupt,
+        pending_health_check=lambda: runner._raise_if_pool_workers_exited(workers),
     )
     slim_payloads = [payload for payload in ordered_payloads if payload is not None]
     log_seed_memory(
