@@ -5,7 +5,8 @@ All notable user-facing changes will be documented in this file.
 ## Unreleased
 
 - Documented Python 3.12 and 3.14 support, explicitly excluding Python 3.13 until its dependency
-  set is supported, and fixed reentrant candle fetch-lock
+  set is supported and bounding package metadata to those validated minor versions, and fixed
+  reentrant candle fetch-lock
   cleanup so a missing bookkeeping record no longer suppresses an exception raised by the
   protected operation. CI now builds the Rust extension and runs the Python suite on both Python
   3.12 and 3.14. Reentrancy is now restricted to the owning asyncio task, so parallel requests

@@ -26,3 +26,4 @@ def test_setup_python_requires_matches_supported_versions():
     assert Version("3.12") in supported
     assert Version("3.13") not in supported
     assert Version("3.14") in supported
+    assert Version("3.15") not in supported
