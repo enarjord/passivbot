@@ -42,7 +42,7 @@ Passivbot manages underperforming, or "stuck", positions by realizing small loss
 
 To install Passivbot and its dependencies, follow the steps below.
 
-Passivbot requires **Python 3.12**. Earlier versions are not supported.
+Passivbot requires **Python 3.12 or newer**. Earlier versions are not supported.
 
 ### Upgrading a v7 config
 

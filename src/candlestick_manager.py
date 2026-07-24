@@ -1940,13 +1940,11 @@ class CandlestickManager:
                 yield
             finally:
                 record = self._held_fetch_locks.get(key)
-                if record is None:
-                    return
-                if record.count <= 1:
+                if record is not None and record.count <= 1:
                     self._held_fetch_locks.pop(key, None)
                     self._cancel_fetch_lock_watchdog(key)
                     await self._release_lock(record.lock, record.path, symbol, tf_norm)
-                else:
+                elif record is not None:
                     self._held_fetch_locks[key] = _LockRecord(
                         lock=record.lock,
                         path=record.path,

@@ -4,6 +4,10 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Documented Python 3.12+ support, including Python 3.14, and fixed reentrant candle fetch-lock
+  cleanup so a missing bookkeeping record no longer suppresses an exception raised by the
+  protected operation.
+
 - Live candle orchestration now reads bounded cache-only native 1h EMA carry-forward from the 1h
   index, requires a complete native window, isolates carried values from the active EMA cache, and
   applies the background refresher's surface-count staleness limit using the active live/replay

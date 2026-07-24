@@ -4,7 +4,10 @@ This guide collects all steps (and common pitfalls) for setting up Passivbot on 
 
 ## 1. Prerequisites
 
-- **Python 3.12** – Earlier versions are no longer supported. On Debian/Ubuntu use `sudo apt install python3.12 python3.12-venv python3.12-dev`.
+- **Python 3.12 or newer** – Earlier versions are no longer supported. On Debian/Ubuntu systems
+  whose default interpreter is Python 3.12+, install it and its build headers with
+  `sudo apt install python3 python3-venv python3-dev`. Otherwise install a supported newer
+  interpreter, then confirm the selected `python3 --version` reports Python 3.12+.
 - **Rust toolchain** – Passivbot’s hot paths live in Rust. Install via [rustup](https://rustup.rs/) if `rustc --version` is not available.
 - **C build tools** – Ubuntu/Debian: `sudo apt install build-essential`. macOS: Xcode command-line tools (`xcode-select --install`).
 - **Virtual environment** – Strongly recommended so dependencies do not leak into the system interpreter.
@@ -16,8 +19,8 @@ This guide collects all steps (and common pitfalls) for setting up Passivbot on 
  git clone https://github.com/enarjord/passivbot.git
  cd passivbot
 
-# Create + activate Python 3.12 venv (inside repo root)
- python3.12 -m venv venv
+# Create + activate a Python 3.12+ venv (inside repo root)
+ python3 -m venv venv
  source venv/bin/activate  # Windows: venv\Scripts\activate
 ```
 
@@ -50,7 +53,8 @@ Common errors:
 
 - `error: linker cc not found` → install build tools: `sudo apt install build-essential`. On macOS ensure Xcode CLT is installed.
 - `No such command 'maturin'` → re-run `pip install -r requirements-rust.txt`.
-- `failed to run custom build command … cc not found` on WSL/Ubuntu → install `python3-dev` (`sudo apt install python3.12-dev`).
+- `failed to run custom build command … cc not found` on WSL/Ubuntu → install the compiler and
+  Python headers (`sudo apt install build-essential python3-dev`).
 - `failed to parse manifest ... feature edition2024 is required` or `cargo metadata ... failed` during `python3 -m pip install -e ".[full]"` → your Rust/Cargo is too old for the transitive crates Cargo resolved. Update Rust with `rustup update stable`, confirm `cargo --version` / `rustc --version`, then retry the install. If you installed Rust from distro packages, prefer the `rustup` toolchain instead.
 
 ## 5. Verify the install
@@ -102,7 +106,7 @@ If you see linker errors after an OS update (e.g. new glibc), rebuild the extens
 | `feature edition2024 is required` during the Rust build | Update Rust with `rustup update stable`, then retry `python3 -m pip install -e ".[full]"`. |
 | `python3 -m pip install … failed due to SSL` | Update `certifi` or set `PIP_CERT` if corporate proxies intercept TLS. |
 | `maturin develop` can’t find Python | Ensure you run it inside the venv (`which python` should point to `venv/bin/python`). |
-| `TypeError: unsupported operand type(s) for |: ...` | You are running an unsupported Python version; install Python 3.12 and recreate the venv with `python3.12 -m venv venv`. |
+| `TypeError: unsupported operand type(s) for |: ...` | You are running an unsupported Python version; install Python 3.12+ and recreate the venv with that interpreter. |
 
 For more detail, see [docs/troubleshooting.md](troubleshooting.md).
 
