@@ -147,10 +147,13 @@ def drain_async_results(
     poll_interval_seconds: float = 0.05,
     on_result: Callable[[Any, Any], None],
     on_interrupt: Callable[[dict], None] | None = None,
+    pending_health_check: Callable[[], None] | None = None,
 ) -> int:
     completed = 0
     try:
         while pending:
+            if pending_health_check is not None:
+                pending_health_check()
             ready = [res for res in pending if res.ready()]
             if not ready:
                 time.sleep(max(0.0, float(poll_interval_seconds)))
@@ -175,6 +178,7 @@ def stream_async_results(
     max_pending: int | None = None,
     poll_interval_seconds: float = 0.05,
     on_interrupt: Callable[[dict], None] | None = None,
+    pending_health_check: Callable[[], None] | None = None,
 ) -> int:
     max_pending = None if max_pending is None else max(1, int(max_pending))
     iterator = iter(items)
@@ -195,6 +199,8 @@ def stream_async_results(
             if not pending:
                 continue
 
+            if pending_health_check is not None:
+                pending_health_check()
             ready = [res for res in pending if res.ready()]
             if not ready:
                 time.sleep(max(0.0, float(poll_interval_seconds)))
