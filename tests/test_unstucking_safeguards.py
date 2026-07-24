@@ -1669,7 +1669,10 @@ async def test_restart_same_state_waits_for_post_position_fill_refresh():
 
 
 @pytest.mark.asyncio
-async def test_runtime_delta_without_update_time_rejects_mismatched_prefetched_fill():
+async def test_runtime_delta_accepts_fresh_identity_when_reconstructed_after_state_mismatches(
+    caplog,
+):
+    caplog.set_level(logging.INFO)
     cfg = _dummy_config()
     bot = _make_dummy_bot(cfg)
     symbol = _set_basic_state(bot)
@@ -1725,7 +1728,10 @@ async def test_runtime_delta_without_update_time_rejects_mismatched_prefetched_f
 
     async def complete_matching_epoch_candles(*args, **kwargs):
         return _make_candles(
-            [(300_000, 101.0, 103.0, 100.0, 102.0, 1.0)]
+            [
+                (240_000, 100.0, 102.0, 99.0, 101.0, 1.0),
+                (300_000, 101.0, 103.0, 100.0, 102.0, 1.0),
+            ]
         )
 
     bot.cm.get_candles = complete_matching_epoch_candles
@@ -1733,27 +1739,82 @@ async def test_runtime_delta_without_update_time_rejects_mismatched_prefetched_f
     bot._trailing_fill_fetch_generation = 3
     await bot.update_trailing_data()
 
-    assert bot._trailing_pending_fill_confirmations == {
-        (symbol, "long"): "fill:120000:old-fill"
+    assert bot._trailing_pending_fill_confirmations == {}
+    assert bot._trailing_position_snapshot_fill_epochs == {
+        (symbol, "long"): "fill:180000:mismatched-fill"
     }
-    assert bot._orchestrator_trailing_unavailable_reasons == {
-        symbol: ["position_fill_confirmation_pending"]
-    }
-
-    bot._pnls_manager._events.append(
-        _DummyFillEvent(
-            symbol, "long", 240_000, "matching-fill", psize=1.5, pprice=101.0
-        )
+    assert bot._orchestrator_trailing_unavailable_symbols == set()
+    assert any(
+        "accepted fresh fill identity despite reconstructed after-state mismatch"
+        in record.getMessage()
+        for record in caplog.records
     )
-    bot._trailing_fill_refresh_started_generation = 4
-    bot._trailing_fill_fetch_generation = 4
+
+
+@pytest.mark.asyncio
+async def test_restart_accepts_fresh_fill_identity_when_cache_starts_mid_position(
+    caplog,
+):
+    caplog.set_level(logging.INFO)
+    cfg = _dummy_config()
+    bot = _make_dummy_bot(cfg)
+    symbol = _set_basic_state(bot)
+    bot._pnls_manager = _DummyPnlsManager(
+        [
+            _DummyFillEvent(
+                symbol,
+                "long",
+                120_000,
+                "partial-history-fill",
+                psize=0.4,
+                pprice=99.0,
+            )
+        ]
+    )
+    bot.is_trailing = lambda sym, pside=None: pside == "long"
+    bot.get_exchange_time = lambda: 361_000
+
+    bot._apply_positions_snapshot(
+        [
+            {
+                "symbol": symbol,
+                "position_side": "long",
+                "size": 1.5,
+                "price": 101.0,
+                "lastUpdateTimestamp": 240_000,
+            }
+        ]
+    )
+
+    async def complete_epoch_candles(*args, **kwargs):
+        return _make_candles(
+            [
+                (180_000, 100.0, 110.0, 90.0, 100.0, 1.0),
+                (240_000, 100.0, 111.0, 89.0, 101.0, 1.0),
+                (300_000, 101.0, 112.0, 88.0, 102.0, 1.0),
+            ]
+        )
+
+    bot.cm.get_candles = complete_epoch_candles
+    await bot.update_trailing_data()
+    assert bot._trailing_pending_fill_confirmations == {(symbol, "long"): None}
+
+    bot._trailing_fill_fetch_generation = 1
     await bot.update_trailing_data()
 
     assert bot._trailing_pending_fill_confirmations == {}
     assert bot._trailing_position_snapshot_fill_epochs == {
-        (symbol, "long"): "fill:240000:matching-fill"
+        (symbol, "long"): "fill:120000:partial-history-fill"
     }
     assert bot._orchestrator_trailing_unavailable_symbols == set()
+    assert bot.trailing_prices[symbol]["long"]["max_since_open"] == pytest.approx(
+        112.0
+    )
+    assert any(
+        "accepted fresh fill identity despite reconstructed after-state mismatch"
+        in record.getMessage()
+        for record in caplog.records
+    )
 
 
 @pytest.mark.asyncio

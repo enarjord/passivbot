@@ -8535,6 +8535,7 @@ class Passivbot:
                         and fill_fetch_generation < int(minimum_fill_generation)
                     ):
                         failed_predicates.append("post_snapshot_fill_refresh_pending")
+                    fill_after_state_matches = True
                     if (
                         current_epoch is not None
                         and current_epoch.startswith("fill:")
@@ -8543,7 +8544,7 @@ class Passivbot:
                             symbol, expected_position_state, anchor
                         )
                     ):
-                        failed_predicates.append("fill_after_state_mismatch")
+                        fill_after_state_matches = False
                     if failed_predicates:
                         position_update_timestamp = self._position_update_timestamp_ms(
                             symbol, pside
@@ -8578,6 +8579,21 @@ class Passivbot:
                         unavailable_psides[symbol].add(pside)
                         last_position_changes.get(symbol, {}).pop(pside, None)
                         continue
+                    if not fill_after_state_matches:
+                        # Fill-event psize/pprice are reconstructed from the
+                        # locally available history and may be inaccurate when
+                        # that history starts mid-position.  A completed
+                        # post-snapshot refresh plus a current fill identity is
+                        # the authoritative proof required by trailing: the
+                        # contract resets extrema after every fill for the
+                        # symbol and position side, irrespective of after-state.
+                        logging.info(
+                            "[trailing] accepted fresh fill identity despite reconstructed "
+                            "after-state mismatch | symbol=%s pside=%s "
+                            "action=use_post_refresh_fill_identity",
+                            self._log_symbol(symbol),
+                            pside,
+                        )
                     pending_fill_confirmations.pop(epoch_key, None)
                     pending_fill_min_generations.pop(epoch_key, None)
                     pending_position_states.pop(epoch_key, None)

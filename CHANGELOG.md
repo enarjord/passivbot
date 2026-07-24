@@ -4,6 +4,11 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Fixed live trailing fill confirmation getting stuck after restart when cached fill history starts
+  mid-position and therefore cannot reconstruct the exchange position's exact size or average
+  price. A completed post-snapshot fill refresh and current fill identity now restore trailing
+  extrema while reconstructed fill after-state remains diagnostic-only.
+
 - Live candle orchestration now reads bounded cache-only native 1h EMA carry-forward from the 1h
   index, requires a complete native window, isolates carried values from the active EMA cache, and
   applies the background refresher's surface-count staleness limit using the active live/replay
