@@ -3569,6 +3569,25 @@ class TestEvaluator:
             "drawdown_worst_strategy_eq_max",
         ]
 
+    def test_suite_objective_scenario_must_match_context_label(self):
+        from optimize import Evaluator, SuiteEvaluator
+        from config_utils import get_template_config
+
+        mock_config = get_template_config()
+        mock_config["optimize"]["objective_scenario"] = "base"
+        base = Evaluator(
+            hlcvs_specs={},
+            btc_usd_specs={},
+            msss={},
+            config=mock_config,
+        )
+
+        with pytest.raises(
+            ValueError,
+            match="optimize.objective_scenario 'base' is not present",
+        ):
+            SuiteEvaluator(base, [], {"default": "mean"})
+
     def test_evaluate_converts_recoverable_backtest_panic_to_penalty(self):
         from optimize import Evaluator, INVALID_BACKTEST_CANDIDATE_PENALTY
         from config_utils import get_template_config

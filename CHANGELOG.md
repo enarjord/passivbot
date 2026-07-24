@@ -11,6 +11,16 @@ All notable user-facing changes will be documented in this file.
   EMA, avoiding transient candidate drops and unnecessary close-EMA fallback on WEEX and other
   exchanges without weakening active-symbol fail-closed behavior.
 
+- Optimizer suites may set `optimize.objective_scenario` (or
+  `--objective-scenario LABEL`) to score performance objectives on one named scenario while
+  continuing to enforce limits against configured suite aggregates. Suite scenario labels must
+  now be unique.
+
+- `passivbot tool crash-finder` can discover ordered low-to-later-high pumps as well as
+  high-to-later-low crashes via `--direction up|both`. Generated idiosyncratic stress scenarios
+  may use `--scenario-force-normal adverse` to isolate long exposure during crashes and short
+  exposure during pumps.
+
 - Canonical live-event payloads now make a bounded JSON-compatible copy at construction time,
   revalidate that copy at persistence boundaries, redact sensitive keys before retention, and
   record aggregate truncation metadata only when a limit applies. Event identity, routing, monitor

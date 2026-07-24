@@ -1432,6 +1432,18 @@ RESERVED_CLI_ARGS = {
         "group": {"optimize": "Optimizer"},
         "help": "Optimizer scoring metrics, for example adg_pnl,loss_profit_ratio.",
     },
+    "optimize.objective_scenario": {
+        "visible": ["--objective-scenario"],
+        "hidden": ["--optimize.objective_scenario", "--optimize_objective_scenario"],
+        "type": str,
+        "metavar": "LABEL",
+        "commands": {"optimize"},
+        "group": {"optimize": "Optimizer"},
+        "help": (
+            "Use one suite scenario for scoring objectives while keeping optimize.limits "
+            "evaluated against suite aggregates."
+        ),
+    },
     "optimize.population_size": {
         "visible": ["--population-size", "-ps"],
         "hidden": ["--optimize.population_size", "--optimize_population_size"],
@@ -1810,6 +1822,7 @@ def _classify_optimize_argument(full_name: str, help_all: bool) -> Optional[str]
         "optimize.iters",
         "optimize.backend",
         "optimize.n_cpus",
+        "optimize.objective_scenario",
         "optimize.pareto_max_size",
         "optimize.population_size",
         "optimize.scoring",

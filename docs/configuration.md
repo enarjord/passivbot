@@ -647,6 +647,9 @@ The optimizer reuses the backtest suite configuration when `--suite [y/n]` is en
 - **backtest.suite_enabled**: Can be toggled for optimizer runs via `--suite [y/n]` on `passivbot optimize`.
 - **backtest.aggregate**: Per-metric aggregation rules applied to scenario results before feeding into `optimize.scoring` and `optimize.limits`.
 - **backtest.scenarios**: Scenario dictionaries. Each one may override `coins`, `ignored_coins`, `start_date`, `end_date`, `exchanges`, `coin_sources`, and `overrides` (arbitrary config path overrides).
+- **optimize.objective_scenario**: Optional unique scenario label used for objective scoring.
+  Limits remain suite-aggregated, so a common pattern is `base` performance scoring with
+  worst-case stress limits.
 
 Use `--suite-config path/to/file.json` to layer additional scenario definitions at runtime.
 

@@ -541,6 +541,16 @@ def build_scenarios(
             )
         )
 
+    label_counts: Dict[str, int] = {}
+    for scenario in scenarios:
+        label_counts[scenario.label] = label_counts.get(scenario.label, 0) + 1
+    duplicate_labels = sorted(label for label, count in label_counts.items() if count > 1)
+    if duplicate_labels:
+        raise ValueError(
+            "config.backtest.scenarios labels must be unique; duplicate label(s): "
+            + ", ".join(duplicate_labels)
+        )
+
     aggregate_cfg = deepcopy(suite_cfg.get("aggregate", {"default": "mean"}))
     return scenarios, aggregate_cfg
 

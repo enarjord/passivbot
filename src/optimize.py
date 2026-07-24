@@ -723,6 +723,7 @@ def _resume_config_mismatches(entry: dict, config: dict) -> list[str]:
             "mutation_indpb",
             "mutation_probability",
             "offspring_multiplier",
+            "objective_scenario",
             "population_size",
             "pymoo",
             "round_to_n_significant_digits",
@@ -1595,16 +1596,23 @@ class Evaluator:
             aggregate_cfg=aggregate_cfg,
         )
 
-    def calc_fitness(self, analyses_combined, *, return_raw_objectives: bool = False):
+    def calc_fitness(
+        self,
+        analyses_combined,
+        *,
+        limit_metrics=None,
+        return_raw_objectives: bool = False,
+    ):
+        limit_metrics = analyses_combined if limit_metrics is None else limit_metrics
         per_objective_modifier = [0.0] * len(self.scoring_specs)
         global_modifier = 0.0
         for check in self.limit_checks:
-            val = resolve_metric_value(analyses_combined, check["metric_key"])
+            val = resolve_metric_value(limit_metrics, check["metric_key"])
             if val is None:
                 raise ValueError(
                     "missing optimizer limit metric "
                     f"{check['metric_key']!r} for limit on {check['metric']!r}; "
-                    f"available metrics: {_format_available_metric_keys(analyses_combined)}"
+                    f"available metrics: {_format_available_metric_keys(limit_metrics)}"
                 )
             penalty = compute_limit_violation(check, val)
             if not penalty:
@@ -1675,6 +1683,20 @@ class SuiteEvaluator:
         self.base = base_evaluator
         self.contexts = scenario_contexts
         self.aggregate_cfg = aggregate_cfg
+        objective_scenario = self.base.config["optimize"].get("objective_scenario")
+        self.objective_scenario = (
+            str(objective_scenario).strip() if objective_scenario is not None else None
+        )
+        if not self.objective_scenario:
+            self.objective_scenario = None
+        if self.objective_scenario is not None:
+            labels = [ctx.label for ctx in self.contexts]
+            if self.objective_scenario not in labels:
+                raise ValueError(
+                    "optimize.objective_scenario "
+                    f"{self.objective_scenario!r} is not present in backtest.scenarios; "
+                    f"available labels: {', '.join(labels)}"
+                )
         self.base.build_limit_checks(self.aggregate_cfg)
         # Cache for master dataset attachments (shared across scenarios)
         self._master_attachments: Dict[str, Dict[str, Any]] = {"hlcvs": {}, "btc": {}}
@@ -2017,7 +2039,18 @@ class SuiteEvaluator:
         aggregated_values = aggregate_summary.get("aggregated", {})
         for metric, agg_value in aggregated_values.items():
             flat_stats[f"{metric}_mean"] = agg_value
-        objectives, total_penalty = self.base.calc_fitness(flat_stats)
+        objective_stats = flat_stats
+        if self.objective_scenario is not None:
+            objective_result = next(
+                result
+                for result in scenario_results
+                if result.scenario.label == self.objective_scenario
+            )
+            objective_stats = flatten_metric_stats(objective_result.metrics.get("stats", {}))
+        objectives, total_penalty = self.base.calc_fitness(
+            objective_stats,
+            limit_metrics=flat_stats,
+        )
         objectives_map = {f"w_{i}": val for i, val in enumerate(objectives)}
         _profile_add(timings, "fitness_payload_ms", phase_start)
 
@@ -2027,6 +2060,8 @@ class SuiteEvaluator:
             "constraint_violation": total_penalty,
             "liquidated": liquidated,
         }
+        if self.objective_scenario is not None:
+            metrics_payload["objective_scenario"] = self.objective_scenario
         if timings is not None:
             timings["total_ms"] = (time.perf_counter() - profile_total_start) * 1000.0
             profile_payload = {

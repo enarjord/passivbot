@@ -226,6 +226,10 @@ def apply_non_live_adjustments(
     if population_size is not None and population_size <= 0:
         raise ValueError("optimize.population_size must be > 0 when set")
     result["optimize"]["population_size"] = population_size
+    objective_scenario = result["optimize"].get("objective_scenario")
+    if objective_scenario is not None:
+        objective_scenario = str(objective_scenario).strip() or None
+    result["optimize"]["objective_scenario"] = objective_scenario
     result["optimize"]["seed"] = normalize_optional_seed(result["optimize"].get("seed"))
 
     current_limits = deepcopy(result["optimize"].get("limits", []))

@@ -152,6 +152,21 @@ def test_build_scenarios_rejects_non_mapping_scenarios():
         build_scenarios({"scenarios": ["not-a-mapping"]})
 
 
+def test_build_scenarios_rejects_duplicate_labels():
+    with pytest.raises(
+        ValueError,
+        match=r"config\.backtest\.scenarios labels must be unique; duplicate label\(s\): repeated",
+    ):
+        build_scenarios(
+            {
+                "scenarios": [
+                    {"label": "repeated"},
+                    {"label": "repeated"},
+                ]
+            }
+        )
+
+
 def test_apply_scenario_filters_unavailable_coins():
     base_config = {
         "backtest": {

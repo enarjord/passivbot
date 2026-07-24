@@ -401,6 +401,13 @@ Key fields (directly under `backtest`):
 - `backtest.scenarios`: list of scenario dictionaries (same schema as backtest scenarios)
 - `backtest.aggregate`: how to combine per-scenario metrics (default: `{"default": "mean"}`)
 
+Set `optimize.objective_scenario` to a unique scenario label (commonly `base`) when the suite
+exists primarily as a robustness gate. Objectives are then read from that scenario, while
+`optimize.limits` continue to use the suite aggregation and each limit's `stat`. This supports
+optimizing performance on a representative long period while enforcing worst-case drawdown,
+completion, and recovery constraints across shorter stress periods. The equivalent CLI override
+is `--objective-scenario LABEL`.
+
 Suite mode is opt-in. The default schema/example config does not enable it automatically.
 
 During evaluation the optimizer records:
@@ -408,7 +415,8 @@ During evaluation the optimizer records:
 - Per-scenario combined metrics (the same mean/min/max/std set produced by standalone
   backtests). These are exposed on each individual as `<label>__{metric}`.
 - Aggregated metrics computed with the `backtest.aggregate` rules (default `mean`).
-  These aggregated values feed directly into `optimize.scoring` and `optimize.limits`.
+  These aggregated values feed `optimize.limits` and, unless `optimize.objective_scenario` is set,
+  `optimize.scoring`.
 
 See [Suite Examples](suite_examples.md) for practical scenario configurations including exchange
 comparisons, date range testing, and parameter sensitivity analysis.

@@ -1,17 +1,19 @@
 # Crash Discovery And Stress-Suite Runbook
 
-`passivbot tool crash-finder` finds difficult historical periods in local OHLCV data and generates
+`passivbot tool crash-finder` finds difficult historical crashes and pumps in local OHLCV data and generates
 backtest/optimizer scenario suites. Keep output under
 `crash_finder_results/<date>_crash_scenarios/`; it is local research evidence, not PR content.
 
 ## Modes And Semantics
 
 - Full discovery reads cached 1m candles, builds epoch-aligned discovery candles, finds ordered
-  high-to-later-low events, clusters them, and generates scenarios.
+  high-to-later-low and/or low-to-later-high events, clusters them by direction, and generates
+  scenarios.
 - `--clusters-csv` regenerates suites from existing clusters without reading candles. It cannot
   discover events added by a later data download.
 - `--timeframe` defaults to `1h`; wider candles may combine unrelated moves and shift cluster time.
 - `--threshold` is log return (`-0.10` is about a 9.5% decline).
+- `--pump-threshold` is a positive log return (`0.10` is about a 10.5% rally).
 - `--min-valid-minutes` counts valid source rows per discovery candle.
 
 Do not replace the ordered metric with plain high/low range; range cannot prove that the high
@@ -41,11 +43,11 @@ passivbot tool crash-finder \
   --root caches/ohlcvs \
   --exchange binance --exchange bybit \
   --source-timeframe 1m --timeframe 1h \
-  --threshold -0.10 --min-valid-minutes 2 \
+  --direction both --threshold -0.10 --pump-threshold 0.10 --min-valid-minutes 2 \
   --top-per-coin 20 --top-clusters 80 \
   --pre-days 14 --post-days 60 \
   --scenario-coin-mode affected --scenario-kind all \
-  --scenario-force-normal both --scenario-merge-overlaps \
+  --scenario-force-normal adverse --scenario-merge-overlaps \
   --write-filtered-suites \
   --output-dir crash_finder_results/$(date +%F)_crash_scenarios
 ```
@@ -72,6 +74,10 @@ coverage and preserves scan metadata.
 ## Scenario Contract
 
 - Market-wide scenarios include affected coins but never force individual coins to normal mode.
+- Idiosyncratic `adverse` scenarios isolate long exposure for crashes and short exposure for
+  pumps by setting the opposite side to manual mode.
+- Market-wide `adverse` scenarios isolate the whole portfolio side by setting the non-adverse
+  side's `total_wallet_exposure_limit` to zero without forcing individual coins.
 - Forced-normal overrides apply only to idiosyncratic events and at most two coins per scenario.
 - Split overlapping force targets into repeated scenarios when more than two are required.
 - Every scenario coin has source data overlapping its date range on at least one scenario exchange.

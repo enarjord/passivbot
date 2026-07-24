@@ -150,7 +150,7 @@ passivbot tool trailing-inspect \
 ## Crash finder
 
 `passivbot tool crash-finder` builds larger discovery candles from local v2 1m OHLCV data and
-scans them for severe crash windows. The discovery timeframe is parameterized with `--timeframe`
+scans them for severe crash and pump windows. The discovery timeframe is parameterized with `--timeframe`
 and defaults to `1h`; `4h` and `12h` are useful alternatives for slower market-wide moves. The
 scanner groups valid source rows once, while retaining their order inside each candle so a low
 before a later high is not misclassified as a crash.
@@ -170,10 +170,12 @@ passivbot tool crash-finder \
   --exchange bybit \
   --source-timeframe 1m \
   --timeframe 1h \
+  --direction both \
   --threshold -0.10 \
+  --pump-threshold 0.10 \
   --pre-days 14 \
   --post-days 60 \
-  --scenario-force-normal both \
+  --scenario-force-normal adverse \
   --scenario-merge-overlaps \
   --write-filtered-suites \
   --output-dir crash_finder_results/$(date +%F)_crash_scenarios
@@ -190,6 +192,9 @@ passivbot tool crash-finder \
 
 Useful suite controls:
 
+- `--direction down|up|both` chooses high-to-later-low crashes, low-to-later-high pumps, or both.
+  `--threshold` is the negative crash threshold and `--pump-threshold` is the positive pump
+  threshold, both expressed as log returns.
 - `--scenario-kind market-wide` keeps broad market crashes only.
 - `--scenario-kind coin-focused` keeps non-market-wide crashes, including isolated multi-coin
   clusters such as a DEXE/M event.
@@ -199,6 +204,9 @@ Useful suite controls:
   only for idiosyncratic non-market-wide crash coins. Market-wide scenario coins are not forced.
   If a merged scenario would contain more than two forced coins, the tool splits it into repeated
   scenario windows with at most two forced coins per scenario.
+- `--scenario-force-normal adverse` forces long normal/short manual for idiosyncratic crashes and
+  long manual/short normal for idiosyncratic pumps. For market-wide events it enables only the
+  adverse portfolio side: long for crashes and short for pumps.
 - `--scenario-merge-overlaps` merges scenarios whose generated date windows overlap, preserving
   the earliest start, latest end, union of coins, and worst-severity label.
 
