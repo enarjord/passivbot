@@ -14,7 +14,9 @@ All notable user-facing changes will be documented in this file.
   position/open timestamp even when that predates the configured PnL window. Affected trailing
   positions remain fail-closed until refreshed history reconstructs a post-fill state matching
   exchange state; price and quantity alone cannot prove a flat-to-position transition. Id-less
-  fills use stable content-based identities rather than history-list indices.
+  fills use stable content-based identities rather than history-list indices. Position snapshots
+  preserve distinct exchange opening times, while timestamp-free positions retry with
+  progressively wider history windows.
 
 - Bybit closed-PnL refreshes now cover requested history with explicit,
   contiguous sub-seven-day windows and cursor pagination inside each window.

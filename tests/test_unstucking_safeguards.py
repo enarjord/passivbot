@@ -1374,6 +1374,31 @@ def test_position_anchor_timestamp_prefers_update_fields_over_open_fields():
     assert bot._position_update_timestamp_ms(symbol, "long") == 360_000
 
 
+def test_position_snapshot_preserves_distinct_open_and_update_timestamps():
+    cfg = _dummy_config()
+    bot = _make_dummy_bot(cfg)
+    symbol = _set_basic_state(bot)
+
+    bot._apply_positions_snapshot(
+        [
+            {
+                "symbol": symbol,
+                "position_side": "long",
+                "size": 1.0,
+                "price": 100.0,
+                "openTime": 120_000,
+                "updatedTime": 360_000,
+            }
+        ]
+    )
+
+    position = bot.positions[symbol]["long"]
+    assert position["openTime"] == 120_000
+    assert position["timestamp"] == 360_000
+    assert position["lastUpdateTimestamp"] == 360_000
+    assert bot._position_history_anchor_timestamp_ms(symbol, "long") == 120_000
+
+
 @pytest.mark.asyncio
 async def test_trailing_anchor_uses_position_timestamp_when_fill_history_is_out_of_window(
     monkeypatch,
@@ -1711,6 +1736,34 @@ def test_fill_history_recovery_starts_before_open_even_outside_pnl_window():
     assert bot._trailing_fill_history_recovery_start_ms(age_limit) == (
         open_ms - 5 * minute_ms
     )
+
+
+def test_timestamp_free_fill_history_recovery_progressively_widens(
+    monkeypatch,
+):
+    cfg = _dummy_config()
+    bot = _make_dummy_bot(cfg)
+    symbol = _set_basic_state(bot)
+    now_ms = 1_800_000_000_000
+    day_ms = 24 * 60 * 60_000
+    age_limit = now_ms - 30 * day_ms
+    monkeypatch.setattr(sys.modules["passivbot"], "utc_ms", lambda: now_ms)
+    bot.get_exchange_time = lambda: now_ms
+    bot.positions[symbol]["long"] = {"size": 1.0, "price": 100.0}
+    bot._trailing_fill_confirmation_diagnostics = {
+        (symbol, "long"): {
+            "failed_predicates": ["missing_fill_anchor"],
+        }
+    }
+
+    assert bot._trailing_fill_history_recovery_start_ms(age_limit) == (
+        now_ms - 60 * day_ms
+    )
+    bot._trailing_fill_history_recovery_state["next_retry_ms"] = 0
+    assert bot._trailing_fill_history_recovery_start_ms(age_limit) == (
+        now_ms - 120 * day_ms
+    )
+    assert bot._trailing_fill_history_recovery_state["retry_count"] == 2
 
 
 @pytest.mark.asyncio

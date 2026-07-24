@@ -8297,6 +8297,25 @@ class Passivbot:
                 return update_ts
         return None
 
+    def _position_open_timestamp_from_row(self, position: dict) -> int | None:
+        """Return an explicit exchange-reported position opening time."""
+        open_keys = (
+            "open_time",
+            "openTime",
+            "createdTime",
+            "createTime",
+            "cTime",
+        )
+        candidates = [position.get(key) for key in open_keys]
+        info = position.get("info")
+        if isinstance(info, dict):
+            candidates.extend(info.get(key) for key in open_keys)
+        for candidate in candidates:
+            open_ts = self._parse_position_anchor_timestamp_ms(candidate)
+            if open_ts is not None:
+                return open_ts
+        return None
+
     def _position_anchor_timestamp_ms(self, symbol: str, pside: str) -> int | None:
         position = self.positions.get(symbol, {}).get(pside, {})
         return self._position_anchor_timestamp_from_row(position)
@@ -11569,7 +11588,8 @@ class Passivbot:
             "fill_identity_unchanged",
             "fill_after_state_mismatch",
         }
-        candidates: list[int] = []
+        anchored_candidates: list[int] = []
+        missing_anchor_cohorts: list[tuple[str, str]] = []
         cohorts: list[tuple[str, str]] = []
         for raw_key, detail in diagnostics.items():
             if not isinstance(raw_key, tuple) or len(raw_key) != 2:
@@ -11587,17 +11607,20 @@ class Passivbot:
                 except (TypeError, ValueError, OverflowError):
                     anchor_ts = None
             if anchor_ts is None:
-                continue
-            candidates.append(max(0, int(anchor_ts) - 5 * ONE_MIN_MS))
+                missing_anchor_cohorts.append((symbol, pside))
+            else:
+                anchored_candidates.append(
+                    max(0, int(anchor_ts) - 5 * ONE_MIN_MS)
+                )
             cohorts.append((symbol, pside))
-        if not candidates:
+        if not cohorts:
             return None
 
-        start_ms = min(candidates)
-        # `age_limit` bounds PnL accounting, not current-position
-        # reconciliation. A position may legitimately predate that window.
-        recovery_key = (tuple(sorted(cohorts)), int(start_ms))
         now_ms = utc_ms()
+        recovery_key = (
+            tuple(sorted(cohorts)),
+            tuple(sorted(missing_anchor_cohorts)),
+        )
         state = dict(
             getattr(self, "_trailing_fill_history_recovery_state", {}) or {}
         )
@@ -11611,6 +11634,29 @@ class Passivbot:
             if state.get("key") == recovery_key
             else 1
         )
+        candidates = list(anchored_candidates)
+        if missing_anchor_cohorts:
+            try:
+                history_now_ms = int(self.get_exchange_time())
+            except Exception:
+                history_now_ms = now_ms
+            if age_limit is None:
+                candidates.append(0)
+            else:
+                base_window_ms = max(
+                    24 * 60 * ONE_MIN_MS,
+                    history_now_ms - int(age_limit),
+                )
+                widened_window_ms = base_window_ms * (2**retry_count)
+                candidates.append(
+                    max(0, history_now_ms - widened_window_ms)
+                )
+        if not candidates:
+            return None
+        start_ms = min(candidates)
+        # `age_limit` bounds PnL accounting, not current-position
+        # reconciliation. Timestamp-free positions progressively widen beyond
+        # that window; timestamped positions start before their opening anchor.
         delay_ms = min(
             60 * ONE_MIN_MS,
             5 * ONE_MIN_MS * (2 ** min(retry_count - 1, 4)),
@@ -11620,6 +11666,7 @@ class Passivbot:
             "retry_count": retry_count,
             "last_attempt_ms": now_ms,
             "next_retry_ms": now_ms + delay_ms,
+            "start_ms": start_ms,
         }
         logging.warning(
             "[fills] widening refresh for unresolved position/fill confirmation | "
@@ -14539,6 +14586,9 @@ class Passivbot:
                     "short": {"size": 0.0, "price": 0.0},
                 }
             normalized_position = {"size": psize, "price": pprice}
+            open_ts = self._position_open_timestamp_from_row(elm)
+            if open_ts is not None:
+                normalized_position["openTime"] = open_ts
             anchor_ts = self._position_anchor_timestamp_from_row(elm)
             if anchor_ts is not None:
                 normalized_position["timestamp"] = anchor_ts
