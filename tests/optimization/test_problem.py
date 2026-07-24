@@ -68,6 +68,19 @@ class FakeAsyncPool:
         return FakeAsyncResult(fn(*args))
 
 
+class NeverReadyAsyncResult:
+    def ready(self):
+        return False
+
+
+class DeadWorkerPool:
+    def __init__(self):
+        self._pool = [type("DeadWorker", (), {"pid": 123, "exitcode": -9})()]
+
+    def apply_async(self, fn, args=()):
+        return NeverReadyAsyncResult()
+
+
 class PickleCheckingPool(FakeAsyncPool):
     def apply_async(self, fn, args=()):
         ForkingPickler.dumps((fn, args))
@@ -232,3 +245,51 @@ def test_async_recording_runner_uses_picklable_worker_target():
     assert len(results) == 1
     assert results[0]["F"].tolist() == [-1.5, 0.2]
     assert results[0]["G"].tolist() == [0.3]
+
+
+def test_async_recording_runner_surfaces_base_exception_from_worker():
+    class WorkerPanic(BaseException):
+        pass
+
+    class FailingEvaluator:
+        limit_checks = []
+
+        def evaluate(self, vector, overrides_list):
+            raise WorkerPanic("unexpected rust panic")
+
+    runner = PymooAsyncRecordingRunner(
+        evaluator=FailingEvaluator(),
+        has_constraints=False,
+        n_obj=1,
+        pool=FakeAsyncPool(),
+        recorder=MagicMock(),
+        template={"optimize": {"backend": "pymoo"}},
+        build_config_fn=MagicMock(),
+        overrides_fn=object(),
+    )
+
+    with np.testing.assert_raises_regex(
+        RuntimeError,
+        "batch index 0: WorkerPanic: unexpected rust panic",
+    ):
+        runner(object(), [np.asarray([0.25])])
+
+
+def test_async_recording_runner_fails_when_pool_worker_exits():
+    runner = PymooAsyncRecordingRunner(
+        evaluator=SingleObjectiveEvaluator(),
+        has_constraints=False,
+        n_obj=1,
+        pool=DeadWorkerPool(),
+        recorder=MagicMock(),
+        template={"optimize": {"backend": "pymoo"}},
+        build_config_fn=MagicMock(),
+        overrides_fn=object(),
+        poll_interval_seconds=0.0,
+    )
+
+    with np.testing.assert_raises_regex(
+        RuntimeError,
+        "pymoo worker exited.*pid=123 exitcode=-9",
+    ):
+        runner(object(), [np.asarray([0.25])])
