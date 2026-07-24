@@ -4,6 +4,12 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Canonical live-event payloads now make a bounded JSON-compatible copy at construction time,
+  revalidate that copy at persistence boundaries, redact sensitive keys before retention, and
+  record aggregate truncation metadata only when a limit applies. Event identity, routing, monitor
+  envelope structure, and trading behavior are unchanged; legacy direct monitor history, order,
+  and raw-fill storage remain outside this payload boundary.
+
 - Event-bus degradation diagnostics now retain bounded exception types and canonical dropped-event
   labels only. Sink isolation, queue behavior, counters for registered events, timing, return
   values, event routing, and trading behavior are unchanged.

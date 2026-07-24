@@ -10,6 +10,30 @@ Event emission and sink failures are observability-only unless a feature contrac
 requires durable publication. Diagnostic producers must not mutate order lists, execution results,
 eligibility, replay order, or runtime decisions.
 
+## Canonical Payload Budget
+
+Each `LiveEvent` constructor makes a non-mutating, JSON-compatible bounded copy of its canonical
+`data` mapping before the event reaches any sink. Under-limit data is preserved apart from existing
+sensitive-key redaction. The copy has a maximum nesting depth of six, 64 items per list, 128 keys
+per mapping, 256 inspected mapping entries, 512 characters per string, 128 characters per key,
+4,096 traversed nodes, and 32 KiB of serialized `data` including metadata. Strings retain their
+prefix with a stable truncation suffix; lists retain prefixes without marker objects; excess keys
+and items are omitted.
+
+Sensitive keys redact before their values are retained. Cycles, over-depth values, unsupported
+values, and node-limit values become stable classification strings; arbitrary object rendering is
+not retained. When any boundary changes data, the reserved root `_live_event_budget` object records
+only versioned aggregate counters. A caller cannot supply or override that object. The metadata
+contains no source paths, payload fragments, or other caller values.
+
+The same bounded `data` appears in `to_dict()` and the monitor event envelope. This construction-time
+budget is revalidated by serialization, monitor projection, context replacement, and pipeline
+emission so post-construction caller mutation cannot bypass redaction or size limits. Revalidation
+preserves existing aggregate budget metadata without double-counting it. The boundary is
+diagnostic-only: it does not alter event identity, schema fields, routes, sinks, caller returns, or
+trading behavior. It applies only to canonical `LiveEvent.data`; direct legacy `MonitorPublisher`
+history, order, and raw-fill storage contracts remain unchanged.
+
 ## Balance Composition Diagnostics
 
 `balance.changed` may carry an optional `balance_composition` object from the

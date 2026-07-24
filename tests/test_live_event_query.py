@@ -6,6 +6,12 @@ import os
 
 import pytest
 
+from live.event_bus import (
+    EventTypes,
+    LIVE_EVENT_BUDGET_METADATA_KEY,
+    LIVE_EVENT_MAX_LIST_ITEMS,
+    LiveEvent,
+)
 from live.event_file_rows import event_file_rows
 from live.event_query import (
     build_event_report,
@@ -901,6 +907,43 @@ def test_event_query_filters_by_debug_profile(tmp_path):
 def test_event_query_rejects_malformed_data_eq_filter(tmp_path):
     with pytest.raises(ValueError, match="key=value"):
         build_event_report(tmp_path, data_eq="missing_equals")
+
+
+def test_event_query_includes_budgeted_data_without_affecting_data_eq_filters(tmp_path):
+    event = LiveEvent(
+        EventTypes.PLANNING_UNAVAILABLE,
+        data={
+            "availability": "missing_candles",
+            "samples": list(range(LIVE_EVENT_MAX_LIST_ITEMS + 1)),
+        },
+    )
+    event_type, tags, payload = event.to_monitor_event()
+    events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            {
+                "exchange": "binance",
+                "user": "binance_01",
+                "kind": event_type,
+                "tags": list(tags),
+                "payload": payload,
+                "seq": 1,
+                "ts": 1000,
+            }
+        ],
+    )
+
+    report = build_event_report(
+        tmp_path / "monitor",
+        data_eq="availability=missing_candles",
+        include_data=True,
+    )
+
+    assert report["query"]["matched_events"] == 1
+    data = report["query"]["events"][0]["data"]
+    assert data["availability"] == "missing_candles"
+    assert data[LIVE_EVENT_BUDGET_METADATA_KEY]["omitted_items"] == 1
 
 
 def test_event_query_filters_by_remaining_event_ids(tmp_path):
