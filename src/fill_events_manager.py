@@ -1806,8 +1806,18 @@ class FillEventCache:
                 ) from exc
             raise
 
-    def update_metadata_from_events(self, events: Sequence[FillEvent]) -> None:
-        """Update metadata timestamps based on events."""
+    def update_metadata_from_events(
+        self,
+        events: Sequence[FillEvent],
+        *,
+        mark_refreshed: bool = True,
+    ) -> None:
+        """Update cached event bounds and optionally record a remote refresh.
+
+        Loading and normalizing local cache files is not an exchange refresh.
+        Callers doing local-only maintenance must leave ``last_refresh_ms``
+        unchanged so the next incremental fetch still covers bot downtime.
+        """
         if not events:
             return
 
@@ -1824,7 +1834,10 @@ class FillEventCache:
         if newest > current_newest:
             metadata["newest_event_ts"] = newest
 
-        metadata["last_refresh_ms"] = int(datetime.now(tz=timezone.utc).timestamp() * 1000)
+        if mark_refreshed:
+            metadata["last_refresh_ms"] = int(
+                datetime.now(tz=timezone.utc).timestamp() * 1000
+            )
         metadata["pnl_contract"] = PNL_CONTRACT_CURRENT
         self.save_metadata(metadata)
 
@@ -3474,7 +3487,9 @@ class FillEventsManager:
                 if normalized_days:
                     self.cache.save_days(self._events_for_days(self._events, normalized_days))
                 if synthesized_days or normalized_days:
-                    self.cache.update_metadata_from_events(self._events)
+                    self.cache.update_metadata_from_events(
+                        self._events, mark_refreshed=False
+                    )
 
             logger.debug(
                 "[fills] ensure_loaded: %d cached events (dropped %d without raw)",
@@ -4112,7 +4127,9 @@ class FillEventsManager:
         legacy_contract = metadata_legacy or record_legacy
         report["legacy_contract"] = legacy_contract
         if metadata_legacy and not record_legacy and auto_repair:
-            self.cache.update_metadata_from_events(self._events)
+            self.cache.update_metadata_from_events(
+                self._events, mark_refreshed=False
+            )
             report["repaired"] = True
             report["anomaly_events_after"] = 0
             report["anomaly_examples_after"] = []
@@ -4188,7 +4205,9 @@ class FillEventsManager:
         report["anomaly_examples"] = anomalies[:5]
         if not anomalies or not auto_repair:
             if legacy_contract and auto_repair and not record_legacy:
-                self.cache.update_metadata_from_events(self._events)
+                self.cache.update_metadata_from_events(
+                    self._events, mark_refreshed=False
+                )
                 report["repaired"] = True
                 report["anomaly_events_after"] = 0
                 report["anomaly_examples_after"] = []
@@ -4248,7 +4267,9 @@ class FillEventsManager:
         apply_hyperliquid_raw_psize_overrides(payload)
         self._events = [FillEvent.from_dict(ev) for ev in payload]
         self.cache.save(self._events)
-        self.cache.update_metadata_from_events(self._events)
+        self.cache.update_metadata_from_events(
+            self._events, mark_refreshed=False
+        )
 
         remaining = self._scan_bybit_qty_inflation(self._events)
         report["anomaly_events_after"] = len(remaining)
@@ -4394,7 +4415,9 @@ class FillEventsManager:
         compute_psize_pprice(repaired_payload)
         self._events = [FillEvent.from_dict(ev) for ev in repaired_payload]
         self.cache.save(self._events)
-        self.cache.update_metadata_from_events(self._events)
+        self.cache.update_metadata_from_events(
+            self._events, mark_refreshed=False
+        )
         report["backup_path"] = backup_path
         report["degraded_events_after"] = degraded_count
         report["anomaly_events_after"] = degraded_count

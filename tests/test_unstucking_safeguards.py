@@ -844,6 +844,7 @@ class _DummyFillEvent:
         price: float = 100.0,
         client_order_id: str = "",
         source_ids: list[str] | None = None,
+        c_mult: float | None = None,
     ):
         self.symbol = symbol
         self.position_side = position_side
@@ -859,6 +860,14 @@ class _DummyFillEvent:
             self.psize = psize
         if pprice is not None:
             self.pprice = pprice
+        if side is not None:
+            self.side = side
+        if qty is not None:
+            self.qty = qty
+        if price is not None:
+            self.price = price
+        if c_mult is not None:
+            self.c_mult = c_mult
 
 
 class _DummyPnlsManager:
@@ -1536,10 +1545,16 @@ async def test_fill_prefetch_before_position_delta_waits_for_post_snapshot_refre
         "failed_predicates"
     ] == ["post_snapshot_fill_refresh_pending"]
 
+    bot._trailing_fill_history_recovery_state = {
+        "key": (((symbol, "long"),), 120_000),
+        "retry_count": 3,
+        "next_retry_ms": 1_800_000_000_000,
+    }
     bot._trailing_fill_fetch_generation = 1
     await bot.update_trailing_data()
 
     assert bot._trailing_pending_fill_confirmations == {}
+    assert bot._trailing_fill_history_recovery_state == {}
     assert bot._orchestrator_trailing_unavailable_symbols == set()
     assert bot.trailing_prices[symbol]["long"]["max_since_open"] == pytest.approx(
         103.0
@@ -1644,6 +1659,30 @@ def test_restart_without_update_timestamp_requires_matching_fill_after_state():
         (symbol, "long"): (1.0, 101.0)
     }
     assert "fills" in bot._authoritative_pending_confirmations
+
+
+def test_full_opening_fill_matches_position_despite_truncated_cache_psize():
+    cfg = _dummy_config()
+    bot = _make_dummy_bot(cfg)
+    symbol = _set_basic_state(bot)
+    anchor = {
+        "psize": 5.01,
+        "pprice": 63.8149,
+        "side": "buy",
+        "qty": 1.1,
+        "price": 58.717,
+        "c_mult": 1.0,
+    }
+
+    assert bot._fill_anchor_matches_position_state(
+        symbol, "long", (1.1, 58.717), anchor
+    )
+    assert not bot._fill_anchor_matches_position_state(
+        symbol, "long", (1.2, 58.717), anchor
+    )
+    assert not bot._fill_anchor_matches_position_state(
+        symbol, "short", (1.1, 58.717), anchor
+    )
 
 
 @pytest.mark.asyncio
