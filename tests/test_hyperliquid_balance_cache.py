@@ -145,10 +145,10 @@ async def test_hyperliquid_ws_order_without_reduce_only_requests_refresh_without
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("side", "position_side", "reduce_only"),
+    ("side", "raw_side", "position_side", "reduce_only"),
     [
-        ("buy", "long", False),
-        ("sell", "long", True),
+        ("buy", "B", "long", False),
+        ("sell", "A", "long", True),
     ],
 )
 async def test_hyperliquid_ws_order_recovers_semantics_from_exact_acknowledged_id(
@@ -156,6 +156,7 @@ async def test_hyperliquid_ws_order_recovers_semantics_from_exact_acknowledged_i
     monkeypatch,
     caplog,
     side,
+    raw_side,
     position_side,
     reduce_only,
 ):
@@ -198,7 +199,7 @@ async def test_hyperliquid_ws_order_recovers_semantics_from_exact_acknowledged_i
                 "symbol": "BTC/USDC:USDC",
                 "side": side,
                 "amount": 0.01,
-                "info": {"oid": 123, "side": "B", "sz": "0.01"},
+                "info": {"oid": 123, "side": raw_side, "sz": "0.01"},
             }
         ]
 
@@ -262,6 +263,16 @@ def test_hyperliquid_ws_order_rejects_ambiguous_acknowledged_id(stubbed_modules)
                     "side": "B",
                     "sz": "0.01",
                     "reduceOnly": True,
+                },
+            },
+        ),
+        (
+            {},
+            {
+                "info": {
+                    "oid": 123,
+                    "side": "A",
+                    "sz": "0.01",
                 },
             },
         ),

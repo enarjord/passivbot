@@ -813,6 +813,18 @@ class HyperliquidBot(CCXTBot):
             return None
         info = order.get("info")
         raw_info = info if isinstance(info, dict) else {}
+        raw_side_value = raw_info.get("side")
+        if raw_side_value not in (None, ""):
+            raw_side = {
+                "a": "sell",
+                "ask": "sell",
+                "b": "buy",
+                "bid": "buy",
+                "buy": "buy",
+                "sell": "sell",
+            }.get(str(raw_side_value).strip().lower())
+            if raw_side is None or raw_side != side:
+                return None
         explicit_position_sides = [
             value
             for value in (
