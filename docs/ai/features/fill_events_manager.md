@@ -27,10 +27,9 @@
    offline.
 9. A position whose latest fill identity or reconstructed after-state does not
    match the authoritative exchange position remains nontradable. Live orchestration
-   retries from the position/fill anchor with bounded in-memory backoff; it may accept
-   an exact full-opening fill whose direction, quantity, and price independently match
-   the whole exchange position even when an older truncated cache polluted the fill's
-   reconstructed `psize`/`pprice`.
+   retries from the position/fill anchor with bounded in-memory backoff. Direction,
+   quantity, and price alone do not prove a flat-to-position transition when truncated
+   history has polluted reconstructed `psize`/`pprice`.
 
 ## Runtime Provenance
 

@@ -8699,7 +8699,13 @@ class Passivbot:
         self._trailing_pending_position_states = pending_position_states
         self._trailing_position_snapshot_fill_epochs = associated_fill_epochs
         self._trailing_fill_confirmation_diagnostics = confirmation_diagnostics
-        if not confirmation_diagnostics:
+        if confirmation_diagnostics:
+            # A successful fetch may have cleared the account-wide barrier even
+            # though this position still lacks matching fill evidence. Keep
+            # requesting post-snapshot fill refreshes so timestamp-free recovery
+            # can advance through its progressively wider windows.
+            self._request_authoritative_confirmation({"fills"})
+        else:
             self._trailing_fill_history_recovery_state = {}
 
         # Build concurrent fetches per symbol that has position changes

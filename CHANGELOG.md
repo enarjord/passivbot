@@ -16,7 +16,7 @@ All notable user-facing changes will be documented in this file.
   exchange state; price and quantity alone cannot prove a flat-to-position transition. Id-less
   fills use stable content-based identities rather than history-list indices. Position snapshots
   preserve distinct exchange opening times, while timestamp-free positions retry with
-  progressively wider history windows.
+  progressively wider history windows and retain the fills confirmation barrier between attempts.
 
 - Bybit closed-PnL refreshes now cover requested history with explicit,
   contiguous sub-seven-day windows and cursor pagination inside each window.

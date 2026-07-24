@@ -1907,6 +1907,9 @@ async def test_runtime_delta_keeps_mismatched_after_state_pending():
     bot.cm.get_candles = complete_matching_epoch_candles
     bot._trailing_fill_refresh_started_generation = 3
     bot._trailing_fill_fetch_generation = 3
+    # Simulate the account-wide barrier clearing the successful fetch before
+    # trailing validation observes that the fill evidence is still mismatched.
+    bot._authoritative_pending_confirmations = {}
     await bot.update_trailing_data()
 
     assert bot._trailing_pending_fill_confirmations == {
@@ -1918,6 +1921,7 @@ async def test_runtime_delta_keeps_mismatched_after_state_pending():
     assert bot._orchestrator_trailing_unavailable_reasons == {
         symbol: ["position_fill_confirmation_pending"]
     }
+    assert "fills" in bot._authoritative_pending_confirmations
 
 
 @pytest.mark.asyncio
