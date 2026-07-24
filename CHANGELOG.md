@@ -6,7 +6,8 @@ All notable user-facing changes will be documented in this file.
 
 - Reduced Hyperliquid account-state refresh churn by recovering websocket order-update semantics
   from Passivbot's own acknowledged order record when the exchange order id matches exactly.
-  Ambiguous, contradictory, and foreign updates still fail closed and request authoritative state.
+  Existing websocket position-side and reduce-only metadata must agree with that record; ambiguous,
+  contradictory, and foreign updates still fail closed and request authoritative state.
 
 - Live candle orchestration now reads bounded cache-only native 1h EMA carry-forward from the 1h
   index, requires a complete native window, isolates carried values from the active EMA cache, and

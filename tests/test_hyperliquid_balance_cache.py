@@ -248,8 +248,29 @@ def test_hyperliquid_ws_order_rejects_ambiguous_acknowledged_id(stubbed_modules)
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("record_overrides", "order_overrides"),
+    [
+        ({"side": "sell", "position_side": "short"}, {}),
+        ({}, {"position_side": "short"}),
+        (
+            {},
+            {
+                "position_side": "long",
+                "info": {
+                    "oid": 123,
+                    "side": "B",
+                    "sz": "0.01",
+                    "reduceOnly": True,
+                },
+            },
+        ),
+    ],
+)
 async def test_hyperliquid_ws_order_rejects_contradictory_acknowledged_semantics(
     stubbed_modules,
+    record_overrides,
+    order_overrides,
 ):
     HyperliquidBot = importlib.import_module("exchanges.hyperliquid").HyperliquidBot
     bot = HyperliquidBot.__new__(HyperliquidBot)
@@ -258,17 +279,17 @@ async def test_hyperliquid_ws_order_rejects_contradictory_acknowledged_semantics
     bot._health_rate_limits = 0
     bot._log_symbols = lambda symbols, limit=8: ",".join(symbols[:limit])
     bot._hl_note_ws_symbols_for_dex_scope = lambda _orders: None
-    bot.orders_emitted_to_exchange = [
-        {
-            "timestamp": 1,
-            "exchange_id": "123",
-            "side": "sell",
-            "position_side": "short",
-            "reduce_only": False,
-            "pb_type": "entry_initial_normal_short",
-            "status": "acknowledged",
-        }
-    ]
+    record = {
+        "timestamp": 1,
+        "exchange_id": "123",
+        "side": "buy",
+        "position_side": "long",
+        "reduce_only": False,
+        "pb_type": "entry_initial_normal_long",
+        "status": "acknowledged",
+    }
+    record.update(record_overrides)
+    bot.orders_emitted_to_exchange = [record]
     handled = []
     dirty = []
     bot.handle_order_update = lambda orders: handled.append(orders)
@@ -276,15 +297,15 @@ async def test_hyperliquid_ws_order_rejects_contradictory_acknowledged_semantics
 
     async def watch_orders():
         bot.stop_websocket = True
-        return [
-            {
-                "id": "123",
-                "symbol": "BTC/USDC:USDC",
-                "side": "buy",
-                "amount": 0.01,
-                "info": {"oid": 123, "side": "B", "sz": "0.01"},
-            }
-        ]
+        order = {
+            "id": "123",
+            "symbol": "BTC/USDC:USDC",
+            "side": "buy",
+            "amount": 0.01,
+            "info": {"oid": 123, "side": "B", "sz": "0.01"},
+        }
+        order.update(order_overrides)
+        return [order]
 
     bot.ccp = types.SimpleNamespace(watch_orders=watch_orders)
 

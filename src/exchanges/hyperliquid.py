@@ -811,6 +811,39 @@ class HyperliquidBot(CCXTBot):
         )
         if action_side != position_side:
             return None
+        info = order.get("info")
+        raw_info = info if isinstance(info, dict) else {}
+        explicit_position_sides = [
+            value
+            for value in (
+                order.get("position_side"),
+                raw_info.get("positionSide"),
+            )
+            if value not in (None, "")
+        ]
+        if any(
+            str(value).lower() != position_side for value in explicit_position_sides
+        ):
+            return None
+        durable_position_side = self._durable_order_position_side(order)
+        if (
+            durable_position_side in {"long", "short"}
+            and durable_position_side != position_side
+        ):
+            return None
+        authoritative_reduce_source = raw_info if raw_info else order
+        reduce_only_keys = ("reduce_only", "reduceOnly", "is_reduce_only")
+        has_explicit_reduce_only = any(
+            key in authoritative_reduce_source for key in reduce_only_keys
+        )
+        websocket_reduce_only = self._strict_order_reduce_only_response(order)
+        if has_explicit_reduce_only and not isinstance(websocket_reduce_only, bool):
+            return None
+        if (
+            isinstance(websocket_reduce_only, bool)
+            and websocket_reduce_only != reduce_only
+        ):
+            return None
         return position_side, reduce_only
 
     def determine_pos_side(self, order):
