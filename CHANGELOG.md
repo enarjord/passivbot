@@ -4,6 +4,10 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Failed Rust-orchestrator return events now retain bounded exception types instead of persisted
+  exception text. Existing timing and correlation metadata, event delivery, orchestration, and
+  trading behavior are unchanged.
+
 - Executor churn-admission and fresh-entry eligibility diagnostics now retain bounded exception
   types only. Existing admission/defer reasons, batch limits, fail-closed behavior, trace handling,
   event delivery isolation, scheduling, and trading behavior are unchanged.
