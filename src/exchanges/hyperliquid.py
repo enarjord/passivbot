@@ -820,6 +820,7 @@ class HyperliquidBot(CCXTBot):
             "client_oid",
             "clientOid",
             "clOrdId",
+            "cloid",
         )
         client_ids = {
             self._canonical_passivbot_custom_id(str(source.get(key)))
@@ -860,6 +861,33 @@ class HyperliquidBot(CCXTBot):
                 "sell": "sell",
             }.get(str(raw_side_value).strip().lower())
             if raw_side is None or raw_side != side:
+                return None
+        raw_status_value = raw_info.get("status")
+        if raw_status_value not in (None, ""):
+            normalized_status = {
+                "open": "open",
+                "opened": "open",
+                "resting": "open",
+                "filled": "closed",
+                "closed": "closed",
+                "canceled": "canceled",
+                "cancelled": "canceled",
+                "rejected": "rejected",
+                "expired": "expired",
+            }.get(str(raw_status_value).strip().lower())
+            top_status = {
+                "open": "open",
+                "opened": "open",
+                "closed": "closed",
+                "filled": "closed",
+                "canceled": "canceled",
+                "cancelled": "canceled",
+                "rejected": "rejected",
+                "expired": "expired",
+            }.get(str(order.get("status") or "").strip().lower())
+            if normalized_status is None or (
+                top_status is not None and normalized_status != top_status
+            ):
                 return None
         explicit_position_sides = [
             value

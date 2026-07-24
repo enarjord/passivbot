@@ -256,6 +256,14 @@ def test_hyperliquid_ws_order_rejects_ambiguous_acknowledged_id(stubbed_modules)
             "clientOrderId": "entry_initial_normal_long_different",
             "info": {"oid": 123, "side": "B", "sz": "0.01"},
         },
+        {
+            "info": {
+                "oid": 123,
+                "cloid": "entry_initial_normal_long_different",
+                "side": "B",
+                "sz": "0.01",
+            }
+        },
     ],
 )
 def test_hyperliquid_ws_order_rejects_conflicting_acknowledged_identity(
@@ -371,6 +379,18 @@ async def test_hyperliquid_recovered_partial_fill_forces_authoritative_refresh(
                 "info": {
                     "oid": 123,
                     "side": "A",
+                    "sz": "0.01",
+                },
+            },
+        ),
+        (
+            {},
+            {
+                "status": "open",
+                "info": {
+                    "oid": 123,
+                    "side": "B",
+                    "status": "filled",
                     "sz": "0.01",
                 },
             },
