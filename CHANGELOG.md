@@ -23,6 +23,10 @@ All notable user-facing changes will be documented in this file.
   is normalized to the string required by CCXT Pro, preventing private order
   WebSocket reconnect loops after otherwise successful startup.
 
+- Scope cancel-first create deferral to the symbol and position side of stale-order cancellations
+  in hedge mode, or the whole symbol in one-way mode, while retaining conservative account-wide
+  deferral for malformed unscoped cancellations.
+
 - Monitor `state.latest.json` snapshots now refresh from a serialized background
   maintainer at least every five seconds, independently of successful planning
   cycles. Prolonged authoritative-data or planning degradation therefore remains
