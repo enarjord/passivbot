@@ -11,10 +11,44 @@ executing returned orders, and explaining every degraded, deferred, skipped, or
 executed decision. The logging overhaul should make that explanation cheap to
 collect, bounded on a small VPS, and reliable enough for post-incident debugging.
 
+## Scope And Stopping Rule
+
+This plan owns the shared live-event contract, routing, sinks, retention,
+redaction, correlation, console projection, and migration of high-value
+decision/action logs. It is not an umbrella for every capability that consumes
+events.
+
+In scope:
+
+- correctness, boundedness, and failure isolation of the canonical event
+  pipeline;
+- one structured owner for high-value lifecycle, readiness, planning,
+  execution, fill, position, balance, and safety evidence;
+- removal of duplicate or unsafe human/structured output;
+- the minimal query and validation needed to prove the event contract across
+  rotation and restart;
+- consolidation that reduces duplicated event-reader or projection code.
+
+Out of scope unless a concrete event-contract defect blocks the work:
+
+- trading policy, reconciliation, readiness enforcement, and risk behavior;
+- restart/deployment execution and process supervision;
+- HSL, candle, fill, startup, shutdown, or connector performance work;
+- general incident, performance, configuration, repository, dashboard, export,
+  and operator-convenience tooling.
+
+The overhaul ends when the finite migration and correctness criteria in
+`live_logging_overhaul_current_status.md` are satisfied. It does not remain
+open because another event type, report field, debug profile, selector, or
+operational edge case could be useful. New work requires observed evidence,
+must identify which completion criterion is unmet, and should prefer deletion,
+consolidation, demotion, or aggregation before adding another surface.
+
 ## Current State
 
-The problem is fragmentation, not absence. The branch already has several useful
-observability islands:
+This section records the baseline that motivated the overhaul. Consult
+`live_logging_overhaul_current_status.md` for the implemented state and resume
+instructions. At the baseline, the problem was fragmentation, not absence:
 
 1. Standard Python logging from `src/logging_setup.py`.
    Console/file logs are operator-readable and already use familiar text tags
@@ -403,11 +437,13 @@ Cache load/flush events should explain:
 This is especially important for candle and fill-history issues, where runtime
 behavior often depends on local cache coverage.
 
-## Operational Restart Goals
+## Adjacent Operational Restart Goals
 
 These are adjacent behavior/performance goals discovered while smoke-testing the
 logging work. They should be implemented as reviewed slices with tests and live
-smoke, not hidden inside observability-only PRs.
+smoke, not hidden inside observability-only PRs or counted toward logging
+completion. Their implementation belongs in the live-operations backlog or a
+dedicated handoff.
 
 1. Shutdown contract.
    Ctrl-C or process stop should set one shutdown intent that long-running live
@@ -430,6 +466,11 @@ exit or restart was slow because of exchange I/O, cache coverage, HSL replay,
 lock contention, or intentional safety policy.
 
 ## Migration Plan
+
+These phases define a finite migration, not a standing invitation to instrument
+every call site. A phase is complete enough when its exit criteria and the
+current-status completion criteria are met; low-value residual producers may
+remain intentionally unmigrated.
 
 ### Phase 0: Contract And Routing Table
 

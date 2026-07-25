@@ -1,8 +1,9 @@
 # Live Logging Overhaul PR Loop Workflow
 
-This is the operating workflow for the logging/observability implementation
-loop. Read `live_logging_overhaul_current_status.md` first. Use
-`live_logging_overhaul_progress.md` only for historical evidence.
+This workflow applies only when the resume procedure in
+`live_logging_overhaul_current_status.md` has produced a finite, evidence-backed
+logging gap list. Use `live_logging_overhaul_progress.md` only for historical
+evidence.
 
 Architecture and backlog references:
 
@@ -14,9 +15,9 @@ Architecture and backlog references:
 ## Goal
 
 Deliver bounded, correlated, operator-useful live observability through
-reviewable PRs, current-head review gates, and evidence-based VPS5 validation,
-without moving trading decisions out of Rust or making observability a trading
-control plane.
+reviewable PRs, current-head review gates, and evidence-based validation on an
+approved representative runtime, without moving trading decisions out of Rust
+or making observability a trading control plane.
 
 ## Tiered Ownership
 
@@ -70,14 +71,15 @@ before push or merge.
 
 ## Current State And History
 
-- `live_logging_overhaul_current_status.md` is the compact operational source
-  for the active PR, review gate, deployed SHA, VPS state, and next action.
-- `live_logging_overhaul_progress.md` is append-only historical evidence. Do not
-  load or rewrite the entire ledger during routine polls.
-- Update the compact status whenever the active PR, head SHA, gate, deploy
-  state, or next action changes.
-- Append one compact historical entry after merge/deploy. Archive older ledger
-  sections in a separate docs-only slice when size materially impairs use.
+- `live_logging_overhaul_current_status.md` is the compact scope, completion,
+  and resume source. It does not track every active PR, deployed SHA, or VPS
+  action.
+- `live_logging_overhaul_progress.md` is historical evidence. Do not load or
+  rewrite the entire ledger during routine work.
+- Update compact status only when scope, completion criteria, or the finite
+  resume gap list changes.
+- Add historical progress only for a material logging milestone or design
+  decision, not every PR, deploy, or smoke.
 
 ## PR Scope
 
@@ -144,12 +146,13 @@ State:
 ## Implementation Loop
 
 1. Read the compact current-status file and fetch current `origin/master`.
-2. Reconcile the active PR/head/gate from GitHub. Read historical progress only
-   when evidence is needed.
-3. Select one review-worthy slice. Route routine scoped work to Terra when
-   available; keep high-risk work with Sol.
+2. Confirm that an observed gap maps to an unmet logging completion criterion.
+   Read historical progress only when evidence is needed.
+3. Select one review-worthy slice, preferring deletion, consolidation,
+   aggregation, or demotion before a new producer or tool. Route routine scoped
+   work to Terra when available; keep high-risk work with Sol.
 4. Create a clean branch/worktree. Preserve unrelated tracked and untracked
-   artifacts in the main checkout and on VPS5.
+   artifacts in the main checkout and on any approved runtime host.
 5. Implement and validate proportionally. Use real fake-live, backtest, or
    optimize smokes when touched behavior warrants them.
 6. Finish the selected slice and author validation, then open a regular
@@ -166,8 +169,8 @@ State:
     signals/restarts; read-only preflight and output parsing may be delegated.
 12. Run immediate and settled bounded smoke checks and leave expected bots
     running.
-13. Update compact status, then append concise merge/deploy evidence to the
-    historical ledger.
+13. Update compact status only if scope/completion changed. Append historical
+    evidence only for a material milestone.
 
 ## VPS Policy
 
