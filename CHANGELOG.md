@@ -4,6 +4,10 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- WEEX REST and private WebSocket clients now use IPv4 transport so API keys
+  bound to the host's public IPv4 address do not fail with `-1056 ILLEGAL_IP`
+  when a dual-stack host would otherwise select IPv6.
+
 - Documented Python 3.12 and 3.14 support, explicitly excluding Python 3.13 until its dependency
   set is supported and bounding package metadata to those validated minor versions, and fixed
   reentrant candle fetch-lock
