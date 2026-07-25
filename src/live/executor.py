@@ -111,13 +111,21 @@ def _order_is_protective_create(order: dict) -> bool:
     return _order_is_reduce_only(order)
 
 
-def _cancel_first_scope(order: dict) -> tuple[str, str] | None:
-    """Return the position scope whose stale actual order is being replaced."""
+def _cancel_first_scope(bot, order: dict) -> tuple[str, str] | None:
+    """Return the independent exchange scope affected by a stale actual order."""
     if not isinstance(order, dict):
         return None
     symbol = str(order.get("symbol") or "")
+    if not symbol:
+        return None
+    effective_hedge_mode = bool(
+        getattr(bot, "_config_hedge_mode", False)
+        and getattr(bot, "hedge_mode", False)
+    )
+    if not effective_hedge_mode:
+        return symbol, ""
     position_side = str(order.get("position_side") or "").lower()
-    if not symbol or position_side not in {"long", "short"}:
+    if position_side not in {"long", "short"}:
         return None
     return symbol, position_side
 
@@ -787,12 +795,12 @@ async def execute_order_plan(
             order_wave["cancel_ms"] = int(max(0, _utc_ms() - cancel_started_ms))
             order_wave["cancel_posted"] = len(res or [])
     if cancel_first_barrier:
-        cancel_scopes = {_cancel_first_scope(order) for order in to_cancel}
+        cancel_scopes = {_cancel_first_scope(bot, order) for order in to_cancel}
         has_unscoped_cancel = None in cancel_scopes
         cancel_scopes.discard(None)
 
         def must_wait_for_cancel_confirmation(order: dict) -> bool:
-            scope = _cancel_first_scope(order)
+            scope = _cancel_first_scope(bot, order)
             return has_unscoped_cancel or scope is None or scope in cancel_scopes
 
         barrier_deferred = [
@@ -836,7 +844,7 @@ async def execute_order_plan(
                     "cancel_count": len(to_cancel),
                     "cancel_scope_count": len(cancel_scopes),
                     "unscoped_cancel_count": sum(
-                        _cancel_first_scope(order) is None for order in to_cancel
+                        _cancel_first_scope(bot, order) is None for order in to_cancel
                     ),
                     "dedicated_market_panic_bypass_count": sum(
                         _is_dedicated_protective_market_panic(
