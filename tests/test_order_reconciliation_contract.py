@@ -185,7 +185,7 @@ def test_bybit_rejects_noncanonical_position_idx(raw_position_idx):
         (BitgetBot, {}, {"is_uta": False}),
         (HyperliquidBot, {}, {}),
         (GateIOBot, {}, {}),
-        (KucoinBot, {}, {}),
+        (KucoinBot, {}, {"hedge_mode": False}),
         (OKXBot, {"posSide": "net"}, {}),
     ],
 )
@@ -225,7 +225,7 @@ def test_effective_one_way_orders_cover_all_side_close_only_tuples(
         (BitgetBot, {}, {"is_uta": False}),
         (HyperliquidBot, {}, {}),
         (GateIOBot, {}, {}),
-        (KucoinBot, {}, {}),
+        (KucoinBot, {}, {"hedge_mode": False}),
         (OKXBot, {"posSide": "net"}, {}),
     ],
 )

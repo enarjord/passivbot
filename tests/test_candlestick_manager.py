@@ -2746,3 +2746,77 @@ def test_kucoin_between_page_holes_recorded_as_expiring_auto_gaps(tmp_path):
     assert between["reason"] == "auto_detected"
     assert int(between["retry_count"]) < _GAP_MAX_RETRIES
     assert cm._should_retry_gap(between)
+
+
+def test_kucoin_h1_payload_synthesizes_only_internally_bounded_no_trade_buckets(
+    tmp_path,
+):
+    class _Ex:
+        id = "kucoinfutures"
+
+    cm = CandlestickManager(
+        exchange=_Ex(), exchange_name="kucoin", cache_dir=str(tmp_path / "caches")
+    )
+    hour_ms = 60 * ONE_MIN_MS
+    base = (int(time.time() * 1000) // hour_ms) * hour_ms - 10 * hour_ms
+
+    def row(offset, close):
+        ts = base + offset * hour_ms
+        return [ts, close, close + 1.0, close - 1.0, close, 5.0]
+
+    pages = [
+        [
+            row(1, 101.0),
+            row(2, 102.0),
+            row(4, 104.0),
+        ],
+        [
+            row(7, 107.0),
+            row(8, 108.0),
+        ],
+    ]
+    persisted = []
+
+    async def fake_once(
+        symbol,
+        since_ms,
+        limit,
+        end_exclusive_ms=None,
+        timeframe=None,
+        *,
+        tf=None,
+    ):
+        return pages.pop(0) if pages else []
+
+    cm._ccxt_fetch_ohlcv_once = fake_once
+    arr = asyncio.run(
+        cm._fetch_ohlcv_paginated(
+            "MORPHO/USDT:USDT",
+            base,
+            base + 9 * hour_ms,
+            timeframe="1h",
+            on_batch=lambda batch: persisted.append(batch.copy()),
+        )
+    )
+
+    assert list(arr["ts"]) == [
+        base + hour_ms,
+        base + 2 * hour_ms,
+        base + 3 * hour_ms,
+        base + 4 * hour_ms,
+        base + 7 * hour_ms,
+        base + 8 * hour_ms,
+    ]
+    synthetic = arr[arr["ts"] == base + 3 * hour_ms]
+    assert synthetic.shape[0] == 1
+    assert float(synthetic[0]["o"]) == pytest.approx(102.0)
+    assert float(synthetic[0]["h"]) == pytest.approx(102.0)
+    assert float(synthetic[0]["l"]) == pytest.approx(102.0)
+    assert float(synthetic[0]["c"]) == pytest.approx(102.0)
+    assert float(synthetic[0]["bv"]) == pytest.approx(0.0)
+    assert base not in set(arr["ts"])
+    assert base + 5 * hour_ms not in set(arr["ts"])
+    assert base + 6 * hour_ms not in set(arr["ts"])
+    assert len(persisted) == 2
+    assert base + 3 * hour_ms in set(persisted[0]["ts"])
+    assert base + 5 * hour_ms not in set(persisted[1]["ts"])

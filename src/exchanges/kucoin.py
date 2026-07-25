@@ -166,11 +166,16 @@ class KucoinBot(CCXTBot):
         return
 
     def _get_position_side_for_order(self, order: dict) -> str:
-        """KuCoin: require durable open-order metadata, never current position state."""
-        if not bool(
-            getattr(self, "_config_hedge_mode", True)
-            and getattr(self, "hedge_mode", True)
-        ):
+        """KuCoin: normalize against the exchange account mode, not strategy mode.
+
+        The connector keeps the KuCoin account in hedge mode even when
+        ``live.hedge_mode`` disables simultaneous strategy exposure.  KuCoin
+        websocket updates in that account mode carry ``positionSide`` but do
+        not necessarily carry native ``reduceOnly``.  Treating the strategy
+        flag as the exchange account mode therefore makes otherwise valid
+        updates fail one-way attribution.
+        """
+        if not bool(getattr(self, "hedge_mode", True)):
             return self._normalize_one_way_position_side(order)
         explicit = order.get("position_side")
         if explicit is None:

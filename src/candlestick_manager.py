@@ -4362,6 +4362,62 @@ class CandlestickManager:
             last = ts[i]
         return arr[keep]
 
+    def _synthesize_verified_sparse_payload_gaps(
+        self,
+        arr: np.ndarray,
+        *,
+        period_ms: int,
+    ) -> np.ndarray:
+        """Fill KuCoin higher-timeframe no-tick buckets bounded in one payload.
+
+        KuCoin documents that it omits kline buckets with no ticks.  Two real
+        adjacent rows in the same successful response prove that an internal
+        missing bucket is a no-trade interval.  Leading, trailing, and
+        between-page gaps remain unproven and are deliberately not filled.
+
+        The established 1m path records verified gaps and standardizes them
+        later, so this helper is limited to native higher timeframes.
+        """
+        if (
+            not self._record_payload_gaps_as_known
+            or int(period_ms) <= ONE_MIN_MS
+            or not isinstance(arr, np.ndarray)
+            or arr.size < 2
+        ):
+            return arr
+        arr = np.sort(_ensure_dtype(arr), order="ts")
+        rows = []
+        changed = False
+        for idx in range(arr.shape[0] - 1):
+            current = arr[idx]
+            following = arr[idx + 1]
+            rows.append(tuple(current.tolist()))
+            current_ts = int(current["ts"])
+            following_ts = int(following["ts"])
+            if following_ts <= current_ts + int(period_ms):
+                continue
+            previous_close = float(current["c"])
+            for ts in range(
+                current_ts + int(period_ms),
+                following_ts,
+                int(period_ms),
+            ):
+                rows.append(
+                    (
+                        int(ts),
+                        previous_close,
+                        previous_close,
+                        previous_close,
+                        previous_close,
+                        0.0,
+                    )
+                )
+                changed = True
+        rows.append(tuple(arr[-1].tolist()))
+        if not changed:
+            return arr
+        return np.array(rows, dtype=CANDLE_DTYPE)
+
     async def _fetch_ohlcv_paginated(
         self,
         symbol: str,
@@ -4394,6 +4450,8 @@ class CandlestickManager:
         all_rows = []
         pages = 0
         prev_last_ts: Optional[int] = None
+        verified_sparse_synthetic_count = 0
+        verified_sparse_synthetic_pages = 0
         total_span = max(1, end_excl - since_start)
 
         def _partial_rows() -> np.ndarray:
@@ -4443,6 +4501,14 @@ class CandlestickManager:
                         "reaching the requested end"
                     )
                 break
+            raw_arr_size = int(arr.size)
+            arr = self._synthesize_verified_sparse_payload_gaps(
+                arr,
+                period_ms=period_ms,
+            )
+            if int(arr.size) > raw_arr_size:
+                verified_sparse_synthetic_count += int(arr.size) - raw_arr_size
+                verified_sparse_synthetic_pages += 1
             if probe_limit is not None and not self._ccxt_limit_probe_done:
                 # If Bitget returns >200 rows, we can safely use 1000 going forward.
                 if arr.shape[0] > 200:
@@ -4592,6 +4658,16 @@ class CandlestickManager:
                 break
             since = new_since
             prev_last_ts = last_ts
+        if verified_sparse_synthetic_count > 0:
+            self._log(
+                "info",
+                "kucoin_sparse_payload_gaps_synthesized",
+                symbol=symbol,
+                tf=tf_norm,
+                count=verified_sparse_synthetic_count,
+                pages=verified_sparse_synthetic_pages,
+                source="same_successful_payload",
+            )
         self._log(
             "debug",
             "ccxt_fetch_paginated_done",

@@ -90,21 +90,29 @@ Handling:
 
 1. Treat current same-mode success as success (`code=200000`, `data.positionMode=1`).
 2. Let unknown `set_position_mode` failures raise unless a verified KuCoin no-op code is added with a targeted test.
-3. Never infer a resting order's position side from the current position. Require explicit
-   `info.positionSide`/`info.posSide` in hedge mode; in effective one-way mode, derive and verify
-   `position_side` from the authoritative order side plus `reduceOnly` tuple.
+3. The connector keeps the exchange account in hedge mode even when `live.hedge_mode=false`
+   disables simultaneous strategy exposure. Normalize order updates against that actual exchange
+   mode, not the strategy flag.
+4. Never infer a resting order's position side from the current position. Require explicit
+   `info.positionSide`/`info.posSide` in exchange hedge mode; only when the exchange capability is
+   actually one-way may `position_side` be derived and verified from the authoritative order side
+   plus `reduceOnly` tuple.
 
 ### OHLCV limit behavior + sparse-minute markets
 
 Problem:
 
 1. Effective page size is 200 rows.
-2. Illiquid symbols legitimately have missing trade minutes.
+2. KuCoin documents that kline data is omitted for intervals with no ticks, including native
+   higher-timeframe buckets.
 
 Handling:
 
 1. Page with `limit=200`.
 2. Overlap page boundaries by 1 candle to validate inter-page gaps.
+3. For native timeframes above 1m, synthesize a flat zero-volume no-trade bucket only when the gap
+   is bounded by two real candles in the same successful payload. Do not synthesize leading,
+   trailing, failed-fetch, or unproven between-page gaps.
 
 ## Bitget Futures
 
