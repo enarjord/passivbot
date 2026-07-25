@@ -218,8 +218,10 @@ def authoritative_staged_refresh_plan(bot) -> set[str]:
             logging.debug(
                 "[state] staged fills refresh required: risk lookback coverage unproven"
             )
-        elif should_prefetch_trailing_recovery and (
-            bot._schedule_routine_fill_refresh_prefetch(
+        elif (
+            should_prefetch_trailing_recovery
+            and bot._staged_fills_can_prefetch_routine()
+            and bot._schedule_routine_fill_refresh_prefetch(
                 reason="trailing_recovery"
             )
         ):

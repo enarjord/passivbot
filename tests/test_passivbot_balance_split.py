@@ -9009,6 +9009,29 @@ def test_staged_refresh_plan_schedules_trailing_recovery_without_barrier(
     assert bot._authoritative_pending_confirmations == {}
 
 
+def test_staged_refresh_plan_keeps_stale_fills_during_trailing_recovery(
+    monkeypatch,
+):
+    bot = Passivbot.__new__(Passivbot)
+    bot.freshness_ledger = FreshnessLedger(now_ms=0)
+    bot._authoritative_pending_confirmations = {}
+    bot._pnl_history_coverage_ready_for_risk = lambda: True
+    bot._trailing_fill_recovery_prefetch_due = lambda: True
+    scheduled = []
+    bot._schedule_routine_fill_refresh_prefetch = (
+        lambda *, reason: scheduled.append(reason) or True
+    )
+    bot.freshness_ledger.stamp(
+        "fills", ("fills", "stale"), now_ms=120_010, epoch=1
+    )
+
+    monkeypatch.setattr(passivbot_module, "utc_ms", lambda: 360_500)
+    plan = bot._authoritative_staged_refresh_plan()
+
+    assert scheduled == []
+    assert plan == {"balance", "positions", "open_orders", "fills"}
+
+
 def test_staged_refresh_plan_keeps_fills_when_risk_coverage_unproven(monkeypatch):
     bot = Passivbot.__new__(Passivbot)
     bot.freshness_ledger = FreshnessLedger(now_ms=0)

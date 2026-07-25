@@ -2950,6 +2950,36 @@ async def test_bybit_fetcher_merges_pnl_and_batches(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_bybit_trade_fetch_traverses_empty_recent_windows():
+    day_ms = 24 * 60 * 60 * 1000
+    end_ms = 2_000_000_000_000
+    start_ms = end_ms - 14 * day_ms
+    older_trade = {
+        "id": "old-sparse",
+        "timestamp": start_ms + 2 * day_ms,
+        "amount": 0.1,
+        "price": 100.0,
+        "side": "buy",
+        "symbol": "BTC/USDT",
+        "info": {},
+    }
+    api = _FakeBybitAPI(
+        trades_batches=[[], [older_trade], []],
+        positions_batches=[],
+    )
+    fetcher = BybitFetcher(api, max_span_days=6.5)
+
+    trades = await fetcher._fetch_my_trades(start_ms, end_ms)
+
+    assert [trade["id"] for trade in trades] == ["old-sparse"]
+    assert len(api.trade_calls) == 3
+    assert api.trade_calls[1]["endTime"] == end_ms - fetcher._max_span_ms
+    assert api.trade_calls[2]["endTime"] == (
+        end_ms - 2 * fetcher._max_span_ms
+    )
+
+
+@pytest.mark.asyncio
 async def test_bybit_closed_pnl_uses_contiguous_cursor_paginated_windows():
     day_ms = 24 * 60 * 60 * 1000
     end_ms = 2_000_000_000_000

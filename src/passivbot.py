@@ -11595,15 +11595,14 @@ class Passivbot:
         except Exception:
             history_now_ms = now_ms
         day_ms = 24 * 60 * ONE_MIN_MS
-        # Bound recovery to the venue's documented history retention. WEEX
-        # retains at most 365 days; the conservative generic bound matches
-        # Bybit's two-year execution-history retention. Older unresolved
-        # states remain fail-closed.
-        max_window_days = (
-            365
-            if str(getattr(self, "exchange", "")).lower() == "weex"
-            else 730
-        )
+        # Bound recovery to a horizon the connector can actually traverse.
+        # Bybit's sub-seven-day windows fit two years within its 200-request
+        # cap. Classic Bitget and KuCoin need roughly one request per day and
+        # cap pagination at 400 requests, so they (and the conservative
+        # default) stop at one year. Older unresolved states remain
+        # fail-closed.
+        exchange = str(getattr(self, "exchange", "")).lower()
+        max_window_days = 730 if exchange == "bybit" else 365
         max_window_ms = max_window_days * day_ms
         earliest_recovery_ms = max(1, history_now_ms - max_window_ms)
 

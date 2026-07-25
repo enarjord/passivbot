@@ -5270,7 +5270,12 @@ class BybitFetcher(BaseFetcher):
                     len(batch) if batch else 0,
                 )
             if not batch:
-                break
+                if params["endTime"] - start_ms < self._max_span_ms:
+                    break
+                params["endTime"] = max(
+                    start_ms, params["endTime"] - self._max_span_ms
+                )
+                continue
             batch.sort(key=lambda x: x["timestamp"])
             results.extend(batch)
             if len(batch) < self.trade_limit:

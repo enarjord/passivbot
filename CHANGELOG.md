@@ -27,8 +27,11 @@ All notable user-facing changes will be documented in this file.
   progressively wider history windows outside the account-wide execution barrier, so only the
   affected trailing coin and position side remain nontradable between attempts.
   Widening starts only in background recovery after the required recent post-snapshot confirmation,
-  tracks progress per coin and position side, and is capped by venue retention (365 days on WEEX,
-  otherwise a conservative two-year horizon) to avoid unbounded exchange pagination.
+  tracks progress per coin and position side, and is capped by connector pagination capacity
+  (two years on Bybit, otherwise one year) to avoid unbounded exchange pagination. Sparse Bybit
+  trade history now traverses empty recent windows instead of stopping before older fills, while
+  stale fill state remains part of the blocking authoritative refresh rather than being displaced
+  by a background recovery.
 
 - Bybit closed-PnL refreshes now cover requested history with explicit,
   contiguous sub-seven-day windows and cursor pagination inside each window.
