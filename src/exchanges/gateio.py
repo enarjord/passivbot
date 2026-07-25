@@ -1,3 +1,5 @@
+import math
+
 from exchanges.ccxt_bot import CCXTBot
 from passivbot import logging
 
@@ -60,6 +62,23 @@ class GateIOBot(CCXTBot):
         return self._normalize_one_way_position_side(order)
 
     # ═══════════════════ GATEIO-SPECIFIC METHODS ═══════════════════
+
+    def set_market_specific_settings(self):
+        super().set_market_specific_settings()
+        for symbol in self.symbols_requiring_market_sizing():
+            market = self.markets_dict[symbol]
+            raw_max_leverage = (market.get("limits") or {}).get("leverage", {}).get(
+                "max"
+            )
+            if raw_max_leverage is None:
+                raw_max_leverage = (market.get("info") or {}).get("leverage_max")
+            max_leverage = float(raw_max_leverage)
+            if not math.isfinite(max_leverage) or max_leverage <= 0.0:
+                raise ValueError(
+                    f"{symbol}: invalid Gate.io max leverage metadata: "
+                    f"{raw_max_leverage!r}"
+                )
+            self.max_leverage[symbol] = int(max_leverage)
 
     async def fetch_balance(self) -> float:
         """GateIO: Fetch balance using the same parser as staged snapshots."""
