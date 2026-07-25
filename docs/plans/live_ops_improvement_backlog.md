@@ -32,10 +32,16 @@ Classify proposed work into one primary lane:
    state-changing actions explicit.
 4. **Observability defect:** incorrect/missing evidence, unsafe payloads,
    duplicate ownership, event loss, broken correlation, or unbounded sinks.
-   Only this lane may reopen the logging-overhaul plan.
-5. **Convenience:** another projection, filter, export, dashboard, or summary.
+5. **Observability consolidation:** two or more existing readers or reports can
+   share one bounded implementation with a demonstrated net reduction in code.
+   This may reopen the logging overhaul under resume reason 4 in
+   `live_logging_overhaul_current_status.md`.
+6. **Convenience:** another projection, filter, export, dashboard, or summary.
    Defer unless repeated operator use demonstrates value greater than its
    maintenance cost.
+
+Only the observability-defect and observability-consolidation lanes may reopen
+the logging-overhaul plan.
 
 Before accepting a PR, record the observed problem, affected scope, simplest
 credible fix, validation, and stopping condition. Prefer removing or

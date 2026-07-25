@@ -167,11 +167,13 @@ State:
 9. Re-fetch `origin/master`, verify mergeability, gate SHAs, and CI immediately
    before merge.
 10. Merge only after the gate is satisfied. Update local state.
-11. Before any pull or restart, compare each target host's exact deployed SHA
-    and local config with the intended target delta. Stop on unresolved
-    config-sensitive behavior changes. Then deploy according to the declared
-    impact. Sol retains control of actual VPS signals/restarts; read-only
-    preflight and output parsing may be delegated.
+11. Obtain explicit approval in the current task before any SSH, remote
+    preflight, pull, restart, smoke, or other host action. After approval,
+    compare each target host's exact deployed SHA and local config with the
+    intended target delta. Stop on unresolved config-sensitive behavior
+    changes. Then deploy according to the declared impact. Sol retains control
+    of actual VPS signals/restarts; approved read-only preflight and output
+    parsing may be delegated.
 12. Run immediate and settled bounded smoke checks and leave expected bots
     running.
 13. Update compact status only if scope/completion changed. Append historical

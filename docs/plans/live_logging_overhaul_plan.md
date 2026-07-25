@@ -13,10 +13,12 @@ collect, bounded on a small VPS, and reliable enough for post-incident debugging
 
 ## Scope And Stopping Rule
 
-This plan owns the shared live-event contract, routing, sinks, retention,
-redaction, correlation, console projection, and migration of high-value
-decision/action logs. It is not an umbrella for every capability that consumes
-events.
+This plan defines the implementation and migration scope for the shared
+live-event pipeline and high-value decision/action logs. Canonical logging,
+redaction, and sink behavior remains owned by `docs/ai/logging_policy.md`;
+event-family payload contracts remain owned by
+`docs/ai/features/live_events.md`. This plan is not an umbrella for every
+capability that consumes events.
 
 In scope:
 
