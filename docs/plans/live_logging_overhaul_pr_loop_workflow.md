@@ -148,7 +148,8 @@ State:
 
 ## Implementation Loop
 
-1. Read the compact current-status file, fetch current `origin/master`, and
+1. Read the compact current-status file, resolve the current default branch and
+   PR target from live repository/PR metadata, fetch that exact remote ref, and
    reconcile open logging PRs with their exact heads and review/check state.
 2. Confirm that an observed gap maps to an unmet logging completion criterion
    and is not already covered by an open PR. Read historical progress only when
@@ -167,8 +168,8 @@ State:
    high-cost semantic loop.
 8. Verify every finding against the current branch. Apply the narrow fix,
    rerun affected tests, push, and require current-head delta review.
-9. Re-fetch `origin/master`, verify mergeability, gate SHAs, and CI immediately
-   before merge.
+9. Re-resolve and fetch the live PR target ref, then verify mergeability, gate
+   SHAs, and CI immediately before merge.
 10. Merge only after the gate is satisfied. Update local state.
 11. Obtain explicit approval in the current task before any SSH, remote
     preflight, pull, restart, smoke, or other host action. After approval,
@@ -179,8 +180,10 @@ State:
     parsing may be delegated.
 12. Run immediate and settled bounded smoke checks and leave expected bots
     running.
-13. Update compact status only if scope/completion changed. Append historical
-    evidence only for a material milestone.
+13. Record bounded post-deployment evidence on the PR or another durable run
+    record: exact deployed SHA, target scope, commands/actions, outcomes, and
+    limitations. Update compact status only if scope/completion changed. Append
+    historical progress only for a material milestone.
 
 ## VPS Policy
 

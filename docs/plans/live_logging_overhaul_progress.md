@@ -11,8 +11,10 @@ operational diary.
 - Add an entry only when a logging-overhaul milestone materially changes the
   architecture, closes a completion criterion, or records evidence needed to
   understand a later design decision.
-- Do not append routine PR, deployment, restart, reviewer, or smoke chronology;
-  Git and GitHub retain that history.
+- Do not append routine PR, deployment, restart, reviewer, or smoke chronology
+  here. Runtime actions still require a bounded durable record on the PR or
+  another run record with the exact deployed SHA, target scope,
+  commands/actions, outcomes, and limitations.
 - Adjacent trading, performance, restart, process, report, and operator-tool
   work belongs in its own plan or the live-operations backlog even when it uses
   the event pipeline.

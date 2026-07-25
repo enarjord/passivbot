@@ -90,9 +90,10 @@ backlog to be finished.
 
 ## Resume Procedure
 
-1. Refresh `origin/master` and reconcile open logging PRs, their exact heads,
-   and review/check state; ignore stale branch names and historical “next
-   slice” text.
+1. Resolve the current default branch and any PR target from live
+   repository/PR metadata, fetch that exact remote ref, and reconcile open
+   logging PRs with their exact heads and review/check state. Ignore stale
+   branch names and historical “next slice” text.
 2. Inspect representative overnight event and INFO output already available in
    local artifacts before proposing code. If the evidence exists only on a
    remote host, obtain explicit approval in the current task before SSH or any
