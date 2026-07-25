@@ -4,6 +4,13 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Binance and KuCoin private order streams now recover sparse Passivbot-owned
+  updates from the encoded client-order position side without weakening strict
+  REST open-order reconciliation. Gate.io coerces its account UID to the string
+  representation required by CCXT Pro private subscriptions, avoiding repeated
+  local `ValueError`/`TypeError` reconnect loops. Genuine transport failures
+  retain the existing bounded reconnect backoff.
+
 - Live fill recovery now performs bounded historical refetches around degraded
   synthetic realized-PnL rows even when cache metadata already proves the configured
   lookback. Repair-only fetches preserve the incremental checkpoint and rotate through

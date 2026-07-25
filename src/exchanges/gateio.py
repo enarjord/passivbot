@@ -78,7 +78,9 @@ class GateIOBot(CCXTBot):
             raise KeyError(f"{self.exchange}: fetch_balance response missing info[0]")
         primary = info[0]
         if not hasattr(self, "uid") or not self.uid:
-            self.uid = primary["user"]
+            # CCXT Pro's Gate.io private subscription checks ``len(uid)``.
+            # The REST payload may encode the account id as an integer.
+            self.uid = str(primary["user"])
             self.cca.uid = self.uid
             if self.ccp is not None:
                 self.ccp.uid = self.uid

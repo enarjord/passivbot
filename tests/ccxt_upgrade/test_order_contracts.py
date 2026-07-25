@@ -937,7 +937,7 @@ def test_gateio_get_balance_uses_cross_available_for_multi_currency_margin():
             "USDT": {"total": 0.000000000035},
             "info": [
                 {
-                    "user": "16770081",
+                    "user": 16770081,
                     "margin_mode_name": "multi_currency",
                     "cross_available": "724.95615",
                 }

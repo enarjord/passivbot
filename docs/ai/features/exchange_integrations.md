@@ -29,6 +29,14 @@ reconciliation/tolerance path until that venue receives a connector-specific con
 separate global retirement of the old initial-entry-only distance gate does not enable the new
 churn policy there.
 
+## Private Order Websocket Normalization
+
+Authoritative REST open-order reconciliation remains strict. Binance and KuCoin
+private websocket notifications for Passivbot-owned orders may omit native
+long/short metadata; only that hint path may recover `position_side` from a
+valid Passivbot client-order marker. Sparse foreign or unmarked notifications
+remain rejected.
+
 ## Broker Agreement Attribution
 
 Problem:
@@ -170,6 +178,15 @@ Handling in Passivbot:
    semantics.
 
 ## Gate.io Futures
+
+### Private websocket account UID
+
+Problem: Gate.io REST balance payloads may encode `user` as a number, while
+CCXT Pro's private subscription requires a string UID and checks its length.
+
+Handling: normalize the account UID to a string before assigning it to either
+CCXT client. This is identifier normalization only; it must not numerically
+transform the value.
 
 ### Contract order text must start with `t-`
 

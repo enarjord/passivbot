@@ -180,6 +180,18 @@ class KucoinBot(CCXTBot):
             return str(explicit).lower()
         raise ValueError("KuCoin open order missing durable long/short attribution")
 
+    def _normalize_order_update(self, order: dict) -> dict:
+        """Allow PB client metadata to recover sparse websocket notifications."""
+        try:
+            return super()._normalize_order_update(order)
+        except ValueError:
+            position_side = self._durable_order_position_side(order)
+            if position_side not in {"long", "short"}:
+                raise
+            order["position_side"] = position_side
+            order["qty"] = order["amount"]
+            return order
+
     def determine_pos_side(self, order):
         """Compatibility route for the authoritative open-order attribution hook."""
         return self._get_position_side_for_order(order)

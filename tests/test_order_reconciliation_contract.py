@@ -85,6 +85,42 @@ def test_supported_hedge_orders_do_not_fabricate_pside_from_client_id(bot_cls):
         bot._get_position_side_for_order(order)
 
 
+@pytest.mark.parametrize("bot_cls", [BinanceBot, KucoinBot])
+def test_sparse_websocket_order_update_uses_passivbot_client_pside(bot_cls):
+    bot = bot_cls.__new__(bot_cls)
+    bot._config_hedge_mode = True
+    bot.hedge_mode = True
+    order = {
+        "symbol": "BTC/USDT:USDT",
+        "side": "buy",
+        "amount": 0.1,
+        "clientOrderId": _client_id("entry_grid_normal_long"),
+        "info": {},
+    }
+
+    normalized = bot._normalize_order_update(order)
+
+    assert normalized["position_side"] == "long"
+    assert normalized["qty"] == 0.1
+
+
+@pytest.mark.parametrize("bot_cls", [BinanceBot, KucoinBot])
+def test_sparse_non_passivbot_websocket_order_update_remains_rejected(bot_cls):
+    bot = bot_cls.__new__(bot_cls)
+    bot._config_hedge_mode = True
+    bot.hedge_mode = True
+    order = {
+        "symbol": "BTC/USDT:USDT",
+        "side": "buy",
+        "amount": 0.1,
+        "clientOrderId": "user-order",
+        "info": {},
+    }
+
+    with pytest.raises(ValueError, match="missing"):
+        bot._normalize_order_update(order)
+
+
 @pytest.mark.parametrize(
     ("side", "position_side", "reported_reduce_only", "expected_close"),
     [
