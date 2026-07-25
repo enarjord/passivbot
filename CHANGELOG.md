@@ -4,6 +4,10 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- KuCoin REST and private WebSocket clients now use IPv4 transport so API keys
+  restricted to a host's stable public IPv4 address are not rejected when the
+  host also has IPv6 connectivity.
+
 - Gate.io live configuration now accepts CCXT's `gate` exchange label as an alias,
   logs its normalization to Passivbot's canonical `gateio` identity, and consistently
   selects the dedicated Gate.io connector. Standalone market loading now also

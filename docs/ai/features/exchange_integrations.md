@@ -79,6 +79,16 @@ Primary reference: `src/fill_events_manager.py` (`BybitFetcher._fetch_positions_
 
 ## KuCoin Futures
 
+### IPv4 API-key whitelist transport
+
+Problem: A dual-stack host may select IPv6 for KuCoin REST and private
+WebSocket traffic even when the API key permits only the host's stable public
+IPv4 address. KuCoin then rejects the first authenticated request as an IP
+whitelist authentication failure.
+
+Handling: Both KuCoin REST and WebSocket CCXT clients use IPv4-only network
+connectors. Keep the host's stable public IPv4 address in the API-key whitelist.
+
 ### KuCoin hedge-mode refresh
 
 Problem:
