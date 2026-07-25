@@ -27,6 +27,8 @@ class _PlanBot:
     debug_mode = False
     balance_threshold = 0.0
     quote = "USDT"
+    _config_hedge_mode = True
+    hedge_mode = True
     state_change_detected_by_symbol = set()
     _equity_hard_stop_coin_replay_pending_pairs = set()
     _order_churn_gate_state = None
@@ -107,7 +109,7 @@ def execution_shell(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_any_stale_actual_defers_all_normal_plan_creates_account_wide(
+async def test_stale_actual_defers_normal_create_for_same_symbol_and_pside(
     execution_shell,
 ):
     _wave, events = execution_shell
@@ -127,6 +129,96 @@ async def test_any_stale_actual_defers_all_normal_plan_creates_account_wide(
     ]
     assert barrier["reason_code"] == ReasonCodes.ACCOUNT_CANCEL_FIRST_BARRIER
     assert barrier["order_count"] == 1
+    assert barrier["data"]["cancel_scope_count"] == 1
+    assert barrier["data"]["unscoped_cancel_count"] == 0
+    assert barrier["data"]["dedicated_market_panic_bypass_count"] == 0
+    assert barrier["data"]["unaffected_scope_create_count"] == 0
+
+
+@pytest.mark.asyncio
+async def test_cancel_first_allows_creates_for_unaffected_position_scopes(
+    execution_shell,
+):
+    _wave, events = execution_shell
+    bot = _PlanBot()
+    stale = _order("stale")
+    same_scope = _order("same_scope")
+    other_pside = {**_order("other_pside"), "position_side": "short"}
+    other_symbol = {**_order("other_symbol"), "symbol": "ETH/USDT:USDT"}
+
+    await executor.execute_order_plan(
+        bot,
+        [stale],
+        [same_scope, other_pside, other_symbol],
+    )
+
+    assert bot.cancelled == [stale]
+    assert bot.created == [other_pside, other_symbol]
+    assert bot.confirmations == [{"balance", "positions", "open_orders", "fills"}]
+    [barrier] = [
+        event
+        for event in events
+        if event["event_type"] == EventTypes.EXECUTION_CANCEL_FIRST_BARRIER
+    ]
+    assert barrier["order_count"] == 1
+    assert barrier["data"]["cancel_scope_count"] == 1
+    assert barrier["data"]["unscoped_cancel_count"] == 0
+    assert barrier["data"]["dedicated_market_panic_bypass_count"] == 0
+    assert barrier["data"]["unaffected_scope_create_count"] == 2
+
+
+@pytest.mark.asyncio
+async def test_cancel_first_defers_opposite_pside_on_same_symbol_in_one_way_mode(
+    execution_shell,
+):
+    _wave, events = execution_shell
+    bot = _PlanBot()
+    bot._config_hedge_mode = False
+    stale = _order("stale")
+    opposite_pside = {**_order("opposite_pside"), "position_side": "short"}
+    other_symbol = {**_order("other_symbol"), "symbol": "ETH/USDT:USDT"}
+
+    await executor.execute_order_plan(
+        bot,
+        [stale],
+        [opposite_pside, other_symbol],
+    )
+
+    assert bot.cancelled == [stale]
+    assert bot.created == [other_symbol]
+    [barrier] = [
+        event
+        for event in events
+        if event["event_type"] == EventTypes.EXECUTION_CANCEL_FIRST_BARRIER
+    ]
+    assert barrier["order_count"] == 1
+    assert barrier["data"]["cancel_scope_count"] == 1
+    assert barrier["data"]["unscoped_cancel_count"] == 0
+    assert barrier["data"]["unaffected_scope_create_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_unscoped_cancel_conservatively_defers_all_normal_creates(
+    execution_shell,
+):
+    _wave, events = execution_shell
+    bot = _PlanBot()
+    stale = _order("stale")
+    stale.pop("position_side")
+    desired = {**_order("desired"), "symbol": "ETH/USDT:USDT"}
+
+    await executor.execute_order_plan(bot, [stale], [desired])
+
+    assert bot.cancelled == [stale]
+    assert bot.created == []
+    [barrier] = [
+        event
+        for event in events
+        if event["event_type"] == EventTypes.EXECUTION_CANCEL_FIRST_BARRIER
+    ]
+    assert barrier["order_count"] == 1
+    assert barrier["data"]["cancel_scope_count"] == 0
+    assert barrier["data"]["unscoped_cancel_count"] == 1
 
 
 @pytest.mark.asyncio
