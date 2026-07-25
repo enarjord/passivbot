@@ -111,6 +111,22 @@ def _order_is_protective_create(order: dict) -> bool:
     return _order_is_reduce_only(order)
 
 
+def _order_requires_exchange_config_before_create(bot, order: dict) -> bool:
+    checker = getattr(bot, "_order_requires_exchange_config_before_create", None)
+    if callable(checker):
+        return bool(checker(order))
+    return True
+
+
+def _pending_exchange_config_consumes_error_budget(
+    bot, blocked_orders: list[dict]
+) -> bool:
+    checker = getattr(bot, "_pending_exchange_config_consumes_error_budget", None)
+    if callable(checker):
+        return bool(checker(blocked_orders))
+    return False
+
+
 def _complete_terminal_signed_action_attempts(
     bot, tokens, results, orders, *, action: str
 ) -> None:
@@ -925,15 +941,20 @@ async def execute_order_plan(
                 order_wave["skipped_create"] += max(
                     0, before_state_filter - len(to_create_mod)
                 )
+        config_required_orders = [
+            order
+            for order in to_create_mod
+            if _order_requires_exchange_config_before_create(bot, order)
+        ]
         config_action_costs_by_symbol = {}
-        if to_create_mod and configure_creations:
+        if config_required_orders and configure_creations:
             config_cost_estimator = getattr(
                 bot, "_order_churn_precreate_signed_action_costs", None
             )
             if callable(config_cost_estimator):
                 config_action_costs_by_symbol = (
                     config_cost_estimator(
-                        {str(order["symbol"]) for order in to_create_mod}
+                        {str(order["symbol"]) for order in config_required_orders}
                     )
                     or {}
                 )
@@ -947,8 +968,16 @@ async def execute_order_plan(
             order_wave["deferred_create"] += max(
                 0, len(before_churn_admission) - len(to_create_mod)
             )
-        if to_create_mod and configure_creations:
-            creation_symbols = sorted({order["symbol"] for order in to_create_mod})
+        pending_config_error_budget = False
+        config_required_orders = [
+            order
+            for order in to_create_mod
+            if _order_requires_exchange_config_before_create(bot, order)
+        ]
+        if config_required_orders and configure_creations:
+            creation_symbols = sorted(
+                {order["symbol"] for order in config_required_orders}
+            )
             configured_symbols = await bot.update_exchange_configs(creation_symbols)
             if bot._shutdown_requested():
                 bot._order_wave_in_progress = None
@@ -959,11 +988,22 @@ async def execute_order_plan(
             )
             if pending_config:
                 pending_config_orders = [
-                    order for order in to_create_mod if order["symbol"] in pending_config
+                    order
+                    for order in config_required_orders
+                    if order["symbol"] in pending_config
+                ]
+                protective_config_bypasses = [
+                    order
+                    for order in to_create_mod
+                    if order["symbol"] in pending_config
+                    and not _order_requires_exchange_config_before_create(bot, order)
                 ]
                 logging.warning(
-                    "[config] skipping order creation for symbols pending exchange config: %s",
+                    "[config] skipping exposure-increasing order creation for symbols pending "
+                    "exchange config: %s | blocked=%d protective_allowed=%d",
                     passivbot_cls._log_symbols(pending_config, limit=12),
+                    len(pending_config_orders),
+                    len(protective_config_bypasses),
                 )
                 if pending_config_orders:
                     _record_fresh_entry_orders(
@@ -985,13 +1025,22 @@ async def execute_order_plan(
                         data={
                             "configured_symbols_count": len(configured_symbols or set()),
                             "pending_symbols_count": len(pending_config),
+                            "protective_allowed_count": len(
+                                protective_config_bypasses
+                            ),
                         },
+                    )
+                    pending_config_error_budget = (
+                        _pending_exchange_config_consumes_error_budget(
+                            bot, pending_config_orders
+                        )
                     )
                 before_config_filter = len(to_create_mod)
                 to_create_mod = [
                     order
                     for order in to_create_mod
                     if order["symbol"] not in pending_config
+                    or not _order_requires_exchange_config_before_create(bot, order)
                 ]
                 if order_wave is not None:
                     order_wave["skipped_create"] += max(
@@ -1044,6 +1093,8 @@ async def execute_order_plan(
                         bounded_exception_type(exc),
                     )
                 await bot.restart_bot_on_too_many_errors()
+        if pending_config_error_budget:
+            await bot.restart_bot_on_too_many_errors()
     _emit_fresh_entry_eligibility(bot, passivbot_cls, order_wave)
     if to_cancel or to_create:
         bot.execution_scheduled = True

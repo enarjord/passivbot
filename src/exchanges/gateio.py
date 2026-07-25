@@ -206,6 +206,7 @@ class GateIOBot(CCXTBot):
         for symbol in symbols:
             leverage = self._calc_leverage_for_symbol(symbol)
             margin_mode = self._get_margin_mode_for_symbol(symbol)
+            self._record_order_churn_allowance_attempts(1, action_kind="config")
             await self.cca.set_leverage(
                 leverage,
                 symbol=symbol,
@@ -217,6 +218,26 @@ class GateIOBot(CCXTBot):
                 margin_mode,
                 leverage,
             )
+
+    def _order_churn_precreate_signed_action_costs(self, symbols) -> dict[str, int]:
+        configured = set(
+            getattr(self, "already_updated_exchange_config_symbols", set()) or set()
+        )
+        return {
+            str(symbol): 1
+            for symbol in symbols
+            if str(symbol) not in configured
+        }
+
+    def _order_requires_exchange_config_before_create(self, order: dict) -> bool:
+        """Gate leverage is an entry prerequisite, not a close prerequisite."""
+        return self._extract_order_reduce_only(order) is not True
+
+    def _pending_exchange_config_consumes_error_budget(
+        self, blocked_orders: list[dict]
+    ) -> bool:
+        """Keep persistent Gate entry-configuration failures restart-visible."""
+        return bool(blocked_orders)
 
     async def update_exchange_config(self):
         """GateIO: No exchange-level configuration needed."""

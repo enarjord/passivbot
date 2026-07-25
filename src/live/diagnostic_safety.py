@@ -13,6 +13,10 @@ _EXCEPTION_STATUS_RE = re.compile(r"[0-9]{1,3}")
 _EXCEPTION_CODE_RE = re.compile(r"-?[0-9]{1,12}")
 _EXCHANGE_ERROR_LABEL_RE = re.compile(r"[A-Za-z][A-Za-z0-9_.:-]{0,79}")
 _EXCHANGE_ERROR_SECRET_VALUE_RE = re.compile(r"[A-Za-z0-9+/_=-]{24,}")
+_EXCHANGE_ERROR_EMAIL_RE = re.compile(
+    r"(?i)\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b"
+)
+_EXCHANGE_ERROR_URL_RE = re.compile(r"(?i)\bhttps?://[^\s]+")
 _EXCHANGE_ERROR_PAYLOAD_MAX_LEN = 8192
 _EXCHANGE_ERROR_REASON_MAX_LEN = 160
 _TRUSTED_EXCEPTION_MODULE_PREFIXES = (
@@ -259,7 +263,9 @@ def _bounded_exchange_error_reason(value: object) -> str | None:
     if _SENSITIVE_EXCEPTION_TYPE_RE.search(value):
         return None
     try:
-        text = _EXCHANGE_ERROR_SECRET_VALUE_RE.sub("<redacted>", value)
+        text = _EXCHANGE_ERROR_URL_RE.sub("<redacted-url>", value)
+        text = _EXCHANGE_ERROR_EMAIL_RE.sub("<redacted-email>", text)
+        text = _EXCHANGE_ERROR_SECRET_VALUE_RE.sub("<redacted>", text)
         text = " ".join(text.split())
         text = "".join(
             char if char.isascii() and char.isprintable() and char not in {"|"} else "_"

@@ -203,8 +203,15 @@ Handling:
    preference.
 3. Call CCXT `set_leverage` with an explicit `marginMode`; CCXT then produces the
    correct Gate parameter tuple without accidentally switching margin mode.
-4. Propagate configuration failures and keep creations deferred until configuration
-   succeeds.
+4. Propagate configuration failures and keep exposure-increasing creations deferred
+   until configuration succeeds. Existing-position reduce-only closes do not depend
+   on leverage initialization and remain eligible.
+5. Every failed cycle containing a blocked entry advances the existing execution
+   error/restart budget. The failure and blocked-entry scope remain visible in
+   operator logs and structured events; close-only operation must not look healthy
+   while entries are failing.
+6. Reserve and debit the one-time signed leverage write in the account-wide order
+   churn allowance before admitting the symbol's first entry creation.
 
 ### Contract order text must start with `t-`
 

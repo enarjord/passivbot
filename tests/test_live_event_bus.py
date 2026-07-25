@@ -2871,6 +2871,20 @@ def test_console_format_includes_bounded_exchange_rejection_context():
     assert "reason=invalid argument: size" in rendered
 
 
+def test_console_format_bounds_exchange_rejection_reason_length():
+    event = LiveEvent(
+        EventTypes.EXECUTION_CREATE_REJECTED,
+        status="failed",
+        symbol="DOGE/USDT:USDT",
+        data={"error_reason": "x" * 160},
+    )
+
+    rendered = format_console_event(event)
+
+    assert "reason=" + ("x" * 93) + "..." in rendered
+    assert "x" * 97 not in rendered
+
+
 def test_console_format_marks_ambiguous_cancel_as_requiring_full_account_confirmation():
     event = LiveEvent(
         EventTypes.EXECUTION_CANCEL_AMBIGUOUS_TERMINAL,

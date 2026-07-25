@@ -1670,6 +1670,8 @@ def _console_order_summary(event: LiveEvent) -> list[str]:
     for key in ("error_status", "error_code", "error_label", "error_reason"):
         value = _data_str(data, key)
         if value:
+            if key == "error_reason" and len(value) > 96:
+                value = f"{value[:93]}..."
             parts.append(f"{key.removeprefix('error_')}={value}")
     return parts
 

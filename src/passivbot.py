@@ -9011,7 +9011,7 @@ class Passivbot:
 
     @staticmethod
     def _format_exchange_config_error(exc: BaseException) -> str:
-        """Return a bounded error-type label without rendering exception values."""
+        """Return bounded structured exchange context without raw response text."""
         error_type = type(exc).__name__
         if (
             not error_type
@@ -9020,7 +9020,10 @@ class Passivbot:
             or not error_type.replace("_", "").isalnum()
         ):
             error_type = "Exception"
-        return f"error_type={error_type}"
+        fields = [f"error_type={error_type}"]
+        for key, value in bounded_exchange_error_context(exc).items():
+            fields.append(f"{key}={value}")
+        return " ".join(fields)
 
     async def update_exchange_configs(self, symbols=None):
         """Ensure exchange-specific settings are initialised for all active symbols."""
@@ -9092,6 +9095,16 @@ class Passivbot:
     def _order_churn_precreate_signed_action_costs(self, symbols) -> dict[str, int]:
         """Return connector signed-action costs required before creating on symbols."""
         return {}
+
+    def _order_requires_exchange_config_before_create(self, order: dict) -> bool:
+        """Return whether this creation requires successful per-symbol setup."""
+        return True
+
+    def _pending_exchange_config_consumes_error_budget(
+        self, blocked_orders: list[dict]
+    ) -> bool:
+        """Return whether blocked creations should consume the execution error budget."""
+        return False
 
     def _is_rate_limit_like_exception(self, exc: Exception) -> bool:
         if isinstance(exc, RateLimitExceeded):

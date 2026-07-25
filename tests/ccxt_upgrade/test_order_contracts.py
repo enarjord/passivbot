@@ -963,6 +963,7 @@ def test_gateio_market_settings_capture_current_max_leverage():
 @pytest.mark.asyncio
 async def test_gateio_updates_cross_leverage_without_switching_to_isolated():
     calls = []
+    accounted = []
 
     async def set_leverage(leverage, symbol=None, params=None):
         calls.append((leverage, symbol, params))
@@ -977,12 +978,34 @@ async def test_gateio_updates_cross_leverage_without_switching_to_isolated():
     bot.cca = SimpleNamespace(set_leverage=set_leverage)
     bot._calc_leverage_for_symbol = lambda _symbol: 10
     bot._get_margin_mode_for_symbol = lambda _symbol: "cross"
+    bot._record_order_churn_allowance_attempts = (
+        lambda count, *, action_kind: accounted.append((count, action_kind))
+    )
 
     await bot.update_exchange_config_by_symbols(["DOGE/USDT:USDT"])
 
     assert calls == [
         (10, "DOGE/USDT:USDT", {"marginMode": "cross"}),
     ]
+    assert accounted == [(1, "config")]
+
+
+def test_gateio_reserves_config_cost_only_for_unconfigured_entry_symbols():
+    bot = GateIOBot.__new__(GateIOBot)
+    bot.already_updated_exchange_config_symbols = {"BTC/USDT:USDT"}
+
+    assert bot._order_churn_precreate_signed_action_costs(
+        {"BTC/USDT:USDT", "DOGE/USDT:USDT"}
+    ) == {"DOGE/USDT:USDT": 1}
+    assert bot._order_requires_exchange_config_before_create(
+        {"reduce_only": False}
+    )
+    assert not bot._order_requires_exchange_config_before_create(
+        {"reduce_only": True}
+    )
+    assert bot._pending_exchange_config_consumes_error_budget(
+        [{"symbol": "DOGE/USDT:USDT"}]
+    )
 
 
 def test_ccxt_gate_cross_leverage_maps_to_documented_request_tuple():

@@ -64,6 +64,19 @@ def test_bounded_exchange_error_context_redacts_long_tokens_and_sensitive_reason
     }
 
 
+def test_bounded_exchange_error_context_redacts_urls_and_email_addresses():
+    error = RuntimeError(
+        'gate {"message":"contact trader@example.com or visit '
+        'https://example.invalid/account?id=short"}'
+    )
+
+    assert bounded_exchange_error_context(error) == {
+        "error_reason": (
+            "contact <redacted-email> or visit <redacted-url>"
+        )
+    }
+
+
 def test_bounded_exception_type_uses_trusted_mro_classification():
     opaque_error = type("sk_live_7E4v93kR2mN6pQ8t", (RuntimeError,), {})
 
