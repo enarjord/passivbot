@@ -1667,6 +1667,10 @@ def _console_order_summary(event: LiveEvent) -> list[str]:
     error_type = _data_str(data, "error_type")
     if error_type:
         parts.append(f"error_type={error_type}")
+    for key in ("error_status", "error_code", "error_label", "error_reason"):
+        value = _data_str(data, key)
+        if value:
+            parts.append(f"{key.removeprefix('error_')}={value}")
     return parts
 
 

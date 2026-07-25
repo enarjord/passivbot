@@ -2,6 +2,7 @@ from live.diagnostic_safety import (
     bounded_exception_code,
     bounded_exception_status,
     bounded_exception_type,
+    bounded_exchange_error_context,
     exception_text_contains,
     exception_type_name_contains,
 )
@@ -32,6 +33,35 @@ def test_bounded_exception_code_rejects_identifier_shaped_values():
     error.info = {"retCode": "RATE_LIMIT"}
 
     assert bounded_exception_code(error) is None
+
+
+def test_bounded_exchange_error_context_extracts_structured_ccxt_payload():
+    error = RuntimeError(
+        'gate {"label":"INVALID_PARAM_VALUE","message":"invalid argument: size"}'
+    )
+
+    assert bounded_exchange_error_context(error) == {
+        "error_label": "INVALID_PARAM_VALUE",
+        "error_reason": "invalid argument: size",
+    }
+
+
+def test_bounded_exchange_error_context_redacts_long_tokens_and_sensitive_reasons():
+    error = RuntimeError(
+        'gate {"label":"INVALID_PARAM_VALUE",'
+        '"message":"bad client id abcdefghijklmnopqrstuvwxyz012345"}'
+    )
+    sensitive = RuntimeError(
+        'gate {"label":"INVALID_PARAM_VALUE","message":"api_key=do-not-log"}'
+    )
+
+    assert bounded_exchange_error_context(error) == {
+        "error_label": "INVALID_PARAM_VALUE",
+        "error_reason": "bad client id <redacted>",
+    }
+    assert bounded_exchange_error_context(sensitive) == {
+        "error_label": "INVALID_PARAM_VALUE"
+    }
 
 
 def test_bounded_exception_type_uses_trusted_mro_classification():

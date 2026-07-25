@@ -73,6 +73,7 @@ from live.diagnostic_safety import (
     bounded_exception_code,
     bounded_exception_status,
     bounded_exception_type,
+    bounded_exchange_error_context,
     exception_text_contains,
     exception_type_name_contains,
 )
@@ -944,12 +945,18 @@ class Passivbot:
         )
         if len(symbol) > 80:
             symbol = f"{symbol[:80]}..."
+        error_context = bounded_exchange_error_context(error)
         logging.error(
-            "[order] write failed | action=%s symbol=%s type=%s error_type=%s",
+            "[order] write failed | action=%s symbol=%s type=%s error_type=%s "
+            "status=%s code=%s label=%s reason=%s",
             action,
             symbol,
             Passivbot._log_order_type(order),
-            type(error).__name__,
+            bounded_exception_type(error),
+            error_context.get("error_status", "-"),
+            error_context.get("error_code", "-"),
+            error_context.get("error_label", "-"),
+            error_context.get("error_reason", "-"),
         )
 
     @staticmethod

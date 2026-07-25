@@ -20,7 +20,10 @@ from live.event_bus import (
     utc_ms,
 )
 from live.balance_composition import public_balance_composition
-from live.diagnostic_safety import bounded_exception_type as _bounded_exception_type
+from live.diagnostic_safety import (
+    bounded_exception_type as _bounded_exception_type,
+    bounded_exchange_error_context as _bounded_exchange_error_context,
+)
 from candlestick_manager import sanitize_remote_fetch_diagnostic
 
 
@@ -4449,6 +4452,7 @@ def emit_execution_order_event(
             error = result
         if error is not None:
             data["error_type"] = _bounded_exception_type(error)
+            data.update(_bounded_exchange_error_context(error))
         if extra:
             data.update(extra)
         _add_execution_debug_profile(

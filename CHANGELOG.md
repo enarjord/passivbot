@@ -4,6 +4,11 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Live order-write failures now include bounded, sanitized exchange status, code,
+  label, and reason fields when CCXT exposes a structured rejection payload.
+  Sensitive-marked values and long identifier-like tokens remain redacted; the
+  existing bot restart error budget is unchanged.
+
 - Gate.io live configuration now accepts CCXT's `gate` exchange label as an alias,
   logs its normalization to Passivbot's canonical `gateio` identity, and consistently
   selects the dedicated Gate.io connector. Standalone market loading now also

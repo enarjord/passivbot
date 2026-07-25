@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 import sys
 
@@ -10,6 +11,10 @@ _SENSITIVE_EXCEPTION_TYPE_RE = re.compile(
 )
 _EXCEPTION_STATUS_RE = re.compile(r"[0-9]{1,3}")
 _EXCEPTION_CODE_RE = re.compile(r"-?[0-9]{1,12}")
+_EXCHANGE_ERROR_LABEL_RE = re.compile(r"[A-Za-z][A-Za-z0-9_.:-]{0,79}")
+_EXCHANGE_ERROR_SECRET_VALUE_RE = re.compile(r"[A-Za-z0-9+/_=-]{24,}")
+_EXCHANGE_ERROR_PAYLOAD_MAX_LEN = 8192
+_EXCHANGE_ERROR_REASON_MAX_LEN = 160
 _TRUSTED_EXCEPTION_MODULE_PREFIXES = (
     "aiohttp",
     "asyncio",
@@ -205,3 +210,90 @@ def bounded_exception_code(exc: BaseException) -> str | None:
         ("code", "exact", "error_code", "retCode", "errorCode"),
         _EXCEPTION_CODE_RE,
     )
+
+
+def _exception_payload_mapping(exc: BaseException) -> dict | None:
+    """Return a small structured exchange payload without retaining raw exception text."""
+    try:
+        info = getattr(exc, "info", None)
+    except BaseException:
+        info = None
+    if type(info) is dict:
+        return info
+    try:
+        args = getattr(exc, "args", ())
+    except BaseException:
+        return None
+    if type(args) is not tuple:
+        return None
+    for arg in args:
+        if type(arg) is not str or len(arg) > _EXCHANGE_ERROR_PAYLOAD_MAX_LEN:
+            continue
+        start = arg.find("{")
+        if start < 0:
+            continue
+        try:
+            payload, _end = json.JSONDecoder().raw_decode(arg[start:])
+        except (TypeError, ValueError, json.JSONDecodeError):
+            continue
+        if type(payload) is dict:
+            return payload
+    return None
+
+
+def _bounded_exchange_error_label(value: object) -> str | None:
+    text = _exact_scalar_text(value)
+    if (
+        text is None
+        or not text.isascii()
+        or not _EXCHANGE_ERROR_LABEL_RE.fullmatch(text)
+        or _SENSITIVE_EXCEPTION_TYPE_RE.search(text)
+    ):
+        return None
+    return text
+
+
+def _bounded_exchange_error_reason(value: object) -> str | None:
+    if type(value) is not str or not value or len(value) > _EXCHANGE_ERROR_PAYLOAD_MAX_LEN:
+        return None
+    if _SENSITIVE_EXCEPTION_TYPE_RE.search(value):
+        return None
+    try:
+        text = _EXCHANGE_ERROR_SECRET_VALUE_RE.sub("<redacted>", value)
+        text = " ".join(text.split())
+        text = "".join(
+            char if char.isascii() and char.isprintable() and char not in {"|"} else "_"
+            for char in text
+        ).strip()
+    except BaseException:
+        return None
+    if not text:
+        return None
+    if len(text) > _EXCHANGE_ERROR_REASON_MAX_LEN:
+        return f"{text[: _EXCHANGE_ERROR_REASON_MAX_LEN - 3]}..."
+    return text
+
+
+def bounded_exchange_error_context(exc: BaseException) -> dict[str, str]:
+    """Extract only bounded, sanitized fields from a structured exchange error."""
+    result: dict[str, str] = {}
+    status = bounded_exception_status(exc)
+    code = bounded_exception_code(exc)
+    if status is not None:
+        result["error_status"] = status
+    if code is not None:
+        result["error_code"] = code
+    payload = _exception_payload_mapping(exc)
+    if payload is None:
+        return result
+    for key in ("label", "error", "name"):
+        label = _bounded_exchange_error_label(payload.get(key))
+        if label is not None:
+            result["error_label"] = label
+            break
+    for key in ("message", "detail", "reason"):
+        reason = _bounded_exchange_error_reason(payload.get(key))
+        if reason is not None:
+            result["error_reason"] = reason
+            break
+    return result
