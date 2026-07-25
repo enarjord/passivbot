@@ -181,15 +181,23 @@ class KucoinBot(CCXTBot):
         raise ValueError("KuCoin open order missing durable long/short attribution")
 
     def _normalize_order_update(self, order: dict) -> dict:
-        """Allow PB client metadata to recover sparse websocket notifications."""
+        """Recover owned hedge-mode websocket rows with sparse pside metadata."""
         try:
             return super()._normalize_order_update(order)
         except ValueError:
+            if not bool(
+                getattr(self, "_config_hedge_mode", True)
+                and getattr(self, "hedge_mode", True)
+            ):
+                raise
+            if not self._sparse_ws_order_has_emitted_identity(order):
+                raise
             position_side = self._durable_order_position_side(order)
             if position_side not in {"long", "short"}:
                 raise
             order["position_side"] = position_side
             order["qty"] = order["amount"]
+            order["_pb_order_update_requires_authoritative_refresh"] = True
             return order
 
     def determine_pos_side(self, order):

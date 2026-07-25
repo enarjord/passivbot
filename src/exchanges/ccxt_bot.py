@@ -144,6 +144,40 @@ class CCXTBot(Passivbot):
         order["qty"] = order["amount"]
         return order
 
+    def _sparse_ws_order_has_emitted_identity(self, order: dict) -> bool:
+        """Return whether a sparse WS row identifies an order emitted by this process.
+
+        Exact exchange or client-order identity is required. A Passivbot type
+        marker or an order-shape fingerprint is not ownership evidence because
+        another bot process on the same account may emit the same type and
+        shape.
+        """
+        if not isinstance(order, dict):
+            return False
+        try:
+            now_ts = int(self.get_exchange_time())
+            self._prune_emitted_order_custom_ids(now_ts)
+            exchange_id = self._extract_order_exchange_id(order)
+            custom_id = self._canonical_passivbot_custom_id(
+                self._extract_order_custom_id(order)
+            )
+            if not exchange_id and not custom_id:
+                return False
+            for record in self._emitted_order_records():
+                record_exchange_id = str(record.get("exchange_id") or "")
+                if (
+                    exchange_id
+                    and record_exchange_id
+                    and str(exchange_id) == record_exchange_id
+                ):
+                    return True
+                record_custom_id = str(record.get("canonical_custom_id") or "")
+                if custom_id and record_custom_id and custom_id == record_custom_id:
+                    return True
+        except (AttributeError, TypeError, ValueError, OverflowError):
+            return False
+        return False
+
     def _get_position_side_for_order(self, order: dict) -> str:
         """Hook: Derive position_side from order data.
 
