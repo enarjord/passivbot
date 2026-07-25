@@ -7057,6 +7057,93 @@ async def test_ema_anchor_monitor_snapshot_flush_skips_legacy_trailing_params():
     }
 
 
+@pytest.mark.asyncio
+async def test_monitor_snapshot_flushes_are_serialized():
+    import passivbot as pb_mod
+
+    class FakePublisher:
+        def write_snapshot(self, snapshot, *, ts=None, force=False):
+            return True
+
+    class FakeBot:
+        _monitor_flush_snapshot = pb_mod.Passivbot._monitor_flush_snapshot
+
+        def __init__(self):
+            self.monitor_publisher = FakePublisher()
+            self.active_builds = 0
+            self.max_active_builds = 0
+
+        async def _build_monitor_snapshot(self, *, now_ms=None):
+            self.active_builds += 1
+            self.max_active_builds = max(self.max_active_builds, self.active_builds)
+            await asyncio.sleep(0)
+            self.active_builds -= 1
+            return {}
+
+    bot = FakeBot()
+
+    assert await asyncio.gather(
+        bot._monitor_flush_snapshot(force=True),
+        bot._monitor_flush_snapshot(force=True),
+    ) == [True, True]
+    assert bot.max_active_builds == 1
+
+
+@pytest.mark.asyncio
+async def test_monitor_snapshot_maintainer_runs_without_planning_cycles():
+    import passivbot as pb_mod
+
+    bot = SimpleNamespace(
+        monitor_publisher=SimpleNamespace(snapshot_interval_ms=1),
+        stop_signal_received=False,
+    )
+    flush_count = 0
+
+    async def flush_snapshot():
+        nonlocal flush_count
+        flush_count += 1
+        if flush_count == 2:
+            bot.stop_signal_received = True
+        return True
+
+    async def sleep_unless_shutdown(_seconds, *, stage):
+        assert stage == "monitor_snapshot_interval"
+        await asyncio.sleep(0)
+
+    bot._monitor_flush_snapshot = flush_snapshot
+    bot._sleep_unless_shutdown = sleep_unless_shutdown
+
+    await pb_mod.Passivbot.maintain_monitor_snapshot(bot)
+
+    assert flush_count == 2
+
+
+@pytest.mark.asyncio
+async def test_monitor_snapshot_maintainer_is_registered_when_enabled():
+    import passivbot as pb_mod
+
+    bot = pb_mod.Passivbot.__new__(pb_mod.Passivbot)
+    bot.ws_enabled = False
+    bot.monitor_publisher = SimpleNamespace(snapshot_interval_ms=1_000)
+    blocker = asyncio.Event()
+
+    async def wait_for_stop():
+        await blocker.wait()
+
+    bot.maintain_hourly_cycle = wait_for_stop
+    bot.maintain_monitor_snapshot = wait_for_stop
+
+    await bot.start_data_maintainers()
+
+    assert set(bot.maintainers) == {
+        "maintain_hourly_cycle",
+        "maintain_monitor_snapshot",
+    }
+    tasks = list(bot.maintainers.values())
+    bot.stop_data_maintainers(verbose=False)
+    await asyncio.gather(*tasks, return_exceptions=True)
+
+
 def test_monitor_trailing_section_includes_trailing_grid_v7_diagnostics():
     import passivbot as pb_mod
 
