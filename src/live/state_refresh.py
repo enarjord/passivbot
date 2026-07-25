@@ -196,8 +196,16 @@ async def capture_positions_staged_snapshot(bot) -> tuple[object, list[dict]]:
 def authoritative_staged_refresh_plan(bot) -> set[str]:
     """Return the minimal staged authoritative surfaces needed this cycle."""
     pending = set(getattr(bot, "_authoritative_pending_confirmations", {}) or {})
+    trailing_recovery_due = getattr(
+        bot, "_trailing_fill_recovery_prefetch_due", None
+    )
+    should_prefetch_trailing_recovery = bool(
+        callable(trailing_recovery_due) and trailing_recovery_due()
+    )
     if pending == {"open_orders"}:
         plan = {"open_orders"}
+        if should_prefetch_trailing_recovery:
+            bot._schedule_routine_fill_refresh_prefetch(reason="trailing_recovery")
         bot._authoritative_refresh_plan_surfaces = set(plan)
         return plan
     plan = {"balance", "positions", "open_orders", "fills"}
@@ -218,6 +226,8 @@ def authoritative_staged_refresh_plan(bot) -> set[str]:
         ):
             plan.discard("fills")
             logging.debug("[state] staged routine fills refresh scheduled in background")
+    if should_prefetch_trailing_recovery and "fills" not in plan:
+        bot._schedule_routine_fill_refresh_prefetch(reason="trailing_recovery")
     bot._authoritative_refresh_plan_surfaces = set(plan)
     return plan
 

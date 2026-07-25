@@ -8698,13 +8698,7 @@ class Passivbot:
         self._trailing_pending_position_states = pending_position_states
         self._trailing_position_snapshot_fill_epochs = associated_fill_epochs
         self._trailing_fill_confirmation_diagnostics = confirmation_diagnostics
-        if confirmation_diagnostics:
-            # A successful fetch may have cleared the account-wide barrier even
-            # though this position still lacks matching fill evidence. Keep
-            # requesting post-snapshot fill refreshes so timestamp-free recovery
-            # can advance through its progressively wider windows.
-            self._request_authoritative_confirmation({"fills"})
-        else:
+        if not confirmation_diagnostics:
             self._trailing_fill_history_recovery_state = {}
 
         # Build concurrent fetches per symbol that has position changes
@@ -11726,6 +11720,46 @@ class Passivbot:
         )
         return start_ms
 
+    def _trailing_fill_recovery_prefetch_due(self) -> bool:
+        """Whether unresolved trailing evidence needs a nonblocking fill prefetch."""
+        if "fills" in (
+            getattr(self, "_authoritative_pending_confirmations", {}) or {}
+        ):
+            return False
+        diagnostics = dict(
+            getattr(self, "_trailing_fill_confirmation_diagnostics", {}) or {}
+        )
+        recoverable_predicates = {
+            "missing_fill_anchor",
+            "non_fill_anchor",
+            "fill_identity_unchanged",
+            "fill_after_state_mismatch",
+        }
+        cohort_states = dict(
+            (
+                getattr(self, "_trailing_fill_history_recovery_state", {}) or {}
+            ).get("cohorts", {})
+            or {}
+        )
+        now_ms = utc_ms()
+        for raw_key, detail in diagnostics.items():
+            if not isinstance(raw_key, tuple) or len(raw_key) != 2:
+                continue
+            if not isinstance(detail, dict):
+                continue
+            failed = set(detail.get("failed_predicates") or [])
+            if not failed.intersection(recoverable_predicates):
+                continue
+            if "post_snapshot_fill_refresh_pending" in failed:
+                # The position snapshot itself arms the authoritative fills
+                # confirmation; do not race it with a background recovery.
+                continue
+            cohort = (str(raw_key[0]), str(raw_key[1]))
+            state = dict(cohort_states.get(cohort, {}) or {})
+            if now_ms >= int(state.get("next_retry_ms", 0) or 0):
+                return True
+        return False
+
     async def _update_pnls_locked(
         self,
         *,
@@ -11902,6 +11936,10 @@ class Passivbot:
                     getattr(self, "_authoritative_pending_confirmations", {}) or {}
                 )
                 confirmation_refresh = "fills" in pending
+                trailing_recovery_refresh = bool(
+                    getattr(self, "_trailing_fill_confirmation_diagnostics", {})
+                    or {}
+                )
                 refresh_mode = (
                     "incremental_confirm"
                     if confirmation_refresh
@@ -11916,7 +11954,7 @@ class Passivbot:
                 else:
                     recovery_start_ms = (
                         self._trailing_fill_history_recovery_start_ms(age_limit)
-                        if confirmation_refresh
+                        if confirmation_refresh or trailing_recovery_refresh
                         else None
                     )
                     overlap_minutes_key = (

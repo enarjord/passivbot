@@ -16,7 +16,8 @@ All notable user-facing changes will be documented in this file.
   exchange state; price and quantity alone cannot prove a flat-to-position transition. Id-less
   fills use stable content-based identities rather than history-list indices. Position snapshots
   preserve distinct exchange opening times, while timestamp-free positions retry with
-  progressively wider history windows and retain the fills confirmation barrier between attempts.
+  progressively wider history windows outside the account-wide execution barrier, so only the
+  affected trailing coin and position side remain nontradable between attempts.
   Widening starts only after the required recent post-snapshot confirmation, tracks progress per
   coin and position side, and is capped at a two-year live recovery horizon to avoid unbounded
   exchange pagination.

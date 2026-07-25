@@ -2044,7 +2044,8 @@ async def test_runtime_delta_keeps_mismatched_after_state_pending():
     assert bot._orchestrator_trailing_unavailable_reasons == {
         symbol: ["position_fill_confirmation_pending"]
     }
-    assert "fills" in bot._authoritative_pending_confirmations
+    assert "fills" not in bot._authoritative_pending_confirmations
+    assert bot._trailing_fill_recovery_prefetch_due() is True
 
 
 @pytest.mark.asyncio
