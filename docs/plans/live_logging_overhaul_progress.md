@@ -12,9 +12,9 @@ operational diary.
   architecture, closes a completion criterion, or records evidence needed to
   understand a later design decision.
 - Do not append routine PR, deployment, restart, reviewer, or smoke chronology
-  here. Runtime actions still require a bounded durable record on the PR or
-  another run record with the exact deployed SHA, target scope,
-  commands/actions, outcomes, and limitations.
+  here. Runtime actions still require the bounded durable record and
+  public/private evidence split defined by step 13 of
+  `live_logging_overhaul_pr_loop_workflow.md`.
 - Adjacent trading, performance, restart, process, report, and operator-tool
   work belongs in its own plan or the live-operations backlog even when it uses
   the event pipeline.

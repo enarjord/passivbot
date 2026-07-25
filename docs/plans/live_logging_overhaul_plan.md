@@ -620,8 +620,8 @@ work unless later live evidence forces a revision.
 9. Conservative default disk budgets per bot on a small VPS:
    - structured event stream: roughly 100-250 MB
    - human text projection: roughly 25-50 MB
-   - permitted non-exchange diagnostic refs: disabled by default; when enabled,
-     roughly 50-100 MB with short retention
+   - permitted bounded scrubbed diagnostic artifacts: disabled by default; when
+     enabled, roughly 50-100 MB with short retention
    These limits should be configurable.
 10. Migrate meaningful decision/action stdlib logs first: lifecycle, cycle
     summary, Rust planning, reconciliation, order lifecycle, fills, positions,
