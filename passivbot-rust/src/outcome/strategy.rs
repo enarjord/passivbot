@@ -130,7 +130,6 @@ impl OutcomeInventorySnapshot {
     }
 }
 
-#[cfg(test)]
 impl OutcomeNativeOrderIntent {
     fn canonical_exposure_delta(&self) -> f64 {
         let sign = match (self.outcome, self.side) {
@@ -186,10 +185,16 @@ impl OutcomeEmaAnchorState {
     pub fn update(
         &mut self,
         canonical_close: f64,
+        payout_unit: f64,
         params: &OutcomeEmaAnchorParams,
     ) -> Result<(), OutcomeError> {
         params.validate()?;
-        if !canonical_close.is_finite() || !(0.0..=1.0).contains(&canonical_close) {
+        if !payout_unit.is_finite()
+            || payout_unit <= 0.0
+            || !canonical_close.is_finite()
+            || canonical_close < 0.0
+            || canonical_close > payout_unit
+        {
             return Err(OutcomeError::InvalidPrice(canonical_close));
         }
         if !self.initialized {
@@ -376,6 +381,18 @@ impl OutcomeEmaAnchorState {
             .min(affordable_pair_qty);
         let mut bid = self.bid_intent(bid_price, buy_qty, market, params, inventory);
         let mut ask = self.ask_intent(ask_price, buy_qty, market, params, inventory);
+        bid = cap_intent_to_residual_bounds(
+            bid,
+            inventory.residual_qty(),
+            params.max_abs_residual_qty,
+            market,
+        );
+        ask = cap_intent_to_residual_bounds(
+            ask,
+            inventory.residual_qty(),
+            params.max_abs_residual_qty,
+            market,
+        );
 
         if completion_overlap {
             if inventory.residual_qty() > EPSILON {
@@ -576,13 +593,17 @@ pub fn plan_outcome_ema_anchor(
                 "outcome EMA-anchor observations must be contiguous".to_string(),
             ));
         }
-        state.update(observation.close, &input.strategy_params)?;
+        state.update(
+            observation.close,
+            input.market.payout_unit,
+            &input.strategy_params,
+        )?;
     }
 
     let first = input.observations.first().expect("non-empty checked");
     let last = input.observations.last().expect("non-empty checked");
     let quotes = state.quote(
-        last.timestamp_ms,
+        last.timestamp_ms.saturating_add(1_000),
         last.close,
         &input.market,
         &input.strategy_params,
@@ -591,7 +612,7 @@ pub fn plan_outcome_ema_anchor(
     Ok(OutcomeEmaAnchorPlanOutput {
         strategy_kind: "ema_anchor_outcome".to_string(),
         observation_start_ms: first.timestamp_ms,
-        observation_end_ms: last.timestamp_ms,
+        observation_end_ms: last.timestamp_ms.saturating_add(1_000),
         observation_count: input.observations.len(),
         quotes,
     })
@@ -651,6 +672,27 @@ fn sell_intent(
         canonical_yes_price,
         qty,
     })
+}
+
+fn cap_intent_to_residual_bounds(
+    intent: Option<OutcomeNativeOrderIntent>,
+    residual_qty: f64,
+    max_abs_residual_qty: f64,
+    market: &BinaryOutcomeMarketSpec,
+) -> Option<OutcomeNativeOrderIntent> {
+    let intent = intent?;
+    let exposure_delta = intent.canonical_exposure_delta();
+    let residual_headroom = if exposure_delta > 0.0 {
+        max_abs_residual_qty - residual_qty
+    } else {
+        max_abs_residual_qty + residual_qty
+    }
+    .max(0.0);
+    let qty = intent.qty.min(residual_headroom);
+    match intent.side {
+        OutcomeOrderSide::Buy => buy_intent(intent.outcome, intent.native_price, qty, market),
+        OutcomeOrderSide::Sell => sell_intent(intent.outcome, intent.native_price, qty, market),
+    }
 }
 
 fn round_down(value: f64, step: f64) -> f64 {
@@ -722,7 +764,11 @@ mod tests {
     fn accumulate_mode_maps_canonical_bid_to_buy_yes_and_ask_to_buy_no() {
         let mut state = OutcomeEmaAnchorState::default();
         state
-            .update(0.5, &params(OutcomeEmaAnchorExecutionMode::AccumulatePairs))
+            .update(
+                0.5,
+                market().payout_unit,
+                &params(OutcomeEmaAnchorExecutionMode::AccumulatePairs),
+            )
             .unwrap();
         let quotes = state
             .quote(
@@ -749,11 +795,30 @@ mod tests {
     }
 
     #[test]
+    fn quote_sizes_cannot_cross_configured_residual_bounds() {
+        let mut state = OutcomeEmaAnchorState::default();
+        let mut parameters = params(OutcomeEmaAnchorExecutionMode::AccumulatePairs);
+        parameters.clip_qty = 25.0;
+        parameters.max_abs_residual_qty = 10.0;
+        state
+            .update(0.5, market().payout_unit, &parameters)
+            .unwrap();
+
+        let quotes = state
+            .quote(2_000, 0.5, &market(), &parameters, &flat_inventory())
+            .unwrap();
+
+        assert_eq!(quotes.canonical_bid.unwrap().qty, 10.0);
+        assert_eq!(quotes.canonical_ask.unwrap().qty, 10.0);
+    }
+
+    #[test]
     fn absolute_offsets_and_price_bounds_remain_symmetric_near_extremes() {
         let mut state = OutcomeEmaAnchorState::default();
         state
             .update(
                 0.005,
+                market().payout_unit,
                 &params(OutcomeEmaAnchorExecutionMode::AccumulatePairs),
             )
             .unwrap();
@@ -774,7 +839,9 @@ mod tests {
     fn positive_yes_residual_quotes_only_the_missing_complement() {
         let mut state = OutcomeEmaAnchorState::default();
         let parameters = params(OutcomeEmaAnchorExecutionMode::AccumulatePairs);
-        state.update(0.5, &parameters).unwrap();
+        state
+            .update(0.5, market().payout_unit, &parameters)
+            .unwrap();
         let inventory = OutcomeInventorySnapshot {
             yes_qty: 10.0,
             no_qty: 0.0,
@@ -800,8 +867,12 @@ mod tests {
         let mut state = OutcomeEmaAnchorState::default();
         let mut parameters = params(OutcomeEmaAnchorExecutionMode::AccumulatePairs);
         parameters.inventory_skew = 0.0;
-        state.update(0.6, &parameters).unwrap();
-        state.update(0.5, &parameters).unwrap();
+        state
+            .update(0.6, market().payout_unit, &parameters)
+            .unwrap();
+        state
+            .update(0.5, market().payout_unit, &parameters)
+            .unwrap();
         let inventory = OutcomeInventorySnapshot {
             yes_qty: 1.0,
             no_qty: 0.0,
@@ -827,8 +898,12 @@ mod tests {
         let mut state = OutcomeEmaAnchorState::default();
         let mut parameters = params(OutcomeEmaAnchorExecutionMode::AccumulatePairs);
         parameters.inventory_skew = 0.0;
-        state.update(0.6, &parameters).unwrap();
-        state.update(0.5, &parameters).unwrap();
+        state
+            .update(0.6, market().payout_unit, &parameters)
+            .unwrap();
+        state
+            .update(0.5, market().payout_unit, &parameters)
+            .unwrap();
         let inventory = OutcomeInventorySnapshot {
             yes_qty: 1.0,
             no_qty: 0.0,
@@ -853,7 +928,9 @@ mod tests {
     fn inventory_aware_mode_sells_existing_tokens_before_buying_complements() {
         let mut state = OutcomeEmaAnchorState::default();
         let parameters = params(OutcomeEmaAnchorExecutionMode::InventoryAware);
-        state.update(0.5, &parameters).unwrap();
+        state
+            .update(0.5, market().payout_unit, &parameters)
+            .unwrap();
         let inventory = OutcomeInventorySnapshot {
             yes_qty: 2.0,
             no_qty: 3.0,
@@ -880,7 +957,9 @@ mod tests {
     fn yes_only_mode_never_invents_a_sell_without_yes_inventory() {
         let mut state = OutcomeEmaAnchorState::default();
         let parameters = params(OutcomeEmaAnchorExecutionMode::YesOnly);
-        state.update(0.5, &parameters).unwrap();
+        state
+            .update(0.5, market().payout_unit, &parameters)
+            .unwrap();
         let flat = state
             .quote(2_000, 0.5, &market(), &parameters, &flat_inventory())
             .unwrap();
@@ -892,7 +971,9 @@ mod tests {
     fn entry_cutoff_disables_both_quotes() {
         let mut state = OutcomeEmaAnchorState::default();
         let parameters = params(OutcomeEmaAnchorExecutionMode::AccumulatePairs);
-        state.update(0.5, &parameters).unwrap();
+        state
+            .update(0.5, market().payout_unit, &parameters)
+            .unwrap();
         let quotes = state
             .quote(95_000, 0.5, &market(), &parameters, &flat_inventory())
             .unwrap();
@@ -904,7 +985,9 @@ mod tests {
     fn risk_reduction_window_sells_excess_yes_instead_of_adding_no() {
         let mut state = OutcomeEmaAnchorState::default();
         let parameters = params(OutcomeEmaAnchorExecutionMode::AccumulatePairs);
-        state.update(0.5, &parameters).unwrap();
+        state
+            .update(0.5, market().payout_unit, &parameters)
+            .unwrap();
         let inventory = OutcomeInventorySnapshot {
             yes_qty: 2.0,
             no_qty: 1.0,
@@ -930,7 +1013,9 @@ mod tests {
     fn risk_reduction_window_sells_only_excess_no() {
         let mut state = OutcomeEmaAnchorState::default();
         let parameters = params(OutcomeEmaAnchorExecutionMode::AccumulatePairs);
-        state.update(0.5, &parameters).unwrap();
+        state
+            .update(0.5, market().payout_unit, &parameters)
+            .unwrap();
         let inventory = OutcomeInventorySnapshot {
             yes_qty: 1.0,
             no_qty: 2.0,
@@ -956,7 +1041,9 @@ mod tests {
     fn risk_reduction_window_does_not_open_fresh_inventory_when_flat() {
         let mut state = OutcomeEmaAnchorState::default();
         let parameters = params(OutcomeEmaAnchorExecutionMode::AccumulatePairs);
-        state.update(0.5, &parameters).unwrap();
+        state
+            .update(0.5, market().payout_unit, &parameters)
+            .unwrap();
         let quotes = state
             .quote(91_000, 0.5, &market(), &parameters, &flat_inventory())
             .unwrap();
@@ -974,7 +1061,9 @@ mod tests {
         };
         let mut state = OutcomeEmaAnchorState::default();
         let parameters = params(OutcomeEmaAnchorExecutionMode::AccumulatePairs);
-        state.update(0.333_333, &parameters).unwrap();
+        state
+            .update(0.333_333, significant_market.payout_unit, &parameters)
+            .unwrap();
         let inventory = OutcomeInventorySnapshot {
             yes_qty: 1.0,
             no_qty: 2.0,
@@ -1034,19 +1123,67 @@ mod tests {
     }
 
     #[test]
+    fn stateless_planner_uses_completed_candle_boundary_for_cutoff() {
+        let parameters = params(OutcomeEmaAnchorExecutionMode::AccumulatePairs);
+        let input = OutcomeEmaAnchorPlanInput {
+            market: market(),
+            strategy_params: parameters,
+            observations: vec![OutcomeEmaAnchorObservation {
+                timestamp_ms: 94_000,
+                close: 0.5,
+            }],
+            inventory: flat_inventory(),
+        };
+
+        let output = plan_outcome_ema_anchor(&input).unwrap();
+
+        assert_eq!(output.observation_end_ms, 95_000);
+        assert_eq!(output.quotes.timestamp_ms, 95_000);
+        assert!(output.quotes.canonical_bid.is_none());
+        assert!(output.quotes.canonical_ask.is_none());
+    }
+
+    #[test]
+    fn ema_observations_accept_the_market_payout_range() {
+        let mut larger_payout_market = market();
+        larger_payout_market.payout_unit = 2.0;
+        larger_payout_market.max_price = 1.999;
+        let input = OutcomeEmaAnchorPlanInput {
+            market: larger_payout_market,
+            strategy_params: params(OutcomeEmaAnchorExecutionMode::AccumulatePairs),
+            observations: vec![OutcomeEmaAnchorObservation {
+                timestamp_ms: 1_000,
+                close: 1.2,
+            }],
+            inventory: flat_inventory(),
+        };
+
+        let output = plan_outcome_ema_anchor(&input).unwrap();
+
+        assert!((output.quotes.ema_fast - 1.2).abs() < 1e-12);
+        assert!((output.quotes.ema_slow - 1.2).abs() < 1e-12);
+    }
+
+    #[test]
     fn warmup_suppresses_quotes_until_enough_dense_seconds_exist() {
         let mut parameters = params(OutcomeEmaAnchorExecutionMode::AccumulatePairs);
         parameters.ema_warmup_seconds = 3;
         let mut state = OutcomeEmaAnchorState::default();
-        state.update(0.5, &parameters).unwrap();
-        state.update(0.5, &parameters).unwrap();
+        state
+            .update(0.5, market().payout_unit, &parameters)
+            .unwrap();
+        state
+            .update(0.5, market().payout_unit, &parameters)
+            .unwrap();
         let warming = state
             .quote(2_000, 0.5, &market(), &parameters, &flat_inventory())
             .unwrap();
         assert!(warming.canonical_bid.is_none());
         assert!(warming.canonical_ask.is_none());
 
-        state.update(0.5, &parameters).unwrap();
+        state
+            .update(0.5, market().payout_unit, &parameters)
+            .unwrap();
         let ready = state
             .quote(3_000, 0.5, &market(), &parameters, &flat_inventory())
             .unwrap();

@@ -143,6 +143,7 @@ async def collect_verified_outcome_signal_window(
     collection_end_ms: int | None = None
     first_received_ms: int | None = None
     trades: list[NormalizedOutcomeTrade] = []
+    rejected_trade_times_ms: list[int] = []
     try:
         while True:
             now_monotonic = loop.time()
@@ -186,6 +187,7 @@ async def collect_verified_outcome_signal_window(
                 archive.append_trade(trade, collector_session=collector_session)
             delivery_delay_ms = trade.received_time_ms - trade.exchange_time_ms
             if not -1_000 <= delivery_delay_ms <= max_live_trade_lag_ms:
+                rejected_trade_times_ms.append(trade.exchange_time_ms)
                 continue
             trades.append(trade)
             if first_received_ms is None:
@@ -210,6 +212,13 @@ async def collect_verified_outcome_signal_window(
             "outcome collection did not complete one verified signal second"
         )
     coverage = VerifiedCoverage(coverage_start_ms, coverage_end_ms)
+    if any(
+        coverage.start_ms <= exchange_time_ms < coverage.end_ms
+        for exchange_time_ms in rejected_trade_times_ms
+    ):
+        raise OutcomeIncompleteVerifiedSignal(
+            "outcome collection observed an in-window fill outside the allowed delivery lag"
+        )
     window = build_verified_outcome_signal_window(
         trades,
         coverage,

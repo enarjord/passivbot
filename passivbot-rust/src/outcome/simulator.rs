@@ -272,6 +272,9 @@ impl SingleOutcomeSimulator {
     }
 
     pub fn split(&mut self, qty: f64, yes_reference_price: f64) -> Result<(), OutcomeError> {
+        if !self.market.capabilities.supports_split {
+            return Err(OutcomeError::UnsupportedOrderFeature("split".to_string()));
+        }
         let required = qty * self.market.payout_unit;
         let available = self.available_collateral();
         if required > available + QTY_EPSILON {
@@ -284,6 +287,9 @@ impl SingleOutcomeSimulator {
     }
 
     pub fn merge(&mut self, qty: f64) -> Result<f64, OutcomeError> {
+        if !self.market.capabilities.supports_merge {
+            return Err(OutcomeError::UnsupportedOrderFeature("merge".to_string()));
+        }
         for outcome in [Outcome::Yes, Outcome::No] {
             let available = self.available_inventory(outcome);
             if qty > available + QTY_EPSILON {
@@ -719,5 +725,23 @@ mod tests {
         simulator.cancel_order("reserved-sell").unwrap();
         assert_close(simulator.merge(2.0).unwrap(), 0.0);
         assert_close(simulator.ledger().collateral(), 2.0);
+    }
+
+    #[test]
+    fn split_and_merge_require_venue_capabilities() {
+        let mut unsupported = market(false);
+        unsupported.capabilities.supports_split = false;
+        unsupported.capabilities.supports_merge = false;
+        let mut simulator =
+            SingleOutcomeSimulator::new(unsupported, OutcomeFeeSchedule::zero(), 2.0).unwrap();
+
+        assert_eq!(
+            simulator.split(1.0, 0.5),
+            Err(OutcomeError::UnsupportedOrderFeature("split".to_string()))
+        );
+        assert_eq!(
+            simulator.merge(1.0),
+            Err(OutcomeError::UnsupportedOrderFeature("merge".to_string()))
+        );
     }
 }

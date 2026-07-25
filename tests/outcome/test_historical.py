@@ -41,7 +41,7 @@ def test_hyperliquid_block_archive_deduplicates_participant_fills_and_proves_zer
         json.dumps(
             {
                 "local_time": "1970-01-01T00:00:01.600Z",
-                "block_time": "1970-01-01T00:00:01.500Z",
+                "block_time": "1970-01-01T00:00:01.000Z",
                 "block_number": 100,
                 "events": [["0xbuyer", fill], ["0xseller", opposite]],
             }
@@ -49,7 +49,7 @@ def test_hyperliquid_block_archive_deduplicates_participant_fills_and_proves_zer
         json.dumps(
             {
                 "local_time": "1970-01-01T00:00:02.600Z",
-                "block_time": "1970-01-01T00:00:02.500Z",
+                "block_time": "1970-01-01T00:00:03.000Z",
                 "block_number": 101,
                 "events": [],
             }
@@ -87,6 +87,80 @@ def test_hyperliquid_block_archive_deduplicates_participant_fills_and_proves_zer
         start_ms=0,
         end_ms=10_000,
     ) == [VerifiedCoverage(1_000, 3_000)]
+
+
+def test_hyperliquid_coverage_excludes_partial_boundary_seconds():
+    market = hyperliquid.normalize_market(fixture("hyperliquid_price_binary.json"))
+    lines = [
+        json.dumps(
+            {
+                "block_time": "1970-01-01T00:00:01.500Z",
+                "block_number": 100,
+                "events": [],
+            }
+        ),
+        json.dumps(
+            {
+                "block_time": "1970-01-01T00:00:02.500Z",
+                "block_number": 101,
+                "events": [],
+            }
+        ),
+    ]
+
+    batch = parse_hyperliquid_node_fills_by_block(
+        lines,
+        market,
+        source_cursor="partial-boundaries",
+    )
+
+    assert batch.coverage_by_asset == {}
+
+
+def test_hyperliquid_mirrored_assets_share_historical_economic_event_id():
+    market = hyperliquid.normalize_market(fixture("hyperliquid_price_binary.json"))
+    yes_fill = {
+        "coin": market.yes_asset.market_data_symbol,
+        "px": "0.335",
+        "sz": "2",
+        "side": "A",
+        "time": 1_500,
+        "hash": "0xmirror",
+        "tid": 7,
+    }
+    no_fill = {
+        **yes_fill,
+        "coin": market.no_asset.market_data_symbol,
+        "px": "0.665",
+        "side": "B",
+        "tid": 8,
+    }
+    lines = [
+        json.dumps(
+            {
+                "block_time": "1970-01-01T00:00:01.000Z",
+                "block_number": 100,
+                "events": [["0xparticipant", yes_fill], ["0xparticipant", no_fill]],
+            }
+        ),
+        json.dumps(
+            {
+                "block_time": "1970-01-01T00:00:02.000Z",
+                "block_number": 101,
+                "events": [],
+            }
+        ),
+    ]
+
+    batch = parse_hyperliquid_node_fills_by_block(
+        lines,
+        market,
+        source_cursor="mirrored-assets",
+    )
+
+    assert len(batch.trades) == 2
+    assert batch.trades[0].source_event_id != batch.trades[1].source_event_id
+    assert batch.trades[0].economic_event_id == batch.trades[1].economic_event_id
 
 
 def test_hyperliquid_block_gap_fails_before_claiming_coverage():

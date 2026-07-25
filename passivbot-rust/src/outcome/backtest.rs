@@ -506,7 +506,11 @@ pub fn run_outcome_ema_anchor_backtest(
             &mut worst_case_settlement_equity_min,
         );
 
-        state.update(signal.close, &input.strategy_params)?;
+        state.update(
+            signal.close,
+            input.market.payout_unit,
+            &input.strategy_params,
+        )?;
         let ledger = simulator.ledger();
         let inventory = OutcomeInventorySnapshot {
             yes_qty: ledger.yes_qty(),
@@ -516,7 +520,7 @@ pub fn run_outcome_ema_anchor_backtest(
             free_collateral: simulator.available_collateral(),
         };
         let quotes = state.quote(
-            signal.timestamp_ms,
+            signal_second_end_ms,
             signal.close,
             &current_market,
             &input.strategy_params,
@@ -529,7 +533,7 @@ pub fn run_outcome_ema_anchor_backtest(
             next_order_sequence = next_order_sequence.saturating_add(1);
             simulator.place_order(
                 limit_order_from_intent(intent, format!("ema-outcome-{next_order_sequence}")),
-                signal.timestamp_ms,
+                signal_second_end_ms,
             )?;
             orders_placed_count += 1;
         }

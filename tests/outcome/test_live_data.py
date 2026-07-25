@@ -5,6 +5,7 @@ import pytest
 from outcome.archive import OutcomeTradeArchive
 from outcome.candles import VerifiedCoverage
 from outcome.live_data import (
+    OutcomeIncompleteVerifiedSignal,
     build_verified_outcome_signal_window,
     collect_verified_polymarket_signal_window,
 )
@@ -141,3 +142,53 @@ async def test_polymarket_collector_uses_same_actual_fill_and_zero_second_contra
     assert len(window.trades) == 1
     assert window.covered_trades == ()
     assert archive.load_market_metadata(market.venue, market.market_id) == [market]
+
+
+@pytest.mark.asyncio
+async def test_late_in_window_fill_prevents_verified_coverage(tmp_path):
+    market = polymarket_market()
+    archive = OutcomeTradeArchive(tmp_path / "late-fill.sqlite")
+
+    async def stream():
+        for sequence, (exchange_time_ms, received_time_ms) in enumerate(
+            ((1_900, 1_950), (2_500, 5_001)),
+            start=1,
+        ):
+            yield NormalizedOutcomeTrade(
+                venue=market.venue,
+                market_id=market.market_id,
+                asset_id=market.yes_asset.asset_id,
+                outcome=OutcomeSide.YES,
+                native_side=OutcomeOrderSide.BUY,
+                native_price=0.4,
+                canonical_yes_price=0.4,
+                qty=1.0,
+                exchange_time_ms=exchange_time_ms,
+                received_time_ms=received_time_ms,
+                source_event_id=f"late-{sequence}",
+                collector_sequence=sequence,
+            )
+
+    clock_values = iter((1_900, 2_500, 2_500, 3_100, 3_100))
+    with pytest.raises(
+        OutcomeIncompleteVerifiedSignal,
+        match="outside the allowed delivery lag",
+    ):
+        await collect_verified_polymarket_signal_window(
+            market,
+            min_observations=1,
+            delivery_lag_ms=0,
+            max_live_trade_lag_ms=2_000,
+            wall_clock_ms=lambda: next(clock_values),
+            trade_stream=stream(),
+            archive=archive,
+            collector_session="late-fill-test",
+        )
+
+    assert archive.load_verified_coverage(
+        market.venue,
+        market.market_id,
+        market.yes_asset.asset_id,
+        start_ms=0,
+        end_ms=10_000,
+    ) == []

@@ -3,10 +3,13 @@ from __future__ import annotations
 import asyncio
 import json
 from pathlib import Path
+import sqlite3
 
 import pytest
 
+import outcome.live_bot as live_bot
 from outcome.adapters import hyperliquid
+from outcome.archive import OutcomeTradeArchive
 from outcome.hyperliquid_live import (
     HyperliquidOutcomeAccountSnapshot,
     HyperliquidOutcomeFeeRates,
@@ -172,6 +175,39 @@ async def test_default_cycle_is_read_only_and_returns_explicit_reconciliation():
     assert cycle.reconciliation.cancels == ()
     assert client.market_checks == 1
     assert client.snapshot_fetches == 1
+
+
+@pytest.mark.asyncio
+async def test_default_cycle_timestamps_decision_after_required_reads(monkeypatch):
+    signal_candles = candles()
+    completed_at_ms = signal_candles[-1].timestamp_ms + 1_000
+    clock = {"now_ms": completed_at_ms - 2_000}
+
+    class AdvancingClient(ReadOnlyClient):
+        async def fetch_account_snapshot(self, markets):
+            clock["now_ms"] = completed_at_ms
+            self.account = snapshot(completed_at_ms)
+            return await super().fetch_account_snapshot(markets)
+
+        async def fetch_market_lifecycle(self, market, *, account=None, now_ms=None):
+            assert now_ms is None
+            return lifecycle_snapshot(clock["now_ms"])
+
+    monkeypatch.setattr(
+        live_bot.time,
+        "time",
+        lambda: clock["now_ms"] / 1_000,
+    )
+    cycle = await run_hip4_outcome_cycle(
+        AdvancingClient(snapshot(clock["now_ms"])),
+        market(),
+        params(),
+        signal_candles,
+    )
+
+    assert cycle.planned_at_ms == completed_at_ms
+    assert cycle.account.received_time_ms == completed_at_ms
+    assert cycle.planning_available is True
 
 
 @pytest.mark.asyncio
@@ -398,6 +434,35 @@ async def test_settled_market_routes_normal_cycle_to_cancel_only_with_evidence()
     assert cycle.reconciliation.creates == ()
 
 
+@pytest.mark.asyncio
+async def test_settled_cycle_persists_authoritative_evidence(tmp_path):
+    signal_candles = candles()
+    now_ms = market().lifecycle.scheduled_event_time_ms + 2_000
+    archive = OutcomeTradeArchive(tmp_path / "live-settlement.sqlite")
+    client = ReadOnlyClient(
+        snapshot(now_ms),
+        lifecycle=lifecycle_snapshot(
+            now_ms,
+            state=HyperliquidOutcomeLifecycleState.SETTLED,
+        ),
+    )
+
+    cycle = await run_hip4_outcome_cycle(
+        client,
+        market(),
+        params(),
+        signal_candles,
+        now_ms=now_ms,
+        archive=archive,
+        collector_session="live-settlement",
+    )
+
+    assert cycle.lifecycle.settlement is not None
+    assert archive.load_settlements(OutcomeVenue.HYPERLIQUID, "913") == [
+        cycle.lifecycle.settlement
+    ]
+
+
 class SafetyMutationClient:
     def __init__(self, snapshots, *, lifecycle=None):
         self.snapshots = list(snapshots)
@@ -479,3 +544,99 @@ async def test_executed_unavailable_signal_cycle_cancels_managed_quote_only():
     assert cycle.mutation_result is not None
     assert len(cycle.mutation_result.cancelled) == 1
     assert cycle.mutation_result.created == ()
+
+
+@pytest.mark.asyncio
+async def test_stream_disconnect_routes_to_executed_cancel_only_cycle():
+    outcome_market = market()
+    start_ms = outcome_market.lifecycle.trading_open_time_ms
+    assert start_ms is not None
+
+    async def disconnected_stream():
+        yield NormalizedOutcomeTrade(
+            venue=outcome_market.venue,
+            market_id=outcome_market.market_id,
+            asset_id=outcome_market.yes_asset.asset_id,
+            outcome=OutcomeSide.YES,
+            native_side=OutcomeOrderSide.BUY,
+            native_price=0.5,
+            canonical_yes_price=0.5,
+            qty=1.0,
+            exchange_time_ms=start_ms + 900,
+            received_time_ms=start_ms + 950,
+            source_event_id="disconnect-seed",
+            collector_sequence=1,
+        )
+
+    now_ms = start_ms + 1_500
+    cloid = managed_outcome_client_order_id(
+        "913",
+        slot="canonical_bid",
+        observation_end_ms=candles()[-1].timestamp_ms,
+    )
+    managed_order = OutcomeOpenOrder(
+        market_id="913",
+        order_id="7",
+        asset_id="+9130",
+        outcome=OutcomeSide.YES,
+        side=OutcomeOrderSide.BUY,
+        native_price=0.49,
+        qty=25.0,
+        original_qty=25.0,
+        timestamp_ms=start_ms,
+        client_order_id=cloid,
+    )
+    client = SafetyMutationClient(
+        (
+            snapshot(now_ms, open_orders=(managed_order,)),
+            snapshot(now_ms),
+            snapshot(now_ms),
+        )
+    )
+
+    collected = await run_hip4_outcome_collected_cycle(
+        client,
+        outcome_market,
+        params(),
+        min_observations=3,
+        max_wait_seconds=1.0,
+        delivery_lag_ms=0,
+        wall_clock_ms=lambda: now_ms,
+        trade_stream=disconnected_stream(),
+        execute=True,
+        now_ms=now_ms,
+    )
+
+    assert collected.signal_window is None
+    assert (
+        collected.cycle.planning_unavailable_reason
+        is OutcomePlanningUnavailableReason.SIGNAL_COLLECTION_FAILED
+    )
+    assert client.cancelled == [("913", OutcomeSide.YES, 7, cloid)]
+    assert client.created == []
+
+
+@pytest.mark.asyncio
+async def test_archive_failure_routes_to_cancel_only_cycle():
+    class FailingArchive:
+        def append_market_metadata(self, *args, **kwargs):
+            raise sqlite3.OperationalError("archive unavailable")
+
+    now_ms = candles()[-1].timestamp_ms + 1_000
+    client = ReadOnlyClient(snapshot(now_ms))
+    collected = await run_hip4_outcome_collected_cycle(
+        client,
+        market(),
+        params(),
+        min_observations=3,
+        archive=FailingArchive(),
+        collector_session="failing-archive",
+        now_ms=now_ms,
+    )
+
+    assert collected.signal_window is None
+    assert (
+        collected.cycle.planning_unavailable_reason
+        is OutcomePlanningUnavailableReason.SIGNAL_COLLECTION_FAILED
+    )
+    assert collected.cycle.reconciliation.creates == ()

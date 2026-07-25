@@ -39,8 +39,8 @@ class OutcomeLiveOrderIntent:
             raise ValueError(f"unsupported live outcome intent slot {self.slot!r}")
         for name in ("native_price", "canonical_yes_price"):
             value = getattr(self, name)
-            if not math.isfinite(value) or not 0.0 <= value <= 1.0:
-                raise ValueError(f"live outcome intent {name} must be in [0, 1]")
+            if not math.isfinite(value) or value < 0.0:
+                raise ValueError(f"live outcome intent {name} must be finite and non-negative")
         if not math.isfinite(self.qty) or self.qty <= 0.0:
             raise ValueError("live outcome intent qty must be finite and positive")
 
@@ -146,13 +146,20 @@ def build_ema_anchor_outcome_live_plan(
             continue
         if not isinstance(raw_intent, Mapping):
             raise TypeError(f"Rust outcome planner returned malformed {key}")
+        native_price = float(raw_intent["native_price"])
+        canonical_yes_price = float(raw_intent["canonical_yes_price"])
+        if not (
+            0.0 <= native_price <= market.payout_unit
+            and 0.0 <= canonical_yes_price <= market.payout_unit
+        ):
+            raise ValueError("Rust outcome planner returned a price outside the payout range")
         intents.append(
             OutcomeLiveOrderIntent(
                 slot=key,
                 outcome=OutcomeSide(str(raw_intent["outcome"])),
                 side=OutcomeOrderSide(str(raw_intent["side"])),
-                native_price=float(raw_intent["native_price"]),
-                canonical_yes_price=float(raw_intent["canonical_yes_price"]),
+                native_price=native_price,
+                canonical_yes_price=canonical_yes_price,
                 qty=float(raw_intent["qty"]),
             )
         )

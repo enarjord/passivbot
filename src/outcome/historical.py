@@ -245,7 +245,6 @@ def parse_hyperliquid_node_fills_by_block(
                 replace(
                     normalized,
                     sequence_id=_ordered_sequence(block_number, 0, event_index),
-                    economic_event_id=f"{block_number}:{coin}:{tid}",
                     raw_payload=payload,
                 )
             )
@@ -259,9 +258,13 @@ def parse_hyperliquid_node_fills_by_block(
             trade.asset_id,
         )
     )
-    start_ms = (first_block_time_ms // 1_000) * 1_000
-    end_ms = (last_block_time_ms // 1_000) * 1_000 + 1_000
-    coverage = (VerifiedCoverage(start_ms, end_ms),)
+    start_ms = ((first_block_time_ms + 999) // 1_000) * 1_000
+    end_ms = (last_block_time_ms // 1_000) * 1_000
+    coverage = (
+        (VerifiedCoverage(start_ms, end_ms),)
+        if start_ms < end_ms
+        else ()
+    )
     settlement_fills = hyperliquid.normalize_account_fills(
         settlement_payloads,
         (market,),
@@ -278,10 +281,14 @@ def parse_hyperliquid_node_fills_by_block(
         market=market,
         source_cursor=source_cursor,
         trades=tuple(trades),
-        coverage_by_asset={
-            market.yes_asset.asset_id: coverage,
-            market.no_asset.asset_id: coverage,
-        },
+        coverage_by_asset=(
+            {
+                market.yes_asset.asset_id: coverage,
+                market.no_asset.asset_id: coverage,
+            }
+            if coverage
+            else {}
+        ),
         settlements=settlements,
     )
 

@@ -2,8 +2,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
+import sqlite3
 import time
 from typing import Any, AsyncIterator, Callable, Mapping, Sequence
+
+import aiohttp
 
 from outcome.archive import OutcomeTradeArchive
 from outcome.hyperliquid_live import (
@@ -41,6 +44,7 @@ class OutcomePlanningUnavailableReason(str, Enum):
     NO_PUBLIC_FILL = "no_public_fill"
     INCOMPLETE_VERIFIED_SIGNAL = "incomplete_verified_signal"
     STALE_VERIFIED_SIGNAL = "stale_verified_signal"
+    SIGNAL_COLLECTION_FAILED = "signal_collection_failed"
     MARKET_EXPIRED_AWAITING_SETTLEMENT = "market_expired_awaiting_settlement"
     MARKET_SETTLED = "market_settled"
 
@@ -79,15 +83,23 @@ async def run_hip4_outcome_cycle(
     *,
     execute: bool = False,
     now_ms: int | None = None,
+    archive: OutcomeTradeArchive | None = None,
+    collector_session: str | None = None,
 ) -> HyperliquidOutcomeCycle:
     """Plan and optionally reconcile one HIP-4 market from authoritative current inputs."""
 
-    planned_at_ms = int(time.time() * 1_000) if now_ms is None else int(now_ms)
+    _validate_archive_session(archive, collector_session)
     account = await client.fetch_account_snapshot((market,))
     lifecycle = await client.fetch_market_lifecycle(
         market,
         account=account,
-        now_ms=planned_at_ms,
+        now_ms=now_ms,
+    )
+    planned_at_ms = int(time.time() * 1_000) if now_ms is None else int(now_ms)
+    _persist_lifecycle_settlement(
+        lifecycle,
+        archive=archive,
+        collector_session=collector_session,
     )
     lifecycle_reason = _planning_reason_for_lifecycle(lifecycle)
     if lifecycle_reason is not None:
@@ -143,17 +155,25 @@ async def run_hip4_outcome_unavailable_cycle(
     reason: OutcomePlanningUnavailableReason,
     execute: bool = False,
     now_ms: int | None = None,
+    archive: OutcomeTradeArchive | None = None,
+    collector_session: str | None = None,
 ) -> HyperliquidOutcomeCycle:
     """Produce a cancel-only decision when a verified strategy signal is unavailable."""
 
     if not isinstance(reason, OutcomePlanningUnavailableReason):
         raise TypeError("outcome planning unavailability requires a stable reason")
-    planned_at_ms = int(time.time() * 1_000) if now_ms is None else int(now_ms)
+    _validate_archive_session(archive, collector_session)
     account = await client.fetch_account_snapshot((market,))
     lifecycle = await client.fetch_market_lifecycle(
         market,
         account=account,
-        now_ms=planned_at_ms,
+        now_ms=now_ms,
+    )
+    planned_at_ms = int(time.time() * 1_000) if now_ms is None else int(now_ms)
+    _persist_lifecycle_settlement(
+        lifecycle,
+        archive=archive,
+        collector_session=collector_session,
     )
     lifecycle_reason = _planning_reason_for_lifecycle(lifecycle)
     return await _finish_unavailable_cycle(
@@ -180,6 +200,27 @@ def _planning_reason_for_lifecycle(
     ):
         return OutcomePlanningUnavailableReason.MARKET_EXPIRED_AWAITING_SETTLEMENT
     raise ValueError(f"unsupported HIP-4 lifecycle state {lifecycle.state!r}")
+
+
+def _validate_archive_session(
+    archive: OutcomeTradeArchive | None,
+    collector_session: str | None,
+) -> None:
+    if archive is not None and not collector_session:
+        raise ValueError("archived outcome cycles require collector_session")
+
+
+def _persist_lifecycle_settlement(
+    lifecycle: HyperliquidOutcomeLifecycleSnapshot,
+    *,
+    archive: OutcomeTradeArchive | None,
+    collector_session: str | None,
+) -> None:
+    if archive is not None and lifecycle.settlement is not None:
+        archive.append_settlement(
+            lifecycle.settlement,
+            collector_session=collector_session,
+        )
 
 
 async def _finish_unavailable_cycle(
@@ -252,6 +293,8 @@ async def run_hip4_outcome_collected_cycle(
             reason=OutcomePlanningUnavailableReason.NO_PUBLIC_FILL,
             execute=execute,
             now_ms=now_ms,
+            archive=archive,
+            collector_session=collector_session,
         )
         return HyperliquidOutcomeCollectedCycle(cycle=cycle, signal_window=None)
     except OutcomeIncompleteVerifiedSignal:
@@ -261,6 +304,19 @@ async def run_hip4_outcome_collected_cycle(
             reason=OutcomePlanningUnavailableReason.INCOMPLETE_VERIFIED_SIGNAL,
             execute=execute,
             now_ms=now_ms,
+            archive=archive,
+            collector_session=collector_session,
+        )
+        return HyperliquidOutcomeCollectedCycle(cycle=cycle, signal_window=None)
+    except (ConnectionError, OSError, aiohttp.ClientError, sqlite3.Error):
+        cycle = await run_hip4_outcome_unavailable_cycle(
+            client,
+            market,
+            reason=OutcomePlanningUnavailableReason.SIGNAL_COLLECTION_FAILED,
+            execute=execute,
+            now_ms=now_ms,
+            archive=archive,
+            collector_session=collector_session,
         )
         return HyperliquidOutcomeCollectedCycle(cycle=cycle, signal_window=None)
 
@@ -271,5 +327,7 @@ async def run_hip4_outcome_collected_cycle(
         window.candles,
         execute=execute,
         now_ms=now_ms,
+        archive=archive,
+        collector_session=collector_session,
     )
     return HyperliquidOutcomeCollectedCycle(cycle=cycle, signal_window=window)
