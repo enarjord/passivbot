@@ -11939,7 +11939,7 @@ class Passivbot:
                 trailing_recovery_refresh = bool(
                     getattr(self, "_trailing_fill_confirmation_diagnostics", {})
                     or {}
-                )
+                ) and source == "routine_prefetch:trailing_recovery"
                 refresh_mode = (
                     "incremental_confirm"
                     if confirmation_refresh

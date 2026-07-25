@@ -218,6 +218,15 @@ def authoritative_staged_refresh_plan(bot) -> set[str]:
             logging.debug(
                 "[state] staged fills refresh required: risk lookback coverage unproven"
             )
+        elif should_prefetch_trailing_recovery and (
+            bot._schedule_routine_fill_refresh_prefetch(
+                reason="trailing_recovery"
+            )
+        ):
+            plan.discard("fills")
+            logging.debug(
+                "[state] trailing fill recovery scheduled outside blocking staged refresh"
+            )
         elif not bot._staged_fills_refresh_due():
             plan.discard("fills")
             logging.debug("[state] staged fills refresh deferred until next minute boundary")
@@ -226,8 +235,6 @@ def authoritative_staged_refresh_plan(bot) -> set[str]:
         ):
             plan.discard("fills")
             logging.debug("[state] staged routine fills refresh scheduled in background")
-    if should_prefetch_trailing_recovery and "fills" not in plan:
-        bot._schedule_routine_fill_refresh_prefetch(reason="trailing_recovery")
     bot._authoritative_refresh_plan_surfaces = set(plan)
     return plan
 

@@ -6419,7 +6419,9 @@ async def test_update_pnls_widens_refresh_for_mismatched_trailing_fill_anchor(
     bot.logging_level = 0
     bot._health_rate_limits = 0
 
-    result = await bot.update_pnls()
+    result = await bot.update_pnls(
+        source="routine_prefetch:trailing_recovery"
+    )
 
     assert result is True
     bot._pnls_manager.refresh.assert_awaited_once_with(
