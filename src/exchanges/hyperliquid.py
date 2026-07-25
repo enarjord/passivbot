@@ -696,10 +696,27 @@ class HyperliquidBot(CCXTBot):
                 for order in res:
                     try:
                         order["position_side"] = self.determine_pos_side(order)
+                    except (KeyError, TypeError, ValueError) as exc:
+                        recovered = self._hl_acknowledged_ws_order_semantics(order)
+                        if recovered is None:
+                            untrusted.append((order, exc))
+                            continue
+                        position_side, reduce_only = recovered
+                        order["position_side"] = position_side
+                        order["reduceOnly"] = reduce_only
+                        order["_pb_order_semantics_source"] = (
+                            "acknowledged_exchange_order_id"
+                        )
+                        if self._hl_ws_order_has_fill_progress(order):
+                            order[
+                                "_pb_order_update_requires_authoritative_refresh"
+                            ] = True
+                    try:
                         order["qty"] = order["amount"]
-                        normalized.append(order)
                     except (KeyError, TypeError, ValueError) as exc:
                         untrusted.append((order, exc))
+                        continue
+                    normalized.append(order)
                 if untrusted:
                     symbols = {
                         str(order.get("symbol") or "")
@@ -756,6 +773,217 @@ class HyperliquidBot(CCXTBot):
                 )
                 await asyncio.sleep(1)
                 logging.debug("[ws] %s: reconnecting...", self.exchange)
+
+    def _hl_acknowledged_ws_order_semantics(
+        self, order: dict
+    ) -> tuple[str, bool] | None:
+        """Recover missing WS semantics from an exact acknowledged-order id.
+
+        Hyperliquid websocket order updates commonly omit ``reduceOnly`` and
+        client metadata.  Passivbot's acknowledged create records retain those
+        semantics together with the exchange-assigned order id.  An exact id
+        match is strong enough for websocket hint attribution; ambiguous,
+        malformed, contradictory, or foreign updates remain untrusted and
+        trigger the authoritative account-state refresh path.
+        """
+        if not isinstance(order, dict):
+            return None
+        info = order.get("info")
+        info_wrapper = info if isinstance(info, dict) else {}
+        nested_order = info_wrapper.get("order")
+        raw_info = nested_order if isinstance(nested_order, dict) else info_wrapper
+        raw_source_candidates = (info_wrapper, raw_info)
+        raw_sources = tuple(
+            source
+            for index, source in enumerate(raw_source_candidates)
+            if source
+            and all(
+                source is not prior for prior in raw_source_candidates[:index]
+            )
+        )
+
+        exchange_id_keys = ("id", "order_id", "orderId", "orderID", "ordId", "oid")
+        exchange_ids = {
+            str(source.get(key))
+            for source in (order, *raw_sources)
+            for key in exchange_id_keys
+            if source.get(key) not in (None, "")
+        }
+        if len(exchange_ids) != 1:
+            return None
+        exchange_id = next(iter(exchange_ids))
+        side = str(order.get("side") or "").lower()
+        if not exchange_id or side not in {"buy", "sell"}:
+            return None
+        matches = [
+            record
+            for record in self._emitted_order_records()
+            if str(record.get("exchange_id") or "") == exchange_id
+        ]
+        if len(matches) != 1:
+            return None
+        record = matches[0]
+        client_id_keys = (
+            "custom_id",
+            "customId",
+            "client_order_id",
+            "clientOrderId",
+            "client_oid",
+            "clientOid",
+            "clOrdId",
+            "cloid",
+        )
+        client_ids = {
+            self._canonical_passivbot_custom_id(str(source.get(key)))
+            for source in (order, *raw_sources)
+            for key in client_id_keys
+            if source.get(key) not in (None, "")
+        }
+        record_client_id = str(record.get("canonical_custom_id") or "")
+        if client_ids and (
+            not record_client_id
+            or len(client_ids) != 1
+            or next(iter(client_ids)) != record_client_id
+        ):
+            return None
+        record_side = str(record.get("side") or "").lower()
+        position_side = str(record.get("position_side") or "").lower()
+        reduce_only = record.get("reduce_only")
+        if (
+            record.get("status") != "acknowledged"
+            or record_side != side
+            or position_side not in {"long", "short"}
+            or not isinstance(reduce_only, bool)
+        ):
+            return None
+        action_side = self._derive_one_way_position_side(
+            {"side": side, "reduceOnly": reduce_only}
+        )
+        if action_side != position_side:
+            return None
+        raw_side_values = [
+            source.get("side")
+            for source in raw_sources
+            if source.get("side") not in (None, "")
+        ]
+        for raw_side_value in raw_side_values:
+            raw_side = {
+                "a": "sell",
+                "ask": "sell",
+                "b": "buy",
+                "bid": "buy",
+                "buy": "buy",
+                "sell": "sell",
+            }.get(str(raw_side_value).strip().lower())
+            if raw_side is None or raw_side != side:
+                return None
+        raw_status_values = [
+            source.get("status")
+            for source in raw_sources
+            if source.get("status") not in (None, "")
+        ]
+        for raw_status_value in raw_status_values:
+            normalized_status = {
+                "open": "open",
+                "opened": "open",
+                "resting": "open",
+                "filled": "closed",
+                "closed": "closed",
+                "canceled": "canceled",
+                "cancelled": "canceled",
+                "rejected": "rejected",
+                "expired": "expired",
+            }.get(str(raw_status_value).strip().lower())
+            top_status = {
+                "open": "open",
+                "opened": "open",
+                "closed": "closed",
+                "filled": "closed",
+                "canceled": "canceled",
+                "cancelled": "canceled",
+                "rejected": "rejected",
+                "expired": "expired",
+            }.get(str(order.get("status") or "").strip().lower())
+            if normalized_status is None or (
+                top_status is not None and normalized_status != top_status
+            ):
+                return None
+        explicit_position_sides = [
+            value
+            for source in (order, *raw_sources)
+            for value in (source.get("position_side"), source.get("positionSide"))
+            if value not in (None, "")
+        ]
+        if any(
+            str(value).lower() != position_side for value in explicit_position_sides
+        ):
+            return None
+        durable_position_side = self._durable_order_position_side(order)
+        if (
+            durable_position_side in {"long", "short"}
+            and durable_position_side != position_side
+        ):
+            return None
+        authoritative_reduce_sources = raw_sources if raw_sources else (order,)
+        reduce_only_keys = ("reduce_only", "reduceOnly", "is_reduce_only")
+        raw_has_explicit_reduce_only = False
+        for source in authoritative_reduce_sources:
+            for key in reduce_only_keys:
+                if key not in source:
+                    continue
+                raw_has_explicit_reduce_only = True
+                websocket_reduce_only = self._strict_order_reduce_only_response(
+                    {"info": {key: source[key]}}
+                )
+                if (
+                    not isinstance(websocket_reduce_only, bool)
+                    or websocket_reduce_only != reduce_only
+                ):
+                    return None
+        if raw_sources:
+            for key in reduce_only_keys:
+                if key not in order:
+                    continue
+                value = order[key]
+                # CCXT may synthesize a unified False when the native payload
+                # omits reduceOnly. Preserve that compatibility, but never
+                # discard a supplied True or contradict native semantics.
+                if value is False and not raw_has_explicit_reduce_only:
+                    continue
+                websocket_reduce_only = self._strict_order_reduce_only_response(
+                    {"info": {key: value}}
+                )
+                if (
+                    not isinstance(websocket_reduce_only, bool)
+                    or websocket_reduce_only != reduce_only
+                ):
+                    return None
+        return position_side, reduce_only
+
+    @staticmethod
+    def _hl_ws_order_has_fill_progress(order: dict) -> bool:
+        """Whether an open WS row proves that an acknowledged order has filled."""
+
+        def _number(key: str) -> float | None:
+            for source in (order, order.get("info", {})):
+                if not isinstance(source, dict) or source.get(key) in (None, ""):
+                    continue
+                try:
+                    value = float(source[key])
+                except (TypeError, ValueError, OverflowError):
+                    return None
+                return value if math.isfinite(value) and value >= 0.0 else None
+            return None
+
+        filled = _number("filled")
+        if filled is not None and filled > 0.0:
+            return True
+        amount = _number("amount")
+        remaining = _number("remaining")
+        if amount is None or remaining is None:
+            return False
+        tolerance = max(1e-12, amount * 1e-12)
+        return remaining < amount - tolerance
 
     def determine_pos_side(self, order):
         # Hyperliquid is one-way, but current position state must never label a

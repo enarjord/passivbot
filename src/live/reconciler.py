@@ -282,6 +282,7 @@ def extract_order_custom_id(order: dict) -> str:
         "order_link_id",
         "orderLinkId",
         "clOrdId",
+        "cloid",
         "text",
     )
     for source in (order, order.get("info", {})):

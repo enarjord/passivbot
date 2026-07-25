@@ -10994,6 +10994,8 @@ class Passivbot:
         for order in upd_list:
             if not isinstance(order, dict):
                 return False
+            if order.get("_pb_order_update_requires_authoritative_refresh") is True:
+                return False
             status = str(order.get("status") or "").lower()
             if status == "open":
                 if not self.order_matches_recent_execution(order):
