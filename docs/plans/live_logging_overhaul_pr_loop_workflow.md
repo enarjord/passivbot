@@ -180,9 +180,12 @@ State:
     parsing may be delegated.
 12. Run immediate and settled bounded smoke checks and leave expected bots
     running.
-13. Record bounded post-deployment evidence on the PR or another durable run
-    record: exact deployed SHA, target scope, commands/actions, outcomes, and
-    limitations. Update compact status only if scope/completion changed. Append
+13. Record bounded post-deployment evidence: exact deployed SHA, target scope,
+    commands/actions, outcomes, and limitations. A public PR may contain only a
+    sanitized public-safe summary. Hostnames, account/config identifiers, local
+    paths, process details, private commands, and VPS-derived telemetry belong
+    only in an operator-approved private run record, never the public
+    repository. Update compact status only if scope/completion changed. Append
     historical progress only for a material milestone.
 
 ## VPS Policy

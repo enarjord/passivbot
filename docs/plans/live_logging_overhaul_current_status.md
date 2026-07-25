@@ -70,8 +70,9 @@ The logging overhaul may be declared complete when all of the following hold:
 - one canonical structured path covers the high-value live decision and action
   boundaries;
 - sink failure and queue pressure cannot change trading behavior;
-- normal payloads are bounded and redact credentials, unsafe exception values,
-  raw exchange payloads, and unbounded symbol/order collections;
+- every sink and profile omits raw exchange/account payloads; retained payloads
+  are bounded and omit credentials, unsafe exception values, and unbounded
+  symbol/order collections;
 - console INFO satisfies `docs/ai/logging_policy.md` in representative
   overnight operation, excluding its documented action/fill/safety
   exemptions;
