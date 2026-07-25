@@ -1381,6 +1381,34 @@ def _single_line_help(help_text: str) -> str:
     return " ".join(help_text.split())
 
 
+def _assert_help_option_aliases(
+    help_text: str, long_option: str, short_option: str, metavar: str
+) -> None:
+    """Assert argparse exposes both aliases without depending on render order."""
+    normalized = _single_line_help(help_text)
+    long_rendered = f"{long_option} {metavar}"
+    short_rendered = f"{short_option} {metavar}"
+    assert (
+        f"{long_rendered}, {short_rendered}" in normalized
+        or f"{short_rendered}, {long_rendered}" in normalized
+        or f"{long_option}, {short_rendered}" in normalized
+        or f"{short_option}, {long_rendered}" in normalized
+    )
+
+
+@pytest.mark.parametrize(
+    "rendered",
+    [
+        "--symbols CSV_OR_PATH, -s CSV_OR_PATH",
+        "-s CSV_OR_PATH, --symbols CSV_OR_PATH",
+        "--symbols, -s CSV_OR_PATH",
+        "-s, --symbols CSV_OR_PATH",
+    ],
+)
+def test_help_option_alias_assertion_accepts_supported_argparse_orderings(rendered):
+    _assert_help_option_aliases(rendered, "--symbols", "-s", "CSV_OR_PATH")
+
+
 def test_optimize_default_help_groups_common_flags_and_hides_bounds():
     config = get_template_config()
     help_text = _format_parser_help_with_config("optimize", config, help_all=False)
@@ -1388,18 +1416,28 @@ def test_optimize_default_help_groups_common_flags_and_hides_bounds():
     assert "Coin Selection:" in help_text
     assert "Date Range:" in help_text
     assert "Optimizer:" in help_text
-    assert "--symbols CSV_OR_PATH, -s CSV_OR_PATH" in help_text
-    assert "--population-size INT, -ps INT" in help_text
-    assert "--backend BACKEND, -ob BACKEND" in help_text
+    _assert_help_option_aliases(help_text, "--symbols", "-s", "CSV_OR_PATH")
+    _assert_help_option_aliases(help_text, "--population-size", "-ps", "INT")
+    _assert_help_option_aliases(help_text, "--backend", "-ob", "BACKEND")
     assert "--limits JSON_OR_HJSON" in help_text
-    assert "-l SPEC, --limit SPEC" in help_text
+    _assert_help_option_aliases(help_text, "--limit", "-l", "SPEC")
     assert "--clear-limits" in help_text
-    assert "--minimum-coin-age-days FLOAT, -mcad FLOAT" in help_text
-    assert "--hedge-mode Y/N, -hm Y/N" in help_text
-    assert "--market-orders-allowed Y/N, -moa Y/N" in help_text
-    assert "--market-order-near-touch-threshold FLOAT, -montt FLOAT" in help_text
-    assert "--max-realized-loss-pct FLOAT, -mrlp FLOAT" in help_text
-    assert "--pnls-max-lookback-days FLOAT|all, -pmld FLOAT|all" in help_text
+    _assert_help_option_aliases(
+        help_text, "--minimum-coin-age-days", "-mcad", "FLOAT"
+    )
+    _assert_help_option_aliases(help_text, "--hedge-mode", "-hm", "Y/N")
+    _assert_help_option_aliases(
+        help_text, "--market-orders-allowed", "-moa", "Y/N"
+    )
+    _assert_help_option_aliases(
+        help_text, "--market-order-near-touch-threshold", "-montt", "FLOAT"
+    )
+    _assert_help_option_aliases(
+        help_text, "--max-realized-loss-pct", "-mrlp", "FLOAT"
+    )
+    _assert_help_option_aliases(
+        help_text, "--pnls-max-lookback-days", "-pmld", "FLOAT|all"
+    )
     assert "--bot.long.entry_grid_inflation_enabled" not in help_text
     assert "--bot.long.hsl.enabled" not in help_text
     assert "--optimize_population_size" not in help_text
@@ -1418,10 +1456,14 @@ def test_optimize_help_all_shows_hidden_bounds_flags():
         in help_text
     )
     assert "--limits JSON_OR_HJSON" in help_text
-    assert "-l SPEC, --limit SPEC" in help_text
-    assert "--hedge-mode Y/N, -hm Y/N" in help_text
-    assert "--market-order-near-touch-threshold FLOAT, -montt FLOAT" in help_text
-    assert "--max-realized-loss-pct FLOAT, -mrlp FLOAT" in help_text
+    _assert_help_option_aliases(help_text, "--limit", "-l", "SPEC")
+    _assert_help_option_aliases(help_text, "--hedge-mode", "-hm", "Y/N")
+    _assert_help_option_aliases(
+        help_text, "--market-order-near-touch-threshold", "-montt", "FLOAT"
+    )
+    _assert_help_option_aliases(
+        help_text, "--max-realized-loss-pct", "-mrlp", "FLOAT"
+    )
     assert "--bot.long.hsl.enabled Y/N" in help_text
     assert "--bot.short.hsl.enabled Y/N" in help_text
     assert "--bot.long.hsl.orange_tier_mode VALUE" in help_text
@@ -1466,13 +1508,17 @@ def test_live_default_help_shows_curated_groups():
     assert "Coin Selection:" in help_text
     assert "Behavior:" in help_text
     assert "Runtime:" in help_text
-    assert "--symbols CSV_OR_PATH, -s CSV_OR_PATH" in help_text
+    _assert_help_option_aliases(help_text, "--symbols", "-s", "CSV_OR_PATH")
     assert "--ignored-coins CSV_OR_PATH" in help_text
     assert "--minimum-coin-age-days FLOAT" in help_text
     assert "--hedge-mode Y/N" in help_text
-    assert "--market-order-near-touch-threshold FLOAT, -montt FLOAT" in help_text
-    assert "--pnls-max-lookback-days FLOAT|all, -pmld FLOAT|all" in help_text
-    assert "--user VALUE, -u VALUE" in help_text
+    _assert_help_option_aliases(
+        help_text, "--market-order-near-touch-threshold", "-montt", "FLOAT"
+    )
+    _assert_help_option_aliases(
+        help_text, "--pnls-max-lookback-days", "-pmld", "FLOAT|all"
+    )
+    _assert_help_option_aliases(help_text, "--user", "-u", "VALUE")
     assert "--live.auto_gs" not in help_text
     assert "--optimize.iters" not in help_text
 
@@ -1485,14 +1531,24 @@ def test_backtest_default_help_hides_optimize_flags_and_shows_suite_controls():
     assert "Date Range:" in help_text
     assert "Backtest Runtime:" in help_text
     assert "Suite:" in help_text
-    assert "--symbols CSV_OR_PATH, -s CSV_OR_PATH" in help_text
+    _assert_help_option_aliases(help_text, "--symbols", "-s", "CSV_OR_PATH")
     assert "--ignored-coins CSV_OR_PATH" in help_text
-    assert "--minimum-coin-age-days FLOAT, -mcad FLOAT" in help_text
-    assert "--hedge-mode Y/N, -hm Y/N" in help_text
-    assert "--market-orders-allowed Y/N, -moa Y/N" in help_text
-    assert "--market-order-near-touch-threshold FLOAT, -montt FLOAT" in help_text
-    assert "--max-realized-loss-pct FLOAT, -mrlp FLOAT" in help_text
-    assert "--pnls-max-lookback-days FLOAT|all, -pmld FLOAT|all" in help_text
+    _assert_help_option_aliases(
+        help_text, "--minimum-coin-age-days", "-mcad", "FLOAT"
+    )
+    _assert_help_option_aliases(help_text, "--hedge-mode", "-hm", "Y/N")
+    _assert_help_option_aliases(
+        help_text, "--market-orders-allowed", "-moa", "Y/N"
+    )
+    _assert_help_option_aliases(
+        help_text, "--market-order-near-touch-threshold", "-montt", "FLOAT"
+    )
+    _assert_help_option_aliases(
+        help_text, "--max-realized-loss-pct", "-mrlp", "FLOAT"
+    )
+    _assert_help_option_aliases(
+        help_text, "--pnls-max-lookback-days", "-pmld", "FLOAT|all"
+    )
     assert "--aggregate-default MODE" in help_text
     assert "--iters INT, -i INT" not in help_text
 
@@ -1701,7 +1757,9 @@ def test_backtest_default_help_shows_live_near_touch_threshold_override():
     config = get_template_config()
     help_text = _format_parser_help_with_config("backtest", config, help_all=False)
 
-    assert "--market-order-near-touch-threshold FLOAT, -montt FLOAT" in help_text
+    _assert_help_option_aliases(
+        help_text, "--market-order-near-touch-threshold", "-montt", "FLOAT"
+    )
     assert "--maker-fee-override FLOAT" in help_text
     assert "--taker-fee-override FLOAT" in help_text
 

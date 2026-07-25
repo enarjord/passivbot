@@ -223,6 +223,7 @@ class _LockRecord:
     count: int
     acquired_at: float
     path: str
+    owner_task: Optional[asyncio.Task[Any]]
 
 
 class GapEntry(TypedDict, total=False):
@@ -837,7 +838,9 @@ class CandlestickManager:
         self._lock_backoff_initial = float(_LOCK_BACKOFF_INITIAL)
         self._lock_backoff_max = float(_LOCK_BACKOFF_MAX)
         self._lock_hold_timeout_seconds = max(60.0, self._lock_timeout_seconds * 6.0)
-        # Reentrant bookkeeping for portalocker fetch locks: key -> _LockRecord
+        # Reentrant bookkeeping for portalocker fetch locks: key -> _LockRecord.
+        # Reentrancy is valid only within the owning asyncio task; a different
+        # coroutine using this manager must wait for the same symbol/timeframe.
         self._held_fetch_locks: Dict[Tuple[str, str], _LockRecord] = {}
         self._fetch_lock_watchdogs: Dict[Tuple[str, str], asyncio.Task] = {}
         self._shutdown_guard = threading.Lock()
@@ -1921,13 +1924,15 @@ class CandlestickManager:
 
         lock_path = self._fetch_lock_path(symbol, tf_norm)
         key = (symbol, tf_norm)
+        current_task = asyncio.current_task()
         held = self._held_fetch_locks.get(key)
-        if held is not None:
+        if held is not None and held.owner_task is current_task:
             self._held_fetch_locks[key] = _LockRecord(
                 lock=held.lock,
                 path=held.path,
                 count=held.count + 1,
                 acquired_at=held.acquired_at,
+                owner_task=held.owner_task,
             )
             self._log(
                 "debug",
@@ -1940,18 +1945,17 @@ class CandlestickManager:
                 yield
             finally:
                 record = self._held_fetch_locks.get(key)
-                if record is None:
-                    return
-                if record.count <= 1:
+                if record is not None and record.count <= 1:
                     self._held_fetch_locks.pop(key, None)
                     self._cancel_fetch_lock_watchdog(key)
                     await self._release_lock(record.lock, record.path, symbol, tf_norm)
-                else:
+                elif record is not None:
                     self._held_fetch_locks[key] = _LockRecord(
                         lock=record.lock,
                         path=record.path,
                         count=record.count - 1,
                         acquired_at=record.acquired_at,
+                        owner_task=record.owner_task,
                     )
             return
 
@@ -1978,6 +1982,7 @@ class CandlestickManager:
                     path=lock_path,
                     count=1,
                     acquired_at=acquired_at,
+                    owner_task=current_task,
                 )
                 self._start_fetch_lock_watchdog(
                     key,

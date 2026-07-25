@@ -145,6 +145,65 @@ async def test_fetch_lock_watchdog_logs_stale_local_holder_without_release(tmp_p
     assert len(rendered) <= 240
 
 
+@pytest.mark.asyncio
+async def test_reentrant_fetch_lock_does_not_suppress_body_exception_when_record_missing(
+    tmp_path,
+):
+    cm = CandlestickManager(
+        exchange=FakeExchange(),
+        exchange_name="hyperliquid",
+        cache_dir=str(tmp_path / "caches"),
+        default_window_candles=5,
+    )
+    key = ("BTC/USDC:USDC", "1m")
+
+    async with cm._acquire_fetch_lock(*key):
+        outer_record = cm._held_fetch_locks[key]
+        try:
+            with pytest.raises(RuntimeError, match="body failure"):
+                async with cm._acquire_fetch_lock(*key):
+                    cm._held_fetch_locks.pop(key)
+                    raise RuntimeError("body failure")
+        finally:
+            cm._held_fetch_locks[key] = outer_record
+
+    assert cm._held_fetch_locks == {}
+
+
+@pytest.mark.asyncio
+async def test_fetch_lock_is_reentrant_only_for_owning_task(tmp_path):
+    cm = CandlestickManager(
+        exchange=FakeExchange(),
+        exchange_name="hyperliquid",
+        cache_dir=str(tmp_path / "caches"),
+        default_window_candles=5,
+    )
+    key = ("BTC/USDC:USDC", "1m")
+    contender_entered = asyncio.Event()
+
+    async def contend_for_lock():
+        async with cm._acquire_fetch_lock(*key):
+            contender_entered.set()
+
+    async with cm._acquire_fetch_lock(*key):
+        owner_record = cm._held_fetch_locks[key]
+        assert owner_record.owner_task is asyncio.current_task()
+
+        # Nested acquisition by the owning task remains reentrant.
+        async with cm._acquire_fetch_lock(*key):
+            assert cm._held_fetch_locks[key].count == 2
+        assert cm._held_fetch_locks[key].count == 1
+
+        # A separate task using the same manager must wait.
+        contender = asyncio.create_task(contend_for_lock())
+        await asyncio.sleep(cm._lock_backoff_initial * 1.5)
+        assert not contender_entered.is_set()
+
+    await asyncio.wait_for(contender, timeout=1.0)
+    assert contender_entered.is_set()
+    assert cm._held_fetch_locks == {}
+
+
 def test_read_lockfile_owner_defaults_to_full_context_for_stale_waiting(tmp_path):
     cm = CandlestickManager(
         exchange=FakeExchange(),

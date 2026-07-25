@@ -47,7 +47,7 @@ DEV_REQUIREMENTS = parse_requirements("requirements-dev.txt")
 setup(
     name="passivbot",
     version=VERSION_NS["__version__"],
-    python_requires=">=3.12",
+    python_requires=">=3.12,<3.15,!=3.13.*",
     packages=find_packages(where="src"),
     package_dir={"": "src"},
     py_modules=discover_py_modules(),
