@@ -33,14 +33,18 @@
 10. A degraded synthetic PnL row inside the configured live risk lookback is not
     authoritative merely because cache metadata proves time coverage. Refetch bounded
     windows around each such row, preserving the pre-repair incremental checkpoint and
-    processing at most four disjoint repair ranges per authoritative cycle. Rotate
-    remaining ranges across backed-off cycles so one unresolved range cannot starve the
-    others. Preserve ordinary recent-fill overlap for routine ingestion, and defer risk
-    planning without consuming restart budget until every in-lookback row is
-    authoritatively replaced. Replacement diagnostics count pending or synthetic rows
-    becoming authoritative. Uptime health adds the full authoritative net PnL when the
-    previous cached value was not counted by this process, and applies only the
-    old-to-new delta when it was.
+    processing at most four independently bounded execution ranges per authoritative
+    cycle. Rotate remaining events across backed-off cycles so one unresolved row cannot
+    starve the others. Connectors whose authoritative PnL endpoint uses a timestamp
+    different from execution time must search that timestamp independently in bounded,
+    advancing windows while retaining the narrow execution lookup. Preserve ordinary
+    recent-fill overlap for routine ingestion, and defer risk planning without consuming
+    restart budget until every in-lookback row is authoritatively replaced. Report every
+    successful replacement before attempting later fallible fetches. Uptime health adds
+    the full authoritative net PnL when the previous cached value was not counted by this
+    process, and applies a delta against the exact net PnL previously counted for an
+    outstanding runtime synthetic row. Discard that temporary accounting after
+    enrichment; authoritative fills must not accumulate identity state.
 
 ## Runtime Provenance
 
@@ -86,7 +90,9 @@ logs, runtime windows, and immutable manifests.
    repair path so proven coverage cannot strand an otherwise recoverable authoritative
    exchange record. Repair-only calls do not advance `last_refresh_ms`; the subsequent
    ordinary recent refresh must still cover downtime from the prior successful
-   checkpoint.
+   checkpoint. Bybit keeps the execution-time range narrow while rotating a separate
+   closed-PnL `updatedTime` range toward the present; each auxiliary range spans at most
+   one day.
 
 ## Failure Semantics And Risks
 

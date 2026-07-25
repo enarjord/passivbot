@@ -4656,6 +4656,7 @@ def test_log_new_fill_events_emits_fill_ingested_event():
             self.monitor_publisher = RecorderPublisher()
             self._health_fills = 0
             self._health_pnl = 0.0
+            self._health_counted_synthetic_pnl_by_key = {}
 
     source_ids = ["trade-a", "trade-b"]
     source_derived_fill_id = "+".join(source_ids)
@@ -4715,7 +4716,7 @@ def test_log_enriched_cached_fill_adds_full_authoritative_pnl_to_health(caplog):
 
         def __init__(self):
             self._health_pnl = 100.0
-            self._health_counted_fill_keys = set()
+            self._health_counted_synthetic_pnl_by_key = {}
 
     previous = SimpleNamespace(
         id="degraded-close",
@@ -4753,7 +4754,7 @@ def test_log_enriched_runtime_fill_applies_authoritative_pnl_delta(caplog):
 
         def __init__(self):
             self._health_pnl = 100.0
-            self._health_counted_fill_keys = set()
+            self._health_counted_synthetic_pnl_by_key = {}
 
     previous = SimpleNamespace(
         id="degraded-close",
@@ -4775,6 +4776,12 @@ def test_log_enriched_runtime_fill_applies_authoritative_pnl_delta(caplog):
     )
     bot = FakeBot()
     pb_mod.Passivbot._mark_health_fill_pnl_counted(bot, previous)
+    assert bot._health_counted_synthetic_pnl_by_key
+    assert all(
+        value == pytest.approx(4.9)
+        for value in bot._health_counted_synthetic_pnl_by_key.values()
+    )
+    previous.pnl = 50.0
 
     with caplog.at_level(logging.INFO):
         bot._log_enriched_fill_events([(previous, authoritative)])
@@ -4782,6 +4789,7 @@ def test_log_enriched_runtime_fill_applies_authoritative_pnl_delta(caplog):
     assert bot._health_pnl == pytest.approx(98.0)
     assert "previous_counted=true" in caplog.text
     assert "pnl_delta=-2" in caplog.text
+    assert bot._health_counted_synthetic_pnl_by_key == {}
 
 
 def test_log_new_fill_events_uses_structured_console_without_legacy_duplicate(caplog):
@@ -4820,6 +4828,7 @@ def test_log_new_fill_events_uses_structured_console_without_legacy_duplicate(ca
             self.monitor_publisher = RecorderPublisher()
             self._health_fills = 0
             self._health_pnl = 0.0
+            self._health_counted_synthetic_pnl_by_key = {}
 
     event = SimpleNamespace(
         id="fill-1",
@@ -4842,6 +4851,7 @@ def test_log_new_fill_events_uses_structured_console_without_legacy_duplicate(ca
     with caplog.at_level(logging.INFO):
         bot._log_new_fill_events([event])
 
+    assert bot._health_counted_synthetic_pnl_by_key == {}
     assert bot._live_event_pipeline.flush(timeout=2.0) is True
     assert [event.event_type for event in structured.events] == [EventTypes.FILL_INGESTED]
     assert [event.event_type for event in console.events] == [EventTypes.FILL_INGESTED]

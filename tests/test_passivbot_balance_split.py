@@ -6303,7 +6303,10 @@ async def test_update_pnls_window_lookback_uses_incremental_when_coverage_proven
 
 
 @pytest.mark.asyncio
-async def test_update_pnls_repairs_old_degraded_pnl_before_marking_fills_authoritative():
+@pytest.mark.parametrize("failure_stage", [None, "repair", "routine"])
+async def test_update_pnls_repairs_old_degraded_pnl_before_marking_fills_authoritative(
+    failure_stage,
+):
     bot = Passivbot.__new__(Passivbot)
     now_ms = 1_800_000_000_000
     lookback_days = 30.0
@@ -6358,6 +6361,8 @@ async def test_update_pnls_repairs_old_degraded_pnl_before_marking_fills_authori
 
         async def _repair_degraded(self, **_kwargs):
             self._events = [authoritative]
+            if failure_stage == "repair":
+                raise RuntimeError("later repair range unavailable")
             return {
                 "attempted": True,
                 "before_count": 1,
@@ -6389,6 +6394,10 @@ async def test_update_pnls_repairs_old_degraded_pnl_before_marking_fills_authori
     }
     bot._authoritative_pending_confirmations = {}
     bot._pnls_manager = _Manager()
+    if failure_stage == "routine":
+        bot._pnls_manager.refresh_latest.side_effect = RuntimeError(
+            "routine refresh unavailable"
+        )
     bot.init_pnls = AsyncMock()
     bot.live_value = lambda key: bot.config["live"][key]
     bot.get_exchange_time = lambda: now_ms
@@ -6401,22 +6410,35 @@ async def test_update_pnls_repairs_old_degraded_pnl_before_marking_fills_authori
     bot._emit_fills_refresh_summary_event = MagicMock()
     bot.logging_level = 0
     bot._health_rate_limits = 0
+    bot._shutdown_requested = lambda: False
+    bot._maybe_recover_exchange_time_sync = AsyncMock(return_value=False)
 
-    result = await bot.update_pnls(source="staged_blocking")
+    if failure_stage is not None:
+        with pytest.raises(RuntimeError, match="unavailable"):
+            await bot.update_pnls(source="staged_blocking")
+        result = None
+    else:
+        result = await bot.update_pnls(source="staged_blocking")
 
-    assert result is True
+    if failure_stage is None:
+        assert result is True
     bot._pnls_manager.refresh_degraded_pnl_events.assert_awaited_once_with(
         start_ms=start_ms,
         end_ms=now_ms,
     )
-    bot._pnls_manager.refresh_latest.assert_awaited_once_with(
-        overlap=20,
-        last_refresh_overlap_ms=10 * 60 * 1000,
-    )
+    if failure_stage == "repair":
+        bot._pnls_manager.refresh_latest.assert_not_awaited()
+    else:
+        bot._pnls_manager.refresh_latest.assert_awaited_once_with(
+            overlap=20,
+            last_refresh_overlap_ms=10 * 60 * 1000,
+        )
     bot._log_enriched_fill_events.assert_called_once()
     previous, current = bot._log_enriched_fill_events.call_args.args[0][0]
     assert previous is degraded
     assert current is authoritative
+    if failure_stage is not None:
+        return
     summary = bot._emit_fills_refresh_summary_event.call_args.kwargs
     assert summary["refresh_mode"] == "incremental_recent_with_degraded_pnl_repair"
     assert summary["enriched_count"] == 1

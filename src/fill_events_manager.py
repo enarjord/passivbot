@@ -1504,6 +1504,7 @@ GAP_REASON_MANUAL = "manual"
 PENDING_PNL_REFRESH_MARGIN_MS = 5 * 60 * 1000
 KUCOIN_POSITION_HISTORY_LOOKAHEAD_MS = 10 * 60 * 1000
 DEGRADED_PNL_REPAIR_MAX_INTERVALS_PER_CYCLE = 4
+DEGRADED_PNL_REPAIR_MAX_INTERVAL_SPAN_MS = 24 * 60 * 60 * 1000
 
 
 class KnownGap(TypedDict, total=False):
@@ -3253,7 +3254,9 @@ class FillEventsManager:
         self._events: List[FillEvent] = []
         self._loaded = False
         self._lock = asyncio.Lock()
-        self._degraded_pnl_repair_attempted_ranges: set[tuple[int, int]] = set()
+        self._degraded_pnl_repair_attempted_keys: set[str] = set()
+        self._degraded_pnl_repair_aux_cursor_ms: dict[str, int] = {}
+        self._degraded_pnl_repair_aux_completed_keys: set[str] = set()
 
     def _apply_fee_policy(
         self,
@@ -4440,6 +4443,7 @@ class FillEventsManager:
         start_ms: Optional[int] = None,
         end_ms: Optional[int] = None,
         mark_refreshed: bool = True,
+        degraded_pnl_aux_range: Optional[Tuple[int, int]] = None,
     ) -> None:
         await self.ensure_loaded()
         logger.debug(
@@ -4604,9 +4608,22 @@ class FillEventsManager:
                     fetched_batches.append(bounded)
 
         try:
-            fetched_events = await self.fetcher.fetch(
-                start_ms, end_ms, detail_cache, on_batch=collect_batch
+            repair_fetch = getattr(
+                self.fetcher, "fetch_degraded_pnl_repair", None
             )
+            if degraded_pnl_aux_range is not None and callable(repair_fetch):
+                fetched_events = await repair_fetch(
+                    start_ms,
+                    end_ms,
+                    int(degraded_pnl_aux_range[0]),
+                    int(degraded_pnl_aux_range[1]),
+                    detail_cache,
+                    on_batch=collect_batch,
+                )
+            else:
+                fetched_events = await self.fetcher.fetch(
+                    start_ms, end_ms, detail_cache, on_batch=collect_batch
+                )
         except RateLimitExceeded:
             # Preserve bounded-range failures as known gaps so retry logic can
             # revisit them.  We still re-raise to fail loudly on critical input.
@@ -4787,7 +4804,9 @@ class FillEventsManager:
             if int(ev.timestamp) >= lower_bound and int(ev.timestamp) <= upper_bound
         ]
         if not degraded_before:
-            self._degraded_pnl_repair_attempted_ranges = set()
+            self._degraded_pnl_repair_attempted_keys = set()
+            self._degraded_pnl_repair_aux_cursor_ms = {}
+            self._degraded_pnl_repair_aux_completed_keys = set()
             return {
                 "attempted": False,
                 "before_count": 0,
@@ -4798,53 +4817,103 @@ class FillEventsManager:
                 "deferred_range_count": 0,
             }
 
-        intervals = self._merge_intervals(
-            [
-                (
-                    max(lower_bound, int(ev.timestamp) - PENDING_PNL_REFRESH_MARGIN_MS),
-                    min(
-                        upper_bound,
-                        int(ev.timestamp) + KUCOIN_POSITION_HISTORY_LOOKAHEAD_MS,
-                    ),
-                )
-                for ev in degraded_before
-            ]
+        def repair_key(event: FillEvent) -> str:
+            source_ids = sorted(
+                str(value)
+                for value in getattr(event, "source_ids", None) or ()
+                if value
+            )
+            if source_ids:
+                return f"source:{source_ids[0]}"
+            event_id = str(getattr(event, "id", "") or "")
+            if event_id:
+                return f"id:{event_id}"
+            return (
+                f"event:{getattr(event, 'symbol', '')}:"
+                f"{getattr(event, 'position_side', '')}:{int(event.timestamp)}:"
+                f"{getattr(event, 'side', '')}:{getattr(event, 'qty', '')}"
+            )
+
+        keyed_events = [(repair_key(event), event) for event in degraded_before]
+        current_keys = {key for key, _event in keyed_events}
+        attempted_keys = set(self._degraded_pnl_repair_attempted_keys)
+        attempted_keys.intersection_update(current_keys)
+        self._degraded_pnl_repair_aux_cursor_ms = {
+            key: cursor
+            for key, cursor in self._degraded_pnl_repair_aux_cursor_ms.items()
+            if key in current_keys
+        }
+        self._degraded_pnl_repair_aux_completed_keys.intersection_update(
+            current_keys
         )
-        interval_count = len(intervals)
-        attempted_ranges = set(
-            getattr(self, "_degraded_pnl_repair_attempted_ranges", set()) or set()
-        )
-        attempted_ranges.intersection_update(intervals)
-        unattempted_intervals = [
-            interval for interval in intervals if interval not in attempted_ranges
+        unattempted_events = [
+            (key, event)
+            for key, event in keyed_events
+            if key not in attempted_keys
         ]
-        if not unattempted_intervals:
-            attempted_ranges.clear()
-            unattempted_intervals = list(intervals)
+        if not unattempted_events:
+            attempted_keys.clear()
+            unattempted_events = list(keyed_events)
         selected_count = min(
-            len(unattempted_intervals),
+            len(unattempted_events),
             DEGRADED_PNL_REPAIR_MAX_INTERVALS_PER_CYCLE,
         )
-        selected_intervals = unattempted_intervals[:selected_count]
+        selected_events = unattempted_events[:selected_count]
         logger.info(
             "[fills] refetching authoritative PnL for degraded cached fills | "
             "exchange=%s user=%s events=%d ranges=%d/%d oldest=%s newest=%s",
             self.exchange,
             self.user,
             len(degraded_before),
-            len(selected_intervals),
-            interval_count,
+            len(selected_events),
+            len(keyed_events),
             _format_ms(min(ev.timestamp for ev in degraded_before)),
             _format_ms(max(ev.timestamp for ev in degraded_before)),
         )
-        for interval_start, interval_end in selected_intervals:
-            attempted_ranges.add((interval_start, interval_end))
-            self._degraded_pnl_repair_attempted_ranges = attempted_ranges
+        repair_fetch = getattr(self.fetcher, "fetch_degraded_pnl_repair", None)
+        for key, event in selected_events:
+            event_timestamp = int(event.timestamp)
+            interval_start = max(
+                lower_bound,
+                event_timestamp - PENDING_PNL_REFRESH_MARGIN_MS,
+            )
+            interval_end = min(
+                upper_bound,
+                event_timestamp + KUCOIN_POSITION_HISTORY_LOOKAHEAD_MS,
+            )
+            aux_range = None
+            if callable(repair_fetch):
+                cursor = max(
+                    interval_start,
+                    int(
+                        self._degraded_pnl_repair_aux_cursor_ms.get(
+                            key, interval_start
+                        )
+                    ),
+                )
+                if key in self._degraded_pnl_repair_aux_completed_keys:
+                    # The prior scan reached the moving upper bound. Start a
+                    # fresh bounded pass so an eventually consistent record
+                    # cannot remain stranded in an already visited window.
+                    cursor = interval_start
+                    self._degraded_pnl_repair_aux_completed_keys.discard(key)
+                aux_end = min(
+                    upper_bound,
+                    cursor + DEGRADED_PNL_REPAIR_MAX_INTERVAL_SPAN_MS,
+                )
+                aux_range = (cursor, aux_end)
+            attempted_keys.add(key)
+            self._degraded_pnl_repair_attempted_keys = attempted_keys
             await self.refresh(
                 start_ms=interval_start,
                 end_ms=interval_end,
                 mark_refreshed=False,
+                degraded_pnl_aux_range=aux_range,
             )
+            if aux_range is not None:
+                self._degraded_pnl_repair_aux_cursor_ms[key] = aux_range[1]
+                if aux_range[1] >= upper_bound:
+                    self._degraded_pnl_repair_aux_completed_keys.add(key)
 
         degraded_after = [
             ev
@@ -4873,10 +4942,9 @@ class FillEventsManager:
             "before_count": len(degraded_before),
             "repaired_count": repaired_count,
             "remaining_count": len(degraded_after),
-            "range_count": len(selected_intervals),
-            "total_range_count": interval_count,
-            "deferred_range_count": len(unattempted_intervals)
-            - len(selected_intervals),
+            "range_count": len(selected_events),
+            "total_range_count": len(keyed_events),
+            "deferred_range_count": len(unattempted_events) - len(selected_events),
         }
 
     async def refresh_for_lookback(
@@ -5347,16 +5415,53 @@ class BybitFetcher(BaseFetcher):
     ) -> List[Dict[str, object]]:
         end_ms = until_ms or (self._now_ms() + 60 * 60 * 1000)
         start_ms = since_ms or max(0, end_ms - self._default_span_ms)
+        return await self._fetch_ranges(
+            trade_start_ms=start_ms,
+            trade_end_ms=end_ms,
+            pnl_start_ms=start_ms,
+            pnl_end_ms=end_ms,
+            detail_cache=detail_cache,
+            on_batch=on_batch,
+        )
 
-        trades = await self._fetch_my_trades(start_ms, end_ms)
-        positions = await self._fetch_positions_history(start_ms, end_ms)
+    async def fetch_degraded_pnl_repair(
+        self,
+        trade_start_ms: int,
+        trade_end_ms: int,
+        pnl_start_ms: int,
+        pnl_end_ms: int,
+        detail_cache: Dict[str, Tuple[str, str]],
+        on_batch: Optional[Callable[[List[Dict[str, object]]], None]] = None,
+    ) -> List[Dict[str, object]]:
+        """Refetch executions while independently searching closed-PnL update time."""
+        return await self._fetch_ranges(
+            trade_start_ms=int(trade_start_ms),
+            trade_end_ms=int(trade_end_ms),
+            pnl_start_ms=int(pnl_start_ms),
+            pnl_end_ms=int(pnl_end_ms),
+            detail_cache=detail_cache,
+            on_batch=on_batch,
+        )
+
+    async def _fetch_ranges(
+        self,
+        *,
+        trade_start_ms: int,
+        trade_end_ms: int,
+        pnl_start_ms: int,
+        pnl_end_ms: int,
+        detail_cache: Dict[str, Tuple[str, str]],
+        on_batch: Optional[Callable[[List[Dict[str, object]]], None]] = None,
+    ) -> List[Dict[str, object]]:
+        trades = await self._fetch_my_trades(trade_start_ms, trade_end_ms)
+        positions = await self._fetch_positions_history(pnl_start_ms, pnl_end_ms)
 
         events = self._combine(trades, positions, detail_cache)
         events = [
             ev
             for ev in events
-            if (since_ms is None or ev["timestamp"] >= since_ms)
-            and (until_ms is None or ev["timestamp"] <= until_ms)
+            if ev["timestamp"] >= trade_start_ms
+            and ev["timestamp"] <= trade_end_ms
         ]
         events.sort(key=lambda ev: ev["timestamp"])
         events = _coalesce_events(events)
@@ -5369,10 +5474,15 @@ class BybitFetcher(BaseFetcher):
                 on_batch(day_map[day])
 
         logger.debug(
-            "BybitFetcher.fetch: done (events=%d, trades=%d, positions=%d)",
+            "BybitFetcher.fetch: done (events=%d, trades=%d, positions=%d, "
+            "trade_range=%s..%s, pnl_range=%s..%s)",
             len(events),
             len(trades),
             len(positions),
+            _format_ms(trade_start_ms),
+            _format_ms(trade_end_ms),
+            _format_ms(pnl_start_ms),
+            _format_ms(pnl_end_ms),
         )
         return events
 

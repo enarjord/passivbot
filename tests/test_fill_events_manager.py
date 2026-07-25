@@ -7,7 +7,7 @@ import types
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -3069,6 +3069,43 @@ async def test_bybit_closed_pnl_fetch_propagates_api_error():
 
 
 @pytest.mark.asyncio
+async def test_bybit_degraded_repair_uses_independent_trade_and_pnl_ranges():
+    fetcher = BybitFetcher(api=object())
+    trade_start_ms = 1_700_000_000_000
+    trade_end_ms = trade_start_ms + 15 * 60_000
+    pnl_start_ms = trade_start_ms + 3 * 86_400_000
+    pnl_end_ms = pnl_start_ms + 86_400_000
+    trade = {"id": "trade-1"}
+    position = {"id": "position-1"}
+    event = {
+        "id": "trade-1",
+        "timestamp": trade_start_ms + 60_000,
+    }
+    fetcher._fetch_my_trades = AsyncMock(return_value=[trade])
+    fetcher._fetch_positions_history = AsyncMock(return_value=[position])
+    fetcher._combine = MagicMock(return_value=[event])
+
+    out = await fetcher.fetch_degraded_pnl_repair(
+        trade_start_ms,
+        trade_end_ms,
+        pnl_start_ms,
+        pnl_end_ms,
+        detail_cache={},
+    )
+
+    assert len(out) == 1
+    assert out[0]["id"] == event["id"]
+    assert out[0]["timestamp"] == event["timestamp"]
+    fetcher._fetch_my_trades.assert_awaited_once_with(
+        trade_start_ms, trade_end_ms
+    )
+    fetcher._fetch_positions_history.assert_awaited_once_with(
+        pnl_start_ms, pnl_end_ms
+    )
+    fetcher._combine.assert_called_once_with([trade], [position], {})
+
+
+@pytest.mark.asyncio
 async def test_bybit_fetcher_uses_detail_cache(monkeypatch):
     base_ts = int(datetime.now(timezone.utc).timestamp() * 1000)
     trades_batches = [
@@ -4876,7 +4913,7 @@ async def test_manager_degraded_pnl_repair_caps_and_rotates_ranges(tmp_path: Pat
         cache_path=tmp_path / "fills_degraded_repair_cap",
     )
     start_ms = 1_700_000_000_000
-    interval_spacing_ms = 30 * 60 * 1000
+    interval_spacing_ms = 60_000
     manager._events = [
         types.SimpleNamespace(
             timestamp=start_ms + index * interval_spacing_ms,
@@ -4888,8 +4925,8 @@ async def test_manager_degraded_pnl_repair_caps_and_rotates_ranges(tmp_path: Pat
     manager.refresh = AsyncMock()
 
     first = await manager.refresh_degraded_pnl_events(
-        start_ms=start_ms - 60_000,
-        end_ms=start_ms + 6 * interval_spacing_ms,
+        start_ms=start_ms - 10 * 60_000,
+        end_ms=start_ms + 20 * 60_000,
     )
     first_calls = list(manager.refresh.await_args_list)
 
@@ -4898,11 +4935,17 @@ async def test_manager_degraded_pnl_repair_caps_and_rotates_ranges(tmp_path: Pat
     assert first["deferred_range_count"] == 2
     assert len(first_calls) == 4
     assert all(call.kwargs["mark_refreshed"] is False for call in first_calls)
+    assert all(
+        call.kwargs["end_ms"] - call.kwargs["start_ms"]
+        <= fem.PENDING_PNL_REFRESH_MARGIN_MS
+        + fem.KUCOIN_POSITION_HISTORY_LOOKAHEAD_MS
+        for call in first_calls
+    )
 
     manager.refresh.reset_mock()
     second = await manager.refresh_degraded_pnl_events(
-        start_ms=start_ms - 60_000,
-        end_ms=start_ms + 6 * interval_spacing_ms,
+        start_ms=start_ms - 10 * 60_000,
+        end_ms=start_ms + 20 * 60_000,
     )
     second_calls = list(manager.refresh.await_args_list)
 
@@ -4924,6 +4967,63 @@ async def test_manager_degraded_pnl_repair_caps_and_rotates_ranges(tmp_path: Pat
             )
             for call in second_calls
         }
+    )
+
+
+@pytest.mark.asyncio
+async def test_manager_degraded_pnl_repair_advances_bounded_auxiliary_windows(
+    tmp_path: Path,
+):
+    class _DelayedPnlFetcher(BaseFetcher):
+        async def fetch_degraded_pnl_repair(self, *args, **kwargs):
+            return []
+
+    manager = FillEventsManager(
+        exchange="bybit",
+        user="default",
+        fetcher=_DelayedPnlFetcher(),
+        cache_path=tmp_path / "fills_degraded_delayed_aux",
+    )
+    event_ts = 1_700_000_000_000
+    upper_bound = event_ts + 3 * fem.DEGRADED_PNL_REPAIR_MAX_INTERVAL_SPAN_MS
+    manager._events = [
+        types.SimpleNamespace(
+            id="close-1",
+            source_ids=["trade-1"],
+            timestamp=event_ts,
+            pnl_source=fem.PNL_SOURCE_SYNTHETIC_DEGRADED,
+        )
+    ]
+    manager._loaded = True
+    manager.refresh = AsyncMock()
+
+    await manager.refresh_degraded_pnl_events(
+        start_ms=event_ts - 10 * 60_000,
+        end_ms=upper_bound,
+    )
+    first_aux_range = manager.refresh.await_args.kwargs[
+        "degraded_pnl_aux_range"
+    ]
+
+    manager.refresh.reset_mock()
+    await manager.refresh_degraded_pnl_events(
+        start_ms=event_ts - 10 * 60_000,
+        end_ms=upper_bound,
+    )
+    second_aux_range = manager.refresh.await_args.kwargs[
+        "degraded_pnl_aux_range"
+    ]
+
+    assert first_aux_range[1] - first_aux_range[0] <= (
+        fem.DEGRADED_PNL_REPAIR_MAX_INTERVAL_SPAN_MS
+    )
+    assert second_aux_range[0] == first_aux_range[1]
+    assert second_aux_range[1] > first_aux_range[1]
+    assert manager.refresh.await_args.kwargs["start_ms"] == (
+        event_ts - fem.PENDING_PNL_REFRESH_MARGIN_MS
+    )
+    assert manager.refresh.await_args.kwargs["end_ms"] == (
+        event_ts + fem.KUCOIN_POSITION_HISTORY_LOOKAHEAD_MS
     )
 
 

@@ -7,11 +7,14 @@ All notable user-facing changes will be documented in this file.
 - Live fill recovery now performs bounded historical refetches around degraded
   synthetic realized-PnL rows even when cache metadata already proves the configured
   lookback. Repair-only fetches preserve the incremental checkpoint and rotate through
-  at most four disjoint ranges per authoritative cycle. Authoritative replacements are
-  reported as enrichment; uptime health adds the full authoritative PnL for cached rows
-  not previously counted by this process and applies only the replacement delta for
-  runtime-counted rows. Unresolved degraded rows defer risk planning with exponential
-  backoff instead of consuming the generic bot restart budget.
+  at most four independently bounded execution ranges per authoritative cycle. Bybit
+  repair also advances a separately bounded closed-PnL update-time window so delayed
+  records remain discoverable. Authoritative replacements are reported before later
+  fallible refresh work; uptime health adds the full authoritative PnL for cached rows
+  not previously counted by this process and applies a delta against the exact synthetic
+  amount counted at runtime. Outstanding synthetic accounting is discarded after
+  enrichment. Unresolved degraded rows defer risk planning with exponential backoff
+  instead of consuming the generic bot restart budget.
 
 - WEEX REST and private WebSocket clients now use IPv4 transport so API keys
   bound to the host's public IPv4 address do not fail with `-1056 ILLEGAL_IP`

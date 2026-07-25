@@ -1502,7 +1502,7 @@ class Passivbot:
         self._health_orders_cancelled = 0
         self._health_fills = 0
         self._health_pnl = 0.0  # sum of realized PnL from fills
-        self._health_counted_fill_keys: set[str] = set()
+        self._health_counted_synthetic_pnl_by_key: dict[str, float] = {}
         self._health_errors = 0
         self._health_ws_reconnects = 0
         self._health_rate_limits = 0
@@ -11835,6 +11835,11 @@ class Passivbot:
         coverage_status: dict[str, Any] = {}
         post_refresh_coverage_status: dict[str, Any] = {}
         lookback_config_value = None
+        enriched_events: list[tuple[object, object]] = []
+
+        def flush_enriched_events() -> list[tuple[object, object]]:
+            return []
+
         await self.init_pnls()  # will do nothing if already initiated
 
         if self._pnls_manager is None:
@@ -11867,6 +11872,56 @@ class Passivbot:
                     existing_source_ids.add(ev.id)
                     existing_by_source_id[str(ev.id)] = ev
 
+            handled_enrichment_keys: set[str] = set()
+
+            def event_identity_keys(event: object) -> set[str]:
+                keys = {
+                    f"source:{str(value)}"
+                    for value in getattr(event, "source_ids", None) or ()
+                    if value
+                }
+                event_id = str(getattr(event, "id", "") or "")
+                if event_id:
+                    keys.add(f"id:{event_id}")
+                return keys
+
+            def collect_enriched_events() -> list[tuple[object, object]]:
+                transitions: list[tuple[object, object]] = []
+                for current in self._pnls_manager.get_events():
+                    current_keys = event_identity_keys(current)
+                    if current_keys & handled_enrichment_keys:
+                        continue
+                    previous = existing_by_id.get(
+                        str(getattr(current, "id", "") or "")
+                    )
+                    if previous is None:
+                        for source_id in getattr(current, "source_ids", None) or ():
+                            previous = existing_by_source_id.get(str(source_id))
+                            if previous is not None:
+                                break
+                    if previous is None:
+                        continue
+                    previous_needs_enrichment = (
+                        fill_event_pnl_pending(previous)
+                        or bool(
+                            FillEventsManager.synthetic_pnl_events([previous])
+                        )
+                    )
+                    current_is_authoritative = (
+                        not fill_event_pnl_pending(current)
+                        and not FillEventsManager.synthetic_pnl_events([current])
+                    )
+                    if previous_needs_enrichment and current_is_authoritative:
+                        transitions.append((previous, current))
+                        handled_enrichment_keys.update(current_keys)
+                if transitions:
+                    self._log_enriched_fill_events(transitions)
+                    self._request_authoritative_confirmation(ACCOUNT_SURFACES)
+                    enriched_events.extend(transitions)
+                return transitions
+
+            flush_enriched_events = collect_enriched_events
+
             # Check whether the cache proves the configured fill-history
             # lookback before risk gates consume realized PnL.
             events = self._pnls_manager.get_events()
@@ -11892,10 +11947,13 @@ class Passivbot:
             )
             if coverage_ready and degraded_before and callable(repair_degraded):
                 degraded_repair_attempted = True
-                await repair_degraded(
-                    start_ms=None if age_limit is None else int(age_limit),
-                    end_ms=int(self.get_exchange_time()),
-                )
+                try:
+                    await repair_degraded(
+                        start_ms=None if age_limit is None else int(age_limit),
+                        end_ms=int(self.get_exchange_time()),
+                    )
+                finally:
+                    flush_enriched_events()
             if not coverage_ready:
                 now_ms = utc_ms()
                 if self._fill_coverage_retry_deferred(coverage_status, now_ms):
@@ -12048,6 +12106,7 @@ class Passivbot:
 
             # Find and log new events (those not in cache before refresh)
             all_events = self._pnls_manager.get_events()
+            flush_enriched_events()
             # Trailing fill confirmation only needs proof that a fill-cache
             # refresh completed after the position snapshot. Keep this
             # separate from the risk-authoritative fills generation below,
@@ -12055,7 +12114,6 @@ class Passivbot:
             if fill_fetch_completed:
                 self._trailing_fill_fetch_generation = fill_refresh_attempt_generation
             new_events = []
-            enriched_events = []
             seen_new_source_ids: set[str] = set()
             for ev in all_events:
                 src_ids = getattr(ev, "source_ids", None)
@@ -12066,25 +12124,6 @@ class Passivbot:
                 if not src_ids:
                     continue
                 if any(src_id in existing_source_ids for src_id in src_ids):
-                    prev = existing_by_id.get(str(getattr(ev, "id", "")))
-                    if prev is None:
-                        for src_id in src_ids:
-                            prev = existing_by_source_id.get(src_id)
-                            if prev is not None:
-                                break
-                    previous_needs_enrichment = (
-                        prev is not None
-                        and (
-                            fill_event_pnl_pending(prev)
-                            or bool(FillEventsManager.synthetic_pnl_events([prev]))
-                        )
-                    )
-                    current_is_authoritative = (
-                        not fill_event_pnl_pending(ev)
-                        and not FillEventsManager.synthetic_pnl_events([ev])
-                    )
-                    if previous_needs_enrichment and current_is_authoritative:
-                        enriched_events.append((prev, ev))
                     continue
                 if any(src_id in seen_new_source_ids for src_id in src_ids):
                     continue
@@ -12092,9 +12131,6 @@ class Passivbot:
                 seen_new_source_ids.update(src_ids)
             if new_events:
                 self._log_new_fill_events(new_events)
-                self._request_authoritative_confirmation(ACCOUNT_SURFACES)
-            if enriched_events:
-                self._log_enriched_fill_events(enriched_events)
                 self._request_authoritative_confirmation(ACCOUNT_SURFACES)
             pending_pnl_events = FillEventsManager.pending_pnl_events(all_events)
             degraded_pnl_events = [
@@ -12202,6 +12238,7 @@ class Passivbot:
             return pnls_safe and coverage_ready_after
 
         except RateLimitExceeded as e:
+            flush_enriched_events()
             if self._shutdown_requested():
                 logging.debug(
                     "[shutdown] fill refresh stopped during rate-limit handling"
@@ -12230,6 +12267,7 @@ class Passivbot:
             )
             return False
         except Exception as e:
+            flush_enriched_events()
             if self._shutdown_requested():
                 logging.debug(
                     "[shutdown] fill refresh stopped during in-flight request | error_type=%s",
@@ -12342,8 +12380,10 @@ class Passivbot:
         for event in new_events:
             if fill_event_pnl_pending(event):
                 continue
-            self._health_pnl += fill_event_net_pnl(event)
-            Passivbot._mark_health_fill_pnl_counted(self, event)
+            net_pnl = fill_event_net_pnl(event)
+            self._health_pnl += net_pnl
+            if FillEventsManager.synthetic_pnl_events([event]):
+                Passivbot._mark_health_fill_pnl_counted(self, event, net_pnl)
 
         batch_summary = len(new_events) > 20
         pending_count = 0
@@ -12416,16 +12456,35 @@ class Passivbot:
                 keys.add(f"source:{normalized}")
         return keys
 
-    def _health_fill_pnl_was_counted(self, event: object) -> bool:
-        counted = set(getattr(self, "_health_counted_fill_keys", set()) or set())
-        return bool(Passivbot._health_fill_identity_keys(event) & counted)
+    def _health_fill_counted_net_pnl(self, event: object) -> float | None:
+        counted = getattr(self, "_health_counted_synthetic_pnl_by_key", {}) or {}
+        for key in Passivbot._health_fill_identity_keys(event):
+            if key in counted:
+                return float(counted[key])
+        return None
 
-    def _mark_health_fill_pnl_counted(self, event: object) -> None:
-        counted = getattr(self, "_health_counted_fill_keys", None)
+    def _mark_health_fill_pnl_counted(
+        self, event: object, net_pnl: float | None = None
+    ) -> None:
+        counted = getattr(self, "_health_counted_synthetic_pnl_by_key", None)
         if counted is None:
-            counted = set()
-            self._health_counted_fill_keys = counted
-        counted.update(Passivbot._health_fill_identity_keys(event))
+            counted = {}
+            self._health_counted_synthetic_pnl_by_key = counted
+        amount = (
+            fill_event_net_pnl(event)
+            if net_pnl is None
+            else float(net_pnl)
+        )
+        for key in Passivbot._health_fill_identity_keys(event):
+            counted[key] = amount
+
+    def _forget_health_fill_pnl_counted(self, *events: object) -> None:
+        counted = getattr(self, "_health_counted_synthetic_pnl_by_key", None)
+        if not counted:
+            return
+        for event in events:
+            for key in Passivbot._health_fill_identity_keys(event):
+                counted.pop(key, None)
 
     def _log_enriched_fill_events(self, transitions: list[tuple[object, object]]) -> None:
         """Log authoritative PnL replacing pending or synthetic cached values."""
@@ -12434,15 +12493,12 @@ class Passivbot:
         for previous, event in sorted(
             transitions, key=lambda item: item[1].timestamp
         ):
-            previous_counted = Passivbot._health_fill_pnl_was_counted(self, previous)
-            previous_net_pnl = (
-                fill_event_net_pnl(previous)
-                if previous_counted and not fill_event_pnl_pending(previous)
-                else 0.0
-            )
+            counted_net_pnl = Passivbot._health_fill_counted_net_pnl(self, previous)
+            previous_counted = counted_net_pnl is not None
+            previous_net_pnl = float(counted_net_pnl or 0.0)
             pnl_delta = fill_event_net_pnl(event) - previous_net_pnl
             self._health_pnl += pnl_delta
-            Passivbot._mark_health_fill_pnl_counted(self, event)
+            Passivbot._forget_health_fill_pnl_counted(self, previous, event)
             previous_source = str(
                 getattr(previous, "pnl_source", "") or "pending"
             ).lower()
