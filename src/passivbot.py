@@ -19670,6 +19670,22 @@ class Passivbot:
                 await self.restart_bot_on_too_many_errors()
                 await asyncio.sleep(5)
 
+    async def maintain_monitor_snapshot(self):
+        """Refresh diagnostics independently of successful planning cycles."""
+        publisher = getattr(self, "monitor_publisher", None)
+        if publisher is None:
+            return
+        interval_seconds = max(
+            5.0,
+            float(getattr(publisher, "snapshot_interval_ms", 1_000) or 1_000)
+            / 1_000.0,
+        )
+        while not self.stop_signal_received:
+            await self._monitor_flush_snapshot()
+            await self._sleep_unless_shutdown(
+                interval_seconds, stage="monitor_snapshot_interval"
+            )
+
     def _emit_maintenance_exchange_config_refresh_event(self, **kwargs):
         try:
             self._emit_exchange_config_refresh_event(**kwargs)
@@ -19711,6 +19727,8 @@ class Passivbot:
                 self.maintainers.pop("hsl_coin_replay")
             self.stop_data_maintainers()
         maintainer_names = ["maintain_hourly_cycle"]
+        if getattr(self, "monitor_publisher", None) is not None:
+            maintainer_names.append("maintain_monitor_snapshot")
         if self.ws_enabled:
             maintainer_names.append("watch_orders")
         else:

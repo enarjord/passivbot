@@ -5,6 +5,13 @@
 `src/monitor_publisher.py` owns monitor appends, snapshots, manifest checkpoints, rotation,
 retention, and startup recovery. Persistence failures stay visible but never alter trading behavior.
 
+`state.latest.json` is refreshed by a serialized background maintainer, independent
+of whether the trading loop reaches a valid planning snapshot. Successful and
+degraded cycles may also request a flush; concurrent requests serialize and the
+publisher's configured interval remains the write throttle. The independent
+maintainer uses a five-second minimum cadence to keep degraded state visible
+without turning diagnostic persistence into a high-frequency trading dependency.
+
 `record_error` retains the event kind, tags, known code-owned source/stage classifications, and a
 bounded exception type. It must not persist arbitrary caller strings or numbers, exception messages,
 request URLs, responses, tracebacks, or caller-supplied raw diagnostic aliases. More detailed
