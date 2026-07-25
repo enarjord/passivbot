@@ -93,8 +93,10 @@ backlog to be finished.
 1. Refresh `origin/master` and reconcile open logging PRs, their exact heads,
    and review/check state; ignore stale branch names and historical “next
    slice” text.
-2. Inspect representative overnight event and INFO output from the current
-   runtime before proposing code.
+2. Inspect representative overnight event and INFO output already available in
+   local artifacts before proposing code. If the evidence exists only on a
+   remote host, obtain explicit approval in the current task before SSH or any
+   other remote access.
 3. Produce a finite list of observed gaps mapped to the completion criteria,
    excluding work already covered by an open PR.
 4. Rank deletion, consolidation, demotion, or aggregation before adding a new

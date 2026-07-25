@@ -113,10 +113,13 @@ State:
 
 ## Review Gate
 
-- Merge only after every currently required semantic reviewer and CI are green
-  on the exact current head SHA, or after prior semantic approval is carried by
-  a documented current-head mechanical-delta adjudication under the canonical
-  review runbook.
+- Query the live GitHub ruleset/branch protection for the target branch and
+  record its required checks and reviews. Add any semantic reviewers explicitly
+  required by `AGENTS.md` or the current task. Those current sources define the
+  gate; historical progress entries do not.
+- Merge only after that required reviewer/check set is green on the exact
+  current head SHA, or after prior semantic approval is carried by a documented
+  current-head mechanical-delta adjudication under the canonical review runbook.
 - Prefer formal GitHub reviews or commit-bound checks. If GitHub forbids
   self-approval, accept a structured comment only when it names the reviewer,
   verdict, and exact head SHA.

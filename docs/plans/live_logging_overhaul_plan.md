@@ -467,12 +467,13 @@ These goals depend on the event stream being good enough to prove whether an
 exit or restart was slow because of exchange I/O, cache coverage, HSL replay,
 lock contention, or intentional safety policy.
 
-## Migration Plan
+## Historical Migration Plan
 
-These phases define a finite migration, not a standing invitation to instrument
-every call site. A phase is complete enough when its exit criteria and the
-current-status completion criteria are met; low-value residual producers may
-remain intentionally unmigrated.
+The phases below are the historical implementation sequence that established
+the current architecture. They are retained as design rationale, not as resume
+instructions. Do not restart these phases or branch from their historical `v8`
+baseline; select any remaining work only through
+`live_logging_overhaul_current_status.md`.
 
 ### Phase 0: Contract And Routing Table
 
@@ -556,45 +557,6 @@ After the event bus exists.
   blocked/degraded behavior.
 - Structured events retain full diagnostic context subject to volume policy.
 
-## Recommended First Implementation Milestone
-
-Milestone 1 should be a unified local event stream, not a broad conversion of
-all logging call sites.
-
-Companion pre-implementation docs:
-
-- `docs/plans/live_logging_phase0_phase1_spec.md`
-- `docs/plans/live_logging_migration_audit.md`
-
-Scope:
-
-- `LiveEvent`
-- `LiveEventContext`
-- `LiveEventPipeline`
-- queue-backed NDJSON structured sink using monitor storage
-- console summary sink for the small first event set
-- context ids for cycle, plan, and order wave
-- bridge existing monitor events
-- instrument only:
-  - planning cycle start/end
-  - existing `data_packet.updated`, `snapshot.built`, `planning_unavailable`
-  - Rust orchestrator input/output summaries and raw refs under policy
-  - reconciliation summary
-  - execution wave summary
-
-Why this first:
-
-- It is small enough to review and merge safely.
-- It establishes schema, routing, sink behavior, and backpressure policy before
-  instrumenting every exchange endpoint.
-- Rust input/output capture is the highest-value artifact for live/backtest
-  alignment and for debugging why a given ideal order existed.
-- It gives immediate replay value: one cycle can be reconstructed by `cycle_id`
-  before the full remote-call and cache instrumentation arrives.
-
-Milestone 2 should then instrument remote calls, candle/EMA readiness, forager
-features, and cache load/flush behavior.
-
 ## Validation Strategy
 
 - Unit tests for envelope defaults, routing, redaction, queue overflow, and sink
@@ -625,36 +587,10 @@ features, and cache load/flush behavior.
   exchange result, rotated NDJSON segments remain valid, and monitor relay still
   serves snapshots/events.
 
-## Branching And Rollout Recommendation
-
-Do not implement the logging overhaul directly on the current hardening branch
-unless the branch is first merged into `v8`.
-
-Recommended flow:
-
-1. Finish validating `codex/v8-fill-history-coverage-bootstrap`.
-2. Merge or fast-forward the accepted hardening commits into `v8`, because the
-   current `v8` baseline is known to be noisier and buggier than this branch.
-3. Fork a new logging branch from updated `v8`, for example
-   `codex/v8-live-event-pipeline-phase1`.
-4. Implement Phase 0 and Phase 1 only in the first PR/commit series.
-5. Review each phase separately before adding broader instrumentation.
-
-Reasoning:
-
-- The logging overhaul should be behavior-preserving and reviewable.
-- Starting from old `v8` would force agents to rediscover already-fixed live
-  bugs and would make test/probe results harder to interpret.
-- Starting from the current hardening branch without merging risks building a
-  major observability redesign on a branch that still has unrelated live fixes
-  under review.
-- Phase boundaries let reviewers verify that observability does not silently
-  change execution behavior or add unacceptable VPS load.
-
 ## Settled Design Decisions
 
-These decisions should guide the first implementation unless later live evidence
-forces a revision.
+These decisions describe the established architecture and guide any remaining
+work unless later live evidence forces a revision.
 
 1. Implement the pipeline in a new live logging module or package, not inside
    `passivbot.py`. The intended first home is `src/live/event_bus.py` or a small
