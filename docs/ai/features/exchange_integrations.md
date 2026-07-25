@@ -35,9 +35,11 @@ Authoritative REST open-order reconciliation remains strict. Binance and KuCoin
 private websocket notifications for Passivbot-owned orders may omit native
 long/short metadata; only that hint path may recover `position_side`, only in
 effective hedge mode, and only when a valid Passivbot client-order marker has
-an exact exchange or client-order identity in this process's emitted-order
-registry. Recovered rows always force an authoritative account refresh.
-Sparse foreign, one-way, or unmarked notifications remain rejected.
+no conflicting native position-side field and every supplied exchange/client
+identity matches the same record in this process's emitted-order registry.
+Recovered rows always force an authoritative account refresh. Sparse foreign,
+explicitly one-way, identity-conflicting, or unmarked notifications remain
+rejected.
 
 ## Broker Agreement Attribution
 

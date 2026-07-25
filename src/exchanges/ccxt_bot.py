@@ -165,14 +165,14 @@ class CCXTBot(Passivbot):
                 return False
             for record in self._emitted_order_records():
                 record_exchange_id = str(record.get("exchange_id") or "")
-                if (
-                    exchange_id
-                    and record_exchange_id
-                    and str(exchange_id) == record_exchange_id
-                ):
-                    return True
                 record_custom_id = str(record.get("canonical_custom_id") or "")
-                if custom_id and record_custom_id and custom_id == record_custom_id:
+                exchange_id_matches = not exchange_id or bool(
+                    record_exchange_id and str(exchange_id) == record_exchange_id
+                )
+                custom_id_matches = not custom_id or bool(
+                    record_custom_id and custom_id == record_custom_id
+                )
+                if exchange_id_matches and custom_id_matches:
                     return True
         except (AttributeError, TypeError, ValueError, OverflowError):
             return False

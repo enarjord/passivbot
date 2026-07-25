@@ -112,6 +112,17 @@ class BinanceBot(CCXTBot):
                 and getattr(self, "hedge_mode", True)
             ):
                 raise
+            info = order.get("info") or {}
+            if any(
+                value not in (None, "")
+                for value in (
+                    order.get("position_side"),
+                    order.get("positionSide"),
+                    info.get("positionSide"),
+                    info.get("ps"),
+                )
+            ):
+                raise
             if not self._sparse_ws_order_has_emitted_identity(order):
                 raise
             position_side = self._durable_order_position_side(order)

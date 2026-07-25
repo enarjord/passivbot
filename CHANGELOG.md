@@ -6,12 +6,14 @@ All notable user-facing changes will be documented in this file.
 
 - Binance and KuCoin private order streams now recover sparse Passivbot-owned
   hedge-mode updates only when the encoded client-order position side has an
-  exact identity in this process's emitted-order registry. Recovered updates
-  force an authoritative account refresh without weakening strict REST
-  open-order reconciliation. Gate.io coerces its account UID to the string
-  representation required by CCXT Pro private subscriptions, avoiding repeated
-  local `ValueError`/`TypeError` reconnect loops. Genuine transport failures
-  retain the existing bounded reconnect backoff.
+  exact identity in this process's emitted-order registry, native position-side
+  metadata is absent, and all supplied order identities agree with the same
+  emitted record. Recovered updates force an authoritative account refresh
+  without weakening strict REST open-order reconciliation. Gate.io coerces its
+  account UID to the string representation required by CCXT Pro private
+  subscriptions, avoiding repeated local `ValueError`/`TypeError` reconnect
+  loops. Genuine transport failures retain the existing bounded reconnect
+  backoff.
 
 - Monitor `state.latest.json` snapshots now refresh from a serialized background
   maintainer at least every five seconds, independently of successful planning

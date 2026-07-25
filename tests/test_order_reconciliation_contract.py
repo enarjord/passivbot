@@ -185,6 +185,68 @@ def test_sparse_one_way_websocket_order_update_does_not_use_marker_recovery(bot_
 
 
 @pytest.mark.parametrize(
+    ("bot_cls", "info"),
+    [
+        (BinanceBot, {"ps": "BOTH"}),
+        (KucoinBot, {"positionSide": "BOTH"}),
+    ],
+)
+def test_sparse_ws_recovery_rejects_explicit_native_one_way_metadata(bot_cls, info):
+    bot = bot_cls.__new__(bot_cls)
+    bot._config_hedge_mode = True
+    bot.hedge_mode = True
+    bot.get_exchange_time = lambda: 1_000
+    client_id = _client_id("entry_grid_normal_long")
+    bot.orders_emitted_to_exchange = [
+        {
+            "timestamp": 900,
+            "exchange_id": "",
+            "canonical_custom_id": bot._canonical_passivbot_custom_id(client_id),
+        }
+    ]
+    order = {
+        "symbol": "BTC/USDT:USDT",
+        "side": "buy",
+        "amount": 0.1,
+        "clientOrderId": client_id,
+        "info": info,
+    }
+
+    with pytest.raises(ValueError):
+        bot._normalize_order_update(order)
+
+
+@pytest.mark.parametrize("bot_cls", [BinanceBot, KucoinBot])
+def test_sparse_ws_recovery_rejects_conflicting_emitted_identities(bot_cls):
+    bot = bot_cls.__new__(bot_cls)
+    bot._config_hedge_mode = True
+    bot.hedge_mode = True
+    bot.get_exchange_time = lambda: 1_000
+    owned_client_id = _client_id("entry_grid_normal_long") + "-ours"
+    foreign_client_id = _client_id("entry_grid_normal_short") + "-foreign"
+    bot.orders_emitted_to_exchange = [
+        {
+            "timestamp": 900,
+            "exchange_id": "owned-exchange-id",
+            "canonical_custom_id": bot._canonical_passivbot_custom_id(
+                owned_client_id
+            ),
+        }
+    ]
+    order = {
+        "id": "owned-exchange-id",
+        "symbol": "BTC/USDT:USDT",
+        "side": "buy",
+        "amount": 0.1,
+        "clientOrderId": foreign_client_id,
+        "info": {},
+    }
+
+    with pytest.raises(ValueError, match="missing"):
+        bot._normalize_order_update(order)
+
+
+@pytest.mark.parametrize(
     ("side", "position_side", "reported_reduce_only", "expected_close"),
     [
         ("buy", "LONG", False, False),
