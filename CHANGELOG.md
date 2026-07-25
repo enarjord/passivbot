@@ -4,6 +4,14 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Reduced Hyperliquid account-state refresh churn by recovering websocket order-update semantics
+  from Passivbot's own acknowledged order record when the exchange order id matches exactly.
+  Every supplied native, unified, and client identity must agree, along with existing websocket
+  side, raw side, raw status, position-side, and reduce-only metadata. This includes
+  Hyperliquid-native `oid` and `cloid` identities, with `cloid` retained in acknowledged-order
+  records. Recovered partial-fill updates force an authoritative refresh; ambiguous,
+  contradictory, and foreign updates still fail closed.
+
 - Backtests now treat a finite balance depleted by fills as liquidation before recomputing orders,
   so extreme optimizer candidates terminate normally instead of panicking an optimizer worker.
   Other invalid orchestrator inputs now propagate as backtest errors without unwinding Rust.
