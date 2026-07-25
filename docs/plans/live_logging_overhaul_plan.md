@@ -11,10 +11,46 @@ executing returned orders, and explaining every degraded, deferred, skipped, or
 executed decision. The logging overhaul should make that explanation cheap to
 collect, bounded on a small VPS, and reliable enough for post-incident debugging.
 
+## Scope And Stopping Rule
+
+This plan defines the implementation and migration scope for the shared
+live-event pipeline and high-value decision/action logs. Canonical logging,
+redaction, and sink behavior remains owned by `docs/ai/logging_policy.md`;
+event-family payload contracts remain owned by
+`docs/ai/features/live_events.md`. This plan is not an umbrella for every
+capability that consumes events.
+
+In scope:
+
+- correctness, boundedness, and failure isolation of the canonical event
+  pipeline;
+- one structured owner for high-value lifecycle, readiness, planning,
+  execution, fill, position, balance, and safety evidence;
+- removal of duplicate or unsafe human/structured output;
+- the minimal query and validation needed to prove the event contract across
+  rotation and restart;
+- consolidation that reduces duplicated event-reader or projection code.
+
+Out of scope unless a concrete event-contract defect blocks the work:
+
+- trading policy, reconciliation, readiness enforcement, and risk behavior;
+- restart/deployment execution and process supervision;
+- HSL, candle, fill, startup, shutdown, or connector performance work;
+- general incident, performance, configuration, repository, dashboard, export,
+  and operator-convenience tooling.
+
+The overhaul ends when the finite migration and correctness criteria in
+`live_logging_overhaul_current_status.md` are satisfied. It does not remain
+open because another event type, report field, debug profile, selector, or
+operational edge case could be useful. New work requires observed evidence,
+must identify which completion criterion is unmet, and should prefer deletion,
+consolidation, demotion, or aggregation before adding another surface.
+
 ## Current State
 
-The problem is fragmentation, not absence. The branch already has several useful
-observability islands:
+This section records the baseline that motivated the overhaul. Consult
+`live_logging_overhaul_current_status.md` for the implemented state and resume
+instructions. At the baseline, the problem was fragmentation, not absence:
 
 1. Standard Python logging from `src/logging_setup.py`.
    Console/file logs are operator-readable and already use familiar text tags
@@ -73,7 +109,7 @@ Primary components:
    Per-cycle and per-action context propagated through the live loop.
 4. Sinks
    Console, text logfile, structured NDJSON, monitor projection, history streams,
-   and optional raw payload store.
+   and optional bounded diagnostic artifacts for permitted non-exchange data.
 5. Routing table
    One declarative policy mapping event types and levels to sinks, retention,
    throttling, and console formatting.
@@ -116,8 +152,9 @@ Each event should include a stable envelope:
 - `reason_code`
 - `message`: short human text
 - `data`: bounded JSON object with event-specific fields
-- `raw_ref`: optional reference to a redacted raw payload artifact
-- `raw_hash`: hash of the raw payload when persisted or intentionally omitted
+- `raw_ref`: optional reference to a policy-permitted bounded, scrubbed
+  diagnostic artifact that contains no raw exchange/account payload
+- `raw_hash`: hash of a source payload that is intentionally not persisted
 
 Compatibility mapping:
 
@@ -217,7 +254,7 @@ Keep out of INFO by default:
 - every remote poll
 - every EMA update
 - full Rust payloads
-- full exchange payloads
+- raw exchange/account payloads, which no sink may retain
 - repeated candidate-only forager misses
 - high-frequency cache maintenance with no state change
 
@@ -272,19 +309,15 @@ and retention needs differ:
 - completed candles
 - candle fetches
 - EMA bundles or EMA summaries
-- Rust payload raw refs
+- Rust diagnostic hashes and bounded scrubbed summaries
 
-### Raw Payload Store
+### Diagnostic Artifact Store
 
-Full raw exchange responses and full Rust input/output payloads should be stored
-only under explicit policy:
-
-- default: store hashes and compact summaries
-- debug: store selected raw refs for targeted components
-- trace/firehose: store full redacted payloads with short retention and byte caps
-
-Raw artifacts must be redacted before persistence. API keys, signatures,
-secrets, auth headers, and sensitive account identifiers must never be written.
+Raw exchange/account payloads must never be retained. Exchange and Rust
+orchestrator diagnostics keep hashes and bounded normalized summaries by
+default. A targeted Rust artifact may retain only a bounded scrubbed projection
+that omits account state; it also requires explicit policy, short retention, and
+byte caps.
 
 ## High-Volume Policy
 
@@ -335,8 +368,8 @@ traceable:
 1. Rust ideal order
 2. Python executable order
 3. gate decision
-4. submitted exchange payload
-5. exchange response
+4. bounded normalized submitted-order summary and payload hash
+5. bounded normalized exchange outcome and response hash
 6. local open-order update
 7. confirmation refresh request
 8. confirmation satisfied, timed out, or ambiguous terminal state
@@ -361,7 +394,7 @@ Fields:
 - start/end timestamps
 - elapsed ms
 - timeout/retry/rate-limit metadata
-- payload size/hash/raw_ref when available
+- payload size/hash and bounded normalized summary when available
 - completeness/coverage result when applicable
 
 `CandlestickManager.remote_fetch_callback` should be wired into this pipeline
@@ -372,17 +405,18 @@ rather than staying a dead-end hook.
 The call to Rust should become a first-class event chain:
 
 - `rust_orchestrator.called`
-  Summary plus raw ref/hash for the full input payload.
+  Bounded summary plus hash for the full input payload, which is not persisted.
 - `rust_orchestrator.returned`
-  Summary plus raw ref/hash for the output.
+  Bounded summary plus hash for the output.
 - `planning.symbol_state`
   Per-symbol non-tradable/deferred/reason state, compacted and throttled.
 - `action.planned`
   Per order or compact batch summary with reason and source.
 
-Raw Rust payload retention can be much more useful than raw exchange payloads
-because it captures the complete decision surface passed to the pure Rust order
-computer.
+Targeted Rust diagnostics may retain only policy-permitted bounded scrubbed
+projections that omit account state such as balances, position sizes, and entry
+prices. Full Rust inputs and raw exchange/account payloads are never persisted;
+their diagnostics remain hashes and bounded normalized summaries.
 
 ## Cache And Disk Instrumentation
 
@@ -403,11 +437,13 @@ Cache load/flush events should explain:
 This is especially important for candle and fill-history issues, where runtime
 behavior often depends on local cache coverage.
 
-## Operational Restart Goals
+## Adjacent Operational Restart Goals
 
 These are adjacent behavior/performance goals discovered while smoke-testing the
 logging work. They should be implemented as reviewed slices with tests and live
-smoke, not hidden inside observability-only PRs.
+smoke, not hidden inside observability-only PRs or counted toward logging
+completion. Their implementation belongs in the live-operations backlog or a
+dedicated handoff.
 
 1. Shutdown contract.
    Ctrl-C or process stop should set one shutdown intent that long-running live
@@ -429,7 +465,13 @@ These goals depend on the event stream being good enough to prove whether an
 exit or restart was slow because of exchange I/O, cache coverage, HSL replay,
 lock contention, or intentional safety policy.
 
-## Migration Plan
+## Historical Migration Plan
+
+The phases below are the historical implementation sequence that established
+the current architecture. They are retained as design rationale, not as resume
+instructions. Do not restart these phases or branch from their historical `v8`
+baseline; select any remaining work only through
+`live_logging_overhaul_current_status.md`.
 
 ### Phase 0: Contract And Routing Table
 
@@ -437,8 +479,8 @@ No behavior change.
 
 - Freeze the initial `LiveEvent` envelope.
 - Create the event registry and routing table.
-- Define console defaults, structured retention defaults, raw payload policy,
-  and redaction rules.
+- Define console defaults, structured retention defaults, diagnostic-artifact
+  policy, and redaction rules.
 - Document how current monitor `kind` events map to `event_type`.
 
 ### Phase 1: Event Bus Around Existing Structured Events
@@ -466,12 +508,14 @@ No trading behavior change.
 - Add call ids and call group ids.
 - Add tests for concurrent vs isolated remote-call reconstruction.
 
-### Phase 3: Rust Planning And Payload Raw Refs
+### Phase 3: Rust Planning And Bounded Payload Diagnostics
 
 No trading behavior change.
 
 - Emit `rust_orchestrator.called` and `rust_orchestrator.returned`.
-- Persist raw Rust payloads under debug/raw-ref policy.
+- Retain hashes and bounded summaries; any targeted artifact must be a scrubbed
+  projection that omits account state and satisfies the diagnostic-artifact
+  policy.
 - Emit planning summaries and per-symbol unavailable reasons from the same
   snapshot context.
 - Add payload redaction/hash tests and retention tests.
@@ -511,52 +555,13 @@ After the event bus exists.
 - Treat gatekeeper output as one producer, not as a separate logging system.
 - Console shows only gatekeeper decisions that affect execution or explain
   blocked/degraded behavior.
-- Structured events retain full diagnostic context subject to volume policy.
-
-## Recommended First Implementation Milestone
-
-Milestone 1 should be a unified local event stream, not a broad conversion of
-all logging call sites.
-
-Companion pre-implementation docs:
-
-- `docs/plans/live_logging_phase0_phase1_spec.md`
-- `docs/plans/live_logging_migration_audit.md`
-
-Scope:
-
-- `LiveEvent`
-- `LiveEventContext`
-- `LiveEventPipeline`
-- queue-backed NDJSON structured sink using monitor storage
-- console summary sink for the small first event set
-- context ids for cycle, plan, and order wave
-- bridge existing monitor events
-- instrument only:
-  - planning cycle start/end
-  - existing `data_packet.updated`, `snapshot.built`, `planning_unavailable`
-  - Rust orchestrator input/output summaries and raw refs under policy
-  - reconciliation summary
-  - execution wave summary
-
-Why this first:
-
-- It is small enough to review and merge safely.
-- It establishes schema, routing, sink behavior, and backpressure policy before
-  instrumenting every exchange endpoint.
-- Rust input/output capture is the highest-value artifact for live/backtest
-  alignment and for debugging why a given ideal order existed.
-- It gives immediate replay value: one cycle can be reconstructed by `cycle_id`
-  before the full remote-call and cache instrumentation arrives.
-
-Milestone 2 should then instrument remote calls, candle/EMA readiness, forager
-features, and cache load/flush behavior.
+- Structured events retain bounded, policy-permitted diagnostic context.
 
 ## Validation Strategy
 
 - Unit tests for envelope defaults, routing, redaction, queue overflow, and sink
   degradation.
-- Unit tests for payload digest/raw-ref behavior and context propagation across
+- Unit tests for payload digest/scrubbed-artifact behavior and context propagation across
   `cycle_id`, `remote_call_group_id`, `plan_id`, and `order_wave_id`.
 - Fake-live integration tests for a full chain:
   `cycle.started -> remote_call.* -> data_packet.updated -> snapshot.built ->
@@ -576,42 +581,16 @@ features, and cache load/flush behavior.
 - Rotation/retention tests using small byte limits.
 - A replay utility that loads one structured event directory and reconstructs a
   planning cycle by ids.
-- Manual VPS smoke with DEBUG off to verify console remains tail-safe and CPU
-  does not materially regress.
-- Operational verification that one live order can be traced from Rust output to
-  exchange result, rotated NDJSON segments remain valid, and monitor relay still
-  serves snapshots/events.
-
-## Branching And Rollout Recommendation
-
-Do not implement the logging overhaul directly on the current hardening branch
-unless the branch is first merged into `v8`.
-
-Recommended flow:
-
-1. Finish validating `codex/v8-fill-history-coverage-bootstrap`.
-2. Merge or fast-forward the accepted hardening commits into `v8`, because the
-   current `v8` baseline is known to be noisier and buggier than this branch.
-3. Fork a new logging branch from updated `v8`, for example
-   `codex/v8-live-event-pipeline-phase1`.
-4. Implement Phase 0 and Phase 1 only in the first PR/commit series.
-5. Review each phase separately before adding broader instrumentation.
-
-Reasoning:
-
-- The logging overhaul should be behavior-preserving and reviewable.
-- Starting from old `v8` would force agents to rediscover already-fixed live
-  bugs and would make test/probe results harder to interpret.
-- Starting from the current hardening branch without merging risks building a
-  major observability redesign on a branch that still has unrelated live fixes
-  under review.
-- Phase boundaries let reviewers verify that observability does not silently
-  change execution behavior or add unacceptable VPS load.
+- After explicit approval in the current task, manual VPS smoke with DEBUG off
+  may verify that console remains tail-safe and CPU does not materially regress.
+- After the same explicit approval, operational verification may trace one live
+  order from Rust output to exchange result and confirm that rotated NDJSON
+  segments remain valid and monitor relay still serves snapshots/events.
 
 ## Settled Design Decisions
 
-These decisions should guide the first implementation unless later live evidence
-forces a revision.
+These decisions describe the established architecture and guide any remaining
+work unless later live evidence forces a revision.
 
 1. Implement the pipeline in a new live logging module or package, not inside
    `passivbot.py`. The intended first home is `src/live/event_bus.py` or a small
@@ -628,12 +607,11 @@ forces a revision.
    should summarize only user-relevant effects, such as entries deferred,
    forager unavailable counts, stale market data, or degraded readiness. Per-span
    EMA diagnostics are DEBUG/TRACE material.
-5. Raw Rust input/output payloads default to summary plus hash. Full redacted raw
-   refs are enabled only by explicit DEBUG/targeted diagnostic policy with short
-   retention.
-6. Raw exchange payloads are never default-on. They are allowed only in targeted
-   DEBUG/TRACE sessions with strict redaction, byte caps, and short retention.
-   Default events keep hashes and bounded summaries.
+5. Raw Rust input/output payloads are not retained. Diagnostics use summaries
+   plus hashes. Explicit DEBUG/targeted diagnostic policy may retain only a
+   bounded scrubbed projection that omits account state and has short retention.
+6. Raw exchange/account payloads are never retained, including in DEBUG/TRACE.
+   Events keep hashes and bounded normalized summaries only.
 7. Reuse and evolve monitor storage as the canonical structured sink instead of
    creating a parallel `events/` tree. Monitor snapshots remain projections of
    the structured event stream.
@@ -642,8 +620,8 @@ forces a revision.
 9. Conservative default disk budgets per bot on a small VPS:
    - structured event stream: roughly 100-250 MB
    - human text projection: roughly 25-50 MB
-   - raw payload refs: disabled by default; when enabled, roughly 50-100 MB with
-     short retention
+   - permitted bounded scrubbed diagnostic artifacts: disabled by default; when
+     enabled, roughly 50-100 MB with short retention
    These limits should be configurable.
 10. Migrate meaningful decision/action stdlib logs first: lifecycle, cycle
     summary, Rust planning, reconciliation, order lifecycle, fills, positions,
@@ -660,7 +638,7 @@ forces a revision.
 13. Add a compact `live.logging` config surface eventually. Phase 1 may use
     conservative defaults and environment overrides to avoid schema churn.
     Durable knobs should include level, structured retention, console verbosity,
-    raw payload policy, redaction mode, and queue size.
+    diagnostic-artifact policy, redaction mode, and queue size.
 14. Event emission is behavior-neutral. Logging failures may degrade
     observability, but they must not block order execution, alter risk decisions,
     or become a trading control plane.
