@@ -314,6 +314,8 @@ def test_live_event_cycle_helpers_emit_structured_events():
                 },
             },
             "authoritative_epoch": 999999,
+            "pending_pnl_count": 2,
+            "degraded_pnl_count": 1,
         },
     )
     assert bot._current_live_event_cycle_id() is None
@@ -364,6 +366,8 @@ def test_live_event_cycle_helpers_emit_structured_events():
                 ]
             },
         },
+        "pending_pnl_count": 2,
+        "degraded_pnl_count": 1,
         "authoritative_epoch": "[redacted]",
     }
     assert "SECRET" not in str(events[1].data)
@@ -4656,6 +4660,7 @@ def test_log_new_fill_events_emits_fill_ingested_event():
             self.monitor_publisher = RecorderPublisher()
             self._health_fills = 0
             self._health_pnl = 0.0
+            self._health_counted_synthetic_pnl_by_key = {}
 
     source_ids = ["trade-a", "trade-b"]
     source_derived_fill_id = "+".join(source_ids)
@@ -4706,6 +4711,91 @@ def test_log_new_fill_events_emits_fill_ingested_event():
     assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 
+def test_log_enriched_cached_fill_adds_full_authoritative_pnl_to_health(caplog):
+    import passivbot as pb_mod
+
+    class FakeBot:
+        _log_enriched_fill_events = pb_mod.Passivbot._log_enriched_fill_events
+        _log_fill_event = lambda self, event: f"id={event.id}"
+
+        def __init__(self):
+            self._health_pnl = 100.0
+            self._health_counted_synthetic_pnl_by_key = {}
+
+    previous = SimpleNamespace(
+        id="degraded-close",
+        timestamp=1_700_000_000_000,
+        pnl=5.0,
+        fee_paid=-0.1,
+        pnl_status="complete",
+        pnl_source="synthetic_fill_reconstruction_degraded",
+    )
+    authoritative = SimpleNamespace(
+        id="degraded-close",
+        timestamp=previous.timestamp,
+        pnl=3.0,
+        fee_paid=-0.1,
+        pnl_status="complete",
+        pnl_source="authoritative",
+    )
+    bot = FakeBot()
+
+    with caplog.at_level(logging.INFO):
+        bot._log_enriched_fill_events([(previous, authoritative)])
+
+    assert bot._health_pnl == pytest.approx(102.9)
+    assert "previous_source=synthetic_fill_reconstruction_degraded" in caplog.text
+    assert "previous_counted=false" in caplog.text
+    assert "pnl_delta=+2.9" in caplog.text
+
+
+def test_log_enriched_runtime_fill_applies_authoritative_pnl_delta(caplog):
+    import passivbot as pb_mod
+
+    class FakeBot:
+        _log_enriched_fill_events = pb_mod.Passivbot._log_enriched_fill_events
+        _log_fill_event = lambda self, event: f"id={event.id}"
+
+        def __init__(self):
+            self._health_pnl = 100.0
+            self._health_counted_synthetic_pnl_by_key = {}
+
+    previous = SimpleNamespace(
+        id="degraded-close",
+        source_ids=["trade-1"],
+        timestamp=1_700_000_000_000,
+        pnl=5.0,
+        fee_paid=-0.1,
+        pnl_status="complete",
+        pnl_source="synthetic_fill_reconstruction_degraded",
+    )
+    authoritative = SimpleNamespace(
+        id="authoritative-close",
+        source_ids=["trade-1"],
+        timestamp=previous.timestamp,
+        pnl=3.0,
+        fee_paid=-0.1,
+        pnl_status="complete",
+        pnl_source="authoritative",
+    )
+    bot = FakeBot()
+    pb_mod.Passivbot._mark_health_fill_pnl_counted(bot, previous)
+    assert bot._health_counted_synthetic_pnl_by_key
+    assert all(
+        value == pytest.approx(4.9)
+        for value in bot._health_counted_synthetic_pnl_by_key.values()
+    )
+    previous.pnl = 50.0
+
+    with caplog.at_level(logging.INFO):
+        bot._log_enriched_fill_events([(previous, authoritative)])
+
+    assert bot._health_pnl == pytest.approx(98.0)
+    assert "previous_counted=true" in caplog.text
+    assert "pnl_delta=-2" in caplog.text
+    assert bot._health_counted_synthetic_pnl_by_key == {}
+
+
 def test_log_new_fill_events_uses_structured_console_without_legacy_duplicate(caplog):
     import passivbot as pb_mod
 
@@ -4742,6 +4832,7 @@ def test_log_new_fill_events_uses_structured_console_without_legacy_duplicate(ca
             self.monitor_publisher = RecorderPublisher()
             self._health_fills = 0
             self._health_pnl = 0.0
+            self._health_counted_synthetic_pnl_by_key = {}
 
     event = SimpleNamespace(
         id="fill-1",
@@ -4764,6 +4855,7 @@ def test_log_new_fill_events_uses_structured_console_without_legacy_duplicate(ca
     with caplog.at_level(logging.INFO):
         bot._log_new_fill_events([event])
 
+    assert bot._health_counted_synthetic_pnl_by_key == {}
     assert bot._live_event_pipeline.flush(timeout=2.0) is True
     assert [event.event_type for event in structured.events] == [EventTypes.FILL_INGESTED]
     assert [event.event_type for event in console.events] == [EventTypes.FILL_INGESTED]
@@ -5162,6 +5254,7 @@ def test_fills_refresh_debug_profile_adds_bounded_coverage_shape():
         new_count=2,
         enriched_count=1,
         pending_pnl_count=0,
+        degraded_pnl_count=1,
         coverage_before={
             "ready": False,
             "reason": "window_coverage_not_proven",
@@ -5201,6 +5294,7 @@ def test_fills_refresh_debug_profile_adds_bounded_coverage_shape():
         "new_count": 2,
         "enriched_count": 1,
         "pending_pnl_count": 0,
+        "degraded_pnl_count": 1,
         "event_count_delta": 4,
         "coverage_before_ready": False,
         "coverage_before_reason": "window_coverage_not_proven",

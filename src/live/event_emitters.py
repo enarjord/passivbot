@@ -281,7 +281,12 @@ def _sanitize_cycle_degraded_payload(value: Any) -> dict[str, Any]:
     out: dict[str, Any] = {}
     if "timings_ms" in value:
         out["timings_ms"] = _cycle_degraded_int_map(value.get("timings_ms"))
-    for key in ("retry_count", "failed_count"):
+    for key in (
+        "retry_count",
+        "failed_count",
+        "pending_pnl_count",
+        "degraded_pnl_count",
+    ):
         parsed = _cycle_degraded_non_negative_int(value.get(key))
         if parsed is not None:
             out[key] = parsed
@@ -5151,12 +5156,14 @@ def _fill_refresh_debug_payload(
     new_count: int | None = None,
     enriched_count: int | None = None,
     pending_pnl_count: int | None = None,
+    degraded_pnl_count: int | None = None,
 ) -> dict[str, Any]:
     before_count = _safe_int(event_count_before)
     after_count = _safe_int(event_count_after)
     new_value = _safe_int(new_count)
     enriched_value = _safe_int(enriched_count)
     pending_value = _safe_int(pending_pnl_count)
+    degraded_value = _safe_int(degraded_pnl_count)
     data: dict[str, Any] = {
         "coverage_before_keys": _mapping_key_sample(coverage_before),
         "coverage_after_keys": _mapping_key_sample(coverage_after),
@@ -5165,6 +5172,7 @@ def _fill_refresh_debug_payload(
         "new_count": new_value,
         "enriched_count": enriched_value,
         "pending_pnl_count": pending_value,
+        "degraded_pnl_count": degraded_value,
     }
     if before_count is not None and after_count is not None:
         data["event_count_delta"] = int(after_count) - int(before_count)
@@ -5247,6 +5255,7 @@ def _emit_fills_refresh_summary_event_unchecked(
     new_count: int | None = None,
     enriched_count: int | None = None,
     pending_pnl_count: int | None = None,
+    degraded_pnl_count: int | None = None,
     coverage_before: dict[str, Any] | None = None,
     coverage_after: dict[str, Any] | None = None,
     overlap_minutes: float | None = None,
@@ -5279,6 +5288,7 @@ def _emit_fills_refresh_summary_event_unchecked(
         "new_count": _safe_int(new_count),
         "enriched_count": _safe_int(enriched_count),
         "pending_pnl_count": _safe_int(pending_pnl_count),
+        "degraded_pnl_count": _safe_int(degraded_pnl_count),
     }
     if coverage_before_summary:
         data["coverage_before"] = coverage_before_summary
@@ -5339,6 +5349,7 @@ def _emit_fills_refresh_summary_event_unchecked(
             new_count=new_count,
             enriched_count=enriched_count,
             pending_pnl_count=pending_pnl_count,
+            degraded_pnl_count=degraded_pnl_count,
         )
         if debug:
             data["debug_profile"] = "fills"

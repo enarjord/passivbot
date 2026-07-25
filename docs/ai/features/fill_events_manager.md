@@ -30,6 +30,23 @@
    retries from the position/fill anchor with bounded in-memory backoff. Direction,
    quantity, and price alone do not prove a flat-to-position transition when truncated
    history has polluted reconstructed `psize`/`pprice`.
+10. A degraded synthetic PnL row inside the configured live risk lookback is not
+    authoritative merely because cache metadata proves time coverage. Refetch bounded
+    windows around each such row, preserving the pre-repair incremental checkpoint and
+    processing at most four independently bounded execution ranges per authoritative
+    cycle. Rotate remaining events across backed-off cycles so one unresolved row cannot
+    starve the others. Connectors whose authoritative PnL endpoint uses a timestamp
+    different from execution time must search that timestamp independently in bounded,
+    advancing windows while retaining the narrow execution lookup. Preserve ordinary
+    recent-fill overlap for routine ingestion, and defer risk planning without consuming
+    restart budget until every in-lookback row is authoritatively replaced. Report every
+    successful replacement before attempting later fallible fetches. Uptime health adds
+    the full authoritative net PnL when the previous cached value was not counted by this
+    process, and applies a delta against the exact net PnL previously counted for an
+    outstanding runtime synthetic row. Discard that temporary accounting after
+    enrichment; authoritative fills must not accumulate identity state. Structured
+    `cycle.degraded` diagnostics preserve bounded `pending_pnl_count` and
+    `degraded_pnl_count` fields through the centralized payload sanitizer.
 
 ## Runtime Provenance
 
@@ -70,6 +87,14 @@ logs, runtime windows, and immutable manifests.
    Full responses are recursively split into disjoint time windows because the endpoint does not
    guarantee row ordering or expose a stable cursor. Saturation within one millisecond is unavailable
    rather than silently treated as complete.
+5. Old synthetic rows remain outside ordinary recent-fill overlap to avoid repeatedly
+   widening every routine refresh. Risk-blocking degraded rows use a separate bounded
+   repair path so proven coverage cannot strand an otherwise recoverable authoritative
+   exchange record. Repair-only calls do not advance `last_refresh_ms`; the subsequent
+   ordinary recent refresh must still cover downtime from the prior successful
+   checkpoint. Bybit keeps the execution-time range narrow while rotating a separate
+   closed-PnL `updatedTime` range toward the present; each auxiliary range spans at most
+   one day.
 
 ## Failure Semantics And Risks
 
@@ -88,6 +113,8 @@ merely because an auxiliary endpoint failed.
 3. PnL attachment behavior when auxiliary endpoints fail.
 4. Provenance round-trip, preservation during refresh/deduplication, and legacy
    rows remaining unattributed.
+5. Old degraded synthetic PnL is refetched in bounded windows, authoritative
+   replacement is persisted, and unresolved rows defer live planning without restarts.
 
 ## Key Code
 

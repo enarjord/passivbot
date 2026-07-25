@@ -38,6 +38,7 @@ sys.modules.setdefault(
 
 from passivbot import Passivbot
 import passivbot as passivbot_module
+import fill_events_manager as fem
 from config import get_template_config, prepare_config
 from freshness_ledger import ACCOUNT_SURFACES, LIVE_STATE_SURFACES, FreshnessLedger
 from live.planning_availability import PlanningAvailability
@@ -6302,6 +6303,151 @@ async def test_update_pnls_window_lookback_uses_incremental_when_coverage_proven
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("failure_stage", [None, "repair", "routine"])
+async def test_update_pnls_repairs_old_degraded_pnl_before_marking_fills_authoritative(
+    failure_stage,
+):
+    bot = Passivbot.__new__(Passivbot)
+    now_ms = 1_800_000_000_000
+    lookback_days = 30.0
+    start_ms = now_ms - int(lookback_days * 86_400_000)
+    degraded = SimpleNamespace(
+        timestamp=start_ms + 60_000,
+        id="degraded-close",
+        source_ids=["degraded-close"],
+        symbol="SOL/USDT:USDT",
+        position_side="long",
+        side="sell",
+        qty=-4.0,
+        price=103.0,
+        pnl=5.0,
+        fee_paid=-0.1,
+        pnl_status="complete",
+        pnl_source=fem.PNL_SOURCE_SYNTHETIC_DEGRADED,
+    )
+    authoritative = SimpleNamespace(
+        **{
+            **vars(degraded),
+            "pnl": 3.0,
+            "pnl_source": fem.PNL_SOURCE_AUTHORITATIVE,
+        }
+    )
+
+    class _Cache:
+        def load_metadata(self):
+            return {
+                "covered_start_ms": start_ms,
+                "oldest_event_ts": degraded.timestamp,
+                "history_scope": "window",
+                "known_gaps": [],
+            }
+
+        def get_known_gaps(self):
+            return []
+
+        def get_covered_start_ms(self):
+            return start_ms
+
+    class _Manager:
+        def __init__(self):
+            self._events = [degraded]
+            self.cache = _Cache()
+            self.refresh = AsyncMock()
+            self.refresh_latest = AsyncMock()
+            self.refresh_for_lookback = AsyncMock()
+            self.refresh_degraded_pnl_events = AsyncMock(
+                side_effect=self._repair_degraded
+            )
+
+        async def _repair_degraded(self, **_kwargs):
+            self._events = [authoritative]
+            if failure_stage == "repair":
+                raise RuntimeError("later repair range unavailable")
+            return {
+                "attempted": True,
+                "before_count": 1,
+                "repaired_count": 1,
+                "remaining_count": 0,
+                "range_count": 1,
+            }
+
+        def get_events(self, start_ms=None, end_ms=None):
+            events = list(self._events)
+            if start_ms is not None:
+                events = [event for event in events if event.timestamp >= start_ms]
+            if end_ms is not None:
+                events = [event for event in events if event.timestamp <= end_ms]
+            return events
+
+        def get_history_scope(self):
+            return "window"
+
+        def set_history_scope(self, _scope):
+            pass
+
+    bot.stop_signal_received = False
+    bot.config = {
+        "live": {
+            "fills_recent_overlap_minutes": 10.0,
+            "pnls_max_lookback_days": lookback_days,
+        }
+    }
+    bot._authoritative_pending_confirmations = {}
+    bot._pnls_manager = _Manager()
+    if failure_stage == "routine":
+        bot._pnls_manager.refresh_latest.side_effect = RuntimeError(
+            "routine refresh unavailable"
+        )
+    bot.init_pnls = AsyncMock()
+    bot.live_value = lambda key: bot.config["live"][key]
+    bot.get_exchange_time = lambda: now_ms
+    bot._log_new_fill_events = MagicMock()
+    bot._log_enriched_fill_events = MagicMock()
+    bot._request_authoritative_confirmation = MagicMock()
+    bot._record_authoritative_surface = MagicMock()
+    bot._monitor_record_event = lambda *args, **kwargs: None
+    bot._monitor_record_error = lambda *args, **kwargs: None
+    bot._emit_fills_refresh_summary_event = MagicMock()
+    bot.logging_level = 0
+    bot._health_rate_limits = 0
+    bot._shutdown_requested = lambda: False
+    bot._maybe_recover_exchange_time_sync = AsyncMock(return_value=False)
+
+    if failure_stage is not None:
+        with pytest.raises(RuntimeError, match="unavailable"):
+            await bot.update_pnls(source="staged_blocking")
+        result = None
+    else:
+        result = await bot.update_pnls(source="staged_blocking")
+
+    if failure_stage is None:
+        assert result is True
+    bot._pnls_manager.refresh_degraded_pnl_events.assert_awaited_once_with(
+        start_ms=start_ms,
+        end_ms=now_ms,
+    )
+    if failure_stage == "repair":
+        bot._pnls_manager.refresh_latest.assert_not_awaited()
+    else:
+        bot._pnls_manager.refresh_latest.assert_awaited_once_with(
+            overlap=20,
+            last_refresh_overlap_ms=10 * 60 * 1000,
+        )
+    bot._log_enriched_fill_events.assert_called_once()
+    previous, current = bot._log_enriched_fill_events.call_args.args[0][0]
+    assert previous is degraded
+    assert current is authoritative
+    if failure_stage is not None:
+        return
+    summary = bot._emit_fills_refresh_summary_event.call_args.kwargs
+    assert summary["refresh_mode"] == "incremental_recent_with_degraded_pnl_repair"
+    assert summary["enriched_count"] == 1
+    assert summary["degraded_pnl_count"] == 0
+    assert summary["reason_code"] == "fills_refresh_succeeded"
+    assert bot._last_fill_refresh_degraded_pnl_count == 0
+
+
+@pytest.mark.asyncio
 async def test_update_pnls_uses_confirmation_overlap_when_fills_pending():
     bot = Passivbot.__new__(Passivbot)
     cached_events = [
@@ -7481,6 +7627,8 @@ async def test_refresh_authoritative_state_staged_does_not_publish_when_fills_fa
             "positions": [{"symbol": "BTC/USDT:USDT"}],
             "open_orders": [],
             "pnls_ok": False,
+            "pending_pnl_count": 0,
+            "degraded_pnl_count": 1,
         }
     )
     bot._apply_positions_snapshot = MagicMock()
@@ -7497,6 +7645,9 @@ async def test_refresh_authoritative_state_staged_does_not_publish_when_fills_fa
     bot._apply_open_orders_snapshot.assert_not_awaited()
     bot.handle_balance_update.assert_not_awaited()
     bot._finalize_authoritative_refresh_consistency.assert_not_called()
+    assert bot._last_authoritative_block_reason == "degraded_pnl"
+    assert bot._last_authoritative_pending_pnl_count == 0
+    assert bot._last_authoritative_degraded_pnl_count == 1
 
 
 @pytest.mark.asyncio
@@ -11986,6 +12137,70 @@ async def test_run_execution_loop_waits_on_pending_pnl_without_restart(monkeypat
     assert sleep_seconds[:7] == [1.0, 2.0, 4.0, 8.0, 16.0, 32.0, 60.0]
     assert sleep_seconds[7:12] == [60.0] * 5
     assert {stage for _seconds, stage in sleeps} == {"pending_pnl_authoritative_retry"}
+
+
+@pytest.mark.asyncio
+async def test_run_execution_loop_waits_on_degraded_pnl_without_restart():
+    bot = Passivbot.__new__(Passivbot)
+    cycle = {"n": 0}
+    sleeps = []
+
+    async def fake_sleep_unless_shutdown(seconds, *, stage):
+        sleeps.append((seconds, stage))
+
+    bot.stop_signal_received = False
+    bot.execution_scheduled = False
+    bot.state_change_detected_by_symbol = set()
+    bot.debug_mode = True
+    bot._equity_hard_stop_enabled = lambda *args, **kwargs: False
+    bot._set_log_silence_watchdog_context = lambda *args, **kwargs: None
+    bot._maybe_log_health_summary = lambda: None
+    bot._maybe_log_unstuck_status = lambda: None
+    bot._monitor_flush_snapshot = AsyncMock()
+    bot.restart_bot_on_too_many_errors = AsyncMock()
+    bot._sleep_unless_shutdown = fake_sleep_unless_shutdown
+    bot._emit_live_cycle_degraded = MagicMock()
+    bot.live_value = lambda key: 0.0 if key == "execution_delay_seconds" else False
+
+    async def fake_refresh_authoritative_state():
+        cycle["n"] += 1
+        if cycle["n"] <= 3:
+            bot._last_authoritative_block_reason = "degraded_pnl"
+            bot._last_authoritative_pending_pnl_count = 0
+            bot._last_authoritative_degraded_pnl_count = 1
+            return False
+        bot._begin_authoritative_refresh_epoch()
+        for surface, sig in (
+            ("balance", ("b", 1)),
+            ("positions", ("p", 1)),
+            ("open_orders", ("o", 1)),
+            ("fills", ("f", 1)),
+            ("completed_candles", tuple()),
+        ):
+            bot._record_authoritative_surface(surface, sig)
+        return True
+
+    bot.refresh_authoritative_state = fake_refresh_authoritative_state
+    bot.prepare_planning_universe = AsyncMock()
+    bot.refresh_market_state_if_needed = AsyncMock(return_value=True)
+    bot.execute_to_exchange = AsyncMock(return_value={"executed_cycle": 4})
+
+    result = await bot.run_execution_loop()
+
+    assert result == {"executed_cycle": 4}
+    bot.restart_bot_on_too_many_errors.assert_not_awaited()
+    assert sleeps == [
+        (1.0, "degraded_pnl_authoritative_retry"),
+        (2.0, "degraded_pnl_authoritative_retry"),
+        (4.0, "degraded_pnl_authoritative_retry"),
+    ]
+    degraded_events = [
+        call.kwargs
+        for call in bot._emit_live_cycle_degraded.call_args_list
+        if call.kwargs["reason_code"] == "degraded_pnl_authoritative_refresh"
+    ]
+    assert len(degraded_events) == 3
+    assert all(event["data"]["degraded_pnl_count"] == 1 for event in degraded_events)
 
 
 @pytest.mark.asyncio
