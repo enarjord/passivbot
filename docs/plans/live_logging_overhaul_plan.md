@@ -109,7 +109,7 @@ Primary components:
    Per-cycle and per-action context propagated through the live loop.
 4. Sinks
    Console, text logfile, structured NDJSON, monitor projection, history streams,
-   and optional raw payload store.
+   and optional bounded diagnostic artifacts for permitted non-exchange data.
 5. Routing table
    One declarative policy mapping event types and levels to sinks, retention,
    throttling, and console formatting.
@@ -152,8 +152,8 @@ Each event should include a stable envelope:
 - `reason_code`
 - `message`: short human text
 - `data`: bounded JSON object with event-specific fields
-- `raw_ref`: optional reference to a redacted raw payload artifact
-- `raw_hash`: hash of the raw payload when persisted or intentionally omitted
+- `raw_ref`: optional reference to a permitted non-exchange diagnostic artifact
+- `raw_hash`: hash of a source payload that is intentionally not persisted
 
 Compatibility mapping:
 
@@ -253,7 +253,7 @@ Keep out of INFO by default:
 - every remote poll
 - every EMA update
 - full Rust payloads
-- full exchange payloads
+- raw exchange/account payloads, which no sink may retain
 - repeated candidate-only forager misses
 - high-frequency cache maintenance with no state change
 
@@ -310,17 +310,12 @@ and retention needs differ:
 - EMA bundles or EMA summaries
 - Rust payload raw refs
 
-### Raw Payload Store
+### Diagnostic Artifact Store
 
-Full raw exchange responses and full Rust input/output payloads should be stored
-only under explicit policy:
-
-- default: store hashes and compact summaries
-- debug: store selected raw refs for targeted components
-- trace/firehose: store full redacted payloads with short retention and byte caps
-
-Raw artifacts must be redacted before persistence. API keys, signatures,
-secrets, auth headers, and sensitive account identifiers must never be written.
+Raw exchange/account payloads must never be retained. Exchange diagnostics keep
+only hashes and bounded normalized summaries. Permitted non-exchange artifacts,
+such as targeted Rust input/output diagnostics, require explicit policy,
+redaction, short retention, and byte caps.
 
 ## High-Volume Policy
 
@@ -371,8 +366,8 @@ traceable:
 1. Rust ideal order
 2. Python executable order
 3. gate decision
-4. submitted exchange payload
-5. exchange response
+4. bounded normalized submitted-order summary and payload hash
+5. bounded normalized exchange outcome and response hash
 6. local open-order update
 7. confirmation refresh request
 8. confirmation satisfied, timed out, or ambiguous terminal state
@@ -397,7 +392,7 @@ Fields:
 - start/end timestamps
 - elapsed ms
 - timeout/retry/rate-limit metadata
-- payload size/hash/raw_ref when available
+- payload size/hash and bounded normalized summary when available
 - completeness/coverage result when applicable
 
 `CandlestickManager.remote_fetch_callback` should be wired into this pipeline
@@ -416,9 +411,9 @@ The call to Rust should become a first-class event chain:
 - `action.planned`
   Per order or compact batch summary with reason and source.
 
-Raw Rust payload retention can be much more useful than raw exchange payloads
-because it captures the complete decision surface passed to the pure Rust order
-computer.
+Targeted Rust diagnostics may retain permitted redacted artifacts because they
+capture the complete decision surface passed to the pure Rust order computer.
+Exchange diagnostics remain hashes and bounded normalized summaries only.
 
 ## Cache And Disk Instrumentation
 
@@ -481,8 +476,8 @@ No behavior change.
 
 - Freeze the initial `LiveEvent` envelope.
 - Create the event registry and routing table.
-- Define console defaults, structured retention defaults, raw payload policy,
-  and redaction rules.
+- Define console defaults, structured retention defaults, diagnostic-artifact
+  policy, and redaction rules.
 - Document how current monitor `kind` events map to `event_type`.
 
 ### Phase 1: Event Bus Around Existing Structured Events
@@ -610,9 +605,8 @@ work unless later live evidence forces a revision.
 5. Raw Rust input/output payloads default to summary plus hash. Full redacted raw
    refs are enabled only by explicit DEBUG/targeted diagnostic policy with short
    retention.
-6. Raw exchange payloads are never default-on. They are allowed only in targeted
-   DEBUG/TRACE sessions with strict redaction, byte caps, and short retention.
-   Default events keep hashes and bounded summaries.
+6. Raw exchange/account payloads are never retained, including in DEBUG/TRACE.
+   Events keep hashes and bounded normalized summaries only.
 7. Reuse and evolve monitor storage as the canonical structured sink instead of
    creating a parallel `events/` tree. Monitor snapshots remain projections of
    the structured event stream.
@@ -621,8 +615,8 @@ work unless later live evidence forces a revision.
 9. Conservative default disk budgets per bot on a small VPS:
    - structured event stream: roughly 100-250 MB
    - human text projection: roughly 25-50 MB
-   - raw payload refs: disabled by default; when enabled, roughly 50-100 MB with
-     short retention
+   - permitted non-exchange diagnostic refs: disabled by default; when enabled,
+     roughly 50-100 MB with short retention
    These limits should be configurable.
 10. Migrate meaningful decision/action stdlib logs first: lifecycle, cycle
     summary, Rust planning, reconciliation, order lifecycle, fills, positions,
@@ -639,7 +633,7 @@ work unless later live evidence forces a revision.
 13. Add a compact `live.logging` config surface eventually. Phase 1 may use
     conservative defaults and environment overrides to avoid schema churn.
     Durable knobs should include level, structured retention, console verbosity,
-    raw payload policy, redaction mode, and queue size.
+    diagnostic-artifact policy, redaction mode, and queue size.
 14. Event emission is behavior-neutral. Logging failures may degrade
     observability, but they must not block order execution, alter risk decisions,
     or become a trading control plane.
