@@ -11593,11 +11593,16 @@ class Passivbot:
         except Exception:
             history_now_ms = now_ms
         day_ms = 24 * 60 * ONE_MIN_MS
-        # Use a conservative two-year live recovery horizon. This matches
-        # Bybit's documented execution-history retention and prevents an
-        # update-only position from requesting an impossible epoch-to-now
-        # pagination walk. Older unresolved states remain fail-closed.
-        max_window_ms = 730 * day_ms
+        # Bound recovery to the venue's documented history retention. WEEX
+        # retains at most 365 days; the conservative generic bound matches
+        # Bybit's two-year execution-history retention. Older unresolved
+        # states remain fail-closed.
+        max_window_days = (
+            365
+            if str(getattr(self, "exchange", "")).lower() == "weex"
+            else 730
+        )
+        max_window_ms = max_window_days * day_ms
         earliest_recovery_ms = max(1, history_now_ms - max_window_ms)
 
         previous_state = dict(
@@ -11952,9 +11957,13 @@ class Passivbot:
                         end_ms=None,
                     )
                 else:
+                    # Mandatory account-wide confirmations must stay on the
+                    # bounded recent path. Potentially expensive history
+                    # widening is reserved for the nonblocking trailing
+                    # recovery prefetch.
                     recovery_start_ms = (
                         self._trailing_fill_history_recovery_start_ms(age_limit)
-                        if confirmation_refresh or trailing_recovery_refresh
+                        if trailing_recovery_refresh
                         else None
                     )
                     overlap_minutes_key = (

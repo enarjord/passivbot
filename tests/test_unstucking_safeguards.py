@@ -1830,6 +1830,40 @@ def test_all_history_fill_recovery_uses_bounded_progressive_start(monkeypatch):
     assert bounded_state["next_retry_ms"] == now_ms + 24 * 60 * 60_000
 
 
+def test_weex_fill_recovery_uses_venue_retention_bound(monkeypatch):
+    cfg = _dummy_config()
+    bot = _make_dummy_bot(cfg)
+    bot.exchange = "weex"
+    symbol = _set_basic_state(bot)
+    now_ms = 1_800_000_000_000
+    day_ms = 24 * 60 * 60_000
+    monkeypatch.setattr(sys.modules["passivbot"], "utc_ms", lambda: now_ms)
+    bot.get_exchange_time = lambda: now_ms
+    bot.positions[symbol]["long"] = {
+        "size": 1.0,
+        "price": 100.0,
+        "lastUpdateTimestamp": now_ms - 60_000,
+    }
+    bot._trailing_fill_confirmation_diagnostics = {
+        (symbol, "long"): {
+            "failed_predicates": ["fill_after_state_mismatch"],
+        }
+    }
+
+    recovery_start_ms = None
+    for _ in range(5):
+        recovery_start_ms = bot._trailing_fill_history_recovery_start_ms(None)
+        bot._trailing_fill_history_recovery_state["cohorts"][
+            (symbol, "long")
+        ]["next_retry_ms"] = 0
+
+    assert recovery_start_ms == now_ms - 365 * day_ms
+    bounded_state = bot._trailing_fill_history_recovery_state["cohorts"][
+        (symbol, "long")
+    ]
+    assert bounded_state["at_history_bound"] is True
+
+
 def test_fill_recovery_waits_for_post_snapshot_confirmation(monkeypatch):
     cfg = _dummy_config()
     bot = _make_dummy_bot(cfg)
