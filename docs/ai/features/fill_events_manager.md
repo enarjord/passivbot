@@ -44,7 +44,9 @@
     the full authoritative net PnL when the previous cached value was not counted by this
     process, and applies a delta against the exact net PnL previously counted for an
     outstanding runtime synthetic row. Discard that temporary accounting after
-    enrichment; authoritative fills must not accumulate identity state.
+    enrichment; authoritative fills must not accumulate identity state. Structured
+    `cycle.degraded` diagnostics preserve bounded `pending_pnl_count` and
+    `degraded_pnl_count` fields through the centralized payload sanitizer.
 
 ## Runtime Provenance
 

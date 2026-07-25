@@ -281,7 +281,12 @@ def _sanitize_cycle_degraded_payload(value: Any) -> dict[str, Any]:
     out: dict[str, Any] = {}
     if "timings_ms" in value:
         out["timings_ms"] = _cycle_degraded_int_map(value.get("timings_ms"))
-    for key in ("retry_count", "failed_count"):
+    for key in (
+        "retry_count",
+        "failed_count",
+        "pending_pnl_count",
+        "degraded_pnl_count",
+    ):
         parsed = _cycle_degraded_non_negative_int(value.get(key))
         if parsed is not None:
             out[key] = parsed

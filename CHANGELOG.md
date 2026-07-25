@@ -13,8 +13,9 @@ All notable user-facing changes will be documented in this file.
   fallible refresh work; uptime health adds the full authoritative PnL for cached rows
   not previously counted by this process and applies a delta against the exact synthetic
   amount counted at runtime. Outstanding synthetic accounting is discarded after
-  enrichment. Unresolved degraded rows defer risk planning with exponential backoff
-  instead of consuming the generic bot restart budget.
+  enrichment. Unresolved degraded rows defer risk planning with exponential backoff,
+  retain pending/degraded PnL counts in structured cycle diagnostics, and do not consume
+  the generic bot restart budget.
 
 - WEEX REST and private WebSocket clients now use IPv4 transport so API keys
   bound to the host's public IPv4 address do not fail with `-1056 ILLEGAL_IP`

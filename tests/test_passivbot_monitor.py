@@ -314,6 +314,8 @@ def test_live_event_cycle_helpers_emit_structured_events():
                 },
             },
             "authoritative_epoch": 999999,
+            "pending_pnl_count": 2,
+            "degraded_pnl_count": 1,
         },
     )
     assert bot._current_live_event_cycle_id() is None
@@ -364,6 +366,8 @@ def test_live_event_cycle_helpers_emit_structured_events():
                 ]
             },
         },
+        "pending_pnl_count": 2,
+        "degraded_pnl_count": 1,
         "authoritative_epoch": "[redacted]",
     }
     assert "SECRET" not in str(events[1].data)
