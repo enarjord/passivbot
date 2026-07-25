@@ -1732,7 +1732,7 @@ def test_matching_fill_shape_does_not_override_truncated_cache_psize():
     )
 
 
-def test_explicit_position_open_time_rebases_polluted_fill_after_state(caplog):
+def test_explicit_position_open_time_rebases_polluted_fill_after_state():
     cfg = _dummy_config()
     bot = _make_dummy_bot(cfg)
     diagnostic_events = []
@@ -1779,9 +1779,7 @@ def test_explicit_position_open_time_rebases_polluted_fill_after_state(caplog):
     assert bot._fill_anchor_matches_position_state(
         symbol, "long", (3.0, 60.442), anchor
     )
-    assert "recovered polluted cached after-state" in caplog.text
-    assert diagnostic_events[0][0] == "fill.position_open_boundary_recovery_used"
-    assert diagnostic_events[0][2]["recovery"] == "position_open_single_fill"
+    assert diagnostic_events == []
 
 
 def test_generic_or_distant_position_time_cannot_rebase_fill_after_state():
@@ -1840,10 +1838,9 @@ def test_position_open_recovery_rejects_incomplete_or_multi_fill_cohort():
     bot.positions[symbol]["long"] = {
         "size": 1.0,
         "price": 100.0,
-        "openTime": 180_000,
-        # A later authoritative update means unseen post-open position
-        # mutations may exist even when final size and VWAP happen to match.
-        "lastUpdateTimestamp": 240_000,
+        # Even a one-millisecond mismatch can be a prior position episode.
+        "openTime": 180_001,
+        "lastUpdateTimestamp": 180_001,
     }
     assert not bot._fill_anchor_matches_position_state(
         symbol, "long", (1.0, 100.0), anchor
@@ -1874,6 +1871,7 @@ def test_position_open_recovery_rejects_incomplete_or_multi_fill_cohort():
             ),
         ]
     )
+    bot.positions[symbol]["long"]["openTime"] = 180_000
     bot.positions[symbol]["long"]["lastUpdateTimestamp"] = 200_000
     anchor = bot._latest_fill_position_change_anchors()[(symbol, "long")]
     assert not bot._fill_anchor_matches_position_state(
@@ -1882,9 +1880,13 @@ def test_position_open_recovery_rejects_incomplete_or_multi_fill_cohort():
 
 
 @pytest.mark.asyncio
-async def test_restart_confirms_trailing_from_explicit_position_open_replay():
+async def test_restart_confirms_trailing_from_explicit_position_open_replay(caplog):
     cfg = _dummy_config()
     bot = _make_dummy_bot(cfg)
+    diagnostic_events = []
+    bot._monitor_record_event = lambda kind, tags, payload, **kwargs: (
+        diagnostic_events.append((kind, tags, payload, kwargs))
+    )
     symbol = _set_basic_state(bot)
     bot.c_mults[symbol] = 0.1
     bot._pnls_manager = _DummyPnlsManager(
@@ -1938,6 +1940,12 @@ async def test_restart_confirms_trailing_from_explicit_position_open_replay():
         )
 
     bot.cm.get_candles = complete_post_open_candles
+    await bot.update_trailing_data()
+
+    assert bot._trailing_pending_fill_confirmations
+    assert diagnostic_events == []
+    assert "recovered polluted cached after-state" not in caplog.text
+
     bot._trailing_fill_fetch_generation = 1
 
     await bot.update_trailing_data()
@@ -1947,6 +1955,9 @@ async def test_restart_confirms_trailing_from_explicit_position_open_replay():
         (symbol, "long"): "fill:180000:opening-fill"
     }
     assert bot._orchestrator_trailing_unavailable_symbols == set()
+    assert "recovered polluted cached after-state" in caplog.text
+    assert diagnostic_events[0][0] == "fill.position_open_boundary_recovery_used"
+    assert diagnostic_events[0][2]["recovery"] == "position_open_single_fill"
 
 
 def test_fill_history_recovery_starts_before_open_even_outside_pnl_window():

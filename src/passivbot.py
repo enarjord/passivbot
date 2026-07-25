@@ -8470,11 +8470,29 @@ class Passivbot:
         anchor: dict | None,
     ) -> bool:
         """Whether a fill's recorded after-state matches an exchange position."""
+        return (
+            self._fill_anchor_position_state_match_kind(
+                symbol,
+                pside,
+                state,
+                anchor,
+            )
+            is not None
+        )
+
+    def _fill_anchor_position_state_match_kind(
+        self,
+        symbol: str,
+        pside: str,
+        state: tuple[float, float],
+        anchor: dict | None,
+    ) -> str | None:
+        """Return the evidence kind matching a fill anchor to exchange state."""
         if anchor is None:
-            return False
+            return None
         position_size, position_price = state
         if not all(math.isfinite(value) for value in (position_size, position_price)):
-            return False
+            return None
         qty_step = abs(float(getattr(self, "qty_steps", {}).get(symbol, 0.0) or 0.0))
         price_step = abs(
             float(getattr(self, "price_steps", {}).get(symbol, 0.0) or 0.0)
@@ -8492,16 +8510,18 @@ class Passivbot:
                 and abs(fill_size - position_size_in_fill_units) <= qty_tolerance
                 and abs(fill_price - position_price) <= price_tolerance
             ):
-                return True
+                return "recorded_after_state"
 
-        return self._position_open_fill_replay_matches_state(
+        if self._position_open_fill_replay_matches_state(
             symbol,
             pside,
             state,
             anchor,
             qty_tolerance=qty_tolerance,
             price_tolerance=price_tolerance,
-        )
+        ):
+            return "position_open_boundary"
+        return None
 
     def _position_open_fill_replay_matches_state(
         self,
@@ -8531,7 +8551,8 @@ class Passivbot:
             open_ts is None
             or update_ts is None
             or anchor_ts <= 0
-            or abs(update_ts - anchor_ts) > 5_000
+            or open_ts != anchor_ts
+            or update_ts != anchor_ts
         ):
             return False
         manager = getattr(self, "_pnls_manager", None)
@@ -8633,12 +8654,19 @@ class Passivbot:
         position_size, position_price = state
         c_mult = abs(float(getattr(self, "c_mults", {}).get(symbol, 1.0) or 1.0))
         expected_size = abs(position_size) * c_mult
-        matched = (
+        return (
             abs(psize - expected_size) <= qty_tolerance
             and abs(pprice - position_price) <= price_tolerance
         )
-        if not matched:
-            return False
+
+    def _emit_position_open_fill_recovery_used(
+        self, symbol: str, pside: str, anchor: dict
+    ) -> None:
+        """Report boundary recovery only after every confirmation predicate clears."""
+        position = self.positions.get(symbol, {}).get(pside, {})
+        open_ts = self._position_open_timestamp_from_row(position)
+        update_ts = self._position_update_timestamp_from_row(position)
+        anchor_ts = int(anchor.get("timestamp") or 0)
         logging.warning(
             "[fills] recovered polluted cached after-state from explicit position "
             "open/update boundary | symbol=%s pside=%s fill_ts=%s",
@@ -8663,7 +8691,6 @@ class Passivbot:
                 pside=pside,
             ),
         )
-        return True
 
     def _latest_fill_position_change_epochs(self) -> dict[tuple[str, str], str]:
         """Return the newest known fill identity for each symbol and position side."""
@@ -8826,6 +8853,7 @@ class Passivbot:
                     )
                     expected_position_state = pending_position_states.get(epoch_key)
                     failed_predicates = []
+                    position_match_kind = None
                     if current_epoch is None:
                         failed_predicates.append("missing_fill_anchor")
                     elif not current_epoch.startswith("fill:"):
@@ -8841,11 +8869,14 @@ class Passivbot:
                         current_epoch is not None
                         and current_epoch.startswith("fill:")
                         and expected_position_state is not None
-                        and not self._fill_anchor_matches_position_state(
-                            symbol, pside, expected_position_state, anchor
-                        )
                     ):
-                        failed_predicates.append("fill_after_state_mismatch")
+                        position_match_kind = (
+                            self._fill_anchor_position_state_match_kind(
+                                symbol, pside, expected_position_state, anchor
+                            )
+                        )
+                        if position_match_kind is None:
+                            failed_predicates.append("fill_after_state_mismatch")
                     if failed_predicates:
                         position_update_timestamp = self._position_update_timestamp_ms(
                             symbol, pside
@@ -8880,6 +8911,10 @@ class Passivbot:
                         unavailable_psides[symbol].add(pside)
                         last_position_changes.get(symbol, {}).pop(pside, None)
                         continue
+                    if position_match_kind == "position_open_boundary":
+                        self._emit_position_open_fill_recovery_used(
+                            symbol, pside, anchor
+                        )
                     pending_fill_confirmations.pop(epoch_key, None)
                     pending_fill_min_generations.pop(epoch_key, None)
                     pending_position_states.pop(epoch_key, None)
