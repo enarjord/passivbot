@@ -8516,15 +8516,23 @@ class Passivbot:
         """Replay fills from an exchange-proven position opening boundary.
 
         A cache may retain an old synthetic position residue when an exchange
-        no longer exposes the intervening close.  Explicit position opening
+        no longer exposes the intervening close. Explicit position opening
         timestamps (for example OKX ``cTime``) provide a safe zero-state
-        boundary after a successful post-snapshot fill refresh.  Generic
-        position timestamps and update timestamps are deliberately excluded.
+        boundary after a successful post-snapshot fill refresh only when the
+        identified opening fill is also adjacent to the authoritative latest
+        position-update time. Generic timestamps and multi-fill cohorts remain
+        insufficient.
         """
-        open_ts = self._position_open_timestamp_from_row(
-            self.positions.get(symbol, {}).get(pside, {})
-        )
-        if open_ts is None:
+        position = self.positions.get(symbol, {}).get(pside, {})
+        open_ts = self._position_open_timestamp_from_row(position)
+        update_ts = self._position_update_timestamp_from_row(position)
+        anchor_ts = int(anchor.get("timestamp") or 0)
+        if (
+            open_ts is None
+            or update_ts is None
+            or anchor_ts <= 0
+            or abs(update_ts - anchor_ts) > 5_000
+        ):
             return False
         manager = getattr(self, "_pnls_manager", None)
         if manager is None:
@@ -8565,6 +8573,14 @@ class Passivbot:
         if opening_index is None:
             return False
         events = events[opening_index:]
+
+        # This fallback intentionally accepts only a singleton open cohort. A
+        # multi-fill replay can reconcile to the same final size/VWAP despite
+        # an omitted reduction/re-entry pair, while a position update time
+        # later than the opening fill proves that the opening fill is not the
+        # latest position mutation. Richer cohorts therefore remain pending.
+        if len(events) != 1:
+            return False
 
         # The replay must end at the exact exchange fill identity selected as
         # the current anchor. Timestamp-only equality is insufficient when an
@@ -8617,10 +8633,37 @@ class Passivbot:
         position_size, position_price = state
         c_mult = abs(float(getattr(self, "c_mults", {}).get(symbol, 1.0) or 1.0))
         expected_size = abs(position_size) * c_mult
-        return (
+        matched = (
             abs(psize - expected_size) <= qty_tolerance
             and abs(pprice - position_price) <= price_tolerance
         )
+        if not matched:
+            return False
+        logging.warning(
+            "[fills] recovered polluted cached after-state from explicit position "
+            "open/update boundary | symbol=%s pside=%s fill_ts=%s",
+            self._log_symbol(symbol),
+            pside,
+            anchor_ts,
+        )
+        emit_diagnostic_event(
+            self,
+            DiagnosticEvent.build(
+                "fill.position_open_boundary_recovery_used",
+                ("diagnostic", "fills", "recovery", "fallback"),
+                {
+                    "recovery": "position_open_single_fill",
+                    "open_timestamp": int(open_ts),
+                    "position_update_timestamp": int(update_ts),
+                    "fill_timestamp": int(anchor_ts),
+                    "cohort_fill_count": 1,
+                },
+                ts_ms=utc_ms(),
+                symbol=symbol,
+                pside=pside,
+            ),
+        )
+        return True
 
     def _latest_fill_position_change_epochs(self) -> dict[tuple[str, str], str]:
         """Return the newest known fill identity for each symbol and position side."""

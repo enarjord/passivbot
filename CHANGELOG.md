@@ -6,9 +6,11 @@ All notable user-facing changes will be documented in this file.
 
 - Live trailing fill confirmation can now recover from a polluted historical
   `psize`/`pprice` residue when the exchange supplies an explicit position
-  opening timestamp. Passivbot replays identified fills from that proven
-  zero-state boundary and still requires the replayed after-state to match the
-  authoritative position; generic or update-only timestamps remain insufficient.
+  opening timestamp. Recovery is restricted to a single identified opening fill
+  adjacent to both the opening and latest position-update timestamps, still
+  requires its zero-state after-state to match the authoritative position, and
+  emits an operator-visible fallback diagnostic. Multi-fill cohorts, later
+  updates, and generic or update-only timestamps remain insufficient.
 
 - Live fill recovery now performs bounded historical refetches around degraded
   synthetic realized-PnL rows even when cache metadata already proves the configured
