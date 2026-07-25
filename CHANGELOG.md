@@ -4,6 +4,16 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Documented Python 3.12 and 3.14 support, explicitly excluding Python 3.13 until its dependency
+  set is supported and bounding package metadata to those validated minor versions, and fixed
+  reentrant candle fetch-lock
+  cleanup so a missing bookkeeping record no longer suppresses an exception raised by the
+  protected operation. CI now builds the Rust extension and runs the Python suite on both Python
+  3.12 and 3.14. Reentrancy is now restricted to the owning asyncio task, so parallel requests
+  sharing one candle manager serialize same-symbol/timeframe fetches correctly. Installation
+  examples now create the venv with the explicitly selected supported interpreter instead of
+  assuming the system `python3` points to it.
+
 - Reduced Hyperliquid account-state refresh churn by recovering websocket order-update semantics
   from Passivbot's own acknowledged order record when the exchange order id matches exactly.
   Every supplied native, unified, and client identity must agree, along with existing websocket
