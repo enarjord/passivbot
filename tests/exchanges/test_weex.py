@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import socket
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -62,6 +63,17 @@ def _bot(*, time_in_force: str = "gtc") -> WeexBot:
 
 def test_ccxt_contract_registry_uses_weex_adapter():
     assert get_bot_class("weex") is WeexBot
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("client_class", [AsyncWeex, ProWeex])
+async def test_weex_clients_use_ipv4_transport(client_class):
+    exchange = client_class()
+    try:
+        exchange.open()
+        assert exchange.tcp_connector._family == socket.AF_INET
+    finally:
+        await exchange.close()
 
 
 def test_weex_client_accepts_only_documented_success_envelope():

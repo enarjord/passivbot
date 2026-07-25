@@ -241,6 +241,21 @@ Primary references: [WEEX V3 place-order API](https://www.weex.com/api-doc/contr
 [current-orders API](https://www.weex.com/api-doc/contract/Transaction_API/GetCurrentOrderStatus),
 and [account-balance API](https://www.weex.com/api-doc/contract/Account_API/GetAccountBalance).
 
+### API whitelist transport
+
+Problem: WEEX API keys accept IPv4 whitelist entries, while a dual-stack host
+may select its IPv6 source address for `api-contract.weex.com`. Public market
+data then works, but private endpoints reject the authenticated request with
+`-1056 ILLEGAL_IP` even when the host's public IPv4 address is whitelisted.
+
+Handling: Both the REST and WebSocket WEEX CCXT clients use IPv4-only network
+connectors. Keep the host's stable public IPv4 address in the API-key whitelist;
+do not interpret `-1056` as a credential, signature, or Passivbot fill-history
+failure.
+
+Primary references: [WEEX V3 error codes](https://www.weex.com/api-doc/contract/ExampleOfErrorCode)
+and [WEEX API integration preparation](https://www.weex.com/api-doc/spot/QuickStart/IntegrationPreparation).
+
 ### Market data and CCXT compatibility
 
 Problem:
