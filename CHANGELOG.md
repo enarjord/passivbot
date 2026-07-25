@@ -13,6 +13,11 @@ All notable user-facing changes will be documented in this file.
   local `ValueError`/`TypeError` reconnect loops. Genuine transport failures
   retain the existing bounded reconnect backoff.
 
+- Monitor `state.latest.json` snapshots now refresh from a serialized background
+  maintainer at least every five seconds, independently of successful planning
+  cycles. Prolonged authoritative-data or planning degradation therefore remains
+  visible without concurrent snapshot builds or any change to trading behavior.
+
 - Live fill recovery now performs bounded historical refetches around degraded
   synthetic realized-PnL rows even when cache metadata already proves the configured
   lookback. Repair-only fetches preserve the incremental checkpoint and rotate through
