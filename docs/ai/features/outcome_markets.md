@@ -182,6 +182,10 @@ and NO have separate native books, execution candles retain their native source 
 their prices are transformed into the canonical YES coordinate. This prevents a trade in one
 native book from falsely filling an order resting only in the other.
 
+This initial execution model is passive-only. It accepts post-only orders and rejects non-post-only
+orders until an explicit taker model defines immediate execution, liquidity role, fees, and
+slippage.
+
 Some venues use a merged complementary book and report one economic trade as mirrored YES and NO
 fill records. Adapters retain both native records for audit and execution reconciliation, attach a
 shared economic-event identity when the venue proves one, and count that event once in the
@@ -308,6 +312,11 @@ residual and gross inventory instead of adding the missing complement late in th
 both settlement outcomes, pair-completion ratio, and settlement sensitivity; spread PnL alone is
 not a sufficient objective.
 
+Total token quantities remain authoritative for exposure, cost basis, and strategy skew.
+Executable sell sizing uses available token quantities plus only inventory reserved by
+Passivbot-managed sell orders that the same reconciliation will cancel. Inventory held by
+unmanaged user orders is never treated as reclaimable.
+
 ## Backtest Composition
 
 The Rust single-market kernel simulates one market from trading through settlement and emits fills,
@@ -365,7 +374,9 @@ cancellation is allowed after expiry only for an order proven by the fresh accou
 belong to the retained market, outcome side, and exact expected client-order ID. The mutation
 executor independently validates every cancellation and creation against the deterministic
 Passivbot outcome namespace before its first write, then verifies the complete final managed-order
-set rather than trusting the previously constructed reconciliation object.
+set rather than trusting the previously constructed reconciliation object. If final verification
+fails after submissions, it cancels every attempted create that remains authoritative and verifies
+their absence before propagating the failure.
 
 If the verified actual-fill signal is unavailable or stale, new and replacement quotes are
 unavailable. Reconciliation targets an empty managed-order set for the affected outcome market:

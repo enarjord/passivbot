@@ -77,6 +77,42 @@ def _toy_optimize_bounds(*keys):
     return {"bounds": {key: [0.0, 1000.0] for key in keys}}
 
 
+def test_optimizer_preaggregation_rewrites_validity_indices():
+    n_minutes = 304
+    start_ts = 1_609_459_200_000 + 60_000
+    hlcvs = np.ones((n_minutes, 1, 4), dtype=np.float64)
+    timestamps = np.arange(
+        start_ts,
+        start_ts + n_minutes * 60_000,
+        60_000,
+        dtype=np.int64,
+    )
+    btc_usd_prices = np.full(n_minutes, 20_000.0, dtype=np.float64)
+    mss = {
+        "BTC": {"first_valid_index": 104, "last_valid_index": 303},
+        "__meta__": {"data_interval_minutes": 1},
+    }
+
+    aggregated, aggregated_timestamps, aggregated_btc = (
+        optimize._maybe_aggregate_backtest_data(
+            hlcvs,
+            timestamps,
+            btc_usd_prices,
+            mss,
+            {"backtest": {"candle_interval_minutes": 5}},
+        )
+    )
+
+    assert aggregated.shape[0] == 60
+    assert aggregated_timestamps.shape[0] == 60
+    assert aggregated_btc.shape[0] == 60
+    assert mss["BTC"]["first_valid_index"] == 20
+    assert mss["BTC"]["last_valid_index"] == 59
+    assert mss["__meta__"]["data_interval_minutes"] == 5
+    assert mss["__meta__"]["source_candle_interval_offset_bars"] == 4
+    assert mss["__meta__"]["candle_interval_offset_bars"] == 0
+
+
 def test_worker_initializer_is_pickleable_for_spawn():
     ForkingPickler.dumps(ignore_sigint_in_worker)
 

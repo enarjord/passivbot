@@ -104,6 +104,11 @@ impl SingleOutcomeSimulator {
         self.ensure_trading(timestamp_ms)?;
         self.expire_orders(timestamp_ms);
         self.market.validate_order(&order)?;
+        if !order.post_only {
+            return Err(OutcomeError::UnsupportedOrderFeature(
+                "non_post_only".to_string(),
+            ));
+        }
         if order.post_only && !self.market.capabilities.supports_post_only {
             return Err(OutcomeError::UnsupportedOrderFeature(
                 "post_only".to_string(),
@@ -506,6 +511,22 @@ mod tests {
         assert_close(fills[0].fill.price, 0.4);
         assert!(simulator.open_orders().is_empty());
         assert_close(simulator.ledger().yes_qty(), 2.0);
+    }
+
+    #[test]
+    fn non_post_only_orders_are_rejected_until_taker_execution_is_modeled() {
+        let mut simulator =
+            SingleOutcomeSimulator::new(market(false), OutcomeFeeSchedule::zero(), 10.0).unwrap();
+        let mut taker = order("taker", Outcome::Yes, OutcomeOrderSide::Buy, 0.4, 1.0);
+        taker.post_only = false;
+
+        assert_eq!(
+            simulator.place_order(taker, 1_500),
+            Err(OutcomeError::UnsupportedOrderFeature(
+                "non_post_only".to_string()
+            ))
+        );
+        assert!(simulator.open_orders().is_empty());
     }
 
     #[test]

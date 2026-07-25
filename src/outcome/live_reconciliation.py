@@ -51,11 +51,13 @@ async def _cancel_attempted_creates(
     client: HyperliquidOutcomeLiveClient,
     market: NormalizedOutcomeMarket,
     attempted: tuple[OutcomeOrderCreate, ...],
+    authoritative: HyperliquidOutcomeAccountSnapshot | None = None,
 ) -> None:
     """Restore a verified create-free state after a rejected or ambiguous submission."""
 
     attempted_cloids = {creation.client_order_id for creation in attempted}
-    authoritative = await client.fetch_account_snapshot((market,))
+    if authoritative is None:
+        authoritative = await client.fetch_account_snapshot((market,))
     cleanup_orders = tuple(
         order
         for order in authoritative.open_orders
@@ -259,6 +261,8 @@ async def execute_hip4_order_reconciliation(
                 )
             )
     except Exception:
+        if not attempted_creates:
+            raise
         try:
             await _cancel_attempted_creates(
                 client,
@@ -272,62 +276,80 @@ async def execute_hip4_order_reconciliation(
             ) from cleanup_error
         raise
 
-    final_snapshot = await client.fetch_account_snapshot((market,))
-    expected_cloids = {creation.client_order_id for creation in reconciliation.creates}
-    final_market_orders = tuple(
-        order
-        for order in final_snapshot.open_orders
-        if order.market_id == market.market_id
-    )
-    for creation in reconciliation.creates:
-        matches = [
+    final_snapshot = None
+    try:
+        final_snapshot = await client.fetch_account_snapshot((market,))
+        expected_cloids = {creation.client_order_id for creation in reconciliation.creates}
+        final_market_orders = tuple(
             order
-            for order in final_market_orders
-            if order.client_order_id == creation.client_order_id
-        ]
-        if len(matches) != 1 or not _order_matches_intent(
-            matches[0],
-            creation.intent,
-            market.market_id,
-        ):
-            raise RuntimeError(
-                "HIP-4 created managed order is not authoritative with its exact "
-                f"intent: {creation.client_order_id}"
-            )
-    final_order_ids = {order.order_id for order in final_market_orders}
-    missing_kept = set(reconciliation.kept_order_ids) - final_order_ids
-    if missing_kept:
-        raise RuntimeError(
-            f"HIP-4 kept managed orders are no longer authoritative: {sorted(missing_kept)}"
+            for order in final_snapshot.open_orders
+            if order.market_id == market.market_id
         )
-    cancelled_still_open = {
-        cancellation.order_id
-        for cancellation in reconciliation.cancels
-        if cancellation.order_id in final_order_ids
-    }
-    if cancelled_still_open:
-        raise RuntimeError(
-            "HIP-4 cancelled managed orders reappeared in final state: "
-            f"{sorted(cancelled_still_open)}"
-        )
-    expected_managed_ids = set(reconciliation.kept_order_ids)
-    unexpected_managed = {
-        order.order_id
-        for order in final_market_orders
-        if (
-            is_managed_outcome_client_order_id(
-                order.client_order_id,
+        for creation in reconciliation.creates:
+            matches = [
+                order
+                for order in final_market_orders
+                if order.client_order_id == creation.client_order_id
+            ]
+            if len(matches) != 1 or not _order_matches_intent(
+                matches[0],
+                creation.intent,
                 market.market_id,
+            ):
+                raise RuntimeError(
+                    "HIP-4 created managed order is not authoritative with its exact "
+                    f"intent: {creation.client_order_id}"
+                )
+        final_order_ids = {order.order_id for order in final_market_orders}
+        missing_kept = set(reconciliation.kept_order_ids) - final_order_ids
+        if missing_kept:
+            raise RuntimeError(
+                f"HIP-4 kept managed orders are no longer authoritative: {sorted(missing_kept)}"
             )
-            and order.order_id not in expected_managed_ids
-            and order.client_order_id not in expected_cloids
-        )
-    }
-    if unexpected_managed:
-        raise RuntimeError(
-            "HIP-4 final state contains unexpected managed orders: "
-            f"{sorted(unexpected_managed)}"
-        )
+        cancelled_still_open = {
+            cancellation.order_id
+            for cancellation in reconciliation.cancels
+            if cancellation.order_id in final_order_ids
+        }
+        if cancelled_still_open:
+            raise RuntimeError(
+                "HIP-4 cancelled managed orders reappeared in final state: "
+                f"{sorted(cancelled_still_open)}"
+            )
+        expected_managed_ids = set(reconciliation.kept_order_ids)
+        unexpected_managed = {
+            order.order_id
+            for order in final_market_orders
+            if (
+                is_managed_outcome_client_order_id(
+                    order.client_order_id,
+                    market.market_id,
+                )
+                and order.order_id not in expected_managed_ids
+                and order.client_order_id not in expected_cloids
+            )
+        }
+        if unexpected_managed:
+            raise RuntimeError(
+                "HIP-4 final state contains unexpected managed orders: "
+                f"{sorted(unexpected_managed)}"
+            )
+    except Exception:
+        if not attempted_creates:
+            raise
+        try:
+            await _cancel_attempted_creates(
+                client,
+                market,
+                tuple(attempted_creates),
+                final_snapshot,
+            )
+        except Exception as cleanup_error:
+            raise RuntimeError(
+                "HIP-4 final verification failed and attempted-create cleanup could "
+                "not establish an authoritative safe state"
+            ) from cleanup_error
+        raise
     return OutcomeOrderReconciliationResult(
         cancelled=tuple(cancelled),
         created=tuple(created),

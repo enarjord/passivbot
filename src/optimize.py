@@ -276,9 +276,41 @@ def _maybe_aggregate_backtest_data(hlcvs, timestamps, btc_usd_prices, mss, confi
         hlcvs.shape[0],
         offset_bars,
     )
+    target_steps = hlcvs.shape[0]
+    source_steps = target_steps * candle_interval
+    for coin, coin_meta in mss.items():
+        if coin == "__meta__" or not isinstance(coin_meta, dict):
+            continue
+        first_source = max(
+            0,
+            min(
+                source_steps,
+                int(coin_meta.get("first_valid_index", 0)) - int(offset_bars),
+            ),
+        )
+        last_source = max(
+            0,
+            min(
+                source_steps - 1,
+                int(coin_meta.get("last_valid_index", n_before - 1))
+                - int(offset_bars),
+            ),
+        )
+        first_target = int(math.ceil(first_source / candle_interval))
+        last_target = int(((last_source + 1) // candle_interval) - 1)
+        if first_target >= target_steps:
+            first_target = target_steps
+        if last_target >= target_steps:
+            last_target = target_steps - 1
+        if last_target < 0:
+            first_target = target_steps
+            last_target = 0
+        coin_meta["first_valid_index"] = first_target
+        coin_meta["last_valid_index"] = last_target
     meta = mss.setdefault("__meta__", {})
     meta["data_interval_minutes"] = candle_interval
-    meta["candle_interval_offset_bars"] = int(offset_bars)
+    meta["source_candle_interval_offset_bars"] = int(offset_bars)
+    meta["candle_interval_offset_bars"] = 0
     if timestamps is not None and len(timestamps) > 0:
         meta["effective_start_ts"] = int(timestamps[0])
         meta["effective_start_date"] = ts_to_date(int(timestamps[0]))

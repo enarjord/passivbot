@@ -540,6 +540,8 @@ pub fn run_outcome_ema_anchor_backtest(
         let inventory = OutcomeInventorySnapshot {
             yes_qty: ledger.yes_qty(),
             no_qty: ledger.no_qty(),
+            yes_available_qty: Some(simulator.available_inventory(Outcome::Yes)),
+            no_available_qty: Some(simulator.available_inventory(Outcome::No)),
             yes_average_cost: average_cost(ledger.yes_cost(), ledger.yes_qty()),
             no_average_cost: average_cost(ledger.no_cost(), ledger.no_qty()),
             free_collateral: simulator.available_collateral(),

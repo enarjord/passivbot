@@ -86,6 +86,10 @@ impl OutcomeEmaAnchorParams {
 pub struct OutcomeInventorySnapshot {
     pub yes_qty: f64,
     pub no_qty: f64,
+    #[serde(default)]
+    pub yes_available_qty: Option<f64>,
+    #[serde(default)]
+    pub no_available_qty: Option<f64>,
     pub yes_average_cost: f64,
     pub no_average_cost: f64,
     pub free_collateral: f64,
@@ -102,6 +106,18 @@ impl OutcomeInventorySnapshot {
                 return Err(OutcomeError::InvalidMarket(format!(
                     "{name} must be finite and non-negative"
                 )));
+            }
+        }
+        for (name, available, total) in [
+            ("yes_available_qty", self.yes_available_qty, self.yes_qty),
+            ("no_available_qty", self.no_available_qty, self.no_qty),
+        ] {
+            if let Some(value) = available {
+                if !value.is_finite() || value < 0.0 || value > total + EPSILON {
+                    return Err(OutcomeError::InvalidMarket(format!(
+                        "{name} must be finite, non-negative, and no greater than total inventory"
+                    )));
+                }
             }
         }
         for (name, value, qty) in [
@@ -127,6 +143,14 @@ impl OutcomeInventorySnapshot {
 
     pub fn total_inventory_qty(&self) -> f64 {
         self.yes_qty + self.no_qty
+    }
+
+    pub fn available_yes_qty(&self) -> f64 {
+        self.yes_available_qty.unwrap_or(self.yes_qty)
+    }
+
+    pub fn available_no_qty(&self) -> f64 {
+        self.no_available_qty.unwrap_or(self.no_qty)
     }
 }
 
@@ -291,7 +315,10 @@ impl OutcomeEmaAnchorState {
                     sell_intent(
                         Outcome::Yes,
                         exit_price,
-                        params.clip_qty.min(residual).min(inventory.yes_qty),
+                        params
+                            .clip_qty
+                            .min(residual)
+                            .min(inventory.available_yes_qty()),
                         market,
                     ),
                 )
@@ -304,7 +331,10 @@ impl OutcomeEmaAnchorState {
                     sell_intent(
                         Outcome::No,
                         native_exit,
-                        params.clip_qty.min(-residual).min(inventory.no_qty),
+                        params
+                            .clip_qty
+                            .min(-residual)
+                            .min(inventory.available_no_qty()),
                         market,
                     ),
                     None,
@@ -489,21 +519,14 @@ impl OutcomeEmaAnchorState {
                 buy_intent(Outcome::Yes, canonical_price, buy_qty, market)
             }
             OutcomeEmaAnchorExecutionMode::InventoryAware => {
-                let sell_qty = params.clip_qty.min(inventory.no_qty);
                 let native_price = market.payout_unit - canonical_price;
-                if sell_qty >= market.min_qty
-                    && sell_qty * native_price + EPSILON >= market.min_notional
-                {
-                    Some(OutcomeNativeOrderIntent {
-                        outcome: Outcome::No,
-                        side: OutcomeOrderSide::Sell,
-                        native_price,
-                        canonical_yes_price: canonical_price,
-                        qty: round_down(sell_qty, market.qty_step),
-                    })
-                } else {
-                    buy_intent(Outcome::Yes, canonical_price, buy_qty, market)
-                }
+                sell_intent(
+                    Outcome::No,
+                    native_price,
+                    params.clip_qty.min(inventory.available_no_qty()),
+                    market,
+                )
+                .or_else(|| buy_intent(Outcome::Yes, canonical_price, buy_qty, market))
             }
         }
     }
@@ -525,17 +548,14 @@ impl OutcomeEmaAnchorState {
             ),
             OutcomeEmaAnchorExecutionMode::InventoryAware
             | OutcomeEmaAnchorExecutionMode::YesOnly => {
-                let sell_qty = params.clip_qty.min(inventory.yes_qty);
-                if sell_qty >= market.min_qty
-                    && sell_qty * canonical_price + EPSILON >= market.min_notional
-                {
-                    Some(OutcomeNativeOrderIntent {
-                        outcome: Outcome::Yes,
-                        side: OutcomeOrderSide::Sell,
-                        native_price: canonical_price,
-                        canonical_yes_price: canonical_price,
-                        qty: round_down(sell_qty, market.qty_step),
-                    })
+                let sell = sell_intent(
+                    Outcome::Yes,
+                    canonical_price,
+                    params.clip_qty.min(inventory.available_yes_qty()),
+                    market,
+                );
+                if sell.is_some() {
+                    sell
                 } else if params.execution_mode == OutcomeEmaAnchorExecutionMode::InventoryAware {
                     buy_intent(
                         Outcome::No,
@@ -769,6 +789,8 @@ mod tests {
         OutcomeInventorySnapshot {
             yes_qty: 0.0,
             no_qty: 0.0,
+            yes_available_qty: None,
+            no_available_qty: None,
             yes_average_cost: 0.0,
             no_average_cost: 0.0,
             free_collateral: 100.0,
@@ -842,6 +864,8 @@ mod tests {
         let inventory = OutcomeInventorySnapshot {
             yes_qty: 9.0,
             no_qty: 0.0,
+            yes_available_qty: None,
+            no_available_qty: None,
             yes_average_cost: 0.4,
             no_average_cost: 0.0,
             free_collateral: 100.0,
@@ -893,6 +917,8 @@ mod tests {
         let inventory = OutcomeInventorySnapshot {
             yes_qty: 10.0,
             no_qty: 0.0,
+            yes_available_qty: None,
+            no_available_qty: None,
             yes_average_cost: 0.4,
             no_average_cost: 0.0,
             free_collateral: 100.0,
@@ -924,6 +950,8 @@ mod tests {
         let inventory = OutcomeInventorySnapshot {
             yes_qty: 1.0,
             no_qty: 0.0,
+            yes_available_qty: None,
+            no_available_qty: None,
             yes_average_cost: 0.4,
             no_average_cost: 0.0,
             free_collateral: 100.0,
@@ -955,6 +983,8 @@ mod tests {
         let inventory = OutcomeInventorySnapshot {
             yes_qty: 1.0,
             no_qty: 0.0,
+            yes_available_qty: None,
+            no_available_qty: None,
             yes_average_cost: 0.7,
             no_average_cost: 0.0,
             free_collateral: 100.0,
@@ -982,6 +1012,8 @@ mod tests {
         let inventory = OutcomeInventorySnapshot {
             yes_qty: 2.0,
             no_qty: 3.0,
+            yes_available_qty: None,
+            no_available_qty: None,
             yes_average_cost: 0.4,
             no_average_cost: 0.4,
             free_collateral: 100.0,
@@ -1016,6 +1048,60 @@ mod tests {
     }
 
     #[test]
+    fn yes_only_mode_respects_available_inventory_separately_from_total_inventory() {
+        let mut state = OutcomeEmaAnchorState::default();
+        let mut parameters = params(OutcomeEmaAnchorExecutionMode::YesOnly);
+        parameters.clip_qty = 25.0;
+        state
+            .update(0.5, market().payout_unit, &parameters)
+            .unwrap();
+        let inventory = OutcomeInventorySnapshot {
+            yes_qty: 25.0,
+            no_qty: 0.0,
+            yes_available_qty: Some(0.0),
+            no_available_qty: Some(0.0),
+            yes_average_cost: 0.4,
+            no_average_cost: 0.0,
+            free_collateral: 100.0,
+        };
+
+        let quotes = state
+            .quote(2_000, 0.5, &market(), &parameters, &inventory)
+            .unwrap();
+
+        assert!(quotes.canonical_ask.is_none());
+    }
+
+    #[test]
+    fn rounded_sell_quantity_must_still_meet_minimum_notional() {
+        let mut outcome_market = market();
+        outcome_market.qty_step = 1.0;
+        outcome_market.min_qty = 1.0;
+        outcome_market.min_notional = 10.0;
+        let mut state = OutcomeEmaAnchorState::default();
+        let mut parameters = params(OutcomeEmaAnchorExecutionMode::YesOnly);
+        parameters.clip_qty = 19.7;
+        state
+            .update(0.5, outcome_market.payout_unit, &parameters)
+            .unwrap();
+        let inventory = OutcomeInventorySnapshot {
+            yes_qty: 19.7,
+            no_qty: 0.0,
+            yes_available_qty: Some(19.7),
+            no_available_qty: Some(0.0),
+            yes_average_cost: 0.4,
+            no_average_cost: 0.0,
+            free_collateral: 100.0,
+        };
+
+        let quotes = state
+            .quote(2_000, 0.5, &outcome_market, &parameters, &inventory)
+            .unwrap();
+
+        assert!(quotes.canonical_ask.is_none());
+    }
+
+    #[test]
     fn entry_cutoff_disables_both_quotes() {
         let mut state = OutcomeEmaAnchorState::default();
         let parameters = params(OutcomeEmaAnchorExecutionMode::AccumulatePairs);
@@ -1039,6 +1125,8 @@ mod tests {
         let inventory = OutcomeInventorySnapshot {
             yes_qty: 2.0,
             no_qty: 1.0,
+            yes_available_qty: None,
+            no_available_qty: None,
             yes_average_cost: 0.4,
             no_average_cost: 0.4,
             free_collateral: 100.0,
@@ -1067,6 +1155,8 @@ mod tests {
         let inventory = OutcomeInventorySnapshot {
             yes_qty: 1.0,
             no_qty: 2.0,
+            yes_available_qty: None,
+            no_available_qty: None,
             yes_average_cost: 0.4,
             no_average_cost: 0.4,
             free_collateral: 100.0,
@@ -1115,6 +1205,8 @@ mod tests {
         let inventory = OutcomeInventorySnapshot {
             yes_qty: 1.0,
             no_qty: 2.0,
+            yes_available_qty: None,
+            no_available_qty: None,
             yes_average_cost: 0.4,
             no_average_cost: 0.4,
             free_collateral: 100.0,

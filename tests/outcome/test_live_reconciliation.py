@@ -182,8 +182,8 @@ def test_unavailable_signal_reconciliation_requires_second_aligned_decision_time
 
 
 class FakeClient:
-    def __init__(self, initial, final):
-        self.snapshots = [initial, final]
+    def __init__(self, *snapshots):
+        self.snapshots = list(snapshots)
         self.cancelled = []
         self.created = []
 
@@ -364,3 +364,29 @@ async def test_executor_rejects_created_order_with_wrong_authoritative_terms():
 
     with pytest.raises(RuntimeError, match="exact intent"):
         await execute_hip4_order_reconciliation(client, market(), reconciliation)
+
+    assert [item[2] for item in client.cancelled] == [9]
+
+
+@pytest.mark.asyncio
+async def test_executor_cleans_up_attempted_orders_after_final_verification_failure():
+    reconciliation = reconcile_outcome_orders(market(), plan(), snapshot())
+    first, second = reconciliation.creates
+    incomplete_final = snapshot(
+        (
+            order(
+                "9",
+                outcome=first.intent.outcome,
+                price=first.intent.native_price,
+                cloid=first.client_order_id,
+            ),
+        )
+    )
+    client = FakeClient(incomplete_final, snapshot())
+
+    with pytest.raises(RuntimeError, match="exact intent"):
+        await execute_hip4_order_reconciliation(client, market(), reconciliation)
+
+    assert [item[2] for item in client.cancelled] == [9]
+    assert [item[3] for item in client.cancelled] == [first.client_order_id]
+    assert len(client.created) == 2

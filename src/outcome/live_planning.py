@@ -10,6 +10,7 @@ from outcome.models import (
     OutcomeOrderSide,
     OutcomeSide,
     OutcomeSignalCandle1s,
+    OutcomeTokenBalance,
 )
 from outcome.order_ownership import is_managed_outcome_client_order_id
 from outcome.rust_runner import (
@@ -89,6 +90,29 @@ def _planning_free_collateral(
     )
 
 
+def _planning_available_inventory(
+    market: NormalizedOutcomeMarket,
+    account: HyperliquidOutcomeAccountSnapshot,
+    balance: OutcomeTokenBalance,
+) -> float:
+    """Include inventory reclaimable only from this market's managed sell orders."""
+
+    managed_sell_reserve = sum(
+        order.qty
+        for order in account.open_orders
+        if order.market_id == market.market_id
+        and order.asset_id == balance.asset_id
+        and order.outcome is balance.outcome
+        and order.side is OutcomeOrderSide.SELL
+        and is_managed_outcome_client_order_id(
+            order.client_order_id,
+            market.market_id,
+        )
+    )
+    reclaimable = min(balance.held_qty, managed_sell_reserve)
+    return min(balance.total_qty, balance.available_qty + reclaimable)
+
+
 def build_ema_anchor_outcome_live_plan(
     market: NormalizedOutcomeMarket,
     strategy_params: Mapping[str, Any],
@@ -154,6 +178,8 @@ def build_ema_anchor_outcome_live_plan(
         "inventory": {
             "yes_qty": yes.total_qty,
             "no_qty": no.total_qty,
+            "yes_available_qty": _planning_available_inventory(market, account, yes),
+            "no_available_qty": _planning_available_inventory(market, account, no),
             "yes_average_cost": _average_cost(yes.entry_notional, yes.total_qty),
             "no_average_cost": _average_cost(no.entry_notional, no.total_qty),
             "free_collateral": _planning_free_collateral(market, account),

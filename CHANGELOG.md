@@ -69,7 +69,11 @@ All notable user-facing changes will be documented in this file.
   history and capital-release evidence, rather than treating fill coverage as tick history or
   `ConditionResolution` as redemption. Source bars must be contiguous before interval aggregation;
   one-sided pair completion can use its full remaining inventory headroom; mode summaries retain
-  peak paired and residual exposure.
+  peak paired and residual exposure. Final HIP-4 verification failures now trigger verified cleanup
+  of every attempted create; live sell sizing excludes inventory reserved by unmanaged orders while
+  reclaiming managed reservations. Outcome sell constraints are checked after quantity rounding,
+  and the candle simulator rejects non-post-only orders until taker execution is modeled. Optimizer
+  candle pre-aggregation now converts per-coin validity indices to the aggregated interval.
   Authenticated outcome mutations remain disabled by default.
 
 - Canonical live-event payloads now make a bounded JSON-compatible copy at construction time,

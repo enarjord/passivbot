@@ -36,6 +36,8 @@ def account(
     *,
     yes_qty: float = 0.0,
     no_qty: float = 0.0,
+    yes_held_qty: float = 0.0,
+    no_held_qty: float = 0.0,
     held_collateral: float = 0.0,
     available_after_maintenance: float = 100.0,
     open_orders: tuple[OutcomeOpenOrder, ...] = (),
@@ -60,7 +62,7 @@ def account(
                 asset_id="+9130",
                 outcome=OutcomeSide.YES,
                 total_qty=yes_qty,
-                held_qty=0.0,
+                held_qty=yes_held_qty,
                 entry_notional=yes_qty * 0.4,
             ),
             OutcomeTokenBalance(
@@ -68,7 +70,7 @@ def account(
                 asset_id="+9131",
                 outcome=OutcomeSide.NO,
                 total_qty=no_qty,
-                held_qty=0.0,
+                held_qty=no_held_qty,
                 entry_notional=no_qty * 0.4,
             ),
         ),
@@ -247,3 +249,77 @@ def test_live_plan_sells_excess_yes_during_risk_reduction_window():
     assert intent.outcome is OutcomeSide.YES
     assert intent.side is OutcomeOrderSide.SELL
     assert intent.qty == 25.0
+
+
+def test_live_plan_does_not_sell_inventory_reserved_by_unmanaged_orders():
+    signal_candles = candles()
+    now_ms = signal_candles[-1].timestamp_ms + 1_000
+    configured = params()
+    configured["execution_mode"] = "yes_only"
+    unmanaged_sell = OutcomeOpenOrder(
+        market_id="913",
+        order_id="unmanaged-sell",
+        asset_id="+9130",
+        outcome=OutcomeSide.YES,
+        side=OutcomeOrderSide.SELL,
+        native_price=0.60,
+        qty=30.0,
+        original_qty=30.0,
+        timestamp_ms=now_ms - 1_000,
+        client_order_id="0x" + "00" * 16,
+    )
+
+    plan = build_ema_anchor_outcome_live_plan(
+        market(),
+        configured,
+        signal_candles,
+        account(
+            now_ms,
+            yes_qty=30.0,
+            yes_held_qty=30.0,
+            open_orders=(unmanaged_sell,),
+        ),
+        now_ms=now_ms,
+    )
+
+    assert all(intent.side is not OutcomeOrderSide.SELL for intent in plan.intents)
+
+
+def test_live_plan_can_reclaim_inventory_reserved_by_managed_sell_orders():
+    signal_candles = candles()
+    now_ms = signal_candles[-1].timestamp_ms + 1_000
+    configured = params()
+    configured["execution_mode"] = "yes_only"
+    managed_sell = OutcomeOpenOrder(
+        market_id="913",
+        order_id="managed-sell",
+        asset_id="+9130",
+        outcome=OutcomeSide.YES,
+        side=OutcomeOrderSide.SELL,
+        native_price=0.60,
+        qty=30.0,
+        original_qty=30.0,
+        timestamp_ms=now_ms - 1_000,
+        client_order_id=managed_outcome_client_order_id(
+            "913",
+            slot="canonical_ask",
+            observation_end_ms=signal_candles[-1].timestamp_ms,
+        ),
+    )
+
+    plan = build_ema_anchor_outcome_live_plan(
+        market(),
+        configured,
+        signal_candles,
+        account(
+            now_ms,
+            yes_qty=30.0,
+            yes_held_qty=30.0,
+            open_orders=(managed_sell,),
+        ),
+        now_ms=now_ms,
+    )
+
+    sells = [intent for intent in plan.intents if intent.side is OutcomeOrderSide.SELL]
+    assert len(sells) == 1
+    assert sells[0].qty == pytest.approx(25.0)
