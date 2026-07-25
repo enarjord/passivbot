@@ -171,6 +171,17 @@ Handling in Passivbot:
 
 ## Gate.io Futures
 
+### Exchange identity boundary
+
+Passivbot's canonical exchange identity is `gateio`. This identity owns connector
+routing, cache and event paths, broker attribution, and persisted state. CCXT 4.5.66
+renamed only its client class to `gate`.
+
+For compatibility, `api-keys.json` may specify either `"exchange": "gateio"` or
+`"exchange": "gate"`. Passivbot normalizes the latter to `gateio` and logs that
+migration. Only CCXT REST and WebSocket client construction translates `gateio` to
+`gate`; do not add parallel `gate` identities to internal registries or state paths.
+
 ### Contract order text must start with `t-`
 
 Problem:
