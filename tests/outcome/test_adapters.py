@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+from dataclasses import replace
 import json
 from pathlib import Path
 
 import pytest
 
 from outcome.adapters import hyperliquid, polymarket
-from outcome.models import OutcomeOrderSide, OutcomeSide, OutcomeVenue
+from outcome.models import MarketLifecycle, OutcomeOrderSide, OutcomeSide, OutcomeVenue
+from outcome.rust_runner import normalized_market_to_rust_spec
 
 
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "outcome"
@@ -112,6 +114,35 @@ def test_polymarket_binary_market_preserves_tokens_lifecycle_and_fee_curve():
     assert market.fee_metadata.parameters["taker_only"] is True
     assert market.native_metadata["yes_outcome_index"] == 0
     assert market.native_metadata["no_outcome_index"] == 1
+
+
+def test_polymarket_rust_spec_requires_explicit_qty_step_and_uses_tick_bounds():
+    market = polymarket.normalize_market(load_fixture("polymarket_binary.json"))
+    market = replace(
+        market,
+        lifecycle=MarketLifecycle(
+            trading_open_time_ms=1_000,
+            trading_close_time_ms=5_000,
+            scheduled_event_time_ms=5_000,
+        ),
+    )
+
+    with pytest.raises(ValueError, match="quantity constraints"):
+        normalized_market_to_rust_spec(market)
+
+    spec = normalized_market_to_rust_spec(market, qty_step=0.01)
+    assert spec["qty_step"] == 0.01
+    assert spec["min_price"] == pytest.approx(0.01)
+    assert spec["max_price"] == pytest.approx(0.99)
+
+
+def test_hyperliquid_rust_spec_bounds_follow_significant_figure_grid():
+    market = hyperliquid.normalize_market(load_fixture("hyperliquid_price_binary.json"))
+
+    spec = normalized_market_to_rust_spec(market)
+
+    assert spec["min_price"] == pytest.approx(1e-8)
+    assert spec["max_price"] == pytest.approx(0.99999)
 
 
 def test_polymarket_closed_time_is_actual_trading_close_not_scheduled_event():

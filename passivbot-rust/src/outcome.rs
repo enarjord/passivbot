@@ -790,8 +790,13 @@ impl OutcomeLedger {
             + self.no.qty * (self.payout_unit - yes_price))
     }
 
-    pub fn worst_case_settlement_equity(&self) -> f64 {
-        self.collateral + self.paired_qty() * self.payout_unit
+    pub fn worst_case_settlement_equity(
+        &self,
+        fee_schedule: &OutcomeFeeSchedule,
+    ) -> Result<f64, OutcomeError> {
+        let collateral_payout = self.paired_qty() * self.payout_unit;
+        let settlement_fee = fee_schedule.calculate_settlement_fee(collateral_payout)?;
+        Ok(self.collateral + collateral_payout - settlement_fee)
     }
 
     pub fn total_return(&self) -> f64 {
@@ -950,7 +955,12 @@ mod tests {
                 .unwrap();
             assert_close(ledger.paired_qty(), 1.0);
             assert_close(ledger.net_yes_exposure(), 0.0);
-            assert_close(ledger.worst_case_settlement_equity(), 1.492);
+            assert_close(
+                ledger
+                    .worst_case_settlement_equity(&OutcomeFeeSchedule::zero())
+                    .unwrap(),
+                1.492,
+            );
 
             let settlement = ledger.settle(yes_fraction).unwrap();
             assert_close(settlement.realized_settlement_pnl, 0.492);

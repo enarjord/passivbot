@@ -14,12 +14,14 @@ import aiohttp
 
 from outcome.adapters import hyperliquid
 from outcome.archive import OutcomeTradeArchive
+from outcome.archive_replay import consolidated_archived_market
 from outcome.backtest_input import build_trade_derived_ema_anchor_input
 from outcome.candles import VerifiedCoverage
 from outcome.evaluation import (
     evaluate_ema_anchor_outcome_modes,
     summarize_outcome_strategy_modes,
 )
+from outcome.models import OutcomeVenue
 from outcome.rust_runner import normalized_market_to_rust_spec
 
 
@@ -70,7 +72,15 @@ def _proves_interval(
 
 async def _main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--underlying", default="BTC")
+    market_selector = parser.add_mutually_exclusive_group(required=True)
+    market_selector.add_argument(
+        "--market-id",
+        help="Load retained HIP-4 metadata for this archived market ID",
+    )
+    market_selector.add_argument(
+        "--underlying",
+        help="Discover the one currently active HIP-4 contract for this underlying",
+    )
     parser.add_argument("--start-ms", required=True, type=int)
     parser.add_argument("--end-ms", required=True, type=int)
     parser.add_argument("--archive", default="caches/outcome_markets.sqlite")
@@ -112,9 +122,20 @@ async def _main() -> int:
     ):
         parser.error("fee rates must be finite")
 
-    market = await _fetch_market(args.underlying)
     archive = OutcomeTradeArchive(Path(args.archive))
     try:
+        if args.market_id is not None:
+            market_versions = archive.load_market_metadata(
+                OutcomeVenue.HYPERLIQUID,
+                args.market_id,
+            )
+            if not market_versions:
+                raise ValueError(
+                    f"outcome archive has no HIP-4 market metadata for {args.market_id}"
+                )
+            market = consolidated_archived_market(market_versions)
+        else:
+            market = await _fetch_market(args.underlying)
         trades = []
         for asset in (market.yes_asset, market.no_asset):
             coverage = archive.load_verified_coverage(

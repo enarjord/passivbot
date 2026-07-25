@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 import json
+import math
 from typing import Any, Callable, Mapping
 
 from outcome.orchestrator import (
@@ -11,7 +12,46 @@ from outcome.orchestrator import (
 from outcome.models import NormalizedOutcomeMarket
 
 
-def normalized_market_to_rust_spec(market: NormalizedOutcomeMarket) -> dict[str, Any]:
+def _executable_price_bounds(market: NormalizedOutcomeMarket) -> tuple[float, float]:
+    """Return the first and last executable prices on the venue-reported grid."""
+
+    payout_unit = market.payout_unit
+    grid = market.price_grid
+    upper_probe = math.nextafter(payout_unit, -math.inf)
+    if grid.kind == "fixed_step":
+        minimum_increment = grid.fixed_step
+        assert minimum_increment is not None
+        upper_increment = minimum_increment
+    elif grid.kind == "significant_figures":
+        assert grid.max_significant_figures is not None
+        assert grid.max_decimal_places is not None
+        minimum_increment = 10.0 ** -grid.max_decimal_places
+        if upper_probe <= 0.0:
+            raise ValueError("outcome price grid has no executable prices inside payout bounds")
+        magnitude = math.floor(math.log10(upper_probe))
+        upper_increment = max(
+            minimum_increment,
+            10.0 ** (magnitude - grid.max_significant_figures + 1),
+        )
+    else:  # pragma: no cover - model validation rejects unsupported kinds
+        raise ValueError(f"unsupported outcome price grid {grid.kind!r}")
+
+    min_price = minimum_increment
+    max_price = math.floor(upper_probe / upper_increment) * upper_increment
+    if not (
+        math.isfinite(min_price)
+        and math.isfinite(max_price)
+        and 0.0 < min_price < max_price < payout_unit
+    ):
+        raise ValueError("outcome price grid has no executable prices inside payout bounds")
+    return min_price, max_price
+
+
+def normalized_market_to_rust_spec(
+    market: NormalizedOutcomeMarket,
+    *,
+    qty_step: float | None = None,
+) -> dict[str, Any]:
     """Translate exchange-neutral metadata into the authoritative Rust market contract."""
 
     opens_ms = market.lifecycle.trading_open_time_ms
@@ -19,8 +59,20 @@ def normalized_market_to_rust_spec(market: NormalizedOutcomeMarket) -> dict[str,
     resolution_ms = market.lifecycle.scheduled_event_time_ms
     if opens_ms is None or closes_ms is None or resolution_ms is None:
         raise ValueError("outcome market lifecycle is incomplete for Rust planning")
-    if market.qty_step is None or market.min_order_qty is None:
+    effective_qty_step = market.qty_step if qty_step is None else qty_step
+    if (
+        effective_qty_step is None
+        or not math.isfinite(effective_qty_step)
+        or effective_qty_step <= 0.0
+        or market.min_order_qty is None
+    ):
         raise ValueError("outcome market quantity constraints are incomplete for Rust planning")
+    if (
+        market.qty_step is not None
+        and qty_step is not None
+        and not math.isclose(market.qty_step, qty_step, rel_tol=0.0, abs_tol=1e-12)
+    ):
+        raise ValueError("explicit outcome qty_step disagrees with venue metadata")
     price_grid: dict[str, Any] = {"kind": market.price_grid.kind}
     if market.price_grid.kind == "fixed_step":
         price_grid["step"] = market.price_grid.fixed_step
@@ -33,16 +85,17 @@ def normalized_market_to_rust_spec(market: NormalizedOutcomeMarket) -> dict[str,
         )
     else:  # pragma: no cover - model validation rejects unsupported kinds
         raise ValueError(f"unsupported outcome price grid {market.price_grid.kind!r}")
+    min_price, max_price = _executable_price_bounds(market)
     return {
         "venue": market.venue.value,
         "market_id": market.market_id,
         "yes_asset_id": market.yes_asset.asset_id,
         "no_asset_id": market.no_asset.asset_id,
         "payout_unit": market.payout_unit,
-        "min_price": 0.00000001,
-        "max_price": market.payout_unit - 0.00000001,
+        "min_price": min_price,
+        "max_price": max_price,
         "price_grid": price_grid,
-        "qty_step": market.qty_step,
+        "qty_step": effective_qty_step,
         "min_qty": market.min_order_qty,
         "min_notional": market.min_order_notional or 0.0,
         "trading_opens_ms": opens_ms,

@@ -259,6 +259,47 @@ async def test_executor_verifies_cancel_before_create_and_final_resting_state():
 
 
 @pytest.mark.asyncio
+async def test_executor_cancels_all_attempted_orders_after_partial_create_failure():
+    reconciliation = reconcile_outcome_orders(market(), plan(), snapshot())
+    first, second = reconciliation.creates
+    cleanup_snapshot = snapshot(
+        (
+            order(
+                "9",
+                outcome=first.intent.outcome,
+                price=first.intent.native_price,
+                cloid=first.client_order_id,
+            ),
+            order(
+                "10",
+                outcome=second.intent.outcome,
+                price=second.intent.native_price,
+                cloid=second.client_order_id,
+            ),
+        )
+    )
+    client = FakeClient(cleanup_snapshot, snapshot())
+    original_submit = client.submit_limit_order
+
+    async def fail_second_submit(*args, **kwargs):
+        if len(client.created) == 1:
+            client.created.append(("ambiguous-second", kwargs["client_order_id"]))
+            raise TimeoutError("ambiguous create timeout")
+        return await original_submit(*args, **kwargs)
+
+    client.submit_limit_order = fail_second_submit
+
+    with pytest.raises(TimeoutError, match="ambiguous create timeout"):
+        await execute_hip4_order_reconciliation(client, market(), reconciliation)
+
+    assert [item[2] for item in client.cancelled] == [9, 10]
+    assert [item[3] for item in client.cancelled] == [
+        first.client_order_id,
+        second.client_order_id,
+    ]
+
+
+@pytest.mark.asyncio
 async def test_executor_rejects_forged_unnamespaced_cancel_before_any_mutation():
     desired = replace(plan(), intents=())
     unmanaged = order(

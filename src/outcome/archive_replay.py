@@ -62,7 +62,7 @@ def _authoritative_settlement(
     )
 
 
-def _consolidated_market_lifecycle(
+def consolidated_archived_market(
     market_versions: list[NormalizedOutcomeMarket],
 ) -> NormalizedOutcomeMarket:
     """Keep initial trading terms while merging later lifecycle observations.
@@ -71,6 +71,8 @@ def _consolidated_market_lifecycle(
     observation supplies that field, so replay must not blindly select the first archived version.
     """
 
+    if not market_versions:
+        raise ValueError("cannot consolidate an empty outcome market history")
     first = market_versions[0]
 
     def first_present(name: str):
@@ -116,13 +118,14 @@ def build_archived_ema_anchor_replay(
     fee_schedule: Mapping[str, Any],
     requested_collateral: float,
     strategy_params: Mapping[str, Any],
+    qty_step: float | None = None,
 ) -> ArchivedOutcomeReplay:
     """Build one authoritative full-contract replay from retained metadata and fills."""
 
     market_versions = archive.load_market_metadata(venue, market_id)
     if not market_versions:
         raise ValueError(f"outcome archive has no market metadata for {market_id}")
-    market = _consolidated_market_lifecycle(market_versions)
+    market = consolidated_archived_market(market_versions)
     start_ms = market.lifecycle.trading_open_time_ms
     end_ms = market.lifecycle.trading_close_time_ms
     if start_ms is None or end_ms is None or end_ms <= start_ms:
@@ -165,7 +168,7 @@ def build_archived_ema_anchor_replay(
     )
     full_coverage = VerifiedCoverage(start_ms, end_ms)
     payload = build_trade_derived_ema_anchor_input(
-        market_spec=normalized_market_to_rust_spec(market),
+        market_spec=normalized_market_to_rust_spec(market, qty_step=qty_step),
         trades=trades,
         verified_coverage=(full_coverage,),
         fee_schedule=fee_schedule,

@@ -98,6 +98,42 @@ class OutcomeOrderReconciliationResult:
     final_snapshot: HyperliquidOutcomeAccountSnapshot
 
 
+async def _cancel_attempted_creates(
+    client: HyperliquidOutcomeLiveClient,
+    market: NormalizedOutcomeMarket,
+    attempted: tuple[OutcomeOrderCreate, ...],
+) -> None:
+    """Restore a verified create-free state after a rejected or ambiguous submission."""
+
+    attempted_cloids = {creation.client_order_id for creation in attempted}
+    authoritative = await client.fetch_account_snapshot((market,))
+    cleanup_orders = tuple(
+        order
+        for order in authoritative.open_orders
+        if order.market_id == market.market_id
+        and order.client_order_id in attempted_cloids
+    )
+    for order in cleanup_orders:
+        await client.cancel_order(
+            market,
+            outcome=order.outcome,
+            order_id=int(order.order_id),
+            expected_client_order_id=order.client_order_id,
+        )
+    verified = await client.fetch_account_snapshot((market,))
+    remaining = sorted(
+        order.order_id
+        for order in verified.open_orders
+        if order.market_id == market.market_id
+        and order.client_order_id in attempted_cloids
+    )
+    if remaining:
+        raise RuntimeError(
+            "HIP-4 partial-create cleanup is not authoritative: "
+            f"{remaining}"
+        )
+
+
 def _order_matches_intent(
     order: OutcomeOpenOrder,
     intent: OutcomeLiveOrderIntent,
@@ -257,19 +293,35 @@ async def execute_hip4_order_reconciliation(
             )
 
     created = []
-    for creation in reconciliation.creates:
-        intent = creation.intent
-        created.append(
-            await client.submit_limit_order(
-                market,
-                outcome=intent.outcome,
-                side=intent.side,
-                native_price=intent.native_price,
-                qty=intent.qty,
-                client_order_id=creation.client_order_id,
-                post_only=True,
+    attempted_creates = []
+    try:
+        for creation in reconciliation.creates:
+            attempted_creates.append(creation)
+            intent = creation.intent
+            created.append(
+                await client.submit_limit_order(
+                    market,
+                    outcome=intent.outcome,
+                    side=intent.side,
+                    native_price=intent.native_price,
+                    qty=intent.qty,
+                    client_order_id=creation.client_order_id,
+                    post_only=True,
+                )
             )
-        )
+    except Exception:
+        try:
+            await _cancel_attempted_creates(
+                client,
+                market,
+                tuple(attempted_creates),
+            )
+        except Exception as cleanup_error:
+            raise RuntimeError(
+                "HIP-4 order creation failed and partial-create cleanup could "
+                "not establish an authoritative safe state"
+            ) from cleanup_error
+        raise
 
     final_snapshot = await client.fetch_account_snapshot((market,))
     expected_cloids = {creation.client_order_id for creation in reconciliation.creates}

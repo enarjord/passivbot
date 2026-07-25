@@ -20,6 +20,44 @@ HYPERLIQUID_PUBLIC_WS_URL = "wss://api.hyperliquid.xyz/ws"
 POLYMARKET_PUBLIC_MARKET_WS_URL = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
 
 
+class _HyperliquidSubscriptionGate:
+    """Suppress data until every requested Hyperliquid subscription is acknowledged."""
+
+    def __init__(self, subscription_type: str, symbols: Iterable[str]) -> None:
+        requested = tuple(symbols)
+        if not requested or len(set(requested)) != len(requested):
+            raise ValueError("Hyperliquid subscriptions require unique non-empty symbols")
+        self.subscription_type = subscription_type
+        self.requested_symbols = set(requested)
+        self.pending_symbols = set(requested)
+
+    def allows(self, message: Mapping[str, Any]) -> bool:
+        if message.get("channel") == "subscriptionResponse":
+            data = message.get("data")
+            if not isinstance(data, Mapping):
+                raise ValueError("Hyperliquid subscription response data must be an object")
+            subscription = data.get("subscription")
+            if data.get("method") != "subscribe" or not isinstance(
+                subscription, Mapping
+            ):
+                raise ValueError("malformed Hyperliquid subscription response")
+            if subscription.get("type") != self.subscription_type:
+                return False
+            symbol = str(subscription.get("coin", ""))
+            if symbol not in self.pending_symbols:
+                if symbol in self.requested_symbols:
+                    return False
+                raise ValueError(
+                    f"Hyperliquid acknowledged an unrequested {self.subscription_type} "
+                    f"symbol {symbol!r}"
+                )
+            self.pending_symbols.remove(symbol)
+            return False
+        if self.pending_symbols:
+            return False
+        return message.get("channel") == self.subscription_type
+
+
 async def _polymarket_ping_loop(websocket: Any) -> None:
     """Polymarket requires the literal text heartbeat rather than websocket ping frames."""
 
@@ -212,6 +250,7 @@ async def stream_hyperliquid_public_trades(
     ]
     timeout = aiohttp.ClientTimeout(total=None, connect=20, sock_read=None)
     collector_sequence = 0
+    subscription_gate = _HyperliquidSubscriptionGate("trades", symbols)
     async with aiohttp.ClientSession(timeout=timeout) as session:
         async with session.ws_connect(ws_url, heartbeat=30) as websocket:
             for symbol in symbols:
@@ -225,6 +264,10 @@ async def stream_hyperliquid_public_trades(
                 if event.type == aiohttp.WSMsgType.TEXT:
                     received_time_ms = int(time.time() * 1_000)
                     payload = json.loads(event.data)
+                    if not isinstance(payload, Mapping):
+                        raise ValueError("Hyperliquid websocket message must be an object")
+                    if not subscription_gate.allows(payload):
+                        continue
                     for trade in decode_hyperliquid_ws_message(
                         payload,
                         market_list,

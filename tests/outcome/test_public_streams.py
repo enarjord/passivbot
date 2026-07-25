@@ -8,6 +8,7 @@ import pytest
 from outcome.adapters import hyperliquid, polymarket
 from outcome.models import OutcomeSide
 from outcome.public_streams import (
+    _HyperliquidSubscriptionGate,
     decode_hyperliquid_ws_book_message,
     decode_hyperliquid_ws_message,
     decode_polymarket_ws_book_message,
@@ -54,6 +55,39 @@ def test_decode_hyperliquid_trade_channel_and_ignore_control_messages():
     )
     assert len(trades) == 1
     assert trades[0].outcome is OutcomeSide.YES
+
+
+def test_hyperliquid_trade_gate_waits_for_all_subscription_acknowledgements():
+    gate = _HyperliquidSubscriptionGate("trades", ("#9130", "#9131"))
+    trade_message = {"channel": "trades", "data": []}
+
+    assert gate.allows(trade_message) is False
+    assert (
+        gate.allows(
+            {
+                "channel": "subscriptionResponse",
+                "data": {
+                    "method": "subscribe",
+                    "subscription": {"type": "trades", "coin": "#9130"},
+                },
+            }
+        )
+        is False
+    )
+    assert gate.allows(trade_message) is False
+    assert (
+        gate.allows(
+            {
+                "channel": "subscriptionResponse",
+                "data": {
+                    "method": "subscribe",
+                    "subscription": {"type": "trades", "coin": "#9131"},
+                },
+            }
+        )
+        is False
+    )
+    assert gate.allows(trade_message) is True
 
 
 def test_websocket_decoder_assigns_monotonic_collector_sequence_to_batch():

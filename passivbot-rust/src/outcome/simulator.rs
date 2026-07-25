@@ -171,7 +171,11 @@ impl SingleOutcomeSimulator {
         self.ensure_trading(timestamp_ms)?;
         price_grid.validate()?;
         self.market.price_grid = price_grid;
-        self.market.validate()
+        self.market.validate()?;
+        // A venue grid transition makes any incompatible resting price non-executable.
+        self.open_orders
+            .retain(|resting| self.market.validate_order(&resting.order).is_ok());
+        Ok(())
     }
 
     pub fn process_candle(
@@ -269,6 +273,10 @@ impl SingleOutcomeSimulator {
         self.open_orders.clear();
         self.ledger
             .settle_with_fee_schedule(yes_fraction, &self.fee_schedule)
+    }
+
+    pub fn worst_case_settlement_equity(&self) -> Result<f64, OutcomeError> {
+        self.ledger.worst_case_settlement_equity(&self.fee_schedule)
     }
 
     pub fn split(&mut self, qty: f64, yes_reference_price: f64) -> Result<(), OutcomeError> {
@@ -657,6 +665,70 @@ mod tests {
         assert_close(settlement.fee, 0.02);
         assert_close(simulator.ledger().collateral(), 1.48);
         assert_close(simulator.ledger().fees_paid(), 0.02);
+    }
+
+    #[test]
+    fn worst_case_settlement_equity_includes_settlement_fee() {
+        let schedule = OutcomeFeeSchedule {
+            maker_rate: 0.0,
+            taker_rate: 0.0,
+            formula: OutcomeFeeFormula::Notional,
+            incidence: OutcomeFeeIncidence::EveryFill,
+            settlement_rate: 0.02,
+        };
+        let mut simulator = SingleOutcomeSimulator::new(market(false), schedule, 2.0).unwrap();
+        simulator
+            .place_order(
+                OutcomeLimitOrder {
+                    order_id: "yes".to_string(),
+                    outcome: Outcome::Yes,
+                    side: OutcomeOrderSide::Buy,
+                    price: 0.4,
+                    qty: 1.0,
+                    post_only: true,
+                    expires_at_ms: None,
+                },
+                1_000,
+            )
+            .unwrap();
+        simulator
+            .place_order(
+                OutcomeLimitOrder {
+                    order_id: "no".to_string(),
+                    outcome: Outcome::No,
+                    side: OutcomeOrderSide::Buy,
+                    price: 0.5,
+                    qty: 1.0,
+                    post_only: true,
+                    expires_at_ms: None,
+                },
+                1_000,
+            )
+            .unwrap();
+        simulator
+            .process_candle(&OutcomeCandle {
+                timestamp_ms: 2_000,
+                outcome: Outcome::Yes,
+                open: 0.5,
+                high: 0.5,
+                low: 0.39,
+                close: 0.5,
+                volume: 1.0,
+            })
+            .unwrap();
+        simulator
+            .process_candle(&OutcomeCandle {
+                timestamp_ms: 2_000,
+                outcome: Outcome::No,
+                open: 0.5,
+                high: 0.51,
+                low: 0.49,
+                close: 0.5,
+                volume: 1.0,
+            })
+            .unwrap();
+
+        assert_close(simulator.worst_case_settlement_equity().unwrap(), 2.08);
     }
 
     #[test]

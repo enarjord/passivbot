@@ -11,7 +11,7 @@ from pathlib import Path
 
 from outcome.archive import OutcomeTradeArchive
 from outcome.archive_replay import build_archived_ema_anchor_replay
-from outcome.models import OutcomeVenue
+from outcome.models import NormalizedOutcomeMarket, OutcomeVenue
 from outcome.orchestrator import (
     InsufficientCapitalPolicy,
     run_outcome_portfolio_backtest,
@@ -20,6 +20,27 @@ from outcome.rust_runner import make_rust_ema_anchor_outcome_job
 
 
 DEFAULT_MODES = ("accumulate_pairs", "inventory_aware", "yes_only")
+
+
+def _rust_fee_formula(market: NormalizedOutcomeMarket, override: str) -> str:
+    if override != "archived":
+        return override
+    metadata = market.fee_metadata
+    if metadata.formula == "polymarket_probability_curve":
+        exponent = float(metadata.parameters.get("exponent", math.nan))
+        if exponent != 1.0:
+            raise ValueError(
+                "archived Polymarket fee exponent is not supported by the Rust "
+                "probability_variance formula; pass --fee-formula explicitly only "
+                "when intentionally evaluating another formula"
+            )
+        return "probability_variance"
+    if metadata.formula == "venue_reported_zero":
+        return "notional"
+    raise ValueError(
+        f"archived fee formula {metadata.formula!r} has no Rust translation; "
+        "pass --fee-formula explicitly"
+    )
 
 
 def main() -> int:
@@ -47,6 +68,17 @@ def main() -> int:
     parser.add_argument("--maker-rate", required=True, type=float)
     parser.add_argument("--taker-rate", required=True, type=float)
     parser.add_argument("--settlement-rate", required=True, type=float)
+    parser.add_argument(
+        "--qty-step",
+        type=float,
+        help="Explicit share quantity step when retained venue metadata does not report one",
+    )
+    parser.add_argument(
+        "--fee-formula",
+        choices=("archived", "notional", "probability_variance"),
+        default="archived",
+        help="Use the retained venue formula when representable, or an explicit override",
+    )
     parser.add_argument(
         "--fee-incidence",
         choices=("every_fill", "inventory_reduction_only"),
@@ -90,18 +122,16 @@ def main() -> int:
         for rate in (args.maker_rate, args.taker_rate, args.settlement_rate)
     ):
         parser.error("fee rates must be finite")
+    if args.qty_step is not None and (
+        not math.isfinite(args.qty_step) or args.qty_step <= 0.0
+    ):
+        parser.error("--qty-step must be finite and positive")
 
     venue = OutcomeVenue(args.venue)
     modes = tuple(args.execution_mode or DEFAULT_MODES)
-    fee_schedule = {
-        "maker_rate": args.maker_rate,
-        "taker_rate": args.taker_rate,
-        "formula": "notional",
-        "incidence": args.fee_incidence,
-        "settlement_rate": args.settlement_rate,
-    }
     archive = OutcomeTradeArchive(args.archive)
     reports = []
+    fee_schedules = {}
     try:
         for mode in modes:
             replays = []
@@ -111,7 +141,19 @@ def main() -> int:
                     raise ValueError(
                         f"outcome archive has no market metadata for {market_id}"
                     )
-                payout_unit = market_versions[0].payout_unit
+                archived_market = market_versions[0]
+                payout_unit = archived_market.payout_unit
+                fee_schedule = {
+                    "maker_rate": args.maker_rate,
+                    "taker_rate": args.taker_rate,
+                    "formula": _rust_fee_formula(
+                        archived_market,
+                        args.fee_formula,
+                    ),
+                    "incidence": args.fee_incidence,
+                    "settlement_rate": args.settlement_rate,
+                }
+                fee_schedules[market_id] = fee_schedule
                 strategy_params = {
                     "ema_span_fast_seconds": args.ema_fast_seconds,
                     "ema_span_slow_seconds": args.ema_slow_seconds,
@@ -140,6 +182,7 @@ def main() -> int:
                         fee_schedule=fee_schedule,
                         requested_collateral=args.allocation_per_market,
                         strategy_params=strategy_params,
+                        qty_step=args.qty_step,
                     )
                 )
             portfolio = run_outcome_portfolio_backtest(
@@ -179,7 +222,7 @@ def main() -> int:
                 "archive": str(args.archive),
                 "venue": venue.value,
                 "market_ids": args.market_id,
-                "fee_schedule": fee_schedule,
+                "fee_schedules": fee_schedules,
                 "starting_collateral": args.starting_collateral,
                 "allocation_per_market": args.allocation_per_market,
                 "results": reports,

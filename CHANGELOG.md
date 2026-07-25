@@ -59,7 +59,12 @@ All notable user-facing changes will be documented in this file.
   cumulative complementary buys, pair completion, peak residual, and time-weighted residual and
   total inventory through settlement. HIP-4 reconciliation now independently proves exact
   Passivbot client-order IDs before every cancellation or creation and verifies the complete final
-  managed-order set. Authenticated outcome mutations remain disabled by default.
+  managed-order set, including verified cleanup after ambiguous partial creation. Public HIP-4
+  collection waits for both native-book subscription acknowledgements before establishing
+  coverage. Archived replay derives executable venue-grid bounds, requires an explicit quantity
+  step when retained metadata omits one, preserves representable venue fee formulas, applies
+  same-second grid changes before fills, and includes settlement fees in worst-case equity.
+  Authenticated outcome mutations remain disabled by default.
 
 - Canonical live-event payloads now make a bounded JSON-compatible copy at construction time,
   revalidate that copy at persistence boundaries, redact sensitive keys before retention, and

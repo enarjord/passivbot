@@ -194,6 +194,27 @@ fn validate_price_grid_change(
     Ok(())
 }
 
+fn apply_price_grid_changes_before(
+    simulator: &mut SingleOutcomeSimulator,
+    current_market: &mut BinaryOutcomeMarketSpec,
+    changes: &[OutcomePriceGridChange],
+    next_change: &mut usize,
+    boundary_ms: u64,
+) -> Result<(), OutcomeError> {
+    while *next_change < changes.len() && changes[*next_change].timestamp_ms < boundary_ms {
+        let change = changes[*next_change];
+        if change.old_grid != current_market.price_grid {
+            return Err(OutcomeError::InvalidMarket(
+                "outcome price-grid change does not continue the prior grid".to_string(),
+            ));
+        }
+        simulator.update_price_grid(change.new_grid, change.timestamp_ms)?;
+        current_market.price_grid = change.new_grid;
+        *next_change += 1;
+    }
+    Ok(())
+}
+
 pub fn run_single_outcome_backtest(
     input: &SingleOutcomeBacktestInput,
 ) -> Result<SingleOutcomeBacktestOutput, OutcomeError> {
@@ -311,7 +332,7 @@ pub fn run_single_outcome_backtest(
         max_abs_residual_qty =
             max_abs_residual_qty.max(simulator.ledger().net_yes_exposure().abs());
         worst_case_settlement_equity_min =
-            worst_case_settlement_equity_min.min(simulator.ledger().worst_case_settlement_equity());
+            worst_case_settlement_equity_min.min(simulator.worst_case_settlement_equity()?);
     }
     accumulate_inventory_time(
         &simulator,
@@ -336,7 +357,7 @@ pub fn run_single_outcome_backtest(
     let pre_settlement_no_cost = simulator.ledger().no_cost();
     let pre_settlement_paired_qty = simulator.ledger().paired_qty();
     let pre_settlement_net_yes_exposure = simulator.ledger().net_yes_exposure();
-    let pre_settlement_worst_case_equity = simulator.ledger().worst_case_settlement_equity();
+    let pre_settlement_worst_case_equity = simulator.worst_case_settlement_equity()?;
     let fills = simulator.fills().to_vec();
     let (cumulative_yes_buy_qty, cumulative_no_buy_qty) = cumulative_buy_qty(&fills);
     let pair_completion_ratio = completion_ratio(cumulative_yes_buy_qty, cumulative_no_buy_qty);
@@ -472,6 +493,16 @@ pub fn run_outcome_ema_anchor_backtest(
             &mut residual_qty_time_area_ms,
             &mut total_inventory_time_area_ms,
         );
+        // A grid change stamped at the bucket boundary is authoritative for every fill in that
+        // second. Changes later inside an aggregated one-second bucket cannot be ordered against
+        // its fills, so they apply after execution and before quotes for the next bucket.
+        apply_price_grid_changes_before(
+            &mut simulator,
+            &mut current_market,
+            &price_grid_changes,
+            &mut next_price_grid_change,
+            signal.timestamp_ms.saturating_add(1),
+        )?;
         if let Some(execution_candles) = executions_by_time.get(&signal.timestamp_ms) {
             for execution_candle in execution_candles {
                 simulator.process_candle(execution_candle)?;
@@ -486,25 +517,19 @@ pub fn run_outcome_ema_anchor_backtest(
             simulator.cancel_order(&order_id)?;
         }
         let signal_second_end_ms = signal.timestamp_ms.saturating_add(1_000);
-        while next_price_grid_change < price_grid_changes.len()
-            && price_grid_changes[next_price_grid_change].timestamp_ms < signal_second_end_ms
-        {
-            let change = price_grid_changes[next_price_grid_change];
-            if change.old_grid != current_market.price_grid {
-                return Err(OutcomeError::InvalidMarket(
-                    "outcome price-grid change does not continue the prior grid".to_string(),
-                ));
-            }
-            simulator.update_price_grid(change.new_grid, change.timestamp_ms)?;
-            current_market.price_grid = change.new_grid;
-            next_price_grid_change += 1;
-        }
+        apply_price_grid_changes_before(
+            &mut simulator,
+            &mut current_market,
+            &price_grid_changes,
+            &mut next_price_grid_change,
+            signal_second_end_ms,
+        )?;
         update_risk_extrema(
             &simulator,
             &mut max_paired_qty,
             &mut max_abs_residual_qty,
             &mut worst_case_settlement_equity_min,
-        );
+        )?;
 
         state.update(
             signal.close,
@@ -559,8 +584,9 @@ pub fn run_outcome_ema_anchor_backtest(
         &mut max_paired_qty,
         &mut max_abs_residual_qty,
         &mut worst_case_settlement_equity_min,
-    );
+    )?;
 
+    let pre_settlement_worst_case_equity = simulator.worst_case_settlement_equity()?;
     let ledger = simulator.ledger();
     let paired_locked_pnl = locked_pair_pnl(
         input.market.payout_unit,
@@ -577,7 +603,6 @@ pub fn run_outcome_ema_anchor_backtest(
     let pre_settlement_no_cost = ledger.no_cost();
     let pre_settlement_paired_qty = ledger.paired_qty();
     let pre_settlement_net_yes_exposure = ledger.net_yes_exposure();
-    let pre_settlement_worst_case_equity = ledger.worst_case_settlement_equity();
     let fills = simulator.fills().to_vec();
     let (cumulative_yes_buy_qty, cumulative_no_buy_qty) = cumulative_buy_qty(&fills);
     let pair_completion_ratio = completion_ratio(cumulative_yes_buy_qty, cumulative_no_buy_qty);
@@ -666,11 +691,12 @@ fn update_risk_extrema(
     max_paired_qty: &mut f64,
     max_abs_residual_qty: &mut f64,
     worst_case_settlement_equity_min: &mut f64,
-) {
+) -> Result<(), OutcomeError> {
     *max_paired_qty = max_paired_qty.max(simulator.ledger().paired_qty());
     *max_abs_residual_qty = max_abs_residual_qty.max(simulator.ledger().net_yes_exposure().abs());
     *worst_case_settlement_equity_min =
-        worst_case_settlement_equity_min.min(simulator.ledger().worst_case_settlement_equity());
+        worst_case_settlement_equity_min.min(simulator.worst_case_settlement_equity()?);
+    Ok(())
 }
 
 fn accumulate_inventory_time(
@@ -966,6 +992,49 @@ mod tests {
         assert_eq!(output.pair_completion_ratio, 1.0);
         assert!(output.time_weighted_abs_residual_qty.abs() < 1e-12);
         assert!((output.time_weighted_total_inventory_qty - 1.5).abs() < 1e-12);
+    }
+
+    #[test]
+    fn ema_grid_change_at_bucket_start_precedes_same_second_fills() {
+        let mut market = fixture_market();
+        market.price_grid = OutcomePriceGrid::FixedStep { step: 0.001 };
+        let mut params = outcome_strategy_params();
+        params.quote_offset = 0.005;
+        let output = run_outcome_ema_anchor_backtest(&OutcomeEmaAnchorBacktestInput {
+            market,
+            fee_schedule: OutcomeFeeSchedule::zero(),
+            starting_collateral: 10.0,
+            strategy_params: params,
+            signal_candles: (1..5)
+                .map(|second| OutcomeSignalCandle {
+                    timestamp_ms: second * 1_000,
+                    open: 0.5,
+                    high: 0.5,
+                    low: 0.5,
+                    close: 0.5,
+                    volume: if second == 1 { 1.0 } else { 0.0 },
+                })
+                .collect(),
+            execution_candles: vec![OutcomeCandle {
+                timestamp_ms: 2_000,
+                outcome: Outcome::Yes,
+                open: 0.5,
+                high: 0.5,
+                low: 0.494,
+                close: 0.5,
+                volume: 1.0,
+            }],
+            price_grid_changes: vec![OutcomePriceGridChange {
+                timestamp_ms: 2_000,
+                old_grid: OutcomePriceGrid::FixedStep { step: 0.001 },
+                new_grid: OutcomePriceGrid::FixedStep { step: 0.01 },
+            }],
+            settlement_time_ms: 5_000,
+            yes_fraction: 1.0,
+        })
+        .unwrap();
+
+        assert_eq!(output.fills_count, 0);
     }
 
     #[test]
