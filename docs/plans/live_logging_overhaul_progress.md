@@ -23,7 +23,10 @@ operational diary.
 
 The entries below predate this focus rule and are retained unchanged as
 historical evidence. Their branch names, “active follow-up” language, deployment
-state, and next-slice statements are not current instructions.
+state, and next-slice statements are not current instructions. Unresolved
+deployment blockers remain safety evidence: revalidate them against the target
+host's exact deployed SHA, local config, and intended target delta before any
+pull or restart.
 
 ## Latest Canonical Merge, Deployment Deferred (PR #1356)
 

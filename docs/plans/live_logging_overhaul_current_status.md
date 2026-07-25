@@ -77,8 +77,9 @@ The logging overhaul may be declared complete when all of the following hold:
   exemptions;
 - remaining direct `logging.*` producers are intentionally retained, have one
   human-output owner, and do not need structured migration;
-- monitor rotation, retention, and recovery remain bounded on the smallest
-  supported VPS class;
+- monitor rotation and recovery enforce configured per-bot byte/retention caps,
+  and a representative overnight run has no queue drops or sink degradation
+  attributable to normal logging load;
 - the minimal event query can reconstruct lifecycle, degraded planning,
   exchange calls, order waves, fills, and safety transitions across rotation;
 - there is no active must-have logging slice backed by an observed gap.
@@ -89,11 +90,13 @@ backlog to be finished.
 
 ## Resume Procedure
 
-1. Refresh `origin/master`; ignore stale branch names and historical “next
+1. Refresh `origin/master` and reconcile open logging PRs, their exact heads,
+   and review/check state; ignore stale branch names and historical “next
    slice” text.
 2. Inspect representative overnight event and INFO output from the current
    runtime before proposing code.
-3. Produce a finite list of observed gaps mapped to the completion criteria.
+3. Produce a finite list of observed gaps mapped to the completion criteria,
+   excluding work already covered by an open PR.
 4. Rank deletion, consolidation, demotion, or aggregation before adding a new
    event type, emitter, tool, or report field.
 5. Implement one independently reviewable slice. Prefer net-negative or
@@ -102,6 +105,12 @@ backlog to be finished.
    parity, and the affected operator/forensic workflow.
 7. Stop when the finite gap list is closed. Newly noticed adjacent work goes to
    the live-operations backlog and does not automatically reopen this plan.
+
+Before any runtime pull or restart, independently reconcile each target host's
+exact deployed SHA and local config against the intended target delta. Historical
+deployment notes are evidence, not authorization or a current-state substitute;
+an unresolved config-sensitive delta blocks deployment until an explicit rollout
+decision is made.
 
 ## Next Slice
 

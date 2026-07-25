@@ -45,6 +45,10 @@ Update policy:
 
 - Keep open work in `High-Value Follow-Ups` with checkboxes, one primary lane,
   and short current status notes.
+- Existing entries without a recorded primary lane are unclassified and cannot
+  be selected for implementation or used to reopen the logging overhaul. Add
+  the lane, evidence, simplest credible fix, validation, and stopping condition
+  before selecting one.
 - When a PR completes all or a meaningful first slice of an item, update the
   item status. Add a `Merged Work Log` entry only for a material milestone, not
   every incremental PR or deployment.

@@ -145,9 +145,11 @@ State:
 
 ## Implementation Loop
 
-1. Read the compact current-status file and fetch current `origin/master`.
-2. Confirm that an observed gap maps to an unmet logging completion criterion.
-   Read historical progress only when evidence is needed.
+1. Read the compact current-status file, fetch current `origin/master`, and
+   reconcile open logging PRs with their exact heads and review/check state.
+2. Confirm that an observed gap maps to an unmet logging completion criterion
+   and is not already covered by an open PR. Read historical progress only when
+   evidence is needed.
 3. Select one review-worthy slice, preferring deletion, consolidation,
    aggregation, or demotion before a new producer or tool. Route routine scoped
    work to Terra when available; keep high-risk work with Sol.
@@ -165,8 +167,11 @@ State:
 9. Re-fetch `origin/master`, verify mergeability, gate SHAs, and CI immediately
    before merge.
 10. Merge only after the gate is satisfied. Update local state.
-11. Deploy according to the declared impact. Sol retains control of actual VPS
-    signals/restarts; read-only preflight and output parsing may be delegated.
+11. Before any pull or restart, compare each target host's exact deployed SHA
+    and local config with the intended target delta. Stop on unresolved
+    config-sensitive behavior changes. Then deploy according to the declared
+    impact. Sol retains control of actual VPS signals/restarts; read-only
+    preflight and output parsing may be delegated.
 12. Run immediate and settled bounded smoke checks and leave expected bots
     running.
 13. Update compact status only if scope/completion changed. Append historical
